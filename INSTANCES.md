@@ -151,10 +151,13 @@ favored more children.
 
 ### Stable Retro Runtime Notes
 
-- As of 2026-06-19, use `stable-retro-turbo==1.0.0.post14` for new local,
+- As of 2026-06-20, use `stable-retro-turbo==1.0.0.post16` for new local,
   Modal, and SkyPilot training/eval work. The repo dependency pin, lockfile,
   SkyPilot launcher default, and reusable launch manifests are expected to stay
-  on post14 unless a future runtime migration is explicitly benchmarked.
+  on post16 unless a future runtime migration is explicitly benchmarked.
+- The previous default `stable-retro-turbo==1.0.0.post14` was validated for
+  native-vector life-loss termination on `SuperMarioBros-Nes-v0` and remains
+  useful as a historical baseline for B39/B40/B44 comparisons.
 - On 2026-06-19, `stable-retro-turbo==1.0.0.post14` was validated for
   native-vector life-loss termination on `SuperMarioBros-Nes-v0`: random-action
   vector probes emitted one-slot `done`s with `life_loss=True`, `died=True`,

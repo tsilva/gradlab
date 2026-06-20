@@ -25,7 +25,7 @@ REQUIRED_ENV_KEYS = (
     "WANDB_API_KEY",
 )
 DEFAULT_INSTANCE_CONFIG = "experiments/instances.json"
-REQUIRED_STABLE_RETRO_TURBO_VERSION = "1.0.0.post14"
+REQUIRED_STABLE_RETRO_TURBO_VERSION = "1.0.0.post16"
 
 
 @dataclass(frozen=True)
@@ -287,6 +287,15 @@ def render_task_yaml(
         raise ValueError("manifest must define rom_source for SkyPilot file_mounts")
     rom_source = repo_root / str(manifest["rom_source"])
     rom_mount_path = str(manifest.get("rom_mount_path", f"~/roms/{game}/{rom_source.name}"))
+    extra_file_mounts = manifest.get("extra_file_mounts", {})
+    if extra_file_mounts and not isinstance(extra_file_mounts, dict):
+        raise ValueError("extra_file_mounts must be a mapping of remote path to local path")
+    file_mount_lines = [
+        "file_mounts:",
+        f"  {rom_mount_path}: {rom_source}",
+    ]
+    for remote_path, local_path in extra_file_mounts.items():
+        file_mount_lines.append(f"  {remote_path}: {repo_root / str(local_path)}")
     smoke_options = training_options(manifest, manifest["runs"][0])
     smoke_state = str(smoke_options.get("state", ""))
     smoke_hud_crop_top = int(smoke_options.get("hud_crop_top", -1))
@@ -319,8 +328,25 @@ UV_VENV="$HOME/{venv_name}-uv"
 
 export UV_PROJECT_ENVIRONMENT="$JOB_VENV"
 "$UV_VENV/bin/uv" sync --locked --no-dev
-"$UV_VENV/bin/uv" pip install --python "$JOB_VENV/bin/python" --no-deps --force-reinstall "stable-retro-turbo=={stable_retro_turbo_version}"
+"$JOB_VENV/bin/python" -m ensurepip --upgrade
+"$JOB_VENV/bin/python" -m pip install --no-deps --force-reinstall "stable-retro-turbo=={stable_retro_turbo_version}"
 "$JOB_VENV/bin/python" -m stable_retro.import "$HOME/roms"
+
+"$JOB_VENV/bin/python" - <<'PY'
+from pathlib import Path
+import shutil
+import stable_retro as retro
+
+game = {game!r}
+mounted_dir = Path.home() / "roms" / game
+rom_path = retro.data.get_romfile_path(game)
+if rom_path is not None and mounted_dir.exists():
+    package_dir = Path(rom_path).parent
+    for source in mounted_dir.iterdir():
+        if source.is_file():
+            shutil.copy2(source, package_dir / source.name)
+    print("synced_mounted_game_data", mounted_dir, "->", package_dir)
+PY
 
 "$JOB_VENV/bin/python" - <<'PY'
 import importlib.metadata
@@ -419,8 +445,7 @@ PY"""
         "",
         "workdir: .",
         "",
-        "file_mounts:",
-        f"  {rom_mount_path}: {rom_source}",
+        *file_mount_lines,
         "",
         "resources:",
         f"  accelerators: {{{accelerator}: 1}}",
@@ -521,6 +546,14 @@ def preflight_checks(
     rom_source = repo_root / str(manifest.get("rom_source", ""))
     if manifest.get("rom_source") and not rom_source.exists():
         checks.append(Check("error", f"ROM source path does not exist: {rom_source}"))
+    extra_file_mounts = manifest.get("extra_file_mounts", {})
+    if extra_file_mounts and not isinstance(extra_file_mounts, dict):
+        checks.append(Check("error", "extra_file_mounts must be a mapping of remote path to local path"))
+    elif isinstance(extra_file_mounts, dict):
+        for local_path in extra_file_mounts.values():
+            source = repo_root / str(local_path)
+            if not source.exists():
+                checks.append(Check("error", f"extra file mount source path does not exist: {source}"))
     rom_mount_path = str(manifest.get("rom_mount_path", ""))
     if rom_source.suffix and rom_mount_path and not Path(rom_mount_path).name.endswith(rom_source.suffix):
         checks.append(

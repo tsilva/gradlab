@@ -32,6 +32,9 @@ from stable_retro_ppo.env import (
     EnvConfig,
     MixedStateNativeVecEnv,
     StickyAction,
+    make_eval_vec_env,
+    make_rendered_replay_env,
+    make_training_vec_env,
     needs_vec_transpose_image,
     resolve_env_config,
     resolve_mixed_state_config,
@@ -110,6 +113,49 @@ class EnvConfigFromArgsTests(unittest.TestCase):
     def test_invalid_sticky_action_probability_fails_loudly(self) -> None:
         with self.assertRaisesRegex(ValueError, "sticky_action_prob"):
             resolve_env_config(EnvConfig(game="SuperMarioBros-Nes-v0", sticky_action_prob=-0.1))
+
+    def test_eval_vec_env_forces_life_loss_termination_off(self) -> None:
+        sentinel = object()
+        config = EnvConfig(game="SuperMarioBros-Nes-v0", terminate_on_life_loss=True)
+
+        with patch("stable_retro_ppo.env.make_vec_envs", return_value=sentinel) as make_vec_envs:
+            env = make_eval_vec_env(config=config, n_envs=2, seed=7)
+
+        self.assertIs(env, sentinel)
+        passed_config = make_vec_envs.call_args.kwargs["config"]
+        self.assertFalse(passed_config.terminate_on_life_loss)
+
+    def test_eval_vec_env_disables_target_default_life_loss_termination(self) -> None:
+        sentinel = object()
+        config = EnvConfig(game="SuperMarioBros-Nes-v0", terminate_on_life_loss=None)
+
+        with patch("stable_retro_ppo.env.make_vec_envs", return_value=sentinel) as make_vec_envs:
+            make_eval_vec_env(config=config, n_envs=1, seed=7)
+
+        passed_config = make_vec_envs.call_args.kwargs["config"]
+        self.assertFalse(passed_config.terminate_on_life_loss)
+
+    def test_training_vec_env_preserves_requested_life_loss_termination(self) -> None:
+        sentinel = object()
+        config = EnvConfig(game="SuperMarioBros-Nes-v0", terminate_on_life_loss=True)
+
+        with patch("stable_retro_ppo.env.make_vec_envs", return_value=sentinel) as make_vec_envs:
+            env = make_training_vec_env(config=config, n_envs=2, seed=7)
+
+        self.assertIs(env, sentinel)
+        passed_config = make_vec_envs.call_args.kwargs["config"]
+        self.assertTrue(passed_config.terminate_on_life_loss)
+
+    def test_rendered_eval_replay_forces_life_loss_termination_off(self) -> None:
+        sentinel = object()
+        config = EnvConfig(game="SuperMarioBros-Nes-v0", terminate_on_life_loss=True)
+
+        with patch("stable_retro_ppo.env.make_retro_env", return_value=sentinel) as make_retro_env:
+            env = make_rendered_replay_env(config=config, seed=7)
+
+        self.assertIs(env, sentinel)
+        passed_config = make_retro_env.call_args.kwargs["config"]
+        self.assertFalse(passed_config.terminate_on_life_loss)
 
     def test_short_states_requires_one_state_per_env_slot(self) -> None:
         with patch(

@@ -90,11 +90,25 @@ class SkyPilotLaunchTests(unittest.TestCase):
         self.assertIn("retro.data.get_romfile_path('TestGame-Platform')", yaml)
         self.assertIn(str(rom_path), yaml)
 
+    def test_render_task_includes_extra_file_mounts(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo_root = Path(tmp)
+            manifest = sample_manifest()
+            manifest["extra_file_mounts"] = {
+                "~/roms/TestGame-Platform/Level1-2.state": "roms/Level1-2.state",
+            }
+            yaml = render_task_yaml(manifest, INSTANCE_CONFIG, repo_root)
+
+        self.assertIn(
+            f"  ~/roms/TestGame-Platform/Level1-2.state: {repo_root / 'roms/Level1-2.state'}",
+            yaml,
+        )
+
     def test_preflight_flags_missing_secrets_and_empty_descriptions(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo_root = Path(tmp)
             (repo_root / "pyproject.toml").write_text(
-                'dependencies = ["stable-retro-turbo==1.0.0.post14"]\n',
+                'dependencies = ["stable-retro-turbo==1.0.0.post16"]\n',
                 encoding="utf-8",
             )
             manifest = sample_manifest()
@@ -110,7 +124,7 @@ class SkyPilotLaunchTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             repo_root = Path(tmp)
             (repo_root / "pyproject.toml").write_text(
-                'dependencies = ["stable-retro-turbo==1.0.0.post14"]\n',
+                'dependencies = ["stable-retro-turbo==1.0.0.post16"]\n',
                 encoding="utf-8",
             )
             (repo_root / "rom.bin").write_bytes(b"rom")
@@ -124,7 +138,7 @@ class SkyPilotLaunchTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             repo_root = Path(tmp)
             (repo_root / "pyproject.toml").write_text(
-                'dependencies = ["stable-retro-turbo==1.0.0.post14"]\n',
+                'dependencies = ["stable-retro-turbo==1.0.0.post16"]\n',
                 encoding="utf-8",
             )
             (repo_root / "rom.bin").write_bytes(b"rom")
@@ -141,7 +155,7 @@ class SkyPilotLaunchTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             repo_root = Path(tmp)
             (repo_root / "pyproject.toml").write_text(
-                'dependencies = ["stable-retro-turbo==1.0.0.post14"]\n',
+                'dependencies = ["stable-retro-turbo==1.0.0.post16"]\n',
                 encoding="utf-8",
             )
             (repo_root / "rom.bin").write_bytes(b"rom")
