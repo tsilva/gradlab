@@ -53,6 +53,30 @@ UV_CACHE_DIR=.uv-cache uv run python -m stable_retro_ppo.play \
   --scale 4
 ```
 
+Mixed Mario start-state rehearsal can use fixed env slots:
+
+```bash
+UV_CACHE_DIR=.uv-cache uv run python -m stable_retro_ppo.train \
+  --game SuperMarioBros-Nes-v0 \
+  --states Level1-1,Level1-2 \
+  --n-envs 2 \
+  --run-name mario_l1_l2_fixed \
+  --run-description "Native vector fixed-slot rehearsal on Level1-1 and Level1-2"
+```
+
+Or reset-time weighted sampling. `--state-probs` values must be positive finite
+weights; training normalizes them before storing metadata and W&B config.
+
+```bash
+UV_CACHE_DIR=.uv-cache uv run python -m stable_retro_ppo.train \
+  --game SuperMarioBros-Nes-v0 \
+  --states Level1-1,Level1-2 \
+  --state-probs 1,3 \
+  --n-envs 8 \
+  --run-name mario_l1_l2_weighted \
+  --run-description "Reset-time weighted rehearsal on Level1-1 and Level1-2"
+```
+
 ## Commands
 
 ```bash

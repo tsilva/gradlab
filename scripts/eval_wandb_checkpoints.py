@@ -3,6 +3,7 @@ from __future__ import annotations
 # ruff: noqa: E402
 
 import argparse
+import copy
 import json
 import os
 import re
@@ -15,11 +16,19 @@ os.makedirs(os.environ["MPLCONFIGDIR"], exist_ok=True)
 
 from stable_baselines3 import PPO
 
+from stable_retro_ppo.artifacts import (
+    apply_model_config_defaults,
+    explicit_arg_dests,
+)
 from stable_retro_ppo.device import resolve_sb3_device
 from stable_retro_ppo.env import EnvConfig, assert_rom_imported, resolve_env_config
 from stable_retro_ppo.env_config import env_config_from_args
 from stable_retro_ppo.eval_runner import evaluate_model_episodes
-from stable_retro_ppo.wandb_artifacts import model_zip_from_download, safe_artifact_stem
+from stable_retro_ppo.wandb_artifacts import (
+    model_zip_from_download,
+    safe_artifact_stem,
+    write_downloaded_artifact_metadata,
+)
 from stable_retro_ppo.wandb_utils import DEFAULT_WANDB_PROJECT_PATH, load_wandb_env
 
 
@@ -90,7 +99,9 @@ def download_artifact(artifact, root: Path) -> Path:
     root.mkdir(parents=True, exist_ok=True)
     name = getattr(artifact, "qualified_name", None) or getattr(artifact, "name", "artifact")
     download_root = root / slug(name.replace("/", "_").replace(":", "_"))
-    return model_zip_from_download(Path(artifact.download(root=str(download_root))))
+    model_path = model_zip_from_download(Path(artifact.download(root=str(download_root))))
+    write_downloaded_artifact_metadata(model_path, artifact)
+    return model_path
 
 
 def load_eval_history(path: Path) -> list[dict[str, Any]]:
@@ -311,13 +322,21 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--state", default=defaults.state)
     parser.add_argument("--frame-skip", type=int, default=4)
     parser.add_argument("--max-pool-frames", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument(
+        "--sticky-action-prob",
+        type=float,
+        default=defaults.sticky_action_prob,
+        help="Probability of replaying the previous high-level action; 0 disables sticky actions.",
+    )
     parser.add_argument("--max-steps", type=int, default=2500)
+    parser.add_argument("--observation-size", type=int, default=defaults.observation_size)
     parser.add_argument(
         "--hud-crop-top",
         type=int,
         default=defaults.hud_crop_top,
         help="Crop this many pixels from the top of raw frames before grayscale resize.",
     )
+    parser.add_argument("--obs-resize-algorithm", default=defaults.obs_resize_algorithm)
     parser.add_argument("--seed", type=int, default=10007)
     parser.add_argument(
         "--seed-offset-by-checkpoint-step",
@@ -330,6 +349,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--device", default="auto", choices=["auto", "cpu", "cuda", "mps"])
     parser.add_argument("--deterministic", action="store_true", help="Use greedy policy actions")
     parser.add_argument("--action-set", default=defaults.action_set)
+    parser.add_argument("--use-retro-reward", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--clip-rewards", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument(
         "--reward-mode",
         choices=["auto", "baseline", "bounded", "additive", "score", "native"],
@@ -342,7 +363,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--time-penalty", type=float, default=0.0)
     parser.add_argument("--death-penalty", type=float, default=25.0)
     parser.add_argument("--completion-reward", type=float, default=0.0)
-    parser.add_argument("--score-progress-clipped", action="store_true")
+    parser.add_argument("--score-progress-clipped", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--no-progress-timeout-steps", type=int, default=0)
     parser.add_argument("--no-progress-min-delta", type=int, default=0)
     parser.add_argument(
@@ -350,9 +371,14 @@ def build_parser() -> argparse.ArgumentParser:
         action=argparse.BooleanOptionalAction,
         default=defaults.terminate_on_life_loss,
     )
-    parser.add_argument("--terminate-on-level-change", action="store_true")
-    parser.add_argument("--terminate-on-completion", action="store_true")
-    parser.add_argument("--completion-x-threshold", type=int, default=defaults.completion_x_threshold)
+    parser.add_argument("--terminate-on-level-change", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--terminate-on-completion", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument(
+        "--completion-x-threshold",
+        type=int,
+        default=defaults.completion_x_threshold,
+        help="Deprecated no-op; level completion is detected from stable-retro level changes.",
+    )
     parser.add_argument("--record-best-video", action="store_true")
     parser.add_argument("--video-fps", type=float, default=30.0)
     parser.add_argument("--video-scale", type=int, default=4)
@@ -365,7 +391,10 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> None:
-    args = build_parser().parse_args()
+    parser = build_parser()
+    parser_defaults = vars(parser.parse_args([]))
+    explicit_dests = explicit_arg_dests(parser, sys.argv[1:])
+    args = parser.parse_args()
     if args.episodes < 1:
         raise SystemExit("--episodes must be >= 1")
     if not args.run_name and args.artifact:
@@ -373,7 +402,6 @@ def main() -> None:
     if not args.run_name:
         raise SystemExit("run_name is required")
 
-    assert_rom_imported(args.game)
     artifacts = find_checkpoint_artifacts(args)
     if not artifacts:
         print("No checkpoint artifacts found")
@@ -407,10 +435,18 @@ def main() -> None:
                 print(f"Skipping step {checkpoint_step}: already evaluated")
                 continue
 
+            checkpoint_args = copy.copy(args)
+            apply_model_config_defaults(
+                checkpoint_args,
+                model_path,
+                parser_defaults,
+                explicit_dests,
+            )
+            assert_rom_imported(checkpoint_args.game)
             print(f"Evaluating checkpoint step {checkpoint_step}: {artifact_name}", flush=True)
             previous_best = best_metrics(history)
             metrics, video_path = evaluate_checkpoint(
-                args, model_path, checkpoint_step, artifact_name
+                checkpoint_args, model_path, checkpoint_step, artifact_name
             )
             append_eval_history(history_path, metrics)
             history.append(metrics)

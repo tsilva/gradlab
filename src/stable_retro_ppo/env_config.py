@@ -1,13 +1,37 @@
 from __future__ import annotations
 
 import argparse
+import math
 from typing import Any
 
 from stable_retro_ppo.env import EnvConfig
 
 
 def parse_states(value: str) -> tuple[str, ...]:
-    return tuple(state.strip() for state in value.split(",") if state.strip())
+    if not value:
+        return ()
+    states = tuple(state.strip() for state in value.split(","))
+    if any(not state for state in states):
+        raise ValueError("--states must not contain empty state names")
+    return states
+
+
+def parse_state_probs(value: str) -> tuple[float, ...]:
+    if not value:
+        return ()
+    probs: list[float] = []
+    for item in value.split(","):
+        item = item.strip()
+        if not item:
+            raise ValueError("--state-probs must not contain empty values")
+        try:
+            prob = float(item)
+        except ValueError as exc:
+            raise ValueError(f"--state-probs contains a non-numeric value: {item!r}") from exc
+        if not math.isfinite(prob) or prob <= 0.0:
+            raise ValueError("--state-probs values must be positive finite numbers")
+        probs.append(prob)
+    return tuple(probs)
 
 
 def env_config_from_args(
@@ -52,6 +76,7 @@ def env_config_from_args(
     }
     if include_states:
         config_kwargs["states"] = parse_states(value("states", ""))
+        config_kwargs["state_probs"] = parse_state_probs(value("state_probs", ""))
     if include_env_threads:
         config_kwargs["env_threads"] = value("env_threads")
     return EnvConfig(**config_kwargs)

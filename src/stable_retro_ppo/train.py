@@ -27,7 +27,13 @@ from stable_retro_ppo.callbacks import (
 )
 from stable_retro_ppo.cli import apply_preset, build_parser
 from stable_retro_ppo.device import resolve_sb3_device
-from stable_retro_ppo.env import assert_rom_imported, default_run_dir, make_training_vec_env, resolve_env_config
+from stable_retro_ppo.env import (
+    assert_rom_imported,
+    default_run_dir,
+    make_training_vec_env,
+    resolve_env_config,
+    resolve_mixed_state_config,
+)
 from stable_retro_ppo.env_config import env_config_from_args
 from stable_retro_ppo.eval_metrics import RetroEvalCallback
 from stable_retro_ppo.schedules import (
@@ -61,6 +67,7 @@ def main() -> None:
     config = resolve_env_config(
         env_config_from_args(args, include_states=True, include_env_threads=True)
     )
+    config = resolve_mixed_state_config(config, n_envs=args.n_envs)
     wandb_run = init_wandb(args, run_dir, config)
 
     env = make_training_vec_env(config=config, n_envs=args.n_envs, seed=args.seed)

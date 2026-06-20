@@ -6,6 +6,7 @@ import argparse
 import json
 import os
 import random
+import sys
 from pathlib import Path
 
 os.environ.setdefault("MPLCONFIGDIR", os.path.abspath(".matplotlib"))
@@ -15,6 +16,7 @@ import numpy as np
 import torch
 from stable_baselines3 import PPO
 
+from stable_retro_ppo.artifacts import apply_model_config_defaults, explicit_arg_dests
 from stable_retro_ppo.device import resolve_sb3_device
 from stable_retro_ppo.env import EnvConfig, assert_rom_imported, resolve_env_config
 from stable_retro_ppo.env_config import env_config_from_args
@@ -70,19 +72,29 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--state", default=defaults.state)
     parser.add_argument("--frame-skip", type=int, default=4)
     parser.add_argument("--max-pool-frames", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument(
+        "--sticky-action-prob",
+        type=float,
+        default=defaults.sticky_action_prob,
+        help="Probability of replaying the previous high-level action; 0 disables sticky actions.",
+    )
     parser.add_argument("--max-steps", type=int, default=1200)
+    parser.add_argument("--observation-size", type=int, default=defaults.observation_size)
     parser.add_argument(
         "--hud-crop-top",
         type=int,
         default=defaults.hud_crop_top,
         help="Crop this many pixels from the top of raw frames before grayscale resize.",
     )
+    parser.add_argument("--obs-resize-algorithm", default=defaults.obs_resize_algorithm)
     parser.add_argument("--seed", type=int, default=7)
     parser.add_argument("--device", default="auto", choices=["auto", "cpu", "cuda", "mps"])
     parser.add_argument("--fps", type=float, default=30.0)
     parser.add_argument("--scale", type=int, default=4)
     parser.add_argument("--deterministic", action="store_true", help="Use greedy policy actions")
     parser.add_argument("--action-set", default=defaults.action_set)
+    parser.add_argument("--use-retro-reward", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--clip-rewards", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument(
         "--reward-mode",
         choices=["auto", "baseline", "bounded", "additive", "score", "native"],
@@ -95,7 +107,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--time-penalty", type=float, default=0.0)
     parser.add_argument("--death-penalty", type=float, default=25.0)
     parser.add_argument("--completion-reward", type=float, default=0.0)
-    parser.add_argument("--score-progress-clipped", action="store_true")
+    parser.add_argument("--score-progress-clipped", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--no-progress-timeout-steps", type=int, default=0)
     parser.add_argument("--no-progress-min-delta", type=int, default=0)
     parser.add_argument(
@@ -103,13 +115,13 @@ def build_parser() -> argparse.ArgumentParser:
         action=argparse.BooleanOptionalAction,
         default=defaults.terminate_on_life_loss,
     )
-    parser.add_argument("--terminate-on-level-change", action="store_true")
-    parser.add_argument("--terminate-on-completion", action="store_true")
+    parser.add_argument("--terminate-on-level-change", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--terminate-on-completion", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument(
         "--completion-x-threshold",
         type=int,
         default=defaults.completion_x_threshold,
-        help="Stored in the summary; ranking uses level_complete first, then max_x_pos, then reward.",
+        help="Deprecated no-op; level completion is detected from stable-retro level changes.",
     )
     parser.add_argument("--output", default="runs/videos/best_episode.mp4")
     parser.add_argument("--summary-output", default="runs/videos/best_episode_summary.json")
@@ -117,7 +129,10 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> None:
-    args = build_parser().parse_args()
+    parser = build_parser()
+    parser_defaults = vars(parser.parse_args([]))
+    explicit_dests = explicit_arg_dests(parser, sys.argv[1:])
+    args = parser.parse_args()
     if args.episodes < 1:
         raise SystemExit("--episodes must be >= 1")
     if args.scale < 1:
@@ -127,8 +142,9 @@ def main() -> None:
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
 
-    assert_rom_imported(args.game)
     model_path = resolve_model_path(args)
+    apply_model_config_defaults(args, model_path, parser_defaults, explicit_dests)
+    assert_rom_imported(args.game)
     model = PPO.load(model_path, device=resolve_sb3_device(args.device))
     config = resolve_env_config(env_config_from_args(args, max_episode_steps_attr="max_steps"))
     output = Path(args.output)

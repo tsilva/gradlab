@@ -325,17 +325,22 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--time-penalty", type=float, default=0.0)
     parser.add_argument("--death-penalty", type=float, default=25.0)
     parser.add_argument("--completion-reward", type=float, default=0.0)
-    parser.add_argument("--score-progress-clipped", action="store_true")
+    parser.add_argument("--score-progress-clipped", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--no-progress-timeout-steps", type=int, default=0)
     parser.add_argument("--no-progress-min-delta", type=int, default=0)
-    parser.add_argument("--completion-x-threshold", type=int, default=defaults.completion_x_threshold)
+    parser.add_argument(
+        "--completion-x-threshold",
+        type=int,
+        default=defaults.completion_x_threshold,
+        help="Deprecated no-op; level completion is detected from stable-retro level changes.",
+    )
     parser.add_argument(
         "--terminate-on-life-loss",
         action=argparse.BooleanOptionalAction,
         default=defaults.terminate_on_life_loss,
     )
-    parser.add_argument("--terminate-on-level-change", action="store_true")
-    parser.add_argument("--terminate-on-completion", action="store_true")
+    parser.add_argument("--terminate-on-level-change", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--terminate-on-completion", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--action-set", default=defaults.action_set)
     return parser
 

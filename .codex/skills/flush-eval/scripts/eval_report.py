@@ -48,7 +48,6 @@ def fetch_all(cur, query: str, params: dict[str, Any] | None = None) -> list[dic
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Report Neon eval queue results.")
-    parser.add_argument("--eval-profile", default="mario_level1_v1")
     parser.add_argument("--stage", default="quick")
     parser.add_argument("--episodes", type=int, default=100)
     parser.add_argument("--seed-start", type=int, default=10007)
@@ -60,7 +59,6 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> None:
     args = build_parser().parse_args()
     params = {
-        "eval_profile": args.eval_profile,
         "stage": args.stage,
         "episodes": args.episodes,
         "seed_start": args.seed_start,
@@ -75,8 +73,7 @@ def main() -> None:
                 """
                 SELECT status, COUNT(*) AS count
                 FROM eval_jobs
-                WHERE eval_profile = %(eval_profile)s
-                  AND stage = %(stage)s
+                WHERE stage = %(stage)s
                   AND episodes = %(episodes)s
                   AND seed_start = %(seed_start)s
                 GROUP BY status
@@ -95,8 +92,7 @@ def main() -> None:
                   MAX(max_x_max) AS best_max_x_max,
                   AVG(reward_mean) AS mean_reward_mean
                 FROM eval_results
-                WHERE eval_profile = %(eval_profile)s
-                  AND stage = %(stage)s
+                WHERE stage = %(stage)s
                   AND episodes = %(episodes)s
                   AND seed_start = %(seed_start)s
                 """,
@@ -112,8 +108,7 @@ def main() -> None:
                   MIN(EXTRACT(EPOCH FROM finished_at - started_at)) AS min_seconds,
                   MAX(EXTRACT(EPOCH FROM finished_at - started_at)) AS max_seconds
                 FROM eval_jobs
-                WHERE eval_profile = %(eval_profile)s
-                  AND stage = %(stage)s
+                WHERE stage = %(stage)s
                   AND episodes = %(episodes)s
                   AND seed_start = %(seed_start)s
                   AND status = 'done'
@@ -133,11 +128,11 @@ def main() -> None:
                   r.completion_rate,
                   r.max_x_max,
                   r.reward_mean,
+                  r.training_metadata_hash,
                   r.created_at
                 FROM eval_results r
                 JOIN checkpoint_candidates c ON c.id = r.candidate_id
-                WHERE r.eval_profile = %(eval_profile)s
-                  AND r.stage = %(stage)s
+                WHERE r.stage = %(stage)s
                   AND r.episodes = %(episodes)s
                   AND r.seed_start = %(seed_start)s
                 ORDER BY r.completion_rate DESC, r.reward_mean DESC, r.max_x_max DESC
@@ -146,7 +141,7 @@ def main() -> None:
                 params,
             )
 
-        print(f"# Eval Report: {args.eval_profile} / {args.stage}")
+        print(f"# Eval Report: {args.stage}")
         print()
         print(f"- candidates: {int(candidates.get('count', 0))}")
         print(f"- episodes: {args.episodes}")
@@ -178,16 +173,18 @@ def main() -> None:
             print("No results for this eval selection.")
             return
         print()
-        print("| rank | completion | max_x | reward_mean | step | run | artifact |")
-        print("| ---: | ---: | ---: | ---: | ---: | --- | --- |")
+        print("| rank | completion | max_x | reward_mean | metadata | step | run | artifact |")
+        print("| ---: | ---: | ---: | ---: | --- | ---: | --- | --- |")
         for index, row in enumerate(top, start=1):
             run_name = str(row.get("run_name") or "")
             artifact_ref = str(row.get("artifact_ref") or "")
+            metadata_hash = str(row.get("training_metadata_hash") or "")[:12]
             print(
                 f"| {index} "
                 f"| {float(row['completion_rate']):.3f} ({int(row['completion_count'])}/{args.episodes}) "
                 f"| {int(row['max_x_max'])} "
                 f"| {float(row['reward_mean']):.2f} "
+                f"| `{metadata_hash}` "
                 f"| {int(row['checkpoint_step'] or 0)} "
                 f"| `{run_name}` "
                 f"| `{artifact_ref}` |"

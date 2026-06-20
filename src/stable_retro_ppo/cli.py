@@ -44,6 +44,7 @@ TRAIN_VALUE_OPTIONS = {
     "game": "--game",
     "state": "--state",
     "states": "--states",
+    "state_probs": "--state-probs",
     "frame_skip": "--frame-skip",
     "max_episode_steps": "--max-episode-steps",
     "hud_crop_top": "--hud-crop-top",
@@ -179,7 +180,18 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--states",
         default="",
-        help="Comma-separated training states. If set, vector workers cycle through these states by rank.",
+        help=(
+            "Comma-separated training states. Without --state-probs, provide exactly "
+            "one state per env slot in order."
+        ),
+    )
+    parser.add_argument(
+        "--state-probs",
+        default="",
+        help=(
+            "Comma-separated positive weights for --states. Values are normalized and "
+            "sampled independently on each episode reset."
+        ),
     )
     parser.add_argument("--frame-skip", type=int, default=4)
     parser.add_argument(
@@ -207,10 +219,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--completion-x-threshold",
         type=int,
         default=parser_defaults_env.completion_x_threshold,
-        help=(
-            "Treat an episode as complete if target progress reaches this value; "
-            "-1 uses the target default, <=0 disables threshold completion."
-        ),
+        help="Deprecated no-op; level completion is detected from stable-retro level changes.",
     )
     parser.add_argument(
         "--no-eval-videos", action="store_true", help="Disable best-episode eval videos"

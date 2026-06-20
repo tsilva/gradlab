@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
+import importlib.metadata
 import json
 import os
 import re
@@ -10,15 +12,17 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
-from stable_retro_ppo.env import EnvConfig
+from stable_retro_ppo.env import EnvConfig, state_distribution_metadata
 from stable_retro_ppo.wandb_utils import load_wandb_env
 
 
-MODEL_METADATA_VERSION = 1
+MODEL_METADATA_VERSION = 2
 
 PLAYBACK_ENV_ARG_KEYS = {
     "game": ("game",),
     "state": ("state",),
+    "states": ("states",),
+    "state_probs": ("state_probs",),
     "frame_skip": ("frame_skip",),
     "max_pool_frames": ("max_pool_frames",),
     "sticky_action_prob": ("sticky_action_prob",),
@@ -60,7 +64,55 @@ def explicit_arg_dests(parser: argparse.ArgumentParser, argv: list[str]) -> set[
 
 
 def env_config_metadata(config: EnvConfig) -> dict[str, Any]:
-    return asdict(config)
+    metadata = asdict(config)
+    metadata["states"] = list(config.states)
+    metadata["state_probs"] = list(config.state_probs)
+    if config.state_probs:
+        metadata["state_sampling_mode"] = "probability"
+    elif config.states:
+        metadata["state_sampling_mode"] = "fixed_per_env"
+    else:
+        metadata["state_sampling_mode"] = "single"
+    metadata["state_distribution"] = state_distribution_metadata(config)
+    return metadata
+
+
+def _package_version(package: str) -> str | None:
+    try:
+        return importlib.metadata.version(package)
+    except importlib.metadata.PackageNotFoundError:
+        return None
+
+
+def training_preprocessing_metadata(config: EnvConfig) -> dict[str, Any]:
+    return {
+        "pipeline": "stable_retro_native_vec_env",
+        "obs_resize": [config.observation_size, config.observation_size],
+        "obs_crop": [config.hud_crop_top, 0, 0, 0] if config.hud_crop_top else None,
+        "obs_grayscale": True,
+        "obs_resize_algorithm": config.obs_resize_algorithm,
+        "frame_skip": config.frame_skip,
+        "frame_stack": 4,
+        "maxpool_last_two": config.max_pool_frames,
+        "copy_observations": False,
+        "policy_observation_layout": "channel_first",
+    }
+
+
+def training_metadata(config: EnvConfig) -> dict[str, Any]:
+    return {
+        "env_config": env_config_metadata(config),
+        "preprocessing": training_preprocessing_metadata(config),
+        "versions": {
+            "stable_retro_turbo": _package_version("stable-retro-turbo"),
+            "stable_baselines3": _package_version("stable-baselines3"),
+        },
+    }
+
+
+def stable_json_hash(value: Any) -> str:
+    data = json.dumps(value, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(data.encode("utf-8")).hexdigest()
 
 
 def model_metadata_path(model_path: Path) -> Path:
@@ -73,6 +125,7 @@ def build_model_metadata(
     model_path: Path,
     kind: str,
 ) -> dict[str, Any]:
+    training = training_metadata(config)
     return {
         "metadata_version": MODEL_METADATA_VERSION,
         "kind": kind,
@@ -80,7 +133,9 @@ def build_model_metadata(
         "run_name": getattr(args, "run_name", ""),
         "run_description": getattr(args, "run_description", ""),
         "checkpoint_step": checkpoint_step(model_path),
-        "env_config": env_config_metadata(config),
+        "env_config": training["env_config"],
+        "training_metadata": training,
+        "training_metadata_hash": stable_json_hash(training),
     }
 
 
@@ -114,8 +169,87 @@ def load_model_metadata(model_path: Path) -> dict[str, Any]:
 
 
 def env_config_from_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
+    training = metadata.get("training_metadata")
+    if isinstance(training, dict):
+        env_config = training.get("env_config", {})
+        if isinstance(env_config, dict) and env_config:
+            return env_config
     env_config = metadata.get("env_config", {})
     return env_config if isinstance(env_config, dict) else {}
+
+
+def require_training_metadata(model_path: Path) -> dict[str, Any]:
+    metadata = load_model_metadata(model_path)
+    version = metadata.get("metadata_version")
+    training = metadata.get("training_metadata")
+    if version != MODEL_METADATA_VERSION or not isinstance(training, dict):
+        raise ValueError(
+            f"{model_path} is missing v{MODEL_METADATA_VERSION} training metadata; "
+            "recreate or re-upload the checkpoint with current artifact metadata"
+        )
+    env_config = training.get("env_config")
+    if not isinstance(env_config, dict) or not env_config:
+        raise ValueError(f"{model_path} training metadata is missing env_config")
+    return training
+
+
+def require_env_config_from_model_metadata(model_path: Path) -> EnvConfig:
+    training = require_training_metadata(model_path)
+    config = env_config_from_config_dict(training["env_config"])
+    if config is None:
+        raise ValueError(f"{model_path} training metadata cannot be converted to EnvConfig")
+    return config
+
+
+def env_config_from_config_dict(
+    config: dict[str, Any],
+    fallback: EnvConfig | None = None,
+) -> EnvConfig | None:
+    field_names = set(EnvConfig.__dataclass_fields__)
+    config_values = asdict(fallback) if fallback is not None else {}
+    matched = False
+
+    for field_name in field_names:
+        if field_name in config and config[field_name] is not None:
+            config_values[field_name] = config[field_name]
+            matched = True
+
+    if "max_steps" in config and config.get("max_steps") is not None:
+        config_values["max_episode_steps"] = config["max_steps"]
+        matched = True
+
+    if "states" in config and config.get("states") is not None:
+        states = config["states"]
+        config_values["states"] = tuple(states) if isinstance(states, list) else states
+        matched = True
+    if "state_probs" in config and config.get("state_probs") is not None:
+        state_probs = config["state_probs"]
+        config_values["state_probs"] = (
+            tuple(state_probs) if isinstance(state_probs, list) else state_probs
+        )
+        matched = True
+
+    if not matched and fallback is None:
+        return None
+    return EnvConfig(**config_values)
+
+
+def env_config_from_model_metadata(
+    model_path: Path,
+    fallback: EnvConfig | None = None,
+) -> EnvConfig | None:
+    saved_config = env_config_from_metadata(load_model_metadata(model_path))
+    if not saved_config:
+        return fallback
+
+    field_names = set(EnvConfig.__dataclass_fields__)
+    config_values = asdict(fallback) if fallback is not None else {}
+    config_values.update({key: value for key, value in saved_config.items() if key in field_names})
+    if isinstance(config_values.get("states"), list):
+        config_values["states"] = tuple(config_values["states"])
+    if isinstance(config_values.get("state_probs"), list):
+        config_values["state_probs"] = tuple(config_values["state_probs"])
+    return EnvConfig(**config_values)
 
 
 def apply_config_defaults(
@@ -125,6 +259,8 @@ def apply_config_defaults(
     explicit_dests: set[str],
 ) -> None:
     for arg_name, config_keys in PLAYBACK_ENV_ARG_KEYS.items():
+        if arg_name not in parser_defaults or not hasattr(args, arg_name):
+            continue
         if arg_name in explicit_dests:
             continue
         current_value = getattr(args, arg_name)
@@ -135,6 +271,19 @@ def apply_config_defaults(
             if config_key in config and config[config_key] is not None:
                 setattr(args, arg_name, config[config_key])
                 break
+
+
+def apply_model_config_defaults(
+    args: argparse.Namespace,
+    model_path: Path,
+    parser_defaults: dict[str, object],
+    explicit_dests: set[str],
+) -> bool:
+    saved_config = env_config_from_metadata(load_model_metadata(model_path))
+    if not saved_config:
+        return False
+    apply_config_defaults(args, saved_config, parser_defaults, explicit_dests)
+    return True
 
 
 def init_wandb(args: argparse.Namespace, run_dir: str, config: EnvConfig):
@@ -164,6 +313,11 @@ def init_wandb(args: argparse.Namespace, run_dir: str, config: EnvConfig):
         "game": config.game,
         "state": config.state,
         "states": list(config.states),
+        "state_probs": list(config.state_probs),
+        "state_sampling_mode": (
+            "probability" if config.state_probs else "fixed_per_env" if config.states else "single"
+        ),
+        "state_distribution": state_distribution_metadata(config),
         "frame_skip": config.frame_skip,
         "max_pool_frames": config.max_pool_frames,
         "sticky_action_prob": config.sticky_action_prob,
@@ -307,8 +461,11 @@ def log_wandb_model_artifact(
         "filename": model_path.name,
         "checkpoint_step": step,
         "metadata_version": MODEL_METADATA_VERSION,
-        "env_config": env_config_metadata(config),
     }
+    training = training_metadata(config)
+    metadata["env_config"] = training["env_config"]
+    metadata["training_metadata"] = training
+    metadata["training_metadata_hash"] = stable_json_hash(training)
     run_id = getattr(wandb_run, "id", None)
     if run_id:
         metadata["wandb_run_id"] = run_id

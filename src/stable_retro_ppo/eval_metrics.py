@@ -12,10 +12,7 @@ from stable_retro_ppo.video import replay_actions_for_video, write_video
 
 
 def is_level_complete(info: dict[str, Any], max_x_pos: int, completion_x_threshold: int) -> bool:
-    if bool(info.get("level_complete", False)) or bool(info.get("level_changed", False)):
-        return True
-    level_max_x_pos = int(info.get("level_max_x_pos", max_x_pos))
-    return completion_x_threshold > 0 and level_max_x_pos >= completion_x_threshold
+    return bool(info.get("level_complete", False)) or bool(info.get("level_changed", False))
 
 
 def death_location_histogram(death_x_positions: list[int], bin_size: int = 100) -> dict[str, int]:

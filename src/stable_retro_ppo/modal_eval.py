@@ -4,7 +4,8 @@ import json
 import os
 import time
 import uuid
-from dataclasses import replace
+from concurrent.futures import Future, ThreadPoolExecutor
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -12,9 +13,13 @@ import psycopg2
 import psycopg2.extras
 from stable_baselines3 import PPO
 
+from stable_retro_ppo.artifacts import (
+    require_env_config_from_model_metadata,
+    require_training_metadata,
+    stable_json_hash,
+)
 from stable_retro_ppo.device import resolve_sb3_device
 from stable_retro_ppo.env import assert_rom_imported
-from stable_retro_ppo.eval_profiles import get_eval_profile
 from stable_retro_ppo.eval_runner import evaluate_model_episodes
 from stable_retro_ppo.modal_core import (
     RUNS_DIR,
@@ -26,7 +31,22 @@ from stable_retro_ppo.modal_core import (
     safe_path_name,
     volume,
 )
-from stable_retro_ppo.wandb_artifacts import model_zip_from_download
+from stable_retro_ppo.wandb_artifacts import model_zip_from_download, write_downloaded_artifact_metadata
+
+
+LOCAL_ARTIFACT_CACHE_DIR = Path("/tmp/stable-retro-ppo-eval-artifacts")
+
+
+@dataclass(frozen=True)
+class PrefetchedArtifact:
+    path: Path
+    download_elapsed_seconds: float
+
+
+@dataclass(frozen=True)
+class PrefetchedJob:
+    job: dict[str, Any]
+    future: Future[PrefetchedArtifact]
 
 
 CLAIM_SQL = """
@@ -57,7 +77,6 @@ WHERE job.id = next_job.id
 RETURNING
   job.id,
   job.candidate_id,
-  job.eval_profile,
   job.stage,
   job.episodes,
   job.seed_start,
@@ -173,7 +192,7 @@ def commit_result(
                 INSERT INTO eval_results (
                   candidate_id,
                   job_id,
-                  eval_profile,
+                  training_metadata_hash,
                   stage,
                   episodes,
                   seed_start,
@@ -186,7 +205,7 @@ def commit_result(
                 VALUES (
                   %(candidate_id)s,
                   %(job_id)s,
-                  %(eval_profile)s,
+                  %(training_metadata_hash)s,
                   %(stage)s,
                   %(episodes)s,
                   %(seed_start)s,
@@ -196,7 +215,7 @@ def commit_result(
                   %(reward_mean)s,
                   %(metrics_json)s
                 )
-                ON CONFLICT (candidate_id, eval_profile, stage, episodes, seed_start)
+                ON CONFLICT (candidate_id, training_metadata_hash, stage, episodes, seed_start)
                 DO UPDATE SET
                   job_id = EXCLUDED.job_id,
                   completion_count = EXCLUDED.completion_count,
@@ -209,7 +228,7 @@ def commit_result(
                 {
                     "candidate_id": job["candidate_id"],
                     "job_id": job["id"],
-                    "eval_profile": job["eval_profile"],
+                    "training_metadata_hash": metrics["training_metadata_hash"],
                     "stage": job["stage"],
                     "episodes": job["episodes"],
                     "seed_start": job["seed_start"],
@@ -268,37 +287,61 @@ def mark_job_failed_with_reconnect(
         return mark_job_failed(conn, job=job, worker_id=worker_id, error=error), conn
 
 
-def download_model_artifact(ref: str) -> Path:
+def download_model_artifact(
+    ref: str,
+    *,
+    base_dir: Path = RUNS_DIR / "wandb_artifacts",
+) -> Path:
     import wandb
 
-    download_root = RUNS_DIR / "wandb_artifacts" / safe_path_name(ref)
+    download_root = base_dir / safe_path_name(ref)
     download_root.mkdir(parents=True, exist_ok=True)
     artifact = wandb.Api().artifact(ref, type="model")
-    return model_zip_from_download(Path(artifact.download(root=str(download_root))))
+    model_path = model_zip_from_download(Path(artifact.download(root=str(download_root))))
+    write_downloaded_artifact_metadata(model_path, artifact)
+    return model_path
 
 
-def evaluate_job(job: dict[str, Any], *, device: str) -> dict[str, Any]:
-    profile = get_eval_profile(str(job["eval_profile"]))
-    config = profile.env_config()
+def prefetch_model_artifact(job: dict[str, Any]) -> PrefetchedArtifact:
+    started_at = time.monotonic()
+    model_path = download_model_artifact(
+        str(job["artifact_ref"]),
+        base_dir=LOCAL_ARTIFACT_CACHE_DIR,
+    )
+    return PrefetchedArtifact(
+        path=model_path,
+        download_elapsed_seconds=round(time.monotonic() - started_at, 3),
+    )
+
+
+def evaluate_job(
+    job: dict[str, Any],
+    *,
+    device: str,
+    model_path: Path | None = None,
+) -> dict[str, Any]:
+    if model_path is None:
+        model_path = download_model_artifact(str(job["artifact_ref"]))
+    training = require_training_metadata(model_path)
+    config = require_env_config_from_model_metadata(model_path)
+    training_hash = stable_json_hash(training)
     assert_rom_imported(config.game)
-    model_path = download_model_artifact(str(job["artifact_ref"]))
     model = PPO.load(model_path, device=resolve_sb3_device(device))
     metrics, _ = evaluate_model_episodes(
         model=model,
         config=config,
         episodes=int(job["episodes"]),
         seed=int(job["seed_start"]),
-        max_steps=profile.max_steps,
-        deterministic=profile.deterministic,
+        max_steps=config.max_episode_steps,
+        deterministic=False,
         completion_x_threshold=config.completion_x_threshold,
-        n_envs=profile.n_envs,
+        n_envs=1,
         capture_best_video=False,
         extra={
             "job_id": int(job["id"]),
             "candidate_id": int(job["candidate_id"]),
             "checkpoint_artifact": str(job["artifact_ref"]),
-            "eval_profile": profile.name,
-            "eval_profile_config": profile.metadata(),
+            "training_metadata_hash": training_hash,
             "eval_seed": int(job["seed_start"]),
         },
     )
@@ -315,7 +358,6 @@ def evaluate_job(job: dict[str, Any], *, device: str) -> dict[str, Any]:
 )
 def eval_artifact_benchmark_remote(
     artifact_ref: str,
-    eval_profile: str = "mario_level1_no_life_loss_v1",
     episodes: int = 100,
     seed: int = 10007,
     n_envs: int = 0,
@@ -326,13 +368,14 @@ def eval_artifact_benchmark_remote(
 ) -> dict[str, Any]:
     total_started_at = time.monotonic()
     ensure_remote_roms("evaluation benchmark")
-    profile = get_eval_profile(eval_profile)
-    config = profile.env_config()
-    effective_n_envs = n_envs if n_envs > 0 else profile.n_envs
+    effective_n_envs = n_envs if n_envs > 0 else 1
+    model_path = download_model_artifact(artifact_ref)
+    training = require_training_metadata(model_path)
+    training_hash = stable_json_hash(training)
+    config = require_env_config_from_model_metadata(model_path)
     if env_threads > 0:
         config = replace(config, env_threads=env_threads)
     assert_rom_imported(config.game)
-    model_path = download_model_artifact(artifact_ref)
     model = PPO.load(model_path, device=resolve_sb3_device(device))
     eval_started_at = time.monotonic()
     try:
@@ -341,15 +384,14 @@ def eval_artifact_benchmark_remote(
             config=config,
             episodes=episodes,
             seed=seed,
-            max_steps=profile.max_steps,
-            deterministic=profile.deterministic,
+            max_steps=config.max_episode_steps,
+            deterministic=False,
             completion_x_threshold=config.completion_x_threshold,
             n_envs=effective_n_envs,
             capture_best_video=False,
             extra={
                 "checkpoint_artifact": artifact_ref,
-                "eval_profile": profile.name,
-                "eval_profile_config": profile.metadata(),
+                "training_metadata_hash": training_hash,
                 "eval_seed": seed,
                 "benchmark": True,
                 "benchmark_cpu": benchmark_cpu,
@@ -364,7 +406,7 @@ def eval_artifact_benchmark_remote(
     total_elapsed_seconds = time.monotonic() - total_started_at
     return {
         "artifact_ref": artifact_ref,
-        "eval_profile": profile.name,
+        "training_metadata_hash": training_hash,
         "episodes": episodes,
         "n_envs": effective_n_envs,
         "env_threads": env_threads,
@@ -384,7 +426,6 @@ def eval_artifact_benchmark_remote(
 @app.local_entrypoint()
 def eval_artifact_benchmark(
     artifact_ref: str,
-    eval_profile: str = "mario_level1_no_life_loss_v1",
     episodes: int = 100,
     seed: int = 10007,
     n_envs: int = 0,
@@ -396,7 +437,6 @@ def eval_artifact_benchmark(
     remote = eval_artifact_benchmark_remote.with_options(cpu=cpu, memory=memory_mib)
     result = remote.remote(
         artifact_ref=artifact_ref,
-        eval_profile=eval_profile,
         episodes=episodes,
         seed=seed,
         n_envs=n_envs,
@@ -423,6 +463,7 @@ def eval_worker_remote(
     idle_sleep_seconds: float = 5.0,
     lease_seconds: int = 1800,
     device: str = "cpu",
+    prefetch_jobs: int = 2,
 ) -> dict[str, Any]:
     ensure_remote_roms("evaluation")
     worker_id = worker_name or f"modal-eval-{uuid.uuid4()}"
@@ -431,31 +472,62 @@ def eval_worker_remote(
     failed = 0
     idle = 0
     processed_jobs: list[int] = []
+    prefetch_target = max(prefetch_jobs, 1)
+    pending_jobs: list[PrefetchedJob] = []
 
     conn = connect()
+    prefetcher = ThreadPoolExecutor(max_workers=1, thread_name_prefix="artifact-prefetch")
     try:
         while max_jobs <= 0 or completed + failed < max_jobs:
-            job = claim_job(conn, worker_id=worker_id, lease_seconds=lease_seconds)
-            if job is None:
+            while len(pending_jobs) < prefetch_target and (
+                max_jobs <= 0 or completed + failed + len(pending_jobs) < max_jobs
+            ):
+                job = claim_job(conn, worker_id=worker_id, lease_seconds=lease_seconds)
+                if job is None:
+                    break
+
+                idle = 0
+                future = prefetcher.submit(prefetch_model_artifact, job)
+                pending_jobs.append(PrefetchedJob(job=job, future=future))
+                print(
+                    "claimed "
+                    f"worker={worker_id} "
+                    f"job_id={job['id']} "
+                    f"candidate_id={job['candidate_id']} "
+                    f"stage={job['stage']} "
+                    f"episodes={job['episodes']} "
+                    f"prefetch_queued={len(pending_jobs)}",
+                    flush=True,
+                )
+
+            if not pending_jobs:
                 idle += 1
                 if idle >= idle_polls:
                     break
                 time.sleep(idle_sleep_seconds)
                 continue
 
-            idle = 0
-            print(
-                "claimed "
-                f"worker={worker_id} "
-                f"job_id={job['id']} "
-                f"candidate_id={job['candidate_id']} "
-                f"profile={job['eval_profile']} "
-                f"stage={job['stage']} "
-                f"episodes={job['episodes']}",
-                flush=True,
-            )
+            prefetched_job = pending_jobs.pop(0)
+            job = prefetched_job.job
             try:
-                metrics = evaluate_job(job, device=device)
+                prefetch_wait_started_at = time.monotonic()
+                prefetched_artifact = prefetched_job.future.result()
+                prefetch_wait_seconds = round(time.monotonic() - prefetch_wait_started_at, 3)
+                print(
+                    "prefetched "
+                    f"worker={worker_id} "
+                    f"job_id={job['id']} "
+                    f"download_seconds={prefetched_artifact.download_elapsed_seconds:.3f} "
+                    f"wait_seconds={prefetch_wait_seconds:.3f}",
+                    flush=True,
+                )
+                metrics = evaluate_job(
+                    job,
+                    device=device,
+                    model_path=prefetched_artifact.path,
+                )
+                metrics["artifact_download_seconds"] = prefetched_artifact.download_elapsed_seconds
+                metrics["artifact_prefetch_wait_seconds"] = prefetch_wait_seconds
                 committed, conn = commit_result_with_reconnect(
                     conn, job=job, worker_id=worker_id, metrics=metrics
                 )
@@ -488,6 +560,7 @@ def eval_worker_remote(
                     flush=True,
                 )
     finally:
+        prefetcher.shutdown(wait=False, cancel_futures=True)
         close_quietly(conn)
         volume.commit()
 
@@ -510,6 +583,7 @@ def eval_queue(
     cpu: float = 4.0,
     memory_mib: int = 8192,
     device: str = "cpu",
+    prefetch_jobs: int = 2,
 ) -> None:
     calls = []
     remote = eval_worker_remote.with_options(cpu=cpu, memory=memory_mib)
@@ -522,6 +596,7 @@ def eval_queue(
             idle_sleep_seconds=idle_sleep_seconds,
             lease_seconds=lease_seconds,
             device=device,
+            prefetch_jobs=prefetch_jobs,
         )
         calls.append((worker_name, call))
         print(f"started {worker_name}", flush=True)

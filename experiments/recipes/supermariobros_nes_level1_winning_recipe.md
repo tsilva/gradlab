@@ -40,7 +40,7 @@ obs_resize_algorithm: area
 observation_size: 84
 hud_crop_top: 32
 max_episode_steps: 4500
-completion_x_threshold: 3160
+completion_x_threshold: 0
 terminate_on_life_loss: true
 terminate_on_level_change: false
 terminate_on_completion: true
@@ -53,6 +53,8 @@ stop_completion_rate_threshold: 1.0
 ```
 
 Use 5 concurrent child trainings on `k8s/rtx4090` for throughput screening.
+Level completion is detected from stable-retro `levelHi`/`levelLo` changes, not
+from an x-position threshold.
 
 ## Evidence
 

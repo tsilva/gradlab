@@ -4,8 +4,10 @@ import argparse
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
 from stable_retro_ppo.artifacts import (
+    PLAYBACK_ENV_ARG_KEYS,
     apply_config_defaults,
     env_config_from_metadata,
     explicit_arg_dests,
@@ -74,17 +76,22 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--time-penalty", type=float, default=0.0)
     parser.add_argument("--death-penalty", type=float, default=25.0)
     parser.add_argument("--completion-reward", type=float, default=0.0)
-    parser.add_argument("--score-progress-clipped", action="store_true")
+    parser.add_argument("--score-progress-clipped", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--no-progress-timeout-steps", type=int, default=0)
     parser.add_argument("--no-progress-min-delta", type=int, default=0)
-    parser.add_argument("--completion-x-threshold", type=int, default=defaults.completion_x_threshold)
+    parser.add_argument(
+        "--completion-x-threshold",
+        type=int,
+        default=defaults.completion_x_threshold,
+        help="Deprecated no-op; level completion is detected from stable-retro level changes.",
+    )
     parser.add_argument(
         "--terminate-on-life-loss",
         action=argparse.BooleanOptionalAction,
         default=defaults.terminate_on_life_loss,
     )
-    parser.add_argument("--terminate-on-level-change", action="store_true")
-    parser.add_argument("--terminate-on-completion", action="store_true")
+    parser.add_argument("--terminate-on-level-change", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--terminate-on-completion", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--action-set", default=defaults.action_set)
     parser.add_argument("--download-only", action="store_true")
     return parser
@@ -108,7 +115,7 @@ def apply_artifact_run_config_defaults(
     ref: str,
     parser_defaults: dict[str, object],
     explicit_dests: set[str],
-) -> None:
+) -> dict[str, Any]:
     load_wandb_env()
 
     import wandb
@@ -117,15 +124,48 @@ def apply_artifact_run_config_defaults(
         run = wandb.Api().artifact(ref, type="model").logged_by()
     except Exception as exc:
         print(f"warning: could not infer playback config from {ref}: {exc}", file=sys.stderr)
-        return
+        return {}
     if run is None:
-        return
+        return {}
 
     config = getattr(run, "config", {}) or {}
     apply_config_defaults(args, config, parser_defaults, explicit_dests)
+    return config if isinstance(config, dict) else {}
 
 
-def play_model(model_path: Path, args: argparse.Namespace) -> None:
+def append_explicit_env_args(
+    cmd: list[str],
+    parser: argparse.ArgumentParser,
+    args: argparse.Namespace,
+    explicit_dests: set[str],
+) -> None:
+    actions = {action.dest: action for action in parser._actions}
+    for dest in PLAYBACK_ENV_ARG_KEYS:
+        if dest not in explicit_dests:
+            continue
+        action = actions.get(dest)
+        if action is None:
+            continue
+        value = getattr(args, dest)
+        if isinstance(action, argparse.BooleanOptionalAction):
+            prefix = "--no-" if value is False else "--"
+            option = next(
+                opt for opt in action.option_strings if opt.startswith(prefix)
+            )
+            cmd.append(option)
+        elif action.nargs == 0:
+            if value:
+                cmd.append(action.option_strings[0])
+        else:
+            cmd.extend([action.option_strings[0], str(value)])
+
+
+def play_model(
+    model_path: Path,
+    args: argparse.Namespace,
+    parser: argparse.ArgumentParser,
+    explicit_dests: set[str],
+) -> None:
     cmd = [
         sys.executable,
         "-m",
@@ -134,79 +174,18 @@ def play_model(model_path: Path, args: argparse.Namespace) -> None:
         str(model_path),
         "--episodes",
         str(args.episodes),
-        "--game",
-        args.game,
-        "--state",
-        args.state,
-        "--max-steps",
-        str(args.max_steps),
-        "--observation-size",
-        str(args.observation_size),
-        "--hud-crop-top",
-        str(args.hud_crop_top),
-        "--obs-resize-algorithm",
-        args.obs_resize_algorithm,
-        "--frame-skip",
-        str(args.frame_skip),
-        "--sticky-action-prob",
-        str(args.sticky_action_prob),
         "--seed",
         str(args.seed),
         "--fps",
         str(args.fps),
         "--scale",
         str(args.scale),
-        "--action-set",
-        args.action_set,
-        "--reward-mode",
-        args.reward_mode,
-        "--progress-reward-cap",
-        str(args.progress_reward_cap),
-        "--progress-reward-scale",
-        str(args.progress_reward_scale),
-        "--terminal-reward",
-        str(args.terminal_reward),
-        "--reward-scale",
-        str(args.reward_scale),
-        "--time-penalty",
-        str(args.time_penalty),
-        "--death-penalty",
-        str(args.death_penalty),
-        "--completion-reward",
-        str(args.completion_reward),
-        "--no-progress-timeout-steps",
-        str(args.no_progress_timeout_steps),
-        "--no-progress-min-delta",
-        str(args.no_progress_min_delta),
-        "--completion-x-threshold",
-        str(args.completion_x_threshold),
     ]
-    if args.score_progress_clipped:
-        cmd.append("--score-progress-clipped")
-    if args.use_retro_reward:
-        cmd.append("--use-retro-reward")
-    else:
-        cmd.append("--no-use-retro-reward")
-    if args.clip_rewards:
-        cmd.append("--clip-rewards")
-    else:
-        cmd.append("--no-clip-rewards")
     if args.stochastic:
         cmd.append("--stochastic")
-    if args.max_pool_frames:
-        cmd.append("--max-pool-frames")
-    else:
-        cmd.append("--no-max-pool-frames")
     if args.random_seeds:
         cmd.append("--random-seeds")
-    if args.terminate_on_life_loss is True:
-        cmd.append("--terminate-on-life-loss")
-    elif args.terminate_on_life_loss is False:
-        cmd.append("--no-terminate-on-life-loss")
-    if args.terminate_on_level_change:
-        cmd.append("--terminate-on-level-change")
-    if args.terminate_on_completion:
-        cmd.append("--terminate-on-completion")
+    append_explicit_env_args(cmd, parser, args, explicit_dests)
     print("+", " ".join(cmd), flush=True)
     subprocess.run(cmd, check=True)
 
@@ -221,17 +200,29 @@ def main() -> None:
     print(f"Downloading {ref} to {download_root}")
     model_path = download_model_artifact(ref, download_root)
     saved_config = env_config_from_metadata(load_model_metadata(model_path))
+    inferred_config: dict[str, Any] = {}
     if saved_config:
         apply_config_defaults(args, saved_config, parser_defaults, explicit_dests)
     else:
-        apply_artifact_run_config_defaults(args, ref, parser_defaults, explicit_dests)
-    config = resolve_env_config(env_config_from_args(args, max_episode_steps_attr="max_steps"))
-    metadata_path = write_model_metadata(model_path, args, config, kind=args.kind)
+        inferred_config = apply_artifact_run_config_defaults(
+            args,
+            ref,
+            parser_defaults,
+            explicit_dests,
+        )
+    metadata_path = None
+    if not saved_config and inferred_config:
+        metadata_args = parser.parse_args([])
+        apply_config_defaults(metadata_args, inferred_config, parser_defaults, set())
+        metadata_config = resolve_env_config(
+            env_config_from_args(metadata_args, max_episode_steps_attr="max_steps")
+        )
+        metadata_path = write_model_metadata(model_path, args, metadata_config, kind=args.kind)
     if metadata_path is not None:
         print(f"Wrote playback metadata: {metadata_path}")
     print(f"Downloaded model: {model_path}")
     if not args.download_only:
-        play_model(model_path, args)
+        play_model(model_path, args, parser, explicit_dests)
 
 
 if __name__ == "__main__":

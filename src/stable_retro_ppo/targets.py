@@ -133,16 +133,8 @@ class SuperMarioBrosNesV0ProgressTracker(RetroProgressTracker):
         if progress_delta > config.no_progress_min_delta:
             self.last_progress_step = self.episode_steps
 
-        threshold_complete = (
-            config.completion_x_threshold > 0
-            and self.level_max_x_pos >= config.completion_x_threshold
-        )
-        threshold_completion_event = (
-            threshold_complete and not self.current_level_completion_awarded
-        )
-        completion_event = level_completion_event or threshold_completion_event
-        if threshold_completion_event:
-            self.current_level_completion_awarded = True
+        threshold_complete = False
+        completion_event = level_completion_event
         if completion_event:
             self.completed = True
 
@@ -317,7 +309,7 @@ class SuperMarioBrosNesV0Target(RetroTarget):
     game = "SuperMarioBros-Nes-v0"
     default_state = "Level1-1"
     default_hud_crop_top = 32
-    default_completion_x_threshold = 3160
+    default_completion_x_threshold = 0
     default_action_set = "simple"
     default_reward_mode = "baseline"
     default_terminate_on_life_loss = True
