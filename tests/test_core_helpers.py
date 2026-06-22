@@ -26,7 +26,7 @@ from stable_retro_ppo.artifacts import (
     require_training_metadata,
     write_model_metadata,
 )
-from stable_retro_ppo.callbacks import ThroughputCallback
+from stable_retro_ppo.callbacks import RolloutDiagnosticsCallback, ThroughputCallback
 from stable_retro_ppo.cli import build_train_command
 from stable_retro_ppo.env import (
     EnvConfig,
@@ -98,6 +98,15 @@ class EnvConfigFromArgsTests(unittest.TestCase):
         self.assertEqual(build_play_parser().parse_args([]).sticky_action_prob, 0.0)
         self.assertEqual(build_wandb_play_parser().parse_args(["run"]).sticky_action_prob, 0.0)
 
+    def test_playback_eval_termination_defaults_to_disabled(self) -> None:
+        play_args = build_play_parser().parse_args([])
+        wandb_args = build_wandb_play_parser().parse_args(["run"])
+
+        for args in (play_args, wandb_args):
+            self.assertFalse(args.terminate_on_life_loss)
+            self.assertFalse(args.terminate_on_level_change)
+            self.assertFalse(args.terminate_on_completion)
+
     def test_sticky_action_probability_parses_for_playback(self) -> None:
         self.assertEqual(
             build_play_parser().parse_args(["--sticky-action-prob", "0.25"]).sticky_action_prob,
@@ -124,6 +133,8 @@ class EnvConfigFromArgsTests(unittest.TestCase):
         self.assertIs(env, sentinel)
         passed_config = make_vec_envs.call_args.kwargs["config"]
         self.assertFalse(passed_config.terminate_on_life_loss)
+        self.assertFalse(passed_config.terminate_on_level_change)
+        self.assertFalse(passed_config.terminate_on_completion)
 
     def test_eval_vec_env_disables_target_default_life_loss_termination(self) -> None:
         sentinel = object()
@@ -134,6 +145,8 @@ class EnvConfigFromArgsTests(unittest.TestCase):
 
         passed_config = make_vec_envs.call_args.kwargs["config"]
         self.assertFalse(passed_config.terminate_on_life_loss)
+        self.assertFalse(passed_config.terminate_on_level_change)
+        self.assertFalse(passed_config.terminate_on_completion)
 
     def test_training_vec_env_preserves_requested_life_loss_termination(self) -> None:
         sentinel = object()
@@ -156,6 +169,8 @@ class EnvConfigFromArgsTests(unittest.TestCase):
         self.assertIs(env, sentinel)
         passed_config = make_retro_env.call_args.kwargs["config"]
         self.assertFalse(passed_config.terminate_on_life_loss)
+        self.assertFalse(passed_config.terminate_on_level_change)
+        self.assertFalse(passed_config.terminate_on_completion)
 
     def test_short_states_requires_one_state_per_env_slot(self) -> None:
         with patch(
@@ -659,6 +674,42 @@ class CommandAndArtifactTests(unittest.TestCase):
             self.assertEqual(config.state, "Level2-1")
             self.assertEqual(config.observation_size, 96)
 
+    def test_playback_eval_defaults_block_training_termination_metadata(self) -> None:
+        parser = build_play_parser()
+        parser_defaults = vars(parser.parse_args([]))
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            model_path = Path(tmp_dir) / "ppo_test_100_steps.zip"
+            model_path.write_bytes(b"zip")
+            write_model_metadata(
+                model_path,
+                argparse.Namespace(run_name="run", run_description="description"),
+                EnvConfig(
+                    game="SuperMarioBros-Nes-v0",
+                    state="Level1-1",
+                    terminate_on_life_loss=True,
+                    terminate_on_level_change=True,
+                    terminate_on_completion=True,
+                ),
+                kind="checkpoint",
+            )
+
+            args = parser.parse_args(["--model", str(model_path)])
+            explicit_dests = explicit_arg_dests(parser, [])
+            explicit_dests.update(
+                {
+                    "terminate_on_life_loss",
+                    "terminate_on_level_change",
+                    "terminate_on_completion",
+                }
+            )
+
+            self.assertTrue(
+                apply_model_config_defaults(args, model_path, parser_defaults, explicit_dests)
+            )
+            self.assertFalse(args.terminate_on_life_loss)
+            self.assertFalse(args.terminate_on_level_change)
+            self.assertFalse(args.terminate_on_completion)
+
     def test_wandb_play_forwards_only_explicit_env_overrides(self) -> None:
         parser = build_wandb_play_parser()
         argv = [
@@ -862,6 +913,47 @@ class ThroughputCallbackTests(unittest.TestCase):
                 ("time/fps_instant", 20.0),
             ],
         )
+
+
+class RolloutDiagnosticsCallbackTests(unittest.TestCase):
+    def test_logs_value_prediction_and_advantage_stats(self) -> None:
+        class Logger:
+            def __init__(self) -> None:
+                self.records: list[tuple[str, float]] = []
+
+            def record(self, key: str, value: float) -> None:
+                self.records.append((key, value))
+
+        class RolloutBuffer:
+            values = np.array([[1.0, 2.0], [3.0, 4.0]])
+            advantages = np.array([[-1.0, 0.0], [1.0, 2.0]])
+
+        class Model:
+            def __init__(self) -> None:
+                self.logger = Logger()
+                self.rollout_buffer = RolloutBuffer()
+
+        model = Model()
+        callback = RolloutDiagnosticsCallback(log_histograms=False)
+        callback.model = model  # type: ignore[assignment]
+
+        callback._on_rollout_end()
+
+        records = dict(model.logger.records)
+        self.assertEqual(records["train/value_pred_mean"], 2.5)
+        self.assertAlmostEqual(
+            records["train/value_pred_std"], float(np.std([1.0, 2.0, 3.0, 4.0]))
+        )
+        self.assertEqual(records["train/value_pred_min"], 1.0)
+        self.assertEqual(records["train/value_pred_max"], 4.0)
+        self.assertEqual(records["train/value_pred_abs_mean"], 2.5)
+        self.assertEqual(records["train/advantage_mean"], 0.5)
+        self.assertAlmostEqual(
+            records["train/advantage_std"], float(np.std([-1.0, 0.0, 1.0, 2.0]))
+        )
+        self.assertEqual(records["train/advantage_min"], -1.0)
+        self.assertEqual(records["train/advantage_max"], 2.0)
+        self.assertEqual(records["train/advantage_abs_mean"], 1.0)
 
 
 if __name__ == "__main__":

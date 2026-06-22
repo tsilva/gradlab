@@ -369,7 +369,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--terminate-on-life-loss",
         action=argparse.BooleanOptionalAction,
-        default=defaults.terminate_on_life_loss,
+        default=False,
     )
     parser.add_argument("--terminate-on-level-change", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--terminate-on-completion", action=argparse.BooleanOptionalAction, default=False)
@@ -394,6 +394,9 @@ def main() -> None:
     parser = build_parser()
     parser_defaults = vars(parser.parse_args([]))
     explicit_dests = explicit_arg_dests(parser, sys.argv[1:])
+    explicit_dests.update(
+        {"terminate_on_life_loss", "terminate_on_level_change", "terminate_on_completion"}
+    )
     args = parser.parse_args()
     if args.episodes < 1:
         raise SystemExit("--episodes must be >= 1")

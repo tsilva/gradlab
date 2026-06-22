@@ -1,0 +1,4 @@
+interface:
+  display_name: "SkyPilot Mario Monitor"
+  short_description: "Poll Mario PPO SkyPilot batches and gate follow-up launches"
+  default_prompt: "Use $skypilot-mario-monitor to poll <cluster/job>, summarize W&B per-seed results, and launch the prepared follow-up only if the success criterion is met."

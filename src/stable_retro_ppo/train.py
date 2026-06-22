@@ -20,6 +20,7 @@ from stable_retro_ppo.artifacts import (
     write_wandb_url,
 )
 from stable_retro_ppo.callbacks import (
+    RolloutDiagnosticsCallback,
     RollingCompletionStopCallback,
     ThroughputCallback,
     TrainingCompletionRateStopCallback,
@@ -114,6 +115,7 @@ def main() -> None:
     )
     callbacks = [
         ThroughputCallback(),
+        RolloutDiagnosticsCallback(wandb_run=wandb_run),
         CheckpointCallback(
             save_freq=checkpoint_save_freq,
             save_path=checkpoint_dir,

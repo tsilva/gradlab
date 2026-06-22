@@ -298,6 +298,23 @@ def render_task_yaml(
         file_mount_lines.append(f"  {remote_path}: {repo_root / str(local_path)}")
     smoke_options = training_options(manifest, manifest["runs"][0])
     smoke_state = str(smoke_options.get("state", ""))
+    smoke_states = _manifest_train_value(smoke_options.get("states", ""))
+    smoke_state_probs = _manifest_train_value(smoke_options.get("state_probs", ""))
+    smoke_states_tuple = (
+        tuple(part.strip() for part in str(smoke_states).split(",") if part.strip())
+        if smoke_states
+        else ()
+    )
+    smoke_state_probs_tuple = (
+        tuple(float(part.strip()) for part in str(smoke_state_probs).split(",") if part.strip())
+        if smoke_state_probs
+        else ()
+    )
+    smoke_n_envs = (
+        len(smoke_states_tuple)
+        if smoke_states_tuple and not smoke_state_probs_tuple
+        else int(smoke_options.get("n_envs", 2))
+    )
     smoke_hud_crop_top = int(smoke_options.get("hud_crop_top", -1))
     smoke_reward_mode = str(smoke_options.get("reward_mode", "auto"))
     smoke_action_set = str(smoke_options.get("action_set", "auto"))
@@ -363,6 +380,8 @@ print("rom", retro.data.get_romfile_path({game!r}))
 config = resolve_env_config(EnvConfig(
     game={game!r},
     state={smoke_state!r},
+    states={smoke_states_tuple!r},
+    state_probs={smoke_state_probs_tuple!r},
     hud_crop_top={smoke_hud_crop_top!r},
     reward_mode={smoke_reward_mode!r},
     action_set={smoke_action_set!r},
@@ -370,7 +389,7 @@ config = resolve_env_config(EnvConfig(
     terminate_on_completion={smoke_terminate_on_completion!r},
     completion_x_threshold={smoke_completion_x_threshold!r},
 ))
-env = make_training_vec_env(config, n_envs=2, seed=0)
+env = make_training_vec_env(config, n_envs={smoke_n_envs!r}, seed=0)
 try:
     obs = env.reset()
     print("training_observation_space", env.observation_space)

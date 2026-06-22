@@ -843,12 +843,22 @@ def make_training_vec_env(config: EnvConfig, n_envs: int, seed: int, start_metho
 
 
 def make_eval_vec_env(config: EnvConfig, n_envs: int, seed: int, start_method: str = "fork"):
-    eval_config = replace(resolve_env_config(config), terminate_on_life_loss=False)
+    eval_config = replace(
+        resolve_env_config(config),
+        terminate_on_life_loss=False,
+        terminate_on_level_change=False,
+        terminate_on_completion=False,
+    )
     return make_vec_envs(config=eval_config, n_envs=n_envs, seed=seed, start_method=start_method)
 
 
 def make_rendered_replay_env(config: EnvConfig | None = None, seed: int | None = None) -> gym.Env:
-    eval_config = replace(resolve_env_config(config or EnvConfig()), terminate_on_life_loss=False)
+    eval_config = replace(
+        resolve_env_config(config or EnvConfig()),
+        terminate_on_life_loss=False,
+        terminate_on_level_change=False,
+        terminate_on_completion=False,
+    )
     return make_retro_env(config=eval_config, seed=seed)
 
 

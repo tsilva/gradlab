@@ -29,6 +29,10 @@ Before choosing hardware, launching remote training, changing concurrency, or re
 
 When the user gives a game plus target and asks Codex to find a reproducible model-training recipe, use the project-level `$autoresearch` skill in `.codex/skills/autoresearch`. That workflow is RTX4090-only, allows only reward-function and hyperparameter changes by default, and requires three fresh successful seeds before declaring the target solved.
 
+## SkyPilot Mario Monitoring
+
+When the user asks to poll, monitor, summarize, or conditionally continue sandbox-sb3 Mario PPO SkyPilot training jobs, use the project-level `$skypilot-mario-monitor` skill in `.codex/skills/skypilot-mario-monitor`. That workflow standardizes SkyPilot queue checks, W&B per-seed metric collection, success-criterion gating, and avoiding accidental RTX4090 oversubscription.
+
 ## Eval Queue
 
 When the user asks to flush unevaluated checkpoints, evaluate pending checkpoints, run the Modal eval queue, or produce an eval database report, use the project-level `$flush-eval` skill in `.codex/skills/flush-eval`. Its default eval profile is Level 1 with no terminal-on-life.

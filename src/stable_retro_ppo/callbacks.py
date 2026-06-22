@@ -4,8 +4,9 @@ import argparse
 import time
 from collections import deque
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable
 
+import numpy as np
 from stable_baselines3.common.callbacks import BaseCallback
 
 from stable_retro_ppo.artifacts import checkpoint_step, log_wandb_model_artifact
@@ -96,6 +97,61 @@ class ThroughputCallback(BaseCallback):
 
     def _on_step(self) -> bool:
         return True
+
+
+class RolloutDiagnosticsCallback(BaseCallback):
+    """Log rollout-buffer value and advantage distributions."""
+
+    def __init__(self, wandb_run=None, log_histograms: bool = True):
+        super().__init__()
+        self.wandb_run = wandb_run
+        self.log_histograms = log_histograms
+
+    def _on_rollout_end(self) -> None:
+        rollout_buffer = getattr(self.model, "rollout_buffer", None)
+        if rollout_buffer is None:
+            return
+
+        value_predictions = self._finite_values(getattr(rollout_buffer, "values", None))
+        advantages = self._finite_values(getattr(rollout_buffer, "advantages", None))
+        self._record_stats("train/value_pred", value_predictions)
+        self._record_stats("train/advantage", advantages)
+        self._log_wandb_histograms(value_predictions, advantages)
+
+    def _on_step(self) -> bool:
+        return True
+
+    @staticmethod
+    def _finite_values(values: Any) -> np.ndarray:
+        if values is None:
+            return np.array([], dtype=np.float64)
+        flattened = np.asarray(values, dtype=np.float64).reshape(-1)
+        return flattened[np.isfinite(flattened)]
+
+    def _record_stats(self, prefix: str, values: np.ndarray) -> None:
+        if values.size == 0:
+            return
+        self.logger.record(f"{prefix}_mean", float(np.mean(values)))
+        self.logger.record(f"{prefix}_std", float(np.std(values)))
+        self.logger.record(f"{prefix}_min", float(np.min(values)))
+        self.logger.record(f"{prefix}_max", float(np.max(values)))
+        self.logger.record(f"{prefix}_abs_mean", float(np.mean(np.abs(values))))
+
+    def _log_wandb_histograms(
+        self, value_predictions: np.ndarray, advantages: np.ndarray
+    ) -> None:
+        if self.wandb_run is None or not self.log_histograms:
+            return
+
+        import wandb
+
+        payload: dict[str, object] = {"global_step": self.num_timesteps}
+        if value_predictions.size > 0:
+            payload["train/value_pred_histogram"] = wandb.Histogram(value_predictions)
+        if advantages.size > 0:
+            payload["train/advantage_histogram"] = wandb.Histogram(advantages)
+        if len(payload) > 1:
+            self.wandb_run.log(payload, step=self.num_timesteps)
 
 
 class RollingCompletionStopCallback(BaseCallback):
