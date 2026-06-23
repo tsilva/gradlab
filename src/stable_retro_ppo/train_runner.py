@@ -25,14 +25,18 @@ from stable_retro_ppo.campaign import (
     print_status,
 )
 from stable_retro_ppo.cli import build_train_command
+from stable_retro_ppo.wandb_artifacts import download_model_artifact
 
 
 ARTIFACT_RE = re.compile(r"wandb artifact logged: (?P<name>[^ ]+) \((?P<location>[^)]+)\)")
 METRIC_ROW_RE = re.compile(r"\|\s+(?P<key>[A-Za-z0-9_./-]+)\s+\|\s+(?P<value>[^|]+?)\s+\|")
 WANDB_RUN_URL_RE = re.compile(r"https://wandb\.ai/\S+/runs/[A-Za-z0-9_-]+")
+RESUME_ARTIFACT_ROOT = Path("artifacts/train_resumes")
 
 
-def normalize_train_config(job: dict[str, Any]) -> dict[str, Any]:
+def normalize_train_config(
+    job: dict[str, Any], *, resolve_resume_artifact: bool = True
+) -> dict[str, Any]:
     config = dict(job.get("train_config") or {})
     run_name = job.get("run_name") or config.get("run_name") or f"train_job_{job['id']}"
     config["run_name"] = run_name
@@ -45,6 +49,16 @@ def normalize_train_config(job: dict[str, Any]) -> dict[str, Any]:
         config["wandb_tags"] = ",".join(str(tag) for tag in tags)
     if isinstance(config.get("wandb_tags"), list):
         config["wandb_tags"] = ",".join(str(tag) for tag in config["wandb_tags"])
+    if config.get("wandb_artifact_storage_uri") == "${CHECKPOINT_BUCKET_URI}":
+        config["wandb_artifact_storage_uri"] = os.environ.get("CHECKPOINT_BUCKET_URI", "")
+    resume_artifact = config.pop("resume_artifact", None)
+    if resume_artifact:
+        if config.get("resume"):
+            raise ValueError("Use only one of resume or resume_artifact in train_config")
+        if resolve_resume_artifact:
+            config["resume"] = str(
+                download_model_artifact(str(resume_artifact), RESUME_ARTIFACT_ROOT)
+            )
     return config
 
 
@@ -109,7 +123,7 @@ def parse_wandb_run_url(log_text: str) -> str | None:
 
 
 def collect_result_metadata(job: dict[str, Any], log_path: Path) -> dict[str, Any]:
-    config = normalize_train_config(job)
+    config = normalize_train_config(job, resolve_resume_artifact=False)
     run_name = str(config["run_name"])
     runs_dir = str(config.get("runs_dir") or "runs")
     run_dir = Path(runs_dir) / run_name

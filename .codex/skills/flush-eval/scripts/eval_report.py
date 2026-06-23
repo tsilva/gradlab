@@ -47,10 +47,8 @@ def fetch_all(cur, query: str, params: dict[str, Any] | None = None) -> list[dic
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Report Neon eval queue results.")
-    parser.add_argument("--stage", default="quick")
-    parser.add_argument("--episodes", type=int, default=100)
-    parser.add_argument("--seed-start", type=int, default=10007)
+    parser = argparse.ArgumentParser(description="Report Neon campaign eval queue results.")
+    parser.add_argument("--profile", default="mario-level1-quick")
     parser.add_argument("--limit", type=int, default=20)
     parser.add_argument("--direct", action="store_true", help="Use DIRECT_DATABASE_URL.")
     return parser
@@ -58,24 +56,16 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main() -> None:
     args = build_parser().parse_args()
-    params = {
-        "stage": args.stage,
-        "episodes": args.episodes,
-        "seed_start": args.seed_start,
-        "limit": args.limit,
-    }
+    params = {"profile": args.profile, "limit": args.limit}
     conn = connect(database_url(args.direct))
     try:
         with conn.cursor() as cur:
-            candidates = fetch_one(cur, "SELECT COUNT(*) AS count FROM checkpoint_candidates")
             statuses = fetch_all(
                 cur,
                 """
                 SELECT status, COUNT(*) AS count
                 FROM eval_jobs
-                WHERE stage = %(stage)s
-                  AND episodes = %(episodes)s
-                  AND seed_start = %(seed_start)s
+                WHERE profile_id = %(profile)s
                 GROUP BY status
                 ORDER BY status
                 """,
@@ -86,15 +76,14 @@ def main() -> None:
                 """
                 SELECT
                   COUNT(*) AS result_count,
-                  AVG(completion_rate) AS mean_completion_rate,
-                  MAX(completion_rate) AS max_completion_rate,
-                  AVG(max_x_max) AS mean_max_x_max,
-                  MAX(max_x_max) AS best_max_x_max,
-                  AVG(reward_mean) AS mean_reward_mean
+                  AVG((metrics_json->>'completion_rate')::DOUBLE PRECISION) AS mean_completion_rate,
+                  MAX((metrics_json->>'completion_rate')::DOUBLE PRECISION) AS max_completion_rate,
+                  AVG((metrics_json->>'max_x_max')::DOUBLE PRECISION) AS mean_max_x_max,
+                  MAX((metrics_json->>'max_x_max')::DOUBLE PRECISION) AS best_max_x_max,
+                  AVG((metrics_json->>'reward_mean')::DOUBLE PRECISION) AS mean_reward_mean
                 FROM eval_results
-                WHERE stage = %(stage)s
-                  AND episodes = %(episodes)s
-                  AND seed_start = %(seed_start)s
+                WHERE profile_id = %(profile)s
+                  AND status = 'succeeded'
                 """,
                 params,
             )
@@ -108,10 +97,8 @@ def main() -> None:
                   MIN(EXTRACT(EPOCH FROM finished_at - started_at)) AS min_seconds,
                   MAX(EXTRACT(EPOCH FROM finished_at - started_at)) AS max_seconds
                 FROM eval_jobs
-                WHERE stage = %(stage)s
-                  AND episodes = %(episodes)s
-                  AND seed_start = %(seed_start)s
-                  AND status = 'done'
+                WHERE profile_id = %(profile)s
+                  AND status = 'succeeded'
                   AND started_at IS NOT NULL
                   AND finished_at IS NOT NULL
                 """,
@@ -121,31 +108,26 @@ def main() -> None:
                 cur,
                 """
                 SELECT
-                  c.artifact_ref,
-                  c.run_name,
-                  c.checkpoint_step,
-                  r.completion_count,
-                  r.completion_rate,
-                  r.max_x_max,
-                  r.reward_mean,
-                  r.training_metadata_hash,
+                  r.candidate_label,
+                  r.model_ref,
+                  r.output_path,
+                  (r.metrics_json->>'episodes')::INTEGER AS episodes,
+                  (r.metrics_json->>'completion_count')::INTEGER AS completion_count,
+                  (r.metrics_json->>'completion_rate')::DOUBLE PRECISION AS completion_rate,
+                  (r.metrics_json->>'max_x_max')::INTEGER AS max_x_max,
+                  (r.metrics_json->>'reward_mean')::DOUBLE PRECISION AS reward_mean,
                   r.created_at
                 FROM eval_results r
-                JOIN checkpoint_candidates c ON c.id = r.candidate_id
-                WHERE r.stage = %(stage)s
-                  AND r.episodes = %(episodes)s
-                  AND r.seed_start = %(seed_start)s
-                ORDER BY r.completion_rate DESC, r.reward_mean DESC, r.max_x_max DESC
+                WHERE r.profile_id = %(profile)s
+                  AND r.status = 'succeeded'
+                ORDER BY completion_rate DESC, reward_mean DESC, max_x_max DESC
                 LIMIT %(limit)s
                 """,
                 params,
             )
 
-        print(f"# Eval Report: {args.stage}")
+        print(f"# Eval Report: {args.profile}")
         print()
-        print(f"- candidates: {int(candidates.get('count', 0))}")
-        print(f"- episodes: {args.episodes}")
-        print(f"- seed_start: {args.seed_start}")
         print("- job_status_counts:")
         if statuses:
             for row in statuses:
@@ -173,21 +155,19 @@ def main() -> None:
             print("No results for this eval selection.")
             return
         print()
-        print("| rank | completion | max_x | reward_mean | metadata | step | run | artifact |")
-        print("| ---: | ---: | ---: | ---: | --- | ---: | --- | --- |")
+        print("| rank | completion | max_x | reward_mean | candidate | model | output |")
+        print("| ---: | ---: | ---: | ---: | --- | --- | --- |")
         for index, row in enumerate(top, start=1):
-            run_name = str(row.get("run_name") or "")
-            artifact_ref = str(row.get("artifact_ref") or "")
-            metadata_hash = str(row.get("training_metadata_hash") or "")[:12]
+            episodes = int(row.get("episodes") or 0)
+            completion_count = int(row.get("completion_count") or 0)
             print(
                 f"| {index} "
-                f"| {float(row['completion_rate']):.3f} ({int(row['completion_count'])}/{args.episodes}) "
+                f"| {float(row['completion_rate']):.3f} ({completion_count}/{episodes}) "
                 f"| {int(row['max_x_max'])} "
                 f"| {float(row['reward_mean']):.2f} "
-                f"| `{metadata_hash}` "
-                f"| {int(row['checkpoint_step'] or 0)} "
-                f"| `{run_name}` "
-                f"| `{artifact_ref}` |"
+                f"| `{row.get('candidate_label') or ''}` "
+                f"| `{row.get('model_ref') or ''}` "
+                f"| `{row.get('output_path') or ''}` |"
             )
     finally:
         conn.close()

@@ -6,7 +6,6 @@ import argparse
 import copy
 import json
 import os
-import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -26,6 +25,8 @@ from stable_retro_ppo.env_config import env_config_from_args
 from stable_retro_ppo.eval_metrics import flat_numeric_metrics
 from stable_retro_ppo.eval_runner import evaluate_model_episodes
 from stable_retro_ppo.wandb_artifacts import (
+    artifact_qualified_name,
+    checkpoint_step_from_artifact,
     model_zip_from_download,
     safe_artifact_stem,
     write_downloaded_artifact_metadata,
@@ -42,31 +43,6 @@ def split_project(value: str) -> tuple[str | None, str]:
     if len(parts) == 1:
         return None, parts[0]
     return parts[0], parts[1]
-
-
-def artifact_aliases(artifact) -> list[str]:
-    aliases = []
-    for alias in getattr(artifact, "aliases", []) or []:
-        aliases.append(str(getattr(alias, "alias", alias)))
-    return aliases
-
-
-def checkpoint_step_from_name(value: str) -> int | None:
-    match = re.search(r"_(\d+)_steps(?:\.zip)?$", value)
-    return int(match.group(1)) if match else None
-
-
-def checkpoint_step_from_artifact(artifact, model_path: Path | None = None) -> int | None:
-    metadata = getattr(artifact, "metadata", {}) or {}
-    step = metadata.get("checkpoint_step")
-    if step is not None:
-        return int(step)
-    for alias in artifact_aliases(artifact):
-        if alias.startswith("step-"):
-            return int(alias.removeprefix("step-"))
-    if model_path is not None:
-        return checkpoint_step_from_name(model_path.name)
-    return None
 
 
 def artifact_ref(args: argparse.Namespace) -> str:
@@ -98,7 +74,7 @@ def find_checkpoint_artifacts(args: argparse.Namespace):
 
 def download_artifact(artifact, root: Path) -> Path:
     root.mkdir(parents=True, exist_ok=True)
-    name = getattr(artifact, "qualified_name", None) or getattr(artifact, "name", "artifact")
+    name = artifact_qualified_name(artifact)
     download_root = root / slug(name.replace("/", "_").replace(":", "_"))
     model_path = model_zip_from_download(Path(artifact.download(root=str(download_root))))
     write_downloaded_artifact_metadata(model_path, artifact)

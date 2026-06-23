@@ -27,6 +27,7 @@ stable-retro-ppo-play = "stable_retro_ppo.play:main"
 stable-retro-ppo-skypilot = "stable_retro_ppo.skypilot_cli:main"
 stable-retro-ppo-campaign = "stable_retro_ppo.campaign:main"
 stable-retro-ppo-train-runner = "stable_retro_ppo.train_runner:main"
+stable-retro-ppo-eval-runner = "stable_retro_ppo.eval_job_runner:main"
 
 [build-system]
 requires = ["hatchling"]

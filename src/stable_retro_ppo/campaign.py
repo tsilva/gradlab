@@ -97,6 +97,117 @@ CREATE TABLE IF NOT EXISTS train_results (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+CREATE TABLE IF NOT EXISTS eval_jobs (
+  id BIGSERIAL PRIMARY KEY,
+  goal_id BIGINT NOT NULL REFERENCES research_goals(id) ON DELETE CASCADE,
+  experiment_spec_id BIGINT REFERENCES experiment_specs(id) ON DELETE SET NULL,
+  train_job_id BIGINT REFERENCES train_jobs(id) ON DELETE SET NULL,
+  profile_id TEXT NOT NULL,
+  eval_config JSONB NOT NULL,
+  priority INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'pending',
+  attempts INTEGER NOT NULL DEFAULT 0,
+  max_attempts INTEGER NOT NULL DEFAULT 1,
+  lease_owner TEXT,
+  lease_expires_at TIMESTAMPTZ,
+  cancel_requested BOOLEAN NOT NULL DEFAULT FALSE,
+  drain_requested BOOLEAN NOT NULL DEFAULT FALSE,
+  candidate_label TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  started_at TIMESTAMPTZ,
+  heartbeat_at TIMESTAMPTZ,
+  finished_at TIMESTAMPTZ,
+  error TEXT
+);
+
+CREATE TABLE IF NOT EXISTS eval_results (
+  id BIGSERIAL PRIMARY KEY,
+  eval_job_id BIGINT NOT NULL UNIQUE REFERENCES eval_jobs(id) ON DELETE CASCADE,
+  goal_id BIGINT NOT NULL REFERENCES research_goals(id) ON DELETE CASCADE,
+  experiment_spec_id BIGINT REFERENCES experiment_specs(id) ON DELETE SET NULL,
+  train_job_id BIGINT REFERENCES train_jobs(id) ON DELETE SET NULL,
+  profile_id TEXT NOT NULL,
+  status TEXT NOT NULL,
+  candidate_label TEXT,
+  model_ref TEXT,
+  output_path TEXT,
+  video_path TEXT,
+  metrics_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+  error TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+ALTER TABLE IF EXISTS eval_jobs
+  ADD COLUMN IF NOT EXISTS goal_id BIGINT,
+  ADD COLUMN IF NOT EXISTS experiment_spec_id BIGINT,
+  ADD COLUMN IF NOT EXISTS train_job_id BIGINT,
+  ADD COLUMN IF NOT EXISTS profile_id TEXT,
+  ADD COLUMN IF NOT EXISTS eval_config JSONB NOT NULL DEFAULT '{}'::jsonb,
+  ADD COLUMN IF NOT EXISTS max_attempts INTEGER NOT NULL DEFAULT 1,
+  ADD COLUMN IF NOT EXISTS lease_owner TEXT,
+  ADD COLUMN IF NOT EXISTS lease_expires_at TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS cancel_requested BOOLEAN NOT NULL DEFAULT FALSE,
+  ADD COLUMN IF NOT EXISTS drain_requested BOOLEAN NOT NULL DEFAULT FALSE,
+  ADD COLUMN IF NOT EXISTS candidate_label TEXT,
+  ADD COLUMN IF NOT EXISTS heartbeat_at TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS error TEXT;
+
+DO $$
+BEGIN
+  IF to_regclass('eval_jobs') IS NOT NULL THEN
+    IF EXISTS (
+      SELECT 1 FROM information_schema.columns
+      WHERE table_name = 'eval_jobs' AND column_name = 'candidate_id'
+    ) THEN
+      ALTER TABLE eval_jobs ALTER COLUMN candidate_id DROP NOT NULL;
+    END IF;
+    IF EXISTS (
+      SELECT 1 FROM information_schema.columns
+      WHERE table_name = 'eval_jobs' AND column_name = 'stage'
+    ) THEN
+      ALTER TABLE eval_jobs ALTER COLUMN stage DROP NOT NULL;
+    END IF;
+    IF EXISTS (
+      SELECT 1 FROM information_schema.columns
+      WHERE table_name = 'eval_jobs' AND column_name = 'episodes'
+    ) THEN
+      ALTER TABLE eval_jobs ALTER COLUMN episodes DROP NOT NULL;
+    END IF;
+    IF EXISTS (
+      SELECT 1 FROM information_schema.columns
+      WHERE table_name = 'eval_jobs' AND column_name = 'seed_start'
+    ) THEN
+      ALTER TABLE eval_jobs ALTER COLUMN seed_start DROP NOT NULL;
+    END IF;
+  END IF;
+END $$;
+
+ALTER TABLE IF EXISTS eval_results
+  ADD COLUMN IF NOT EXISTS eval_job_id BIGINT,
+  ADD COLUMN IF NOT EXISTS goal_id BIGINT,
+  ADD COLUMN IF NOT EXISTS experiment_spec_id BIGINT,
+  ADD COLUMN IF NOT EXISTS train_job_id BIGINT,
+  ADD COLUMN IF NOT EXISTS profile_id TEXT,
+  ADD COLUMN IF NOT EXISTS status TEXT,
+  ADD COLUMN IF NOT EXISTS candidate_label TEXT,
+  ADD COLUMN IF NOT EXISTS model_ref TEXT,
+  ADD COLUMN IF NOT EXISTS output_path TEXT,
+  ADD COLUMN IF NOT EXISTS video_path TEXT,
+  ADD COLUMN IF NOT EXISTS metrics_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+  ADD COLUMN IF NOT EXISTS error TEXT;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_constraint
+    WHERE conname = 'eval_results_eval_job_id_unique'
+  ) THEN
+    ALTER TABLE eval_results
+      ADD CONSTRAINT eval_results_eval_job_id_unique UNIQUE (eval_job_id);
+  END IF;
+END $$;
+
 CREATE TABLE IF NOT EXISTS campaign_decisions (
   id BIGSERIAL PRIMARY KEY,
   goal_id BIGINT NOT NULL REFERENCES research_goals(id) ON DELETE CASCADE,
@@ -116,6 +227,13 @@ CREATE INDEX IF NOT EXISTS train_jobs_claim_idx
 
 CREATE INDEX IF NOT EXISTS train_jobs_goal_status_idx
   ON train_jobs (goal_id, status);
+
+CREATE INDEX IF NOT EXISTS eval_jobs_claim_idx
+  ON eval_jobs (profile_id, status, priority DESC, id)
+  WHERE status IN ('pending', 'running');
+
+CREATE INDEX IF NOT EXISTS eval_jobs_goal_status_idx
+  ON eval_jobs (goal_id, status);
 
 CREATE INDEX IF NOT EXISTS campaign_decisions_goal_created_idx
   ON campaign_decisions (goal_id, created_at DESC);
@@ -142,6 +260,40 @@ WITH next_job AS (
   FOR UPDATE SKIP LOCKED
 )
 UPDATE train_jobs AS job
+SET
+  status = 'running',
+  lease_owner = %(worker_id)s,
+  lease_expires_at = now() + (%(lease_seconds)s || ' seconds')::interval,
+  attempts = attempts + 1,
+  started_at = COALESCE(started_at, now()),
+  heartbeat_at = now(),
+  error = NULL
+FROM next_job
+WHERE job.id = next_job.id
+RETURNING job.*;
+"""
+
+
+CLAIM_EVAL_JOB_SQL = """
+WITH next_job AS (
+  SELECT id
+  FROM eval_jobs
+  WHERE
+    profile_id = %(profile_id)s
+    AND cancel_requested = FALSE
+    AND (
+      status = 'pending'
+      OR (
+        status = 'running'
+        AND lease_expires_at < now()
+        AND attempts < max_attempts
+      )
+    )
+  ORDER BY priority DESC, id ASC
+  LIMIT 1
+  FOR UPDATE SKIP LOCKED
+)
+UPDATE eval_jobs AS job
 SET
   status = 'running',
   lease_owner = %(worker_id)s,
@@ -426,6 +578,49 @@ def enqueue_train_job(
             return dict(cur.fetchone())
 
 
+def enqueue_eval_job(
+    conn,
+    *,
+    goal_id: int,
+    profile_id: str,
+    eval_config: Mapping[str, Any],
+    experiment_spec_id: int | None = None,
+    train_job_id: int | None = None,
+    priority: int = 0,
+    max_attempts: int = 1,
+    candidate_label: str | None = None,
+) -> dict[str, Any]:
+    config = dict(eval_config)
+    assert_no_secrets(config, label="eval_config")
+    with conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO eval_jobs (
+                  goal_id, experiment_spec_id, train_job_id, profile_id,
+                  eval_config, priority, max_attempts, candidate_label
+                )
+                VALUES (
+                  %(goal_id)s, %(experiment_spec_id)s, %(train_job_id)s,
+                  %(profile_id)s, %(eval_config)s, %(priority)s, %(max_attempts)s,
+                  %(candidate_label)s
+                )
+                RETURNING *
+                """,
+                {
+                    "goal_id": goal_id,
+                    "experiment_spec_id": experiment_spec_id,
+                    "train_job_id": train_job_id,
+                    "profile_id": profile_id,
+                    "eval_config": json_arg(config),
+                    "priority": priority,
+                    "max_attempts": max_attempts,
+                    "candidate_label": candidate_label,
+                },
+            )
+            return dict(cur.fetchone())
+
+
 def claim_train_job(
     conn,
     *,
@@ -437,6 +632,27 @@ def claim_train_job(
         with conn.cursor() as cur:
             cur.execute(
                 CLAIM_TRAIN_JOB_SQL,
+                {
+                    "profile_id": profile_id,
+                    "worker_id": worker_id,
+                    "lease_seconds": lease_seconds,
+                },
+            )
+            row = cur.fetchone()
+            return dict(row) if row else None
+
+
+def claim_eval_job(
+    conn,
+    *,
+    profile_id: str,
+    worker_id: str,
+    lease_seconds: int,
+) -> dict[str, Any] | None:
+    with conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                CLAIM_EVAL_JOB_SQL,
                 {
                     "profile_id": profile_id,
                     "worker_id": worker_id,
@@ -472,12 +688,54 @@ def heartbeat_train_job(
             return dict(row) if row else None
 
 
+def heartbeat_eval_job(
+    conn,
+    *,
+    job_id: int,
+    worker_id: str,
+    lease_seconds: int,
+) -> dict[str, Any] | None:
+    with conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE eval_jobs
+                SET heartbeat_at = now(),
+                    lease_expires_at = now() + (%(lease_seconds)s || ' seconds')::interval
+                WHERE id = %(job_id)s
+                  AND lease_owner = %(worker_id)s
+                  AND status = 'running'
+                RETURNING id, cancel_requested, drain_requested
+                """,
+                {"job_id": job_id, "worker_id": worker_id, "lease_seconds": lease_seconds},
+            )
+            row = cur.fetchone()
+            return dict(row) if row else None
+
+
 def request_cancel_train_job(conn, *, job_id: int) -> int:
     with conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
                 UPDATE train_jobs
+                SET cancel_requested = TRUE,
+                    status = CASE WHEN status = 'pending' THEN 'canceled' ELSE status END,
+                    finished_at = CASE WHEN status = 'pending' THEN now() ELSE finished_at END
+                WHERE id = %(job_id)s
+                  AND status IN ('pending', 'running')
+                """,
+                {"job_id": job_id},
+            )
+            return int(cur.rowcount)
+
+
+def request_cancel_eval_job(conn, *, job_id: int) -> int:
+    with conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE eval_jobs
                 SET cancel_requested = TRUE,
                     status = CASE WHEN status = 'pending' THEN 'canceled' ELSE status END,
                     finished_at = CASE WHEN status = 'pending' THEN now() ELSE finished_at END
@@ -573,6 +831,82 @@ def finish_train_job(
             )
 
 
+def finish_eval_job(
+    conn,
+    *,
+    job: Mapping[str, Any],
+    worker_id: str,
+    status: str,
+    result: Mapping[str, Any],
+    error: str | None = None,
+) -> None:
+    if status not in {"succeeded", "failed", "canceled"}:
+        raise ValueError(f"invalid eval job terminal status: {status}")
+    metrics_json = dict(result.get("metrics_json") or {})
+    assert_no_secrets(metrics_json, label="metrics_json")
+    with conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE eval_jobs
+                SET status = %(status)s,
+                    lease_owner = NULL,
+                    lease_expires_at = NULL,
+                    finished_at = now(),
+                    error = %(error)s
+                WHERE id = %(job_id)s
+                  AND lease_owner = %(worker_id)s
+                  AND status = 'running'
+                """,
+                {
+                    "status": status,
+                    "error": error,
+                    "job_id": job["id"],
+                    "worker_id": worker_id,
+                },
+            )
+            if cur.rowcount != 1:
+                raise RuntimeError(f"could not finish eval job {job['id']} for worker {worker_id}")
+            cur.execute(
+                """
+                INSERT INTO eval_results (
+                  eval_job_id, goal_id, experiment_spec_id, train_job_id, profile_id,
+                  status, candidate_label, model_ref, output_path, video_path,
+                  metrics_json, error
+                )
+                VALUES (
+                  %(eval_job_id)s, %(goal_id)s, %(experiment_spec_id)s,
+                  %(train_job_id)s, %(profile_id)s, %(status)s, %(candidate_label)s,
+                  %(model_ref)s, %(output_path)s, %(video_path)s, %(metrics_json)s,
+                  %(error)s
+                )
+                ON CONFLICT (eval_job_id) DO UPDATE SET
+                  status = EXCLUDED.status,
+                  candidate_label = EXCLUDED.candidate_label,
+                  model_ref = EXCLUDED.model_ref,
+                  output_path = EXCLUDED.output_path,
+                  video_path = EXCLUDED.video_path,
+                  metrics_json = EXCLUDED.metrics_json,
+                  error = EXCLUDED.error,
+                  created_at = now()
+                """,
+                {
+                    "eval_job_id": job["id"],
+                    "goal_id": job["goal_id"],
+                    "experiment_spec_id": job.get("experiment_spec_id"),
+                    "train_job_id": job.get("train_job_id"),
+                    "profile_id": job["profile_id"],
+                    "status": status,
+                    "candidate_label": result.get("candidate_label") or job.get("candidate_label"),
+                    "model_ref": result.get("model_ref"),
+                    "output_path": result.get("output_path"),
+                    "video_path": result.get("video_path"),
+                    "metrics_json": json_arg(metrics_json),
+                    "error": error,
+                },
+            )
+
+
 def campaign_status(conn, *, goal_slug_or_id: str, recent_decisions: int = 5) -> dict[str, Any]:
     goal_filter = (
         ("id = %(goal_id)s", {"goal_id": int(goal_slug_or_id)})
@@ -600,6 +934,17 @@ def campaign_status(conn, *, goal_slug_or_id: str, recent_decisions: int = 5) ->
         train_jobs = {row["status"]: int(row["count"]) for row in cur.fetchall()}
         cur.execute(
             """
+            SELECT status, COUNT(*) AS count
+            FROM eval_jobs
+            WHERE goal_id = %(goal_id)s
+            GROUP BY status
+            ORDER BY status
+            """,
+            {"goal_id": goal_id},
+        )
+        eval_jobs = {row["status"]: int(row["count"]) for row in cur.fetchall()}
+        cur.execute(
+            """
             SELECT id, profile_id, status, run_name, wandb_url, final_model_path, created_at
             FROM train_results
             WHERE goal_id = %(goal_id)s
@@ -609,6 +954,17 @@ def campaign_status(conn, *, goal_slug_or_id: str, recent_decisions: int = 5) ->
             {"goal_id": goal_id},
         )
         results = [dict(row) for row in cur.fetchall()]
+        cur.execute(
+            """
+            SELECT id, profile_id, status, candidate_label, model_ref, created_at
+            FROM eval_results
+            WHERE goal_id = %(goal_id)s
+            ORDER BY created_at DESC
+            LIMIT 10
+            """,
+            {"goal_id": goal_id},
+        )
+        eval_results = [dict(row) for row in cur.fetchall()]
         cur.execute(
             """
             SELECT decision_type, summary, rationale, created_at
@@ -623,7 +979,9 @@ def campaign_status(conn, *, goal_slug_or_id: str, recent_decisions: int = 5) ->
     return {
         "goal": goal,
         "train_jobs": train_jobs,
+        "eval_jobs": eval_jobs,
         "recent_results": results,
+        "recent_eval_results": eval_results,
         "decisions": decisions,
     }
 
@@ -635,12 +993,20 @@ def print_status(report: Mapping[str, Any]) -> None:
     print(f"objective: {json.dumps(goal['objective_json'], sort_keys=True, default=str)}")
     print(f"constraints: {json.dumps(goal['constraints_json'], sort_keys=True, default=str)}")
     print(f"train_jobs: {json.dumps(report['train_jobs'], sort_keys=True)}")
+    print(f"eval_jobs: {json.dumps(report['eval_jobs'], sort_keys=True)}")
     print("recent_results:")
     for row in report["recent_results"]:
         print(
             "  "
             f"result={row['id']} status={row['status']} profile={row['profile_id']} "
             f"run={row.get('run_name') or ''} wandb={row.get('wandb_url') or ''}"
+        )
+    print("recent_eval_results:")
+    for row in report["recent_eval_results"]:
+        print(
+            "  "
+            f"result={row['id']} status={row['status']} profile={row['profile_id']} "
+            f"candidate={row.get('candidate_label') or ''} model={row.get('model_ref') or ''}"
         )
     print("recent_decisions:")
     for row in report["decisions"]:
@@ -688,6 +1054,17 @@ def build_parser() -> argparse.ArgumentParser:
     enqueue.add_argument("--wandb-tag", action="append", default=[])
     enqueue.set_defaults(func=cmd_enqueue_train)
 
+    enqueue_eval = subparsers.add_parser("enqueue-eval", help="Create a concrete eval job")
+    enqueue_eval.add_argument("--goal", required=True, help="Research goal slug")
+    enqueue_eval.add_argument("--spec-id", type=int)
+    enqueue_eval.add_argument("--train-job-id", type=int)
+    enqueue_eval.add_argument("--profile", required=True)
+    enqueue_eval.add_argument("--eval-config-json", required=True)
+    enqueue_eval.add_argument("--priority", type=int, default=0)
+    enqueue_eval.add_argument("--max-attempts", type=int, default=1)
+    enqueue_eval.add_argument("--candidate-label")
+    enqueue_eval.set_defaults(func=cmd_enqueue_eval)
+
     decision = subparsers.add_parser("decision", help="Append a Codex campaign decision")
     decision.add_argument("--goal", required=True, help="Research goal slug")
     decision.add_argument("--type", required=True, dest="decision_type")
@@ -702,6 +1079,10 @@ def build_parser() -> argparse.ArgumentParser:
     cancel = subparsers.add_parser("cancel-train", help="Request cancellation for a train job")
     cancel.add_argument("job_id", type=int)
     cancel.set_defaults(func=cmd_cancel_train)
+
+    cancel_eval = subparsers.add_parser("cancel-eval", help="Request cancellation for an eval job")
+    cancel_eval.add_argument("job_id", type=int)
+    cancel_eval.set_defaults(func=cmd_cancel_eval)
 
     status = subparsers.add_parser("status", help="Print compact campaign status")
     status.add_argument("goal")
@@ -786,6 +1167,27 @@ def cmd_enqueue_train(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_enqueue_eval(args: argparse.Namespace) -> int:
+    conn = _connect_from_args(args)
+    try:
+        goal_id = goal_id_from_slug(conn, args.goal)
+        row = enqueue_eval_job(
+            conn,
+            goal_id=goal_id,
+            experiment_spec_id=args.spec_id,
+            train_job_id=args.train_job_id,
+            profile_id=args.profile,
+            eval_config=load_json_arg(args.eval_config_json, default={}),
+            priority=args.priority,
+            max_attempts=args.max_attempts,
+            candidate_label=args.candidate_label,
+        )
+    finally:
+        conn.close()
+    print(f"eval_job_id={row['id']} profile={row['profile_id']}")
+    return 0
+
+
 def cmd_decision(args: argparse.Namespace) -> int:
     conn = _connect_from_args(args)
     try:
@@ -811,6 +1213,16 @@ def cmd_cancel_train(args: argparse.Namespace) -> int:
     conn = _connect_from_args(args)
     try:
         count = request_cancel_train_job(conn, job_id=args.job_id)
+    finally:
+        conn.close()
+    print(f"cancel_requested={count}")
+    return 0
+
+
+def cmd_cancel_eval(args: argparse.Namespace) -> int:
+    conn = _connect_from_args(args)
+    try:
+        count = request_cancel_eval_job(conn, job_id=args.job_id)
     finally:
         conn.close()
     print(f"cancel_requested={count}")

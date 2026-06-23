@@ -4,6 +4,7 @@ import json
 import re
 import sys
 from pathlib import Path
+from typing import Any
 
 from stable_retro_ppo.artifacts import model_metadata_path
 from stable_retro_ppo.wandb_utils import load_wandb_env
@@ -11,6 +12,38 @@ from stable_retro_ppo.wandb_utils import load_wandb_env
 
 def safe_artifact_stem(value: str, fallback: str = "artifact") -> str:
     return re.sub(r"[^A-Za-z0-9_.-]+", "-", value).strip("-") or fallback
+
+
+def artifact_aliases(artifact: Any) -> list[str]:
+    aliases = []
+    for alias in getattr(artifact, "aliases", []) or []:
+        aliases.append(str(getattr(alias, "alias", alias)))
+    return aliases
+
+
+def artifact_qualified_name(artifact: Any) -> str:
+    value = getattr(artifact, "qualified_name", None)
+    if value:
+        return str(value)
+    return str(getattr(artifact, "name"))
+
+
+def checkpoint_step_from_name(value: str) -> int | None:
+    match = re.search(r"_(\d+)_steps(?:\.zip)?$", value)
+    return int(match.group(1)) if match else None
+
+
+def checkpoint_step_from_artifact(artifact: Any, model_path: Path | None = None) -> int | None:
+    metadata = getattr(artifact, "metadata", {}) or {}
+    step = metadata.get("checkpoint_step")
+    if step is not None:
+        return int(step)
+    for alias in artifact_aliases(artifact):
+        if alias.startswith("step-"):
+            return int(alias.removeprefix("step-"))
+    if model_path is not None:
+        return checkpoint_step_from_name(model_path.name)
+    return None
 
 
 def model_artifact_ref(

@@ -380,8 +380,11 @@ def format_wandb_run_path(run_path) -> str:
 
 
 def wandb_artifact_storage_uri(args: argparse.Namespace) -> str:
+    configured_uri = args.wandb_artifact_storage_uri.strip()
+    if configured_uri == "${CHECKPOINT_BUCKET_URI}":
+        configured_uri = ""
     return (
-        args.wandb_artifact_storage_uri.strip()
+        configured_uri
         or os.environ.get("WANDB_ARTIFACT_STORAGE_URI", "").strip()
         or os.environ.get("CHECKPOINT_BUCKET_URI", "").strip()
     )

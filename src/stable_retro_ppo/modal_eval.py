@@ -10,7 +10,6 @@ from pathlib import Path
 from typing import Any
 
 import psycopg2
-import psycopg2.extras
 from stable_baselines3 import PPO
 
 from stable_retro_ppo.artifacts import (
@@ -18,8 +17,19 @@ from stable_retro_ppo.artifacts import (
     require_training_metadata,
     stable_json_hash,
 )
+from stable_retro_ppo.campaign import (
+    claim_eval_job,
+    connect as campaign_connect,
+    database_url as campaign_database_url,
+    finish_eval_job,
+)
 from stable_retro_ppo.device import resolve_sb3_device
 from stable_retro_ppo.env import assert_rom_imported
+from stable_retro_ppo.eval_job_runner import (
+    eval_env_config,
+    model_ref_for_config,
+    normalize_eval_config,
+)
 from stable_retro_ppo.eval_runner import evaluate_model_episodes
 from stable_retro_ppo.modal_core import (
     RUNS_DIR,
@@ -49,58 +59,11 @@ class PrefetchedJob:
     future: Future[PrefetchedArtifact]
 
 
-CLAIM_SQL = """
-WITH next_job AS (
-  SELECT id
-  FROM eval_jobs
-  WHERE
-    status = 'pending'
-    OR (
-      status = 'running'
-      AND lease_expires_at < now()
-      AND attempts < max_attempts
-    )
-  ORDER BY priority DESC, id ASC
-  LIMIT 1
-  FOR UPDATE SKIP LOCKED
-)
-UPDATE eval_jobs AS job
-SET
-  status = 'running',
-  lease_owner = %(worker_id)s,
-  lease_expires_at = now() + (%(lease_seconds)s || ' seconds')::interval,
-  attempts = attempts + 1,
-  started_at = COALESCE(started_at, now()),
-  error = NULL
-FROM next_job
-WHERE job.id = next_job.id
-RETURNING
-  job.id,
-  job.candidate_id,
-  job.stage,
-  job.episodes,
-  job.seed_start,
-  job.priority,
-  job.attempts,
-  job.lease_owner,
-  job.lease_expires_at,
-  (
-    SELECT artifact_ref
-    FROM checkpoint_candidates
-    WHERE checkpoint_candidates.id = job.candidate_id
-  ) AS artifact_ref;
-"""
-
-
-def database_url() -> str:
+def connect():
     value = os.environ.get("DATABASE_URL") or os.environ.get("DIRECT_DATABASE_URL")
     if not value:
         raise RuntimeError("DATABASE_URL or DIRECT_DATABASE_URL must be available in Modal")
-    return value
-
-
-def connect():
-    return psycopg2.connect(database_url(), cursor_factory=psycopg2.extras.RealDictCursor)
+    return campaign_connect(campaign_database_url(use_direct=False))
 
 
 def close_quietly(conn) -> None:
@@ -128,40 +91,34 @@ def json_safe(value: Any) -> Any:
     return value
 
 
-def claim_job(conn, *, worker_id: str, lease_seconds: int) -> dict[str, Any] | None:
-    with conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                CLAIM_SQL,
-                {"worker_id": worker_id, "lease_seconds": lease_seconds},
-            )
-            row = cur.fetchone()
-            return dict(row) if row else None
+def claim_job(
+    conn,
+    *,
+    profile_id: str,
+    worker_id: str,
+    lease_seconds: int,
+) -> dict[str, Any] | None:
+    return claim_eval_job(
+        conn,
+        profile_id=profile_id,
+        worker_id=worker_id,
+        lease_seconds=lease_seconds,
+    )
 
 
 def mark_job_failed(conn, *, job: dict[str, Any], worker_id: str, error: str) -> bool:
-    with conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                UPDATE eval_jobs
-                SET
-                  status = CASE WHEN attempts >= max_attempts THEN 'failed' ELSE 'pending' END,
-                  lease_owner = NULL,
-                  lease_expires_at = NULL,
-                  error = %(error)s,
-                  finished_at = CASE WHEN attempts >= max_attempts THEN now() ELSE finished_at END
-                WHERE id = %(job_id)s
-                  AND lease_owner = %(worker_id)s
-                  AND status = 'running'
-                """,
-                {
-                    "job_id": job["id"],
-                    "worker_id": worker_id,
-                    "error": error[:4000],
-                },
-            )
-            return cur.rowcount == 1
+    finish_eval_job(
+        conn,
+        job=job,
+        worker_id=worker_id,
+        status="failed",
+        result={
+            "candidate_label": job.get("candidate_label"),
+            "model_ref": model_ref_for_config(normalize_eval_config(job)),
+        },
+        error=error[:4000],
+    )
+    return True
 
 
 def commit_result(
@@ -171,90 +128,19 @@ def commit_result(
     worker_id: str,
     metrics: dict[str, Any],
 ) -> bool:
-    with conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT 1
-                FROM eval_jobs
-                WHERE id = %(job_id)s
-                  AND lease_owner = %(worker_id)s
-                  AND status = 'running'
-                FOR UPDATE
-                """,
-                {"job_id": job["id"], "worker_id": worker_id},
-            )
-            if cur.fetchone() is None:
-                return False
-
-            cur.execute(
-                """
-                INSERT INTO eval_results (
-                  candidate_id,
-                  job_id,
-                  training_metadata_hash,
-                  stage,
-                  episodes,
-                  seed_start,
-                  completion_count,
-                  completion_rate,
-                  max_x_max,
-                  reward_mean,
-                  metrics_json
-                )
-                VALUES (
-                  %(candidate_id)s,
-                  %(job_id)s,
-                  %(training_metadata_hash)s,
-                  %(stage)s,
-                  %(episodes)s,
-                  %(seed_start)s,
-                  %(completion_count)s,
-                  %(completion_rate)s,
-                  %(max_x_max)s,
-                  %(reward_mean)s,
-                  %(metrics_json)s
-                )
-                ON CONFLICT (candidate_id, training_metadata_hash, stage, episodes, seed_start)
-                DO UPDATE SET
-                  job_id = EXCLUDED.job_id,
-                  completion_count = EXCLUDED.completion_count,
-                  completion_rate = EXCLUDED.completion_rate,
-                  max_x_max = EXCLUDED.max_x_max,
-                  reward_mean = EXCLUDED.reward_mean,
-                  metrics_json = EXCLUDED.metrics_json,
-                  created_at = now()
-                """,
-                {
-                    "candidate_id": job["candidate_id"],
-                    "job_id": job["id"],
-                    "training_metadata_hash": metrics["training_metadata_hash"],
-                    "stage": job["stage"],
-                    "episodes": job["episodes"],
-                    "seed_start": job["seed_start"],
-                    "completion_count": int(metrics["completion_count"]),
-                    "completion_rate": float(metrics["completion_rate"]),
-                    "max_x_max": int(metrics["max_x_max"]),
-                    "reward_mean": float(metrics["reward_mean"]),
-                    "metrics_json": psycopg2.extras.Json(json_safe(metrics)),
-                },
-            )
-            cur.execute(
-                """
-                UPDATE eval_jobs
-                SET
-                  status = 'done',
-                  lease_owner = NULL,
-                  lease_expires_at = NULL,
-                  finished_at = now(),
-                  error = NULL
-                WHERE id = %(job_id)s
-                  AND lease_owner = %(worker_id)s
-                  AND status = 'running'
-                """,
-                {"job_id": job["id"], "worker_id": worker_id},
-            )
-            return cur.rowcount == 1
+    config = normalize_eval_config(job)
+    finish_eval_job(
+        conn,
+        job=job,
+        worker_id=worker_id,
+        status="succeeded",
+        result={
+            "candidate_label": job.get("candidate_label"),
+            "model_ref": model_ref_for_config(config),
+            "metrics_json": json_safe(metrics),
+        },
+    )
+    return True
 
 
 def commit_result_with_reconnect(
@@ -304,10 +190,17 @@ def download_model_artifact(
 
 def prefetch_model_artifact(job: dict[str, Any]) -> PrefetchedArtifact:
     started_at = time.monotonic()
-    model_path = download_model_artifact(
-        str(job["artifact_ref"]),
-        base_dir=LOCAL_ARTIFACT_CACHE_DIR,
-    )
+    config = normalize_eval_config(job)
+    artifact_ref = config.get("artifact_ref") or config.get("model_artifact")
+    if artifact_ref:
+        model_path = download_model_artifact(
+            str(artifact_ref),
+            base_dir=LOCAL_ARTIFACT_CACHE_DIR,
+        )
+    elif config.get("model_path"):
+        model_path = Path(str(config["model_path"])).expanduser()
+    else:
+        raise ValueError("eval_config must define artifact_ref, model_artifact, or model_path")
     return PrefetchedArtifact(
         path=model_path,
         download_elapsed_seconds=round(time.monotonic() - started_at, 3),
@@ -320,29 +213,33 @@ def evaluate_job(
     device: str,
     model_path: Path | None = None,
 ) -> dict[str, Any]:
+    eval_config = normalize_eval_config(job)
     if model_path is None:
-        model_path = download_model_artifact(str(job["artifact_ref"]))
-    training = require_training_metadata(model_path)
-    config = require_env_config_from_model_metadata(model_path)
-    training_hash = stable_json_hash(training)
+        model_path = prefetch_model_artifact(job).path
+    config = eval_env_config(eval_config, model_path)
+    try:
+        training_hash = stable_json_hash(require_training_metadata(model_path))
+    except ValueError:
+        training_hash = ""
     assert_rom_imported(config.game)
     model = PPO.load(model_path, device=resolve_sb3_device(device))
     metrics, _ = evaluate_model_episodes(
         model=model,
         config=config,
-        episodes=int(job["episodes"]),
-        seed=int(job["seed_start"]),
-        max_steps=config.max_episode_steps,
-        deterministic=False,
+        episodes=int(eval_config["episodes"]),
+        seed=int(eval_config["seed"]),
+        max_steps=int(eval_config["max_steps"]),
+        deterministic=not bool(eval_config["stochastic"]),
         completion_x_threshold=config.completion_x_threshold,
-        n_envs=1,
+        n_envs=int(eval_config["n_envs"]),
         capture_best_video=False,
         extra={
-            "job_id": int(job["id"]),
-            "candidate_id": int(job["candidate_id"]),
-            "checkpoint_artifact": str(job["artifact_ref"]),
+            "campaign_eval_job_id": int(job["id"]),
+            "campaign_profile_id": job["profile_id"],
+            "campaign_candidate_label": job.get("candidate_label"),
+            "model_ref": model_ref_for_config(eval_config),
             "training_metadata_hash": training_hash,
-            "eval_seed": int(job["seed_start"]),
+            "eval_seed": int(eval_config["seed"]),
         },
     )
     return metrics
@@ -457,6 +354,7 @@ def eval_artifact_benchmark(
     secrets=[eval_queue_secret],
 )
 def eval_worker_remote(
+    profile: str = "mario-level1-quick",
     worker_name: str = "",
     max_jobs: int = 0,
     idle_polls: int = 2,
@@ -482,7 +380,12 @@ def eval_worker_remote(
             while len(pending_jobs) < prefetch_target and (
                 max_jobs <= 0 or completed + failed + len(pending_jobs) < max_jobs
             ):
-                job = claim_job(conn, worker_id=worker_id, lease_seconds=lease_seconds)
+                job = claim_job(
+                    conn,
+                    profile_id=profile,
+                    worker_id=worker_id,
+                    lease_seconds=lease_seconds,
+                )
                 if job is None:
                     break
 
@@ -493,9 +396,8 @@ def eval_worker_remote(
                     "claimed "
                     f"worker={worker_id} "
                     f"job_id={job['id']} "
-                    f"candidate_id={job['candidate_id']} "
-                    f"stage={job['stage']} "
-                    f"episodes={job['episodes']} "
+                    f"profile={job['profile_id']} "
+                    f"candidate={job.get('candidate_label') or ''} "
                     f"prefetch_queued={len(pending_jobs)}",
                     flush=True,
                 )
@@ -575,6 +477,7 @@ def eval_worker_remote(
 
 @app.local_entrypoint()
 def eval_queue(
+    profile: str = "mario-level1-quick",
     runners: int = 2,
     max_jobs_per_runner: int = 0,
     idle_polls: int = 2,
@@ -590,6 +493,7 @@ def eval_queue(
     for index in range(runners):
         worker_name = f"modal-eval-{uuid.uuid4()}-{index + 1}"
         call = remote.spawn(
+            profile=profile,
             worker_name=worker_name,
             max_jobs=max_jobs_per_runner,
             idle_polls=idle_polls,

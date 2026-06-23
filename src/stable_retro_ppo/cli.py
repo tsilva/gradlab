@@ -122,6 +122,8 @@ def build_train_command(options: Mapping[str, Any]) -> list[str]:
             continue
         if key == "target_kl" and float(value) <= 0:
             continue
+        if isinstance(value, list | tuple):
+            value = ",".join(str(item) for item in value)
         cmd.extend([flag, str(value)])
     for key, flag in TRAIN_TRUE_FLAGS.items():
         if options.get(key):
