@@ -23,6 +23,7 @@ PLAYBACK_ENV_ARG_KEYS = {
     "state": ("state",),
     "states": ("states",),
     "state_probs": ("state_probs",),
+    "task_conditioning": ("task_conditioning",),
     "frame_skip": ("frame_skip",),
     "max_pool_frames": ("max_pool_frames",),
     "sticky_action_prob": ("sticky_action_prob",),
@@ -95,7 +96,9 @@ def training_preprocessing_metadata(config: EnvConfig) -> dict[str, Any]:
         "frame_stack": 4,
         "maxpool_last_two": config.max_pool_frames,
         "copy_observations": False,
-        "policy_observation_layout": "channel_first",
+        "policy_observation_layout": "dict_image_task"
+        if config.task_conditioning
+        else "channel_first",
     }
 
 
@@ -314,6 +317,7 @@ def init_wandb(args: argparse.Namespace, run_dir: str, config: EnvConfig):
         "state": config.state,
         "states": list(config.states),
         "state_probs": list(config.state_probs),
+        "task_conditioning": config.task_conditioning,
         "state_sampling_mode": (
             "probability" if config.state_probs else "fixed_per_env" if config.states else "single"
         ),
@@ -343,7 +347,7 @@ def init_wandb(args: argparse.Namespace, run_dir: str, config: EnvConfig):
         "terminate_on_completion": config.terminate_on_completion,
         "action_set": config.action_set,
     }
-    return wandb.init(
+    wandb_run = wandb.init(
         project=args.wandb_project,
         entity=args.wandb_entity,
         group=args.wandb_group,
@@ -356,6 +360,9 @@ def init_wandb(args: argparse.Namespace, run_dir: str, config: EnvConfig):
         save_code=True,
         mode=args.wandb_mode,
     )
+    wandb_run.define_metric("global_step")
+    wandb_run.define_metric("*", step_metric="global_step")
+    return wandb_run
 
 
 def wandb_artifacts_enabled(wandb_run, args: argparse.Namespace) -> bool:

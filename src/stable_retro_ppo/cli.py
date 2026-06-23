@@ -96,6 +96,7 @@ TRAIN_VALUE_OPTIONS = {
 TRAIN_TRUE_FLAGS = {
     "eval_stochastic": "--eval-stochastic",
     "no_eval_videos": "--no-eval-videos",
+    "task_conditioning": "--task-conditioning",
     "use_retro_reward": "--use-retro-reward",
     "clip_rewards": "--clip-rewards",
     "score_progress_clipped": "--score-progress-clipped",
@@ -183,8 +184,8 @@ def build_parser() -> argparse.ArgumentParser:
         "--states",
         default="",
         help=(
-            "Comma-separated training states. Without --state-probs, provide exactly "
-            "one state per env slot in order."
+            "Comma-separated native-vector training states. Without --state-probs, "
+            "provide exactly one state per env slot in order."
         ),
     )
     parser.add_argument(
@@ -192,7 +193,15 @@ def build_parser() -> argparse.ArgumentParser:
         default="",
         help=(
             "Comma-separated positive weights for --states. Values are normalized and "
-            "sampled independently on each episode reset."
+            "sampled by the native vector env independently on each episode reset."
+        ),
+    )
+    parser.add_argument(
+        "--task-conditioning",
+        action="store_true",
+        help=(
+            "Use SB3 MultiInputPolicy with a one-hot task vector derived from the "
+            "native active state for each env lane."
         ),
     )
     parser.add_argument("--frame-skip", type=int, default=4)

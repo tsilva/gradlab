@@ -12,8 +12,10 @@ from stable_retro_ppo.eval_metrics import (
     episode_rank,
     is_level_complete,
     run_eval_episode,
+    serializable_info,
     summarize_episode_results,
 )
+from stable_retro_ppo.metric_names import EVAL_STATE_ROOT
 from stable_retro_ppo.video import replay_actions_for_video, write_video
 
 
@@ -104,7 +106,7 @@ def _evaluate_model_episodes_vector(
                         "level_complete": completed,
                         "died": died,
                         "death_x_pos": int(death_x_pos) if death_x_pos is not None else None,
-                        "final_info": info,
+                        "final_info": serializable_info(info),
                     }
                     episode_results.append(result)
                     if best_episode_result is None or episode_rank(result) > episode_rank(
@@ -194,7 +196,7 @@ def evaluate_model_episodes(
     metrics = summarize_episode_results(
         episode_results,
         deterministic=deterministic,
-        state_metric_root="eval",
+        state_metric_root=EVAL_STATE_ROOT,
         extra={"eval_n_envs": n_envs, **(extra or {})},
     )
     metrics["best_episode"] = best_episode_result

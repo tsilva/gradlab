@@ -151,10 +151,10 @@ favored more children.
 
 ### Stable Retro Runtime Notes
 
-- As of 2026-06-20, use `stable-retro-turbo==1.0.0.post16` for new local,
+- As of 2026-06-23, use `stable-retro-turbo==1.0.0.post19` for new local,
   Modal, and SkyPilot training/eval work. The repo dependency pin, lockfile,
   SkyPilot launcher default, and reusable launch manifests are expected to stay
-  on post16 unless a future runtime migration is explicitly benchmarked.
+  on post19 unless a future runtime migration is explicitly benchmarked.
 - On 2026-06-23, a short RTX4090 campaign speed gate retried reset-time
   Level1-1/Level1-2 probability sampling with `state_probs=0.5,0.5`,
   `stable-retro-turbo==1.0.0.post16`, `n_envs=16`, and one queued child. It
@@ -162,16 +162,51 @@ favored more children.
   than historical B50: `time/fps=174`, `fps_instant=126`, while rollout-only
   throughput was `726-808 fps`. This measured the current sandbox-sb3 wrapper
   path, which still routed `config.states` through `MixedStateNativeVecEnv`.
-  Later on 2026-06-23, sandbox-sb3 was changed to pass mixed `states` and
-  optional `state_probs` directly into `StableRetroNativeVecEnv`; rerun the
-  speed gate before using B64 as evidence about the native mixed-state path.
+  Do not use this run as evidence against stable-retro-turbo native mixed-state
+  support.
 - Later on 2026-06-23, B65 reran that same short queue speed gate after the
-  native mixed-state change. Train job `38`, W&B run `63smvp1y`, completed
-  262,144 timesteps on `k8s/rtx4090` with final `time/fps=3307`,
+  code was changed to always pass mixed `states` and optional `state_probs`
+  directly into `StableRetroNativeVecEnv`. Train job `38`, W&B run `63smvp1y`,
+  completed 262,144 timesteps on `k8s/rtx4090` with final `time/fps=3307`,
   `time/fps_instant=3286`, and `time/rollout_fps=4200`. Conclusion: native
-  `StableRetroNativeVecEnv` reset-time `states`/`state_probs` sampling is fast
-  enough to use; the B64 slowdown measured sandbox wrapper overhead, not
-  stable-retro-turbo native mixed-state support.
+  `StableRetroNativeVecEnv` fixed-slot and reset-time `states`/`state_probs`
+  sampling are the supported mixed-state path going forward; the B64 slowdown
+  measured sandbox wrapper overhead, not stable-retro-turbo native mixed-state
+  support.
+- On 2026-06-23, local isolated testing of `stable-retro-turbo==1.0.0.post18`
+  validated the active-state API for task conditioning. `initial_state_names`
+  is a tuple, `active_state_indices()` returns the same read-only `int32`
+  NumPy view on repeated calls, explicit sampled resets mutate the view in
+  place, and automatic lane resets update it before the next observation is
+  consumed. Tested modes: single state, fixed per-lane states, weighted
+  sampling via `state={"Level1-1": 0.5, "Level1-2": 0.5}`, and the repo's
+  current `states=["Level1-1", "Level1-2"], state_probs=[0.5, 0.5]` form.
+  The documented `state_probs={"Level1-1": 0.5, "Level1-2": 0.5}` constructor
+  form failed with `ValueError: state_probs requires states`; use `state={...}`
+  or `states` plus `state_probs` until that API/documentation mismatch is fixed.
+  In fixed per-lane mode, repeated state names produce repeated
+  `initial_state_names` entries with distinct active indices, so task
+  conditioning should map active names to unique task ids rather than directly
+  one-hotting slot indices when lanes intentionally duplicate a state.
+- Later on 2026-06-23, B66 trained five queued RTX4090 seeds with
+  `stable-retro-turbo==1.0.0.post18`, native reset-time 50/50 Level1-1/Level1-2
+  sampling, and SB3 `MultiInputPolicy` task conditioning from the active-state
+  one-hot vector. The setup smoke passed on the remote RTX4090, and throughput
+  stayed healthy at about `1180-1196` final `time/fps` per child, roughly
+  `5.9k` aggregate PPO fps for five concurrent children. All five runs finished
+  5,005,312 timesteps and logged final R2/W&B artifacts, but did not solve the
+  mixed-level criterion: final training completion rates were seed154 `0.45`,
+  seed155 `0.47`, seed156 `0.60`, seed157 `0.65`, and seed158 `0.49`. Meaningful
+  peak post-warmup rates were stronger (`0.71-0.94`) but not stable. Conclusion:
+  one-hot task conditioning is supported and performant, but this B50-style
+  sampled mixed-start recipe still needs additional changes before confirmation
+  or eval promotion.
+- On 2026-06-23, the repo was updated for the post19 native start-state API.
+  `StableRetroNativeVecEnv` now receives only the single `state=` constructor
+  argument: a string for one start state, a list for fixed per-lane states, or a
+  state-to-weight dict for reset-time sampling. The repo CLI and metadata still
+  accept `--states` and `--state-probs`, but the native boundary must not pass
+  removed `states=` or `state_probs=` kwargs.
 - The previous default `stable-retro-turbo==1.0.0.post14` was validated for
   native-vector life-loss termination on `SuperMarioBros-Nes-v0` and remains
   useful as a historical baseline for B39/B40/B44 comparisons.

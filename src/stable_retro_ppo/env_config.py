@@ -7,18 +7,28 @@ from typing import Any
 from stable_retro_ppo.env import EnvConfig
 
 
-def parse_states(value: str) -> tuple[str, ...]:
+def parse_states(value: str | list[str] | tuple[str, ...]) -> tuple[str, ...]:
     if not value:
         return ()
+    if isinstance(value, (list, tuple)):
+        states = tuple(str(state).strip() for state in value)
+        if any(not state for state in states):
+            raise ValueError("--states must not contain empty state names")
+        return states
     states = tuple(state.strip() for state in value.split(","))
     if any(not state for state in states):
         raise ValueError("--states must not contain empty state names")
     return states
 
 
-def parse_state_probs(value: str) -> tuple[float, ...]:
+def parse_state_probs(value: str | list[float] | tuple[float, ...]) -> tuple[float, ...]:
     if not value:
         return ()
+    if isinstance(value, (list, tuple)):
+        probs = tuple(float(prob) for prob in value)
+        if any(not math.isfinite(prob) or prob <= 0.0 for prob in probs):
+            raise ValueError("--state-probs values must be positive finite numbers")
+        return probs
     probs: list[float] = []
     for item in value.split(","):
         item = item.strip()
@@ -50,6 +60,7 @@ def env_config_from_args(
     config_kwargs: dict[str, Any] = {
         "game": value("game"),
         "state": value("state"),
+        "task_conditioning": value("task_conditioning"),
         "frame_skip": value("frame_skip"),
         "max_pool_frames": value("max_pool_frames"),
         "sticky_action_prob": value("sticky_action_prob"),

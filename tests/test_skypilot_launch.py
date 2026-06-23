@@ -8,6 +8,7 @@ from stable_retro_ppo.skypilot_launch import (
     EndpointCheck,
     REQUIRED_ENV_KEYS,
     build_launch_command,
+    build_runner_launch_command,
     configured_api_endpoints,
     collect_results,
     ensure_skypilot_api,
@@ -15,6 +16,8 @@ from stable_retro_ppo.skypilot_launch import (
     launch_report,
     manifest_from_wandb_config,
     preflight_checks,
+    preflight_runner_profile,
+    render_runner_task_yaml,
     render_task_yaml,
     sparse_log_events,
     write_launch_report,
@@ -73,6 +76,41 @@ def sample_manifest() -> dict:
     }
 
 
+def sample_runner_profile() -> dict:
+    return {
+        "name": "runner-test-4090",
+        "cluster": "runner-cluster",
+        "profile_id": "mario-ppo/post19/rtx4090-task-conditioned-v1",
+        "game": "TestGame-Platform",
+        "rom_source": "rom.bin",
+        "rom_mount_path": "~/roms/TestGame-Platform/rom.bin",
+        "extra_file_mounts": {
+            "~/roms/TestGame-Platform/Level1-1.state": "states/Level1-1.state",
+        },
+        "stable_retro_turbo_version": "1.0.0.post19",
+        "venv_name": "runner-test-venv",
+        "log_dir": "logs/train_runner",
+        "workers": 5,
+        "max_jobs": 0,
+        "poll_seconds": 15,
+        "status_goal": "mario-level1-1-1-2-100of100",
+        "smoke": {
+            "env": {
+                "states": ["Level1-1", "Level1-2"],
+                "state_probs": [0.5, 0.5],
+                "task_conditioning": True,
+                "hud_crop_top": 32,
+                "reward_mode": "score",
+                "action_set": "simple",
+                "terminate_on_life_loss": True,
+                "terminate_on_completion": True,
+                "completion_x_threshold": 0,
+                "max_pool_frames": False,
+            }
+        },
+    }
+
+
 class SkyPilotLaunchTests(unittest.TestCase):
     def test_render_task_injects_standard_rtx4090_training_shape(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -108,7 +146,7 @@ class SkyPilotLaunchTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             repo_root = Path(tmp)
             (repo_root / "pyproject.toml").write_text(
-                'dependencies = ["stable-retro-turbo==1.0.0.post16"]\n',
+                'dependencies = ["stable-retro-turbo==1.0.0.post19"]\n',
                 encoding="utf-8",
             )
             manifest = sample_manifest()
@@ -124,7 +162,7 @@ class SkyPilotLaunchTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             repo_root = Path(tmp)
             (repo_root / "pyproject.toml").write_text(
-                'dependencies = ["stable-retro-turbo==1.0.0.post16"]\n',
+                'dependencies = ["stable-retro-turbo==1.0.0.post19"]\n',
                 encoding="utf-8",
             )
             (repo_root / "rom.bin").write_bytes(b"rom")
@@ -138,7 +176,7 @@ class SkyPilotLaunchTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             repo_root = Path(tmp)
             (repo_root / "pyproject.toml").write_text(
-                'dependencies = ["stable-retro-turbo==1.0.0.post16"]\n',
+                'dependencies = ["stable-retro-turbo==1.0.0.post19"]\n',
                 encoding="utf-8",
             )
             (repo_root / "rom.bin").write_bytes(b"rom")
@@ -155,7 +193,7 @@ class SkyPilotLaunchTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             repo_root = Path(tmp)
             (repo_root / "pyproject.toml").write_text(
-                'dependencies = ["stable-retro-turbo==1.0.0.post16"]\n',
+                'dependencies = ["stable-retro-turbo==1.0.0.post19"]\n',
                 encoding="utf-8",
             )
             (repo_root / "rom.bin").write_bytes(b"rom")
@@ -176,6 +214,84 @@ class SkyPilotLaunchTests(unittest.TestCase):
         self.assertIn("CHECKPOINT_BUCKET_URI", cmd)
         self.assertIn("--secret", cmd)
         self.assertIn("WANDB_API_KEY", cmd)
+        self.assertNotIn("DATABASE_URL", cmd)
+
+    def test_runner_launch_command_includes_available_database_secret(self) -> None:
+        env = {key: "value" for key in REQUIRED_ENV_KEYS}
+        env["DATABASE_URL"] = "postgres://example"
+
+        cmd = build_runner_launch_command("cluster", Path("task.yaml"), env=env)
+
+        self.assertIn("--secret", cmd)
+        self.assertIn("DATABASE_URL", cmd)
+        self.assertNotIn("TRAIN_QUEUE_DATABASE_URL", cmd)
+        self.assertNotIn("DIRECT_DATABASE_URL", cmd)
+
+    def test_runner_launch_command_requires_database_secret(self) -> None:
+        env = {key: "value" for key in REQUIRED_ENV_KEYS}
+
+        with self.assertRaisesRegex(ValueError, "database"):
+            build_runner_launch_command("cluster", Path("task.yaml"), env=env)
+
+    def test_render_runner_task_claims_profile_without_embedding_train_runs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo_root = Path(tmp)
+            profile = sample_runner_profile()
+            yaml = render_runner_task_yaml(profile, INSTANCE_CONFIG, repo_root)
+
+        self.assertIn("name: runner-test-4090", yaml)
+        self.assertIn("stable-retro-turbo==1.0.0.post19", yaml)
+        self.assertIn("-m stable_retro_ppo.train_runner", yaml)
+        self.assertIn("--profile mario-ppo/post19/rtx4090-task-conditioned-v1", yaml)
+        self.assertIn("--workers 5", yaml)
+        self.assertIn("--max-jobs 0", yaml)
+        self.assertIn("--status-goal mario-level1-1-1-2-100of100", yaml)
+        self.assertIn("PPO('MultiInputPolicy' if isinstance(obs, dict) else 'CnnPolicy'", yaml)
+        self.assertNotIn("-m stable_retro_ppo.train --", yaml)
+
+    def test_preflight_runner_profile_passes_with_required_files(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo_root = Path(tmp)
+            (repo_root / "pyproject.toml").write_text(
+                'dependencies = ["stable-retro-turbo==1.0.0.post19"]\n',
+                encoding="utf-8",
+            )
+            (repo_root / "rom.bin").write_bytes(b"rom")
+            (repo_root / "states").mkdir()
+            (repo_root / "states" / "Level1-1.state").write_bytes(b"state")
+            env = {key: "value" for key in REQUIRED_ENV_KEYS}
+            env["TRAIN_QUEUE_DATABASE_URL"] = "postgres://example"
+            checks = preflight_runner_profile(
+                sample_runner_profile(),
+                INSTANCE_CONFIG,
+                repo_root,
+                env=env,
+            )
+
+        self.assertFalse(any(check.level == "error" for check in checks))
+        self.assertTrue(any(check.level == "ok" for check in checks))
+
+    def test_preflight_runner_profile_requires_database_url(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo_root = Path(tmp)
+            (repo_root / "pyproject.toml").write_text(
+                'dependencies = ["stable-retro-turbo==1.0.0.post19"]\n',
+                encoding="utf-8",
+            )
+            (repo_root / "rom.bin").write_bytes(b"rom")
+            (repo_root / "states").mkdir()
+            (repo_root / "states" / "Level1-1.state").write_bytes(b"state")
+            env = {key: "value" for key in REQUIRED_ENV_KEYS}
+            checks = preflight_runner_profile(
+                sample_runner_profile(),
+                INSTANCE_CONFIG,
+                repo_root,
+                env=env,
+            )
+
+        messages = [check.message for check in checks]
+        self.assertTrue(any("database URL" in message for message in messages))
+        self.assertTrue(any(check.level == "error" for check in checks))
 
     def test_collect_results_parses_log_and_run_markers(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -189,8 +305,9 @@ class SkyPilotLaunchTests(unittest.TestCase):
                     [
                         "wandb artifact logged: candidate-final (s3://bucket/prefix/final.zip)",
                         "|    total_timesteps                | 123456      |",
-                        "|    completion_episode_rate        | 0.8         |",
-                        "|    completion_episodes_total      | 80          |",
+                        "| train/outcome/                    |             |",
+                        "|    rate                           | 0.8         |",
+                        "|    completions                    | 80          |",
                         "candidate exit status: 0",
                     ]
                 ),
@@ -241,8 +358,9 @@ class SkyPilotLaunchTests(unittest.TestCase):
                 [
                     "wandb: View run at https://wandb.ai/e/p/runs/abc",
                     "|    total_timesteps                | 1000000      |",
-                    "|    completion_episodes_total      | 1            |",
-                    "|    completion_episode_rate        | 0.8          |",
+                    "| train/outcome/                    |             |",
+                    "|    completions                    | 1            |",
+                    "|    rate                           | 0.8          |",
                     "wandb artifact logged: candidate-final (s3://bucket/game/run/final.zip)",
                     "candidate exit status: 0",
                 ]
@@ -264,7 +382,8 @@ class SkyPilotLaunchTests(unittest.TestCase):
                 "\n".join(
                     [
                         "wandb artifact logged: candidate-final (s3://bucket/game/run/final.zip)",
-                        "|    completion_episode_rate        | 0.9         |",
+                        "| train/outcome/                    |             |",
+                        "|    rate                           | 0.9         |",
                         "candidate exit status: 0",
                     ]
                 ),

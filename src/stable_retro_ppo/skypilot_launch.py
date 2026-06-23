@@ -13,6 +13,10 @@ from urllib.request import urlopen
 
 from stable_retro_ppo.artifacts import artifact_storage_prefix, checkpoint_step, sanitize_artifact_name
 from stable_retro_ppo.cli import TRAIN_COMMAND_FIELDS, build_train_command
+from stable_retro_ppo.metric_names import (
+    TRAIN_OUTCOME_COMPLETIONS,
+    TRAIN_OUTCOME_RATE,
+)
 from stable_retro_ppo.wandb_utils import DEFAULT_WANDB_PROJECT
 
 
@@ -24,8 +28,13 @@ REQUIRED_ENV_KEYS = (
     "CHECKPOINT_BUCKET_URI",
     "WANDB_API_KEY",
 )
+DATABASE_ENV_KEYS = (
+    "TRAIN_QUEUE_DATABASE_URL",
+    "DATABASE_URL",
+    "DIRECT_DATABASE_URL",
+)
 DEFAULT_INSTANCE_CONFIG = "experiments/instances.json"
-REQUIRED_STABLE_RETRO_TURBO_VERSION = "1.0.0.post16"
+REQUIRED_STABLE_RETRO_TURBO_VERSION = "1.0.0.post19"
 
 
 @dataclass(frozen=True)
@@ -98,6 +107,17 @@ def load_manifest(path: Path) -> dict[str, Any]:
     return manifest
 
 
+def load_runner_profile(path: Path) -> dict[str, Any]:
+    profile = load_json_file(path)
+    if not str(profile.get("profile_id", "")).strip():
+        raise ValueError("runner profile must define profile_id")
+    if not str(profile.get("game", "")).strip():
+        raise ValueError("runner profile must define game")
+    if not str(profile.get("rom_source", "")).strip():
+        raise ValueError("runner profile must define rom_source")
+    return profile
+
+
 def manifest_game(manifest: dict[str, Any]) -> str:
     game = str(manifest.get("game", "")).strip()
     base = manifest.get("base_train", {})
@@ -105,6 +125,13 @@ def manifest_game(manifest: dict[str, Any]) -> str:
         game = str(base.get("game", "")).strip()
     if not game:
         raise ValueError("manifest must define game or base_train.game")
+    return game
+
+
+def runner_profile_game(profile: dict[str, Any]) -> str:
+    game = str(profile.get("game", "")).strip()
+    if not game:
+        raise ValueError("runner profile must define game")
     return game
 
 
@@ -481,15 +508,47 @@ PY"""
     return "\n".join(yaml) + "\n"
 
 
-def build_launch_command(cluster: str, task_path: Path, *, detach_run: bool = False) -> list[str]:
+def build_launch_command(
+    cluster: str,
+    task_path: Path,
+    *,
+    detach_run: bool = False,
+    extra_env: tuple[str, ...] = (),
+    extra_secrets: tuple[str, ...] = (),
+) -> list[str]:
     cmd = ["sky", "launch", "-c", cluster, "-y", str(task_path)]
     if detach_run:
         cmd.append("--detach-run")
-    for key in ("AWS_REGION", "AWS_S3_ENDPOINT_URL", "CHECKPOINT_BUCKET_URI"):
+    for key in ("AWS_REGION", "AWS_S3_ENDPOINT_URL", "CHECKPOINT_BUCKET_URI", *extra_env):
         cmd.extend(["--env", key])
-    for key in ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "WANDB_API_KEY"):
+    for key in ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "WANDB_API_KEY", *extra_secrets):
         cmd.extend(["--secret", key])
     return cmd
+
+
+def available_database_env_keys(env: dict[str, str]) -> tuple[str, ...]:
+    return tuple(key for key in DATABASE_ENV_KEYS if env.get(key))
+
+
+def build_runner_launch_command(
+    cluster: str,
+    task_path: Path,
+    *,
+    env: dict[str, str],
+    detach_run: bool = False,
+) -> list[str]:
+    database_secrets = available_database_env_keys(env)
+    if not database_secrets:
+        raise ValueError(
+            "runner launch requires a database secret from one of "
+            f"{', '.join(DATABASE_ENV_KEYS)} in the local environment or .env",
+        )
+    return build_launch_command(
+        cluster,
+        task_path,
+        detach_run=detach_run,
+        extra_secrets=database_secrets,
+    )
 
 
 def write_rendered_task(
@@ -501,6 +560,351 @@ def write_rendered_task(
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(render_task_yaml(manifest, instance_config, repo_root), encoding="utf-8")
     return output_path
+
+
+def _file_mount_lines(
+    *,
+    game: str,
+    rom_source: Path,
+    rom_mount_path: str,
+    repo_root: Path,
+    extra_file_mounts: Any,
+) -> list[str]:
+    if extra_file_mounts and not isinstance(extra_file_mounts, dict):
+        raise ValueError("extra_file_mounts must be a mapping of remote path to local path")
+    file_mount_lines = [
+        "file_mounts:",
+        f"  {rom_mount_path}: {rom_source}",
+    ]
+    if isinstance(extra_file_mounts, dict):
+        for remote_path, local_path in extra_file_mounts.items():
+            file_mount_lines.append(f"  {remote_path}: {repo_root / str(local_path)}")
+    return file_mount_lines
+
+
+def render_runner_task_yaml(
+    profile: dict[str, Any],
+    instance_config: dict[str, Any],
+    repo_root: Path,
+) -> str:
+    instance = rtx4090_defaults(instance_config)
+    game = runner_profile_game(profile)
+    profile_id = str(profile["profile_id"]).strip()
+    sky_name = str(profile.get("name", sanitize_slug(profile_id)))
+    stable_retro_turbo_version = str(
+        profile.get("stable_retro_turbo_version", REQUIRED_STABLE_RETRO_TURBO_VERSION)
+    ).strip()
+    venv_name = str(profile.get("venv_name", f"{sky_name}-venv"))
+    log_dir = str(profile.get("log_dir", "logs/train_runner"))
+    workers = int(profile.get("workers", instance.get("children", 1)))
+    max_jobs = int(profile.get("max_jobs", 0))
+    poll_seconds = float(profile.get("poll_seconds", 30))
+    lease_seconds = int(profile.get("lease_seconds", 1800))
+    heartbeat_seconds = float(profile.get("heartbeat_seconds", 30.0))
+    once = bool(profile.get("once", False))
+    direct = bool(profile.get("direct", False))
+    status_goal = str(profile.get("status_goal", "")).strip()
+    image_id = str(instance["image_id"])
+    cpus = str(profile.get("cpus", instance.get("cpus", "12+")))
+    memory = str(profile.get("memory", instance.get("memory", "48+")))
+    accelerator = str(instance.get("accelerator", "RTX4090"))
+    rom_source = repo_root / str(profile["rom_source"])
+    rom_mount_path = str(profile.get("rom_mount_path", f"~/roms/{game}/{rom_source.name}"))
+    file_mount_lines = _file_mount_lines(
+        game=game,
+        rom_source=rom_source,
+        rom_mount_path=rom_mount_path,
+        repo_root=repo_root,
+        extra_file_mounts=profile.get("extra_file_mounts", {}),
+    )
+
+    smoke = profile.get("smoke", {})
+    if smoke is False:
+        smoke = {"enabled": False}
+    if smoke and not isinstance(smoke, dict):
+        raise ValueError("smoke must be an object or false")
+    smoke_enabled = bool(smoke.get("enabled", True))
+    smoke_env = smoke.get("env", {})
+    if smoke_env and not isinstance(smoke_env, dict):
+        raise ValueError("smoke.env must be an object")
+    smoke_state = str(smoke_env.get("state", profile.get("state", "")))
+    smoke_states = _manifest_train_value(smoke_env.get("states", profile.get("states", "")))
+    smoke_state_probs = _manifest_train_value(
+        smoke_env.get("state_probs", profile.get("state_probs", ""))
+    )
+    smoke_states_tuple = (
+        tuple(part.strip() for part in str(smoke_states).split(",") if part.strip())
+        if smoke_states
+        else ()
+    )
+    smoke_state_probs_tuple = (
+        tuple(float(part.strip()) for part in str(smoke_state_probs).split(",") if part.strip())
+        if smoke_state_probs
+        else ()
+    )
+    smoke_n_envs = int(
+        smoke_env.get(
+            "n_envs",
+            len(smoke_states_tuple) if smoke_states_tuple and not smoke_state_probs_tuple else 2,
+        )
+    )
+    smoke_task_conditioning = bool(smoke_env.get("task_conditioning", False))
+    smoke_hud_crop_top = int(smoke_env.get("hud_crop_top", -1))
+    smoke_reward_mode = str(smoke_env.get("reward_mode", "auto"))
+    smoke_action_set = str(smoke_env.get("action_set", "auto"))
+    smoke_terminate_on_life_loss = smoke_env.get("terminate_on_life_loss")
+    smoke_terminate_on_completion = bool(smoke_env.get("terminate_on_completion", False))
+    smoke_completion_x_threshold = int(smoke_env.get("completion_x_threshold", -1))
+    smoke_max_pool_frames = bool(smoke_env.get("max_pool_frames", True))
+    smoke_learn = bool(smoke.get("learn", smoke_task_conditioning))
+
+    smoke_block = ""
+    if smoke_enabled:
+        smoke_block = f'''
+
+"$JOB_VENV/bin/python" - <<'PY'
+import importlib.metadata
+import stable_retro as retro
+import torch
+from stable_retro_ppo.env import EnvConfig, make_training_vec_env, resolve_env_config, resolve_mixed_state_config
+
+print("stable-retro-turbo", importlib.metadata.version("stable-retro-turbo"))
+print("torch", torch.__version__, "cuda", torch.cuda.is_available())
+print("gpu", torch.cuda.get_device_name(0) if torch.cuda.is_available() else "none")
+states_preview = list(retro.data.list_states({game!r}))[:12]
+print("states_preview", states_preview)
+config = resolve_mixed_state_config(resolve_env_config(EnvConfig(
+    game={game!r},
+    state={smoke_state!r},
+    states={smoke_states_tuple!r},
+    state_probs={smoke_state_probs_tuple!r},
+    task_conditioning={smoke_task_conditioning!r},
+    hud_crop_top={smoke_hud_crop_top!r},
+    reward_mode={smoke_reward_mode!r},
+    action_set={smoke_action_set!r},
+    terminate_on_life_loss={smoke_terminate_on_life_loss!r},
+    terminate_on_completion={smoke_terminate_on_completion!r},
+    completion_x_threshold={smoke_completion_x_threshold!r},
+    max_pool_frames={smoke_max_pool_frames!r},
+)), n_envs={smoke_n_envs!r})
+env = make_training_vec_env(config, n_envs={smoke_n_envs!r}, seed=0)
+try:
+    obs = env.reset()
+    print("runner_smoke_observation_space", env.observation_space)
+    print("runner_smoke_reset", type(obs).__name__, getattr(obs, "shape", None))
+    if isinstance(obs, dict):
+        print("runner_smoke_keys", sorted(obs))
+{"    from stable_baselines3 import PPO" if smoke_learn else ""}
+{"    PPO('MultiInputPolicy' if isinstance(obs, dict) else 'CnnPolicy', env, n_steps=8, batch_size=4, n_epochs=1, learning_rate=1e-4, device='cpu', verbose=0).learn(total_timesteps=16)" if smoke_learn else ""}
+{"    print('runner_smoke_learn=ok')" if smoke_learn else ""}
+finally:
+    env.close()
+PY'''
+
+    setup_block = f"""set -euo pipefail
+
+if command -v apt-get >/dev/null 2>&1; then
+  if command -v sudo >/dev/null 2>&1; then
+    sudo -n apt-get update
+    sudo -n apt-get install -y libxcb1 libgl1 libglib2.0-0
+  else
+    apt-get update
+    apt-get install -y libxcb1 libgl1 libglib2.0-0
+  fi
+fi
+
+BOOTSTRAP_PYTHON=/home/sky/skypilot-runtime/bin/python
+JOB_VENV="$HOME/{venv_name}"
+UV_VENV="$HOME/{venv_name}-uv"
+
+"$BOOTSTRAP_PYTHON" -m venv --clear "$JOB_VENV"
+"$BOOTSTRAP_PYTHON" -m venv "$UV_VENV"
+"$UV_VENV/bin/python" -m pip install --upgrade pip
+"$UV_VENV/bin/python" -m pip install --upgrade "uv>=0.9,<1"
+
+export UV_PROJECT_ENVIRONMENT="$JOB_VENV"
+"$UV_VENV/bin/uv" sync --locked --no-dev
+"$JOB_VENV/bin/python" -m ensurepip --upgrade
+"$JOB_VENV/bin/python" -m pip install --no-deps --force-reinstall "stable-retro-turbo=={stable_retro_turbo_version}"
+"$JOB_VENV/bin/python" -m stable_retro.import "$HOME/roms"
+
+"$JOB_VENV/bin/python" - <<'PY'
+from pathlib import Path
+import shutil
+import stable_retro as retro
+
+game = {game!r}
+mounted_dir = Path.home() / "roms" / game
+rom_path = retro.data.get_romfile_path(game)
+if rom_path is not None and mounted_dir.exists():
+    package_dir = Path(rom_path).parent
+    for source in mounted_dir.iterdir():
+        if source.is_file():
+            shutil.copy2(source, package_dir / source.name)
+    print("synced_mounted_game_data", mounted_dir, "->", package_dir)
+PY{smoke_block}"""
+
+    command = [
+        '"$PY"',
+        "-m",
+        "stable_retro_ppo.train_runner",
+        "--profile",
+        profile_id,
+        "--workers",
+        str(workers),
+        "--max-jobs",
+        str(max_jobs),
+        "--log-dir",
+        log_dir,
+        "--poll-seconds",
+        str(poll_seconds),
+        "--lease-seconds",
+        str(lease_seconds),
+        "--heartbeat-seconds",
+        str(heartbeat_seconds),
+    ]
+    if once:
+        command.append("--once")
+    if direct:
+        command.append("--direct")
+    if status_goal:
+        command.extend(["--status-goal", status_goal])
+
+    run_block = "\n".join(
+        [
+            "set -euo pipefail",
+            "",
+            f'PY="$HOME/{venv_name}/bin/python"',
+            f"mkdir -p {shell_quote(log_dir)}",
+            f'echo "train_profile={profile_id}"',
+            f'echo "target=k8s/rtx4090 workers={workers} max_jobs={max_jobs}"',
+            shell_join(command),
+        ]
+    )
+
+    yaml = [
+        f"name: {sky_name}",
+        "",
+        "workdir: .",
+        "",
+        *file_mount_lines,
+        "",
+        "resources:",
+        f"  accelerators: {{{accelerator}: 1}}",
+        f"  cpus: {cpus}",
+        f"  memory: {memory}",
+        f"  image_id: {yaml_string(image_id)}",
+        "",
+        "setup: |",
+        indent_block(setup_block, 2),
+        "",
+        "run: |",
+        indent_block(run_block, 2),
+    ]
+    return "\n".join(yaml) + "\n"
+
+
+def write_rendered_runner_task(
+    profile: dict[str, Any],
+    instance_config: dict[str, Any],
+    repo_root: Path,
+    output_path: Path,
+) -> Path:
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(render_runner_task_yaml(profile, instance_config, repo_root), encoding="utf-8")
+    return output_path
+
+
+def preflight_runner_profile(
+    profile: dict[str, Any],
+    instance_config: dict[str, Any],
+    repo_root: Path,
+    env: dict[str, str] | None = None,
+) -> list[Check]:
+    env_values = env if env is not None else merged_env(repo_root / ".env")
+    checks: list[Check] = []
+    instance = rtx4090_defaults(instance_config)
+    max_children = int(instance.get("max_children", 5))
+    profile_id = str(profile.get("profile_id", "")).strip()
+    if not profile_id:
+        checks.append(Check("error", "runner profile must define profile_id"))
+    try:
+        runner_profile_game(profile)
+    except ValueError as exc:
+        checks.append(Check("error", str(exc)))
+    if not profile.get("rom_source"):
+        checks.append(Check("error", "runner profile must define rom_source"))
+
+    missing = [key for key in REQUIRED_ENV_KEYS if not env_values.get(key)]
+    if missing:
+        checks.append(Check("error", f"missing env/secrets: {', '.join(missing)}"))
+    if not available_database_env_keys(env_values):
+        checks.append(
+            Check(
+                "error",
+                "missing train queue database URL: "
+                f"set one of {', '.join(DATABASE_ENV_KEYS)}",
+            )
+        )
+
+    workers = int(profile.get("workers", instance.get("children", 1)))
+    if workers > max_children:
+        checks.append(Check("warning", f"{workers} workers exceeds RTX4090 default {max_children}"))
+
+    max_jobs = int(profile.get("max_jobs", 0))
+    if max_jobs > 0 and not profile.get("once"):
+        checks.append(Check("warning", "max_jobs is bounded but once=false; runner exits after max_jobs"))
+
+    pyproject = repo_root / "pyproject.toml"
+    expected_version = str(
+        profile.get("stable_retro_turbo_version", REQUIRED_STABLE_RETRO_TURBO_VERSION)
+    ).strip()
+    if pyproject.exists():
+        content = pyproject.read_text(encoding="utf-8")
+        expected_pin = f"stable-retro-turbo=={expected_version}"
+        if expected_pin not in content:
+            checks.append(
+                Check(
+                    "warning",
+                    "pyproject.toml does not pin stable-retro-turbo "
+                    f"{expected_version}; runner setup will force-reinstall this version",
+                )
+            )
+    else:
+        checks.append(Check("warning", "pyproject.toml was not found"))
+
+    rom_source = repo_root / str(profile.get("rom_source", ""))
+    if profile.get("rom_source") and not rom_source.exists():
+        checks.append(Check("error", f"ROM source path does not exist: {rom_source}"))
+    extra_file_mounts = profile.get("extra_file_mounts", {})
+    if extra_file_mounts and not isinstance(extra_file_mounts, dict):
+        checks.append(Check("error", "extra_file_mounts must be a mapping of remote path to local path"))
+    elif isinstance(extra_file_mounts, dict):
+        for local_path in extra_file_mounts.values():
+            source = repo_root / str(local_path)
+            if not source.exists():
+                checks.append(Check("error", f"extra file mount source path does not exist: {source}"))
+    rom_mount_path = str(profile.get("rom_mount_path", ""))
+    if rom_source.suffix and rom_mount_path and not Path(rom_mount_path).name.endswith(rom_source.suffix):
+        checks.append(
+            Check(
+                "error",
+                "rom_mount_path must preserve the ROM file extension "
+                f"({rom_source.name} -> {rom_mount_path})",
+            )
+        )
+
+    smoke = profile.get("smoke", {})
+    if smoke and not isinstance(smoke, dict):
+        checks.append(Check("error", "smoke must be an object or false"))
+    elif isinstance(smoke, dict):
+        smoke_env = smoke.get("env", {})
+        if smoke_env and not isinstance(smoke_env, dict):
+            checks.append(Check("error", "smoke.env must be an object"))
+
+    if not any(check.level == "error" for check in checks):
+        checks.append(Check("ok", "runner preflight passed with no blocking errors"))
+    return checks
 
 
 def preflight_checks(
@@ -652,6 +1056,7 @@ class SparseLogMonitor:
         self._seen_wandb_urls: set[str] = set()
         self._seen_artifact_steps: set[int] = set()
         self._last_step: int | None = None
+        self._metric_section = ""
 
     def observe(self, line: str) -> list[SparseEvent]:
         events: list[SparseEvent] = []
@@ -680,15 +1085,23 @@ class SparseLogMonitor:
         if metric:
             key = metric.group("key").strip()
             value = metric.group("value").strip()
-            if key == "total_timesteps":
+            if key.endswith("/") and not value:
+                self._metric_section = key.rstrip("/")
+                return events
+            metric_key = (
+                key
+                if key == "total_timesteps" or "/" in key or not self._metric_section
+                else f"{self._metric_section}/{key}"
+            )
+            if metric_key in {"total_timesteps", "time/total_timesteps"}:
                 self._last_step = _parse_int(value)
-            elif key == "completion_episodes_total":
+            elif metric_key == TRAIN_OUTCOME_COMPLETIONS:
                 total = _parse_int(value)
                 if total and total > 0 and not self._seen_first_completion:
                     self._seen_first_completion = True
                     step = f" at {self._last_step} steps" if self._last_step else ""
                     events.append(SparseEvent("completion", f"first completion{step}: total={total}"))
-            elif key == "completion_episode_rate":
+            elif metric_key == TRAIN_OUTCOME_RATE:
                 rate = _parse_float(value)
                 if rate is not None:
                     for threshold in self._rate_thresholds:
@@ -762,6 +1175,23 @@ def parse_key_value_file(path: Path) -> dict[str, str]:
     return values
 
 
+def metric_rows(text: str) -> dict[str, str]:
+    rows: dict[str, str] = {}
+    section = ""
+    for line in text.splitlines():
+        metric = METRIC_ROW_RE.search(line)
+        if not metric:
+            continue
+        key = metric.group("key").strip()
+        value = metric.group("value").strip()
+        if key.endswith("/") and not value:
+            section = key.rstrip("/")
+            continue
+        metric_key = key if key == "total_timesteps" or "/" in key or not section else f"{section}/{key}"
+        rows[metric_key] = value
+    return rows
+
+
 def parse_log_summary(path: Path) -> dict[str, str]:
     text = path.read_text(encoding="utf-8", errors="replace")
     result: dict[str, str] = {}
@@ -775,15 +1205,13 @@ def parse_log_summary(path: Path) -> dict[str, str]:
     wandb_matches = re.findall(r"https://wandb\.ai/\S+", text)
     if wandb_matches:
         result["wandb_url"] = wandb_matches[-1]
-    total_steps = re.findall(r"total_timesteps\s+\|\s+([0-9,]+)", text)
-    if total_steps:
-        result["timesteps"] = total_steps[-1].replace(",", "")
-    completion_rates = re.findall(r"completion_episode_rate\s+\|\s+([0-9.]+)", text)
-    if completion_rates:
-        result["completion_rate"] = completion_rates[-1]
-    completion_totals = re.findall(r"completion_episodes_total\s+\|\s+([0-9]+)", text)
-    if completion_totals:
-        result["completed_episodes"] = completion_totals[-1]
+    metrics = metric_rows(text)
+    if total_steps := metrics.get("time/total_timesteps") or metrics.get("total_timesteps"):
+        result["timesteps"] = total_steps.replace(",", "")
+    if completion_rate := metrics.get(TRAIN_OUTCOME_RATE):
+        result["completion_rate"] = completion_rate
+    if completion_total := metrics.get(TRAIN_OUTCOME_COMPLETIONS):
+        result["completed_episodes"] = completion_total.replace(",", "")
     return result
 
 

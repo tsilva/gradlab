@@ -7,6 +7,13 @@ import argparse
 from pathlib import Path
 
 from dotenv import load_dotenv
+from stable_retro_ppo.metric_names import (
+    THROUGHPUT_LOOP_FPS,
+    THROUGHPUT_ROLLOUT_FPS,
+    TRAIN_OUTCOME_COMPLETIONS,
+    TRAIN_OUTCOME_RATE,
+    TRAIN_OUTCOME_TERMINALS,
+)
 
 try:
     from wandb_workspaces import workspaces as ws
@@ -70,14 +77,14 @@ def build_workspace(entity: str, project: str, name: str, query: str) -> ws.Work
         runset_settings=ws.RunsetSettings(
             query=query,
             regex_query=True,
-            order=[ws.Ordering(ws.Summary("train/completion_episode_rate"), ascending=False)],
+            order=[ws.Ordering(ws.Summary(TRAIN_OUTCOME_RATE), ascending=False)],
             pinned_runs=["6hvqs5et", "5ktcw6dm", "lugd5cth", "iab5gq4b", "j0q58wg4", "cyyfs6s5"],
             pinned_columns=[
                 "Name",
                 "State",
                 "group",
-                "summary.train/completion_episode_rate",
-                "summary.train/completion_episodes_total",
+                f"summary.{TRAIN_OUTCOME_RATE}",
+                f"summary.{TRAIN_OUTCOME_COMPLETIONS}",
                 "summary.global_step",
                 "config.learning_rate",
                 "config.ent_coef_final",
@@ -96,7 +103,7 @@ def build_workspace(entity: str, project: str, name: str, query: str) -> ws.Work
                         """
                         Primary question: which runs become reliable at the selected target, not merely high reward?
 
-                        Read `train/completion_episode_rate` first. It is already the rolling success rate over the last 100 completed terminal episodes, so the dashboard uses no extra smoothing. Then use `completion_episodes_total` to distinguish early discovery from reliable exploitation, and use PPO internals to diagnose whether promising policies were destroyed by later updates.
+                        Read `train/outcome/rate` first. It is already the rolling success rate over the last 100 terminal episodes, so the dashboard uses no extra smoothing. Then use `train/outcome/completions` to distinguish early discovery from reliable exploitation, and use PPO internals to diagnose whether promising policies were destroyed by later updates.
                         """,
                         x=0,
                         y=0,
@@ -109,7 +116,7 @@ def build_workspace(entity: str, project: str, name: str, query: str) -> ws.Work
                 panels=[
                     line(
                         "North star: completion rate over last 100 terminal episodes",
-                        "train/completion_episode_rate",
+                        TRAIN_OUTCOME_RATE,
                         x=0,
                         y=0,
                         w=24,
@@ -119,27 +126,27 @@ def build_workspace(entity: str, project: str, name: str, query: str) -> ws.Work
                     ),
                     line(
                         "Discovery volume: cumulative completed episodes",
-                        "train/completion_episodes_total",
+                        TRAIN_OUTCOME_COMPLETIONS,
                         x=0,
                         y=8,
                     ),
                     line(
                         "Denominator: cumulative terminal episodes",
-                        "train/terminal_episodes_total",
+                        TRAIN_OUTCOME_TERMINALS,
                         x=12,
                         y=8,
                     ),
                     wr.BarPlot(
                         title="Final summary: completion rate",
-                        metrics=["train/completion_episode_rate"],
+                        metrics=[TRAIN_OUTCOME_RATE],
                         orientation="h",
                         max_runs_to_show=30,
                         layout=wr.Layout(x=0, y=14, w=12, h=6),
                     ),
                     wr.ScatterPlot(
                         title="Final reliability vs total completions",
-                        x="train/completion_episodes_total",
-                        y="train/completion_episode_rate",
+                        x=TRAIN_OUTCOME_COMPLETIONS,
+                        y=TRAIN_OUTCOME_RATE,
                         z="global_step",
                         range_y=(0, 1.05),
                         legend_template="${run:displayName}",
@@ -154,8 +161,8 @@ def build_workspace(entity: str, project: str, name: str, query: str) -> ws.Work
                     line("Episode reward mean", "rollout/ep_rew_mean", x=0, y=0),
                     line("Episode length mean", "rollout/ep_len_mean", x=12, y=0),
                     line("Cumulative fps", "time/fps", x=0, y=6),
-                    line("Rollout fps", "time/rollout_fps", x=12, y=6),
-                    line("Instant full-loop fps", "time/fps_instant", x=0, y=12),
+                    line("Rollout fps", THROUGHPUT_ROLLOUT_FPS, x=12, y=6),
+                    line("Instant full-loop fps", THROUGHPUT_LOOP_FPS, x=0, y=12),
                 ],
             ),
             ws.Section(
@@ -176,7 +183,7 @@ def build_workspace(entity: str, project: str, name: str, query: str) -> ws.Work
                     line("Learning rate schedule", "train/learning_rate", x=0, y=0),
                     line("Entropy loss", "train/entropy_loss", x=12, y=0),
                     wr.ParameterImportancePlot(
-                        with_respect_to="train/completion_episode_rate",
+                        with_respect_to=TRAIN_OUTCOME_RATE,
                         layout=wr.Layout(x=0, y=6, w=24, h=8),
                     ),
                 ],

@@ -1,7 +1,9 @@
 # Launches
 
-Root-level `sky_*.yaml` files are ignored scratch launch files. Promote a launch
-shape here only when it is worth reviewing and reusing.
+Root-level `sky_*.yaml` files are ignored scratch launch files. Promote a direct
+batch launch shape here only when it is worth reviewing and reusing. For
+long-lived queue workers, promote the runtime shape to
+`experiments/runner_profiles/` instead.
 
 Prefer names that describe intent instead of timestamps, and keep credentials in
 SkyPilot secrets or environment variables rather than in YAML.
@@ -12,9 +14,13 @@ Use `stable-retro-ppo-skypilot` to turn a JSON experiment matrix into a
 SkyPilot task, run preflight checks, print the standard secret-safe launch
 command, sparsely monitor live launches, and summarize finished child logs.
 
+This path embeds concrete training runs in the rendered SkyPilot YAML. Prefer
+runner profiles when jobs already live in the campaign queue and SkyPilot only
+needs to host workers.
+
 The example manifest is a template. Replace `game`, optional `state`, and
 `rom_source` before expecting preflight or launch to succeed.
-Default reusable manifests should target `stable-retro-turbo==1.0.0.post16`;
+Default reusable manifests should target `stable-retro-turbo==1.0.0.post19`;
 older runtime versions belong only in explicitly historical repro or comparison
 manifests.
 

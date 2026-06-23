@@ -43,7 +43,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--random-seeds", action="store_true")
     parser.add_argument("--fps", type=float, default=30.0)
     parser.add_argument("--scale", type=int, default=4)
-    parser.add_argument("--stochastic", action="store_true")
+    parser.add_argument(
+        "--stochastic",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Sample from the policy; use --no-stochastic for deterministic playback.",
+    )
     parser.add_argument("--download-only", action="store_true")
     return parser
 
@@ -132,8 +137,7 @@ def play_model(
         "--scale",
         str(args.scale),
     ]
-    if args.stochastic:
-        cmd.append("--stochastic")
+    cmd.append("--stochastic" if args.stochastic else "--no-stochastic")
     if args.random_seeds:
         cmd.append("--random-seeds")
     append_explicit_env_args(cmd, parser, args, explicit_dests)

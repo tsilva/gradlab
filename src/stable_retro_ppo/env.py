@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import os
 import inspect
-from collections.abc import Callable
 from dataclasses import dataclass
 from dataclasses import replace
 from typing import Any
@@ -48,6 +47,7 @@ class EnvConfig:
     state: str = DEFAULT_STATE
     states: tuple[str, ...] = ()
     state_probs: tuple[float, ...] = ()
+    task_conditioning: bool = False
     frame_skip: int = 4
     max_pool_frames: bool = True
     sticky_action_prob: float = 0.0
@@ -148,9 +148,12 @@ def state_distribution_metadata(config: EnvConfig) -> list[dict[str, float | str
     if not config.states:
         return []
     if config.state_probs:
+        distribution: dict[str, float] = {}
+        for state, prob in zip(config.states, config.state_probs, strict=True):
+            distribution[state] = distribution.get(state, 0.0) + float(prob)
         return [
-            {"state": state, "probability": float(prob)}
-            for state, prob in zip(config.states, config.state_probs, strict=True)
+            {"state": state, "probability": probability}
+            for state, probability in distribution.items()
         ]
     probability = 1.0 / len(config.states)
     return [{"state": state, "probability": probability} for state in config.states]
@@ -267,6 +270,96 @@ class VecStickyAction(VecEnvWrapper):
 
     def step_wait(self):
         return self.venv.step_wait()
+
+
+def _find_vec_attr(venv, attr_name: str) -> Any:
+    current = venv
+    while current is not None:
+        if attr_name in vars(current) or hasattr(type(current), attr_name):
+            return getattr(current, attr_name)
+        current = getattr(current, "venv", None)
+    raise AttributeError(attr_name)
+
+
+class VecTaskConditioning(VecEnvWrapper):
+    """Expose active native state as a one-hot task vector in dict observations."""
+
+    def __init__(self, venv):
+        try:
+            initial_state_names = _find_vec_attr(venv, "initial_state_names")
+            active_state_indices = _find_vec_attr(venv, "active_state_indices")
+        except AttributeError as exc:
+            raise ValueError(
+                "task conditioning requires stable-retro-turbo active-state support "
+                "(initial_state_names and active_state_indices), available in post19",
+            ) from exc
+        self._initial_state_names = tuple(initial_state_names)
+        if not self._initial_state_names:
+            raise ValueError("task conditioning requires at least one native initial state")
+        self._active_state_indices = active_state_indices()
+        task_index_by_name: dict[str, int] = {}
+        slot_to_task: list[int] = []
+        for state_name in self._initial_state_names:
+            slot_to_task.append(
+                task_index_by_name.setdefault(state_name, len(task_index_by_name))
+            )
+        self.task_state_names = tuple(task_index_by_name)
+        self._slot_to_task = np.asarray(slot_to_task, dtype=np.int64)
+        self._task_eye = np.eye(len(self.task_state_names), dtype=np.float32)
+        observation_space = gym.spaces.Dict(
+            {
+                "image": venv.observation_space,
+                "task": gym.spaces.Box(
+                    low=0.0,
+                    high=1.0,
+                    shape=(len(self.task_state_names),),
+                    dtype=np.float32,
+                ),
+            }
+        )
+        super().__init__(
+            venv,
+            observation_space=observation_space,
+            action_space=venv.action_space,
+        )
+
+    @property
+    def initial_state_names(self) -> tuple[str, ...]:
+        return self._initial_state_names
+
+    def active_state_indices(self) -> np.ndarray:
+        return self._active_state_indices
+
+    def _task_indices(self, active_indices: np.ndarray | None = None) -> np.ndarray:
+        indices = self._active_state_indices if active_indices is None else active_indices
+        return self._slot_to_task[np.asarray(indices, dtype=np.int64)]
+
+    def _task_vectors(self, active_indices: np.ndarray | None = None) -> np.ndarray:
+        return self._task_eye[self._task_indices(active_indices)]
+
+    def _observation(self, image_obs, active_indices: np.ndarray | None = None) -> dict[str, np.ndarray]:
+        return {
+            "image": image_obs,
+            "task": self._task_vectors(active_indices),
+        }
+
+    def reset(self):
+        obs = self.venv.reset()
+        return self._observation(obs)
+
+    def step_async(self, actions):
+        self.venv.step_async(actions)
+
+    def step_wait(self):
+        previous_indices = self._active_state_indices.copy()
+        obs, rewards, dones, infos = self.venv.step_wait()
+        for index, done in enumerate(dones):
+            if done and "terminal_observation" in infos[index]:
+                infos[index]["terminal_observation"] = {
+                    "image": infos[index]["terminal_observation"],
+                    "task": self._task_vectors(previous_indices[index : index + 1])[0],
+                }
+        return self._observation(obs), rewards, dones, infos
 
 
 class VecRetroProgressInfo(VecEnvWrapper):
@@ -503,20 +596,15 @@ def wrap_retro_env(env: gym.Env, config: EnvConfig, seed: int | None = None) -> 
     return env
 
 
-def make_env_fn(rank: int, seed: int, config: EnvConfig) -> Callable[[], gym.Env]:
-    def _init() -> gym.Env:
-        env_config = resolve_env_config(config)
-        if config.states:
-            env_config = replace(config, state=config.states[rank % len(config.states)])
-        env = make_fast_retro_env(config=env_config, seed=seed + rank)
-        env.reset(seed=seed + rank)
-        return env
-
-    return _init
-
-
 def needs_vec_transpose_image(observation_space: gym.Space) -> bool:
     """Return whether SB3 needs VecTransposeImage to receive channel-first images."""
+
+    if isinstance(observation_space, gym.spaces.Dict):
+        transpose = False
+        for key, space in observation_space.spaces.items():
+            if key == "image":
+                transpose = transpose or needs_vec_transpose_image(space)
+        return transpose
 
     shape = getattr(observation_space, "shape", None)
     if not isinstance(observation_space, gym.spaces.Box) or shape is None or len(shape) != 3:
@@ -552,7 +640,6 @@ def _native_vec_kwargs(
     *,
     n_envs: int,
     num_threads: int,
-    state: str | None,
     native_life_variable: str | None,
     native_life_loss_supported: bool,
 ) -> dict[str, Any]:
@@ -570,12 +657,18 @@ def _native_vec_kwargs(
         "copy_observations": False,
     }
     if config.states:
-        native_kwargs["state"] = None
-        native_kwargs["states"] = list(config.states)
-        if config.state_probs:
-            native_kwargs["state_probs"] = list(config.state_probs)
+        native_kwargs["state"] = (
+            {
+                item["state"]: item["probability"]
+                for item in state_distribution_metadata(config)
+            }
+            if config.state_probs
+            else list(config.states)
+        )
+    elif config.state:
+        native_kwargs["state"] = config.state
     else:
-        native_kwargs["state"] = state or None
+        native_kwargs["state"] = None
     if native_life_loss_supported:
         native_kwargs["terminate_on_life_loss"] = True
         native_kwargs["life_variable"] = native_life_variable
@@ -598,7 +691,6 @@ def make_vec_envs(config: EnvConfig, n_envs: int, seed: int, start_method: str =
         config,
         n_envs=n_envs,
         num_threads=num_threads,
-        state=config.state,
         native_life_variable=native_life_variable,
         native_life_loss_supported=native_life_loss_supported,
     )
@@ -615,6 +707,8 @@ def make_vec_envs(config: EnvConfig, n_envs: int, seed: int, start_method: str =
     )
     vec_env = VecRetroProgressInfo(vec_env, config=progress_config)
     vec_env = VecMonitor(vec_env)
+    if config.task_conditioning:
+        vec_env = VecTaskConditioning(vec_env)
     return maybe_transpose_vec_image(vec_env)
 
 

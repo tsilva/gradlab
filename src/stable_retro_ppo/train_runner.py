@@ -113,10 +113,10 @@ def parse_log_metrics(log_text: str) -> dict[str, int | float | str]:
         if key.endswith("/") and not value:
             section = key.rstrip("/")
             continue
-        metric_key = key if "/" in key or not section else f"{section}/{key}"
+        metric_key = key if key == "total_timesteps" or "/" in key or not section else f"{section}/{key}"
         parsed = parse_metric_value(value)
         metrics[metric_key] = parsed
-        if key in {"total_timesteps", "completion_episode_rate", "completion_episodes_total"}:
+        if metric_key in {"total_timesteps", "time/total_timesteps"}:
             metrics[key] = parsed
     return metrics
 

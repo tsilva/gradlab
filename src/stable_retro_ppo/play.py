@@ -34,6 +34,7 @@ from stable_retro_ppo.env import (
 )
 from stable_retro_ppo.env_config import env_config_from_args
 from stable_retro_ppo.eval_metrics import single_env_action
+from stable_retro_ppo.eval_metrics import is_level_complete
 
 
 def stacked_obs(frames: deque[np.ndarray]) -> np.ndarray:
@@ -59,6 +60,51 @@ def fast_env_frames(obs: np.ndarray) -> deque[np.ndarray]:
     if arr.ndim == 3 and arr.shape[0] == 4:
         return deque([arr[idx, ..., None] for idx in range(arr.shape[0])], maxlen=4)
     raise ValueError(f"expected fast env obs with 4 stacked frames, got shape {arr.shape}")
+
+
+def task_vector_for_state(config, task_dim: int) -> np.ndarray:
+    states = tuple(dict.fromkeys(config.states or ((config.state,) if config.state else ())))
+    if not states:
+        raise ValueError("task-conditioned playback requires at least one configured state")
+    if task_dim != len(states):
+        raise ValueError(
+            "task-conditioned model expects "
+            f"{task_dim} task values, but playback metadata has {len(states)} state(s): {states}",
+        )
+    active_state = config.state or states[0]
+    if active_state not in states:
+        raise ValueError(
+            f"playback state {active_state!r} is not in task-conditioned state list {states!r}",
+        )
+    task = np.zeros((1, task_dim), dtype=np.float32)
+    task[0, states.index(active_state)] = 1.0
+    return task
+
+
+def model_observation(model: PPO, image_obs: np.ndarray, config) -> np.ndarray | dict[str, np.ndarray]:
+    observation_space = model.observation_space
+    spaces = getattr(observation_space, "spaces", None)
+    if not isinstance(spaces, dict):
+        return image_obs
+    if "image" not in spaces or "task" not in spaces:
+        raise ValueError(
+            "dict-observation model must have 'image' and 'task' observation keys, "
+            f"got {tuple(spaces)}",
+        )
+    task_shape = getattr(spaces["task"], "shape", None)
+    if task_shape is None or len(task_shape) != 1:
+        raise ValueError(f"expected one-dimensional task observation, got {spaces['task']!r}")
+    return {
+        "image": image_obs,
+        "task": task_vector_for_state(config, task_dim=int(task_shape[0])),
+    }
+
+
+def playback_should_end_episode(terminated: bool, truncated: bool, completed: bool) -> bool:
+    # Completion is shown in playback output, but GUI playback keeps going unless
+    # the environment actually terminates or truncates the episode.
+    del completed
+    return bool(terminated or truncated)
 
 
 def render_obs_stack(frames: deque[np.ndarray], scale: int) -> np.ndarray:
@@ -291,7 +337,12 @@ def build_parser() -> argparse.ArgumentParser:
             "preprocessing; 'rendered' uses the older manual GUI frame stack."
         ),
     )
-    parser.add_argument("--stochastic", action="store_true", help="Sample from the policy")
+    parser.add_argument(
+        "--stochastic",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Sample from the policy; use --no-stochastic for deterministic playback.",
+    )
     return parser
 
 
@@ -310,7 +361,13 @@ def main() -> None:
         print(f"loaded playback metadata: {Path(args.model).with_suffix('.metadata.json')}", flush=True)
     assert_rom_imported(args.game)
     model = PPO.load(args.model, device=resolve_sb3_device(args.device))
-    config = resolve_env_config(env_config_from_args(args, max_episode_steps_attr="max_steps"))
+    config = resolve_env_config(
+        env_config_from_args(
+            args,
+            max_episode_steps_attr="max_steps",
+            include_states=True,
+        )
+    )
     display_env = make_rendered_replay_env(config=config, seed=args.seed)
     policy_env = (
         make_fast_retro_env(config=config, seed=args.seed)
@@ -437,11 +494,12 @@ def main() -> None:
             max_x_pos = 0
             final_info = {}
             for step_idx in range(args.max_steps):
-                model_obs = (
+                image_obs = (
                     fast_env_obs(policy_obs)
                     if args.policy_env == "fast"
                     else stacked_obs(frames)
                 )
+                model_obs = model_observation(model, image_obs, config)
                 action, _ = model.predict(model_obs, deterministic=not args.stochastic)
                 env_action = single_env_action(action)
                 policy_obs, reward, terminated, truncated, info = policy_env.step(env_action)
@@ -456,6 +514,7 @@ def main() -> None:
                 total_reward += float(reward)
                 max_x_pos = max(max_x_pos, int(info.get("max_x_pos", 0)))
                 final_info = dict(info)
+                completed = is_level_complete(final_info, max_x_pos, config.completion_x_threshold)
                 frame = display_env.render()
                 overlay = [
                     f"r_step: {float(reward):.2f}",
@@ -474,14 +533,14 @@ def main() -> None:
                 if not viewer.show(frame, overlay):
                     return
                 throttle()
-                if terminated or truncated:
-                    status = "terminated" if terminated else "truncated"
+                if playback_should_end_episode(terminated, truncated, completed):
+                    status = "complete" if completed else "terminated" if terminated else "truncated"
                     print(
                         "episode="
                         f"{episode + 1} seed={episode_seed} reward={total_reward:.2f} "
                         f"max_x={max_x_pos} steps={step_idx + 1} status={status} "
                         f"died={bool(final_info.get('died', False))} "
-                        f"complete={bool(final_info.get('level_complete', False))}",
+                        f"complete={completed}",
                         flush=True,
                     )
                     time.sleep(0.5)

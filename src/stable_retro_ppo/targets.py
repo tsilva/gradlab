@@ -114,9 +114,15 @@ class SuperMarioBrosNesV0ProgressTracker(RetroProgressTracker):
         if self.current_level is None:
             self.current_level = level
 
+        died = bool(info.get("life_loss", False))
+        if self.prev_lives is not None and lives is not None and int(lives) < self.prev_lives:
+            died = True
+        if lives is not None:
+            self.prev_lives = int(lives)
+
         level_changed = level != self.current_level
         level_completion_event = False
-        if level_changed:
+        if level_changed and not died:
             self.completed_level_base += self.level_max_x_pos
             self.completed_level_count += 1
             level_completion_event = not self.current_level_completion_awarded
@@ -148,14 +154,9 @@ class SuperMarioBrosNesV0ProgressTracker(RetroProgressTracker):
             custom_done = True
             custom_terminal = True
 
-        died = bool(info.get("life_loss", False))
-        if self.prev_lives is not None and lives is not None and int(lives) < self.prev_lives:
-            died = True
-            if config.terminate_on_life_loss:
-                custom_done = True
-                custom_terminal = True
-        if lives is not None:
-            self.prev_lives = int(lives)
+        if died and config.terminate_on_life_loss:
+            custom_done = True
+            custom_terminal = True
 
         progress_reward = min(float(progress_delta), config.progress_reward_cap)
         score = int(info.get("score", 0))

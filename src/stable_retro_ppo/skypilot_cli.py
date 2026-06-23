@@ -7,6 +7,7 @@ from pathlib import Path
 
 from stable_retro_ppo.skypilot_launch import (
     build_launch_command,
+    build_runner_launch_command,
     cleanup_command,
     collect_results,
     ensure_skypilot_api,
@@ -17,13 +18,17 @@ from stable_retro_ppo.skypilot_launch import (
     launch_summary,
     load_instance_config,
     load_manifest,
+    load_runner_profile,
     manifest_from_wandb_config,
     merged_env,
     preflight_checks,
+    preflight_runner_profile,
+    render_runner_task_yaml,
     render_task_yaml,
     shell_join,
     write_launch_report,
     write_rendered_task,
+    write_rendered_runner_task,
 )
 
 
@@ -33,6 +38,20 @@ def repo_root_from_args(args: argparse.Namespace) -> Path:
 
 def add_common_manifest_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("manifest", type=Path, help="Experiment manifest JSON file")
+    parser.add_argument(
+        "--repo-root",
+        default=".",
+        help="Repository root used for relative paths; defaults to the current directory.",
+    )
+    parser.add_argument(
+        "--instances",
+        type=Path,
+        help="Machine-readable instance config; defaults to experiments/instances.json.",
+    )
+
+
+def add_common_runner_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("profile", type=Path, help="Runner profile JSON file")
     parser.add_argument(
         "--repo-root",
         default=".",
@@ -57,12 +76,39 @@ def cmd_render(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_render_runner(args: argparse.Namespace) -> int:
+    repo_root = repo_root_from_args(args)
+    profile = load_runner_profile(args.profile)
+    instance_config = load_instance_config(repo_root, args.instances)
+    if args.output:
+        path = write_rendered_runner_task(profile, instance_config, repo_root, args.output)
+        print(path)
+    else:
+        print(render_runner_task_yaml(profile, instance_config, repo_root), end="")
+    return 0
+
+
 def cmd_preflight(args: argparse.Namespace) -> int:
     repo_root = repo_root_from_args(args)
     manifest = load_manifest(args.manifest)
     instance_config = load_instance_config(repo_root, args.instances)
     checks = preflight_checks(
         manifest,
+        instance_config,
+        repo_root,
+        env=merged_env(repo_root / ".env"),
+    )
+    for check in checks:
+        print(f"{check.level}: {check.message}")
+    return 1 if any(check.level == "error" for check in checks) else 0
+
+
+def cmd_preflight_runner(args: argparse.Namespace) -> int:
+    repo_root = repo_root_from_args(args)
+    profile = load_runner_profile(args.profile)
+    instance_config = load_instance_config(repo_root, args.instances)
+    checks = preflight_runner_profile(
+        profile,
         instance_config,
         repo_root,
         env=merged_env(repo_root / ".env"),
@@ -84,6 +130,42 @@ def cmd_launch(args: argparse.Namespace) -> int:
     print(f"task: {summary.task_path}")
     print(f"cluster: {summary.cluster}")
     print(f"wandb_group_prefix: {summary.wandb_group_prefix}")
+    print(shell_join(summary.command))
+    if not args.execute:
+        print("dry_run: pass --execute to run sky launch")
+        return 0
+    return execute_launch(
+        summary,
+        repo_root,
+        repo_root / ".env",
+        sparse=args.sparse,
+        log_path=args.log_output,
+        down_on_complete=args.down_on_complete,
+    )
+
+
+def cmd_launch_runner(args: argparse.Namespace) -> int:
+    repo_root = repo_root_from_args(args)
+    profile = load_runner_profile(args.profile)
+    instance_config = load_instance_config(repo_root, args.instances)
+    task_path = write_rendered_runner_task(profile, instance_config, repo_root, args.output)
+    cluster = str(profile.get("cluster", profile.get("name", "stable-retro-ppo-runner-4090")))
+    env = merged_env(repo_root / ".env")
+    command = build_runner_launch_command(
+        cluster,
+        task_path,
+        env=env,
+        detach_run=args.detach_run,
+    )
+    summary = LaunchSummary(
+        command=command,
+        task_path=task_path,
+        cluster=cluster,
+        wandb_group_prefix=str(profile["profile_id"]),
+    )
+    print(f"task: {summary.task_path}")
+    print(f"cluster: {summary.cluster}")
+    print(f"profile: {profile['profile_id']}")
     print(shell_join(summary.command))
     if not args.execute:
         print("dry_run: pass --execute to run sky launch")
@@ -229,9 +311,24 @@ def build_parser() -> argparse.ArgumentParser:
     render.add_argument("--output", type=Path, help="Write rendered task YAML to this path")
     render.set_defaults(func=cmd_render)
 
+    render_runner = subparsers.add_parser(
+        "render-runner",
+        help="Render a long-lived train-runner profile to SkyPilot YAML",
+    )
+    add_common_runner_args(render_runner)
+    render_runner.add_argument("--output", type=Path, help="Write rendered task YAML to this path")
+    render_runner.set_defaults(func=cmd_render_runner)
+
     preflight = subparsers.add_parser("preflight", help="Check manifest/env launch readiness")
     add_common_manifest_args(preflight)
     preflight.set_defaults(func=cmd_preflight)
+
+    preflight_runner = subparsers.add_parser(
+        "preflight-runner",
+        help="Check runner profile/env launch readiness",
+    )
+    add_common_runner_args(preflight_runner)
+    preflight_runner.set_defaults(func=cmd_preflight_runner)
 
     launch = subparsers.add_parser("launch", help="Render a task and optionally run sky launch")
     add_common_manifest_args(launch)
@@ -260,6 +357,37 @@ def build_parser() -> argparse.ArgumentParser:
         help="Run the standard sky down cleanup after the launch command exits.",
     )
     launch.set_defaults(func=cmd_launch)
+
+    launch_runner = subparsers.add_parser(
+        "launch-runner",
+        help="Render a train-runner task and optionally run sky launch",
+    )
+    add_common_runner_args(launch_runner)
+    launch_runner.add_argument(
+        "--output",
+        type=Path,
+        default=Path("sky_train_runner_4090.yaml"),
+        help="Rendered SkyPilot YAML path.",
+    )
+    launch_runner.add_argument("--execute", action="store_true", help="Actually run sky launch")
+    launch_runner.add_argument(
+        "--detach-run",
+        action="store_true",
+        help="Submit the SkyPilot job and return without streaming remote logs.",
+    )
+    launch_runner.add_argument(
+        "--sparse",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Keep a full local launch log but print only milestone lines while SkyPilot runs.",
+    )
+    launch_runner.add_argument("--log-output", type=Path, help="Full SkyPilot launch log path for --sparse")
+    launch_runner.add_argument(
+        "--down-on-complete",
+        action="store_true",
+        help="Run the standard sky down cleanup after the launch command exits.",
+    )
+    launch_runner.set_defaults(func=cmd_launch_runner)
 
     command = subparsers.add_parser("command", help="Print the standard sky launch command")
     command.add_argument("cluster")

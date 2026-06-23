@@ -11,6 +11,7 @@ from pathlib import Path
 os.environ.setdefault("MPLCONFIGDIR", os.path.abspath(".matplotlib"))
 os.makedirs(os.environ["MPLCONFIGDIR"], exist_ok=True)
 
+import numpy as np
 from stable_baselines3 import PPO
 
 from stable_retro_ppo.artifacts import apply_model_config_defaults, explicit_arg_dests
@@ -28,6 +29,18 @@ from stable_retro_ppo.eval_metrics import (
     run_eval_episode,
     summarize_episode_results,
 )
+from stable_retro_ppo.metric_names import EVAL_STATE_ROOT
+
+
+def json_default(value):
+    if isinstance(value, np.generic):
+        return value.item()
+    if isinstance(value, np.ndarray):
+        return {
+            "shape": list(value.shape),
+            "dtype": str(value.dtype),
+        }
+    raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
 
 
 def scripted_action(policy: str, step_idx: int, action_names: tuple[str, ...]) -> int:
@@ -105,6 +118,17 @@ def build_parser() -> argparse.ArgumentParser:
         help="Sample from the policy; use --no-stochastic for deterministic argmax eval.",
     )
     parser.add_argument("--output", help="Optional JSON output path")
+    parser.add_argument(
+        "--progress",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Print one progress line per completed episode to stderr.",
+    )
+    parser.add_argument(
+        "--summary-only",
+        action="store_true",
+        help="Omit per-episode details from stdout JSON.",
+    )
     return parser
 
 
@@ -119,7 +143,13 @@ def main() -> None:
     if args.model:
         apply_model_config_defaults(args, Path(args.model), parser_defaults, explicit_dests)
     assert_rom_imported(args.game)
-    config = resolve_env_config(env_config_from_args(args, max_episode_steps_attr="max_steps"))
+    config = resolve_env_config(
+        env_config_from_args(
+            args,
+            max_episode_steps_attr="max_steps",
+            include_states=True,
+        )
+    )
     model = PPO.load(args.model, device=resolve_sb3_device(args.device)) if args.model else None
 
     if model is not None:
@@ -138,6 +168,17 @@ def main() -> None:
                 )
                 result.pop("actions")
                 episodes.append(result)
+                if args.progress:
+                    print(
+                        "eval_episode="
+                        f"{episode_idx + 1}/{args.episodes} "
+                        f"state={result.get('start_state')} "
+                        f"complete={bool(result.get('level_complete'))} "
+                        f"max_x={int(result.get('max_x_pos', 0))} "
+                        f"steps={int(result.get('steps', 0))}",
+                        file=sys.stderr,
+                        flush=True,
+                    )
         finally:
             env.close()
     else:
@@ -159,17 +200,22 @@ def main() -> None:
     summary = summarize_episode_results(
         episodes,
         deterministic=bool(args.model and not args.stochastic),
-        state_metric_root="eval",
+        state_metric_root=EVAL_STATE_ROOT,
         extra={
             "model": args.model,
             "policy": "ppo" if args.model else args.policy,
             "hud_crop_top": args.hud_crop_top,
         },
     )
-    print(json.dumps(summary, indent=2))
+    if args.summary_only:
+        summary.pop("episode_results", None)
+    print(json.dumps(summary, indent=2, default=json_default))
     if args.output:
         Path(args.output).parent.mkdir(parents=True, exist_ok=True)
-        Path(args.output).write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
+        Path(args.output).write_text(
+            json.dumps(summary, indent=2, default=json_default) + "\n",
+            encoding="utf-8",
+        )
 
 
 if __name__ == "__main__":

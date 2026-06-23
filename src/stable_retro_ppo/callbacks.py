@@ -11,7 +11,26 @@ from stable_baselines3.common.callbacks import BaseCallback
 
 from stable_retro_ppo.artifacts import checkpoint_step, log_wandb_model_artifact
 from stable_retro_ppo.env import EnvConfig
-from stable_retro_ppo.metric_names import metric_path_segment
+from stable_retro_ppo.metric_names import (
+    GLOBAL_STEP,
+    ROLLOUT_ADVANTAGE,
+    ROLLOUT_ADVANTAGE_HIST,
+    ROLLOUT_VALUE_PRED,
+    ROLLOUT_VALUE_PRED_HIST,
+    THROUGHPUT_LOOP_FPS,
+    THROUGHPUT_ROLLOUT_FPS,
+    TRAIN_COMPLETION_EVENTS_ROLLING_MEAN,
+    TRAIN_COMPLETION_EVENTS_ROLLOUT,
+    TRAIN_COMPLETION_EVENTS_TOTAL,
+    TRAIN_OUTCOME_COMPLETIONS,
+    TRAIN_OUTCOME_RATE,
+    TRAIN_OUTCOME_STATE_MEAN_RATE,
+    TRAIN_OUTCOME_STATE_MIN_RATE,
+    TRAIN_OUTCOME_TERMINALS,
+    TRAIN_OUTCOME_WINDOW,
+    stat_metric,
+    train_outcome_state_prefix,
+)
 
 
 class WandbCheckpointArtifactCallback(BaseCallback):
@@ -90,10 +109,10 @@ class ThroughputCallback(BaseCallback):
             elapsed = now - self.rollout_start_time
             steps = self.num_timesteps - self.rollout_start_timesteps
             if elapsed > 0 and steps > 0:
-                self.logger.record("time/rollout_fps", steps / elapsed)
+                self.logger.record(THROUGHPUT_ROLLOUT_FPS, steps / elapsed)
 
         if self.pending_fps_instant is not None:
-            self.logger.record("time/fps_instant", self.pending_fps_instant)
+            self.logger.record(THROUGHPUT_LOOP_FPS, self.pending_fps_instant)
             self.pending_fps_instant = None
 
     def _on_step(self) -> bool:
@@ -115,8 +134,8 @@ class RolloutDiagnosticsCallback(BaseCallback):
 
         value_predictions = self._finite_values(getattr(rollout_buffer, "values", None))
         advantages = self._finite_values(getattr(rollout_buffer, "advantages", None))
-        self._record_stats("train/value_pred", value_predictions)
-        self._record_stats("train/advantage", advantages)
+        self._record_stats(ROLLOUT_VALUE_PRED, value_predictions)
+        self._record_stats(ROLLOUT_ADVANTAGE, advantages)
         self._log_wandb_histograms(value_predictions, advantages)
 
     def _on_step(self) -> bool:
@@ -132,11 +151,11 @@ class RolloutDiagnosticsCallback(BaseCallback):
     def _record_stats(self, prefix: str, values: np.ndarray) -> None:
         if values.size == 0:
             return
-        self.logger.record(f"{prefix}_mean", float(np.mean(values)))
-        self.logger.record(f"{prefix}_std", float(np.std(values)))
-        self.logger.record(f"{prefix}_min", float(np.min(values)))
-        self.logger.record(f"{prefix}_max", float(np.max(values)))
-        self.logger.record(f"{prefix}_abs_mean", float(np.mean(np.abs(values))))
+        self.logger.record(stat_metric(prefix, "mean"), float(np.mean(values)))
+        self.logger.record(stat_metric(prefix, "std"), float(np.std(values)))
+        self.logger.record(stat_metric(prefix, "min"), float(np.min(values)))
+        self.logger.record(stat_metric(prefix, "max"), float(np.max(values)))
+        self.logger.record(stat_metric(prefix, "abs_mean"), float(np.mean(np.abs(values))))
 
     def _log_wandb_histograms(self, value_predictions: np.ndarray, advantages: np.ndarray) -> None:
         if self.wandb_run is None or not self.log_histograms:
@@ -144,11 +163,11 @@ class RolloutDiagnosticsCallback(BaseCallback):
 
         import wandb
 
-        payload: dict[str, object] = {"global_step": self.num_timesteps}
+        payload: dict[str, object] = {GLOBAL_STEP: self.num_timesteps}
         if value_predictions.size > 0:
-            payload["train/value_pred_histogram"] = wandb.Histogram(value_predictions)
+            payload[ROLLOUT_VALUE_PRED_HIST] = wandb.Histogram(value_predictions)
         if advantages.size > 0:
-            payload["train/advantage_histogram"] = wandb.Histogram(advantages)
+            payload[ROLLOUT_ADVANTAGE_HIST] = wandb.Histogram(advantages)
         if len(payload) > 1:
             self.wandb_run.log(payload, step=self.num_timesteps)
 
@@ -189,17 +208,17 @@ class RollingCompletionStopCallback(BaseCallback):
         self.rolling_mean = sum(self.rollout_counts) / len(self.rollout_counts)
         window_full = len(self.rollout_counts) >= self.rolling_window
 
-        self.logger.record("train/completion_events_rollout", self.rollout_completion_count)
-        self.logger.record("train/completion_events_rolling_mean", self.rolling_mean)
-        self.logger.record("train/completion_events_total", self.total_completion_count)
+        self.logger.record(TRAIN_COMPLETION_EVENTS_ROLLOUT, self.rollout_completion_count)
+        self.logger.record(TRAIN_COMPLETION_EVENTS_ROLLING_MEAN, self.rolling_mean)
+        self.logger.record(TRAIN_COMPLETION_EVENTS_TOTAL, self.total_completion_count)
 
         if self.wandb_run is not None:
             self.wandb_run.log(
                 {
-                    "train/completion_events_rollout": self.rollout_completion_count,
-                    "train/completion_events_rolling_mean": self.rolling_mean,
-                    "train/completion_events_total": self.total_completion_count,
-                    "global_step": self.num_timesteps,
+                    TRAIN_COMPLETION_EVENTS_ROLLOUT: self.rollout_completion_count,
+                    TRAIN_COMPLETION_EVENTS_ROLLING_MEAN: self.rolling_mean,
+                    TRAIN_COMPLETION_EVENTS_TOTAL: self.total_completion_count,
+                    GLOBAL_STEP: self.num_timesteps,
                 },
                 step=self.num_timesteps,
             )
@@ -282,23 +301,19 @@ class TrainingCompletionRateStopCallback(BaseCallback):
             state_metric_payload = self.record_state_episode(info, completed)
 
             completion_rate = self.completion_rate
-            self.logger.record("train/completion_episode_rate", completion_rate)
-            self.logger.record(
-                "train/completion_episode_window_size", len(self.completed_episode_outcomes)
-            )
-            self.logger.record("train/completion_episodes_total", self.total_completed_episodes)
-            self.logger.record("train/terminal_episodes_total", self.total_terminal_episodes)
+            self.logger.record(TRAIN_OUTCOME_RATE, completion_rate)
+            self.logger.record(TRAIN_OUTCOME_WINDOW, len(self.completed_episode_outcomes))
+            self.logger.record(TRAIN_OUTCOME_COMPLETIONS, self.total_completed_episodes)
+            self.logger.record(TRAIN_OUTCOME_TERMINALS, self.total_terminal_episodes)
 
             if self.wandb_run is not None:
                 self.wandb_run.log(
                     {
-                        "train/completion_episode_rate": completion_rate,
-                        "train/completion_episode_window_size": len(
-                            self.completed_episode_outcomes,
-                        ),
-                        "train/completion_episodes_total": self.total_completed_episodes,
-                        "train/terminal_episodes_total": self.total_terminal_episodes,
-                        "global_step": self.num_timesteps,
+                        TRAIN_OUTCOME_RATE: completion_rate,
+                        TRAIN_OUTCOME_WINDOW: len(self.completed_episode_outcomes),
+                        TRAIN_OUTCOME_COMPLETIONS: self.total_completed_episodes,
+                        TRAIN_OUTCOME_TERMINALS: self.total_terminal_episodes,
+                        GLOBAL_STEP: self.num_timesteps,
                         **state_metric_payload,
                     },
                     step=self.num_timesteps,
@@ -340,15 +355,22 @@ class TrainingCompletionRateStopCallback(BaseCallback):
         else:
             self.state_total_completed_episodes.setdefault(state_key, 0)
 
-        segment = metric_path_segment(state_key)
-        prefix = f"train/{segment}"
+        prefix = train_outcome_state_prefix(state_key)
         state_rate = sum(outcomes) / len(outcomes)
         payload: dict[str, int | float] = {
-            f"{prefix}/completion_episode_rate": state_rate,
-            f"{prefix}/completion_episode_window_size": len(outcomes),
-            f"{prefix}/completion_episodes_total": self.state_total_completed_episodes[state_key],
-            f"{prefix}/terminal_episodes_total": self.state_total_terminal_episodes[state_key],
+            f"{prefix}/rate": state_rate,
+            f"{prefix}/window": len(outcomes),
+            f"{prefix}/completions": self.state_total_completed_episodes[state_key],
+            f"{prefix}/terminals": self.state_total_terminal_episodes[state_key],
         }
+        state_rates = [
+            sum(state_outcomes) / len(state_outcomes)
+            for state_outcomes in self.state_completed_episode_outcomes.values()
+            if state_outcomes
+        ]
+        if state_rates:
+            payload[TRAIN_OUTCOME_STATE_MIN_RATE] = min(state_rates)
+            payload[TRAIN_OUTCOME_STATE_MEAN_RATE] = sum(state_rates) / len(state_rates)
         for key, value in payload.items():
             self.logger.record(key, value)
         return payload

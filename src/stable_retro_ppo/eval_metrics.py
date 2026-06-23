@@ -8,12 +8,37 @@ import numpy as np
 from stable_baselines3.common.callbacks import BaseCallback
 
 from stable_retro_ppo.env import EnvConfig, make_eval_vec_env, make_rendered_replay_env
-from stable_retro_ppo.metric_names import metric_path_segment
+from stable_retro_ppo.metric_names import (
+    EVAL_BEST_REWARD,
+    EVAL_BEST_VIDEO,
+    EVAL_BEST_X,
+    EVAL_DEATH_COUNT,
+    EVAL_DEATH_RATE,
+    EVAL_DEATH_X_HIST,
+    EVAL_OUTCOME_COMPLETIONS,
+    EVAL_OUTCOME_RATE,
+    EVAL_PROGRESS_LEVEL_X_MAX,
+    EVAL_PROGRESS_LEVEL_X_MEAN,
+    EVAL_PROGRESS_X_MAX,
+    EVAL_PROGRESS_X_MEAN,
+    EVAL_REWARD_MAX,
+    EVAL_REWARD_MEAN,
+    EVAL_REWARD_STD,
+    EVAL_STATE_MIN_RATE,
+    EVAL_STATE_ROOT,
+    EVAL_STATE_MEAN_RATE,
+    GLOBAL_STEP,
+    eval_state_prefix,
+)
 from stable_retro_ppo.video import replay_actions_for_video, write_video
 
 
 def is_level_complete(info: dict[str, Any], max_x_pos: int, completion_x_threshold: int) -> bool:
-    return bool(info.get("level_complete", False)) or bool(info.get("level_changed", False))
+    if "completion_event" in info or "level_complete" in info:
+        return bool(info.get("completion_event", info.get("level_complete", False)))
+    return bool(info.get("level_changed", False)) and not bool(
+        info.get("died", False) or info.get("life_loss", False),
+    )
 
 
 def death_location_histogram(death_x_positions: list[int], bin_size: int = 100) -> dict[str, int]:
@@ -33,12 +58,19 @@ def episode_start_state(episode: dict[str, Any]) -> str | None:
     return str(state) if state else None
 
 
+def serializable_info(info: dict[str, Any]) -> dict[str, Any]:
+    result = dict(info)
+    result.pop("terminal_observation", None)
+    return result
+
+
 def state_episode_metrics(
     episode_results: list[dict[str, Any]],
     *,
-    metric_root: str,
+    metric_root: str = EVAL_STATE_ROOT,
 ) -> dict[str, int | float]:
     metrics: dict[str, int | float] = {}
+    completion_rates: list[float] = []
     states = sorted(
         {state for episode in episode_results if (state := episode_start_state(episode))}
     )
@@ -56,24 +88,33 @@ def state_episode_metrics(
             dtype=np.float64,
         )
         completion_count = sum(1 for episode in state_episodes if episode["level_complete"])
+        completion_rate = completion_count / len(state_episodes)
+        completion_rates.append(completion_rate)
         death_count = sum(1 for episode in state_episodes if episode["died"])
-        prefix = f"{metric_root}/{metric_path_segment(state)}"
+        prefix = eval_state_prefix(state) if metric_root == EVAL_STATE_ROOT else f"{metric_root}/{state}"
         metrics.update(
             {
                 f"{prefix}/episodes": len(state_episodes),
-                f"{prefix}/reward_mean": float(rewards.mean()),
-                f"{prefix}/reward_std": float(rewards.std()),
-                f"{prefix}/reward_max": float(rewards.max()),
-                f"{prefix}/max_x_mean": float(max_x_positions.mean()),
-                f"{prefix}/max_x_max": int(max_x_positions.max()),
-                f"{prefix}/max_level_x_mean": float(max_level_x_positions.mean()),
-                f"{prefix}/max_level_x_max": int(max_level_x_positions.max()),
-                f"{prefix}/completion_count": completion_count,
-                f"{prefix}/completion_rate": completion_count / len(state_episodes),
-                f"{prefix}/death_count": death_count,
-                f"{prefix}/death_rate": death_count / len(state_episodes),
+                f"{prefix}/reward/mean": float(rewards.mean()),
+                f"{prefix}/reward/std": float(rewards.std()),
+                f"{prefix}/reward/max": float(rewards.max()),
+                f"{prefix}/progress/x/mean": float(max_x_positions.mean()),
+                f"{prefix}/progress/x/max": int(max_x_positions.max()),
+                f"{prefix}/progress/level_x/mean": float(max_level_x_positions.mean()),
+                f"{prefix}/progress/level_x/max": int(max_level_x_positions.max()),
+                f"{prefix}/outcome/completions": completion_count,
+                f"{prefix}/outcome/rate": completion_rate,
+                f"{prefix}/death/count": death_count,
+                f"{prefix}/death/rate": death_count / len(state_episodes),
             },
         )
+    if completion_rates:
+        if metric_root == EVAL_STATE_ROOT:
+            metrics[EVAL_STATE_MIN_RATE] = min(completion_rates)
+            metrics[EVAL_STATE_MEAN_RATE] = float(np.mean(completion_rates))
+        else:
+            metrics[f"{metric_root}/min_rate"] = min(completion_rates)
+            metrics[f"{metric_root}/mean_rate"] = float(np.mean(completion_rates))
     return metrics
 
 
@@ -186,7 +227,9 @@ def run_eval_episode(
         max_x_pos = max(max_x_pos, int(info.get("max_x_pos", 0)))
         max_level_x_pos = max(max_level_x_pos, int(info.get("level_max_x_pos", 0)))
         final_info = info
-        if terminated:
+        completed = is_level_complete(final_info, max_x_pos, completion_x_threshold)
+        if terminated or completed:
+            terminated = terminated or completed
             break
 
     completed = is_level_complete(final_info, max_x_pos, completion_x_threshold)
@@ -211,7 +254,7 @@ def run_eval_episode(
         "level_complete": completed,
         "died": died,
         "death_x_pos": int(death_x_pos) if death_x_pos is not None else None,
-        "final_info": final_info,
+        "final_info": serializable_info(final_info),
         "actions": actions,
     }
 
@@ -294,11 +337,11 @@ class RetroEvalCallback(BaseCallback):
         metrics = summarize_episode_results(
             episode_results,
             deterministic=self.deterministic,
-            state_metric_root="eval",
+            state_metric_root=EVAL_STATE_ROOT,
             extra={"timesteps": self.num_timesteps},
         )
         metrics["best_model_score"] = [
-            metrics["completion_rate"],
+            metrics.get(EVAL_STATE_MIN_RATE, metrics["completion_rate"]),
             metrics["max_x_max"],
             metrics["reward_mean"],
         ]
@@ -325,25 +368,23 @@ class RetroEvalCallback(BaseCallback):
         with Path(self.run_dir, "eval_metrics.jsonl").open("a", encoding="utf-8") as file:
             file.write(json.dumps(metrics) + "\n")
 
-        self.logger.record("eval/reward_mean", metrics["reward_mean"])
-        self.logger.record("eval/reward_std", metrics["reward_std"])
-        self.logger.record("eval/reward_max", metrics["reward_max"])
-        self.logger.record("eval/max_x_mean", metrics["max_x_mean"])
-        self.logger.record("eval/max_x_max", metrics["max_x_max"])
-        self.logger.record("eval/max_level_x_mean", metrics["max_level_x_mean"])
-        self.logger.record("eval/max_level_x_max", metrics["max_level_x_max"])
-        self.logger.record("eval/completion_rate", metrics["completion_rate"])
-        self.logger.record("eval/death_rate", metrics["death_rate"])
-        self.logger.record("eval/death_count", metrics["death_count"])
-        for key, value in flat_numeric_metrics(metrics, "eval/").items():
-            if key in {"eval/completion_rate", "eval/death_rate", "eval/death_count"}:
-                continue
+        self.logger.record(EVAL_REWARD_MEAN, metrics["reward_mean"])
+        self.logger.record(EVAL_REWARD_STD, metrics["reward_std"])
+        self.logger.record(EVAL_REWARD_MAX, metrics["reward_max"])
+        self.logger.record(EVAL_PROGRESS_X_MEAN, metrics["max_x_mean"])
+        self.logger.record(EVAL_PROGRESS_X_MAX, metrics["max_x_max"])
+        self.logger.record(EVAL_PROGRESS_LEVEL_X_MEAN, metrics["max_level_x_mean"])
+        self.logger.record(EVAL_PROGRESS_LEVEL_X_MAX, metrics["max_level_x_max"])
+        self.logger.record(EVAL_OUTCOME_RATE, metrics["completion_rate"])
+        self.logger.record(EVAL_DEATH_RATE, metrics["death_rate"])
+        self.logger.record(EVAL_DEATH_COUNT, metrics["death_count"])
+        for key, value in flat_numeric_metrics(metrics, f"{EVAL_STATE_ROOT}/").items():
             self.logger.record(key, value)
         self.logger.record("time/total_timesteps", self.num_timesteps)
         self.logger.dump(self.num_timesteps)
 
         eval_score = (
-            metrics["completion_rate"],
+            metrics.get(EVAL_STATE_MIN_RATE, metrics["completion_rate"]),
             metrics["max_x_max"],
             metrics["reward_mean"],
         )
@@ -375,25 +416,26 @@ class RetroEvalCallback(BaseCallback):
         import wandb
 
         payload: dict[str, Any] = {
-            "eval/reward_mean": metrics["reward_mean"],
-            "eval/reward_std": metrics["reward_std"],
-            "eval/reward_max": metrics["reward_max"],
-            "eval/max_x_mean": metrics["max_x_mean"],
-            "eval/max_x_max": metrics["max_x_max"],
-            "eval/max_level_x_mean": metrics["max_level_x_mean"],
-            "eval/max_level_x_max": metrics["max_level_x_max"],
-            "eval/completion_count": metrics["completion_count"],
-            "eval/completion_rate": metrics["completion_rate"],
-            "eval/death_count": metrics["death_count"],
-            "eval/death_rate": metrics["death_rate"],
-            "eval/best_episode_reward": metrics["best_episode"]["reward"],
-            "eval/best_episode_max_x": metrics["best_episode"]["max_x_pos"],
+            GLOBAL_STEP: self.num_timesteps,
+            EVAL_REWARD_MEAN: metrics["reward_mean"],
+            EVAL_REWARD_STD: metrics["reward_std"],
+            EVAL_REWARD_MAX: metrics["reward_max"],
+            EVAL_PROGRESS_X_MEAN: metrics["max_x_mean"],
+            EVAL_PROGRESS_X_MAX: metrics["max_x_max"],
+            EVAL_PROGRESS_LEVEL_X_MEAN: metrics["max_level_x_mean"],
+            EVAL_PROGRESS_LEVEL_X_MAX: metrics["max_level_x_max"],
+            EVAL_OUTCOME_COMPLETIONS: metrics["completion_count"],
+            EVAL_OUTCOME_RATE: metrics["completion_rate"],
+            EVAL_DEATH_COUNT: metrics["death_count"],
+            EVAL_DEATH_RATE: metrics["death_rate"],
+            EVAL_BEST_REWARD: metrics["best_episode"]["reward"],
+            EVAL_BEST_X: metrics["best_episode"]["max_x_pos"],
         }
-        payload.update(flat_numeric_metrics(metrics, "eval/"))
+        payload.update(flat_numeric_metrics(metrics, f"{EVAL_STATE_ROOT}/"))
         if death_x_positions:
-            payload["eval/death_x_pos_histogram"] = wandb.Histogram(death_x_positions)
+            payload[EVAL_DEATH_X_HIST] = wandb.Histogram(death_x_positions)
         if video_path is not None and video_path.is_file():
-            payload["eval/best_episode_video"] = wandb.Video(
+            payload[EVAL_BEST_VIDEO] = wandb.Video(
                 str(video_path), fps=self.video_fps, format="mp4"
             )
         self.wandb_run.log(payload, step=self.num_timesteps)

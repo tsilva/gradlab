@@ -17,6 +17,13 @@ def add_env_config_args(
     defaults = defaults or EnvConfig()
     parser.add_argument("--game", default=defaults.game)
     parser.add_argument("--state", default=defaults.state)
+    parser.add_argument("--states", default=",".join(defaults.states))
+    parser.add_argument("--state-probs", default=",".join(str(prob) for prob in defaults.state_probs))
+    parser.add_argument(
+        "--task-conditioning",
+        action=argparse.BooleanOptionalAction,
+        default=defaults.task_conditioning,
+    )
     parser.add_argument("--frame-skip", type=int, default=4)
     parser.add_argument("--max-pool-frames", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument(

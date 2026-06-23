@@ -307,14 +307,16 @@ class TrainRunnerTests(unittest.TestCase):
                         "wandb: 🚀 View run at "
                         "https://wandb.ai/tsilva/SuperMarioBros-NES/runs/abc123",
                         "|    total_timesteps                | 256         |",
-                        "|    completion_episode_rate        | 0.1         |",
+                        "| train/outcome/                    |             |",
+                        "|    rate                           | 0.1         |",
                         "|    total_timesteps                | 512         |",
                         "| time/                             |             |",
                         "|    fps                            | 240         |",
                         "| train/                            |             |",
                         "|    loss                           | 1.5         |",
                         "|    rollout/ep_rew_mean            | 3.02e+03    |",
-                        "|    completion_episode_rate        | 0.2         |",
+                        "| train/outcome/                    |             |",
+                        "|    rate                           | 0.2         |",
                         "wandb artifact logged: candidate-final "
                         "(s3://bucket/SuperMarioBros-Nes-v0/candidate/final_model.zip)",
                     ]
@@ -334,7 +336,7 @@ class TrainRunnerTests(unittest.TestCase):
             "https://wandb.ai/tsilva/SuperMarioBros-NES/runs/abc123",
         )
         self.assertEqual(result["metrics_json"]["total_timesteps"], 512)
-        self.assertEqual(result["metrics_json"]["train/completion_episode_rate"], 0.2)
+        self.assertEqual(result["metrics_json"]["train/outcome/rate"], 0.2)
         self.assertEqual(result["metrics_json"]["rollout/ep_rew_mean"], 3020.0)
         self.assertEqual(result["metrics_json"]["time/fps"], 240)
         self.assertEqual(result["metrics_json"]["train/loss"], 1.5)
@@ -344,15 +346,17 @@ class TrainRunnerTests(unittest.TestCase):
             "\n".join(
                 [
                     "|    total_timesteps                | 256         |",
-                    "|    completion_episode_rate        | 0.1         |",
+                    "| train/outcome/                    |             |",
+                    "|    rate                           | 0.1         |",
                     "|    total_timesteps                | 512         |",
-                    "|    completion_episode_rate        | 0.2         |",
+                    "| train/outcome/                    |             |",
+                    "|    rate                           | 0.2         |",
                 ]
             )
         )
 
         self.assertEqual(metrics["total_timesteps"], 512)
-        self.assertEqual(metrics["completion_episode_rate"], 0.2)
+        self.assertEqual(metrics["train/outcome/rate"], 0.2)
 
     def test_parse_log_metrics_prefixes_sb3_sections(self) -> None:
         metrics = parse_log_metrics(
@@ -372,7 +376,6 @@ class TrainRunnerTests(unittest.TestCase):
         self.assertEqual(metrics["rollout/ep_rew_mean"], 3020.0)
         self.assertEqual(metrics["time/fps"], 240)
         self.assertEqual(metrics["train/loss"], 1.5)
-        self.assertEqual(metrics["train/total_timesteps"], 1024)
         self.assertEqual(metrics["total_timesteps"], 1024)
 
 

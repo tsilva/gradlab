@@ -26,6 +26,28 @@ from stable_retro_ppo.env_config import env_config_from_args
 from stable_retro_ppo.eval_metrics import flat_numeric_metrics
 from stable_retro_ppo.eval_runner import evaluate_model_episodes
 from stable_retro_ppo.json_utils import json_safe
+from stable_retro_ppo.metric_names import (
+    EVAL_BEST_REWARD,
+    EVAL_BEST_VIDEO,
+    EVAL_BEST_X,
+    EVAL_CHECKPOINT_ARTIFACT,
+    EVAL_CHECKPOINT_STEP,
+    EVAL_CONFIG_HUD_CROP_TOP,
+    EVAL_DEATH_COUNT,
+    EVAL_DEATH_RATE,
+    EVAL_DEATH_X_HIST,
+    EVAL_OUTCOME_COMPLETIONS,
+    EVAL_OUTCOME_RATE,
+    EVAL_PROGRESS_LEVEL_X_MAX,
+    EVAL_PROGRESS_LEVEL_X_MEAN,
+    EVAL_PROGRESS_X_MAX,
+    EVAL_PROGRESS_X_MEAN,
+    EVAL_REWARD_MAX,
+    EVAL_REWARD_MEAN,
+    EVAL_REWARD_STD,
+    EVAL_STATE_MIN_RATE,
+    EVAL_STATE_ROOT,
+)
 from stable_retro_ppo.wandb_artifacts import (
     artifact_download_dir,
     artifact_qualified_name,
@@ -97,7 +119,7 @@ def append_eval_history(path: Path, metrics: dict[str, Any]) -> None:
 
 def score(metrics: dict[str, Any]) -> tuple[float, int, float]:
     return (
-        float(metrics["completion_rate"]),
+        float(metrics.get(EVAL_STATE_MIN_RATE, metrics["completion_rate"])),
         int(metrics["max_x_max"]),
         float(metrics["reward_mean"]),
     )
@@ -201,33 +223,33 @@ def log_wandb_eval(wandb_run, metrics: dict[str, Any], video_path: Path | None) 
     import wandb
 
     payload: dict[str, Any] = {
-        "eval/reward_mean": metrics["reward_mean"],
-        "eval/reward_std": metrics["reward_std"],
-        "eval/reward_max": metrics["reward_max"],
-        "eval/max_x_mean": metrics["max_x_mean"],
-        "eval/max_x_max": metrics["max_x_max"],
-        "eval/max_level_x_mean": metrics["max_level_x_mean"],
-        "eval/max_level_x_max": metrics["max_level_x_max"],
-        "eval/completion_count": metrics["completion_count"],
-        "eval/completion_rate": metrics["completion_rate"],
-        "eval/death_count": metrics["death_count"],
-        "eval/death_rate": metrics["death_rate"],
-        "eval/best_episode_reward": metrics["best_episode"]["reward"],
-        "eval/best_episode_max_x": metrics["best_episode"]["max_x_pos"],
-        "eval/checkpoint_step": metrics["checkpoint_step"],
-        "eval/checkpoint_artifact": metrics["checkpoint_artifact"],
-        "eval/hud_crop_top": metrics["hud_crop_top"],
+        EVAL_REWARD_MEAN: metrics["reward_mean"],
+        EVAL_REWARD_STD: metrics["reward_std"],
+        EVAL_REWARD_MAX: metrics["reward_max"],
+        EVAL_PROGRESS_X_MEAN: metrics["max_x_mean"],
+        EVAL_PROGRESS_X_MAX: metrics["max_x_max"],
+        EVAL_PROGRESS_LEVEL_X_MEAN: metrics["max_level_x_mean"],
+        EVAL_PROGRESS_LEVEL_X_MAX: metrics["max_level_x_max"],
+        EVAL_OUTCOME_COMPLETIONS: metrics["completion_count"],
+        EVAL_OUTCOME_RATE: metrics["completion_rate"],
+        EVAL_DEATH_COUNT: metrics["death_count"],
+        EVAL_DEATH_RATE: metrics["death_rate"],
+        EVAL_BEST_REWARD: metrics["best_episode"]["reward"],
+        EVAL_BEST_X: metrics["best_episode"]["max_x_pos"],
+        EVAL_CHECKPOINT_STEP: metrics["checkpoint_step"],
+        EVAL_CHECKPOINT_ARTIFACT: metrics["checkpoint_artifact"],
+        EVAL_CONFIG_HUD_CROP_TOP: metrics["hud_crop_top"],
     }
-    payload.update(flat_numeric_metrics(metrics, "eval/"))
+    payload.update(flat_numeric_metrics(metrics, f"{EVAL_STATE_ROOT}/"))
     death_x_positions = [
         int(episode["death_x_pos"])
         for episode in metrics["episode_results"]
         if episode.get("death_x_pos") is not None
     ]
     if death_x_positions:
-        payload["eval/death_x_pos_histogram"] = wandb.Histogram(death_x_positions)
+        payload[EVAL_DEATH_X_HIST] = wandb.Histogram(death_x_positions)
     if video_path is not None and video_path.is_file():
-        payload["eval/best_episode_video"] = wandb.Video(str(video_path), format="mp4")
+        payload[EVAL_BEST_VIDEO] = wandb.Video(str(video_path), format="mp4")
     wandb_run.log(payload, step=int(metrics["checkpoint_step"]))
 
 

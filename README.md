@@ -53,7 +53,10 @@ UV_CACHE_DIR=.uv-cache uv run python -m stable_retro_ppo.play \
   --scale 4
 ```
 
-Mixed Mario start-state rehearsal can use fixed env slots:
+Mixed Mario start-state rehearsal stays on `StableRetroNativeVecEnv`. The CLI
+keeps `--states` and `--state-probs` for compatibility, then translates them to
+post19's single native `state=` constructor argument. Use fixed native env
+slots:
 
 ```bash
 UV_CACHE_DIR=.uv-cache uv run python -m stable_retro_ppo.train \
@@ -64,8 +67,8 @@ UV_CACHE_DIR=.uv-cache uv run python -m stable_retro_ppo.train \
   --run-description "Native vector fixed-slot rehearsal on Level1-1 and Level1-2"
 ```
 
-Or reset-time weighted sampling. `--state-probs` values must be positive finite
-weights; training normalizes them before storing metadata and W&B config.
+Or native reset-time weighted sampling. `--state-probs` values must be positive
+finite weights; training normalizes them before storing metadata and W&B config.
 
 ```bash
 UV_CACHE_DIR=.uv-cache uv run python -m stable_retro_ppo.train \
@@ -115,6 +118,11 @@ UV_CACHE_DIR=.uv-cache uv run modal run src/stable_retro_ppo/modal_app.py::train
 SkyPilot launch manifests live in `experiments/launches/` and are rendered or
 preflighted through `stable-retro-ppo-skypilot`. Read `INSTANCES.md` before
 choosing hardware, changing concurrency, or launching remote training.
+
+For queue-backed training, prefer long-lived runner profiles in
+`experiments/runner_profiles/`. Those profiles render the SkyPilot runtime
+envelope and start `stable_retro_ppo.train_runner`; experiment payloads stay in
+the campaign queue.
 
 ## Notes
 

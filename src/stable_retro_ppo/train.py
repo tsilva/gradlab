@@ -85,8 +85,9 @@ def main() -> None:
         model = PPO.load(args.resume, env=env, tensorboard_log=run_dir, device=device)
         apply_resume_hyperparameters(model, args)
     else:
+        policy_name = "MultiInputPolicy" if config.task_conditioning else "CnnPolicy"
         model = PPO(
-            "CnnPolicy",
+            policy_name,
             env,
             learning_rate=lr_schedule,
             n_steps=args.n_steps,
