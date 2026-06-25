@@ -12,8 +12,110 @@ Use this file as the repo-local source of truth for known GPU instances, launch 
 | Lower-contention RTX4090 confirmation batch | `k8s/rtx4090` | 3-4 concurrent children, `env_threads=4` |
 | Small-GPU batch screening | `ssh/beast2` | 4 concurrent children, `env_threads=2` |
 | Faster individual turnaround on RTX2060 | `ssh/beast2` | 2 concurrent children, `env_threads=4` |
+| Modal baseline GPU launch | `modal-t4` | 1 child, `n_envs=32`, `env_threads=0` |
 
 Refresh these defaults when changing `n_envs`, `n_steps`, model size, deterministic CUDA flags, runtime package version, W&B/artifact behavior, or target node CPU shape.
+
+## Unified Compute Targets
+
+Default control plane: the Mac-local SkyPilot API server at
+`http://127.0.0.1:46580`. Beast-3 and RunPod are compute targets, not required
+control-plane hosts. The old beast-3 SkyPilot API server
+`http://192.168.0.151:46580` is a legacy/remote endpoint and should not be the
+default if RunPod should work while beast-3 is off.
+
+Local Mac control-plane setup as of 2026-06-24:
+
+- `~/.sky/config.yaml` no longer pins `api_server.endpoint`; SkyPilot uses the
+  default local endpoint.
+- `sky api start --host 127.0.0.1` starts the local API/dashboard server.
+- `sky check runpod` succeeds from the local API server using local
+  `~/.runpod/config.toml`.
+- Local kubeconfig context `rtx4090` points at beast-3 Kubernetes via
+  `https://192.168.0.151:6443`; `sky check kubernetes` enables context
+  `rtx4090`.
+- `ssh/beast2` was not enabled in this local-control-plane pass because beast-2
+  was unreachable from the Mac by both `beast-2` and `192.168.133.26`.
+
+Machine-readable defaults live in `experiments/instances.json`. SkyPilot
+manifests and runner profiles may set `"target": "<name>"`, and the
+`rlab-compute` and `rlab-skypilot` CLIs accept `--target <name>` to override
+that without editing JSON. Prefer `rlab-compute` for provider-neutral direct
+launch manifests; keep using `rlab-skypilot` for SkyPilot-only runner profiles
+and low-level SkyPilot utilities.
+
+Current target names:
+
+| Target | Alias examples | Infra | Default shape |
+| --- | --- | --- | --- |
+| `rtx4090` | `beast-3` | `k8s/rtx4090` | 5 children, `env_threads=4` |
+| `rtx2060` | `beast-2` | `ssh/beast2` | 4 children, `env_threads=2` |
+| `runpod-rtx4090` | `runpod4090` | `runpod` | 1 child, `env_threads=2` |
+| `runpod-l4` | `l4` | `runpod` | 1 child, `env_threads=2` |
+| `runpod-t4` | `t4` | `runpod` | unavailable in current SkyPilot RunPod catalog |
+| `modal-t4` | `modal`, `t4-modal` | Modal | 1 child, `n_envs=32`, `env_threads=0` |
+| `local-macbook` | `macbook`, `local` | local CLI only | 1 child, no SkyPilot launch |
+
+Examples:
+
+```bash
+UV_CACHE_DIR=.uv-cache uv run rlab-compute targets
+
+UV_CACHE_DIR=.uv-cache uv run rlab-compute launch \
+  experiments/launches/rlab_rtx4090.example.json \
+  --target modal-t4
+
+UV_CACHE_DIR=.uv-cache uv run rlab-skypilot render-runner \
+  experiments/runner_profiles/mario_ppo_post20_task_conditioned_rtx4090.example.json \
+  --target runpod-l4 \
+  --output sky_train_runner_runpod_l4.yaml
+
+UV_CACHE_DIR=.uv-cache uv run rlab-skypilot launch-runner \
+  experiments/runner_profiles/mario_ppo_post20_task_conditioned_rtx4090.example.json \
+  --target beast-3 \
+  --output sky_train_runner_4090.yaml \
+  --execute \
+  --detach-run
+```
+
+RunPod support requires both the local client and the active SkyPilot API server
+environment to have `skypilot[runpod]` installed and a valid
+`~/.runpod/config.toml`. As of the first RunPod catalog check on 2026-06-24,
+SkyPilot resolved `RTX4090` on RunPod to `1x_RTX4090_SECURE` with 5 vCPUs,
+29 GB host memory, and about `$0.690/hr`; the repo defaults for RunPod are
+therefore conservative until benchmarked.
+
+On 2026-06-24, `sky check runpod` initially failed because the active
+beast-3 SkyPilot API server venv lacked the RunPod extra and server-side
+RunPod config. Installing `skypilot[runpod]==0.12.3.post1` into
+`/home/tsilva/.local/share/skypilot/venv` and copying the local
+`~/.runpod/config.toml` to beast-3 enabled RunPod.
+
+The same day, SkyPilot's RunPod catalog returned no T4 offerings:
+`sky gpus list T4 --infra runpod --all-regions` reported `Resources 'T4' not
+found on RunPod`. Do not use `runpod-t4` unless a future catalog refresh shows
+T4 availability again.
+
+RunPod L4 did smoke successfully after transient per-region capacity misses:
+`rlab-runpod-l4-smoke` eventually provisioned `1x_L4_SECURE` in the US at about
+`$0.390/hr`, printed `NVIDIA L4, 23034 MiB, 580.159.03`, Python `3.10.12`, and
+`torch_available False` in the base image. The cluster was torn down with
+`sky down -y rlab-runpod-l4-smoke`.
+
+RunPod `docker:runpod/base:1.0.2-ubuntu2204` tasks run as `root`, expose the
+SkyPilot runtime at `$HOME/skypilot-runtime/bin/python` (`/root/...`), and may
+define `sudo` as an empty alias. Do not render setup commands that prefer
+`sudo -n ...` just because `sudo` appears in command lookup; use direct
+`apt-get` when `id -u` is `0`, and resolve the bootstrap Python from
+`${SKY_RUNTIME_DIR:-$HOME}/skypilot-runtime/bin/python` with `/home/sky/...` as
+only a fallback.
+
+Modal support is wired through `rlab-compute launch --target modal-t4` for
+direct launch manifests. It dispatches to `modal run
+src/rlab/modal_app.py::launch_manifest`, uses the same manifest training fields
+as local/SkyPilot runs, and applies the target's `gpu`, `cpu`, and `memory_mib`
+defaults through Modal `with_options`. ROMs must already be uploaded to the
+`rlab-data` Modal volume with `modal run src/rlab/modal_app.py::upload_roms`.
 
 ## W&B Artifact Storage: Cloudflare R2
 
@@ -38,7 +140,7 @@ exists, object upload/download worked, and the smoke object was deleted.
 
 Training support:
 
-- `stable_retro_ppo.train` reads `--wandb-artifact-storage-uri`, or falls back to
+- `rlab.train` reads `--wandb-artifact-storage-uri`, or falls back to
   `WANDB_ARTIFACT_STORAGE_URI`, then `CHECKPOINT_BUCKET_URI`.
 - When that URI is set, checkpoint/final/best model zips upload to R2/S3 and W&B
   logs reference artifacts with the existing aliases such as `latest`, `final`,
@@ -102,8 +204,8 @@ PY
 
 - SkyPilot infra: `k8s/rtx4090`
 - GPU host SSH: `ssh tsilva@beast-3`
-- SkyPilot dashboard/API server on LAN: `http://192.168.0.151:46580`
-- SkyPilot dashboard/API server from the current Mac/Codex network: `http://100.118.135.59:46580`
+- Legacy beast-3 SkyPilot dashboard/API server on LAN: `http://192.168.0.151:46580`
+- Legacy beast-3 SkyPilot dashboard/API server from the current Mac/Codex network: `http://100.118.135.59:46580`
 - GPU: NVIDIA GeForce RTX 4090, 24 GB VRAM
 - Observed driver: `595.71.05`, reporting CUDA support up to `13.2`
 - Default SkyPilot image: `docker:us-docker.pkg.dev/sky-dev-465/skypilotk8s/skypilot-gpu:latest`
@@ -143,7 +245,9 @@ favored more children.
 ### Operational Notes
 
 - If a single RTX4090 is already held by an `UP` SkyPilot cluster with no active managed jobs, launching a second Kubernetes cluster may fail with `Insufficient nvidia.com/gpu`. Prefer submitting to the warm cluster with `sky launch -c <existing-cluster> -y <task.yaml>` when reuse is intended.
-- If the local SkyPilot CLI reports only SSH resources or checks `http://127.0.0.1:46581`, point it at the beast-3 API server first with `sky api login -e http://100.118.135.59:46580`.
+- If the local SkyPilot CLI reports the wrong endpoint, prefer `sky api start --host 127.0.0.1`
+  and `sky api info` over logging into the beast-3 API server. Beast-3 should
+  be a compute target, not the default control plane.
 - Use normal `sky launch -c <warm-cluster> -y <task.yaml>` for valid repeat runs. Starting a second long trainer via ad hoc `sky exec` inside an already-running task produced pathological throughput around 140 fps.
 - `sky cancel` against `k8s/rtx4090` jobs can fail with `PermissionError: [Errno 13] Permission denied` while trying to `os.killpg`. If that happens, identify the training process group with `sky exec <cluster> 'ps -eo pid,ppid,pgid,stat,cmd | grep <run-name>'`, terminate the process group with `kill -TERM -<pgid>`, verify no trainer remains, then run `sky down -y <cluster>`.
 - The local SkyPilot CLI may not expose a useful general `sky cp`. For small artifact retrieval from Kubernetes-backed clusters, identify the pod on `beast-3` and stream files from `/home/sky/sky_workdir` with `kubectl exec ... -- cat <remote-file> > <local-file>`.
@@ -151,10 +255,16 @@ favored more children.
 
 ### Stable Retro Runtime Notes
 
-- As of 2026-06-23, use `stable-retro-turbo==1.0.0.post19` for new local,
+- As of 2026-06-25, use `stable-retro-turbo==1.0.0.post21` for new local,
   Modal, and SkyPilot training/eval work. The repo dependency pin, lockfile,
   SkyPilot launcher default, and reusable launch manifests are expected to stay
-  on post19 unless a future runtime migration is explicitly benchmarked.
+  on post21 unless a future runtime migration is explicitly benchmarked.
+  Post21 adds structured native `done_on_info` payloads with previous/next
+  info-variable values. Post20 added native `done_on_info` termination in
+  `StableRetroNativeVecEnv`;
+  Mario mixed-level training should push `life_loss` and `level_change`
+  termination into native per-lane autoresets instead of Python wrapper-level
+  global resets.
 - On 2026-06-23, a short RTX4090 campaign speed gate retried reset-time
   Level1-1/Level1-2 probability sampling with `state_probs=0.5,0.5`,
   `stable-retro-turbo==1.0.0.post16`, `n_envs=16`, and one queued child. It

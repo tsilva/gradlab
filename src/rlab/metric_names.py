@@ -1,0 +1,83 @@
+from __future__ import annotations
+
+import re
+
+GLOBAL_STEP = "global_step"
+
+THROUGHPUT_ROLLOUT_FPS = "throughput/rollout_fps"
+THROUGHPUT_LOOP_FPS = "throughput/loop_fps"
+
+ROLLOUT_VALUE_PRED = "rollout/value_pred"
+ROLLOUT_VALUE_PRED_HIST = "rollout/value_pred/hist"
+ROLLOUT_ADVANTAGE = "rollout/advantage"
+ROLLOUT_ADVANTAGE_HIST = "rollout/advantage/hist"
+
+TRAIN_REWARD_COMPONENT_ROOT = "train/reward"
+TRAIN_REWARD_SHARE_ROOT = "train/reward_share"
+
+TRAIN_DONE_ALL = "train/done/all"
+TRAIN_DONE_MAX_STEPS = "train/done/max_steps"
+TRAIN_DONE_UNCLASSIFIED = "train/done/unclassified"
+
+EVAL_DONE_ALL = "eval/done/all"
+EVAL_DONE_LEVEL_CHANGE = "eval/done/level_change"
+EVAL_DONE_LEVEL_CHANGE_RATE = "eval/done/level_change/rate"
+EVAL_DONE_LEVEL_CHANGE_FROM_RATE_MIN = "eval/done/level_change/from_rate/min"
+EVAL_DONE_LEVEL_CHANGE_FROM_RATE_MEAN = "eval/done/level_change/from_rate/mean"
+EVAL_DONE_MAX_STEPS = "eval/done/max_steps"
+EVAL_DONE_MAX_STEPS_RATE = "eval/done/max_steps/rate"
+EVAL_DONE_UNCLASSIFIED = "eval/done/unclassified"
+EVAL_DONE_UNCLASSIFIED_RATE = "eval/done/unclassified/rate"
+
+EVAL_REWARD_MEAN = "eval/reward/mean"
+EVAL_REWARD_STD = "eval/reward/std"
+EVAL_REWARD_MAX = "eval/reward/max"
+EVAL_PROGRESS_X_MEAN = "eval/progress/x/mean"
+EVAL_PROGRESS_X_MAX = "eval/progress/x/max"
+EVAL_PROGRESS_LEVEL_X_MEAN = "eval/progress/level_x/mean"
+EVAL_PROGRESS_LEVEL_X_MAX = "eval/progress/level_x/max"
+EVAL_DEATH_COUNT = "eval/death/count"
+EVAL_DEATH_RATE = "eval/death/rate"
+EVAL_DEATH_X_HIST = "eval/death/x_hist"
+EVAL_BEST_REWARD = "eval/best/reward"
+EVAL_BEST_X = "eval/best/x"
+EVAL_BEST_VIDEO = "eval/best/video"
+EVAL_CHECKPOINT_STEP = "eval/checkpoint/step"
+EVAL_CHECKPOINT_ARTIFACT = "eval/checkpoint/artifact"
+EVAL_CONFIG_HUD_CROP_TOP = "eval/config/hud_crop_top"
+
+
+def metric_path_segment(value: object) -> str:
+    segment = str(value).strip()
+    segment = re.sub(r"[^A-Za-z0-9_.-]+", "_", segment)
+    return segment.strip("_") or "unknown"
+
+
+def stat_metric(prefix: str, stat: str) -> str:
+    return f"{prefix}/{stat}"
+
+
+def train_state_prefix(state: object) -> str:
+    return f"train/state/{metric_path_segment(state)}"
+
+
+def train_done_reason_metric(reason: object) -> str:
+    return f"train/done/{metric_path_segment(reason)}"
+
+
+def metric_value_segment(value: object) -> str:
+    if isinstance(value, (list, tuple)):
+        return "-".join(metric_path_segment(item) for item in value) or "unknown"
+    return metric_path_segment(value)
+
+
+def train_done_value_metric(reason: object, direction: str, value: object) -> str:
+    return f"{train_done_reason_metric(reason)}/{metric_path_segment(direction)}/{metric_value_segment(value)}"
+
+
+def eval_done_reason_metric(reason: object) -> str:
+    return f"eval/done/{metric_path_segment(reason)}"
+
+
+def eval_done_value_metric(reason: object, direction: str, value: object) -> str:
+    return f"{eval_done_reason_metric(reason)}/{metric_path_segment(direction)}/{metric_value_segment(value)}"

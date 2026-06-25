@@ -8,9 +8,9 @@ Subagent: Ptolemy
 
 Training resume inputs can flow into unsafe SB3/PyTorch deserialization:
 
-- `src/stable_retro_ppo/train_runner.py:54-65` converts `resume_artifact` into a downloaded local `resume` path.
-- `src/stable_retro_ppo/modal_train.py:104` accepts `resume`, `resume_artifact`, and `auto_resume_latest`, then forwards the resolved path.
-- `src/stable_retro_ppo/train.py:84-86` passes `args.resume` directly to `PPO.load()`.
+- `src/rlab/train_runner.py:54-65` converts `resume_artifact` into a downloaded local `resume` path.
+- `src/rlab/modal_train.py:104` accepts `resume`, `resume_artifact`, and `auto_resume_latest`, then forwards the resolved path.
+- `src/rlab/train.py:84-86` passes `args.resume` directly to `PPO.load()`.
 
 `PPO.load()` deserializes SB3 checkpoint archives. Treat checkpoint files and downloaded W&B artifacts as code-bearing inputs unless provenance and integrity are explicitly trusted.
 
@@ -22,7 +22,7 @@ Accepted resume sources are limited to project-produced model artifacts/checkpoi
 
 ## Implementation plan
 
-1. Add `src/stable_retro_ppo/resume_trust.py`:
+1. Add `src/rlab/resume_trust.py`:
    - `validate_resume_path(path, allowed_roots, require_metadata=True) -> Path`.
    - Resolve paths; reject missing files, non-`.zip` files, symlink escapes, directories, and paths outside allowed roots.
    - Use existing metadata helpers from `artifacts.py` to verify metadata version, training metadata, and training metadata hash.

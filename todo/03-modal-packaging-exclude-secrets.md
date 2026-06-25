@@ -6,7 +6,7 @@ Subagent: Euler
 
 ## Problem
 
-`src/stable_retro_ppo/modal_core.py:77-94` packages the repo root into the Modal image with a manual ignore list. It excludes `.env` but not `.secret`, while `scripts/upload_youtube_video.py:375-376` defaults OAuth inputs to `.secret/youtube_client_secret.json` and `.secret/youtube_token.json`. Local proof showed both files exist and would be included by Modal packaging.
+`src/rlab/modal_core.py:77-94` packages the repo root into the Modal image with a manual ignore list. It excludes `.env` but not `.secret`, while `scripts/upload_youtube_video.py:375-376` defaults OAuth inputs to `.secret/youtube_client_secret.json` and `.secret/youtube_token.json`. Local proof showed both files exist and would be included by Modal packaging.
 
 ## Desired state
 
@@ -14,13 +14,13 @@ Modal images never include repo-local OAuth tokens, client secrets, or the `.sec
 
 ## Implementation plan
 
-1. In `src/stable_retro_ppo/modal_core.py`, replace the inline `ignore=[...]` with a named constant or helper such as `MODAL_REPO_IGNORE_PATTERNS`.
+1. In `src/rlab/modal_core.py`, replace the inline `ignore=[...]` with a named constant or helper such as `MODAL_REPO_IGNORE_PATTERNS`.
 2. Add explicit deny patterns:
    - `.secret`
    - `.secret/**`
    - optionally `**/youtube_token.json` and `**/youtube_client_secret.json` as defense in depth.
 3. Keep existing excludes unchanged: `.git`, `.env`, `.env.*`, `.venv`, `.uv-cache`, run/log/model/video output dirs, and `wandb`.
-4. Prefer a small pure helper module, such as `src/stable_retro_ppo/modal_packaging.py`, if tests would otherwise need to import Modal.
+4. Prefer a small pure helper module, such as `src/rlab/modal_packaging.py`, if tests would otherwise need to import Modal.
 5. Do not move or rename the YouTube script defaults unless product direction changes. The bug is Modal package scope, not local credential path choice.
 6. Add a comment near the Modal ignore list explaining that it is a deployment boundary and must include local secret directories even when Git already ignores them.
 
@@ -31,13 +31,13 @@ Modal images never include repo-local OAuth tokens, client secrets, or the `.sec
   - Excluded: `.secret/youtube_token.json`.
   - Excluded: `.secret/youtube_client_secret.json`.
   - Excluded: `.env`.
-  - Included: `src/stable_retro_ppo/modal_app.py`.
+  - Included: `src/rlab/modal_app.py`.
 
 Run:
 
 ```bash
 UV_CACHE_DIR=.uv-cache uv run python -m unittest tests.test_core_helpers
-UV_CACHE_DIR=.uv-cache uv run python -c "import stable_retro_ppo.modal_core as m; print(m.APP_NAME)"
+UV_CACHE_DIR=.uv-cache uv run python -c "import rlab.modal_core as m; print(m.APP_NAME)"
 ```
 
 Run a Modal dry/smoke packaging command only after confirming it will not launch expensive training.

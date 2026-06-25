@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from stable_retro_ppo.artifacts import (
+from rlab.artifacts import (
     PLAYBACK_ENV_ARG_KEYS,
     apply_config_defaults,
     env_config_from_metadata,
@@ -14,15 +14,15 @@ from stable_retro_ppo.artifacts import (
     load_model_metadata,
     write_model_metadata,
 )
-from stable_retro_ppo.cli_args import add_env_config_args
-from stable_retro_ppo.env import resolve_env_config
-from stable_retro_ppo.env_config import env_config_from_args
-from stable_retro_ppo.wandb_artifacts import (
+from rlab.cli_args import add_env_config_args
+from rlab.env import resolve_env_config
+from rlab.env_config import env_config_from_args
+from rlab.wandb_artifacts import (
     artifact_download_dir,
     download_model_artifact,
     model_artifact_ref,
 )
-from stable_retro_ppo.wandb_utils import DEFAULT_WANDB_PROJECT_PATH, load_wandb_env
+from rlab.wandb_utils import DEFAULT_WANDB_PROJECT_PATH, load_wandb_env
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -125,7 +125,7 @@ def play_model(
     cmd = [
         sys.executable,
         "-m",
-        "stable_retro_ppo.play",
+        "rlab.play",
         "--model",
         str(model_path),
         "--episodes",
@@ -149,9 +149,7 @@ def main() -> None:
     parser = build_parser()
     parser_defaults = vars(parser.parse_args([]))
     explicit_dests = explicit_arg_dests(parser, sys.argv[1:])
-    explicit_dests.update(
-        {"terminate_on_life_loss", "terminate_on_level_change", "terminate_on_completion"}
-    )
+    explicit_dests.add("done_on_info_json")
     args = parser.parse_args()
     ref = artifact_ref(args)
     download_root = artifact_download_dir(Path(args.root), ref)

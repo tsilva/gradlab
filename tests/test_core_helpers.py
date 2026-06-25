@@ -14,7 +14,7 @@ from scripts.play_wandb_artifact import (
     append_explicit_env_args,
     build_parser as build_wandb_play_parser,
 )
-from stable_retro_ppo.artifacts import (
+from rlab.artifacts import (
     apply_model_config_defaults,
     apply_config_defaults,
     build_s3_artifact_uri,
@@ -28,38 +28,44 @@ from stable_retro_ppo.artifacts import (
     require_training_metadata,
     write_model_metadata,
 )
-from stable_retro_ppo.callbacks import (
+from rlab.callbacks import (
+    DoneCounterCallback,
+    RewardComponentDiagnosticsCallback,
     RolloutDiagnosticsCallback,
     ThroughputCallback,
-    TrainingCompletionRateStopCallback,
 )
-from stable_retro_ppo.cli import build_train_command
-from stable_retro_ppo.env import (
+from rlab.cli import build_parser as build_train_parser
+from rlab.cli import build_train_command
+from rlab.env import (
     EnvConfig,
     StickyAction,
     VecTaskConditioning,
     make_eval_vec_env,
     make_rendered_replay_env,
     make_training_vec_env,
+    native_vec_env_supports_done_on_info,
     needs_vec_transpose_image,
     resolve_env_config,
     resolve_mixed_state_config,
+    state_name_candidates_from_level_id,
 )
-from stable_retro_ppo.env_config import env_config_from_args, parse_state_probs, parse_states
-from stable_retro_ppo.eval_metrics import episode_rank, is_level_complete
-from stable_retro_ppo.eval_metrics import RetroEvalCallback
-from stable_retro_ppo.eval_runner import evaluate_model_episodes
-from stable_retro_ppo.metric_names import metric_path_segment
-from stable_retro_ppo.play import build_parser as build_play_parser
-from stable_retro_ppo.play import model_observation
-from stable_retro_ppo.play import playback_should_end_episode
-from stable_retro_ppo.targets import SuperMarioBrosNesV0Target, target_for_game
-from stable_retro_ppo.wandb_artifacts import (
+from rlab.env_config import env_config_from_args, parse_done_on_info, parse_state_probs, parse_states
+from rlab.eval_metrics import episode_rank, is_level_complete
+from rlab.eval_metrics import RetroEvalCallback
+from rlab.eval_runner import evaluate_model_episodes
+from rlab.metric_names import metric_path_segment
+from rlab.play import build_parser as build_play_parser
+from rlab.play import model_observation
+from rlab.play import playback_should_end_episode
+from rlab.play import task_conditioning_change_message
+from rlab.task_advantage import normalize_advantages_by_task
+from rlab.targets import SuperMarioBrosNesV0Target, target_for_game
+from rlab.wandb_artifacts import (
     artifact_download_dir,
     model_artifact_ref,
     safe_artifact_stem,
 )
-from stable_retro_ppo.wandb_artifacts import metadata_from_wandb_artifact
+from rlab.wandb_artifacts import metadata_from_wandb_artifact
 from scripts.eval_wandb_checkpoints import eval_seed_for_checkpoint
 from scripts.eval_wandb_checkpoints import score as eval_checkpoint_score
 
@@ -111,7 +117,7 @@ class EnvConfigFromArgsTests(unittest.TestCase):
         )
 
         with tempfile.TemporaryDirectory() as tmp_dir:
-            with patch("stable_retro_ppo.artifacts.load_wandb_env"), patch.dict(
+            with patch("rlab.artifacts.load_wandb_env"), patch.dict(
                 sys.modules, {"wandb": fake_wandb}
             ):
                 run = init_wandb(args, tmp_dir, EnvConfig())
@@ -146,29 +152,46 @@ class EnvConfigFromArgsTests(unittest.TestCase):
             no_progress_timeout_steps=0,
             no_progress_min_delta=0,
             completion_x_threshold=SuperMarioBrosNesV0Target.default_completion_x_threshold,
-            terminate_on_life_loss=True,
-            terminate_on_level_change=False,
-            terminate_on_completion=False,
+            done_on_info_json='{"life_loss":["lives","decrease"]}',
             action_set="right",
         )
         config = env_config_from_args(args, max_episode_steps_attr="max_steps")
         self.assertEqual(config.max_episode_steps, 123)
         self.assertEqual(config.action_set, "right")
         self.assertEqual(config.sticky_action_prob, 0.25)
-        self.assertTrue(config.terminate_on_life_loss)
+        self.assertEqual(config.done_on_info, {"life_loss": ("lives", "decrease")})
+
+    def test_parse_done_on_info_accepts_single_and_multi_key_rules(self) -> None:
+        self.assertEqual(
+            parse_done_on_info(
+                '{"life_loss":["lives","decrease"],'
+                '"level_change":[["levelHi","levelLo"],"change"]}',
+            ),
+            {
+                "life_loss": ("lives", "decrease"),
+                "level_change": (("levelHi", "levelLo"), "change"),
+            },
+        )
+
+    def test_parse_done_on_info_rejects_invalid_shapes(self) -> None:
+        invalid_values = [
+            "{",
+            "[]",
+            '{"":["lives","decrease"]}',
+            '{"life_loss":["lives"]}',
+            '{"life_loss":[[],"change"]}',
+            '{"life_loss":[" ","decrease"]}',
+            '{"life_loss":["lives",""]}',
+        ]
+
+        for value in invalid_values:
+            with self.subTest(value=value):
+                with self.assertRaises(ValueError):
+                    parse_done_on_info(value)
 
     def test_sticky_action_probability_defaults_to_disabled(self) -> None:
         self.assertEqual(build_play_parser().parse_args([]).sticky_action_prob, 0.0)
         self.assertEqual(build_wandb_play_parser().parse_args(["run"]).sticky_action_prob, 0.0)
-
-    def test_playback_eval_termination_defaults_to_disabled(self) -> None:
-        play_args = build_play_parser().parse_args([])
-        wandb_args = build_wandb_play_parser().parse_args(["run"])
-
-        for args in (play_args, wandb_args):
-            self.assertFalse(args.terminate_on_life_loss)
-            self.assertFalse(args.terminate_on_level_change)
-            self.assertFalse(args.terminate_on_completion)
 
     def test_sticky_action_probability_parses_for_playback(self) -> None:
         self.assertEqual(
@@ -190,6 +213,8 @@ class EnvConfigFromArgsTests(unittest.TestCase):
                 "--state-probs",
                 "0.5,0.5",
                 "--task-conditioning",
+                "--task-conditioning-info-vars",
+                "levelHi,levelLo",
             ]
         )
         config = env_config_from_args(
@@ -201,63 +226,68 @@ class EnvConfigFromArgsTests(unittest.TestCase):
         self.assertEqual(config.states, ("Level1-1", "Level1-2"))
         self.assertEqual(config.state_probs, (0.5, 0.5))
         self.assertTrue(config.task_conditioning)
+        self.assertEqual(config.task_conditioning_info_vars, ("levelHi", "levelLo"))
+
+    def test_task_conditioning_info_values_validate_arity(self) -> None:
+        with self.assertRaisesRegex(ValueError, "row length"):
+            resolve_env_config(
+                EnvConfig(
+                    game="SuperMarioBros-Nes-v0",
+                    task_conditioning=True,
+                    task_conditioning_info_vars=("levelHi", "levelLo"),
+                    task_conditioning_info_values=((0,),),
+                )
+            )
 
     def test_invalid_sticky_action_probability_fails_loudly(self) -> None:
         with self.assertRaisesRegex(ValueError, "sticky_action_prob"):
             resolve_env_config(EnvConfig(game="SuperMarioBros-Nes-v0", sticky_action_prob=-0.1))
 
-    def test_eval_vec_env_forces_life_loss_termination_off(self) -> None:
+    def test_eval_vec_env_clears_done_on_info_rules(self) -> None:
         sentinel = object()
-        config = EnvConfig(game="SuperMarioBros-Nes-v0", terminate_on_life_loss=True)
+        config = EnvConfig(
+            game="SuperMarioBros-Nes-v0",
+            done_on_info={"life_loss": ("lives", "decrease")},
+        )
 
-        with patch("stable_retro_ppo.env.make_vec_envs", return_value=sentinel) as make_vec_envs:
+        with patch("rlab.env.make_vec_envs", return_value=sentinel) as make_vec_envs:
             env = make_eval_vec_env(config=config, n_envs=2, seed=7)
 
         self.assertIs(env, sentinel)
         passed_config = make_vec_envs.call_args.kwargs["config"]
-        self.assertFalse(passed_config.terminate_on_life_loss)
-        self.assertFalse(passed_config.terminate_on_level_change)
-        self.assertFalse(passed_config.terminate_on_completion)
+        self.assertEqual(passed_config.done_on_info, {})
 
-    def test_eval_vec_env_disables_target_default_life_loss_termination(self) -> None:
+    def test_training_vec_env_preserves_requested_done_on_info_rules(self) -> None:
         sentinel = object()
-        config = EnvConfig(game="SuperMarioBros-Nes-v0", terminate_on_life_loss=None)
+        config = EnvConfig(
+            game="SuperMarioBros-Nes-v0",
+            done_on_info={"life_loss": ("lives", "decrease")},
+        )
 
-        with patch("stable_retro_ppo.env.make_vec_envs", return_value=sentinel) as make_vec_envs:
-            make_eval_vec_env(config=config, n_envs=1, seed=7)
-
-        passed_config = make_vec_envs.call_args.kwargs["config"]
-        self.assertFalse(passed_config.terminate_on_life_loss)
-        self.assertFalse(passed_config.terminate_on_level_change)
-        self.assertFalse(passed_config.terminate_on_completion)
-
-    def test_training_vec_env_preserves_requested_life_loss_termination(self) -> None:
-        sentinel = object()
-        config = EnvConfig(game="SuperMarioBros-Nes-v0", terminate_on_life_loss=True)
-
-        with patch("stable_retro_ppo.env.make_vec_envs", return_value=sentinel) as make_vec_envs:
+        with patch("rlab.env.make_vec_envs", return_value=sentinel) as make_vec_envs:
             env = make_training_vec_env(config=config, n_envs=2, seed=7)
 
         self.assertIs(env, sentinel)
         passed_config = make_vec_envs.call_args.kwargs["config"]
-        self.assertTrue(passed_config.terminate_on_life_loss)
+        self.assertEqual(passed_config.done_on_info, {"life_loss": ("lives", "decrease")})
 
-    def test_rendered_eval_replay_forces_life_loss_termination_off(self) -> None:
+    def test_rendered_eval_replay_clears_done_on_info_rules(self) -> None:
         sentinel = object()
-        config = EnvConfig(game="SuperMarioBros-Nes-v0", terminate_on_life_loss=True)
+        config = EnvConfig(
+            game="SuperMarioBros-Nes-v0",
+            done_on_info={"life_loss": ("lives", "decrease")},
+        )
 
-        with patch("stable_retro_ppo.env.make_retro_env", return_value=sentinel) as make_retro_env:
+        with patch("rlab.env.make_retro_env", return_value=sentinel) as make_retro_env:
             env = make_rendered_replay_env(config=config, seed=7)
 
         self.assertIs(env, sentinel)
         passed_config = make_retro_env.call_args.kwargs["config"]
-        self.assertFalse(passed_config.terminate_on_life_loss)
-        self.assertFalse(passed_config.terminate_on_level_change)
-        self.assertFalse(passed_config.terminate_on_completion)
+        self.assertEqual(passed_config.done_on_info, {})
 
     def test_short_states_requires_one_state_per_env_slot(self) -> None:
         with patch(
-            "stable_retro_ppo.env.retro.data.list_states",
+            "rlab.env.retro.data.list_states",
             return_value=["Level1-1", "Level1-2"],
         ):
             with self.assertRaisesRegex(ValueError, "exactly one state per env slot"):
@@ -271,7 +301,7 @@ class EnvConfigFromArgsTests(unittest.TestCase):
 
     def test_state_probs_are_normalized_and_count_checked(self) -> None:
         with patch(
-            "stable_retro_ppo.env.retro.data.list_states",
+            "rlab.env.retro.data.list_states",
             return_value=["Level1-1", "Level1-2"],
         ):
             config = resolve_mixed_state_config(
@@ -302,7 +332,7 @@ class EnvConfigFromArgsTests(unittest.TestCase):
             )
 
     def test_unknown_mixed_state_fails_loudly(self) -> None:
-        with patch("stable_retro_ppo.env.retro.data.list_states", return_value=["Level1-1"]):
+        with patch("rlab.env.retro.data.list_states", return_value=["Level1-1"]):
             with self.assertRaisesRegex(ValueError, "unknown stable-retro state"):
                 resolve_mixed_state_config(
                     EnvConfig(game="SuperMarioBros-Nes-v0", states=("Level9-9",)),
@@ -328,9 +358,6 @@ class TargetTests(unittest.TestCase):
             reward_mode="baseline",
             no_progress_min_delta=0,
             completion_x_threshold=0,
-            terminate_on_level_change=False,
-            terminate_on_completion=False,
-            terminate_on_life_loss=False,
             max_episode_steps=0,
             no_progress_timeout_steps=0,
             progress_reward_cap=30.0,
@@ -365,9 +392,6 @@ class TargetTests(unittest.TestCase):
             reward_mode="score",
             no_progress_min_delta=0,
             completion_x_threshold=25,
-            terminate_on_level_change=False,
-            terminate_on_completion=False,
-            terminate_on_life_loss=False,
             max_episode_steps=0,
             no_progress_timeout_steps=0,
             progress_reward_cap=30.0,
@@ -395,6 +419,12 @@ class TargetTests(unittest.TestCase):
 
         self.assertFalse(same_level_info["level_complete"])
         self.assertFalse(same_level_info["threshold_complete"])
+        self.assertEqual(same_level_info["progress_component"], 256.0)
+        self.assertEqual(same_level_info["progress_reward_component"], 256.0)
+        self.assertEqual(same_level_info["score_reward_component"], 0.0)
+        self.assertEqual(same_level_info["completion_reward_component"], 0.0)
+        self.assertEqual(same_level_info["death_penalty_component"], 0.0)
+        self.assertEqual(same_level_info["time_penalty_component"], 0.0)
 
         next_level_info = {
             "lives": 3,
@@ -414,9 +444,6 @@ class TargetTests(unittest.TestCase):
             reward_mode="score",
             no_progress_min_delta=0,
             completion_x_threshold=0,
-            terminate_on_level_change=False,
-            terminate_on_completion=True,
-            terminate_on_life_loss=True,
             max_episode_steps=0,
             no_progress_timeout_steps=0,
             progress_reward_cap=30.0,
@@ -449,7 +476,48 @@ class TargetTests(unittest.TestCase):
         self.assertFalse(death_level_change_info["completion_event"])
         self.assertEqual(death_level_change_info["completed_level_count"], 0)
         self.assertEqual(death_level_change_info["terminal_reward"], -50.0)
-        self.assertTrue(progress.done)
+        self.assertFalse(progress.done)
+
+    def test_mario_done_on_info_death_level_change_does_not_count_as_completion(self) -> None:
+        config = argparse.Namespace(
+            reward_mode="score",
+            no_progress_min_delta=0,
+            completion_x_threshold=0,
+            max_episode_steps=0,
+            no_progress_timeout_steps=0,
+            progress_reward_cap=30.0,
+            progress_reward_scale=1.0,
+            terminal_reward=50.0,
+            reward_scale=10.0,
+            time_penalty=0.0,
+            completion_reward=0.0,
+            death_penalty=25.0,
+            score_progress_clipped=False,
+            use_retro_reward=False,
+        )
+        tracker = SuperMarioBrosNesV0Target.create_tracker(config)
+        tracker.reset({"lives": 3, "score": 0, "levelHi": 1, "levelLo": 1})
+
+        death_level_change_info = {
+            "lives": 3,
+            "score": 0,
+            "levelHi": 2,
+            "levelLo": 1,
+            "xscrollHi": 0,
+            "xscrollLo": 64,
+            "done_on_info": {
+                "life_loss": {"op": "decrease", "keys": ("lives",)},
+                "level_change": {"op": "change", "keys": ("levelHi", "levelLo")},
+            },
+        }
+        progress = tracker.step(0.0, death_level_change_info, done=True)
+
+        self.assertTrue(death_level_change_info["level_changed"])
+        self.assertTrue(death_level_change_info["died"])
+        self.assertFalse(death_level_change_info["level_complete"])
+        self.assertFalse(death_level_change_info["completion_event"])
+        self.assertEqual(death_level_change_info["completed_level_count"], 0)
+        self.assertFalse(progress.done)
 
 
 class VecImageShapeTests(unittest.TestCase):
@@ -493,7 +561,7 @@ class StickyActionTests(unittest.TestCase):
 
 
 class NativeMixedStateVecEnvTests(unittest.TestCase):
-    def test_training_vec_env_passes_weighted_states_as_post19_state_dict(self) -> None:
+    def test_training_vec_env_passes_weighted_states_as_native_state_dict(self) -> None:
         created: list[dict[str, object]] = []
 
         class FakeNative:
@@ -517,17 +585,16 @@ class NativeMixedStateVecEnvTests(unittest.TestCase):
             game="SuperMarioBros-Nes-v0",
             action_set="native",
             reward_mode="native",
-            terminate_on_life_loss=False,
             states=("Level1-1", "Level1-2"),
             state_probs=(0.5, 0.5),
         )
         with (
-            patch("stable_retro_ppo.env.StableRetroNativeVecEnv", FakeNative),
-            patch("stable_retro_ppo.env.VecRetroProgressInfo", side_effect=lambda env, config: env),
-            patch("stable_retro_ppo.env.VecMonitor", side_effect=lambda env: env),
-            patch("stable_retro_ppo.env.maybe_transpose_vec_image", side_effect=lambda env: env),
+            patch("rlab.env.StableRetroNativeVecEnv", FakeNative),
+            patch("rlab.env.VecRetroProgressInfo", side_effect=lambda env, config: env),
+            patch("rlab.env.VecMonitor", side_effect=lambda env: env),
+            patch("rlab.env.maybe_transpose_vec_image", side_effect=lambda env: env),
             patch(
-                "stable_retro_ppo.env.retro.data.list_states",
+                "rlab.env.retro.data.list_states",
                 return_value=["Level1-1", "Level1-2"],
             ),
         ):
@@ -540,7 +607,7 @@ class NativeMixedStateVecEnvTests(unittest.TestCase):
         self.assertNotIn("states", created[0])
         self.assertNotIn("state_probs", created[0])
 
-    def test_training_vec_env_passes_fixed_lane_states_as_post19_state_list(self) -> None:
+    def test_training_vec_env_passes_fixed_lane_states_as_native_state_list(self) -> None:
         created: list[dict[str, object]] = []
 
         class FakeNative:
@@ -563,16 +630,15 @@ class NativeMixedStateVecEnvTests(unittest.TestCase):
             game="SuperMarioBros-Nes-v0",
             action_set="native",
             reward_mode="native",
-            terminate_on_life_loss=False,
             states=("Level1-1", "Level1-2", "Level1-1", "Level1-2"),
         )
         with (
-            patch("stable_retro_ppo.env.StableRetroNativeVecEnv", FakeNative),
-            patch("stable_retro_ppo.env.VecRetroProgressInfo", side_effect=lambda env, config: env),
-            patch("stable_retro_ppo.env.VecMonitor", side_effect=lambda env: env),
-            patch("stable_retro_ppo.env.maybe_transpose_vec_image", side_effect=lambda env: env),
+            patch("rlab.env.StableRetroNativeVecEnv", FakeNative),
+            patch("rlab.env.VecRetroProgressInfo", side_effect=lambda env, config: env),
+            patch("rlab.env.VecMonitor", side_effect=lambda env: env),
+            patch("rlab.env.maybe_transpose_vec_image", side_effect=lambda env: env),
             patch(
-                "stable_retro_ppo.env.retro.data.list_states",
+                "rlab.env.retro.data.list_states",
                 return_value=["Level1-1", "Level1-2"],
             ),
         ):
@@ -582,6 +648,101 @@ class NativeMixedStateVecEnvTests(unittest.TestCase):
         self.assertEqual(created[0]["state"], ["Level1-1", "Level1-2", "Level1-1", "Level1-2"])
         self.assertNotIn("states", created[0])
         self.assertNotIn("state_probs", created[0])
+
+    def test_training_vec_env_passes_configured_native_done_on_info_rules(self) -> None:
+        created: list[dict[str, object]] = []
+        progress_configs: list[EnvConfig] = []
+
+        class FakeNative:
+            observation_space = gym.spaces.Box(
+                low=0,
+                high=255,
+                shape=(4, 84, 84),
+                dtype=np.uint8,
+            )
+            action_space = gym.spaces.MultiBinary(2)
+
+            def __init__(self, game, **kwargs):
+                self.game = game
+                created.append(kwargs)
+
+            def seed(self, seed):
+                return [seed]
+
+        def fake_progress(env, config):
+            progress_configs.append(config)
+            return env
+
+        config = EnvConfig(
+            game="SuperMarioBros-Nes-v0",
+            action_set="native",
+            reward_mode="native",
+            done_on_info={
+                "life_loss": ("lives", "decrease"),
+                "level_change": (("levelHi", "levelLo"), "change"),
+            },
+            states=("Level1-1", "Level1-2"),
+            state_probs=(0.5, 0.5),
+        )
+        with (
+            patch("rlab.env.StableRetroNativeVecEnv", FakeNative),
+            patch("rlab.env.native_vec_env_supports_done_on_info", return_value=True),
+            patch("rlab.env.VecRetroProgressInfo", side_effect=fake_progress),
+            patch("rlab.env.VecMonitor", side_effect=lambda env: env),
+            patch("rlab.env.maybe_transpose_vec_image", side_effect=lambda env: env),
+            patch(
+                "rlab.env.retro.data.list_states",
+                return_value=["Level1-1", "Level1-2"],
+            ),
+        ):
+            env = make_training_vec_env(config, n_envs=16, seed=7)
+
+        self.assertIsInstance(env, FakeNative)
+        self.assertEqual(
+            created[0]["done_on_info"],
+            {
+                "life_loss": ("lives", "decrease"),
+                "level_change": (("levelHi", "levelLo"), "change"),
+            },
+        )
+        self.assertNotIn("terminate_on_life_loss", created[0])
+        self.assertNotIn("life_variable", created[0])
+        self.assertEqual(progress_configs[0].done_on_info, config.done_on_info)
+
+    def test_training_vec_env_requires_native_done_on_info_support_when_rules_requested(self) -> None:
+        class FakeNative:
+            observation_space = gym.spaces.Box(
+                low=0,
+                high=255,
+                shape=(4, 84, 84),
+                dtype=np.uint8,
+            )
+            action_space = gym.spaces.MultiBinary(2)
+
+            def __init__(self, game, **kwargs):
+                pass
+
+        config = EnvConfig(
+            game="SuperMarioBros-Nes-v0",
+            action_set="native",
+            reward_mode="native",
+            done_on_info={"life_loss": ("lives", "decrease")},
+        )
+        with (
+            patch("rlab.env.StableRetroNativeVecEnv", FakeNative),
+            patch("rlab.env.native_vec_env_supports_done_on_info", return_value=False),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "done_on_info support"):
+                make_training_vec_env(config, n_envs=1, seed=7)
+
+    def test_done_on_info_support_detection(self) -> None:
+        class FakeNative:
+            def __init__(self, game, *, done_on_info=None):
+                self.game = game
+                self.done_on_info = done_on_info
+
+        with patch("rlab.env.StableRetroNativeVecEnv", FakeNative):
+            self.assertTrue(native_vec_env_supports_done_on_info())
 
     def test_task_conditioning_wraps_native_active_state_as_one_hot(self) -> None:
         class FakeNative:
@@ -625,18 +786,17 @@ class NativeMixedStateVecEnvTests(unittest.TestCase):
             game="SuperMarioBros-Nes-v0",
             action_set="native",
             reward_mode="native",
-            terminate_on_life_loss=False,
             states=("Level1-1", "Level1-2"),
             state_probs=(0.5, 0.5),
             task_conditioning=True,
         )
         with (
-            patch("stable_retro_ppo.env.StableRetroNativeVecEnv", FakeNative),
-            patch("stable_retro_ppo.env.VecRetroProgressInfo", side_effect=lambda env, config: env),
-            patch("stable_retro_ppo.env.VecMonitor", side_effect=lambda env: env),
-            patch("stable_retro_ppo.env.maybe_transpose_vec_image", side_effect=lambda env: env),
+            patch("rlab.env.StableRetroNativeVecEnv", FakeNative),
+            patch("rlab.env.VecRetroProgressInfo", side_effect=lambda env, config: env),
+            patch("rlab.env.VecMonitor", side_effect=lambda env: env),
+            patch("rlab.env.maybe_transpose_vec_image", side_effect=lambda env: env),
             patch(
-                "stable_retro_ppo.env.retro.data.list_states",
+                "rlab.env.retro.data.list_states",
                 return_value=["Level1-1", "Level1-2"],
             ),
         ):
@@ -723,6 +883,136 @@ class NativeMixedStateVecEnvTests(unittest.TestCase):
             ),
         )
 
+    def test_task_conditioning_follows_non_terminal_level_id(self) -> None:
+        class FakeVec:
+            num_envs = 2
+            observation_space = gym.spaces.Box(
+                low=0,
+                high=255,
+                shape=(4, 84, 84),
+                dtype=np.uint8,
+            )
+            action_space = gym.spaces.MultiBinary(2)
+            initial_state_names = ("Level1-1", "Level1-2")
+
+            def __init__(self) -> None:
+                self._indices = np.asarray([0, 0], dtype=np.int32)
+
+            def active_state_indices(self):
+                return self._indices
+
+            def reset(self):
+                return np.zeros((self.num_envs, 4, 84, 84), dtype=np.uint8)
+
+            def step_async(self, actions):
+                pass
+
+            def step_wait(self):
+                return (
+                    self.reset(),
+                    np.zeros(self.num_envs, dtype=np.float32),
+                    np.zeros(self.num_envs, dtype=bool),
+                    [{"level_id": "1-2"}, {"level_id": "1-1"}],
+                )
+
+        env = VecTaskConditioning(FakeVec())
+        reset_obs = env.reset()
+        env.step_async(np.zeros((2, 2), dtype=np.uint8))
+        step_obs, _, _, _ = env.step_wait()
+
+        np.testing.assert_array_equal(
+            reset_obs["task"],
+            np.asarray([[1.0, 0.0], [1.0, 0.0]], dtype=np.float32),
+        )
+        np.testing.assert_array_equal(
+            step_obs["task"],
+            np.asarray([[0.0, 1.0], [1.0, 0.0]], dtype=np.float32),
+        )
+
+    def test_task_conditioning_maps_zero_indexed_mario_level_id(self) -> None:
+        class FakeVec:
+            num_envs = 1
+            observation_space = gym.spaces.Box(
+                low=0,
+                high=255,
+                shape=(4, 84, 84),
+                dtype=np.uint8,
+            )
+            action_space = gym.spaces.MultiBinary(2)
+            initial_state_names = ("Level1-1", "Level1-2")
+
+            def __init__(self) -> None:
+                self._indices = np.asarray([0], dtype=np.int32)
+
+            def active_state_indices(self):
+                return self._indices
+
+            def reset(self):
+                return np.zeros((self.num_envs, 4, 84, 84), dtype=np.uint8)
+
+            def step_async(self, actions):
+                pass
+
+            def step_wait(self):
+                return self.reset(), np.zeros(1, dtype=np.float32), np.zeros(1, dtype=bool), [
+                    {"level_id": "0-1"}
+                ]
+
+        env = VecTaskConditioning(FakeVec())
+        env.reset()
+        env.step_async(np.zeros((1, 2), dtype=np.uint8))
+        step_obs, _, _, _ = env.step_wait()
+
+        np.testing.assert_array_equal(
+            step_obs["task"],
+            np.asarray([[0.0, 1.0]], dtype=np.float32),
+        )
+
+    def test_task_conditioning_follows_configured_info_vars(self) -> None:
+        class FakeVec:
+            num_envs = 1
+            observation_space = gym.spaces.Box(
+                low=0,
+                high=255,
+                shape=(4, 84, 84),
+                dtype=np.uint8,
+            )
+            action_space = gym.spaces.MultiBinary(2)
+            initial_state_names = ("Level1-1", "Level1-2")
+
+            def __init__(self) -> None:
+                self._indices = np.asarray([0], dtype=np.int32)
+
+            def active_state_indices(self):
+                return self._indices
+
+            def reset(self):
+                return np.zeros((self.num_envs, 4, 84, 84), dtype=np.uint8)
+
+            def step_async(self, actions):
+                pass
+
+            def step_wait(self):
+                return self.reset(), np.zeros(1, dtype=np.float32), np.zeros(1, dtype=bool), [
+                    {"levelHi": 0, "levelLo": 1, "level_id": "not-used"}
+                ]
+
+        env = VecTaskConditioning(
+            FakeVec(),
+            config=EnvConfig(
+                game="SuperMarioBros-Nes-v0",
+                states=("Level1-1", "Level1-2"),
+                task_conditioning=True,
+                task_conditioning_info_vars=("levelHi", "levelLo"),
+            ),
+        )
+        reset_obs = env.reset()
+        env.step_async(np.zeros((1, 2), dtype=np.uint8))
+        step_obs, _, _, _ = env.step_wait()
+
+        np.testing.assert_array_equal(reset_obs["task"], np.asarray([[1.0, 0.0]], dtype=np.float32))
+        np.testing.assert_array_equal(step_obs["task"], np.asarray([[0.0, 1.0]], dtype=np.float32))
+
 
 class CommandAndArtifactTests(unittest.TestCase):
     def test_build_train_command_skips_empty_target_kl(self) -> None:
@@ -732,19 +1022,106 @@ class CommandAndArtifactTests(unittest.TestCase):
                 "states": "Level1-1,Level1-2",
                 "state_probs": "1,3",
                 "target_kl": 0.0,
+                "clip_range_vf": 0.2,
+                "task_conditioning_info_vars": ("levelHi", "levelLo"),
+                "policy_net_arch": "128",
+                "value_net_arch": "512,512",
+                "advantage_normalization": "per-task",
                 "task_conditioning": True,
                 "wandb": True,
                 "normalize_advantage": False,
+                "done_on_info_json": {
+                    "life_loss": ["lives", "decrease"],
+                    "level_change": [["levelHi", "levelLo"], "change"],
+                },
             }
         )
         self.assertIn("--run-name", cmd)
         self.assertIn("--states", cmd)
         self.assertIn("--state-probs", cmd)
         self.assertIn("--task-conditioning", cmd)
+        self.assertIn("--task-conditioning-info-vars", cmd)
+        self.assertIn("levelHi,levelLo", cmd)
         self.assertNotIn("True", cmd)
         self.assertNotIn("--target-kl", cmd)
+        self.assertIn("--clip-range-vf", cmd)
+        self.assertIn("0.2", cmd)
+        self.assertIn("--policy-net-arch", cmd)
+        self.assertIn("128", cmd)
+        self.assertIn("--value-net-arch", cmd)
+        self.assertIn("512,512", cmd)
+        self.assertIn("--advantage-normalization", cmd)
+        self.assertIn("per-task", cmd)
+        self.assertIn("--done-on-info-json", cmd)
+        self.assertIn(
+            '{"life_loss":["lives","decrease"],"level_change":[["levelHi","levelLo"],"change"]}',
+            cmd,
+        )
         self.assertIn("--wandb", cmd)
         self.assertIn("--no-normalize-advantage", cmd)
+
+    def test_train_parser_accepts_task_conditioning_and_done_on_info_flags(self) -> None:
+        args = build_train_parser().parse_args(
+            [
+                "--game",
+                "SuperMarioBros-Nes-v0",
+                "--states",
+                "Level1-1,Level1-2",
+                "--task-conditioning",
+                "--task-conditioning-info-vars",
+                "levelHi,levelLo",
+                "--task-conditioning-info-values",
+                "0,0;0,1",
+                "--done-on-info-json",
+                '{"level_change":[["levelHi","levelLo"],"change"]}',
+            ]
+        )
+
+        self.assertEqual(args.task_conditioning_info_vars, "levelHi,levelLo")
+        self.assertEqual(args.task_conditioning_info_values, "0,0;0,1")
+        config = env_config_from_args(args, include_states=True)
+        self.assertEqual(
+            config.done_on_info,
+            {"level_change": (("levelHi", "levelLo"), "change")},
+        )
+
+    def test_train_parser_deletes_completion_stop_flags(self) -> None:
+        args = build_train_parser().parse_args([])
+
+        self.assertFalse(hasattr(args, "stop_completion_episode_window"))
+        self.assertFalse(hasattr(args, "stop_completion_rate_threshold"))
+        self.assertFalse(hasattr(args, "stop_state_min_completion_rate_threshold"))
+        self.assertFalse(hasattr(args, "stop_completion_rolling_window"))
+        self.assertFalse(hasattr(args, "stop_completion_rolling_threshold"))
+
+    def test_normalize_advantages_by_task_updates_rollout_in_place(self) -> None:
+        advantages = np.asarray(
+            [
+                [1.0, 10.0],
+                [3.0, 12.0],
+                [5.0, 14.0],
+            ],
+            dtype=np.float32,
+        )
+        observations = {
+            "task": np.asarray(
+                [
+                    [[1.0, 0.0], [0.0, 1.0]],
+                    [[1.0, 0.0], [0.0, 1.0]],
+                    [[1.0, 0.0], [0.0, 1.0]],
+                ],
+                dtype=np.float32,
+            )
+        }
+
+        stats = normalize_advantages_by_task(advantages, observations)
+
+        self.assertEqual(stats[0]["count"], 3.0)
+        self.assertEqual(stats[1]["count"], 3.0)
+        np.testing.assert_allclose(advantages[:, 0].mean(), 0.0, atol=1e-6)
+        np.testing.assert_allclose(advantages[:, 1].mean(), 0.0, atol=1e-6)
+        np.testing.assert_allclose(advantages[:, 0].std(), 1.0, atol=1e-6)
+        np.testing.assert_allclose(advantages[:, 1].std(), 1.0, atol=1e-6)
 
     def test_checkpoint_step_from_sb3_checkpoint_name(self) -> None:
         self.assertEqual(checkpoint_step(Path("ppo_retro_123456_steps.zip")), 123456)
@@ -878,12 +1255,12 @@ class CommandAndArtifactTests(unittest.TestCase):
                     max_pool_frames=False,
                     observation_size=96,
                     score_progress_clipped=True,
-                    terminate_on_completion=True,
+                    done_on_info={"level_change": (("levelHi", "levelLo"), "change")},
                 ),
                 kind="checkpoint",
             )
 
-            argv = ["--model", str(model_path), "--no-terminate-on-completion"]
+            argv = ["--model", str(model_path), "--done-on-info-json", "{}"]
             args = parser.parse_args(argv)
             explicit_dests = explicit_arg_dests(parser, argv)
 
@@ -894,7 +1271,7 @@ class CommandAndArtifactTests(unittest.TestCase):
             self.assertFalse(args.max_pool_frames)
             self.assertEqual(args.observation_size, 96)
             self.assertTrue(args.score_progress_clipped)
-            self.assertFalse(args.terminate_on_completion)
+            self.assertEqual(args.done_on_info_json, "{}")
 
             config = env_config_from_model_metadata(
                 model_path, fallback=EnvConfig(state="fallback")
@@ -933,7 +1310,88 @@ class CommandAndArtifactTests(unittest.TestCase):
         self.assertIs(obs["image"], image_obs)
         np.testing.assert_array_equal(obs["task"], np.array([[0.0, 1.0]], dtype=np.float32))
 
-    def test_playback_eval_defaults_block_training_termination_metadata(self) -> None:
+    def test_model_observation_can_override_active_task_state(self) -> None:
+        class FakeModel:
+            observation_space = gym.spaces.Dict(
+                {
+                    "image": gym.spaces.Box(
+                        low=0,
+                        high=255,
+                        shape=(4, 84, 84),
+                        dtype=np.uint8,
+                    ),
+                    "task": gym.spaces.Box(low=0.0, high=1.0, shape=(2,), dtype=np.float32),
+                }
+            )
+
+        image_obs = np.zeros((1, 4, 84, 84), dtype=np.uint8)
+        obs = model_observation(
+            FakeModel(),
+            image_obs,
+            EnvConfig(
+                game="SuperMarioBros-Nes-v0",
+                state="Level1-1",
+                states=("Level1-1", "Level1-2"),
+                task_conditioning=True,
+            ),
+            active_task_state="Level1-2",
+        )
+
+        self.assertIs(obs["image"], image_obs)
+        np.testing.assert_array_equal(obs["task"], np.array([[0.0, 1.0]], dtype=np.float32))
+
+    def test_model_observation_can_use_active_info_value(self) -> None:
+        class FakeModel:
+            observation_space = gym.spaces.Dict(
+                {
+                    "image": gym.spaces.Box(
+                        low=0,
+                        high=255,
+                        shape=(4, 84, 84),
+                        dtype=np.uint8,
+                    ),
+                    "task": gym.spaces.Box(low=0.0, high=1.0, shape=(2,), dtype=np.float32),
+                }
+            )
+
+        image_obs = np.zeros((1, 4, 84, 84), dtype=np.uint8)
+        obs = model_observation(
+            FakeModel(),
+            image_obs,
+            EnvConfig(
+                game="SuperMarioBros-Nes-v0",
+                state="Level1-1",
+                states=("Level1-1", "Level1-2"),
+                task_conditioning=True,
+                task_conditioning_info_vars=("levelHi", "levelLo"),
+            ),
+            active_info_value=(0, 1),
+        )
+
+        self.assertIs(obs["image"], image_obs)
+        np.testing.assert_array_equal(obs["task"], np.array([[0.0, 1.0]], dtype=np.float32))
+
+    def test_task_state_from_info_maps_zero_indexed_mario_level_id(self) -> None:
+        self.assertEqual(
+            state_name_candidates_from_level_id("0-1"),
+            ("Level0-1", "Level1-2"),
+        )
+
+    def test_task_conditioning_change_message_includes_one_hot(self) -> None:
+        self.assertEqual(
+            task_conditioning_change_message(
+                episode=1,
+                step=481,
+                old_task=(0, 0),
+                new_task=(0, 1),
+                task_index=1,
+                task_count=2,
+            ),
+            "task_conditioning_change episode=1 step=481 old=(0, 0) "
+            "new=(0, 1) index=1 one_hot=[0, 1]",
+        )
+
+    def test_playback_eval_defaults_block_training_done_on_info_metadata(self) -> None:
         parser = build_play_parser()
         parser_defaults = vars(parser.parse_args([]))
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -945,29 +1403,22 @@ class CommandAndArtifactTests(unittest.TestCase):
                 EnvConfig(
                     game="SuperMarioBros-Nes-v0",
                     state="Level1-1",
-                    terminate_on_life_loss=True,
-                    terminate_on_level_change=True,
-                    terminate_on_completion=True,
+                    done_on_info={
+                        "life_loss": ("lives", "decrease"),
+                        "level_change": (("levelHi", "levelLo"), "change"),
+                    },
                 ),
                 kind="checkpoint",
             )
 
             args = parser.parse_args(["--model", str(model_path)])
             explicit_dests = explicit_arg_dests(parser, [])
-            explicit_dests.update(
-                {
-                    "terminate_on_life_loss",
-                    "terminate_on_level_change",
-                    "terminate_on_completion",
-                }
-            )
+            explicit_dests.add("done_on_info_json")
 
             self.assertTrue(
                 apply_model_config_defaults(args, model_path, parser_defaults, explicit_dests)
             )
-            self.assertFalse(args.terminate_on_life_loss)
-            self.assertFalse(args.terminate_on_level_change)
-            self.assertFalse(args.terminate_on_completion)
+            self.assertEqual(args.done_on_info_json, "")
 
     def test_gui_playback_defaults_to_stochastic(self) -> None:
         parser = build_play_parser()
@@ -1006,7 +1457,8 @@ class CommandAndArtifactTests(unittest.TestCase):
             "--state",
             "Level2-1",
             "--no-max-pool-frames",
-            "--no-terminate-on-completion",
+            "--done-on-info-json",
+            '{"life_loss":["lives","decrease"]}',
         ]
         args = parser.parse_args(argv)
         explicit_dests = explicit_arg_dests(parser, argv)
@@ -1017,7 +1469,8 @@ class CommandAndArtifactTests(unittest.TestCase):
         self.assertIn("--state", cmd)
         self.assertIn("Level2-1", cmd)
         self.assertIn("--no-max-pool-frames", cmd)
-        self.assertIn("--no-terminate-on-completion", cmd)
+        self.assertIn("--done-on-info-json", cmd)
+        self.assertIn('{"life_loss":["lives","decrease"]}', cmd)
         self.assertNotIn("--game", cmd)
         self.assertNotIn("--reward-mode", cmd)
 
@@ -1058,7 +1511,7 @@ class EvalMetricTests(unittest.TestCase):
     def test_checkpoint_score_prefers_min_completion_rate_when_available(self) -> None:
         metrics = {
             "completion_rate": 0.95,
-            "eval/state/min_rate": 0.80,
+            "eval/done/level_change/from_rate/min": 0.80,
             "max_x_max": 3200,
             "reward_mean": 1200.0,
         }
@@ -1100,6 +1553,17 @@ class EvalMetricTests(unittest.TestCase):
             "completion_rate": 1.0,
             "death_count": 0,
             "death_rate": 0.0,
+            "terminated_count": 1,
+            "terminated_rate": 1.0,
+            "truncated_count": 0,
+            "truncated_rate": 0.0,
+            "eval/done/all": 1,
+            "eval/done/level_change": 1,
+            "eval/done/level_change/rate": 1.0,
+            "eval/done/max_steps": 0,
+            "eval/done/max_steps/rate": 0.0,
+            "eval/done/unclassified": 0,
+            "eval/done/unclassified/rate": 0.0,
             "best_episode": {"reward": 2.0, "max_x_pos": 4},
         }
 
@@ -1108,6 +1572,12 @@ class EvalMetricTests(unittest.TestCase):
 
         assert callback.wandb_run.payload is not None
         self.assertEqual(callback.wandb_run.payload["global_step"], 12345)
+        self.assertEqual(callback.wandb_run.payload["eval/done/all"], 1)
+        self.assertEqual(callback.wandb_run.payload["eval/done/level_change"], 1)
+        self.assertEqual(callback.wandb_run.payload["eval/done/level_change/rate"], 1.0)
+        self.assertEqual(callback.wandb_run.payload["eval/done/max_steps"], 0)
+        self.assertNotIn("eval/outcome/terminated", callback.wandb_run.payload)
+        self.assertNotIn("eval/outcome/truncated", callback.wandb_run.payload)
         self.assertEqual(callback.wandb_run.step, 12345)
 
     def test_metric_path_segment_preserves_retro_state_names(self) -> None:
@@ -1200,6 +1670,7 @@ class EvalMetricTests(unittest.TestCase):
                                 "level_max_x_pos": 20,
                                 "died": True,
                                 "death_x_pos": 20,
+                                "TimeLimit.truncated": True,
                                 "score": 100,
                                 "lives": 2,
                             },
@@ -1226,7 +1697,7 @@ class EvalMetricTests(unittest.TestCase):
                 pass
 
         config = EnvConfig(game="SuperMarioBros-Nes-v0", completion_x_threshold=25)
-        with patch("stable_retro_ppo.eval_runner.make_eval_vec_env", return_value=FakeVecEnv()):
+        with patch("rlab.eval_runner.make_eval_vec_env", return_value=FakeVecEnv()):
             metrics, video_path = evaluate_model_episodes(
                 model=FakeModel(),
                 config=config,
@@ -1244,12 +1715,29 @@ class EvalMetricTests(unittest.TestCase):
         self.assertEqual(metrics["reward_mean"], 3.0)
         self.assertEqual(metrics["completion_count"], 1)
         self.assertEqual(metrics["death_count"], 1)
-        self.assertEqual(metrics["eval/state/Level1-1/episodes"], 1)
-        self.assertEqual(metrics["eval/state/Level1-1/outcome/rate"], 1.0)
-        self.assertEqual(metrics["eval/state/Level1-2/episodes"], 1)
-        self.assertEqual(metrics["eval/state/Level1-2/outcome/rate"], 0.0)
-        self.assertEqual(metrics["eval/state/min_rate"], 0.0)
-        self.assertEqual(metrics["eval/state/mean_rate"], 0.5)
+        self.assertEqual(metrics["terminated_count"], 1)
+        self.assertEqual(metrics["terminated_rate"], 0.5)
+        self.assertEqual(metrics["truncated_count"], 1)
+        self.assertEqual(metrics["truncated_rate"], 0.5)
+        self.assertEqual(metrics["eval/done/all"], 2)
+        self.assertEqual(metrics["eval/done/level_change"], 1)
+        self.assertEqual(metrics["eval/done/level_change/rate"], 0.5)
+        self.assertEqual(metrics["eval/done/max_steps"], 1)
+        self.assertEqual(metrics["eval/done/max_steps/rate"], 0.5)
+        self.assertEqual(metrics["eval/done/unclassified"], 0)
+        self.assertEqual(metrics["eval/done/unclassified/rate"], 0.0)
+        self.assertEqual(metrics["eval/done/all/from/Level1-1"], 1)
+        self.assertEqual(metrics["eval/done/level_change/from/Level1-1"], 1)
+        self.assertEqual(metrics["eval/done/level_change/from/Level1-1/rate"], 1.0)
+        self.assertEqual(metrics["eval/done/max_steps/from/Level1-1"], 0)
+        self.assertEqual(metrics["eval/done/max_steps/from/Level1-1/rate"], 0.0)
+        self.assertEqual(metrics["eval/done/all/from/Level1-2"], 1)
+        self.assertEqual(metrics["eval/done/level_change/from/Level1-2"], 0)
+        self.assertEqual(metrics["eval/done/level_change/from/Level1-2/rate"], 0.0)
+        self.assertEqual(metrics["eval/done/max_steps/from/Level1-2"], 1)
+        self.assertEqual(metrics["eval/done/max_steps/from/Level1-2/rate"], 1.0)
+        self.assertEqual(metrics["eval/done/level_change/from_rate/min"], 0.0)
+        self.assertEqual(metrics["eval/done/level_change/from_rate/mean"], 0.5)
         self.assertEqual(metrics["episode_results"][0]["env_index"], 1)
         self.assertEqual(metrics["episode_results"][0]["start_state"], "Level1-2")
         self.assertEqual(metrics["episode_results"][0]["reward"], 2.0)
@@ -1258,8 +1746,8 @@ class EvalMetricTests(unittest.TestCase):
         self.assertEqual(metrics["episode_results"][1]["reward"], 4.0)
 
 
-class TrainingCompletionRateStopCallbackTests(unittest.TestCase):
-    def test_records_per_state_completion_windows(self) -> None:
+class DoneCounterCallbackTests(unittest.TestCase):
+    def test_records_life_loss_level_change_max_steps_and_unclassified(self) -> None:
         class FakeLogger:
             def __init__(self) -> None:
                 self.records: dict[str, int | float] = {}
@@ -1271,46 +1759,224 @@ class TrainingCompletionRateStopCallbackTests(unittest.TestCase):
             def __init__(self) -> None:
                 self.logger = FakeLogger()
 
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            callback = TrainingCompletionRateStopCallback(
-                episode_window=2,
-                rate_threshold=1.0,
-                run_dir=tmp_dir,
-                default_state="Level1-1",
-            )
-            model = FakeModel()
-            callback.model = model  # type: ignore[assignment]
-            callback.num_timesteps = 10
+        model = FakeModel()
+        callback = DoneCounterCallback(default_state="Level1-1")
+        callback.model = model  # type: ignore[assignment]
+        callback.num_timesteps = 10
+        callback.locals = {
+            "dones": [True, True, True, True, False, True],
+            "infos": [
+                {
+                    "start_state": "Level1-1",
+                    "done_on_info": {
+                        "life_loss": {
+                            "op": "decrease",
+                            "keys": ("lives",),
+                            "prev": 3,
+                            "next": 2,
+                        },
+                    },
+                },
+                {
+                    "start_state": "Level1-2",
+                    "done_on_info": {
+                        "level_change": {
+                            "op": "change",
+                            "keys": ("levelHi", "levelLo"),
+                            "prev": [0, 0],
+                            "next": [0, 1],
+                        },
+                    },
+                },
+                {"start_state": "Level1-2", "TimeLimit.truncated": True},
+                {"start_state": "Level1-1"},
+                {"start_state": "Level1-1", "done_on_info": {"life_loss": {}}},
+                {"global_reset": True, "done_on_info": {"life_loss": {}}},
+            ],
+        }
+
+        self.assertTrue(callback._on_step())
+
+        self.assertEqual(model.logger.records["train/done/all"], 4)
+        self.assertEqual(model.logger.records["train/done/life_loss"], 1)
+        self.assertEqual(model.logger.records["train/done/level_change"], 1)
+        self.assertEqual(model.logger.records["train/done/max_steps"], 1)
+        self.assertEqual(model.logger.records["train/done/unclassified"], 1)
+        self.assertEqual(model.logger.records["train/done/life_loss/from/3"], 1)
+        self.assertEqual(model.logger.records["train/done/level_change/from/0-0"], 1)
+        self.assertNotIn("train/done/life_loss/from/3/ep_window/rate", model.logger.records)
+        self.assertNotIn(
+            "train/done/level_change/from/0-0/ep_window/rate",
+            model.logger.records,
+        )
+        self.assertFalse(any("/to/" in key for key in model.logger.records))
+        self.assertFalse(any(key.startswith("train/state/") for key in model.logger.records))
+        self.assertNotIn("train/outcome/pooled_rate", model.logger.records)
+
+    def test_multiple_done_reasons_share_one_all_count(self) -> None:
+        class FakeLogger:
+            def __init__(self) -> None:
+                self.records: dict[str, int | float] = {}
+
+            def record(self, key: str, value: int | float) -> None:
+                self.records[key] = value
+
+        class FakeModel:
+            def __init__(self) -> None:
+                self.logger = FakeLogger()
+
+        model = FakeModel()
+        callback = DoneCounterCallback(default_state="Level1-1")
+        callback.model = model  # type: ignore[assignment]
+        callback.num_timesteps = 20
+        callback.locals = {
+            "dones": [True],
+            "infos": [
+                {
+                    "start_state": "Level1-1",
+                    "done_on_info": {
+                        "life_loss": {"op": "decrease", "prev": [3], "next": [2]},
+                        "level_change": {"op": "change", "prev": (0, 0), "next": (0, 1)},
+                    },
+                    "TimeLimit.truncated": True,
+                },
+            ],
+        }
+
+        self.assertTrue(callback._on_step())
+
+        self.assertEqual(model.logger.records["train/done/all"], 1)
+        self.assertEqual(model.logger.records["train/done/life_loss"], 1)
+        self.assertEqual(model.logger.records["train/done/level_change"], 1)
+        self.assertEqual(model.logger.records["train/done/max_steps"], 1)
+        self.assertEqual(model.logger.records["train/done/unclassified"], 0)
+        self.assertEqual(model.logger.records["train/done/life_loss/from/3"], 1)
+        self.assertEqual(model.logger.records["train/done/level_change/from/0-0"], 1)
+        self.assertNotIn("train/done/life_loss/from/3/ep_window/rate", model.logger.records)
+        self.assertNotIn(
+            "train/done/level_change/from/0-0/ep_window/rate",
+            model.logger.records,
+        )
+
+    def test_done_from_ep_window_rate_uses_100_terminal_episode_window(self) -> None:
+        class FakeLogger:
+            def __init__(self) -> None:
+                self.records: dict[str, int | float] = {}
+
+            def record(self, key: str, value: int | float) -> None:
+                self.records[key] = value
+
+        class FakeModel:
+            def __init__(self) -> None:
+                self.logger = FakeLogger()
+
+        model = FakeModel()
+        callback = DoneCounterCallback(default_state="Level1-1")
+        callback.model = model  # type: ignore[assignment]
+
+        for index in range(50):
+            callback.num_timesteps = index
             callback.locals = {
-                "dones": [True, True, True],
+                "dones": [True],
                 "infos": [
-                    {"start_state": "Level1-1", "completion_event": True},
-                    {"start_state": "Level1-2", "completion_event": False},
-                    {"start_state": "Level1-2", "completion_event": True},
+                    {
+                        "done_on_info": {
+                            "level_change": {
+                                "op": "change",
+                                "prev": [0, 0],
+                                "next": [0, 1],
+                            },
+                        },
+                    },
                 ],
             }
-
             self.assertTrue(callback._on_step())
 
-        self.assertEqual(model.logger.records["train/outcome/rate"], 0.5)
+        for index in range(50, 100):
+            callback.num_timesteps = index
+            callback.locals = {
+                "dones": [True],
+                "infos": [
+                    {
+                        "done_on_info": {
+                            "level_change": {
+                                "op": "change",
+                                "prev": [0, 1],
+                                "next": [0, 2],
+                            },
+                        },
+                    },
+                ],
+            }
+            self.assertTrue(callback._on_step())
+
         self.assertEqual(
-            model.logger.records["train/outcome/state/Level1-1/rate"],
-            1.0,
-        )
-        self.assertEqual(
-            model.logger.records["train/outcome/state/Level1-1/window"],
-            1,
-        )
-        self.assertEqual(
-            model.logger.records["train/outcome/state/Level1-2/rate"],
+            model.logger.records["train/done/level_change/from/0-0/ep_window/rate"],
             0.5,
         )
         self.assertEqual(
-            model.logger.records["train/outcome/state/Level1-2/window"],
-            2,
+            model.logger.records["train/done/level_change/from/0-1/ep_window/rate"],
+            0.5,
         )
-        self.assertEqual(model.logger.records["train/outcome/state/min_rate"], 0.5)
-        self.assertEqual(model.logger.records["train/outcome/state/mean_rate"], 0.75)
+
+        callback.num_timesteps = 100
+        callback.locals = {
+            "dones": [True],
+            "infos": [
+                {
+                    "done_on_info": {
+                        "level_change": {
+                            "op": "change",
+                            "prev": [0, 1],
+                            "next": [0, 2],
+                        },
+                    },
+                },
+            ],
+        }
+        self.assertTrue(callback._on_step())
+
+        self.assertAlmostEqual(
+            model.logger.records["train/done/level_change/from/0-0/ep_window/rate"],
+            0.49,
+        )
+        self.assertAlmostEqual(
+            model.logger.records["train/done/level_change/from/0-1/ep_window/rate"],
+            0.51,
+        )
+
+    def test_logs_done_metrics_to_wandb(self) -> None:
+        class FakeLogger:
+            def __init__(self) -> None:
+                self.records: dict[str, int | float] = {}
+
+            def record(self, key: str, value: int | float) -> None:
+                self.records[key] = value
+
+        class FakeModel:
+            def __init__(self) -> None:
+                self.logger = FakeLogger()
+
+        class FakeRun:
+            def __init__(self) -> None:
+                self.payloads: list[tuple[dict[str, object], int]] = []
+
+            def log(self, payload: dict[str, object], *, step: int) -> None:
+                self.payloads.append((payload, step))
+
+        model = FakeModel()
+        run = FakeRun()
+        callback = DoneCounterCallback(wandb_run=run, default_state="Level1-1")
+        callback.model = model  # type: ignore[assignment]
+        callback.num_timesteps = 30
+        callback.locals = {"dones": [True], "infos": [{"done_on_info": "life_loss"}]}
+
+        self.assertTrue(callback._on_step())
+
+        self.assertEqual(run.payloads[0][1], 30)
+        self.assertEqual(run.payloads[0][0]["global_step"], 30)
+        self.assertEqual(run.payloads[0][0]["train/done/all"], 1)
+        self.assertEqual(run.payloads[0][0]["train/done/life_loss"], 1)
 
 
 class ThroughputCallbackTests(unittest.TestCase):
@@ -1386,6 +2052,118 @@ class RolloutDiagnosticsCallbackTests(unittest.TestCase):
         self.assertEqual(records["rollout/advantage/min"], -1.0)
         self.assertEqual(records["rollout/advantage/max"], 2.0)
         self.assertEqual(records["rollout/advantage/abs_mean"], 1.0)
+
+
+class RewardComponentDiagnosticsCallbackTests(unittest.TestCase):
+    def test_logs_rollout_reward_component_stats(self) -> None:
+        class Logger:
+            def __init__(self) -> None:
+                self.records: list[tuple[str, float]] = []
+
+            def record(self, key: str, value: float) -> None:
+                self.records.append((key, value))
+
+        class Model:
+            def __init__(self) -> None:
+                self.logger = Logger()
+
+        callback = RewardComponentDiagnosticsCallback()
+        callback.model = Model()  # type: ignore[assignment]
+        callback.locals = {
+            "infos": [
+                {
+                    "shaped_reward": 10.0,
+                    "progress_reward_component": 8.0,
+                    "score_reward_component": 2.0,
+                    "death_penalty_component": 0.0,
+                },
+                {
+                    "shaped_reward": -25.0,
+                    "progress_reward_component": 0.0,
+                    "score_reward_component": 0.0,
+                    "death_penalty_component": -25.0,
+                },
+            ],
+        }
+
+        self.assertTrue(callback._on_step())
+        callback._on_rollout_end()
+
+        records = dict(callback.model.logger.records)
+        self.assertEqual(records["train/reward/shaped/mean"], -7.5)
+        self.assertEqual(records["train/reward/shaped/min"], -25.0)
+        self.assertEqual(records["train/reward/shaped/max"], 10.0)
+        self.assertEqual(records["train/reward/prog_x/mean"], 4.0)
+        self.assertEqual(records["train/reward/prog_x/nonzero_rate"], 0.5)
+        self.assertEqual(records["train/reward/score/nonzero_rate"], 0.5)
+        self.assertEqual(records["train/reward/death/abs_mean"], 12.5)
+        self.assertAlmostEqual(records["train/reward_share/prog_x"], 8.0 / 35.0)
+        self.assertAlmostEqual(records["train/reward_share/score"], 2.0 / 35.0)
+        self.assertAlmostEqual(records["train/reward_share/death"], 25.0 / 35.0)
+        self.assertEqual(records["train/reward_share/done"], 0.0)
+        self.assertEqual(records["train/reward_share/time"], 0.0)
+        self.assertEqual(records["train/reward_share/native"], 0.0)
+
+    def test_logs_rollout_reward_component_shares_with_negative_components(self) -> None:
+        class Logger:
+            def __init__(self) -> None:
+                self.records: dict[str, float] = {}
+
+            def record(self, key: str, value: float) -> None:
+                self.records[key] = value
+
+        class Model:
+            def __init__(self) -> None:
+                self.logger = Logger()
+
+        callback = RewardComponentDiagnosticsCallback()
+        callback.model = Model()  # type: ignore[assignment]
+        callback.locals = {
+            "infos": [
+                {
+                    "progress_reward_component": 3.0,
+                    "score_reward_component": 2.0,
+                    "death_penalty_component": -4.0,
+                    "completion_reward_component": 5.0,
+                    "time_penalty_component": -1.0,
+                    "native_reward_component": -5.0,
+                },
+            ],
+        }
+
+        self.assertTrue(callback._on_step())
+        callback._on_rollout_end()
+
+        records = callback.model.logger.records
+        self.assertAlmostEqual(records["train/reward_share/prog_x"], 3.0 / 20.0)
+        self.assertAlmostEqual(records["train/reward_share/score"], 2.0 / 20.0)
+        self.assertAlmostEqual(records["train/reward_share/death"], 4.0 / 20.0)
+        self.assertAlmostEqual(records["train/reward_share/done"], 5.0 / 20.0)
+        self.assertAlmostEqual(records["train/reward_share/time"], 1.0 / 20.0)
+        self.assertAlmostEqual(records["train/reward_share/native"], 5.0 / 20.0)
+
+    def test_logs_zero_reward_component_shares_when_rollout_has_no_component_magnitude(
+        self,
+    ) -> None:
+        class Logger:
+            def __init__(self) -> None:
+                self.records: dict[str, float] = {}
+
+            def record(self, key: str, value: float) -> None:
+                self.records[key] = value
+
+        class Model:
+            def __init__(self) -> None:
+                self.logger = Logger()
+
+        callback = RewardComponentDiagnosticsCallback()
+        callback.model = Model()  # type: ignore[assignment]
+
+        callback._on_rollout_end()
+
+        records = callback.model.logger.records
+        for component in ("prog_x", "score", "death", "done", "time", "native"):
+            self.assertEqual(records[f"train/reward_share/{component}"], 0.0)
 
 
 if __name__ == "__main__":

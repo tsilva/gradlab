@@ -10,10 +10,10 @@ Modal eval workers claim DB-selected jobs, resolve `eval_config.artifact_ref`, `
 
 Affected files:
 
-- `src/stable_retro_ppo/modal_core.py:45-55`
-- `src/stable_retro_ppo/modal_eval.py:162-174`
-- `src/stable_retro_ppo/modal_eval.py:196`
-- `src/stable_retro_ppo/modal_eval.py:319-325`
+- `src/rlab/modal_core.py:45-55`
+- `src/rlab/modal_eval.py:162-174`
+- `src/rlab/modal_eval.py:196`
+- `src/rlab/modal_eval.py:319-325`
 
 ## Desired state
 

@@ -6,14 +6,14 @@ Subagent: Feynman
 
 ## Problem
 
-`src/stable_retro_ppo/skypilot_launch.py` renders SkyPilot YAML by interpolating manifest and runner-profile fields directly into YAML scalars and shell blocks. The proof case is `venv_name`, which reaches `JOB_VENV="$HOME/{venv_name}"`, `UV_VENV="$HOME/{venv_name}-uv"`, and `PY="$HOME/{venv_name}/bin/python"` without shell-safe construction.
+`src/rlab/skypilot_launch.py` renders SkyPilot YAML by interpolating manifest and runner-profile fields directly into YAML scalars and shell blocks. The proof case is `venv_name`, which reaches `JOB_VENV="$HOME/{venv_name}"`, `UV_VENV="$HOME/{venv_name}-uv"`, and `PY="$HOME/{venv_name}/bin/python"` without shell-safe construction.
 
 Affected surfaces:
 
-- `src/stable_retro_ppo/skypilot_launch.py:93-114` validates presence, not safety.
-- `src/stable_retro_ppo/skypilot_launch.py:348-361` interpolates manifest fields into setup.
-- `src/stable_retro_ppo/skypilot_launch.py:424-430` interpolates fields into run assignments.
-- `src/stable_retro_ppo/skypilot_launch.py:769-778` repeats the pattern for runner profiles.
+- `src/rlab/skypilot_launch.py:93-114` validates presence, not safety.
+- `src/rlab/skypilot_launch.py:348-361` interpolates manifest fields into setup.
+- `src/rlab/skypilot_launch.py:424-430` interpolates fields into run assignments.
+- `src/rlab/skypilot_launch.py:769-778` repeats the pattern for runner profiles.
 
 ## Desired state
 
@@ -58,7 +58,7 @@ Run:
 
 ```bash
 uv run python -m unittest tests.test_skypilot_launch
-uv run python -m stable_retro_ppo.skypilot_cli render /tmp/malicious_manifest.json
+uv run python -m rlab.skypilot_cli render /tmp/malicious_manifest.json
 ```
 
 ## Rollout notes

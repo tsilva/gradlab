@@ -10,7 +10,7 @@ import numpy as np
 import stable_retro as retro
 from stable_baselines3.common.vec_env import SubprocVecEnv
 
-from stable_retro_ppo.env import (
+from rlab.env import (
     GAME,
     DiscreteRetroActions,
     EnvConfig,
@@ -217,7 +217,6 @@ def main() -> None:
             hud_crop_top=args.hud_crop_top,
             action_set=args.action_set,
             max_episode_steps=4500,
-            terminate_on_life_loss=False,
         )
     )
     if args.envs == 1:

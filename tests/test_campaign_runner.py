@@ -6,11 +6,11 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
-from stable_retro_ppo import campaign
-from stable_retro_ppo.artifacts import wandb_artifact_storage_uri
-from stable_retro_ppo.eval_job_runner import normalize_eval_config
-from stable_retro_ppo.json_utils import json_safe
-from stable_retro_ppo.train_runner import (
+from rlab import campaign
+from rlab.artifacts import wandb_artifact_storage_uri
+from rlab.eval_job_runner import normalize_eval_config
+from rlab.json_utils import json_safe
+from rlab.train_runner import (
     collect_result_metadata,
     normalize_train_config,
     parse_log_metrics,
@@ -84,6 +84,7 @@ class CampaignQueueTests(unittest.TestCase):
         self.assertIn("CREATE TABLE IF NOT EXISTS eval_jobs", campaign.SCHEMA_SQL)
         self.assertIn("CREATE TABLE IF NOT EXISTS eval_results", campaign.SCHEMA_SQL)
         self.assertIn("CREATE TABLE IF NOT EXISTS campaign_decisions", campaign.SCHEMA_SQL)
+        self.assertIn("origin_decision_id", campaign.SCHEMA_SQL)
 
     def test_claim_eval_job_filters_exact_profile(self) -> None:
         conn = FakeConnection(row={"id": 8, "profile_id": "mario-ppo/post16/rtx4090-eval"})
@@ -101,6 +102,106 @@ class CampaignQueueTests(unittest.TestCase):
             conn.cursor_obj.executed_params["profile_id"],
             "mario-ppo/post16/rtx4090-eval",
         )
+
+    def test_render_lineage_tree_shows_decision_spec_run_and_eval_causality(self) -> None:
+        report = {
+            "goal": {
+                "id": 1,
+                "slug": "mario-level1",
+                "title": "Solve Mario Level 1",
+                "status": "active",
+                "objective_json": {"target": "completion"},
+                "constraints_json": {},
+            },
+            "specs": [
+                {
+                    "id": 10,
+                    "slug": "baseline",
+                    "hypothesis": "Known reward shape is a viable baseline.",
+                    "expected_signal": "Some completions by 5M steps.",
+                    "parent_spec_id": None,
+                    "origin_decision_id": 100,
+                    "priority": 0,
+                    "status": "active",
+                },
+                {
+                    "id": 11,
+                    "slug": "lower-kl",
+                    "hypothesis": "Lower KL should stabilize late policy updates.",
+                    "expected_signal": "Higher completion rate than baseline.",
+                    "parent_spec_id": 10,
+                    "origin_decision_id": None,
+                    "priority": 1,
+                    "status": "active",
+                },
+            ],
+            "train_jobs": [
+                {
+                    "id": 20,
+                    "experiment_spec_id": 10,
+                    "profile_id": "rtx4090-screening",
+                    "status": "succeeded",
+                    "priority": 0,
+                    "run_name": "baseline_s1",
+                    "run_description": "Baseline seed.",
+                    "origin_decision_id": 100,
+                    "metrics_json": {"completion_rate": "0.20", "total_timesteps": 5000000},
+                    "wandb_url": "https://wandb.ai/e/p/runs/abc",
+                    "error": None,
+                    "result_error": None,
+                }
+            ],
+            "eval_jobs": [
+                {
+                    "id": 30,
+                    "experiment_spec_id": 10,
+                    "train_job_id": 20,
+                    "profile_id": "level1-eval",
+                    "status": "succeeded",
+                    "priority": 0,
+                    "candidate_label": "baseline-step-5m",
+                    "origin_decision_id": None,
+                    "model_ref": "entity/project/baseline-checkpoint:v50",
+                    "metrics_json": {"completion_rate": 0.2, "episodes": 100},
+                    "error": None,
+                    "result_error": None,
+                }
+            ],
+            "decisions": [
+                {
+                    "id": 100,
+                    "decision_type": "launch",
+                    "summary": "Start from the known baseline.",
+                    "rationale": "Previous evals showed enough signal to justify a control.",
+                    "affected_spec_ids": [10],
+                    "affected_train_job_ids": [20],
+                    "affected_eval_job_ids": [],
+                    "metadata_json": {},
+                },
+                {
+                    "id": 101,
+                    "decision_type": "branch",
+                    "summary": "Try lower KL after baseline plateaued.",
+                    "rationale": "Baseline eval completed some episodes but late updates were unstable.",
+                    "affected_spec_ids": [11],
+                    "affected_train_job_ids": [],
+                    "affected_eval_job_ids": [30],
+                    "metadata_json": {},
+                },
+            ],
+        }
+
+        tree = campaign.render_lineage_tree(report)
+
+        self.assertIn("goal 1: mario-level1 [active]", tree)
+        self.assertIn("- spec 10 baseline [active]", tree)
+        self.assertIn("cause: decision 100 [launch] Start from the known baseline.", tree)
+        self.assertIn("run 20 [succeeded] profile=rtx4090-screening name=baseline_s1", tree)
+        self.assertIn("eval 30 [succeeded] profile=level1-eval", tree)
+        self.assertIn("result: completion_rate=0.2 episodes=100", tree)
+        self.assertIn("- spec 11 lower-kl [active]", tree)
+        self.assertIn("parent: spec 10 baseline", tree)
+        self.assertIn("cause: decision 101 [branch] Try lower KL after baseline plateaued.", tree)
 
 
 class TrainRunnerTests(unittest.TestCase):
@@ -133,7 +234,7 @@ class TrainRunnerTests(unittest.TestCase):
                 os.environ["CHECKPOINT_BUCKET_URI"] = old_value
 
     def test_resume_artifact_resolves_to_local_resume_path(self) -> None:
-        import stable_retro_ppo.train_runner as train_runner
+        import rlab.train_runner as train_runner
 
         calls = []
         old_download = train_runner.download_model_artifact
@@ -188,7 +289,7 @@ class TrainRunnerTests(unittest.TestCase):
             train_runner.download_model_artifact = old_download
 
     def test_collect_result_metadata_does_not_resolve_resume_artifact(self) -> None:
-        import stable_retro_ppo.train_runner as train_runner
+        import rlab.train_runner as train_runner
 
         old_download = train_runner.download_model_artifact
 
@@ -307,16 +408,16 @@ class TrainRunnerTests(unittest.TestCase):
                         "wandb: 🚀 View run at "
                         "https://wandb.ai/tsilva/SuperMarioBros-NES/runs/abc123",
                         "|    total_timesteps                | 256         |",
-                        "| train/outcome/                    |             |",
-                        "|    rate                           | 0.1         |",
+                        "| train/done/                       |             |",
+                        "|    all                            | 10          |",
                         "|    total_timesteps                | 512         |",
                         "| time/                             |             |",
                         "|    fps                            | 240         |",
                         "| train/                            |             |",
                         "|    loss                           | 1.5         |",
                         "|    rollout/ep_rew_mean            | 3.02e+03    |",
-                        "| train/outcome/                    |             |",
-                        "|    rate                           | 0.2         |",
+                        "| train/done/                       |             |",
+                        "|    all                            | 20          |",
                         "wandb artifact logged: candidate-final "
                         "(s3://bucket/SuperMarioBros-Nes-v0/candidate/final_model.zip)",
                     ]
@@ -336,7 +437,7 @@ class TrainRunnerTests(unittest.TestCase):
             "https://wandb.ai/tsilva/SuperMarioBros-NES/runs/abc123",
         )
         self.assertEqual(result["metrics_json"]["total_timesteps"], 512)
-        self.assertEqual(result["metrics_json"]["train/outcome/rate"], 0.2)
+        self.assertEqual(result["metrics_json"]["train/done/all"], 20)
         self.assertEqual(result["metrics_json"]["rollout/ep_rew_mean"], 3020.0)
         self.assertEqual(result["metrics_json"]["time/fps"], 240)
         self.assertEqual(result["metrics_json"]["train/loss"], 1.5)
@@ -346,17 +447,17 @@ class TrainRunnerTests(unittest.TestCase):
             "\n".join(
                 [
                     "|    total_timesteps                | 256         |",
-                    "| train/outcome/                    |             |",
-                    "|    rate                           | 0.1         |",
+                    "| train/done/                       |             |",
+                    "|    all                            | 10          |",
                     "|    total_timesteps                | 512         |",
-                    "| train/outcome/                    |             |",
-                    "|    rate                           | 0.2         |",
+                    "| train/done/                       |             |",
+                    "|    all                            | 20          |",
                 ]
             )
         )
 
         self.assertEqual(metrics["total_timesteps"], 512)
-        self.assertEqual(metrics["train/outcome/rate"], 0.2)
+        self.assertEqual(metrics["train/done/all"], 20)
 
     def test_parse_log_metrics_prefixes_sb3_sections(self) -> None:
         metrics = parse_log_metrics(

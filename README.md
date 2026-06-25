@@ -28,23 +28,23 @@ game id you plan to pass with `--game`.
 Start with a local smoke run:
 
 ```bash
-UV_CACHE_DIR=.uv-cache uv run python -m stable_retro_ppo.train \
+UV_CACHE_DIR=.uv-cache uv run python -m rlab.train \
   --game <GameId> \
   --preset smoke \
   --run-name local_smoke \
-  --run-description "Local Stable Retro PPO smoke test"
+  --run-description "Local rlab smoke test"
 ```
 
 Evaluate and watch the resulting model:
 
 ```bash
-UV_CACHE_DIR=.uv-cache uv run python -m stable_retro_ppo.evaluate \
+UV_CACHE_DIR=.uv-cache uv run python -m rlab.evaluate \
   --game <GameId> \
   --model runs/local_smoke/final_model.zip \
   --episodes 2 \
   --max-steps 600
 
-UV_CACHE_DIR=.uv-cache uv run python -m stable_retro_ppo.play \
+UV_CACHE_DIR=.uv-cache uv run python -m rlab.play \
   --game <GameId> \
   --model runs/local_smoke/final_model.zip \
   --episodes 3 \
@@ -55,11 +55,11 @@ UV_CACHE_DIR=.uv-cache uv run python -m stable_retro_ppo.play \
 
 Mixed Mario start-state rehearsal stays on `StableRetroNativeVecEnv`. The CLI
 keeps `--states` and `--state-probs` for compatibility, then translates them to
-post19's single native `state=` constructor argument. Use fixed native env
+the current native `state=` constructor argument. Use fixed native env
 slots:
 
 ```bash
-UV_CACHE_DIR=.uv-cache uv run python -m stable_retro_ppo.train \
+UV_CACHE_DIR=.uv-cache uv run python -m rlab.train \
   --game SuperMarioBros-Nes-v0 \
   --states Level1-1,Level1-2 \
   --n-envs 2 \
@@ -71,7 +71,7 @@ Or native reset-time weighted sampling. `--state-probs` values must be positive
 finite weights; training normalizes them before storing metadata and W&B config.
 
 ```bash
-UV_CACHE_DIR=.uv-cache uv run python -m stable_retro_ppo.train \
+UV_CACHE_DIR=.uv-cache uv run python -m rlab.train \
   --game SuperMarioBros-Nes-v0 \
   --states Level1-1,Level1-2 \
   --state-probs 1,3 \
@@ -87,8 +87,8 @@ UV_CACHE_DIR=.uv-cache uv sync --frozen
 UV_CACHE_DIR=.uv-cache uv run ruff check .
 UV_CACHE_DIR=.uv-cache uv run pytest
 
-UV_CACHE_DIR=.uv-cache uv run python -m stable_retro_ppo.train --game <GameId> --preset smoke --run-description "Smoke test"
-UV_CACHE_DIR=.uv-cache uv run python -m stable_retro_ppo.evaluate --game <GameId> --policy random --episodes 2 --max-steps 600
+UV_CACHE_DIR=.uv-cache uv run python -m rlab.train --game <GameId> --preset smoke --run-description "Smoke test"
+UV_CACHE_DIR=.uv-cache uv run python -m rlab.evaluate --game <GameId> --policy random --episodes 2 --max-steps 600
 UV_CACHE_DIR=.uv-cache uv run python scripts/eval_wandb_checkpoints.py <run-name> --game <GameId> --episodes 50 --record-best-video
 UV_CACHE_DIR=.uv-cache uv run python scripts/play_wandb_artifact.py <run-name> --game <GameId> --kind best --stochastic
 ```
@@ -100,36 +100,35 @@ Modal setup:
 ```bash
 UV_CACHE_DIR=.uv-cache uv sync --frozen --extra modal
 UV_CACHE_DIR=.uv-cache uv run modal setup
-UV_CACHE_DIR=.uv-cache uv run modal run src/stable_retro_ppo/modal_app.py::upload_roms --rom-dir ~/Desktop/roms
+UV_CACHE_DIR=.uv-cache uv run modal run src/rlab/modal_app.py::upload_roms --rom-dir ~/Desktop/roms
 ```
 
-Modal smoke job:
+Provider-neutral Modal launch dry run:
 
 ```bash
-UV_CACHE_DIR=.uv-cache uv run modal run src/stable_retro_ppo/modal_app.py::train \
-  --game <GameId> \
-  --timesteps 512 \
-  --n-envs 1 \
-  --run-name modal_smoke \
-  --run-description "Modal smoke test" \
-  --max-episode-steps 600
+UV_CACHE_DIR=.uv-cache uv run rlab-compute launch \
+  experiments/launches/rlab_rtx4090.example.json \
+  --target modal-t4
 ```
 
 SkyPilot launch manifests live in `experiments/launches/` and are rendered or
-preflighted through `stable-retro-ppo-skypilot`. Read `INSTANCES.md` before
-choosing hardware, changing concurrency, or launching remote training.
+preflighted through `rlab-compute` for provider-neutral direct launches or
+`rlab-skypilot` for SkyPilot-specific workflows. Read `INSTANCES.md` before
+choosing hardware, changing concurrency, or launching remote training. Use
+`rlab-compute targets` to list configured compute targets, and pass
+`--target <name>` to swap between `beast-3`, `beast-2`, RunPod, Modal, or other
+configured backends without editing the manifest.
 
 For queue-backed training, prefer long-lived runner profiles in
 `experiments/runner_profiles/`. Those profiles render the SkyPilot runtime
-envelope and start `stable_retro_ppo.train_runner`; experiment payloads stay in
+envelope and start `rlab.train_runner`; experiment payloads stay in
 the campaign queue.
 
 ## Notes
 
-- Python is pinned to `>=3.14,<3.15`; dependency resolution is managed by `uv`
+- Python is pinned to `==3.14.*`; dependency resolution is managed by `uv`
   and `uv.lock`.
-- The project name is `rlab`; the current Python package and console-script
-  names still use `stable_retro_ppo` and `stable-retro-ppo-*`.
+- The Python package is `rlab`; console scripts use the `rlab-*` prefix.
 - Runtime support is pinned in `pyproject.toml` for macOS arm64 and Linux
   x86_64 with `stable-retro-turbo`.
 - Every training run should include `--run-description`.

@@ -8,8 +8,8 @@ from typing import Any
 import numpy as np
 from stable_retro import StableRetroNativeVecEnv
 
-from stable_retro_ppo.env import EnvConfig, action_names_for_set, make_vec_envs
-from stable_retro_ppo.targets import SuperMarioBrosNesV0Target, target_for_game
+from rlab.env import EnvConfig, action_names_for_set, make_vec_envs
+from rlab.targets import SuperMarioBrosNesV0Target, target_for_game
 
 
 def sha_array(array: Any) -> str:
@@ -88,7 +88,7 @@ def run_raw(copy_observations: bool) -> dict[str, Any]:
         reward_scale=10.0,
         action_set="simple",
         completion_x_threshold=SuperMarioBrosNesV0Target.default_completion_x_threshold,
-        terminate_on_completion=True,
+        done_on_info={"level_change": (("levelHi", "levelLo"), "change")},
         env_threads=4,
     )
     n_envs = 16
@@ -133,7 +133,7 @@ def run_wrapped() -> dict[str, Any]:
         reward_scale=10.0,
         action_set="simple",
         completion_x_threshold=SuperMarioBrosNesV0Target.default_completion_x_threshold,
-        terminate_on_completion=True,
+        done_on_info={"level_change": (("levelHi", "levelLo"), "change")},
         env_threads=4,
     )
     n_envs = 16

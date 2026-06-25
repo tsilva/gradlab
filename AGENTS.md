@@ -16,8 +16,15 @@ Before choosing hardware, launching remote training, changing concurrency, or re
 - Keep generated artifacts out of source control; use `runs/`, `logs/`, and `models/`.
 - Log to W&B and upload checkpoint/final artifacts unless explicitly opted out.
 - Every run needs a specific description via `--run-description` or Modal `run_description`.
+- Use run names shaped as `<batch>_<scope>_<arm>_s<seed>_<utc>`, for example `b58_l11_lowkldecay_s108_20260623T142700Z`. Keep target/scope separate from the arm/recipe unless the recipe is inherently target-specific.
 - Do not run robust evals inside remote training by default. Evaluate checkpoints out of process; promote by completion rate, then mean reward, then max x-position.
 - Default Modal shape unless overridden: `cpu=16.0`, `memory=32768`, `gpu=T4`, `n_envs=32`, `env_threads=0`, `torch_num_threads=0`, `n_steps=512`, `batch_size=256`, `n_epochs=10`.
+
+## Metrics
+
+- `METRICS.md` is the source of truth for W&B metric names and semantics.
+- When adding, removing, renaming, or changing the meaning of a logged metric, update `METRICS.md` in the same change.
+- When the user asks a metric question and the answer is not already clear from `METRICS.md`, improve `METRICS.md` with that clarification before finishing.
 
 ## Model Cards
 

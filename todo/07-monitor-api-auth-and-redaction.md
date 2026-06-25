@@ -6,14 +6,14 @@ Subagent: Goodall
 
 ## Problem
 
-`stable-retro-ppo-monitor` can be bound to `0.0.0.0` or a LAN address via `--host`, but `/` and `/api/state` are served without auth. `/api/state` calls `collect_state()` and returns live campaign jobs. The DB queries currently expose full `to_jsonb(j)` and `to_jsonb(r)` payloads, so a broad bind can leak raw job/result rows, configs, paths, artifact refs, and possibly secret-like config values.
+`rlab-monitor` can be bound to `0.0.0.0` or a LAN address via `--host`, but `/` and `/api/state` are served without auth. `/api/state` calls `collect_state()` and returns live campaign jobs. The DB queries currently expose full `to_jsonb(j)` and `to_jsonb(r)` payloads, so a broad bind can leak raw job/result rows, configs, paths, artifact refs, and possibly secret-like config values.
 
 Affected files:
 
-- `src/stable_retro_ppo/monitoring/server.py:601-617`
-- `src/stable_retro_ppo/monitoring/server.py:659-660`
-- `src/stable_retro_ppo/monitoring/state.py:421-427`
-- `src/stable_retro_ppo/monitoring/state.py:447-453`
+- `src/rlab/monitoring/server.py:601-617`
+- `src/rlab/monitoring/server.py:659-660`
+- `src/rlab/monitoring/state.py:421-427`
+- `src/rlab/monitoring/state.py:447-453`
 
 ## Desired state
 
@@ -64,7 +64,7 @@ Run:
 
 ```bash
 UV_CACHE_DIR=.uv-cache uv run pytest tests/test_monitoring.py tests/test_monitoring_server.py
-UV_CACHE_DIR=.uv-cache uv run ruff check src/stable_retro_ppo/monitoring tests/test_monitoring.py tests/test_monitoring_server.py
+UV_CACHE_DIR=.uv-cache uv run ruff check src/rlab/monitoring tests/test_monitoring.py tests/test_monitoring_server.py
 ```
 
 ## Rollout notes
@@ -72,13 +72,13 @@ UV_CACHE_DIR=.uv-cache uv run ruff check src/stable_retro_ppo/monitoring tests/t
 Default local usage should remain:
 
 ```bash
-stable-retro-ppo-monitor --host 127.0.0.1 --port 8765
+rlab-monitor --host 127.0.0.1 --port 8765
 ```
 
 Remote/LAN usage should become:
 
 ```bash
-STABLE_RETRO_MONITOR_TOKEN="$(openssl rand -hex 24)" stable-retro-ppo-monitor --host 0.0.0.0 --port 8765
+STABLE_RETRO_MONITOR_TOKEN="$(openssl rand -hex 24)" rlab-monitor --host 0.0.0.0 --port 8765
 ```
 
 Document that broad binding is for trusted networks only, should preferably be tunneled over SSH/Tailscale, and now requires the token. Treat any existing broad-bound monitor as sensitive and restart it after the fix.

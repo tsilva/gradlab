@@ -16,12 +16,12 @@ import numpy as np
 import torch
 from stable_baselines3 import PPO
 
-from stable_retro_ppo.artifacts import (
+from rlab.artifacts import (
     env_config_from_model_metadata,
     load_model_metadata,
     write_model_metadata,
 )
-from stable_retro_ppo.env import (
+from rlab.env import (
     EnvConfig,
     assert_rom_imported,
     make_training_vec_env,
@@ -305,7 +305,7 @@ def main() -> None:
         print(f"saved distilled student: {final_path}", flush=True)
         print(
             "playback example: "
-            f"UV_CACHE_DIR=.uv-cache uv run python -m stable_retro_ppo.play --model {final_path} "
+            f"UV_CACHE_DIR=.uv-cache uv run python -m rlab.play --model {final_path} "
             "--episodes 0 --stochastic",
             flush=True,
         )

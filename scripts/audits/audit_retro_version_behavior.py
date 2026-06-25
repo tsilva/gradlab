@@ -10,8 +10,8 @@ from typing import Any
 import numpy as np
 from stable_retro import StableRetroNativeVecEnv
 
-from stable_retro_ppo.env import EnvConfig, action_names_for_set, make_fast_retro_env, make_vec_envs
-from stable_retro_ppo.targets import SuperMarioBrosNesV0Target, target_for_game
+from rlab.env import EnvConfig, action_names_for_set, make_fast_retro_env, make_vec_envs
+from rlab.targets import SuperMarioBrosNesV0Target, target_for_game
 
 
 def sha_array(array: Any) -> str:
@@ -72,7 +72,7 @@ def config_from_args(args: argparse.Namespace) -> EnvConfig:
         reward_scale=10.0,
         action_set="simple",
         completion_x_threshold=SuperMarioBrosNesV0Target.default_completion_x_threshold,
-        terminate_on_completion=True,
+        done_on_info={"level_change": (("levelHi", "levelLo"), "change")},
         env_threads=args.env_threads,
     )
 

@@ -16,9 +16,9 @@ from stable_baselines3 import PPO
 from stable_baselines3.common.utils import set_random_seed
 from stable_retro import StableRetroNativeVecEnv
 
-from stable_retro_ppo.device import resolve_sb3_device
-from stable_retro_ppo.env import EnvConfig, action_names_for_set, assert_rom_imported, make_vec_envs
-from stable_retro_ppo.targets import SuperMarioBrosNesV0Target, target_for_game
+from rlab.device import resolve_sb3_device
+from rlab.env import EnvConfig, action_names_for_set, assert_rom_imported, make_vec_envs
+from rlab.targets import SuperMarioBrosNesV0Target, target_for_game
 
 
 def sha_bytes(data: bytes) -> str:
@@ -344,7 +344,7 @@ def main() -> None:
         reward_scale=10.0,
         action_set="simple",
         completion_x_threshold=SuperMarioBrosNesV0Target.default_completion_x_threshold,
-        terminate_on_completion=True,
+        done_on_info={"level_change": (("levelHi", "levelLo"), "change")},
         env_threads=args.env_threads,
     )
     result = {

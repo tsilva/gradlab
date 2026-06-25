@@ -15,18 +15,18 @@ os.makedirs(os.environ["MPLCONFIGDIR"], exist_ok=True)
 
 from stable_baselines3 import PPO
 
-from stable_retro_ppo.artifacts import (
+from rlab.artifacts import (
     apply_model_config_defaults,
     explicit_arg_dests,
 )
-from stable_retro_ppo.cli_args import add_env_config_args
-from stable_retro_ppo.device import resolve_sb3_device
-from stable_retro_ppo.env import assert_rom_imported, resolve_env_config
-from stable_retro_ppo.env_config import env_config_from_args
-from stable_retro_ppo.eval_metrics import flat_numeric_metrics
-from stable_retro_ppo.eval_runner import evaluate_model_episodes
-from stable_retro_ppo.json_utils import json_safe
-from stable_retro_ppo.metric_names import (
+from rlab.cli_args import add_env_config_args
+from rlab.device import resolve_sb3_device
+from rlab.env import assert_rom_imported, resolve_env_config
+from rlab.env_config import env_config_from_args
+from rlab.eval_metrics import flat_numeric_metrics
+from rlab.eval_runner import evaluate_model_episodes
+from rlab.json_utils import json_safe
+from rlab.metric_names import (
     EVAL_BEST_REWARD,
     EVAL_BEST_VIDEO,
     EVAL_BEST_X,
@@ -36,8 +36,7 @@ from stable_retro_ppo.metric_names import (
     EVAL_DEATH_COUNT,
     EVAL_DEATH_RATE,
     EVAL_DEATH_X_HIST,
-    EVAL_OUTCOME_COMPLETIONS,
-    EVAL_OUTCOME_RATE,
+    EVAL_DONE_LEVEL_CHANGE_FROM_RATE_MIN,
     EVAL_PROGRESS_LEVEL_X_MAX,
     EVAL_PROGRESS_LEVEL_X_MEAN,
     EVAL_PROGRESS_X_MAX,
@@ -45,17 +44,15 @@ from stable_retro_ppo.metric_names import (
     EVAL_REWARD_MAX,
     EVAL_REWARD_MEAN,
     EVAL_REWARD_STD,
-    EVAL_STATE_MIN_RATE,
-    EVAL_STATE_ROOT,
 )
-from stable_retro_ppo.wandb_artifacts import (
+from rlab.wandb_artifacts import (
     artifact_download_dir,
     artifact_qualified_name,
     checkpoint_step_from_artifact,
     download_artifact_model,
     safe_artifact_stem,
 )
-from stable_retro_ppo.wandb_utils import DEFAULT_WANDB_PROJECT_PATH, load_wandb_env
+from rlab.wandb_utils import DEFAULT_WANDB_PROJECT_PATH, load_wandb_env
 
 
 def slug(value: str) -> str:
@@ -119,7 +116,7 @@ def append_eval_history(path: Path, metrics: dict[str, Any]) -> None:
 
 def score(metrics: dict[str, Any]) -> tuple[float, int, float]:
     return (
-        float(metrics.get(EVAL_STATE_MIN_RATE, metrics["completion_rate"])),
+        float(metrics.get(EVAL_DONE_LEVEL_CHANGE_FROM_RATE_MIN, metrics["completion_rate"])),
         int(metrics["max_x_max"]),
         float(metrics["reward_mean"]),
     )
@@ -230,8 +227,6 @@ def log_wandb_eval(wandb_run, metrics: dict[str, Any], video_path: Path | None) 
         EVAL_PROGRESS_X_MAX: metrics["max_x_max"],
         EVAL_PROGRESS_LEVEL_X_MEAN: metrics["max_level_x_mean"],
         EVAL_PROGRESS_LEVEL_X_MAX: metrics["max_level_x_max"],
-        EVAL_OUTCOME_COMPLETIONS: metrics["completion_count"],
-        EVAL_OUTCOME_RATE: metrics["completion_rate"],
         EVAL_DEATH_COUNT: metrics["death_count"],
         EVAL_DEATH_RATE: metrics["death_rate"],
         EVAL_BEST_REWARD: metrics["best_episode"]["reward"],
@@ -240,7 +235,7 @@ def log_wandb_eval(wandb_run, metrics: dict[str, Any], video_path: Path | None) 
         EVAL_CHECKPOINT_ARTIFACT: metrics["checkpoint_artifact"],
         EVAL_CONFIG_HUD_CROP_TOP: metrics["hud_crop_top"],
     }
-    payload.update(flat_numeric_metrics(metrics, f"{EVAL_STATE_ROOT}/"))
+    payload.update(flat_numeric_metrics(metrics, "eval/done/"))
     death_x_positions = [
         int(episode["death_x_pos"])
         for episode in metrics["episode_results"]
@@ -287,7 +282,7 @@ def promote_best_artifact(
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Evaluate pending W&B Stable Retro PPO checkpoints"
+        description="Evaluate pending W&B rlab checkpoints"
     )
     parser.add_argument("run_name", nargs="?", help="Training run name / artifact prefix")
     parser.add_argument("--project", default=DEFAULT_WANDB_PROJECT_PATH, help="W&B entity/project")
@@ -326,9 +321,7 @@ def main() -> None:
     parser = build_parser()
     parser_defaults = vars(parser.parse_args([]))
     explicit_dests = explicit_arg_dests(parser, sys.argv[1:])
-    explicit_dests.update(
-        {"terminate_on_life_loss", "terminate_on_level_change", "terminate_on_completion"}
-    )
+    explicit_dests.add("done_on_info_json")
     args = parser.parse_args()
     if args.episodes < 1:
         raise SystemExit("--episodes must be >= 1")

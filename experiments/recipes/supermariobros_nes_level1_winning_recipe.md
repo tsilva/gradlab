@@ -42,15 +42,11 @@ observation_size: 84
 hud_crop_top: 32
 max_episode_steps: 4500
 completion_x_threshold: 0
-terminate_on_life_loss: true
-terminate_on_level_change: false
-terminate_on_completion: true
+done_on_info_json: '{"life_loss":["lives","decrease"],"level_change":[["levelHi","levelLo"],"change"]}'
 eval_freq: 0
 eval_episodes: 0
 checkpoint_freq: 100000
 timesteps: 5,000,000
-stop_completion_episode_window: 100
-stop_completion_rate_threshold: 1.0
 ```
 
 Use 5 concurrent child trainings on `k8s/rtx4090` for throughput screening.

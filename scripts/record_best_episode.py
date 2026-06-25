@@ -16,18 +16,18 @@ import numpy as np
 import torch
 from stable_baselines3 import PPO
 
-from stable_retro_ppo.artifacts import apply_model_config_defaults, explicit_arg_dests
-from stable_retro_ppo.cli_args import add_env_config_args
-from stable_retro_ppo.device import resolve_sb3_device
-from stable_retro_ppo.env import assert_rom_imported, resolve_env_config
-from stable_retro_ppo.env_config import env_config_from_args
-from stable_retro_ppo.eval_runner import evaluate_model_episodes
-from stable_retro_ppo.wandb_artifacts import (
+from rlab.artifacts import apply_model_config_defaults, explicit_arg_dests
+from rlab.cli_args import add_env_config_args
+from rlab.device import resolve_sb3_device
+from rlab.env import assert_rom_imported, resolve_env_config
+from rlab.env_config import env_config_from_args
+from rlab.eval_runner import evaluate_model_episodes
+from rlab.wandb_artifacts import (
     artifact_download_dir,
     download_model_artifact,
     model_artifact_ref,
 )
-from stable_retro_ppo.wandb_utils import DEFAULT_WANDB_PROJECT_PATH
+from rlab.wandb_utils import DEFAULT_WANDB_PROJECT_PATH
 
 
 def artifact_ref(args: argparse.Namespace) -> str:
@@ -83,9 +83,7 @@ def main() -> None:
     parser = build_parser()
     parser_defaults = vars(parser.parse_args([]))
     explicit_dests = explicit_arg_dests(parser, sys.argv[1:])
-    explicit_dests.update(
-        {"terminate_on_life_loss", "terminate_on_level_change", "terminate_on_completion"}
-    )
+    explicit_dests.add("done_on_info_json")
     args = parser.parse_args()
     if args.episodes < 1:
         raise SystemExit("--episodes must be >= 1")

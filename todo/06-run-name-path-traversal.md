@@ -10,10 +10,10 @@ Queue job `run_name` flows from `train_runner.normalize_train_config()` into `--
 
 Affected files:
 
-- `src/stable_retro_ppo/env.py:752-753`
-- `src/stable_retro_ppo/train.py:57-62`
-- `src/stable_retro_ppo/artifacts.py:298-309`
-- `src/stable_retro_ppo/train_runner.py:37-43`
+- `src/rlab/env.py:752-753`
+- `src/rlab/train.py:57-62`
+- `src/rlab/artifacts.py:298-309`
+- `src/rlab/train_runner.py:37-43`
 
 ## Desired state
 
@@ -21,7 +21,7 @@ Affected files:
 
 ## Implementation plan
 
-1. Add shared helpers near `default_run_dir()` in `src/stable_retro_ppo/env.py`:
+1. Add shared helpers near `default_run_dir()` in `src/rlab/env.py`:
    - `sanitize_run_name(value: str) -> str`.
    - `safe_run_dir(run_name: str, runs_dir: str | Path = "runs") -> Path`.
    - Keep allowed chars aligned with existing artifact name sanitization: `[A-Za-z0-9_.-]`.

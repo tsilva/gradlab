@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Create a focused W&B workspace for Stable Retro PPO sweep diagnosis."""
+"""Create a focused W&B workspace for rlab sweep diagnosis."""
 
 from __future__ import annotations
 
@@ -7,12 +7,10 @@ import argparse
 from pathlib import Path
 
 from dotenv import load_dotenv
-from stable_retro_ppo.metric_names import (
+from rlab.metric_names import (
     THROUGHPUT_LOOP_FPS,
     THROUGHPUT_ROLLOUT_FPS,
-    TRAIN_OUTCOME_COMPLETIONS,
-    TRAIN_OUTCOME_RATE,
-    TRAIN_OUTCOME_TERMINALS,
+    TRAIN_DONE_ALL,
 )
 
 try:
@@ -27,7 +25,7 @@ except ImportError as exc:  # pragma: no cover - operator-facing dependency hint
 
 
 DEFAULT_QUERY = r"^b2[0-9]_"
-DEFAULT_PROJECT = "StableRetro-PPO"
+DEFAULT_PROJECT = "rlab"
 DEFAULT_ENTITY = "tsilva"
 
 
@@ -77,14 +75,13 @@ def build_workspace(entity: str, project: str, name: str, query: str) -> ws.Work
         runset_settings=ws.RunsetSettings(
             query=query,
             regex_query=True,
-            order=[ws.Ordering(ws.Summary(TRAIN_OUTCOME_RATE), ascending=False)],
+            order=[ws.Ordering(ws.Summary(TRAIN_DONE_ALL), ascending=False)],
             pinned_runs=["6hvqs5et", "5ktcw6dm", "lugd5cth", "iab5gq4b", "j0q58wg4", "cyyfs6s5"],
             pinned_columns=[
                 "Name",
                 "State",
                 "group",
-                f"summary.{TRAIN_OUTCOME_RATE}",
-                f"summary.{TRAIN_OUTCOME_COMPLETIONS}",
+                f"summary.{TRAIN_DONE_ALL}",
                 "summary.global_step",
                 "config.learning_rate",
                 "config.ent_coef_final",
@@ -103,7 +100,7 @@ def build_workspace(entity: str, project: str, name: str, query: str) -> ws.Work
                         """
                         Primary question: which runs become reliable at the selected target, not merely high reward?
 
-                        Read `train/outcome/rate` first. It is already the rolling success rate over the last 100 terminal episodes, so the dashboard uses no extra smoothing. Then use `train/outcome/completions` to distinguish early discovery from reliable exploitation, and use PPO internals to diagnose whether promising policies were destroyed by later updates.
+                        Read `train/done/all` first to understand episode-boundary volume, then inspect done-reason counters such as `train/done/life_loss` and `train/done/level_change` to understand what is ending episodes. For structured native done payloads, use metrics such as `train/done/level_change/from/0-0` to break counts down by actual info-variable values.
                         """,
                         x=0,
                         y=0,
@@ -111,46 +108,48 @@ def build_workspace(entity: str, project: str, name: str, query: str) -> ws.Work
                 ],
             ),
             ws.Section(
-                name="Outcome: sample efficiency and reliability",
+                name="Done accounting: episode boundaries",
                 is_open=True,
                 panels=[
                     line(
-                        "North star: completion rate over last 100 terminal episodes",
-                        TRAIN_OUTCOME_RATE,
+                        "Episode done count",
+                        TRAIN_DONE_ALL,
                         x=0,
                         y=0,
                         w=24,
                         h=8,
                         ymin=0,
-                        ymax=1.05,
                     ),
                     line(
-                        "Discovery volume: cumulative completed episodes",
-                        TRAIN_OUTCOME_COMPLETIONS,
+                        "Done reasons",
+                        "train/done/life_loss",
                         x=0,
                         y=8,
+                        w=8,
                     ),
                     line(
-                        "Denominator: cumulative terminal episodes",
-                        TRAIN_OUTCOME_TERMINALS,
-                        x=12,
+                        "Level changes",
+                        "train/done/level_change",
+                        x=8,
                         y=8,
+                        w=8,
                     ),
-                    wr.BarPlot(
-                        title="Final summary: completion rate",
-                        metrics=[TRAIN_OUTCOME_RATE],
-                        orientation="h",
-                        max_runs_to_show=30,
-                        layout=wr.Layout(x=0, y=14, w=12, h=6),
+                    line(
+                        "Level changes by from-value",
+                        [
+                            "train/done/level_change/from/0-0",
+                            "train/done/level_change/from/0-1",
+                        ],
+                        x=8,
+                        y=16,
+                        w=8,
                     ),
-                    wr.ScatterPlot(
-                        title="Final reliability vs total completions",
-                        x=TRAIN_OUTCOME_COMPLETIONS,
-                        y=TRAIN_OUTCOME_RATE,
-                        z="global_step",
-                        range_y=(0, 1.05),
-                        legend_template="${run:displayName}",
-                        layout=wr.Layout(x=12, y=14, w=12, h=6),
+                    line(
+                        "Max steps",
+                        "train/done/max_steps",
+                        x=16,
+                        y=8,
+                        w=8,
                     ),
                 ],
             ),
@@ -183,7 +182,7 @@ def build_workspace(entity: str, project: str, name: str, query: str) -> ws.Work
                     line("Learning rate schedule", "train/learning_rate", x=0, y=0),
                     line("Entropy loss", "train/entropy_loss", x=12, y=0),
                     wr.ParameterImportancePlot(
-                        with_respect_to=TRAIN_OUTCOME_RATE,
+                        with_respect_to=TRAIN_DONE_ALL,
                         layout=wr.Layout(x=0, y=6, w=24, h=8),
                     ),
                 ],
@@ -196,7 +195,7 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--entity", default=DEFAULT_ENTITY)
     parser.add_argument("--project", default=DEFAULT_PROJECT)
-    parser.add_argument("--name", default="Stable Retro PPO Sweep Diagnosis")
+    parser.add_argument("--name", default="rlab Sweep Diagnosis")
     parser.add_argument("--query", default=DEFAULT_QUERY)
     args = parser.parse_args()
 

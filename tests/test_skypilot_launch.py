@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
 from pathlib import Path
 
-from stable_retro_ppo.skypilot_launch import (
+from rlab.skypilot_launch import (
     EndpointCheck,
     REQUIRED_ENV_KEYS,
     build_launch_command,
@@ -22,18 +23,49 @@ from stable_retro_ppo.skypilot_launch import (
     sparse_log_events,
     write_launch_report,
 )
+from rlab.modal_launch import modal_launch_summary, preflight_modal_manifest
 
 
 INSTANCE_CONFIG = {
     "instances": {
         "rtx4090": {
+            "aliases": ["beast-3"],
             "accelerator": "RTX4090",
             "cpus": "12+",
             "memory": "48+",
             "image_id": "docker:test",
+            "infra": "k8s/rtx4090",
             "max_children": 5,
             "env_threads": 4,
             "api_endpoints": ["http://healthy.example", "http://lan.example"],
+        },
+        "runpod-l4": {
+            "accelerator": "L4",
+            "cpus": "5+",
+            "memory": "29+",
+            "image_id": "docker:runpod",
+            "infra": "runpod",
+            "max_children": 1,
+            "children": 1,
+            "env_threads": 2,
+        },
+        "local-macbook": {
+            "kind": "local",
+            "accelerator": "MPS",
+            "max_children": 1,
+            "children": 1,
+            "env_threads": 0,
+        },
+        "modal-t4": {
+            "aliases": ["modal"],
+            "kind": "modal",
+            "accelerator": "T4",
+            "modal_gpu": "T4",
+            "cpu": 16.0,
+            "memory_mib": 32768,
+            "max_children": 1,
+            "children": 1,
+            "env_threads": 0,
         }
     }
 }
@@ -80,14 +112,14 @@ def sample_runner_profile() -> dict:
     return {
         "name": "runner-test-4090",
         "cluster": "runner-cluster",
-        "profile_id": "mario-ppo/post19/rtx4090-task-conditioned-v1",
+        "profile_id": "mario-ppo/post20/rtx4090-task-conditioned-v1",
         "game": "TestGame-Platform",
         "rom_source": "rom.bin",
         "rom_mount_path": "~/roms/TestGame-Platform/rom.bin",
         "extra_file_mounts": {
             "~/roms/TestGame-Platform/Level1-1.state": "states/Level1-1.state",
         },
-        "stable_retro_turbo_version": "1.0.0.post19",
+                "stable_retro_turbo_version": "1.0.0.post21",
         "venv_name": "runner-test-venv",
         "log_dir": "logs/train_runner",
         "workers": 5,
@@ -102,8 +134,10 @@ def sample_runner_profile() -> dict:
                 "hud_crop_top": 32,
                 "reward_mode": "score",
                 "action_set": "simple",
-                "terminate_on_life_loss": True,
-                "terminate_on_completion": True,
+                "done_on_info_json": (
+                    '{"life_loss":["lives","decrease"],'
+                    '"level_change":[["levelHi","levelLo"],"change"]}'
+                ),
                 "completion_x_threshold": 0,
                 "max_pool_frames": False,
             }
@@ -128,6 +162,30 @@ class SkyPilotLaunchTests(unittest.TestCase):
         self.assertIn("retro.data.get_romfile_path('TestGame-Platform')", yaml)
         self.assertIn(str(rom_path), yaml)
 
+    def test_render_task_uses_named_target_resources(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo_root = Path(tmp)
+            manifest = sample_manifest()
+            manifest["target"] = "runpod-l4"
+            yaml = render_task_yaml(manifest, INSTANCE_CONFIG, repo_root)
+
+        self.assertIn("accelerators: {L4: 1}", yaml)
+        self.assertIn("cpus: 5+", yaml)
+        self.assertIn("memory: 29+", yaml)
+        self.assertIn("target=runpod", yaml)
+
+    def test_render_task_accepts_target_alias_override(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo_root = Path(tmp)
+            yaml = render_task_yaml(
+                sample_manifest(),
+                INSTANCE_CONFIG,
+                repo_root,
+                target_override="beast-3",
+            )
+
+        self.assertIn("accelerators: {RTX4090: 1}", yaml)
+
     def test_render_task_includes_extra_file_mounts(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo_root = Path(tmp)
@@ -146,7 +204,7 @@ class SkyPilotLaunchTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             repo_root = Path(tmp)
             (repo_root / "pyproject.toml").write_text(
-                'dependencies = ["stable-retro-turbo==1.0.0.post19"]\n',
+                'dependencies = ["stable-retro-turbo==1.0.0.post21"]\n',
                 encoding="utf-8",
             )
             manifest = sample_manifest()
@@ -162,7 +220,7 @@ class SkyPilotLaunchTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             repo_root = Path(tmp)
             (repo_root / "pyproject.toml").write_text(
-                'dependencies = ["stable-retro-turbo==1.0.0.post19"]\n',
+                'dependencies = ["stable-retro-turbo==1.0.0.post21"]\n',
                 encoding="utf-8",
             )
             (repo_root / "rom.bin").write_bytes(b"rom")
@@ -176,7 +234,7 @@ class SkyPilotLaunchTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             repo_root = Path(tmp)
             (repo_root / "pyproject.toml").write_text(
-                'dependencies = ["stable-retro-turbo==1.0.0.post19"]\n',
+                'dependencies = ["stable-retro-turbo==1.0.0.post21"]\n',
                 encoding="utf-8",
             )
             (repo_root / "rom.bin").write_bytes(b"rom")
@@ -193,7 +251,7 @@ class SkyPilotLaunchTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             repo_root = Path(tmp)
             (repo_root / "pyproject.toml").write_text(
-                'dependencies = ["stable-retro-turbo==1.0.0.post19"]\n',
+                'dependencies = ["stable-retro-turbo==1.0.0.post21"]\n',
                 encoding="utf-8",
             )
             (repo_root / "rom.bin").write_bytes(b"rom")
@@ -208,8 +266,10 @@ class SkyPilotLaunchTests(unittest.TestCase):
         self.assertFalse(any(check.level == "error" for check in checks))
 
     def test_launch_command_uses_standard_env_and_secret_flags(self) -> None:
-        cmd = build_launch_command("cluster", Path("task.yaml"))
+        cmd = build_launch_command("cluster", Path("task.yaml"), infra="runpod")
         self.assertEqual(cmd[:5], ["sky", "launch", "-c", "cluster", "-y"])
+        self.assertIn("--infra", cmd)
+        self.assertIn("runpod", cmd)
         self.assertIn("--env", cmd)
         self.assertIn("CHECKPOINT_BUCKET_URI", cmd)
         self.assertIn("--secret", cmd)
@@ -240,20 +300,20 @@ class SkyPilotLaunchTests(unittest.TestCase):
             yaml = render_runner_task_yaml(profile, INSTANCE_CONFIG, repo_root)
 
         self.assertIn("name: runner-test-4090", yaml)
-        self.assertIn("stable-retro-turbo==1.0.0.post19", yaml)
-        self.assertIn("-m stable_retro_ppo.train_runner", yaml)
-        self.assertIn("--profile mario-ppo/post19/rtx4090-task-conditioned-v1", yaml)
+        self.assertIn("stable-retro-turbo==1.0.0.post21", yaml)
+        self.assertIn("-m rlab.train_runner", yaml)
+        self.assertIn("--profile mario-ppo/post20/rtx4090-task-conditioned-v1", yaml)
         self.assertIn("--workers 5", yaml)
         self.assertIn("--max-jobs 0", yaml)
         self.assertIn("--status-goal mario-level1-1-1-2-100of100", yaml)
         self.assertIn("PPO('MultiInputPolicy' if isinstance(obs, dict) else 'CnnPolicy'", yaml)
-        self.assertNotIn("-m stable_retro_ppo.train --", yaml)
+        self.assertNotIn("-m rlab.train --", yaml)
 
     def test_preflight_runner_profile_passes_with_required_files(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo_root = Path(tmp)
             (repo_root / "pyproject.toml").write_text(
-                'dependencies = ["stable-retro-turbo==1.0.0.post19"]\n',
+                'dependencies = ["stable-retro-turbo==1.0.0.post21"]\n',
                 encoding="utf-8",
             )
             (repo_root / "rom.bin").write_bytes(b"rom")
@@ -275,7 +335,7 @@ class SkyPilotLaunchTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             repo_root = Path(tmp)
             (repo_root / "pyproject.toml").write_text(
-                'dependencies = ["stable-retro-turbo==1.0.0.post19"]\n',
+                'dependencies = ["stable-retro-turbo==1.0.0.post21"]\n',
                 encoding="utf-8",
             )
             (repo_root / "rom.bin").write_bytes(b"rom")
@@ -293,6 +353,66 @@ class SkyPilotLaunchTests(unittest.TestCase):
         self.assertTrue(any("database URL" in message for message in messages))
         self.assertTrue(any(check.level == "error" for check in checks))
 
+    def test_preflight_rejects_non_skypilot_target_for_skypilot_launch(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo_root = Path(tmp)
+            (repo_root / "pyproject.toml").write_text(
+                'dependencies = ["stable-retro-turbo==1.0.0.post21"]\n',
+                encoding="utf-8",
+            )
+            (repo_root / "rom.bin").write_bytes(b"rom")
+            env = {key: "value" for key in REQUIRED_ENV_KEYS}
+            checks = preflight_checks(
+                sample_manifest(),
+                INSTANCE_CONFIG,
+                repo_root,
+                env=env,
+                target_override="modal-t4",
+            )
+
+        messages = [check.message for check in checks]
+        self.assertTrue(any("matching compute launcher" in message for message in messages))
+        self.assertTrue(any(check.level == "error" for check in checks))
+
+    def test_modal_launch_summary_renders_manifest_command(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo_root = Path(tmp)
+            (repo_root / "experiments").mkdir()
+            (repo_root / "experiments" / "instances.json").write_text(
+                json.dumps(INSTANCE_CONFIG),
+                encoding="utf-8",
+            )
+            manifest_path = repo_root / "manifest.json"
+            manifest = sample_manifest()
+            manifest["target"] = "modal-t4"
+            summary = modal_launch_summary(
+                manifest,
+                manifest_path,
+                repo_root=repo_root,
+                instances_path=None,
+                target_override=None,
+            )
+
+        self.assertEqual(summary.target, "modal-t4")
+        self.assertEqual(summary.gpu, "T4")
+        self.assertEqual(summary.cpu, 16.0)
+        self.assertEqual(summary.memory_mib, 32768)
+        self.assertEqual(summary.command[:3], ["modal", "run", "src/rlab/modal_app.py::launch_manifest"])
+        self.assertIn("--target", summary.command)
+        self.assertIn("modal-t4", summary.command)
+
+    def test_modal_preflight_allows_volume_uploaded_roms(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo_root = Path(tmp)
+            manifest = sample_manifest()
+            manifest["target"] = "modal-t4"
+            checks = preflight_modal_manifest(manifest, INSTANCE_CONFIG, repo_root)
+
+        messages = [check.message for check in checks]
+        self.assertFalse(any(check.level == "error" for check in checks))
+        self.assertTrue(any("Modal preflight passed" in message for message in messages))
+        self.assertTrue(any("Modal can still run if ROMs were uploaded" in message for message in messages))
+
     def test_collect_results_parses_log_and_run_markers(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -305,9 +425,9 @@ class SkyPilotLaunchTests(unittest.TestCase):
                     [
                         "wandb artifact logged: candidate-final (s3://bucket/prefix/final.zip)",
                         "|    total_timesteps                | 123456      |",
-                        "| train/outcome/                    |             |",
-                        "|    rate                           | 0.8         |",
-                        "|    completions                    | 80          |",
+                        "| train/done/                       |             |",
+                        "|    all                            | 80          |",
+                        "|    level_change                   | 50          |",
                         "candidate exit status: 0",
                     ]
                 ),
@@ -358,9 +478,8 @@ class SkyPilotLaunchTests(unittest.TestCase):
                 [
                     "wandb: View run at https://wandb.ai/e/p/runs/abc",
                     "|    total_timesteps                | 1000000      |",
-                    "| train/outcome/                    |             |",
-                    "|    completions                    | 1            |",
-                    "|    rate                           | 0.8          |",
+                    "| train/done/                       |             |",
+                    "|    all                            | 10           |",
                     "wandb artifact logged: candidate-final (s3://bucket/game/run/final.zip)",
                     "candidate exit status: 0",
                 ]
@@ -369,8 +488,8 @@ class SkyPilotLaunchTests(unittest.TestCase):
 
         messages = [event.message for event in events]
         self.assertTrue(any("wandb.ai/e/p/runs/abc" in message for message in messages))
-        self.assertTrue(any("first completion" in message for message in messages))
-        self.assertTrue(any("crossed 0.80" in message for message in messages))
+        self.assertTrue(any("done count crossed 1" in message for message in messages))
+        self.assertTrue(any("done count crossed 10" in message for message in messages))
         self.assertTrue(any("candidate-final" in message for message in messages))
 
     def test_launch_report_writes_structured_summary(self) -> None:
@@ -382,8 +501,8 @@ class SkyPilotLaunchTests(unittest.TestCase):
                 "\n".join(
                     [
                         "wandb artifact logged: candidate-final (s3://bucket/game/run/final.zip)",
-                        "| train/outcome/                    |             |",
-                        "|    rate                           | 0.9         |",
+                        "| train/done/                       |             |",
+                        "|    all                            | 90          |",
                         "candidate exit status: 0",
                     ]
                 ),
@@ -393,7 +512,7 @@ class SkyPilotLaunchTests(unittest.TestCase):
             report = launch_report(log_path)
             report_exists = report_path.exists()
 
-        self.assertEqual(report["summary"]["completion_rate"], "0.9")
+        self.assertEqual(report["summary"]["done_all"], "90")
         self.assertEqual(report["artifacts"][0]["plane"], "r2")
         self.assertTrue(report_exists)
 
@@ -403,7 +522,7 @@ class SkyPilotLaunchTests(unittest.TestCase):
             ["http://healthy.example", "http://lan.example"],
         )
 
-        original = __import__("stable_retro_ppo.skypilot_launch", fromlist=["check_api_endpoint"])
+        original = __import__("rlab.skypilot_launch", fromlist=["check_api_endpoint"])
         check_api_endpoint = original.check_api_endpoint
         try:
             original.check_api_endpoint = lambda endpoint: EndpointCheck(
