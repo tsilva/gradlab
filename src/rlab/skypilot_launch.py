@@ -618,7 +618,8 @@ def render_runner_task_yaml(
     once = bool(profile.get("once", False))
     direct = bool(profile.get("direct", False))
     status_goal = str(profile.get("status_goal", "")).strip()
-    image_id = str(instance.get("image_id", "")).strip()
+    image_id = str(profile.get("image_id", instance.get("image_id", ""))).strip()
+    prebuilt_image = bool(profile.get("prebuilt_image", instance.get("prebuilt_image", False)))
     cpus = str(profile.get("cpus", instance.get("cpus", "12+")))
     memory = str(profile.get("memory", instance.get("memory", "48+")))
     accelerator = str(instance.get("accelerator", "RTX4090"))
@@ -735,7 +736,13 @@ finally:
     env.close()
 PY'''
 
-    setup_block = f"""set -euo pipefail
+    if prebuilt_image:
+        setup_block = """set -euo pipefail
+
+export RLAB_ROM_DIR="$HOME/roms"
+rlab-container-entrypoint rlab-container-smoke"""
+    else:
+        setup_block = f"""set -euo pipefail
 
 if command -v apt-get >/dev/null 2>&1; then
   if [ "$(id -u)" -eq 0 ]; then
@@ -785,7 +792,7 @@ if rom_path is not None and mounted_dir.exists():
 PY{smoke_block}"""
 
     command = [
-        '"$PY"',
+        "python" if prebuilt_image else '"$PY"',
         "-m",
         "rlab.train_runner",
         "--profile",
@@ -809,18 +816,25 @@ PY{smoke_block}"""
         command.append("--direct")
     if status_goal:
         command.extend(["--status-goal", status_goal])
+    if prebuilt_image:
+        command = ["rlab-container-entrypoint", *command]
 
-    run_block = "\n".join(
+    run_lines = [
+        "set -euo pipefail",
+        "",
+        'export RLAB_ROM_DIR="$HOME/roms"',
+    ]
+    if not prebuilt_image:
+        run_lines.append(f'PY="$HOME/{venv_name}/bin/python"')
+    run_lines.extend(
         [
-            "set -euo pipefail",
-            "",
-            f'PY="$HOME/{venv_name}/bin/python"',
             f"mkdir -p {shell_quote(log_dir)}",
             f'echo "train_profile={profile_id}"',
             f'echo "target={target_description} workers={workers} max_jobs={max_jobs}"',
             shell_join(command),
         ]
     )
+    run_block = "\n".join(run_lines)
 
     resource_lines = [
         "resources:",
@@ -899,6 +913,18 @@ def preflight_runner_profile(
         checks.append(Check("error", str(exc)))
     if not profile.get("rom_source"):
         checks.append(Check("error", "runner profile must define rom_source"))
+    image_id = str(profile.get("image_id", instance.get("image_id", ""))).strip()
+    prebuilt_image = bool(profile.get("prebuilt_image", instance.get("prebuilt_image", False)))
+    if prebuilt_image and not image_id:
+        checks.append(Check("error", "prebuilt_image=true requires image_id on the profile or target"))
+    if prebuilt_image and str(instance.get("infra", "")).startswith("ssh/"):
+        checks.append(
+            Check(
+                "warning",
+                "prebuilt_image=true on an SSH node pool may not run inside Docker; "
+                "prefer direct docker or a Kubernetes/RunPod target for container isolation",
+            )
+        )
 
     missing = [key for key in REQUIRED_ENV_KEYS if not env_values.get(key)]
     if missing:

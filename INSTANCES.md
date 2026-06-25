@@ -1,6 +1,6 @@
 # GPU Instances
 
-Last updated: 2026-06-19
+Last updated: 2026-06-25
 
 Use this file as the repo-local source of truth for known GPU instances, launch targets, benchmark-backed concurrency, and operational gotchas. Re-check live availability before launching, but do not rediscover these basics from scratch unless the facts here fail.
 
@@ -10,8 +10,8 @@ Use this file as the repo-local source of truth for known GPU instances, launch 
 | --- | --- | --- |
 | Highest-throughput Mario PPO screening | `k8s/rtx4090` | 5 concurrent children, `env_threads=4` |
 | Lower-contention RTX4090 confirmation batch | `k8s/rtx4090` | 3-4 concurrent children, `env_threads=4` |
-| Small-GPU batch screening | `ssh/beast2` | 4 concurrent children, `env_threads=2` |
-| Faster individual turnaround on RTX2060 | `ssh/beast2` | 2 concurrent children, `env_threads=4` |
+| Small-GPU batch screening | `kubernetes` on beast-2 | 4 concurrent children, `env_threads=2` |
+| Faster individual turnaround on RTX2060 | `kubernetes` on beast-2 | 2 concurrent children, `env_threads=4` |
 | Modal baseline GPU launch | `modal-t4` | 1 child, `n_envs=32`, `env_threads=0` |
 
 Refresh these defaults when changing `n_envs`, `n_steps`, model size, deterministic CUDA flags, runtime package version, W&B/artifact behavior, or target node CPU shape.
@@ -34,8 +34,9 @@ Local Mac control-plane setup as of 2026-06-24:
 - Local kubeconfig context `rtx4090` points at beast-3 Kubernetes via
   `https://192.168.0.151:6443`; `sky check kubernetes` enables context
   `rtx4090`.
-- `ssh/beast2` was not enabled in this local-control-plane pass because beast-2
-  was unreachable from the Mac by both `beast-2` and `192.168.133.26`.
+- beast-2 is managed from its host-side SkyPilot server against local k3s.
+  Use `ssh -o HostKeyAlias=beast-2 tsilva@192.168.133.26` and run SkyPilot
+  with `KUBECONFIG="$HOME/.kube/config"`.
 
 Machine-readable defaults live in `experiments/instances.json`. SkyPilot
 manifests and runner profiles may set `"target": "<name>"`, and the
@@ -49,7 +50,7 @@ Current target names:
 | Target | Alias examples | Infra | Default shape |
 | --- | --- | --- | --- |
 | `rtx4090` | `beast-3` | `k8s/rtx4090` | 5 children, `env_threads=4` |
-| `rtx2060` | `beast-2` | `ssh/beast2` | 4 children, `env_threads=2` |
+| `rtx2060` | `beast-2` | `kubernetes` | 4 children, `env_threads=2` |
 | `runpod-rtx4090` | `runpod4090` | `runpod` | 1 child, `env_threads=2` |
 | `runpod-l4` | `l4` | `runpod` | 1 child, `env_threads=2` |
 | `runpod-t4` | `t4` | `runpod` | unavailable in current SkyPilot RunPod catalog |
@@ -116,6 +117,33 @@ src/rlab/modal_app.py::launch_manifest`, uses the same manifest training fields
 as local/SkyPilot runs, and applies the target's `gpu`, `cpu`, and `memory_mib`
 defaults through Modal `with_options`. ROMs must already be uploaded to the
 `rlab-data` Modal volume with `modal run src/rlab/modal_app.py::upload_roms`.
+
+## Prebuilt Train Runtime Images
+
+The shared Docker/OCI runtime lives in `containers/train/` and is published by
+`.github/workflows/rlab-train-image.yml` to GitHub Container Registry:
+
+```text
+ghcr.io/tsilva/rlab/rlab-train:git-<short-sha>
+ghcr.io/tsilva/rlab/rlab-train@sha256:<digest>
+```
+
+Use the digest form for real runs. The image contains repo code, `uv.lock`
+dependencies, Stable Retro system libraries, and `rlab-*` entrypoints. It must
+not contain `.env`, ROMs, checkpoints, W&B files, or run outputs.
+
+SkyPilot runner profiles can opt into this runtime with:
+
+```json
+{
+  "image_id": "docker:ghcr.io/tsilva/rlab/rlab-train@sha256:<digest>",
+  "prebuilt_image": true
+}
+```
+
+Modal can use the same image by setting `RLAB_MODAL_IMAGE_REF` before invoking
+`modal run`; `RLAB_MODAL_REGISTRY_SECRET` names an optional Modal registry
+secret for private GHCR pulls.
 
 ## W&B Artifact Storage: Cloudflare R2
 
@@ -362,25 +390,50 @@ ssh tsilva@beast-3 'KUBECONFIG=/home/tsilva/.kube/config kubectl exec -n default
 
 ### Access
 
-- SkyPilot infra: `ssh/beast2`
+- SkyPilot infra: `kubernetes` from the host-side beast-2 SkyPilot server
+- Legacy SkyPilot SSH node-pool infra: `ssh/beast2`
 - GPU host IP observed from the current Mac/Codex network: `192.168.133.26`
 - SSH command: `ssh -o HostKeyAlias=beast-2 tsilva@192.168.133.26`
 - GPU: NVIDIA GeForce RTX 2060, 6 GB VRAM
 - Observed driver: `595.71.05`
+- Kubernetes: k3s `v1.35.5+k3s1` on node `beast-2`, containerd
+  `2.2.3-k3s1`, GPU advertised as `RTX2060` / `nvidia.com/gpu: 1`
+- NVIDIA runtime classes: `nvidia`, `nvidia-cdi`, `nvidia-legacy`
 - SkyPilot server venv on host: `/home/tsilva/skypilot-server/.venv`
 - Host `uv`: `/home/tsilva/.local/bin/uv`
 - Host-side SkyPilot API server: localhost-only at `http://127.0.0.1:46580`; do not bind to `0.0.0.0` without explicit security approval.
 
 `beast-2`, `beast2`, `beast-2.local`, and `beast2.local` may not resolve from the current Mac/Codex network. Use the IP plus `HostKeyAlias=beast-2` unless hostname resolution has been re-established. `ssh-keyscan -T 5 192.168.133.26` previously matched the existing `beast-2` host keys in `~/.ssh/known_hosts`.
 
-When running SkyPilot from the host-side CLI on `beast-2`, set `KUBECONFIG="$HOME/.kube/config"` first. Without it, `sky check ssh` may try `/etc/rancher/k3s/k3s.yaml` and fail with permission denied.
+When running SkyPilot from the host-side CLI on `beast-2`, set `KUBECONFIG="$HOME/.kube/config"` first. Without it, SkyPilot or `kubectl` may try `/etc/rancher/k3s/k3s.yaml` and fail with permission denied.
 
 Example host-side launch shape:
 
 ```bash
 ssh -o HostKeyAlias=beast-2 tsilva@192.168.133.26 \
-  'cd /home/tsilva/sandbox-sb3 && export KUBECONFIG="$HOME/.kube/config" && PATH="$HOME/.local/bin:$PATH" /home/tsilva/skypilot-server/.venv/bin/sky launch --infra ssh/beast2 -c <cluster-name> -y <task.yaml>'
+  'cd /home/tsilva/sandbox-sb3 && export KUBECONFIG="$HOME/.kube/config" && PATH="$HOME/.local/bin:$PATH" /home/tsilva/skypilot-server/.venv/bin/sky launch --infra kubernetes -c <cluster-name> -y <task.yaml>'
 ```
+
+As of 2026-06-25, the first local training image imported into k3s is
+`ghcr.io/tsilva/rlab/rlab-train:local-8332822-dirty`, digest
+`sha256:873484b80a09723a8bdd78baadcc357d5bfe5f4c145c48d8eda4ae2880ddc5bf`.
+It is present only in beast-2's k3s/containerd image store, not GHCR. Replace
+this with a pushed immutable digest once registry publishing is approved.
+
+SkyPilot `0.12.3.post1` hard-codes `imagePullPolicy: Always` for the
+Kubernetes Ray node. For the local imported image test, the host-side template
+at `/home/tsilva/skypilot-server/.venv/lib/python3.13/site-packages/sky/templates/kubernetes-ray.yml.j2`
+was patched to `IfNotPresent` for the `ray-node` container, with backup
+`kubernetes-ray.yml.j2.bak-20260625-local-images`. Without that patch, k3s
+tries to pull the private/unpublished GHCR tag and fails with `403 Forbidden`.
+
+The 2026-06-25 SkyPilot Kubernetes retry successfully provisioned the pod and
+started Ray, but the launch remained in `INIT` because SkyPilot's Kubernetes
+`rsync` helper hung while syncing `/root/.sky/.runtime_files`. The verified
+B77 Docker/Kubernetes smoke therefore ran as a plain Kubernetes Job,
+`rlab-b77-docker-k8s-103`, using the same imported image and hostPath ROM
+mount. Re-test SkyPilot task submission before relying on `rlab-skypilot
+launch-runner` for beast-2 Kubernetes queues.
 
 ### Mario PPO Scheduling
 
@@ -398,9 +451,12 @@ Default to 4 children with `env_threads=2` for aggregate screening throughput. U
 
 ### Operational Notes
 
-- `sky check ssh --verbose` is the authoritative confirmation that `ssh/beast2` is enabled; `sky ssh up` alone is not enough.
-- Persistent setup to reuse: SkyPilot server venv, localhost API server, `ssh/beast2`, node-pool enablement, host tools, and GPU visibility.
-- Disposable per-job setup: cluster/pod creation, workdir sync, YAML `setup`, package installs, and dataset download unless cached.
+- `sky check kubernetes --verbose` from beast-2 with `KUBECONFIG="$HOME/.kube/config"` is the authoritative confirmation that the host-side SkyPilot server sees local k3s.
+- Persistent setup to reuse: k3s, NVIDIA GPU operator/runtime classes, SkyPilot server venv, localhost API server, host tools, local ROM bundle, and imported prebuilt training images.
+- Disposable per-job setup: SkyPilot cluster/pod creation, workdir sync, YAML `setup`, image import when the tag is new, and dataset download unless cached.
+- For local imported images, use `imagePullPolicy: IfNotPresent` or publish the
+  image to GHCR with registry credentials. SkyPilot's default `Always` policy
+  ignores the local containerd image store.
 - The RTX2060 training-validated Mario path includes `stable-retro-turbo==1.0.0.post7`; it reproduced the completed-episode stop criterion at 2,711,552 timesteps on 2026-06-15.
 
 ## Cleanup

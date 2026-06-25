@@ -29,13 +29,24 @@
       "aliases": ["beast-2"],
       "label": "beast-2",
       "kind": "skypilot",
-      "infra": "ssh/beast2",
+      "infra": "kubernetes",
       "accelerator": "RTX2060",
+      "cpus": "4+",
+      "memory": "8+",
+      "image_id": "docker:ghcr.io/tsilva/rlab/rlab-train:local-8332822-dirty",
+      "prebuilt_image": true,
       "children": 4,
       "max_children": 4,
       "env_threads": 2,
       "fast_turnaround_children": 2,
-      "fast_turnaround_env_threads": 4
+      "fast_turnaround_env_threads": 4,
+      "legacy_infra": "ssh/beast2",
+      "notes": [
+        "Run SkyPilot from beast-2 with KUBECONFIG=$HOME/.kube/config so the local k3s context is used.",
+        "The local-8332822-dirty image tag is imported into beast-2 k3s/containerd; replace with a pushed GHCR digest when publishing is approved.",
+        "SkyPilot 0.12.3.post1 provisioned the local image after patching ray-node imagePullPolicy to IfNotPresent, but task submission hung in Kubernetes rsync; verify before using launch-runner here.",
+        "ssh/beast2 remains useful for host access and legacy node-pool debugging."
+      ]
     },
     "local-macbook": {
       "aliases": ["macbook", "local"],

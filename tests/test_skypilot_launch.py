@@ -309,6 +309,25 @@ class SkyPilotLaunchTests(unittest.TestCase):
         self.assertIn("PPO('MultiInputPolicy' if isinstance(obs, dict) else 'CnnPolicy'", yaml)
         self.assertNotIn("-m rlab.train --", yaml)
 
+    def test_render_runner_task_uses_prebuilt_image_runtime(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo_root = Path(tmp)
+            profile = sample_runner_profile()
+            profile["image_id"] = "docker:ghcr.io/tsilva/rlab/rlab-train:git-test"
+            profile["prebuilt_image"] = True
+            yaml = render_runner_task_yaml(profile, INSTANCE_CONFIG, repo_root)
+
+        self.assertIn(
+            'image_id: "docker:ghcr.io/tsilva/rlab/rlab-train:git-test"',
+            yaml,
+        )
+        self.assertIn("rlab-container-entrypoint rlab-container-smoke", yaml)
+        self.assertIn("rlab-container-entrypoint python -m rlab.train_runner", yaml)
+        self.assertIn('export RLAB_ROM_DIR="$HOME/roms"', yaml)
+        self.assertNotIn("uv sync", yaml)
+        self.assertNotIn("stable-retro-turbo==1.0.0.post21", yaml)
+        self.assertNotIn('PY="$HOME/runner-test-venv/bin/python"', yaml)
+
     def test_preflight_runner_profile_passes_with_required_files(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo_root = Path(tmp)

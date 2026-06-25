@@ -1,0 +1,93 @@
+name: rlab train image
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - .dockerignore
+      - .github/workflows/rlab-train-image.yml
+      - containers/train/**
+      - experiments/**
+      - scripts/**
+      - src/**
+      - INSTANCES.md
+      - METRICS.md
+      - README.md
+      - pyproject.toml
+      - uv.lock
+  pull_request:
+    paths:
+      - .dockerignore
+      - .github/workflows/rlab-train-image.yml
+      - containers/train/**
+      - experiments/**
+      - scripts/**
+      - src/**
+      - INSTANCES.md
+      - METRICS.md
+      - README.md
+      - pyproject.toml
+      - uv.lock
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}/rlab-train
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=sha,prefix=git-,format=short
+            type=ref,event=branch
+            type=ref,event=pr
+
+      - name: Build image
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: containers/train/Dockerfile
+          platforms: linux/amd64
+          push: ${{ github.event_name != 'pull_request' }}
+          provenance: true
+          sbom: true
+          labels: ${{ steps.meta.outputs.labels }}
+          tags: ${{ steps.meta.outputs.tags }}
+          build-args: |
+            BUILD_DATE=${{ github.event.repository.updated_at }}
+            VCS_REF=${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Print image digest
+        if: github.event_name != 'pull_request'
+        run: |
+          echo "image=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}"
+          echo "digest=${{ steps.build.outputs.digest }}"
+          echo "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }}"
+

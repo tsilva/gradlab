@@ -49,3 +49,25 @@ Keep profile IDs coarse. Create a new profile when the runtime contract changes:
 package pin, observation space or policy family, ROM/state mounts, hardware
 shape, or queue-client compatibility. Seeds, hyperparameters, W&B tags, stop
 criteria, and run descriptions belong in queued jobs.
+
+## Prebuilt Container Runtime
+
+Profiles can use the shared training image from `containers/train/` instead of
+building a venv during SkyPilot setup:
+
+```json
+{
+  "image_id": "docker:ghcr.io/tsilva/rlab/rlab-train@sha256:<digest>",
+  "prebuilt_image": true
+}
+```
+
+In this mode the rendered YAML still mounts ROM/state files, but setup only runs
+the container smoke/import helper. The train runner then starts with:
+
+```bash
+rlab-container-entrypoint python -m rlab.train_runner ...
+```
+
+Use an immutable digest for runs. Tags such as `git-<short-sha>` are for humans;
+the digest is the reproducibility boundary.
