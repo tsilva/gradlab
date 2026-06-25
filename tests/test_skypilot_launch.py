@@ -324,9 +324,26 @@ class SkyPilotLaunchTests(unittest.TestCase):
         self.assertIn("rlab-container-entrypoint rlab-container-smoke", yaml)
         self.assertIn("rlab-container-entrypoint python -m rlab.train_runner", yaml)
         self.assertIn('export RLAB_ROM_DIR="$HOME/roms"', yaml)
+        self.assertNotIn("workdir: .", yaml)
         self.assertNotIn("uv sync", yaml)
         self.assertNotIn("stable-retro-turbo==1.0.0.post21", yaml)
         self.assertNotIn('PY="$HOME/runner-test-venv/bin/python"', yaml)
+
+    def test_render_runner_task_resolves_relative_mounts(self) -> None:
+        repo_root = Path(".")
+        profile = sample_runner_profile()
+
+        yaml = render_runner_task_yaml(profile, INSTANCE_CONFIG, repo_root)
+
+        cwd = Path.cwd().resolve()
+        self.assertIn(
+            f"  ~/roms/TestGame-Platform/rom.bin: {cwd / 'rom.bin'}",
+            yaml,
+        )
+        self.assertIn(
+            f"  ~/roms/TestGame-Platform/Level1-1.state: {cwd / 'states/Level1-1.state'}",
+            yaml,
+        )
 
     def test_preflight_runner_profile_passes_with_required_files(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -141,6 +141,16 @@ SkyPilot runner profiles can opt into this runtime with:
 }
 ```
 
+2026-06-25 BEAST-3 smoke: image
+`ghcr.io/tsilva/rlab/rlab-train@sha256:0016b1322b2f4ba166185de13341871945933f660cf4a2c15b873c2b4ed13fdf`
+successfully ran a SkyPilot train runner on `k8s/rtx4090`, claimed
+`train_job=104` from the queue, and completed W&B run
+`b78_beast3_imageq_smoke_s301_20260625T191227Z`
+(`https://wandb.ai/tsilva/SuperMarioBros-NES/runs/7vhhuns0`). For
+prebuilt-image runner YAML, omit `workdir: .` and render file mounts as
+absolute host paths; otherwise the local SkyPilot API server can resolve mounts
+from its own cwd instead of the repo cwd.
+
 Modal can use the same image by setting `RLAB_MODAL_IMAGE_REF` before invoking
 `modal run`; `RLAB_MODAL_REGISTRY_SECRET` names an optional Modal registry
 secret for private GHCR pulls.
@@ -280,6 +290,15 @@ favored more children.
 - `sky cancel` against `k8s/rtx4090` jobs can fail with `PermissionError: [Errno 13] Permission denied` while trying to `os.killpg`. If that happens, identify the training process group with `sky exec <cluster> 'ps -eo pid,ppid,pgid,stat,cmd | grep <run-name>'`, terminate the process group with `kill -TERM -<pgid>`, verify no trainer remains, then run `sky down -y <cluster>`.
 - The local SkyPilot CLI may not expose a useful general `sky cp`. For small artifact retrieval from Kubernetes-backed clusters, identify the pod on `beast-3` and stream files from `/home/sky/sky_workdir` with `kubectl exec ... -- cat <remote-file> > <local-file>`.
 - The default interactive kube context on the server may not have the `rtx4090` alias. For manual Kubernetes inspection, explicitly use `KUBECONFIG=/home/tsilva/.kube/config`.
+- Local SkyPilot `0.12.3.post1` Kubernetes launches from this Mac can hang in
+  `INIT` after the pod-side runtime files and Ray setup have completed. The
+  working local venv patch used on 2026-06-25 switches small `.runtime_files`
+  and file-mount uploads from rsync-over-`kubectl exec` to `kubectl cp`, uses
+  an absolute `kubectl` binary path, expands `~/sky_logs/...` before writing
+  file-mount logs, and treats a timed-out bootstrap exec as success only after
+  `/tmp/apt_ssh_setup_complete`, `/tmp/ray_skypilot_installation_complete`,
+  `/tmp/env_setup_complete`, and `ray status --address 127.0.0.1:6380` are
+  healthy. Preserve or upstream this before reinstalling the SkyPilot venv.
 
 ### Stable Retro Runtime Notes
 

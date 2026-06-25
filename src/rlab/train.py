@@ -74,6 +74,12 @@ def policy_kwargs_from_args(args) -> dict[str, object]:
     return policy_kwargs
 
 
+def checkpoint_save_frequency(checkpoint_freq: int, n_envs: int) -> int | None:
+    if checkpoint_freq <= 0:
+        return None
+    return max(checkpoint_freq // max(n_envs, 1), 1)
+
+
 def main() -> None:
     args = apply_preset(build_parser().parse_args())
     assert_rom_imported(args.game)
@@ -140,26 +146,32 @@ def main() -> None:
             verbose=1,
         )
 
-    checkpoint_save_freq = max(args.checkpoint_freq // max(args.n_envs, 1), 1)
-    artifact_callback = WandbCheckpointArtifactCallback(
-        wandb_run,
-        args,
-        config,
-        checkpoint_dir,
-        scan_freq=checkpoint_save_freq,
-    )
     callbacks = [
         ThroughputCallback(),
         DoneCounterCallback(wandb_run=wandb_run, default_state=config.state),
         RolloutDiagnosticsCallback(wandb_run=wandb_run),
         RewardComponentDiagnosticsCallback(),
-        CheckpointCallback(
-            save_freq=checkpoint_save_freq,
-            save_path=checkpoint_dir,
-            name_prefix=checkpoint_prefix(config.game),
-        ),
-        artifact_callback,
     ]
+    artifact_callback = None
+    checkpoint_save_freq = checkpoint_save_frequency(args.checkpoint_freq, args.n_envs)
+    if checkpoint_save_freq is not None:
+        artifact_callback = WandbCheckpointArtifactCallback(
+            wandb_run,
+            args,
+            config,
+            checkpoint_dir,
+            scan_freq=checkpoint_save_freq,
+        )
+        callbacks.extend(
+            [
+                CheckpointCallback(
+                    save_freq=checkpoint_save_freq,
+                    save_path=checkpoint_dir,
+                    name_prefix=checkpoint_prefix(config.game),
+                ),
+                artifact_callback,
+            ]
+        )
     if args.ent_coef_final is not None:
         callbacks.append(
             EntropyCoefficientScheduleCallback(
@@ -194,7 +206,8 @@ def main() -> None:
     try:
         model.learn(total_timesteps=args.timesteps, callback=callbacks, progress_bar=True)
         model.save(os.path.join(run_dir, "final_model"))
-        artifact_callback.log_new_checkpoints()
+        if artifact_callback is not None:
+            artifact_callback.log_new_checkpoints()
         for best_model_path in sorted(Path(best_dir).glob("*.zip")):
             log_wandb_model_artifact(
                 wandb_run,

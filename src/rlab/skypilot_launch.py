@@ -277,6 +277,13 @@ def indent_block(text: str, spaces: int = 2) -> str:
     return "\n".join(f"{prefix}{line}" if line else "" for line in text.splitlines())
 
 
+def local_mount_path(repo_root: Path, path: str | Path) -> Path:
+    source = Path(path).expanduser()
+    if source.is_absolute():
+        return source
+    return (repo_root.resolve() / source).resolve()
+
+
 def render_task_yaml(
     manifest: dict[str, Any],
     instance_config: dict[str, Any],
@@ -302,7 +309,7 @@ def render_task_yaml(
     target_description = str(instance.get("infra") or target)
     if not manifest.get("rom_source"):
         raise ValueError("manifest must define rom_source for SkyPilot file_mounts")
-    rom_source = repo_root / str(manifest["rom_source"])
+    rom_source = local_mount_path(repo_root, str(manifest["rom_source"]))
     rom_mount_path = str(manifest.get("rom_mount_path", f"~/roms/{game}/{rom_source.name}"))
     extra_file_mounts = manifest.get("extra_file_mounts", {})
     if extra_file_mounts and not isinstance(extra_file_mounts, dict):
@@ -312,7 +319,7 @@ def render_task_yaml(
         f"  {rom_mount_path}: {rom_source}",
     ]
     for remote_path, local_path in extra_file_mounts.items():
-        file_mount_lines.append(f"  {remote_path}: {repo_root / str(local_path)}")
+        file_mount_lines.append(f"  {remote_path}: {local_mount_path(repo_root, str(local_path))}")
     smoke_options = training_options(manifest, manifest["runs"][0])
     smoke_state = str(smoke_options.get("state", ""))
     smoke_states = _manifest_train_value(smoke_options.get("states", ""))
@@ -588,7 +595,7 @@ def _file_mount_lines(
     ]
     if isinstance(extra_file_mounts, dict):
         for remote_path, local_path in extra_file_mounts.items():
-            file_mount_lines.append(f"  {remote_path}: {repo_root / str(local_path)}")
+            file_mount_lines.append(f"  {remote_path}: {local_mount_path(repo_root, str(local_path))}")
     return file_mount_lines
 
 
@@ -624,7 +631,7 @@ def render_runner_task_yaml(
     memory = str(profile.get("memory", instance.get("memory", "48+")))
     accelerator = str(instance.get("accelerator", "RTX4090"))
     target_description = str(instance.get("infra") or target)
-    rom_source = repo_root / str(profile["rom_source"])
+    rom_source = local_mount_path(repo_root, str(profile["rom_source"]))
     rom_mount_path = str(profile.get("rom_mount_path", f"~/roms/{game}/{rom_source.name}"))
     file_mount_lines = _file_mount_lines(
         game=game,
@@ -848,18 +855,22 @@ PY{smoke_block}"""
     yaml = [
         f"name: {sky_name}",
         "",
-        "workdir: .",
-        "",
-        *file_mount_lines,
-        "",
-        *resource_lines,
-        "",
-        "setup: |",
-        indent_block(setup_block, 2),
-        "",
-        "run: |",
-        indent_block(run_block, 2),
     ]
+    if not prebuilt_image:
+        yaml.extend(["workdir: .", ""])
+    yaml.extend(
+        [
+            *file_mount_lines,
+            "",
+            *resource_lines,
+            "",
+            "setup: |",
+            indent_block(setup_block, 2),
+            "",
+            "run: |",
+            indent_block(run_block, 2),
+        ]
+    )
     return "\n".join(yaml) + "\n"
 
 
