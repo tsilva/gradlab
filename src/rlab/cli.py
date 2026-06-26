@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import argparse
 import json
-from collections.abc import Mapping
+import sys
+from collections.abc import Mapping, Sequence
+from pathlib import Path
 from typing import Any
 
 from rlab.env import EnvConfig
@@ -23,16 +25,6 @@ TRAINING_PRESETS: dict[str, dict[str, Any]] = {
         "run_description": "Tiny local smoke run that checks the rlab training path compiles and saves.",
     },
     "baseline": {},
-    "modal-t4": {
-        "n_envs": 32,
-        "env_threads": 0,
-        "torch_num_threads": 0,
-        "n_steps": 512,
-        "batch_size": 256,
-        "n_epochs": 10,
-        "wandb": True,
-        "run_description": "Modal T4 baseline training shape using benchmarked default concurrency.",
-    },
 }
 
 TRAIN_VALUE_OPTIONS = {
@@ -155,9 +147,72 @@ def build_train_command(options: Mapping[str, Any]) -> list[str]:
     return cmd
 
 
+def explicit_train_arg_dests(parser: argparse.ArgumentParser, argv: Sequence[str]) -> set[str]:
+    option_dests: dict[str, str] = {}
+    for action in parser._actions:
+        for option in action.option_strings:
+            option_dests[option] = action.dest
+    return {
+        option_dests[arg.split("=", 1)[0]]
+        for arg in argv
+        if arg.split("=", 1)[0] in option_dests
+    }
+
+
+def load_train_config_json(path: Path) -> dict[str, Any]:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError(f"--train-config-json must contain a JSON object: {path}")
+    return payload
+
+
+def apply_train_config_json(
+    args: argparse.Namespace,
+    parser: argparse.ArgumentParser,
+    explicit_dests: set[str],
+) -> argparse.Namespace:
+    path = getattr(args, "train_config_json", None)
+    if path is None:
+        return args
+
+    payload = load_train_config_json(Path(path))
+    valid_dests = {
+        action.dest
+        for action in parser._actions
+        if action.dest != argparse.SUPPRESS
+    }
+    unknown = sorted(str(key) for key in payload if key not in valid_dests)
+    if unknown:
+        raise ValueError(
+            f"unknown train config field(s) in {path}: {', '.join(unknown)}",
+        )
+
+    for key, value in payload.items():
+        if key == "train_config_json" or key in explicit_dests:
+            continue
+        if key == "wandb_tags" and isinstance(value, list | tuple):
+            value = ",".join(str(tag) for tag in value)
+        setattr(args, key, value)
+    return args
+
+
+def parse_train_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
+    parser = build_parser()
+    argv_list = list(sys.argv[1:] if argv is None else argv)
+    explicit_dests = explicit_train_arg_dests(parser, argv_list or [])
+    args = parser.parse_args(argv_list)
+    apply_train_config_json(args, parser, explicit_dests)
+    return apply_preset(args)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser_defaults_env = EnvConfig()
     parser = argparse.ArgumentParser(description="Train PPO on an imported Stable Retro game")
+    parser.add_argument(
+        "--train-config-json",
+        type=Path,
+        help="JSON file containing train option values. Explicit CLI flags override file values.",
+    )
     parser.add_argument(
         "--preset",
         choices=sorted(TRAINING_PRESETS),

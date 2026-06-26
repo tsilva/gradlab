@@ -1043,6 +1043,66 @@ def finish_train_job(
             )
 
 
+def record_running_train_result(
+    conn,
+    *,
+    job: Mapping[str, Any],
+    result: Mapping[str, Any],
+) -> None:
+    metrics_json = dict(result.get("metrics_json") or {})
+    artifact_refs = list(result.get("artifact_refs") or [])
+    assert_no_secrets(metrics_json, label="metrics_json")
+    assert_no_secrets(artifact_refs, label="artifact_refs")
+    with conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO train_results (
+                  train_job_id, goal_id, experiment_spec_id, profile_id,
+                  runtime_image_ref, run_target, status, exit_code, run_name,
+                  run_dir, final_model_path, wandb_run_id, wandb_url,
+                  artifact_refs, metrics_json, error
+                )
+                VALUES (
+                  %(train_job_id)s, %(goal_id)s, %(experiment_spec_id)s, %(profile_id)s,
+                  %(runtime_image_ref)s, %(run_target)s, 'running', NULL,
+                  %(run_name)s, %(run_dir)s, %(final_model_path)s,
+                  %(wandb_run_id)s, %(wandb_url)s, %(artifact_refs)s,
+                  %(metrics_json)s, NULL
+                )
+                ON CONFLICT (train_job_id) DO UPDATE SET
+                  runtime_image_ref = EXCLUDED.runtime_image_ref,
+                  run_target = EXCLUDED.run_target,
+                  status = CASE
+                    WHEN train_results.status = 'running' THEN EXCLUDED.status
+                    ELSE train_results.status
+                  END,
+                  run_name = COALESCE(EXCLUDED.run_name, train_results.run_name),
+                  run_dir = COALESCE(EXCLUDED.run_dir, train_results.run_dir),
+                  final_model_path = COALESCE(EXCLUDED.final_model_path, train_results.final_model_path),
+                  wandb_run_id = COALESCE(EXCLUDED.wandb_run_id, train_results.wandb_run_id),
+                  wandb_url = COALESCE(EXCLUDED.wandb_url, train_results.wandb_url),
+                  artifact_refs = EXCLUDED.artifact_refs,
+                  metrics_json = EXCLUDED.metrics_json
+                """,
+                {
+                    "train_job_id": job["id"],
+                    "goal_id": job["goal_id"],
+                    "experiment_spec_id": job["experiment_spec_id"],
+                    "profile_id": job["profile_id"],
+                    "runtime_image_ref": job.get("runtime_image_ref"),
+                    "run_target": job.get("run_target"),
+                    "run_name": result.get("run_name") or job.get("run_name"),
+                    "run_dir": result.get("run_dir"),
+                    "final_model_path": result.get("final_model_path"),
+                    "wandb_run_id": result.get("wandb_run_id"),
+                    "wandb_url": result.get("wandb_url"),
+                    "artifact_refs": json_arg(artifact_refs),
+                    "metrics_json": json_arg(metrics_json),
+                },
+            )
+
+
 def finish_eval_job(
     conn,
     *,
@@ -1701,13 +1761,17 @@ def build_parser() -> argparse.ArgumentParser:
     enqueue = subparsers.add_parser("enqueue-train", help="Create a concrete train job")
     enqueue.add_argument("--goal", required=True, help="Research goal slug")
     enqueue.add_argument("--spec-id", type=int, required=True)
-    enqueue.add_argument("--profile", required=True)
+    enqueue.add_argument("--profile", help="Optional exact train_jobs.profile_id to require.")
     enqueue.add_argument("--runtime-image-ref")
     enqueue.add_argument(
         "--runtime-image-ref-file",
         type=Path,
-        help="JSON artifact or plain-text file containing the immutable runtime image ref.",
+        help="JSON artifact or plain-text file containing the immutable runtime image ref; defaults to latest.",
     )
+    enqueue.add_argument("--latest-image", action="store_true", help="Resolve the latest successful train image digest.")
+    enqueue.add_argument("--image-workflow", default=DEFAULT_IMAGE_WORKFLOW)
+    enqueue.add_argument("--image-branch", default=DEFAULT_IMAGE_BRANCH)
+    enqueue.add_argument("--image-artifact", default=DEFAULT_IMAGE_ARTIFACT)
     enqueue.add_argument("--target", dest="run_target", help="Optional compute target required by this job")
     enqueue.add_argument(
         "--instances",
@@ -1730,13 +1794,17 @@ def build_parser() -> argparse.ArgumentParser:
         help="Create/update a spec file and enqueue one train job per configured seed.",
     )
     enqueue_spec.add_argument("path", type=Path)
-    enqueue_spec.add_argument("--profile", help="Override spec profile_id.")
+    enqueue_spec.add_argument("--profile", help="Optional exact train_jobs.profile_id to require.")
     enqueue_spec.add_argument("--runtime-image-ref")
     enqueue_spec.add_argument(
         "--runtime-image-ref-file",
         type=Path,
-        help="JSON artifact or plain-text file containing the immutable runtime image ref.",
+        help="JSON artifact or plain-text file containing the immutable runtime image ref; defaults to latest.",
     )
+    enqueue_spec.add_argument("--latest-image", action="store_true", help="Resolve the latest successful train image digest.")
+    enqueue_spec.add_argument("--image-workflow", default=DEFAULT_IMAGE_WORKFLOW)
+    enqueue_spec.add_argument("--image-branch", default=DEFAULT_IMAGE_BRANCH)
+    enqueue_spec.add_argument("--image-artifact", default=DEFAULT_IMAGE_ARTIFACT)
     enqueue_spec.add_argument("--target", dest="run_target", help="Override spec run_target.")
     enqueue_spec.add_argument(
         "--instances",
@@ -1870,13 +1938,9 @@ def cmd_add_spec_file(args: argparse.Namespace) -> int:
 
 
 def cmd_enqueue_train(args: argparse.Namespace) -> int:
-    runtime_image_ref = (
-        runtime_image_ref_from_file(args.runtime_image_ref_file)
-        if getattr(args, "runtime_image_ref_file", None)
-        else args.runtime_image_ref
-    )
+    runtime_image_ref = runtime_image_ref_from_args(args, default_latest=True)
     if not runtime_image_ref:
-        raise SystemExit("--runtime-image-ref or --runtime-image-ref-file is required")
+        raise SystemExit("--runtime-image-ref, --runtime-image-ref-file, or latest image resolution is required")
     conn = _connect_from_args(args)
     try:
         goal_id = goal_id_from_slug(conn, args.goal)
@@ -1900,20 +1964,16 @@ def cmd_enqueue_train(args: argparse.Namespace) -> int:
         conn.close()
     target = row.get("run_target") or "any"
     print(
-        f"train_job_id={row['id']} profile={row['profile_id']} "
+        f"train_job_id={row['id']} profile={row['profile_id'] or 'any'} "
         f"runtime_image_ref={row['runtime_image_ref']} target={target}"
     )
     return 0
 
 
 def cmd_enqueue_train_from_spec(args: argparse.Namespace) -> int:
-    runtime_image_ref = (
-        runtime_image_ref_from_file(args.runtime_image_ref_file)
-        if getattr(args, "runtime_image_ref_file", None)
-        else args.runtime_image_ref
-    )
+    runtime_image_ref = runtime_image_ref_from_args(args, default_latest=True)
     if not runtime_image_ref:
-        raise SystemExit("--runtime-image-ref or --runtime-image-ref-file is required")
+        raise SystemExit("--runtime-image-ref, --runtime-image-ref-file, or latest image resolution is required")
     document = load_spec_document(args.path)
     conn = _connect_from_args(args)
     try:
@@ -1931,7 +1991,7 @@ def cmd_enqueue_train_from_spec(args: argparse.Namespace) -> int:
     for row in rows:
         target = row.get("run_target") or "any"
         print(
-            f"train_job_id={row['id']} profile={row['profile_id']} "
+            f"train_job_id={row['id']} profile={row['profile_id'] or 'any'} "
             f"run_name={row.get('run_name') or ''} target={target}"
         )
     return 0

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 import tempfile
 import unittest
@@ -36,6 +37,7 @@ from rlab.callbacks import (
 )
 from rlab.cli import build_parser as build_train_parser
 from rlab.cli import build_train_command
+from rlab.cli import parse_train_args
 from rlab.env import (
     EnvConfig,
     StickyAction,
@@ -53,7 +55,11 @@ from rlab.env_config import env_config_from_args, parse_done_on_info, parse_stat
 from rlab.eval_metrics import episode_rank, is_level_complete
 from rlab.eval_metrics import RetroEvalCallback
 from rlab.eval_runner import evaluate_model_episodes
-from rlab.metric_names import metric_path_segment
+from rlab.metric_names import (
+    TRAIN_DONE_LEVEL_CHANGE_FROM_RATE_MEAN,
+    TRAIN_DONE_LEVEL_CHANGE_FROM_RATE_MIN,
+    metric_path_segment,
+)
 from rlab.play import build_parser as build_play_parser
 from rlab.play import model_observation
 from rlab.play import playback_should_end_episode
@@ -173,6 +179,38 @@ class EnvConfigFromArgsTests(unittest.TestCase):
                 "level_change": (("levelHi", "levelLo"), "change"),
             },
         )
+
+    def test_train_config_json_applies_defaults_and_cli_overrides(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "train_config.json"
+            path.write_text(
+                json.dumps(
+                    {
+                        "game": "SuperMarioBros-Nes-v0",
+                        "state": "Level1-2",
+                        "timesteps": 1024,
+                        "states": ["Level1-1", "Level1-2"],
+                        "wandb_tags": ["from-json", "config-file"],
+                    },
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            args = parse_train_args(
+                [
+                    "--train-config-json",
+                    str(path),
+                    "--timesteps",
+                    "2048",
+                ],
+            )
+
+        self.assertEqual(args.game, "SuperMarioBros-Nes-v0")
+        self.assertEqual(args.state, "Level1-2")
+        self.assertEqual(args.timesteps, 2048)
+        self.assertEqual(args.states, ["Level1-1", "Level1-2"])
+        self.assertEqual(args.wandb_tags, "from-json,config-file")
 
     def test_parse_done_on_info_rejects_invalid_shapes(self) -> None:
         invalid_values = [
@@ -1964,6 +2002,7 @@ class DoneCounterCallbackTests(unittest.TestCase):
             "train/done/level_change/from/0-1/ep_window/rate",
             model.logger.records,
         )
+        self.assertNotIn(TRAIN_DONE_LEVEL_CHANGE_FROM_RATE_MIN, model.logger.records)
 
         for index in range(150, 225):
             callback.num_timesteps = index
@@ -1987,6 +2026,8 @@ class DoneCounterCallbackTests(unittest.TestCase):
             model.logger.records["train/done/level_change/from/0-1/ep_window/rate"],
             0.25,
         )
+        self.assertEqual(model.logger.records[TRAIN_DONE_LEVEL_CHANGE_FROM_RATE_MIN], 0.25)
+        self.assertEqual(model.logger.records[TRAIN_DONE_LEVEL_CHANGE_FROM_RATE_MEAN], 0.375)
 
         callback.num_timesteps = 225
         callback.locals = {
@@ -2015,6 +2056,7 @@ class DoneCounterCallbackTests(unittest.TestCase):
             model.logger.records["train/done/level_change/from/0-1/ep_window/rate"],
             0.25,
         )
+        self.assertEqual(model.logger.records[TRAIN_DONE_LEVEL_CHANGE_FROM_RATE_MIN], 0.25)
 
     def test_logs_done_metrics_to_wandb(self) -> None:
         class FakeLogger:

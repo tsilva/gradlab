@@ -1,11 +1,10 @@
 {
   "schema_version": 1,
   "updated_at": "2026-06-26",
-  "purpose": "Keep local and paid compute full without mixing incomparable runtime envelopes.",
+  "purpose": "Keep beast-2 and beast-3 queue capacity full without mixing incomparable runtime envelopes.",
   "defaults": {
     "runtime_image_ref": "digest-pinned GHCR train image from rlab-train-image.json",
     "queue_reconcile_interval_seconds": 30,
-    "empty_paid_runner_action": "exit_with_once_or_tear_down",
     "manual_shell_trainers": "forbidden_for_comparable_results"
   },
   "lanes": [
@@ -40,16 +39,6 @@
       "env_threads": 2,
       "use_for": ["cheap_screen", "small_ablation"],
       "reserve_workers": 0
-    },
-    {
-      "name": "runpod-rtx4090-burst",
-      "target": "runpod-rtx4090",
-      "manager": "rlab-skypilot",
-      "max_runner_workers": 1,
-      "env_threads": 2,
-      "use_for": ["burst_capacity"],
-      "launch_only_when_pending_jobs_match_profile": true,
-      "notes": "Use --once for empty queues so a billable pod does not idle."
     }
   ],
   "policy_checks": [

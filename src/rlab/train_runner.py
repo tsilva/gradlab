@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import queue
 import re
@@ -23,8 +24,8 @@ from rlab.campaign import (
     heartbeat_train_job,
     new_worker_id,
     print_status,
+    record_running_train_result,
 )
-from rlab.cli import build_train_command
 from rlab.wandb_artifacts import artifact_download_dir, download_model_artifact
 
 
@@ -77,11 +78,17 @@ def normalize_train_config(
     return config
 
 
-def train_command_for_job(job: dict[str, Any]) -> list[str]:
-    cmd = build_train_command(normalize_train_config(job))
-    if cmd[:3] != ["python", "-m", "rlab.train"]:
-        raise ValueError("unexpected train command prefix")
-    return [sys.executable, *cmd[1:]]
+def write_train_config_file(job: dict[str, Any], path: Path) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(normalize_train_config(job), indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    return path
+
+
+def train_command_for_job(config_path: Path) -> list[str]:
+    return [sys.executable, "-m", "rlab.train", "--train-config-json", str(config_path)]
 
 
 def read_text_file(path: Path) -> str | None:
@@ -186,9 +193,11 @@ def run_training_job(
     log_dir: Path,
     dry_run: bool = False,
 ) -> str:
-    command = train_command_for_job(job)
     log_dir.mkdir(parents=True, exist_ok=True)
-    log_path = log_dir / f"train_job_{job['id']}_{uuid.uuid4().hex[:8]}.log"
+    log_stem = f"train_job_{job['id']}_{uuid.uuid4().hex[:8]}"
+    config_path = write_train_config_file(job, log_dir / f"{log_stem}.config.json")
+    command = train_command_for_job(config_path)
+    log_path = log_dir / f"{log_stem}.log"
     print(f"train_job={job['id']} command={' '.join(command)}", flush=True)
 
     if dry_run:
@@ -268,6 +277,22 @@ def run_training_job(
                         break
                     if heartbeat.get("drain_requested"):
                         drain_after_job = True
+                    try:
+                        running_result = collect_result_metadata(job, log_path)
+                        if running_result.get("wandb_url"):
+                            record_running_train_result(
+                                conn,
+                                job=job,
+                                result=running_result,
+                            )
+                    except Exception as exc:
+                        if hasattr(conn, "rollback"):
+                            conn.rollback()
+                        print(
+                            f"warning: failed to record running train metadata "
+                            f"job={job['id']}: {exc}",
+                            flush=True,
+                        )
         finally:
             if process.poll() is None:
                 terminate_process(process)

@@ -25,6 +25,7 @@ from rlab.metric_names import (
     TRAIN_REWARD_COMPONENT_ROOT,
     TRAIN_REWARD_SHARE_ROOT,
     stat_metric,
+    train_done_from_rate_metric,
     train_done_value_metric,
     train_done_reason_metric,
 )
@@ -379,11 +380,36 @@ class DoneCounterCallback(BaseCallback):
         return tuple(values)
 
     def record_ep_window_rates(self) -> dict[str, float]:
-        return {
-            self.done_ep_window_rate_metric(metric): sum(window) / len(window)
+        detail_rates = {
+            metric: sum(window) / len(window)
             for metric, window in sorted(self.detail_episode_windows.items())
             if len(window) >= self.ep_window_size
         }
+        payload = {
+            self.done_ep_window_rate_metric(metric): rate for metric, rate in detail_rates.items()
+        }
+
+        rates_by_reason: dict[str, list[float]] = {}
+        for metric, rate in detail_rates.items():
+            reason = self.done_detail_metric_reason(metric)
+            if reason is not None:
+                rates_by_reason.setdefault(reason, []).append(rate)
+
+        for reason, rates in sorted(rates_by_reason.items()):
+            if len(rates) < 2:
+                continue
+            payload[train_done_from_rate_metric(reason, "min")] = min(rates)
+            payload[train_done_from_rate_metric(reason, "mean")] = float(np.mean(rates))
+        return payload
+
+    @staticmethod
+    def done_detail_metric_reason(metric: str) -> str | None:
+        prefix = "train/done/"
+        marker = "/from/"
+        if not metric.startswith(prefix) or marker not in metric:
+            return None
+        reason, _value = metric.removeprefix(prefix).split(marker, 1)
+        return reason or None
 
     def record_metrics(self) -> dict[str, int | float]:
         payload: dict[str, int | float] = {TRAIN_DONE_ALL: self.done_count}

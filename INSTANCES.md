@@ -1,532 +1,141 @@
 # GPU Instances
 
-Last updated: 2026-06-26
-
-Use this file as the repo-local source of truth for known GPU instances, launch targets, benchmark-backed concurrency, and operational gotchas. Re-check live availability before launching, but do not rediscover these basics from scratch unless the facts here fail.
+This repo currently supports local Docker fleet runners only. Training jobs are
+created in the campaign DB with `rlab-campaign`; Mac-side `rlab-fleet` reconciles
+Docker containers on `beast-3` and `beast-2` over SSH. Do not use provider
+launchers for this project while the beast path is being hardened.
 
 ## Quick Choice
 
-| Use case | Target | Default shape |
+| Use case | Target | Shape |
 | --- | --- | --- |
-| Highest-throughput Mario PPO screening | `rlab-fleet` on `beast-3` | 5 Docker runner containers, `env_threads=4` |
-| Lower-contention RTX4090 confirmation batch | `rlab-fleet` on `beast-3` | 3-4 Docker runner containers, `env_threads=4` |
-| Small-GPU batch screening | `rlab-fleet` on `beast-2` | 4 Docker runner containers, `env_threads=2` |
-| Faster individual turnaround on RTX2060 | `rlab-fleet` on `beast-2` | 2 Docker runner containers, `env_threads=4` |
-| Modal baseline GPU launch | `modal-t4` | 1 child, `n_envs=32`, `env_threads=0` |
+| Highest-throughput Mario PPO screening | `rtx4090` / `beast-3` | 5 Docker runner containers, `env_threads=4` |
+| Lower-contention RTX4090 confirmation | `rtx4090` / `beast-3` | 3-4 Docker runner containers, `env_threads=4` |
+| Small-GPU batch screening | `rtx2060` / `beast-2` | 4 Docker runner containers, `env_threads=2` |
+| Faster RTX2060 turnaround | `rtx2060` / `beast-2` | 2 Docker runner containers, `env_threads=4` |
+| Smoke, debugging, playback | `local-macbook` | direct local CLI |
 
-Refresh these defaults when changing `n_envs`, `n_steps`, model size, deterministic CUDA flags, runtime package version, W&B/artifact behavior, or target node CPU shape.
+Machine-readable target defaults live in `experiments/instances.json`. Fleet host
+connection and mount details live in `experiments/fleet.json`. Scheduling lanes
+and policy checks live in `experiments/policies/capacity_policy.json`.
 
-## Unified Compute Targets
+## Standard Workflow
 
-Default SkyPilot control plane for non-beast providers: the Mac-local SkyPilot
-API server at `http://127.0.0.1:46580`. `beast-3` and `beast-2` are no longer
-SkyPilot targets or control-plane hosts. They are Docker/GPU hosts controlled by
-the Mac-side fleet manager.
-
-Local Mac control-plane setup as of 2026-06-24:
-
-- `~/.sky/config.yaml` no longer pins `api_server.endpoint`; SkyPilot uses the
-  default local endpoint.
-- `sky api start --host 127.0.0.1` starts the local API/dashboard server.
-- `sky check runpod` succeeds from the local API server using local
-  `~/.runpod/config.toml`.
-- Historical local kubeconfig contexts for the beast hosts may still exist for
-  cleanup/inspection, but do not use SkyPilot to launch work there.
-- Use `ssh tsilva@beast-3` for `beast-3` and
-  `ssh -o HostKeyAlias=beast-2 tsilva@192.168.133.26` for `beast-2`.
-
-Machine-readable defaults live in `experiments/instances.json`. Local beast
-targets are marked `kind: fleet`, so `rlab-skypilot` refuses to render or launch
-them. Use `rlab-compute` for provider-neutral direct launch manifests and
-`rlab-skypilot` only for SkyPilot-backed providers such as RunPod.
-
-Local queue runners on `beast-3` and `beast-2` are managed from the MacBook by
-`rlab-fleet`, with host-level defaults in `experiments/fleet.json`. The beast
-hosts are plain Docker/GPU targets: they do not poll the queue, run a fleet
-service, or make scheduling decisions. The Mac-side fleet manager reads the
-campaign queue and reconciles Docker containers over SSH; it does not schedule
-jobs and does not inspect RL config. Future RunPod support may still use
-SkyPilot at the provider boundary, then hand a provisioned host to the Docker
-reconciler.
-
-Current target names:
-
-| Target | Alias examples | Infra | Default shape |
-| --- | --- | --- | --- |
-| `rtx4090` | `beast-3` | Docker fleet on beast-3 | 5 children, `env_threads=4` |
-| `rtx2060` | `beast-2` | Docker fleet on beast-2 | 4 children, `env_threads=2` |
-| `runpod-rtx4090` | `runpod4090` | `runpod` | 1 child, `env_threads=2` |
-| `runpod-l4` | `l4` | `runpod` | 1 child, `env_threads=2` |
-| `runpod-t4` | `t4` | `runpod` | unavailable in current SkyPilot RunPod catalog |
-| `modal-t4` | `modal`, `t4-modal` | Modal | 1 child, `n_envs=32`, `env_threads=0` |
-| `local-macbook` | `macbook`, `local` | local CLI only | 1 child, no SkyPilot launch |
-
-Examples:
+Queue work through campaign specs or explicit train jobs:
 
 ```bash
-UV_CACHE_DIR=.uv-cache uv run rlab-compute targets
+UV_CACHE_DIR=.uv-cache uv run rlab-campaign enqueue-train-from-spec \
+  experiments/specs/mario-level1/<spec>.json
+```
 
-UV_CACHE_DIR=.uv-cache uv run rlab-compute launch \
-  experiments/launches/rlab_rtx4090.example.json \
-  --target modal-t4
+Inspect and reconcile local capacity from the MacBook:
 
-UV_CACHE_DIR=.uv-cache uv run rlab-skypilot render-runner \
-  experiments/runner_profiles/mario_ppo_post20_task_conditioned_rtx4090.example.json \
-  --target runpod-l4 \
-  --output sky_train_runner_runpod_l4.yaml
-
+```bash
+UV_CACHE_DIR=.uv-cache uv run rlab-fleet policy
+UV_CACHE_DIR=.uv-cache uv run rlab-fleet status
+UV_CACHE_DIR=.uv-cache uv run rlab-fleet ps
 UV_CACHE_DIR=.uv-cache uv run rlab-fleet plan
 UV_CACHE_DIR=.uv-cache uv run rlab-fleet reconcile --execute
 ```
 
-RunPod support requires both the local client and the active SkyPilot API server
-environment to have `skypilot[runpod]` installed and a valid
-`~/.runpod/config.toml`. As of the first RunPod catalog check on 2026-06-24,
-SkyPilot resolved `RTX4090` on RunPod to `1x_RTX4090_SECURE` with 5 vCPUs,
-29 GB host memory, and about `$0.690/hr`; the repo defaults for RunPod are
-therefore conservative until benchmarked.
-
-On 2026-06-24, `sky check runpod` initially failed because the active
-beast-3 SkyPilot API server venv lacked the RunPod extra and server-side
-RunPod config. Installing `skypilot[runpod]==0.12.3.post1` into
-`/home/tsilva/.local/share/skypilot/venv` and copying the local
-`~/.runpod/config.toml` to beast-3 enabled RunPod.
-
-The same day, SkyPilot's RunPod catalog returned no T4 offerings:
-`sky gpus list T4 --infra runpod --all-regions` reported `Resources 'T4' not
-found on RunPod`. Do not use `runpod-t4` unless a future catalog refresh shows
-T4 availability again.
-
-RunPod L4 did smoke successfully after transient per-region capacity misses:
-`rlab-runpod-l4-smoke` eventually provisioned `1x_L4_SECURE` in the US at about
-`$0.390/hr`, printed `NVIDIA L4, 23034 MiB, 580.159.03`, Python `3.10.12`, and
-`torch_available False` in the base image. The cluster was torn down with
-`sky down -y rlab-runpod-l4-smoke`.
-
-RunPod `docker:runpod/base:1.0.2-ubuntu2204` tasks run as `root`, expose the
-SkyPilot runtime at `$HOME/skypilot-runtime/bin/python` (`/root/...`), and may
-define `sudo` as an empty alias. Do not render setup commands that prefer
-`sudo -n ...` just because `sudo` appears in command lookup; use direct
-`apt-get` when `id -u` is `0`, and resolve the bootstrap Python from
-`${SKY_RUNTIME_DIR:-$HOME}/skypilot-runtime/bin/python` with `/home/sky/...` as
-only a fallback.
-
-Modal support is wired through `rlab-compute launch --target modal-t4` for
-direct launch manifests. It dispatches to `modal run
-src/rlab/modal_app.py::launch_manifest`, uses the same manifest training fields
-as local/SkyPilot runs, and applies the target's `gpu`, `cpu`, and `memory_mib`
-defaults through Modal `with_options`. ROMs must already be uploaded to the
-`rlab-data` Modal volume with `modal run src/rlab/modal_app.py::upload_roms`.
-
-## Prebuilt Train Runtime Images
-
-The shared Docker/OCI runtime lives in `containers/train/` and is published by
-`.github/workflows/rlab-train-image.yml` to GitHub Container Registry:
-
-```text
-ghcr.io/tsilva/rlab/rlab-train:git-<short-sha>
-ghcr.io/tsilva/rlab/rlab-train@sha256:<digest>
-```
-
-Use the digest form for real runs. The image contains repo code, `uv.lock`
-dependencies, Stable Retro system libraries, and `rlab-*` entrypoints. It must
-not contain `.env`, ROMs, checkpoints, W&B files, or run outputs.
-
-SkyPilot runner profiles can opt into this runtime with:
-
-```json
-{
-  "image_id": "docker:ghcr.io/tsilva/rlab/rlab-train@sha256:<digest>",
-  "prebuilt_image": true
-}
-```
-
-Historical 2026-06-25 BEAST-3 SkyPilot smoke, superseded by the Docker fleet
-policy on 2026-06-26: image
-`ghcr.io/tsilva/rlab/rlab-train@sha256:0016b1322b2f4ba166185de13341871945933f660cf4a2c15b873c2b4ed13fdf`
-successfully ran a SkyPilot train runner on `k8s/rtx4090`, claimed
-`train_job=104` from the queue, and completed W&B run
-`b78_beast3_imageq_smoke_s301_20260625T191227Z`
-(`https://wandb.ai/tsilva/SuperMarioBros-NES/runs/7vhhuns0`). For
-prebuilt-image runner YAML, omit `workdir: .` and render file mounts as
-absolute host paths; otherwise the local SkyPilot API server can resolve mounts
-from its own cwd instead of the repo cwd.
-
-Historical 2026-06-26 BEAST-3 SkyPilot latest-image smoke, superseded by the
-Docker fleet policy later the same day: image
-`ghcr.io/tsilva/rlab/rlab-train@sha256:7c7fb9e1a88b2dd87943486555ebb87a145a3c25516d121928a72b979f322560`
-successfully launched on `k8s/beast-3` via cluster `rlab-b81-image-4090`.
-Kubernetes pulled the digest, started pod `rlab-b81-image-4090-922ea937-head`,
-and the runner job passed container smoke with Python `3.14.6`,
-`stable-retro-turbo==1.0.0.post21`, Torch `2.12.0`, CUDA available on
-`NVIDIA GeForce RTX 4090`, and
-`uv_lock_sha256=36f9438f6c4bdbda12f5336fa1c6b2b4fb0f59f300ea8a7cf713bfffbdd49feb`.
-The first runner attempt failed because its `status_goal` used a nonexistent
-`-v2` goal; after restoring the existing `mario-l11-l12-post21-image-50x50`
-goal, job `2` exited successfully with no pending `v2` train jobs to claim.
-
-2026-06-26 RunPod smoke: image
-`ghcr.io/tsilva/rlab/rlab-train@sha256:10af05929528b5895c0660830497ecc78adf42e4cbb91742388b0d980315d3ca`
-successfully ran on `runpod-rtx4090` via cluster
-`sandbox-sb3-b79-runpod-image-best-4090` in `EU-CZ-1`. The runner first idled
-because no matching train job was pending; after enqueueing smoke
-`train_job=111`, it completed W&B run
-`b81_runpod_image_smoke_s921_20260626T102808Z`
-(`https://wandb.ai/tsilva/SuperMarioBros-NES/runs/caw950xw`) and logged the
-final model as an R2-backed reference artifact. The one-off RunPod cluster was
-then torn down with `sky down -y sandbox-sb3-b79-runpod-image-best-4090`.
-Before launching future queue runners, confirm there is a pending train job for
-the exact `profile_id`, or use `--once` so an empty queue does not leave an idle
-billable pod polling.
-
-Modal can use the same image by setting `RLAB_MODAL_IMAGE_REF` before invoking
-`modal run`; `RLAB_MODAL_REGISTRY_SECRET` names an optional Modal registry
-secret for private GHCR pulls.
-
-## W&B Artifact Storage: Cloudflare R2
-
-Use Cloudflare R2 as the default byte store for W&B model artifacts so W&B keeps
-metrics, config, aliases, lineage, and reference metadata instead of storing every
-checkpoint zip directly.
-
-Current repo-local `.env` is expected to define:
-
-```text
-AWS_ACCESS_KEY_ID
-AWS_SECRET_ACCESS_KEY
-AWS_S3_ENDPOINT_URL
-AWS_REGION
-CHECKPOINT_BUCKET_URI
-WANDB_API_KEY
-```
-
-The active smoke-tested storage target is the bucket referenced by
-`CHECKPOINT_BUCKET_URI`. As of 2026-06-17, the R2 smoke test succeeded: bucket
-exists, object upload/download worked, and the smoke object was deleted.
-
-Training support:
-
-- `rlab.train` reads `--wandb-artifact-storage-uri`, or falls back to
-  `WANDB_ARTIFACT_STORAGE_URI`, then `CHECKPOINT_BUCKET_URI`.
-- When that URI is set, checkpoint/final/best model zips upload to R2/S3 and W&B
-  logs reference artifacts with the existing aliases such as `latest`, `final`,
-  `best`, and `step-<N>`.
-- Artifact objects are stored below `<game-id>/...` under the configured bucket.
-  With the current R2 bucket this means `s3://wandb/<game-id>/...`. If the
-  configured URI already ends with `<game-id>`, training uses it as-is;
-  otherwise it appends that game-specific segment to the configured bucket/prefix.
-- Without that URI, W&B artifact behavior remains direct file upload.
-
-Preferred SkyPilot launch pattern from this repo:
+For a long-running local reconciliation loop:
 
 ```bash
-(
-  set -a
-  . ./.env
-  set +a
-
-  sky launch -c <cluster-name> -y <task.yaml> \
-    --env AWS_REGION \
-    --env AWS_S3_ENDPOINT_URL \
-    --env CHECKPOINT_BUCKET_URI \
-    --secret AWS_ACCESS_KEY_ID \
-    --secret AWS_SECRET_ACCESS_KEY \
-    --secret WANDB_API_KEY
-)
+UV_CACHE_DIR=.uv-cache uv run rlab-fleet reconcile --execute --watch --interval 30
 ```
 
-This passes only the bucket config and secrets needed by the task. Older task
-YAMLs often mount `.env` to `~/.env` and source it in `run`; that works, but
-prefer `--env`/`--secret` for new tasks and remove the `.env` file mount when
-editing those YAMLs.
-
-Local R2 smoke test:
+After publishing a new train image, roll active hosts to the latest successful
+digest:
 
 ```bash
-(
-  set -a
-  . ./.env
-  set +a
-
-  uv --cache-dir .uv-cache run python scripts/setup_r2_bucket.py \
-    "$(python - <<'PY'
-import os
-from urllib.parse import urlparse
-print(urlparse(os.environ["CHECKPOINT_BUCKET_URI"]).netloc)
-PY
-)" \
-    --prefix "$(python - <<'PY'
-import os
-from urllib.parse import urlparse
-print(urlparse(os.environ["CHECKPOINT_BUCKET_URI"]).path.strip("/") or "wandb/_smoke")
-PY
-)"
-)
+UV_CACHE_DIR=.uv-cache uv run rlab-fleet ensure-latest --execute
 ```
 
-## RTX4090: beast-3
-
-### Access
-
-- Current role: Docker fleet host managed from the MacBook with `rlab-fleet`.
-- Do not run SkyPilot API servers, SkyPilot job controllers, or SkyPilot
-  training pods on this host.
-- GPU host SSH: `ssh tsilva@beast-3`
-- Historical Kubernetes API endpoint from the Mac: `https://beast-3:6443`
-- Historical beast-3 SkyPilot dashboard/API server endpoints:
-  `http://192.168.0.151:46580` and `http://100.118.135.59:46580`.
-  These should stay disabled for the Docker fleet flow.
-- SkyPilot user state, `.sky`, `.kube`, user services, and `sky_logs` were
-  removed from the host account on 2026-06-26.
-- Kubernetes/k3s was uninstalled on 2026-06-26; no k3s/kube processes,
-  services, binaries, kube user config, or Kubernetes client commands
-  (`kubectl`, `k3s`, `helm`) should remain. Inert root-owned leftovers observed
-  after uninstall: `/etc/rancher/node/password` and `/var/lib/rancher`.
-- Docker Engine `docker.io 29.1.3-0ubuntu4.1` is installed and active. The
-  fleet config uses `sudo -n docker` for this host instead of adding `tsilva`
-  to the persistent `docker` group. NVIDIA Container Toolkit is configured, and
-  `docker run --gpus all ... nvidia-smi` succeeds.
-- GPU: NVIDIA GeForce RTX 4090, 24 GB VRAM
-- Observed driver: `595.71.05`, reporting CUDA support up to `13.2`
-
-### Mario PPO Scheduling
-
-Benchmarked for the current near-best Mario PPO shape: `n_envs=16`, `n_steps=512`, `batch_size=512`, `n_epochs=10`, `stable-retro-turbo==1.0.0.post10`, Torch `2.12.0+cu130`, 262,144 timesteps per child, W&B logging enabled, model artifact uploads disabled.
-
-| Shape | Aggregate wall fps | Avg GPU util | Max VRAM | Notes |
-| --- | ---: | ---: | ---: | --- |
-| 1 child, `env_threads=4` | 2,881 | 16.7% | 990 MiB | Single trainer severely underuses the GPU. |
-| 3 children, `env_threads=4` | 5,578 | 44.3% | 2,604 MiB | Good lower-contention confirmation shape. |
-| 4 children, `env_threads=4` | 5,825-5,858 | ~52% | ~3,412 MiB | Good confirmation/screening compromise. |
-| 5 children, `env_threads=4` | 6,242-6,271 | 57-58% | 4,219 MiB | Best measured aggregate throughput. |
-| 5 children, `env_threads=2` | 5,878 | 51.9% | not recorded here | Lower contention but about 6% slower. |
-| 5 children, `env_threads=1` | 4,615 | 37.0% | not recorded here | Underfeeds rollout collection. |
-
-Default to 5 children with `env_threads=4` for screening queues. Use 3-4
-children with `env_threads=4` when individual run latency, lower CPU
-contention, or easier debugging matters more than total aggregate throughput.
-Do not launch more than 5 children for this Mario PPO shape unless explicitly
-running a short concurrency benchmark. On 2026-06-19, a live 6-child B33
-reproduction used about 10 of 12 requested CPU cores and reached about 6.1k
-aggregate fps, which was not better than the recorded 5-child results; the
-extra child mainly increased CPU/env contention.
-
-2026-06-19 update: the B34 strict `100/100` confirmation shape
-(`n_envs=16`, `n_steps=512`, `batch_size=512`, `n_epochs=10`, W&B artifact
-uploads enabled, checkpointing every 100k) OOMKilled with three concurrent
-children under the 48 GB Kubernetes memory request, while a 64 GB request was
-unschedulable. Two concurrent children completed cleanly. Until memory use is
-re-benchmarked or reduced, use two concurrent children for this exact
-confirmation/screening shape even though older short throughput benchmarks
-favored more children.
-
-### Operational Notes
-
-- `rlab-fleet setup-host --host beast-3 --execute` installed Docker after
-  non-interactive sudo was enabled, configured the NVIDIA Docker runtime,
-  created `/home/tsilva/rlab/{runs,logs,fleet}`, `/home/tsilva/roms`, and
-  `/home/tsilva/rlab/.env.runner`, then completed the digest-pinned train image
-  smoke with `rlab_container_smoke=ok` and
-  `torch_cuda_device=NVIDIA GeForce RTX 4090`.
-- If cleaning residual k3s state, remove `/etc/rancher` and
-  `/var/lib/rancher` only after Docker Engine is installed/active.
-- Historical note: local SkyPilot `0.12.3.post1` Kubernetes launches from this Mac can hang in
-  `INIT` after the pod-side runtime files and Ray setup have completed. The
-  working local venv patch used on 2026-06-25 switches small `.runtime_files`
-  and file-mount uploads from rsync-over-`kubectl exec` to `kubectl cp`, uses
-  an absolute `kubectl` binary path, expands `~/sky_logs/...` before writing
-  file-mount logs, and treats a timed-out bootstrap exec as success only after
-  `/tmp/apt_ssh_setup_complete`, `/tmp/ray_skypilot_installation_complete`,
-  `/tmp/env_setup_complete`, and `ray status --address 127.0.0.1:6380` are
-  healthy. Preserve or upstream this before reinstalling the SkyPilot venv.
-
-### Stable Retro Runtime Notes
-
-- As of 2026-06-25, use `stable-retro-turbo==1.0.0.post21` for new local,
-  Modal, and SkyPilot training/eval work. The repo dependency pin, lockfile,
-  SkyPilot launcher default, and reusable launch manifests are expected to stay
-  on post21 unless a future runtime migration is explicitly benchmarked.
-  Post21 adds structured native `done_on_info` payloads with previous/next
-  info-variable values. Post20 added native `done_on_info` termination in
-  `StableRetroNativeVecEnv`;
-  Mario mixed-level training should push `life_loss` and `level_change`
-  termination into native per-lane autoresets instead of Python wrapper-level
-  global resets.
-- On 2026-06-23, a short RTX4090 campaign speed gate retried reset-time
-  Level1-1/Level1-2 probability sampling with `state_probs=0.5,0.5`,
-  `stable-retro-turbo==1.0.0.post16`, `n_envs=16`, and one queued child. It
-  was canceled at iteration 3 because actual PPO-loop throughput was not faster
-  than historical B50: `time/fps=174`, `fps_instant=126`, while rollout-only
-  throughput was `726-808 fps`. This measured the current rlab wrapper
-  path, which still routed `config.states` through `MixedStateNativeVecEnv`.
-  Do not use this run as evidence against stable-retro-turbo native mixed-state
-  support.
-- Later on 2026-06-23, B65 reran that same short queue speed gate after the
-  code was changed to always pass mixed `states` and optional `state_probs`
-  directly into `StableRetroNativeVecEnv`. Train job `38`, W&B run `63smvp1y`,
-  completed 262,144 timesteps on `k8s/rtx4090` with final `time/fps=3307`,
-  `time/fps_instant=3286`, and `time/rollout_fps=4200`. Conclusion: native
-  `StableRetroNativeVecEnv` fixed-slot and reset-time `states`/`state_probs`
-  sampling are the supported mixed-state path going forward; the B64 slowdown
-  measured sandbox wrapper overhead, not stable-retro-turbo native mixed-state
-  support.
-- On 2026-06-23, local isolated testing of `stable-retro-turbo==1.0.0.post18`
-  validated the active-state API for task conditioning. `initial_state_names`
-  is a tuple, `active_state_indices()` returns the same read-only `int32`
-  NumPy view on repeated calls, explicit sampled resets mutate the view in
-  place, and automatic lane resets update it before the next observation is
-  consumed. Tested modes: single state, fixed per-lane states, weighted
-  sampling via `state={"Level1-1": 0.5, "Level1-2": 0.5}`, and the repo's
-  current `states=["Level1-1", "Level1-2"], state_probs=[0.5, 0.5]` form.
-  The documented `state_probs={"Level1-1": 0.5, "Level1-2": 0.5}` constructor
-  form failed with `ValueError: state_probs requires states`; use `state={...}`
-  or `states` plus `state_probs` until that API/documentation mismatch is fixed.
-  In fixed per-lane mode, repeated state names produce repeated
-  `initial_state_names` entries with distinct active indices, so task
-  conditioning should map active names to unique task ids rather than directly
-  one-hotting slot indices when lanes intentionally duplicate a state.
-- Later on 2026-06-23, B66 trained five queued RTX4090 seeds with
-  `stable-retro-turbo==1.0.0.post18`, native reset-time 50/50 Level1-1/Level1-2
-  sampling, and SB3 `MultiInputPolicy` task conditioning from the active-state
-  one-hot vector. The setup smoke passed on the remote RTX4090, and throughput
-  stayed healthy at about `1180-1196` final `time/fps` per child, roughly
-  `5.9k` aggregate PPO fps for five concurrent children. All five runs finished
-  5,005,312 timesteps and logged final R2/W&B artifacts, but did not solve the
-  mixed-level criterion: final training completion rates were seed154 `0.45`,
-  seed155 `0.47`, seed156 `0.60`, seed157 `0.65`, and seed158 `0.49`. Meaningful
-  peak post-warmup rates were stronger (`0.71-0.94`) but not stable. Conclusion:
-  one-hot task conditioning is supported and performant, but this B50-style
-  sampled mixed-start recipe still needs additional changes before confirmation
-  or eval promotion.
-- On 2026-06-23, the repo was updated for the post19 native start-state API.
-  `StableRetroNativeVecEnv` now receives only the single `state=` constructor
-  argument: a string for one start state, a list for fixed per-lane states, or a
-  state-to-weight dict for reset-time sampling. The repo CLI and metadata still
-  accept `--states` and `--state-probs`, but the native boundary must not pass
-  removed `states=` or `state_probs=` kwargs.
-- The previous default `stable-retro-turbo==1.0.0.post14` was validated for
-  native-vector life-loss termination on `SuperMarioBros-Nes-v0` and remains
-  useful as a historical baseline for B39/B40/B44 comparisons.
-- On 2026-06-19, `stable-retro-turbo==1.0.0.post14` was validated for
-  native-vector life-loss termination on `SuperMarioBros-Nes-v0`: random-action
-  vector probes emitted one-slot `done`s with `life_loss=True`, `died=True`,
-  `terminal_observation`, and no wrapper-level `global_reset`. This resolves the
-  old first-life-loss vector reset concern for Mario when the repo uses the
-  native `terminate_on_life_loss`/`life_variable="lives"` path.
-- On 2026-06-19, Modal CPU eval throughput for W&B artifact
-  `tsilva/SuperMarioBros-NES/b31_post12_loosekl_5m_stop100ep100_clip015_targetkl012_clippeddx_seed23_20260618_192135-checkpoint:v44`
-  improved from the old single-lane profile (`129.666s` for 100 episodes,
-  `0.771 eps/s`) to the validated vectorized no-life-loss path (`25.627s`,
-  `3.902 eps/s`), a `5.1x` speedup. The first naive vector attempt was faster
-  but semantically wrong because Python-side completion termination caused
-  whole-vector resets; the validated path disables Python completion termination
-  inside the VecEnv and lets the evaluator finish lanes in batches.
-- A follow-up Modal cost sweep on the same artifact found the best measured
-  `$ / episode` point at `cpu=1`, `memory=4096`, `n_envs=20`: `31.436s` total
-  for 100 episodes, `3.181 eps/s`, about `$0.0069 / 1000 episodes` at listed
-  Modal CPU and memory rates. More lanes helped up to about 20; `n_envs=24`
-  regressed to `36.751s`, and `n_envs=32` regressed to `64.559s`. The fastest
-  measured wall-clock point was `cpu=8`, `memory=4096`, `n_envs=16` at
-  `21.644s` for 100 episodes, but about `$0.0246 / 1000 episodes`. For balanced
-  speed/cost without 8 CPU, `cpu=4`, `memory=4096`, `n_envs=24` took `25.877s`
-  and cost about `$0.0159 / 1000 episodes`. Prefer checkpoint training metadata
-  as the source of eval environment semantics, with `eval_queue --cpu 1
-  --memory-mib 4096` for cheapest eval throughput.
-- `stable-retro-turbo==1.0.0.post12` returns native-vector training observations in channel-first shape `(n_envs, 4, 84, 84)`, so the repo must skip `VecTransposeImage` for that shape and only apply it to channel-last `(n_envs, 84, 84, 4)` runtimes.
-- On 2026-06-18, a single RTX4090 repro of W&B run `lexxixz3` with post12, seed 24, `n_envs=16`, `env_threads=4`, `target_kl=0.04`, and a strict `100/100` terminal-episode stop trained successfully to the 5M cap but did not early-stop: final `68/100` recent completions, `189` total completions, `5,005,312` timesteps, `27m34s` progress-bar wall time, and final logged fps `3023`.
-- On 2026-06-18, a matched three-seed RTX4090 batch compared `stable-retro-turbo==1.0.0.post11` and `1.0.0.post12` with seeds `23`, `24`, and `25`, 3 concurrent children, `n_envs=16`, `env_threads=4`, `target_kl=0.04`, strict `100/100` terminal-episode stop, and a 5M cap. Neither version reached the strict stop. Final recent completion rates were post11: seed23 `19/100`, seed24 `90/100`, seed25 `22/100`; post12: seed23 `6/100`, seed24 `85/100`, seed25 `55/100`. Mean final rate was post11 `0.437` vs post12 `0.487`; median final rate was post11 `0.22` vs post12 `0.55`; total completions were post11 `576` vs post12 `428`. Final logged SB3 fps averaged `1917` for post11 and `1943` for post12 in this concurrent shape, so this training workload did not show the package-level `+23.6%` throughput increase.
-- On 2026-06-18, a five-seed post12 follow-up used new seeds `26`-`30`, 5 concurrent children, and the same `lexxixz3` config. Final recent completion rates were seed26 `0/100`, seed27 `32/100`, seed28 `5/100`, seed29 `90/100`, and seed30 `66/100`; total completions were `0`, `390`, `15`, `413`, and `153`. Across all eight post12 seeds tested so far (`23`-`30`), mean final rate is `0.424`, median `0.435`, max `0.90`, and total completions `1399`. The five-child batch averaged `1353` final logged fps per child, about `6766` aggregate fps, while the earlier three-child post12 batch averaged `1943` per child, about `5829` aggregate fps.
-
-## RTX2060: beast-2
-
-### Access
-
-- Current role: Docker fleet host managed from the MacBook with `rlab-fleet`.
-- Do not run SkyPilot API servers, SkyPilot job controllers, or SkyPilot
-  training pods on this host.
-- GPU host IP observed from the current Mac/Codex network: `192.168.133.26`
-- SSH command: `ssh -o HostKeyAlias=beast-2 tsilva@192.168.133.26`
-- GPU: NVIDIA GeForce RTX 2060, 6 GB VRAM
-- Observed driver: `595.71.05`
-- Kubernetes: removed on 2026-06-26; no k3s/kube processes, services,
-  binaries, kube user config, or Kubernetes client commands (`kubectl`, `k3s`,
-  `helm`) should remain.
-- NVIDIA runtime classes: `nvidia`, `nvidia-cdi`, `nvidia-legacy`
-- Host `uv`: `/home/tsilva/.local/bin/uv`
-- No host-side SkyPilot API server should be running for the Docker fleet flow.
-
-As of 2026-06-26, `beast-2` did not resolve from the Mac and
-`192.168.133.26` reported host down on SSH, so the local Mac kube context could
-not establish its SkyPilot SSH tunnel. When reachable, use the IP plus
-`HostKeyAlias=beast-2` unless hostname resolution has been re-established.
-`ssh-keyscan -T 5 192.168.133.26` previously matched the existing `beast-2`
-host keys in `~/.ssh/known_hosts`.
-
-As of 2026-06-26, `beast-2` is reachable again from the Mac with the IP plus
-`HostKeyAlias=beast-2` command. For the Mac-managed Docker fleet path, the host
-has Docker Engine `docker.io 29.1.3-0ubuntu4.1`, NVIDIA Container Toolkit
-`1.19.1-1`, and `libnvidia-container1 1.19.1-1`. The fleet config uses
-`sudo -n docker` for this host instead of adding `tsilva` to the persistent
-`docker` group. `rlab-fleet setup-host --host beast-2 --execute` created
-`/home/tsilva/rlab/{runs,logs,fleet}`, `/home/tsilva/roms`, and
-`/home/tsilva/rlab/.env.runner` mode `600`; the digest-pinned train image
-`ghcr.io/tsilva/rlab/rlab-train@sha256:21062924bb7a43c3bb0a2a5ae093bf6f54ed45b6e1da57d3d28b87b605e100b8`
-smoke completed with `rlab_container_smoke=ok` and
-`torch_cuda_device=NVIDIA GeForce RTX 2060`.
-
-Historical note: on 2026-06-25, the first local training image imported into k3s was
-`ghcr.io/tsilva/rlab/rlab-train:local-8332822-dirty`, digest
-`sha256:873484b80a09723a8bdd78baadcc357d5bfe5f4c145c48d8eda4ae2880ddc5bf`.
-That k3s/containerd image store has since been removed. Use pushed immutable
-GHCR digest refs for Docker fleet jobs.
-
-Historical note: SkyPilot `0.12.3.post1` hard-codes `imagePullPolicy: Always` for the
-Kubernetes Ray node. For the local imported image test, the host-side template
-at `/home/tsilva/skypilot-server/.venv/lib/python3.13/site-packages/sky/templates/kubernetes-ray.yml.j2`
-was patched to `IfNotPresent` for the `ray-node` container, with backup
-`kubernetes-ray.yml.j2.bak-20260625-local-images`. Without that patch, k3s
-tries to pull the private/unpublished GHCR tag and fails with `403 Forbidden`.
-
-Historical note: the 2026-06-25 SkyPilot Kubernetes retry successfully provisioned the pod and
-started Ray, but the launch remained in `INIT` because SkyPilot's Kubernetes
-`rsync` helper hung while syncing `/root/.sky/.runtime_files`. The verified
-B77 Docker/Kubernetes smoke therefore ran as a plain Kubernetes Job,
-`rlab-b77-docker-k8s-103`, using the same imported image and hostPath ROM
-mount. Do not use `rlab-skypilot launch-runner` for beast-2 queues.
-
-### Mario PPO Scheduling
-
-Benchmarked on 2026-06-17 with `stable-retro-turbo==1.0.0.post7`, Torch `2.12.0+cu130`, 131,072 timesteps per child, and W&B disabled to avoid upload-time contamination.
-
-| Shape | Aggregate wall fps | Per-child wall fps | Avg GPU util | Max VRAM | Notes |
-| --- | ---: | ---: | ---: | ---: | --- |
-| 1 child, `env_threads=4` | 1,248 | 1,248 | 32% | 695 MiB | Fastest single-job setting. |
-| 2 children, `env_threads=4` | 1,971 | 986-993 | 56% | 1,175 MiB | Best fast-turnaround setting. |
-| 3 children, `env_threads=4` | 2,473 | 824-830 | 70% | 1,655 MiB | Good compromise. |
-| 4 children, `env_threads=2` | 2,661 | 665-669 | 77% | 2,135 MiB | Best measured aggregate throughput. |
-| 4 children, `env_threads=4` | 2,661 | 665-672 | 75% | 2,135 MiB | Same aggregate as `env_threads=2`, no clear advantage. |
-
-Default to 4 children with `env_threads=2` for aggregate screening throughput. Use 2 children with `env_threads=4` when individual result latency matters.
-
-### Operational Notes
-
-- Persistent setup to reuse: Docker Engine, NVIDIA Container Toolkit, host
-  tools, local ROM bundle, and persistent `/home/tsilva/rlab` directories.
-- SkyPilot user state, `skypilot-server`, `.sky`, `.kube`, and `sky_logs` were
-  removed from the host account on 2026-06-26.
-- The RTX2060 training-validated Mario path includes `stable-retro-turbo==1.0.0.post7`; it reproduced the completed-episode stop criterion at 2,711,552 timesteps on 2026-06-15.
-
-## Cleanup
-
-After one-off SkyPilot experiments on non-beast providers, clean up clusters
-unless the user explicitly wants a warm cluster left running:
+To warm a host even before matching queue demand:
 
 ```bash
-sky down -y <cluster-name>
+UV_CACHE_DIR=.uv-cache uv run rlab-fleet ensure-runner \
+  --host beast-3 \
+  --image latest \
+  --execute
 ```
 
-## Related Repo Files
+Use `--profile <profile-id>` only for an intentionally profile-locked lane.
+Default train jobs and runners should be profileless and locked by immutable
+`runtime_image_ref` plus optional `run_target`.
 
-- `GOAL.md`: current RTX4090 scheduling decision for the active screening goal.
-- root-level `sky_*.yaml`: ignored local launch files; promote reusable shapes under
-  `experiments/launches/`.
+## Host Setup
+
+Bootstrap each host after OS/Docker changes or when validating a new runtime
+image:
+
+```bash
+UV_CACHE_DIR=.uv-cache uv run rlab-fleet setup-host \
+  --host beast-3 \
+  --runtime-image-ref-file rlab-train-image.json \
+  --execute
+
+UV_CACHE_DIR=.uv-cache uv run rlab-fleet setup-host \
+  --host beast-2 \
+  --runtime-image-ref-file rlab-train-image.json \
+  --execute
+```
+
+The setup command verifies Docker, NVIDIA runtime support, persistent
+directories, `.env.runner` permissions, digest pulls, and the container smoke
+path. The beast hosts should remain simple Docker/GPU hosts; they do not run a
+queue service and do not schedule experiments.
+
+## beast-3 / RTX4090
+
+- Target: `rtx4090`, alias `beast-3`.
+- Access: `ssh tsilva@beast-3`.
+- Fleet role: primary screening and confirmation host.
+- Default capacity: 5 managed Docker runner containers.
+- Default runtime shape: `env_threads=4`, `torch_num_threads=1`.
+- Lower-contention shape: 3-4 workers with `env_threads=4`.
+- Current benchmark expectation: about 6200 aggregate wall FPS for the current
+  Mario PPO shape.
+- Docker command: configured in `experiments/fleet.json`; currently
+  `sudo -n docker`.
+- Persistent root: `/home/tsilva/rlab`.
+- ROM mount root: `/home/tsilva/roms`.
+
+Use beast-3 for the run that decides the main research loop unless you are
+intentionally testing small-GPU behavior.
+
+## beast-2 / RTX2060
+
+- Target: `rtx2060`, alias `beast-2`.
+- Access: `ssh -o HostKeyAlias=beast-2 tsilva@192.168.133.26` until hostname
+  resolution is restored.
+- Fleet role: cheaper small ablations, smoke jobs, and RTX2060-specific checks.
+- Default capacity: 4 managed Docker runner containers.
+- Default runtime shape: `env_threads=2`, `torch_num_threads=1`.
+- Fast-turnaround shape: 2 workers with `env_threads=4`.
+- Docker command: configured in `experiments/fleet.json`; currently
+  `sudo -n docker`.
+- Persistent root: `/home/tsilva/rlab`.
+- ROM mount root: `/home/tsilva/roms`.
+
+The old `local-8332822-dirty` image tag was a k3s/containerd artifact. Use
+pushed immutable GHCR digest refs for all comparable Docker fleet jobs.
+
+## Local MacBook
+
+- Target: `local-macbook`, aliases `macbook` and `local`.
+- Use for smoke tests, debugging, playback, and quick eval checks.
+- Do not use local training throughput as evidence for beast concurrency.
+
+## Operational Rules
+
+- Keep train jobs profileless by default.
+- Use immutable `docker:...@sha256:...` runtime image refs.
+- Keep secrets in `.env` locally and `/home/tsilva/rlab/.env.runner` on hosts.
+- Do not print DB, W&B, or AWS/R2 secrets.
+- Keep generated checkpoints, logs, videos, W&B files, caches, and scratch
+  outputs under ignored paths such as `runs/`, `logs/`, `models/`, and `wandb/`.
+- `rlab-fleet` may remove old managed containers only when there are no
+  pending/running jobs for that container's profile/digest/target and no active
+  queue lease owned by one of its workers.
+

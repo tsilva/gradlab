@@ -26,7 +26,7 @@ from rlab.callbacks import (
     ThroughputCallback,
     WandbCheckpointArtifactCallback,
 )
-from rlab.cli import apply_preset, build_parser
+from rlab.cli import parse_train_args
 from rlab.device import resolve_sb3_device
 from rlab.env import (
     assert_rom_imported,
@@ -81,7 +81,7 @@ def checkpoint_save_frequency(checkpoint_freq: int, n_envs: int) -> int | None:
 
 
 def main() -> None:
-    args = apply_preset(build_parser().parse_args())
+    args = parse_train_args()
     assert_rom_imported(args.game)
     set_random_seed(args.seed)
 

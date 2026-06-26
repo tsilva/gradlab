@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -11,17 +12,19 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from rlab.campaign import connect, database_url
-from rlab.compute_targets import instance_label, target_kind
+from rlab.compute_targets import FLEET_TARGET_KINDS, instance_label, target_kind
 from rlab.json_utils import json_safe
 from rlab.metric_names import (
     THROUGHPUT_LOOP_FPS,
     TRAIN_DONE_ALL,
 )
+from rlab.runtime_refs import runtime_image_digest_slug
 
 
 RUNNING_STATES = {"running"}
 QUEUED_STATES = {"pending"}
 PROBE_TIMEOUT_SECONDS = 3.0
+FLEET_WORKER_RE = re.compile(r"^(?P<container>rlab-[A-Za-z0-9-]+)-\d+-[0-9a-f]{8}$")
 
 
 @dataclass(frozen=True)
@@ -98,6 +101,13 @@ def load_instances(repo_root: Path) -> dict[str, Any]:
     path = repo_root / "experiments" / "instances.json"
     if not path.is_file():
         return {"instances": {}}
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def load_fleet(repo_root: Path) -> dict[str, Any]:
+    path = repo_root / "experiments" / "fleet.json"
+    if not path.is_file():
+        return {"hosts": {}}
     return json.loads(path.read_text(encoding="utf-8"))
 
 
@@ -356,6 +366,26 @@ def metric_value(metrics: dict[str, Any], *keys: str) -> Any:
     return None
 
 
+def profile_label(profile_id: Any) -> str:
+    value = str(profile_id or "").strip()
+    return value or "any"
+
+
+def run_target_label(run_target: Any) -> str:
+    value = str(run_target or "").strip()
+    return value or "any"
+
+
+def runtime_ref_label(runtime_image_ref: Any) -> str:
+    value = str(runtime_image_ref or "").strip()
+    if not value:
+        return ""
+    try:
+        return f"sha256:{runtime_image_digest_slug(value)}"
+    except ValueError:
+        return value.rsplit("/", 1)[-1][:40]
+
+
 def payload_from_row(
     *,
     table: str,
@@ -381,7 +411,28 @@ def payload_from_row(
     }
 
 
-def infer_device_key(kind: str, profile: str, worker: str, config: dict[str, Any]) -> str:
+def device_key_from_run_target(run_target: Any) -> str | None:
+    target = str(run_target or "").strip().lower()
+    if not target:
+        return None
+    if target in {"rtx4090", "beast-3"}:
+        return "rtx4090"
+    if target in {"rtx2060", "beast-2", "beast2"}:
+        return "rtx2060"
+    return target
+
+
+def infer_device_key(
+    kind: str,
+    profile: str,
+    worker: str,
+    config: dict[str, Any],
+    *,
+    run_target: Any = None,
+) -> str:
+    explicit = device_key_from_run_target(run_target or config.get("run_target"))
+    if explicit:
+        return explicit
     text = " ".join(
         [
             kind,
@@ -390,39 +441,31 @@ def infer_device_key(kind: str, profile: str, worker: str, config: dict[str, Any
             str(config.get("device") or "").lower(),
             str(config.get("runner") or "").lower(),
             str(config.get("target") or "").lower(),
+            str(config.get("run_target") or "").lower(),
         ]
     )
-    if "4090" in text or "beast-3" in text or "k8s/rtx4090" in text or "k8s/beast-3" in text:
-        if "runpod" in text:
-            return "runpod-rtx4090"
+    if "4090" in text or "beast-3" in text:
         return "rtx4090"
     if "2060" in text or "beast2" in text or "beast-2" in text:
         return "rtx2060"
-    if "runpod-l4" in text or "runpod_l4" in text or "runpod l4" in text:
-        return "runpod-l4"
-    if "runpod-t4" in text or "runpod_t4" in text or "runpod t4" in text:
-        return "runpod-t4"
-    if "runpod" in text:
-        return "runpod-rtx4090"
-    if "modal-t4" in text or "t4-modal" in text:
-        return "modal-t4"
-    if "modal" in text:
-        return "modal"
     return "local"
 
 
-def where_label(device_key: str, *, kind: str) -> str:
+def device_label(device_key: str) -> str:
     if device_key == "rtx4090":
-        return "beast-3 / RTX4090"
+        return "beast-3"
     if device_key == "rtx2060":
         return "beast-2"
-    if device_key.startswith("runpod"):
-        return device_key
-    if device_key == "modal-t4":
-        return "Modal T4"
-    if device_key == "modal":
-        return "Modal CPU"
-    return "local" if kind == "eval" else "Local Mac"
+    return "local"
+
+
+def container_label(worker: str) -> str:
+    if not worker:
+        return ""
+    match = FLEET_WORKER_RE.match(worker)
+    if match:
+        return match.group("container")
+    return worker if worker.startswith("rlab-") else ""
 
 
 def attention_for_row(
@@ -432,7 +475,13 @@ def attention_for_row(
     heartbeat_at: Any,
     lease_expires_at: Any,
     metrics: dict[str, Any],
+    cancel_requested: Any = False,
+    drain_requested: Any = False,
 ) -> str:
+    if cancel_requested:
+        return "cancel requested"
+    if drain_requested:
+        return "draining"
     if error:
         return "check logs"
     if status == "failed":
@@ -461,7 +510,12 @@ def job_from_train_row(row: dict[str, Any]) -> dict[str, Any]:
     status = str(row.get("status") or "")
     worker = str(row.get("lease_owner") or "")
     profile = str(row.get("profile_id") or "")
-    device_key = infer_device_key("train", profile, worker, config)
+    run_target = row.get("run_target")
+    runtime_image_ref = row.get("runtime_image_ref")
+    wandb_url = str(row.get("wandb_url") or "").strip()
+    device_key = infer_device_key("train", profile, worker, config, run_target=run_target)
+    device = device_label(device_key)
+    container = container_label(worker)
     artifact_refs = row.get("artifact_refs") or []
     artifact = ""
     if artifact_refs:
@@ -473,26 +527,40 @@ def job_from_train_row(row: dict[str, Any]) -> dict[str, Any]:
         "id": f"train-{row['id']}",
         "kind": "train",
         "target": target_label(config, fallback=str(row.get("goal_slug") or "")),
-        "where": where_label(device_key, kind="train"),
+        "device": device,
+        "container": container,
         "device_key": device_key,
         "state": status,
         "progress": completion_progress(metrics),
+        "wandb_url": wandb_url,
         "attention": attention_for_row(
             status=status,
             error=row.get("error"),
             heartbeat_at=row.get("heartbeat_at"),
             lease_expires_at=row.get("lease_expires_at"),
             metrics=metrics,
+            cancel_requested=row.get("cancel_requested"),
+            drain_requested=row.get("drain_requested"),
         ),
         "details": {
             "goal": row.get("goal_slug") or "",
             "spec": row.get("spec_slug") or "",
-            "profile": profile,
+            "profile": profile_label(profile),
+            "device": device,
+            "container": container,
+            "run_target": run_target_label(run_target),
+            "runtime_image": runtime_ref_label(runtime_image_ref),
             "run": row.get("run_name") or "",
             "worker": worker,
             "lease": minutes_until(row.get("lease_expires_at")),
             "heartbeat": short_age(row.get("heartbeat_at")),
-            "wandb": row.get("wandb_url") or "",
+            "attempts": f"{row.get('attempts')}/{row.get('max_attempts')}"
+            if row.get("attempts") is not None and row.get("max_attempts") is not None
+            else "",
+            "priority": row.get("priority") if row.get("priority") is not None else "",
+            "cancel": "requested" if row.get("cancel_requested") else "",
+            "drain": "requested" if row.get("drain_requested") else "",
+            "wandb": wandb_url,
             "artifact": artifact,
             "fps": metric_value(metrics, "time/fps", THROUGHPUT_LOOP_FPS) or "",
             "completion": completion_progress(metrics),
@@ -513,6 +581,8 @@ def job_from_eval_row(row: dict[str, Any]) -> dict[str, Any]:
     worker = str(row.get("lease_owner") or "")
     profile = str(row.get("profile_id") or "")
     device_key = infer_device_key("eval", profile, worker, config)
+    device = device_label(device_key)
+    container = container_label(worker)
     progress = ""
     if status == "running" and config.get("episodes"):
         progress = f"0/{config['episodes']}"
@@ -522,23 +592,35 @@ def job_from_eval_row(row: dict[str, Any]) -> dict[str, Any]:
         "id": f"eval-{row['id']}",
         "kind": "eval",
         "target": row.get("candidate_label") or target_label(config),
-        "where": where_label(device_key, kind="eval"),
+        "device": device,
+        "container": container,
         "device_key": device_key,
         "state": status,
         "progress": progress,
+        "wandb_url": str(config.get("wandb_url") or "").strip(),
         "attention": attention_for_row(
             status=status,
             error=row.get("error"),
             heartbeat_at=row.get("heartbeat_at"),
             lease_expires_at=row.get("lease_expires_at"),
             metrics=metrics,
+            cancel_requested=row.get("cancel_requested"),
+            drain_requested=row.get("drain_requested"),
         ),
         "details": {
             "goal": row.get("goal_slug") or "",
-            "profile": profile,
+            "profile": profile_label(profile),
+            "device": device,
+            "container": container,
             "worker": worker,
             "lease": minutes_until(row.get("lease_expires_at")),
             "heartbeat": short_age(row.get("heartbeat_at")),
+            "attempts": f"{row.get('attempts')}/{row.get('max_attempts')}"
+            if row.get("attempts") is not None and row.get("max_attempts") is not None
+            else "",
+            "priority": row.get("priority") if row.get("priority") is not None else "",
+            "cancel": "requested" if row.get("cancel_requested") else "",
+            "drain": "requested" if row.get("drain_requested") else "",
             "episodes": config.get("episodes") or "",
             "seed": config.get("seed") or "",
             "n_envs": config.get("n_envs") or "",
@@ -640,18 +722,20 @@ def sample_jobs() -> list[dict[str, Any]]:
             "id": "train-184",
             "kind": "train",
             "target": "Mario L1 mixed",
-            "where": "beast-3 / RTX4090",
+            "device": "beast-3",
+            "container": "rlab-runner-rtx4090-latest",
             "device_key": "rtx4090",
             "state": "running",
             "progress": "42%",
+            "wandb_url": "https://wandb.ai/tsilva/SuperMarioBros-NES/runs/sample-train-184",
             "attention": "W&B stale",
             "details": {
-                "cluster": "beast-3",
-                "pod": "rtx4090-head",
+                "host": "beast-3",
+                "container": "rlab-runner-rtx4090-latest",
                 "worker": "train-runner-2",
                 "lease": "11m",
-                "wandb": "crashed",
-                "k8s": "alive",
+                "wandb": "https://wandb.ai/tsilva/SuperMarioBros-NES/runs/sample-train-184",
+                "docker": "running",
                 "artifact": "R2 ref",
                 "fps": "1620",
             },
@@ -673,12 +757,20 @@ def sample_jobs() -> list[dict[str, Any]]:
             "id": "eval-77",
             "kind": "eval",
             "target": "checkpoint v47",
-            "where": "Modal CPU",
-            "device_key": "modal",
+            "device": "local",
+            "container": "",
+            "device_key": "local",
             "state": "running",
             "progress": "68/100",
+            "wandb_url": "https://wandb.ai/tsilva/SuperMarioBros-NES/runs/sample-eval-77",
             "attention": "",
-            "details": {"worker": "modal-eval", "episodes": 100, "seed": 10007, "n_envs": 20},
+            "details": {
+                "worker": "eval-runner",
+                "episodes": 100,
+                "seed": 10007,
+                "n_envs": 20,
+                "wandb": "https://wandb.ai/tsilva/SuperMarioBros-NES/runs/sample-eval-77",
+            },
             "payload": {
                 "table": "eval_jobs",
                 "schema": ["id", "profile_id", "eval_config", "status"],
@@ -686,7 +778,10 @@ def sample_jobs() -> list[dict[str, Any]]:
                 "job": {
                     "id": 77,
                     "profile_id": "mario-level1-quick",
-                    "eval_config": {"episodes": 100},
+                    "eval_config": {
+                        "episodes": 100,
+                        "wandb_url": "https://wandb.ai/tsilva/SuperMarioBros-NES/runs/sample-eval-77",
+                    },
                     "status": "running",
                 },
                 "context": {"goal_slug": "sample"},
@@ -697,7 +792,8 @@ def sample_jobs() -> list[dict[str, Any]]:
             "id": "train-185",
             "kind": "train",
             "target": "Mario L1-2",
-            "where": "beast-3 / RTX4090",
+            "device": "beast-3",
+            "container": "",
             "device_key": "rtx4090",
             "state": "pending",
             "progress": "",
@@ -708,7 +804,8 @@ def sample_jobs() -> list[dict[str, Any]]:
             "id": "eval-78",
             "kind": "eval",
             "target": "seed81 best",
-            "where": "local",
+            "device": "local",
+            "container": "",
             "device_key": "local",
             "state": "pending",
             "progress": "",
@@ -719,7 +816,8 @@ def sample_jobs() -> list[dict[str, Any]]:
             "id": "train-181",
             "kind": "train",
             "target": "Mario L1-1",
-            "where": "beast-2",
+            "device": "beast-2",
+            "container": "",
             "device_key": "rtx2060",
             "state": "failed",
             "progress": "",
@@ -731,12 +829,10 @@ def sample_jobs() -> list[dict[str, Any]]:
 
 def target_display(instance_name: str, instance: dict[str, Any]) -> str:
     kind = target_kind(instance)
-    if kind == "skypilot":
-        return str(instance.get("infra") or instance_name)
-    if kind == "modal":
-        return f"modal:{instance.get('modal_gpu') or instance.get('accelerator') or instance_name}"
+    if kind in FLEET_TARGET_KINDS:
+        return str(instance.get("infra") or f"docker/{instance_label(instance)}")
     if kind == "local":
-        return "local"
+        return "local CLI"
     return kind or instance_name
 
 
@@ -744,23 +840,36 @@ def capacity_label(instance: dict[str, Any]) -> str:
     if instance.get("available") is False:
         return "unavailable"
     kind = target_kind(instance)
+    fleet_workers = instance.get("max_workers")
+    if kind in FLEET_TARGET_KINDS and fleet_workers:
+        return f"{fleet_workers} workers"
     slots = instance.get("max_children") or instance.get("children")
-    if kind == "modal":
-        return f"{slots} launch" if slots else "on demand"
     if slots:
-        return f"{slots} slots"
+        try:
+            slot_count = int(slots)
+        except (TypeError, ValueError):
+            return f"{slots} slots"
+        return "1 slot" if slot_count == 1 else f"{slot_count} slots"
     return ""
+
+
+def manager_label(instance: dict[str, Any]) -> str:
+    kind = target_kind(instance)
+    if kind in FLEET_TARGET_KINDS:
+        return "rlab-fleet"
+    if kind == "local":
+        return "local"
+    return kind or "unknown"
 
 
 def instance_details(instance_name: str, instance: dict[str, Any]) -> dict[str, Any]:
     aliases = instance.get("aliases") if isinstance(instance.get("aliases"), list) else []
     details: dict[str, Any] = {
         "target": instance_name,
-        "provider": target_kind(instance),
+        "manager": manager_label(instance),
         "aliases": ", ".join(str(alias) for alias in aliases),
         "accelerator": instance.get("accelerator") or "",
         "infra": instance.get("infra") or "",
-        "modal_gpu": instance.get("modal_gpu") or "",
         "image": instance.get("image_id") or "",
         "cpu_shape": instance.get("cpu") or instance.get("cpus") or "",
         "memory_shape": instance.get("memory_mib") or instance.get("memory") or "",
@@ -802,7 +911,69 @@ def base_devices(repo_root: Path) -> list[dict[str, Any]]:
                 "details": instance_details(str(instance_name), instance),
             }
         )
+    merge_fleet_hosts(repo_root, devices)
     return devices
+
+
+def device_lookup(devices: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    by_key: dict[str, dict[str, Any]] = {}
+    for device in devices:
+        by_key[str(device["id"])] = device
+        for alias in device.get("aliases") or []:
+            by_key.setdefault(str(alias), device)
+    return by_key
+
+
+def merge_fleet_hosts(repo_root: Path, devices: list[dict[str, Any]]) -> None:
+    hosts = load_fleet(repo_root).get("hosts", {})
+    if not isinstance(hosts, dict):
+        return
+    by_key = device_lookup(devices)
+    for host_name, raw_host in hosts.items():
+        if not isinstance(raw_host, dict):
+            continue
+        host = dict(raw_host)
+        run_target = str(host.get("run_target") or "").strip()
+        target_key = device_key_from_run_target(run_target) or run_target or str(host_name)
+        device = by_key.get(target_key) or by_key.get(str(host_name))
+        max_workers = host.get("max_workers")
+        capacity = f"{max_workers} workers" if max_workers else ""
+        details = {
+            "fleet_host": str(host_name),
+            "run_target": run_target or "",
+            "ssh": host.get("ssh_target") or "",
+            "runner_capacity": max_workers or "",
+            "docker": " ".join(str(part) for part in host.get("docker_command") or []),
+            "pull_policy": host.get("pull_policy") or "",
+        }
+        if device is None:
+            device = {
+                "id": target_key,
+                "aliases": [str(host_name)],
+                "device": str(host_name),
+                "target": f"docker/{host_name}",
+                "capacity": capacity,
+                "available": True,
+                "details": {
+                    "target": target_key,
+                    "manager": "rlab-fleet",
+                    **{key: value for key, value in details.items() if value},
+                },
+            }
+            devices.append(device)
+            by_key[str(device["id"])] = device
+        else:
+            aliases = list(device.get("aliases") or [])
+            if str(host_name) not in aliases:
+                aliases.append(str(host_name))
+            if run_target and run_target not in aliases and run_target != device.get("id"):
+                aliases.append(run_target)
+            device["aliases"] = aliases
+            if capacity:
+                device["capacity"] = capacity
+            existing_details = dict(device.get("details") or {})
+            existing_details.update({key: value for key, value in details.items() if value})
+            device["details"] = existing_details
 
 
 def devices_from_jobs(
@@ -812,20 +983,15 @@ def devices_from_jobs(
 ) -> list[dict[str, Any]]:
     devices = base_devices(repo_root)
     probes = probes or {}
-    by_key = {device["id"]: device for device in devices}
-    for device in devices:
-        for alias in device.get("aliases") or []:
-            by_key.setdefault(str(alias), device)
+    by_key = device_lookup(devices)
     for device in devices:
         device["current_jobs"] = []
         device["queued_jobs"] = []
         device["attention"] = ""
         device["usage"] = ""
         device["metrics"] = {}
-        kind = str((device.get("details") or {}).get("provider") or "")
-        if kind == "modal":
-            device["last_check"] = "on demand"
-        elif kind == "local":
+        manager = str((device.get("details") or {}).get("manager") or "")
+        if manager == "local":
             device["last_check"] = "local"
         else:
             device["last_check"] = "not probed"
@@ -879,7 +1045,7 @@ def devices_from_jobs(
         details.update(
             {
                 "state": device["state"],
-                "slots": device["capacity"],
+                "capacity": device["capacity"],
                 "running jobs": device["current_job"],
                 "queued jobs": device["queued_job"],
                 "attention": device["attention"],

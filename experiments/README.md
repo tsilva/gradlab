@@ -1,14 +1,14 @@
 # Experiments
 
-This directory holds experiment evidence and launch notes. Keep active operational
+This directory holds experiment evidence and queue notes. Keep active operational
 instructions in the top-level runbooks:
 
 - `../AGENTS.md` for repo rules and stable-retro runtime cautions.
 - `../INSTANCES.md` for known GPU targets and benchmark-backed concurrency.
 - `../GOAL.md` for the current screening goal.
 
-Use `launches/` for durable launch templates or notes. Root-level `sky_*.yaml`
-files are ignored local working files, not the source of truth.
+Use `specs/`, `fleet.json`, and `policies/` for durable queue inputs.
+Generated local run logs and outputs belong under ignored `runs/` or `logs/`.
 
 Current machine-readable research state:
 

@@ -65,45 +65,11 @@ Use tags for humans and digests for runs. The workflow uploads
 that file into queue creation with `--runtime-image-ref-file` so jobs do not
 depend on mutable tags.
 
-## Modal
-
-Modal keeps the existing local image builder by default. To use a prebuilt GHCR
-image instead:
-
-```bash
-export RLAB_MODAL_IMAGE_REF=ghcr.io/tsilva/rlab/rlab-train@sha256:<digest>
-export RLAB_MODAL_REGISTRY_SECRET=ghcr-registry  # only for private images
-```
-
-The Modal secret, when used, must provide `REGISTRY_USERNAME` and
-`REGISTRY_PASSWORD`.
-
-## SkyPilot
-
-Runner profiles can opt into the prebuilt runtime:
-
-```json
-{
-  "image_id": "docker:ghcr.io/tsilva/rlab/rlab-train@sha256:<digest>",
-  "prebuilt_image": true
-}
-```
-
-With `prebuilt_image: true`, the rendered runner YAML skips venv creation,
-`uv sync`, and package installation. It mounts ROMs, runs
-`rlab-container-entrypoint rlab-container-smoke`, then launches
-`rlab.train_runner` through the same entrypoint.
-
-Use this mode on backends that actually run the `image_id` as a container, such
-as Kubernetes or RunPod. For SSH node pools, prefer direct `docker run` on the
-host unless that host has been put behind Kubernetes.
-
 ## Local Fleet Manager
 
-For `beast-2` and `beast-3`, prefer Mac-side `rlab-fleet` over SkyPilot. It
-reconciles Docker containers directly over SSH and keeps the queue in charge of
-scheduling; the beast hosts only need Docker, NVIDIA runtime support, mounts,
-and the runner env file.
+For `beast-2` and `beast-3`, Mac-side `rlab-fleet` reconciles Docker containers
+directly over SSH and keeps the queue in charge of scheduling; the beast hosts
+only need Docker, NVIDIA runtime support, mounts, and the runner env file.
 
 ```bash
 uv run rlab-fleet plan

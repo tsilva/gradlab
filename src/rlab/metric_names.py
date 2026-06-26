@@ -18,6 +18,8 @@ TRAIN_REWARD_SHARE_ROOT = "train/reward_share"
 TRAIN_DONE_ALL = "train/done/all"
 TRAIN_DONE_MAX_STEPS = "train/done/max_steps"
 TRAIN_DONE_UNCLASSIFIED = "train/done/unclassified"
+TRAIN_DONE_LEVEL_CHANGE_FROM_RATE_MIN = "train/done/level_change/from_rate/min"
+TRAIN_DONE_LEVEL_CHANGE_FROM_RATE_MEAN = "train/done/level_change/from_rate/mean"
 
 EVAL_DONE_ALL = "eval/done/all"
 EVAL_DONE_LEVEL_CHANGE = "eval/done/level_change"
@@ -73,6 +75,10 @@ def metric_value_segment(value: object) -> str:
 
 def train_done_value_metric(reason: object, direction: str, value: object) -> str:
     return f"{train_done_reason_metric(reason)}/{metric_path_segment(direction)}/{metric_value_segment(value)}"
+
+
+def train_done_from_rate_metric(reason: object, stat: str) -> str:
+    return f"{train_done_reason_metric(reason)}/from_rate/{metric_path_segment(stat)}"
 
 
 def eval_done_reason_metric(reason: object) -> str:

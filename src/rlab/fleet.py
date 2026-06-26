@@ -9,6 +9,7 @@ import sys
 import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -72,7 +73,7 @@ class FleetConfig:
 
 @dataclass(frozen=True)
 class QueueDemand:
-    profile_id: str
+    profile_id: str | None
     runtime_image_ref: str
     run_target: str | None
     pending_count: int
@@ -88,7 +89,7 @@ class QueueDemand:
 @dataclass(frozen=True)
 class ActiveLease:
     lease_owner: str
-    profile_id: str
+    profile_id: str | None
     runtime_image_ref: str
     run_target: str | None
     running_count: int
@@ -98,7 +99,7 @@ class ActiveLease:
 class RunningJob:
     id: int
     lease_owner: str
-    profile_id: str
+    profile_id: str | None
     runtime_image_ref: str
     run_target: str | None
     run_name: str | None
@@ -437,7 +438,7 @@ def _matching_policy_hosts(config: FleetConfig, profile_id: str) -> tuple[str, .
 
 
 def eligible_hosts(config: FleetConfig, demand: QueueDemand) -> list[HostConfig]:
-    names = _matching_policy_hosts(config, demand.profile_id)
+    names = _matching_policy_hosts(config, demand.profile_id or "*")
     hosts = []
     for name in names:
         host = config.hosts[name]
@@ -460,7 +461,7 @@ def allocate_desired_deployments(
             item.running_count == 0,
             -item.max_priority,
             item.oldest_job_id,
-            item.profile_id,
+            item.profile_id or "",
             item.runtime_image_ref,
             item.run_target or "",
         ),
@@ -470,14 +471,14 @@ def allocate_desired_deployments(
         if not hosts:
             warnings.append(
                 "no eligible host for "
-                f"profile={demand.profile_id} target={demand.run_target or 'any'}"
+                f"profile={demand.profile_id or 'any'} target={demand.run_target or 'any'}"
             )
             continue
         chosen = next((host for host in hosts if remaining[host.name] > 0), None)
         if chosen is None:
             warnings.append(
                 "capacity exhausted for "
-                f"profile={demand.profile_id} target={demand.run_target or 'any'}"
+                f"profile={demand.profile_id or 'any'} target={demand.run_target or 'any'}"
             )
             continue
         requested = max(demand.running_count, demand.pending_count, 1)
@@ -501,12 +502,12 @@ def allocate_desired_deployments(
         if requested > workers:
             warnings.append(
                 f"partially allocated {workers}/{requested} workers for "
-                f"{demand.profile_id} on {chosen.name}"
+                f"{demand.profile_id or 'any'} on {chosen.name}"
             )
     return tuple(desired), tuple(warnings)
 
 
-def demand_index(demands: Sequence[QueueDemand]) -> dict[tuple[str, str, str | None], QueueDemand]:
+def demand_index(demands: Sequence[QueueDemand]) -> dict[tuple[str | None, str, str | None], QueueDemand]:
     return {
         (demand.profile_id, demand.runtime_image_ref, demand.run_target): demand
         for demand in demands
@@ -974,7 +975,7 @@ def queue_demands(conn) -> list[QueueDemand]:
     for row in rows:
         demands.append(
             QueueDemand(
-                profile_id=str(row["profile_id"]),
+                profile_id=str(row["profile_id"]) if row["profile_id"] else None,
                 runtime_image_ref=normalize_runtime_image_ref(row["runtime_image_ref"]),
                 run_target=str(row["run_target"]) if row["run_target"] else None,
                 pending_count=int(row["pending_count"]),
@@ -993,7 +994,7 @@ def active_leases(conn) -> list[ActiveLease]:
     return [
         ActiveLease(
             lease_owner=str(row["lease_owner"]),
-            profile_id=str(row["profile_id"]),
+            profile_id=str(row["profile_id"]) if row["profile_id"] else None,
             runtime_image_ref=normalize_runtime_image_ref(row["runtime_image_ref"]),
             run_target=str(row["run_target"]) if row["run_target"] else None,
             running_count=int(row["running_count"]),
@@ -1010,7 +1011,7 @@ def running_jobs(conn) -> list[RunningJob]:
         RunningJob(
             id=int(row["id"]),
             lease_owner=str(row["lease_owner"]),
-            profile_id=str(row["profile_id"]),
+            profile_id=str(row["profile_id"]) if row["profile_id"] else None,
             runtime_image_ref=normalize_runtime_image_ref(row["runtime_image_ref"]),
             run_target=str(row["run_target"]) if row["run_target"] else None,
             run_name=str(row["run_name"]) if row["run_name"] else None,
@@ -1305,7 +1306,7 @@ def format_demands(demands: Sequence[QueueDemand]) -> str:
     for demand in demands:
         lines.append(
             "  "
-            f"profile={demand.profile_id} target={demand.run_target or 'any'} "
+            f"profile={demand.profile_id or 'any'} target={demand.run_target or 'any'} "
             f"pending={demand.pending_count} running={demand.running_count} "
             f"digest={runtime_image_digest_slug(demand.runtime_image_ref)}"
         )
@@ -1372,6 +1373,37 @@ def format_plan(plan: FleetPlan) -> str:
     return "\n".join(lines)
 
 
+def format_elapsed_since(value: Any, *, now: datetime | None = None) -> str:
+    if not value:
+        return "unknown"
+    timestamp: datetime
+    if isinstance(value, datetime):
+        timestamp = value
+    else:
+        text = str(value).strip()
+        if not text:
+            return "unknown"
+        try:
+            timestamp = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        except ValueError:
+            return text
+    if timestamp.tzinfo is None:
+        timestamp = timestamp.replace(tzinfo=UTC)
+    current = now or datetime.now(UTC)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=UTC)
+    seconds = max(0, int((current - timestamp).total_seconds()))
+    if seconds < 60:
+        return f"{seconds}s_ago"
+    minutes = seconds // 60
+    if minutes < 60:
+        return f"{minutes}m_ago"
+    hours = minutes // 60
+    if hours < 48:
+        return f"{hours}h_ago"
+    return f"{hours // 24}d_ago"
+
+
 def format_containers(
     containers: Sequence[ExistingContainer],
     jobs: Sequence[RunningJob] = (),
@@ -1398,14 +1430,14 @@ def format_containers(
             owned_jobs = [job for job in jobs if job.lease_owner.startswith(prefix)]
             for job in owned_jobs:
                 matched_job_ids.add(job.id)
-                heartbeat = job.heartbeat_at.isoformat() if hasattr(job.heartbeat_at, "isoformat") else job.heartbeat_at
+                heartbeat = format_elapsed_since(job.heartbeat_at)
                 started = job.started_at.isoformat() if hasattr(job.started_at, "isoformat") else job.started_at
                 worker = job.lease_owner.removeprefix(f"{prefix}-")
                 fields = [
                     f"job={job.id}",
                     f"run={job.run_name or 'unknown'}",
                     f"worker={worker}",
-                    f"profile={job.profile_id}",
+                    f"profile={job.profile_id or 'any'}",
                 ]
                 if job.run_target != target:
                     fields.append(f"target={job.run_target or 'any'}")
@@ -1425,7 +1457,7 @@ def format_containers(
             lines.append(
                 "  "
                 f"job={job.id} run={job.run_name or 'unknown'} owner={job.lease_owner} "
-                f"profile={job.profile_id} target={job.run_target or 'any'}"
+                f"profile={job.profile_id or 'any'} target={job.run_target or 'any'}"
             )
     if warnings:
         lines.append("warnings:")
@@ -1447,7 +1479,7 @@ def cmd_status(args: argparse.Namespace) -> int:
             print(
                 "  "
                 f"owner={lease.lease_owner} running={lease.running_count} "
-                f"profile={lease.profile_id} target={lease.run_target or 'any'}"
+                f"profile={lease.profile_id or 'any'} target={lease.run_target or 'any'}"
             )
     else:
         print("active leases: none")

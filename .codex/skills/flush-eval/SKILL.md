@@ -17,7 +17,7 @@ Default eval protocol unless the user says otherwise:
 
 This skill is for eval-only work. Do not launch training, upload model cards, publish checkpoints, or mutate candidate selection beyond creating explicitly requested eval jobs.
 
-If the user asks to run remote/provider evals, estimate expected cost first and get explicit approval. Local eval runner work does not require a provider-cost approval, but still report expected runtime and hardware assumptions.
+Use the local eval runner by default. Report expected runtime and hardware assumptions when the queue is large.
 
 ## Workflow
 
@@ -79,10 +79,9 @@ The report should include:
 
 - Do not print `.env` values or database URLs.
 - Do not reset failed jobs unless the user asks for retries.
-- Do not launch remote/provider workers without explicit cost approval in the current turn.
 - Do not use terminal-on-life eval as the default for this skill; the default is explicitly no terminal on life.
 - Keep generated reports and scratch outputs under ignored paths such as `runs/`.
 
 ## Final Response
 
-Report the exact profile, episode count, seed, runner shape, number of jobs evaluated, remaining job counts, top results, and any skipped cost/provider details. Include the remote-provider retrospective required by `AGENTS.md` only when remote providers were used.
+Report the exact profile, episode count, seed, runner shape, number of jobs evaluated, remaining job counts, top results, and any skipped local-runtime details.

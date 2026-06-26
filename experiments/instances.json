@@ -14,13 +14,9 @@
       "env_threads": 4,
       "torch_num_threads": 1,
       "expected_aggregate_wall_fps": 6200,
-      "legacy_api_endpoints": [
-        "http://100.118.135.59:46580",
-        "http://192.168.0.151:46580"
-      ],
       "lower_contention_children": [3, 4],
       "notes": [
-        "Mac-side rlab-fleet manages Docker runner containers on this host; do not run SkyPilot here.",
+        "Mac-side rlab-fleet manages Docker runner containers on this host.",
         "Use 5 children with env_threads=4 for screening queues.",
         "Use 3-4 children with env_threads=4 when individual latency or lower contention matters."
       ]
@@ -40,9 +36,8 @@
       "env_threads": 2,
       "fast_turnaround_children": 2,
       "fast_turnaround_env_threads": 4,
-      "legacy_infra": "ssh/beast2",
       "notes": [
-        "Mac-side rlab-fleet manages Docker runner containers on this host; do not run SkyPilot here.",
+        "Mac-side rlab-fleet manages Docker runner containers on this host.",
         "Use ssh -o HostKeyAlias=beast-2 tsilva@192.168.133.26 until hostname resolution is restored.",
         "The local-8332822-dirty image tag is a legacy k3s/containerd artifact; use pushed immutable GHCR digest refs for Docker fleet jobs."
       ]
@@ -57,81 +52,8 @@
       "env_threads": 0,
       "torch_num_threads": 0,
       "notes": [
-        "Use direct local training/eval commands, not SkyPilot launch.",
+        "Use direct local training/eval commands.",
         "Best for smoke tests, debugging, and playback rather than long PPO batches."
-      ]
-    },
-    "modal-t4": {
-      "aliases": ["modal", "t4-modal"],
-      "label": "Modal T4",
-      "kind": "modal",
-      "accelerator": "T4",
-      "modal_gpu": "T4",
-      "cpu": 16.0,
-      "memory_mib": 32768,
-      "children": 1,
-      "max_children": 1,
-      "n_envs": 32,
-      "env_threads": 0,
-      "torch_num_threads": 0,
-      "notes": [
-        "Use through rlab-compute launch --target modal-t4.",
-        "Modal ROMs must already be uploaded to the rlab-data volume with upload_roms."
-      ]
-    },
-    "runpod-rtx4090": {
-      "aliases": ["runpod4090"],
-      "label": "RunPod RTX4090 secure pod",
-      "kind": "skypilot",
-      "infra": "runpod",
-      "accelerator": "RTX4090",
-      "cpus": "5+",
-      "memory": "29+",
-      "image_id": "docker:runpod/base:1.0.2-ubuntu2204",
-      "children": 1,
-      "max_children": 1,
-      "env_threads": 2,
-      "torch_num_threads": 1,
-      "expected_hourly_cost": 0.69,
-      "notes": [
-        "Catalog observed 1x_RTX4090_SECURE as 5 vCPU, 29 GB host memory, about $0.690/hr.",
-        "Benchmark before raising children above 1; this shape has less host CPU and memory than beast-3."
-      ]
-    },
-    "runpod-l4": {
-      "aliases": ["l4", "runpod-l4-secure"],
-      "label": "RunPod L4 secure pod",
-      "kind": "skypilot",
-      "infra": "runpod",
-      "accelerator": "L4",
-      "cpus": "5+",
-      "memory": "29+",
-      "image_id": "docker:runpod/base:1.0.2-ubuntu2204",
-      "children": 1,
-      "max_children": 1,
-      "env_threads": 2,
-      "torch_num_threads": 1,
-      "notes": [
-        "Use for lower-cost smoke or queue work after a small throughput benchmark."
-      ]
-    },
-    "runpod-t4": {
-      "aliases": ["t4", "runpod-t4-secure"],
-      "label": "RunPod T4 secure pod (unavailable in SkyPilot catalog)",
-      "kind": "skypilot",
-      "available": false,
-      "disabled_reason": "SkyPilot RunPod catalog returned no T4 offerings on 2026-06-24.",
-      "infra": "runpod",
-      "accelerator": "T4",
-      "cpus": "4+",
-      "memory": "16+",
-      "image_id": "docker:runpod/base:1.0.2-ubuntu2204",
-      "children": 1,
-      "max_children": 1,
-      "env_threads": 1,
-      "torch_num_threads": 1,
-      "notes": [
-        "Use for cheap smoke tests or eval-style checks; benchmark before training campaigns."
       ]
     }
   }

@@ -30,6 +30,8 @@ These are the first metrics to check when choosing policies.
 | `train/done/<reason>` | Cumulative count of done events attributed to `<reason>`, such as `life_loss`, `level_change`, `max_steps`, or `unclassified`. Reason counters are explanatory and do not have to sum to `train/done/all`. |
 | `train/done/<reason>/from/<prev>` | Cumulative count of structured done events for `<reason>` whose native payload reported previous value `<prev>`. Multi-key values are joined with `-`, e.g. `0-0`. |
 | `train/done/<reason>/from/<prev>/ep_window/rate` | Fraction of the last 100 non-`global_reset` terminal training episodes whose configured source value for `<reason>` was `<prev>` that ended with that structured done event. Each `<reason>/from/<prev>` has its own 100-episode denominator and emits only after that per-source window is full. |
+| `train/done/<reason>/from_rate/min` | Minimum across the full per-source `ep_window/rate` values for `<reason>`. For the current two-level Mario goal, use `train/done/level_change/from_rate/min` as the live training bottleneck metric. |
+| `train/done/<reason>/from_rate/mean` | Mean across the full per-source `ep_window/rate` values for `<reason>`. This is secondary; it can hide one weak level. |
 | `eval/done/level_change/rate` | Pooled eval episode completion fraction. |
 | `eval/done/level_change/from/<start>/rate` | Eval completion fraction for episodes that started from `<start>`. |
 | `eval/done/level_change/from_rate/min` | Minimum per-start eval completion fraction. Use this first when comparing multi-start-state policies. |
@@ -46,6 +48,27 @@ ending training episodes.
 `eval/done/level_change/from_rate/min` is the eval selection metric for multi-start-state
 policies. The top-level eval metrics are pooled summaries and should be treated as secondary
 when per-start-state eval done metrics exist.
+
+### Mario Level1-1/Level1-2 Notes
+
+For the current Level1-1/Level1-2 training goal, native level values map to training metrics as:
+
+| Level | Training window-rate metric |
+| --- | --- |
+| `Level1-1` | `train/done/level_change/from/0-0/ep_window/rate` |
+| `Level1-2` | `train/done/level_change/from/0-1/ep_window/rate` |
+
+Use `train/done/level_change/from_rate/min` as the live training bottleneck: it is the lower of
+the full per-level window rates at each logging point. For example, `Level1-1 = 0.50` and
+`Level1-2 = 0.40` produces a min of `0.40`, while `Level1-1 = 0.30` and `Level1-2 = 0.80`
+produces a min of `0.30`. The mean is secondary because it can hide one weak level. Once
+checkpoint eval jobs have logged per-start metrics, use `eval/done/level_change/from_rate/min`
+as the balanced eval selection metric.
+
+Use current `train/reward_share/*` metrics for reward attribution rather than the older
+`train/reward_component/*` namespace. Shares are based on absolute rollout contribution
+magnitude, so negative components such as death or time penalties are visible by magnitude
+rather than canceling against positive reward.
 
 Training done criteria are configured with `--done-on-info-json`, which maps reason names to native
 info-variable rules. For Mario, a typical rule set is
@@ -64,6 +87,15 @@ for natural level transitions. Evaluation forces `done_on_info={}` in env constr
 the eval episode when it observes completion, so `eval/done/level_change` and
 `eval/done/level_change/from/<start>` track natural transitions per eval episode. Eval `from` values
 are the configured episode start state, not native `done_on_info` previous-value payloads.
+
+Training `train/done/*` windows are terminal-episode metrics. A natural level transition observed
+while the training env keeps running sets `level_complete` / `completion_event` in the step info,
+but it is not currently appended to `train/done/level_change/from/<prev>/ep_window/rate`. To count
+that transition in the training done windows today, configure the level change as a `done_on_info`
+rule, which also ends that episode. Those training done-window successes are based on the fired
+native `done_on_info` reason, not a second check of `level_complete`; target/eval completion logic
+separately filters death-induced level changes. Tracking multiple non-terminal clears inside one
+continued training episode would require a separate completion-event metric family.
 
 ## SB3 PPO Metrics
 

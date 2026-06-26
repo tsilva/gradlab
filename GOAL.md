@@ -105,12 +105,12 @@ Most important retained facts from the retired experiment history:
 - Historical `BASELINE*` names are retired. In this repo, "baseline" now means a
   config confirmed under the current `100/100` protocol.
 - Stable-retro runtime cautions and the current default runtime pin live in
-  `AGENTS.md`; hardware and SkyPilot facts live in `INSTANCES.md`.
+  `AGENTS.md`; beast hardware facts live in `INSTANCES.md`.
 
 ## RTX4090 Execution
 
-Run local RTX4090 queue work through the Mac-managed Docker fleet on `beast-3`,
-not through SkyPilot. The usual flow is:
+Run local RTX4090 queue work through the Mac-managed Docker fleet on `beast-3`.
+The usual flow is:
 
 ```bash
 UV_CACHE_DIR=.uv-cache uv run rlab-fleet status
@@ -119,9 +119,8 @@ UV_CACHE_DIR=.uv-cache uv run rlab-fleet ensure-runner --host beast-3 --image la
 UV_CACHE_DIR=.uv-cache uv run rlab-fleet reconcile --execute
 ```
 
-Use SkyPilot only for SkyPilot-backed providers such as RunPod. Keep hardware
-target facts in `INSTANCES.md`, and update that file when fleet capacity,
-runner shape, or host setup changes.
+Keep hardware target facts in `INSTANCES.md`, and update that file when fleet
+capacity, runner shape, or host setup changes.
 
 Benchmark-backed scheduling decision for the current `n_envs=16`, `n_steps=512`
 shape:
@@ -423,8 +422,8 @@ On 2026-06-16, screen batch 1 was interrupted because the RTX4090 host had to
 be shut down.
 
 ```text
-task: sky_mario_100of100_screen_batch1_4090.yaml
-cluster: rlab-100of100-screen1
+legacy_launcher_task: removed
+legacy_cluster: rlab-100of100-screen1
 wandb_group: 100of100-screen-batch1-20260616_151115
 runtime: stable-retro-turbo==1.0.0.post4
 stage: screen
@@ -453,9 +452,9 @@ On 2026-06-18, B30 screened post12 reliability variants on seed `23` with five
 concurrent RTX4090 children and the strict `100/100` terminal-episode stop.
 
 ```text
-task: sky_post12_reliability_screen_b30_4090.yaml
-manifest: experiments/launches/post12_reliability_screen_b30.local.json
-cluster: rlab-post12-5seed-followup
+legacy_launcher_task: removed
+legacy_manifest: removed
+legacy_cluster: rlab-post12-5seed-followup
 wandb_group_prefix: b30-post12-reliability-screen
 runtime: stable-retro-turbo==1.0.0.post12
 stage: screen
@@ -500,9 +499,9 @@ On 2026-06-18, B31 screened looser KL fuses on seed `23` with five concurrent
 RTX4090 children and the strict `100/100` terminal-episode stop.
 
 ```text
-task: sky_post12_loose_kl_screen_b31_4090.yaml
-manifest: experiments/launches/post12_loose_kl_screen_b31.local.json
-cluster: rlab-post12-loose-kl-b31
+legacy_launcher_task: removed
+legacy_manifest: removed
+legacy_cluster: rlab-post12-loose-kl-b31
 wandb_group_prefix: b31-post12-loosekl-screen
 runtime: stable-retro-turbo==1.0.0.post12
 stage: screen
@@ -542,9 +541,9 @@ seed `23`, but the run was interrupted around `2.0M` timesteps because the user
 stopped the batch.
 
 ```text
-task: sky_post12_clippeddx_kl_screen_b32_4090.yaml
-manifest: experiments/launches/post12_clippeddx_kl_screen_b32.local.json
-cluster: rlab-post12-clippeddx-kl-b32
+legacy_launcher_task: removed
+legacy_manifest: removed
+legacy_cluster: rlab-post12-clippeddx-kl-b32
 wandb_group_prefix: b32-post12-clippeddx-kl-screen
 runtime: stable-retro-turbo==1.0.0.post12
 stage: screen
@@ -599,9 +598,9 @@ Interpretation:
 ## Completed Batch B33
 
 ```text
-task: sky_post12_late_stability_screen_b33_4090.yaml
-manifest: experiments/launches/post12_late_stability_screen_b33.local.json
-cluster: rlab-post12-late-stab-b33
+legacy_launcher_task: removed
+legacy_manifest: removed
+legacy_cluster: rlab-post12-late-stab-b33
 wandb_group_prefix: b33-post12-late-stability-screen
 runtime: stable-retro-turbo==1.0.0.post12
 stage: screen
@@ -650,8 +649,8 @@ Interpretation:
 ## Active Batch B34
 
 ```text
-manifest: experiments/launches/post12_ent1e4_confirm_b34.local.json
-cluster: rlab-post12-ent1e4-b34
+legacy_manifest: removed
+legacy_cluster: rlab-post12-ent1e4-b34
 runtime: stable-retro-turbo==1.0.0.post12
 stage: confirm
 fresh_seeds: 24,25,26

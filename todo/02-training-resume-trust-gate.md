@@ -9,7 +9,6 @@ Subagent: Ptolemy
 Training resume inputs can flow into unsafe SB3/PyTorch deserialization:
 
 - `src/rlab/train_runner.py:54-65` converts `resume_artifact` into a downloaded local `resume` path.
-- `src/rlab/modal_train.py:104` accepts `resume`, `resume_artifact`, and `auto_resume_latest`, then forwards the resolved path.
 - `src/rlab/train.py:84-86` passes `args.resume` directly to `PPO.load()`.
 
 `PPO.load()` deserializes SB3 checkpoint archives. Treat checkpoint files and downloaded W&B artifacts as code-bearing inputs unless provenance and integrity are explicitly trusted.
@@ -18,7 +17,7 @@ Training resume inputs can flow into unsafe SB3/PyTorch deserialization:
 
 No training code path calls `PPO.load()` for a resume unless the checkpoint passes one centralized trust gate.
 
-Accepted resume sources are limited to project-produced model artifacts/checkpoints with current metadata, expected W&B entity/project provenance, a `.zip` model file, and integrity checks. Arbitrary local paths or cross-project W&B artifact refs fail before launching local subprocesses or Modal workers, unless the project intentionally adds a clearly named unsafe operator override.
+Accepted resume sources are limited to project-produced model artifacts/checkpoints with current metadata, expected W&B entity/project provenance, a `.zip` model file, and integrity checks. Arbitrary local paths or cross-project W&B artifact refs fail before launching local subprocesses or train runners, unless the project intentionally adds a clearly named unsafe operator override.
 
 ## Implementation plan
 
@@ -42,11 +41,7 @@ Accepted resume sources are limited to project-produced model artifacts/checkpoi
    - In `normalize_train_config()`, validate existing `resume` values before command construction.
    - Replace the `resume_artifact` branch with the trusted W&B helper.
    - Preserve the existing `resume` versus `resume_artifact` conflict error.
-5. Wire the trust gate into Modal training:
-   - In `train_remote()`, validate raw `resume`, trusted downloaded `resume_artifact`, and `_latest_checkpoint(run_name)` before adding `train_options["resume"]`.
-   - Use Modal allowed roots such as `RUNS_DIR` and the W&B artifact cache root.
-   - Keep validation inside the remote worker too, not only in the local entrypoint.
-6. Reduce direct sink usage:
+5. Reduce direct sink usage:
    - In `train.py`, replace direct `PPO.load(args.resume, ...)` with `load_trusted_resume_model(...)`.
    - The helper should call validation immediately before `PPO.load()`, covering direct CLI use.
 
@@ -55,7 +50,6 @@ Accepted resume sources are limited to project-produced model artifacts/checkpoi
 - Add unit tests for the trust module: valid checkpoint plus metadata, missing metadata, bad metadata hash, SHA mismatch, non-zip file, symlink escape, outside-root path, and missing file.
 - Update campaign runner resume tests so `resume_artifact` succeeds only when the mocked download returns a checkpoint accepted by the trust gate.
 - Add tests that `normalize_train_config()` rejects unsafe raw `resume` paths and disallowed W&B refs.
-- Extract Modal resume resolution into a helper if needed, then test `resume`, `resume_artifact`, `auto_resume_latest`, and conflict behavior without launching Modal.
 - Add a light `train.py` test around the new loader helper, monkeypatching `PPO.load()` to prove validation runs first.
 
 Run:
@@ -69,7 +63,7 @@ rg -n "PPO\\.load\\(args\\.resume|download_model_artifact\\(.*resume" src tests
 
 This will likely break resuming from older checkpoints that lack sidecar metadata or hashes. Provide a migration path: re-upload/re-log known-good checkpoints with current metadata, or add a temporary explicit `--allow-legacy-resume` only if the owner accepts the residual pickle risk.
 
-Do not delete existing artifacts during remediation. First validate with a known current checkpoint locally, then with one Modal smoke resume, then enable stricter campaign-worker behavior.
+Do not delete existing artifacts during remediation. First validate with a known current checkpoint locally, then enable stricter campaign-worker behavior.
 
 Adjacent `PPO.load()` use in eval/play scripts is visible but outside this issue. Track it separately so the training fix stays small.
 

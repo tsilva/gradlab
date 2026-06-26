@@ -8,9 +8,7 @@ from typing import Any
 DEFAULT_INSTANCE_CONFIG = "experiments/instances.json"
 DEFAULT_COMPUTE_TARGET = "rtx4090"
 LOCAL_TARGET_KINDS = {"local"}
-SKYPILOT_TARGET_KINDS = {"skypilot", ""}
 FLEET_TARGET_KINDS = {"fleet", "docker", "docker-fleet"}
-MODAL_TARGET_KINDS = {"modal"}
 
 
 def load_json_file(path: Path) -> dict[str, Any]:
@@ -79,43 +77,13 @@ def instance_label(instance: dict[str, Any]) -> str:
 
 
 def target_kind(instance: dict[str, Any]) -> str:
-    return str(instance.get("kind", "skypilot")).strip().lower()
-
-
-def launch_infra(instance: dict[str, Any]) -> str | None:
-    value = str(instance.get("infra", "")).strip()
-    return value or None
+    return str(instance.get("kind", "")).strip().lower()
 
 
 def ensure_available_target(instance: dict[str, Any]) -> None:
     if instance.get("available") is False:
         reason = str(instance.get("disabled_reason") or "target is marked unavailable")
         raise ValueError(f"target {instance_label(instance)!r} is unavailable: {reason}")
-
-
-def ensure_skypilot_target(instance: dict[str, Any]) -> None:
-    ensure_available_target(instance)
-    kind = target_kind(instance)
-    if kind not in SKYPILOT_TARGET_KINDS:
-        if kind in FLEET_TARGET_KINDS:
-            raise ValueError(
-                f"target {instance_label(instance)!r} has kind {kind!r}; "
-                "use rlab-fleet to manage Docker runner containers instead of SkyPilot"
-            )
-        raise ValueError(
-            f"target {instance_label(instance)!r} has kind {kind!r}; "
-            "use the matching compute launcher instead of SkyPilot"
-        )
-
-
-def ensure_modal_target(instance: dict[str, Any]) -> None:
-    ensure_available_target(instance)
-    kind = target_kind(instance)
-    if kind not in MODAL_TARGET_KINDS:
-        raise ValueError(
-            f"target {instance_label(instance)!r} has kind {kind!r}; "
-            "use a Modal target such as modal-t4"
-        )
 
 
 def ensure_local_target(instance: dict[str, Any]) -> None:

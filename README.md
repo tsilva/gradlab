@@ -4,8 +4,8 @@
   **Reinforcement-learning workbench for training game agents**
 </div>
 
-It uses `stable-retro-turbo`, Stable-Baselines3, W&B, and local or remote
-runners to move from ROM import to checkpoint evaluation and playback.
+It uses `stable-retro-turbo`, Stable-Baselines3, W&B, and local queue runners
+to move from ROM import to checkpoint evaluation and playback.
 
 The repo is optimized for experiment iteration: configure a game target, run a
 bounded training job, upload checkpoints, evaluate them out of process, and
@@ -125,39 +125,26 @@ Use `rlab-campaign status <goal>` and `rlab-campaign lineage <goal>` for the
 decision view. Status prints eval selection leaders separately; training metrics
 are diagnostic unless out-of-process eval agrees.
 
-## Remote Runs
-
-Modal setup:
+For a quick terminal monitor over campaign jobs and fleet state:
 
 ```bash
-UV_CACHE_DIR=.uv-cache uv sync --frozen --extra modal
-UV_CACHE_DIR=.uv-cache uv run modal setup
-UV_CACHE_DIR=.uv-cache uv run modal run src/rlab/modal_app.py::upload_roms --rom-dir ~/Desktop/roms
+UV_CACHE_DIR=.uv-cache uv run rlab-monitor --view all
+UV_CACHE_DIR=.uv-cache uv run rlab-monitor --json
 ```
 
-Provider-neutral Modal launch dry run:
+## Queue Runners
 
-```bash
-UV_CACHE_DIR=.uv-cache uv run rlab-compute launch \
-  experiments/launches/rlab_rtx4090.example.json \
-  --target modal-t4
-```
+Queue-backed training is the supported GPU workflow. Create train jobs with
+`rlab-campaign`, then run capacity through `rlab-fleet` on `beast-3` and
+`beast-2`.
 
-SkyPilot launch manifests live in `experiments/launches/` and are rendered or
-preflighted through `rlab-compute` for provider-neutral direct launches or
-`rlab-skypilot` for SkyPilot-specific workflows. Read `INSTANCES.md` before
-choosing hardware, changing concurrency, or launching remote training. Local
-`beast-3` and `beast-2` targets are Docker fleet hosts, not SkyPilot targets;
-use `rlab-fleet` for those and reserve `rlab-skypilot` for SkyPilot-backed
-providers such as RunPod.
+For queue-backed training, keep worker capacity in `experiments/fleet.json` and
+`experiments/policies/capacity_policy.json`. `rlab-fleet` starts digest-pinned
+Docker containers running `rlab.train_runner`; experiment payloads stay in the
+campaign queue.
 
-For queue-backed training, prefer long-lived runner profiles in
-`experiments/runner_profiles/`. Local beast profiles are consumed by
-`rlab-fleet`, which starts digest-pinned Docker containers running
-`rlab.train_runner`; experiment payloads stay in the campaign queue.
-
-For local GPU queue capacity, run the fleet manager from the MacBook instead of
-SkyPilot. It reads pending/running `train_jobs`, groups demand by `profile_id`,
+For local GPU queue capacity, run the fleet manager from the MacBook. It reads
+pending/running `train_jobs`, groups demand by `profile_id`,
 `runtime_image_ref`, and `run_target`, then reconciles Docker runner containers
 on `beast-3` and `beast-2` over SSH. The beast hosts are intentionally just
 Docker engines; they do not poll the queue or run a local fleet service.
@@ -234,14 +221,15 @@ still owns a running queue lease.
 - Every training run should include `--run-description`.
 - Training logs to W&B and uploads model artifacts unless `--no-wandb-artifacts`
   is set.
-- Queue-backed train jobs should reference immutable runtime image digests. The
-  train-image CI workflow uploads `rlab-train-image.json`; pass it with
-  `--runtime-image-ref-file` when enqueueing jobs.
+- Queue-backed train jobs are profileless by default and should reference
+  immutable runtime image digests. `rlab-campaign enqueue-train` resolves the
+  latest successful train-image artifact when no explicit digest/file is given;
+  pass `--profile <profile-id>` only for an intentionally profile-locked lane.
 - Set `WANDB_API_KEY` for online W&B. For R2/S3-backed reference artifacts, set
   `CHECKPOINT_BUCKET_URI` or pass `--wandb-artifact-storage-uri`, along with the
   required `AWS_*` credentials.
-- Keep generated checkpoints, logs, videos, W&B files, caches, and ad hoc launch
-  specs out of source control.
+- Keep generated checkpoints, logs, videos, W&B files, caches, and scratch
+  outputs out of source control.
 - Local eval outputs are written under `runs/local_evals/<run-name>/`.
 
 ## Architecture

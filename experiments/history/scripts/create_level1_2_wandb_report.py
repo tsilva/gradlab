@@ -13,10 +13,10 @@ import wandb
 from dotenv import load_dotenv
 from rlab.metric_names import (
     EVAL_DONE_LEVEL_CHANGE_FROM_RATE_MIN,
-    ROLLOUT_ADVANTAGE,
-    ROLLOUT_VALUE_PRED,
     THROUGHPUT_LOOP_FPS,
     THROUGHPUT_ROLLOUT_FPS,
+    ROLLOUT_ADVANTAGE,
+    ROLLOUT_VALUE_PRED,
     TRAIN_DONE_ALL,
     TRAIN_DONE_LEVEL_CHANGE_FROM_RATE_MEAN,
     TRAIN_DONE_LEVEL_CHANGE_FROM_RATE_MIN,
@@ -128,10 +128,18 @@ def normalize_report_url(url: str) -> str:
     return urlunsplit((parts.scheme, parts.netloc, path, parts.query, parts.fragment))
 
 
+def runset_query(query: str, run_state: str | None) -> str:
+    return query.strip()
+
+
 def runset_filters(run_state: str | None) -> str:
     if run_state is None:
         return ""
     return f"State = '{run_state}'"
+
+
+def filter_value(value: str) -> str:
+    return value.replace("\\", "\\\\").replace("'", "\\'")
 
 
 def wandb_run_filters(query: str, run_state: str | None = None) -> dict[str, object]:
@@ -274,9 +282,11 @@ def policy_selection_markdown(
         lines.append("| " + " | ".join(values) + " |")
 
     if not rows:
-        empty_values = ["n/a", "No active runs matched the report filters."]
-        empty_values.extend(["n/a"] * (len(headers) - 2))
-        lines.append("| " + " | ".join(empty_values) + " |")
+        lines.append(
+            "| "
+            + " | ".join(["n/a", "No active runs matched the report filters.", *["n/a"] * (len(headers) - 2)])
+            + " |"
+        )
     return "\n".join(lines)
 
 
@@ -288,9 +298,7 @@ def backfill_min_rate_summary(runs: list[object], level_specs: list[LevelSpec]) 
             continue
         numeric_rates = [rate for rate in rates if rate is not None]
         run.summary[TRAIN_DONE_LEVEL_CHANGE_FROM_RATE_MIN] = min(numeric_rates)
-        run.summary[TRAIN_DONE_LEVEL_CHANGE_FROM_RATE_MEAN] = sum(numeric_rates) / len(
-            numeric_rates,
-        )
+        run.summary[TRAIN_DONE_LEVEL_CHANGE_FROM_RATE_MEAN] = sum(numeric_rates) / len(numeric_rates)
         run.summary.update()
         run.update()
         updated += 1
@@ -383,9 +391,9 @@ def build_report(
             "Name",
             "State",
             "group",
-            *[f"summary.{metric}" for metric in level_window_rate_metrics],
             f"summary.{TRAIN_DONE_LEVEL_CHANGE_FROM_RATE_MIN}",
             f"summary.{TRAIN_DONE_LEVEL_CHANGE_FROM_RATE_MEAN}",
+            *[f"summary.{metric}" for metric in level_window_rate_metrics],
             *[f"summary.{metric}" for metric in level_count_metrics],
             f"summary.{EVAL_DONE_LEVEL_CHANGE_FROM_RATE_MIN}",
             f"summary.{TRAIN_DONE_ALL}",
@@ -426,8 +434,8 @@ def build_report(
         description=(
             "Training-focused view for active SuperMarioBros-NES runs. It prioritizes "
             "the current running W&B runset, minimum per-level clearance rate, "
-            "per-level 100-terminal-episode completion windows, reward attribution, "
-            "rollout diagnostics, and PPO health."
+            "per-level 100-terminal-episode completion "
+            "windows, reward attribution, rollout diagnostics, and PPO health."
         ),
         width="fluid",
         blocks=[

@@ -29,9 +29,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Download a W&B model artifact and play it locally"
     )
-    parser.add_argument(
-        "run_name", nargs="?", help="Training run name, e.g. modal_gpu_short_improve"
-    )
+    parser.add_argument("run_name", nargs="?", help="Training run name, e.g. mario_l1_smoke")
     parser.add_argument("--project", default=DEFAULT_WANDB_PROJECT_PATH, help="W&B entity/project")
     parser.add_argument("--artifact", help="Full artifact ref, overriding run_name/kind/project")
     parser.add_argument("--kind", choices=["final", "best", "checkpoint"], default="final")

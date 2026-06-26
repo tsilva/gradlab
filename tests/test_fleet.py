@@ -4,6 +4,7 @@ import json
 import tempfile
 import unittest
 from argparse import Namespace
+from datetime import UTC, datetime
 from pathlib import Path
 from unittest import mock
 
@@ -131,6 +132,26 @@ class FleetQueueTests(unittest.TestCase):
         self.assertEqual(rows[0].running_count, 1)
         self.assertIn("GROUP BY profile_id, runtime_image_ref, run_target", conn.cursor_obj.executed_sql)
         self.assertIn("status IN ('pending', 'running')", conn.cursor_obj.executed_sql)
+
+    def test_queue_demands_preserves_profileless_jobs_as_any_profile(self) -> None:
+        conn = FakeConnection(
+            [
+                {
+                    "profile_id": None,
+                    "runtime_image_ref": RUNTIME_IMAGE_REF,
+                    "run_target": "rtx4090",
+                    "pending_count": 2,
+                    "running_count": 0,
+                    "max_priority": 3,
+                    "oldest_job_id": 7,
+                }
+            ]
+        )
+
+        rows = fleet.queue_demands(conn)
+
+        self.assertIsNone(rows[0].profile_id)
+        self.assertIn("profile=any", fleet.format_demands(rows))
 
     def test_runtime_image_ref_file_accepts_ci_json_artifact(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -645,6 +666,56 @@ class FleetPlanTests(unittest.TestCase):
         self.assertIn("worker=4-56ea2c67", job_line)
         self.assertNotIn("target=rtx4090", job_line)
         self.assertNotIn("owner=rlab-beast-3-rtx4090-any-profile-cccccccccccc-4-56ea2c67", job_line)
+
+    def test_format_containers_shows_heartbeat_as_elapsed_time(self) -> None:
+        container = fleet.ExistingContainer(
+            host="beast-3",
+            name="rlab-beast-3-rtx4090-any-profile-cccccccccccc",
+            state="running",
+            status="Up 5 minutes",
+            image="ghcr.io/tsilva/rlab/rlab-train",
+            labels={
+                "rlab.managed": "true",
+                "rlab.host": "beast-3",
+                "rlab.profile": "",
+                "rlab.run-target": "rtx4090",
+                "rlab.runtime-digest": "cccccccccccc",
+                "rlab.runtime-image-ref": RUNTIME_IMAGE_REF,
+                "rlab.worker-prefix": "rlab-beast-3-rtx4090-any-profile-cccccccccccc",
+            },
+        )
+        job = fleet.RunningJob(
+            id=123,
+            lease_owner="rlab-beast-3-rtx4090-any-profile-cccccccccccc-4-56ea2c67",
+            profile_id=None,
+            runtime_image_ref=RUNTIME_IMAGE_REF,
+            run_target="rtx4090",
+            run_name="b83_l11_lowkl_lrdecay_image_s121_20260626T153508Z",
+            started_at=None,
+            heartbeat_at=datetime.now(UTC),
+        )
+
+        output = fleet.format_containers([container], [job])
+        job_line = next(line for line in output.splitlines() if "job=123" in line)
+
+        self.assertRegex(job_line, r"heartbeat=\d+s_ago")
+        self.assertNotIn("+00:00", job_line)
+
+    def test_format_elapsed_since_uses_compact_age_buckets(self) -> None:
+        now = datetime(2026, 6, 26, 16, 30, tzinfo=UTC)
+
+        self.assertEqual(
+            fleet.format_elapsed_since(datetime(2026, 6, 26, 16, 29, 42, tzinfo=UTC), now=now),
+            "18s_ago",
+        )
+        self.assertEqual(
+            fleet.format_elapsed_since(datetime(2026, 6, 26, 16, 25, tzinfo=UTC), now=now),
+            "5m_ago",
+        )
+        self.assertEqual(
+            fleet.format_elapsed_since(datetime(2026, 6, 26, 14, 30, tzinfo=UTC), now=now),
+            "2h_ago",
+        )
 
     def test_format_containers_keeps_mismatched_job_target_visible(self) -> None:
         container = fleet.ExistingContainer(

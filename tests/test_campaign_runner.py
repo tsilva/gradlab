@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import tempfile
 import unittest
@@ -15,6 +16,7 @@ from rlab.train_runner import (
     normalize_train_config,
     parse_log_metrics,
     train_command_for_job,
+    write_train_config_file,
 )
 
 
@@ -133,7 +135,41 @@ class CampaignQueueTests(unittest.TestCase):
         self.assertIn("origin_decision_id", campaign.SCHEMA_SQL)
         self.assertIn("runtime_image_ref TEXT", campaign.SCHEMA_SQL)
         self.assertIn("run_target TEXT", campaign.SCHEMA_SQL)
+        self.assertIn("ALTER COLUMN profile_id DROP NOT NULL", campaign.SCHEMA_SQL)
         self.assertIn("train_jobs_runtime_claim_idx", campaign.SCHEMA_SQL)
+
+    def test_record_running_train_result_upserts_wandb_url(self) -> None:
+        conn = FakeConnection()
+
+        campaign.record_running_train_result(
+            conn,
+            job={
+                "id": 12,
+                "goal_id": 1,
+                "experiment_spec_id": 2,
+                "profile_id": None,
+                "runtime_image_ref": RUNTIME_IMAGE_REF,
+                "run_target": "rtx4090",
+                "run_name": "candidate",
+            },
+            result={
+                "run_name": "candidate",
+                "run_dir": "runs/candidate",
+                "wandb_run_id": "abc123",
+                "wandb_url": "https://wandb.ai/tsilva/SuperMarioBros-NES/runs/abc123",
+                "artifact_refs": [],
+                "metrics_json": {"train/done/all": 20},
+            },
+        )
+
+        self.assertIn("INSERT INTO train_results", conn.cursor_obj.executed_sql)
+        self.assertIn("ON CONFLICT (train_job_id) DO UPDATE", conn.cursor_obj.executed_sql)
+        self.assertEqual(conn.cursor_obj.executed_params["train_job_id"], 12)
+        self.assertEqual(
+            conn.cursor_obj.executed_params["wandb_url"],
+            "https://wandb.ai/tsilva/SuperMarioBros-NES/runs/abc123",
+        )
+        self.assertEqual(conn.cursor_obj.executed_params["run_target"], "rtx4090")
 
     def test_enqueue_train_job_persists_runtime_and_target(self) -> None:
         conn = FakeConnection(
@@ -160,6 +196,30 @@ class CampaignQueueTests(unittest.TestCase):
         self.assertEqual(conn.cursor_obj.executed_params["runtime_image_ref"], RUNTIME_IMAGE_REF)
         self.assertEqual(conn.cursor_obj.executed_params["run_target"], "rtx4090")
 
+    def test_enqueue_train_job_allows_profileless_digest_locked_jobs(self) -> None:
+        conn = FakeConnection(
+            row={
+                "id": 9,
+                "profile_id": None,
+                "runtime_image_ref": RUNTIME_IMAGE_REF,
+                "run_target": "rtx4090",
+            }
+        )
+
+        row = campaign.enqueue_train_job(
+            conn,
+            goal_id=1,
+            experiment_spec_id=2,
+            profile_id=None,
+            runtime_image_ref=RUNTIME_IMAGE_REF,
+            run_target="rtx4090",
+            train_config={"timesteps": 1024},
+        )
+
+        self.assertIsNone(row["profile_id"])
+        self.assertIsNone(conn.cursor_obj.executed_params["profile_id"])
+        self.assertEqual(conn.cursor_obj.executed_params["runtime_image_ref"], RUNTIME_IMAGE_REF)
+
     def test_enqueue_train_job_rejects_mutable_runtime_tag(self) -> None:
         conn = FakeConnection(row={"id": 9})
 
@@ -172,6 +232,35 @@ class CampaignQueueTests(unittest.TestCase):
                 runtime_image_ref="docker:ghcr.io/tsilva/rlab/rlab-train:latest",
                 train_config={"timesteps": 1024},
             )
+
+    def test_runtime_image_ref_from_args_defaults_to_latest_digest(self) -> None:
+        args = SimpleNamespace(
+            runtime_image_ref=None,
+            runtime_image_ref_file=None,
+            latest_image=False,
+            image_workflow="workflow",
+            image_branch="main",
+            image_artifact="artifact",
+        )
+        original = campaign.latest_runtime_image_ref
+        calls = []
+
+        def fake_latest_runtime_image_ref(**kwargs):
+            calls.append(kwargs)
+            return RUNTIME_IMAGE_REF
+
+        campaign.latest_runtime_image_ref = fake_latest_runtime_image_ref
+        try:
+            self.assertEqual(
+                campaign.runtime_image_ref_from_args(args, default_latest=True),
+                RUNTIME_IMAGE_REF,
+            )
+        finally:
+            campaign.latest_runtime_image_ref = original
+        self.assertEqual(
+            calls,
+            [{"workflow": "workflow", "branch": "main", "artifact_name": "artifact"}],
+        )
 
     def test_claim_eval_job_filters_exact_profile(self) -> None:
         conn = FakeConnection(row={"id": 8, "profile_id": "mario-ppo/post16/rtx4090-eval"})
@@ -393,11 +482,18 @@ class TrainRunnerTests(unittest.TestCase):
             }
 
             config = normalize_train_config(job)
-            command = train_command_for_job(job)
+            with tempfile.TemporaryDirectory() as tmp:
+                config_path = write_train_config_file(job, Path(tmp) / "train_config.json")
+                command = train_command_for_job(config_path)
+                written_config = json.loads(config_path.read_text(encoding="utf-8"))
 
             self.assertEqual(config["wandb_artifact_storage_uri"], "s3://bucket/checkpoints")
-            self.assertIn("--wandb-artifact-storage-uri", command)
-            self.assertIn("s3://bucket/checkpoints", command)
+            self.assertEqual(
+                written_config["wandb_artifact_storage_uri"],
+                "s3://bucket/checkpoints",
+            )
+            self.assertIn("--train-config-json", command)
+            self.assertIn("train_config.json", command[-1])
             self.assertNotIn('"s3://bucket/checkpoints"', command)
             self.assertNotIn("${CHECKPOINT_BUCKET_URI}", command)
         finally:
@@ -444,7 +540,10 @@ class TrainRunnerTests(unittest.TestCase):
             self.assertNotIn("resume_artifact", config)
             calls.clear()
 
-            command = train_command_for_job(job)
+            with tempfile.TemporaryDirectory() as tmp:
+                config_path = write_train_config_file(job, Path(tmp) / "train_config.json")
+                command = train_command_for_job(config_path)
+                written_config = json.loads(config_path.read_text(encoding="utf-8"))
 
             self.assertEqual(
                 calls,
@@ -456,8 +555,8 @@ class TrainRunnerTests(unittest.TestCase):
                     )
                 ],
             )
-            self.assertIn("--resume", command)
-            self.assertIn("/tmp/downloaded/model.zip", command)
+            self.assertEqual(written_config["resume"], "/tmp/downloaded/model.zip")
+            self.assertIn("--train-config-json", command)
         finally:
             train_runner.download_model_artifact = old_download
 
@@ -524,20 +623,21 @@ class TrainRunnerTests(unittest.TestCase):
         }
 
         config = normalize_train_config(job)
-        command = train_command_for_job(job)
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = write_train_config_file(job, Path(tmp) / "train_config.json")
+            command = train_command_for_job(config_path)
+            written_config = json.loads(config_path.read_text(encoding="utf-8"))
 
         self.assertEqual(config["wandb_tags"], "screen,post16")
-        self.assertIn("--run-name", command)
-        self.assertIn("b52_seed23", command)
-        self.assertIn("--states", command)
-        self.assertIn("Level1-1,Level1-2", command)
-        self.assertIn("--wandb-group", command)
-        self.assertIn("b52", command)
-        self.assertIn("--runtime-image-ref", command)
-        self.assertIn(RUNTIME_IMAGE_REF, command)
-        self.assertIn("--run-target", command)
-        self.assertIn("rtx4090", command)
-        self.assertIn("--wandb", command)
+        self.assertEqual(written_config["run_name"], "b52_seed23")
+        self.assertEqual(written_config["states"], ["Level1-1", "Level1-2"])
+        self.assertEqual(written_config["wandb_group"], "b52")
+        self.assertEqual(written_config["runtime_image_ref"], RUNTIME_IMAGE_REF)
+        self.assertEqual(written_config["run_target"], "rtx4090")
+        self.assertTrue(written_config["wandb"])
+        self.assertEqual(command[1:4], ["-m", "rlab.train", "--train-config-json"])
+        self.assertNotIn("--run-name", command)
+        self.assertNotIn("--states", command)
 
     def test_collect_result_metadata_reads_run_markers_and_artifacts(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
