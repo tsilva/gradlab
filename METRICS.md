@@ -29,7 +29,7 @@ These are the first metrics to check when choosing policies.
 | `train/done/all` | Cumulative count of non-`global_reset` training `done=True` env-slot episode boundaries. This is exhaustive. |
 | `train/done/<reason>` | Cumulative count of done events attributed to `<reason>`, such as `life_loss`, `level_change`, `max_steps`, or `unclassified`. Reason counters are explanatory and do not have to sum to `train/done/all`. |
 | `train/done/<reason>/from/<prev>` | Cumulative count of structured done events for `<reason>` whose native payload reported previous value `<prev>`. Multi-key values are joined with `-`, e.g. `0-0`. |
-| `train/done/<reason>/from/<prev>/ep_window/rate` | Fraction of the last 100 non-`global_reset` terminal training episodes that included that structured previous-value done event. Emitted only after the 100-episode window is full. |
+| `train/done/<reason>/from/<prev>/ep_window/rate` | Fraction of the last 100 non-`global_reset` terminal training episodes whose configured source value for `<reason>` was `<prev>` that ended with that structured done event. Each `<reason>/from/<prev>` has its own 100-episode denominator and emits only after that per-source window is full. |
 | `eval/done/level_change/rate` | Pooled eval episode completion fraction. |
 | `eval/done/level_change/from/<start>/rate` | Eval completion fraction for episodes that started from `<start>`. |
 | `eval/done/level_change/from_rate/min` | Minimum per-start eval completion fraction. Use this first when comparing multi-start-state policies. |
@@ -53,13 +53,17 @@ info-variable rules. For Mario, a typical rule set is
 environment terminations that do not match a configured rule and are not max-step truncations count
 as `train/done/unclassified`. When native `done_on_info` payloads include `prev` and `next`,
 training also emits fully softcoded previous-value counters such as
-`train/done/level_change/from/0-0`. Training intentionally does not emit `to` or full-transition
-counters because those multiply metric cardinality quickly. Training does
-not emit initializer-state mirrors under `train/state/<initializer>/done/*`; those labels are not
-reliable for natural level transitions. Evaluation forces `done_on_info={}` in env construction but
-stops the eval episode when it observes completion, so `eval/done/level_change` and
-`eval/done/level_change/from/<start>` track natural transitions per eval episode. Eval `from`
-values are the configured episode start state, not native `done_on_info` previous-value payloads.
+`train/done/level_change/from/0-0`. For per-source episode-window rates, successful structured
+events use the native payload `prev`; terminal episodes where that reason did not fire use the
+configured rule keys read from terminal `info` as the source value. For Mario
+`level_change`, that means life-loss or max-step terminal episodes still count in the denominator
+for their current `(levelHi, levelLo)` source level. Training intentionally does not emit `to` or
+full-transition counters because those multiply metric cardinality quickly. Training does not emit
+initializer-state mirrors under `train/state/<initializer>/done/*`; those labels are not reliable
+for natural level transitions. Evaluation forces `done_on_info={}` in env construction but stops
+the eval episode when it observes completion, so `eval/done/level_change` and
+`eval/done/level_change/from/<start>` track natural transitions per eval episode. Eval `from` values
+are the configured episode start state, not native `done_on_info` previous-value payloads.
 
 ## SB3 PPO Metrics
 

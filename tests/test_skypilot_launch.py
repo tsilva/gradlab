@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import json
+import io
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
 
+from rlab.skypilot_cli import cmd_launch_runner
 from rlab.skypilot_launch import (
     EndpointCheck,
     REQUIRED_ENV_KEYS,
@@ -149,7 +152,7 @@ class SkyPilotLaunchTests(unittest.TestCase):
     def test_render_task_injects_standard_rtx4090_training_shape(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo_root = Path(tmp)
-            rom_path = repo_root / "rom.bin"
+            rom_path = (repo_root / "rom.bin").resolve()
             manifest = sample_manifest()
             yaml = render_task_yaml(manifest, INSTANCE_CONFIG, repo_root)
 
@@ -196,7 +199,8 @@ class SkyPilotLaunchTests(unittest.TestCase):
             yaml = render_task_yaml(manifest, INSTANCE_CONFIG, repo_root)
 
         self.assertIn(
-            f"  ~/roms/TestGame-Platform/Level1-2.state: {repo_root / 'roms/Level1-2.state'}",
+                "  ~/roms/TestGame-Platform/Level1-2.state: "
+                f"{(repo_root / 'roms/Level1-2.state').resolve()}",
             yaml,
         )
 
@@ -292,6 +296,56 @@ class SkyPilotLaunchTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "database"):
             build_runner_launch_command("cluster", Path("task.yaml"), env=env)
+
+    def test_launch_runner_command_accepts_cluster_override(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo_root = Path(tmp)
+            (repo_root / "experiments").mkdir()
+            (repo_root / "experiments" / "instances.json").write_text(
+                json.dumps(INSTANCE_CONFIG),
+                encoding="utf-8",
+            )
+            (repo_root / ".env").write_text(
+                "\n".join(
+                    [
+                        *(f"{key}=value" for key in REQUIRED_ENV_KEYS),
+                        "DATABASE_URL=postgres://example",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            (repo_root / "rom.bin").write_bytes(b"rom")
+            (repo_root / "states").mkdir()
+            (repo_root / "states" / "Level1-1.state").write_bytes(b"state")
+            profile_path = repo_root / "profile.json"
+            profile_path.write_text(json.dumps(sample_runner_profile()), encoding="utf-8")
+            output_path = repo_root / "runner.yaml"
+            args = type(
+                "Args",
+                (),
+                {
+                    "profile": profile_path,
+                    "repo_root": str(repo_root),
+                    "instances": None,
+                    "target": "runpod-l4",
+                    "output": output_path,
+                    "cluster": "runner-runpod-l4",
+                    "detach_run": False,
+                    "execute": False,
+                    "sparse": True,
+                    "log_output": None,
+                    "down_on_complete": False,
+                },
+            )()
+
+            output = io.StringIO()
+            with redirect_stdout(output):
+                returncode = cmd_launch_runner(args)
+
+        self.assertEqual(returncode, 0)
+        self.assertIn("cluster: runner-runpod-l4", output.getvalue())
+        self.assertIn("sky launch -c runner-runpod-l4", output.getvalue())
+        self.assertIn("--infra runpod", output.getvalue())
 
     def test_render_runner_task_claims_profile_without_embedding_train_runs(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

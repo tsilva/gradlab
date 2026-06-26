@@ -4,13 +4,13 @@ import argparse
 import time
 from collections import deque
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Mapping
 
 import numpy as np
 from stable_baselines3.common.callbacks import BaseCallback
 
 from rlab.artifacts import checkpoint_step, log_wandb_model_artifact
-from rlab.env import EnvConfig
+from rlab.env import DoneOnInfoRules, EnvConfig
 from rlab.metric_names import (
     GLOBAL_STEP,
     ROLLOUT_ADVANTAGE,
@@ -237,17 +237,20 @@ class RewardComponentDiagnosticsCallback(BaseCallback):
 class DoneCounterCallback(BaseCallback):
     ep_window_size = 100
 
-    def __init__(self, wandb_run=None, default_state: str | None = None):
+    def __init__(
+        self,
+        wandb_run=None,
+        default_state: str | None = None,
+        done_on_info: DoneOnInfoRules | None = None,
+    ):
         super().__init__()
         self.wandb_run = wandb_run
         self.default_state = default_state
+        self.done_on_info = dict(done_on_info or {})
         self.done_count = 0
         self.reason_counts: dict[str, int] = {}
         self.detail_counts: dict[str, int] = {}
-        self.detail_episode_window: deque[tuple[str, ...]] = deque(
-            maxlen=self.ep_window_size,
-        )
-        self.detail_metrics_seen: set[str] = set()
+        self.detail_episode_windows: dict[str, deque[bool]] = {}
 
     def _on_step(self) -> bool:
         infos = self.locals.get("infos", [])
@@ -262,7 +265,7 @@ class DoneCounterCallback(BaseCallback):
             if not reason_payloads:
                 reason_payloads["unclassified"] = {}
 
-            payload = self.record_done(reason_payloads)
+            payload = self.record_done(reason_payloads, info)
 
             if self.wandb_run is not None:
                 self.wandb_run.log(
@@ -286,16 +289,20 @@ class DoneCounterCallback(BaseCallback):
             return {done_on_info: {}}
         return {}
 
-    def record_done(self, reason_payloads: dict[str, Any]) -> dict[str, int | float]:
+    def record_done(
+        self,
+        reason_payloads: dict[str, Any],
+        info: Mapping[str, Any] | None = None,
+    ) -> dict[str, int | float]:
         self.done_count += 1
-        episode_detail_metrics: list[str] = []
+        info = info or {}
+        episode_detail_metrics: set[str] = set()
         for reason, payload in reason_payloads.items():
             self.reason_counts[reason] = self.reason_counts.get(reason, 0) + 1
             for metric in self.done_detail_metrics(reason, payload):
                 self.detail_counts[metric] = self.detail_counts.get(metric, 0) + 1
-                episode_detail_metrics.append(metric)
-        self.detail_episode_window.append(tuple(episode_detail_metrics))
-        self.detail_metrics_seen.update(episode_detail_metrics)
+                episode_detail_metrics.add(metric)
+        self.record_detail_episode_windows(reason_payloads, episode_detail_metrics, info)
         return self.record_metrics()
 
     @staticmethod
@@ -311,17 +318,71 @@ class DoneCounterCallback(BaseCallback):
     def done_ep_window_rate_metric(metric: str) -> str:
         return f"{metric}/ep_window/rate"
 
+    def record_detail_episode_windows(
+        self,
+        reason_payloads: dict[str, Any],
+        fired_detail_metrics: set[str],
+        info: Mapping[str, Any],
+    ) -> None:
+        source_reasons = set(self.done_on_info)
+        source_reasons.update(reason_payloads)
+        for reason in sorted(source_reasons):
+            source_value = self.source_value_for_reason(reason, reason_payloads.get(reason), info)
+            if source_value is None:
+                continue
+            metric = train_done_value_metric(reason, "from", source_value)
+            window = self.detail_episode_windows.setdefault(
+                metric,
+                deque(maxlen=self.ep_window_size),
+            )
+            window.append(metric in fired_detail_metrics)
+
+    def source_value_for_reason(
+        self,
+        reason: str,
+        payload: Any,
+        info: Mapping[str, Any],
+    ) -> Any | None:
+        if isinstance(payload, dict) and "prev" in payload and payload["prev"] is not None:
+            return payload["prev"]
+        keys = self.source_keys_for_reason(reason, payload)
+        if keys is None:
+            return None
+        return self.info_value_for_keys(info, keys)
+
+    def source_keys_for_reason(self, reason: str, payload: Any) -> str | tuple[str, ...] | None:
+        rule = self.done_on_info.get(reason)
+        if rule is not None:
+            key_or_keys, _op = rule
+            return key_or_keys
+        if isinstance(payload, dict) and "keys" in payload:
+            key_or_keys = payload["keys"]
+            if isinstance(key_or_keys, str):
+                return key_or_keys
+            if isinstance(key_or_keys, (list, tuple)):
+                keys = tuple(str(item) for item in key_or_keys)
+                return keys if keys else None
+        return None
+
+    @staticmethod
+    def info_value_for_keys(
+        info: Mapping[str, Any],
+        keys: str | tuple[str, ...],
+    ) -> Any | None:
+        if isinstance(keys, str):
+            return info.get(keys)
+        values = []
+        for key in keys:
+            if key not in info:
+                return None
+            values.append(info[key])
+        return tuple(values)
+
     def record_ep_window_rates(self) -> dict[str, float]:
-        denominator = len(self.detail_episode_window)
-        if denominator < self.ep_window_size:
-            return {}
-        counts = dict.fromkeys(self.detail_metrics_seen, 0)
-        for episode_metrics in self.detail_episode_window:
-            for metric in set(episode_metrics):
-                counts[metric] = counts.get(metric, 0) + 1
         return {
-            self.done_ep_window_rate_metric(metric): count / denominator
-            for metric, count in sorted(counts.items())
+            self.done_ep_window_rate_metric(metric): sum(window) / len(window)
+            for metric, window in sorted(self.detail_episode_windows.items())
+            if len(window) >= self.ep_window_size
         }
 
     def record_metrics(self) -> dict[str, int | float]:

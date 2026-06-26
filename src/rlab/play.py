@@ -180,6 +180,22 @@ def task_conditioning_change_message(
     )
 
 
+def task_conditioning_start_message(
+    *,
+    episode: int,
+    step: int,
+    task: object,
+    task_index: int,
+    task_count: int,
+) -> str:
+    task_vector = [1 if index == task_index else 0 for index in range(task_count)]
+    return (
+        "task_conditioning_start "
+        f"episode={episode} step={step} task={task!r} "
+        f"index={task_index} one_hot={task_vector}"
+    )
+
+
 def task_state_from_info(info: dict, task_states: tuple[str, ...]) -> str | None:
     level_id = info.get("level_id")
     if not isinstance(level_id, str) or not level_id:
@@ -553,7 +569,7 @@ def main() -> None:
                 else args.seed + episode
             )
             torch.manual_seed(episode_seed)
-            policy_obs, _ = policy_env.reset(seed=episode_seed)
+            policy_obs, policy_reset_info = policy_env.reset(seed=episode_seed)
             if policy_env is display_env:
                 display_obs = policy_obs
             else:
@@ -583,13 +599,44 @@ def main() -> None:
                 else None
             )
             active_info_value = (
-                info_value_from_state_name(
+                task_info_value_from_info(policy_reset_info, config)
+                or info_value_from_state_name(
                     active_task_state or "",
                     config.task_conditioning_info_vars,
                 )
                 if config.task_conditioning_info_vars
                 else None
             )
+            if config.task_conditioning_info_vars and active_info_value is not None:
+                values = task_conditioning_info_values(config)
+                print(
+                    task_conditioning_start_message(
+                        episode=episode + 1,
+                        step=0,
+                        task=active_info_value,
+                        task_index=values.index(active_info_value),
+                        task_count=len(values),
+                    ),
+                    flush=True,
+                )
+            elif (
+                not config.task_conditioning_info_vars
+                and configured_task_states
+                and active_task_state is not None
+            ):
+                reset_task_state = task_state_from_info(policy_reset_info, configured_task_states)
+                if reset_task_state is not None:
+                    active_task_state = reset_task_state
+                print(
+                    task_conditioning_start_message(
+                        episode=episode + 1,
+                        step=0,
+                        task=active_task_state,
+                        task_index=configured_task_states.index(active_task_state),
+                        task_count=len(configured_task_states),
+                    ),
+                    flush=True,
+                )
             if not update_controls(frames):
                 return
             total_reward = 0.0

@@ -187,7 +187,7 @@ def cmd_launch_runner(args: argparse.Namespace) -> int:
         args.output,
         target_override=target,
     )
-    cluster = str(profile.get("cluster", profile.get("name", "rlab-runner-4090")))
+    cluster = str(args.cluster or profile.get("cluster", profile.get("name", "rlab-runner-4090")))
     env = merged_env(repo_root / ".env")
     command = build_runner_launch_command(
         cluster,
@@ -477,6 +477,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=Path("sky_train_runner_4090.yaml"),
         help="Rendered SkyPilot YAML path.",
     )
+    launch_runner.add_argument("--cluster", help="SkyPilot cluster name; overrides profile.cluster")
     launch_runner.add_argument("--execute", action="store_true", help="Actually run sky launch")
     launch_runner.add_argument(
         "--detach-run",

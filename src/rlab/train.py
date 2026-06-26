@@ -148,7 +148,11 @@ def main() -> None:
 
     callbacks = [
         ThroughputCallback(),
-        DoneCounterCallback(wandb_run=wandb_run, default_state=config.state),
+        DoneCounterCallback(
+            wandb_run=wandb_run,
+            default_state=config.state,
+            done_on_info=config.done_on_info,
+        ),
         RolloutDiagnosticsCallback(wandb_run=wandb_run),
         RewardComponentDiagnosticsCallback(),
     ]

@@ -58,6 +58,7 @@ from rlab.play import build_parser as build_play_parser
 from rlab.play import model_observation
 from rlab.play import playback_should_end_episode
 from rlab.play import task_conditioning_change_message
+from rlab.play import task_conditioning_start_message
 from rlab.task_advantage import normalize_advantages_by_task
 from rlab.targets import SuperMarioBrosNesV0Target, target_for_game
 from rlab.wandb_artifacts import (
@@ -1391,6 +1392,19 @@ class CommandAndArtifactTests(unittest.TestCase):
             "new=(0, 1) index=1 one_hot=[0, 1]",
         )
 
+    def test_task_conditioning_start_message_includes_one_hot(self) -> None:
+        self.assertEqual(
+            task_conditioning_start_message(
+                episode=1,
+                step=0,
+                task=(0, 0),
+                task_index=0,
+                task_count=3,
+            ),
+            "task_conditioning_start episode=1 step=0 task=(0, 0) "
+            "index=0 one_hot=[1, 0, 0]",
+        )
+
     def test_playback_eval_defaults_block_training_done_on_info_metadata(self) -> None:
         parser = build_play_parser()
         parser_defaults = vars(parser.parse_args([]))
@@ -1858,7 +1872,9 @@ class DoneCounterCallbackTests(unittest.TestCase):
             model.logger.records,
         )
 
-    def test_done_from_ep_window_rate_uses_100_terminal_episode_window(self) -> None:
+    def test_done_from_ep_window_rate_uses_100_matching_source_terminal_episode_window(
+        self,
+    ) -> None:
         class FakeLogger:
             def __init__(self) -> None:
                 self.records: dict[str, int | float] = {}
@@ -1871,7 +1887,10 @@ class DoneCounterCallbackTests(unittest.TestCase):
                 self.logger = FakeLogger()
 
         model = FakeModel()
-        callback = DoneCounterCallback(default_state="Level1-1")
+        callback = DoneCounterCallback(
+            default_state="Level1-1",
+            done_on_info={"level_change": (("levelHi", "levelLo"), "change")},
+        )
         callback.model = model  # type: ignore[assignment]
 
         for index in range(50):
@@ -1880,6 +1899,8 @@ class DoneCounterCallbackTests(unittest.TestCase):
                 "dones": [True],
                 "infos": [
                     {
+                        "levelHi": 0,
+                        "levelLo": 0,
                         "done_on_info": {
                             "level_change": {
                                 "op": "change",
@@ -1898,6 +1919,8 @@ class DoneCounterCallbackTests(unittest.TestCase):
                 "dones": [True],
                 "infos": [
                     {
+                        "levelHi": 0,
+                        "levelLo": 1,
                         "done_on_info": {
                             "level_change": {
                                 "op": "change",
@@ -1910,20 +1933,68 @@ class DoneCounterCallbackTests(unittest.TestCase):
             }
             self.assertTrue(callback._on_step())
 
+        self.assertNotIn(
+            "train/done/level_change/from/0-0/ep_window/rate",
+            model.logger.records,
+        )
+        self.assertNotIn(
+            "train/done/level_change/from/0-1/ep_window/rate",
+            model.logger.records,
+        )
+
+        for index in range(100, 150):
+            callback.num_timesteps = index
+            callback.locals = {
+                "dones": [True],
+                "infos": [
+                    {
+                        "levelHi": 0,
+                        "levelLo": 0,
+                        "done_on_info": {"life_loss": {"op": "decrease", "prev": 2, "next": 1}},
+                    },
+                ],
+            }
+            self.assertTrue(callback._on_step())
+
+        self.assertEqual(
+            model.logger.records["train/done/level_change/from/0-0/ep_window/rate"],
+            0.5,
+        )
+        self.assertNotIn(
+            "train/done/level_change/from/0-1/ep_window/rate",
+            model.logger.records,
+        )
+
+        for index in range(150, 225):
+            callback.num_timesteps = index
+            callback.locals = {
+                "dones": [True],
+                "infos": [
+                    {
+                        "levelHi": 0,
+                        "levelLo": 1,
+                        "done_on_info": {"life_loss": {"op": "decrease", "prev": 2, "next": 1}},
+                    },
+                ],
+            }
+            self.assertTrue(callback._on_step())
+
         self.assertEqual(
             model.logger.records["train/done/level_change/from/0-0/ep_window/rate"],
             0.5,
         )
         self.assertEqual(
             model.logger.records["train/done/level_change/from/0-1/ep_window/rate"],
-            0.5,
+            0.25,
         )
 
-        callback.num_timesteps = 100
+        callback.num_timesteps = 225
         callback.locals = {
             "dones": [True],
             "infos": [
                 {
+                    "levelHi": 0,
+                    "levelLo": 1,
                     "done_on_info": {
                         "level_change": {
                             "op": "change",
@@ -1936,13 +2007,13 @@ class DoneCounterCallbackTests(unittest.TestCase):
         }
         self.assertTrue(callback._on_step())
 
-        self.assertAlmostEqual(
+        self.assertEqual(
             model.logger.records["train/done/level_change/from/0-0/ep_window/rate"],
-            0.49,
+            0.5,
         )
         self.assertAlmostEqual(
             model.logger.records["train/done/level_change/from/0-1/ep_window/rate"],
-            0.51,
+            0.25,
         )
 
     def test_logs_done_metrics_to_wandb(self) -> None:
