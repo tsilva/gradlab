@@ -155,6 +155,13 @@ def sample_runner_profile() -> dict:
     }
 
 
+def fleet_instance_config() -> dict:
+    config = json.loads(json.dumps(INSTANCE_CONFIG))
+    config["instances"]["rtx4090"]["kind"] = "fleet"
+    config["instances"]["rtx4090"]["infra"] = "docker/beast-3"
+    return config
+
+
 class SkyPilotLaunchTests(unittest.TestCase):
     def test_render_task_injects_standard_rtx4090_training_shape(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -195,6 +202,18 @@ class SkyPilotLaunchTests(unittest.TestCase):
             )
 
         self.assertIn("accelerators: {RTX4090: 1}", yaml)
+
+    def test_render_runner_rejects_fleet_beast_target(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo_root = Path(tmp)
+
+            with self.assertRaisesRegex(ValueError, "rlab-fleet"):
+                render_runner_task_yaml(
+                    sample_runner_profile(),
+                    fleet_instance_config(),
+                    repo_root,
+                    target_override="beast-3",
+                )
 
     def test_render_task_includes_extra_file_mounts(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -558,6 +577,30 @@ class SkyPilotLaunchTests(unittest.TestCase):
 
         messages = [check.message for check in checks]
         self.assertTrue(any("immutable docker digest ref" in message for message in messages))
+        self.assertTrue(any(check.level == "error" for check in checks))
+
+    def test_preflight_runner_profile_points_fleet_target_to_fleet_manager(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo_root = Path(tmp)
+            (repo_root / "pyproject.toml").write_text(
+                'dependencies = ["stable-retro-turbo==1.0.0.post21"]\n',
+                encoding="utf-8",
+            )
+            (repo_root / "rom.bin").write_bytes(b"rom")
+            (repo_root / "states").mkdir()
+            (repo_root / "states" / "Level1-1.state").write_bytes(b"state")
+            env = {key: "value" for key in REQUIRED_ENV_KEYS}
+            env["TRAIN_QUEUE_DATABASE_URL"] = "postgres://example"
+            checks = preflight_runner_profile(
+                sample_runner_profile(),
+                fleet_instance_config(),
+                repo_root,
+                env=env,
+                target_override="beast-3",
+            )
+
+        messages = [check.message for check in checks]
+        self.assertTrue(any("rlab-fleet" in message for message in messages))
         self.assertTrue(any(check.level == "error" for check in checks))
 
     def test_preflight_rejects_non_skypilot_target_for_skypilot_launch(self) -> None:

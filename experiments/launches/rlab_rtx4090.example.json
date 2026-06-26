@@ -1,7 +1,7 @@
 {
   "name": "rlab-example-4090",
   "cluster": "rlab-example",
-  "target": "rtx4090",
+  "target": "runpod-rtx4090",
   "game": "YourGame-Platform",
   "state": "",
   "rom_source": "roms/your-game.rom",

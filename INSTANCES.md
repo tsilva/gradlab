@@ -1,6 +1,6 @@
 # GPU Instances
 
-Last updated: 2026-06-25
+Last updated: 2026-06-26
 
 Use this file as the repo-local source of truth for known GPU instances, launch targets, benchmark-backed concurrency, and operational gotchas. Re-check live availability before launching, but do not rediscover these basics from scratch unless the facts here fail.
 
@@ -8,21 +8,20 @@ Use this file as the repo-local source of truth for known GPU instances, launch 
 
 | Use case | Target | Default shape |
 | --- | --- | --- |
-| Highest-throughput Mario PPO screening | `k8s/beast-3` | 5 concurrent children, `env_threads=4` |
-| Lower-contention RTX4090 confirmation batch | `k8s/beast-3` | 3-4 concurrent children, `env_threads=4` |
-| Small-GPU batch screening | `kubernetes` on beast-2 | 4 concurrent children, `env_threads=2` |
-| Faster individual turnaround on RTX2060 | `kubernetes` on beast-2 | 2 concurrent children, `env_threads=4` |
+| Highest-throughput Mario PPO screening | `rlab-fleet` on `beast-3` | 5 Docker runner containers, `env_threads=4` |
+| Lower-contention RTX4090 confirmation batch | `rlab-fleet` on `beast-3` | 3-4 Docker runner containers, `env_threads=4` |
+| Small-GPU batch screening | `rlab-fleet` on `beast-2` | 4 Docker runner containers, `env_threads=2` |
+| Faster individual turnaround on RTX2060 | `rlab-fleet` on `beast-2` | 2 Docker runner containers, `env_threads=4` |
 | Modal baseline GPU launch | `modal-t4` | 1 child, `n_envs=32`, `env_threads=0` |
 
 Refresh these defaults when changing `n_envs`, `n_steps`, model size, deterministic CUDA flags, runtime package version, W&B/artifact behavior, or target node CPU shape.
 
 ## Unified Compute Targets
 
-Default control plane: the Mac-local SkyPilot API server at
-`http://127.0.0.1:46580`. Beast-3 and RunPod are compute targets, not required
-control-plane hosts. The old beast-3 SkyPilot API server
-`http://192.168.0.151:46580` is a legacy/remote endpoint and should not be the
-default if RunPod should work while beast-3 is off.
+Default SkyPilot control plane for non-beast providers: the Mac-local SkyPilot
+API server at `http://127.0.0.1:46580`. `beast-3` and `beast-2` are no longer
+SkyPilot targets or control-plane hosts. They are Docker/GPU hosts controlled by
+the Mac-side fleet manager.
 
 Local Mac control-plane setup as of 2026-06-24:
 
@@ -31,34 +30,31 @@ Local Mac control-plane setup as of 2026-06-24:
 - `sky api start --host 127.0.0.1` starts the local API/dashboard server.
 - `sky check runpod` succeeds from the local API server using local
   `~/.runpod/config.toml`.
-- Local kubeconfig context `beast-3` points at beast-3 Kubernetes via
-  `https://beast-3:6443`; `sky check kubernetes` enables context `beast-3`.
-  The k3s server certificate is valid for short host `beast-3` and LAN IP
-  `192.168.0.151`, but not the full Tailscale FQDN
-  `beast-3.tail50040f.ts.net`.
-- beast-2 is managed from its host-side SkyPilot server against local k3s.
-  Use `ssh -o HostKeyAlias=beast-2 tsilva@192.168.133.26` and run SkyPilot
-  with `KUBECONFIG="$HOME/.kube/config"`.
+- Historical local kubeconfig contexts for the beast hosts may still exist for
+  cleanup/inspection, but do not use SkyPilot to launch work there.
+- Use `ssh tsilva@beast-3` for `beast-3` and
+  `ssh -o HostKeyAlias=beast-2 tsilva@192.168.133.26` for `beast-2`.
 
-Machine-readable defaults live in `experiments/instances.json`. SkyPilot
-manifests and runner profiles may set `"target": "<name>"`, and the
-`rlab-compute` and `rlab-skypilot` CLIs accept `--target <name>` to override
-that without editing JSON. Prefer `rlab-compute` for provider-neutral direct
-launch manifests; keep using `rlab-skypilot` for SkyPilot-only runner profiles
-and low-level SkyPilot utilities.
+Machine-readable defaults live in `experiments/instances.json`. Local beast
+targets are marked `kind: fleet`, so `rlab-skypilot` refuses to render or launch
+them. Use `rlab-compute` for provider-neutral direct launch manifests and
+`rlab-skypilot` only for SkyPilot-backed providers such as RunPod.
 
-Local queue runners on `beast-3` and `beast-2` are managed by `rlab-fleet`,
-with host-level defaults in `experiments/fleet.json`. The fleet manager reads
-the campaign queue and reconciles Docker containers over SSH; it does not
-schedule jobs and does not inspect RL config. Use SkyPilot for future ephemeral
-RunPod provisioning, then hand the provisioned host to the Docker reconciler.
+Local queue runners on `beast-3` and `beast-2` are managed from the MacBook by
+`rlab-fleet`, with host-level defaults in `experiments/fleet.json`. The beast
+hosts are plain Docker/GPU targets: they do not poll the queue, run a fleet
+service, or make scheduling decisions. The Mac-side fleet manager reads the
+campaign queue and reconciles Docker containers over SSH; it does not schedule
+jobs and does not inspect RL config. Future RunPod support may still use
+SkyPilot at the provider boundary, then hand a provisioned host to the Docker
+reconciler.
 
 Current target names:
 
 | Target | Alias examples | Infra | Default shape |
 | --- | --- | --- | --- |
-| `rtx4090` | `beast-3` | `k8s/beast-3` | 5 children, `env_threads=4` |
-| `rtx2060` | `beast-2` | `kubernetes` | 4 children, `env_threads=2` |
+| `rtx4090` | `beast-3` | Docker fleet on beast-3 | 5 children, `env_threads=4` |
+| `rtx2060` | `beast-2` | Docker fleet on beast-2 | 4 children, `env_threads=2` |
 | `runpod-rtx4090` | `runpod4090` | `runpod` | 1 child, `env_threads=2` |
 | `runpod-l4` | `l4` | `runpod` | 1 child, `env_threads=2` |
 | `runpod-t4` | `t4` | `runpod` | unavailable in current SkyPilot RunPod catalog |
@@ -78,13 +74,6 @@ UV_CACHE_DIR=.uv-cache uv run rlab-skypilot render-runner \
   experiments/runner_profiles/mario_ppo_post20_task_conditioned_rtx4090.example.json \
   --target runpod-l4 \
   --output sky_train_runner_runpod_l4.yaml
-
-UV_CACHE_DIR=.uv-cache uv run rlab-skypilot launch-runner \
-  experiments/runner_profiles/mario_ppo_post20_task_conditioned_rtx4090.example.json \
-  --target beast-3 \
-  --output sky_train_runner_4090.yaml \
-  --execute \
-  --detach-run
 
 UV_CACHE_DIR=.uv-cache uv run rlab-fleet plan
 UV_CACHE_DIR=.uv-cache uv run rlab-fleet reconcile --execute
@@ -152,7 +141,8 @@ SkyPilot runner profiles can opt into this runtime with:
 }
 ```
 
-2026-06-25 BEAST-3 smoke: image
+Historical 2026-06-25 BEAST-3 SkyPilot smoke, superseded by the Docker fleet
+policy on 2026-06-26: image
 `ghcr.io/tsilva/rlab/rlab-train@sha256:0016b1322b2f4ba166185de13341871945933f660cf4a2c15b873c2b4ed13fdf`
 successfully ran a SkyPilot train runner on `k8s/rtx4090`, claimed
 `train_job=104` from the queue, and completed W&B run
@@ -162,7 +152,8 @@ prebuilt-image runner YAML, omit `workdir: .` and render file mounts as
 absolute host paths; otherwise the local SkyPilot API server can resolve mounts
 from its own cwd instead of the repo cwd.
 
-2026-06-26 BEAST-3 latest-image smoke: image
+Historical 2026-06-26 BEAST-3 SkyPilot latest-image smoke, superseded by the
+Docker fleet policy later the same day: image
 `ghcr.io/tsilva/rlab/rlab-train@sha256:7c7fb9e1a88b2dd87943486555ebb87a145a3c25516d121928a72b979f322560`
 successfully launched on `k8s/beast-3` via cluster `rlab-b81-image-4090`.
 Kubernetes pulled the digest, started pod `rlab-b81-image-4090-922ea937-head`,
@@ -277,15 +268,25 @@ PY
 
 ### Access
 
-- SkyPilot infra: `k8s/beast-3`
+- Current role: Docker fleet host managed from the MacBook with `rlab-fleet`.
+- Do not run SkyPilot API servers, SkyPilot job controllers, or SkyPilot
+  training pods on this host.
 - GPU host SSH: `ssh tsilva@beast-3`
-- Kubernetes API endpoint from the Mac: `https://beast-3:6443`
-- Legacy beast-3 SkyPilot dashboard/API server on LAN: `http://192.168.0.151:46580`
-- Legacy beast-3 SkyPilot dashboard/API server from the current Mac/Codex network: `http://100.118.135.59:46580`
+- Historical Kubernetes API endpoint from the Mac: `https://beast-3:6443`
+- Historical beast-3 SkyPilot dashboard/API server endpoints:
+  `http://192.168.0.151:46580` and `http://100.118.135.59:46580`.
+  These should stay disabled for the Docker fleet flow.
+- SkyPilot user state, `.sky`, `.kube`, user services, and `sky_logs` were
+  removed from the host account on 2026-06-26.
+- Kubernetes/k3s was uninstalled on 2026-06-26; no k3s/kube processes,
+  services, binaries, kube user config, or Kubernetes client commands
+  (`kubectl`, `k3s`, `helm`) should remain. Inert root-owned leftovers observed
+  after uninstall: `/etc/rancher/node/password` and `/var/lib/rancher`.
+- Docker Engine still needs interactive host setup on `beast-3`; `docker` and
+  `containerd` were inactive after k3s removal, and `sudo -n true` still fails
+  from SSH with `interactive authentication is required`.
 - GPU: NVIDIA GeForce RTX 4090, 24 GB VRAM
 - Observed driver: `595.71.05`, reporting CUDA support up to `13.2`
-- Default SkyPilot image: `docker:us-docker.pkg.dev/sky-dev-465/skypilotk8s/skypilot-gpu:latest`
-- Task Python bootstrap path inside the standard image: `/home/sky/skypilot-runtime/bin/python`
 
 ### Mario PPO Scheduling
 
@@ -320,19 +321,11 @@ favored more children.
 
 ### Operational Notes
 
-- If a single RTX4090 is already held by an `UP` SkyPilot cluster with no active managed jobs, launching a second Kubernetes cluster may fail with `Insufficient nvidia.com/gpu`. Prefer submitting to the warm cluster with `sky launch -c <existing-cluster> -y <task.yaml>` when reuse is intended.
-- If the local SkyPilot CLI reports the wrong endpoint, prefer `sky api start --host 127.0.0.1`
-  and `sky api info` over logging into the beast-3 API server. Beast-3 should
-  be a compute target, not the default control plane.
-- For Mac-side Kubernetes/SkyPilot access to beast-3, prefer the short
-  hostname endpoint `https://beast-3:6443` over the hardcoded LAN IP. Do not
-  use `https://beast-3.tail50040f.ts.net:6443` unless the k3s API certificate
-  is regenerated with that DNS SAN.
-- Use normal `sky launch -c <warm-cluster> -y <task.yaml>` for valid repeat runs. Starting a second long trainer via ad hoc `sky exec` inside an already-running task produced pathological throughput around 140 fps.
-- `sky cancel` against `k8s/beast-3` jobs can fail with `PermissionError: [Errno 13] Permission denied` while trying to `os.killpg`. If that happens, identify the training process group with `sky exec <cluster> 'ps -eo pid,ppid,pgid,stat,cmd | grep <run-name>'`, terminate the process group with `kill -TERM -<pgid>`, verify no trainer remains, then run `sky down -y <cluster>`.
-- The local SkyPilot CLI may not expose a useful general `sky cp`. For small artifact retrieval from Kubernetes-backed clusters, identify the pod on `beast-3` and stream files from `/home/sky/sky_workdir` with `kubectl exec ... -- cat <remote-file> > <local-file>`.
-- The default interactive kube context on the server may not have the `beast-3` alias. For manual Kubernetes inspection, explicitly use `KUBECONFIG=/home/tsilva/.kube/config`.
-- Local SkyPilot `0.12.3.post1` Kubernetes launches from this Mac can hang in
+- `rlab-fleet setup-host --host beast-3 --execute` currently verifies SSH and
+  the GPU, but Docker installation still requires interactive sudo on the host.
+- If cleaning residual k3s state, remove `/etc/rancher` and
+  `/var/lib/rancher` only after Docker Engine is installed/active.
+- Historical note: local SkyPilot `0.12.3.post1` Kubernetes launches from this Mac can hang in
   `INIT` after the pod-side runtime files and Ray setup have completed. The
   working local venv patch used on 2026-06-25 switches small `.runtime_files`
   and file-mount uploads from rsync-over-`kubectl exec` to `kubectl cp`, uses
@@ -439,33 +432,23 @@ favored more children.
 - On 2026-06-18, a matched three-seed RTX4090 batch compared `stable-retro-turbo==1.0.0.post11` and `1.0.0.post12` with seeds `23`, `24`, and `25`, 3 concurrent children, `n_envs=16`, `env_threads=4`, `target_kl=0.04`, strict `100/100` terminal-episode stop, and a 5M cap. Neither version reached the strict stop. Final recent completion rates were post11: seed23 `19/100`, seed24 `90/100`, seed25 `22/100`; post12: seed23 `6/100`, seed24 `85/100`, seed25 `55/100`. Mean final rate was post11 `0.437` vs post12 `0.487`; median final rate was post11 `0.22` vs post12 `0.55`; total completions were post11 `576` vs post12 `428`. Final logged SB3 fps averaged `1917` for post11 and `1943` for post12 in this concurrent shape, so this training workload did not show the package-level `+23.6%` throughput increase.
 - On 2026-06-18, a five-seed post12 follow-up used new seeds `26`-`30`, 5 concurrent children, and the same `lexxixz3` config. Final recent completion rates were seed26 `0/100`, seed27 `32/100`, seed28 `5/100`, seed29 `90/100`, and seed30 `66/100`; total completions were `0`, `390`, `15`, `413`, and `153`. Across all eight post12 seeds tested so far (`23`-`30`), mean final rate is `0.424`, median `0.435`, max `0.90`, and total completions `1399`. The five-child batch averaged `1353` final logged fps per child, about `6766` aggregate fps, while the earlier three-child post12 batch averaged `1943` per child, about `5829` aggregate fps.
 
-Manual inspection examples:
-
-```bash
-ssh tsilva@beast-3 'KUBECONFIG=/home/tsilva/.kube/config kubectl get pods -n default -o wide'
-ssh tsilva@beast-3 'KUBECONFIG=/home/tsilva/.kube/config kubectl logs -n default <pod> -c ray-node --tail=200'
-ssh tsilva@beast-3 'KUBECONFIG=/home/tsilva/.kube/config kubectl exec -n default <pod> -c ray-node -- bash -lc "<command>"'
-```
-
 ## RTX2060: beast-2
 
 ### Access
 
-- SkyPilot infra: `kubernetes` from the host-side beast-2 SkyPilot server
-- Legacy SkyPilot SSH node-pool infra: `ssh/beast2`
-- Local Mac kubeconfig context: `beast-2`, with cluster `beast-2`, authinfo
-  `beast-2`, and namespace `default`; the context uses a SkyPilot SSH tunnel to
-  local API endpoint `https://127.0.0.1:6443`.
+- Current role: Docker fleet host managed from the MacBook with `rlab-fleet`.
+- Do not run SkyPilot API servers, SkyPilot job controllers, or SkyPilot
+  training pods on this host.
 - GPU host IP observed from the current Mac/Codex network: `192.168.133.26`
 - SSH command: `ssh -o HostKeyAlias=beast-2 tsilva@192.168.133.26`
 - GPU: NVIDIA GeForce RTX 2060, 6 GB VRAM
 - Observed driver: `595.71.05`
-- Kubernetes: k3s `v1.35.5+k3s1` on node `beast-2`, containerd
-  `2.2.3-k3s1`, GPU advertised as `RTX2060` / `nvidia.com/gpu: 1`
+- Kubernetes: removed on 2026-06-26; no k3s/kube processes, services,
+  binaries, kube user config, or Kubernetes client commands (`kubectl`, `k3s`,
+  `helm`) should remain.
 - NVIDIA runtime classes: `nvidia`, `nvidia-cdi`, `nvidia-legacy`
-- SkyPilot server venv on host: `/home/tsilva/skypilot-server/.venv`
 - Host `uv`: `/home/tsilva/.local/bin/uv`
-- Host-side SkyPilot API server: localhost-only at `http://127.0.0.1:46580`; do not bind to `0.0.0.0` without explicit security approval.
+- No host-side SkyPilot API server should be running for the Docker fleet flow.
 
 As of 2026-06-26, `beast-2` did not resolve from the Mac and
 `192.168.133.26` reported host down on SSH, so the local Mac kube context could
@@ -474,35 +457,36 @@ not establish its SkyPilot SSH tunnel. When reachable, use the IP plus
 `ssh-keyscan -T 5 192.168.133.26` previously matched the existing `beast-2`
 host keys in `~/.ssh/known_hosts`.
 
-When running SkyPilot from the host-side CLI on `beast-2`, set `KUBECONFIG="$HOME/.kube/config"` first. Without it, SkyPilot or `kubectl` may try `/etc/rancher/k3s/k3s.yaml` and fail with permission denied.
+As of 2026-06-26, `beast-2` is reachable again from the Mac with the IP plus
+`HostKeyAlias=beast-2` command. For the Mac-managed Docker fleet path, the host
+has Docker Engine `docker.io 29.1.3-0ubuntu4.1`, NVIDIA Container Toolkit
+`1.19.1-1`, and `libnvidia-container1 1.19.1-1`. The fleet config uses
+`sudo -n docker` for this host instead of adding `tsilva` to the persistent
+`docker` group. `rlab-fleet setup-host --host beast-2 --execute` created
+`/home/tsilva/rlab/{runs,logs,fleet}`, `/home/tsilva/roms`, and
+`/home/tsilva/rlab/.env.runner` mode `600`; the digest-pinned train image
+smoke completed with `rlab_container_smoke=ok` and
+`torch_cuda_device=NVIDIA GeForce RTX 2060`.
 
-Example host-side launch shape:
-
-```bash
-ssh -o HostKeyAlias=beast-2 tsilva@192.168.133.26 \
-  'cd /home/tsilva/rlab && export KUBECONFIG="$HOME/.kube/config" && PATH="$HOME/.local/bin:$PATH" /home/tsilva/skypilot-server/.venv/bin/sky launch --infra kubernetes -c <cluster-name> -y <task.yaml>'
-```
-
-As of 2026-06-25, the first local training image imported into k3s is
+Historical note: on 2026-06-25, the first local training image imported into k3s was
 `ghcr.io/tsilva/rlab/rlab-train:local-8332822-dirty`, digest
 `sha256:873484b80a09723a8bdd78baadcc357d5bfe5f4c145c48d8eda4ae2880ddc5bf`.
-It is present only in beast-2's k3s/containerd image store, not GHCR. Replace
-this with a pushed immutable digest once registry publishing is approved.
+That k3s/containerd image store has since been removed. Use pushed immutable
+GHCR digest refs for Docker fleet jobs.
 
-SkyPilot `0.12.3.post1` hard-codes `imagePullPolicy: Always` for the
+Historical note: SkyPilot `0.12.3.post1` hard-codes `imagePullPolicy: Always` for the
 Kubernetes Ray node. For the local imported image test, the host-side template
 at `/home/tsilva/skypilot-server/.venv/lib/python3.13/site-packages/sky/templates/kubernetes-ray.yml.j2`
 was patched to `IfNotPresent` for the `ray-node` container, with backup
 `kubernetes-ray.yml.j2.bak-20260625-local-images`. Without that patch, k3s
 tries to pull the private/unpublished GHCR tag and fails with `403 Forbidden`.
 
-The 2026-06-25 SkyPilot Kubernetes retry successfully provisioned the pod and
+Historical note: the 2026-06-25 SkyPilot Kubernetes retry successfully provisioned the pod and
 started Ray, but the launch remained in `INIT` because SkyPilot's Kubernetes
 `rsync` helper hung while syncing `/root/.sky/.runtime_files`. The verified
 B77 Docker/Kubernetes smoke therefore ran as a plain Kubernetes Job,
 `rlab-b77-docker-k8s-103`, using the same imported image and hostPath ROM
-mount. Re-test SkyPilot task submission before relying on `rlab-skypilot
-launch-runner` for beast-2 Kubernetes queues.
+mount. Do not use `rlab-skypilot launch-runner` for beast-2 queues.
 
 ### Mario PPO Scheduling
 
@@ -520,27 +504,19 @@ Default to 4 children with `env_threads=2` for aggregate screening throughput. U
 
 ### Operational Notes
 
-- `sky check kubernetes --verbose` from beast-2 with `KUBECONFIG="$HOME/.kube/config"` is the authoritative confirmation that the host-side SkyPilot server sees local k3s.
-- Persistent setup to reuse: k3s, NVIDIA GPU operator/runtime classes, SkyPilot server venv, localhost API server, host tools, local ROM bundle, and imported prebuilt training images.
-- Disposable per-job setup: SkyPilot cluster/pod creation, workdir sync, YAML `setup`, image import when the tag is new, and dataset download unless cached.
-- For local imported images, use `imagePullPolicy: IfNotPresent` or publish the
-  image to GHCR with registry credentials. SkyPilot's default `Always` policy
-  ignores the local containerd image store.
+- Persistent setup to reuse: Docker Engine, NVIDIA Container Toolkit, host
+  tools, local ROM bundle, and persistent `/home/tsilva/rlab` directories.
+- SkyPilot user state, `skypilot-server`, `.sky`, `.kube`, and `sky_logs` were
+  removed from the host account on 2026-06-26.
 - The RTX2060 training-validated Mario path includes `stable-retro-turbo==1.0.0.post7`; it reproduced the completed-episode stop criterion at 2,711,552 timesteps on 2026-06-15.
 
 ## Cleanup
 
-After one-off experiments, clean up clusters unless the user explicitly wants a warm cluster left running:
+After one-off SkyPilot experiments on non-beast providers, clean up clusters
+unless the user explicitly wants a warm cluster left running:
 
 ```bash
 sky down -y <cluster-name>
-```
-
-For `beast-2` host-side commands, run cleanup through the host SkyPilot venv and explicit kubeconfig:
-
-```bash
-ssh -o HostKeyAlias=beast-2 tsilva@192.168.133.26 \
-  'cd /home/tsilva/rlab && export KUBECONFIG="$HOME/.kube/config" && PATH="$HOME/.local/bin:$PATH" /home/tsilva/skypilot-server/.venv/bin/sky down -y <cluster-name>'
 ```
 
 ## Related Repo Files

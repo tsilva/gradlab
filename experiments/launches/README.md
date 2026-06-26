@@ -25,7 +25,9 @@ outside that target.
 
 Use `rlab-compute` to launch a JSON experiment matrix on the configured target.
 It dispatches SkyPilot targets to `rlab-skypilot` and Modal targets to
-`modal run src/rlab/modal_app.py::launch_manifest`.
+`modal run src/rlab/modal_app.py::launch_manifest`. Local `beast-2` and
+`beast-3` targets are Docker fleet hosts; do not use these direct SkyPilot
+launch manifests for them.
 
 This path embeds concrete training runs in the rendered SkyPilot YAML. Prefer
 runner profiles when jobs already live in the campaign queue and SkyPilot only
@@ -42,15 +44,17 @@ Render a task:
 ```bash
 UV_CACHE_DIR=.uv-cache uv run rlab-skypilot render \
   experiments/launches/rlab_rtx4090.example.json \
+  --target runpod-rtx4090 \
   --output sky_rlab_generated_4090.yaml
 ```
 
-Check env, descriptions, RTX4090 child count, `env_threads`, runtime pin, and ROM
-source before launching:
+Check env, descriptions, RTX4090 child count, `env_threads`, runtime pin, and
+ROM source before launching on a SkyPilot-backed target:
 
 ```bash
 UV_CACHE_DIR=.uv-cache uv run rlab-compute preflight \
-  experiments/launches/rlab_rtx4090.example.json
+  experiments/launches/rlab_rtx4090.example.json \
+  --target runpod-rtx4090
 ```
 
 Print the provider launch command without running it:
@@ -58,6 +62,7 @@ Print the provider launch command without running it:
 ```bash
 UV_CACHE_DIR=.uv-cache uv run rlab-compute launch \
   experiments/launches/rlab_rtx4090.example.json \
+  --target runpod-rtx4090 \
   --output sky_rlab_generated_4090.yaml
 ```
 
@@ -74,6 +79,7 @@ Actually launch only after the rendered YAML and preflight output look right:
 ```bash
 UV_CACHE_DIR=.uv-cache uv run rlab-compute launch \
   experiments/launches/rlab_rtx4090.example.json \
+  --target runpod-rtx4090 \
   --output sky_rlab_generated_4090.yaml \
   --execute \
   --sparse \
@@ -104,6 +110,7 @@ Reproduce a W&B run config without hardcoding the ROM target:
 UV_CACHE_DIR=.uv-cache uv run rlab-skypilot repro-from-wandb \
   tsilva/SuperMarioBros-NES/lexxixz3 \
   --rom-source roms/your-game.rom \
+  --target runpod-rtx4090 \
   --manifest-output experiments/launches/repro_lexxixz3.json \
   --output sky_repro_lexxixz3_4090.yaml
 ```

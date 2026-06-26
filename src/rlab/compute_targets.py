@@ -9,6 +9,7 @@ DEFAULT_INSTANCE_CONFIG = "experiments/instances.json"
 DEFAULT_COMPUTE_TARGET = "rtx4090"
 LOCAL_TARGET_KINDS = {"local"}
 SKYPILOT_TARGET_KINDS = {"skypilot", ""}
+FLEET_TARGET_KINDS = {"fleet", "docker", "docker-fleet"}
 MODAL_TARGET_KINDS = {"modal"}
 
 
@@ -96,6 +97,11 @@ def ensure_skypilot_target(instance: dict[str, Any]) -> None:
     ensure_available_target(instance)
     kind = target_kind(instance)
     if kind not in SKYPILOT_TARGET_KINDS:
+        if kind in FLEET_TARGET_KINDS:
+            raise ValueError(
+                f"target {instance_label(instance)!r} has kind {kind!r}; "
+                "use rlab-fleet to manage Docker runner containers instead of SkyPilot"
+            )
         raise ValueError(
             f"target {instance_label(instance)!r} has kind {kind!r}; "
             "use the matching compute launcher instead of SkyPilot"

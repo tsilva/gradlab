@@ -3,12 +3,12 @@
     "rtx4090": {
       "aliases": ["beast-3"],
       "label": "beast-3",
-      "kind": "skypilot",
-      "infra": "k8s/beast-3",
+      "kind": "fleet",
+      "infra": "docker/beast-3",
       "accelerator": "RTX4090",
       "cpus": "12+",
       "memory": "48+",
-      "image_id": "docker:us-docker.pkg.dev/sky-dev-465/skypilotk8s/skypilot-gpu:latest",
+      "image_id": "",
       "children": 5,
       "max_children": 5,
       "env_threads": 4,
@@ -20,20 +20,20 @@
       ],
       "lower_contention_children": [3, 4],
       "notes": [
+        "Mac-side rlab-fleet manages Docker runner containers on this host; do not run SkyPilot here.",
         "Use 5 children with env_threads=4 for screening queues.",
-        "Use 3-4 children with env_threads=4 when individual latency or lower contention matters.",
-        "Use normal sky launch -c for repeat jobs; avoid ad hoc long trainers via sky exec."
+        "Use 3-4 children with env_threads=4 when individual latency or lower contention matters."
       ]
     },
     "rtx2060": {
       "aliases": ["beast-2"],
       "label": "beast-2",
-      "kind": "skypilot",
-      "infra": "kubernetes",
+      "kind": "fleet",
+      "infra": "docker/beast-2",
       "accelerator": "RTX2060",
       "cpus": "4+",
       "memory": "8+",
-      "image_id": "docker:ghcr.io/tsilva/rlab/rlab-train:local-8332822-dirty",
+      "image_id": "",
       "prebuilt_image": true,
       "children": 4,
       "max_children": 4,
@@ -42,10 +42,9 @@
       "fast_turnaround_env_threads": 4,
       "legacy_infra": "ssh/beast2",
       "notes": [
-        "Run SkyPilot from beast-2 with KUBECONFIG=$HOME/.kube/config so the local k3s context is used.",
-        "The local-8332822-dirty image tag is imported into beast-2 k3s/containerd; replace with a pushed GHCR digest when publishing is approved.",
-        "SkyPilot 0.12.3.post1 provisioned the local image after patching ray-node imagePullPolicy to IfNotPresent, but task submission hung in Kubernetes rsync; verify before using launch-runner here.",
-        "ssh/beast2 remains useful for host access and legacy node-pool debugging."
+        "Mac-side rlab-fleet manages Docker runner containers on this host; do not run SkyPilot here.",
+        "Use ssh -o HostKeyAlias=beast-2 tsilva@192.168.133.26 until hostname resolution is restored.",
+        "The local-8332822-dirty image tag is a legacy k3s/containerd artifact; use pushed immutable GHCR digest refs for Docker fleet jobs."
       ]
     },
     "local-macbook": {

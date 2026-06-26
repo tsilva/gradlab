@@ -282,6 +282,7 @@ class FleetHostSetupTests(unittest.TestCase):
         self.assertIn("HostKeyAlias=beast-2", config.hosts["beast-2"].ssh_options)
         self.assertEqual(config.hosts["beast-2"].run_target, "rtx2060")
         self.assertEqual(config.hosts["beast-2"].max_workers, 4)
+        self.assertEqual(config.hosts["beast-2"].docker_command, ("sudo", "-n", "docker"))
 
     def test_setup_host_script_verifies_docker_nvidia_and_digest_smoke(self) -> None:
         config = sample_config()
@@ -294,17 +295,51 @@ class FleetHostSetupTests(unittest.TestCase):
         self.assertIn("nvidia-smi", script)
         self.assertIn("docker run --rm --gpus all", script)
         self.assertIn("nvidia-container-toolkit", script)
+        self.assertIn("nvidia.github.io/libnvidia-container", script)
+        self.assertIn("nvidia-ctk runtime configure --runtime=docker", script)
         self.assertIn("TRAIN_QUEUE_DATABASE_URL=", script)
         self.assertIn("docker pull ghcr.io/tsilva/rlab/rlab-train@sha256:", script)
         self.assertIn("rlab-container-entrypoint rlab-container-smoke", script)
 
-    def test_systemd_script_runs_host_local_remote_reconcile_watch(self) -> None:
-        config = sample_config()
-        script = fleet.systemd_install_script(config.hosts["beast-3"], interval=30)
+    def test_beast_2_uses_configured_sudo_docker_command(self) -> None:
+        config = fleet.filter_config_to_host(fleet.load_fleet_config(Path(".").resolve()), "beast-2")
+        beast2_demand = fleet.QueueDemand(
+            profile_id="mario-ppo/post21/rtx2060",
+            runtime_image_ref=RUNTIME_IMAGE_REF,
+            run_target="rtx2060",
+            pending_count=1,
+            running_count=0,
+            max_priority=0,
+            oldest_job_id=1,
+        )
+        plan = fleet.build_fleet_plan(config, [beast2_demand], [], [])
+        command_text = "\n".join(plan.actions[0].commands)
+        setup_script = fleet.setup_host_script(config.hosts["beast-2"], runtime_image_ref=RUNTIME_IMAGE_REF)
 
-        self.assertIn("rlab-fleet remote-reconcile --host beast-3 --execute --watch", script)
-        self.assertIn("Restart=always", script)
-        self.assertIn("systemctl --user enable --now rlab-fleet-beast-3.service", script)
+        self.assertIn("sudo -n docker pull ghcr.io/tsilva/rlab/rlab-train@sha256:", command_text)
+        self.assertIn("sudo -n docker run -d", command_text)
+        self.assertIn("sudo -n docker info", setup_script)
+        self.assertIn("sudo -n docker run --rm --gpus all", setup_script)
+
+    def test_host_command_quotes_remote_shell_script(self) -> None:
+        config = sample_config()
+        command = fleet.host_command(
+            config.hosts["beast-2"],
+            ["bash", "-lc", "sudo -n docker ps -a --format '{{json .}}'"],
+        )
+
+        self.assertEqual(command[-2], "tsilva@192.168.133.26")
+        self.assertIn("bash -lc", command[-1])
+        self.assertIn("sudo -n docker ps", command[-1])
+        self.assertIn("{{json .}}", command[-1])
+
+    def test_cli_exposes_only_mac_managed_reconciliation(self) -> None:
+        help_text = fleet.build_parser().format_help()
+
+        self.assertIn("reconcile", help_text)
+        self.assertIn("setup-host", help_text)
+        self.assertNotIn("remote-reconcile", help_text)
+        self.assertNotIn("install-systemd", help_text)
 
 
 if __name__ == "__main__":

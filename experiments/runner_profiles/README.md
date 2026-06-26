@@ -12,12 +12,13 @@ Use profiles when the queue already owns the experiment payload. Use
 `experiments/launches/` manifests only for older direct SkyPilot batches that
 embed concrete training runs in the rendered YAML.
 
-Render a profile to ignored scratch YAML:
+Render a SkyPilot-backed profile to ignored scratch YAML:
 
 ```bash
 UV_CACHE_DIR=.uv-cache uv run rlab-skypilot render-runner \
   experiments/runner_profiles/mario_ppo_post20_task_conditioned_rtx4090.example.json \
-  --output sky_train_runner_4090.yaml
+  --target runpod-rtx4090 \
+  --output sky_train_runner_runpod_4090.yaml
 ```
 
 Override the profile target when capacity is better elsewhere:
@@ -29,19 +30,21 @@ UV_CACHE_DIR=.uv-cache uv run rlab-skypilot render-runner \
   --output sky_train_runner_runpod_l4.yaml
 ```
 
-Preflight a profile before launch:
+Preflight a SkyPilot-backed profile before launch:
 
 ```bash
 UV_CACHE_DIR=.uv-cache uv run rlab-skypilot preflight-runner \
-  experiments/runner_profiles/mario_ppo_post20_task_conditioned_rtx4090.example.json
+  experiments/runner_profiles/mario_ppo_post20_task_conditioned_rtx4090.example.json \
+  --target runpod-rtx4090
 ```
 
-Launch a queue runner:
+Launch a SkyPilot-backed queue runner:
 
 ```bash
 UV_CACHE_DIR=.uv-cache uv run rlab-skypilot launch-runner \
   experiments/runner_profiles/mario_ppo_post20_task_conditioned_rtx4090.example.json \
-  --output sky_train_runner_4090.yaml \
+  --target runpod-rtx4090 \
+  --output sky_train_runner_runpod_4090.yaml \
   --execute \
   --detach-run
 ```
@@ -55,18 +58,18 @@ UV_CACHE_DIR=.uv-cache uv run rlab-campaign enqueue-train \
   --profile <profile-id> \
   --train-config-json '<json>' \
   --runtime-image-ref-file rlab-train-image.json \
-  --target beast-3
+  --target rtx4090
 ```
 
-Then let the fleet manager reconcile local runner containers:
+Then let the Mac-side fleet manager reconcile local runner containers over SSH:
 
 ```bash
 UV_CACHE_DIR=.uv-cache uv run rlab-fleet plan
 UV_CACHE_DIR=.uv-cache uv run rlab-fleet reconcile --execute
 ```
 
-For SkyPilot-backed targets, queue and ensure a digest-pinned runner in one
-dry-run-first command:
+For SkyPilot-backed targets such as RunPod, queue and ensure a digest-pinned
+runner in one dry-run-first command:
 
 ```bash
 UV_CACHE_DIR=.uv-cache uv run rlab-skypilot queue-train \
@@ -75,7 +78,7 @@ UV_CACHE_DIR=.uv-cache uv run rlab-skypilot queue-train \
   --spec-id <spec-id> \
   --train-config-json '<json>' \
   --runtime-image-ref-file rlab-train-image.json \
-  --target beast-3 \
+  --target runpod-rtx4090 \
   --ensure-runner
 ```
 

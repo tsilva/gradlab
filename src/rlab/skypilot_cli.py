@@ -7,7 +7,7 @@ import subprocess
 from pathlib import Path
 
 from rlab.campaign import connect, database_url, enqueue_train_job, goal_id_from_slug, load_json_arg
-from rlab.compute_targets import canonical_target_name
+from rlab.compute_targets import canonical_target_name, ensure_skypilot_target
 from rlab.runtime_refs import (
     normalize_runtime_image_ref,
     runtime_image_digest_slug,
@@ -488,6 +488,11 @@ def cmd_cleanup(args: argparse.Namespace) -> int:
 def cmd_doctor_api(args: argparse.Namespace) -> int:
     repo_root = repo_root_from_args(args)
     instance_config = load_instance_config(repo_root, args.instances)
+    try:
+        ensure_skypilot_target(instance_defaults(instance_config, args.instance))
+    except ValueError as exc:
+        print(f"error: {exc}")
+        return 1
     checks, command = ensure_skypilot_api(
         instance_config,
         repo_root=repo_root,
@@ -813,4 +818,8 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
-    return args.func(args)
+    try:
+        return args.func(args)
+    except ValueError as exc:
+        print(f"error: {exc}")
+        return 1

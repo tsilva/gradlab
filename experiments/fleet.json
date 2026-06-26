@@ -5,7 +5,7 @@
       "ssh_options": ["-o", "BatchMode=yes", "-o", "ConnectTimeout=8"],
       "run_target": "rtx4090",
       "max_workers": 5,
-      "repo_dir": "/home/tsilva/rlab",
+      "base_dir": "/home/tsilva/rlab",
       "env_file": "/home/tsilva/rlab/.env.runner",
       "runs_dir": "/home/tsilva/rlab/runs",
       "logs_dir": "/home/tsilva/rlab/logs",
@@ -30,7 +30,7 @@
       ],
       "run_target": "rtx2060",
       "max_workers": 4,
-      "repo_dir": "/home/tsilva/rlab",
+      "base_dir": "/home/tsilva/rlab",
       "env_file": "/home/tsilva/rlab/.env.runner",
       "runs_dir": "/home/tsilva/rlab/runs",
       "logs_dir": "/home/tsilva/rlab/logs",
@@ -41,6 +41,7 @@
       "container_rom_dir": "/roms",
       "log_dir_in_container": "/root/rlab/logs/train_runner",
       "gpu_test_image": "nvidia/cuda:12.9.1-base-ubuntu22.04",
+      "docker_command": ["sudo", "-n", "docker"],
       "pull_policy": "always"
     }
   },

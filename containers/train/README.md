@@ -100,8 +100,10 @@ host unless that host has been put behind Kubernetes.
 
 ## Local Fleet Manager
 
-For `beast-2` and `beast-3`, prefer `rlab-fleet` over SkyPilot. It reconciles
-Docker containers directly over SSH and keeps the queue in charge of scheduling:
+For `beast-2` and `beast-3`, prefer Mac-side `rlab-fleet` over SkyPilot. It
+reconciles Docker containers directly over SSH and keeps the queue in charge of
+scheduling; the beast hosts only need Docker, NVIDIA runtime support, mounts,
+and the runner env file.
 
 ```bash
 uv run rlab-fleet plan

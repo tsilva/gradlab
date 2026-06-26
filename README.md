@@ -114,29 +114,32 @@ UV_CACHE_DIR=.uv-cache uv run rlab-compute launch \
 SkyPilot launch manifests live in `experiments/launches/` and are rendered or
 preflighted through `rlab-compute` for provider-neutral direct launches or
 `rlab-skypilot` for SkyPilot-specific workflows. Read `INSTANCES.md` before
-choosing hardware, changing concurrency, or launching remote training. Use
-`rlab-compute targets` to list configured compute targets, and pass
-`--target <name>` to swap between `beast-3`, `beast-2`, RunPod, Modal, or other
-configured backends without editing the manifest.
+choosing hardware, changing concurrency, or launching remote training. Local
+`beast-3` and `beast-2` targets are Docker fleet hosts, not SkyPilot targets;
+use `rlab-fleet` for those and reserve `rlab-skypilot` for SkyPilot-backed
+providers such as RunPod.
 
 For queue-backed training, prefer long-lived runner profiles in
-`experiments/runner_profiles/`. Those profiles render the SkyPilot runtime
-envelope and start `rlab.train_runner`; experiment payloads stay in
-the campaign queue.
+`experiments/runner_profiles/`. Local beast profiles are consumed by
+`rlab-fleet`, which starts digest-pinned Docker containers running
+`rlab.train_runner`; experiment payloads stay in the campaign queue.
 
-For local GPU queue capacity, use the fleet manager instead of SkyPilot. It
-reads pending/running `train_jobs`, groups demand by `profile_id`,
+For local GPU queue capacity, run the fleet manager from the MacBook instead of
+SkyPilot. It reads pending/running `train_jobs`, groups demand by `profile_id`,
 `runtime_image_ref`, and `run_target`, then reconciles Docker runner containers
-on `beast-3` and `beast-2` over SSH:
+on `beast-3` and `beast-2` over SSH. The beast hosts are intentionally just
+Docker engines; they do not poll the queue or run a local fleet service.
 
 ```bash
 UV_CACHE_DIR=.uv-cache uv run rlab-fleet status
 UV_CACHE_DIR=.uv-cache uv run rlab-fleet plan
 UV_CACHE_DIR=.uv-cache uv run rlab-fleet reconcile --execute
+UV_CACHE_DIR=.uv-cache uv run rlab-fleet reconcile --execute --watch --interval 30
 ```
 
-Bootstrap each host once, then install the host-local reconciler so runners keep
-working when the Mac sleeps or disconnects:
+Bootstrap each host once so Docker, the NVIDIA runtime, persistent directories,
+the non-secret env-file path, digest pulls, and the container smoke check are
+ready:
 
 ```bash
 UV_CACHE_DIR=.uv-cache uv run rlab-fleet setup-host \
@@ -148,9 +151,6 @@ UV_CACHE_DIR=.uv-cache uv run rlab-fleet setup-host \
   --host beast-2 \
   --runtime-image-ref-file rlab-train-image.json \
   --execute
-
-UV_CACHE_DIR=.uv-cache uv run rlab-fleet install-systemd --host beast-3 --execute
-UV_CACHE_DIR=.uv-cache uv run rlab-fleet install-systemd --host beast-2 --execute
 ```
 
 The fleet manager does not schedule experiments and does not inspect RL config.

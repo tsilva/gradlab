@@ -16,6 +16,7 @@ from rlab.cli import TRAIN_COMMAND_FIELDS, build_train_command
 from rlab.compute_targets import (
     canonical_target_name,
     ensure_skypilot_target,
+    FLEET_TARGET_KINDS,
     instance_defaults,
     instance_label,
     launch_infra,
@@ -937,9 +938,17 @@ def preflight_runner_profile(
         reason = str(instance.get("disabled_reason") or "target is marked unavailable")
         checks.append(Check("error", f"target {target!r} is unavailable: {reason}"))
     if kind not in {"", "skypilot"}:
-        checks.append(
-            Check("error", f"target {target!r} has kind {kind!r}; use the matching compute launcher")
-        )
+        if kind in FLEET_TARGET_KINDS:
+            checks.append(
+                Check(
+                    "error",
+                    f"target {target!r} has kind {kind!r}; use rlab-fleet for Docker runner containers",
+                )
+            )
+        else:
+            checks.append(
+                Check("error", f"target {target!r} has kind {kind!r}; use the matching compute launcher")
+            )
     max_children = int(instance.get("max_children", instance.get("children", 1)))
     profile_id = str(profile.get("profile_id", "")).strip()
     if not profile_id:
@@ -1063,9 +1072,17 @@ def preflight_checks(
         reason = str(instance.get("disabled_reason") or "target is marked unavailable")
         checks.append(Check("error", f"target {target!r} is unavailable: {reason}"))
     if kind not in {"", "skypilot"}:
-        checks.append(
-            Check("error", f"target {target!r} has kind {kind!r}; use the matching compute launcher")
-        )
+        if kind in FLEET_TARGET_KINDS:
+            checks.append(
+                Check(
+                    "error",
+                    f"target {target!r} has kind {kind!r}; use rlab-fleet for Docker runner containers",
+                )
+            )
+        else:
+            checks.append(
+                Check("error", f"target {target!r} has kind {kind!r}; use the matching compute launcher")
+            )
     max_children = int(instance.get("max_children", instance.get("children", 1)))
     expected_env_threads = int(instance.get("env_threads", 4))
     try:

@@ -36,7 +36,7 @@ class HostConfig:
     ssh_options: tuple[str, ...]
     run_target: str
     max_workers: int
-    repo_dir: str
+    base_dir: str
     env_file: str
     runs_dir: str
     logs_dir: str
@@ -47,6 +47,7 @@ class HostConfig:
     container_rom_dir: str
     log_dir_in_container: str
     gpu_test_image: str
+    docker_command: tuple[str, ...]
     docker_network: str | None
     pull_policy: str
     extra_env: tuple[str, ...]
@@ -191,7 +192,7 @@ def _host_config_from_raw(
         ssh_options=_tuple(raw.get("ssh_options", ())),
         run_target=str(instance.get("name", run_target)),
         max_workers=max_workers,
-        repo_dir=str(raw.get("repo_dir") or "/home/tsilva/rlab"),
+        base_dir=str(raw.get("base_dir") or raw.get("repo_dir") or "/home/tsilva/rlab"),
         env_file=str(raw.get("env_file") or "/home/tsilva/rlab/.env.runner"),
         runs_dir=str(raw.get("runs_dir") or "/home/tsilva/rlab/runs"),
         logs_dir=str(raw.get("logs_dir") or "/home/tsilva/rlab/logs"),
@@ -202,6 +203,7 @@ def _host_config_from_raw(
         container_rom_dir=str(raw.get("container_rom_dir") or "/roms"),
         log_dir_in_container=str(raw.get("log_dir_in_container") or "/root/rlab/logs/train_runner"),
         gpu_test_image=str(raw.get("gpu_test_image") or "nvidia/cuda:12.9.1-base-ubuntu22.04"),
+        docker_command=_tuple(raw.get("docker_command") or ("docker",)),
         docker_network=str(raw.get("docker_network") or "").strip() or None,
         pull_policy=str(raw.get("pull_policy") or "always"),
         extra_env=_tuple(raw.get("extra_env", ())),
@@ -301,29 +303,35 @@ def shell_join(parts: Sequence[str]) -> str:
     return shlex.join([str(part) for part in parts])
 
 
+def docker_command(host: HostConfig, args: Sequence[str]) -> list[str]:
+    return [*host.docker_command, *args]
+
+
 def docker_run_command(host: HostConfig, desired: DesiredDeployment) -> list[str]:
     image = docker_image_ref(desired.key.runtime_image_ref)
-    cmd = [
-        "docker",
-        "run",
-        "-d",
-        "--name",
-        desired.name,
-        "--restart",
-        "unless-stopped",
-        "--gpus",
-        "all",
-        "--env-file",
-        host.env_file,
-        "-e",
-        f"RLAB_ROM_DIR={host.container_rom_dir}",
-        "-v",
-        f"{host.rom_dir}:{host.container_rom_dir}:ro",
-        "-v",
-        f"{host.runs_dir}:{host.container_runs_dir}",
-        "-v",
-        f"{host.logs_dir}:{host.container_logs_dir}",
-    ]
+    cmd = docker_command(
+        host,
+        [
+            "run",
+            "-d",
+            "--name",
+            desired.name,
+            "--restart",
+            "unless-stopped",
+            "--gpus",
+            "all",
+            "--env-file",
+            host.env_file,
+            "-e",
+            f"RLAB_ROM_DIR={host.container_rom_dir}",
+            "-v",
+            f"{host.rom_dir}:{host.container_rom_dir}:ro",
+            "-v",
+            f"{host.runs_dir}:{host.container_runs_dir}",
+            "-v",
+            f"{host.logs_dir}:{host.container_logs_dir}",
+        ],
+    )
     for value in host.extra_env:
         cmd.extend(["-e", value])
     if host.docker_network:
@@ -369,6 +377,7 @@ def build_desired_deployment(
         "runs_dir": host.runs_dir,
         "logs_dir": host.logs_dir,
         "rom_dir": host.rom_dir,
+        "docker_command": host.docker_command,
         "command": command,
     }
     digest = runtime_image_digest_slug(key.runtime_image_ref)
@@ -491,25 +500,25 @@ def container_has_active_lease(container: ExistingContainer, leases: Sequence[Ac
     return any(lease.lease_owner.startswith(prefix) for lease in leases)
 
 
-def pull_command(runtime_image_ref: str) -> str:
-    return shell_join(["docker", "pull", docker_image_ref(runtime_image_ref)])
+def pull_command(host: HostConfig, runtime_image_ref: str) -> str:
+    return shell_join(docker_command(host, ["pull", docker_image_ref(runtime_image_ref)]))
 
 
-def remove_command(name: str) -> str:
-    return shell_join(["docker", "rm", "-f", name])
+def remove_command(host: HostConfig, name: str) -> str:
+    return shell_join(docker_command(host, ["rm", "-f", name]))
 
 
 def restart_commands(host: HostConfig, desired: DesiredDeployment) -> tuple[str, ...]:
     return (
-        pull_command(desired.key.runtime_image_ref),
-        remove_command(desired.name),
+        pull_command(host, desired.key.runtime_image_ref),
+        remove_command(host, desired.name),
         shell_join(docker_run_command(host, desired)),
     )
 
 
 def start_commands(host: HostConfig, desired: DesiredDeployment) -> tuple[str, ...]:
     return (
-        pull_command(desired.key.runtime_image_ref),
+        pull_command(host, desired.key.runtime_image_ref),
         shell_join(docker_run_command(host, desired)),
     )
 
@@ -601,7 +610,7 @@ def build_fleet_plan(
                 host=current.host,
                 container=current.name,
                 reason="no pending or running jobs for this digest/profile/target",
-                commands=(remove_command(current.name),),
+                commands=(remove_command(config.hosts[current.host], current.name),),
             )
         )
 
@@ -721,7 +730,7 @@ def parse_docker_ps_json_lines(host: str, output: str) -> list[ExistingContainer
 
 
 def host_command(host: HostConfig, remote_args: Sequence[str]) -> list[str]:
-    return ["ssh", *host.ssh_options, host.ssh_target, *remote_args]
+    return ["ssh", *host.ssh_options, host.ssh_target, shell_join(remote_args)]
 
 
 def run_host_script(
@@ -731,7 +740,7 @@ def run_host_script(
     local: bool = False,
     capture: bool = False,
 ) -> subprocess.CompletedProcess[str]:
-    command = ["sh", "-lc", script] if local else host_command(host, ["sh", "-lc", script])
+    command = ["bash", "-lc", script] if local else host_command(host, ["bash", "-lc", script])
     return subprocess.run(
         command,
         check=False,
@@ -744,7 +753,12 @@ def run_host_script(
 def list_managed_containers(host: HostConfig, *, local: bool = False) -> list[ExistingContainer]:
     result = run_host_script(
         host,
-        "docker ps -a --filter label=rlab.managed=true --format '{{json .}}'",
+        shell_join(
+            docker_command(
+                host,
+                ["ps", "-a", "--filter", "label=rlab.managed=true", "--format", "{{json .}}"],
+            )
+        ),
         local=local,
         capture=True,
     )
@@ -789,9 +803,13 @@ def selected_hosts(config: FleetConfig, host_filter: str | None) -> list[HostCon
 
 
 def setup_host_script(host: HostConfig, *, runtime_image_ref: str | None = None) -> str:
+    docker_info = shell_join(docker_command(host, ["info"]))
+    gpu_test = shell_join(
+        docker_command(host, ["run", "--rm", "--gpus", "all", host.gpu_test_image, "nvidia-smi"])
+    )
     lines = [
         "set -euo pipefail",
-        f"mkdir -p {shlex.quote(host.repo_dir)}",
+        f"mkdir -p {shlex.quote(host.base_dir)}",
         f"mkdir -p {shlex.quote(host.runs_dir)} {shlex.quote(host.logs_dir)} "
         f"{shlex.quote(host.rom_dir)} {shlex.quote(host.state_dir)}",
         "if ! command -v docker >/dev/null 2>&1; then",
@@ -804,20 +822,36 @@ def setup_host_script(host: HostConfig, *, runtime_image_ref: str | None = None)
         "  fi",
         "fi",
         "sudo -n systemctl enable --now docker >/dev/null 2>&1 || true",
-        "docker info >/dev/null",
+        f"{docker_info} >/dev/null",
         "if ! command -v nvidia-smi >/dev/null 2>&1; then",
         "  echo 'warning: nvidia-smi is not on PATH' >&2",
         "else",
         "  nvidia-smi >/dev/null",
         "fi",
-        "if ! docker run --rm --gpus all "
-        f"{shlex.quote(host.gpu_test_image)} nvidia-smi >/dev/null; then",
+        "if ! command -v nvidia-ctk >/dev/null 2>&1; then",
         "  if command -v apt-get >/dev/null 2>&1; then",
-        "    sudo -n apt-get install -y nvidia-container-toolkit || true",
-        "    sudo -n systemctl restart docker || true",
+        "    sudo -n apt-get install -y --no-install-recommends ca-certificates curl gnupg2",
+        "    sudo -n install -d -m 0755 /usr/share/keyrings",
+        "    curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | "
+        "sudo -n gpg --batch --yes --dearmor "
+        "-o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg",
+        "    curl -fsSL https://nvidia.github.io/libnvidia-container/stable/deb/"
+        "nvidia-container-toolkit.list | sed 's#deb https://#deb "
+        "[signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' | "
+        "sudo -n tee /etc/apt/sources.list.d/nvidia-container-toolkit.list >/dev/null",
+        "    sudo -n apt-get update",
+        "    sudo -n apt-get install -y nvidia-container-toolkit",
+        "  else",
+        "    echo 'nvidia-ctk is missing and apt-get is unavailable' >&2",
+        "    exit 1",
         "  fi",
-        "  docker run --rm --gpus all "
-        f"{shlex.quote(host.gpu_test_image)} nvidia-smi >/dev/null",
+        "fi",
+        "if command -v nvidia-ctk >/dev/null 2>&1; then",
+        "  sudo -n nvidia-ctk runtime configure --runtime=docker",
+        "  sudo -n systemctl restart docker || true",
+        "fi",
+        f"if ! {gpu_test} >/dev/null; then",
+        f"  {gpu_test} >/dev/null",
         "fi",
         f"if [ ! -f {shlex.quote(host.env_file)} ]; then",
         f"  umask 077; cat > {shlex.quote(host.env_file)} <<'EOF'",
@@ -837,58 +871,30 @@ def setup_host_script(host: HostConfig, *, runtime_image_ref: str | None = None)
         image = docker_image_ref(runtime_image_ref)
         lines.extend(
             [
-                shell_join(["docker", "pull", image]),
+                shell_join(docker_command(host, ["pull", image])),
                 shell_join(
-                    [
-                        "docker",
-                        "run",
-                        "--rm",
-                        "--gpus",
-                        "all",
-                        "--env-file",
-                        host.env_file,
-                        "-e",
-                        f"RLAB_ROM_DIR={host.container_rom_dir}",
-                        "-v",
-                        f"{host.rom_dir}:{host.container_rom_dir}:ro",
-                        image,
-                        "rlab-container-entrypoint",
-                        "rlab-container-smoke",
-                    ]
+                    docker_command(
+                        host,
+                        [
+                            "run",
+                            "--rm",
+                            "--gpus",
+                            "all",
+                            "--env-file",
+                            host.env_file,
+                            "-e",
+                            f"RLAB_ROM_DIR={host.container_rom_dir}",
+                            "-v",
+                            f"{host.rom_dir}:{host.container_rom_dir}:ro",
+                            image,
+                            "rlab-container-entrypoint",
+                            "rlab-container-smoke",
+                        ],
+                    )
                 ),
             ]
         )
     return "\n".join(lines) + "\n"
-
-
-def systemd_install_script(host: HostConfig, *, interval: int = 30) -> str:
-    service_name = f"rlab-fleet-{host.name}.service"
-    user_dir = "$HOME/.config/systemd/user"
-    exec_start = (
-        "uv run rlab-fleet remote-reconcile "
-        f"--host {shlex.quote(host.name)} --execute --watch --interval {int(interval)}"
-    )
-    return f"""set -euo pipefail
-mkdir -p {user_dir}
-cat > {user_dir}/{service_name} <<'EOF'
-[Unit]
-Description=rlab fleet reconciler for {host.name}
-
-[Service]
-Type=simple
-WorkingDirectory={host.repo_dir}
-Environment=UV_CACHE_DIR=.uv-cache
-ExecStart={exec_start}
-Restart=always
-RestartSec=10
-
-[Install]
-WantedBy=default.target
-EOF
-systemctl --user daemon-reload
-systemctl --user enable --now {service_name}
-loginctl enable-linger "$USER" >/dev/null 2>&1 || true
-"""
 
 
 def image_ref_from_args(args: argparse.Namespace) -> str | None:
@@ -1042,14 +1048,6 @@ def cmd_reconcile(args: argparse.Namespace) -> int:
         time.sleep(args.interval)
 
 
-def cmd_remote_reconcile(args: argparse.Namespace) -> int:
-    while True:
-        status = _run_reconcile_once(args, local=True)
-        if status != 0 or not args.watch:
-            return status
-        time.sleep(args.interval)
-
-
 def cmd_setup_host(args: argparse.Namespace) -> int:
     config = _load_config_from_args(args)
     runtime_image_ref = image_ref_from_args(args)
@@ -1060,22 +1058,6 @@ def cmd_setup_host(args: argparse.Namespace) -> int:
         print(script.rstrip())
         if not args.execute:
             print("dry_run: pass --execute to run setup over SSH")
-            continue
-        result = run_host_script(host, script)
-        if result.returncode != 0:
-            status = int(result.returncode)
-    return status
-
-
-def cmd_install_systemd(args: argparse.Namespace) -> int:
-    config = _load_config_from_args(args)
-    status = 0
-    for host in selected_hosts(config, args.host):
-        script = systemd_install_script(host, interval=args.interval)
-        print(f"host: {host.name}")
-        print(script.rstrip())
-        if not args.execute:
-            print("dry_run: pass --execute to install the user service over SSH")
             continue
         result = run_host_script(host, script)
         if result.returncode != 0:
@@ -1124,27 +1106,12 @@ def build_parser() -> argparse.ArgumentParser:
     add_reconcile_args(reconcile)
     reconcile.set_defaults(func=cmd_reconcile)
 
-    remote = subparsers.add_parser(
-        "remote-reconcile",
-        help="Reconcile the local Docker host; intended for host-local systemd.",
-    )
-    add_common_args(remote)
-    add_reconcile_args(remote, host_required=True)
-    remote.set_defaults(func=cmd_remote_reconcile)
-
-    setup = subparsers.add_parser("setup-host", help="Prepare GPU hosts for Docker runners.")
+    setup = subparsers.add_parser("setup-host", help="Prepare SSH Docker hosts for runners.")
     add_common_args(setup)
     setup.add_argument("--host", required=True, help="Fleet host to set up.")
     setup.add_argument("--execute", action="store_true")
     add_runtime_image_args(setup)
     setup.set_defaults(func=cmd_setup_host)
-
-    systemd = subparsers.add_parser("install-systemd", help="Install host-local fleet service.")
-    add_common_args(systemd)
-    systemd.add_argument("--host", required=True, help="Fleet host to install.")
-    systemd.add_argument("--execute", action="store_true")
-    systemd.add_argument("--interval", type=int, default=30)
-    systemd.set_defaults(func=cmd_install_systemd)
 
     return parser
 

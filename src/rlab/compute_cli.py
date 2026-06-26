@@ -5,6 +5,7 @@ import subprocess
 from pathlib import Path
 
 from rlab.compute_targets import (
+    FLEET_TARGET_KINDS,
     instance_defaults,
     instance_label,
     load_instance_config,
@@ -94,6 +95,9 @@ def cmd_preflight(args: argparse.Namespace) -> int:
         for check in checks:
             print(f"{check.level}: {check.message}")
         return 1 if any(check.level == "error" for check in checks) else 0
+    if kind in FLEET_TARGET_KINDS:
+        print("error: compute target kind 'fleet' is managed by rlab-fleet, not rlab-compute")
+        return 1
     print(f"error: compute target kind {kind!r} is not supported by preflight")
     return 1
 
@@ -120,6 +124,9 @@ def cmd_launch(args: argparse.Namespace) -> int:
             print("dry_run: pass --execute to run modal launch")
             return 0
         return subprocess.run(summary.command, cwd=repo_root, check=False).returncode
+    if kind in FLEET_TARGET_KINDS:
+        print("error: compute target kind 'fleet' is managed by rlab-fleet, not rlab-compute")
+        return 1
     print(f"error: compute target kind {kind!r} is not supported by launch")
     return 1
 
