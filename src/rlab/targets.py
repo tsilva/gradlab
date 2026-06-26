@@ -114,14 +114,14 @@ class SuperMarioBrosNesV0ProgressTracker(RetroProgressTracker):
         if self.current_level is None:
             self.current_level = level
 
-        done_rules = info.get("done_on_info") or {}
-        died = "life_loss" in done_rules or bool(info.get("life_loss", False))
+        info_events = info.get("info_events") or info.get("done_on_info") or {}
+        died = "life_loss" in info_events or bool(info.get("life_loss", False))
         if self.prev_lives is not None and lives is not None and int(lives) < self.prev_lives:
             died = True
         if lives is not None:
             self.prev_lives = int(lives)
 
-        native_level_changed = "level_change" in done_rules
+        native_level_changed = "level_change" in info_events
         level_changed = native_level_changed or level != self.current_level
         level_completion_event = False
         if level_changed and not died:

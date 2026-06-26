@@ -30,8 +30,12 @@ These are the first metrics to check when choosing policies.
 | `train/done/<reason>` | Cumulative count of done events attributed to `<reason>`, such as `life_loss`, `level_change`, `max_steps`, or `unclassified`. Reason counters are explanatory and do not have to sum to `train/done/all`. |
 | `train/done/<reason>/from/<prev>` | Cumulative count of structured done events for `<reason>` whose native payload reported previous value `<prev>`. Multi-key values are joined with `-`, e.g. `0-0`. |
 | `train/done/<reason>/from/<prev>/ep_window/rate` | Fraction of the last 100 non-`global_reset` terminal training episodes whose configured source value for `<reason>` was `<prev>` that ended with that structured done event. Each `<reason>/from/<prev>` has its own 100-episode denominator and emits only after that per-source window is full. |
-| `train/done/<reason>/from_rate/min` | Minimum across the full per-source `ep_window/rate` values for `<reason>`. For the current two-level Mario goal, use `train/done/level_change/from_rate/min` as the live training bottleneck metric. |
-| `train/done/<reason>/from_rate/mean` | Mean across the full per-source `ep_window/rate` values for `<reason>`. This is secondary; it can hide one weak level. |
+| `train/event/<event>` | Cumulative count of observed configured `info_events`, terminal or non-terminal. |
+| `train/outcome/<event>/from/<prev>/attempts` | Cumulative attempts tracked from source value `<prev>` for `<event>`. |
+| `train/outcome/<event>/from/<prev>/fires` | Cumulative attempts from source value `<prev>` where `<event>` fired. |
+| `train/outcome/<event>/from/<prev>/attempt_window/rate` | Fraction of the last 100 attempts from `<prev>` where `<event>` fired. Attempts can end at a non-terminal event, terminal event, life loss, truncation, or episode done. |
+| `train/outcome/<event>/from_rate/min` | Minimum across full per-source `attempt_window/rate` values for `<event>`. For balanced Mario training, use `train/outcome/level_change/from_rate/min` as the live bottleneck metric. |
+| `train/outcome/<event>/from_rate/mean` | Mean across full per-source `attempt_window/rate` values for `<event>`. This is secondary; it can hide one weak level. |
 | `eval/done/level_change/rate` | Pooled eval episode completion fraction. |
 | `eval/done/level_change/from/<start>/rate` | Eval completion fraction for episodes that started from `<start>`. |
 | `eval/done/level_change/from_rate/min` | Minimum per-start eval completion fraction. Use this first when comparing multi-start-state policies. |
@@ -41,9 +45,9 @@ Current training does not log per-rollout done-count distribution stats such as 
 
 ### Selection and Redundancy Notes
 
-Training no longer logs terminal-episode completion-rate metrics under `train/outcome/*`. Use
-external eval metrics for policy success/ranking and use `train/done/*` to understand what is
-ending training episodes.
+Training outcome metrics live under `train/outcome/*` and count attempts, not full episodes. Use
+them for live training bottlenecks when a policy can clear multiple levels inside one episode. Use
+`train/done/*` only to understand what is ending training episodes.
 
 `eval/done/level_change/from_rate/min` is the eval selection metric for multi-start-state
 policies. The top-level eval metrics are pooled summaries and should be treated as secondary
@@ -51,15 +55,15 @@ when per-start-state eval done metrics exist.
 
 ### Mario Level1-1/Level1-2 Notes
 
-For the current Level1-1/Level1-2 training goal, native level values map to training metrics as:
+For the current Level1-1/Level1-2 training goal, native level values map to training outcome metrics as:
 
 | Level | Training window-rate metric |
 | --- | --- |
-| `Level1-1` | `train/done/level_change/from/0-0/ep_window/rate` |
-| `Level1-2` | `train/done/level_change/from/0-1/ep_window/rate` |
+| `Level1-1` | `train/outcome/level_change/from/0-0/attempt_window/rate` |
+| `Level1-2` | `train/outcome/level_change/from/0-1/attempt_window/rate` |
 
-Use `train/done/level_change/from_rate/min` as the live training bottleneck: it is the lower of
-the full per-level window rates at each logging point. For example, `Level1-1 = 0.50` and
+Use `train/outcome/level_change/from_rate/min` as the live training bottleneck: it is the lower
+of the full per-level attempt-window rates at each logging point. For example, `Level1-1 = 0.50` and
 `Level1-2 = 0.40` produces a min of `0.40`, while `Level1-1 = 0.30` and `Level1-2 = 0.80`
 produces a min of `0.30`. The mean is secondary because it can hide one weak level. Once
 checkpoint eval jobs have logged per-start metrics, use `eval/done/level_change/from_rate/min`
@@ -70,8 +74,10 @@ Use current `train/reward_share/*` metrics for reward attribution rather than th
 magnitude, so negative components such as death or time penalties are visible by magnitude
 rather than canceling against positive reward.
 
-Training done criteria are configured with `--done-on-info-json`, which maps reason names to native
-info-variable rules. For Mario, a typical rule set is
+Training info events are configured with `--info-events-json`, which maps event names to native
+info-variable rules. `--done-on-events` separately chooses which configured events terminate an
+episode. Legacy `--done-on-info-json` remains supported as shorthand for "observe these events and
+terminate on all of them." For Mario, a typical observed event set is
 `{"life_loss":["lives","decrease"],"level_change":[["levelHi","levelLo"],"change"]}`. Native/default
 environment terminations that do not match a configured rule and are not max-step truncations count
 as `train/done/unclassified`. When native `done_on_info` payloads include `prev` and `next`,
@@ -88,14 +94,11 @@ the eval episode when it observes completion, so `eval/done/level_change` and
 `eval/done/level_change/from/<start>` track natural transitions per eval episode. Eval `from` values
 are the configured episode start state, not native `done_on_info` previous-value payloads.
 
-Training `train/done/*` windows are terminal-episode metrics. A natural level transition observed
-while the training env keeps running sets `level_complete` / `completion_event` in the step info,
-but it is not currently appended to `train/done/level_change/from/<prev>/ep_window/rate`. To count
-that transition in the training done windows today, configure the level change as a `done_on_info`
-rule, which also ends that episode. Those training done-window successes are based on the fired
-native `done_on_info` reason, not a second check of `level_complete`; target/eval completion logic
-separately filters death-induced level changes. Tracking multiple non-terminal clears inside one
-continued training episode would require a separate completion-event metric family.
+`train/done/*` windows remain terminal-episode metrics. Natural level transitions observed while
+the training env keeps running set `level_complete` / `completion_event`, emit
+`info_events.level_change`, and append to `train/outcome/level_change/from/<prev>/attempt_window/rate`.
+The same outcome path is used when `level_change` is also listed in `--done-on-events`; in that mode
+the event both counts as a successful attempt and ends the episode.
 
 ## SB3 PPO Metrics
 

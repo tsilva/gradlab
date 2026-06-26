@@ -88,4 +88,17 @@ def add_env_config_args(
             '\'{"life_loss":["lives","decrease"],"level_change":[["levelHi","levelLo"],"change"]}\''
         ),
     )
+    parser.add_argument(
+        "--info-events-json",
+        default="",
+        help=(
+            "JSON object mapping event names to [key_or_keys, op]. Events are observed "
+            "without ending episodes unless also listed in --done-on-events."
+        ),
+    )
+    parser.add_argument(
+        "--done-on-events",
+        default=",".join(defaults.done_on_events),
+        help="Comma-separated info event names that should terminate the current episode.",
+    )
     parser.add_argument("--action-set", default=defaults.action_set)

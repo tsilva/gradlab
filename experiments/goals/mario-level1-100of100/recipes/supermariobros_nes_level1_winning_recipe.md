@@ -1,6 +1,6 @@
 # SuperMarioBros-NES Level 1 Winning Training Recipe
 
-Last updated: 2026-06-22
+Last updated: 2026-06-26
 
 This is the current preferred training recipe for `SuperMarioBros-Nes-v0`
 `Level1-1` screening on the RTX4090. The current incumbent is B55
@@ -42,12 +42,17 @@ observation_size: 84
 hud_crop_top: 32
 max_episode_steps: 4500
 completion_x_threshold: 0
-done_on_info_json: '{"life_loss":["lives","decrease"],"level_change":[["levelHi","levelLo"],"change"]}'
+info_events_json: '{"life_loss":["lives","decrease"],"level_change":[["levelHi","levelLo"],"change"]}'
+done_on_events: life_loss,level_change
 eval_freq: 0
 eval_episodes: 0
 checkpoint_freq: 100000
 timesteps: 5,000,000
 ```
+
+Use `info_events_json` to define observed info-variable events and
+`done_on_events` to choose which observed events terminate episodes. Do not use
+the legacy `done_on_info_json` key in new launch specs.
 
 Use 5 fleet-managed Docker runner containers on `beast-3` for throughput screening.
 Recent recipe-search batches used 6 concurrent child trainings for 3-arm /

@@ -1,19 +1,28 @@
 from __future__ import annotations
 
 import argparse
+import errno
+import fcntl
 import hashlib
 import json
+import os
+import shutil
 import shlex
 import subprocess
 import sys
 import time
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, TextIO
 
-from rlab.campaign import connect, database_url
+from rlab.campaign import (
+    connect,
+    database_url,
+    list_stale_train_jobs,
+    mark_stale_train_jobs_failed,
+)
 from rlab.compute_targets import instance_defaults, load_instance_config
 from rlab.json_utils import json_safe
 from rlab.runtime_refs import (
@@ -30,6 +39,9 @@ from rlab.runtime_refs import (
 DEFAULT_FLEET_CONFIG = Path("experiments/fleet.json")
 DEFAULT_INSTANCES_CONFIG = Path("experiments/instances.json")
 DEFAULT_CAPACITY_POLICY = Path("experiments/policies/capacity_policy.json")
+DEFAULT_WATCH_LATEST_INTERVAL_SECONDS = 5.0
+DEFAULT_WATCH_STALE_OLDER_THAN_SECONDS = 300
+DEFAULT_WATCH_STALE_LIMIT = 50
 LABEL_PREFIX = "rlab."
 MANAGED_LABEL = f"{LABEL_PREFIX}managed"
 CONFIG_HASH_LABEL = f"{LABEL_PREFIX}config-hash"
@@ -108,6 +120,19 @@ class RunningJob:
 
 
 @dataclass(frozen=True)
+class StaleTrainJob:
+    host: str
+    id: int
+    profile_id: str | None
+    runtime_image_ref: str | None
+    run_target: str | None
+    run_name: str | None
+    lease_owner: str | None
+    heartbeat_at: Any
+    execute: bool
+
+
+@dataclass(frozen=True)
 class DeploymentKey:
     host: str
     profile_id: str | None
@@ -168,6 +193,44 @@ class FleetPlan:
     existing: tuple[ExistingContainer, ...]
     actions: tuple[FleetAction, ...]
     warnings: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class ActionResult:
+    kind: str
+    host: str
+    container: str
+    exit_code: int
+    output: str = ""
+
+
+@dataclass(frozen=True)
+class LatestWatchSnapshot:
+    captured_at: datetime
+    config: FleetConfig
+    runtime_image_ref: str
+    demands: tuple[QueueDemand, ...]
+    leases: tuple[ActiveLease, ...]
+    jobs: tuple[RunningJob, ...]
+    plan: FleetPlan
+    stale_train_jobs: tuple[StaleTrainJob, ...] = ()
+    down_hosts: tuple[str, ...] = ()
+    action_results: tuple[ActionResult, ...] = ()
+    execute: bool = False
+    interval: float = 30.0
+
+
+@dataclass
+class WatchLatestLock:
+    path: Path
+    handle: TextIO
+
+
+class WatchLatestLockBusy(RuntimeError):
+    def __init__(self, path: Path, owner: str) -> None:
+        super().__init__(f"another watch session is already running: {path}")
+        self.path = path
+        self.owner = owner
 
 
 def load_json_file(path: Path) -> dict[str, Any]:
@@ -1115,12 +1178,33 @@ def collect_existing_containers(
 
 
 def run_action(config: FleetConfig, action: FleetAction, *, local: bool = False) -> int:
+    return run_action_result(config, action, local=local, capture=False).exit_code
+
+
+def run_action_result(
+    config: FleetConfig,
+    action: FleetAction,
+    *,
+    local: bool = False,
+    capture: bool = False,
+) -> ActionResult:
     if not action.commands:
-        return 0
+        return ActionResult(
+            kind=action.kind,
+            host=action.host,
+            container=action.container,
+            exit_code=0,
+        )
     host = config.hosts[action.host]
     script = "set -euo pipefail\n" + "\n".join(action.commands)
-    result = run_host_script(host, script, local=local)
-    return int(result.returncode)
+    result = run_host_script(host, script, local=local, capture=capture)
+    return ActionResult(
+        kind=action.kind,
+        host=action.host,
+        container=action.container,
+        exit_code=int(result.returncode),
+        output=(result.stdout or "").strip(),
+    )
 
 
 def selected_hosts(config: FleetConfig, host_filter: str | None) -> list[HostConfig]:
@@ -1270,7 +1354,101 @@ def _load_config_from_args(args: argparse.Namespace) -> FleetConfig:
 
 
 def repo_root_from_args(args: argparse.Namespace) -> Path:
-    return Path(args.repo_root).expanduser().resolve()
+    return Path(getattr(args, "repo_root", ".")).expanduser().resolve()
+
+
+def watch_latest_lock_path(args: argparse.Namespace) -> Path:
+    return repo_root_from_args(args) / "runs" / "fleet" / "watch.lock"
+
+
+def acquire_watch_latest_lock(args: argparse.Namespace) -> WatchLatestLock:
+    path = watch_latest_lock_path(args)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    handle = path.open("a+", encoding="utf-8")
+    try:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError as exc:
+        handle.seek(0)
+        owner = handle.read().strip()
+        handle.close()
+        if exc.errno in {errno.EACCES, errno.EAGAIN}:
+            raise WatchLatestLockBusy(path, owner) from exc
+        raise
+    handle.seek(0)
+    handle.truncate()
+    owner = {
+        "pid": os.getpid(),
+        "started_at": datetime.now(UTC).isoformat(timespec="seconds"),
+        "repo_root": str(repo_root_from_args(args)),
+        "host": getattr(args, "host", None) or "all",
+        "mode": "execute" if getattr(args, "execute", False) else "dry-run",
+        "interval": getattr(args, "interval", DEFAULT_WATCH_LATEST_INTERVAL_SECONDS),
+    }
+    handle.write(json.dumps(owner, sort_keys=True) + "\n")
+    handle.flush()
+    return WatchLatestLock(path=path, handle=handle)
+
+
+def release_watch_latest_lock(lock: WatchLatestLock) -> None:
+    try:
+        fcntl.flock(lock.handle.fileno(), fcntl.LOCK_UN)
+    finally:
+        lock.handle.close()
+
+
+def stale_lease_owner_prefix_for_host(host: HostConfig) -> str:
+    return f"rlab-{sanitize_slug(host.name, limit=16)}-"
+
+
+def stale_train_job_from_row(
+    host: HostConfig,
+    row: Mapping[str, Any],
+    *,
+    execute: bool,
+) -> StaleTrainJob:
+    return StaleTrainJob(
+        host=host.name,
+        id=int(row["id"]),
+        profile_id=row.get("profile_id"),
+        runtime_image_ref=row.get("runtime_image_ref"),
+        run_target=row.get("run_target"),
+        run_name=row.get("run_name"),
+        lease_owner=row.get("stale_lease_owner"),
+        heartbeat_at=row.get("stale_heartbeat_at"),
+        execute=execute,
+    )
+
+
+def stale_train_job_error_for_host(host: HostConfig) -> str:
+    return f"worker_lost: stale train job marked failed by rlab-fleet watch host={host.name}"
+
+
+def stale_train_jobs_for_watch(
+    conn,
+    config: FleetConfig,
+    *,
+    execute: bool,
+    older_than_seconds: int,
+    limit: int,
+) -> tuple[StaleTrainJob, ...]:
+    stale_jobs: list[StaleTrainJob] = []
+    for host in sorted(config.hosts.values(), key=lambda item: item.name):
+        common = {
+            "run_target": host.run_target,
+            "lease_owner_prefix": stale_lease_owner_prefix_for_host(host),
+            "older_than_seconds": older_than_seconds,
+            "limit": limit,
+        }
+        if execute:
+            rows = mark_stale_train_jobs_failed(
+                conn,
+                **common,
+                error=stale_train_job_error_for_host(host),
+            )
+        else:
+            rows = list_stale_train_jobs(conn, **common)
+        stale_jobs.extend(stale_train_job_from_row(host, row, execute=execute) for row in rows)
+    return tuple(stale_jobs)
 
 
 def build_live_plan(
@@ -1645,6 +1823,457 @@ def build_live_ensure_latest_plan(args: argparse.Namespace) -> tuple[FleetConfig
     )
 
 
+def build_latest_watch_snapshot(
+    args: argparse.Namespace,
+    *,
+    action_results: Sequence[ActionResult] = (),
+) -> LatestWatchSnapshot:
+    config = filter_config_to_host(_load_config_from_args(args), getattr(args, "host", None))
+    runtime_image_ref = image_ref_from_args(args, default_latest=True)
+    if not runtime_image_ref:
+        raise SystemExit("--image, --image-file, --runtime-image-ref, or --runtime-image-ref-file is required")
+    conn = _connect_from_args(args)
+    try:
+        stale_train_jobs = (
+            stale_train_jobs_for_watch(
+                conn,
+                config,
+                execute=bool(args.execute),
+                older_than_seconds=int(
+                    getattr(args, "stale_older_than_seconds", DEFAULT_WATCH_STALE_OLDER_THAN_SECONDS)
+                ),
+                limit=int(getattr(args, "stale_limit", DEFAULT_WATCH_STALE_LIMIT)),
+            )
+            if getattr(args, "claim_stale_jobs", True)
+            else ()
+        )
+        demands = tuple(queue_demands(conn))
+        leases = tuple(active_leases(conn))
+        jobs = tuple(running_jobs(conn))
+    finally:
+        conn.close()
+    existing, container_warnings = collect_existing_containers(config, host_filter=None, local=False)
+    down_hosts = tuple(sorted(warning_hosts(config, container_warnings)))
+    plan = build_ensure_latest_plan(
+        config,
+        runtime_image_ref=runtime_image_ref,
+        workers=args.workers,
+        existing=existing,
+        leases=leases,
+        demands=demands,
+    )
+    return LatestWatchSnapshot(
+        captured_at=datetime.now(UTC),
+        config=config,
+        runtime_image_ref=runtime_image_ref,
+        demands=demands,
+        leases=leases,
+        jobs=jobs,
+        plan=FleetPlan(
+            desired=plan.desired,
+            existing=plan.existing,
+            actions=tuple(action for action in plan.actions if action.host not in down_hosts),
+            warnings=plan.warnings,
+        ),
+        stale_train_jobs=stale_train_jobs,
+        down_hosts=down_hosts,
+        action_results=tuple(action_results),
+        execute=bool(args.execute),
+        interval=float(args.interval),
+    )
+
+
+def run_latest_watch_actions(config: FleetConfig, plan: FleetPlan) -> tuple[ActionResult, ...]:
+    results: list[ActionResult] = []
+    failed_hosts: set[str] = set()
+    for action in plan.actions:
+        if action.kind == "keep" or action.host in failed_hosts:
+            continue
+        result = run_action_result(config, action, local=False, capture=True)
+        results.append(result)
+        if result.exit_code != 0:
+            failed_hosts.add(action.host)
+    return tuple(results)
+
+
+ANSI_STYLES = {
+    "reset": "\033[0m",
+    "bold": "\033[1m",
+    "dim": "\033[2m",
+    "red": "\033[31m",
+    "green": "\033[32m",
+    "yellow": "\033[33m",
+    "blue": "\033[34m",
+    "cyan": "\033[36m",
+}
+
+
+def colorize(text: str, style: str, *, enabled: bool) -> str:
+    if not enabled:
+        return text
+    return f"{ANSI_STYLES[style]}{text}{ANSI_STYLES['reset']}"
+
+
+def compact_ref(runtime_image_ref: str) -> str:
+    return runtime_image_digest_slug(runtime_image_ref)
+
+
+def truncate_cell(value: Any, width: int) -> str:
+    text = str(value)
+    if width < 4 or len(text) <= width:
+        return text
+    return f"{text[: width - 3]}..."
+
+
+def format_table(
+    headers: Sequence[str],
+    rows: Sequence[Sequence[Any]],
+    *,
+    max_width: int,
+) -> str:
+    if not headers:
+        return ""
+    string_rows = [[str(cell) for cell in row] for row in rows]
+    widths = [
+        max(
+            len(str(headers[index])),
+            *(len(row[index]) for row in string_rows),
+        )
+        for index in range(len(headers))
+    ]
+    min_widths = [min(len(str(header)), 10) for header in headers]
+    while sum(widths) + (3 * (len(widths) - 1)) > max_width and max(widths) > 10:
+        widest = max(range(len(widths)), key=lambda index: widths[index])
+        if widths[widest] <= min_widths[widest]:
+            break
+        widths[widest] -= 1
+    line_parts = [str(header).ljust(widths[index]) for index, header in enumerate(headers)]
+    lines = [" | ".join(line_parts)]
+    lines.append("-+-".join("-" * width for width in widths))
+    for row in string_rows:
+        lines.append(
+            " | ".join(
+                truncate_cell(row[index], widths[index]).ljust(widths[index])
+                for index in range(len(headers))
+            )
+        )
+    return "\n".join(lines)
+
+
+def warning_hosts(config: FleetConfig, warnings: Sequence[str]) -> set[str]:
+    hosts = set()
+    for host_name in config.hosts:
+        if any(host_name in warning for warning in warnings):
+            hosts.add(host_name)
+    return hosts
+
+
+def jobs_for_prefix(jobs: Sequence[RunningJob], prefix: str) -> list[RunningJob]:
+    return [job for job in jobs if job.lease_owner.startswith(prefix)]
+
+
+def host_dashboard_rows(snapshot: LatestWatchSnapshot) -> list[list[str]]:
+    down_hosts = set(snapshot.down_hosts) | warning_hosts(snapshot.config, snapshot.plan.warnings)
+    desired_by_host = {item.key.host: item for item in snapshot.plan.desired}
+    actions_by_host: dict[str, list[FleetAction]] = {}
+    for action in snapshot.plan.actions:
+        actions_by_host.setdefault(action.host, []).append(action)
+    results_by_host: dict[str, list[ActionResult]] = {}
+    for result in snapshot.action_results:
+        results_by_host.setdefault(result.host, []).append(result)
+    rows: list[list[str]] = []
+    for host_name, host in sorted(snapshot.config.hosts.items()):
+        desired = desired_by_host.get(host_name)
+        containers = [container for container in snapshot.plan.existing if container.host == host_name]
+        latest = next(
+            (
+                container
+                for container in containers
+                if desired is not None and container.name == desired.name
+            ),
+            None,
+        )
+        if latest is not None:
+            prefix = latest.labels.get(f"{LABEL_PREFIX}worker-prefix") or latest.name
+            job_count = len(jobs_for_prefix(snapshot.jobs, prefix))
+            runner = latest.status or latest.state or "present"
+            digest = latest.labels.get(f"{LABEL_PREFIX}runtime-digest") or "unknown"
+        else:
+            job_count = 0
+            runner = "missing"
+            digest = compact_ref(snapshot.runtime_image_ref)
+        old_count = sum(1 for container in containers if desired is None or container.name != desired.name)
+        non_keep_actions = [action.kind for action in actions_by_host.get(host_name, ()) if action.kind != "keep"]
+        failed = [result for result in results_by_host.get(host_name, ()) if result.exit_code != 0]
+        live = "down" if host_name in down_hosts else "live"
+        if live == "down":
+            action_text = "down"
+        elif failed:
+            action_text = f"failed:{failed[-1].kind}"
+        elif non_keep_actions:
+            action_text = ",".join(non_keep_actions)
+        else:
+            action_text = "ok"
+        rows.append(
+            [
+                host.name,
+                host.run_target,
+                live,
+                runner,
+                digest,
+                str(job_count),
+                str(old_count),
+                action_text,
+            ]
+        )
+    return rows
+
+
+def demand_dashboard_rows(demands: Sequence[QueueDemand]) -> list[list[str]]:
+    return [
+        [
+            demand.profile_id or "any",
+            demand.run_target or "any",
+            str(demand.pending_count),
+            str(demand.running_count),
+            compact_ref(demand.runtime_image_ref),
+        ]
+        for demand in demands
+    ]
+
+
+def action_dashboard_rows(plan: FleetPlan, results: Sequence[ActionResult]) -> list[list[str]]:
+    result_by_key = {
+        (result.host, result.container, result.kind): result
+        for result in results
+    }
+    rows = []
+    for action in plan.actions:
+        if action.kind == "keep":
+            continue
+        result = result_by_key.get((action.host, action.container, action.kind))
+        if result is None:
+            status = "planned"
+        elif result.exit_code == 0:
+            status = "ok"
+        else:
+            status = f"exit={result.exit_code}"
+        rows.append([action.host, action.kind, status, action.container, action.reason])
+    return rows
+
+
+def running_job_dashboard_rows(jobs: Sequence[RunningJob], *, limit: int = 8) -> list[list[str]]:
+    rows = []
+    for job in list(jobs)[:limit]:
+        rows.append(
+            [
+                str(job.id),
+                job.run_target or "any",
+                compact_ref(job.runtime_image_ref),
+                job.run_name or "unknown",
+                format_elapsed_since(job.heartbeat_at),
+            ]
+        )
+    return rows
+
+
+def stale_train_job_dashboard_rows(jobs: Sequence[StaleTrainJob], *, limit: int = 8) -> list[list[str]]:
+    rows = []
+    for job in list(jobs)[:limit]:
+        owner = job.lease_owner or "unknown"
+        host_prefix = f"rlab-{job.host}-"
+        if owner.startswith(host_prefix):
+            owner = owner.removeprefix(host_prefix)
+        rows.append(
+            [
+                job.host,
+                "failed" if job.execute else "would_fail",
+                str(job.id),
+                job.run_target or "any",
+                owner,
+                format_elapsed_since(job.heartbeat_at),
+                job.run_name or "unknown",
+            ]
+        )
+    return rows
+
+
+def render_latest_watch_dashboard(
+    snapshot: LatestWatchSnapshot,
+    *,
+    color: bool = True,
+    max_width: int | None = None,
+) -> str:
+    width = max_width or shutil.get_terminal_size((120, 30)).columns
+    width = max(width, 72)
+    action_count = len([action for action in snapshot.plan.actions if action.kind != "keep"])
+    stale_count = len(snapshot.stale_train_jobs)
+    failed_results = [result for result in snapshot.action_results if result.exit_code != 0]
+    if failed_results or snapshot.plan.warnings or snapshot.down_hosts:
+        status_style = "yellow"
+        status = "attention"
+    elif action_count or stale_count:
+        status_style = "cyan"
+        status = "applying" if snapshot.execute else "planned"
+    else:
+        status_style = "green"
+        status = "steady"
+    mode = "execute" if snapshot.execute else "dry-run"
+    title = colorize("rlab fleet watch", "bold", enabled=color)
+    latest = colorize(compact_ref(snapshot.runtime_image_ref), "cyan", enabled=color)
+    header = [
+        title,
+        (
+            f"time={snapshot.captured_at.isoformat(timespec='seconds')} "
+            f"mode={mode} interval={snapshot.interval:g}s latest={latest} "
+            f"status={colorize(status, status_style, enabled=color)}"
+        ),
+        "=" * min(width, 120),
+    ]
+    sections = ["\n".join(header)]
+    sections.append(
+        format_table(
+            ["host", "target", "live", "runner", "digest", "jobs", "old", "action"],
+            host_dashboard_rows(snapshot),
+            max_width=width,
+        )
+    )
+    demand_rows = demand_dashboard_rows(snapshot.demands)
+    sections.append(
+        "queue demand:\n"
+        + (
+            format_table(["profile", "target", "pending", "running", "digest"], demand_rows, max_width=width)
+            if demand_rows
+            else "none"
+        )
+    )
+    action_rows = action_dashboard_rows(snapshot.plan, snapshot.action_results)
+    sections.append(
+        "actions:\n"
+        + (
+            format_table(["host", "kind", "status", "container", "reason"], action_rows, max_width=width)
+            if action_rows
+            else "none"
+        )
+    )
+    stale_rows = stale_train_job_dashboard_rows(snapshot.stale_train_jobs)
+    if stale_rows:
+        sections.append(
+            "stale train jobs:\n"
+            + format_table(
+                ["host", "action", "id", "target", "owner", "heartbeat", "run"],
+                stale_rows,
+                max_width=width,
+            )
+        )
+    job_rows = running_job_dashboard_rows(snapshot.jobs)
+    sections.append(
+        "running jobs:\n"
+        + (
+            format_table(["id", "target", "digest", "run", "heartbeat"], job_rows, max_width=width)
+            if job_rows
+            else "none"
+        )
+    )
+    if snapshot.plan.warnings:
+        sections.append(
+            colorize("warnings:", "yellow", enabled=color)
+            + "\n"
+            + "\n".join(f"  {warning}" for warning in snapshot.plan.warnings[:8])
+        )
+    if failed_results:
+        lines = [colorize("failed actions:", "red", enabled=color)]
+        for result in failed_results[:4]:
+            tail = result.output.splitlines()[-1] if result.output else ""
+            lines.append(
+                f"  host={result.host} kind={result.kind} container={result.container} "
+                f"exit={result.exit_code} {tail}"
+            )
+        sections.append("\n".join(lines))
+    sections.append(colorize("Ctrl-C to stop.", "dim", enabled=color))
+    return "\n\n".join(sections)
+
+
+def requested_image_label(args: argparse.Namespace) -> str:
+    image = str(getattr(args, "image", "") or "").strip()
+    if image:
+        if image == "latest":
+            return "latest successful train image"
+        try:
+            return compact_ref(image)
+        except ValueError:
+            return image
+    image_file = getattr(args, "image_file", None)
+    if image_file:
+        return str(image_file)
+    value = getattr(args, "runtime_image_ref", None)
+    if value:
+        try:
+            return compact_ref(value)
+        except ValueError:
+            return str(value)
+    ref_file = getattr(args, "runtime_image_ref_file", None)
+    if ref_file:
+        return str(ref_file)
+    return "latest successful train image"
+
+
+def render_latest_watch_starting_dashboard(
+    args: argparse.Namespace,
+    *,
+    color: bool = True,
+    max_width: int | None = None,
+) -> str:
+    width = max_width or shutil.get_terminal_size((120, 30)).columns
+    width = max(width, 72)
+    mode = "execute" if args.execute else "dry-run"
+    host = args.host or "all"
+    title = colorize("rlab fleet watch", "bold", enabled=color)
+    status = colorize("starting", "cyan", enabled=color)
+    header = [
+        title,
+        (
+            f"time={datetime.now(UTC).isoformat(timespec='seconds')} "
+            f"mode={mode} interval={args.interval:g}s host={host} "
+            f"latest={requested_image_label(args)} status={status}"
+        ),
+        "=" * min(width, 120),
+    ]
+    body = [
+        "polling now...",
+        "resolving image, reading queue state, and checking SSH/Docker hosts",
+        "",
+        colorize("Ctrl-C to stop.", "dim", enabled=color),
+    ]
+    return "\n".join([*header, *body])
+
+
+def render_watch_latest_lock_busy(
+    error: WatchLatestLockBusy,
+    *,
+    color: bool = True,
+    max_width: int | None = None,
+) -> str:
+    width = max_width or shutil.get_terminal_size((120, 30)).columns
+    width = max(width, 72)
+    lines = [
+        colorize("rlab fleet watch", "bold", enabled=color),
+        "=" * min(width, 120),
+        colorize("another watch session already owns the lock", "yellow", enabled=color),
+        f"lock={error.path}",
+    ]
+    if error.owner:
+        lines.extend(["owner:", f"  {error.owner}"])
+    lines.append("Stop the existing session before starting another one.")
+    return "\n".join(lines)
+
+
+def write_tui_frame(text: str, *, enabled: bool) -> None:
+    if enabled and sys.stdout.isatty():
+        sys.stdout.write("\033[2J\033[H")
+    print(text, flush=True)
+
+
 def cmd_ensure_latest(args: argparse.Namespace) -> int:
     while True:
         config, runtime_image_ref, plan = build_live_ensure_latest_plan(args)
@@ -1658,6 +2287,60 @@ def cmd_ensure_latest(args: argparse.Namespace) -> int:
         if status != 0 or not args.watch:
             return status
         time.sleep(args.interval)
+
+
+def cmd_watch_latest(args: argparse.Namespace) -> int:
+    color = not args.no_color
+    tui = not args.no_tui
+    try:
+        lock = acquire_watch_latest_lock(args)
+    except WatchLatestLockBusy as exc:
+        write_tui_frame(
+            render_watch_latest_lock_busy(exc, color=color, max_width=args.width),
+            enabled=tui,
+        )
+        return 2
+    try:
+        write_tui_frame(
+            render_latest_watch_starting_dashboard(args, color=color, max_width=args.width),
+            enabled=tui,
+        )
+        while True:
+            try:
+                snapshot = build_latest_watch_snapshot(args)
+                action_results: tuple[ActionResult, ...] = ()
+                if args.execute:
+                    action_results = run_latest_watch_actions(snapshot.config, snapshot.plan)
+                    snapshot = replace(snapshot, action_results=action_results)
+                write_tui_frame(
+                    render_latest_watch_dashboard(snapshot, color=color, max_width=args.width),
+                    enabled=tui,
+                )
+                exit_code = max((result.exit_code for result in action_results), default=0)
+                if args.once:
+                    return exit_code
+                if exit_code != 0 and args.fail_fast:
+                    return exit_code
+            except KeyboardInterrupt:
+                print("\nwatch stopped")
+                return 130
+            except Exception as exc:
+                message = (
+                    colorize("rlab fleet watch", "bold", enabled=color)
+                    + "\n"
+                    + "=" * min(args.width or shutil.get_terminal_size((120, 30)).columns, 120)
+                    + "\n"
+                    + colorize(f"snapshot failed: {exc}", "red", enabled=color)
+                    + "\n\nCtrl-C to stop."
+                )
+                write_tui_frame(message, enabled=tui)
+                if args.once:
+                    return 1
+                if args.fail_fast:
+                    return 1
+            time.sleep(args.interval)
+    finally:
+        release_watch_latest_lock(lock)
 
 
 def cmd_setup_host(args: argparse.Namespace) -> int:
@@ -1675,6 +2358,66 @@ def cmd_setup_host(args: argparse.Namespace) -> int:
         if result.returncode != 0:
             status = int(result.returncode)
     return status
+
+
+def print_stale_train_rows(
+    rows: Sequence[Mapping[str, Any]],
+    *,
+    execute: bool,
+) -> None:
+    action = "failed" if execute else "would_fail"
+    print(f"stale_train_jobs_{action}={len(rows)}")
+    for row in rows:
+        print(
+            "  "
+            f"train_job_id={row['id']} "
+            f"profile={row.get('profile_id') or 'any'} "
+            f"target={row.get('run_target') or 'any'} "
+            f"owner={row.get('stale_lease_owner') or 'unknown'} "
+            f"heartbeat={row.get('stale_heartbeat_at') or 'unknown'} "
+            f"run={row.get('run_name') or ''}"
+        )
+
+
+def cmd_mark_stale_failed(args: argparse.Namespace) -> int:
+    config = _load_config_from_args(args)
+    if args.host not in config.hosts:
+        known = ", ".join(sorted(config.hosts))
+        raise SystemExit(f"unknown fleet host {args.host!r}; known hosts: {known}")
+    host = config.hosts[args.host]
+    lease_owner_prefix = args.lease_owner_prefix or stale_lease_owner_prefix_for_host(host)
+    conn = _connect_from_args(args)
+    try:
+        func = mark_stale_train_jobs_failed if args.execute else list_stale_train_jobs
+        if args.execute:
+            rows = func(
+                conn,
+                job_ids=args.job_id,
+                run_target=host.run_target,
+                lease_owner_prefix=lease_owner_prefix,
+                older_than_seconds=args.older_than_seconds,
+                limit=args.limit,
+                error=args.error,
+            )
+        else:
+            rows = func(
+                conn,
+                job_ids=args.job_id,
+                run_target=host.run_target,
+                lease_owner_prefix=lease_owner_prefix,
+                older_than_seconds=args.older_than_seconds,
+                limit=args.limit,
+            )
+    finally:
+        conn.close()
+    print(
+        f"host={host.name} target={host.run_target} "
+        f"lease_owner_prefix={lease_owner_prefix} mode={'execute' if args.execute else 'dry-run'}"
+    )
+    print_stale_train_rows(rows, execute=args.execute)
+    if not args.execute:
+        print("dry_run: pass --execute to mark these stale train jobs failed")
+    return 0
 
 
 def add_common_args(parser: argparse.ArgumentParser) -> None:
@@ -1786,6 +2529,71 @@ def build_parser() -> argparse.ArgumentParser:
     ensure_latest.add_argument("--interval", type=float, default=30.0, help="Watch interval in seconds.")
     add_ensure_image_args(ensure_latest)
     ensure_latest.set_defaults(func=cmd_ensure_latest)
+
+    watch_latest = subparsers.add_parser(
+        "watch",
+        help="Run a live TUI that keeps fleet hosts on the latest image and cleans idle old runners.",
+    )
+    add_common_args(watch_latest)
+    watch_latest.add_argument("--host", help="Limit monitoring to one fleet host.")
+    watch_latest.add_argument(
+        "--workers",
+        type=int,
+        help="Workers inside each latest runner; defaults to host capacity.",
+    )
+    watch_latest.add_argument("--execute", action="store_true", help="Apply actions; omit for dry-run.")
+    watch_latest.add_argument(
+        "--interval",
+        type=float,
+        default=DEFAULT_WATCH_LATEST_INTERVAL_SECONDS,
+        help="Polling interval in seconds; defaults to 5.",
+    )
+    watch_latest.add_argument("--once", action="store_true", help="Render/apply one poll and exit.")
+    watch_latest.add_argument(
+        "--fail-fast",
+        action="store_true",
+        help="Exit when a poll or action fails instead of retrying forever.",
+    )
+    watch_latest.add_argument(
+        "--no-claim-stale-jobs",
+        dest="claim_stale_jobs",
+        action="store_false",
+        help="Disable stale running train job detection and failure marking.",
+    )
+    watch_latest.add_argument(
+        "--stale-older-than-seconds",
+        type=int,
+        default=DEFAULT_WATCH_STALE_OLDER_THAN_SECONDS,
+        help="Treat running train jobs with no recent heartbeat as stale after this many seconds.",
+    )
+    watch_latest.add_argument(
+        "--stale-limit",
+        type=int,
+        default=DEFAULT_WATCH_STALE_LIMIT,
+        help="Maximum stale train jobs to inspect or fail per host; 0 means no limit.",
+    )
+    watch_latest.add_argument("--no-tui", action="store_true", help="Do not clear/redraw the terminal.")
+    watch_latest.add_argument("--no-color", action="store_true", help="Disable ANSI color output.")
+    watch_latest.add_argument("--width", type=int, help="Override dashboard width.")
+    add_ensure_image_args(watch_latest)
+    watch_latest.set_defaults(func=cmd_watch_latest)
+
+    mark_stale = subparsers.add_parser(
+        "mark-stale-failed",
+        help="Mark stale running train jobs for one fleet host failed.",
+    )
+    add_common_args(mark_stale)
+    mark_stale.add_argument("--host", required=True, help="Fleet host whose lost workers owned the jobs.")
+    mark_stale.add_argument("--job-id", type=int, action="append", default=[])
+    mark_stale.add_argument(
+        "--lease-owner-prefix",
+        help="Override the derived host worker-prefix filter.",
+    )
+    mark_stale.add_argument("--older-than-seconds", type=int, default=300)
+    mark_stale.add_argument("--limit", type=int, default=50, help="Maximum rows to affect; 0 means no limit.")
+    mark_stale.add_argument("--error", help="Failure message to store on job/result rows.")
+    mark_stale.add_argument("--execute", action="store_true", help="Apply changes; default is dry-run.")
+    mark_stale.set_defaults(func=cmd_mark_stale_failed)
 
     setup = subparsers.add_parser("setup-host", help="Prepare SSH Docker hosts for runners.")
     add_common_args(setup)

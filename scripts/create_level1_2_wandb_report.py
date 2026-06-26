@@ -18,15 +18,15 @@ from rlab.metric_names import (
     THROUGHPUT_LOOP_FPS,
     THROUGHPUT_ROLLOUT_FPS,
     TRAIN_DONE_ALL,
-    TRAIN_DONE_LEVEL_CHANGE_FROM_RATE_MEAN,
-    TRAIN_DONE_LEVEL_CHANGE_FROM_RATE_MIN,
     TRAIN_DONE_MAX_STEPS,
     TRAIN_DONE_UNCLASSIFIED,
+    TRAIN_OUTCOME_LEVEL_CHANGE_FROM_RATE_MEAN,
+    TRAIN_OUTCOME_LEVEL_CHANGE_FROM_RATE_MIN,
     TRAIN_REWARD_COMPONENT_ROOT,
     TRAIN_REWARD_SHARE_ROOT,
     eval_done_value_metric,
     stat_metric,
-    train_done_value_metric,
+    train_outcome_value_metric,
 )
 
 try:
@@ -72,11 +72,11 @@ class LevelSpec:
 
     @property
     def count_metric(self) -> str:
-        return train_done_value_metric("level_change", "from", self.train_from_value)
+        return train_outcome_value_metric("level_change", "from", self.train_from_value)
 
     @property
     def window_rate_metric(self) -> str:
-        return f"{self.count_metric}/ep_window/rate"
+        return f"{self.count_metric}/attempt_window/rate"
 
     @property
     def eval_rate_metric(self) -> str:
@@ -287,8 +287,8 @@ def backfill_min_rate_summary(runs: list[object], level_specs: list[LevelSpec]) 
         if any(rate is None for rate in rates):
             continue
         numeric_rates = [rate for rate in rates if rate is not None]
-        run.summary[TRAIN_DONE_LEVEL_CHANGE_FROM_RATE_MIN] = min(numeric_rates)
-        run.summary[TRAIN_DONE_LEVEL_CHANGE_FROM_RATE_MEAN] = sum(numeric_rates) / len(
+        run.summary[TRAIN_OUTCOME_LEVEL_CHANGE_FROM_RATE_MIN] = min(numeric_rates)
+        run.summary[TRAIN_OUTCOME_LEVEL_CHANGE_FROM_RATE_MEAN] = sum(numeric_rates) / len(
             numeric_rates,
         )
         run.summary.update()
@@ -374,7 +374,7 @@ def build_report(
         order=[
             wr.OrderBy(
                 wr.SummaryMetric(
-                    TRAIN_DONE_LEVEL_CHANGE_FROM_RATE_MIN,
+                    TRAIN_OUTCOME_LEVEL_CHANGE_FROM_RATE_MIN,
                 ),
                 ascending=False,
             ),
@@ -384,8 +384,8 @@ def build_report(
             "State",
             "group",
             *[f"summary.{metric}" for metric in level_window_rate_metrics],
-            f"summary.{TRAIN_DONE_LEVEL_CHANGE_FROM_RATE_MIN}",
-            f"summary.{TRAIN_DONE_LEVEL_CHANGE_FROM_RATE_MEAN}",
+            f"summary.{TRAIN_OUTCOME_LEVEL_CHANGE_FROM_RATE_MIN}",
+            f"summary.{TRAIN_OUTCOME_LEVEL_CHANGE_FROM_RATE_MEAN}",
             *[f"summary.{metric}" for metric in level_count_metrics],
             f"summary.{EVAL_DONE_LEVEL_CHANGE_FROM_RATE_MIN}",
             f"summary.{TRAIN_DONE_ALL}",
@@ -426,7 +426,7 @@ def build_report(
         description=(
             "Training-focused view for active SuperMarioBros-NES runs. It prioritizes "
             "the current running W&B runset, minimum per-level clearance rate, "
-            "per-level 100-terminal-episode completion windows, reward attribution, "
+            "per-level 100-attempt completion windows, reward attribution, "
             "rollout diagnostics, and PPO health."
         ),
         width="fluid",
@@ -435,11 +435,11 @@ def build_report(
             wr.MarkdownBlock(
                 f"""
                 Training monitor for active SuperMarioBros-NES runs. During training,
-                start with the per-level 100-terminal-episode window rates:
+                start with the per-level 100-attempt window rates:
                 `{primary_level.window_rate_metric}` and `{secondary_level.window_rate_metric}`.
                 The top metric is the current minimum per-level clearance rate: the lower of the
                 per-level rates for each active run. New training code also logs
-                `{TRAIN_DONE_LEVEL_CHANGE_FROM_RATE_MIN}` directly. The runset is softcoded to W&B
+                `{TRAIN_OUTCOME_LEVEL_CHANGE_FROM_RATE_MIN}` directly. The runset is softcoded to W&B
                 `State = 'running'` by default, so it follows current active runs instead of a fixed
                 batch. For the Reward component share panel, select one run in the run table before
                 reading the component fractions.
@@ -484,7 +484,7 @@ def build_report(
                         "Per-level clearance rates (bottleneck is the lower trace)",
                         [
                             *level_window_rate_metrics,
-                            TRAIN_DONE_LEVEL_CHANGE_FROM_RATE_MIN,
+                            TRAIN_OUTCOME_LEVEL_CHANGE_FROM_RATE_MIN,
                         ],
                         x=0,
                         y=12,
@@ -683,9 +683,9 @@ def build_report(
             wr.MarkdownBlock(
                 f"""
                 During active training, rank runs by the current minimum per-level clearance rate.
-                That value is the lower of the per-level 100-terminal-episode clearance rates;
+                That value is the lower of the per-level 100-attempt clearance rates;
                 the mean can look good while one level is failing, so it is secondary. New runs log
-                `{TRAIN_DONE_LEVEL_CHANGE_FROM_RATE_MIN}` directly for history panels. Once
+                `{TRAIN_OUTCOME_LEVEL_CHANGE_FROM_RATE_MIN}` directly for history panels. Once
                 out-of-process checkpoint eval exists, rank by
                 `{EVAL_DONE_LEVEL_CHANGE_FROM_RATE_MIN}`, then mean reward, then max x-position.
                 """,

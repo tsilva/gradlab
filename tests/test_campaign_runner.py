@@ -27,8 +27,9 @@ RUNTIME_IMAGE_REF = (
 
 
 class FakeCursor:
-    def __init__(self, row=None) -> None:
+    def __init__(self, row=None, rows=None) -> None:
         self.row = row
+        self.rows = rows if rows is not None else []
         self.executed_sql = ""
         self.executed_params = {}
 
@@ -45,10 +46,13 @@ class FakeCursor:
     def fetchone(self):
         return self.row
 
+    def fetchall(self):
+        return self.rows
+
 
 class FakeConnection:
-    def __init__(self, row=None) -> None:
-        self.cursor_obj = FakeCursor(row=row)
+    def __init__(self, row=None, rows=None) -> None:
+        self.cursor_obj = FakeCursor(row=row, rows=rows)
 
     def __enter__(self):
         return self
@@ -171,6 +175,70 @@ class CampaignQueueTests(unittest.TestCase):
         )
         self.assertEqual(conn.cursor_obj.executed_params["run_target"], "rtx4090")
 
+    def test_list_stale_train_jobs_filters_target_prefix_and_age(self) -> None:
+        conn = FakeConnection(
+            rows=[
+                {
+                    "id": 12,
+                    "profile_id": None,
+                    "runtime_image_ref": RUNTIME_IMAGE_REF,
+                    "run_target": "rtx2060",
+                    "run_name": "candidate",
+                    "stale_lease_owner": "rlab-beast-2-rtx2060-any-profile-cccc-0-deadbeef",
+                    "stale_heartbeat_at": None,
+                }
+            ]
+        )
+
+        rows = campaign.list_stale_train_jobs(
+            conn,
+            run_target="rtx2060",
+            lease_owner_prefix="rlab-beast-2-",
+            older_than_seconds=600,
+            limit=25,
+        )
+
+        self.assertEqual(rows[0]["id"], 12)
+        self.assertIn("FROM train_jobs", conn.cursor_obj.executed_sql)
+        self.assertIn("status = 'running'", conn.cursor_obj.executed_sql)
+        self.assertIn("run_target = %(run_target)s", conn.cursor_obj.executed_sql)
+        self.assertIn("lease_owner LIKE %(lease_owner_like)s", conn.cursor_obj.executed_sql)
+        self.assertNotIn("UPDATE train_jobs", conn.cursor_obj.executed_sql)
+        self.assertEqual(conn.cursor_obj.executed_params["run_target"], "rtx2060")
+        self.assertEqual(conn.cursor_obj.executed_params["lease_owner_like"], "rlab-beast-2-%")
+        self.assertEqual(conn.cursor_obj.executed_params["older_than_seconds"], 600)
+        self.assertEqual(conn.cursor_obj.executed_params["limit"], 25)
+
+    def test_mark_stale_train_jobs_failed_updates_job_and_result(self) -> None:
+        conn = FakeConnection(rows=[{"id": 12, "stale_lease_owner": "rlab-beast-2-x"}])
+
+        rows = campaign.mark_stale_train_jobs_failed(
+            conn,
+            job_ids=[12],
+            run_target="rtx2060",
+            lease_owner_prefix="rlab-beast-2-",
+            older_than_seconds=1,
+            error="worker_lost: beast-2 powered off",
+        )
+
+        self.assertEqual(rows[0]["id"], 12)
+        self.assertIn("WITH candidates AS", conn.cursor_obj.executed_sql)
+        self.assertIn("FOR UPDATE SKIP LOCKED", conn.cursor_obj.executed_sql)
+        self.assertIn("UPDATE train_jobs AS job", conn.cursor_obj.executed_sql)
+        self.assertIn("INSERT INTO train_results", conn.cursor_obj.executed_sql)
+        self.assertIn("status = 'failed'", conn.cursor_obj.executed_sql)
+        self.assertEqual(conn.cursor_obj.executed_params["job_ids"], [12])
+        self.assertEqual(
+            conn.cursor_obj.executed_params["error"],
+            "worker_lost: beast-2 powered off",
+        )
+
+    def test_mark_stale_failed_execute_requires_scope_or_all(self) -> None:
+        args = campaign.build_parser().parse_args(["mark-stale-failed", "--execute"])
+
+        with self.assertRaisesRegex(SystemExit, "refusing unscoped"):
+            campaign.cmd_mark_stale_failed(args)
+
     def test_enqueue_train_job_persists_runtime_and_target(self) -> None:
         conn = FakeConnection(
             row={
@@ -219,6 +287,39 @@ class CampaignQueueTests(unittest.TestCase):
         self.assertIsNone(row["profile_id"])
         self.assertIsNone(conn.cursor_obj.executed_params["profile_id"])
         self.assertEqual(conn.cursor_obj.executed_params["runtime_image_ref"], RUNTIME_IMAGE_REF)
+
+    def test_enqueue_train_job_rejects_legacy_event_launch_config(self) -> None:
+        with self.assertRaisesRegex(ValueError, "legacy event key.*done_on_info_json"):
+            campaign.enqueue_train_job(
+                FakeConnection(),
+                goal_id=1,
+                experiment_spec_id=2,
+                profile_id=None,
+                runtime_image_ref=RUNTIME_IMAGE_REF,
+                run_target="rtx4090",
+                train_config={
+                    "timesteps": 1024,
+                    "done_on_info_json": {
+                        "level_change": [["levelHi", "levelLo"], "change"],
+                    },
+                },
+            )
+
+    def test_enqueue_train_job_requires_done_events_to_be_info_events(self) -> None:
+        with self.assertRaisesRegex(ValueError, "references unconfigured info event"):
+            campaign.enqueue_train_job(
+                FakeConnection(),
+                goal_id=1,
+                experiment_spec_id=2,
+                profile_id=None,
+                runtime_image_ref=RUNTIME_IMAGE_REF,
+                run_target="rtx4090",
+                train_config={
+                    "timesteps": 1024,
+                    "info_events_json": {"life_loss": ["lives", "decrease"]},
+                    "done_on_events": "life_loss,level_change",
+                },
+            )
 
     def test_enqueue_train_job_rejects_mutable_runtime_tag(self) -> None:
         conn = FakeConnection(row={"id": 9})
@@ -449,7 +550,15 @@ class CampaignQueueTests(unittest.TestCase):
                     "wandb_tags": ["mario", "confirm"],
                     "run_name_template": "btest_s{seed}_{utc}",
                     "run_description_template": "candidate seed {seed}",
-                    "train_config": {"game": "SuperMarioBros-Nes-v0", "timesteps": 1024},
+                    "train_config": {
+                        "game": "SuperMarioBros-Nes-v0",
+                        "timesteps": 1024,
+                        "info_events_json": {
+                            "life_loss": ["lives", "decrease"],
+                            "level_change": [["levelHi", "levelLo"], "change"],
+                        },
+                        "done_on_events": "life_loss,level_change",
+                    },
                 },
                 runtime_image_ref=RUNTIME_IMAGE_REF,
                 instances_path=Path("/tmp/does-not-exist.json"),
@@ -461,6 +570,15 @@ class CampaignQueueTests(unittest.TestCase):
 
         self.assertEqual([row["run_name"] for row in rows], ["btest_s23_20260626T120000Z", "btest_s24_20260626T120000Z"])
         self.assertEqual([call["train_config"]["seed"] for call in calls], [23, 24])
+        self.assertEqual(
+            calls[0]["train_config"]["info_events_json"],
+            {
+                "life_loss": ["lives", "decrease"],
+                "level_change": [["levelHi", "levelLo"], "change"],
+            },
+        )
+        self.assertEqual(calls[0]["train_config"]["done_on_events"], "life_loss,level_change")
+        self.assertNotIn("done_on_info_json", calls[0]["train_config"])
         self.assertEqual(calls[0]["priority"], 7)
         self.assertEqual(calls[0]["wandb_tags"], ["mario", "confirm"])
 

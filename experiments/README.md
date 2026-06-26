@@ -1,19 +1,19 @@
 # Experiments
 
-This directory holds experiment evidence and queue notes. Keep active operational
-instructions in the top-level runbooks:
+This directory holds shared fleet config plus goal-scoped experiment capsules.
+Keep broad repo rules in the top-level runbooks:
 
 - `../AGENTS.md` for repo rules and stable-retro runtime cautions.
-- `../INSTANCES.md` for known GPU targets and benchmark-backed concurrency.
-- `../GOAL.md` for the current screening goal.
+- `../INSTANCES.md` for the human-facing hardware runbook.
 
-Use `specs/`, `fleet.json`, and `policies/` for durable queue inputs.
-Generated local run logs and outputs belong under ignored `runs/` or `logs/`.
+Use `goals/<goal-slug>/` for durable goal contracts, checked-in specs, recipe
+evidence, reports, and decisions. Generated local run logs and outputs belong
+under ignored paths such as `runs/`, `logs/`, `models/`, or goal-local ignored
+scratch directories.
 
 Current machine-readable research state:
 
-- `goals/`: active goal contracts, including metric, runtime, seed, and
-  promotion policy.
-- `specs/`: checked-in experiment hypotheses and queue payloads.
+- `goals/`: active goal capsules, including contract, specs, recipe evidence,
+  reports, and decisions.
 - `policies/`: capacity and scheduling policies for keeping compute busy without
   mixing incomparable runtime envelopes.

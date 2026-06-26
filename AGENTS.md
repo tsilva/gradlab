@@ -13,6 +13,7 @@ Before choosing hardware, launching training, changing concurrency, or recommend
 
 ## Training Runs
 
+- Active research goal contracts live under goal-scoped folders in `experiments/goals/`. For current Mario Level1-1 work, read `experiments/goals/mario-level1-100of100/goal.json` before choosing specs, seeds, caps, metrics, or promotion criteria.
 - Keep generated artifacts out of source control; use `runs/`, `logs/`, and `models/`.
 - Log to W&B and upload checkpoint/final artifacts unless explicitly opted out.
 - Every training run needs a specific description via `--run-description`.

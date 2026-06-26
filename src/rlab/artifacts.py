@@ -13,7 +13,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 from rlab.env import EnvConfig, state_distribution_metadata
-from rlab.env_config import parse_done_on_info
+from rlab.env_config import parse_done_on_info, parse_event_names, parse_info_events
 from rlab.wandb_utils import load_wandb_env
 
 
@@ -49,6 +49,8 @@ PLAYBACK_ENV_ARG_KEYS = {
     "no_progress_min_delta": ("no_progress_min_delta",),
     "completion_x_threshold": ("completion_x_threshold",),
     "done_on_info_json": ("done_on_info",),
+    "info_events_json": ("info_events",),
+    "done_on_events": ("done_on_events",),
     "action_set": ("action_set",),
 }
 
@@ -227,7 +229,12 @@ def env_config_from_config_dict(
     if "done_on_info" in config and config.get("done_on_info") is not None:
         config_values["done_on_info"] = parse_done_on_info(config["done_on_info"])
         matched = True
-
+    if "info_events" in config and config.get("info_events") is not None:
+        config_values["info_events"] = parse_info_events(config["info_events"])
+        matched = True
+    if "done_on_events" in config and config.get("done_on_events") is not None:
+        config_values["done_on_events"] = parse_event_names(config["done_on_events"])
+        matched = True
     if "max_steps" in config and config.get("max_steps") is not None:
         config_values["max_episode_steps"] = config["max_steps"]
         matched = True
@@ -367,6 +374,8 @@ def init_wandb(args: argparse.Namespace, run_dir: str, config: EnvConfig):
         "no_progress_min_delta": config.no_progress_min_delta,
         "completion_x_threshold": config.completion_x_threshold,
         "done_on_info": config.done_on_info,
+        "info_events": config.info_events,
+        "done_on_events": list(config.done_on_events),
         "action_set": config.action_set,
     }
     wandb_run = wandb.init(

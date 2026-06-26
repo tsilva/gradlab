@@ -32,6 +32,7 @@ SECRET_KEY_FRAGMENTS = (
     "credential",
     "database_url",
 )
+LEGACY_EVENT_TRAIN_CONFIG_KEYS = ("done_on_info_json", "done_on_info")
 
 
 SCHEMA_SQL = """
@@ -442,7 +443,66 @@ def load_spec_document(path: Path) -> dict[str, Any]:
     if not isinstance(document.get("train_config"), dict):
         raise ValueError(f"{path} must define train_config as an object")
     assert_no_secrets(document, label=f"spec file {path}")
+    validate_launch_event_config(
+        document["train_config"],
+        label=f"spec file {path} train_config",
+    )
     return document
+
+
+def _non_empty_config_value(value: Any) -> bool:
+    return value not in (None, "", (), [], {})
+
+
+def _configured_event_names(value: Any, *, label: str) -> tuple[str, ...]:
+    if value in (None, ""):
+        return ()
+    if isinstance(value, str):
+        names = tuple(name.strip() for name in value.split(",") if name.strip())
+    elif isinstance(value, Sequence):
+        names = tuple(str(name).strip() for name in value if str(name).strip())
+    else:
+        raise ValueError(f"{label} must be a comma-separated string or list")
+    return tuple(dict.fromkeys(names))
+
+
+def _configured_info_event_map(value: Any, *, label: str) -> Mapping[str, Any]:
+    if isinstance(value, Mapping):
+        return value
+    if isinstance(value, str) and value.strip():
+        parsed = json.loads(value)
+        if isinstance(parsed, Mapping):
+            return parsed
+    raise ValueError(f"{label} must define info_events_json as an object")
+
+
+def validate_launch_event_config(train_config: Mapping[str, Any], *, label: str = "train_config") -> None:
+    legacy_keys = [
+        key
+        for key in LEGACY_EVENT_TRAIN_CONFIG_KEYS
+        if _non_empty_config_value(train_config.get(key))
+    ]
+    if legacy_keys:
+        raise ValueError(
+            f"{label} uses legacy event key(s) {', '.join(legacy_keys)}; "
+            "use info_events_json plus done_on_events for new launches"
+        )
+    done_event_names = _configured_event_names(
+        train_config.get("done_on_events"),
+        label=f"{label}.done_on_events",
+    )
+    if not done_event_names:
+        return
+    info_events = _configured_info_event_map(
+        train_config.get("info_events_json"),
+        label=label,
+    )
+    missing = [name for name in done_event_names if name not in info_events]
+    if missing:
+        raise ValueError(
+            f"{label}.done_on_events references unconfigured info event(s): "
+            f"{', '.join(missing)}"
+        )
 
 
 def spec_goal_slug(document: Mapping[str, Any]) -> str:
@@ -635,6 +695,7 @@ def create_experiment_spec(
 ) -> dict[str, Any]:
     config = dict(train_config)
     assert_no_secrets(config, label="train_config")
+    validate_launch_event_config(config)
     with conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -734,6 +795,7 @@ def enqueue_train_job(
 ) -> dict[str, Any]:
     config = dict(train_config)
     assert_no_secrets(config, label="train_config")
+    validate_launch_event_config(config)
     profile_id = str(profile_id).strip() if profile_id else None
     runtime_image_ref = normalize_runtime_image_ref(runtime_image_ref)
     run_target = normalize_run_target(run_target)
@@ -951,6 +1013,353 @@ def request_cancel_eval_job(conn, *, job_id: int) -> int:
                 {"job_id": job_id},
             )
             return int(cur.rowcount)
+
+
+def _normalize_positive_ids(values: Sequence[int]) -> tuple[int, ...]:
+    ids = tuple(int(value) for value in values)
+    invalid = [value for value in ids if value <= 0]
+    if invalid:
+        raise ValueError(f"job ids must be positive integers: {invalid}")
+    return ids
+
+
+def _normalize_stale_limit(value: int | None) -> int | None:
+    if value is None or int(value) <= 0:
+        return None
+    return int(value)
+
+
+def _like_prefix(value: str) -> str:
+    escaped = value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"{escaped}%"
+
+
+def _stale_job_filters(
+    *,
+    job_ids: Sequence[int] = (),
+    profile_id: str | None = None,
+    lease_owner_prefix: str | None = None,
+    older_than_seconds: int = 300,
+    limit: int | None = 50,
+) -> tuple[list[str], dict[str, Any]]:
+    if older_than_seconds < 0:
+        raise ValueError("older_than_seconds must be non-negative")
+    normalized_ids = _normalize_positive_ids(job_ids)
+    profile_id = str(profile_id).strip() if profile_id else None
+    lease_owner_prefix = str(lease_owner_prefix).strip() if lease_owner_prefix else None
+    filters = [
+        "status = 'running'",
+        (
+            "COALESCE(heartbeat_at, started_at, created_at) <= "
+            "now() - (%(older_than_seconds)s || ' seconds')::interval"
+        ),
+    ]
+    params: dict[str, Any] = {
+        "older_than_seconds": int(older_than_seconds),
+        "limit": _normalize_stale_limit(limit),
+    }
+    if normalized_ids:
+        filters.append("id = ANY(%(job_ids)s)")
+        params["job_ids"] = list(normalized_ids)
+    if profile_id is not None:
+        filters.append("profile_id = %(profile_id)s")
+        params["profile_id"] = profile_id
+    if lease_owner_prefix is not None:
+        filters.append("lease_owner LIKE %(lease_owner_like)s ESCAPE '\\'")
+        params["lease_owner_like"] = _like_prefix(lease_owner_prefix)
+    return filters, params
+
+
+def _stale_train_candidate_sql(
+    *,
+    job_ids: Sequence[int] = (),
+    profile_id: str | None = None,
+    run_target: str | None = None,
+    lease_owner_prefix: str | None = None,
+    older_than_seconds: int = 300,
+    limit: int | None = 50,
+    lock: bool = False,
+) -> tuple[str, dict[str, Any]]:
+    filters, params = _stale_job_filters(
+        job_ids=job_ids,
+        profile_id=profile_id,
+        lease_owner_prefix=lease_owner_prefix,
+        older_than_seconds=older_than_seconds,
+        limit=limit,
+    )
+    run_target = normalize_run_target(run_target)
+    if run_target is not None:
+        filters.append("run_target = %(run_target)s")
+        params["run_target"] = run_target
+    lock_clause = "FOR UPDATE SKIP LOCKED" if lock else ""
+    where = "\n    AND ".join(filters)
+    return (
+        f"""
+        SELECT
+          id, goal_id, experiment_spec_id, profile_id, runtime_image_ref,
+          run_target, run_name, lease_owner AS stale_lease_owner,
+          lease_expires_at AS stale_lease_expires_at,
+          started_at AS stale_started_at, heartbeat_at AS stale_heartbeat_at
+        FROM train_jobs
+        WHERE {where}
+        ORDER BY id ASC
+        LIMIT %(limit)s
+        {lock_clause}
+        """,
+        params,
+    )
+
+
+def list_stale_train_jobs(
+    conn,
+    *,
+    job_ids: Sequence[int] = (),
+    profile_id: str | None = None,
+    run_target: str | None = None,
+    lease_owner_prefix: str | None = None,
+    older_than_seconds: int = 300,
+    limit: int | None = 50,
+) -> list[dict[str, Any]]:
+    sql, params = _stale_train_candidate_sql(
+        job_ids=job_ids,
+        profile_id=profile_id,
+        run_target=run_target,
+        lease_owner_prefix=lease_owner_prefix,
+        older_than_seconds=older_than_seconds,
+        limit=limit,
+        lock=False,
+    )
+    with conn.cursor() as cur:
+        cur.execute(sql, params)
+        return [dict(row) for row in cur.fetchall()]
+
+
+def mark_stale_train_jobs_failed(
+    conn,
+    *,
+    job_ids: Sequence[int] = (),
+    profile_id: str | None = None,
+    run_target: str | None = None,
+    lease_owner_prefix: str | None = None,
+    older_than_seconds: int = 300,
+    limit: int | None = 50,
+    error: str | None = None,
+) -> list[dict[str, Any]]:
+    candidate_sql, params = _stale_train_candidate_sql(
+        job_ids=job_ids,
+        profile_id=profile_id,
+        run_target=run_target,
+        lease_owner_prefix=lease_owner_prefix,
+        older_than_seconds=older_than_seconds,
+        limit=limit,
+        lock=True,
+    )
+    error = error or "worker_lost: stale train job marked failed by rlab-campaign"
+    params["error"] = error
+    with conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"""
+                WITH candidates AS (
+                  {candidate_sql}
+                ),
+                updated AS (
+                  UPDATE train_jobs AS job
+                  SET status = 'failed',
+                      lease_owner = NULL,
+                      lease_expires_at = NULL,
+                      finished_at = now(),
+                      error = %(error)s
+                  FROM candidates
+                  WHERE job.id = candidates.id
+                  RETURNING job.*
+                ),
+                upserted AS (
+                  INSERT INTO train_results (
+                    train_job_id, goal_id, experiment_spec_id, profile_id,
+                    runtime_image_ref, run_target, status, exit_code, run_name,
+                    run_dir, final_model_path, wandb_run_id, wandb_url,
+                    artifact_refs, metrics_json, error
+                  )
+                  SELECT
+                    updated.id, updated.goal_id, updated.experiment_spec_id,
+                    updated.profile_id, updated.runtime_image_ref, updated.run_target,
+                    'failed', NULL, updated.run_name, existing.run_dir,
+                    existing.final_model_path, existing.wandb_run_id, existing.wandb_url,
+                    COALESCE(existing.artifact_refs, '[]'::jsonb),
+                    COALESCE(existing.metrics_json, '{{}}'::jsonb),
+                    %(error)s
+                  FROM updated
+                  LEFT JOIN train_results AS existing
+                    ON existing.train_job_id = updated.id
+                  ON CONFLICT (train_job_id) DO UPDATE SET
+                    status = EXCLUDED.status,
+                    exit_code = EXCLUDED.exit_code,
+                    run_name = COALESCE(train_results.run_name, EXCLUDED.run_name),
+                    run_dir = COALESCE(train_results.run_dir, EXCLUDED.run_dir),
+                    final_model_path = COALESCE(
+                      train_results.final_model_path,
+                      EXCLUDED.final_model_path
+                    ),
+                    wandb_run_id = COALESCE(train_results.wandb_run_id, EXCLUDED.wandb_run_id),
+                    wandb_url = COALESCE(train_results.wandb_url, EXCLUDED.wandb_url),
+                    artifact_refs = train_results.artifact_refs,
+                    metrics_json = train_results.metrics_json,
+                    error = EXCLUDED.error,
+                    created_at = now()
+                  RETURNING train_job_id
+                )
+                SELECT
+                  updated.id, updated.profile_id, updated.runtime_image_ref,
+                  updated.run_target, updated.run_name,
+                  candidates.stale_lease_owner, candidates.stale_lease_expires_at,
+                  candidates.stale_started_at, candidates.stale_heartbeat_at,
+                  updated.finished_at, updated.error
+                FROM updated
+                JOIN candidates ON candidates.id = updated.id
+                ORDER BY updated.id ASC
+                """,
+                params,
+            )
+            return [dict(row) for row in cur.fetchall()]
+
+
+def _stale_eval_candidate_sql(
+    *,
+    job_ids: Sequence[int] = (),
+    profile_id: str | None = None,
+    lease_owner_prefix: str | None = None,
+    older_than_seconds: int = 300,
+    limit: int | None = 50,
+    lock: bool = False,
+) -> tuple[str, dict[str, Any]]:
+    filters, params = _stale_job_filters(
+        job_ids=job_ids,
+        profile_id=profile_id,
+        lease_owner_prefix=lease_owner_prefix,
+        older_than_seconds=older_than_seconds,
+        limit=limit,
+    )
+    lock_clause = "FOR UPDATE SKIP LOCKED" if lock else ""
+    where = "\n    AND ".join(filters)
+    return (
+        f"""
+        SELECT
+          id, goal_id, experiment_spec_id, train_job_id, profile_id,
+          candidate_label, lease_owner AS stale_lease_owner,
+          lease_expires_at AS stale_lease_expires_at,
+          started_at AS stale_started_at, heartbeat_at AS stale_heartbeat_at
+        FROM eval_jobs
+        WHERE {where}
+        ORDER BY id ASC
+        LIMIT %(limit)s
+        {lock_clause}
+        """,
+        params,
+    )
+
+
+def list_stale_eval_jobs(
+    conn,
+    *,
+    job_ids: Sequence[int] = (),
+    profile_id: str | None = None,
+    lease_owner_prefix: str | None = None,
+    older_than_seconds: int = 300,
+    limit: int | None = 50,
+) -> list[dict[str, Any]]:
+    sql, params = _stale_eval_candidate_sql(
+        job_ids=job_ids,
+        profile_id=profile_id,
+        lease_owner_prefix=lease_owner_prefix,
+        older_than_seconds=older_than_seconds,
+        limit=limit,
+        lock=False,
+    )
+    with conn.cursor() as cur:
+        cur.execute(sql, params)
+        return [dict(row) for row in cur.fetchall()]
+
+
+def mark_stale_eval_jobs_failed(
+    conn,
+    *,
+    job_ids: Sequence[int] = (),
+    profile_id: str | None = None,
+    lease_owner_prefix: str | None = None,
+    older_than_seconds: int = 300,
+    limit: int | None = 50,
+    error: str | None = None,
+) -> list[dict[str, Any]]:
+    candidate_sql, params = _stale_eval_candidate_sql(
+        job_ids=job_ids,
+        profile_id=profile_id,
+        lease_owner_prefix=lease_owner_prefix,
+        older_than_seconds=older_than_seconds,
+        limit=limit,
+        lock=True,
+    )
+    error = error or "worker_lost: stale eval job marked failed by rlab-campaign"
+    params["error"] = error
+    with conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"""
+                WITH candidates AS (
+                  {candidate_sql}
+                ),
+                updated AS (
+                  UPDATE eval_jobs AS job
+                  SET status = 'failed',
+                      lease_owner = NULL,
+                      lease_expires_at = NULL,
+                      finished_at = now(),
+                      error = %(error)s
+                  FROM candidates
+                  WHERE job.id = candidates.id
+                  RETURNING job.*
+                ),
+                upserted AS (
+                  INSERT INTO eval_results (
+                    eval_job_id, goal_id, experiment_spec_id, train_job_id, profile_id,
+                    status, candidate_label, model_ref, output_path, video_path,
+                    metrics_json, error
+                  )
+                  SELECT
+                    updated.id, updated.goal_id, updated.experiment_spec_id,
+                    updated.train_job_id, updated.profile_id, 'failed',
+                    updated.candidate_label, existing.model_ref, existing.output_path,
+                    existing.video_path, COALESCE(existing.metrics_json, '{{}}'::jsonb),
+                    %(error)s
+                  FROM updated
+                  LEFT JOIN eval_results AS existing
+                    ON existing.eval_job_id = updated.id
+                  ON CONFLICT (eval_job_id) DO UPDATE SET
+                    status = EXCLUDED.status,
+                    candidate_label = COALESCE(
+                      eval_results.candidate_label,
+                      EXCLUDED.candidate_label
+                    ),
+                    model_ref = COALESCE(eval_results.model_ref, EXCLUDED.model_ref),
+                    output_path = COALESCE(eval_results.output_path, EXCLUDED.output_path),
+                    video_path = COALESCE(eval_results.video_path, EXCLUDED.video_path),
+                    metrics_json = eval_results.metrics_json,
+                    error = EXCLUDED.error,
+                    created_at = now()
+                  RETURNING eval_job_id
+                )
+                SELECT
+                  updated.id, updated.profile_id, updated.candidate_label,
+                  candidates.stale_lease_owner, candidates.stale_lease_expires_at,
+                  candidates.stale_started_at, candidates.stale_heartbeat_at,
+                  updated.finished_at, updated.error
+                FROM updated
+                JOIN candidates ON candidates.id = updated.id
+                ORDER BY updated.id ASC
+                """,
+                params,
+            )
+            return [dict(row) for row in cur.fetchall()]
 
 
 def finish_train_job(
@@ -1376,6 +1785,9 @@ def _append_train_lines(
             summary = _metric_summary(
                 metrics,
                 (
+                    "train/outcome/level_change/from_rate/min",
+                    "train/outcome/level_change/from/0-0/attempt_window/rate",
+                    "train/outcome/level_change/from/0-1/attempt_window/rate",
                     "train/done/all",
                     "train/done/level_change",
                     "train/done/level_change/from/0-0",
@@ -1846,6 +2258,31 @@ def build_parser() -> argparse.ArgumentParser:
     cancel_eval.add_argument("job_id", type=int)
     cancel_eval.set_defaults(func=cmd_cancel_eval)
 
+    stale = subparsers.add_parser(
+        "mark-stale-failed",
+        help="Mark stale running queue jobs failed after their worker is known lost.",
+    )
+    stale.add_argument("--job-kind", choices=("train", "eval"), default="train")
+    stale.add_argument("--job-id", type=int, action="append", default=[])
+    stale.add_argument("--profile", help="Restrict to one profile_id.")
+    stale.add_argument("--target", dest="run_target", help="Restrict train jobs to one run_target.")
+    stale.add_argument(
+        "--instances",
+        type=Path,
+        default=Path("experiments/instances.json"),
+        help="Target config used to canonicalize --target.",
+    )
+    stale.add_argument(
+        "--lease-owner-prefix",
+        help="Restrict to running jobs whose lease_owner starts with this prefix.",
+    )
+    stale.add_argument("--older-than-seconds", type=int, default=300)
+    stale.add_argument("--limit", type=int, default=50, help="Maximum rows to affect; 0 means no limit.")
+    stale.add_argument("--error", help="Failure message to store on job/result rows.")
+    stale.add_argument("--all", action="store_true", help="Allow an unscoped --execute.")
+    stale.add_argument("--execute", action="store_true", help="Apply changes; default is dry-run.")
+    stale.set_defaults(func=cmd_mark_stale_failed)
+
     status = subparsers.add_parser("status", help="Print compact campaign status")
     status.add_argument("goal")
     status.add_argument("--recent-decisions", type=int, default=5)
@@ -2057,6 +2494,80 @@ def cmd_cancel_eval(args: argparse.Namespace) -> int:
     finally:
         conn.close()
     print(f"cancel_requested={count}")
+    return 0
+
+
+def _stale_scope_selected(args: argparse.Namespace) -> bool:
+    return bool(args.job_id or args.profile or args.lease_owner_prefix or args.run_target)
+
+
+def _print_stale_rows(
+    rows: Sequence[Mapping[str, Any]],
+    *,
+    job_kind: str,
+    execute: bool,
+) -> None:
+    action = "failed" if execute else "would_fail"
+    print(f"stale_{job_kind}_jobs_{action}={len(rows)}")
+    for row in rows:
+        name = row.get("run_name") or row.get("candidate_label") or ""
+        target = row.get("run_target") or ""
+        print(
+            "  "
+            f"{job_kind}_job_id={row['id']} "
+            f"profile={row.get('profile_id') or 'any'} "
+            f"target={target or 'any'} "
+            f"owner={row.get('stale_lease_owner') or 'unknown'} "
+            f"heartbeat={row.get('stale_heartbeat_at') or 'unknown'} "
+            f"name={name}"
+        )
+
+
+def cmd_mark_stale_failed(args: argparse.Namespace) -> int:
+    if args.job_kind == "eval" and args.run_target:
+        raise SystemExit("--target is only valid for train jobs")
+    if args.execute and not args.all and not _stale_scope_selected(args):
+        raise SystemExit(
+            "refusing unscoped --execute; pass --job-id, --profile, "
+            "--target, --lease-owner-prefix, or --all"
+        )
+    run_target = (
+        canonicalize_run_target(args.run_target, instances_path=args.instances)
+        if args.job_kind == "train"
+        else None
+    )
+    conn = _connect_from_args(args)
+    try:
+        if args.job_kind == "train":
+            common = {
+                "job_ids": args.job_id,
+                "profile_id": args.profile,
+                "run_target": run_target,
+                "lease_owner_prefix": args.lease_owner_prefix,
+                "older_than_seconds": args.older_than_seconds,
+                "limit": args.limit,
+            }
+            if args.execute:
+                rows = mark_stale_train_jobs_failed(conn, **common, error=args.error)
+            else:
+                rows = list_stale_train_jobs(conn, **common)
+        else:
+            common = {
+                "job_ids": args.job_id,
+                "profile_id": args.profile,
+                "lease_owner_prefix": args.lease_owner_prefix,
+                "older_than_seconds": args.older_than_seconds,
+                "limit": args.limit,
+            }
+            if args.execute:
+                rows = mark_stale_eval_jobs_failed(conn, **common, error=args.error)
+            else:
+                rows = list_stale_eval_jobs(conn, **common)
+    finally:
+        conn.close()
+    _print_stale_rows(rows, job_kind=args.job_kind, execute=args.execute)
+    if not args.execute:
+        print("dry_run: pass --execute to mark these stale jobs failed")
     return 0
 
 

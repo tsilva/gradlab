@@ -21,6 +21,7 @@ from rlab.artifacts import (
 )
 from rlab.callbacks import (
     DoneCounterCallback,
+    OutcomeCounterCallback,
     RewardComponentDiagnosticsCallback,
     RolloutDiagnosticsCallback,
     ThroughputCallback,
@@ -151,7 +152,15 @@ def main() -> None:
         DoneCounterCallback(
             wandb_run=wandb_run,
             default_state=config.state,
-            done_on_info=config.done_on_info,
+            done_on_info={
+                name: config.info_events[name]
+                for name in config.done_on_events
+                if name in config.info_events
+            },
+        ),
+        OutcomeCounterCallback(
+            wandb_run=wandb_run,
+            info_events=config.info_events,
         ),
         RolloutDiagnosticsCallback(wandb_run=wandb_run),
         RewardComponentDiagnosticsCallback(),

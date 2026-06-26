@@ -7,7 +7,7 @@ import inspect
 from dataclasses import dataclass
 from dataclasses import field
 from dataclasses import replace
-from typing import Any
+from typing import Any, Mapping
 
 os.environ.setdefault("MPLCONFIGDIR", os.path.abspath(".matplotlib"))
 os.makedirs(os.environ["MPLCONFIGDIR"], exist_ok=True)
@@ -30,6 +30,8 @@ DEFAULT_COMPLETION_X_THRESHOLD = GenericRetroTarget.default_completion_x_thresho
 FRAME_STACK_CHANNELS = {1, 3, 4}
 DoneOnInfoRule = tuple[str | tuple[str, ...], str]
 DoneOnInfoRules = dict[str, DoneOnInfoRule]
+InfoEventRule = DoneOnInfoRule
+InfoEventRules = DoneOnInfoRules
 
 
 def native_vec_env_supports_done_on_info() -> bool:
@@ -75,8 +77,23 @@ class EnvConfig:
     no_progress_min_delta: int = 0
     completion_x_threshold: int = 0
     done_on_info: DoneOnInfoRules = field(default_factory=dict)
+    info_events: InfoEventRules = field(default_factory=dict)
+    done_on_events: tuple[str, ...] = ()
     action_set: str = "auto"
     env_threads: int = 0
+
+
+def normalize_event_config(config: EnvConfig) -> EnvConfig:
+    events: InfoEventRules = {}
+    events.update(config.done_on_info)
+    events.update(config.info_events)
+    done_on_events = config.done_on_events or tuple(config.done_on_info)
+    updates: dict[str, Any] = {}
+    if events != config.info_events:
+        updates["info_events"] = events
+    if done_on_events != config.done_on_events:
+        updates["done_on_events"] = tuple(dict.fromkeys(str(item) for item in done_on_events))
+    return replace(config, **updates) if updates else config
 
 
 def resolve_env_config(config: EnvConfig) -> EnvConfig:
@@ -109,7 +126,8 @@ def resolve_env_config(config: EnvConfig) -> EnvConfig:
         updates["hud_crop_top"] = target.default_hud_crop_top
     if config.completion_x_threshold < 0:
         updates["completion_x_threshold"] = 0
-    return replace(config, **updates) if updates else config
+    config = replace(config, **updates) if updates else config
+    return normalize_event_config(config)
 
 
 def _validate_state_names(game: str, states: tuple[str, ...]) -> None:
@@ -488,6 +506,9 @@ class VecRetroProgressInfo(VecEnvWrapper):
         self.config = config
         target = target_for_game(config.game)
         self.trackers = [target.create_tracker(config) for _ in range(self.num_envs)]
+        self.previous_event_values: list[dict[str, Any]] = [
+            {} for _ in range(self.num_envs)
+        ]
 
     def reset(self):
         obs = self.venv.reset()
@@ -499,6 +520,79 @@ class VecRetroProgressInfo(VecEnvWrapper):
         for index in indices:
             info = infos[index] if index < len(infos) else {}
             self.trackers[index].reset(info)
+            self.previous_event_values[index] = self.event_values(info)
+
+    def event_values(self, info: Mapping[str, Any]) -> dict[str, Any]:
+        values: dict[str, Any] = {}
+        for name, rule in self.config.info_events.items():
+            key_or_keys, _op = rule
+            value = self.info_value_for_keys(info, key_or_keys)
+            if value is not None:
+                values[name] = value
+        return values
+
+    @staticmethod
+    def info_value_for_keys(
+        info: Mapping[str, Any],
+        keys: str | tuple[str, ...],
+    ) -> Any | None:
+        if isinstance(keys, str):
+            return info.get(keys)
+        values = []
+        for key in keys:
+            if key not in info:
+                return None
+            values.append(info[key])
+        return tuple(values)
+
+    @staticmethod
+    def event_rule_fired(previous: Any, current: Any, op: str) -> bool:
+        if previous is None or current is None:
+            return False
+        if op == "change":
+            return current != previous
+        if op == "increase":
+            return current > previous
+        if op == "decrease":
+            return current < previous
+        return False
+
+    @staticmethod
+    def native_event_payloads(info: Mapping[str, Any]) -> dict[str, Any]:
+        done_on_info = info.get("done_on_info")
+        if isinstance(done_on_info, dict):
+            return {str(name): payload for name, payload in done_on_info.items() if str(name)}
+        if isinstance(done_on_info, (list, tuple, set)):
+            return {str(name): {} for name in done_on_info if str(name)}
+        if isinstance(done_on_info, str) and done_on_info:
+            return {done_on_info: {}}
+        return {}
+
+    def annotate_info_events(self, index: int, info: dict[str, Any]) -> None:
+        event_payloads = self.native_event_payloads(info)
+        previous_values = self.previous_event_values[index]
+        current_values = self.event_values(info)
+
+        for name, rule in self.config.info_events.items():
+            if name in event_payloads:
+                continue
+            if name not in previous_values or name not in current_values:
+                continue
+            key_or_keys, op = rule
+            previous = previous_values[name]
+            current = current_values[name]
+            if not self.event_rule_fired(previous, current, op):
+                continue
+            event_payloads[name] = {
+                "op": op,
+                "keys": key_or_keys,
+                "prev": previous,
+                "next": current,
+            }
+
+        if event_payloads:
+            info["info_events"] = event_payloads
+        self.previous_event_values[index].update(current_values)
 
     def step_async(self, actions):
         self.venv.step_async(actions)
@@ -512,6 +606,7 @@ class VecRetroProgressInfo(VecEnvWrapper):
         custom_dones = np.zeros(self.num_envs, dtype=bool)
 
         for index, info in enumerate(infos):
+            self.annotate_info_events(index, info)
             progress = self.trackers[index].step(rewards[index], info, dones[index])
             shaped_rewards[index] = progress.reward
             if progress.done:
@@ -753,12 +848,17 @@ def maybe_transpose_vec_image(vec_env):
 
 
 def _native_done_on_info_rules(config: EnvConfig, *, done_on_info_supported: bool) -> DoneOnInfoRules:
-    if config.done_on_info and not done_on_info_supported:
+    native_rules = {
+        name: rule
+        for name, rule in config.info_events.items()
+        if name in set(config.done_on_events)
+    }
+    if native_rules and not done_on_info_supported:
         raise RuntimeError(
             "configured done_on_info rules require stable-retro-turbo with native "
             "done_on_info support",
         )
-    return dict(config.done_on_info)
+    return native_rules
 
 
 def _native_vec_kwargs(

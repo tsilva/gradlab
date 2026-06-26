@@ -50,14 +50,14 @@
     "action_set": "simple",
     "frame_skip": 4,
     "max_pool_frames": false,
-    "obs_resize_algorithm": "area",
     "hud_crop_top": 32,
     "max_episode_steps": 4500,
     "completion_x_threshold": 0,
-    "done_on_info_json": {
+    "info_events_json": {
       "life_loss": ["lives", "decrease"],
       "level_change": [["levelHi", "levelLo"], "change"]
     },
+    "done_on_events": "life_loss,level_change",
     "eval_freq": 0,
     "eval_episodes": 0,
     "checkpoint_freq": 100000,

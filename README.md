@@ -98,7 +98,7 @@ UV_CACHE_DIR=.uv-cache uv run python scripts/play_wandb_artifact.py <run-name> -
 The current Mario Level1-1 contract is machine-readable:
 
 ```bash
-cat experiments/goals/mario-level1-current.json
+cat experiments/goals/mario-level1-100of100/goal.json
 ```
 
 Queue comparable experiments from checked-in spec files instead of ad hoc
@@ -106,10 +106,10 @@ commands:
 
 ```bash
 UV_CACHE_DIR=.uv-cache uv run rlab-campaign add-spec-file \
-  experiments/specs/mario-level1/b55-lowkl-lrdecay-post21-revalidate.json
+  experiments/goals/mario-level1-100of100/specs/b83-b55-post21-five-seed-l11-confirm.json
 
 UV_CACHE_DIR=.uv-cache uv run rlab-campaign enqueue-train-from-spec \
-  experiments/specs/mario-level1/b55-lowkl-lrdecay-post21-revalidate.json \
+  experiments/goals/mario-level1-100of100/specs/b83-b55-post21-five-seed-l11-confirm.json \
   --runtime-image-ref-file rlab-train-image.json
 ```
 
@@ -155,6 +155,7 @@ UV_CACHE_DIR=.uv-cache uv run rlab-fleet ps
 UV_CACHE_DIR=.uv-cache uv run rlab-fleet plan
 UV_CACHE_DIR=.uv-cache uv run rlab-fleet reconcile --execute
 UV_CACHE_DIR=.uv-cache uv run rlab-fleet reconcile --execute --watch --interval 30
+UV_CACHE_DIR=.uv-cache uv run rlab-fleet watch --execute
 ```
 
 After publishing a new train image, roll all active beast hosts to the latest
@@ -170,6 +171,17 @@ matching that old container's profile, digest, and target, and no active worker
 lease owned by that container. Add `--host beast-3` to limit a rollout, or
 `--watch --interval 30` if you want a long-running local loop that keeps
 checking for newly published latest artifacts.
+
+For an operator-friendly live view, prefer `watch`. It continuously
+checks configured fleet hosts, keeps one unprofiled latest-image runner alive on
+each live host, leaves old runners alone while they still own active leases or
+have matching queued/running jobs, marks stale running train jobs failed so they
+can stop blocking the queue, and removes idle stale managed containers. Omit
+`--execute` for a dry-run dashboard.
+
+```bash
+UV_CACHE_DIR=.uv-cache uv run rlab-fleet watch --execute
+```
 
 To explicitly make a latest-image runner available on a local beast host,
 without waiting for queue demand, use `ensure-runner`. When no image ref is

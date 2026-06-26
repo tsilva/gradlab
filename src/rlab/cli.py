@@ -42,6 +42,8 @@ TRAIN_VALUE_OPTIONS = {
     "states": "--states",
     "state_probs": "--state-probs",
     "done_on_info_json": "--done-on-info-json",
+    "info_events_json": "--info-events-json",
+    "done_on_events": "--done-on-events",
     "task_conditioning_info_vars": "--task-conditioning-info-vars",
     "task_conditioning_info_values": "--task-conditioning-info-values",
     "frame_skip": "--frame-skip",
@@ -121,7 +123,7 @@ def build_train_command(options: Mapping[str, Any]) -> list[str]:
             continue
         if key == "target_kl" and float(value) <= 0:
             continue
-        if key == "done_on_info_json" and isinstance(value, Mapping):
+        if key in {"done_on_info_json", "info_events_json"} and isinstance(value, Mapping):
             value = json.dumps(value, separators=(",", ":"))
         elif key == "task_conditioning_info_values" and isinstance(value, list | tuple):
             value = ";".join(
@@ -273,6 +275,19 @@ def build_parser() -> argparse.ArgumentParser:
             "JSON object mapping done-reason names to [key_or_keys, op], for example "
             '\'{"life_loss":["lives","decrease"],"level_change":[["levelHi","levelLo"],"change"]}\''
         ),
+    )
+    parser.add_argument(
+        "--info-events-json",
+        default="",
+        help=(
+            "JSON object mapping event names to [key_or_keys, op]. Events are observed "
+            "without ending episodes unless also listed in --done-on-events."
+        ),
+    )
+    parser.add_argument(
+        "--done-on-events",
+        default="",
+        help="Comma-separated info event names that should terminate the current episode.",
     )
     parser.add_argument(
         "--task-conditioning",

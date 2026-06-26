@@ -25,7 +25,7 @@ Queue work through campaign specs or explicit train jobs:
 
 ```bash
 UV_CACHE_DIR=.uv-cache uv run rlab-campaign enqueue-train-from-spec \
-  experiments/specs/mario-level1/<spec>.json
+  experiments/goals/<goal-slug>/specs/<spec>.json
 ```
 
 Inspect and reconcile local capacity from the MacBook:
@@ -36,12 +36,20 @@ UV_CACHE_DIR=.uv-cache uv run rlab-fleet status
 UV_CACHE_DIR=.uv-cache uv run rlab-fleet ps
 UV_CACHE_DIR=.uv-cache uv run rlab-fleet plan
 UV_CACHE_DIR=.uv-cache uv run rlab-fleet reconcile --execute
+UV_CACHE_DIR=.uv-cache uv run rlab-fleet watch --execute
 ```
 
 For a long-running local reconciliation loop:
 
 ```bash
 UV_CACHE_DIR=.uv-cache uv run rlab-fleet reconcile --execute --watch --interval 30
+```
+
+For a live terminal dashboard that keeps each reachable beast host on the latest
+successful train image and removes idle old managed containers:
+
+```bash
+UV_CACHE_DIR=.uv-cache uv run rlab-fleet watch --execute
 ```
 
 After publishing a new train image, roll active hosts to the latest successful
@@ -138,4 +146,3 @@ pushed immutable GHCR digest refs for all comparable Docker fleet jobs.
 - `rlab-fleet` may remove old managed containers only when there are no
   pending/running jobs for that container's profile/digest/target and no active
   queue lease owned by one of its workers.
-

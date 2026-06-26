@@ -40,6 +40,12 @@ logs/
 models/
 videos/
 wandb/
+experiments/goals/*/runs/
+experiments/goals/*/logs/
+experiments/goals/*/models/
+experiments/goals/*/videos/
+experiments/goals/*/wandb/
+experiments/goals/*/artifacts/
 
 # RL/model artifacts generated outside ignored run dirs
 *.ckpt

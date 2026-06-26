@@ -153,6 +153,55 @@ class FleetQueueTests(unittest.TestCase):
         self.assertIsNone(rows[0].profile_id)
         self.assertIn("profile=any", fleet.format_demands(rows))
 
+    def test_stale_lease_owner_prefix_for_host_uses_fleet_host_name(self) -> None:
+        config = sample_config()
+
+        prefix = fleet.stale_lease_owner_prefix_for_host(config.hosts["beast-2"])
+
+        self.assertEqual(prefix, "rlab-beast-2-")
+
+    def test_mark_stale_failed_scopes_to_host_target_and_owner_prefix(self) -> None:
+        config = sample_config()
+        conn = mock.Mock()
+        args = Namespace(
+            host="beast-2",
+            lease_owner_prefix=None,
+            execute=False,
+            job_id=[],
+            older_than_seconds=600,
+            limit=0,
+            error=None,
+        )
+        rows = [
+            {
+                "id": 12,
+                "profile_id": None,
+                "run_target": "rtx2060",
+                "run_name": "candidate",
+                "stale_lease_owner": "rlab-beast-2-rtx2060-any-profile-cccc-0-deadbeef",
+                "stale_heartbeat_at": "2026-06-26T10:00:00Z",
+            }
+        ]
+
+        with (
+            mock.patch.object(fleet, "_load_config_from_args", return_value=config),
+            mock.patch.object(fleet, "_connect_from_args", return_value=conn),
+            mock.patch.object(fleet, "list_stale_train_jobs", return_value=rows) as list_stale,
+            mock.patch("builtins.print"),
+        ):
+            status = fleet.cmd_mark_stale_failed(args)
+
+        self.assertEqual(status, 0)
+        list_stale.assert_called_once_with(
+            conn,
+            job_ids=[],
+            run_target="rtx2060",
+            lease_owner_prefix="rlab-beast-2-",
+            older_than_seconds=600,
+            limit=0,
+        )
+        conn.close.assert_called_once_with()
+
     def test_runtime_image_ref_file_accepts_ci_json_artifact(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "rlab-train-image.json"
@@ -576,6 +625,395 @@ class FleetPlanTests(unittest.TestCase):
         self.assertFalse(any(action.kind == "remove" for action in plan.actions))
         self.assertTrue(any("active lease" in warning for warning in plan.warnings))
 
+    def test_watch_latest_dashboard_summarizes_hosts_actions_and_jobs(self) -> None:
+        config = fleet.filter_config_to_host(sample_config(), "beast-3")
+        desired = fleet.build_ensure_runner_plan(
+            config,
+            host_name="beast-3",
+            profile_id=None,
+            runtime_image_ref=RUNTIME_IMAGE_REF,
+            run_target="rtx4090",
+            workers=5,
+            existing=[],
+            leases=[],
+        ).desired[0]
+        container = fleet.ExistingContainer(
+            host="beast-3",
+            name=desired.name,
+            state="running",
+            status="Up 2 minutes",
+            image="ghcr.io/tsilva/rlab/rlab-train",
+            labels=desired.labels,
+        )
+        job = fleet.RunningJob(
+            id=141,
+            lease_owner=f"{desired.worker_prefix}-0-aabbccdd",
+            profile_id=None,
+            runtime_image_ref=RUNTIME_IMAGE_REF,
+            run_target="rtx4090",
+            run_name="b83_l11_b55post21_s23_20260626T190751Z",
+            started_at=datetime.now(UTC),
+            heartbeat_at=datetime.now(UTC),
+        )
+        snapshot = fleet.LatestWatchSnapshot(
+            captured_at=datetime(2026, 6, 26, 19, 15, tzinfo=UTC),
+            config=config,
+            runtime_image_ref=RUNTIME_IMAGE_REF,
+            demands=(demand(profile=None, pending=0, running=1),),
+            leases=(),
+            jobs=(job,),
+            plan=fleet.FleetPlan(
+                desired=(desired,),
+                existing=(container,),
+                actions=(
+                    fleet.FleetAction(
+                        kind="keep",
+                        host="beast-3",
+                        container=desired.name,
+                        reason="container already matches desired state",
+                    ),
+                ),
+                warnings=(),
+            ),
+            execute=True,
+            interval=30,
+        )
+
+        output = fleet.render_latest_watch_dashboard(snapshot, color=False, max_width=120)
+
+        self.assertIn("rlab fleet watch", output)
+        self.assertIn("mode=execute", output)
+        self.assertIn("latest=cccccccccccc", output)
+        self.assertNotIn("sha256:cccccccccccc", output)
+        self.assertIn("beast-3", output)
+        self.assertIn("live", output)
+        self.assertIn("b83_l11_b55post21_s23_20260626T190751Z", output)
+        self.assertIn("actions:\nnone", output)
+
+    def test_watch_latest_treats_unreachable_host_as_down_not_failed_action(self) -> None:
+        args = Namespace(
+            repo_root=".",
+            fleet_config=None,
+            instances=None,
+            direct=False,
+            host=None,
+            workers=None,
+            image="latest",
+            image_file=None,
+            runtime_image_ref=None,
+            runtime_image_ref_file=None,
+            image_workflow="rlab train image",
+            image_branch="main",
+            image_artifact="rlab-train-image",
+            execute=False,
+            interval=5,
+        )
+        fake_conn = mock.Mock()
+
+        with (
+            mock.patch.object(fleet, "_load_config_from_args", return_value=sample_config()),
+            mock.patch.object(fleet, "image_ref_from_args", return_value=RUNTIME_IMAGE_REF),
+            mock.patch.object(fleet, "_connect_from_args", return_value=fake_conn),
+            mock.patch.object(fleet, "list_stale_train_jobs", return_value=[]),
+            mock.patch.object(fleet, "queue_demands", return_value=[]),
+            mock.patch.object(fleet, "active_leases", return_value=[]),
+            mock.patch.object(fleet, "running_jobs", return_value=[]),
+            mock.patch.object(
+                fleet,
+                "collect_existing_containers",
+                return_value=(
+                    [],
+                    [
+                        "failed to list managed containers on beast-2: "
+                        "ssh: connect to host 192.168.133.26 port 22: Operation timed out"
+                    ],
+                ),
+            ),
+        ):
+            snapshot = fleet.build_latest_watch_snapshot(args)
+
+        self.assertEqual(snapshot.down_hosts, ("beast-2",))
+        self.assertFalse(any(action.host == "beast-2" for action in snapshot.plan.actions))
+        self.assertFalse(any("beast-2" in warning for warning in snapshot.plan.warnings))
+
+        output = fleet.render_latest_watch_dashboard(snapshot, color=False, max_width=120)
+
+        beast2_line = next(line for line in output.splitlines() if line.startswith("beast-2"))
+        self.assertIn("down", beast2_line)
+        self.assertNotIn("start", beast2_line)
+        self.assertNotIn("failed actions:", output)
+        self.assertNotIn("failed to list managed containers on beast-2", output)
+
+    def test_watch_latest_lists_stale_jobs_in_dry_run(self) -> None:
+        args = Namespace(
+            repo_root=".",
+            fleet_config=None,
+            instances=None,
+            direct=False,
+            host=None,
+            workers=None,
+            image="latest",
+            image_file=None,
+            runtime_image_ref=None,
+            runtime_image_ref_file=None,
+            image_workflow="rlab train image",
+            image_branch="main",
+            image_artifact="rlab-train-image",
+            execute=False,
+            interval=5,
+            claim_stale_jobs=True,
+            stale_older_than_seconds=600,
+            stale_limit=7,
+        )
+        fake_conn = mock.Mock()
+        stale_row = {
+            "id": 132,
+            "profile_id": None,
+            "runtime_image_ref": OTHER_IMAGE_REF,
+            "run_target": "rtx2060",
+            "run_name": "b85_beast2_l11l12_b74current_s189_20260626T163035Z",
+            "stale_lease_owner": "rlab-beast-2-rtx2060-any-profile-10b659be2346-0-deadbeef",
+            "stale_heartbeat_at": datetime(2026, 6, 26, 16, 30, tzinfo=UTC),
+        }
+
+        with (
+            mock.patch.object(fleet, "_load_config_from_args", return_value=sample_config()),
+            mock.patch.object(fleet, "image_ref_from_args", return_value=RUNTIME_IMAGE_REF),
+            mock.patch.object(fleet, "_connect_from_args", return_value=fake_conn),
+            mock.patch.object(fleet, "list_stale_train_jobs", side_effect=([stale_row], [])) as list_stale,
+            mock.patch.object(fleet, "mark_stale_train_jobs_failed") as mark_stale,
+            mock.patch.object(fleet, "queue_demands", return_value=[]),
+            mock.patch.object(fleet, "active_leases", return_value=[]),
+            mock.patch.object(fleet, "running_jobs", return_value=[]),
+            mock.patch.object(fleet, "collect_existing_containers", return_value=([], [])),
+        ):
+            snapshot = fleet.build_latest_watch_snapshot(args)
+
+        list_stale.assert_any_call(
+            fake_conn,
+            run_target="rtx2060",
+            lease_owner_prefix="rlab-beast-2-",
+            older_than_seconds=600,
+            limit=7,
+        )
+        mark_stale.assert_not_called()
+        self.assertEqual(len(snapshot.stale_train_jobs), 1)
+
+        output = fleet.render_latest_watch_dashboard(snapshot, color=False, max_width=120)
+
+        self.assertIn("stale train jobs:", output)
+        self.assertIn("would_fail", output)
+        self.assertIn("132", output)
+        self.assertIn("b85_beast2_l11l12_b74current_s", output)
+
+    def test_watch_latest_marks_stale_jobs_failed_before_reading_queue(self) -> None:
+        args = Namespace(
+            repo_root=".",
+            fleet_config=None,
+            instances=None,
+            direct=False,
+            host=None,
+            workers=None,
+            image="latest",
+            image_file=None,
+            runtime_image_ref=None,
+            runtime_image_ref_file=None,
+            image_workflow="rlab train image",
+            image_branch="main",
+            image_artifact="rlab-train-image",
+            execute=True,
+            interval=5,
+            claim_stale_jobs=True,
+            stale_older_than_seconds=300,
+            stale_limit=50,
+        )
+        fake_conn = mock.Mock()
+        events = []
+        stale_row = {
+            "id": 132,
+            "profile_id": None,
+            "runtime_image_ref": OTHER_IMAGE_REF,
+            "run_target": "rtx2060",
+            "run_name": "b85_beast2_l11l12_b74current_s189_20260626T163035Z",
+            "stale_lease_owner": "rlab-beast-2-rtx2060-any-profile-10b659be2346-0-deadbeef",
+            "stale_heartbeat_at": datetime(2026, 6, 26, 16, 30, tzinfo=UTC),
+        }
+
+        def fake_mark_stale(conn, **kwargs):
+            events.append(f"stale:{kwargs['run_target']}")
+            return [stale_row] if kwargs["run_target"] == "rtx2060" else []
+
+        def fake_queue_demands(conn):
+            events.append("queue")
+            return []
+
+        with (
+            mock.patch.object(fleet, "_load_config_from_args", return_value=sample_config()),
+            mock.patch.object(fleet, "image_ref_from_args", return_value=RUNTIME_IMAGE_REF),
+            mock.patch.object(fleet, "_connect_from_args", return_value=fake_conn),
+            mock.patch.object(fleet, "list_stale_train_jobs") as list_stale,
+            mock.patch.object(fleet, "mark_stale_train_jobs_failed", side_effect=fake_mark_stale) as mark_stale,
+            mock.patch.object(fleet, "queue_demands", side_effect=fake_queue_demands),
+            mock.patch.object(fleet, "active_leases", return_value=[]),
+            mock.patch.object(fleet, "running_jobs", return_value=[]),
+            mock.patch.object(fleet, "collect_existing_containers", return_value=([], [])),
+        ):
+            snapshot = fleet.build_latest_watch_snapshot(args)
+
+        self.assertEqual(events, ["stale:rtx2060", "stale:rtx4090", "queue"])
+        mark_stale.assert_any_call(
+            fake_conn,
+            run_target="rtx2060",
+            lease_owner_prefix="rlab-beast-2-",
+            older_than_seconds=300,
+            limit=50,
+            error="worker_lost: stale train job marked failed by rlab-fleet watch host=beast-2",
+        )
+        list_stale.assert_not_called()
+        self.assertEqual(len(snapshot.stale_train_jobs), 1)
+
+        output = fleet.render_latest_watch_dashboard(snapshot, color=False, max_width=120)
+
+        self.assertIn("stale train jobs:", output)
+        self.assertIn("failed", output)
+        self.assertIn("132", output)
+
+    def test_watch_latest_prints_starting_frame_before_first_snapshot(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            args = Namespace(
+                repo_root=tmp,
+                execute=False,
+                interval=30,
+                host=None,
+                image="latest",
+                image_file=None,
+                runtime_image_ref=None,
+                runtime_image_ref_file=None,
+                no_color=True,
+                no_tui=True,
+                width=120,
+                once=True,
+                fail_fast=False,
+            )
+            frames = []
+
+            def fake_write_frame(text, *, enabled):
+                frames.append(text)
+
+            with (
+                mock.patch.object(fleet, "write_tui_frame", side_effect=fake_write_frame),
+                mock.patch.object(fleet, "build_latest_watch_snapshot", side_effect=RuntimeError("boom")),
+            ):
+                status = fleet.cmd_watch_latest(args)
+
+        self.assertEqual(status, 1)
+        self.assertGreaterEqual(len(frames), 2)
+        self.assertIn("status=starting", frames[0])
+        self.assertIn("polling now", frames[0])
+        self.assertIn("snapshot failed: boom", frames[1])
+
+    def test_watch_latest_lock_rejects_second_session(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            args = Namespace(
+                repo_root=tmp,
+                execute=False,
+                interval=5,
+                host=None,
+                image="latest",
+                image_file=None,
+                runtime_image_ref=None,
+                runtime_image_ref_file=None,
+                no_color=True,
+                no_tui=True,
+                width=120,
+                once=True,
+                fail_fast=False,
+            )
+            lock = fleet.acquire_watch_latest_lock(args)
+            try:
+                with self.assertRaises(fleet.WatchLatestLockBusy) as raised:
+                    fleet.acquire_watch_latest_lock(args)
+            finally:
+                fleet.release_watch_latest_lock(lock)
+
+        self.assertIn("watch.lock", str(raised.exception.path))
+        self.assertIn('"pid"', raised.exception.owner)
+
+    def test_watch_latest_busy_lock_exits_without_polling(self) -> None:
+        args = Namespace(
+            repo_root=".",
+            execute=False,
+            interval=5,
+            host=None,
+            image="latest",
+            image_file=None,
+            runtime_image_ref=None,
+            runtime_image_ref_file=None,
+            no_color=True,
+            no_tui=True,
+            width=120,
+            once=True,
+            fail_fast=False,
+        )
+        frames = []
+        lock_error = fleet.WatchLatestLockBusy(Path("/tmp/watch.lock"), '{"pid": 123}')
+
+        def fake_write_frame(text, *, enabled):
+            frames.append(text)
+
+        with (
+            mock.patch.object(fleet, "acquire_watch_latest_lock", side_effect=lock_error),
+            mock.patch.object(fleet, "build_latest_watch_snapshot") as build_snapshot,
+            mock.patch.object(fleet, "write_tui_frame", side_effect=fake_write_frame),
+        ):
+            status = fleet.cmd_watch_latest(args)
+
+        self.assertEqual(status, 2)
+        build_snapshot.assert_not_called()
+        self.assertIn("already owns the lock", frames[0])
+        self.assertIn('"pid": 123', frames[0])
+
+    def test_watch_latest_default_interval_is_five_seconds(self) -> None:
+        args = fleet.build_parser().parse_args(["watch"])
+
+        self.assertEqual(args.interval, 5.0)
+        self.assertTrue(args.claim_stale_jobs)
+        self.assertEqual(args.stale_older_than_seconds, 300)
+        self.assertEqual(args.stale_limit, 50)
+
+    def test_watch_latest_can_disable_stale_job_claims(self) -> None:
+        args = fleet.build_parser().parse_args(["watch", "--no-claim-stale-jobs"])
+
+        self.assertFalse(args.claim_stale_jobs)
+
+    def test_watch_latest_skips_later_actions_on_failed_host(self) -> None:
+        config = sample_config()
+        actions = (
+            fleet.FleetAction(kind="start", host="beast-2", container="new-2", reason="latest"),
+            fleet.FleetAction(kind="remove", host="beast-2", container="old-2", reason="old"),
+            fleet.FleetAction(kind="start", host="beast-3", container="new-3", reason="latest"),
+        )
+        calls = []
+
+        def fake_run_action_result(config_arg, action, *, local=False, capture=False):
+            calls.append(action.container)
+            return fleet.ActionResult(
+                kind=action.kind,
+                host=action.host,
+                container=action.container,
+                exit_code=1 if action.container == "new-2" else 0,
+            )
+
+        with mock.patch.object(fleet, "run_action_result", side_effect=fake_run_action_result):
+            results = fleet.run_latest_watch_actions(
+                config,
+                fleet.FleetPlan(desired=(), existing=(), actions=actions, warnings=()),
+            )
+
+        self.assertEqual(calls, ["new-2", "new-3"])
+        self.assertEqual([result.container for result in results], ["new-2", "new-3"])
+        self.assertEqual(results[0].exit_code, 1)
+
     def test_reconcile_keeps_unprofiled_container_for_profile_demand(self) -> None:
         config = fleet.filter_config_to_host(sample_config(), "beast-3")
         any_profile = fleet.build_ensure_runner_plan(
@@ -825,6 +1263,8 @@ class FleetHostSetupTests(unittest.TestCase):
 
         self.assertIn("ps", help_text)
         self.assertIn("reconcile", help_text)
+        self.assertIn("watch", help_text)
+        self.assertNotIn("watch-latest", help_text)
         self.assertIn("setup-host", help_text)
         self.assertNotIn("remote-reconcile", help_text)
         self.assertNotIn("install-systemd", help_text)

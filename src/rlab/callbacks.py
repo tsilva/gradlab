@@ -28,6 +28,10 @@ from rlab.metric_names import (
     train_done_from_rate_metric,
     train_done_value_metric,
     train_done_reason_metric,
+    train_event_reason_metric,
+    train_event_value_metric,
+    train_outcome_from_rate_metric,
+    train_outcome_value_metric,
 )
 
 
@@ -423,3 +427,264 @@ class DoneCounterCallback(BaseCallback):
         for key, value in payload.items():
             self.logger.record(key, value)
         return payload
+
+
+class OutcomeCounterCallback(BaseCallback):
+    ep_window_size = 100
+
+    def __init__(
+        self,
+        wandb_run=None,
+        info_events: DoneOnInfoRules | None = None,
+    ):
+        super().__init__()
+        self.wandb_run = wandb_run
+        self.info_events = dict(info_events or {})
+        self.event_counts: dict[str, int] = {}
+        self.event_detail_counts: dict[str, int] = {}
+        self.attempt_counts: dict[str, int] = {}
+        self.fire_counts: dict[str, int] = {}
+        self.attempt_windows: dict[str, deque[bool]] = {}
+        self.current_sources: list[dict[str, Any]] = []
+
+    def _on_step(self) -> bool:
+        infos = self.locals.get("infos", [])
+        dones = self.locals.get("dones", [])
+        self.ensure_slots(len(infos))
+        payload: dict[str, int | float] = {}
+
+        for index, info in enumerate(infos):
+            if bool(info.get("global_reset", False)):
+                self.current_sources[index].clear()
+                continue
+            done = bool(dones[index]) if index < len(dones) else False
+            payload.update(self.record_step(index, info, done))
+
+        if payload and self.wandb_run is not None:
+            self.wandb_run.log(
+                {
+                    GLOBAL_STEP: self.num_timesteps,
+                    **payload,
+                },
+                step=self.num_timesteps,
+            )
+        return True
+
+    def ensure_slots(self, count: int) -> None:
+        while len(self.current_sources) < count:
+            self.current_sources.append({})
+
+    @staticmethod
+    def info_event_payloads(info: Mapping[str, Any]) -> dict[str, Any]:
+        info_events = info.get("info_events")
+        if isinstance(info_events, dict):
+            return {str(reason): payload for reason, payload in info_events.items() if str(reason)}
+        return DoneCounterCallback.done_reason_payloads(dict(info))
+
+    def record_step(
+        self,
+        index: int,
+        info: Mapping[str, Any],
+        done: bool,
+    ) -> dict[str, int | float]:
+        event_payloads = self.info_event_payloads(info)
+        payload: dict[str, int | float] = {}
+        for event, event_payload in event_payloads.items():
+            payload.update(self.record_event(event, event_payload))
+
+        tracked_events = tuple(dict.fromkeys((*self.info_events, *event_payloads)))
+        for event in tracked_events:
+            payload.update(
+                self.record_event_attempt(
+                    index=index,
+                    event=event,
+                    event_payloads=event_payloads,
+                    info=info,
+                    done=done,
+                ),
+            )
+        return payload
+
+    def record_event(self, event: str, payload: Any) -> dict[str, int | float]:
+        self.event_counts[event] = self.event_counts.get(event, 0) + 1
+        result: dict[str, int | float] = {
+            train_event_reason_metric(event): self.event_counts[event],
+        }
+        source = self.payload_previous_value(payload)
+        if source is not None:
+            metric = train_event_value_metric(event, "from", source)
+            self.event_detail_counts[metric] = self.event_detail_counts.get(metric, 0) + 1
+            result[metric] = self.event_detail_counts[metric]
+        self.record_metrics(result)
+        return result
+
+    def record_event_attempt(
+        self,
+        *,
+        index: int,
+        event: str,
+        event_payloads: Mapping[str, Any],
+        info: Mapping[str, Any],
+        done: bool,
+    ) -> dict[str, int | float]:
+        source = self.source_value_for_event(event, event_payloads.get(event), info, index)
+        if source is not None:
+            self.current_sources[index][event] = source
+
+        fired = event in event_payloads
+        ended_without_fire = not fired and self.attempt_ended(event_payloads, info, done)
+        if not fired and not ended_without_fire:
+            return {}
+
+        attempt_source = source if source is not None else self.current_sources[index].get(event)
+        if attempt_source is None:
+            return {}
+
+        result = self.record_attempt(event, attempt_source, fired=fired)
+        self.update_source_after_attempt(index, event, event_payloads.get(event), info, done)
+        self.record_metrics(result)
+        return result
+
+    @staticmethod
+    def payload_previous_value(payload: Any) -> Any | None:
+        if isinstance(payload, dict) and "prev" in payload and payload["prev"] is not None:
+            return payload["prev"]
+        return None
+
+    @staticmethod
+    def payload_next_value(payload: Any) -> Any | None:
+        if isinstance(payload, dict) and "next" in payload and payload["next"] is not None:
+            return payload["next"]
+        return None
+
+    def source_value_for_event(
+        self,
+        event: str,
+        payload: Any,
+        info: Mapping[str, Any],
+        index: int,
+    ) -> Any | None:
+        previous = self.payload_previous_value(payload)
+        if previous is not None:
+            return previous
+        if event in self.current_sources[index]:
+            return self.current_sources[index][event]
+        keys = self.source_keys_for_event(event, payload)
+        if keys is None:
+            return None
+        return DoneCounterCallback.info_value_for_keys(info, keys)
+
+    def source_keys_for_event(self, event: str, payload: Any) -> str | tuple[str, ...] | None:
+        rule = self.info_events.get(event)
+        if rule is not None:
+            key_or_keys, _op = rule
+            return key_or_keys
+        if isinstance(payload, dict) and "keys" in payload:
+            key_or_keys = payload["keys"]
+            if isinstance(key_or_keys, str):
+                return key_or_keys
+            if isinstance(key_or_keys, (list, tuple)):
+                keys = tuple(str(item) for item in key_or_keys)
+                return keys if keys else None
+        return None
+
+    @staticmethod
+    def attempt_ended(
+        event_payloads: Mapping[str, Any],
+        info: Mapping[str, Any],
+        done: bool,
+    ) -> bool:
+        return bool(
+            done
+            or info.get("died", False)
+            or info.get("life_loss", False)
+            or "life_loss" in event_payloads
+            or info.get("TimeLimit.truncated", False)
+        )
+
+    def record_attempt(self, event: str, source: Any, *, fired: bool) -> dict[str, int | float]:
+        metric = train_outcome_value_metric(event, "from", source)
+        self.attempt_counts[metric] = self.attempt_counts.get(metric, 0) + 1
+        if fired:
+            self.fire_counts[metric] = self.fire_counts.get(metric, 0) + 1
+        else:
+            self.fire_counts.setdefault(metric, self.fire_counts.get(metric, 0))
+
+        window = self.attempt_windows.setdefault(metric, deque(maxlen=self.ep_window_size))
+        window.append(fired)
+
+        payload: dict[str, int | float] = {
+            f"{metric}/attempts": self.attempt_counts[metric],
+            f"{metric}/fires": self.fire_counts.get(metric, 0),
+        }
+        payload.update(self.record_attempt_window_rates())
+        return payload
+
+    def record_attempt_window_rates(self) -> dict[str, float]:
+        detail_rates = {
+            metric: sum(window) / len(window)
+            for metric, window in sorted(self.attempt_windows.items())
+            if len(window) >= self.ep_window_size
+        }
+        payload = {
+            f"{metric}/attempt_window/rate": rate for metric, rate in detail_rates.items()
+        }
+
+        rates_by_event: dict[str, list[float]] = {}
+        for metric, rate in detail_rates.items():
+            event = self.outcome_metric_event(metric)
+            if event is not None:
+                rates_by_event.setdefault(event, []).append(rate)
+
+        for event, rates in sorted(rates_by_event.items()):
+            if len(rates) < 2:
+                continue
+            payload[train_outcome_from_rate_metric(event, "min")] = min(rates)
+            payload[train_outcome_from_rate_metric(event, "mean")] = float(np.mean(rates))
+        return payload
+
+    @staticmethod
+    def outcome_metric_event(metric: str) -> str | None:
+        prefix = "train/outcome/"
+        marker = "/from/"
+        if not metric.startswith(prefix) or marker not in metric:
+            return None
+        event, _value = metric.removeprefix(prefix).split(marker, 1)
+        return event or None
+
+    def update_source_after_attempt(
+        self,
+        index: int,
+        event: str,
+        payload: Any,
+        info: Mapping[str, Any],
+        done: bool,
+    ) -> None:
+        if done:
+            reset_info = info.get("reset_info")
+            keys = self.source_keys_for_event(event, payload)
+            if isinstance(reset_info, Mapping) and keys is not None:
+                reset_source = DoneCounterCallback.info_value_for_keys(reset_info, keys)
+                if reset_source is not None:
+                    self.current_sources[index][event] = reset_source
+                    return
+            self.current_sources[index].pop(event, None)
+            return
+
+        next_value = self.payload_next_value(payload)
+        if next_value is not None:
+            self.current_sources[index][event] = next_value
+            return
+        keys = self.source_keys_for_event(event, payload)
+        if keys is None:
+            self.current_sources[index].pop(event, None)
+            return
+        current_source = DoneCounterCallback.info_value_for_keys(info, keys)
+        if current_source is None:
+            self.current_sources[index].pop(event, None)
+        else:
+            self.current_sources[index][event] = current_source
+
+    def record_metrics(self, payload: Mapping[str, int | float]) -> None:
+        for key, value in payload.items():
+            self.logger.record(key, value)

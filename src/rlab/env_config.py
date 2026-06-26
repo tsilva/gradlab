@@ -5,7 +5,7 @@ import json
 import math
 from typing import Any
 
-from rlab.env import DoneOnInfoRules, EnvConfig
+from rlab.env import DoneOnInfoRules, EnvConfig, InfoEventRules
 
 
 def parse_states(value: str | list[str] | tuple[str, ...]) -> tuple[str, ...]:
@@ -74,44 +74,68 @@ def parse_state_probs(value: str | list[float] | tuple[float, ...]) -> tuple[flo
     return tuple(probs)
 
 
-def parse_done_on_info(value: str | dict[str, Any] | None) -> DoneOnInfoRules:
+def parse_info_event_rules(
+    value: str | dict[str, Any] | None,
+    *,
+    option_name: str,
+) -> InfoEventRules:
     if not value:
         return {}
     if isinstance(value, str):
         try:
             raw = json.loads(value)
         except json.JSONDecodeError as exc:
-            raise ValueError(f"--done-on-info-json contains invalid JSON: {exc.msg}") from exc
+            raise ValueError(f"{option_name} contains invalid JSON: {exc.msg}") from exc
     else:
         raw = value
     if not isinstance(raw, dict):
-        raise ValueError("--done-on-info-json must be a JSON object")
+        raise ValueError(f"{option_name} must be a JSON object")
 
-    rules: DoneOnInfoRules = {}
+    rules: InfoEventRules = {}
     for name, rule in raw.items():
         rule_name = str(name).strip()
         if not rule_name:
-            raise ValueError("--done-on-info-json rule names must not be empty")
+            raise ValueError(f"{option_name} rule names must not be empty")
         if not isinstance(rule, (list, tuple)) or len(rule) != 2:
-            raise ValueError(f"done_on_info rule {rule_name!r} must be [key_or_keys, op]")
+            raise ValueError(f"info event rule {rule_name!r} must be [key_or_keys, op]")
         key_or_keys, op = rule
         if isinstance(key_or_keys, str):
             key_text = key_or_keys.strip()
             if not key_text:
-                raise ValueError(f"done_on_info rule {rule_name!r} key must not be empty")
+                raise ValueError(f"info event rule {rule_name!r} key must not be empty")
             key: str | tuple[str, ...] = key_text
         elif isinstance(key_or_keys, (list, tuple)):
             keys = tuple(str(item).strip() for item in key_or_keys)
             if not keys or any(not item for item in keys):
-                raise ValueError(f"done_on_info rule {rule_name!r} has invalid keys")
+                raise ValueError(f"info event rule {rule_name!r} has invalid keys")
             key = keys
         else:
-            raise ValueError(f"done_on_info rule {rule_name!r} key must be a string or list")
+            raise ValueError(f"info event rule {rule_name!r} key must be a string or list")
         op_text = str(op).strip()
         if not op_text:
-            raise ValueError(f"done_on_info rule {rule_name!r} op must not be empty")
+            raise ValueError(f"info event rule {rule_name!r} op must not be empty")
         rules[rule_name] = (key, op_text)
     return rules
+
+
+def parse_done_on_info(value: str | dict[str, Any] | None) -> DoneOnInfoRules:
+    return parse_info_event_rules(value, option_name="--done-on-info-json")
+
+
+def parse_info_events(value: str | dict[str, Any] | None) -> InfoEventRules:
+    return parse_info_event_rules(value, option_name="--info-events-json")
+
+
+def parse_event_names(value: str | list[str] | tuple[str, ...]) -> tuple[str, ...]:
+    if not value:
+        return ()
+    if isinstance(value, (list, tuple)):
+        names = tuple(str(name).strip() for name in value)
+    else:
+        names = tuple(name.strip() for name in value.split(","))
+    if any(not name for name in names):
+        raise ValueError("event name lists must not contain empty values")
+    return tuple(dict.fromkeys(names))
 
 
 def env_config_from_args(
@@ -159,6 +183,10 @@ def env_config_from_args(
         "done_on_info": parse_done_on_info(
             value("done_on_info_json", value("done_on_info", "")),
         ),
+        "info_events": parse_info_events(
+            value("info_events_json", value("info_events", "")),
+        ),
+        "done_on_events": parse_event_names(value("done_on_events", "")),
         "action_set": value("action_set"),
     }
     if include_states:
