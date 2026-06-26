@@ -65,9 +65,9 @@ from rlab.metric_names import (
     TRAIN_DONE_LEVEL_CHANGE_FROM_RATE_MIN,
     metric_path_segment,
 )
+from rlab.model_sources import single_model_artifact_ref
 from rlab.play import build_parser as build_play_parser
 from rlab.play import model_observation
-from rlab.play import playback_artifact_ref
 from rlab.play import playback_should_end_episode
 from rlab.play import task_conditioning_change_message
 from rlab.play import task_conditioning_start_message
@@ -1729,29 +1729,29 @@ class CommandAndArtifactTests(unittest.TestCase):
         self.assertFalse(parser.parse_args([ref]).deterministic)
         self.assertTrue(parser.parse_args([ref, "--deterministic"]).deterministic)
 
-    def test_artifact_playback_ref_uses_positional_artifact_ref(self) -> None:
+    def test_model_source_ref_uses_positional_artifact_ref(self) -> None:
         parser = build_play_parser()
         args = parser.parse_args(["tsilva/SuperMarioBros-NES/run-checkpoint:latest"])
 
         self.assertEqual(
-            playback_artifact_ref(args),
+            single_model_artifact_ref(args),
             "tsilva/SuperMarioBros-NES/run-checkpoint:latest",
         )
 
-    def test_artifact_playback_ref_rejects_positional_run_name(self) -> None:
+    def test_model_source_ref_rejects_positional_run_name(self) -> None:
         parser = build_play_parser()
 
         with patch("sys.stderr", new_callable=io.StringIO):
             with self.assertRaises(SystemExit):
                 parser.parse_args(["run"])
 
-    def test_artifact_playback_ref_uses_explicit_run_kind_and_version(self) -> None:
+    def test_model_source_ref_uses_explicit_run_kind_and_version(self) -> None:
         parser = build_play_parser()
         argv = ["--artifact-run", "run", "--artifact-kind", "best", "--artifact-version", "v8"]
         args = parser.parse_args(argv)
 
         self.assertEqual(
-            playback_artifact_ref(args),
+            single_model_artifact_ref(args),
             "tsilva/SuperMarioBros-NES/run-best:v8",
         )
 

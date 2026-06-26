@@ -16,7 +16,6 @@ os.makedirs(os.environ["MPLCONFIGDIR"], exist_ok=True)
 import numpy as np
 from stable_baselines3 import PPO
 
-from rlab.artifacts import apply_model_config_defaults, explicit_arg_dests
 from rlab.cli_args import add_env_config_args
 from rlab.device import resolve_sb3_device
 from rlab.env import (
@@ -53,15 +52,19 @@ from rlab.metric_names import (
     EVAL_REWARD_MEAN,
     EVAL_REWARD_STD,
 )
-from rlab.wandb_artifacts import (
-    artifact_download_dir,
-    artifact_qualified_name,
-    checkpoint_step_from_artifact,
-    download_artifact_model,
-    model_artifact_ref,
-    safe_artifact_stem,
+from rlab.model_sources import (
+    ResolvedModelSource,
+    add_model_source_args,
+    apply_model_source_defaults,
+    artifact_eval_name,
+    download_artifact_source,
+    explicit_source_arg_dests,
+    find_model_artifacts,
+    model_artifact_checkpoint_step,
+    slug,
+    split_project,
 )
-from rlab.wandb_utils import DEFAULT_WANDB_PROJECT_PATH, load_wandb_env
+from rlab.wandb_utils import load_wandb_env
 
 
 def json_default(value):
@@ -73,72 +76,6 @@ def json_default(value):
             "dtype": str(value.dtype),
         }
     raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
-
-
-def slug(value: str) -> str:
-    return safe_artifact_stem(value)
-
-
-def split_project(value: str) -> tuple[str | None, str]:
-    parts = value.split("/", 1)
-    if len(parts) == 1:
-        return None, parts[0]
-    return parts[0], parts[1]
-
-
-def artifact_eval_name(args: argparse.Namespace) -> str:
-    if args.artifact_run:
-        return slug(args.artifact_run)
-    if args.artifact:
-        leaf = args.artifact[0].split("/")[-1].split(":", 1)[0]
-        for suffix in ("-checkpoint", "-final", "-best"):
-            if suffix in leaf:
-                leaf = leaf.split(suffix, 1)[0]
-                break
-        return slug(leaf)
-    raise ValueError("artifact eval requires --artifact or --artifact-run")
-
-
-def checkpoint_artifact_ref(args: argparse.Namespace) -> str:
-    if not args.artifact_run:
-        raise SystemExit("--artifact-run is required unless --artifact is provided")
-    if args.checkpoint_series:
-        return f"{args.artifact_project}/{slug(args.artifact_run)}-checkpoint"
-    return model_artifact_ref(
-        project=args.artifact_project,
-        run_name=args.artifact_run,
-        kind=args.artifact_kind,
-        version=args.artifact_version,
-    )
-
-
-def find_checkpoint_artifacts(args: argparse.Namespace):
-    load_wandb_env()
-
-    import wandb
-
-    api = wandb.Api()
-    if args.artifact:
-        return [api.artifact(ref, type="model") for ref in args.artifact]
-
-    ref = checkpoint_artifact_ref(args)
-    if not args.checkpoint_series:
-        return [api.artifact(ref, type="model")]
-
-    try:
-        artifacts = list(api.artifact_versions("model", ref))
-    except Exception as exc:
-        raise SystemExit(f"Could not list W&B checkpoint artifacts for {ref}: {exc}") from exc
-
-    artifacts.sort(key=lambda artifact: checkpoint_step_from_artifact(artifact) or -1)
-    if args.max_checkpoints > 0:
-        artifacts = artifacts[: args.max_checkpoints]
-    return artifacts
-
-
-def download_artifact(artifact, root: Path) -> Path:
-    name = artifact_qualified_name(artifact)
-    return download_artifact_model(artifact, artifact_download_dir(root, name))
 
 
 def load_eval_history(path: Path) -> list[dict[str, Any]]:
@@ -392,24 +329,12 @@ def run_scripted_episode(
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Evaluate PPO or scripted Stable Retro baselines")
-    parser.add_argument("--model", help="Path to PPO .zip model")
-    parser.add_argument(
-        "--artifact",
-        action="append",
-        help="Full W&B model artifact ref to evaluate. May be passed more than once.",
+    add_model_source_args(
+        parser,
+        allow_multiple_artifacts=True,
+        model_help="Path to PPO .zip model",
+        default_kind="checkpoint",
     )
-    parser.add_argument(
-        "--artifact-run",
-        help="Training run name used to build a W&B checkpoint artifact ref.",
-    )
-    parser.add_argument("--artifact-project", default=DEFAULT_WANDB_PROJECT_PATH)
-    parser.add_argument(
-        "--artifact-kind",
-        choices=["final", "best", "checkpoint"],
-        default="checkpoint",
-    )
-    parser.add_argument("--artifact-version", default="latest")
-    parser.add_argument("--artifact-root", default="runs/wandb_artifacts")
     parser.add_argument(
         "--checkpoint-series",
         action="store_true",
@@ -463,13 +388,14 @@ def build_parser() -> argparse.ArgumentParser:
 
 def run_checkpoint_artifact_eval(
     args: argparse.Namespace,
+    parser: argparse.ArgumentParser,
     parser_defaults: dict[str, object],
     explicit_dests: set[str],
 ) -> None:
     if args.episodes < 1:
         raise SystemExit("--episodes must be >= 1")
     args.eval_run_name = artifact_eval_name(args)
-    artifacts = find_checkpoint_artifacts(args)
+    artifacts = find_model_artifacts(args)
     if not artifacts:
         print("No checkpoint artifacts found")
         return
@@ -484,7 +410,7 @@ def run_checkpoint_artifact_eval(
             artifact_name = getattr(artifact, "qualified_name", None) or getattr(
                 artifact, "name", "artifact"
             )
-            checkpoint_step = checkpoint_step_from_artifact(artifact)
+            checkpoint_step = model_artifact_checkpoint_step(artifact)
             if (
                 checkpoint_step is not None
                 and checkpoint_step in evaluated_steps
@@ -493,8 +419,9 @@ def run_checkpoint_artifact_eval(
                 print(f"Skipping step {checkpoint_step}: already evaluated")
                 continue
 
-            model_path = download_artifact(artifact, Path(args.artifact_root))
-            checkpoint_step = checkpoint_step or checkpoint_step_from_artifact(artifact, model_path)
+            source = download_artifact_source(artifact, Path(args.artifact_root))
+            model_path = source.model_path
+            checkpoint_step = checkpoint_step or source.checkpoint_step
             if checkpoint_step is None:
                 print(f"Skipping {artifact_name}: cannot infer checkpoint step", file=sys.stderr)
                 continue
@@ -503,9 +430,10 @@ def run_checkpoint_artifact_eval(
                 continue
 
             checkpoint_args = copy.copy(args)
-            apply_model_config_defaults(
+            apply_model_source_defaults(
                 checkpoint_args,
-                model_path,
+                source,
+                parser,
                 parser_defaults,
                 explicit_dests,
             )
@@ -552,14 +480,19 @@ def run_checkpoint_artifact_eval(
 def main() -> None:
     parser = build_parser()
     parser_defaults = vars(parser.parse_args([]))
-    explicit_dests = explicit_arg_dests(parser, sys.argv[1:])
-    explicit_dests.add("done_on_info_json")
+    explicit_dests = explicit_source_arg_dests(parser, sys.argv[1:])
     args = parser.parse_args()
     if args.artifact or args.artifact_run:
-        run_checkpoint_artifact_eval(args, parser_defaults, explicit_dests)
+        run_checkpoint_artifact_eval(args, parser, parser_defaults, explicit_dests)
         return
     if args.model:
-        apply_model_config_defaults(args, Path(args.model), parser_defaults, explicit_dests)
+        apply_model_source_defaults(
+            args,
+            ResolvedModelSource(model_path=Path(args.model)),
+            parser,
+            parser_defaults,
+            explicit_dests,
+        )
     assert_rom_imported(args.game)
     config = resolve_env_config(
         env_config_from_args(

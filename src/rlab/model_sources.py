@@ -1,0 +1,274 @@
+from __future__ import annotations
+
+import argparse
+import sys
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
+
+from rlab.artifacts import (
+    apply_config_defaults,
+    env_config_from_metadata,
+    explicit_arg_dests,
+    load_model_metadata,
+    write_model_metadata,
+)
+from rlab.env import resolve_env_config
+from rlab.env_config import env_config_from_args
+from rlab.wandb_artifacts import (
+    artifact_download_dir,
+    artifact_qualified_name,
+    checkpoint_step_from_artifact,
+    download_artifact_model,
+    download_model_artifact,
+    model_artifact_ref,
+    safe_artifact_stem,
+)
+from rlab.wandb_utils import DEFAULT_WANDB_PROJECT_PATH, load_wandb_env
+
+
+MODEL_KIND_CHOICES = ("final", "best", "checkpoint")
+
+
+@dataclass
+class ResolvedModelSource:
+    model_path: Path
+    artifact_ref: str | None = None
+    artifact_name: str | None = None
+    checkpoint_step: int | None = None
+    run_config: dict[str, Any] = field(default_factory=dict)
+
+
+def artifact_ref_arg(value: str) -> str:
+    parts = value.split("/")
+    artifact_name = parts[-1] if parts else ""
+    if len(parts) != 3 or ":" not in artifact_name or artifact_name.startswith(":"):
+        raise argparse.ArgumentTypeError(
+            "expected W&B artifact ref like entity/project/run-checkpoint:latest"
+        )
+    return value
+
+
+def add_model_source_args(
+    parser: argparse.ArgumentParser,
+    *,
+    positional_artifact: bool = False,
+    allow_multiple_artifacts: bool = False,
+    model_default: str | None = None,
+    model_help: str | None = None,
+    default_kind: str = "checkpoint",
+) -> None:
+    if positional_artifact:
+        parser.add_argument(
+            "artifact_ref",
+            nargs="?",
+            type=artifact_ref_arg,
+            help="Full W&B artifact ref, for example entity/project/run-checkpoint:latest.",
+        )
+    model_kwargs: dict[str, Any] = {}
+    if model_default is not None:
+        model_kwargs["default"] = model_default
+    if model_help is not None:
+        model_kwargs["help"] = model_help
+    parser.add_argument("--model", **model_kwargs)
+    artifact_kwargs: dict[str, Any] = {
+        "type": artifact_ref_arg,
+        "help": "Full W&B model artifact ref, for example entity/project/run-checkpoint:latest.",
+    }
+    if allow_multiple_artifacts:
+        artifact_kwargs["action"] = "append"
+        artifact_kwargs["help"] = "Full W&B model artifact ref to evaluate. May be passed more than once."
+    parser.add_argument("--artifact", **artifact_kwargs)
+    parser.add_argument(
+        "--artifact-run",
+        help="Training run name used to build a W&B artifact ref with --artifact-kind/version.",
+    )
+    parser.add_argument("--artifact-project", default=DEFAULT_WANDB_PROJECT_PATH)
+    parser.add_argument("--artifact-kind", choices=MODEL_KIND_CHOICES, default=default_kind)
+    parser.add_argument("--artifact-version", default="latest")
+    parser.add_argument("--artifact-root", default="runs/wandb_artifacts")
+
+
+def slug(value: str) -> str:
+    return safe_artifact_stem(value)
+
+
+def split_project(value: str) -> tuple[str | None, str]:
+    parts = value.split("/", 1)
+    if len(parts) == 1:
+        return None, parts[0]
+    return parts[0], parts[1]
+
+
+def artifact_values(args: argparse.Namespace) -> tuple[str, ...]:
+    value = getattr(args, "artifact", None)
+    if not value:
+        return ()
+    if isinstance(value, (list, tuple)):
+        return tuple(str(item) for item in value if item)
+    return (str(value),)
+
+
+def single_model_artifact_ref(args: argparse.Namespace) -> str | None:
+    artifacts = artifact_values(args)
+    if artifacts:
+        return artifacts[0]
+    positional = getattr(args, "artifact_ref", None)
+    if positional:
+        return str(positional)
+    run_name = getattr(args, "artifact_run", None)
+    if not run_name:
+        return None
+    return model_artifact_ref(
+        project=getattr(args, "artifact_project", DEFAULT_WANDB_PROJECT_PATH),
+        run_name=str(run_name),
+        kind=getattr(args, "artifact_kind", "checkpoint"),
+        version=getattr(args, "artifact_version", "latest"),
+    )
+
+
+def checkpoint_series_ref(args: argparse.Namespace) -> str:
+    run_name = getattr(args, "artifact_run", None)
+    if not run_name:
+        raise SystemExit("--artifact-run is required unless --artifact is provided")
+    return f"{getattr(args, 'artifact_project', DEFAULT_WANDB_PROJECT_PATH)}/{slug(str(run_name))}-checkpoint"
+
+
+def checkpoint_artifact_ref(args: argparse.Namespace) -> str:
+    if getattr(args, "checkpoint_series", False):
+        return checkpoint_series_ref(args)
+    ref = single_model_artifact_ref(args)
+    if ref is None:
+        raise SystemExit("--artifact-run is required unless --artifact is provided")
+    return ref
+
+
+def artifact_eval_name(args: argparse.Namespace) -> str:
+    if getattr(args, "artifact_run", None):
+        return slug(str(args.artifact_run))
+    artifacts = artifact_values(args)
+    if artifacts:
+        leaf = artifacts[0].split("/")[-1].split(":", 1)[0]
+        for suffix in ("-checkpoint", "-final", "-best"):
+            if suffix in leaf:
+                leaf = leaf.split(suffix, 1)[0]
+                break
+        return slug(leaf)
+    raise ValueError("artifact eval requires --artifact or --artifact-run")
+
+
+def find_model_artifacts(args: argparse.Namespace):
+    load_wandb_env()
+
+    import wandb
+
+    api = wandb.Api()
+    artifacts = artifact_values(args)
+    if artifacts:
+        return [api.artifact(ref, type="model") for ref in artifacts]
+
+    ref = checkpoint_artifact_ref(args)
+    if not getattr(args, "checkpoint_series", False):
+        return [api.artifact(ref, type="model")]
+
+    try:
+        versions = list(api.artifact_versions("model", ref))
+    except Exception as exc:
+        raise SystemExit(f"Could not list W&B checkpoint artifacts for {ref}: {exc}") from exc
+
+    versions.sort(key=lambda artifact: checkpoint_step_from_artifact(artifact) or -1)
+    max_checkpoints = int(getattr(args, "max_checkpoints", 0) or 0)
+    if max_checkpoints > 0:
+        versions = versions[:max_checkpoints]
+    return versions
+
+
+def model_artifact_checkpoint_step(artifact: Any, model_path: Path | None = None) -> int | None:
+    return checkpoint_step_from_artifact(artifact, model_path)
+
+
+def download_artifact_source(artifact: Any, root: Path) -> ResolvedModelSource:
+    artifact_name = artifact_qualified_name(artifact)
+    model_path = download_artifact_model(artifact, artifact_download_dir(root, artifact_name))
+    return ResolvedModelSource(
+        model_path=model_path,
+        artifact_name=artifact_name,
+        checkpoint_step=checkpoint_step_from_artifact(artifact, model_path),
+    )
+
+
+def download_artifact_ref_source(ref: str, root: Path) -> ResolvedModelSource:
+    model_path = download_model_artifact(ref, artifact_download_dir(root, ref))
+    return ResolvedModelSource(
+        model_path=model_path,
+        artifact_ref=ref,
+        artifact_name=ref,
+    )
+
+
+def resolve_single_model_source(args: argparse.Namespace) -> ResolvedModelSource:
+    ref = single_model_artifact_ref(args)
+    if ref is not None:
+        return download_artifact_ref_source(ref, Path(args.artifact_root))
+    model_path = Path(str(args.model))
+    return ResolvedModelSource(model_path=model_path)
+
+
+def artifact_run_config(ref: str) -> dict[str, Any]:
+    load_wandb_env()
+
+    import wandb
+
+    try:
+        run = wandb.Api().artifact(ref, type="model").logged_by()
+    except Exception as exc:
+        print(f"warning: could not infer playback config from {ref}: {exc}", file=sys.stderr)
+        return {}
+    if run is None:
+        return {}
+    config = getattr(run, "config", {}) or {}
+    return config if isinstance(config, dict) else {}
+
+
+def apply_model_source_defaults(
+    args: argparse.Namespace,
+    source: ResolvedModelSource,
+    parser: argparse.ArgumentParser,
+    parser_defaults: dict[str, object],
+    explicit_dests: set[str],
+    *,
+    infer_artifact_config: bool = False,
+    metadata_kind: str | None = None,
+    print_loaded_metadata: bool = False,
+) -> bool:
+    saved_config = env_config_from_metadata(load_model_metadata(source.model_path))
+    if saved_config:
+        apply_config_defaults(args, saved_config, parser_defaults, explicit_dests)
+        if print_loaded_metadata:
+            print(f"loaded playback metadata: {source.model_path.with_suffix('.metadata.json')}", flush=True)
+        return True
+    if not infer_artifact_config or source.artifact_ref is None:
+        return False
+
+    inferred_config = artifact_run_config(source.artifact_ref)
+    if not inferred_config:
+        return False
+    apply_config_defaults(args, inferred_config, parser_defaults, explicit_dests)
+    source.run_config = inferred_config
+
+    metadata_args = parser.parse_args([])
+    apply_config_defaults(metadata_args, inferred_config, parser_defaults, set())
+    metadata_config = resolve_env_config(
+        env_config_from_args(metadata_args, max_episode_steps_attr="max_steps")
+    )
+    kind = metadata_kind or getattr(args, "artifact_kind", "checkpoint")
+    metadata_path = write_model_metadata(source.model_path, args, metadata_config, kind=kind)
+    if metadata_path is not None:
+        print(f"Wrote playback metadata: {metadata_path}", flush=True)
+    return True
+
+
+def explicit_source_arg_dests(parser: argparse.ArgumentParser, argv: list[str]) -> set[str]:
+    explicit_dests = explicit_arg_dests(parser, argv)
+    explicit_dests.add("done_on_info_json")
+    return explicit_dests

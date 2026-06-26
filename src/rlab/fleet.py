@@ -232,6 +232,49 @@ class LatestWatchSnapshot:
     interval: float = 30.0
 
 
+@dataclass(frozen=True)
+class RuntimeImageContext:
+    runtime_image_ref: str | None
+    recent_images: tuple[RuntimeImageInfo, ...] = ()
+    warnings: tuple[str, ...] = ()
+
+
+class RuntimeImageResolver:
+    def __init__(
+        self,
+        args: argparse.Namespace,
+        *,
+        default_latest: bool = False,
+        cache_seconds: float = 0.0,
+    ) -> None:
+        self.args = args
+        self.default_latest = default_latest
+        self.cache_seconds = cache_seconds
+        self._cached_context: RuntimeImageContext | None = None
+        self._cached_at = 0.0
+
+    def resolve(self) -> RuntimeImageContext:
+        now = time.monotonic()
+        if (
+            self._cached_context is not None
+            and self.cache_seconds > 0
+            and now - self._cached_at < self.cache_seconds
+        ):
+            return self._cached_context
+        runtime_image_ref, recent_images, warnings = runtime_image_context_from_args(
+            self.args,
+            default_latest=self.default_latest,
+        )
+        context = RuntimeImageContext(
+            runtime_image_ref=runtime_image_ref,
+            recent_images=recent_images,
+            warnings=warnings,
+        )
+        self._cached_context = context
+        self._cached_at = now
+        return context
+
+
 @dataclass
 class WatchLatestLock:
     path: Path
@@ -1968,10 +2011,15 @@ def build_latest_watch_snapshot(
     args: argparse.Namespace,
     *,
     action_results: Sequence[ActionResult] = (),
+    image_context: RuntimeImageContext | None = None,
+    image_resolver: RuntimeImageResolver | None = None,
 ) -> LatestWatchSnapshot:
     repo_root = repo_root_from_args(args)
     config = filter_config_to_host(_load_config_from_args(args), getattr(args, "host", None))
-    runtime_image_ref, recent_images, image_warnings = runtime_image_context_from_args(args, default_latest=True)
+    image_context = image_context or (
+        image_resolver or RuntimeImageResolver(args, default_latest=True)
+    ).resolve()
+    runtime_image_ref = image_context.runtime_image_ref
     if not runtime_image_ref:
         raise SystemExit("--image, --image-file, --runtime-image-ref, or --runtime-image-ref-file is required")
     conn = _connect_from_args(args)
@@ -2016,9 +2064,9 @@ def build_latest_watch_snapshot(
             desired=plan.desired,
             existing=plan.existing,
             actions=tuple(action for action in plan.actions if action.host not in down_hosts),
-            warnings=(*image_warnings, *plan.warnings),
+            warnings=(*image_context.warnings, *plan.warnings),
         ),
-        recent_images=recent_images,
+        recent_images=image_context.recent_images,
         devices=devices,
         stale_train_jobs=stale_train_jobs,
         down_hosts=down_hosts,
@@ -2640,9 +2688,13 @@ def cmd_watch_latest(args: argparse.Namespace) -> int:
             render_latest_watch_starting_dashboard(args, color=color, max_width=args.width),
             enabled=tui,
         )
+        image_resolver = RuntimeImageResolver(args, default_latest=True)
         while True:
             try:
-                snapshot = build_latest_watch_snapshot(args)
+                snapshot = build_latest_watch_snapshot(
+                    args,
+                    image_resolver=image_resolver,
+                )
                 action_results: tuple[ActionResult, ...] = ()
                 if args.execute:
                     action_results = run_latest_watch_actions(snapshot.config, snapshot.plan)

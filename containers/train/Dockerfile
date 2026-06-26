@@ -7,15 +7,6 @@ FROM ${UV_IMAGE} AS uv
 
 FROM ${PYTHON_IMAGE} AS runtime
 
-ARG BUILD_DATE=unknown
-ARG VCS_REF=unknown
-
-LABEL org.opencontainers.image.title="rlab train runtime"
-LABEL org.opencontainers.image.description="Locked rlab training and evaluation runtime"
-LABEL org.opencontainers.image.source="https://github.com/tsilva/rlab"
-LABEL org.opencontainers.image.created="${BUILD_DATE}"
-LABEL org.opencontainers.image.revision="${VCS_REF}"
-
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 ENV RLAB_PROJECT_ROOT=/root/rlab
@@ -44,7 +35,12 @@ COPY --from=uv /uv /uvx /usr/local/bin/
 
 WORKDIR /root/rlab
 
-COPY pyproject.toml uv.lock README.md ./
+COPY pyproject.toml uv.lock ./
+
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv sync --frozen --no-dev --no-install-project
+
+COPY README.md ./
 COPY src ./src
 
 RUN --mount=type=cache,target=/root/.cache/uv \
@@ -52,11 +48,21 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 
 COPY METRICS.md INSTANCES.md ./
 COPY scripts ./scripts
-COPY experiments ./experiments
+COPY experiments/instances.json experiments/fleet.json ./experiments/
+COPY experiments/policies ./experiments/policies
 COPY containers/train/entrypoint.sh /usr/local/bin/rlab-container-entrypoint
 COPY containers/train/smoke.py /usr/local/bin/rlab-container-smoke
 
 RUN chmod +x /usr/local/bin/rlab-container-entrypoint /usr/local/bin/rlab-container-smoke \
     && mkdir -p /root/rlab/runs /root/rlab/logs /tmp/matplotlib
+
+ARG BUILD_DATE=unknown
+ARG VCS_REF=unknown
+
+LABEL org.opencontainers.image.title="rlab train runtime"
+LABEL org.opencontainers.image.description="Locked rlab training and evaluation runtime"
+LABEL org.opencontainers.image.source="https://github.com/tsilva/rlab"
+LABEL org.opencontainers.image.created="${BUILD_DATE}"
+LABEL org.opencontainers.image.revision="${VCS_REF}"
 
 CMD ["rlab-container-smoke"]
