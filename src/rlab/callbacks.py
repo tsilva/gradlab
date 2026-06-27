@@ -492,6 +492,8 @@ class LevelCompleteInfoCallback(BaseCallback):
         event_payloads = self.info_event_payloads(info)
         level_payload = event_payloads.get(self.completion_source_event)
         completed = bool(info.get("completion_event", info.get("level_complete", False)))
+        if self.failed_by_death_or_life_loss(event_payloads, info):
+            completed = False
         source = self.source_value_for_level(
             level_payload,
             info,
@@ -570,10 +572,17 @@ class LevelCompleteInfoCallback(BaseCallback):
     ) -> bool:
         return bool(
             done
-            or info.get("died", False)
-            or info.get("life_loss", False)
-            or "life_loss" in event_payloads
+            or LevelCompleteInfoCallback.failed_by_death_or_life_loss(event_payloads, info)
             or info.get("TimeLimit.truncated", False)
+        )
+
+    @staticmethod
+    def failed_by_death_or_life_loss(
+        event_payloads: Mapping[str, Any],
+        info: Mapping[str, Any],
+    ) -> bool:
+        return bool(
+            info.get("died", False) or info.get("life_loss", False) or "life_loss" in event_payloads
         )
 
     def record_attempt(self, source: Any, *, completed: bool) -> dict[str, int | float]:

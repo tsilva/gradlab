@@ -39,8 +39,8 @@ These are the first metrics to check when choosing policies.
 | `train/done/<reason>/from_rate/min` | Minimum across full per-source terminal episode-window rates for `<reason>`. |
 | `train/done/<reason>/from_rate/mean` | Mean across full per-source terminal episode-window rates for `<reason>`. |
 | `train/info/level_complete` | Root for Mario training level-complete metrics. This is the only `info_events`-derived training metric family. |
-| `train/info/level_complete/from/<prev>/count` | Cumulative clean level clears from native source value `<prev>`, e.g. `0-0` for Level1-1. |
-| `train/info/level_complete/from/<prev>/rate` | Fraction of the last 100 attempts from `<prev>` that produced a clean `level_complete`. Attempts can end at a clean completion, life loss, truncation, or episode done. Emits only after that source has a full 100-attempt window. |
+| `train/info/level_complete/from/<prev>/count` | Cumulative clean level clears from native source value `<prev>`, e.g. `0-0` for Level1-1. Death or life-loss info always records as a failed attempt, even if an upstream completion flag is also present. |
+| `train/info/level_complete/from/<prev>/rate` | Fraction of the last 100 attempts from `<prev>` that produced a clean `level_complete`. Attempts can end at a clean completion, life loss, truncation, or episode done; death/life-loss attempts contribute `0`. Emits only after that source has a full 100-attempt window. |
 | `train/info/level_complete/rate_min/last` | Minimum across the latest available `train/info/level_complete/from/<prev>/rate` values. Emits after at least one per-source rate is available and updates whenever any per-source rate updates. |
 | `eval/done/level_change/rate` | Pooled eval episode completion fraction. |
 | `eval/done/level_change/from/<start>/rate` | Eval completion fraction for episodes that started from `<start>`. |
@@ -114,13 +114,28 @@ training env keeps running set `level_complete` / `completion_event`, increment
 `train/info/level_complete/from/<prev>/rate` attempt window. This is the metric family to use when
 the question is "did the policy clear this level?"
 
+To sniff whether training is terminating on specific Mario events, chart the terminal counters
+rather than the clean-clear counters:
+
+- `train/done/life_loss` increasing means life-loss events are ending training episodes.
+- `train/done/level_change` increasing means level-change events are ending training episodes.
+- `train/done/all` is the exhaustive terminal episode count. Reason counters are explanatory, so
+  `train/done/life_loss + train/done/level_change` can exceed `train/done/all` when the same terminal
+  info payload reports both events.
+- `train/info/level_complete/from/<prev>/count` should be less than or equal to
+  `train/done/level_change/from/<prev>` when level changes are terminal. Any excess
+  `train/done/level_change/from/<prev>` over clean `level_complete` count is terminal level-change
+  traffic that was not accepted as a clean clear, for example a life-loss/death transition.
+
 `level_change` is the generic stable-retro-style info event: it means configured native level
 variables changed. The Mario target wrapper is responsible for deciding whether that raw transition
 was actually a level clear. It sets the per-step `completion_event` / `level_complete` flag only
 when the level changed without a detected death or life loss. The metrics callback then reuses the
 raw `level_change` payload's `prev` value as the source, so a clean transition from `(0, 0)` to
 `(0, 1)` records `train/info/level_complete/from/0-0/count`. `completion_event` is an info flag/alias
-consumed by code; `level_complete` is the semantic event/result name used in W&B metrics.
+consumed by code; `level_complete` is the semantic event/result name used in W&B metrics. As a
+defensive guard, the metrics callback treats any attempt with `died`, `life_loss`, or a `life_loss`
+info event as failed even if a contradictory completion flag appears in the same info payload.
 
 ## SB3 PPO Metrics
 

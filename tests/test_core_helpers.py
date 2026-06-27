@@ -2505,6 +2505,80 @@ class LevelCompleteInfoCallbackTests(unittest.TestCase):
         self.assertEqual(model.logger.records["train/info/level_complete/from/0-0/rate"], 0.0)
         self.assert_no_generic_info_metrics(model.logger.records)
 
+    def test_conflicting_completion_flag_and_life_loss_records_failure(self) -> None:
+        callback, model = self.make_callback()
+        callback.ep_window_size = 1
+
+        callback.num_timesteps = 1
+        callback.locals = {
+            "dones": [True],
+            "infos": [
+                {
+                    "levelHi": 0,
+                    "levelLo": 1,
+                    "died": True,
+                    "life_loss": True,
+                    "completion_event": True,
+                    "level_complete": True,
+                    "info_events": {
+                        "level_change": {
+                            "op": "change",
+                            "keys": ("levelHi", "levelLo"),
+                            "prev": (0, 0),
+                            "next": (0, 1),
+                        },
+                        "life_loss": {
+                            "op": "decrease",
+                            "keys": ("lives",),
+                            "prev": 3,
+                            "next": 2,
+                        },
+                    },
+                },
+            ],
+        }
+        self.assertTrue(callback._on_step())
+
+        self.assertEqual(model.logger.records["train/info/level_complete/from/0-0/count"], 0)
+        self.assertEqual(model.logger.records["train/info/level_complete/from/0-0/rate"], 0.0)
+        self.assert_no_generic_info_metrics(model.logger.records)
+
+    def test_conflicting_completion_flag_and_native_life_loss_records_failure(self) -> None:
+        callback, model = self.make_callback()
+        callback.ep_window_size = 1
+
+        callback.num_timesteps = 1
+        callback.locals = {
+            "dones": [True],
+            "infos": [
+                {
+                    "levelHi": 0,
+                    "levelLo": 1,
+                    "completion_event": True,
+                    "level_complete": True,
+                    "done_on_info": {
+                        "level_change": {
+                            "op": "change",
+                            "keys": ("levelHi", "levelLo"),
+                            "prev": (0, 0),
+                            "next": (0, 1),
+                        },
+                        "life_loss": {
+                            "op": "decrease",
+                            "keys": ("lives",),
+                            "prev": 3,
+                            "next": 2,
+                        },
+                    },
+                },
+            ],
+        }
+        self.assertTrue(callback._on_step())
+
+        self.assertEqual(model.logger.records["train/info/level_complete/from/0-0/count"], 0)
+        self.assertEqual(model.logger.records["train/info/level_complete/from/0-0/rate"], 0.0)
+        self.assert_no_generic_info_metrics(model.logger.records)
+
     def test_records_current_source_failure_on_life_loss(self) -> None:
         callback, model = self.make_callback()
         callback.ep_window_size = 1
