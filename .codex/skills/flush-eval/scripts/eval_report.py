@@ -2,32 +2,28 @@ from __future__ import annotations
 
 import argparse
 import os
-from pathlib import Path
 from typing import Any
 
 import psycopg2
 import psycopg2.extras
 
-
-def load_dotenv(path: Path = Path(".env")) -> None:
-    if not path.is_file():
-        return
-    for raw_line in path.read_text(encoding="utf-8").splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        os.environ.setdefault(key.strip(), value.strip().strip("'\""))
+from rlab.dotenv import load_env_file
 
 
 def database_url(use_direct: bool) -> str:
-    load_dotenv()
+    load_env_file()
     if use_direct:
         value = os.environ.get("DIRECT_DATABASE_URL") or os.environ.get("DATABASE_URL")
     else:
-        value = os.environ.get("DATABASE_URL") or os.environ.get("DIRECT_DATABASE_URL")
+        value = (
+            os.environ.get("TRAIN_QUEUE_DATABASE_URL")
+            or os.environ.get("DATABASE_URL")
+            or os.environ.get("DIRECT_DATABASE_URL")
+        )
     if not value:
-        raise SystemExit("DATABASE_URL or DIRECT_DATABASE_URL must be set in .env")
+        raise SystemExit(
+            "TRAIN_QUEUE_DATABASE_URL, DATABASE_URL, or DIRECT_DATABASE_URL must be set"
+        )
     return value
 
 

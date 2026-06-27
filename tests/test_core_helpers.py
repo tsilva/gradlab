@@ -54,7 +54,6 @@ from rlab.env import (
 )
 from rlab.env_config import (
     env_config_from_args,
-    parse_done_on_info,
     parse_info_events,
     parse_state_probs,
     parse_states,
@@ -67,7 +66,11 @@ from rlab.metric_names import (
     TRAIN_DONE_LEVEL_CHANGE_FROM_RATE_MIN,
     metric_path_segment,
 )
-from rlab.model_sources import single_model_artifact_ref
+from rlab.model_sources import (
+    ResolvedModelSource,
+    apply_model_source_defaults,
+    single_model_artifact_ref,
+)
 from rlab.play import build_parser as build_play_parser
 from rlab.play import model_observation
 from rlab.play import playback_should_end_episode
@@ -258,18 +261,20 @@ class EnvConfigFromArgsTests(unittest.TestCase):
             no_progress_timeout_steps=0,
             no_progress_min_delta=0,
             completion_x_threshold=SuperMarioBrosNesV0Target.default_completion_x_threshold,
-            done_on_info_json='{"life_loss":["lives","decrease"]}',
+            info_events_json='{"life_loss":["lives","decrease"]}',
+            done_on_events="life_loss",
             action_set="right",
         )
         config = env_config_from_args(args, max_episode_steps_attr="max_steps")
         self.assertEqual(config.max_episode_steps, 123)
         self.assertEqual(config.action_set, "right")
         self.assertEqual(config.sticky_action_prob, 0.25)
-        self.assertEqual(config.done_on_info, {"life_loss": ("lives", "decrease")})
+        self.assertEqual(config.info_events, {"life_loss": ("lives", "decrease")})
+        self.assertEqual(config.done_on_events, ("life_loss",))
 
-    def test_parse_done_on_info_accepts_single_and_multi_key_rules(self) -> None:
+    def test_parse_info_events_accepts_single_and_multi_key_rules(self) -> None:
         self.assertEqual(
-            parse_done_on_info(
+            parse_info_events(
                 '{"life_loss":["lives","decrease"],'
                 '"level_change":[["levelHi","levelLo"],"change"]}',
             ),
@@ -285,14 +290,24 @@ class EnvConfigFromArgsTests(unittest.TestCase):
             {"level_change": (("levelHi", "levelLo"), "change")},
         )
 
-    def test_resolve_env_config_normalizes_legacy_done_on_info_to_events(self) -> None:
+    def test_resolve_env_config_requires_done_events_to_be_info_events(self) -> None:
+        with self.assertRaisesRegex(ValueError, "references unconfigured info event"):
+            resolve_env_config(
+                EnvConfig(
+                    game="SuperMarioBros-Nes-v0",
+                    done_on_events=("life_loss",),
+                )
+            )
+
+    def test_resolve_env_config_preserves_explicit_info_events(self) -> None:
         config = resolve_env_config(
             EnvConfig(
                 game="SuperMarioBros-Nes-v0",
-                done_on_info={
+                info_events={
                     "life_loss": ("lives", "decrease"),
                     "level_change": (("levelHi", "levelLo"), "change"),
                 },
+                done_on_events=("life_loss", "level_change"),
             )
         )
 
@@ -366,7 +381,7 @@ class EnvConfigFromArgsTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "reserved for eval"):
                 parse_train_args(["--train-config-json", str(path)])
 
-    def test_parse_done_on_info_rejects_invalid_shapes(self) -> None:
+    def test_parse_info_events_rejects_invalid_shapes(self) -> None:
         invalid_values = [
             "{",
             "[]",
@@ -380,7 +395,7 @@ class EnvConfigFromArgsTests(unittest.TestCase):
         for value in invalid_values:
             with self.subTest(value=value):
                 with self.assertRaises(ValueError):
-                    parse_done_on_info(value)
+                    parse_info_events(value)
 
     def test_sticky_action_probability_defaults_to_disabled(self) -> None:
         self.assertEqual(build_play_parser().parse_args([]).sticky_action_prob, 0.0)
@@ -447,7 +462,7 @@ class EnvConfigFromArgsTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "sticky_action_prob"):
             resolve_env_config(EnvConfig(game="SuperMarioBros-Nes-v0", sticky_action_prob=-0.1))
 
-    def test_eval_vec_env_clears_done_on_info_rules(self) -> None:
+    def test_eval_vec_env_clears_done_on_events(self) -> None:
         sentinel = object()
         config = EnvConfig(
             game="SuperMarioBros-Nes-v0",
@@ -463,15 +478,15 @@ class EnvConfigFromArgsTests(unittest.TestCase):
 
         self.assertIs(env, sentinel)
         passed_config = make_vec_envs.call_args.kwargs["config"]
-        self.assertEqual(passed_config.done_on_info, {})
         self.assertEqual(passed_config.info_events, config.info_events)
         self.assertEqual(passed_config.done_on_events, ())
 
-    def test_training_vec_env_preserves_requested_done_on_info_rules(self) -> None:
+    def test_training_vec_env_preserves_requested_terminal_info_events(self) -> None:
         sentinel = object()
         config = EnvConfig(
             game="SuperMarioBros-Nes-v0",
-            done_on_info={"life_loss": ("lives", "decrease")},
+            info_events={"life_loss": ("lives", "decrease")},
+            done_on_events=("life_loss",),
         )
 
         with patch("rlab.env.make_vec_envs", return_value=sentinel) as make_vec_envs:
@@ -479,9 +494,10 @@ class EnvConfigFromArgsTests(unittest.TestCase):
 
         self.assertIs(env, sentinel)
         passed_config = make_vec_envs.call_args.kwargs["config"]
-        self.assertEqual(passed_config.done_on_info, {"life_loss": ("lives", "decrease")})
+        self.assertEqual(passed_config.info_events, {"life_loss": ("lives", "decrease")})
+        self.assertEqual(passed_config.done_on_events, ("life_loss",))
 
-    def test_rendered_eval_replay_clears_done_on_info_rules(self) -> None:
+    def test_rendered_eval_replay_clears_done_on_events(self) -> None:
         sentinel = object()
         config = EnvConfig(
             game="SuperMarioBros-Nes-v0",
@@ -497,7 +513,6 @@ class EnvConfigFromArgsTests(unittest.TestCase):
 
         self.assertIs(env, sentinel)
         passed_config = make_retro_env.call_args.kwargs["config"]
-        self.assertEqual(passed_config.done_on_info, {})
         self.assertEqual(passed_config.info_events, config.info_events)
         self.assertEqual(passed_config.done_on_events, ())
 
@@ -959,10 +974,11 @@ class NativeMixedStateVecEnvTests(unittest.TestCase):
             game="SuperMarioBros-Nes-v0",
             action_set="native",
             reward_mode="native",
-            done_on_info={
+            info_events={
                 "life_loss": ("lives", "decrease"),
                 "level_change": (("levelHi", "levelLo"), "change"),
             },
+            done_on_events=("life_loss", "level_change"),
             states=("Level1-1", "Level1-2"),
             state_probs=(0.5, 0.5),
         )
@@ -989,8 +1005,7 @@ class NativeMixedStateVecEnvTests(unittest.TestCase):
         )
         self.assertNotIn("terminate_on_life_loss", created[0])
         self.assertNotIn("life_variable", created[0])
-        self.assertEqual(progress_configs[0].done_on_info, config.done_on_info)
-        self.assertEqual(progress_configs[0].info_events, config.done_on_info)
+        self.assertEqual(progress_configs[0].info_events, config.info_events)
         self.assertEqual(progress_configs[0].done_on_events, ("life_loss", "level_change"))
 
     def test_training_vec_env_passes_only_done_events_to_native_done_on_info(self) -> None:
@@ -1064,7 +1079,8 @@ class NativeMixedStateVecEnvTests(unittest.TestCase):
             game="SuperMarioBros-Nes-v0",
             action_set="native",
             reward_mode="native",
-            done_on_info={"life_loss": ("lives", "decrease")},
+            info_events={"life_loss": ("lives", "decrease")},
+            done_on_events=("life_loss",),
         )
         with (
             patch("rlab.env.StableRetroNativeVecEnv", FakeNative),
@@ -1417,7 +1433,7 @@ class CommandAndArtifactTests(unittest.TestCase):
 
         self.assertIn("--no-eval-stochastic", cmd)
 
-    def test_train_parser_accepts_task_conditioning_and_done_on_info_flags(self) -> None:
+    def test_train_parser_accepts_task_conditioning_and_info_event_flags(self) -> None:
         args = build_train_parser().parse_args(
             [
                 "--game",
@@ -1429,12 +1445,10 @@ class CommandAndArtifactTests(unittest.TestCase):
                 "levelHi,levelLo",
                 "--task-conditioning-info-values",
                 "0,0;0,1",
-                "--done-on-info-json",
-                '{"level_change":[["levelHi","levelLo"],"change"]}',
                 "--info-events-json",
-                '{"life_loss":["lives","decrease"]}',
+                '{"life_loss":["lives","decrease"],"level_change":[["levelHi","levelLo"],"change"]}',
                 "--done-on-events",
-                "life_loss",
+                "life_loss,level_change",
             ]
         )
 
@@ -1442,11 +1456,19 @@ class CommandAndArtifactTests(unittest.TestCase):
         self.assertEqual(args.task_conditioning_info_values, "0,0;0,1")
         config = env_config_from_args(args, include_states=True)
         self.assertEqual(
-            config.done_on_info,
-            {"level_change": (("levelHi", "levelLo"), "change")},
+            config.info_events,
+            {
+                "life_loss": ("lives", "decrease"),
+                "level_change": (("levelHi", "levelLo"), "change"),
+            },
         )
-        self.assertEqual(config.info_events, {"life_loss": ("lives", "decrease")})
-        self.assertEqual(config.done_on_events, ("life_loss",))
+        self.assertEqual(config.done_on_events, ("life_loss", "level_change"))
+
+    def test_train_parser_rejects_done_on_info_flag(self) -> None:
+        with patch("sys.stderr", new=io.StringIO()), self.assertRaises(SystemExit):
+            build_train_parser().parse_args(["--done-on-info-json", "{}"])
+
+        self.assertNotIn("--done-on-info-json", build_train_parser().format_help())
 
     def test_train_parser_deletes_completion_stop_flags(self) -> None:
         args = build_train_parser().parse_args([])
@@ -1711,12 +1733,13 @@ class CommandAndArtifactTests(unittest.TestCase):
                     max_pool_frames=False,
                     observation_size=96,
                     score_progress_clipped=True,
-                    done_on_info={"level_change": (("levelHi", "levelLo"), "change")},
+                    info_events={"level_change": (("levelHi", "levelLo"), "change")},
+                    done_on_events=("level_change",),
                 ),
                 kind="checkpoint",
             )
 
-            argv = ["--model", str(model_path), "--done-on-info-json", "{}"]
+            argv = ["--model", str(model_path)]
             args = parser.parse_args(argv)
             explicit_dests = explicit_arg_dests(parser, argv)
 
@@ -1727,7 +1750,16 @@ class CommandAndArtifactTests(unittest.TestCase):
             self.assertFalse(args.max_pool_frames)
             self.assertEqual(args.observation_size, 96)
             self.assertTrue(args.score_progress_clipped)
-            self.assertEqual(args.done_on_info_json, "{}")
+            restored_args_config = env_config_from_args(
+                args,
+                max_episode_steps_attr="max_steps",
+                include_states=True,
+            )
+            self.assertEqual(
+                restored_args_config.info_events,
+                {"level_change": (("levelHi", "levelLo"), "change")},
+            )
+            self.assertEqual(restored_args_config.done_on_events, ("level_change",))
 
             config = env_config_from_model_metadata(
                 model_path, fallback=EnvConfig(state="fallback")
@@ -1736,6 +1768,11 @@ class CommandAndArtifactTests(unittest.TestCase):
             assert config is not None
             self.assertEqual(config.state, "Level2-1")
             self.assertEqual(config.observation_size, 96)
+            self.assertEqual(
+                config.info_events,
+                {"level_change": (("levelHi", "levelLo"), "change")},
+            )
+            self.assertEqual(config.done_on_events, ("level_change",))
 
     def test_model_observation_wraps_task_conditioned_policy_input(self) -> None:
         class FakeModel:
@@ -1859,34 +1896,89 @@ class CommandAndArtifactTests(unittest.TestCase):
             "task_conditioning_start episode=1 step=0 task=(0, 0) index=0 one_hot=[1, 0, 0]",
         )
 
-    def test_playback_eval_defaults_block_training_done_on_info_metadata(self) -> None:
+    def test_playback_metadata_ignores_legacy_done_on_info(self) -> None:
         parser = build_play_parser()
         parser_defaults = vars(parser.parse_args([]))
         with tempfile.TemporaryDirectory() as tmp_dir:
             model_path = Path(tmp_dir) / "ppo_test_100_steps.zip"
             model_path.write_bytes(b"zip")
-            write_model_metadata(
-                model_path,
-                argparse.Namespace(run_name="run", run_description="description"),
-                EnvConfig(
-                    game="SuperMarioBros-Nes-v0",
-                    state="Level1-1",
-                    done_on_info={
-                        "life_loss": ("lives", "decrease"),
-                        "level_change": (("levelHi", "levelLo"), "change"),
+            model_metadata_path(model_path).write_text(
+                json.dumps(
+                    {
+                        "env_config": {
+                            "game": "SuperMarioBros-Nes-v0",
+                            "state": "Level1-1",
+                            "done_on_info": {
+                                "life_loss": ["lives", "decrease"],
+                                "level_change": [["levelHi", "levelLo"], "change"],
+                            },
+                            "done_on_events": ["life_loss", "level_change"],
+                        },
                     },
-                ),
-                kind="checkpoint",
+                )
+                + "\n",
+                encoding="utf-8",
             )
 
             args = parser.parse_args(["--model", str(model_path)])
             explicit_dests = explicit_arg_dests(parser, [])
-            explicit_dests.add("done_on_info_json")
 
             self.assertTrue(
                 apply_model_config_defaults(args, model_path, parser_defaults, explicit_dests)
             )
-            self.assertEqual(args.done_on_info_json, "")
+            config = env_config_from_args(
+                args,
+                max_episode_steps_attr="max_steps",
+                include_states=True,
+            )
+            self.assertEqual(config.state, "Level1-1")
+            self.assertEqual(config.info_events, {})
+            self.assertEqual(config.done_on_events, ())
+
+    def test_artifact_run_config_ignores_legacy_done_on_info(self) -> None:
+        parser = build_play_parser()
+        parser_defaults = vars(parser.parse_args([]))
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            model_path = Path(tmp_dir) / "ppo_test_100_steps.zip"
+            model_path.write_bytes(b"zip")
+            source = ResolvedModelSource(
+                model_path=model_path,
+                artifact_ref="entity/project/run-checkpoint:v0",
+            )
+            args = parser.parse_args(["--model", str(model_path)])
+            legacy_run_config = {
+                "game": "SuperMarioBros-Nes-v0",
+                "state": "Level1-1",
+                "done_on_info": {
+                    "life_loss": ["lives", "decrease"],
+                    "level_change": [["levelHi", "levelLo"], "change"],
+                },
+                "done_on_events": ["life_loss", "level_change"],
+            }
+
+            with (
+                patch("rlab.model_sources.artifact_run_config", return_value=legacy_run_config),
+                patch("sys.stdout", new=io.StringIO()),
+            ):
+                self.assertTrue(
+                    apply_model_source_defaults(
+                        args,
+                        source,
+                        parser,
+                        parser_defaults,
+                        set(),
+                        infer_artifact_config=True,
+                    )
+                )
+
+            config = env_config_from_args(
+                args,
+                max_episode_steps_attr="max_steps",
+                include_states=True,
+            )
+            self.assertEqual(config.state, "Level1-1")
+            self.assertEqual(config.info_events, {})
+            self.assertEqual(config.done_on_events, ())
 
     def test_gui_playback_defaults_to_stochastic(self) -> None:
         parser = build_play_parser()
@@ -2293,14 +2385,9 @@ class EvalMetricTests(unittest.TestCase):
         self.assertTrue(result["truncated"])
 
     def test_checkpoint_eval_seed_defaults_to_paired_schedule(self) -> None:
-        args = argparse.Namespace(seed=10007, seed_offset_by_checkpoint_step=False)
+        args = argparse.Namespace(seed=10007)
 
-        self.assertEqual(eval_seed_for_checkpoint(args, 4_400_000), 10007)
-
-    def test_checkpoint_eval_seed_legacy_step_offset(self) -> None:
-        args = argparse.Namespace(seed=10007, seed_offset_by_checkpoint_step=True)
-
-        self.assertEqual(eval_seed_for_checkpoint(args, 4_400_000), 4_410_007)
+        self.assertEqual(eval_seed_for_checkpoint(args), 10007)
 
     def test_vector_eval_accumulates_completed_slots_independently(self) -> None:
         class FakeModel:

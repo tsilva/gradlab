@@ -51,8 +51,8 @@ timesteps: 5,000,000
 ```
 
 Use `info_events_json` to define observed info-variable events and
-`done_on_events` to choose which observed events terminate episodes. Do not use
-the legacy `done_on_info_json` key in new launch specs.
+`done_on_events` to choose which observed events terminate episodes.
+`done_on_info_json` is no longer accepted in launch specs.
 
 Use 5 fleet-managed Docker runner containers on `beast-3` for throughput screening.
 Recent recipe-search batches used 6 concurrent child trainings for 3-arm /

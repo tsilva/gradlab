@@ -81,14 +81,6 @@ def add_env_config_args(
         help="Deprecated no-op; level completion is detected from stable-retro level changes.",
     )
     parser.add_argument(
-        "--done-on-info-json",
-        default="",
-        help=(
-            "JSON object mapping done-reason names to [key_or_keys, op], for example "
-            '\'{"life_loss":["lives","decrease"],"level_change":[["levelHi","levelLo"],"change"]}\''
-        ),
-    )
-    parser.add_argument(
         "--info-events-json",
         default="",
         help=(

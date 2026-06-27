@@ -104,8 +104,7 @@ rather than canceling against positive reward.
 
 Training info events are configured with `--info-events-json`, which maps event names to native
 info-variable rules. `--done-on-events` separately chooses which configured events terminate an
-episode. Legacy `--done-on-info-json` remains supported as shorthand for "observe these events and
-terminate on all of them." For Mario, a typical observed event set is
+episode; every `--done-on-events` name must exist in `--info-events-json`. For Mario, a typical observed event set is
 `{"life_loss":["lives","decrease"],"level_change":[["levelHi","levelLo"],"change"]}`. Native/default
 environment terminations that do not match a configured rule and are not max-step truncations count
 as `train/done/unclassified`. When native `done_on_info` payloads include `prev` and `next`,
@@ -117,8 +116,8 @@ configured rule keys read from terminal `info` as the source value. For Mario
 for their current `(levelHi, levelLo)` source level. Training intentionally does not emit `to` or
 full-transition counters because those multiply metric cardinality quickly. Training does not emit
 initializer-state mirrors under `train/state/<initializer>/done/*`; those labels are not reliable
-for natural level transitions. Evaluation forces `done_on_info={}` and `done_on_events=()` in env
-construction and keeps running after observed level completion, so `eval/done/level_change` and
+for natural level transitions. Evaluation forces `done_on_events=()` in env construction and does
+not pass native terminal `done_on_info` rules to Stable Retro; it keeps running after observed level completion, so `eval/done/level_change` and
 `eval/done/level_change/from/<start>` track whether a natural transition was observed during the eval
 horizon. Eval `from` values are the configured episode start state, not native `done_on_info`
 previous-value payloads.
@@ -283,7 +282,8 @@ Reward share metrics compare absolute component magnitudes within a rollout.
 
 These are logged by the in-training `RetroEvalCallback` when training-loop eval is enabled, and
 by `rlab-eval` artifact mode when evaluating checkpoint artifacts out of process.
-Evaluation env construction forces `done_on_info={}` and `done_on_events=()`. The eval loop also
+Evaluation env construction forces `done_on_events=()` and does not pass native terminal
+`done_on_info` rules to Stable Retro. The eval loop also
 keeps running after observed life-loss and level-change events; it stops on native env done or the
 configured max-step horizon. Because of that, level-change and max-step eval metrics can overlap.
 

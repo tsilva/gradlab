@@ -5,7 +5,7 @@ import json
 import math
 from typing import Any
 
-from rlab.env import DoneOnInfoRules, EnvConfig, InfoEventRules
+from rlab.env import EnvConfig, InfoEventRules
 
 
 def parse_states(value: str | list[str] | tuple[str, ...]) -> tuple[str, ...]:
@@ -118,10 +118,6 @@ def parse_info_event_rules(
     return rules
 
 
-def parse_done_on_info(value: str | dict[str, Any] | None) -> DoneOnInfoRules:
-    return parse_info_event_rules(value, option_name="--done-on-info-json")
-
-
 def parse_info_events(value: str | dict[str, Any] | None) -> InfoEventRules:
     return parse_info_event_rules(value, option_name="--info-events-json")
 
@@ -180,9 +176,6 @@ def env_config_from_args(
         "no_progress_timeout_steps": value("no_progress_timeout_steps"),
         "no_progress_min_delta": value("no_progress_min_delta"),
         "completion_x_threshold": value("completion_x_threshold"),
-        "done_on_info": parse_done_on_info(
-            value("done_on_info_json", value("done_on_info", "")),
-        ),
         "info_events": parse_info_events(
             value("info_events_json", value("info_events", "")),
         ),

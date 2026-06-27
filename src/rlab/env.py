@@ -2,8 +2,8 @@ from __future__ import annotations
 
 # ruff: noqa: E402
 
-import os
 import inspect
+import os
 from dataclasses import dataclass
 from dataclasses import field
 from dataclasses import replace
@@ -76,7 +76,6 @@ class EnvConfig:
     no_progress_timeout_steps: int = 0
     no_progress_min_delta: int = 0
     completion_x_threshold: int = 0
-    done_on_info: DoneOnInfoRules = field(default_factory=dict)
     info_events: InfoEventRules = field(default_factory=dict)
     done_on_events: tuple[str, ...] = ()
     action_set: str = "auto"
@@ -84,16 +83,16 @@ class EnvConfig:
 
 
 def normalize_event_config(config: EnvConfig) -> EnvConfig:
-    events: InfoEventRules = {}
-    events.update(config.done_on_info)
-    events.update(config.info_events)
-    done_on_events = config.done_on_events or tuple(config.done_on_info)
-    updates: dict[str, Any] = {}
-    if events != config.info_events:
-        updates["info_events"] = events
+    done_on_events = tuple(dict.fromkeys(str(item) for item in config.done_on_events))
+    missing = [name for name in done_on_events if name not in config.info_events]
+    if missing:
+        raise ValueError(
+            "--done-on-events references unconfigured info event(s): "
+            f"{', '.join(missing)}"
+        )
     if done_on_events != config.done_on_events:
-        updates["done_on_events"] = tuple(dict.fromkeys(str(item) for item in done_on_events))
-    return replace(config, **updates) if updates else config
+        return replace(config, done_on_events=done_on_events)
+    return config
 
 
 def resolve_env_config(config: EnvConfig) -> EnvConfig:
@@ -934,7 +933,6 @@ def make_training_vec_env(config: EnvConfig, n_envs: int, seed: int, start_metho
 def make_eval_vec_env(config: EnvConfig, n_envs: int, seed: int, start_method: str = "fork"):
     eval_config = replace(
         resolve_env_config(config),
-        done_on_info={},
         done_on_events=(),
     )
     return make_vec_envs(config=eval_config, n_envs=n_envs, seed=seed, start_method=start_method)
@@ -943,7 +941,6 @@ def make_eval_vec_env(config: EnvConfig, n_envs: int, seed: int, start_method: s
 def make_rendered_replay_env(config: EnvConfig | None = None, seed: int | None = None) -> gym.Env:
     eval_config = replace(
         resolve_env_config(config or EnvConfig()),
-        done_on_info={},
         done_on_events=(),
     )
     return make_retro_env(config=eval_config, seed=seed)

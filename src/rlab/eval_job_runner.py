@@ -86,7 +86,7 @@ def eval_env_config(config: dict[str, Any], model_path: Path) -> EnvConfig:
     resolved = resolve_env_config(replace(base, **overrides))
     return replace(
         resolved,
-        done_on_info={},
+        done_on_events=(),
     )
 
 

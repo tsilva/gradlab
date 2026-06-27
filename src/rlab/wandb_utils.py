@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-import os
 from pathlib import Path
+
+from rlab.dotenv import load_env_file
 
 DEFAULT_WANDB_ENTITY = "tsilva"
 DEFAULT_WANDB_PROJECT = "SuperMarioBros-NES"
@@ -15,17 +16,8 @@ WANDB_ARTIFACT_ENV_KEYS = {
 
 def load_wandb_env(dotenv_path: str | Path = ".env") -> None:
     """Load W&B and artifact storage env vars without adding a dotenv dependency."""
-    path = Path(dotenv_path)
-    if not path.is_file():
-        return
-
-    for raw_line in path.read_text(encoding="utf-8").splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        key = key.strip()
-        if not key.startswith(WANDB_ENV_PREFIXES) and key not in WANDB_ARTIFACT_ENV_KEYS:
-            continue
-        value = value.strip().strip("'\"")
-        os.environ.setdefault(key, value)
+    load_env_file(
+        dotenv_path,
+        key_filter=lambda key: key.startswith(WANDB_ENV_PREFIXES)
+        or key in WANDB_ARTIFACT_ENV_KEYS,
+    )

@@ -15,7 +15,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 from rlab.env import EnvConfig, state_distribution_metadata
-from rlab.env_config import parse_done_on_info, parse_event_names, parse_info_events
+from rlab.env_config import parse_event_names, parse_info_events
 from rlab.metric_names import (
     GLOBAL_STEP,
     TRAIN_ARTIFACT_LOCAL_SAVE_SECONDS,
@@ -59,7 +59,6 @@ PLAYBACK_ENV_ARG_KEYS = {
     "no_progress_timeout_steps": ("no_progress_timeout_steps",),
     "no_progress_min_delta": ("no_progress_min_delta",),
     "completion_x_threshold": ("completion_x_threshold",),
-    "done_on_info_json": ("done_on_info",),
     "info_events_json": ("info_events",),
     "done_on_events": ("done_on_events",),
     "action_set": ("action_set",),
@@ -207,9 +206,17 @@ def env_config_from_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
     if isinstance(training, dict):
         env_config = training.get("env_config", {})
         if isinstance(env_config, dict) and env_config:
-            return env_config
+            return sanitize_env_config_metadata(env_config)
     env_config = metadata.get("env_config", {})
-    return env_config if isinstance(env_config, dict) else {}
+    return sanitize_env_config_metadata(env_config) if isinstance(env_config, dict) else {}
+
+
+def sanitize_env_config_metadata(config: dict[str, Any]) -> dict[str, Any]:
+    cleaned = dict(config)
+    cleaned.pop("done_on_info", None)
+    if not cleaned.get("info_events"):
+        cleaned.pop("done_on_events", None)
+    return cleaned
 
 
 def require_training_metadata(model_path: Path) -> dict[str, Any]:
@@ -239,7 +246,7 @@ def env_config_from_config_dict(
     config: dict[str, Any],
     fallback: EnvConfig | None = None,
 ) -> EnvConfig | None:
-    field_names = set(EnvConfig.__dataclass_fields__)
+    field_names = set(EnvConfig.__dataclass_fields__) - {"info_events", "done_on_events"}
     config_values = asdict(fallback) if fallback is not None else {}
     matched = False
 
@@ -248,13 +255,14 @@ def env_config_from_config_dict(
             config_values[field_name] = config[field_name]
             matched = True
 
-    if "done_on_info" in config and config.get("done_on_info") is not None:
-        config_values["done_on_info"] = parse_done_on_info(config["done_on_info"])
-        matched = True
     if "info_events" in config and config.get("info_events") is not None:
         config_values["info_events"] = parse_info_events(config["info_events"])
         matched = True
-    if "done_on_events" in config and config.get("done_on_events") is not None:
+    if (
+        "done_on_events" in config
+        and config.get("done_on_events") is not None
+        and config_values.get("info_events")
+    ):
         config_values["done_on_events"] = parse_event_names(config["done_on_events"])
         matched = True
     if "max_steps" in config and config.get("max_steps") is not None:
@@ -398,7 +406,6 @@ def init_wandb(args: argparse.Namespace, run_dir: str, config: EnvConfig):
         "no_progress_timeout_steps": config.no_progress_timeout_steps,
         "no_progress_min_delta": config.no_progress_min_delta,
         "completion_x_threshold": config.completion_x_threshold,
-        "done_on_info": config.done_on_info,
         "info_events": config.info_events,
         "done_on_events": list(config.done_on_events),
         "action_set": config.action_set,

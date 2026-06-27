@@ -108,9 +108,7 @@ def best_metrics(rows: list[dict[str, Any]]) -> dict[str, Any] | None:
     return max(rows, key=score)
 
 
-def eval_seed_for_checkpoint(args: argparse.Namespace, checkpoint_step: int) -> int:
-    if args.seed_offset_by_checkpoint_step:
-        return args.seed + checkpoint_step
+def eval_seed_for_checkpoint(args: argparse.Namespace) -> int:
     return args.seed
 
 
@@ -132,7 +130,7 @@ def evaluate_checkpoint(
             include_states=True,
         )
     )
-    eval_seed = eval_seed_for_checkpoint(args, checkpoint_step)
+    eval_seed = eval_seed_for_checkpoint(args)
     video_path = (
         Path(args.eval_dir)
         / args.eval_run_name
@@ -371,15 +369,8 @@ def build_parser() -> argparse.ArgumentParser:
         default=DEFAULT_EVAL_SEED,
         help=(
             "Base eval seed. The default lives in the eval-reserved seed range "
-            f">= {EVAL_SEED_START}; override only for legacy replay comparisons."
-        ),
-    )
-    parser.add_argument(
-        "--seed-offset-by-checkpoint-step",
-        action="store_true",
-        help=(
-            "Use the legacy eval seed schedule of --seed + checkpoint_step. "
-            "By default, checkpoint artifacts use the same eval seed schedule for fair comparison."
+            f">= {EVAL_SEED_START}; checkpoint artifacts use the same seed schedule "
+            "for fair comparison."
         ),
     )
     parser.add_argument("--device", default="auto", choices=["auto", "cpu", "cuda", "mps"])

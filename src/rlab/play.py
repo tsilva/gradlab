@@ -429,7 +429,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=DEFAULT_EVAL_SEED,
         help=(
             "Base playback seed. The default lives in the eval/play-reserved seed "
-            f"range >= {EVAL_SEED_START}; override only for legacy replay comparisons."
+            f"range >= {EVAL_SEED_START}; override only for explicit comparison reruns."
         ),
     )
     parser.add_argument("--device", default="auto", choices=["auto", "cpu", "cuda", "mps"])
@@ -470,7 +470,6 @@ def main() -> None:
     parser = build_parser()
     parser_defaults = vars(parser.parse_args([]))
     explicit_dests = explicit_arg_dests(parser, sys.argv[1:])
-    explicit_dests.add("done_on_info_json")
     args = parser.parse_args()
     ref = single_model_artifact_ref(args)
     if ref is not None:

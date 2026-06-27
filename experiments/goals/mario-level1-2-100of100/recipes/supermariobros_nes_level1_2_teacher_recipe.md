@@ -51,8 +51,8 @@ timesteps: 5,000,000
 ```
 
 Use `info_events_json` to define observed info-variable events and
-`done_on_events` to choose which observed events terminate episodes. Do not use
-the legacy `done_on_info_json` key in new launch specs.
+`done_on_events` to choose which observed events terminate episodes.
+`done_on_info_json` is no longer accepted in launch specs.
 
 Level completion is detected from stable-retro `levelHi`/`levelLo` changes, not
 from an x-position threshold. For Level1-2, the training stop metric is

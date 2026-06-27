@@ -15,6 +15,7 @@ import psycopg2
 import psycopg2.extras
 
 from rlab.compute_targets import instance_defaults, load_json_file
+from rlab.dotenv import load_env_file
 from rlab.runtime_refs import (
     DEFAULT_IMAGE_ARTIFACT,
     DEFAULT_IMAGE_BRANCH,
@@ -176,9 +177,6 @@ RESET_TABLES = (
     "eval_jobs",
     "train_results",
     "train_jobs",
-    "campaign_decisions",
-    "experiment_specs",
-    "research_goals",
 )
 
 
@@ -242,19 +240,8 @@ def json_arg(value: Any) -> psycopg2.extras.Json:
     return psycopg2.extras.Json(value)
 
 
-def load_dotenv(path: Path = Path(".env")) -> None:
-    if not path.is_file():
-        return
-    for raw_line in path.read_text(encoding="utf-8").splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        os.environ.setdefault(key.strip(), value.strip().strip("'\""))
-
-
 def database_url(use_direct: bool = False) -> str:
-    load_dotenv()
+    load_env_file()
     if use_direct:
         value = os.environ.get("DIRECT_DATABASE_URL") or os.environ.get("DATABASE_URL")
     else:
@@ -341,10 +328,7 @@ def reset_schema(conn, *, export_dir: Path) -> Path:
                   eval_results,
                   eval_jobs,
                   train_results,
-                  train_jobs,
-                  campaign_decisions,
-                  experiment_specs,
-                  research_goals
+                  train_jobs
                 CASCADE
                 """
             )

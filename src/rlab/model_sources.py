@@ -11,6 +11,7 @@ from rlab.artifacts import (
     env_config_from_metadata,
     explicit_arg_dests,
     load_model_metadata,
+    sanitize_env_config_metadata,
     write_model_metadata,
 )
 from rlab.env import resolve_env_config
@@ -250,7 +251,7 @@ def apply_model_source_defaults(
     if not infer_artifact_config or source.artifact_ref is None:
         return False
 
-    inferred_config = artifact_run_config(source.artifact_ref)
+    inferred_config = sanitize_env_config_metadata(artifact_run_config(source.artifact_ref))
     if not inferred_config:
         return False
     apply_config_defaults(args, inferred_config, parser_defaults, explicit_dests)
@@ -269,6 +270,4 @@ def apply_model_source_defaults(
 
 
 def explicit_source_arg_dests(parser: argparse.ArgumentParser, argv: list[str]) -> set[str]:
-    explicit_dests = explicit_arg_dests(parser, argv)
-    explicit_dests.add("done_on_info_json")
-    return explicit_dests
+    return explicit_arg_dests(parser, argv)

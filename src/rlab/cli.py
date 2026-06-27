@@ -42,7 +42,6 @@ TRAIN_VALUE_OPTIONS = {
     "state": "--state",
     "states": "--states",
     "state_probs": "--state-probs",
-    "done_on_info_json": "--done-on-info-json",
     "info_events_json": "--info-events-json",
     "done_on_events": "--done-on-events",
     "task_conditioning_info_vars": "--task-conditioning-info-vars",
@@ -124,7 +123,7 @@ def build_train_command(options: Mapping[str, Any]) -> list[str]:
             continue
         if key == "target_kl" and float(value) <= 0:
             continue
-        if key in {"done_on_info_json", "info_events_json"} and isinstance(value, Mapping):
+        if key == "info_events_json" and isinstance(value, Mapping):
             value = json.dumps(value, separators=(",", ":"))
         elif key == "task_conditioning_info_values" and isinstance(value, list | tuple):
             value = ";".join(
@@ -277,14 +276,6 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "Comma-separated positive weights for --states. Values are normalized and "
             "sampled by the native vector env independently on each episode reset."
-        ),
-    )
-    parser.add_argument(
-        "--done-on-info-json",
-        default="",
-        help=(
-            "JSON object mapping done-reason names to [key_or_keys, op], for example "
-            '\'{"life_loss":["lives","decrease"],"level_change":[["levelHi","levelLo"],"change"]}\''
         ),
     )
     parser.add_argument(

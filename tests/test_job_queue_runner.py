@@ -12,6 +12,7 @@ from types import SimpleNamespace
 
 from rlab import job_queue
 from rlab.artifacts import wandb_artifact_storage_uri
+from rlab.dotenv import load_env_file
 from rlab.eval_job_runner import normalize_eval_config
 from rlab.json_utils import json_safe
 from rlab.seeds import DEFAULT_EVAL_SEED
@@ -218,6 +219,18 @@ class JobQueueTests(unittest.TestCase):
         self.assertIn("spec_sha256 TEXT", job_queue.SCHEMA_SQL)
         self.assertIn("CREATE TABLE IF NOT EXISTS eval_jobs", job_queue.SCHEMA_SQL)
         self.assertIn("CREATE TABLE IF NOT EXISTS eval_results", job_queue.SCHEMA_SQL)
+
+    def test_reset_schema_drops_only_current_queue_tables(self) -> None:
+        conn = FakeConnection()
+        with tempfile.TemporaryDirectory() as tmp:
+            job_queue.reset_schema(conn, export_dir=Path(tmp))
+
+        drop_sql = next(sql for sql in conn.cursor_obj.executed_sqls if "DROP TABLE" in sql)
+        self.assertIn("train_jobs", drop_sql)
+        self.assertIn("eval_jobs", drop_sql)
+        self.assertNotIn("research_goals", drop_sql)
+        self.assertNotIn("experiment_specs", drop_sql)
+        self.assertNotIn("campaign_decisions", drop_sql)
         self.assertIn("CREATE TABLE IF NOT EXISTS job_events", job_queue.SCHEMA_SQL)
         self.assertNotIn("origin_decision_id", job_queue.SCHEMA_SQL)
         self.assertIn("runtime_image_ref TEXT", job_queue.SCHEMA_SQL)
@@ -1150,6 +1163,32 @@ class TrainRunnerTests(unittest.TestCase):
 
 
 class ArtifactConfigTests(unittest.TestCase):
+    def test_load_env_file_strips_quotes_and_respects_filter(self) -> None:
+        old_allowed = os.environ.get("RLAB_TEST_ALLOWED")
+        old_blocked = os.environ.get("RLAB_TEST_BLOCKED")
+        os.environ.pop("RLAB_TEST_ALLOWED", None)
+        os.environ.pop("RLAB_TEST_BLOCKED", None)
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                path = Path(tmp) / ".env"
+                path.write_text(
+                    "RLAB_TEST_ALLOWED='kept value'\nRLAB_TEST_BLOCKED=ignored\n",
+                    encoding="utf-8",
+                )
+                load_env_file(path, key_filter=lambda key: key == "RLAB_TEST_ALLOWED")
+
+            self.assertEqual(os.environ.get("RLAB_TEST_ALLOWED"), "kept value")
+            self.assertIsNone(os.environ.get("RLAB_TEST_BLOCKED"))
+        finally:
+            if old_allowed is None:
+                os.environ.pop("RLAB_TEST_ALLOWED", None)
+            else:
+                os.environ["RLAB_TEST_ALLOWED"] = old_allowed
+            if old_blocked is None:
+                os.environ.pop("RLAB_TEST_BLOCKED", None)
+            else:
+                os.environ["RLAB_TEST_BLOCKED"] = old_blocked
+
     def test_checkpoint_bucket_placeholder_uses_environment(self) -> None:
         old_value = os.environ.get("CHECKPOINT_BUCKET_URI")
         os.environ["CHECKPOINT_BUCKET_URI"] = '"s3://bucket/from-env"'
