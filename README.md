@@ -122,6 +122,19 @@ Use `rlab-queue status --goal <goal>` for operational queue state and compact
 result receipts. Durable research decisions belong in the repo under the goal
 folder; detailed metrics and artifacts belong in W&B.
 
+To stop a running train job without dropping its latest weights, request a
+queue cancel:
+
+```bash
+UV_CACHE_DIR=.uv-cache uv run rlab-queue cancel-train <train_job_id>
+```
+
+The train runner relays that request to the leased trainer with `SIGUSR1`. The
+trainer stops at the next callback step, saves an interrupted step checkpoint,
+uploads it through the usual checkpoint artifact path, saves/uploads the final
+model with an `interrupted` alias, and then exits. If the trainer does not exit
+within the runner's cancel grace window, the runner falls back to `SIGTERM`.
+
 For a quick terminal monitor over queue jobs and fleet state:
 
 ```bash

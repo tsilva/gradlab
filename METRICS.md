@@ -169,6 +169,20 @@ These come from Stable-Baselines3 PPO and `VecMonitor`.
 | `throughput/rollout_fps` | Rollout-only environment-step throughput, measured from rollout start to rollout end. This excludes PPO optimization time. |
 | `throughput/loop_fps` | Full-loop instantaneous throughput, measured from one rollout start to the next. This includes rollout collection plus PPO optimization overhead. |
 
+## Artifact Timing Metrics
+
+These sparse metrics are logged when training logs model artifacts. Checkpoint rows use the checkpoint
+step as `global_step`; final and best artifacts use the model's current timestep.
+
+| Metric | Meaning |
+| --- | --- |
+| `train/artifact/stall_seconds` | Wall-clock time spent in the synchronous artifact boundary. For checkpoints this spans local checkpoint save plus artifact metadata/upload/logging; for final artifacts this spans final model save plus artifact metadata/upload/logging; for best artifacts this spans artifact metadata/upload/logging only. |
+| `train/artifact/local_save_seconds` | Local SB3 checkpoint or final model save duration. Logged when the local save can be paired with the artifact log. |
+| `train/artifact/log_seconds` | Total wall-clock time spent inside artifact metadata/upload/logging after the model zip already exists. |
+| `train/artifact/metadata_seconds` | Time spent writing the checkpoint metadata sidecar. |
+| `train/artifact/storage_upload_seconds` | Time spent uploading the model zip to external S3/R2 storage before W&B receives a reference artifact. Zero when no external artifact storage URI is configured. |
+| `train/artifact/wandb_log_seconds` | Time spent in `wandb_run.log_artifact(...)`. With reference artifacts this mostly covers W&B metadata/reference logging; without reference artifacts it can include uploading the model zip to W&B. |
+
 ## Rollout Diagnostics
 
 Logged at rollout end from the SB3 rollout buffer.

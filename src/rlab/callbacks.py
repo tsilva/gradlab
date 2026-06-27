@@ -3,11 +3,12 @@ from __future__ import annotations
 import argparse
 import time
 from collections import deque
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
 import numpy as np
-from stable_baselines3.common.callbacks import BaseCallback
+from stable_baselines3.common.callbacks import BaseCallback, CheckpointCallback
 
 from rlab.artifacts import checkpoint_step, log_wandb_model_artifact
 from rlab.env import DoneOnInfoRules, EnvConfig
@@ -35,6 +36,59 @@ from rlab.metric_names import (
 )
 
 
+@dataclass
+class PendingCheckpointTiming:
+    step: int
+    started_at: float
+    local_save_seconds: float | None = None
+
+
+class CheckpointArtifactTimingState:
+    def __init__(self) -> None:
+        self.pending: PendingCheckpointTiming | None = None
+
+    def begin(self, step: int, started_at: float) -> None:
+        self.pending = PendingCheckpointTiming(step=step, started_at=started_at)
+
+    def record_save(self, step: int, local_save_seconds: float) -> None:
+        if self.pending is None or self.pending.step != step:
+            return
+        self.pending.local_save_seconds = local_save_seconds
+
+    def get(self, step: int | None) -> PendingCheckpointTiming | None:
+        if step is None or self.pending is None or self.pending.step != step:
+            return None
+        return self.pending
+
+    def clear(self, step: int | None) -> None:
+        if self.get(step) is not None:
+            self.pending = None
+
+
+class TimedCheckpointCallback(CheckpointCallback):
+    def __init__(
+        self,
+        *args,
+        timing_state: CheckpointArtifactTimingState,
+        clock: Callable[[], float] | None = None,
+        **kwargs,
+    ) -> None:
+        super().__init__(*args, **kwargs)
+        self.timing_state = timing_state
+        self.clock = clock or time.perf_counter
+
+    def _on_step(self) -> bool:
+        should_save = self.save_freq > 0 and self.n_calls % self.save_freq == 0
+        if not should_save:
+            return super()._on_step()
+
+        started_at = self.clock()
+        self.timing_state.begin(self.num_timesteps, started_at)
+        result = super()._on_step()
+        self.timing_state.record_save(self.num_timesteps, self.clock() - started_at)
+        return result
+
+
 class WandbCheckpointArtifactCallback(BaseCallback):
     def __init__(
         self,
@@ -43,6 +97,8 @@ class WandbCheckpointArtifactCallback(BaseCallback):
         config: EnvConfig,
         checkpoint_dir: str,
         scan_freq: int,
+        timing_state: CheckpointArtifactTimingState | None = None,
+        clock: Callable[[], float] | None = None,
     ):
         super().__init__()
         self.wandb_run = wandb_run
@@ -50,6 +106,8 @@ class WandbCheckpointArtifactCallback(BaseCallback):
         self.config = config
         self.checkpoint_dir = Path(checkpoint_dir)
         self.scan_freq = scan_freq
+        self.timing_state = timing_state
+        self.clock = clock or time.perf_counter
         self.logged_paths: set[Path] = set()
 
     def _on_step(self) -> bool:
@@ -66,6 +124,7 @@ class WandbCheckpointArtifactCallback(BaseCallback):
             aliases = ["latest"]
             if step is not None:
                 aliases.append(f"step-{step}")
+            pending_timing = self.timing_state.get(step) if self.timing_state is not None else None
             log_wandb_model_artifact(
                 self.wandb_run,
                 self.args,
@@ -73,7 +132,15 @@ class WandbCheckpointArtifactCallback(BaseCallback):
                 checkpoint_path,
                 kind="checkpoint",
                 aliases=aliases,
+                metric_step=self.num_timesteps,
+                local_save_seconds=pending_timing.local_save_seconds
+                if pending_timing is not None
+                else None,
+                stall_started_at=pending_timing.started_at if pending_timing is not None else None,
+                clock=self.clock,
             )
+            if self.timing_state is not None:
+                self.timing_state.clear(step)
             self.logged_paths.add(resolved_path)
 
 

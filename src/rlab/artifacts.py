@@ -7,13 +7,24 @@ import json
 import os
 import re
 import sys
-from dataclasses import asdict
+import time
+from collections.abc import Callable
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
 from rlab.env import EnvConfig, state_distribution_metadata
 from rlab.env_config import parse_done_on_info, parse_event_names, parse_info_events
+from rlab.metric_names import (
+    GLOBAL_STEP,
+    TRAIN_ARTIFACT_LOCAL_SAVE_SECONDS,
+    TRAIN_ARTIFACT_LOG_SECONDS,
+    TRAIN_ARTIFACT_METADATA_SECONDS,
+    TRAIN_ARTIFACT_STALL_SECONDS,
+    TRAIN_ARTIFACT_STORAGE_UPLOAD_SECONDS,
+    TRAIN_ARTIFACT_WANDB_LOG_SECONDS,
+)
 from rlab.wandb_utils import load_wandb_env
 
 
@@ -55,15 +66,26 @@ PLAYBACK_ENV_ARG_KEYS = {
 }
 
 
+@dataclass(frozen=True)
+class ArtifactLogTiming:
+    artifact_name: str
+    kind: str
+    checkpoint_step: int | None
+    metadata_seconds: float
+    storage_upload_seconds: float
+    wandb_log_seconds: float
+    log_seconds: float
+    stall_seconds: float
+    local_save_seconds: float | None = None
+
+
 def explicit_arg_dests(parser: argparse.ArgumentParser, argv: list[str]) -> set[str]:
     option_dests: dict[str, str] = {}
     for action in parser._actions:
         for option in action.option_strings:
             option_dests[option] = action.dest
     return {
-        option_dests[arg.split("=", 1)[0]]
-        for arg in argv
-        if arg.split("=", 1)[0] in option_dests
+        option_dests[arg.split("=", 1)[0]] for arg in argv if arg.split("=", 1)[0] in option_dests
     }
 
 
@@ -249,7 +271,10 @@ def env_config_from_config_dict(
             tuple(state_probs) if isinstance(state_probs, list) else state_probs
         )
         matched = True
-    if "task_conditioning_info_vars" in config and config.get("task_conditioning_info_vars") is not None:
+    if (
+        "task_conditioning_info_vars" in config
+        and config.get("task_conditioning_info_vars") is not None
+    ):
         info_vars = config["task_conditioning_info_vars"]
         config_values["task_conditioning_info_vars"] = (
             tuple(info_vars) if isinstance(info_vars, list) else info_vars
@@ -456,7 +481,9 @@ def artifact_storage_prefix(base_prefix: str, game: str) -> str:
     return f"{prefix}/{rom_prefix}"
 
 
-def build_s3_artifact_uri(base_uri: str, args: argparse.Namespace, model_path: Path, kind: str) -> str:
+def build_s3_artifact_uri(
+    base_uri: str, args: argparse.Namespace, model_path: Path, kind: str
+) -> str:
     bucket, prefix = parse_s3_uri(base_uri)
     prefix = artifact_storage_prefix(prefix, args.game)
     key_parts = [
@@ -474,7 +501,9 @@ def upload_s3_artifact(model_path: Path, destination_uri: str) -> None:
 
     import boto3
 
-    endpoint_url = strip_env_file_quotes(os.environ.get("AWS_S3_ENDPOINT_URL") or os.environ.get("AWS_ENDPOINT_URL_S3", ""))
+    endpoint_url = strip_env_file_quotes(
+        os.environ.get("AWS_S3_ENDPOINT_URL") or os.environ.get("AWS_ENDPOINT_URL_S3", "")
+    )
     client_kwargs = {"endpoint_url": endpoint_url or None}
     access_key = strip_env_file_quotes(os.environ.get("AWS_ACCESS_KEY_ID", ""))
     secret_key = strip_env_file_quotes(os.environ.get("AWS_SECRET_ACCESS_KEY", ""))
@@ -494,6 +523,48 @@ def upload_s3_artifact(model_path: Path, destination_uri: str) -> None:
     )
 
 
+def artifact_timing_payload(timing: ArtifactLogTiming) -> dict[str, float]:
+    payload = {
+        TRAIN_ARTIFACT_STALL_SECONDS: timing.stall_seconds,
+        TRAIN_ARTIFACT_LOG_SECONDS: timing.log_seconds,
+        TRAIN_ARTIFACT_METADATA_SECONDS: timing.metadata_seconds,
+        TRAIN_ARTIFACT_STORAGE_UPLOAD_SECONDS: timing.storage_upload_seconds,
+        TRAIN_ARTIFACT_WANDB_LOG_SECONDS: timing.wandb_log_seconds,
+    }
+    if timing.local_save_seconds is not None:
+        payload[TRAIN_ARTIFACT_LOCAL_SAVE_SECONDS] = timing.local_save_seconds
+    return payload
+
+
+def log_artifact_timing_metrics(
+    wandb_run,
+    timing: ArtifactLogTiming,
+    *,
+    metric_step: int | None,
+) -> None:
+    if wandb_run is None or metric_step is None:
+        return
+    wandb_run.log(
+        {
+            GLOBAL_STEP: metric_step,
+            **artifact_timing_payload(timing),
+        },
+        step=metric_step,
+    )
+
+
+def artifact_stall_seconds(
+    *,
+    finished_at: float,
+    started_at: float,
+    stall_started_at: float | None,
+    local_save_seconds: float | None,
+) -> float:
+    if stall_started_at is not None:
+        return finished_at - stall_started_at
+    return finished_at - started_at + (local_save_seconds or 0.0)
+
+
 def log_wandb_model_artifact(
     wandb_run,
     args: argparse.Namespace,
@@ -501,17 +572,44 @@ def log_wandb_model_artifact(
     model_path: Path,
     kind: str,
     aliases: list[str] | None = None,
-) -> None:
+    *,
+    metric_step: int | None = None,
+    local_save_seconds: float | None = None,
+    stall_started_at: float | None = None,
+    clock: Callable[[], float] | None = None,
+) -> ArtifactLogTiming | None:
     if not model_path.is_file():
-        return
+        return None
+    timer = clock or time.perf_counter
+    started_at = timer()
+    artifact_name = f"{sanitize_artifact_name(args.run_name)}-{kind}"
+    step = checkpoint_step(model_path)
+
+    metadata_started_at = timer()
     sidecar_path = write_model_metadata(model_path, args, config, kind)
+    metadata_seconds = timer() - metadata_started_at
+
     if not wandb_artifacts_enabled(wandb_run, args):
-        return
+        finished_at = timer()
+        return ArtifactLogTiming(
+            artifact_name=artifact_name,
+            kind=kind,
+            checkpoint_step=step,
+            metadata_seconds=metadata_seconds,
+            storage_upload_seconds=0.0,
+            wandb_log_seconds=0.0,
+            log_seconds=finished_at - started_at,
+            stall_seconds=artifact_stall_seconds(
+                finished_at=finished_at,
+                started_at=started_at,
+                stall_started_at=stall_started_at,
+                local_save_seconds=local_save_seconds,
+            ),
+            local_save_seconds=local_save_seconds,
+        )
 
     import wandb
 
-    artifact_name = f"{sanitize_artifact_name(args.run_name)}-{kind}"
-    step = checkpoint_step(model_path)
     metadata: dict[str, Any] = {
         "run_name": args.run_name,
         "run_description": args.run_description,
@@ -533,9 +631,12 @@ def log_wandb_model_artifact(
 
     storage_base_uri = wandb_artifact_storage_uri(args)
     reference_uri = None
+    storage_upload_seconds = 0.0
     if storage_base_uri:
         reference_uri = build_s3_artifact_uri(storage_base_uri, args, model_path, kind)
+        upload_started_at = timer()
         upload_s3_artifact(model_path, reference_uri)
+        storage_upload_seconds = timer() - upload_started_at
         metadata["artifact_storage_uri"] = reference_uri
 
     artifact = wandb.Artifact(
@@ -549,9 +650,37 @@ def log_wandb_model_artifact(
         artifact.add_file(str(model_path), name=model_path.name)
     if sidecar_path is not None:
         artifact.add_file(str(sidecar_path), name=sidecar_path.name)
+    wandb_log_started_at = timer()
     wandb_run.log_artifact(artifact, aliases=aliases)
+    wandb_log_seconds = timer() - wandb_log_started_at
+    finished_at = timer()
+    timing = ArtifactLogTiming(
+        artifact_name=artifact_name,
+        kind=kind,
+        checkpoint_step=step,
+        metadata_seconds=metadata_seconds,
+        storage_upload_seconds=storage_upload_seconds,
+        wandb_log_seconds=wandb_log_seconds,
+        log_seconds=finished_at - started_at,
+        stall_seconds=artifact_stall_seconds(
+            finished_at=finished_at,
+            started_at=started_at,
+            stall_started_at=stall_started_at,
+            local_save_seconds=local_save_seconds,
+        ),
+        local_save_seconds=local_save_seconds,
+    )
+    log_artifact_timing_metrics(
+        wandb_run,
+        timing,
+        metric_step=metric_step if metric_step is not None else step,
+    )
     location = reference_uri or str(model_path)
-    print(f"wandb artifact logged: {artifact_name} ({location})")
+    print(
+        f"wandb artifact logged: {artifact_name} ({location}); "
+        f"artifact_stall_seconds={timing.stall_seconds:.3f}"
+    )
+    return timing
 
 
 def write_wandb_url(wandb_run, run_dir: str) -> None:

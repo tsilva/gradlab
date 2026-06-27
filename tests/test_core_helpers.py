@@ -23,6 +23,7 @@ from rlab.artifacts import (
     explicit_arg_dests,
     init_wandb,
     load_model_metadata,
+    log_wandb_model_artifact,
     model_metadata_path,
     require_training_metadata,
     write_model_metadata,
@@ -1480,6 +1481,99 @@ class CommandAndArtifactTests(unittest.TestCase):
             ),
             "s3://wandb/TestGame-Platform/candidate-run/checkpoint/ppo_test_100_steps.zip",
         )
+
+    def test_wandb_artifact_logging_reports_stall_timing_metrics(self) -> None:
+        class FakeArtifact:
+            def __init__(self, name: str, type: str, metadata: dict[str, object]) -> None:
+                self.name = name
+                self.type = type
+                self.metadata = metadata
+                self.references: list[tuple[str, str]] = []
+                self.files: list[tuple[str, str]] = []
+
+            def add_reference(self, uri: str, name: str) -> None:
+                self.references.append((uri, name))
+
+            def add_file(self, path: str, name: str) -> None:
+                self.files.append((path, name))
+
+        class FakeRun:
+            id = "run-id"
+            path = ("entity", "project", "runs", "run-id")
+
+            def __init__(self) -> None:
+                self.artifact_logs: list[tuple[FakeArtifact, list[str] | None]] = []
+                self.metric_logs: list[tuple[dict[str, object], int | None]] = []
+
+            def log_artifact(
+                self, artifact: FakeArtifact, aliases: list[str] | None = None
+            ) -> None:
+                self.artifact_logs.append((artifact, aliases))
+
+            def log(self, payload: dict[str, object], step: int | None = None) -> None:
+                self.metric_logs.append((payload, step))
+
+        class FakeWandb:
+            def Artifact(self, name: str, type: str, metadata: dict[str, object]) -> FakeArtifact:
+                return FakeArtifact(name, type, metadata)
+
+        clock_values = iter([10.0, 10.0, 10.2, 10.2, 11.2, 11.2, 11.5, 11.5])
+        uploads: list[tuple[Path, str]] = []
+        args = argparse.Namespace(
+            game="TestGame-Platform",
+            run_name="candidate/run",
+            run_description="description",
+            no_wandb_artifacts=False,
+            wandb_artifact_storage_uri="s3://bucket/checkpoints",
+        )
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            model_path = Path(tmp_dir) / "ppo_test_100_steps.zip"
+            model_path.write_bytes(b"zip")
+            fake_run = FakeRun()
+
+            with (
+                patch.dict(sys.modules, {"wandb": FakeWandb()}),
+                patch(
+                    "rlab.artifacts.upload_s3_artifact",
+                    side_effect=lambda path, uri: uploads.append((path, uri)),
+                ),
+            ):
+                timing = log_wandb_model_artifact(
+                    fake_run,
+                    args,
+                    EnvConfig(game="TestGame-Platform"),
+                    model_path,
+                    kind="checkpoint",
+                    aliases=["latest", "step-100"],
+                    metric_step=100,
+                    local_save_seconds=2.0,
+                    stall_started_at=7.5,
+                    clock=lambda: next(clock_values),
+                )
+
+        self.assertIsNotNone(timing)
+        self.assertEqual(
+            uploads,
+            [
+                (
+                    model_path,
+                    "s3://bucket/checkpoints/TestGame-Platform/candidate-run/checkpoint/ppo_test_100_steps.zip",
+                )
+            ],
+        )
+        artifact, aliases = fake_run.artifact_logs[0]
+        self.assertEqual(artifact.references[0][1], "ppo_test_100_steps.zip")
+        self.assertEqual(aliases, ["latest", "step-100"])
+        payload, step = fake_run.metric_logs[0]
+        self.assertEqual(step, 100)
+        self.assertEqual(payload[metric_names.GLOBAL_STEP], 100)
+        self.assertAlmostEqual(payload[metric_names.TRAIN_ARTIFACT_METADATA_SECONDS], 0.2)
+        self.assertAlmostEqual(payload[metric_names.TRAIN_ARTIFACT_STORAGE_UPLOAD_SECONDS], 1.0)
+        self.assertAlmostEqual(payload[metric_names.TRAIN_ARTIFACT_WANDB_LOG_SECONDS], 0.3)
+        self.assertAlmostEqual(payload[metric_names.TRAIN_ARTIFACT_LOG_SECONDS], 1.5)
+        self.assertAlmostEqual(payload[metric_names.TRAIN_ARTIFACT_LOCAL_SAVE_SECONDS], 2.0)
+        self.assertAlmostEqual(payload[metric_names.TRAIN_ARTIFACT_STALL_SECONDS], 4.0)
 
     def test_model_metadata_sidecar_records_env_config(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:

@@ -14,9 +14,11 @@ from rlab.artifacts import wandb_artifact_storage_uri
 from rlab.eval_job_runner import normalize_eval_config
 from rlab.json_utils import json_safe
 from rlab.train_runner import (
+    GRACEFUL_STOP_SIGNAL,
     collect_result_metadata,
     normalize_train_config,
     parse_log_metrics,
+    request_graceful_stop,
     train_command_for_job,
     write_train_config_file,
 )
@@ -26,6 +28,18 @@ RUNTIME_IMAGE_REF = (
     "docker:ghcr.io/tsilva/rlab/rlab-train@sha256:"
     "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 )
+
+
+class FakeProcess:
+    def __init__(self, poll_result=None) -> None:
+        self.poll_result = poll_result
+        self.sent_signals = []
+
+    def poll(self):
+        return self.poll_result
+
+    def send_signal(self, signum) -> None:
+        self.sent_signals.append(signum)
 
 
 class FakeCursor:
@@ -68,6 +82,22 @@ class FakeConnection:
 
     def cursor(self):
         return self.cursor_obj
+
+
+class TrainRunnerSignalTests(unittest.TestCase):
+    @unittest.skipIf(GRACEFUL_STOP_SIGNAL is None, "SIGUSR1 is unavailable on this platform")
+    def test_request_graceful_stop_sends_sigusr1_to_running_process(self) -> None:
+        process = FakeProcess()
+
+        self.assertTrue(request_graceful_stop(process))
+
+        self.assertEqual(process.sent_signals, [GRACEFUL_STOP_SIGNAL])
+
+    def test_request_graceful_stop_skips_exited_process(self) -> None:
+        process = FakeProcess(poll_result=0)
+
+        self.assertFalse(request_graceful_stop(process))
+        self.assertEqual(process.sent_signals, [])
 
 
 class JobQueueTests(unittest.TestCase):

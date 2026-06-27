@@ -4,13 +4,15 @@ from __future__ import annotations
 
 import os
 import re
+import signal
+import time
 from pathlib import Path
 
 os.environ.setdefault("MPLCONFIGDIR", os.path.abspath(".matplotlib"))
 os.makedirs(os.environ["MPLCONFIGDIR"], exist_ok=True)
 
 from stable_baselines3 import PPO
-from stable_baselines3.common.callbacks import BaseCallback, CheckpointCallback
+from stable_baselines3.common.callbacks import BaseCallback
 from stable_baselines3.common.logger import HumanOutputFormat
 from stable_baselines3.common.utils import set_random_seed
 
@@ -21,11 +23,13 @@ from rlab.artifacts import (
     write_wandb_url,
 )
 from rlab.callbacks import (
+    CheckpointArtifactTimingState,
     DoneCounterCallback,
     LevelCompleteInfoCallback,
     RewardComponentDiagnosticsCallback,
     RolloutDiagnosticsCallback,
     ThroughputCallback,
+    TimedCheckpointCallback,
     WandbCheckpointArtifactCallback,
 )
 from rlab.cli import parse_train_args
@@ -48,6 +52,7 @@ from rlab.task_advantage import PerTaskAdvantagePPO, resolve_advantage_normaliza
 
 
 SB3_HUMAN_OUTPUT_MAX_LENGTH = 512
+GRACEFUL_STOP_SIGNAL = getattr(signal, "SIGUSR1", None)
 
 
 def checkpoint_prefix(game: str) -> str:
@@ -85,6 +90,34 @@ def checkpoint_save_frequency(checkpoint_freq: int, n_envs: int) -> int | None:
     return max(checkpoint_freq // max(n_envs, 1), 1)
 
 
+def signal_name(signum: int) -> str:
+    try:
+        return signal.Signals(signum).name
+    except ValueError:
+        return f"signal-{signum}"
+
+
+class GracefulStopFlag:
+    def __init__(self) -> None:
+        self.requested = False
+        self.reason = ""
+
+    def request(self, reason: str) -> None:
+        self.requested = True
+        self.reason = reason
+
+
+def install_graceful_stop_handler(stop_flag: GracefulStopFlag) -> int | None:
+    if GRACEFUL_STOP_SIGNAL is None:
+        return None
+
+    def handle_graceful_stop(signum, _frame) -> None:
+        stop_flag.request(signal_name(signum))
+
+    signal.signal(GRACEFUL_STOP_SIGNAL, handle_graceful_stop)
+    return int(GRACEFUL_STOP_SIGNAL)
+
+
 def disable_sb3_human_output_truncation(
     model, *, max_length: int = SB3_HUMAN_OUTPUT_MAX_LENGTH
 ) -> None:
@@ -111,6 +144,26 @@ class Sb3HumanOutputFormatCallback(BaseCallback):
         return True
 
 
+class GracefulStopCallback(BaseCallback):
+    def __init__(self, stop_flag: GracefulStopFlag) -> None:
+        super().__init__()
+        self.stop_flag = stop_flag
+        self.logged = False
+
+    def _on_step(self) -> bool:
+        if not self.stop_flag.requested:
+            return True
+        if not self.logged:
+            reason = self.stop_flag.reason or "graceful stop"
+            print(
+                f"graceful stop requested by {reason}; "
+                f"stopping at num_timesteps={self.num_timesteps}",
+                flush=True,
+            )
+            self.logged = True
+        return False
+
+
 def main() -> None:
     args = parse_train_args()
     assert_rom_imported(args.game)
@@ -132,6 +185,10 @@ def main() -> None:
     )
     config = resolve_mixed_state_config(config, n_envs=args.n_envs)
     wandb_run = init_wandb(args, run_dir, config)
+    graceful_stop_flag = GracefulStopFlag()
+    graceful_stop_signal = install_graceful_stop_handler(graceful_stop_flag)
+    if graceful_stop_signal is not None:
+        print(f"graceful stop signal: {signal_name(graceful_stop_signal)}", flush=True)
 
     env = make_training_vec_env(config=config, n_envs=args.n_envs, seed=args.seed)
     device = resolve_sb3_device(args.device)
@@ -177,6 +234,7 @@ def main() -> None:
             verbose=1,
         )
     callbacks = [
+        GracefulStopCallback(graceful_stop_flag),
         Sb3HumanOutputFormatCallback(),
         ThroughputCallback(),
         DoneCounterCallback(
@@ -196,21 +254,25 @@ def main() -> None:
         RewardComponentDiagnosticsCallback(),
     ]
     artifact_callback = None
+    checkpoint_timing_state = None
     checkpoint_save_freq = checkpoint_save_frequency(args.checkpoint_freq, args.n_envs)
     if checkpoint_save_freq is not None:
+        checkpoint_timing_state = CheckpointArtifactTimingState()
         artifact_callback = WandbCheckpointArtifactCallback(
             wandb_run,
             args,
             config,
             checkpoint_dir,
             scan_freq=checkpoint_save_freq,
+            timing_state=checkpoint_timing_state,
         )
         callbacks.extend(
             [
-                CheckpointCallback(
+                TimedCheckpointCallback(
                     save_freq=checkpoint_save_freq,
                     save_path=checkpoint_dir,
                     name_prefix=checkpoint_prefix(config.game),
+                    timing_state=checkpoint_timing_state,
                 ),
                 artifact_callback,
             ]
@@ -248,7 +310,24 @@ def main() -> None:
     final_model_path = Path(run_dir, "final_model.zip")
     try:
         model.learn(total_timesteps=args.timesteps, callback=callbacks, progress_bar=True)
+        if graceful_stop_flag.requested and checkpoint_save_freq is not None:
+            interrupted_checkpoint_path = (
+                Path(checkpoint_dir)
+                / f"{checkpoint_prefix(config.game)}_interrupted_{model.num_timesteps}_steps.zip"
+            )
+            save_started_at = time.perf_counter()
+            if checkpoint_timing_state is not None:
+                checkpoint_timing_state.begin(model.num_timesteps, save_started_at)
+            model.save(interrupted_checkpoint_path)
+            if checkpoint_timing_state is not None:
+                checkpoint_timing_state.record_save(
+                    model.num_timesteps,
+                    time.perf_counter() - save_started_at,
+                )
+            print(f"saved interrupted checkpoint {interrupted_checkpoint_path}", flush=True)
+        final_save_started_at = time.perf_counter()
         model.save(os.path.join(run_dir, "final_model"))
+        final_save_seconds = time.perf_counter() - final_save_started_at
         if artifact_callback is not None:
             artifact_callback.log_new_checkpoints()
         for best_model_path in sorted(Path(best_dir).glob("*.zip")):
@@ -259,14 +338,20 @@ def main() -> None:
                 best_model_path,
                 kind="best",
                 aliases=["best", "latest"],
+                metric_step=model.num_timesteps,
             )
+        final_aliases = ["final", "latest"]
+        if graceful_stop_flag.requested:
+            final_aliases.append("interrupted")
         log_wandb_model_artifact(
             wandb_run,
             args,
             config,
             final_model_path,
             kind="final",
-            aliases=["final", "latest"],
+            aliases=final_aliases,
+            metric_step=model.num_timesteps,
+            local_save_seconds=final_save_seconds,
         )
         write_wandb_url(wandb_run, run_dir)
     finally:

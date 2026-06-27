@@ -33,6 +33,8 @@ ARTIFACT_RE = re.compile(r"wandb artifact logged: (?P<name>[^ ]+) \((?P<location
 METRIC_ROW_RE = re.compile(r"\|\s+(?P<key>[A-Za-z0-9_./-]+)\s+\|\s+(?P<value>[^|]+?)\s+\|")
 WANDB_RUN_URL_RE = re.compile(r"https://wandb\.ai/\S+/runs/[A-Za-z0-9_-]+")
 RESUME_ARTIFACT_ROOT = Path("artifacts/train_resumes")
+GRACEFUL_STOP_SIGNAL = getattr(signal, "SIGUSR1", None)
+DEFAULT_CANCEL_GRACE_SECONDS = 30 * 60
 
 
 def strip_env_file_quotes(value: str) -> str:
@@ -169,6 +171,23 @@ def collect_result_metadata(job: dict[str, Any], log_path: Path) -> dict[str, An
     }
 
 
+def signal_label(signum: int) -> str:
+    try:
+        return signal.Signals(signum).name
+    except ValueError:
+        return f"signal-{signum}"
+
+
+def request_graceful_stop(process: subprocess.Popen[str]) -> bool:
+    if GRACEFUL_STOP_SIGNAL is None or process.poll() is not None:
+        return False
+    try:
+        process.send_signal(GRACEFUL_STOP_SIGNAL)
+    except ProcessLookupError:
+        return False
+    return True
+
+
 def terminate_process(process: subprocess.Popen[str], *, grace_seconds: float = 20.0) -> None:
     if process.poll() is not None:
         return
@@ -192,6 +211,7 @@ def run_training_job(
     heartbeat_interval: float,
     log_dir: Path,
     dry_run: bool = False,
+    cancel_grace_seconds: float = DEFAULT_CANCEL_GRACE_SECONDS,
 ) -> str:
     log_dir.mkdir(parents=True, exist_ok=True)
     log_stem = f"train_job_{job['id']}_{uuid.uuid4().hex[:8]}"
@@ -215,6 +235,7 @@ def run_training_job(
         return "succeeded"
 
     canceled = False
+    graceful_cancel_started_at = None
     drain_after_job = bool(job.get("drain_requested"))
     with log_path.open("w", encoding="utf-8") as log_file:
         process = subprocess.Popen(
@@ -272,9 +293,19 @@ def run_training_job(
                         canceled = True
                         break
                     if heartbeat.get("cancel_requested"):
-                        terminate_process(process)
                         canceled = True
-                        break
+                        if graceful_cancel_started_at is None:
+                            graceful_cancel_started_at = now
+                            if request_graceful_stop(process):
+                                signal_name = signal_label(int(GRACEFUL_STOP_SIGNAL))
+                                print(
+                                    f"train_job={job['id']} graceful_cancel_signal={signal_name} "
+                                    f"cancel_grace_seconds={cancel_grace_seconds:g}",
+                                    flush=True,
+                                )
+                            else:
+                                terminate_process(process)
+                                break
                     if heartbeat.get("drain_requested"):
                         drain_after_job = True
                     try:
@@ -293,6 +324,18 @@ def run_training_job(
                             f"job={job['id']}: {exc}",
                             flush=True,
                         )
+                if (
+                    graceful_cancel_started_at is not None
+                    and process.poll() is None
+                    and now - graceful_cancel_started_at >= cancel_grace_seconds
+                ):
+                    print(
+                        f"train_job={job['id']} graceful_cancel_timeout="
+                        f"{cancel_grace_seconds:g}; sending SIGTERM",
+                        flush=True,
+                    )
+                    terminate_process(process)
+                    break
         finally:
             if process.poll() is None:
                 terminate_process(process)
@@ -361,6 +404,7 @@ def worker_loop(args: argparse.Namespace, *, worker_id: str) -> None:
                 heartbeat_interval=args.heartbeat_seconds,
                 log_dir=Path(args.log_dir),
                 dry_run=args.dry_run,
+                cancel_grace_seconds=args.cancel_grace_seconds,
             )
             completed += 1
             print(f"worker={worker_id} train_job={job['id']} status={status}", flush=True)
@@ -405,6 +449,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--worker-id")
     parser.add_argument("--lease-seconds", type=int, default=1800)
     parser.add_argument("--heartbeat-seconds", type=float, default=30.0)
+    parser.add_argument(
+        "--cancel-grace-seconds",
+        type=float,
+        default=DEFAULT_CANCEL_GRACE_SECONDS,
+        help="Seconds to wait after graceful cancel signal before SIGTERM.",
+    )
     parser.add_argument("--poll-seconds", type=float, default=15.0)
     parser.add_argument("--max-jobs", type=int, default=0, help="0 means unlimited.")
     parser.add_argument(

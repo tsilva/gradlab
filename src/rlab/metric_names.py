@@ -7,6 +7,13 @@ GLOBAL_STEP = "global_step"
 THROUGHPUT_ROLLOUT_FPS = "throughput/rollout_fps"
 THROUGHPUT_LOOP_FPS = "throughput/loop_fps"
 
+TRAIN_ARTIFACT_STALL_SECONDS = "train/artifact/stall_seconds"
+TRAIN_ARTIFACT_LOCAL_SAVE_SECONDS = "train/artifact/local_save_seconds"
+TRAIN_ARTIFACT_LOG_SECONDS = "train/artifact/log_seconds"
+TRAIN_ARTIFACT_METADATA_SECONDS = "train/artifact/metadata_seconds"
+TRAIN_ARTIFACT_STORAGE_UPLOAD_SECONDS = "train/artifact/storage_upload_seconds"
+TRAIN_ARTIFACT_WANDB_LOG_SECONDS = "train/artifact/wandb_log_seconds"
+
 ROLLOUT_VALUE_PRED = "rollout/value_pred"
 ROLLOUT_VALUE_PRED_HIST = "rollout/value_pred/hist"
 ROLLOUT_ADVANTAGE = "rollout/advantage"
