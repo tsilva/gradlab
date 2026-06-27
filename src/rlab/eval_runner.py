@@ -6,6 +6,7 @@ from typing import Any
 
 import numpy as np
 import torch
+from tqdm.auto import tqdm
 
 from rlab.env import EnvConfig, make_eval_vec_env, make_rendered_replay_env
 from rlab.eval_metrics import (
@@ -28,6 +29,7 @@ def _evaluate_model_episodes_vector(
     max_steps: int,
     deterministic: bool,
     completion_x_threshold: int,
+    progress_bar: Any | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
     vec_config = replace(
         config,
@@ -107,6 +109,8 @@ def _evaluate_model_episodes_vector(
                         "final_info": serializable_info(info),
                     }
                     episode_results.append(result)
+                    if progress_bar is not None:
+                        progress_bar.update(1)
                     if best_episode_result is None or episode_rank(result) > episode_rank(
                         best_episode_result
                     ):
@@ -141,6 +145,8 @@ def evaluate_model_episodes(
     video_fps: float = 30.0,
     video_scale: int = 4,
     extra: dict[str, Any] | None = None,
+    progress: bool = False,
+    progress_description: str = "eval episodes",
 ) -> tuple[dict[str, Any], Path | None]:
     episode_results: list[dict[str, Any]] = []
     best_episode_result: dict[str, Any] | None = None
@@ -152,44 +158,53 @@ def evaluate_model_episodes(
     if n_envs > 1 and capture_best_video:
         raise ValueError("capture_best_video requires n_envs=1")
 
-    if n_envs == 1:
-        eval_env = make_eval_vec_env(config=config, n_envs=1, seed=seed)
-        try:
-            for episode_idx in range(episodes):
-                episode_seed = seed + episode_idx
-                torch.manual_seed(episode_seed)
-                result = run_eval_episode(
-                    eval_env,
-                    model,
-                    max_steps=max_steps,
-                    deterministic=deterministic,
-                    seed=episode_seed,
-                    completion_x_threshold=completion_x_threshold,
-                    capture_actions=capture_best_video,
-                    default_start_state=config.state,
-                )
-                actions = result.pop("actions")
-                result = {"episode": episode_idx + 1, "seed": episode_seed, **result}
-                episode_results.append(result)
-                if best_episode_result is None or episode_rank(result) > episode_rank(
-                    best_episode_result
-                ):
-                    best_episode_result = result
-                    best_episode_actions = actions
-                    best_episode_seed = episode_seed
-        finally:
-            eval_env.close()
-    else:
-        episode_results, best_episode_result = _evaluate_model_episodes_vector(
-            model=model,
-            config=config,
-            episodes=episodes,
-            seed=seed,
-            n_envs=n_envs,
-            max_steps=max_steps,
-            deterministic=deterministic,
-            completion_x_threshold=completion_x_threshold,
-        )
+    with tqdm(
+        total=episodes,
+        desc=progress_description,
+        unit="episode",
+        disable=not progress,
+        leave=True,
+    ) as progress_bar:
+        if n_envs == 1:
+            eval_env = make_eval_vec_env(config=config, n_envs=1, seed=seed)
+            try:
+                for episode_idx in range(episodes):
+                    episode_seed = seed + episode_idx
+                    torch.manual_seed(episode_seed)
+                    result = run_eval_episode(
+                        eval_env,
+                        model,
+                        max_steps=max_steps,
+                        deterministic=deterministic,
+                        seed=episode_seed,
+                        completion_x_threshold=completion_x_threshold,
+                        capture_actions=capture_best_video,
+                        default_start_state=config.state,
+                    )
+                    actions = result.pop("actions")
+                    result = {"episode": episode_idx + 1, "seed": episode_seed, **result}
+                    episode_results.append(result)
+                    progress_bar.update(1)
+                    if best_episode_result is None or episode_rank(result) > episode_rank(
+                        best_episode_result
+                    ):
+                        best_episode_result = result
+                        best_episode_actions = actions
+                        best_episode_seed = episode_seed
+            finally:
+                eval_env.close()
+        else:
+            episode_results, best_episode_result = _evaluate_model_episodes_vector(
+                model=model,
+                config=config,
+                episodes=episodes,
+                seed=seed,
+                n_envs=n_envs,
+                max_steps=max_steps,
+                deterministic=deterministic,
+                completion_x_threshold=completion_x_threshold,
+                progress_bar=progress_bar,
+            )
 
     metrics = summarize_episode_results(
         episode_results,

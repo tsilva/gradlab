@@ -24,6 +24,8 @@ from rlab.metric_names import (
     EVAL_DONE_MAX_STEPS_RATE,
     EVAL_DONE_UNCLASSIFIED,
     EVAL_DONE_UNCLASSIFIED_RATE,
+    EVAL_INFO_LEVEL_COMPLETE_RATE_MEAN_LAST,
+    EVAL_INFO_LEVEL_COMPLETE_RATE_MIN_LAST,
     EVAL_PROGRESS_LEVEL_X_MAX,
     EVAL_PROGRESS_LEVEL_X_MEAN,
     EVAL_PROGRESS_X_MAX,
@@ -105,8 +107,12 @@ def eval_done_from_metrics(episode_results: list[dict[str, Any]]) -> dict[str, i
             },
         )
     if level_change_rates:
-        metrics[EVAL_DONE_LEVEL_CHANGE_FROM_RATE_MIN] = min(level_change_rates)
-        metrics[EVAL_DONE_LEVEL_CHANGE_FROM_RATE_MEAN] = float(np.mean(level_change_rates))
+        level_change_rate_min = min(level_change_rates)
+        level_change_rate_mean = float(np.mean(level_change_rates))
+        metrics[EVAL_DONE_LEVEL_CHANGE_FROM_RATE_MIN] = level_change_rate_min
+        metrics[EVAL_DONE_LEVEL_CHANGE_FROM_RATE_MEAN] = level_change_rate_mean
+        metrics[EVAL_INFO_LEVEL_COMPLETE_RATE_MIN_LAST] = level_change_rate_min
+        metrics[EVAL_INFO_LEVEL_COMPLETE_RATE_MEAN_LAST] = level_change_rate_mean
     return metrics
 
 
@@ -395,6 +401,8 @@ class RetroEvalCallback(BaseCallback):
         self.logger.record(EVAL_DEATH_COUNT, metrics["death_count"])
         for key, value in flat_numeric_metrics(metrics, "eval/done/").items():
             self.logger.record(key, value)
+        for key, value in flat_numeric_metrics(metrics, "eval/info/").items():
+            self.logger.record(key, value)
         self.logger.record("time/total_timesteps", self.num_timesteps)
         self.logger.dump(self.num_timesteps)
 
@@ -445,6 +453,7 @@ class RetroEvalCallback(BaseCallback):
             EVAL_BEST_X: metrics["best_episode"]["max_x_pos"],
         }
         payload.update(flat_numeric_metrics(metrics, "eval/done/"))
+        payload.update(flat_numeric_metrics(metrics, "eval/info/"))
         if death_x_positions:
             payload[EVAL_DEATH_X_HIST] = wandb.Histogram(death_x_positions)
         if video_path is not None and video_path.is_file():

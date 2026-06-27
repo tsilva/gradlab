@@ -23,6 +23,7 @@ from rlab.metric_names import (
     TRAIN_DONE_ALL,
     TRAIN_DONE_MAX_STEPS,
     TRAIN_DONE_UNCLASSIFIED,
+    TRAIN_INFO_LEVEL_COMPLETE_RATE_MEAN_LAST,
     TRAIN_INFO_LEVEL_COMPLETE_RATE_MIN_LAST,
     TRAIN_REWARD_COMPONENT_ROOT,
     TRAIN_REWARD_SHARE_ROOT,
@@ -669,6 +670,9 @@ class LevelCompleteInfoCallback(BaseCallback):
             payload[rate_metric] = rate
             self.latest_rates[rate_metric] = rate
             payload[TRAIN_INFO_LEVEL_COMPLETE_RATE_MIN_LAST] = min(self.latest_rates.values())
+            payload[TRAIN_INFO_LEVEL_COMPLETE_RATE_MEAN_LAST] = sum(self.latest_rates.values()) / len(
+                self.latest_rates
+            )
         return payload
 
     def update_source_after_attempt(

@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import argparse
+from collections import deque
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass, field
 import json
 import os
 import queue
@@ -22,10 +25,12 @@ from rlab.job_queue import (
     finish_train_job,
     heartbeat_train_job,
     new_worker_id,
+    normalize_run_target,
     print_status,
     queue_status,
     record_running_train_result,
 )
+from rlab.runtime_refs import normalize_runtime_image_ref
 from rlab.wandb_artifacts import artifact_download_dir, download_model_artifact
 
 
@@ -35,6 +40,266 @@ WANDB_RUN_URL_RE = re.compile(r"https://wandb\.ai/\S+/runs/[A-Za-z0-9_-]+")
 RESUME_ARTIFACT_ROOT = Path("artifacts/train_resumes")
 GRACEFUL_STOP_SIGNAL = getattr(signal, "SIGUSR1", None)
 DEFAULT_CANCEL_GRACE_SECONDS = 30 * 60
+DEFAULT_AUTOSCALE_SAMPLE_SECONDS = 30.0
+DEFAULT_AUTOSCALE_WINDOW_SIZE = 5
+DEFAULT_AUTOSCALE_COOLDOWN_SECONDS = 180.0
+DEFAULT_WORKERS = 4
+DEFAULT_MIN_WORKERS = 1
+DEFAULT_MAX_WORKERS = 32
+AUTOSCALE_SCALE_UP_THRESHOLDS = {
+    "cpu_percent": 80.0,
+    "memory_percent": 80.0,
+    "gpu_percent": 85.0,
+    "vram_percent": 85.0,
+}
+AUTOSCALE_SCALE_DOWN_THRESHOLDS = {
+    "cpu_percent": 90.0,
+    "memory_percent": 90.0,
+    "gpu_percent": 95.0,
+    "vram_percent": 95.0,
+}
+WORKER_IDLE = "idle"
+WORKER_CLAIMING = "claiming"
+WORKER_RUNNING = "running"
+WORKER_RETIRING = "retiring"
+WORKER_EXITED = "exited"
+
+
+@dataclass(frozen=True)
+class ResourceSample:
+    cpu_percent: float | None = None
+    memory_percent: float | None = None
+    gpu_percent: float | None = None
+    vram_percent: float | None = None
+    error: str | None = None
+
+    def values(self) -> dict[str, float]:
+        return {
+            key: float(value)
+            for key, value in {
+                "cpu_percent": self.cpu_percent,
+                "memory_percent": self.memory_percent,
+                "gpu_percent": self.gpu_percent,
+                "vram_percent": self.vram_percent,
+            }.items()
+            if value is not None
+        }
+
+    def missing_resources(self, resources: Mapping[str, float]) -> tuple[str, ...]:
+        return tuple(key for key in resources if getattr(self, key) is None)
+
+
+@dataclass(frozen=True)
+class WorkerBounds:
+    starter_workers: int
+    min_workers: int
+    max_workers: int
+
+
+@dataclass(frozen=True)
+class AutoscaleConfig:
+    starter_workers: int
+    min_workers: int
+    max_workers: int
+    window_size: int = DEFAULT_AUTOSCALE_WINDOW_SIZE
+    cooldown_seconds: float = DEFAULT_AUTOSCALE_COOLDOWN_SECONDS
+    scale_up_thresholds: Mapping[str, float] = field(
+        default_factory=lambda: dict(AUTOSCALE_SCALE_UP_THRESHOLDS)
+    )
+    scale_down_thresholds: Mapping[str, float] = field(
+        default_factory=lambda: dict(AUTOSCALE_SCALE_DOWN_THRESHOLDS)
+    )
+
+
+@dataclass(frozen=True)
+class AutoscaleDecision:
+    action: str
+    target_workers: int
+    reason: str
+    averages: dict[str, float]
+    missing_resources: tuple[str, ...] = ()
+
+
+class AutoscaleController:
+    def __init__(self, config: AutoscaleConfig) -> None:
+        if config.window_size < 1:
+            raise ValueError("autoscale window size must be at least 1")
+        self.config = config
+        self.target_workers = config.starter_workers
+        self.samples: deque[ResourceSample] = deque(maxlen=config.window_size)
+        self.last_scale_at: float | None = None
+        self.last_decision = AutoscaleDecision(
+            action="hold",
+            target_workers=self.target_workers,
+            reason="starting",
+            averages={},
+        )
+
+    @property
+    def window_ready(self) -> bool:
+        return len(self.samples) >= self.config.window_size
+
+    def observe(self, sample: ResourceSample) -> None:
+        self.samples.append(sample)
+
+    def averages(self) -> dict[str, float]:
+        sums: dict[str, float] = {}
+        counts: dict[str, int] = {}
+        for sample in self.samples:
+            for key, value in sample.values().items():
+                sums[key] = sums.get(key, 0.0) + value
+                counts[key] = counts.get(key, 0) + 1
+        return {key: sums[key] / counts[key] for key in sorted(sums)}
+
+    def decide(
+        self,
+        *,
+        pending_jobs: bool,
+        active_workers: int,
+        now: float,
+    ) -> AutoscaleDecision:
+        averages = self.averages()
+        missing_for_up = tuple(
+            key for key in self.config.scale_up_thresholds if key not in averages
+        )
+        if not self.samples:
+            return self._remember("hold", "no resource samples", averages, missing_for_up)
+        latest = self.samples[-1]
+        if latest.error:
+            return self._remember("hold", f"resource sample failed: {latest.error}", averages, missing_for_up)
+        if not self.window_ready:
+            return self._remember("hold", "warming up resource window", averages, missing_for_up)
+        if self.last_scale_at is not None and now - self.last_scale_at < self.config.cooldown_seconds:
+            return self._remember("hold", "autoscale cooldown active", averages, missing_for_up)
+
+        saturated = [
+            key
+            for key, threshold in self.config.scale_down_thresholds.items()
+            if averages.get(key) is not None and averages[key] >= threshold
+        ]
+        if saturated and self.target_workers > self.config.min_workers:
+            self.target_workers -= 1
+            self.last_scale_at = now
+            return self._remember(
+                "scale_down",
+                "saturated: " + ",".join(saturated),
+                averages,
+                missing_for_up,
+            )
+
+        if self.target_workers >= self.config.max_workers:
+            return self._remember("hold", "at max workers", averages, missing_for_up)
+        if not pending_jobs:
+            return self._remember("hold", "no pending queue demand", averages, missing_for_up)
+        if active_workers < self.target_workers:
+            return self._remember("hold", "active workers below target", averages, missing_for_up)
+        if missing_for_up:
+            return self._remember(
+                "hold",
+                "missing resources for scale up: " + ",".join(missing_for_up),
+                averages,
+                missing_for_up,
+            )
+        headroom = all(
+            averages[key] < threshold
+            for key, threshold in self.config.scale_up_thresholds.items()
+        )
+        if headroom:
+            self.target_workers += 1
+            self.last_scale_at = now
+            return self._remember("scale_up", "resource headroom and pending demand", averages)
+        return self._remember("hold", "resource headroom insufficient", averages, missing_for_up)
+
+    def _remember(
+        self,
+        action: str,
+        reason: str,
+        averages: dict[str, float],
+        missing_resources: tuple[str, ...] = (),
+    ) -> AutoscaleDecision:
+        self.last_decision = AutoscaleDecision(
+            action=action,
+            target_workers=self.target_workers,
+            reason=reason,
+            averages=averages,
+            missing_resources=missing_resources,
+        )
+        return self.last_decision
+
+
+@dataclass
+class WorkerSlot:
+    index: int
+    worker_id: str
+    state: str = WORKER_IDLE
+    retire_requested: bool = False
+    exit_reason: str | None = None
+    exception: str | None = None
+    thread: threading.Thread | None = None
+    lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
+
+    def set_state(self, state: str) -> None:
+        with self.lock:
+            if self.retire_requested and state == WORKER_IDLE:
+                self.state = WORKER_RETIRING
+            else:
+                self.state = state
+
+    def request_retire(self) -> None:
+        with self.lock:
+            self.retire_requested = True
+            if self.state in {WORKER_IDLE, WORKER_CLAIMING}:
+                self.state = WORKER_RETIRING
+
+    def should_retire(self) -> bool:
+        with self.lock:
+            return self.retire_requested
+
+    def snapshot(self) -> dict[str, Any]:
+        with self.lock:
+            return {
+                "index": self.index,
+                "worker_id": self.worker_id,
+                "state": self.state,
+                "retire_requested": self.retire_requested,
+                "exit_reason": self.exit_reason,
+                "exception": self.exception,
+            }
+
+    def mark_exited(self, reason: str, *, exception: str | None = None) -> None:
+        with self.lock:
+            self.state = WORKER_EXITED
+            self.exit_reason = reason
+            if exception:
+                self.exception = exception
+
+
+def live_worker_slots(slots: list[WorkerSlot]) -> list[WorkerSlot]:
+    return [slot for slot in slots if slot.snapshot()["state"] != WORKER_EXITED]
+
+
+def mark_surplus_workers_for_retirement(slots: list[WorkerSlot], *, target_workers: int) -> tuple[str, ...]:
+    live_slots = live_worker_slots(slots)
+    surplus = max(0, len(live_slots) - target_workers)
+    if surplus <= 0:
+        return ()
+    idle_slots = [
+        slot
+        for slot in live_slots
+        if not slot.should_retire() and slot.snapshot()["state"] in {WORKER_IDLE, WORKER_CLAIMING, WORKER_RETIRING}
+    ]
+    busy_slots = [
+        slot
+        for slot in live_slots
+        if not slot.should_retire() and slot.snapshot()["state"] == WORKER_RUNNING
+    ]
+    retired: list[str] = []
+    for slot in [*idle_slots, *busy_slots]:
+        if len(retired) >= surplus:
+            break
+        slot.request_retire()
+        retired.append(slot.worker_id)
+    return tuple(retired)
 
 
 def strip_env_file_quotes(value: str) -> str:
@@ -91,6 +356,150 @@ def write_train_config_file(job: dict[str, Any], path: Path) -> Path:
 
 def train_command_for_job(config_path: Path) -> list[str]:
     return [sys.executable, "-m", "rlab.train", "--train-config-json", str(config_path)]
+
+
+def proc_stat_cpu_values(line: str) -> list[int]:
+    parts = line.split()
+    if parts and parts[0] == "cpu":
+        parts = parts[1:]
+    return [int(float(part)) for part in parts]
+
+
+def cpu_percent_from_proc_stat(first: str, second: str) -> float | None:
+    try:
+        before = proc_stat_cpu_values(first)
+        after = proc_stat_cpu_values(second)
+    except ValueError:
+        return None
+    if len(before) < 8 or len(after) < 8:
+        return None
+    idle_before = before[3] + before[4]
+    idle_after = after[3] + after[4]
+    total_before = sum(before[:8])
+    total_after = sum(after[:8])
+    total_delta = total_after - total_before
+    idle_delta = idle_after - idle_before
+    if total_delta <= 0:
+        return None
+    return max(0.0, min(100.0, (total_delta - idle_delta) * 100.0 / total_delta))
+
+
+def memory_percent_from_meminfo(text: str) -> float | None:
+    values: dict[str, float] = {}
+    for line in text.splitlines():
+        parts = line.split()
+        if len(parts) < 2:
+            continue
+        key = parts[0].rstrip(":")
+        try:
+            values[key] = float(parts[1])
+        except ValueError:
+            continue
+    total = values.get("MemTotal")
+    available = values.get("MemAvailable")
+    if not total or available is None:
+        return None
+    return max(0.0, min(100.0, (total - available) * 100.0 / total))
+
+
+def parse_nvidia_smi_resource_output(output: str) -> tuple[float | None, float | None]:
+    for line in output.splitlines():
+        parts = [part.strip() for part in line.split(",")]
+        if len(parts) < 3:
+            continue
+        try:
+            gpu_util = float(parts[0])
+            memory_used = float(parts[1])
+            memory_total = float(parts[2])
+        except ValueError:
+            continue
+        if memory_total <= 0:
+            return gpu_util, None
+        return gpu_util, max(0.0, min(100.0, memory_used * 100.0 / memory_total))
+    return None, None
+
+
+def local_resource_sample() -> ResourceSample:
+    errors: list[str] = []
+    cpu_percent = None
+    memory_percent = None
+    gpu_percent = None
+    vram_percent = None
+    try:
+        with Path("/proc/stat").open(encoding="utf-8") as handle:
+            first_cpu = next((line for line in handle if line.startswith("cpu ")), "")
+        time.sleep(0.2)
+        with Path("/proc/stat").open(encoding="utf-8") as handle:
+            second_cpu = next((line for line in handle if line.startswith("cpu ")), "")
+        cpu_percent = cpu_percent_from_proc_stat(first_cpu, second_cpu)
+        if cpu_percent is None:
+            errors.append("cpu")
+    except OSError as exc:
+        errors.append(f"cpu:{exc}")
+    try:
+        memory_percent = memory_percent_from_meminfo(Path("/proc/meminfo").read_text(encoding="utf-8"))
+        if memory_percent is None:
+            errors.append("memory")
+    except OSError as exc:
+        errors.append(f"memory:{exc}")
+    try:
+        result = subprocess.run(
+            [
+                "nvidia-smi",
+                "--query-gpu=utilization.gpu,memory.used,memory.total",
+                "--format=csv,noheader,nounits",
+            ],
+            capture_output=True,
+            check=False,
+            text=True,
+            timeout=3.0,
+        )
+        if result.returncode == 0:
+            gpu_percent, vram_percent = parse_nvidia_smi_resource_output(result.stdout)
+            if gpu_percent is None:
+                errors.append("gpu")
+            if vram_percent is None:
+                errors.append("vram")
+        else:
+            errors.append("nvidia-smi")
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        errors.append(f"nvidia-smi:{exc}")
+    return ResourceSample(
+        cpu_percent=cpu_percent,
+        memory_percent=memory_percent,
+        gpu_percent=gpu_percent,
+        vram_percent=vram_percent,
+        error="; ".join(errors) if errors else None,
+    )
+
+
+def matching_pending_train_job_exists(conn, args: argparse.Namespace) -> bool:
+    profile_id = str(args.profile).strip() if args.profile else None
+    runtime_image_ref = normalize_runtime_image_ref(args.runtime_image_ref)
+    run_target = normalize_run_target(args.run_target)
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT EXISTS (
+              SELECT 1
+              FROM train_jobs
+              WHERE
+                (%(profile_id)s IS NULL OR profile_id = %(profile_id)s)
+                AND runtime_image_ref = %(runtime_image_ref)s
+                AND (run_target IS NULL OR run_target = %(run_target)s)
+                AND cancel_requested = FALSE
+                AND status = 'pending'
+              LIMIT 1
+            ) AS has_pending
+            """,
+            {
+                "profile_id": profile_id,
+                "runtime_image_ref": runtime_image_ref,
+                "run_target": run_target,
+            },
+        )
+        row = cur.fetchone()
+    return bool(row and row.get("has_pending"))
 
 
 def read_text_file(path: Path) -> str | None:
@@ -378,11 +787,25 @@ def run_training_job(
     return "failed"
 
 
-def worker_loop(args: argparse.Namespace, *, worker_id: str) -> None:
+def sleep_with_retire_check(seconds: float, slot: WorkerSlot | None = None) -> None:
+    deadline = time.monotonic() + max(0.0, seconds)
+    while time.monotonic() < deadline:
+        if slot is not None and slot.should_retire():
+            return
+        time.sleep(min(0.5, max(0.0, deadline - time.monotonic())))
+
+
+def worker_loop(args: argparse.Namespace, *, worker_id: str, slot: WorkerSlot | None = None) -> str:
     conn = connect(database_url(args.direct))
     completed = 0
+    exit_reason = "closed"
     try:
         while args.max_jobs <= 0 or completed < args.max_jobs:
+            if slot is not None and slot.should_retire():
+                exit_reason = "retired"
+                return "retired"
+            if slot is not None:
+                slot.set_state(WORKER_CLAIMING)
             job = claim_train_job(
                 conn,
                 profile_id=args.profile,
@@ -392,10 +815,15 @@ def worker_loop(args: argparse.Namespace, *, worker_id: str) -> None:
                 lease_seconds=args.lease_seconds,
             )
             if job is None:
+                if slot is not None:
+                    slot.set_state(WORKER_IDLE)
                 if args.once:
-                    return
-                time.sleep(args.poll_seconds)
+                    exit_reason = "once_empty"
+                    return "once_empty"
+                sleep_with_retire_check(args.poll_seconds, slot)
                 continue
+            if slot is not None:
+                slot.set_state(WORKER_RUNNING)
             status = run_training_job(
                 conn,
                 job=job,
@@ -408,14 +836,233 @@ def worker_loop(args: argparse.Namespace, *, worker_id: str) -> None:
             )
             completed += 1
             print(f"worker={worker_id} train_job={job['id']} status={status}", flush=True)
+            if slot is not None:
+                slot.set_state(WORKER_IDLE)
             if job.get("drain_requested") or status.endswith("_drained"):
-                return
+                exit_reason = "drained"
+                return "drained"
+            if slot is not None and slot.should_retire():
+                exit_reason = "retired"
+                return "retired"
+        exit_reason = "max_jobs"
+        return "max_jobs"
     finally:
+        if slot is not None:
+            slot.mark_exited(exit_reason)
         conn.close()
 
 
+def resolve_worker_bounds(args: argparse.Namespace) -> WorkerBounds:
+    workers = int(args.workers)
+    if workers < 1:
+        raise SystemExit("--workers must be at least 1")
+    if not getattr(args, "autoscale", False):
+        return WorkerBounds(
+            starter_workers=workers,
+            min_workers=workers,
+            max_workers=workers,
+        )
+    min_workers = int(args.min_workers)
+    max_workers = int(args.max_workers)
+    if min_workers < 1:
+        raise SystemExit("--min-workers must be at least 1")
+    if not min_workers <= workers <= max_workers:
+        raise SystemExit("autoscale requires 1 <= --min-workers <= --workers <= --max-workers")
+    if int(args.autoscale_window_size) < 1:
+        raise SystemExit("--autoscale-window-size must be at least 1")
+    if float(args.autoscale_sample_seconds) <= 0:
+        raise SystemExit("--autoscale-sample-seconds must be positive")
+    if float(args.autoscale_cooldown_seconds) < 0:
+        raise SystemExit("--autoscale-cooldown-seconds must be non-negative")
+    return WorkerBounds(
+        starter_workers=workers,
+        min_workers=min_workers,
+        max_workers=max_workers,
+    )
+
+
+def worker_state_counts(slots: list[WorkerSlot]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for slot in slots:
+        state = str(slot.snapshot()["state"])
+        counts[state] = counts.get(state, 0) + 1
+    return counts
+
+
+def autoscale_status_payload(
+    *,
+    bounds: WorkerBounds,
+    controller: AutoscaleController,
+    slots: list[WorkerSlot],
+    pending_jobs: bool,
+    decision: AutoscaleDecision,
+    retired_workers: tuple[str, ...] = (),
+) -> dict[str, Any]:
+    live_slots = live_worker_slots(slots)
+    return {
+        "updated_at_unix": time.time(),
+        "starter_workers": bounds.starter_workers,
+        "min_workers": bounds.min_workers,
+        "max_workers": bounds.max_workers,
+        "target_workers": controller.target_workers,
+        "active_workers": len(live_slots),
+        "running_workers": sum(1 for slot in live_slots if slot.snapshot()["state"] == WORKER_RUNNING),
+        "retiring_workers": sum(1 for slot in live_slots if slot.snapshot()["retire_requested"]),
+        "pending_jobs": pending_jobs,
+        "window_ready": controller.window_ready,
+        "sample_count": len(controller.samples),
+        "rolling_averages": decision.averages,
+        "last_decision": decision.action,
+        "last_reason": decision.reason,
+        "missing_resources": list(decision.missing_resources),
+        "retired_workers": list(retired_workers),
+        "state_counts": worker_state_counts(slots),
+        "workers": [slot.snapshot() for slot in slots],
+    }
+
+
+def write_autoscale_status(path: Path, payload: Mapping[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    tmp_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    tmp_path.replace(path)
+
+
+def start_autoscale_worker(
+    args: argparse.Namespace,
+    *,
+    slot: WorkerSlot,
+) -> None:
+    def run() -> None:
+        try:
+            worker_loop(args, worker_id=slot.worker_id, slot=slot)
+        except Exception as exc:
+            slot.mark_exited("error", exception=str(exc))
+            print(f"worker={slot.worker_id} autoscale_worker_error={exc}", flush=True)
+
+    thread = threading.Thread(target=run, name=slot.worker_id)
+    slot.thread = thread
+    thread.start()
+
+
+def spawn_autoscale_worker(
+    args: argparse.Namespace,
+    slots: list[WorkerSlot],
+    *,
+    index: int,
+) -> WorkerSlot:
+    worker_prefix = args.worker_id or "train-runner"
+    slot = WorkerSlot(
+        index=index,
+        worker_id=f"{worker_prefix}-{index}-{uuid.uuid4().hex[:8]}",
+    )
+    slots.append(slot)
+    start_autoscale_worker(args, slot=slot)
+    return slot
+
+
+def run_autoscale_pool(args: argparse.Namespace, bounds: WorkerBounds) -> int:
+    log_dir = Path(args.log_dir)
+    log_dir.mkdir(parents=True, exist_ok=True)
+    status_path = log_dir / "autoscale_status.json"
+    controller = AutoscaleController(
+        AutoscaleConfig(
+            starter_workers=bounds.starter_workers,
+            min_workers=bounds.min_workers,
+            max_workers=bounds.max_workers,
+            window_size=int(args.autoscale_window_size),
+            cooldown_seconds=float(args.autoscale_cooldown_seconds),
+        )
+    )
+    resource_probe: Callable[[], ResourceSample] = getattr(args, "resource_probe", local_resource_sample)
+    pending_probe: Callable[[Any, argparse.Namespace], bool] = getattr(
+        args,
+        "pending_probe",
+        matching_pending_train_job_exists,
+    )
+    slots: list[WorkerSlot] = []
+    next_worker_index = 0
+    for _ in range(bounds.starter_workers):
+        spawn_autoscale_worker(args, slots, index=next_worker_index)
+        next_worker_index += 1
+
+    conn = connect(database_url(args.direct))
+    next_sample_at = 0.0
+    exit_status = 0
+    try:
+        while live_worker_slots(slots):
+            now = time.monotonic()
+            for slot in slots:
+                if slot.thread is not None and not slot.thread.is_alive():
+                    slot.thread.join(timeout=0)
+            errors = [slot.snapshot() for slot in slots if slot.snapshot().get("exception")]
+            if errors:
+                exit_status = 1
+            if now >= next_sample_at:
+                sample = resource_probe()
+                controller.observe(sample)
+                try:
+                    pending_jobs = pending_probe(conn, args)
+                except Exception as exc:
+                    pending_jobs = False
+                    sample = ResourceSample(error=f"pending queue check failed: {exc}")
+                    controller.observe(sample)
+                    print(f"warning: autoscale pending queue check failed: {exc}", flush=True)
+                live_count = len(live_worker_slots(slots))
+                decision = controller.decide(
+                    pending_jobs=pending_jobs,
+                    active_workers=live_count,
+                    now=now,
+                )
+                retired_workers: tuple[str, ...] = ()
+                if decision.action == "scale_up":
+                    spawn_autoscale_worker(args, slots, index=next_worker_index)
+                    next_worker_index += 1
+                    print(
+                        f"autoscale action=scale_up target_workers={decision.target_workers} "
+                        f"reason={decision.reason}",
+                        flush=True,
+                    )
+                elif decision.action == "scale_down":
+                    retired_workers = mark_surplus_workers_for_retirement(
+                        slots,
+                        target_workers=decision.target_workers,
+                    )
+                    print(
+                        f"autoscale action=scale_down target_workers={decision.target_workers} "
+                        f"retiring={len(retired_workers)} reason={decision.reason}",
+                        flush=True,
+                    )
+                elif decision.reason.startswith("resource sample failed"):
+                    print(f"warning: autoscale {decision.reason}", flush=True)
+                write_autoscale_status(
+                    status_path,
+                    autoscale_status_payload(
+                        bounds=bounds,
+                        controller=controller,
+                        slots=slots,
+                        pending_jobs=pending_jobs,
+                        decision=decision,
+                        retired_workers=retired_workers,
+                    ),
+                )
+                next_sample_at = now + float(args.autoscale_sample_seconds)
+            sleep_with_retire_check(min(1.0, float(args.autoscale_sample_seconds)))
+    finally:
+        conn.close()
+        for slot in live_worker_slots(slots):
+            slot.request_retire()
+        for slot in slots:
+            if slot.thread is not None:
+                slot.thread.join(timeout=5.0)
+    return exit_status
+
+
 def run_pool(args: argparse.Namespace) -> int:
-    workers = max(args.workers, 1)
+    bounds = resolve_worker_bounds(args)
+    if args.autoscale:
+        return run_autoscale_pool(args, bounds)
+    workers = bounds.starter_workers
     if workers == 1:
         worker_loop(args, worker_id=args.worker_id or new_worker_id("train-runner"))
         return 0
@@ -445,7 +1092,47 @@ def build_parser() -> argparse.ArgumentParser:
         "--run-target",
         help="Canonical compute target this runner is serving; claims targetless jobs too.",
     )
-    parser.add_argument("--workers", type=int, default=1)
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=DEFAULT_WORKERS,
+        help="Fixed worker count, or autoscale starter count.",
+    )
+    parser.add_argument(
+        "--autoscale",
+        action="store_true",
+        help="Dynamically adjust desired workers between --min-workers and --max-workers.",
+    )
+    parser.add_argument(
+        "--min-workers",
+        type=int,
+        default=DEFAULT_MIN_WORKERS,
+        help="Minimum workers when --autoscale is enabled.",
+    )
+    parser.add_argument(
+        "--max-workers",
+        type=int,
+        default=DEFAULT_MAX_WORKERS,
+        help="Maximum workers when --autoscale is enabled.",
+    )
+    parser.add_argument(
+        "--autoscale-sample-seconds",
+        type=float,
+        default=DEFAULT_AUTOSCALE_SAMPLE_SECONDS,
+        help="Seconds between autoscale resource samples.",
+    )
+    parser.add_argument(
+        "--autoscale-window-size",
+        type=int,
+        default=DEFAULT_AUTOSCALE_WINDOW_SIZE,
+        help="Number of resource samples in the rolling autoscale window.",
+    )
+    parser.add_argument(
+        "--autoscale-cooldown-seconds",
+        type=float,
+        default=DEFAULT_AUTOSCALE_COOLDOWN_SECONDS,
+        help="Minimum seconds between autoscale target changes.",
+    )
     parser.add_argument("--worker-id")
     parser.add_argument("--lease-seconds", type=int, default=1800)
     parser.add_argument("--heartbeat-seconds", type=float, default=30.0)

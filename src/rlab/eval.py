@@ -28,7 +28,6 @@ from rlab.env_config import env_config_from_args
 from rlab.eval_metrics import (
     flat_numeric_metrics,
     is_level_complete,
-    run_eval_episode,
     summarize_episode_results,
 )
 from rlab.eval_runner import evaluate_model_episodes
@@ -114,6 +113,10 @@ def eval_seed_for_checkpoint(args: argparse.Namespace, checkpoint_step: int) -> 
     return args.seed
 
 
+def default_eval_n_envs() -> int:
+    return max(os.cpu_count() or 1, 1)
+
+
 def evaluate_checkpoint(
     args: argparse.Namespace,
     model_path: Path,
@@ -121,7 +124,13 @@ def evaluate_checkpoint(
     artifact_name: str,
 ) -> tuple[dict[str, Any], Path | None]:
     model = PPO.load(model_path, device=resolve_sb3_device(args.device))
-    config = resolve_env_config(env_config_from_args(args, max_episode_steps_attr="max_steps"))
+    config = resolve_env_config(
+        env_config_from_args(
+            args,
+            max_episode_steps_attr="max_steps",
+            include_states=True,
+        )
+    )
     eval_seed = eval_seed_for_checkpoint(args, checkpoint_step)
     video_path = (
         Path(args.eval_dir)
@@ -139,10 +148,13 @@ def evaluate_checkpoint(
         max_steps=args.max_steps,
         deterministic=eval_deterministic(args),
         completion_x_threshold=config.completion_x_threshold,
+        n_envs=args.n_envs,
         capture_best_video=args.record_best_video,
         video_path=video_path,
         video_fps=args.video_fps,
         video_scale=args.video_scale,
+        progress=args.progress,
+        progress_description=f"eval checkpoint {checkpoint_step}",
         extra={
             "checkpoint_step": checkpoint_step,
             "checkpoint_artifact": artifact_name,
@@ -219,6 +231,7 @@ def log_wandb_eval(wandb_run, metrics: dict[str, Any], video_path: Path | None) 
         EVAL_CONFIG_HUD_CROP_TOP: metrics["hud_crop_top"],
     }
     payload.update(flat_numeric_metrics(metrics, "eval/done/"))
+    payload.update(flat_numeric_metrics(metrics, "eval/info/"))
     death_x_positions = [
         int(episode["death_x_pos"])
         for episode in metrics["episode_results"]
@@ -228,7 +241,10 @@ def log_wandb_eval(wandb_run, metrics: dict[str, Any], video_path: Path | None) 
         payload[EVAL_DEATH_X_HIST] = wandb.Histogram(death_x_positions)
     if video_path is not None and video_path.is_file():
         payload[EVAL_BEST_VIDEO] = wandb.Video(str(video_path), format="mp4")
-    wandb_run.log(payload, step=int(metrics["checkpoint_step"]))
+    # Do not force the W&B history step to the checkpoint step. Artifact evals
+    # often resume training runs whose history cursor has already advanced past
+    # the checkpoint, and W&B drops retroactive partial history records.
+    wandb_run.log(payload)
 
 
 def promote_best_artifact(
@@ -359,11 +375,21 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--device", default="auto", choices=["auto", "cpu", "cuda", "mps"])
     parser.add_argument(
+        "--n-envs",
+        type=int,
+        default=default_eval_n_envs(),
+        help="Number of vectorized eval envs; defaults to the logical CPU core count.",
+    )
+    parser.add_argument(
         "--deterministic",
         action="store_true",
         help="Use deterministic argmax actions instead of stochastic policy sampling.",
     )
-    parser.add_argument("--record-best-video", action="store_true")
+    parser.add_argument(
+        "--record-best-video",
+        action="store_true",
+        help="Temporarily disabled for rlab-eval.",
+    )
     parser.add_argument("--video-fps", type=float, default=30.0)
     parser.add_argument("--video-scale", type=int, default=4)
     parser.add_argument("--wandb-run-id")
@@ -394,6 +420,10 @@ def run_checkpoint_artifact_eval(
 ) -> None:
     if args.episodes < 1:
         raise SystemExit("--episodes must be >= 1")
+    if args.n_envs < 1:
+        raise SystemExit("--n-envs must be >= 1")
+    if args.record_best_video:
+        raise SystemExit("--record-best-video is temporarily disabled for rlab-eval")
     args.eval_run_name = artifact_eval_name(args)
     artifacts = find_model_artifacts(args)
     if not artifacts:
@@ -482,6 +512,10 @@ def main() -> None:
     parser_defaults = vars(parser.parse_args([]))
     explicit_dests = explicit_source_arg_dests(parser, sys.argv[1:])
     args = parser.parse_args()
+    if args.n_envs < 1:
+        raise SystemExit("--n-envs must be >= 1")
+    if args.record_best_video:
+        raise SystemExit("--record-best-video is temporarily disabled for rlab-eval")
     if args.artifact or args.artifact_run:
         run_checkpoint_artifact_eval(args, parser, parser_defaults, explicit_dests)
         return
@@ -504,34 +538,23 @@ def main() -> None:
     model = PPO.load(args.model, device=resolve_sb3_device(args.device)) if args.model else None
 
     if model is not None:
-        env = make_eval_vec_env(config=config, n_envs=1, seed=args.seed)
-        try:
-            episodes = []
-            for episode_idx in range(args.episodes):
-                result = run_eval_episode(
-                    env,
-                    model=model,
-                    max_steps=args.max_steps,
-                    deterministic=eval_deterministic(args),
-                    seed=args.seed + episode_idx,
-                    completion_x_threshold=config.completion_x_threshold,
-                    default_start_state=config.state,
-                )
-                result.pop("actions")
-                episodes.append(result)
-                if args.progress:
-                    print(
-                        "eval_episode="
-                        f"{episode_idx + 1}/{args.episodes} "
-                        f"state={result.get('start_state')} "
-                        f"complete={bool(result.get('level_complete'))} "
-                        f"max_x={int(result.get('max_x_pos', 0))} "
-                        f"steps={int(result.get('steps', 0))}",
-                        file=sys.stderr,
-                        flush=True,
-                    )
-        finally:
-            env.close()
+        summary, _ = evaluate_model_episodes(
+            model=model,
+            config=config,
+            episodes=args.episodes,
+            seed=args.seed,
+            max_steps=args.max_steps,
+            deterministic=eval_deterministic(args),
+            completion_x_threshold=config.completion_x_threshold,
+            n_envs=args.n_envs,
+            progress=args.progress,
+            progress_description="eval model",
+            extra={
+                "model": args.model,
+                "policy": "ppo",
+                "hud_crop_top": args.hud_crop_top,
+            },
+        )
     else:
         action_names = action_names_for_set(args.action_set, game=args.game)
         env = make_eval_vec_env(config=config, n_envs=1, seed=args.seed)
@@ -547,16 +570,15 @@ def main() -> None:
             for _ in range(args.episodes)
         ]
         env.close()
-
-    summary = summarize_episode_results(
-        episodes,
-        deterministic=bool(args.model and eval_deterministic(args)),
-        extra={
-            "model": args.model,
-            "policy": "ppo" if args.model else args.policy,
-            "hud_crop_top": args.hud_crop_top,
-        },
-    )
+        summary = summarize_episode_results(
+            episodes,
+            deterministic=False,
+            extra={
+                "model": args.model,
+                "policy": args.policy,
+                "hud_crop_top": args.hud_crop_top,
+            },
+        )
     if args.summary_only:
         summary.pop("episode_results", None)
     print(json.dumps(summary, indent=2, default=json_default))

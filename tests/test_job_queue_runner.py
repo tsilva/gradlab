@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import json
 import os
 import tempfile
@@ -14,11 +15,22 @@ from rlab.artifacts import wandb_artifact_storage_uri
 from rlab.eval_job_runner import normalize_eval_config
 from rlab.json_utils import json_safe
 from rlab.train_runner import (
+    AutoscaleConfig,
+    AutoscaleController,
     GRACEFUL_STOP_SIGNAL,
+    ResourceSample,
+    WORKER_IDLE,
+    WORKER_RUNNING,
+    WORKER_RETIRING,
+    WorkerSlot,
+    build_parser as build_train_runner_parser,
     collect_result_metadata,
+    mark_surplus_workers_for_retirement,
+    matching_pending_train_job_exists,
     normalize_train_config,
     parse_log_metrics,
     request_graceful_stop,
+    resolve_worker_bounds,
     train_command_for_job,
     write_train_config_file,
 )
@@ -82,6 +94,36 @@ class FakeConnection:
 
     def cursor(self):
         return self.cursor_obj
+
+
+def valid_train_spec() -> dict:
+    return {
+        "schema_version": 1,
+        "goal": "mario-level1-100of100",
+        "slug": "candidate",
+        "stage": "confirm",
+        "hypothesis": "Candidate should reproduce the expected completion signal.",
+        "expected_signal": "Rank by completion rate, then reward.",
+        "parent_spec_slug": None,
+        "priority": 7,
+        "seeds": [23, 24],
+        "run_target": "rtx4090",
+        "wandb_group": "b-test",
+        "wandb_tags": ["mario", "confirm"],
+        "run_name_template": "btest_s{seed}_{utc}",
+        "run_description_template": "candidate seed {seed}",
+        "selection_gate": {
+            "primary": "train/completion_episode_rate",
+            "tie_breakers": ["train/reward/mean"],
+        },
+        "train_config": {
+            "game": "SuperMarioBros-Nes-v0",
+            "state": "Level1-1",
+            "timesteps": 1024,
+            "wandb": True,
+            "wandb_mode": "online",
+        },
+    }
 
 
 class TrainRunnerSignalTests(unittest.TestCase):
@@ -180,6 +222,44 @@ class JobQueueTests(unittest.TestCase):
         self.assertIn("runtime_image_ref TEXT", job_queue.SCHEMA_SQL)
         self.assertIn("run_target TEXT", job_queue.SCHEMA_SQL)
         self.assertIn("train_jobs_runtime_claim_idx", job_queue.SCHEMA_SQL)
+
+    def test_load_spec_document_validates_schema_and_preserves_extra_fields(self) -> None:
+        spec = valid_train_spec()
+        spec["operator_note"] = {"why": "kept outside the formal schema for now"}
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "candidate.json"
+            path.write_text(json.dumps(spec), encoding="utf-8")
+
+            loaded = job_queue.load_spec_document(path)
+
+        self.assertEqual(loaded["operator_note"], {"why": "kept outside the formal schema for now"})
+
+    def test_load_spec_document_rejects_missing_mandatory_schema_field(self) -> None:
+        spec = valid_train_spec()
+        del spec["run_description_template"]
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "candidate.json"
+            path.write_text(json.dumps(spec), encoding="utf-8")
+
+            with self.assertRaisesRegex(ValueError, "run_description_template"):
+                job_queue.load_spec_document(path)
+
+    def test_load_spec_document_rejects_non_compliant_schema_field(self) -> None:
+        spec = valid_train_spec()
+        spec["run_name_template"] = "candidate_{utc}"
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "candidate.json"
+            path.write_text(json.dumps(spec), encoding="utf-8")
+
+            with self.assertRaisesRegex(ValueError, "run_name_template.*seed"):
+                job_queue.load_spec_document(path)
+
+    def test_checked_in_goal_specs_match_train_spec_schema(self) -> None:
+        spec_paths = sorted(Path("experiments/goals").glob("*/specs/*.json"))
+        self.assertGreater(len(spec_paths), 0)
+        for path in spec_paths:
+            with self.subTest(path=str(path)):
+                job_queue.load_spec_document(path)
 
     def test_record_running_train_result_upserts_wandb_url(self) -> None:
         conn = FakeConnection()
@@ -503,29 +583,20 @@ class JobQueueTests(unittest.TestCase):
         job_queue.enqueue_train_job = fake_enqueue
         job_queue._utc_stamp = lambda: "20260626T120000Z"
         try:
+            document = valid_train_spec()
+            document["profile_id"] = "mario-ppo/post21/rtx4090"
+            document["operator_note"] = "non-schema metadata persists"
+            document["train_config"] = {
+                **document["train_config"],
+                "info_events_json": {
+                    "life_loss": ["lives", "decrease"],
+                    "level_change": [["levelHi", "levelLo"], "change"],
+                },
+                "done_on_events": "life_loss,level_change",
+            }
             rows = job_queue.enqueue_train_jobs_from_spec_document(
                 object(),
-                document={
-                    "goal": "mario-level1-100of100",
-                    "slug": "candidate",
-                    "profile_id": "mario-ppo/post21/rtx4090",
-                    "run_target": "rtx4090",
-                    "priority": 7,
-                    "seeds": [23, 24],
-                    "wandb_group": "b-test",
-                    "wandb_tags": ["mario", "confirm"],
-                    "run_name_template": "btest_s{seed}_{utc}",
-                    "run_description_template": "candidate seed {seed}",
-                    "train_config": {
-                        "game": "SuperMarioBros-Nes-v0",
-                        "timesteps": 1024,
-                        "info_events_json": {
-                            "life_loss": ["lives", "decrease"],
-                            "level_change": [["levelHi", "levelLo"], "change"],
-                        },
-                        "done_on_events": "life_loss,level_change",
-                    },
-                },
+                document=document,
                 runtime_image_ref=RUNTIME_IMAGE_REF,
                 spec_path="experiments/goals/mario/specs/candidate.json",
                 spec_sha256="abc123",
@@ -556,6 +627,186 @@ class JobQueueTests(unittest.TestCase):
         self.assertEqual(calls[0]["spec_sha256"], "abc123")
         self.assertEqual(calls[0]["repo_git_commit"], "deadbeef")
         self.assertTrue(calls[0]["repo_dirty"])
+        self.assertEqual(calls[0]["spec_payload"]["operator_note"], "non-schema metadata persists")
+
+    def test_enqueue_train_jobs_from_spec_document_enforces_schema(self) -> None:
+        document = copy.deepcopy(valid_train_spec())
+        del document["schema_version"]
+
+        with self.assertRaisesRegex(ValueError, "schema_version"):
+            job_queue.enqueue_train_jobs_from_spec_document(
+                object(),
+                document=document,
+                runtime_image_ref=RUNTIME_IMAGE_REF,
+                instances_path=Path("/tmp/does-not-exist.json"),
+            )
+
+
+class TrainRunnerAutoscaleTests(unittest.TestCase):
+    def train_runner_args(self, *extra: str):
+        return build_train_runner_parser().parse_args(
+            ["--runtime-image-ref", RUNTIME_IMAGE_REF, *extra]
+        )
+
+    def test_fixed_mode_worker_bounds_preserve_workers(self) -> None:
+        args = self.train_runner_args("--workers", "3")
+
+        bounds = resolve_worker_bounds(args)
+
+        self.assertEqual(bounds.starter_workers, 3)
+        self.assertEqual(bounds.min_workers, 3)
+        self.assertEqual(bounds.max_workers, 3)
+
+    def test_fixed_mode_defaults_to_four_workers(self) -> None:
+        args = self.train_runner_args()
+
+        bounds = resolve_worker_bounds(args)
+
+        self.assertEqual(bounds.starter_workers, 4)
+        self.assertEqual(bounds.min_workers, 4)
+        self.assertEqual(bounds.max_workers, 4)
+
+    def test_autoscale_defaults_to_min_one_start_four_max_thirty_two(self) -> None:
+        args = self.train_runner_args("--autoscale")
+
+        bounds = resolve_worker_bounds(args)
+
+        self.assertEqual(bounds.starter_workers, 4)
+        self.assertEqual(bounds.min_workers, 1)
+        self.assertEqual(bounds.max_workers, 32)
+
+    def test_autoscale_rejects_invalid_worker_range(self) -> None:
+        args = self.train_runner_args(
+            "--workers",
+            "1",
+            "--autoscale",
+            "--min-workers",
+            "2",
+            "--max-workers",
+            "5",
+        )
+
+        with self.assertRaisesRegex(SystemExit, "--min-workers <= --workers <= --max-workers"):
+            resolve_worker_bounds(args)
+
+    def test_autoscale_scales_up_with_headroom_and_pending_jobs(self) -> None:
+        controller = AutoscaleController(
+            AutoscaleConfig(
+                starter_workers=2,
+                min_workers=1,
+                max_workers=5,
+                window_size=2,
+                cooldown_seconds=0,
+            )
+        )
+        controller.observe(ResourceSample(cpu_percent=50, memory_percent=50, gpu_percent=50, vram_percent=50))
+        controller.observe(ResourceSample(cpu_percent=55, memory_percent=55, gpu_percent=55, vram_percent=55))
+
+        decision = controller.decide(pending_jobs=True, active_workers=2, now=10)
+
+        self.assertEqual(decision.action, "scale_up")
+        self.assertEqual(decision.target_workers, 3)
+
+    def test_autoscale_does_not_scale_up_without_pending_jobs(self) -> None:
+        controller = AutoscaleController(
+            AutoscaleConfig(
+                starter_workers=2,
+                min_workers=1,
+                max_workers=5,
+                window_size=1,
+                cooldown_seconds=0,
+            )
+        )
+        controller.observe(ResourceSample(cpu_percent=50, memory_percent=50, gpu_percent=50, vram_percent=50))
+
+        decision = controller.decide(pending_jobs=False, active_workers=2, now=10)
+
+        self.assertEqual(decision.action, "hold")
+        self.assertEqual(decision.target_workers, 2)
+        self.assertIn("no pending", decision.reason)
+
+    def test_autoscale_scales_down_on_resource_saturation(self) -> None:
+        controller = AutoscaleController(
+            AutoscaleConfig(
+                starter_workers=3,
+                min_workers=1,
+                max_workers=5,
+                window_size=2,
+                cooldown_seconds=0,
+            )
+        )
+        controller.observe(ResourceSample(cpu_percent=91, memory_percent=50, gpu_percent=50, vram_percent=50))
+        controller.observe(ResourceSample(cpu_percent=92, memory_percent=50, gpu_percent=50, vram_percent=50))
+
+        decision = controller.decide(pending_jobs=True, active_workers=3, now=10)
+
+        self.assertEqual(decision.action, "scale_down")
+        self.assertEqual(decision.target_workers, 2)
+        self.assertIn("cpu_percent", decision.reason)
+
+    def test_autoscale_respects_min_and_max_bounds(self) -> None:
+        controller = AutoscaleController(
+            AutoscaleConfig(
+                starter_workers=1,
+                min_workers=1,
+                max_workers=1,
+                window_size=1,
+                cooldown_seconds=0,
+            )
+        )
+        controller.observe(ResourceSample(cpu_percent=10, memory_percent=10, gpu_percent=10, vram_percent=10))
+
+        decision = controller.decide(pending_jobs=True, active_workers=1, now=10)
+
+        self.assertEqual(decision.action, "hold")
+        self.assertEqual(decision.target_workers, 1)
+        self.assertIn("max workers", decision.reason)
+
+    def test_autoscale_holds_when_probe_fails(self) -> None:
+        controller = AutoscaleController(
+            AutoscaleConfig(
+                starter_workers=2,
+                min_workers=1,
+                max_workers=5,
+                window_size=1,
+                cooldown_seconds=0,
+            )
+        )
+        controller.observe(ResourceSample(error="nvidia-smi timed out"))
+
+        decision = controller.decide(pending_jobs=True, active_workers=2, now=10)
+
+        self.assertEqual(decision.action, "hold")
+        self.assertEqual(decision.target_workers, 2)
+        self.assertIn("resource sample failed", decision.reason)
+
+    def test_surplus_workers_retire_idle_slots_before_busy_slots(self) -> None:
+        idle = WorkerSlot(index=0, worker_id="worker-0", state=WORKER_IDLE)
+        busy_a = WorkerSlot(index=1, worker_id="worker-1", state=WORKER_RUNNING)
+        busy_b = WorkerSlot(index=2, worker_id="worker-2", state=WORKER_RUNNING)
+
+        retired = mark_surplus_workers_for_retirement(
+            [idle, busy_a, busy_b],
+            target_workers=1,
+        )
+
+        self.assertEqual(retired, ("worker-0", "worker-1"))
+        self.assertEqual(idle.snapshot()["state"], WORKER_RETIRING)
+        self.assertTrue(busy_a.snapshot()["retire_requested"])
+        self.assertFalse(busy_b.snapshot()["retire_requested"])
+
+    def test_pending_train_probe_matches_runner_claim_scope(self) -> None:
+        conn = FakeConnection(row={"has_pending": True})
+        args = self.train_runner_args("--run-target", "rtx4090")
+
+        self.assertTrue(matching_pending_train_job_exists(conn, args))
+
+        self.assertIn("status = 'pending'", conn.cursor_obj.executed_sql)
+        self.assertIn("cancel_requested = FALSE", conn.cursor_obj.executed_sql)
+        self.assertIn("runtime_image_ref = %(runtime_image_ref)s", conn.cursor_obj.executed_sql)
+        self.assertIn("run_target IS NULL OR run_target = %(run_target)s", conn.cursor_obj.executed_sql)
+        self.assertEqual(conn.cursor_obj.executed_params["runtime_image_ref"], RUNTIME_IMAGE_REF)
+        self.assertEqual(conn.cursor_obj.executed_params["run_target"], "rtx4090")
 
 
 class TrainRunnerTests(unittest.TestCase):

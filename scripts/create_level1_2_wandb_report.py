@@ -40,7 +40,7 @@ except ImportError as exc:  # pragma: no cover - operator-facing dependency hint
 
 DEFAULT_ENTITY = "tsilva"
 DEFAULT_PROJECT = "SuperMarioBros-NES"
-DEFAULT_QUERY = ""
+DEFAULT_QUERY = "l11l12"
 DEFAULT_RUN_STATE = "running"
 DEFAULT_TITLE = "Mario Active Training Monitor"
 DEFAULT_LEVEL_SPECS = ("Level1-2=0-1", "Level1-1=0-0")
@@ -239,6 +239,30 @@ def scalar(
     )
 
 
+def metric_line(
+    metric: str,
+    *,
+    x: int,
+    y: int,
+    w: int = 12,
+    h: int = 6,
+    ymin: float | None = None,
+    ymax: float | None = None,
+) -> wr.LinePlot:
+    return line(metric, [metric], x=x, y=y, w=w, h=h, ymin=ymin, ymax=ymax)
+
+
+def metric_scalar(
+    metric: str,
+    *,
+    x: int,
+    y: int,
+    w: int = 6,
+    h: int = 4,
+) -> wr.ScalarChart:
+    return scalar(metric, metric, x=x, y=y, w=w, h=h)
+
+
 def section_panel(title: str, body: str, *, y: int) -> wr.MarkdownPanel:
     return wr.MarkdownPanel(
         markdown=f"### {title}\n{body.strip()}",
@@ -264,33 +288,28 @@ def policy_selection_panels(level_specs: list[LevelSpec]) -> list[object]:
         level_rate_metrics = [spec.rate_metric for spec in level_specs]
         panels.extend(
             [
-                scalar(
-                    "Bottleneck rate",
+                metric_scalar(
                     TRAIN_INFO_LEVEL_COMPLETE_RATE_MIN_LAST,
                     x=0,
                     y=3,
                 ),
-                scalar(
-                    f"{primary_level.label} rate",
+                metric_scalar(
                     primary_level.rate_metric,
                     x=6,
                     y=3,
                 ),
-                scalar(
-                    f"{secondary_level.label} rate",
+                metric_scalar(
                     secondary_level.rate_metric,
                     x=12,
                     y=3,
                 ),
-                scalar(
-                    f"{secondary_level.label} clears",
+                metric_scalar(
                     secondary_level.count_metric,
                     x=18,
                     y=3,
                 ),
-                line(
-                    "Level-complete bottleneck",
-                    [TRAIN_INFO_LEVEL_COMPLETE_RATE_MIN_LAST],
+                metric_line(
+                    TRAIN_INFO_LEVEL_COMPLETE_RATE_MIN_LAST,
                     x=0,
                     y=7,
                     w=12,
@@ -324,32 +343,28 @@ def policy_selection_panels(level_specs: list[LevelSpec]) -> list[object]:
     level = level_specs[0]
     panels.extend(
         [
-            scalar(
-                f"{level.label} clears",
+            metric_scalar(
                 level.count_metric,
                 x=0,
                 y=3,
                 w=12,
             ),
-            scalar(
-                f"{level.label} rate",
+            metric_scalar(
                 level.rate_metric,
                 x=12,
                 y=3,
                 w=12,
             ),
-            line(
-                f"{level.label} clears",
-                [level.count_metric],
+            metric_line(
+                level.count_metric,
                 x=0,
                 y=7,
                 w=12,
                 h=7,
                 ymin=0,
             ),
-            line(
-                f"{level.label} rate",
-                [level.rate_metric],
+            metric_line(
+                level.rate_metric,
                 x=12,
                 y=7,
                 w=12,
@@ -547,17 +562,15 @@ def build_report(
                         ),
                         y=reward_section_y,
                     ),
-                    line(
-                        "Episode reward mean",
-                        ["rollout/ep_rew_mean"],
+                    metric_line(
+                        "rollout/ep_rew_mean",
                         x=0,
                         y=reward_top_y,
                         w=12,
                         h=7,
                     ),
-                    line(
-                        "Episode length mean",
-                        ["rollout/ep_len_mean"],
+                    metric_line(
+                        "rollout/ep_len_mean",
                         x=12,
                         y=reward_top_y,
                         w=12,
@@ -581,31 +594,22 @@ def build_report(
                         ymin=0,
                         ymax=1.05,
                     ),
-                    line(
-                        "Shaped reward mean",
-                        [
-                            f"{TRAIN_REWARD_COMPONENT_ROOT}/shaped/mean",
-                        ],
+                    metric_line(
+                        f"{TRAIN_REWARD_COMPONENT_ROOT}/shaped/mean",
                         x=0,
                         y=reward_detail_y,
                         w=12,
                         h=7,
                     ),
-                    line(
-                        "Progress reward mean",
-                        [
-                            f"{TRAIN_REWARD_COMPONENT_ROOT}/prog_x/mean",
-                        ],
+                    metric_line(
+                        f"{TRAIN_REWARD_COMPONENT_ROOT}/prog_x/mean",
                         x=12,
                         y=reward_detail_y,
                         w=12,
                         h=7,
                     ),
-                    line(
-                        "Death event rate",
-                        [
-                            f"{TRAIN_REWARD_COMPONENT_ROOT}/death/nonzero_rate",
-                        ],
+                    metric_line(
+                        f"{TRAIN_REWARD_COMPONENT_ROOT}/death/nonzero_rate",
                         x=0,
                         y=reward_event_y,
                         w=12,
@@ -613,11 +617,8 @@ def build_report(
                         ymin=0,
                         ymax=1.05,
                     ),
-                    line(
-                        "Progress reward spike",
-                        [
-                            f"{TRAIN_REWARD_COMPONENT_ROOT}/prog_x/max",
-                        ],
+                    metric_line(
+                        f"{TRAIN_REWARD_COMPONENT_ROOT}/prog_x/max",
                         x=12,
                         y=reward_event_y,
                         w=12,
@@ -631,18 +632,17 @@ def build_report(
                         ),
                         y=ppo_section_y,
                     ),
-                    line("Approx KL", ["train/approx_kl"], x=0, y=ppo_top_y),
-                    line("Clip fraction", ["train/clip_fraction"], x=12, y=ppo_top_y, ymin=0),
-                    line("Entropy loss", ["train/entropy_loss"], x=0, y=ppo_mid_y),
-                    line(
-                        "Explained variance",
-                        ["train/explained_variance"],
+                    metric_line("train/approx_kl", x=0, y=ppo_top_y),
+                    metric_line("train/clip_fraction", x=12, y=ppo_top_y, ymin=0),
+                    metric_line("train/entropy_loss", x=0, y=ppo_mid_y),
+                    metric_line(
+                        "train/explained_variance",
                         x=12,
                         y=ppo_mid_y,
                         ymin=-0.1,
                         ymax=1.05,
                     ),
-                    line("Value loss", ["train/value_loss"], x=0, y=ppo_value_y, ymin=0),
+                    metric_line("train/value_loss", x=0, y=ppo_value_y, ymin=0),
                     line(
                         "Rollout value and advantage magnitude",
                         [
@@ -687,8 +687,8 @@ def build_report(
                         ),
                         y=throughput_section_y,
                     ),
-                    line("Loop FPS", [THROUGHPUT_LOOP_FPS], x=0, y=throughput_y, ymin=0),
-                    line("Rollout FPS", [THROUGHPUT_ROLLOUT_FPS], x=12, y=throughput_y, ymin=0),
+                    metric_line(THROUGHPUT_LOOP_FPS, x=0, y=throughput_y, ymin=0),
+                    metric_line(THROUGHPUT_ROLLOUT_FPS, x=12, y=throughput_y, ymin=0),
                 ],
             ),
             wr.H2("Decision Rule"),
@@ -705,7 +705,10 @@ def main() -> None:
     parser.add_argument(
         "--query",
         default=DEFAULT_QUERY,
-        help="Optional W&B report search query. Defaults to all runs matching --run-state.",
+        help=(
+            "W&B report search query. Defaults to active Level1-1/Level1-2 runs; pass an empty "
+            "string with --query '' to include every run matching --run-state."
+        ),
     )
     parser.add_argument(
         "--run-state",

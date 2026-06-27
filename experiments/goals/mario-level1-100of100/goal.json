@@ -9,8 +9,11 @@
     "game": "SuperMarioBros-Nes-v0",
     "states": ["Level1-1"],
     "algorithm": "PPO",
-    "primary_metric": "eval/done/level_change/rate",
-    "training_stop_metric": "train/info/level_complete/from/0-0/rate",
+    "primary_metric": "train/info/level_complete/rate/min/last",
+    "primary_metric_aggregation": "peak_over_training_run",
+    "primary_metric_note": "Primary metric to maximize during training. For this single-source Level1-1 goal it should match train/info/level_complete/from/0-0/rate once the source window is full; out-of-process eval remains the promotion check.",
+    "balance_guard_metric": "train/info/level_complete/rate/min/last",
+    "training_stop_metric": "train/info/level_complete/rate/min/last",
     "success_threshold": 1.0,
     "success_window_attempts": 100,
     "max_train_timesteps": 5000000,
@@ -27,14 +30,16 @@
     "run_description_required": true
   },
   "selection_policy": {
-    "source": "out_of_process_eval",
+    "source": "training_high_watermark_with_out_of_process_eval_confirmation",
     "rank_order": [
+      "max(train/info/level_complete/rate/min/last)",
+      "max(train/info/level_complete/rate/mean/last)",
       "eval/done/level_change/from_rate/min",
       "eval/done/level_change/rate",
       "eval/progress/x/max",
       "eval/reward/mean"
     ],
-    "training_metrics_use": "diagnostic_only",
+    "training_metrics_use": "primary_optimization_signal",
     "fixed_budget_completion_timesteps": [2000000, 3000000, 4000000, 5000000],
     "confirmation_tie_breakers": [
       "higher success count across confirmation seeds",

@@ -3,6 +3,11 @@
 This folder is the durable capsule for the active `mario-level1-2-100of100`
 research objective.
 
+Primary optimization metric: peak
+`train/info/level_complete/rate/min/last`. For this single-level goal it should
+match the Level1-2 source rate once the rolling source window is full; external
+eval remains the promotion check.
+
 - `goal.json`: current goal contract, metric, seed protocol, cap, runtime, and
   promotion policy.
 - `specs/`: checked-in queue payloads for candidate runs.

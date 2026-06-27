@@ -110,6 +110,11 @@ UV_CACHE_DIR=.uv-cache uv run rlab-queue enqueue-train \
   --runtime-image-ref-file rlab-train-image.json
 ```
 
+Train specs are validated against the mandatory queue-backed schema in
+`src/rlab/spec_schema.py` before enqueue. Extra research metadata is preserved
+in `spec_payload_json`, but required launch, naming, W&B, seed, selection, and
+minimal train-config fields must be present and well-formed.
+
 Then keep capacity aligned with the repo policy and queue state:
 
 ```bash

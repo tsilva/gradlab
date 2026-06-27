@@ -29,7 +29,8 @@ TRAIN_DONE_LEVEL_CHANGE_FROM_RATE_MIN = "train/done/level_change/from_rate/min"
 TRAIN_DONE_LEVEL_CHANGE_FROM_RATE_MEAN = "train/done/level_change/from_rate/mean"
 
 TRAIN_INFO_LEVEL_COMPLETE_ROOT = "train/info/level_complete"
-TRAIN_INFO_LEVEL_COMPLETE_RATE_MIN_LAST = "train/info/level_complete/rate_min/last"
+TRAIN_INFO_LEVEL_COMPLETE_RATE_MIN_LAST = "train/info/level_complete/rate/min/last"
+TRAIN_INFO_LEVEL_COMPLETE_RATE_MEAN_LAST = "train/info/level_complete/rate/mean/last"
 
 EVAL_DONE_ALL = "eval/done/all"
 EVAL_DONE_LEVEL_CHANGE = "eval/done/level_change"
@@ -40,6 +41,8 @@ EVAL_DONE_MAX_STEPS = "eval/done/max_steps"
 EVAL_DONE_MAX_STEPS_RATE = "eval/done/max_steps/rate"
 EVAL_DONE_UNCLASSIFIED = "eval/done/unclassified"
 EVAL_DONE_UNCLASSIFIED_RATE = "eval/done/unclassified/rate"
+EVAL_INFO_LEVEL_COMPLETE_RATE_MIN_LAST = "eval/info/level_complete/rate/min/last"
+EVAL_INFO_LEVEL_COMPLETE_RATE_MEAN_LAST = "eval/info/level_complete/rate/mean/last"
 
 EVAL_REWARD_MEAN = "eval/reward/mean"
 EVAL_REWARD_STD = "eval/reward/std"

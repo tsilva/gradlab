@@ -75,6 +75,9 @@ from rlab.play import task_conditioning_change_message
 from rlab.play import task_conditioning_start_message
 from rlab.eval import build_parser as build_eval_parser
 from rlab.eval import eval_seed_for_checkpoint
+from rlab.eval import evaluate_checkpoint
+from rlab.eval import log_wandb_eval
+from rlab.eval import main as eval_main
 from rlab.eval import score as eval_checkpoint_score
 from rlab.task_advantage import normalize_advantages_by_task
 from rlab.targets import SuperMarioBrosNesV0Target, target_for_game
@@ -159,10 +162,13 @@ class MetricsDocumentationTests(unittest.TestCase):
             "train/done/<reason>/from_rate/mean",
             "train/info/level_complete/from/<prev>/count",
             "train/info/level_complete/from/<prev>/rate",
-            "train/info/level_complete/rate_min/last",
+            "train/info/level_complete/rate/min/last",
+            "train/info/level_complete/rate/mean/last",
             "train/reward/<component>/<stat>",
             "train/reward_share/<component>",
             "eval/done/<reason>/from/<start>",
+            "eval/info/level_complete/rate/min/last",
+            "eval/info/level_complete/rate/mean/last",
         ]
         missing_templates = [template for template in required_templates if template not in content]
         self.assertEqual(missing_templates, [])
@@ -422,7 +428,11 @@ class EnvConfigFromArgsTests(unittest.TestCase):
         sentinel = object()
         config = EnvConfig(
             game="SuperMarioBros-Nes-v0",
-            done_on_info={"life_loss": ("lives", "decrease")},
+            info_events={
+                "life_loss": ("lives", "decrease"),
+                "level_change": (("levelHi", "levelLo"), "change"),
+            },
+            done_on_events=("life_loss", "level_change"),
         )
 
         with patch("rlab.env.make_vec_envs", return_value=sentinel) as make_vec_envs:
@@ -431,6 +441,8 @@ class EnvConfigFromArgsTests(unittest.TestCase):
         self.assertIs(env, sentinel)
         passed_config = make_vec_envs.call_args.kwargs["config"]
         self.assertEqual(passed_config.done_on_info, {})
+        self.assertEqual(passed_config.info_events, config.info_events)
+        self.assertEqual(passed_config.done_on_events, ())
 
     def test_training_vec_env_preserves_requested_done_on_info_rules(self) -> None:
         sentinel = object()
@@ -450,7 +462,11 @@ class EnvConfigFromArgsTests(unittest.TestCase):
         sentinel = object()
         config = EnvConfig(
             game="SuperMarioBros-Nes-v0",
-            done_on_info={"life_loss": ("lives", "decrease")},
+            info_events={
+                "life_loss": ("lives", "decrease"),
+                "level_change": (("levelHi", "levelLo"), "change"),
+            },
+            done_on_events=("life_loss", "level_change"),
         )
 
         with patch("rlab.env.make_retro_env", return_value=sentinel) as make_retro_env:
@@ -459,6 +475,8 @@ class EnvConfigFromArgsTests(unittest.TestCase):
         self.assertIs(env, sentinel)
         passed_config = make_retro_env.call_args.kwargs["config"]
         self.assertEqual(passed_config.done_on_info, {})
+        self.assertEqual(passed_config.info_events, config.info_events)
+        self.assertEqual(passed_config.done_on_events, ())
 
     def test_short_states_requires_one_state_per_env_slot(self) -> None:
         with patch(
@@ -1858,14 +1876,23 @@ class CommandAndArtifactTests(unittest.TestCase):
         self.assertNotIn("--no-stochastic", help_text)
 
     def test_eval_defaults_to_stochastic(self) -> None:
-        parser = build_eval_parser()
+        with patch("rlab.eval.os.cpu_count", return_value=12):
+            parser = build_eval_parser()
 
         self.assertFalse(parser.parse_args([]).deterministic)
         self.assertTrue(parser.parse_args(["--deterministic"]).deterministic)
+        self.assertEqual(parser.parse_args([]).n_envs, 12)
+        self.assertEqual(parser.parse_args(["--n-envs", "5"]).n_envs, 5)
         help_text = parser.format_help()
         self.assertIn("--deterministic", help_text)
+        self.assertIn("--n-envs", help_text)
         self.assertNotIn("--stochastic", help_text)
         self.assertNotIn("--no-stochastic", help_text)
+
+    def test_eval_record_best_video_is_disabled_before_work(self) -> None:
+        with patch.object(sys, "argv", ["rlab-eval", "--record-best-video"]):
+            with self.assertRaisesRegex(SystemExit, "--record-best-video is temporarily disabled"):
+                eval_main()
 
     def test_gui_playback_does_not_end_on_completion_without_env_done(self) -> None:
         self.assertFalse(
@@ -2007,6 +2034,8 @@ class EvalMetricTests(unittest.TestCase):
             "eval/done/max_steps/rate": 0.0,
             "eval/done/unclassified": 0,
             "eval/done/unclassified/rate": 0.0,
+            "eval/info/level_complete/rate/min/last": 1.0,
+            "eval/info/level_complete/rate/mean/last": 1.0,
             "best_episode": {"reward": 2.0, "max_x_pos": 4},
         }
 
@@ -2019,9 +2048,102 @@ class EvalMetricTests(unittest.TestCase):
         self.assertEqual(callback.wandb_run.payload["eval/done/level_change"], 1)
         self.assertEqual(callback.wandb_run.payload["eval/done/level_change/rate"], 1.0)
         self.assertEqual(callback.wandb_run.payload["eval/done/max_steps"], 0)
+        self.assertEqual(callback.wandb_run.payload["eval/info/level_complete/rate/min/last"], 1.0)
+        self.assertEqual(
+            callback.wandb_run.payload["eval/info/level_complete/rate/mean/last"],
+            1.0,
+        )
         self.assertNotIn("eval/outcome/terminated", callback.wandb_run.payload)
         self.assertNotIn("eval/outcome/truncated", callback.wandb_run.payload)
         self.assertEqual(callback.wandb_run.step, 12345)
+
+    def test_artifact_eval_wandb_log_does_not_force_retroactive_history_step(self) -> None:
+        class FakeRun:
+            def __init__(self) -> None:
+                self.payload: dict[str, object] | None = None
+                self.kwargs: dict[str, object] | None = None
+
+            def log(self, payload: dict[str, object], **kwargs: object) -> None:
+                self.payload = payload
+                self.kwargs = kwargs
+
+        metrics = {
+            "reward_mean": 1.0,
+            "reward_std": 0.0,
+            "reward_max": 2.0,
+            "max_x_mean": 3.0,
+            "max_x_max": 4,
+            "max_level_x_mean": 5.0,
+            "max_level_x_max": 6,
+            "death_count": 0,
+            "death_rate": 0.0,
+            "best_episode": {"reward": 2.0, "max_x_pos": 4},
+            "checkpoint_step": 4100000,
+            "checkpoint_artifact": "entity/project/run-checkpoint:step-4100000",
+            "hud_crop_top": 32,
+            "episode_results": [],
+            "eval/done/all": 10,
+            "eval/done/level_change": 9,
+            "eval/done/level_change/rate": 0.9,
+            "eval/done/level_change/from_rate/min": 0.9,
+            "eval/info/level_complete/rate/min/last": 0.9,
+            "eval/info/level_complete/rate/mean/last": 0.9,
+        }
+        run = FakeRun()
+
+        with patch.dict(sys.modules, {"wandb": object()}):
+            log_wandb_eval(run, metrics, video_path=None)
+
+        assert run.payload is not None
+        self.assertEqual(run.kwargs, {})
+        self.assertEqual(run.payload["eval/checkpoint/step"], 4100000)
+        self.assertEqual(run.payload["eval/done/all"], 10)
+        self.assertEqual(run.payload["eval/info/level_complete/rate/min/last"], 0.9)
+
+    def test_checkpoint_eval_preserves_artifact_states_in_eval_config(self) -> None:
+        parser = build_eval_parser()
+        args = parser.parse_args(
+            [
+                "--game",
+                "SuperMarioBros-Nes-v0",
+                "--states",
+                "Level1-1,Level1-2",
+                "--state-probs",
+                "0.5,0.5",
+                "--task-conditioning",
+                "--task-conditioning-info-vars",
+                "levelHi,levelLo",
+                "--episodes",
+                "10",
+                "--n-envs",
+                "2",
+            ]
+        )
+        args.eval_dir = "runs/local_evals"
+        args.eval_run_name = "unit"
+        args.record_best_video = False
+        model_path = Path("model.zip")
+
+        with (
+            patch("rlab.eval.PPO.load", return_value=object()) as load_model,
+            patch("rlab.eval.evaluate_model_episodes") as evaluate,
+        ):
+            evaluate.return_value = (
+                {
+                    "checkpoint_step": 4100000,
+                    "episode_results": [],
+                    "best_episode": {"reward": 0.0, "max_x_pos": 0},
+                },
+                None,
+            )
+            evaluate_checkpoint(args, model_path, 4100000, "artifact")
+
+        load_model.assert_called_once()
+        config = evaluate.call_args.kwargs["config"]
+        self.assertEqual(config.states, ("Level1-1", "Level1-2"))
+        self.assertEqual(config.state_probs, (0.5, 0.5))
+        self.assertTrue(config.task_conditioning)
+        self.assertEqual(config.task_conditioning_info_vars, ("levelHi", "levelLo"))
 
     def test_metric_path_segment_preserves_retro_state_names(self) -> None:
         self.assertEqual(metric_path_segment("Level1-2"), "Level1-2")
@@ -2181,12 +2303,84 @@ class EvalMetricTests(unittest.TestCase):
         self.assertEqual(metrics["eval/done/max_steps/from/Level1-2/rate"], 1.0)
         self.assertEqual(metrics["eval/done/level_change/from_rate/min"], 0.0)
         self.assertEqual(metrics["eval/done/level_change/from_rate/mean"], 0.5)
+        self.assertEqual(metrics["eval/info/level_complete/rate/min/last"], 0.0)
+        self.assertEqual(metrics["eval/info/level_complete/rate/mean/last"], 0.5)
         self.assertEqual(metrics["episode_results"][0]["env_index"], 1)
         self.assertEqual(metrics["episode_results"][0]["start_state"], "Level1-2")
         self.assertEqual(metrics["episode_results"][0]["reward"], 2.0)
         self.assertEqual(metrics["episode_results"][1]["env_index"], 0)
         self.assertEqual(metrics["episode_results"][1]["start_state"], "Level1-1")
         self.assertEqual(metrics["episode_results"][1]["reward"], 4.0)
+
+    def test_evaluate_model_episodes_updates_progress_bar(self) -> None:
+        class FakeEnv:
+            def close(self) -> None:
+                pass
+
+        class FakeProgressBar:
+            def __init__(self, **kwargs) -> None:
+                self.kwargs = kwargs
+                self.updates: list[int] = []
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb) -> None:
+                pass
+
+            def update(self, count: int) -> None:
+                self.updates.append(count)
+
+        progress_bars: list[FakeProgressBar] = []
+
+        def fake_tqdm(**kwargs) -> FakeProgressBar:
+            progress_bar = FakeProgressBar(**kwargs)
+            progress_bars.append(progress_bar)
+            return progress_bar
+
+        def fake_run_eval_episode(*args, **kwargs) -> dict:
+            return {
+                "actions": [],
+                "start_state": "Level1-1",
+                "reward": 1.0,
+                "max_x_pos": 10,
+                "max_level_x_pos": 10,
+                "score": 0,
+                "lives": 3,
+                "time": 399,
+                "steps": 1,
+                "terminated": True,
+                "truncated": False,
+                "level_complete": True,
+                "died": False,
+                "death_x_pos": None,
+                "final_info": {"start_state": "Level1-1"},
+            }
+
+        with (
+            patch("rlab.eval_runner.make_eval_vec_env", return_value=FakeEnv()),
+            patch("rlab.eval_runner.run_eval_episode", side_effect=fake_run_eval_episode),
+            patch("rlab.eval_runner.tqdm", side_effect=fake_tqdm),
+        ):
+            metrics, video_path = evaluate_model_episodes(
+                model=object(),
+                config=EnvConfig(game="SuperMarioBros-Nes-v0"),
+                episodes=3,
+                seed=7,
+                max_steps=10,
+                deterministic=True,
+                completion_x_threshold=0,
+                progress=True,
+                progress_description="eval checkpoint 4100000",
+            )
+
+        self.assertIsNone(video_path)
+        self.assertEqual(metrics["episodes"], 3)
+        self.assertEqual(len(progress_bars), 1)
+        self.assertEqual(progress_bars[0].kwargs["total"], 3)
+        self.assertEqual(progress_bars[0].kwargs["desc"], "eval checkpoint 4100000")
+        self.assertEqual(progress_bars[0].kwargs["disable"], False)
+        self.assertEqual(progress_bars[0].updates, [1, 1, 1])
 
 
 class DoneCounterCallbackTests(unittest.TestCase):
@@ -2757,10 +2951,11 @@ class LevelCompleteInfoCallbackTests(unittest.TestCase):
             model.logger.records["train/info/level_complete/from/0-0/rate"],
             0.5,
         )
-        self.assertEqual(model.logger.records["train/info/level_complete/rate_min/last"], 0.5)
+        self.assertEqual(model.logger.records["train/info/level_complete/rate/min/last"], 0.5)
+        self.assertEqual(model.logger.records["train/info/level_complete/rate/mean/last"], 0.5)
         self.assert_no_generic_info_metrics(model.logger.records)
 
-    def test_rate_min_last_uses_latest_available_source_rates(self) -> None:
+    def test_rate_min_and_mean_last_use_latest_available_source_rates(self) -> None:
         callback, model = self.make_callback()
         callback.ep_window_size = 2
 
@@ -2799,23 +2994,38 @@ class LevelCompleteInfoCallbackTests(unittest.TestCase):
             self.assertTrue(callback._on_step())
 
         record_attempt(1, (0, 0), True)
-        self.assertNotIn("train/info/level_complete/rate_min/last", model.logger.records)
+        self.assertNotIn("train/info/level_complete/rate/min/last", model.logger.records)
+        self.assertNotIn("train/info/level_complete/rate/mean/last", model.logger.records)
 
         record_attempt(2, (0, 0), True)
         self.assertEqual(model.logger.records["train/info/level_complete/from/0-0/rate"], 1.0)
-        self.assertEqual(model.logger.records["train/info/level_complete/rate_min/last"], 1.0)
+        self.assertEqual(model.logger.records["train/info/level_complete/rate/min/last"], 1.0)
+        self.assertEqual(model.logger.records["train/info/level_complete/rate/mean/last"], 1.0)
 
         record_attempt(3, (0, 0), False)
         self.assertEqual(model.logger.records["train/info/level_complete/from/0-0/rate"], 0.5)
-        self.assertEqual(model.logger.records["train/info/level_complete/rate_min/last"], 0.5)
+        self.assertEqual(model.logger.records["train/info/level_complete/rate/min/last"], 0.5)
+        self.assertEqual(model.logger.records["train/info/level_complete/rate/mean/last"], 0.5)
 
         record_attempt(4, (0, 1), True)
         self.assertEqual(model.logger.records["train/info/level_complete/from/0-0/rate"], 0.5)
-        self.assertEqual(model.logger.records["train/info/level_complete/rate_min/last"], 0.5)
+        self.assertEqual(model.logger.records["train/info/level_complete/rate/min/last"], 0.5)
+        self.assertEqual(model.logger.records["train/info/level_complete/rate/mean/last"], 0.5)
 
         record_attempt(5, (0, 1), False)
         self.assertEqual(model.logger.records["train/info/level_complete/from/0-1/rate"], 0.5)
-        self.assertEqual(model.logger.records["train/info/level_complete/rate_min/last"], 0.5)
+        self.assertEqual(model.logger.records["train/info/level_complete/rate/min/last"], 0.5)
+        self.assertEqual(model.logger.records["train/info/level_complete/rate/mean/last"], 0.5)
+
+        record_attempt(6, (0, 1), True)
+        self.assertEqual(model.logger.records["train/info/level_complete/from/0-1/rate"], 0.5)
+        self.assertEqual(model.logger.records["train/info/level_complete/rate/min/last"], 0.5)
+        self.assertEqual(model.logger.records["train/info/level_complete/rate/mean/last"], 0.5)
+
+        record_attempt(7, (0, 1), True)
+        self.assertEqual(model.logger.records["train/info/level_complete/from/0-1/rate"], 1.0)
+        self.assertEqual(model.logger.records["train/info/level_complete/rate/min/last"], 0.5)
+        self.assertEqual(model.logger.records["train/info/level_complete/rate/mean/last"], 0.75)
         self.assert_no_generic_info_metrics(model.logger.records)
 
 

@@ -23,6 +23,7 @@ from rlab.runtime_refs import (
     normalize_runtime_image_ref,
     runtime_image_ref_from_file,
 )
+from rlab.spec_schema import validate_train_spec_schema
 
 
 SECRET_KEY_FRAGMENTS = (
@@ -386,12 +387,7 @@ def load_spec_document(path: Path) -> dict[str, Any]:
     document = load_json_arg(str(path), default={})
     if not isinstance(document, dict):
         raise ValueError(f"{path} must contain a JSON object")
-    if not str(document.get("goal") or document.get("goal_slug") or "").strip():
-        raise ValueError(f"{path} must define goal or goal_slug")
-    if not str(document.get("slug") or "").strip():
-        raise ValueError(f"{path} must define slug")
-    if not isinstance(document.get("train_config"), dict):
-        raise ValueError(f"{path} must define train_config as an object")
+    validate_train_spec_schema(document, label=f"spec file {path}")
     assert_no_secrets(document, label=f"spec file {path}")
     validate_launch_event_config(
         document["train_config"],
@@ -572,6 +568,7 @@ def enqueue_train_jobs_from_spec_document(
     seeds: Sequence[int] = (),
     priority_override: int | None = None,
 ) -> list[dict[str, Any]]:
+    validate_train_spec_schema(document)
     profile = str(profile_id).strip() if profile_id else None
     canonical_target = canonicalize_run_target(
         run_target if run_target is not None else document.get("run_target"),

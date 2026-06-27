@@ -41,10 +41,13 @@ These are the first metrics to check when choosing policies.
 | `train/info/level_complete` | Root for Mario training level-complete metrics. This is the only `info_events`-derived training metric family. |
 | `train/info/level_complete/from/<prev>/count` | Cumulative clean level clears from native source value `<prev>`, e.g. `0-0` for Level1-1. Death or life-loss info always records as a failed attempt, even if an upstream completion flag is also present. |
 | `train/info/level_complete/from/<prev>/rate` | Fraction of the last 100 attempts from `<prev>` that produced a clean `level_complete`. Attempts can end at a clean completion, life loss, truncation, or episode done; death/life-loss attempts contribute `0`. Emits only after that source has a full 100-attempt window. |
-| `train/info/level_complete/rate_min/last` | Minimum across the latest available `train/info/level_complete/from/<prev>/rate` values. Emits after at least one per-source rate is available and updates whenever any per-source rate updates. |
+| `train/info/level_complete/rate/min/last` | Minimum across the latest available `train/info/level_complete/from/<prev>/rate` values. Emits after at least one per-source rate is available and updates whenever any per-source rate updates. |
+| `train/info/level_complete/rate/mean/last` | Mean across the latest available `train/info/level_complete/from/<prev>/rate` values. Emits alongside `rate/min/last` and updates whenever any per-source rate updates. |
 | `eval/done/level_change/rate` | Pooled eval episode completion fraction. |
 | `eval/done/level_change/from/<start>/rate` | Eval completion fraction for episodes that started from `<start>`. |
 | `eval/done/level_change/from_rate/min` | Minimum per-start eval completion fraction. Use this first when comparing multi-start-state policies. |
+| `eval/info/level_complete/rate/min/last` | Eval counterpart to `train/info/level_complete/rate/min/last`; alias of `eval/done/level_change/from_rate/min` for eval summaries. |
+| `eval/info/level_complete/rate/mean/last` | Eval counterpart to `train/info/level_complete/rate/mean/last`; alias of `eval/done/level_change/from_rate/mean` for eval summaries. |
 
 Current training does not log per-rollout done-count distribution stats such as `train/done/min`,
 `train/done/mean`, or `train/done/max`. The aggregate all-done counter is `train/done/all`.
@@ -56,8 +59,10 @@ episodes. Use them for live training clear counts/rates when a policy can clear 
 inside one episode. Use `train/done/*` only to understand what is ending training episodes.
 
 `eval/done/level_change/from_rate/min` is the eval selection metric for multi-start-state
-policies. The top-level eval metrics are pooled summaries and should be treated as secondary
-when per-start-state eval done metrics exist.
+policies. `eval/info/level_complete/rate/min/last` and
+`eval/info/level_complete/rate/mean/last` mirror the train `info/level_complete` aggregate names
+for dashboards that compare train and eval surfaces side by side. The top-level eval metrics are
+pooled summaries and should be treated as secondary when per-start-state eval done metrics exist.
 
 ### Mario Level1-1/Level1-2 Notes
 
@@ -68,20 +73,29 @@ For the current Level1-1/Level1-2 training goal, native level values map to trai
 | `Level1-1` | `train/info/level_complete/from/0-0/count` | `train/info/level_complete/from/0-0/rate` |
 | `Level1-2` | `train/info/level_complete/from/0-1/count` | `train/info/level_complete/from/0-1/rate` |
 
-For active multi-level training, use `train/info/level_complete/rate_min/last` as the live
+For active multi-level training, use `train/info/level_complete/rate/min/last` as the live
 bottleneck. It is the minimum of the most recent full-window per-level rates that have emitted so
-far. For example, if Level1-1 is `0.50` and Level1-2 is `0.30`, `rate_min/last` is `0.30`. If
-Level1-1 later drops from `1.00` to `0.50` while Level1-2 drops from `0.60` to `0.55`, `rate_min/last`
-is `0.50`. Training intentionally no longer logs generic `train/event/*`, `train/outcome/*`, or
-aggregate training mean clear-rate metrics. Once checkpoint eval jobs have logged per-start metrics,
+far. For example, if Level1-1 is `0.50` and Level1-2 is `0.30`, `rate/min/last` is `0.30`. If
+Level1-1 later drops from `1.00` to `0.50` while Level1-2 drops from `0.60` to `0.55`, `rate/min/last`
+is `0.50`. Use `train/info/level_complete/rate/mean/last` as the companion average over those same
+latest per-level rates, mainly to distinguish policies with the same bottleneck. Training
+intentionally no longer logs generic `train/event/*` or `train/outcome/*` metrics. Once checkpoint
+eval jobs have logged per-start metrics,
 use `eval/done/level_change/from_rate/min` as the balanced eval selection metric.
+
+`rate/min/last` and `rate/mean/last` are intentionally available-source live metrics. If only one
+source has a full attempt window so far, both report that source's rate; as more source windows emit,
+the minimum automatically tightens to include them and the mean averages across them. Use the companion
+`train/info/level_complete/from/<prev>/rate` and `/count` metrics to see which sources currently
+have coverage, but do not wait for every possible source before reading these summary metrics.
 
 `train/done/level_change/from_rate/min` and `train/done/level_change/from_rate/mean` are terminal
 episode-window diagnostics. Keep them as done-reason diagnostics; for clear counts/rates, prefer
 `train/info/level_complete/from/<prev>/count` and `train/info/level_complete/from/<prev>/rate`
 because they also count non-terminal clears and exclude death or life-loss transitions. For a
 single training selection scalar across source levels, prefer
-`train/info/level_complete/rate_min/last`.
+`train/info/level_complete/rate/min/last`; use `train/info/level_complete/rate/mean/last` as a
+tiebreaker/secondary signal when bottleneck rates match.
 
 Use current `train/reward_share/*` metrics for reward attribution rather than the older
 `train/reward_component/*` namespace. Shares are based on absolute rollout contribution
@@ -103,8 +117,8 @@ configured rule keys read from terminal `info` as the source value. For Mario
 for their current `(levelHi, levelLo)` source level. Training intentionally does not emit `to` or
 full-transition counters because those multiply metric cardinality quickly. Training does not emit
 initializer-state mirrors under `train/state/<initializer>/done/*`; those labels are not reliable
-for natural level transitions. Evaluation forces `done_on_info={}` in env construction but stops
-the eval episode when it observes completion, so `eval/done/level_change` and
+for natural level transitions. Evaluation forces `done_on_info={}` and `done_on_events=()` in env
+construction but stops the eval episode when it observes completion, so `eval/done/level_change` and
 `eval/done/level_change/from/<start>` track natural transitions per eval episode. Eval `from` values
 are the configured episode start state, not native `done_on_info` previous-value payloads.
 
@@ -268,7 +282,7 @@ Reward share metrics compare absolute component magnitudes within a rollout.
 
 These are logged by the in-training `RetroEvalCallback` when training-loop eval is enabled, and
 by `rlab-eval` artifact mode when evaluating checkpoint artifacts out of process.
-Evaluation env construction forces `done_on_info={}`.
+Evaluation env construction forces `done_on_info={}` and `done_on_events=()`.
 
 | Metric | Meaning |
 | --- | --- |
@@ -297,9 +311,9 @@ Evaluation env construction forces `done_on_info={}`.
 | `eval/config/hud_crop_top` | HUD crop used for the out-of-process checkpoint eval. |
 
 Per-start-state eval done metrics mirror the training done namespace as
-`eval/done/<reason>/from/<start>`. Because eval disables `done_on_info`, `<start>` is the eval
-episode start state, for example `Level1-1`, rather than a native previous-value tuple such as
-`0-0`.
+`eval/done/<reason>/from/<start>`. Because eval disables native event termination,
+`<start>` is the eval episode start state, for example `Level1-1`, rather than a native
+previous-value tuple such as `0-0`.
 
 | Metric template | Meaning |
 | --- | --- |
@@ -308,6 +322,8 @@ episode start state, for example `Level1-1`, rather than a native previous-value
 | `eval/done/level_change/from/<start>/rate` | `eval/done/level_change/from/<start> / eval/done/all/from/<start>`. |
 | `eval/done/level_change/from_rate/min` | Minimum per-start-state level-change rate. Use this for balanced multi-state eval ranking. |
 | `eval/done/level_change/from_rate/mean` | Mean per-start-state level-change rate. |
+| `eval/info/level_complete/rate/min/last` | Alias of `eval/done/level_change/from_rate/min`, named to mirror `train/info/level_complete/rate/min/last`. |
+| `eval/info/level_complete/rate/mean/last` | Alias of `eval/done/level_change/from_rate/mean`, named to mirror `train/info/level_complete/rate/mean/last`. |
 | `eval/done/max_steps/from/<start>` | Eval episodes from `<start>` that hit the max-step limit. |
 | `eval/done/max_steps/from/<start>/rate` | `eval/done/max_steps/from/<start> / eval/done/all/from/<start>`. |
 | `eval/done/unclassified/from/<start>` | Eval episodes from `<start>` that ended without level completion or max-step truncation. |

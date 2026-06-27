@@ -18,6 +18,23 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, TextIO
 
+try:  # Rich gives the watch TUI real terminal panels while keeping plain fallback available.
+    from rich import box as rich_box
+    from rich.columns import Columns as RichColumns
+    from rich.console import Console as RichConsole
+    from rich.console import Group as RichGroup
+    from rich.panel import Panel as RichPanel
+    from rich.table import Table as RichTable
+    from rich.text import Text as RichText
+except ImportError:  # pragma: no cover - exercised only when optional transitive dep is absent.
+    rich_box = None
+    RichColumns = None
+    RichConsole = None
+    RichGroup = None
+    RichPanel = None
+    RichTable = None
+    RichText = None
+
 from rlab.job_queue import (
     connect,
     database_url,
@@ -49,7 +66,7 @@ from rlab.runtime_refs import (
 DEFAULT_FLEET_CONFIG = Path("experiments/fleet.json")
 DEFAULT_INSTANCES_CONFIG = Path("experiments/instances.json")
 DEFAULT_CAPACITY_POLICY = Path("experiments/policies/capacity_policy.json")
-DEFAULT_WATCH_LATEST_INTERVAL_SECONDS = 5.0
+DEFAULT_WATCH_LATEST_INTERVAL_SECONDS = 15.0
 DEFAULT_WATCH_STALE_OLDER_THAN_SECONDS = 300
 DEFAULT_WATCH_STALE_LIMIT = 50
 LABEL_PREFIX = "rlab."
@@ -1747,6 +1764,11 @@ def format_elapsed_since(value: Any, *, now: datetime | None = None) -> str:
     return f"{hours // 24}d_ago"
 
 
+def format_elapsed_duration_since(value: Any, *, now: datetime | None = None) -> str:
+    elapsed = format_elapsed_since(value, now=now)
+    return elapsed.removesuffix("_ago")
+
+
 def format_utc_minute(value: Any) -> str:
     if not value:
         return "unknown"
@@ -2093,6 +2115,7 @@ ANSI_STYLES = {
     "reset": "\033[0m",
     "bold": "\033[1m",
     "dim": "\033[2m",
+    "gray": "\033[90m",
     "red": "\033[31m",
     "bright_red": "\033[1;31m",
     "green": "\033[32m",
@@ -2100,10 +2123,13 @@ ANSI_STYLES = {
     "yellow": "\033[33m",
     "bright_yellow": "\033[1;33m",
     "blue": "\033[34m",
+    "bright_blue": "\033[1;34m",
     "magenta": "\033[35m",
+    "bright_magenta": "\033[1;35m",
     "cyan": "\033[36m",
     "bright_cyan": "\033[1;36m",
     "white": "\033[37m",
+    "orange": "\033[38;5;208m",
 }
 
 
@@ -2114,7 +2140,7 @@ def colorize(text: str, style: str, *, enabled: bool) -> str:
 
 
 def dashboard_divider(width: int, *, color: bool) -> str:
-    return colorize("=" * min(width, 120), "dim", enabled=color)
+    return colorize("-" * min(width, 120), "gray", enabled=color)
 
 
 def dashboard_chip(label: str, value: str, style: str, *, color: bool) -> str:
@@ -2123,6 +2149,54 @@ def dashboard_chip(label: str, value: str, style: str, *, color: bool) -> str:
 
 def section_label(text: str, style: str, *, color: bool) -> str:
     return colorize(text, style, enabled=color)
+
+
+def numbered_section(number: int, text: str, style: str, *, color: bool) -> str:
+    prefix = colorize(f"{number}", "bright_red", enabled=color)
+    return f"{prefix}{section_label(text, style, color=color)}"
+
+
+def heat_style(ratio: float) -> str:
+    if ratio >= 0.9:
+        return "bright_red"
+    if ratio >= 0.75:
+        return "orange"
+    if ratio >= 0.55:
+        return "bright_yellow"
+    return "bright_green"
+
+
+def percent_ratio(value: str) -> float | None:
+    match = re.search(r"(-?\d+(?:\.\d+)?)\s*%", value)
+    if not match:
+        return None
+    return max(0.0, min(1.0, float(match.group(1)) / 100.0))
+
+
+def used_total_ratio(value: str) -> float | None:
+    match = re.search(r"(-?\d+(?:\.\d+)?)\s*/\s*(-?\d+(?:\.\d+)?)", value)
+    if not match:
+        return None
+    total = float(match.group(2))
+    if total <= 0:
+        return None
+    return max(0.0, min(1.0, float(match.group(1)) / total))
+
+
+def usage_meter(value: str, *, ratio: float | None = None, color: bool, width: int = 10) -> str:
+    if not value or value == "unknown":
+        return colorize("unknown", "dim", enabled=color)
+    if ratio is None:
+        ratio = percent_ratio(value) or used_total_ratio(value)
+    if ratio is None:
+        return highlight_dashboard_text(value, color=color)
+    filled = max(0, min(width, round(ratio * width)))
+    empty = max(0, width - filled)
+    style = heat_style(ratio)
+    if color:
+        bar = f"[{colorize('#' * filled, style, enabled=True)}{colorize('-' * empty, 'dim', enabled=True)}]"
+        return f"{bar} {colorize(value, style, enabled=True)}"
+    return f"[{'#' * filled}{'-' * empty}] {value}"
 
 
 def highlight_dashboard_text(text: str, *, color: bool) -> str:
@@ -2156,6 +2230,15 @@ def highlight_dashboard_text(text: str, *, color: bool) -> str:
             lambda match, style=style: colorize(match.group(0), style, enabled=True),
             highlighted,
         )
+    highlighted = re.sub(
+        r"\[[#-]{1,10}\]\s+(?:\d+(?:\.\d+)?%|\d+(?:\.\d+)?/\d+(?:\.\d+)?\s+[A-Za-z]+)",
+        lambda match: colorize(
+            match.group(0),
+            heat_style(percent_ratio(match.group(0)) or used_total_ratio(match.group(0)) or 0.0),
+            enabled=True,
+        ),
+        highlighted,
+    )
     return re.sub(
         r"\b[0-9a-f]{12}\b",
         lambda match: colorize(match.group(0), "cyan", enabled=True),
@@ -2269,16 +2352,20 @@ def active_device_dashboard_rows(devices: Sequence[Mapping[str, Any]]) -> list[l
             job_count = len(current_jobs)
         else:
             job_count = 1 if device.get("current_job") else 0
+        cpu = device_detail(device, "cpu")
+        memory = device_detail(device, "memory")
+        gpu = device_detail(device, "gpu")
+        vram = device_detail(device, "vram")
         rows.append(
             [
                 str(device.get("device") or device.get("id") or "unknown"),
-                str(device.get("target") or "unknown"),
+                str(device.get("target") or "unknown").removeprefix("docker/"),
                 str(device.get("state") or "unknown"),
                 str(job_count),
-                device_detail(device, "cpu"),
-                device_detail(device, "memory"),
-                device_detail(device, "gpu"),
-                device_detail(device, "vram"),
+                usage_meter(cpu, color=False, width=4),
+                usage_meter(memory, color=False, width=4),
+                usage_meter(gpu, color=False, width=4),
+                usage_meter(vram, color=False, width=4),
                 str(device.get("last_check") or "unknown"),
             ]
         )
@@ -2334,7 +2421,7 @@ def host_dashboard_rows(snapshot: LatestWatchSnapshot) -> list[list[str]]:
                 live,
                 runner,
                 digest,
-                str(job_count),
+                f"{job_count}/{host.max_workers}",
                 str(old_count),
                 action_text,
             ]
@@ -2375,7 +2462,12 @@ def action_dashboard_rows(plan: FleetPlan, results: Sequence[ActionResult]) -> l
     return rows
 
 
-def running_job_dashboard_rows(jobs: Sequence[RunningJob], *, limit: int = 8) -> list[list[str]]:
+def running_job_dashboard_rows(
+    jobs: Sequence[RunningJob],
+    *,
+    limit: int = 8,
+    now: datetime | None = None,
+) -> list[list[str]]:
     rows = []
     for job in list(jobs)[:limit]:
         rows.append(
@@ -2384,7 +2476,8 @@ def running_job_dashboard_rows(jobs: Sequence[RunningJob], *, limit: int = 8) ->
                 job.run_target or "any",
                 compact_ref(job.runtime_image_ref),
                 job.run_name or "unknown",
-                format_elapsed_since(job.heartbeat_at),
+                format_elapsed_duration_since(job.started_at, now=now),
+                format_elapsed_since(job.heartbeat_at, now=now),
             ]
         )
     return rows
@@ -2411,7 +2504,295 @@ def stale_train_job_dashboard_rows(jobs: Sequence[StaleTrainJob], *, limit: int 
     return rows
 
 
-def render_latest_watch_dashboard(
+def rich_available() -> bool:
+    return all(
+        item is not None
+        for item in (
+            rich_box,
+            RichColumns,
+            RichConsole,
+            RichGroup,
+            RichPanel,
+            RichTable,
+            RichText,
+        )
+    )
+
+
+def rich_heat_style(ratio: float) -> str:
+    if ratio >= 0.9:
+        return "bright_red"
+    if ratio >= 0.75:
+        return "yellow"
+    if ratio >= 0.55:
+        return "bright_yellow"
+    return "green"
+
+
+def rich_text(value: Any, *, base_style: str = "") -> Any:
+    if RichText is None:
+        return str(value)
+    text = RichText(str(value), style=base_style)
+    styles = [
+        (r"\bwould_fail\b", "bright_yellow"),
+        (r"\bfailed\b", "bright_red"),
+        (r"\bexit=\d+\b", "bright_red"),
+        (r"\bdown\b", "bright_red"),
+        (r"\bmissing\b", "yellow"),
+        (r"\bbusy\b", "bright_green"),
+        (r"\bwarning\b", "bright_yellow"),
+        (r"\boffline\b", "bright_red"),
+        (r"\bunreachable\b", "bright_red"),
+        (r"\breachable\b", "bright_green"),
+        (r"\blive\b", "bright_green"),
+        (r"\bok\b", "bright_green"),
+        (r"\bsteady\b", "bright_green"),
+        (r"\bstart\b", "bright_cyan"),
+        (r"\brestart\b", "bright_yellow"),
+        (r"\bremove\b", "bright_yellow"),
+        (r"\bplanned\b", "bright_cyan"),
+        (r"\bnone\b", "dim"),
+        (r"\bunknown\b", "dim"),
+        (r"\b[0-9a-f]{12}\b", "cyan"),
+    ]
+    plain = text.plain
+    for pattern, style in styles:
+        for match in re.finditer(pattern, plain):
+            text.stylize(style, match.start(), match.end())
+    for match in re.finditer(
+        r"\[[#-]{1,10}\]\s+(?:\d+(?:\.\d+)?%|\d+(?:\.\d+)?/\d+(?:\.\d+)?\s+[A-Za-z]+)",
+        plain,
+    ):
+        ratio = percent_ratio(match.group(0)) or used_total_ratio(match.group(0)) or 0.0
+        text.stylize(rich_heat_style(ratio), match.start(), match.end())
+    return text
+
+
+def rich_table(
+    headers: Sequence[str],
+    rows: Sequence[Sequence[Any]],
+    *,
+    expand: bool = True,
+) -> Any:
+    if RichTable is None or rich_box is None:
+        return format_table(headers, rows, max_width=120)
+    table = RichTable(
+        box=rich_box.SIMPLE,
+        expand=expand,
+        header_style="bold white",
+        border_style="dim",
+        show_edge=False,
+        pad_edge=False,
+    )
+    for header in headers:
+        table.add_column(header, overflow="ellipsis", no_wrap=True)
+    for row in rows:
+        table.add_row(*(rich_text(cell) for cell in row))
+    return table
+
+
+def rich_panel(number: int, title: str, body: Any, *, border_style: str) -> Any:
+    if RichPanel is None or rich_box is None:
+        return body
+    return RichPanel(
+        body,
+        title=f"[bright_red]{number}[/] [{border_style}]{title}:[/]",
+        title_align="left",
+        border_style=border_style,
+        box=rich_box.ROUNDED,
+        padding=(0, 1),
+        expand=True,
+    )
+
+
+def render_latest_watch_dashboard_rich(snapshot: LatestWatchSnapshot, *, max_width: int | None = None) -> str:
+    if not rich_available():
+        return render_latest_watch_dashboard_plain(snapshot, color=True, max_width=max_width)
+    width = max_width or shutil.get_terminal_size((120, 30)).columns
+    width = max(width, 72)
+    console = RichConsole(
+        width=width,
+        force_terminal=True,
+        color_system="truecolor",
+        file=sys.stdout,
+        _environ={**os.environ, "COLUMNS": str(width)},
+    )
+    action_count = len([action for action in snapshot.plan.actions if action.kind != "keep"])
+    stale_count = len(snapshot.stale_train_jobs)
+    failed_results = [result for result in snapshot.action_results if result.exit_code != 0]
+    if failed_results or snapshot.plan.warnings or snapshot.down_hosts:
+        status_style = "yellow"
+        status = "attention"
+    elif action_count or stale_count:
+        status_style = "cyan"
+        status = "applying" if snapshot.execute else "planned"
+    else:
+        status_style = "green"
+        status = "steady"
+    mode = "execute" if snapshot.execute else "dry-run"
+    mode_style = "bright_yellow" if snapshot.execute else "blue"
+    live_count = max(0, len(snapshot.config.hosts) - len(snapshot.down_hosts))
+    down_count = len(snapshot.down_hosts)
+    pending_count = sum(demand.pending_count for demand in snapshot.demands)
+    running_count = sum(demand.running_count for demand in snapshot.demands)
+    latest = compact_ref(snapshot.runtime_image_ref)
+    summary = RichTable.grid(expand=True)
+    summary.add_column(ratio=1)
+    summary.add_column(justify="right")
+    summary.add_row(
+        rich_text(
+            f"time={snapshot.captured_at.isoformat(timespec='seconds')} mode={mode} "
+            f"interval={snapshot.interval:g}s latest={latest} status={status}"
+        ),
+        rich_text(snapshot.captured_at.strftime("%H:%M:%SZ"), base_style="bold white"),
+    )
+    summary.add_row(
+        rich_text(
+            f"hosts live={live_count} down={down_count} queue pending={pending_count} "
+            f"running={running_count} actions={action_count} stale={stale_count}"
+        ),
+        rich_text(f"mode={mode}", base_style=mode_style),
+    )
+    header = RichPanel(
+        summary,
+        title="[bold bright_cyan]rlab fleet watch[/]",
+        title_align="left",
+        border_style=status_style,
+        box=rich_box.ROUNDED,
+        padding=(0, 1),
+        expand=True,
+    )
+
+    image_rows = recent_image_dashboard_rows(snapshot.recent_images)
+    image_body = rich_text("none")
+    if image_rows:
+        latest_commit = (
+            [rich_text(f"latest_commit={snapshot.recent_images[0].commit_message}")]
+            if snapshot.recent_images
+            else []
+        )
+        image_body = RichGroup(
+            *latest_commit,
+            rich_table(["digest", "hash", "published", "commit"], image_rows),
+        )
+    images = rich_panel(
+        1,
+        "recent images",
+        image_body,
+        border_style="magenta",
+    )
+    hosts = rich_panel(
+        2,
+        "hosts",
+        rich_table(
+            ["host", "target", "live", "runner", "digest", "jobs/cap", "old", "action"],
+            host_dashboard_rows(snapshot),
+        ),
+        border_style="cyan",
+    )
+    device_rows = active_device_dashboard_rows(snapshot.devices)
+    device_summaries = [
+        rich_text(
+            f"{device.get('device') or device.get('id') or 'unknown'} "
+            f"cpu={device_detail(device, 'cpu')} ram={device_detail(device, 'memory')} "
+            f"gpu={device_detail(device, 'gpu')} vram={device_detail(device, 'vram')}"
+        )
+        for device in snapshot.devices
+    ]
+    devices = rich_panel(
+        3,
+        "active devices",
+        RichGroup(
+            *device_summaries,
+            rich_table(
+                ["host", "target", "state", "jobs", "cpu", "ram", "gpu", "vram", "health"],
+                device_rows,
+            ),
+        )
+        if device_rows
+        else rich_text("none"),
+        border_style="green",
+    )
+    demand_rows = demand_dashboard_rows(snapshot.demands)
+    demand = rich_panel(
+        4,
+        "queue demand",
+        rich_table(["profile", "target", "pending", "running", "digest"], demand_rows)
+        if demand_rows
+        else rich_text("none"),
+        border_style="blue",
+    )
+    action_rows = action_dashboard_rows(snapshot.plan, snapshot.action_results)
+    actions = rich_panel(
+        5,
+        "actions",
+        rich_table(["host", "kind", "status", "container", "reason"], action_rows)
+        if action_rows
+        else rich_text("none"),
+        border_style="cyan",
+    )
+    panels: list[Any] = [
+        header,
+        images,
+        hosts,
+        devices,
+        RichColumns([demand, actions], equal=True, expand=True),
+    ]
+    stale_rows = stale_train_job_dashboard_rows(snapshot.stale_train_jobs)
+    if stale_rows:
+        panels.append(
+            rich_panel(
+                6,
+                "stale train jobs",
+                rich_table(["host", "action", "id", "target", "owner", "heartbeat", "run"], stale_rows),
+                border_style="yellow",
+            )
+        )
+    job_rows = running_job_dashboard_rows(snapshot.jobs, now=snapshot.captured_at)
+    panels.append(
+        rich_panel(
+            7,
+            "running jobs",
+            rich_table(["id", "target", "digest", "run", "runtime", "heartbeat"], job_rows)
+            if job_rows
+            else rich_text("none"),
+            border_style="green",
+        )
+    )
+    if snapshot.plan.warnings:
+        panels.append(
+            rich_panel(
+                8,
+                "warnings",
+                RichGroup(*(rich_text(f"  {warning}") for warning in snapshot.plan.warnings[:8])),
+                border_style="yellow",
+            )
+        )
+    if failed_results:
+        panels.append(
+            rich_panel(
+                9,
+                "failed actions",
+                RichGroup(
+                    *(
+                        rich_text(
+                            f"host={result.host} kind={result.kind} container={result.container} "
+                            f"exit={result.exit_code} "
+                            f"{result.output.splitlines()[-1] if result.output else ''}"
+                        )
+                        for result in failed_results[:4]
+                    )
+                ),
+                border_style="bright_red",
+            )
+        )
+    panels.append(rich_text("Ctrl-C to stop.", base_style="dim"))
+    with console.capture() as capture:
+        console.print(RichGroup(*panels), end="")
+    return capture.get()
+
+
+def render_latest_watch_dashboard_plain(
     snapshot: LatestWatchSnapshot,
     *,
     color: bool = True,
@@ -2439,8 +2820,9 @@ def render_latest_watch_dashboard(
     running_count = sum(demand.running_count for demand in snapshot.demands)
     title = colorize("rlab fleet watch", "bright_cyan", enabled=color)
     latest = colorize(compact_ref(snapshot.runtime_image_ref), "cyan", enabled=color)
+    clock = colorize(snapshot.captured_at.strftime("%H:%M:%SZ"), "white", enabled=color)
     header = [
-        title,
+        f"{title} {clock}",
         (
             f"time={snapshot.captured_at.isoformat(timespec='seconds')} "
             f"{dashboard_chip('mode', mode, mode_style, color=color)} "
@@ -2462,7 +2844,7 @@ def render_latest_watch_dashboard(
     sections = ["\n".join(header)]
     image_rows = recent_image_dashboard_rows(snapshot.recent_images)
     sections.append(
-        section_label("recent images:", "magenta", color=color)
+        numbered_section(1, " recent images:", "magenta", color=color)
         + "\n"
         + (
             style_table(
@@ -2476,7 +2858,7 @@ def render_latest_watch_dashboard(
     sections.append(
         style_table(
             format_table(
-                ["host", "target", "live", "runner", "digest", "jobs", "old", "action"],
+                ["host", "target", "live", "runner", "digest", "jobs/cap", "old", "action"],
                 host_dashboard_rows(snapshot),
                 max_width=width,
             ),
@@ -2485,7 +2867,7 @@ def render_latest_watch_dashboard(
     )
     device_rows = active_device_dashboard_rows(snapshot.devices)
     sections.append(
-        section_label("active devices:", "green", color=color)
+        numbered_section(2, " active devices:", "green", color=color)
         + "\n"
         + (
             style_table(
@@ -2502,7 +2884,7 @@ def render_latest_watch_dashboard(
     )
     demand_rows = demand_dashboard_rows(snapshot.demands)
     sections.append(
-        section_label("queue demand:", "blue", color=color)
+        numbered_section(3, " queue demand:", "blue", color=color)
         + "\n"
         + (
             style_table(
@@ -2515,7 +2897,7 @@ def render_latest_watch_dashboard(
     )
     action_rows = action_dashboard_rows(snapshot.plan, snapshot.action_results)
     sections.append(
-        section_label("actions:", "cyan", color=color)
+        numbered_section(4, " actions:", "cyan", color=color)
         + "\n"
         + (
             style_table(
@@ -2529,7 +2911,7 @@ def render_latest_watch_dashboard(
     stale_rows = stale_train_job_dashboard_rows(snapshot.stale_train_jobs)
     if stale_rows:
         sections.append(
-            section_label("stale train jobs:", "yellow", color=color)
+            numbered_section(5, " stale train jobs:", "yellow", color=color)
             + "\n"
             + style_table(
                 format_table(
@@ -2540,13 +2922,13 @@ def render_latest_watch_dashboard(
                 color=color,
             )
         )
-    job_rows = running_job_dashboard_rows(snapshot.jobs)
+    job_rows = running_job_dashboard_rows(snapshot.jobs, now=snapshot.captured_at)
     sections.append(
-        section_label("running jobs:", "green", color=color)
+        numbered_section(6, " running jobs:", "green", color=color)
         + "\n"
         + (
             style_table(
-                format_table(["id", "target", "digest", "run", "heartbeat"], job_rows, max_width=width),
+                format_table(["id", "target", "digest", "run", "runtime", "heartbeat"], job_rows, max_width=width),
                 color=color,
             )
             if job_rows
@@ -2555,12 +2937,12 @@ def render_latest_watch_dashboard(
     )
     if snapshot.plan.warnings:
         sections.append(
-            section_label("warnings:", "yellow", color=color)
+            numbered_section(7, " warnings:", "yellow", color=color)
             + "\n"
             + "\n".join(highlight_dashboard_text(f"  {warning}", color=color) for warning in snapshot.plan.warnings[:8])
         )
     if failed_results:
-        lines = [section_label("failed actions:", "bright_red", color=color)]
+        lines = [numbered_section(8, " failed actions:", "bright_red", color=color)]
         for result in failed_results[:4]:
             tail = result.output.splitlines()[-1] if result.output else ""
             lines.append(
@@ -2573,6 +2955,17 @@ def render_latest_watch_dashboard(
         sections.append("\n".join(lines))
     sections.append(colorize("Ctrl-C to stop.", "dim", enabled=color))
     return "\n\n".join(sections)
+
+
+def render_latest_watch_dashboard(
+    snapshot: LatestWatchSnapshot,
+    *,
+    color: bool = True,
+    max_width: int | None = None,
+) -> str:
+    if color and rich_available():
+        return render_latest_watch_dashboard_rich(snapshot, max_width=max_width)
+    return render_latest_watch_dashboard_plain(snapshot, color=color, max_width=max_width)
 
 
 def requested_image_label(args: argparse.Namespace) -> str:
@@ -2934,7 +3327,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--interval",
         type=float,
         default=DEFAULT_WATCH_LATEST_INTERVAL_SECONDS,
-        help="Polling interval in seconds; defaults to 5.",
+        help="Polling interval in seconds; defaults to 15.",
     )
     watch_latest.add_argument("--once", action="store_true", help="Render/apply one poll and exit.")
     watch_latest.add_argument(

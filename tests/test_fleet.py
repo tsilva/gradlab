@@ -4,7 +4,7 @@ import json
 import tempfile
 import unittest
 from argparse import Namespace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest import mock
 
@@ -683,6 +683,7 @@ class FleetPlanTests(unittest.TestCase):
 
     def test_watch_latest_dashboard_summarizes_hosts_actions_and_jobs(self) -> None:
         config = fleet.filter_config_to_host(sample_config(), "beast-3")
+        captured_at = datetime(2026, 6, 26, 19, 15, tzinfo=UTC)
         desired = fleet.build_ensure_runner_plan(
             config,
             host_name="beast-3",
@@ -708,11 +709,11 @@ class FleetPlanTests(unittest.TestCase):
             runtime_image_ref=RUNTIME_IMAGE_REF,
             run_target="rtx4090",
             run_name="b83_l11_b55post21_s23_20260626T190751Z",
-            started_at=datetime.now(UTC),
-            heartbeat_at=datetime.now(UTC),
+            started_at=captured_at - timedelta(hours=1, minutes=5),
+            heartbeat_at=captured_at - timedelta(seconds=12),
         )
         snapshot = fleet.LatestWatchSnapshot(
-            captured_at=datetime(2026, 6, 26, 19, 15, tzinfo=UTC),
+            captured_at=captured_at,
             config=config,
             runtime_image_ref=RUNTIME_IMAGE_REF,
             demands=(demand(profile=None, pending=0, running=1),),
@@ -780,6 +781,9 @@ class FleetPlanTests(unittest.TestCase):
         self.assertIn("15.0/24.0 GB", output)
         self.assertIn("20.0/64.0 GB", output)
         self.assertIn("b83_l11_b55post21_s23_20260626T190751Z", output)
+        self.assertIn("runtime", output)
+        self.assertIn("1h", output)
+        self.assertIn("12s_ago", output)
         self.assertIn("actions:\nnone", output)
 
         color_output = fleet.render_latest_watch_dashboard(snapshot, color=True, max_width=120)
@@ -1144,10 +1148,10 @@ class FleetPlanTests(unittest.TestCase):
         self.assertIn("already owns the lock", frames[0])
         self.assertIn('"pid": 123', frames[0])
 
-    def test_watch_latest_default_interval_is_five_seconds(self) -> None:
+    def test_watch_latest_default_interval_is_fifteen_seconds(self) -> None:
         args = fleet.build_parser().parse_args(["watch"])
 
-        self.assertEqual(args.interval, 5.0)
+        self.assertEqual(args.interval, 15.0)
         self.assertTrue(args.claim_stale_jobs)
         self.assertEqual(args.stale_older_than_seconds, 300)
         self.assertEqual(args.stale_limit, 50)
@@ -1325,6 +1329,23 @@ class FleetPlanTests(unittest.TestCase):
             fleet.format_elapsed_since(datetime(2026, 6, 26, 14, 30, tzinfo=UTC), now=now),
             "2h_ago",
         )
+
+    def test_running_job_dashboard_rows_show_runtime_and_heartbeat_elapsed(self) -> None:
+        now = datetime(2026, 6, 26, 16, 30, tzinfo=UTC)
+        job = fleet.RunningJob(
+            id=123,
+            lease_owner="rlab-beast-3-rtx4090-any-profile-cccccccccccc-4-56ea2c67",
+            profile_id=None,
+            runtime_image_ref=RUNTIME_IMAGE_REF,
+            run_target="rtx4090",
+            run_name="b83_l11_lowkl_lrdecay_image_s121_20260626T153508Z",
+            started_at=now - timedelta(hours=2, minutes=5),
+            heartbeat_at=now - timedelta(seconds=18),
+        )
+
+        rows = fleet.running_job_dashboard_rows([job], now=now)
+
+        self.assertEqual(rows[0][-2:], ["2h", "18s_ago"])
 
     def test_format_containers_keeps_mismatched_job_target_visible(self) -> None:
         container = fleet.ExistingContainer(

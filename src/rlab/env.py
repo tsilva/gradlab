@@ -935,6 +935,7 @@ def make_eval_vec_env(config: EnvConfig, n_envs: int, seed: int, start_method: s
     eval_config = replace(
         resolve_env_config(config),
         done_on_info={},
+        done_on_events=(),
     )
     return make_vec_envs(config=eval_config, n_envs=n_envs, seed=seed, start_method=start_method)
 
@@ -943,6 +944,7 @@ def make_rendered_replay_env(config: EnvConfig | None = None, seed: int | None =
     eval_config = replace(
         resolve_env_config(config or EnvConfig()),
         done_on_info={},
+        done_on_events=(),
     )
     return make_retro_env(config=eval_config, seed=seed)
 
