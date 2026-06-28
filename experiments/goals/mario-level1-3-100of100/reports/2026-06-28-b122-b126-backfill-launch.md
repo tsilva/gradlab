@@ -159,16 +159,83 @@ retire the clipped-progress batch because PPO health is acceptable and all five
 jobs are progressing. The next intervention point remains the first nonzero
 Level1-3 clean-clear metric or the `2M` fixed-budget checkpoint.
 
+## B122-B126 Retirement
+
+A live W&B monitor at `2026-06-28T12:07Z` confirmed that all five B122-B126
+arms were still at zero clean Level1-3 clears after the `2M` fixed-budget
+checkpoint:
+
+| Arm | Job | History step | Peak L1-3 rate | Peak min rate | L1-3 count | Decision |
+| --- | ---: | ---: | ---: | ---: | ---: | --- |
+| B122 | `104` | `2123200` | `0` | `0` | `0` | cancel |
+| B123 | `105` | `2088064` | `0` | `0` | `0` | cancel |
+| B124 | `106` | `2069344` | `0` | `0` | `0` | cancel |
+| B125 | `107` | `2077776` | `0` | `0` | `0` | cancel |
+| B126 | `108` | `2071280` | `0` | `0` | `0` | cancel |
+
+The cancellation requests all returned `cancel_requested=1`. This retires the
+clipped-progress/modest-completion family as negative Level1-3 screen evidence:
+PPO remained numerically healthy, but the policy never generated a clean
+level-change completion signal.
+
+## B127-B131 Launch
+
+The next screen batch moves to stronger survival and completion shaping while
+preserving the same game, Level1-3 state, action set, Stable Retro event
+contract, `done_on_events=life_loss,level_change`, 5M cap, and
+`train/info/level_complete/rate/min/last > 0.99` early stop:
+
+| Job | Spec | Run | W&B |
+| ---: | --- | --- | --- |
+| `109` | `b127-lowprogress-death50-complete50-l13-screen` | `b127_l13_lowprogress_death50_complete50_s80_20260628T120806Z` | [`yi2npvew`](https://wandb.ai/tsilva/SuperMarioBros-NES/runs/yi2npvew) |
+| `110` | `b128-lowprogress-death75-complete75-l13-screen` | `b128_l13_lowprogress_death75_complete75_s80_20260628T120820Z` | [`ny9ysmdn`](https://wandb.ai/tsilva/SuperMarioBros-NES/runs/ny9ysmdn) |
+| `111` | `b129-lowprogress-complete100-slowent-l13-screen` | `b129_l13_lowprogress_complete100_slowent_s80_20260628T120837Z` | [`4398ntt5`](https://wandb.ai/tsilva/SuperMarioBros-NES/runs/4398ntt5) |
+| `112` | `b130-gamma097-lowprogress-complete50-l13-screen` | `b130_l13_gamma097_lowprogress_complete50_s80_20260628T120859Z` | [`a7lh2v2t`](https://wandb.ai/tsilva/SuperMarioBros-NES/runs/a7lh2v2t) |
+| `113` | `b131-midpress-lowprogress-complete100-l13-screen` | `b131_l13_midpress_lowprogress_complete100_s80_20260628T120924Z` | [`nf20tius`](https://wandb.ai/tsilva/SuperMarioBros-NES/runs/nf20tius) |
+
+After launch, the queue showed:
+
+```text
+train_jobs: {"canceled": 10, "failed": 5, "running": 5}
+eval_jobs: {}
+```
+
+`rlab-fleet plan` and `rlab-fleet reconcile` both reported that the existing
+beast-3 RTX4090 runner already matched desired capacity:
+
+```text
+desired_deployments=1
+existing_containers=1
+actions=0
+keep rlab-beast-3-rtx4090-any-profile-063e55231d69
+```
+
+The fleet command warned that beast-2 SSH timed out while listing managed
+containers, but this does not affect the active beast-3 Level1-3 training
+capacity.
+
+Initial W&B telemetry at `2026-06-28T12:11Z` confirms all five new runs are
+actively logging:
+
+| Arm | Job | History step | L1-3 rate | L1-3 count | Reward | FPS |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| B127 | `109` | `282864` | `0` | `0` | `90.27` | `1674` |
+| B128 | `110` | `231840` | `0` | `0` | `-4.4585` | `1449` |
+| B129 | `111` | `196560` | `0` | `0` | `18.226002` | `1370` |
+| B130 | `112` | `172032` | `0` | `0` | `75.664` | `1330` |
+| B131 | `113` | `123344` | `0` | `0` | `15.839499` | `1243` |
+
 ## Next Training Decision
 
-Monitor B122-B126 first. The useful early triggers are:
+Monitor B127-B131 first. The useful early triggers are:
 
 - first nonzero `train/info/level_complete/from/0-2/count`
 - first nonzero `train/info/level_complete/from/0-2/rate`
+- first nonzero `train/info/level_complete/rate/min/last`
 - the `2M` fixed-budget checkpoint if all five remain at zero
 
-If one B122-B126 arm produces clears, use it as the parent for the next legal
+If one B127-B131 arm produces clears, use it as the parent for the next legal
 training batch or confirmation path depending on the peak rate. If all five are
-still zero around `2M`, treat clipped progress alone as insufficient and design
-the next batch around stronger survival/credit-assignment hyperparameters while
-preserving the same environment and event contract.
+still zero around `2M`, treat reward shaping alone as insufficient and move the
+next batch toward credit assignment or exploration changes while preserving the
+same environment and event contract.
