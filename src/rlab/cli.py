@@ -49,6 +49,7 @@ TRAIN_VALUE_OPTIONS = {
     "task_conditioning_info_values": "--task-conditioning-info-values",
     "frame_skip": "--frame-skip",
     "max_episode_steps": "--max-episode-steps",
+    "observation_size": "--observation-size",
     "hud_crop_top": "--hud-crop-top",
     "eval_freq": "--eval-freq",
     "eval_episodes": "--eval-episodes",
@@ -341,6 +342,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Max-pool over the last two raw frames inside each frame-skip step.",
     )
     parser.add_argument("--max-episode-steps", type=int, default=4500)
+    parser.add_argument(
+        "--observation-size",
+        type=int,
+        default=parser_defaults_env.observation_size,
+    )
     parser.add_argument(
         "--hud-crop-top",
         type=int,
