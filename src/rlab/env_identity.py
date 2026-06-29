@@ -16,7 +16,9 @@ PREPROCESSING_KEYS = (
     "max_pool_frames",
     "sticky_action_prob",
     "observation_size",
+    "obs_resize",
     "hud_crop_top",
+    "obs_crop",
     "obs_resize_algorithm",
 )
 TASK_CONDITIONING_KEYS = (
@@ -60,12 +62,14 @@ def _normalize_preprocessing(identity: dict[str, Any]) -> None:
     preprocessing.setdefault("obs_grayscale", True)
     preprocessing.setdefault("obs_resize_algorithm", "area")
     preprocessing.setdefault("copy_observations", False)
-    observation_size = preprocessing.get("observation_size", 84)
-    preprocessing.setdefault("observation_size", observation_size)
-    preprocessing.setdefault("obs_resize", [observation_size, observation_size])
+    if "obs_resize" not in preprocessing:
+        observation_size = preprocessing.get("observation_size", 84)
+        preprocessing["obs_resize"] = [observation_size, observation_size]
+    preprocessing.pop("observation_size", None)
     if "obs_crop" not in preprocessing:
         hud_crop_top = preprocessing.get("hud_crop_top")
         preprocessing["obs_crop"] = [hud_crop_top, 0, 0, 0] if hud_crop_top else None
+    preprocessing.pop("hud_crop_top", None)
     task_conditioning = identity.get("task_conditioning")
     if isinstance(task_conditioning, Mapping) and task_conditioning.get("task_conditioning"):
         layout = "dict_image_task"
@@ -125,8 +129,9 @@ def environment_identity_from_train_config(
     identity.setdefault("provider", "stable_retro")
     if "env_id" not in identity and train_config.get("game") is not None:
         identity["env_id"] = deepcopy(train_config["game"])
-    if "provider_env_id" not in identity and train_config.get("game") is not None:
-        identity["provider_env_id"] = deepcopy(train_config["game"])
+    if "env_id" not in identity and identity.get("provider_env_id") is not None:
+        identity["env_id"] = deepcopy(identity["provider_env_id"])
+    identity.pop("provider_env_id", None)
 
     _setdefault_section(identity, "state", _copy_present(train_config, STATE_KEYS))
     _setdefault_section(identity, "action", _copy_present(train_config, ACTION_KEYS))
@@ -150,11 +155,48 @@ def environment_identity_from_train_config(
     return identity
 
 
+def _hud_crop_top_from_obs_crop(obs_crop: Any) -> int | None:
+    if obs_crop is None:
+        return 0
+    if not isinstance(obs_crop, list | tuple) or len(obs_crop) != 4:
+        raise ValueError("environment.preprocessing.obs_crop must be [top, right, bottom, left]")
+    top, right, bottom, left = obs_crop
+    if any(value not in (0, None) for value in (right, bottom, left)):
+        raise ValueError(
+            "environment.preprocessing.obs_crop cannot be materialized into the current "
+            "runtime unless right, bottom, and left are 0",
+        )
+    if not isinstance(top, int) or isinstance(top, bool) or top < 0:
+        raise ValueError("environment.preprocessing.obs_crop[0] must be a non-negative integer")
+    return top
+
+
+def _observation_size_from_obs_resize(obs_resize: Any) -> int:
+    if not isinstance(obs_resize, list | tuple) or len(obs_resize) != 2:
+        raise ValueError("environment.preprocessing.obs_resize must be [height, width]")
+    height, width = obs_resize
+    if (
+        not isinstance(height, int)
+        or isinstance(height, bool)
+        or not isinstance(width, int)
+        or isinstance(width, bool)
+        or height <= 0
+        or width <= 0
+    ):
+        raise ValueError("environment.preprocessing.obs_resize values must be positive integers")
+    if height != width:
+        raise ValueError(
+            "environment.preprocessing.obs_resize cannot be materialized into the current "
+            "runtime unless height and width match",
+        )
+    return height
+
+
 def train_config_from_environment(environment: Mapping[str, Any] | None) -> dict[str, Any]:
     if not isinstance(environment, Mapping):
         return {}
     train_config: dict[str, Any] = {}
-    env_id = environment.get("provider_env_id", environment.get("env_id"))
+    env_id = environment.get("env_id", environment.get("provider_env_id"))
     if env_id is not None:
         train_config["game"] = deepcopy(env_id)
     for section in (
@@ -168,6 +210,14 @@ def train_config_from_environment(environment: Mapping[str, Any] | None) -> dict
         value = environment.get(section)
         if isinstance(value, Mapping):
             train_config.update(deepcopy(dict(value)))
+    if "obs_crop" in train_config and "hud_crop_top" not in train_config:
+        train_config["hud_crop_top"] = _hud_crop_top_from_obs_crop(train_config["obs_crop"])
+    train_config.pop("obs_crop", None)
+    if "obs_resize" in train_config and "observation_size" not in train_config:
+        train_config["observation_size"] = _observation_size_from_obs_resize(
+            train_config["obs_resize"],
+        )
+    train_config.pop("obs_resize", None)
     return train_config
 
 

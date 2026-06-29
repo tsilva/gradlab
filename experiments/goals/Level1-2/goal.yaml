@@ -1,20 +1,34 @@
+# Hydra composition list; imports the shared single-level 100/100 contract first.
 defaults:
+# Shared single-level base; supplies common environment, success criteria, runtime, and search rules.
 - ../_shared/mario-single-level-100of100@_global_
+# Apply this file after the base; lets Level1-2 define its state, seeds, evidence, and defaults.
 - _self_
+# Goal slug; must match the directory so tools can address this contract unambiguously.
 goal_slug: Level1-2
+# Human-readable title; helps reports and operators identify the goal quickly.
 title: Sample-efficient SuperMarioBros-NES Level1-2 completion
+# Last intentional contract update date; distinguishes current goal text from stale history.
 updated_at: '2026-06-27'
+# Repo path for goal-owned specs and evidence; validators use it to catch moved or mismatched files.
 goal_dir: experiments/goals/Level1-2
+# Goal-specific objective notes; shared numeric thresholds come from the base contract.
 objective:
-  states:
-  - Level1-2
+  # Metric semantics note; explains the exact per-source metric expected for this single start state.
   primary_metric_note: Primary metric to maximize during training. For this single-source Level1-2 goal it should match train/info/level_complete/from/0-1/rate once the source window is full; out-of-process eval remains the promotion check.
+  # Attempt denominator note; prevents confusing terminal episodes with source-level attempts.
   attempt_denominator: Source-level Level1-2 attempts. In terminal-on-level-change runs this is equivalent to completed terminal episodes; in continued multi-level runs it also counts non-terminal natural level transitions.
+# Goal-specific environment overlay; only the source state differs from the shared Mario env.
 environment:
+  # State sampling definition; fixes the start state that attempts are counted from.
   state:
+    # Stable Retro state id; Level1-2 is the only source for this goal.
     state: Level1-2
-environment_hash: sha256:2c21832472aa24941335a47481bfd044c8448f7a426965a27110702fd3666888
+# Deterministic hash of the fully composed environment; makes exact env equality cheap to compare.
+environment_hash: sha256:fbbbceaca032ccd4e0fe80d5c123dacc60aac04f26005d6f1512a198750b72a7
+# Goal-specific candidate ranking policy.
 selection_policy:
+  # Ordered ranking metrics; primary bottleneck completion comes first, eval diagnostics follow.
   rank_order:
   - max(train/info/level_complete/rate/min/last)
   - max(train/info/level_complete/rate/mean/last)
@@ -23,27 +37,42 @@ selection_policy:
   - eval/done/level_change/rate
   - eval/progress/x/max
   - eval/reward/mean
+# Seed protocol; fixes screening and confirmation randomness labels for comparable evidence.
 seed_protocol:
+  # First seed used to screen candidate recipes cheaply before confirmation.
   screen:
   - 60
+  # Confirmation seeds; five-seed set guards against promoting a lucky single run.
   confirm:
   - 60
   - 61
   - 62
   - 63
   - 64
+  # Seed interpretation note; avoids claiming bitwise reproducibility from CUDA training.
   same_seed_note: Same seed is a controlled randomization label, not bitwise reproducibility under default CUDA.
+# Current best known evidence for this goal.
 incumbent:
+  # Recipe slug for the incumbent; links current evidence to a reusable recipe name.
   recipe_slug: b46-b44-same-hparams-level1-2
+  # Human-readable teacher recipe file; preserves why this prior run mattered.
   recipe_file: experiments/goals/Level1-2/recipes/supermariobros_nes_level1_2_teacher_recipe.md
+  # Runtime used for incumbent evidence; flags that old evidence may need runtime revalidation.
   evidence_runtime: stable-retro-turbo==1.0.0.post14-era recipe evidence
+  # Incumbent status; explains this is teacher evidence, not a confirmed baseline.
   status: single-seed teacher evidence; not a confirmed baseline; revalidate active launches under post21 runtime
+  # Mean stop step; null because the current confirmation protocol has not produced one.
   mean_stop_step: null
+  # Seeds that succeeded historically; records evidence breadth without implying current confirmation.
   successful_seeds:
   - 60
+  # W&B run id for the historical teacher; lets operators inspect raw metrics.
   wandb_run_id: 5fpk7ki3
+  # W&B run name for the historical teacher; useful for search and report links.
   wandb_run_name: b46_b44_level1_2_same_hparams_5m_stop100ep100_seed60_20260620_124408
+# Default launch spec for this goal; queue tooling can use it as the current representative run.
 default_train_spec_file: experiments/goals/Level1-2/specs/b85-b46-post21-five-seed-l12-confirm.yaml
+# Historical context; keeps old results interpretable without changing the active success contract.
 historical_context:
 - Level1-2 was previously useful as a single-level teacher for Level1-1/Level1-2 distillation, but that is not the same as a confirmed five-seed baseline.
 - The old completed-episode stop flags are retired from new launches; use attempt-window metrics from configured info events instead.

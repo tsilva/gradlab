@@ -57,7 +57,7 @@ objective:
   max_train_timesteps: 5000000
 environment:
   provider: stable_retro
-  provider_env_id: SuperMarioBros-Nes-v0
+  env_id: SuperMarioBros-Nes-v0
   state:
     state: Level1-1
   action:
@@ -68,9 +68,7 @@ environment:
     frame_stack: 4
     max_pool_frames: false
     sticky_action_prob: 0.0
-    observation_size: 84
     obs_resize: [84, 84]
-    hud_crop_top: 32
     obs_crop: [32, 0, 0, 0]
     obs_grayscale: true
     obs_resize_algorithm: area
@@ -83,7 +81,7 @@ environment:
       life_loss: [lives, decrease]
       level_change: [[levelHi, levelLo], change]
     done_on_events: [life_loss, level_change]
-environment_hash: sha256:a42188cdcbf9a83f7702efc7c51806cf76b552be1ff7f01fb8c7976858b60dc4
+environment_hash: sha256:ce3af6d41b4ef1c0d953f1c5edcb1734c2846208b16cfada98a22ccefa46764f
 selection_policy:
   rank_order: [train/info/level_complete/rate/min/last]
 seed_protocol:
@@ -184,13 +182,15 @@ objective:
   max_train_timesteps: 5000000
 environment:
   provider: stable_retro
-  provider_env_id: SuperMarioBros-Nes-v0
+  env_id: SuperMarioBros-Nes-v0
   state:
     state: Level1-1
   action:
     action_set: simple
   preprocessing:
     frame_skip: 4
+    obs_resize: [84, 84]
+    obs_crop: [32, 0, 0, 0]
   termination:
     max_episode_steps: 4500
 environment_hash: sha256:deadbeef
@@ -216,8 +216,13 @@ execution:
         self.assertNotIn("extends", document)
         self.assertEqual(document["goal_slug"], "Level1-3")
         self.assertEqual(document["objective"]["game"], "SuperMarioBros-Nes-v0")
+        self.assertNotIn("states", document["objective"])
         self.assertEqual(document["environment"]["provider"], "stable_retro")
         self.assertEqual(document["environment"]["state"]["state"], "Level1-3")
+        self.assertNotIn("hud_crop_top", document["environment"]["preprocessing"])
+        self.assertEqual(document["environment"]["preprocessing"]["obs_crop"], [32, 0, 0, 0])
+        self.assertNotIn("observation_size", document["environment"]["preprocessing"])
+        self.assertEqual(document["environment"]["preprocessing"]["obs_resize"], [84, 84])
         self.assertEqual(document["execution"]["primary_train_host"], "beast-3")
 
     def test_validate_is_registered_on_unified_cli(self) -> None:
@@ -246,7 +251,7 @@ execution:
         document = json.loads(stdout.getvalue())
         self.assertNotIn("extends", document)
         self.assertEqual(document["goal_slug"], "Level1-3")
-        self.assertEqual(document["environment"]["provider_env_id"], "SuperMarioBros-Nes-v0")
+        self.assertEqual(document["environment"]["env_id"], "SuperMarioBros-Nes-v0")
         self.assertEqual(document["execution"]["primary_train_target"], "rtx4090")
 
 

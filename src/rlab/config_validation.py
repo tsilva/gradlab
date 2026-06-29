@@ -163,6 +163,34 @@ def _require_int_list_value(value: Any, *, label: str) -> list[int]:
     return result
 
 
+def _validate_obs_crop(preprocessing: Mapping[str, Any], *, label: str) -> None:
+    if "hud_crop_top" in preprocessing:
+        raise ValueError(f"{label}.hud_crop_top is redundant; use obs_crop")
+    if "obs_crop" not in preprocessing:
+        raise ValueError(f"{label}.obs_crop is required")
+    value = preprocessing["obs_crop"]
+    if value is None:
+        return
+    if not isinstance(value, Sequence) or isinstance(value, str | bytes) or len(value) != 4:
+        raise ValueError(f"{label}.obs_crop must be [top, right, bottom, left]")
+    for index, item in enumerate(value):
+        if not _is_int(item) or item < 0:
+            raise ValueError(f"{label}.obs_crop[{index}] must be a non-negative integer")
+
+
+def _validate_obs_resize(preprocessing: Mapping[str, Any], *, label: str) -> None:
+    if "observation_size" in preprocessing:
+        raise ValueError(f"{label}.observation_size is redundant; use obs_resize")
+    if "obs_resize" not in preprocessing:
+        raise ValueError(f"{label}.obs_resize is required")
+    value = preprocessing["obs_resize"]
+    if not isinstance(value, Sequence) or isinstance(value, str | bytes) or len(value) != 2:
+        raise ValueError(f"{label}.obs_resize must be [height, width]")
+    for index, item in enumerate(value):
+        if not _is_int(item) or item <= 0:
+            raise ValueError(f"{label}.obs_resize[{index}] must be a positive integer")
+
+
 def _require_schema_version(document: Mapping[str, Any], expected: int, *, label: str) -> None:
     schema_version = _require_int(document, "schema_version", label=label, minimum=1)
     if schema_version != expected:
@@ -189,21 +217,23 @@ def _validate_environment_identity(
     )
     _require_non_empty_string(environment, "provider", label=f"{label}.environment")
     if not (
-        isinstance(environment.get("provider_env_id"), str)
-        and environment["provider_env_id"].strip()
-        or isinstance(environment.get("env_id"), str)
+        isinstance(environment.get("env_id"), str)
         and environment["env_id"].strip()
+        or isinstance(environment.get("provider_env_id"), str)
+        and environment["provider_env_id"].strip()
     ):
-        raise ValueError(f"{label}.environment must define provider_env_id or env_id")
+        raise ValueError(f"{label}.environment must define env_id")
     action = _require_mapping(
         _require_key(environment, "action", label=f"{label}.environment"),
         label=f"{label}.environment.action",
     )
     _require_non_empty_string(action, "action_set", label=f"{label}.environment.action")
-    _require_mapping(
+    preprocessing = _require_mapping(
         _require_key(environment, "preprocessing", label=f"{label}.environment"),
         label=f"{label}.environment.preprocessing",
     )
+    _validate_obs_crop(preprocessing, label=f"{label}.environment.preprocessing")
+    _validate_obs_resize(preprocessing, label=f"{label}.environment.preprocessing")
     _require_mapping(
         _require_key(environment, "termination", label=f"{label}.environment"),
         label=f"{label}.environment.termination",
@@ -264,7 +294,6 @@ def _validate_goal_contract_document(
 
     objective = _require_mapping(_require_key(document, "objective", label=label), label=f"{label}.objective")
     _require_non_empty_string(objective, "game", label=f"{label}.objective")
-    objective_states = _require_string_list(objective, "states", label=f"{label}.objective")
     _require_non_empty_string(objective, "algorithm", label=f"{label}.objective")
     _require_non_empty_string(objective, "primary_metric", label=f"{label}.objective")
     _require_number(objective, "success_threshold", label=f"{label}.objective")
@@ -282,9 +311,13 @@ def _validate_goal_contract_document(
         environment_states = _require_string_list(state_section, "states", label=f"{label}.environment.state")
     else:
         raise ValueError(f"{label}.environment.state must define state or states")
+    if "states" in objective:
+        objective_states = _require_string_list(objective, "states", label=f"{label}.objective")
+    else:
+        objective_states = environment_states
     if environment_states != objective_states:
         raise ValueError(
-            f"{label}.environment.state must match objective.states: "
+            f"{label}.objective.states must match environment.state when present: "
             f"{environment_states!r} != {objective_states!r}"
         )
 

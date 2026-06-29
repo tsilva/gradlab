@@ -1,38 +1,61 @@
+# Hydra composition list; imports only the common Mario env/runtime base, not the single-level 100/100 overlay.
 defaults:
+# Shared Mario base; supplies common environment, runtime, constraints, and fleet defaults.
 - ../_shared/mario-native-vector-common@_global_
+# Apply this file after the base; lets the mixed-level discovery goal define its own objective and protocol.
 - _self_
+# Goal slug; must match the directory so tools can address this contract unambiguously.
 goal_slug: Levels_2_d25102
+# Human-readable title; makes clear this is a mixed Level1-1/Level1-2 recipe search.
 title: SuperMarioBros-NES Level1-1/Level1-2 mixed-policy high-watermark recipe search
+# Last intentional contract update date; distinguishes current goal text from stale history.
 updated_at: '2026-06-27'
+# Repo path for goal-owned specs and evidence; validators use it to catch moved or mismatched files.
 goal_dir: experiments/goals/Levels_2_d25102
+# Objective fields unique to this mixed-source discovery goal.
 objective:
-  states:
-  - Level1-1
-  - Level1-2
+  # Metric semantics note; explains why the min rate, not pooled mean, is the main signal.
   primary_metric_note: Primary metric to maximize during training. It is the bottleneck across the latest available per-source rolling clear rates; use train/info/level_complete/rate/mean/last only as a companion signal or tiebreaker.
+  # Balance guard threshold; requires both source levels to stay useful rather than optimizing only one.
   balance_guard_threshold: 0.8
+  # Balance guard comparison; strict greater-than avoids treating exactly 0.80 as solved.
   balance_guard_threshold_operator: '>'
+  # Success threshold for the discovery metric; mirrors the balance guard for this goal.
   success_threshold: 0.8
+  # Success comparison; strict greater-than matches the stated discovery target.
   success_threshold_operator: '>'
+  # Rolling attempt window; keeps per-source rates comparable with single-level contracts.
   success_window_attempts: 100
+  # Full success definition; records that both seeds in a batch must exceed the bottleneck target.
   success_requirement: Maximize peak train/info/level_complete/rate/min/last. A balanced success requires both seeds in the same batch to each reach that bottleneck metric strictly greater than 0.80 within the 5M-step cap.
+  # Attempt denominator note; maps each mixed source state to its metric namespace.
   attempt_denominator: Per-source rolling 100-attempt windows from train/info/level_complete/from/<prev>/rate. Level1-1 maps to 0-0 and Level1-2 maps to 0-1.
+  # Stop rules that are explicitly disallowed; protects against premature or misleading success calls.
   forbidden_stop_rules:
   - Do not early-stop on the first high-watermark crossing; later collapse and recovery can both happen.
   - Do not use pooled completion or final checkpoint reward as the success metric.
+# Goal-specific environment overlay; changes the shared single-state contract into a two-state distribution.
 environment:
+  # State sampling definition; fixes which source levels are trained together.
   state:
+    # Stable Retro state ids; both Level1-1 and Level1-2 contribute to the bottleneck metric.
     states:
     - Level1-1
     - Level1-2
-environment_hash: sha256:cba9aadfc557491650ec5d8ebe4df193e36176f93558a514a5a596f3f986aece
+# Deterministic hash of the fully composed environment; makes exact env equality cheap to compare.
+environment_hash: sha256:24f30307a1c83c08a57c099f08571d2449a7f8ee13d6d1fec6cbb42a01ba4775
+# Goal-specific constraints; narrows what recipe changes are considered legal.
 constraints:
+  # Default search levers; keeps discovery focused on reward, hyperparameters, and sampling weights.
   allowed_default_levers:
   - reward_function
   - hyperparameters
   - state_sampling_weights
+# Candidate ranking policy for the mixed-level discovery search.
 selection_policy:
+  # Evidence source for ranking; training high-watermark is the goal for this discovery contract.
   source: training_high_watermark
+  # Ordered ranking metrics; bottleneck first, per-source rates and stability diagnostics after.
   rank_order:
   - max(train/info/level_complete/rate/min/last)
   - max(train/info/level_complete/rate/mean/last)
@@ -41,12 +64,19 @@ selection_policy:
   - earlier_peak_step
   - lower_peak_instability_after_crossing
   - rollout/ep_rew_mean
+  # Eval role; checkpoint eval is useful evidence but not the formal success metric here.
   checkpoint_eval_use: recommended_after_candidate
+  # Training metrics role; makes the high-watermark history the official selection surface.
   training_metrics_use: selection_for_this_discovery_goal
+# Runtime override for this discovery goal.
 runtime:
+  # Runtime image policy; uses the latest successful digest-pinned train image by default.
   runtime_image_ref: latest successful digest-pinned GHCR train image from the rlab train image workflow
+# Seed protocol; defines how mixed-level recipe batches are screened.
 seed_protocol:
+  # Number of seeds in each screen batch; two seeds are required to test balanced behavior.
   screen_batch_size: 2
+  # Paired screen seeds; each pair is evaluated as a recipe batch.
   screen_pairs:
   - - 198
     - 199
@@ -58,25 +88,45 @@ seed_protocol:
     - 205
   - - 206
     - 207
+  # Seed interpretation note; avoids claiming bitwise reproducibility from CUDA training.
   same_seed_note: Same seed is a controlled randomization label, not bitwise reproducibility under default CUDA.
+# Budget policy for the discovery search.
 cap_policy:
+  # Active training budget; every candidate trains to this cap because high-watermarks can recover late.
   active_cap_timesteps: 5000000
+  # Cap increase rule; prevents budget creep while comparing mixed-level recipes.
   increase_rule: Do not increase the cap for this goal.
+  # Early stop rule; explicitly disables high-watermark early stops for this unstable mixed objective.
   early_stop_rule: No early stop on train/info/level_complete/rate/min/last or train/info/level_complete/rate/mean/last; train to the cap and select by the peak history.
+# Search protocol describes how to iterate recipe changes and declare success.
 search_protocol:
+  # Screening rule; explains how two-seed batches are launched and ranked.
   screen: Launch two-seed recipe batches on beast-3. Advance recipes by peak train/info/level_complete/rate/min/last; use train/info/level_complete/rate/mean/last as a companion signal for ties and diagnostics.
+  # Iteration rule; names the legal knobs to change between batches.
   iterate: 'Change legal recipe levers in small interpretable steps: PPO update pressure, state sampling weights, entropy schedule, value/reward scaling, and true completion reward.'
+  # Success rule; requires checked-in specs and raw W&B history, not only summaries.
   success: Declare the goal satisfied only when the same checked-in spec produces two completed runs whose sampled or raw W&B history proves peak train/info/level_complete/rate/min/last > 0.80 for both seeds.
+# Current best known evidence for this mixed-level goal.
 incumbent:
+  # Recipe/spec slug for the current near-miss; anchors comparisons to a concrete checked-in spec.
   recipe_slug: b86-b74current-l11l12-latest-five-seed
+  # Spec file for the current near-miss; lets operators reproduce or inspect the incumbent.
   recipe_file: experiments/goals/Levels_2_d25102/specs/b86-b74current-l11l12-latest-five-seed.yaml
+  # Incumbent status; explains why the best known run is not considered solved.
   status: near-miss; one seed reached exactly 0.80, but no two-seed batch satisfied >0.80 on both seeds
+  # Best W&B run name; links the strongest single run to raw evidence.
   best_run_name: b86_l11l12_b74current_s195_20260627T091726Z
+  # Best bottleneck peak; records the near-miss value for quick comparison.
   best_peak_rate_min_last: 0.8
+  # Step of the best bottleneck peak; helps compare sample efficiency and instability.
   best_peak_step: 4070256
+# Default launch spec for this goal; queue tooling can use it as the current representative run.
 default_train_spec_file: experiments/goals/Levels_2_d25102/specs/b87-lowpress-l11l12-two-seed.yaml
+# Execution overlay for this discovery search.
 execution:
+  # Backfill rule; keeps the queue productive while recipe batches still have decision value.
   backfill_rule: Backfill finished slots while queued recipe batches still have decision value.
+# Expected report fields for batch records; keeps mixed-level search notes consistent.
 batch_record_fields:
 - hypothesis
 - config_delta
@@ -90,6 +140,7 @@ batch_record_fields:
 - peak_steps
 - decision
 - next_delta
+# Operator notes that clarify how to interpret this discovery goal.
 notes:
 - This is a discovery goal around the training high-watermark requested by the operator; checkpoint eval remains useful for interpreting candidates but is not the success metric.
 - Use W&B history, not only run summary, because run summary stores the final value for train/info/level_complete/rate/mean/last and train/info/level_complete/rate/min/last.

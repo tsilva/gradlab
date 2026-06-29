@@ -1,20 +1,34 @@
+# Hydra composition list; imports the shared single-level 100/100 contract first.
 defaults:
+# Shared single-level base; supplies common environment, success criteria, runtime, and search rules.
 - ../_shared/mario-single-level-100of100@_global_
+# Apply this file after the base; lets Level1-3 define its state, seeds, evidence, and defaults.
 - _self_
+# Goal slug; must match the directory so tools can address this contract unambiguously.
 goal_slug: Level1-3
+# Human-readable title; helps reports and operators identify the goal quickly.
 title: Sample-efficient SuperMarioBros-NES Level1-3 completion
+# Last intentional contract update date; distinguishes current goal text from stale history.
 updated_at: '2026-06-28'
+# Repo path for goal-owned specs and evidence; validators use it to catch moved or mismatched files.
 goal_dir: experiments/goals/Level1-3
+# Goal-specific objective notes; shared numeric thresholds come from the base contract.
 objective:
-  states:
-  - Level1-3
+  # Metric semantics note; explains the exact per-source metric expected for this single start state.
   primary_metric_note: Primary metric to maximize during training. For this single-source Level1-3 goal it should match train/info/level_complete/from/0-2/rate once the source window is full; out-of-process eval remains the promotion check.
+  # Attempt denominator note; prevents confusing terminal episodes with source-level attempts.
   attempt_denominator: Source-level Level1-3 attempts. In terminal-on-level-change runs this is equivalent to completed terminal episodes; in continued multi-level runs it also counts non-terminal natural level transitions.
+# Goal-specific environment overlay; only the source state differs from the shared Mario env.
 environment:
+  # State sampling definition; fixes the start state that attempts are counted from.
   state:
+    # Stable Retro state id; Level1-3 is the only source for this goal.
     state: Level1-3
-environment_hash: sha256:9106bbbe8038c6dbdefa110fbe93bbade23f8ac832848fcaab0448b26eddcd12
+# Deterministic hash of the fully composed environment; makes exact env equality cheap to compare.
+environment_hash: sha256:400d8a0b5a390da4f45658115e583fb50ea448e50a4122a25cf3e87915d6f671
+# Goal-specific candidate ranking policy.
 selection_policy:
+  # Ordered ranking metrics; primary bottleneck completion comes first, eval diagnostics follow.
   rank_order:
   - max(train/info/level_complete/rate/min/last)
   - max(train/info/level_complete/rate/mean/last)
@@ -23,26 +37,41 @@ selection_policy:
   - eval/done/level_change/rate
   - eval/progress/x/max
   - eval/reward/mean
+# Seed protocol; fixes screening and confirmation randomness labels for comparable evidence.
 seed_protocol:
+  # First seed used to screen candidate recipes cheaply before confirmation.
   screen:
   - 80
+  # Confirmation seeds; five-seed set guards against promoting a lucky single run.
   confirm:
   - 80
   - 81
   - 82
   - 83
   - 84
+  # Seed interpretation note; avoids claiming bitwise reproducibility from CUDA training.
   same_seed_note: Same seed is a controlled randomization label, not bitwise reproducibility under default CUDA.
+# Goal-specific budget and stopping policy.
 cap_policy:
+  # Early stop definition; records the strict success stop used by Level1-3 train specs.
   early_stop_rule: Stop training once train/info/level_complete/rate/min/last > 0.99; this is the strict 100/100 source-attempt window for the single Level1-3 start state.
+# Current best known evidence for this goal.
 incumbent:
+  # Recipe slug for the incumbent; null means no confirmed recipe owns the goal yet.
   recipe_slug: null
+  # Incumbent evidence file; null because there is no confirmed incumbent recipe yet.
   recipe_file: null
+  # Runtime used for incumbent evidence; null because there is no confirmed incumbent yet.
   evidence_runtime: null
+  # Incumbent status; tells operators to use earlier level contracts as templates, not evidence.
   status: no confirmed incumbent yet; use the current Level1-1 and Level1-2 100/100 goal contracts as the metric and promotion templates
+  # Mean stop step; null until confirmation produces successful seeds.
   mean_stop_step: null
+  # Successful confirmed seeds; empty until a recipe satisfies this goal.
   successful_seeds: []
+# Default launch spec for this goal; queue tooling can use it as the current representative run.
 default_train_spec_file: experiments/goals/Level1-3/specs/b117-b55post21-l13-screen.yaml
+# Historical context; keeps old results interpretable without changing the active success contract.
 historical_context:
 - This goal uses the same 100/100 rolling source-attempt success criterion as the single-level Level1-1 and Level1-2 goals.
 - The old completed-episode stop flags are retired from new launches; use attempt-window metrics from configured info events instead.
