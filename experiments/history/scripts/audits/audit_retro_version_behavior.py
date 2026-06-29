@@ -8,7 +8,7 @@ from collections import Counter
 from typing import Any
 
 import numpy as np
-from stable_retro import StableRetroNativeVecEnv
+from stable_retro import RetroVecEnv
 
 from rlab.env import EnvConfig, action_names_for_set, make_fast_retro_env, make_vec_envs
 from rlab.targets import SuperMarioBrosNesV0Target, target_for_game
@@ -202,7 +202,7 @@ def run_raw_native_vector_trace(
     target = target_for_game(config.game)
     index_to_mask = [target.action_library[name] for name in action_names]
     action_indices = action_sequence(sequence_name, length * n_envs, len(action_names), seed)
-    env = StableRetroNativeVecEnv(
+    env = RetroVecEnv(
         config.game,
         num_envs=n_envs,
         state=config.state or None,
@@ -216,6 +216,7 @@ def run_raw_native_vector_trace(
         frame_stack=4,
         maxpool_last_two=config.max_pool_frames,
         copy_observations=False,
+        obs_layout="chw",
     )
     env.seed(seed)
     obs = env.reset()

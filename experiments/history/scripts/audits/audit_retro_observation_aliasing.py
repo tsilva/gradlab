@@ -6,7 +6,7 @@ import json
 from typing import Any
 
 import numpy as np
-from stable_retro import StableRetroNativeVecEnv
+from stable_retro import RetroVecEnv
 
 from rlab.env import EnvConfig, action_names_for_set, make_vec_envs
 from rlab.targets import SuperMarioBrosNesV0Target, target_for_game
@@ -92,7 +92,7 @@ def run_raw(copy_observations: bool) -> dict[str, Any]:
         env_threads=4,
     )
     n_envs = 16
-    env = StableRetroNativeVecEnv(
+    env = RetroVecEnv(
         config.game,
         num_envs=n_envs,
         state=config.state or None,
@@ -106,6 +106,7 @@ def run_raw(copy_observations: bool) -> dict[str, Any]:
         frame_stack=4,
         maxpool_last_two=config.max_pool_frames,
         copy_observations=copy_observations,
+        obs_layout="chw",
     )
     env.seed(23)
     obs = env.reset()

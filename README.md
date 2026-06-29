@@ -53,7 +53,7 @@ UV_CACHE_DIR=.uv-cache uv run rlab play \
   --scale 4
 ```
 
-Mixed Mario start-state rehearsal stays on `StableRetroNativeVecEnv`. The CLI
+Mixed Mario start-state rehearsal stays on `RetroVecEnv`. The CLI
 keeps `--states` and `--state-probs` for compatibility, then translates them to
 the current native `state=` constructor argument. Use fixed native env
 slots:
@@ -113,7 +113,7 @@ commands:
 
 ```bash
 UV_CACHE_DIR=.uv-cache uv run rlab train \
-  --spec-file experiments/goals/Level1-1/specs/b83-b55-post21-five-seed-l11-confirm.yaml \
+  --spec-file experiments/goals/<goal-slug>/specs/<spec>.yaml \
   --runtime-image-ref-file rlab-train-image.json
 ```
 

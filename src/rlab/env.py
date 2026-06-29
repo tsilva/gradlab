@@ -16,7 +16,7 @@ import gymnasium as gym
 import cv2
 import numpy as np
 import stable_retro as retro
-from stable_retro import StableRetroNativeVecEnv
+from stable_retro import RetroVecEnv
 from stable_baselines3.common.atari_wrappers import ClipRewardEnv
 from stable_baselines3.common.vec_env import VecEnvWrapper, VecMonitor, VecTransposeImage
 
@@ -36,10 +36,10 @@ InfoEventRules = DoneOnInfoRules
 
 def native_vec_env_supports_done_on_info() -> bool:
     try:
-        source = inspect.getsource(StableRetroNativeVecEnv.__init__)
+        signature = inspect.signature(RetroVecEnv.__init__)
     except (OSError, TypeError):
         return False
-    return "done_on_info" in source
+    return "done_on_info" in signature.parameters
 
 
 def action_names_for_set(action_set: str, game: str = GAME) -> tuple[str, ...]:
@@ -468,7 +468,7 @@ class VecRetroProgressInfo(VecEnvWrapper):
     """Vectorized target reward shaping and progress metrics.
 
     Image preprocessing, frame skip, frame stacking, and max-pooling stay inside
-    StableRetroNativeVecEnv. This wrapper only rewrites rewards and annotates info.
+    RetroVecEnv. This wrapper only rewrites rewards and annotates info.
     """
 
     def __init__(self, venv, config: EnvConfig):
@@ -824,6 +824,7 @@ def _native_vec_kwargs(
         "maxpool_last_two": config.max_pool_frames,
         "sticky_action_prob": config.sticky_action_prob,
         "copy_observations": False,
+        "obs_layout": "chw",
     }
     if config.states:
         native_kwargs["state"] = (
@@ -858,7 +859,7 @@ def make_vec_envs(config: EnvConfig, n_envs: int, seed: int, start_method: str =
         num_threads=num_threads,
         native_done_on_info_rules=native_done_on_info_rules,
     )
-    vec_env = StableRetroNativeVecEnv(config.game, **native_kwargs)
+    vec_env = RetroVecEnv(config.game, **native_kwargs)
     vec_env.seed(seed)
     if target.uses_discrete_actions(config.action_set):
         vec_env = VecDiscreteRetroActions(vec_env, config=config)

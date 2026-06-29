@@ -123,6 +123,11 @@ def load_composed_mapping(
     resolved_path = path.resolve()
     if stack:
         raise ValueError("load_composed_mapping no longer accepts recursive stack callers")
+    if resolved_path.suffix.lower() not in YAML_EXTENSIONS:
+        return ComposedDocument(
+            document=load_mapping_document(resolved_path, label=str(path)),
+            sources=(resolved_path,),
+        )
     try:
         sources = _collect_hydra_sources(resolved_path, config_root=resolved_path.parent)
         with initialize_config_dir(version_base=None, config_dir=str(resolved_path.parent)):

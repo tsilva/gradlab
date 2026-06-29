@@ -14,7 +14,7 @@ import numpy as np
 import torch
 from stable_baselines3 import PPO
 from stable_baselines3.common.utils import set_random_seed
-from stable_retro import StableRetroNativeVecEnv
+from stable_retro import RetroVecEnv
 
 from rlab.device import resolve_sb3_device
 from rlab.env import EnvConfig, action_names_for_set, assert_rom_imported, make_vec_envs
@@ -55,7 +55,7 @@ def normalize_info(info: dict[str, Any]) -> dict[str, Any]:
 
 
 def make_raw_env(config: EnvConfig, n_envs: int, env_threads: int, env_kwargs: dict[str, Any]):
-    return StableRetroNativeVecEnv(
+    return RetroVecEnv(
         config.game,
         num_envs=n_envs,
         state=config.state or None,
@@ -69,6 +69,7 @@ def make_raw_env(config: EnvConfig, n_envs: int, env_threads: int, env_kwargs: d
         frame_stack=4,
         maxpool_last_two=config.max_pool_frames,
         copy_observations=False,
+        obs_layout="chw",
         **env_kwargs,
     )
 

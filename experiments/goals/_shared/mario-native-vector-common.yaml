@@ -92,7 +92,7 @@ constraints:
 # Runtime provenance expected for comparable launches.
 runtime:
   # Stable Retro package version; important because env behavior and native-vector support can change.
-  stable_retro_turbo: 1.0.0.post21
+  stable_retro_turbo: 1.0.0.post22
   # Runtime image policy; queue jobs should pin the exact trainer image digest.
   runtime_image_ref: digest-pinned GHCR train image from rlab-train-image.json
   # Python runtime family; documents the interpreter expected by the locked environment.
@@ -104,7 +104,7 @@ default_train_profile: null
 # Rationale for null train profile; documents that runtime image digest, not profile id, owns immutability.
 default_train_profile_note: Queue-backed launches are profileless by default; use the spec run_target plus a digest-pinned runtime image.
 # Default eval profile; points independent eval workers at the expected CPU/vector lane.
-default_eval_profile: mario-level1-eval/post21/vector-cpu
+default_eval_profile: mario-level1-eval/post22/vector-cpu
 # Capacity policy file; centralizes host lane limits and scheduling rules.
 capacity_policy_file: experiments/policies/capacity_policy.yaml
 # Execution defaults for queue orchestration.

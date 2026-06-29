@@ -1011,7 +1011,7 @@ class NativeMixedStateVecEnvTests(unittest.TestCase):
             state_probs=(0.5, 0.5),
         )
         with (
-            patch("rlab.env.StableRetroNativeVecEnv", FakeNative),
+            patch("rlab.env.RetroVecEnv", FakeNative),
             patch("rlab.env.VecRetroProgressInfo", side_effect=lambda env, config: env),
             patch("rlab.env.VecMonitor", side_effect=lambda env: env),
             patch("rlab.env.maybe_transpose_vec_image", side_effect=lambda env: env),
@@ -1025,6 +1025,7 @@ class NativeMixedStateVecEnvTests(unittest.TestCase):
         self.assertIsInstance(env, FakeNative)
         self.assertEqual(len(created), 1)
         self.assertEqual(created[0]["num_envs"], 16)
+        self.assertEqual(created[0]["obs_layout"], "chw")
         self.assertEqual(created[0]["state"], {"Level1-1": 0.5, "Level1-2": 0.5})
         self.assertNotIn("states", created[0])
         self.assertNotIn("state_probs", created[0])
@@ -1055,7 +1056,7 @@ class NativeMixedStateVecEnvTests(unittest.TestCase):
             states=("Level1-1", "Level1-2", "Level1-1", "Level1-2"),
         )
         with (
-            patch("rlab.env.StableRetroNativeVecEnv", FakeNative),
+            patch("rlab.env.RetroVecEnv", FakeNative),
             patch("rlab.env.VecRetroProgressInfo", side_effect=lambda env, config: env),
             patch("rlab.env.VecMonitor", side_effect=lambda env: env),
             patch("rlab.env.maybe_transpose_vec_image", side_effect=lambda env: env),
@@ -1097,7 +1098,7 @@ class NativeMixedStateVecEnvTests(unittest.TestCase):
             sticky_action_prob=0.25,
         )
         with (
-            patch("rlab.env.StableRetroNativeVecEnv", FakeNative),
+            patch("rlab.env.RetroVecEnv", FakeNative),
             patch("rlab.env.VecRetroProgressInfo", side_effect=lambda env, config: env),
             patch("rlab.env.VecMonitor", side_effect=lambda env: env),
             patch("rlab.env.maybe_transpose_vec_image", side_effect=lambda env: env),
@@ -1144,7 +1145,7 @@ class NativeMixedStateVecEnvTests(unittest.TestCase):
             state_probs=(0.5, 0.5),
         )
         with (
-            patch("rlab.env.StableRetroNativeVecEnv", FakeNative),
+            patch("rlab.env.RetroVecEnv", FakeNative),
             patch("rlab.env.native_vec_env_supports_done_on_info", return_value=True),
             patch("rlab.env.VecRetroProgressInfo", side_effect=fake_progress),
             patch("rlab.env.VecMonitor", side_effect=lambda env: env),
@@ -1206,7 +1207,7 @@ class NativeMixedStateVecEnvTests(unittest.TestCase):
             state_probs=(0.5, 0.5),
         )
         with (
-            patch("rlab.env.StableRetroNativeVecEnv", FakeNative),
+            patch("rlab.env.RetroVecEnv", FakeNative),
             patch("rlab.env.native_vec_env_supports_done_on_info", return_value=True),
             patch("rlab.env.VecRetroProgressInfo", side_effect=fake_progress),
             patch("rlab.env.VecMonitor", side_effect=lambda env: env),
@@ -1244,7 +1245,7 @@ class NativeMixedStateVecEnvTests(unittest.TestCase):
             done_on_events=("life_loss",),
         )
         with (
-            patch("rlab.env.StableRetroNativeVecEnv", FakeNative),
+            patch("rlab.env.RetroVecEnv", FakeNative),
             patch("rlab.env.native_vec_env_supports_done_on_info", return_value=False),
         ):
             with self.assertRaisesRegex(RuntimeError, "done_on_info support"):
@@ -1256,7 +1257,7 @@ class NativeMixedStateVecEnvTests(unittest.TestCase):
                 self.game = game
                 self.done_on_info = done_on_info
 
-        with patch("rlab.env.StableRetroNativeVecEnv", FakeNative):
+        with patch("rlab.env.RetroVecEnv", FakeNative):
             self.assertTrue(native_vec_env_supports_done_on_info())
 
     def test_task_conditioning_wraps_native_active_state_as_one_hot(self) -> None:
@@ -1306,7 +1307,7 @@ class NativeMixedStateVecEnvTests(unittest.TestCase):
             task_conditioning=True,
         )
         with (
-            patch("rlab.env.StableRetroNativeVecEnv", FakeNative),
+            patch("rlab.env.RetroVecEnv", FakeNative),
             patch("rlab.env.VecRetroProgressInfo", side_effect=lambda env, config: env),
             patch("rlab.env.VecMonitor", side_effect=lambda env: env),
             patch("rlab.env.maybe_transpose_vec_image", side_effect=lambda env: env),
