@@ -3,10 +3,21 @@
 Machine-readable recipes define reusable training ingredients: environment
 semantics, PPO hyperparameters, reward shaping, and logging defaults.
 
+Use a first-class `environment` section for the MDP interface the agent acts
+within. It should name the provider and provider environment id, then capture
+state sampling, action mapping, preprocessing, termination/event semantics, task
+conditioning, and reward shaping. `rlab` materializes this section into
+`train_config` for the existing runners and records a deterministic
+`environment_hash` over the canonicalized environment identity.
+
+Keep optimizer and execution details such as learning rate, rollout length,
+`n_envs`, `env_threads`, runtime image, and W&B naming outside `environment`;
+those change the training process, not the environment identity.
+
 Goal specs under `experiments/goals/<goal>/specs/` remain the launchable queue
 documents. A YAML spec may `extends` one or more recipe files, set goal-specific
-fields such as `state`, `seeds`, `run_target`, and W&B naming, then use
-`overrides` for the small delta that defines the candidate.
+fields such as `environment.state`, `seeds`, `run_target`, and W&B naming, then
+use `overrides` for the small delta that defines the candidate.
 
 At enqueue time, `rlab train --spec-file <path>.yaml` resolves every `extends`
 entry, materializes the final `train_config`, validates the existing expanded

@@ -1,0 +1,50 @@
+defaults:
+- ../_shared/mario-single-level-100of100@_global_
+- _self_
+goal_slug: Level1-2
+title: Sample-efficient SuperMarioBros-NES Level1-2 completion
+updated_at: '2026-06-27'
+goal_dir: experiments/goals/Level1-2
+objective:
+  states:
+  - Level1-2
+  primary_metric_note: Primary metric to maximize during training. For this single-source Level1-2 goal it should match train/info/level_complete/from/0-1/rate once the source window is full; out-of-process eval remains the promotion check.
+  attempt_denominator: Source-level Level1-2 attempts. In terminal-on-level-change runs this is equivalent to completed terminal episodes; in continued multi-level runs it also counts non-terminal natural level transitions.
+environment:
+  state:
+    state: Level1-2
+environment_hash: sha256:2c21832472aa24941335a47481bfd044c8448f7a426965a27110702fd3666888
+selection_policy:
+  rank_order:
+  - max(train/info/level_complete/rate/min/last)
+  - max(train/info/level_complete/rate/mean/last)
+  - eval/done/level_change/from_rate/min
+  - eval/done/level_change/from/Level1-2/rate
+  - eval/done/level_change/rate
+  - eval/progress/x/max
+  - eval/reward/mean
+seed_protocol:
+  screen:
+  - 60
+  confirm:
+  - 60
+  - 61
+  - 62
+  - 63
+  - 64
+  same_seed_note: Same seed is a controlled randomization label, not bitwise reproducibility under default CUDA.
+incumbent:
+  recipe_slug: b46-b44-same-hparams-level1-2
+  recipe_file: experiments/goals/Level1-2/recipes/supermariobros_nes_level1_2_teacher_recipe.md
+  evidence_runtime: stable-retro-turbo==1.0.0.post14-era recipe evidence
+  status: single-seed teacher evidence; not a confirmed baseline; revalidate active launches under post21 runtime
+  mean_stop_step: null
+  successful_seeds:
+  - 60
+  wandb_run_id: 5fpk7ki3
+  wandb_run_name: b46_b44_level1_2_same_hparams_5m_stop100ep100_seed60_20260620_124408
+default_train_spec_file: experiments/goals/Level1-2/specs/b85-b46-post21-five-seed-l12-confirm.yaml
+historical_context:
+- Level1-2 was previously useful as a single-level teacher for Level1-1/Level1-2 distillation, but that is not the same as a confirmed five-seed baseline.
+- The old completed-episode stop flags are retired from new launches; use attempt-window metrics from configured info events instead.
+- Historical BASELINE names are retired. In this repo, baseline means a config confirmed under the current 100/100 protocol.

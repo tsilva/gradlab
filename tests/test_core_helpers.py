@@ -1903,8 +1903,16 @@ class CommandAndArtifactTests(unittest.TestCase):
             self.assertEqual(metadata["env_config"]["max_pool_frames"], False)
             self.assertEqual(metadata["env_config"]["observation_size"], 96)
             self.assertEqual(metadata["env_config"]["hud_crop_top"], 32)
+            self.assertEqual(metadata["environment"]["provider"], "stable_retro")
+            self.assertEqual(metadata["environment"]["env_id"], "SuperMarioBros-Nes-v0")
+            self.assertEqual(metadata["environment"]["preprocessing"]["frame_stack"], 4)
+            self.assertIn("environment_hash", metadata)
             self.assertIn("training_metadata", metadata)
             self.assertIn("training_metadata_hash", metadata)
+            self.assertEqual(
+                metadata["training_metadata"]["environment_hash"],
+                metadata["environment_hash"],
+            )
             self.assertEqual(
                 metadata["training_metadata"]["preprocessing"]["frame_stack"],
                 4,

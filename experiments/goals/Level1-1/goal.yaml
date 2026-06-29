@@ -1,0 +1,49 @@
+defaults:
+- ../_shared/mario-single-level-100of100@_global_
+- _self_
+goal_slug: Level1-1
+title: Sample-efficient SuperMarioBros-NES Level1-1 completion
+updated_at: '2026-06-27'
+goal_dir: experiments/goals/Level1-1
+objective:
+  states:
+  - Level1-1
+  primary_metric_note: Primary metric to maximize during training. For this single-source Level1-1 goal it should match train/info/level_complete/from/0-0/rate once the source window is full; out-of-process eval remains the promotion check.
+  attempt_denominator: Source-level Level1-1 attempts. In terminal-on-level-change runs this is equivalent to completed terminal episodes; in continued multi-level runs it also counts non-terminal natural level transitions.
+environment:
+  state:
+    state: Level1-1
+environment_hash: sha256:a42188cdcbf9a83f7702efc7c51806cf76b552be1ff7f01fb8c7976858b60dc4
+selection_policy:
+  rank_order:
+  - max(train/info/level_complete/rate/min/last)
+  - max(train/info/level_complete/rate/mean/last)
+  - eval/done/level_change/from_rate/min
+  - eval/done/level_change/rate
+  - eval/progress/x/max
+  - eval/reward/mean
+seed_protocol:
+  screen:
+  - 23
+  confirm:
+  - 23
+  - 24
+  - 25
+  - 26
+  - 27
+  same_seed_note: Same seed is a controlled randomization label, not bitwise reproducibility under default CUDA.
+incumbent:
+  recipe_slug: b55-lowkl-lrdecay
+  recipe_file: experiments/goals/Level1-1/recipes/supermariobros_nes_level1_winning_recipe.md
+  evidence_runtime: stable-retro-turbo==1.0.0.post16
+  status: incumbent recipe evidence; revalidate active launches under post21 runtime
+  mean_stop_step: 4372104
+  successful_seeds:
+  - 108
+  - 109
+default_train_spec_file: experiments/goals/Level1-1/specs/b83-b55-post21-five-seed-l11-confirm.yaml
+historical_context:
+- The old 80/100 completed-episode target is retired. It helped find promising shapes but is not the current success criterion.
+- The historical best single run reached the old 80/100 criterion at 2558256 timesteps, but it was not a confirmed baseline and did not satisfy the current 100/100 goal.
+- The upstream PPO reproduction showed that the simple-action, gamma=0.9, gae_lambda=1.0 recipe can learn Level1-1, but checkpoint quality is non-monotonic.
+- Historical BASELINE names are retired. In this repo, baseline means a config confirmed under the current 100/100 protocol.

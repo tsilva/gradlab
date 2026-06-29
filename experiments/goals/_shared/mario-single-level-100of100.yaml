@@ -1,0 +1,50 @@
+defaults:
+- mario-native-vector-common@_global_
+- _self_
+objective:
+  training_stop_metric: train/info/level_complete/rate/min/last
+  training_stop_threshold: 0.99
+  training_stop_threshold_operator: '>'
+  success_threshold: 1.0
+  success_window_attempts: 100
+  forbidden_stop_rules:
+  - Do not use rollout-count completion stops because their meaning changes with n_envs, n_steps, and rollout cadence.
+selection_policy:
+  source: training_high_watermark_with_out_of_process_eval_confirmation
+  training_metrics_use: primary_optimization_signal
+  fixed_budget_completion_timesteps:
+  - 2000000
+  - 3000000
+  - 4000000
+  - 5000000
+  confirmation_tie_breakers:
+  - higher success count across confirmation seeds
+  - lower median time_to_100_of_100
+  - lower worst successful seed time
+  - higher completion rate at fixed budgets
+  - higher external checkpoint eval completion rate
+cap_policy:
+  active_cap_timesteps: 5000000
+  ratchet_rule: If a confirmed baseline succeeds on all confirmation seeds below the active cap, lower future caps to the slowest successful seed rounded up to the next 100k.
+  increase_rule: Do not increase the cap unless the goal changes or an infrastructure bug invalidates the baseline.
+search_protocol:
+  screen: Run screen seeds first. Reject obvious negatives. Advance candidates that reach the success window, materially improve fixed-budget completion metrics, or look promising enough to justify confirmation.
+  confirm: Promote only if success count is at least as good as the incumbent, median time_to_100_of_100 is better, there is no severe reliability regression, and all runs either stop by the success window or reach the cap.
+  baseline_definition: A baseline is the best confirmed config, not the best single run. Single lucky runs generate hypotheses; they do not replace the baseline.
+execution:
+  backfill_rule: Backfill finished slots only while the next queued run still has decision value.
+batch_record_fields:
+- hypothesis
+- config_delta
+- stage
+- active_cap
+- seeds
+- wandb_group
+- runs
+- aggregate
+- decision
+- baseline_update
+notes:
+- Use this file as the operator-facing current contract; goal-owned specs and recipe evidence live beside it under this goal directory.
+- Do not promote a policy from final checkpoint reward alone.
+- Prefer paired confirmation against the incumbent before declaring a new baseline.

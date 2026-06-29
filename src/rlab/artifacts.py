@@ -16,6 +16,7 @@ from urllib.parse import urlparse
 
 from rlab.env import EnvConfig, state_distribution_metadata
 from rlab.env_config import parse_event_names, parse_info_events
+from rlab.env_identity import environment_hash, environment_identity_from_train_config
 from rlab.metric_names import (
     GLOBAL_STEP,
     TRAIN_ARTIFACT_LOCAL_SAVE_SECONDS,
@@ -131,9 +132,15 @@ def training_preprocessing_metadata(config: EnvConfig) -> dict[str, Any]:
 
 
 def training_metadata(config: EnvConfig) -> dict[str, Any]:
+    env_config = env_config_metadata(config)
+    preprocessing = training_preprocessing_metadata(config)
+    environment = environment_identity_from_train_config(env_config)
+    environment.setdefault("preprocessing", {}).update(preprocessing)
     return {
-        "env_config": env_config_metadata(config),
-        "preprocessing": training_preprocessing_metadata(config),
+        "env_config": env_config,
+        "environment": environment,
+        "environment_hash": environment_hash(environment),
+        "preprocessing": preprocessing,
         "versions": {
             "stable_retro_turbo": _package_version("stable-retro-turbo"),
             "stable_baselines3": _package_version("stable-baselines3"),
@@ -167,6 +174,8 @@ def build_model_metadata(
         "run_target": getattr(args, "run_target", ""),
         "checkpoint_step": checkpoint_step(model_path),
         "env_config": training["env_config"],
+        "environment": training["environment"],
+        "environment_hash": training["environment_hash"],
         "training_metadata": training,
         "training_metadata_hash": stable_json_hash(training),
     }
@@ -410,6 +419,9 @@ def init_wandb(args: argparse.Namespace, run_dir: str, config: EnvConfig):
         "done_on_events": list(config.done_on_events),
         "action_set": config.action_set,
     }
+    training = training_metadata(config)
+    wandb_config["environment"] = training["environment"]
+    wandb_config["environment_hash"] = training["environment_hash"]
     wandb_run = wandb.init(
         project=args.wandb_project,
         entity=args.wandb_entity,
@@ -628,6 +640,8 @@ def log_wandb_model_artifact(
     }
     training = training_metadata(config)
     metadata["env_config"] = training["env_config"]
+    metadata["environment"] = training["environment"]
+    metadata["environment_hash"] = training["environment_hash"]
     metadata["training_metadata"] = training
     metadata["training_metadata_hash"] = stable_json_hash(training)
     run_id = getattr(wandb_run, "id", None)

@@ -252,7 +252,7 @@ class JobQueueTests(unittest.TestCase):
 
         self.assertEqual(loaded["operator_note"], {"why": "kept outside the formal schema for now"})
 
-    def test_load_spec_document_resolves_yaml_extends_and_materializes_train_config(self) -> None:
+    def test_load_spec_document_resolves_hydra_defaults_and_materializes_train_config(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             recipe = root / "recipes" / "base.yaml"
@@ -285,7 +285,9 @@ logging:
                 """
 schema_version: 1
 kind: train_experiment
-extends: ../recipes/base.yaml
+defaults:
+- ../recipes/base@_global_
+- _self_
 goal: Level1-1
 slug: candidate
 stage: screen
@@ -319,7 +321,70 @@ overrides:
         self.assertEqual(loaded["train_config"]["learning_rate"], 0.0001)
         self.assertEqual(loaded["train_config"]["death_penalty"], 0)
         self.assertEqual(loaded["train_config"]["done_on_events"], ["life_loss", "level_change"])
+        self.assertEqual(loaded["environment"]["provider"], "stable_retro")
+        self.assertEqual(loaded["environment"]["env_id"], "SuperMarioBros-Nes-v0")
+        self.assertTrue(loaded["environment_hash"].startswith("sha256:"))
         self.assertEqual(len(loaded["_composition"]["source_files"]), 2)
+
+    def test_load_spec_document_materializes_first_class_environment_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "candidate.yaml"
+            path.write_text(
+                """
+schema_version: 1
+kind: train_experiment
+goal: Level1-1
+slug: candidate
+stage: screen
+hypothesis: Candidate should reproduce the expected completion signal.
+expected_signal: Rank by completion rate, then reward.
+parent_spec_slug: null
+priority: 7
+seeds: [23]
+run_target: rtx4090
+environment:
+  provider: stable_retro
+  provider_env_id: SuperMarioBros-Nes-v0
+  state:
+    state: Level1-1
+  action:
+    action_set: simple
+  preprocessing:
+    frame_skip: 4
+    max_pool_frames: false
+    hud_crop_top: 32
+  termination:
+    max_episode_steps: 4500
+    info_events_json:
+      life_loss: [lives, decrease]
+    done_on_events: [life_loss]
+  reward:
+    reward_mode: score
+    death_penalty: 25
+wandb_group: b-test
+wandb_tags: [mario, env-hash]
+run_name_template: btest_s{seed}_{utc}
+run_description_template: candidate seed {seed}
+selection_gate:
+  primary: train/completion_episode_rate
+train:
+  timesteps: 1024
+logging:
+  wandb: true
+  wandb_mode: online
+""",
+                encoding="utf-8",
+            )
+
+            loaded = job_queue.load_spec_document(path)
+
+        self.assertEqual(loaded["train_config"]["game"], "SuperMarioBros-Nes-v0")
+        self.assertEqual(loaded["train_config"]["state"], "Level1-1")
+        self.assertEqual(loaded["train_config"]["frame_skip"], 4)
+        self.assertEqual(loaded["train_config"]["death_penalty"], 25)
+        self.assertEqual(loaded["environment"]["env_id"], "SuperMarioBros-Nes-v0")
+        self.assertEqual(loaded["environment"]["state"]["state"], "Level1-1")
+        self.assertTrue(loaded["environment_hash"].startswith("sha256:"))
 
     def test_load_spec_document_rejects_missing_mandatory_schema_field(self) -> None:
         spec = valid_train_spec()
@@ -349,7 +414,7 @@ overrides:
                 job_queue.load_spec_document(path)
 
     def test_level1_3_specs_configure_goal_metric_early_stop(self) -> None:
-        spec_paths = sorted(Path("experiments/goals/mario-level1-3-100of100/specs").glob("*.yaml"))
+        spec_paths = sorted(Path("experiments/goals/Level1-3/specs").glob("*.yaml"))
         self.assertGreater(len(spec_paths), 0)
         for path in spec_paths:
             with self.subTest(path=str(path)):

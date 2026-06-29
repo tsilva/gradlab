@@ -3,22 +3,31 @@ kind: train_recipe
 slug: b55-lowkl-lrdecay
 algorithm: PPO
 description: Current reusable B55 low-KL late-decay Mario PPO recipe.
-env:
-  game: SuperMarioBros-Nes-v0
+environment:
+  provider: stable_retro
+  provider_env_id: SuperMarioBros-Nes-v0
+  action:
+    action_set: simple
+  preprocessing:
+    frame_skip: 4
+    max_pool_frames: false
+    hud_crop_top: 32
+  termination:
+    max_episode_steps: 4500
+    completion_x_threshold: 0
+    info_events_json:
+      life_loss: [lives, decrease]
+      level_change: [[levelHi, levelLo], change]
+    done_on_events: [life_loss, level_change]
+  reward:
+    reward_mode: score
+    terminal_reward: 50
+    death_penalty: 25
+    reward_scale: 10
+train:
   n_envs: 16
   env_threads: 4
   torch_num_threads: 1
-  action_set: simple
-  frame_skip: 4
-  max_pool_frames: false
-  hud_crop_top: 32
-  max_episode_steps: 4500
-  completion_x_threshold: 0
-  info_events_json:
-    life_loss: [lives, decrease]
-    level_change: [[levelHi, levelLo], change]
-  done_on_events: [life_loss, level_change]
-train:
   n_steps: 512
   batch_size: 512
   n_epochs: 10
@@ -35,11 +44,6 @@ train:
   vf_coef: 1.0
   adam_eps: 0.00000001
   normalize_advantage: false
-reward:
-  reward_mode: score
-  terminal_reward: 50
-  death_penalty: 25
-  reward_scale: 10
 logging:
   eval_freq: 0
   eval_episodes: 0

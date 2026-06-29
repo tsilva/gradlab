@@ -1,10 +1,9 @@
 from __future__ import annotations
 
 import argparse
-import json
 from pathlib import Path
 
-import yaml
+from rlab.config_validation import load_goal_contract
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -34,17 +33,6 @@ def resolve_goal_path(value: str) -> Path:
     if yaml_path.is_file():
         return yaml_path
     return Path("experiments/goals") / value / "goal.yaml"
-
-
-def load_goal_contract(path: Path) -> dict:
-    text = path.read_text(encoding="utf-8")
-    if path.suffix.lower() in {".yaml", ".yml"}:
-        data = yaml.safe_load(text)
-    else:
-        data = json.loads(text)
-    if not isinstance(data, dict):
-        raise ValueError(f"{path} must contain a goal contract object")
-    return data
 
 
 def main(argv: list[str] | None = None) -> None:

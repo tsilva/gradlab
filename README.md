@@ -105,7 +105,7 @@ checks; generated results belong under `logs/benchmarks/`.
 The current Mario Level1-1 contract is machine-readable:
 
 ```bash
-cat experiments/goals/mario-level1-100of100/goal.yaml
+cat experiments/goals/Level1-1/goal.yaml
 ```
 
 Queue comparable experiments from checked-in spec files instead of ad hoc
@@ -113,7 +113,7 @@ commands:
 
 ```bash
 UV_CACHE_DIR=.uv-cache uv run rlab train \
-  --spec-file experiments/goals/mario-level1-100of100/specs/b83-b55-post21-five-seed-l11-confirm.yaml \
+  --spec-file experiments/goals/Level1-1/specs/b83-b55-post21-five-seed-l11-confirm.yaml \
   --runtime-image-ref-file rlab-train-image.json
 ```
 

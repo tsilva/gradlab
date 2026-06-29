@@ -1,0 +1,80 @@
+schema_version: 1
+status: active
+objective:
+  game: SuperMarioBros-Nes-v0
+  algorithm: PPO
+  primary_metric: train/info/level_complete/rate/min/last
+  primary_metric_aggregation: peak_over_training_run
+  balance_guard_metric: train/info/level_complete/rate/min/last
+  max_train_timesteps: 5000000
+environment:
+  provider: stable_retro
+  provider_env_id: SuperMarioBros-Nes-v0
+  action:
+    action_set: simple
+  preprocessing:
+    pipeline: stable_retro_native_vec_env
+    frame_skip: 4
+    frame_stack: 4
+    max_pool_frames: false
+    sticky_action_prob: 0.0
+    observation_size: 84
+    obs_resize:
+    - 84
+    - 84
+    hud_crop_top: 32
+    obs_crop:
+    - 32
+    - 0
+    - 0
+    - 0
+    obs_grayscale: true
+    obs_resize_algorithm: area
+    copy_observations: false
+    policy_observation_layout: channel_first
+  termination:
+    max_episode_steps: 4500
+    completion_x_threshold: 0
+    info_events_json:
+      life_loss:
+      - lives
+      - decrease
+      level_change:
+      - - levelHi
+        - levelLo
+      - change
+    done_on_events:
+    - life_loss
+    - level_change
+constraints:
+  curriculum: none
+  training_path: native_vector_env
+  wandb_project: SuperMarioBros-NES
+  wandb_logging_required: true
+  run_description_required: true
+runtime:
+  stable_retro_turbo: 1.0.0.post21
+  runtime_image_ref: digest-pinned GHCR train image from rlab-train-image.json
+  python: '3.14'
+  dependency_lock: uv.lock
+default_train_profile: null
+default_train_profile_note: Queue-backed launches are profileless by default; use the spec run_target plus a digest-pinned runtime image.
+default_eval_profile: mario-level1-eval/post21/vector-cpu
+capacity_policy_file: experiments/policies/capacity_policy.yaml
+execution:
+  queue_manager: rlab-fleet
+  primary_train_target: rtx4090
+  primary_train_host: beast-3
+  hardware_config_file: experiments/instances.yaml
+  fleet_config_file: experiments/fleet.yaml
+  manual_trainers: Avoid ad hoc second trainers through sky exec, docker exec, or manual host shells for comparable runs.
+determinism:
+  default: Measure the real training distribution. Do not enable deterministic CUDA flags by default because they can slow training and alter the optimizer/kernel path.
+  debug_only:
+    environment:
+    - CUBLAS_WORKSPACE_CONFIG=:4096:8
+    torch_settings:
+    - torch.backends.cudnn.benchmark = False
+    - torch.backends.cudnn.deterministic = True
+    - torch.use_deterministic_algorithms(True, warn_only=True)
+    note: If used, mark deterministic CUDA as a separate runtime condition.

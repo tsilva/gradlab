@@ -12,12 +12,13 @@ import yaml
 
 from rlab.benchmark_profiles import load_benchmark_profiles
 from rlab.compute_targets import load_instance_config
+from rlab.config_loader import YAML_EXTENSIONS, load_composed_mapping, load_mapping_document
+from rlab.env_identity import environment_hash, environment_identity_from_train_config
 from rlab.fleet import load_capacity_policy, load_fleet_config, validate_capacity_policy
 from rlab.job_queue import load_spec_document
 from rlab.seeds import validate_training_seed
 
 
-YAML_EXTENSIONS = {".yaml", ".yml"}
 GOAL_SCHEMA_VERSION = 1
 RECIPE_SCHEMA_VERSION = 1
 BENCHMARK_BASELINES_SCHEMA_VERSION = 1
@@ -61,13 +62,6 @@ def _resolve_repo_path(repo_root: Path, value: Any) -> Path:
     if path.is_absolute():
         return path
     return repo_root / path
-
-
-def _load_yaml_mapping(path: Path) -> Mapping[str, Any]:
-    payload = yaml.safe_load(path.read_text(encoding="utf-8"))
-    if not isinstance(payload, Mapping):
-        raise ValueError("must contain a YAML object")
-    return payload
 
 
 def _label_path(label: str, key: str) -> str:
@@ -183,26 +177,116 @@ def _require_existing_file(repo_root: Path, document: Mapping[str, Any], key: st
     return path
 
 
+def _validate_environment_identity(
+    document: Mapping[str, Any],
+    *,
+    label: str,
+    require_hash: bool,
+) -> Mapping[str, Any]:
+    environment = _require_mapping(
+        _require_key(document, "environment", label=label),
+        label=f"{label}.environment",
+    )
+    _require_non_empty_string(environment, "provider", label=f"{label}.environment")
+    if not (
+        isinstance(environment.get("provider_env_id"), str)
+        and environment["provider_env_id"].strip()
+        or isinstance(environment.get("env_id"), str)
+        and environment["env_id"].strip()
+    ):
+        raise ValueError(f"{label}.environment must define provider_env_id or env_id")
+    action = _require_mapping(
+        _require_key(environment, "action", label=f"{label}.environment"),
+        label=f"{label}.environment.action",
+    )
+    _require_non_empty_string(action, "action_set", label=f"{label}.environment.action")
+    _require_mapping(
+        _require_key(environment, "preprocessing", label=f"{label}.environment"),
+        label=f"{label}.environment.preprocessing",
+    )
+    _require_mapping(
+        _require_key(environment, "termination", label=f"{label}.environment"),
+        label=f"{label}.environment.termination",
+    )
+    if require_hash:
+        configured_hash = _require_non_empty_string(document, "environment_hash", label=label)
+        canonical = environment_identity_from_train_config({}, environment=environment)
+        expected_hash = environment_hash(canonical)
+        if configured_hash != expected_hash:
+            raise ValueError(
+                f"{label}.environment_hash must be {expected_hash}, got {configured_hash}"
+            )
+    return environment
+
+
+def load_goal_contract(
+    path: Path,
+    repo_root: Path | None = None,
+    *,
+    validate: bool = True,
+) -> dict[str, Any]:
+    """Return a goal contract with Hydra defaults resolved."""
+    repo_root = (repo_root or Path(".")).resolve()
+    path = path.resolve()
+    document = load_composed_mapping(path, cycle_label="goal").document
+    if validate:
+        _validate_goal_contract_document(document, path, repo_root)
+    return document
+
+
 def validate_goal_contract(path: Path, repo_root: Path | None = None) -> None:
     repo_root = (repo_root or Path(".")).resolve()
-    document = _load_yaml_mapping(path)
+    path = path.resolve()
+    document = load_goal_contract(path, repo_root, validate=False)
+    _validate_goal_contract_document(document, path, repo_root)
+
+
+def _validate_goal_contract_document(
+    document: Mapping[str, Any],
+    path: Path,
+    repo_root: Path,
+) -> None:
     label = f"goal file {_display_path(path, repo_root)}"
     _require_schema_version(document, GOAL_SCHEMA_VERSION, label=label)
-    _require_non_empty_string(document, "goal_slug", label=label)
+    goal_slug = _require_non_empty_string(document, "goal_slug", label=label)
     _require_non_empty_string(document, "title", label=label)
     _require_non_empty_string(document, "status", label=label)
     goal_dir = _require_non_empty_string(document, "goal_dir", label=label)
-    if not _resolve_repo_path(repo_root, goal_dir).is_dir():
+    resolved_goal_dir = _resolve_repo_path(repo_root, goal_dir).resolve()
+    if not resolved_goal_dir.is_dir():
         raise ValueError(f"{_label_path(label, 'goal_dir')} does not exist: {goal_dir}")
+    if resolved_goal_dir != path.parent:
+        raise ValueError(f"{_label_path(label, 'goal_dir')} must match goal file directory: {goal_dir}")
+    if resolved_goal_dir.name != goal_slug:
+        raise ValueError(
+            f"{_label_path(label, 'goal_slug')} must match goal directory name: {resolved_goal_dir.name}"
+        )
 
     objective = _require_mapping(_require_key(document, "objective", label=label), label=f"{label}.objective")
     _require_non_empty_string(objective, "game", label=f"{label}.objective")
-    _require_string_list(objective, "states", label=f"{label}.objective")
+    objective_states = _require_string_list(objective, "states", label=f"{label}.objective")
     _require_non_empty_string(objective, "algorithm", label=f"{label}.objective")
     _require_non_empty_string(objective, "primary_metric", label=f"{label}.objective")
     _require_number(objective, "success_threshold", label=f"{label}.objective")
     _require_int(objective, "success_window_attempts", label=f"{label}.objective", minimum=1)
     _require_int(objective, "max_train_timesteps", label=f"{label}.objective", minimum=1)
+
+    environment = _validate_environment_identity(document, label=label, require_hash=True)
+    state_section = _require_mapping(
+        _require_key(environment, "state", label=f"{label}.environment"),
+        label=f"{label}.environment.state",
+    )
+    if "state" in state_section:
+        environment_states = [str(state_section["state"])]
+    elif "states" in state_section:
+        environment_states = _require_string_list(state_section, "states", label=f"{label}.environment.state")
+    else:
+        raise ValueError(f"{label}.environment.state must define state or states")
+    if environment_states != objective_states:
+        raise ValueError(
+            f"{label}.environment.state must match objective.states: "
+            f"{environment_states!r} != {objective_states!r}"
+        )
 
     selection_policy = _require_mapping(
         _require_key(document, "selection_policy", label=label),
@@ -265,7 +349,7 @@ def validate_goal_contract(path: Path, repo_root: Path | None = None) -> None:
 
 
 def validate_train_recipe(path: Path) -> None:
-    document = _load_yaml_mapping(path)
+    document = load_mapping_document(path, label=f"recipe file {path}")
     label = f"recipe file {path}"
     _require_schema_version(document, RECIPE_SCHEMA_VERSION, label=label)
     kind = _require_non_empty_string(document, "kind", label=label)
@@ -273,13 +357,22 @@ def validate_train_recipe(path: Path) -> None:
         raise ValueError(f"{label}.kind must be train_recipe")
     _require_non_empty_string(document, "slug", label=label)
     _require_non_empty_string(document, "algorithm", label=label)
-    env = _require_mapping(_require_key(document, "env", label=label), label=f"{label}.env")
+    reward = None
+    if "environment" in document:
+        environment = _validate_environment_identity(document, label=label, require_hash=False)
+        reward = _require_mapping(
+            _require_key(environment, "reward", label=f"{label}.environment"),
+            label=f"{label}.environment.reward",
+        )
+    else:
+        env = _require_mapping(_require_key(document, "env", label=label), label=f"{label}.env")
+        _require_non_empty_string(env, "game", label=f"{label}.env")
+        _require_non_empty_string(env, "action_set", label=f"{label}.env")
+        reward = _require_mapping(_require_key(document, "reward", label=label), label=f"{label}.reward")
+
     train = _require_mapping(_require_key(document, "train", label=label), label=f"{label}.train")
-    reward = _require_mapping(_require_key(document, "reward", label=label), label=f"{label}.reward")
     logging = _require_mapping(_require_key(document, "logging", label=label), label=f"{label}.logging")
 
-    _require_non_empty_string(env, "game", label=f"{label}.env")
-    _require_non_empty_string(env, "action_set", label=f"{label}.env")
     for key in ("n_steps", "batch_size", "n_epochs"):
         _require_int(train, key, label=f"{label}.train", minimum=1)
     if "reward_mode" in reward:
@@ -330,7 +423,7 @@ def validate_fleet_and_capacity(repo_root: Path) -> None:
 
 
 def validate_benchmark_baselines(path: Path) -> None:
-    document = _load_yaml_mapping(path)
+    document = load_mapping_document(path, label=f"benchmark baselines file {path}")
     label = f"benchmark baselines file {path}"
     _require_schema_version(document, BENCHMARK_BASELINES_SCHEMA_VERSION, label=label)
     baselines = _require_mapping(_require_key(document, "baselines", label=label), label=f"{label}.baselines")
@@ -436,13 +529,33 @@ def build_parser() -> argparse.ArgumentParser:
         description="Validate checked-in YAML experiment, goal, spec, recipe, and ops configs.",
     )
     parser.add_argument("--repo-root", type=Path, default=Path("."))
-    parser.add_argument("--json", action="store_true", help="Emit machine-readable validation output.")
+    parser.add_argument("--json", action="store_true", help="Emit machine-readable JSON output.")
+    parser.add_argument(
+        "--load-goal",
+        type=Path,
+        help="Print the final composed goal contract for a goal.yaml path.",
+    )
+    parser.add_argument(
+        "--format",
+        choices=("yaml", "json"),
+        default="yaml",
+        help="Output format for --load-goal.",
+    )
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+    if args.load_goal is not None:
+        document = load_goal_contract(args.load_goal, args.repo_root)
+        output_format = "json" if args.json else args.format
+        if output_format == "json":
+            print(json.dumps(document, indent=2, sort_keys=True))
+        else:
+            print(yaml.safe_dump(document, sort_keys=False), end="")
+        return 0
+
     report = validate_experiment_tree(args.repo_root)
     if args.json:
         print(json.dumps(report.to_json(), indent=2, sort_keys=True))

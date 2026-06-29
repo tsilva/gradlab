@@ -1,0 +1,49 @@
+defaults:
+- ../_shared/mario-single-level-100of100@_global_
+- _self_
+goal_slug: Level1-3
+title: Sample-efficient SuperMarioBros-NES Level1-3 completion
+updated_at: '2026-06-28'
+goal_dir: experiments/goals/Level1-3
+objective:
+  states:
+  - Level1-3
+  primary_metric_note: Primary metric to maximize during training. For this single-source Level1-3 goal it should match train/info/level_complete/from/0-2/rate once the source window is full; out-of-process eval remains the promotion check.
+  attempt_denominator: Source-level Level1-3 attempts. In terminal-on-level-change runs this is equivalent to completed terminal episodes; in continued multi-level runs it also counts non-terminal natural level transitions.
+environment:
+  state:
+    state: Level1-3
+environment_hash: sha256:9106bbbe8038c6dbdefa110fbe93bbade23f8ac832848fcaab0448b26eddcd12
+selection_policy:
+  rank_order:
+  - max(train/info/level_complete/rate/min/last)
+  - max(train/info/level_complete/rate/mean/last)
+  - eval/done/level_change/from_rate/min
+  - eval/done/level_change/from/Level1-3/rate
+  - eval/done/level_change/rate
+  - eval/progress/x/max
+  - eval/reward/mean
+seed_protocol:
+  screen:
+  - 80
+  confirm:
+  - 80
+  - 81
+  - 82
+  - 83
+  - 84
+  same_seed_note: Same seed is a controlled randomization label, not bitwise reproducibility under default CUDA.
+cap_policy:
+  early_stop_rule: Stop training once train/info/level_complete/rate/min/last > 0.99; this is the strict 100/100 source-attempt window for the single Level1-3 start state.
+incumbent:
+  recipe_slug: null
+  recipe_file: null
+  evidence_runtime: null
+  status: no confirmed incumbent yet; use the current Level1-1 and Level1-2 100/100 goal contracts as the metric and promotion templates
+  mean_stop_step: null
+  successful_seeds: []
+default_train_spec_file: experiments/goals/Level1-3/specs/b117-b55post21-l13-screen.yaml
+historical_context:
+- This goal uses the same 100/100 rolling source-attempt success criterion as the single-level Level1-1 and Level1-2 goals.
+- The old completed-episode stop flags are retired from new launches; use attempt-window metrics from configured info events instead.
+- Historical BASELINE names are retired. In this repo, baseline means a config confirmed under the current 100/100 protocol.

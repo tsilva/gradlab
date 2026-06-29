@@ -1,0 +1,54 @@
+defaults:
+- ../_shared/mario-single-level-100of100@_global_
+- _self_
+goal_slug: Level1-4
+title: Sample-efficient SuperMarioBros-NES World 1-4 completion
+updated_at: '2026-06-29'
+goal_dir: experiments/goals/Level1-4
+objective:
+  states:
+  - Level1-4
+  primary_metric_note: Primary metric to maximize during training. For this single-source World 1-4 goal it should match train/info/level_complete/from/0-3/rate once the source window is full; out-of-process eval remains the promotion check.
+  attempt_denominator: Source-level Level1-4 attempts. In terminal-on-level-change runs this is equivalent to completed terminal episodes; in continued multi-level runs it also counts non-terminal natural level transitions.
+environment:
+  state:
+    state: Level1-4
+environment_hash: sha256:46a002f4ea694107f03fc54e10f61b15b040a738c5a86dd18a749764377e1012
+selection_policy:
+  rank_order:
+  - max(train/info/level_complete/rate/min/last)
+  - max(train/info/level_complete/rate/mean/last)
+  - eval/done/level_change/from_rate/min
+  - eval/done/level_change/from/Level1-4/rate
+  - eval/done/level_change/rate
+  - eval/progress/x/max
+  - eval/reward/mean
+seed_protocol:
+  screen:
+  - 90
+  confirm:
+  - 90
+  - 91
+  - 92
+  - 93
+  - 94
+  same_seed_note: Same seed is a controlled randomization label, not bitwise reproducibility under default CUDA.
+cap_policy:
+  early_stop_rule: Stop training once train/info/level_complete/rate/min/last > 0.99; this is the strict 100/100 source-attempt window for the single Level1-4 start state.
+incumbent:
+  recipe_slug: null
+  recipe_file: null
+  evidence_runtime: null
+  status: B250/B255 reached 100/100 on seeds 90, 92, and 93, but failed the full five-seed confirmation protocol because seed 91 peaked at 0.17 and seed 94 peaked at 0.98. B257 soft-update then reached 100/100 on screen seed 90 and is frozen for B261 confirmation on seeds 91-94.
+  mean_stop_step: null
+  successful_seeds: []
+default_train_spec_file: experiments/goals/Level1-4/specs/b261-b257-softupdate-four-seed-l14-confirm.yaml
+historical_context:
+- This goal uses the same 100/100 rolling source-attempt success criterion as the single-level Level1-1, Level1-2, and Level1-3 goals.
+- The old completed-episode stop flags are retired from new launches; use attempt-window metrics from configured info events instead.
+- Historical BASELINE names are retired. In this repo, baseline means a config confirmed under the current 100/100 protocol.
+notes:
+- Use this file as the operator-facing current contract; goal-owned specs and recipe evidence live beside it under this goal directory.
+- Do not promote a policy from final checkpoint reward alone.
+- Prefer paired confirmation against the incumbent before declaring a new baseline.
+- The installed SuperMarioBros-Nes-v0 state list was checked on 2026-06-28 and includes Level1-4.
