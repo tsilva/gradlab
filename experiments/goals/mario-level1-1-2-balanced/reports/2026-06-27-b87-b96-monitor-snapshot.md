@@ -46,7 +46,7 @@ completion-reward benefit while raising the bottleneck.
 
 Added spec:
 
-- `specs/b96-complete25-l11soft-l11l12-two-seed.json`
+- `specs/b96-complete25-l11soft-l11l12-two-seed.yaml`
   - Seeds: `206,207`
   - Deltas from B89: `state_probs=[0.55,0.45]`
   - W&B group: `b96-l11l12-complete25-l11soft-two-seed`

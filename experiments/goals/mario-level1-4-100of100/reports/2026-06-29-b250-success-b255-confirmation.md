@@ -69,7 +69,7 @@ evidence, not final promotion evidence.
 ## Confirmation Batch
 
 Checked-in confirmation spec:
-`experiments/goals/mario-level1-4-100of100/specs/b255-b250-post21-four-seed-l14-confirm.json`
+`experiments/goals/mario-level1-4-100of100/specs/b255-b250-post21-four-seed-l14-confirm.yaml`
 
 The spec was validated with `rlab.job_queue.load_spec_document`, and its
 `train_config` matches B250 exactly. Only stage, seeds, and run metadata changed.

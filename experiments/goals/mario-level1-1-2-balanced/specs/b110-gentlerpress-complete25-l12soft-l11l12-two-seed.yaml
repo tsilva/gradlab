@@ -1,0 +1,109 @@
+schema_version: 1
+goal: Levels_2_d25102
+slug: b110-gentlerpress-complete25-l12soft-l11l12-two-seed
+stage: screen
+hypothesis: B91 proved the low-pressure completion-reward recipe can exceed the strict high-watermark on one seed, but both B91 seeds later collapsed on Level1-2 and seed 207 never crossed. Combining B100's soft Level1-2 sampling bias with B109's gentler PPO update pressure should protect the weaker Level1-2 rolling window without changing the task or reward target.
+expected_signal: Both seeds should maximize peak train/info/level_complete/rate/min/last, with Level1-2 remaining closer to Level1-1 at the high-watermark and a lower chance of B91-style post-peak Level1-2 collapse.
+parent_spec_slug: b91-lowpress-complete25-l11l12-two-seed
+priority: 90
+seeds:
+- 206
+- 207
+run_target: rtx4090
+wandb_group: b110-l11l12-gentlerpress-complete25-l12soft-two-seed
+wandb_tags:
+- mario
+- level1-1
+- level1-2
+- mixed-level
+- b110
+- gentler-update-pressure
+- completion-reward-25
+- soft-l12-sampling-bias
+- task-conditioning
+- per-task-advantage
+- beast3
+run_name_template: b110_l11l12_gentlerpress_complete25_l12soft_s{seed}_{utc}
+run_description_template: Two-seed Beast3 search batch for Level1-1/Level1-2 mixed PPO high-watermark, seed {seed}; combines B91 completion_reward=25 with B109 gentler PPO updates and B100 45/55 Level1-1/Level1-2 sampling to reduce Level1-2 collapse, primary optimization metric is peak train/info/level_complete/rate/min/last; train/info/level_complete/rate/mean/last is a companion signal.
+selection_gate:
+  primary: max(train/info/level_complete/rate/min/last)
+  primary_metric_note: Primary metric to maximize; use train/info/level_complete/rate/mean/last as a companion signal and external eval for promotion.
+  threshold: 0.8
+  threshold_operator: '>'
+  tie_breakers:
+  - max(train/info/level_complete/rate/mean/last)
+  - max(train/info/level_complete/from/0-1/rate)
+  - max(train/info/level_complete/from/0-0/rate)
+  - earlier_peak_step
+  training_metrics: selection_high_watermark
+train_config:
+  game: SuperMarioBros-Nes-v0
+  state: Level1-1
+  states:
+  - Level1-1
+  - Level1-2
+  state_probs:
+  - 0.45
+  - 0.55
+  n_envs: 16
+  env_threads: 4
+  torch_num_threads: 1
+  n_steps: 512
+  batch_size: 512
+  n_epochs: 10
+  learning_rate: 0.00015
+  learning_rate_final: 7.5e-05
+  learning_rate_schedule_timesteps: 4000000
+  ent_coef: 0.01
+  ent_coef_final: 0.0003
+  ent_coef_schedule_timesteps: 2000000
+  gamma: 0.9
+  gae_lambda: 1.0
+  clip_range: 0.12
+  clip_range_vf: 0.2
+  target_kl: 0.12
+  vf_coef: 0.5
+  adam_eps: 1.0e-08
+  normalize_advantage: false
+  advantage_normalization: per-task
+  policy_net_arch: 64,64
+  value_net_arch: 512,512
+  reward_mode: score
+  terminal_reward: 50
+  death_penalty: 25
+  completion_reward: 25
+  reward_scale: 10
+  score_progress_clipped: true
+  action_set: simple
+  frame_skip: 4
+  max_pool_frames: false
+  hud_crop_top: 32
+  max_episode_steps: 4500
+  completion_x_threshold: 0
+  info_events_json:
+    life_loss:
+    - lives
+    - decrease
+    level_change:
+    - - levelHi
+      - levelLo
+    - change
+  done_on_events: life_loss,level_change
+  task_conditioning: true
+  task_conditioning_info_vars:
+  - levelHi
+  - levelLo
+  task_conditioning_info_values:
+  - - 0
+    - 0
+  - - 0
+    - 1
+  - - 0
+    - 2
+  eval_freq: 0
+  eval_episodes: 0
+  checkpoint_freq: 500000
+  timesteps: 5000000
+  wandb: true
+  wandb_mode: online
+  wandb_artifact_storage_uri: ${CHECKPOINT_BUCKET_URI}

@@ -48,7 +48,7 @@ B97 tests the most direct stabilization hypothesis for B89:
 
 Added spec:
 
-- `specs/b97-complete25-slowent-l11l12-two-seed.json`
+- `specs/b97-complete25-slowent-l11l12-two-seed.yaml`
   - Seeds: `198,199`
   - Deltas from B89: `ent_coef_final=0.001`,
     `ent_coef_schedule_timesteps=4000000`

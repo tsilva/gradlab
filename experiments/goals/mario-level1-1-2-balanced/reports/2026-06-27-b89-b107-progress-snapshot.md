@@ -52,7 +52,7 @@ Interpretation:
 B107 covers the missing low-pressure plus completion-reward plus soft Level1-1
 sampling interaction.
 
-- Spec: `specs/b107-lowpress-complete25-l11soft-l11l12-two-seed.json`
+- Spec: `specs/b107-lowpress-complete25-l11soft-l11l12-two-seed.yaml`
 - W&B group: `b107-l11l12-lowpress-complete25-l11soft-two-seed`
 - Seeds: `200,201`
 - Delta from B91: `state_probs=[0.55,0.45]` instead of `0.50/0.50`

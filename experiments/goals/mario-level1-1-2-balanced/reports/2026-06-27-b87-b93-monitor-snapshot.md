@@ -46,13 +46,13 @@ more reproducible.
 
 Added specs:
 
-- `specs/b92-slowent-l11l12-two-seed.json`
+- `specs/b92-slowent-l11l12-two-seed.yaml`
   - Seeds: `198,199`
   - Deltas from B86: `ent_coef_final=0.001`,
     `ent_coef_schedule_timesteps=4000000`
   - W&B group: `b92-l11l12-slowent-two-seed`
   - Jobs: `43`, `44`
-- `specs/b93-slowent-l12bias-l11l12-two-seed.json`
+- `specs/b93-slowent-l12bias-l11l12-two-seed.yaml`
   - Seeds: `200,201`
   - Deltas from B86: B92 entropy schedule plus `state_probs=[0.4,0.6]`
   - W&B group: `b93-l11l12-slowent-l12bias-two-seed`

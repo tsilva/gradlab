@@ -584,6 +584,7 @@ def log_wandb_model_artifact(
     local_save_seconds: float | None = None,
     stall_started_at: float | None = None,
     clock: Callable[[], float] | None = None,
+    purge_after_upload: bool = False,
 ) -> ArtifactLogTiming | None:
     if not model_path.is_file():
         return None
@@ -658,7 +659,9 @@ def log_wandb_model_artifact(
     if sidecar_path is not None:
         artifact.add_file(str(sidecar_path), name=sidecar_path.name)
     wandb_log_started_at = timer()
-    wandb_run.log_artifact(artifact, aliases=aliases)
+    logged_artifact = wandb_run.log_artifact(artifact, aliases=aliases)
+    if logged_artifact is not None and hasattr(logged_artifact, "wait"):
+        logged_artifact.wait()
     wandb_log_seconds = timer() - wandb_log_started_at
     finished_at = timer()
     timing = ArtifactLogTiming(
@@ -687,7 +690,27 @@ def log_wandb_model_artifact(
         f"wandb artifact logged: {artifact_name} ({location}); "
         f"artifact_stall_seconds={timing.stall_seconds:.3f}"
     )
+    if purge_after_upload and getattr(args, "wandb_mode", "online") == "online":
+        purge_model_artifact_files(model_path)
     return timing
+
+
+def purge_model_artifact_files(model_path: Path) -> tuple[Path, ...]:
+    purged: list[Path] = []
+    for path in (model_path, model_metadata_path(model_path)):
+        try:
+            if path.is_file():
+                path.unlink()
+                purged.append(path)
+        except OSError as exc:
+            print(f"warning: could not purge uploaded artifact file {path}: {exc}", file=sys.stderr)
+    if purged:
+        print(
+            "purged uploaded artifact files: "
+            + ", ".join(str(path) for path in purged),
+            flush=True,
+        )
+    return tuple(purged)
 
 
 def write_wandb_url(wandb_run, run_dir: str) -> None:

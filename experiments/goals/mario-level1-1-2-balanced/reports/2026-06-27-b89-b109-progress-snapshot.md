@@ -52,7 +52,7 @@ Interpretation:
 
 B109 covers the missing B91-derived gentler-update-pressure interaction.
 
-- Spec: `specs/b109-gentlerpress-complete25-l11l12-two-seed.json`
+- Spec: `specs/b109-gentlerpress-complete25-l11l12-two-seed.yaml`
 - W&B group: `b109-l11l12-gentlerpress-complete25-two-seed`
 - Seeds: `206,207`
 - Delta from B91:

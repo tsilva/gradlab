@@ -34,7 +34,7 @@ Noncompetitive current arms:
 
 Added:
 
-- `experiments/goals/mario-level1-1-2-balanced/specs/b110-gentlerpress-complete25-l12soft-l11l12-two-seed.json`
+- `experiments/goals/mario-level1-1-2-balanced/specs/b110-gentlerpress-complete25-l12soft-l11l12-two-seed.yaml`
 
 Hypothesis:
 

@@ -73,10 +73,22 @@ def _play(argv: Sequence[str]) -> int:
     return _run(play_main, argv, prog="rlab play")
 
 
+def _benchmark(argv: Sequence[str]) -> int:
+    from rlab.benchmark import main as benchmark_main
+
+    return _run(benchmark_main, argv, prog="rlab benchmark")
+
+
 def _promote(argv: Sequence[str]) -> int:
     from rlab.promote import main as promote_main
 
     return _run(promote_main, argv, prog="rlab promote")
+
+
+def _validate(argv: Sequence[str]) -> int:
+    from rlab.config_validation import main as validate_main
+
+    return _run(validate_main, argv, prog="rlab validate")
 
 
 def build_train_enqueue_parser() -> argparse.ArgumentParser:
@@ -110,7 +122,7 @@ def build_train_enqueue_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--instances",
         type=Path,
-        default=Path("experiments/instances.json"),
+        default=Path("experiments/instances.yaml"),
         help="Target config used to canonicalize --target.",
     )
     parser.add_argument("--priority", type=int, help="Override the priority stored in the spec file.")
@@ -140,7 +152,9 @@ COMMANDS: dict[str, tuple[str, Callable[[Sequence[str]], int]]] = {
     "train": ("enqueue train jobs from checked-in specs; use 'local' for direct training", _train),
     "eval": ("run local evals; use 'enqueue' or 'worker' for queue-backed evals", _eval),
     "play": ("render a local model or W&B artifact in a GUI window", _play),
+    "benchmark": ("run named smoke, throughput, fleet, and eval-contract profiles", _benchmark),
     "promote": ("gate a candidate checkpoint against a goal contract", _promote),
+    "validate": ("validate checked-in YAML experiments, specs, recipes, and ops configs", _validate),
     "jobs": ("manage queue schema, status, cancellation, and stale jobs", _jobs),
     "fleet": ("manage remote runner containers from queue state", _fleet),
     "monitor": ("print read-only queue and fleet state", _monitor),

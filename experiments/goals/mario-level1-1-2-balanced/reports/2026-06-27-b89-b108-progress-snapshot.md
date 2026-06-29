@@ -52,7 +52,7 @@ Interpretation:
 B108 covers the missing B91-derived slow-entropy interaction at neutral 50/50
 state sampling.
 
-- Spec: `specs/b108-lowpress-complete25-slowent-l11l12-two-seed.json`
+- Spec: `specs/b108-lowpress-complete25-slowent-l11l12-two-seed.yaml`
 - W&B group: `b108-l11l12-lowpress-complete25-slowent-two-seed`
 - Seeds: `204,205`
 - Delta from B91:

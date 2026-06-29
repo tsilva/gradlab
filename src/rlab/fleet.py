@@ -18,6 +18,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, TextIO
 
+import yaml
+
 try:  # Rich gives the watch TUI real terminal panels while keeping plain fallback available.
     from rich import box as rich_box
     from rich.columns import Columns as RichColumns
@@ -63,9 +65,9 @@ from rlab.runtime_refs import (
 )
 
 
-DEFAULT_FLEET_CONFIG = Path("experiments/fleet.json")
-DEFAULT_INSTANCES_CONFIG = Path("experiments/instances.json")
-DEFAULT_CAPACITY_POLICY = Path("experiments/policies/capacity_policy.json")
+DEFAULT_FLEET_CONFIG = Path("experiments/fleet.yaml")
+DEFAULT_INSTANCES_CONFIG = Path("experiments/instances.yaml")
+DEFAULT_CAPACITY_POLICY = Path("experiments/policies/capacity_policy.yaml")
 DEFAULT_WATCH_LATEST_INTERVAL_SECONDS = 15.0
 DEFAULT_WATCH_STALE_OLDER_THAN_SECONDS = 300
 DEFAULT_WATCH_STALE_LIMIT = 50
@@ -308,10 +310,13 @@ class WatchLatestLockBusy(RuntimeError):
 
 
 def load_json_file(path: Path) -> dict[str, Any]:
-    with path.open(encoding="utf-8") as handle:
-        data = json.load(handle)
+    text = path.read_text(encoding="utf-8")
+    if path.suffix.lower() in {".yaml", ".yml"}:
+        data = yaml.safe_load(text)
+    else:
+        data = json.loads(text)
     if not isinstance(data, dict):
-        raise ValueError(f"{path} must contain a JSON object")
+        raise ValueError(f"{path} must contain a config object")
     return data
 
 

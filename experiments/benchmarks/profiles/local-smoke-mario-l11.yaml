@@ -1,0 +1,18 @@
+schema_version: 1
+name: local-smoke-mario-l11
+kind: local_smoke
+description: Tiny local train/save/load/eval smoke on the imported Mario Level1-1 state.
+train_config:
+  game: SuperMarioBros-Nes-v0
+  state: Level1-1
+  preset: smoke
+  run_name: benchmark_local_smoke_mario_l11
+  run_description: Benchmark local smoke run for Mario Level1-1.
+eval:
+  enabled: true
+  episodes: 2
+  max_steps: 600
+gates:
+  train_exit_code: 0
+  eval_exit_code: 0
+  final_model_exists: true

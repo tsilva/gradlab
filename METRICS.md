@@ -198,7 +198,7 @@ step as `global_step`; final and best artifacts use the model's current timestep
 | `train/artifact/log_seconds` | Total wall-clock time spent inside artifact metadata/upload/logging after the model zip already exists. |
 | `train/artifact/metadata_seconds` | Time spent writing the checkpoint metadata sidecar. |
 | `train/artifact/storage_upload_seconds` | Time spent uploading the model zip to external S3/R2 storage before W&B receives a reference artifact. Zero when no external artifact storage URI is configured. |
-| `train/artifact/wandb_log_seconds` | Time spent in `wandb_run.log_artifact(...)`. With reference artifacts this mostly covers W&B metadata/reference logging; without reference artifacts it can include uploading the model zip to W&B. |
+| `train/artifact/wandb_log_seconds` | Time spent in `wandb_run.log_artifact(...)` plus artifact upload completion when the W&B SDK exposes `wait()`. With reference artifacts this mostly covers W&B metadata/reference logging and sidecar upload; without reference artifacts it includes uploading the model zip to W&B. |
 
 ## Rollout Diagnostics
 

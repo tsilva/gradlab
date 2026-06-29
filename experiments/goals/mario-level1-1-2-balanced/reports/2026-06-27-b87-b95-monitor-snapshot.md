@@ -49,7 +49,7 @@ B94/B95 extend the current search around the best early signal:
 
 Added specs:
 
-- `specs/b94-lowpress-slowent-l11l12-two-seed.json`
+- `specs/b94-lowpress-slowent-l11l12-two-seed.yaml`
   - Seeds: `202,203`
   - Deltas from B86: `target_kl=0.16`,
     `learning_rate_final=0.0001`,
@@ -58,7 +58,7 @@ Added specs:
     `ent_coef_schedule_timesteps=4000000`
   - W&B group: `b94-l11l12-lowpress-slowent-two-seed`
   - Jobs: `47`, `48`
-- `specs/b95-lowpress-slowent-l12soft-l11l12-two-seed.json`
+- `specs/b95-lowpress-slowent-l12soft-l11l12-two-seed.yaml`
   - Seeds: `204,205`
   - Deltas from B94: `state_probs=[0.45,0.55]`
   - W&B group: `b95-l11l12-lowpress-slowent-l12soft-two-seed`

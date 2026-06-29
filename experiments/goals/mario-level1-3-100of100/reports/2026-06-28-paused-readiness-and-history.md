@@ -34,11 +34,11 @@ recipe failed under the 5M-step contract.
 The five checked-in resume specs load successfully with
 `rlab.job_queue.load_spec_document`:
 
-- `specs/b117-b55post21-l13-screen.json`
-- `specs/b118-b55complete25-l13-screen.json`
-- `specs/b119-b55slowent-l13-screen.json`
-- `specs/b120-b46style-l13-screen.json`
-- `specs/b121-b55slowent-complete25-l13-screen.json`
+- `specs/b117-b55post21-l13-screen.yaml`
+- `specs/b118-b55complete25-l13-screen.yaml`
+- `specs/b119-b55slowent-l13-screen.yaml`
+- `specs/b120-b46style-l13-screen.yaml`
+- `specs/b121-b55slowent-complete25-l13-screen.yaml`
 
 Focused unittest guard passed:
 

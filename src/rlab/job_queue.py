@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 from datetime import UTC, datetime
 import hashlib
 import json
@@ -13,6 +14,7 @@ from typing import Any
 
 import psycopg2
 import psycopg2.extras
+import yaml
 
 from rlab.compute_targets import instance_defaults, load_json_file
 from rlab.dotenv import load_env_file
@@ -38,6 +40,9 @@ SECRET_KEY_FRAGMENTS = (
     "database_url",
 )
 LEGACY_EVENT_TRAIN_CONFIG_KEYS = ("done_on_info_json", "done_on_info")
+YAML_EXTENSIONS = {".yaml", ".yml"}
+TRAIN_CONFIG_SECTION_KEYS = ("env", "train", "reward", "logging")
+TRAIN_CONFIG_TOP_LEVEL_KEYS = ("state", "states", "state_probs", "resume")
 
 
 SCHEMA_SQL = """
@@ -270,7 +275,7 @@ def canonicalize_run_target(
     target = normalize_run_target(value)
     if target is None:
         return None
-    path = instances_path or Path("experiments/instances.json")
+    path = instances_path or Path("experiments/instances.yaml")
     if not path.is_file():
         return target
     return str(instance_defaults(load_json_file(path), target).get("name", target))
@@ -368,10 +373,145 @@ def load_json_arg(value: str | None, *, default: Any) -> Any:
     return json.loads(text)
 
 
-def load_spec_document(path: Path) -> dict[str, Any]:
-    document = load_json_arg(str(path), default={})
+def load_document_arg(value: str | None, *, default: Any) -> Any:
+    if value is None or value == "":
+        return default
+    path = Path(value)
+    if not path.is_file():
+        return json.loads(value)
+    text = path.read_text(encoding="utf-8")
+    if path.suffix.lower() in YAML_EXTENSIONS:
+        loaded = yaml.safe_load(text)
+        return default if loaded is None else loaded
+    return json.loads(text)
+
+
+def _deep_merge(base: Mapping[str, Any], override: Mapping[str, Any]) -> dict[str, Any]:
+    merged = copy.deepcopy(dict(base))
+    for key, value in override.items():
+        if (
+            key in merged
+            and isinstance(merged[key], Mapping)
+            and isinstance(value, Mapping)
+        ):
+            merged[key] = _deep_merge(merged[key], value)
+        else:
+            merged[key] = copy.deepcopy(value)
+    return merged
+
+
+def _normalize_extends(value: Any, *, label: str) -> tuple[str, ...]:
+    if value in (None, "", (), []):
+        return ()
+    if isinstance(value, str):
+        return (value,)
+    if isinstance(value, Sequence) and not isinstance(value, bytes):
+        paths = []
+        for index, item in enumerate(value):
+            if not isinstance(item, str) or not item.strip():
+                raise ValueError(f"{label}.extends[{index}] must be a non-empty string")
+            paths.append(item)
+        return tuple(paths)
+    raise ValueError(f"{label}.extends must be a string or list of strings")
+
+
+def _resolve_relative_spec_path(path: str, *, base_dir: Path) -> Path:
+    candidate = Path(path)
+    if not candidate.is_absolute():
+        candidate = base_dir / candidate
+    return candidate.resolve()
+
+
+def _load_composed_document(
+    path: Path,
+    *,
+    stack: tuple[Path, ...] = (),
+) -> tuple[dict[str, Any], list[Path]]:
+    resolved_path = path.resolve()
+    if resolved_path in stack:
+        chain = " -> ".join(str(item) for item in (*stack, resolved_path))
+        raise ValueError(f"cyclic spec extends chain: {chain}")
+    document = load_document_arg(str(resolved_path), default={})
     if not isinstance(document, dict):
-        raise ValueError(f"{path} must contain a JSON object")
+        raise ValueError(f"{path} must contain a JSON/YAML object")
+
+    merged: dict[str, Any] = {}
+    sources: list[Path] = []
+    for parent in _normalize_extends(document.get("extends"), label=str(path)):
+        parent_path = _resolve_relative_spec_path(parent, base_dir=resolved_path.parent)
+        parent_document, parent_sources = _load_composed_document(
+            parent_path,
+            stack=(*stack, resolved_path),
+        )
+        merged = _deep_merge(merged, parent_document)
+        sources.extend(parent_sources)
+
+    local_document = dict(document)
+    local_document.pop("extends", None)
+    merged = _deep_merge(merged, local_document)
+    sources.append(resolved_path)
+    return merged, sources
+
+
+def _merge_train_config_sections(document: Mapping[str, Any]) -> dict[str, Any]:
+    train_config: dict[str, Any] = {}
+    for key in TRAIN_CONFIG_SECTION_KEYS:
+        value = document.get(key)
+        if isinstance(value, Mapping):
+            train_config = _deep_merge(train_config, value)
+
+    existing_train_config = document.get("train_config")
+    if isinstance(existing_train_config, Mapping):
+        train_config = _deep_merge(train_config, existing_train_config)
+
+    for key in TRAIN_CONFIG_TOP_LEVEL_KEYS:
+        value = document.get(key)
+        if _non_empty_config_value(value):
+            train_config[key] = copy.deepcopy(value)
+
+    overrides = document.get("overrides")
+    if isinstance(overrides, Mapping):
+        override_train_config = overrides.get("train_config")
+        if isinstance(override_train_config, Mapping):
+            train_config = _deep_merge(train_config, override_train_config)
+        for key in TRAIN_CONFIG_SECTION_KEYS:
+            value = overrides.get(key)
+            if isinstance(value, Mapping):
+                train_config = _deep_merge(train_config, value)
+        for key in TRAIN_CONFIG_TOP_LEVEL_KEYS:
+            value = overrides.get(key)
+            if _non_empty_config_value(value):
+                train_config[key] = copy.deepcopy(value)
+
+    return train_config
+
+
+def materialize_train_spec_document(document: Mapping[str, Any]) -> dict[str, Any]:
+    materialized = copy.deepcopy(dict(document))
+    train_config = _merge_train_config_sections(materialized)
+    if train_config:
+        materialized["train_config"] = train_config
+    return materialized
+
+
+def _spec_source_metadata(sources: Sequence[Path]) -> list[dict[str, str]]:
+    return [
+        {
+            "path": str(source),
+            "sha256": file_sha256(source),
+        }
+        for source in sources
+    ]
+
+
+def load_spec_document(path: Path) -> dict[str, Any]:
+    document, sources = _load_composed_document(path)
+    document = materialize_train_spec_document(document)
+    if path.suffix.lower() in YAML_EXTENSIONS or len(sources) > 1:
+        document["_composition"] = {
+            "root_path": str(path.resolve()),
+            "source_files": _spec_source_metadata(sources),
+        }
     validate_train_spec_schema(document, label=f"spec file {path}")
     assert_no_secrets(document, label=f"spec file {path}")
     validate_launch_event_config(
@@ -1767,7 +1907,7 @@ def build_parser() -> argparse.ArgumentParser:
     stale.add_argument(
         "--instances",
         type=Path,
-        default=Path("experiments/instances.json"),
+        default=Path("experiments/instances.yaml"),
         help="Target config used to canonicalize --target.",
     )
     stale.add_argument(

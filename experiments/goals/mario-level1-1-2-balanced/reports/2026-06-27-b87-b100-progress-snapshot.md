@@ -65,7 +65,7 @@ adjustments that are already queued separately:
 
 Added spec:
 
-- `specs/b100-lowpress-complete25-l12soft-l11l12-two-seed.json`
+- `specs/b100-lowpress-complete25-l12soft-l11l12-two-seed.yaml`
   - Seeds: `206,207`
   - W&B group: `b100-l11l12-lowpress-complete25-l12soft-two-seed`
   - Run names:

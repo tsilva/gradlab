@@ -15,11 +15,11 @@ launchers for this project while the beast path is being hardened.
 | Faster RTX2060 turnaround | `rtx2060` / `beast-2` | 2 runner workers, `env_threads=4` |
 | Smoke, debugging, playback | `local-macbook` | direct local CLI |
 
-Machine-readable target defaults live in `experiments/instances.json`; these
+Machine-readable target defaults live in `experiments/instances.yaml`; these
 use `default_workers` and `hardware_max_workers` for descriptive capacity.
 Fleet host connection, mount details, and the enforced `max_workers` cap live in
-`experiments/fleet.json`. Scheduling lanes and policy checks live in
-`experiments/policies/capacity_policy.json`.
+`experiments/fleet.yaml`. Scheduling lanes and policy checks live in
+`experiments/policies/capacity_policy.yaml`.
 
 ## Standard Workflow
 
@@ -27,7 +27,7 @@ Queue work from checked-in goal spec files:
 
 ```bash
 UV_CACHE_DIR=.uv-cache uv run rlab train \
-  --spec-file experiments/goals/<goal-slug>/specs/<spec>.json \
+  --spec-file experiments/goals/<goal-slug>/specs/<spec>.yaml \
   --runtime-image-ref-file rlab-train-image.json
 ```
 
@@ -99,13 +99,13 @@ queue service and do not schedule experiments.
 - Target: `rtx4090`, alias `beast-3`.
 - Access: `ssh tsilva@beast-3`.
 - Fleet role: primary screening and confirmation host.
-- Enforced fleet capacity: `max_workers=5` in `experiments/fleet.json`.
+- Enforced fleet capacity: `max_workers=5` in `experiments/fleet.yaml`.
 - Default operating shape: 5 runner workers.
 - Default runtime shape: `env_threads=4`, `torch_num_threads=1`.
 - Lower-contention shape: 3-4 workers with `env_threads=4`.
 - Current benchmark expectation: about 6200 aggregate wall FPS for the current
   Mario PPO shape.
-- Docker command: configured in `experiments/fleet.json`; currently
+- Docker command: configured in `experiments/fleet.yaml`; currently
   `sudo -n docker`.
 - Persistent root: `/home/tsilva/rlab`.
 - ROM mount root: `/home/tsilva/roms`.
@@ -119,11 +119,11 @@ intentionally testing small-GPU behavior.
 - Access: `ssh -o HostKeyAlias=beast-2 tsilva@192.168.133.26` until hostname
   resolution is restored.
 - Fleet role: cheaper small ablations, smoke jobs, and RTX2060-specific checks.
-- Enforced fleet capacity: `max_workers=4` in `experiments/fleet.json`.
+- Enforced fleet capacity: `max_workers=4` in `experiments/fleet.yaml`.
 - Default operating shape: 4 runner workers.
 - Default runtime shape: `env_threads=2`, `torch_num_threads=1`.
 - Fast-turnaround shape: 2 workers with `env_threads=4`.
-- Docker command: configured in `experiments/fleet.json`; currently
+- Docker command: configured in `experiments/fleet.yaml`; currently
   `sudo -n docker`.
 - Persistent root: `/home/tsilva/rlab`.
 - ROM mount root: `/home/tsilva/roms`.

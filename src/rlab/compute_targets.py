@@ -4,18 +4,22 @@ import json
 from pathlib import Path
 from typing import Any
 
+import yaml
 
-DEFAULT_INSTANCE_CONFIG = "experiments/instances.json"
+DEFAULT_INSTANCE_CONFIG = "experiments/instances.yaml"
 DEFAULT_COMPUTE_TARGET = "rtx4090"
 LOCAL_TARGET_KINDS = {"local"}
 FLEET_TARGET_KINDS = {"fleet", "docker", "docker-fleet"}
 
 
 def load_json_file(path: Path) -> dict[str, Any]:
-    with path.open(encoding="utf-8") as handle:
-        data = json.load(handle)
+    text = path.read_text(encoding="utf-8")
+    if path.suffix.lower() in {".yaml", ".yml"}:
+        data = yaml.safe_load(text)
+    else:
+        data = json.loads(text)
     if not isinstance(data, dict):
-        raise ValueError(f"{path} must contain a JSON object")
+        raise ValueError(f"{path} must contain a config object")
     return data
 
 

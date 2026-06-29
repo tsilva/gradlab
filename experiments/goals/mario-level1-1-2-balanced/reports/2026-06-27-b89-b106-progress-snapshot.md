@@ -63,7 +63,7 @@ sampling knobs.
 
 ### B105
 
-- Spec: `specs/b105-lowpress-complete50-l11l12-two-seed.json`
+- Spec: `specs/b105-lowpress-complete50-l11l12-two-seed.yaml`
 - W&B group: `b105-l11l12-lowpress-complete50-two-seed`
 - Seeds: `198,199`
 - Delta from B91: `completion_reward=50` instead of `25`
@@ -76,7 +76,7 @@ adding sampling bias or slower entropy.
 
 ### B106
 
-- Spec: `specs/b106-lowpress-complete50-slowent-l12soft-l11l12-two-seed.json`
+- Spec: `specs/b106-lowpress-complete50-slowent-l12soft-l11l12-two-seed.yaml`
 - W&B group: `b106-l11l12-lowpress-complete50-slowent-l12soft-two-seed`
 - Seeds: `202,203`
 - Delta from B104: add lower update pressure,

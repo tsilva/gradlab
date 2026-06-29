@@ -1,0 +1,57 @@
+instances:
+  rtx4090:
+    aliases:
+    - beast-3
+    label: beast-3
+    kind: fleet
+    infra: docker/beast-3
+    accelerator: RTX4090
+    cpus: 12+
+    memory: 48+
+    image_id: ''
+    default_workers: 5
+    hardware_max_workers: 5
+    env_threads: 4
+    torch_num_threads: 1
+    expected_aggregate_wall_fps: 6200
+    lower_contention_workers:
+    - 3
+    - 4
+    notes:
+    - Mac-side rlab fleet manages Docker runner containers on this host.
+    - Use 5 workers with env_threads=4 for screening queues.
+    - Use 3-4 workers with env_threads=4 when individual latency or lower contention matters.
+  rtx2060:
+    aliases:
+    - beast-2
+    label: beast-2
+    kind: fleet
+    infra: docker/beast-2
+    accelerator: RTX2060
+    cpus: 4+
+    memory: 8+
+    image_id: ''
+    prebuilt_image: true
+    default_workers: 4
+    hardware_max_workers: 4
+    env_threads: 2
+    fast_turnaround_workers: 2
+    fast_turnaround_env_threads: 4
+    notes:
+    - Mac-side rlab fleet manages Docker runner containers on this host.
+    - Use ssh -o HostKeyAlias=beast-2 tsilva@192.168.133.26 until hostname resolution is restored.
+    - The local-8332822-dirty image tag is a legacy k3s/containerd artifact; use pushed immutable GHCR digest refs for Docker fleet jobs.
+  local-macbook:
+    aliases:
+    - macbook
+    - local
+    label: local MacBook
+    kind: local
+    accelerator: MPS
+    default_workers: 1
+    hardware_max_workers: 1
+    env_threads: 0
+    torch_num_threads: 0
+    notes:
+    - Use direct local training/eval commands.
+    - Best for smoke tests, debugging, and playback rather than long PPO batches.

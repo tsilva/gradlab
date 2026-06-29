@@ -13,7 +13,7 @@ both seeds in the same two-seed batch reach a peak
 ## Winning Spec
 
 - Spec:
-  `experiments/goals/mario-level1-1-2-balanced/specs/b93-slowent-l12bias-l11l12-two-seed.json`
+  `experiments/goals/mario-level1-1-2-balanced/specs/b93-slowent-l12bias-l11l12-two-seed.yaml`
 - W&B group: `b93-l11l12-slowent-l12bias-two-seed`
 - Runtime target: `rtx4090` / beast-3 queue-backed fleet
 - Runtime digest short id: `c672be38cd0f`
@@ -39,7 +39,7 @@ by the training high-watermark rather than final checkpoint value.
 ## Recipe Delta
 
 Parent near-miss:
-`experiments/goals/mario-level1-1-2-balanced/specs/b86-b74current-l11l12-latest-five-seed.json`
+`experiments/goals/mario-level1-1-2-balanced/specs/b86-b74current-l11l12-latest-five-seed.yaml`
 
 B93 kept the B86 PPO/reward shape conservative and changed only the balancing
 and exploration pressure:

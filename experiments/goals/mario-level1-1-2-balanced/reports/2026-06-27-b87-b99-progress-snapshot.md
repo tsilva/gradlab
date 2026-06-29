@@ -48,7 +48,7 @@ B99 targets the late B89 imbalance:
 
 Added spec:
 
-- `specs/b99-complete25-l12soft-l11l12-two-seed.json`
+- `specs/b99-complete25-l12soft-l11l12-two-seed.yaml`
   - Seeds: `202,203`
   - Deltas from B89: `state_probs=[0.45,0.55]`
   - W&B group: `b99-l11l12-complete25-l12soft-two-seed`

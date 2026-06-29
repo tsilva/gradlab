@@ -87,18 +87,25 @@ UV_CACHE_DIR=.uv-cache uv sync --frozen
 UV_CACHE_DIR=.uv-cache uv run ruff check .
 UV_CACHE_DIR=.uv-cache uv run python -m unittest discover -s tests -v
 
+UV_CACHE_DIR=.uv-cache uv run rlab validate
 UV_CACHE_DIR=.uv-cache uv run rlab train local --game <GameId> --preset smoke --run-description "Smoke test"
 UV_CACHE_DIR=.uv-cache uv run rlab eval --game <GameId> --policy random --episodes 2 --max-steps 600
 UV_CACHE_DIR=.uv-cache uv run rlab eval --artifact-run <run-name> --checkpoint-series --game <GameId> --episodes 50 --record-best-video
 UV_CACHE_DIR=.uv-cache uv run rlab play <entity>/<project>/<run-name>-checkpoint:latest
+UV_CACHE_DIR=.uv-cache uv run rlab benchmark list
+UV_CACHE_DIR=.uv-cache uv run rlab benchmark run retro-env-throughput-mario-l11 --dry-run
 ```
+
+Benchmark profiles live under `experiments/benchmarks/profiles/`. They provide
+named smoke, throughput, fleet-capacity, eval-contract, and artifact-storage
+checks; generated results belong under `logs/benchmarks/`.
 
 ## Research Loop
 
 The current Mario Level1-1 contract is machine-readable:
 
 ```bash
-cat experiments/goals/mario-level1-100of100/goal.json
+cat experiments/goals/mario-level1-100of100/goal.yaml
 ```
 
 Queue comparable experiments from checked-in spec files instead of ad hoc
@@ -106,7 +113,7 @@ commands:
 
 ```bash
 UV_CACHE_DIR=.uv-cache uv run rlab train \
-  --spec-file experiments/goals/mario-level1-100of100/specs/b83-b55-post21-five-seed-l11-confirm.json \
+  --spec-file experiments/goals/mario-level1-100of100/specs/b83-b55-post21-five-seed-l11-confirm.yaml \
   --runtime-image-ref-file rlab-train-image.json
 ```
 
@@ -114,6 +121,10 @@ Train specs are validated against the mandatory queue-backed schema in
 `src/rlab/spec_schema.py` before enqueue. Extra research metadata is preserved
 in `spec_payload_json`, but required launch, naming, W&B, seed, selection, and
 minimal train-config fields must be present and well-formed.
+
+Use `rlab validate` before launching a batch to validate the full checked-in
+YAML experiment tree: goals, train specs, reusable recipes, benchmark profiles,
+fleet config, instance config, and capacity policy.
 
 Seed ranges are part of the comparability contract. Training seeds must stay in
 `0..9999`, accounting for vector env slots, and seeds `10000+` are reserved for
@@ -160,8 +171,8 @@ Queue-backed training is the supported GPU workflow. Create train jobs with
 `beast-2`.
 
 For queue-backed training, keep the enforced host cap as `max_workers` in
-`experiments/fleet.json`. Lane-specific limits live in
-`experiments/policies/capacity_policy.json`; they are validated against the host
+`experiments/fleet.yaml`. Lane-specific limits live in
+`experiments/policies/capacity_policy.yaml`; they are validated against the host
 cap by `rlab fleet policy`. `rlab fleet` starts digest-pinned Docker containers
 running `rlab train worker`; experiment payloads stay in the queue row snapshot
 loaded from the checked-in spec file.
@@ -255,6 +266,9 @@ still owns a running queue lease.
 - Every training run should include `--run-description`.
 - Training logs to W&B and uploads model artifacts unless `--no-wandb-artifacts`
   is set.
+- Queue-backed successful online runs purge local run directories after artifact
+  refs have been recorded; pass `rlab-train-runner --keep-successful-run-data`
+  only when debugging a runner host.
 - Queue-backed train jobs are profileless by default and should reference
   immutable runtime image digests. `rlab train` resolves the
   latest successful train-image artifact when no explicit digest/file is given;

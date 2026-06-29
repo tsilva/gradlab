@@ -4,12 +4,14 @@ import argparse
 import json
 from pathlib import Path
 
+import yaml
+
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Gate promotion of a trained checkpoint against a goal contract."
     )
-    parser.add_argument("--goal", required=True, help="Goal slug or path to goal.json.")
+    parser.add_argument("--goal", required=True, help="Goal slug or path to goal.yaml.")
     parser.add_argument(
         "--candidate",
         required=True,
@@ -28,7 +30,21 @@ def resolve_goal_path(value: str) -> Path:
     path = Path(value)
     if path.is_file():
         return path
-    return Path("experiments/goals") / value / "goal.json"
+    yaml_path = Path("experiments/goals") / value / "goal.yaml"
+    if yaml_path.is_file():
+        return yaml_path
+    return Path("experiments/goals") / value / "goal.yaml"
+
+
+def load_goal_contract(path: Path) -> dict:
+    text = path.read_text(encoding="utf-8")
+    if path.suffix.lower() in {".yaml", ".yml"}:
+        data = yaml.safe_load(text)
+    else:
+        data = json.loads(text)
+    if not isinstance(data, dict):
+        raise ValueError(f"{path} must contain a goal contract object")
+    return data
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -37,7 +53,7 @@ def main(argv: list[str] | None = None) -> None:
     if not goal_path.is_file():
         raise SystemExit(f"goal contract not found: {goal_path}")
 
-    goal = json.loads(goal_path.read_text(encoding="utf-8"))
+    goal = load_goal_contract(goal_path)
     rank_order = goal.get("selection_policy", {}).get("rank_order", [])
     print(f"goal={goal.get('goal_slug') or args.goal}")
     print(f"goal_path={goal_path}")

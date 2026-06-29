@@ -13,7 +13,7 @@ collapse.
 
 Current near-miss baseline:
 
-- Spec: `specs/b86-b74current-l11l12-latest-five-seed.json`
+- Spec: `specs/b86-b74current-l11l12-latest-five-seed.yaml`
 - W&B group: `b86-l11l12-b74current-latest-five-seed`
 - Best seed: `b86_l11l12_b74current_s195_20260627T091726Z`
 - Peak: `train/info/level_complete/rate/min/last = 0.80` at about `4,070,256`
@@ -22,7 +22,7 @@ Queue new batches with:
 
 ```bash
 UV_CACHE_DIR=.uv-cache uv run rlab train \
-  --spec-file experiments/goals/mario-level1-1-2-balanced/specs/<spec>.json \
+  --spec-file experiments/goals/mario-level1-1-2-balanced/specs/<spec>.yaml \
   --latest-image
 ```
 

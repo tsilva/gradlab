@@ -1,0 +1,15 @@
+schema_version: 1
+name: fleet-capacity-rtx4090
+kind: fleet_capacity
+description: Queue-backed Beast3 capacity check for the standard five-worker RTX4090 shape.
+target: rtx4090
+host: beast-3
+workers: 5
+env_threads: 4
+spec_file: experiments/goals/mario-level1-100of100/specs/b83-b55-post21-five-seed-l11-confirm.yaml
+runtime_image_ref_file: rlab-train-image.json
+gates:
+  expected_aggregate_wall_fps: 6200
+  min_relative_to_baseline: 0.85
+  profileless: true
+  digest_pinned: true

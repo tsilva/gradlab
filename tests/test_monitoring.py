@@ -89,7 +89,7 @@ class MonitoringStateTests(unittest.TestCase):
         self.assertIn("local-macbook", by_id)
         self.assertEqual(by_id["rtx4090"]["target"], "docker/beast-3")
         self.assertEqual(by_id["rtx4090"]["capacity"], "5 workers")
-        self.assertEqual(by_id["rtx4090"]["details"]["manager"], "rlab-fleet")
+        self.assertEqual(by_id["rtx4090"]["details"]["manager"], "rlab fleet")
         self.assertEqual(by_id["rtx4090"]["details"]["fleet_host"], "beast-3")
         self.assertEqual(by_id["rtx4090"]["details"]["runner_capacity"], 5)
         self.assertEqual(by_id["local-macbook"]["target"], "local CLI")

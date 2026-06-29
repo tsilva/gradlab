@@ -49,7 +49,7 @@ B98 tests the most direct reward-scale follow-up from B89:
 
 Added spec:
 
-- `specs/b98-complete50-l11l12-two-seed.json`
+- `specs/b98-complete50-l11l12-two-seed.yaml`
   - Seeds: `200,201`
   - Deltas from B89: `completion_reward=50`
   - W&B group: `b98-l11l12-complete50-two-seed`

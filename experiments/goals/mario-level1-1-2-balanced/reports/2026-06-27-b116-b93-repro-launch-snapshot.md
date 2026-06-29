@@ -13,9 +13,9 @@ Reproduce the winning B93 recipe across five fresh seeds beyond the solved
 ## Spec
 
 - Spec:
-  `experiments/goals/mario-level1-1-2-balanced/specs/b116-b93-repro-five-seed.json`
+  `experiments/goals/mario-level1-1-2-balanced/specs/b116-b93-repro-five-seed.yaml`
 - Parent recipe:
-  `experiments/goals/mario-level1-1-2-balanced/specs/b93-slowent-l12bias-l11l12-two-seed.json`
+  `experiments/goals/mario-level1-1-2-balanced/specs/b93-slowent-l12bias-l11l12-two-seed.yaml`
 - Stage: `confirm`
 - W&B group: `b116-b93-repro-five-seed`
 - Seeds: `208`, `209`, `210`, `211`, `212`

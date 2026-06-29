@@ -43,7 +43,7 @@ Next queued arm:
 ## B93 High-Watermark Evidence
 
 Spec:
-`experiments/goals/mario-level1-1-2-balanced/specs/b93-slowent-l12bias-l11l12-two-seed.json`
+`experiments/goals/mario-level1-1-2-balanced/specs/b93-slowent-l12bias-l11l12-two-seed.yaml`
 
 W&B group: `b93-l11l12-slowent-l12bias-two-seed`
 

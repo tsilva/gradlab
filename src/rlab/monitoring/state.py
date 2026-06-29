@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import os
 import re
 import subprocess
@@ -12,7 +11,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from rlab.job_queue import connect, database_url
-from rlab.compute_targets import FLEET_TARGET_KINDS, instance_label, target_kind
+from rlab.compute_targets import FLEET_TARGET_KINDS, instance_label, load_json_file, target_kind
 from rlab.json_utils import json_safe
 from rlab.metric_names import (
     THROUGHPUT_LOOP_FPS,
@@ -98,17 +97,17 @@ def minutes_until(value: Any) -> str:
 
 
 def load_instances(repo_root: Path) -> dict[str, Any]:
-    path = repo_root / "experiments" / "instances.json"
+    path = repo_root / "experiments" / "instances.yaml"
     if not path.is_file():
         return {"instances": {}}
-    return json.loads(path.read_text(encoding="utf-8"))
+    return load_json_file(path)
 
 
 def load_fleet(repo_root: Path) -> dict[str, Any]:
-    path = repo_root / "experiments" / "fleet.json"
+    path = repo_root / "experiments" / "fleet.yaml"
     if not path.is_file():
         return {"hosts": {}}
-    return json.loads(path.read_text(encoding="utf-8"))
+    return load_json_file(path)
 
 
 REMOTE_METRICS_SCRIPT = r"""

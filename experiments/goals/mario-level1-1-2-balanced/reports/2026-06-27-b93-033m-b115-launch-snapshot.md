@@ -70,7 +70,7 @@ B91 near-miss reference from the same scan:
 ## B115 Launch Decision
 
 Queued B115 from spec:
-`experiments/goals/mario-level1-1-2-balanced/specs/b115-slowent-l12bias-complete25-l11l12-two-seed.json`.
+`experiments/goals/mario-level1-1-2-balanced/specs/b115-slowent-l12bias-complete25-l11l12-two-seed.yaml`.
 
 B115 preserves B93 exactly on the currently useful recipe shape:
 

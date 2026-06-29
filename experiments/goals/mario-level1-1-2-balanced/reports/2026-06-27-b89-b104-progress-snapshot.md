@@ -55,7 +55,7 @@ branch while staying within legal reward/hyperparameter/state-sampling levers.
 
 ### B103
 
-- Spec: `specs/b103-complete50-l12soft-l11l12-two-seed.json`
+- Spec: `specs/b103-complete50-l12soft-l11l12-two-seed.yaml`
 - W&B group: `b103-l11l12-complete50-l12soft-two-seed`
 - Seeds: `204,205`
 - Delta from B98: add `state_probs=[0.45,0.55]`
@@ -68,7 +68,7 @@ Level1-2 coverage raises the bottleneck level without starving Level1-1.
 
 ### B104
 
-- Spec: `specs/b104-complete50-slowent-l12soft-l11l12-two-seed.json`
+- Spec: `specs/b104-complete50-slowent-l12soft-l11l12-two-seed.yaml`
 - W&B group: `b104-l11l12-complete50-slowent-l12soft-two-seed`
 - Seeds: `206,207`
 - Delta from B103: add slower entropy decay and higher entropy floor,

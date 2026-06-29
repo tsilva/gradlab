@@ -54,7 +54,7 @@ def sample_config() -> fleet.FleetConfig:
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
         (root / "experiments").mkdir()
-        (root / "experiments" / "instances.json").write_text(
+        (root / "experiments" / "instances.yaml").write_text(
             json.dumps(
                 {
                     "instances": {
@@ -73,7 +73,7 @@ def sample_config() -> fleet.FleetConfig:
             ),
             encoding="utf-8",
         )
-        (root / "experiments" / "fleet.json").write_text(
+        (root / "experiments" / "fleet.yaml").write_text(
             json.dumps(
                 {
                     "hosts": {
@@ -1091,7 +1091,7 @@ class FleetPlanTests(unittest.TestCase):
             lease_owner_prefix="rlab-beast-2-",
             older_than_seconds=300,
             limit=50,
-            error="worker_lost: stale train job marked failed by rlab-fleet watch host=beast-2",
+            error="worker_lost: stale train job marked failed by rlab fleet watch host=beast-2",
         )
         list_stale.assert_not_called()
         self.assertEqual(len(snapshot.stale_train_jobs), 1)
@@ -1462,7 +1462,7 @@ class FleetHostSetupTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root / "experiments").mkdir()
-            (root / "experiments" / "instances.json").write_text(
+            (root / "experiments" / "instances.yaml").write_text(
                 json.dumps(
                     {
                         "instances": {
@@ -1476,7 +1476,7 @@ class FleetHostSetupTests(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
-            (root / "experiments" / "fleet.json").write_text(
+            (root / "experiments" / "fleet.yaml").write_text(
                 json.dumps(
                     {
                         "hosts": {

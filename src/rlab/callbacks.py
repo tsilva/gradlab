@@ -140,6 +140,7 @@ class WandbCheckpointArtifactCallback(BaseCallback):
                 else None,
                 stall_started_at=pending_timing.started_at if pending_timing is not None else None,
                 clock=self.clock,
+                purge_after_upload=True,
             )
             if self.timing_state is not None:
                 self.timing_state.clear(step)

@@ -1809,6 +1809,73 @@ class CommandAndArtifactTests(unittest.TestCase):
         self.assertAlmostEqual(payload[metric_names.TRAIN_ARTIFACT_LOCAL_SAVE_SECONDS], 2.0)
         self.assertAlmostEqual(payload[metric_names.TRAIN_ARTIFACT_STALL_SECONDS], 4.0)
 
+    def test_wandb_artifact_logging_can_purge_uploaded_local_files(self) -> None:
+        class FakeArtifact:
+            def __init__(self, name: str, type: str, metadata: dict[str, object]) -> None:
+                self.name = name
+                self.type = type
+                self.metadata = metadata
+                self.files: list[tuple[str, str]] = []
+
+            def add_file(self, path: str, name: str) -> None:
+                self.files.append((path, name))
+
+        class FakeLoggedArtifact:
+            def __init__(self) -> None:
+                self.wait_called = False
+
+            def wait(self) -> None:
+                self.wait_called = True
+
+        class FakeRun:
+            id = "run-id"
+            path = ("entity", "project", "runs", "run-id")
+
+            def __init__(self) -> None:
+                self.logged = FakeLoggedArtifact()
+
+            def log_artifact(
+                self, artifact: FakeArtifact, aliases: list[str] | None = None
+            ) -> FakeLoggedArtifact:
+                return self.logged
+
+            def log(self, payload: dict[str, object], step: int | None = None) -> None:
+                pass
+
+        class FakeWandb:
+            def Artifact(self, name: str, type: str, metadata: dict[str, object]) -> FakeArtifact:
+                return FakeArtifact(name, type, metadata)
+
+        args = argparse.Namespace(
+            game="TestGame-Platform",
+            run_name="candidate-run",
+            run_description="description",
+            no_wandb_artifacts=False,
+            wandb_artifact_storage_uri="",
+            wandb_mode="online",
+        )
+        clock_values = iter([1.0, 1.0, 1.1, 1.1, 1.4, 1.4])
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            model_path = Path(tmp_dir) / "ppo_test_100_steps.zip"
+            model_path.write_bytes(b"zip")
+            fake_run = FakeRun()
+
+            with patch.dict(sys.modules, {"wandb": FakeWandb()}):
+                log_wandb_model_artifact(
+                    fake_run,
+                    args,
+                    EnvConfig(game="TestGame-Platform"),
+                    model_path,
+                    kind="checkpoint",
+                    purge_after_upload=True,
+                    clock=lambda: next(clock_values),
+                )
+
+            self.assertTrue(fake_run.logged.wait_called)
+            self.assertFalse(model_path.exists())
+            self.assertFalse(model_metadata_path(model_path).exists())
+
     def test_model_metadata_sidecar_records_env_config(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             model_path = Path(tmp_dir) / "ppo_test_100_steps.zip"

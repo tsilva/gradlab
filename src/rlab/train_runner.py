@@ -9,6 +9,7 @@ import os
 import queue
 import re
 import signal
+import shutil
 import subprocess
 import sys
 import threading
@@ -641,6 +642,47 @@ def collect_result_metadata(job: dict[str, Any], log_path: Path) -> dict[str, An
     }
 
 
+def should_purge_successful_run_data(job: dict[str, Any], result: Mapping[str, Any]) -> bool:
+    config = normalize_train_config(job, resolve_resume_artifact=False)
+    if not bool(config.get("wandb")):
+        return False
+    if str(config.get("wandb_mode") or "online") != "online":
+        return False
+    if bool(config.get("no_wandb_artifacts")):
+        return False
+    return bool(result.get("artifact_refs"))
+
+
+def purge_successful_run_data(job: dict[str, Any], result: Mapping[str, Any]) -> bool:
+    config = normalize_train_config(job, resolve_resume_artifact=False)
+    runs_dir = Path(str(config.get("runs_dir") or "runs"))
+    raw_run_dir = str(result.get("run_dir") or "").strip()
+    if not raw_run_dir:
+        return False
+    run_dir = Path(raw_run_dir)
+    try:
+        runs_root = runs_dir.resolve()
+        target = run_dir.resolve()
+    except OSError as exc:
+        print(f"warning: could not resolve run cleanup paths run_dir={run_dir}: {exc}", flush=True)
+        return False
+    if target == runs_root or not target.is_relative_to(runs_root):
+        print(
+            f"warning: refusing to purge run_dir outside runs_dir: run_dir={target} runs_dir={runs_root}",
+            flush=True,
+        )
+        return False
+    if not target.exists():
+        return False
+    try:
+        shutil.rmtree(target)
+    except OSError as exc:
+        print(f"warning: could not purge successful run data {target}: {exc}", flush=True)
+        return False
+    print(f"purged successful run data: {target}", flush=True)
+    return True
+
+
 def signal_label(signum: int) -> str:
     try:
         return signal.Signals(signum).name
@@ -682,6 +724,7 @@ def run_training_job(
     log_dir: Path,
     dry_run: bool = False,
     cancel_grace_seconds: float = DEFAULT_CANCEL_GRACE_SECONDS,
+    purge_successful_run_data_enabled: bool = True,
 ) -> str:
     log_dir.mkdir(parents=True, exist_ok=True)
     log_stem = f"train_job_{job['id']}_{uuid.uuid4().hex[:8]}"
@@ -833,6 +876,8 @@ def run_training_job(
             exit_code=exit_code,
             result=result,
         )
+        if purge_successful_run_data_enabled and should_purge_successful_run_data(job, result):
+            purge_successful_run_data(job, result)
         if drain_after_job:
             return "succeeded_drained"
         return "succeeded"
@@ -894,6 +939,7 @@ def worker_loop(args: argparse.Namespace, *, worker_id: str, slot: WorkerSlot | 
                 log_dir=Path(args.log_dir),
                 dry_run=args.dry_run,
                 cancel_grace_seconds=args.cancel_grace_seconds,
+                purge_successful_run_data_enabled=not args.keep_successful_run_data,
             )
             completed += 1
             print(f"worker={worker_id} train_job={job['id']} status={status}", flush=True)
@@ -1215,6 +1261,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--dry-run",
         action="store_true",
         help="Claim and complete jobs without training.",
+    )
+    parser.add_argument(
+        "--keep-successful-run-data",
+        action="store_true",
+        help="Do not purge local run directories after successful online artifact uploads.",
     )
     parser.add_argument("--direct", action="store_true", help="Use DIRECT_DATABASE_URL.")
     parser.add_argument(

@@ -55,7 +55,7 @@ collapse without changing the task or evaluation protocol.
 
 ### B101
 
-- Spec: `specs/b101-complete25-slowent-l12soft-l11l12-two-seed.json`
+- Spec: `specs/b101-complete25-slowent-l12soft-l11l12-two-seed.yaml`
 - Seeds: `198,199`
 - W&B group: `b101-l11l12-complete25-slowent-l12soft-two-seed`
 - Delta from B97: add `state_probs=[0.45,0.55]`
@@ -68,7 +68,7 @@ and soft Level1-2 coverage, without changing PPO update pressure.
 
 ### B102
 
-- Spec: `specs/b102-lowpress-complete25-slowent-l12soft-l11l12-two-seed.json`
+- Spec: `specs/b102-lowpress-complete25-slowent-l12soft-l11l12-two-seed.yaml`
 - Seeds: `200,201`
 - W&B group: `b102-l11l12-lowpress-complete25-slowent-l12soft-two-seed`
 - Delta from B100: add slower entropy decay and higher entropy floor,

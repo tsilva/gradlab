@@ -33,8 +33,10 @@ from rlab.train_runner import (
     matching_pending_train_job_exists,
     normalize_train_config,
     parse_log_metrics,
+    purge_successful_run_data,
     request_graceful_stop,
     resolve_worker_bounds,
+    should_purge_successful_run_data,
     train_command_for_job,
     write_train_config_file,
 )
@@ -250,6 +252,75 @@ class JobQueueTests(unittest.TestCase):
 
         self.assertEqual(loaded["operator_note"], {"why": "kept outside the formal schema for now"})
 
+    def test_load_spec_document_resolves_yaml_extends_and_materializes_train_config(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            recipe = root / "recipes" / "base.yaml"
+            recipe.parent.mkdir(parents=True)
+            recipe.write_text(
+                """
+schema_version: 1
+kind: train_recipe
+env:
+  game: SuperMarioBros-Nes-v0
+  n_envs: 16
+  info_events_json:
+    life_loss: [lives, decrease]
+    level_change: [[levelHi, levelLo], change]
+  done_on_events: [life_loss, level_change]
+train:
+  timesteps: 1024
+  learning_rate: 0.00015
+reward:
+  death_penalty: 25
+logging:
+  wandb: true
+  wandb_mode: online
+""",
+                encoding="utf-8",
+            )
+            spec = root / "goals" / "candidate.yaml"
+            spec.parent.mkdir(parents=True)
+            spec.write_text(
+                """
+schema_version: 1
+kind: train_experiment
+extends: ../recipes/base.yaml
+goal: Level1-1
+slug: candidate
+stage: screen
+hypothesis: Candidate should reproduce the expected completion signal.
+expected_signal: Rank by completion rate, then reward.
+parent_spec_slug: null
+priority: 7
+seeds: [23, 24]
+run_target: rtx4090
+state: Level1-1
+wandb_group: b-test
+wandb_tags: [mario, confirm]
+run_name_template: btest_s{seed}_{utc}
+run_description_template: candidate seed {seed}
+selection_gate:
+  primary: train/completion_episode_rate
+  tie_breakers: [train/reward/mean]
+overrides:
+  train:
+    learning_rate: 0.0001
+  reward:
+    death_penalty: 0
+""",
+                encoding="utf-8",
+            )
+
+            loaded = job_queue.load_spec_document(spec)
+
+        self.assertEqual(loaded["train_config"]["game"], "SuperMarioBros-Nes-v0")
+        self.assertEqual(loaded["train_config"]["state"], "Level1-1")
+        self.assertEqual(loaded["train_config"]["learning_rate"], 0.0001)
+        self.assertEqual(loaded["train_config"]["death_penalty"], 0)
+        self.assertEqual(loaded["train_config"]["done_on_events"], ["life_loss", "level_change"])
+        self.assertEqual(len(loaded["_composition"]["source_files"]), 2)
+
     def test_load_spec_document_rejects_missing_mandatory_schema_field(self) -> None:
         spec = valid_train_spec()
         del spec["run_description_template"]
@@ -270,19 +341,19 @@ class JobQueueTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "run_name_template.*seed"):
                 job_queue.load_spec_document(path)
 
-    def test_checked_in_goal_specs_match_train_spec_schema(self) -> None:
-        spec_paths = sorted(Path("experiments/goals").glob("*/specs/*.json"))
+    def test_checked_in_goal_yaml_specs_match_train_spec_schema(self) -> None:
+        spec_paths = sorted(Path("experiments/goals").glob("*/specs/*.y*ml"))
         self.assertGreater(len(spec_paths), 0)
         for path in spec_paths:
             with self.subTest(path=str(path)):
                 job_queue.load_spec_document(path)
 
     def test_level1_3_specs_configure_goal_metric_early_stop(self) -> None:
-        spec_paths = sorted(Path("experiments/goals/mario-level1-3-100of100/specs").glob("*.json"))
+        spec_paths = sorted(Path("experiments/goals/mario-level1-3-100of100/specs").glob("*.yaml"))
         self.assertGreater(len(spec_paths), 0)
         for path in spec_paths:
             with self.subTest(path=str(path)):
-                spec = json.loads(path.read_text(encoding="utf-8"))
+                spec = job_queue.load_spec_document(path)
                 train_config = spec["train_config"]
                 self.assertEqual(
                     train_config["early_stop_metric"],
@@ -597,13 +668,13 @@ class JobQueueTests(unittest.TestCase):
         args = rlab_main.build_train_enqueue_parser().parse_args(
             [
                 "--spec-file",
-                "experiments/goals/example/specs/candidate.json",
+                "experiments/goals/example/specs/candidate.yaml",
                 "--runtime-image-ref-file",
                 "rlab-train-image.json",
             ]
         )
 
-        self.assertEqual(args.spec_file, Path("experiments/goals/example/specs/candidate.json"))
+        self.assertEqual(args.spec_file, Path("experiments/goals/example/specs/candidate.yaml"))
 
     def test_jobs_parser_no_longer_owns_train_enqueue(self) -> None:
         with self.assertRaises(SystemExit), redirect_stderr(StringIO()):
@@ -611,7 +682,7 @@ class JobQueueTests(unittest.TestCase):
                 [
                     "enqueue-train",
                     "--spec-file",
-                    "experiments/goals/example/specs/candidate.json",
+                    "experiments/goals/example/specs/candidate.yaml",
                 ]
             )
 
@@ -666,7 +737,7 @@ class JobQueueTests(unittest.TestCase):
                 object(),
                 document=document,
                 runtime_image_ref=RUNTIME_IMAGE_REF,
-                spec_path="experiments/goals/mario/specs/candidate.json",
+                spec_path="experiments/goals/mario/specs/candidate.yaml",
                 spec_sha256="abc123",
                 repo_git_commit="deadbeef",
                 repo_dirty=True,
@@ -691,7 +762,7 @@ class JobQueueTests(unittest.TestCase):
         self.assertEqual(calls[0]["wandb_tags"], ["mario", "confirm"])
         self.assertEqual(calls[0]["goal_slug"], "Level1-1")
         self.assertEqual(calls[0]["spec_slug"], "candidate")
-        self.assertEqual(calls[0]["spec_path"], "experiments/goals/mario/specs/candidate.json")
+        self.assertEqual(calls[0]["spec_path"], "experiments/goals/mario/specs/candidate.yaml")
         self.assertEqual(calls[0]["spec_sha256"], "abc123")
         self.assertEqual(calls[0]["repo_git_commit"], "deadbeef")
         self.assertTrue(calls[0]["repo_dirty"])
@@ -1195,6 +1266,58 @@ class TrainRunnerTests(unittest.TestCase):
         self.assertEqual(metrics["time/fps"], 240)
         self.assertEqual(metrics["train/loss"], 1.5)
         self.assertEqual(metrics["total_timesteps"], 1024)
+
+    def test_successful_online_artifact_run_data_is_purged(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            run_dir = root / "runs" / "candidate"
+            run_dir.mkdir(parents=True)
+            (run_dir / "final_model.zip").write_bytes(b"model")
+            (run_dir / "wandb" / "cache").mkdir(parents=True)
+            (run_dir / "wandb" / "cache" / "data").write_bytes(b"cache")
+            job = {
+                "id": 3,
+                "run_name": "candidate",
+                "train_config": {
+                    "runs_dir": str(root / "runs"),
+                    "wandb": True,
+                    "wandb_mode": "online",
+                },
+            }
+            result = {
+                "run_dir": str(run_dir),
+                "artifact_refs": [{"name": "candidate-final", "location": "s3://bucket/model.zip"}],
+            }
+
+            self.assertTrue(should_purge_successful_run_data(job, result))
+            self.assertTrue(purge_successful_run_data(job, result))
+
+            self.assertFalse(run_dir.exists())
+
+    def test_successful_run_data_purge_refuses_paths_outside_runs_dir(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            runs_dir = root / "runs"
+            escaped_dir = root / "escaped"
+            runs_dir.mkdir()
+            escaped_dir.mkdir()
+            (escaped_dir / "final_model.zip").write_bytes(b"model")
+            job = {
+                "id": 3,
+                "run_name": "../escaped",
+                "train_config": {
+                    "runs_dir": str(runs_dir),
+                    "wandb": True,
+                    "wandb_mode": "online",
+                },
+            }
+            result = {
+                "run_dir": str(escaped_dir),
+                "artifact_refs": [{"name": "candidate-final", "location": "s3://bucket/model.zip"}],
+            }
+
+            self.assertFalse(purge_successful_run_data(job, result))
+            self.assertTrue(escaped_dir.exists())
 
 
 class ArtifactConfigTests(unittest.TestCase):
