@@ -47,3 +47,4 @@ When the user asks to flush unevaluated checkpoints, evaluate pending checkpoint
 ## Dependencies
 
 Use `uv` for dependency resolution and keep `uv.lock` committed. Preserve Python supply-chain hardening in `pyproject.toml`.
+The intentional exception to the seven-day `exclude-newer` window is `stable-retro-turbo`, because this project pins the current forward Stable Retro runtime. Keep the per-package cutoff in `[tool.uv.exclude-newer-package]`, and when using resolver paths that do not apply project config or `uv.lock` directly, pass the matching override explicitly, for example `uv tool install --editable --exclude-newer-package stable-retro-turbo=2026-06-29T17:00:00Z .`.
