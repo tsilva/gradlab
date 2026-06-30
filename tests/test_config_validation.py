@@ -71,7 +71,7 @@ environment:
     obs_crop: [32, 0, 0, 0]
     obs_grayscale: true
     obs_resize_algorithm: area
-    copy_observations: false
+    obs_copy: safe_view
     policy_observation_layout: channel_first
   termination:
     max_episode_steps: 4500
@@ -80,7 +80,7 @@ environment:
       life_loss: [lives, decrease]
       level_change: [[levelHi, levelLo], change]
     done_on_events: [life_loss, level_change]
-environment_hash: sha256:ce3af6d41b4ef1c0d953f1c5edcb1734c2846208b16cfada98a22ccefa46764f
+environment_hash: sha256:77e33ea51e95794b67726ea23bbf2879566dfd8c0e5126096679c6adbbf20d5e
 selection_policy:
   rank_order: [train/info/level_complete/rate/min/last]
 capacity_policy_file: experiments/policies/capacity_policy.yaml

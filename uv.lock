@@ -17,7 +17,7 @@ exclude-newer = "0001-01-01T00:00:00Z" # This has no effect and is included for 
 exclude-newer-span = "P7D"
 
 [options.exclude-newer-package]
-stable-retro-turbo = "2026-06-29T17:00:00Z"
+stable-retro-turbo = "2026-06-30T14:00:00Z"
 
 [manifest]
 constraints = [
@@ -893,8 +893,8 @@ requires-dist = [
     { name = "psycopg2-binary", specifier = ">=2.9,<3" },
     { name = "pyyaml", specifier = ">=6,<7" },
     { name = "stable-baselines3", extras = ["extra"], specifier = ">=2.3,<3" },
-    { name = "stable-retro-turbo", marker = "platform_machine == 'arm64' and sys_platform == 'darwin'", specifier = "==1.0.0.post22" },
-    { name = "stable-retro-turbo", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'", specifier = "==1.0.0.post22" },
+    { name = "stable-retro-turbo", marker = "platform_machine == 'arm64' and sys_platform == 'darwin'", specifier = "==1.0.0.post23" },
+    { name = "stable-retro-turbo", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'", specifier = "==1.0.0.post23" },
     { name = "tensorboard", specifier = ">=2.16,<3" },
     { name = "torch", marker = "platform_machine == 'arm64' and sys_platform == 'darwin'", specifier = "==2.11.0" },
     { name = "wandb", specifier = ">=0.18,<0.23" },
@@ -998,7 +998,7 @@ extra = [
 
 [[package]]
 name = "stable-retro-turbo"
-version = "1.0.0.post22"
+version = "1.0.0.post23"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "farama-notifications", marker = "sys_platform != 'emscripten' and sys_platform != 'win32'" },
@@ -1006,8 +1006,8 @@ dependencies = [
     { name = "pyglet", marker = "sys_platform != 'emscripten' and sys_platform != 'win32'" },
 ]
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/b1/6f/9747f4dc8c7fdd30f84057f83638ee404fa90e5a3f36caa83e32ddfe9ccf/stable_retro_turbo-1.0.0.post22-cp314-cp314-macosx_14_0_arm64.whl", hash = "sha256:c431f04e9962e2c2a0a4893dd0ef7cdd8e12411a077e03f76e3be87256f28123", size = 81491209, upload-time = "2026-06-29T16:29:25.582Z" },
-    { url = "https://files.pythonhosted.org/packages/b5/0b/e54fc649d4cc9cb0bb198f364ab4841916be4cd5e7a8cefa90e58d68febc/stable_retro_turbo-1.0.0.post22-cp314-cp314-manylinux_2_26_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:573452599982a2c5a4cfda6f528f1d996221b71e8277cf017a3854afeded80dd", size = 84426623, upload-time = "2026-06-29T16:29:40.879Z" },
+    { url = "https://files.pythonhosted.org/packages/5c/79/616861c76c66ca8017bf902ac40abd4a1b82a2590279e82a06651f4f5ea0/stable_retro_turbo-1.0.0.post23-cp314-cp314-macosx_14_0_arm64.whl", hash = "sha256:fb60631993e5e214b84ab3aaffda4a94ff0fa8ffa74d5a8cb0c9a964612526dd", size = 81485614, upload-time = "2026-06-30T13:39:23.653Z" },
+    { url = "https://files.pythonhosted.org/packages/d3/1c/0e755e583678637203ee6a5461e18c9230b1f01d7f1b9a8712a235b701d1/stable_retro_turbo-1.0.0.post23-cp314-cp314-manylinux_2_26_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:2ec44f1ea86a089cb33ad26c0a58169a80c538f8b83d1ff8fadfaf61a3fbec21", size = 84422158, upload-time = "2026-06-30T13:39:35.247Z" },
 ]
 
 [[package]]

@@ -72,7 +72,8 @@ def config_from_args(args: argparse.Namespace) -> EnvConfig:
         reward_scale=10.0,
         action_set="simple",
         completion_x_threshold=SuperMarioBrosNesV0Target.default_completion_x_threshold,
-        done_on_info={"level_change": (("levelHi", "levelLo"), "change")},
+        info_events={"level_change": (("levelHi", "levelLo"), "change")},
+        done_on_events=("level_change",),
         env_threads=args.env_threads,
     )
 
@@ -214,8 +215,8 @@ def run_raw_native_vector_trace(
         obs_resize_algorithm=config.obs_resize_algorithm,
         frame_skip=config.frame_skip,
         frame_stack=4,
-        maxpool_last_two=config.max_pool_frames,
-        copy_observations=False,
+        frame_maxpool=config.max_pool_frames,
+        obs_copy="safe_view",
         obs_layout="chw",
     )
     env.seed(seed)

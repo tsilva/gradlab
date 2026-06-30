@@ -54,6 +54,9 @@ def _normalize_preprocessing(identity: dict[str, Any]) -> None:
     preprocessing = identity.setdefault("preprocessing", {})
     if not isinstance(preprocessing, dict):
         return
+    if "obs_copy" not in preprocessing and "copy_observations" in preprocessing:
+        preprocessing["obs_copy"] = "copy" if preprocessing["copy_observations"] else "safe_view"
+    preprocessing.pop("copy_observations", None)
     preprocessing.setdefault("pipeline", "stable_retro_native_vec_env")
     preprocessing.setdefault("frame_skip", 4)
     preprocessing.setdefault("frame_stack", 4)
@@ -61,7 +64,7 @@ def _normalize_preprocessing(identity: dict[str, Any]) -> None:
     preprocessing.setdefault("sticky_action_prob", 0.0)
     preprocessing.setdefault("obs_grayscale", True)
     preprocessing.setdefault("obs_resize_algorithm", "area")
-    preprocessing.setdefault("copy_observations", False)
+    preprocessing.setdefault("obs_copy", "safe_view")
     if "obs_resize" not in preprocessing:
         observation_size = preprocessing.get("observation_size", 84)
         preprocessing["obs_resize"] = [observation_size, observation_size]

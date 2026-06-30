@@ -67,15 +67,15 @@ def make_raw_env(config: EnvConfig, n_envs: int, env_threads: int, env_kwargs: d
         obs_resize_algorithm=config.obs_resize_algorithm,
         frame_skip=config.frame_skip,
         frame_stack=4,
-        maxpool_last_two=config.max_pool_frames,
-        copy_observations=False,
+        frame_maxpool=config.max_pool_frames,
+        obs_copy="safe_view",
         obs_layout="chw",
         **env_kwargs,
     )
 
 
 def probe_noop_keyword(config: EnvConfig, n_envs: int, env_threads: int) -> dict[str, Any]:
-    candidates = ("noop_reset_max", "noop_max", "noopmax", "max_noops", "max_noop", "noops")
+    candidates = ("reset_noops",)
     results: dict[str, Any] = {}
     for name in candidates:
         try:
@@ -345,7 +345,8 @@ def main() -> None:
         reward_scale=10.0,
         action_set="simple",
         completion_x_threshold=SuperMarioBrosNesV0Target.default_completion_x_threshold,
-        done_on_info={"level_change": (("levelHi", "levelLo"), "change")},
+        info_events={"level_change": (("levelHi", "levelLo"), "change")},
+        done_on_events=("level_change",),
         env_threads=args.env_threads,
     )
     result = {
@@ -367,8 +368,8 @@ def main() -> None:
                 "obs_resize_algorithm": config.obs_resize_algorithm,
                 "frame_skip": config.frame_skip,
                 "frame_stack": 4,
-                "maxpool_last_two": config.max_pool_frames,
-                "copy_observations": False,
+                "frame_maxpool": config.max_pool_frames,
+                "obs_copy": "safe_view",
             },
         },
         "env_determinism": compare_env_traces(args, config),

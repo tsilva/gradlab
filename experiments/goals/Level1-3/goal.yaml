@@ -15,7 +15,7 @@ environment:
     # Stable Retro state id; Level1-3 is the only source for this goal.
     state: Level1-3
 # Deterministic hash of the fully composed environment; makes exact env equality cheap to compare.
-environment_hash: sha256:400d8a0b5a390da4f45658115e583fb50ea448e50a4122a25cf3e87915d6f671
+environment_hash: sha256:75cc881d6b67127a38124ab9888917199890444a9e2957502727adc4441af5e5
 # Goal-specific candidate ranking policy.
 selection_policy:
   # Ordered ranking metrics; primary bottleneck completion comes first, training diagnostics follow.

@@ -52,8 +52,8 @@ environment:
     obs_grayscale: true
     # Resize kernel; area downsampling is the expected image resizer for this contract.
     obs_resize_algorithm: area
-    # Whether the vector env copies observation buffers; false avoids unnecessary memory traffic.
-    copy_observations: false
+    # Observation buffer ownership mode; safe_view avoids unnecessary memory traffic.
+    obs_copy: safe_view
     # Tensor layout expected by the policy; channel_first matches SB3 CNN inputs.
     policy_observation_layout: channel_first
   # Episode termination semantics; defines what counts as an attempt boundary.
@@ -92,7 +92,7 @@ constraints:
 # Runtime provenance expected for comparable launches.
 runtime:
   # Stable Retro package version; important because env behavior and native-vector support can change.
-  stable_retro_turbo: 1.0.0.post22
+  stable_retro_turbo: 1.0.0.post23
   # Runtime image policy; queue jobs should pin the exact trainer image digest.
   runtime_image_ref: digest-pinned GHCR train image from rlab-train-image.json
   # Python runtime family; documents the interpreter expected by the locked environment.
@@ -104,7 +104,7 @@ default_train_profile: null
 # Rationale for null train profile; documents that runtime image digest, not profile id, owns immutability.
 default_train_profile_note: Queue-backed launches are profileless by default; use the spec run_target plus a digest-pinned runtime image.
 # Default eval profile; points independent eval workers at the expected CPU/vector lane.
-default_eval_profile: mario-level1-eval/post22/vector-cpu
+default_eval_profile: mario-level1-eval/post23/vector-cpu
 # Capacity policy file; centralizes host lane limits and scheduling rules.
 capacity_policy_file: experiments/policies/capacity_policy.yaml
 # Execution defaults for queue orchestration.

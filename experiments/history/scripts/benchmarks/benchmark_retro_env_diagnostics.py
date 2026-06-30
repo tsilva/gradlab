@@ -152,7 +152,7 @@ def run_diagnostics(
             obs_grayscale=True,
             frame_skip=4,
             frame_stack=4,
-            maxpool_last_two=True,
+            frame_maxpool=True,
             **kwargs,
         )
 

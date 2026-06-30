@@ -35,7 +35,7 @@ environment:
     - Level1-1
     - Level1-2
 # Deterministic hash of the fully composed environment; makes exact env equality cheap to compare.
-environment_hash: sha256:24f30307a1c83c08a57c099f08571d2449a7f8ee13d6d1fec6cbb42a01ba4775
+environment_hash: sha256:ba3c01d68aa454d2fb2eb3f7598d04c2c2ddb867ae1e36a0e16da126502ef9fb
 # Goal-specific constraints; narrows what recipe changes are considered legal.
 constraints:
   # Default search levers; keeps discovery focused on reward, hyperparameters, and sampling weights.

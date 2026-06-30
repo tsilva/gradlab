@@ -47,7 +47,7 @@ from rlab.env import (
     make_eval_vec_env,
     make_rendered_replay_env,
     make_training_vec_env,
-    native_vec_env_supports_done_on_info,
+    native_vec_env_supports_done_on,
     needs_vec_transpose_image,
     resolve_env_config,
     resolve_mixed_state_config,
@@ -1026,6 +1026,10 @@ class NativeMixedStateVecEnvTests(unittest.TestCase):
         self.assertEqual(len(created), 1)
         self.assertEqual(created[0]["num_envs"], 16)
         self.assertEqual(created[0]["obs_layout"], "chw")
+        self.assertEqual(created[0]["frame_maxpool"], True)
+        self.assertEqual(created[0]["obs_copy"], "safe_view")
+        self.assertNotIn("maxpool_last_two", created[0])
+        self.assertNotIn("copy_observations", created[0])
         self.assertEqual(created[0]["state"], {"Level1-1": 0.5, "Level1-2": 0.5})
         self.assertNotIn("states", created[0])
         self.assertNotIn("state_probs", created[0])
@@ -1072,7 +1076,7 @@ class NativeMixedStateVecEnvTests(unittest.TestCase):
         self.assertNotIn("states", created[0])
         self.assertNotIn("state_probs", created[0])
 
-    def test_training_vec_env_passes_sticky_action_prob_to_native_vec_env(self) -> None:
+    def test_training_vec_env_passes_action_sticky_prob_to_native_vec_env(self) -> None:
         created: list[dict[str, object]] = []
 
         class FakeNative:
@@ -1106,9 +1110,10 @@ class NativeMixedStateVecEnvTests(unittest.TestCase):
             env = make_training_vec_env(config, n_envs=4, seed=7)
 
         self.assertIsInstance(env, FakeNative)
-        self.assertEqual(created[0]["sticky_action_prob"], 0.25)
+        self.assertEqual(created[0]["action_sticky_prob"], 0.25)
+        self.assertNotIn("sticky_action_prob", created[0])
 
-    def test_training_vec_env_passes_configured_native_done_on_info_rules(self) -> None:
+    def test_training_vec_env_passes_configured_native_done_on_rules(self) -> None:
         created: list[dict[str, object]] = []
         progress_configs: list[EnvConfig] = []
 
@@ -1146,7 +1151,7 @@ class NativeMixedStateVecEnvTests(unittest.TestCase):
         )
         with (
             patch("rlab.env.RetroVecEnv", FakeNative),
-            patch("rlab.env.native_vec_env_supports_done_on_info", return_value=True),
+            patch("rlab.env.native_vec_env_supports_done_on", return_value=True),
             patch("rlab.env.VecRetroProgressInfo", side_effect=fake_progress),
             patch("rlab.env.VecMonitor", side_effect=lambda env: env),
             patch("rlab.env.maybe_transpose_vec_image", side_effect=lambda env: env),
@@ -1159,18 +1164,19 @@ class NativeMixedStateVecEnvTests(unittest.TestCase):
 
         self.assertIsInstance(env, FakeNative)
         self.assertEqual(
-            created[0]["done_on_info"],
+            created[0]["done_on"],
             {
                 "life_loss": ("lives", "decrease"),
                 "level_change": (("levelHi", "levelLo"), "change"),
             },
         )
+        self.assertNotIn("done_on_info", created[0])
         self.assertNotIn("terminate_on_life_loss", created[0])
         self.assertNotIn("life_variable", created[0])
         self.assertEqual(progress_configs[0].info_events, config.info_events)
         self.assertEqual(progress_configs[0].done_on_events, ("life_loss", "level_change"))
 
-    def test_training_vec_env_passes_only_done_events_to_native_done_on_info(self) -> None:
+    def test_training_vec_env_passes_only_done_events_to_native_done_on(self) -> None:
         created: list[dict[str, object]] = []
         progress_configs: list[EnvConfig] = []
 
@@ -1208,7 +1214,7 @@ class NativeMixedStateVecEnvTests(unittest.TestCase):
         )
         with (
             patch("rlab.env.RetroVecEnv", FakeNative),
-            patch("rlab.env.native_vec_env_supports_done_on_info", return_value=True),
+            patch("rlab.env.native_vec_env_supports_done_on", return_value=True),
             patch("rlab.env.VecRetroProgressInfo", side_effect=fake_progress),
             patch("rlab.env.VecMonitor", side_effect=lambda env: env),
             patch("rlab.env.maybe_transpose_vec_image", side_effect=lambda env: env),
@@ -1220,9 +1226,9 @@ class NativeMixedStateVecEnvTests(unittest.TestCase):
             env = make_training_vec_env(config, n_envs=16, seed=7)
 
         self.assertIsInstance(env, FakeNative)
-        self.assertEqual(created[0]["done_on_info"], {"life_loss": ("lives", "decrease")})
+        self.assertEqual(created[0]["done_on"], {"life_loss": ("lives", "decrease")})
 
-    def test_training_vec_env_requires_native_done_on_info_support_when_rules_requested(
+    def test_training_vec_env_requires_native_done_on_support_when_rules_requested(
         self,
     ) -> None:
         class FakeNative:
@@ -1246,19 +1252,19 @@ class NativeMixedStateVecEnvTests(unittest.TestCase):
         )
         with (
             patch("rlab.env.RetroVecEnv", FakeNative),
-            patch("rlab.env.native_vec_env_supports_done_on_info", return_value=False),
+            patch("rlab.env.native_vec_env_supports_done_on", return_value=False),
         ):
-            with self.assertRaisesRegex(RuntimeError, "done_on_info support"):
+            with self.assertRaisesRegex(RuntimeError, "done_on support"):
                 make_training_vec_env(config, n_envs=1, seed=7)
 
-    def test_done_on_info_support_detection(self) -> None:
+    def test_done_on_support_detection(self) -> None:
         class FakeNative:
-            def __init__(self, game, *, done_on_info=None):
+            def __init__(self, game, *, done_on=None):
                 self.game = game
-                self.done_on_info = done_on_info
+                self.done_on = done_on
 
         with patch("rlab.env.RetroVecEnv", FakeNative):
-            self.assertTrue(native_vec_env_supports_done_on_info())
+            self.assertTrue(native_vec_env_supports_done_on())
 
     def test_task_conditioning_wraps_native_active_state_as_one_hot(self) -> None:
         class FakeNative:
@@ -1907,6 +1913,14 @@ class CommandAndArtifactTests(unittest.TestCase):
             self.assertEqual(metadata["environment"]["provider"], "stable_retro")
             self.assertEqual(metadata["environment"]["env_id"], "SuperMarioBros-Nes-v0")
             self.assertEqual(metadata["environment"]["preprocessing"]["frame_stack"], 4)
+            self.assertEqual(metadata["training_metadata"]["preprocessing"]["frame_maxpool"], False)
+            self.assertEqual(
+                metadata["training_metadata"]["preprocessing"]["action_sticky_prob"],
+                0.0,
+            )
+            self.assertEqual(metadata["training_metadata"]["preprocessing"]["obs_copy"], "safe_view")
+            self.assertNotIn("maxpool_last_two", metadata["training_metadata"]["preprocessing"])
+            self.assertNotIn("copy_observations", metadata["training_metadata"]["preprocessing"])
             self.assertIn("environment_hash", metadata)
             self.assertIn("training_metadata", metadata)
             self.assertIn("training_metadata_hash", metadata)

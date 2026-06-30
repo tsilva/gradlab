@@ -1,0 +1,37 @@
+schema_version: 1
+kind: train_experiment
+defaults:
+- ../../../recipes/mario/b55-single-level-no-bonus@_global_
+- _self_
+goal: Level2-1
+slug: b269-b55complete25-l21-screen
+stage: screen
+hypothesis: B263 seed 90 found 93 clean Level2-1 clears but failed to retain a high rolling clear rate; a tiny completion_reward=25 tests target-aligned retention reinforcement without the large completion-bonus disruption observed in earlier single-level screens.
+expected_signal: Seed 90 should improve rolling clear retention over B263 while reward share for completion stays secondary to progress/score; strict 100/100 is required before confirmation.
+parent_spec_slug: b263-b257soft-l21-screen
+priority: 75
+seeds:
+- 90
+run_target: rtx4090
+state: Level2-1
+wandb_group: b269-l21-b55complete25-screen
+wandb_tags:
+- mario
+- level2-1
+- world2-1
+- post22
+- b269
+- b55-transfer
+- completion-reward-25
+- screen
+- beast3
+run_name_template: b269_l21_complete25_s{seed}_{utc}
+run_description_template: Single-seed Beast3 retention screen for World 2-1 100/100, seed {seed}; B55 recipe plus tiny clean completion_reward=25. Primary metric is peak train/info/level_complete/rate/min/last, matching train/info/level_complete/from/1-0/rate once the source window is full; stop early when train/info/level_complete/rate/min/last > 0.99.
+selection_gate:
+  primary: max(train/info/level_complete/rate/min/last)
+  threshold: 1.0
+  tie_breakers:
+  - max(train/info/level_complete/rate/mean/last)
+  training_metrics: primary_optimization_signal
+train_config:
+  completion_reward: 25

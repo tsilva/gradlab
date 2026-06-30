@@ -120,7 +120,7 @@ for their current `(levelHi, levelLo)` source level. Training intentionally does
 full-transition counters because those multiply metric cardinality quickly. Training does not emit
 initializer-state mirrors under `train/state/<initializer>/done/*`; those labels are not reliable
 for natural level transitions. Evaluation forces `done_on_events=()` in env construction and does
-not pass native terminal `done_on_info` rules to Stable Retro; it keeps running after observed level completion, so `eval/done/level_change` and
+not pass native terminal `done_on` rules to Stable Retro; it keeps running after observed level completion, so `eval/done/level_change` and
 `eval/done/level_change/from/<start>` track whether a natural transition was observed during the eval
 horizon. Eval `from` values are the configured episode start state, not native `done_on_info`
 previous-value payloads.
@@ -286,7 +286,7 @@ Reward share metrics compare absolute component magnitudes within a rollout.
 These are logged by the in-training `RetroEvalCallback` when training-loop eval is enabled, and
 by `rlab-eval` artifact mode when evaluating checkpoint artifacts out of process.
 Evaluation env construction forces `done_on_events=()` and does not pass native terminal
-`done_on_info` rules to Stable Retro. The eval loop also
+`done_on` rules to Stable Retro. The eval loop also
 keeps running after observed life-loss and level-change events; it stops on native env done or the
 configured max-step horizon. Because of that, level-change and max-step eval metrics can overlap.
 

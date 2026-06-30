@@ -78,7 +78,7 @@ def mutation_check(reset_obs: np.ndarray, step_fn, actions: np.ndarray, steps: i
     return records
 
 
-def run_raw(copy_observations: bool) -> dict[str, Any]:
+def run_raw(obs_copy: str) -> dict[str, Any]:
     config = EnvConfig(
         game=SuperMarioBrosNesV0Target.game,
         state=SuperMarioBrosNesV0Target.default_state,
@@ -88,7 +88,8 @@ def run_raw(copy_observations: bool) -> dict[str, Any]:
         reward_scale=10.0,
         action_set="simple",
         completion_x_threshold=SuperMarioBrosNesV0Target.default_completion_x_threshold,
-        done_on_info={"level_change": (("levelHi", "levelLo"), "change")},
+        info_events={"level_change": (("levelHi", "levelLo"), "change")},
+        done_on_events=("level_change",),
         env_threads=4,
     )
     n_envs = 16
@@ -104,9 +105,14 @@ def run_raw(copy_observations: bool) -> dict[str, Any]:
         obs_resize_algorithm=config.obs_resize_algorithm,
         frame_skip=config.frame_skip,
         frame_stack=4,
-        maxpool_last_two=config.max_pool_frames,
-        copy_observations=copy_observations,
+        frame_maxpool=config.max_pool_frames,
+        obs_copy=obs_copy,
         obs_layout="chw",
+        done_on={
+            name: config.info_events[name]
+            for name in config.done_on_events
+            if name in config.info_events
+        },
     )
     env.seed(23)
     obs = env.reset()
@@ -119,7 +125,7 @@ def run_raw(copy_observations: bool) -> dict[str, Any]:
     finally:
         env.close()
     return {
-        "copy_observations": copy_observations,
+        "obs_copy": obs_copy,
         "records": records,
     }
 
@@ -134,7 +140,8 @@ def run_wrapped() -> dict[str, Any]:
         reward_scale=10.0,
         action_set="simple",
         completion_x_threshold=SuperMarioBrosNesV0Target.default_completion_x_threshold,
-        done_on_info={"level_change": (("levelHi", "levelLo"), "change")},
+        info_events={"level_change": (("levelHi", "levelLo"), "change")},
+        done_on_events=("level_change",),
         env_threads=4,
     )
     n_envs = 16
@@ -155,8 +162,8 @@ def run_wrapped() -> dict[str, Any]:
 def main() -> None:
     result = {
         "stable_retro_turbo": importlib.metadata.version("stable-retro-turbo"),
-        "raw_copy_false": run_raw(copy_observations=False),
-        "raw_copy_true": run_raw(copy_observations=True),
+        "raw_safe_view": run_raw(obs_copy="safe_view"),
+        "raw_copy": run_raw(obs_copy="copy"),
         "wrapped_training_env": run_wrapped(),
     }
     print(json.dumps(result, indent=2, sort_keys=True))

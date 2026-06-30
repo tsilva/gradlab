@@ -34,12 +34,12 @@ InfoEventRule = DoneOnInfoRule
 InfoEventRules = DoneOnInfoRules
 
 
-def native_vec_env_supports_done_on_info() -> bool:
+def native_vec_env_supports_done_on() -> bool:
     try:
         signature = inspect.signature(RetroVecEnv.__init__)
     except (OSError, TypeError):
         return False
-    return "done_on_info" in signature.parameters
+    return "done_on" in signature.parameters
 
 
 def action_names_for_set(action_set: str, game: str = GAME) -> tuple[str, ...]:
@@ -709,7 +709,7 @@ def make_fast_retro_env(config: EnvConfig | None = None, seed: int | None = None
         obs_resize_algorithm=config.obs_resize_algorithm,
         frame_skip=config.frame_skip,
         frame_stack=4,
-        maxpool_last_two=config.max_pool_frames,
+        frame_maxpool=config.max_pool_frames,
         **retro_make_kwargs(config),
     )
     if target.uses_discrete_actions(config.action_set):
@@ -790,16 +790,16 @@ def maybe_transpose_vec_image(vec_env):
     return vec_env
 
 
-def _native_done_on_info_rules(config: EnvConfig, *, done_on_info_supported: bool) -> DoneOnInfoRules:
+def _native_done_on_rules(config: EnvConfig, *, done_on_supported: bool) -> DoneOnInfoRules:
     native_rules = {
         name: rule
         for name, rule in config.info_events.items()
         if name in set(config.done_on_events)
     }
-    if native_rules and not done_on_info_supported:
+    if native_rules and not done_on_supported:
         raise RuntimeError(
-            "configured done_on_info rules require stable-retro-turbo with native "
-            "done_on_info support",
+            "configured done_on rules require stable-retro-turbo with native "
+            "done_on support",
         )
     return native_rules
 
@@ -809,7 +809,7 @@ def _native_vec_kwargs(
     *,
     n_envs: int,
     num_threads: int,
-    native_done_on_info_rules: DoneOnInfoRules,
+    native_done_on_rules: DoneOnInfoRules,
 ) -> dict[str, Any]:
     native_kwargs: dict[str, Any] = {
         "num_envs": n_envs,
@@ -821,9 +821,9 @@ def _native_vec_kwargs(
         "obs_resize_algorithm": config.obs_resize_algorithm,
         "frame_skip": config.frame_skip,
         "frame_stack": 4,
-        "maxpool_last_two": config.max_pool_frames,
-        "sticky_action_prob": config.sticky_action_prob,
-        "copy_observations": False,
+        "frame_maxpool": config.max_pool_frames,
+        "action_sticky_prob": config.sticky_action_prob,
+        "obs_copy": "safe_view",
         "obs_layout": "chw",
     }
     if config.states:
@@ -839,8 +839,8 @@ def _native_vec_kwargs(
         native_kwargs["state"] = config.state
     else:
         native_kwargs["state"] = None
-    if native_done_on_info_rules:
-        native_kwargs["done_on_info"] = native_done_on_info_rules
+    if native_done_on_rules:
+        native_kwargs["done_on"] = native_done_on_rules
     return native_kwargs
 
 
@@ -849,15 +849,15 @@ def make_vec_envs(config: EnvConfig, n_envs: int, seed: int, start_method: str =
     config = resolve_mixed_state_config(config, n_envs=n_envs)
     target = target_for_game(config.game)
     num_threads = config.env_threads if config.env_threads > 0 else min(max(n_envs, 1), 16)
-    native_done_on_info_rules = _native_done_on_info_rules(
+    native_done_on_rules = _native_done_on_rules(
         config,
-        done_on_info_supported=native_vec_env_supports_done_on_info(),
+        done_on_supported=native_vec_env_supports_done_on(),
     )
     native_kwargs = _native_vec_kwargs(
         config,
         n_envs=n_envs,
         num_threads=num_threads,
-        native_done_on_info_rules=native_done_on_info_rules,
+        native_done_on_rules=native_done_on_rules,
     )
     vec_env = RetroVecEnv(config.game, **native_kwargs)
     vec_env.seed(seed)
