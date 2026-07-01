@@ -555,6 +555,12 @@ train:
       info_events:
         life_loss: [lives, decrease]
       done_on_events: [life_loss]
+logging:
+  eval_freq: 0
+  checkpoint_freq: 500000
+  timesteps: 5000000
+  wandb: true
+  wandb_mode: online
 """,
                 encoding="utf-8",
             )
@@ -607,6 +613,9 @@ train_config:
         )
         self.assertEqual(loaded["train_config"]["early_stop_threshold"], 0.99)
         self.assertEqual(loaded["train_config"]["timesteps"], 1024)
+        self.assertEqual(loaded["train_config"]["checkpoint_freq"], 500000)
+        self.assertTrue(loaded["train_config"]["wandb"])
+        self.assertEqual(loaded["train_config"]["wandb_mode"], "online")
         self.assertIn("selection_policy", loaded)
         source_paths = [source["path"] for source in loaded["_composition"]["source_files"]]
         self.assertTrue(any(path.endswith("_goal.yaml") for path in source_paths))

@@ -74,8 +74,11 @@ GOAL_OWNED_ENV_CONFIG_KEYS = frozenset(
         "task_conditioning_info_values",
         "action_set",
         "frame_skip",
+        "frame_stack",
         "max_pool_frames",
+        "frame_maxpool",
         "sticky_action_prob",
+        "action_sticky_prob",
         "obs_resize",
         "obs_crop",
         "obs_grayscale",
@@ -83,10 +86,14 @@ GOAL_OWNED_ENV_CONFIG_KEYS = frozenset(
         "observation_size",
         "hud_crop_top",
         "policy_observation_layout",
+        "obs_layout",
         "obs_copy",
+        "reset_noops",
+        "info_filter",
         "max_episode_steps",
         "info_events",
         "info_events_json",
+        "done_on",
         "done_on_events",
     }
 )
@@ -494,6 +501,9 @@ def _goal_train_defaults(document: Mapping[str, Any]) -> dict[str, Any]:
     environment = _document_train_environment(document)
     config = _train_environment_section_config(environment) if isinstance(environment, Mapping) else {}
     config = deep_merge(config, _goal_objective_train_config(document))
+    logging = document.get("logging")
+    if isinstance(logging, Mapping):
+        config = deep_merge(config, copy.deepcopy(dict(logging)))
     return config
 
 
