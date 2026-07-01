@@ -81,7 +81,7 @@ from rlab.runtime_refs import (
 
 
 DEFAULT_INSTANCES_CONFIG = Path("experiments/instances.yaml")
-DEFAULT_CAPACITY_POLICY = Path("experiments/history/policies/capacity_policy.yaml")
+DEFAULT_CAPACITY_POLICY = Path("experiments/policies/capacity_policy.yaml")
 DEFAULT_WATCH_LATEST_INTERVAL_SECONDS = 15.0
 DEFAULT_WATCH_STALE_OLDER_THAN_SECONDS = 300
 DEFAULT_WATCH_STALE_LIMIT = 50

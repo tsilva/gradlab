@@ -1,7 +1,7 @@
 # Experiments
 
-This directory holds shared machine config, archived policy and recipe fragments,
-and goal-scoped experiment capsules.
+This directory holds shared machine config, active fleet policy/scripts, and
+goal-scoped experiment capsules.
 Keep broad repo rules in the top-level runbooks:
 
 - `../AGENTS.md` for repo rules and stable-retro runtime cautions.
@@ -14,9 +14,9 @@ scratch directories.
 
 Current machine-readable research state:
 
-- `goals/`: active goal capsules, including contract, specs, recipe evidence,
-  reports, and decisions.
-- `history/policies/`: archived capacity and scheduling policies used by fleet
-  tooling.
-- `history/recipes/`: archived reusable recipe fragments still referenced by
-  older specs.
+- `goals/`: active goal capsules, including contracts and checked-in specs.
+- `policies/`: active fleet capacity and scheduling policies.
+- `scripts/`: active experiment utilities used by benchmark profiles and tooling.
+
+Historical goal reports, old recipe fragments, and the former `history/` tree
+live under repo-root `.deprecated/` for local reference only.

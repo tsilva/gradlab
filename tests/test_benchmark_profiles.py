@@ -85,7 +85,7 @@ gates: {}
 
         self.assertEqual([command.label for command in commands], ["fast-1env", "fast-16env", "fast-32env"])
         for command in commands:
-            self.assertIn("experiments/history/scripts/benchmarks/benchmark_env_sps.py", command.argv)
+            self.assertIn("experiments/scripts/benchmarks/benchmark_env_sps.py", command.argv)
             self.assertIn("Level1-1", command.argv)
             self.assertEqual(command.env, {"STABLE_RETRO_DISABLE_AUDIO": "1"})
 

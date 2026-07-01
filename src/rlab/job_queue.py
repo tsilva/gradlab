@@ -60,6 +60,13 @@ TRAIN_NESTED_SECTION_KEYS = frozenset({"environment", "policy"})
 PROVIDER_OWNED_INFO_EVENTS = {
     "stable-retro-turbo": frozenset({"life_loss", "level_change"}),
 }
+GOAL_GAME_DIR_NAMES = frozenset({"SuperMarioBros-Nes-v0", "super-mario-bros-nes-v0"})
+RUNTIME_TRAIN_CONFIG_DEFAULTS = {
+    "timesteps": 5_000_000,
+    "wandb": True,
+    "wandb_mode": "online",
+    "wandb_artifact_storage_uri": "${CHECKPOINT_BUCKET_URI}",
+}
 GOAL_OWNED_ENV_CONFIG_KEYS = frozenset(
     {
         "env_provider",
@@ -500,10 +507,10 @@ def _goal_objective_train_config(document: Mapping[str, Any]) -> dict[str, Any]:
 def _goal_train_defaults(document: Mapping[str, Any]) -> dict[str, Any]:
     environment = _document_train_environment(document)
     config = _train_environment_section_config(environment) if isinstance(environment, Mapping) else {}
+    train = document.get("train")
+    if isinstance(train, Mapping):
+        config = deep_merge(config, _train_config_from_train_section(train))
     config = deep_merge(config, _goal_objective_train_config(document))
-    logging = document.get("logging")
-    if isinstance(logging, Mapping):
-        config = deep_merge(config, copy.deepcopy(dict(logging)))
     return config
 
 
@@ -705,7 +712,7 @@ def _infer_goal_slug_from_path(path: Path) -> str:
     for index, part in enumerate(parts):
         if part == "goals" and index + 1 < len(parts):
             next_part = parts[index + 1]
-            if index + 2 < len(parts) and next_part == "super-mario-bros-nes-v0":
+            if index + 2 < len(parts) and next_part in GOAL_GAME_DIR_NAMES:
                 return parts[index + 2]
             return next_part
     return ""
@@ -811,6 +818,8 @@ def materialize_train_spec_document(
     _materialize_goal_train_environment(materialized, goal_document)
     train_config = _merge_train_config_sections(materialized, goal_document=goal_document)
     if train_config:
+        for key, value in RUNTIME_TRAIN_CONFIG_DEFAULTS.items():
+            train_config.setdefault(key, copy.deepcopy(value))
         materialized["train_config"] = train_config
     return materialized
 
@@ -1095,6 +1104,10 @@ def _format_seed_template(template: str | None, *, seed: int | None, slug: str, 
     return str(template).format(seed="" if seed is None else seed, slug=slug, utc=utc)
 
 
+def _format_default_run_name(wandb_group: str, *, seed: int | None, utc: str) -> str:
+    return f"{wandb_group}_s{'' if seed is None else seed}_{utc}"
+
+
 def _document_seeds(document: Mapping[str, Any], override_seeds: Sequence[int] = ()) -> list[int | None]:
     if override_seeds:
         return [int(seed) for seed in override_seeds]
@@ -1149,12 +1162,7 @@ def enqueue_train_jobs_from_spec_document(
             run_target=None,
             train_config=train_config,
             max_attempts=int(document.get("max_attempts") or 1),
-            run_name=_format_seed_template(
-                document.get("run_name_template"),
-                seed=seed,
-                slug=document_slug,
-                utc=utc,
-            ),
+            run_name=_format_default_run_name(str(document["wandb_group"]), seed=seed, utc=utc),
             run_description=_format_seed_template(
                 document.get("run_description_template"),
                 seed=seed,

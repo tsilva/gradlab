@@ -22,9 +22,9 @@ class ConfigValidationTests(unittest.TestCase):
 
         self.assertEqual(report.issues, ())
         self.assertEqual(report.counts["json_files"], 0)
-        self.assertGreaterEqual(report.counts["yaml_files"], 196)
-        self.assertGreaterEqual(report.counts["train_specs"], 179)
-        self.assertGreaterEqual(report.counts["goals"], 5)
+        self.assertGreaterEqual(report.counts["yaml_files"], 15)
+        self.assertGreaterEqual(report.counts["train_specs"], 1)
+        self.assertGreaterEqual(report.counts["goals"], 1)
         self.assertGreaterEqual(report.counts["env_configs"], 1)
         self.assertGreaterEqual(report.counts["benchmark_profiles"], 7)
 
@@ -149,12 +149,12 @@ environment_hash: sha256:deadbeef
                 validate_goal_contract(goal_path, root)
 
     def test_load_goal_contract_returns_composed_document(self) -> None:
-        document = load_goal_contract(Path("experiments/goals/super-mario-bros-nes-v0/Level1-3/_goal.yaml"))
+        document = load_goal_contract(Path("experiments/goals/SuperMarioBros-Nes-v0/Level1-1/_goal.yaml"))
 
         self.assertNotIn("extends", document)
         self.assertNotIn("schema_version", document)
         self.assertNotIn("status", document)
-        self.assertEqual(document["goal_id"], "Level1-3")
+        self.assertEqual(document["goal_id"], "Level1-1")
         self.assertNotIn("seed_protocol", document)
         self.assertNotIn("historical_context", document)
         self.assertNotIn("updated_at", document)
@@ -197,7 +197,7 @@ environment_hash: sha256:deadbeef
             "stable-retro-turbo",
         )
         self.assertEqual(document["train"]["environment"]["env_config"]["game"], "SuperMarioBros-Nes-v0")
-        self.assertEqual(document["train"]["environment"]["env_config"]["state"], "Level1-3")
+        self.assertEqual(document["train"]["environment"]["env_config"]["state"], "Level1-1")
         self.assertEqual(document["train"]["environment"]["env_config"]["obs_crop"], [32, 0, 0, 0])
         self.assertEqual(document["train"]["environment"]["env_config"]["obs_resize"], [84, 84])
         self.assertEqual(document["train"]["environment"]["env_config"]["frame_maxpool"], False)
@@ -238,7 +238,7 @@ environment_hash: sha256:deadbeef
             exit_code = validate_main(
                 [
                     "--load-goal",
-                    "experiments/goals/super-mario-bros-nes-v0/Level1-3/_goal.yaml",
+                    "experiments/goals/SuperMarioBros-Nes-v0/Level1-1/_goal.yaml",
                     "--json",
                 ]
             )
@@ -248,7 +248,7 @@ environment_hash: sha256:deadbeef
         self.assertNotIn("extends", document)
         self.assertNotIn("schema_version", document)
         self.assertNotIn("status", document)
-        self.assertEqual(document["goal_id"], "Level1-3")
+        self.assertEqual(document["goal_id"], "Level1-1")
         self.assertNotIn("goal_dir", document)
         self.assertNotIn("seed_protocol", document)
         self.assertNotIn("historical_context", document)

@@ -406,6 +406,10 @@ def normalize_train_config(
         config["runtime_image_ref"] = job["runtime_image_ref"]
     if job.get("run_target"):
         config["run_target"] = job["run_target"]
+    config.setdefault("timesteps", 5_000_000)
+    config.setdefault("wandb", True)
+    config.setdefault("wandb_mode", "online")
+    config.setdefault("wandb_artifact_storage_uri", "${CHECKPOINT_BUCKET_URI}")
     if config.get("wandb_artifact_storage_uri") == "${CHECKPOINT_BUCKET_URI}":
         config["wandb_artifact_storage_uri"] = strip_env_file_quotes(os.environ.get("CHECKPOINT_BUCKET_URI", ""))
     resume_artifact = config.pop("resume_artifact", None)

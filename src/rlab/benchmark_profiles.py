@@ -260,7 +260,7 @@ def _local_smoke_commands(profile: Mapping[str, Any]) -> list[BenchmarkCommand]:
 
 
 def _env_throughput_commands(profile: Mapping[str, Any]) -> list[BenchmarkCommand]:
-    script = str(profile.get("script") or "experiments/history/scripts/benchmarks/benchmark_env_sps.py")
+    script = str(profile.get("script") or "experiments/scripts/benchmarks/benchmark_env_sps.py")
     commands: list[BenchmarkCommand] = []
     for mode in _string_list(profile.get("modes", ["fast"]), label="modes"):
         for envs in _int_list(profile.get("envs", [1]), label="envs"):

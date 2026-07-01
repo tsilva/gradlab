@@ -138,7 +138,6 @@ def valid_train_spec() -> dict:
         "seeds": [23, 24],
         "wandb_group": "b-test",
         "wandb_tags": ["mario", "confirm"],
-        "run_name_template": "btest_s{seed}_{utc}",
         "run_description_template": "candidate seed {seed}",
         "selection_metrics": ["train/completion_episode_rate", "train/reward/mean"],
         "train_config": {
@@ -367,7 +366,6 @@ run_target: rtx4090
 state: Level1-1
 wandb_group: b-test
 wandb_tags: [mario, confirm]
-run_name_template: btest_s{seed}_{utc}
 run_description_template: candidate seed {seed}
 selection_gate:
   primary: train/completion_episode_rate
@@ -426,7 +424,6 @@ environment:
     death_penalty: 25
 wandb_group: b-test
 wandb_tags: [mario, env-hash]
-run_name_template: btest_s{seed}_{utc}
 run_description_template: candidate seed {seed}
 selection_gate:
   primary: train/completion_episode_rate
@@ -473,7 +470,6 @@ seeds: [23]
 run_target: rtx4090
 wandb_group: b-test
 wandb_tags: [mario, env-config]
-run_name_template: btest_s{seed}_{utc}
 run_description_template: candidate seed {seed}
 selection_gate:
   primary: train/completion_episode_rate
@@ -495,9 +491,6 @@ train:
         life_loss: [lives, decrease]
       done_on_events: [life_loss]
   timesteps: 1024
-logging:
-  wandb: true
-  wandb_mode: online
 """,
                 encoding="utf-8",
             )
@@ -539,6 +532,7 @@ objective:
     aggregation: max
     direction: maximize
 train:
+  checkpoint_freq: 500000
   environment:
     n_envs: 16
     env_threads: 4
@@ -555,12 +549,6 @@ train:
       info_events:
         life_loss: [lives, decrease]
       done_on_events: [life_loss]
-logging:
-  eval_freq: 0
-  checkpoint_freq: 500000
-  timesteps: 5000000
-  wandb: true
-  wandb_mode: online
 """,
                 encoding="utf-8",
             )
@@ -577,7 +565,6 @@ parent_spec_slug: null
 seeds: [23]
 wandb_group: b-test
 wandb_tags: [mario, env-config]
-run_name_template: btest_s{seed}_{utc}
 run_description_template: candidate seed {seed}
 state: WrongState
 train_config:
@@ -586,9 +573,6 @@ train_config:
   action_set: complex
   early_stop_metric: wrong/metric
   early_stop_threshold: 0.1
-  timesteps: 1024
-  wandb: true
-  wandb_mode: online
 """,
                 encoding="utf-8",
             )
@@ -612,10 +596,11 @@ train_config:
             TRAIN_INFO_LEVEL_COMPLETE_RATE_MIN_LAST,
         )
         self.assertEqual(loaded["train_config"]["early_stop_threshold"], 0.99)
-        self.assertEqual(loaded["train_config"]["timesteps"], 1024)
+        self.assertEqual(loaded["train_config"]["timesteps"], 5_000_000)
         self.assertEqual(loaded["train_config"]["checkpoint_freq"], 500000)
         self.assertTrue(loaded["train_config"]["wandb"])
         self.assertEqual(loaded["train_config"]["wandb_mode"], "online")
+        self.assertEqual(loaded["train_config"]["wandb_artifact_storage_uri"], "${CHECKPOINT_BUCKET_URI}")
         self.assertIn("selection_policy", loaded)
         source_paths = [source["path"] for source in loaded["_composition"]["source_files"]]
         self.assertTrue(any(path.endswith("_goal.yaml") for path in source_paths))
@@ -630,15 +615,35 @@ train_config:
             with self.assertRaisesRegex(ValueError, "run_description_template"):
                 job_queue.load_spec_document(path)
 
-    def test_load_spec_document_rejects_non_compliant_schema_field(self) -> None:
+    def test_enqueue_train_jobs_from_spec_document_derives_run_name_from_wandb_group(self) -> None:
+        calls = []
+
+        def fake_enqueue(conn, **kwargs):
+            calls.append(kwargs)
+            return {"run_name": kwargs["run_name"]}
+
         spec = valid_train_spec()
-        spec["run_name_template"] = "candidate_{utc}"
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "candidate.json"
             path.write_text(json.dumps(spec), encoding="utf-8")
+            document = job_queue.load_spec_document(path)
 
-            with self.assertRaisesRegex(ValueError, "run_name_template.*seed"):
-                job_queue.load_spec_document(path)
+        old_enqueue = job_queue.enqueue_train_job
+        old_utc = job_queue._utc_stamp
+        job_queue.enqueue_train_job = fake_enqueue
+        job_queue._utc_stamp = lambda: "20260626T120000Z"
+        try:
+            rows = job_queue.enqueue_train_jobs_from_spec_document(
+                object(),
+                document=document,
+                runtime_image_ref=RUNTIME_IMAGE_REF,
+            )
+        finally:
+            job_queue.enqueue_train_job = old_enqueue
+            job_queue._utc_stamp = old_utc
+
+        self.assertEqual([row["run_name"] for row in rows], ["b-test_s23_20260626T120000Z", "b-test_s24_20260626T120000Z"])
+        self.assertEqual([call["run_name"] for call in calls], ["b-test_s23_20260626T120000Z", "b-test_s24_20260626T120000Z"])
 
     def test_checked_in_goal_yaml_specs_match_train_spec_schema(self) -> None:
         spec_paths = sorted(Path("experiments/goals").rglob("specs/*.y*ml"))
@@ -647,8 +652,8 @@ train_config:
             with self.subTest(path=str(path)):
                 job_queue.load_spec_document(path)
 
-    def test_level1_3_specs_configure_goal_metric_early_stop(self) -> None:
-        spec_paths = sorted(Path("experiments/goals/super-mario-bros-nes-v0/Level1-3/specs").glob("*.yaml"))
+    def test_active_level1_1_specs_configure_goal_metric_early_stop(self) -> None:
+        spec_paths = sorted(Path("experiments/goals/SuperMarioBros-Nes-v0/Level1-1/specs").glob("*.yaml"))
         self.assertGreater(len(spec_paths), 0)
         for path in spec_paths:
             with self.subTest(path=str(path)):
@@ -989,7 +994,7 @@ train_config:
             "id": 12,
             "goal_slug": "Level1-1",
             "spec_slug": "candidate",
-            "spec_path": "experiments/goals/super-mario-bros-nes-v0/Level1-1/specs/candidate.yaml",
+            "spec_path": "experiments/goals/SuperMarioBros-Nes-v0/Level1-1/specs/candidate.yaml",
             "runtime_image_ref": RUNTIME_IMAGE_REF,
             "run_name": "candidate_run",
             "train_config": {
@@ -1165,7 +1170,7 @@ train_config:
             job_queue.eval_selection_score(weak_pooled),
         )
 
-    def test_enqueue_train_jobs_from_spec_expands_seed_templates(self) -> None:
+    def test_enqueue_train_jobs_from_spec_derives_group_run_names(self) -> None:
         calls = []
         old_enqueue = job_queue.enqueue_train_job
         old_utc = job_queue._utc_stamp
@@ -1207,7 +1212,7 @@ train_config:
             job_queue.enqueue_train_job = old_enqueue
             job_queue._utc_stamp = old_utc
 
-        self.assertEqual([row["run_name"] for row in rows], ["btest_s23_20260626T120000Z", "btest_s24_20260626T120000Z"])
+        self.assertEqual([row["run_name"] for row in rows], ["b-test_s23_20260626T120000Z", "b-test_s24_20260626T120000Z"])
         self.assertEqual([call["train_config"]["seed"] for call in calls], [23, 24])
         self.assertEqual(
             calls[0]["train_config"]["info_events_json"],
@@ -1422,7 +1427,7 @@ class TrainRunnerAutoscaleTests(unittest.TestCase):
 
 
 class TrainRunnerTests(unittest.TestCase):
-    def test_checkpoint_bucket_placeholder_resolves_before_command_build(self) -> None:
+    def test_checkpoint_bucket_default_resolves_before_command_build(self) -> None:
         old_value = os.environ.get("CHECKPOINT_BUCKET_URI")
         os.environ["CHECKPOINT_BUCKET_URI"] = '"s3://bucket/checkpoints"'
         try:
@@ -1432,7 +1437,6 @@ class TrainRunnerTests(unittest.TestCase):
                     "game": "SuperMarioBros-Nes-v0",
                     "timesteps": 1024,
                     "state": "Level1-2",
-                    "wandb_artifact_storage_uri": "${CHECKPOINT_BUCKET_URI}",
                 },
                 "run_name": "placeholder_candidate",
             }
@@ -1444,10 +1448,14 @@ class TrainRunnerTests(unittest.TestCase):
                 written_config = json.loads(config_path.read_text(encoding="utf-8"))
 
             self.assertEqual(config["wandb_artifact_storage_uri"], "s3://bucket/checkpoints")
+            self.assertTrue(config["wandb"])
+            self.assertEqual(config["wandb_mode"], "online")
             self.assertEqual(
                 written_config["wandb_artifact_storage_uri"],
                 "s3://bucket/checkpoints",
             )
+            self.assertTrue(written_config["wandb"])
+            self.assertEqual(written_config["wandb_mode"], "online")
             self.assertIn("--train-config-json", command)
             self.assertIn("train_config.json", command[-1])
             self.assertNotIn('"s3://bucket/checkpoints"', command)
@@ -1576,16 +1584,16 @@ class TrainRunnerTests(unittest.TestCase):
             "train_config": {
                 "game": "SuperMarioBros-Nes-v0",
                 "timesteps": 1024,
-                "states": ["Level1-1", "Level1-2"],
+                "state": "Level1-1",
                 "wandb": True,
                 "wandb_tags": ["screen", "post16"],
             },
-            "goal_slug": "Levels_2_d25102",
-            "spec_slug": "b52",
-            "spec_path": "experiments/goals/super-mario-bros-nes-v0/Levels_2_d25102/specs/b52.yaml",
-            "run_name": "b52_seed23",
+            "goal_slug": "Level1-1",
+            "spec_slug": "b55-lowkl-lrdecay-post21-revalidate",
+            "spec_path": "experiments/goals/SuperMarioBros-Nes-v0/Level1-1/specs/b55-lowkl-lrdecay-post21-revalidate.yaml",
+            "run_name": "b55_seed23",
             "run_description": "Codex-authored smoke job.",
-            "wandb_group": "b52",
+            "wandb_group": "b55",
             "wandb_tags": ["fallback"],
             "runtime_image_ref": RUNTIME_IMAGE_REF,
             "run_target": "rtx4090",
@@ -1599,18 +1607,18 @@ class TrainRunnerTests(unittest.TestCase):
 
         self.assertEqual(
             config["wandb_tags"],
-            "screen,post16,goal:Levels_2_d25102,spec:b52,level:Level1-1,level:Level1-2",
+            "screen,post16,goal:Level1-1,spec:b55-lowkl-lrdecay-post21-revalidate,level:Level1-1",
         )
-        self.assertEqual(written_config["goal_slug"], "Levels_2_d25102")
-        self.assertEqual(written_config["spec_slug"], "b52")
+        self.assertEqual(written_config["goal_slug"], "Level1-1")
+        self.assertEqual(written_config["spec_slug"], "b55-lowkl-lrdecay-post21-revalidate")
         self.assertEqual(
             written_config["spec_path"],
-            "experiments/goals/super-mario-bros-nes-v0/Levels_2_d25102/specs/b52.yaml",
+            "experiments/goals/SuperMarioBros-Nes-v0/Level1-1/specs/b55-lowkl-lrdecay-post21-revalidate.yaml",
         )
         self.assertEqual(written_config["queue_train_job_id"], 12)
-        self.assertEqual(written_config["run_name"], "b52_seed23")
-        self.assertEqual(written_config["states"], ["Level1-1", "Level1-2"])
-        self.assertEqual(written_config["wandb_group"], "b52")
+        self.assertEqual(written_config["run_name"], "b55_seed23")
+        self.assertEqual(written_config["state"], "Level1-1")
+        self.assertEqual(written_config["wandb_group"], "b55")
         self.assertEqual(written_config["runtime_image_ref"], RUNTIME_IMAGE_REF)
         self.assertEqual(written_config["run_target"], "rtx4090")
         self.assertTrue(written_config["wandb"])

@@ -123,7 +123,7 @@ rlab fleet reconcile --watch --interval 30
 rlab fleet watch
 ```
 
-Fleet capacity comes from `experiments/machines.yaml`, `experiments/instances.yaml`, and `experiments/history/policies/capacity_policy.yaml`. Read `INSTANCES.md` before changing hardware targets, concurrency, cleanup behavior, or beast host recommendations.
+Fleet capacity comes from `experiments/machines.yaml`, `experiments/instances.yaml`, and `experiments/policies/capacity_policy.yaml`. Read `INSTANCES.md` before changing hardware targets, concurrency, cleanup behavior, or beast host recommendations.
 
 ## Notes
 

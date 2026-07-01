@@ -14,7 +14,6 @@ TRAIN_SPEC_REQUIRED_FIELDS = (
     "hypothesis",
     "wandb_group",
     "wandb_tags",
-    "run_name_template",
     "run_description_template",
     "train_config",
 )
@@ -64,7 +63,6 @@ TRAIN_SPEC_SCHEMA: dict[str, Any] = {
             "type": "array",
             "items": {"type": "string", "minLength": 1},
         },
-        "run_name_template": {"type": "string", "minLength": 1},
         "run_description_template": {"type": "string", "minLength": 1},
         "selection_metrics": {
             "type": "array",
@@ -263,12 +261,6 @@ def validate_train_spec_schema(document: Mapping[str, Any], *, label: str = "spe
     seed_values = _require_int_list(document, "seeds", label=label) if "seeds" in document else []
     _require_non_empty_string(document, "wandb_group", label=label)
     _require_string_list(document, "wandb_tags", label=label)
-    _require_template(
-        document,
-        "run_name_template",
-        label=label,
-        required_fields={"seed", "utc"},
-    )
     _require_template(
         document,
         "run_description_template",

@@ -34,3 +34,11 @@ obs_copy: safe_view
 reset_noops: 0
 # Only return full info payloads at terminal transitions.
 info_filter: terminal
+# Default Mario reward shaping contract.
+reward_mode: score
+progress_reward_scale: 1.0
+terminal_reward: 50
+death_penalty: 25
+completion_reward: 0.0
+reward_scale: 10
+score_progress_clipped: false

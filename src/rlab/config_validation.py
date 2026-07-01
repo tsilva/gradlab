@@ -815,7 +815,7 @@ def validate_experiment_tree(repo_root: Path | str = Path(".")) -> ValidationRep
         )
 
     machines_path = experiments_dir / "machines.yaml"
-    capacity_path = experiments_dir / "history" / "policies" / "capacity_policy.yaml"
+    capacity_path = experiments_dir / "policies" / "capacity_policy.yaml"
     counts["machine_configs"] = int(machines_path.is_file())
     counts["capacity_policies"] = int(capacity_path.is_file())
     if machines_path.is_file():
@@ -826,7 +826,7 @@ def validate_experiment_tree(repo_root: Path | str = Path(".")) -> ValidationRep
         _capture_issue(issues, capacity_path, repo_root, lambda: validate_fleet_and_capacity(repo_root))
     elif not capacity_path.is_file():
         issues.append(
-            ValidationIssue(path="experiments/history/policies/capacity_policy.yaml", message="file is required")
+            ValidationIssue(path="experiments/policies/capacity_policy.yaml", message="file is required")
         )
 
     benchmark_dir = experiments_dir / "benchmarks"
