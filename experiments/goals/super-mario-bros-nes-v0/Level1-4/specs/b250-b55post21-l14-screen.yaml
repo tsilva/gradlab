@@ -1,0 +1,37 @@
+schema_version: 1
+kind: train_experiment
+defaults:
+- ../_goal@goal
+- ../../../../history/recipes/mario/b55-single-level-no-bonus@_global_
+- _self_
+slug: b250-b55post21-l14-screen
+hypothesis: >-
+  The B55 low-KL late-learning-rate-decay single-level recipe is the cleanest scratch PPO transfer
+  baseline for World 1-4 because it preserves the current single-level 100/100 contract while changing
+  only the start state. Seed 90 should either reach strict 100/100 Level1-4 source-attempt completion
+  or establish whether the no-bonus score/progress recipe can produce nonzero
+  train/info/level_complete/from/0-3/count before the 5M-step cap.
+parent_spec_slug: b117-b55post21-l13-screen
+seeds:
+- 90
+run_target: rtx4090
+state: Level1-4
+wandb_group: b250-l14-b55post21-screen
+wandb_tags:
+- mario
+- level1-4
+- world1-4
+- post21
+- b250
+- b55-transfer
+- low-update-pressure
+- screen
+- beast3
+run_name_template: b250_l14_b55post21_s{seed}_{utc}
+run_description_template: Single-seed Beast3 scratch screen for World 1-4 100/100, seed {seed}; adapts the B55/B117 low-KL late-LR-decay single-level recipe to Level1-4 with no completion bonus. Primary metric is peak train/info/level_complete/rate/min/last, matching train/info/level_complete/from/0-3/rate once the source window is full; stop early when train/info/level_complete/rate/min/last > 0.99.
+selection_gate:
+  primary: max(train/info/level_complete/rate/min/last)
+  threshold: 1.0
+  tie_breakers:
+  - max(train/info/level_complete/rate/mean/last)
+  training_metrics: primary_optimization_signal

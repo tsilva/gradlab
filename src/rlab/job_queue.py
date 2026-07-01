@@ -50,6 +50,16 @@ SECRET_KEY_FRAGMENTS = (
 LEGACY_EVENT_TRAIN_CONFIG_KEYS = ("done_on_info_json", "done_on_info")
 TRAIN_CONFIG_SECTION_KEYS = ("env", "train", "reward", "logging")
 TRAIN_CONFIG_TOP_LEVEL_KEYS = ("state", "states", "state_probs", "resume")
+TRAIN_ENVIRONMENT_SECTION_KEYS = frozenset(
+    {
+        "n_envs",
+        "env_threads",
+    }
+)
+TRAIN_NESTED_SECTION_KEYS = frozenset({"environment", "policy"})
+PROVIDER_OWNED_INFO_EVENTS = {
+    "stable-retro-turbo": frozenset({"life_loss", "level_change"}),
+}
 GOAL_OWNED_ENV_CONFIG_KEYS = frozenset(
     {
         "env_provider",
@@ -481,7 +491,8 @@ def _goal_objective_train_config(document: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _goal_train_defaults(document: Mapping[str, Any]) -> dict[str, Any]:
-    config = train_config_from_environment(_document_train_environment(document))
+    environment = _document_train_environment(document)
+    config = _train_environment_section_config(environment) if isinstance(environment, Mapping) else {}
     config = deep_merge(config, _goal_objective_train_config(document))
     return config
 
@@ -511,11 +522,7 @@ def _train_config_section_value(
     if key != "train":
         section = dict(value)
     else:
-        section = {
-            nested_key: nested_value
-            for nested_key, nested_value in value.items()
-            if nested_key != "environment"
-        }
+        section = _train_config_from_train_section(value)
     if not strip_goal_owned:
         return section
     if key == "env":
@@ -525,6 +532,74 @@ def _train_config_section_value(
     if key == "train":
         return _without_keys(section, GOAL_OWNED_ENV_CONFIG_KEYS | GOAL_OWNED_OBJECTIVE_CONFIG_KEYS)
     return section
+
+
+def _train_environment_section_config(environment: Mapping[str, Any]) -> dict[str, Any]:
+    config = train_config_from_environment(environment)
+    direct_items = {
+        key: copy.deepcopy(value)
+        for key, value in environment.items()
+        if key
+        not in {
+            "env_config",
+            "env_id",
+            "provider_env_id",
+            "state",
+            "states",
+            "state_probs",
+            "action",
+            "preprocessing",
+            "task_conditioning",
+            "termination",
+            "reward",
+        }
+    }
+    return deep_merge(config, direct_items)
+
+
+def _split_legacy_train_section(section: Mapping[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+    environment: dict[str, Any] = {}
+    policy: dict[str, Any] = {}
+    for key, value in section.items():
+        if key in TRAIN_NESTED_SECTION_KEYS:
+            continue
+        if key in TRAIN_ENVIRONMENT_SECTION_KEYS:
+            environment[key] = copy.deepcopy(value)
+        else:
+            policy[key] = copy.deepcopy(value)
+    return environment, policy
+
+
+def _normalized_train_section(section: Mapping[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(section, Mapping):
+        return {}
+    legacy_environment, legacy_policy = _split_legacy_train_section(section)
+    environment = legacy_environment
+    nested_environment = section.get("environment")
+    if isinstance(nested_environment, Mapping):
+        environment = deep_merge(environment, nested_environment)
+    policy = legacy_policy
+    nested_policy = section.get("policy")
+    if isinstance(nested_policy, Mapping):
+        policy = deep_merge(policy, nested_policy)
+    normalized: dict[str, Any] = {}
+    if environment:
+        normalized["environment"] = environment
+    if policy:
+        normalized["policy"] = policy
+    return normalized
+
+
+def _train_config_from_train_section(section: Mapping[str, Any]) -> dict[str, Any]:
+    normalized = _normalized_train_section(section)
+    config: dict[str, Any] = {}
+    environment = normalized.get("environment")
+    if isinstance(environment, Mapping):
+        config = deep_merge(config, _train_environment_section_config(environment))
+    policy = normalized.get("policy")
+    if isinstance(policy, Mapping):
+        config = deep_merge(config, policy)
+    return config
 
 
 def _top_level_train_config_items(
@@ -615,13 +690,27 @@ def _merge_train_config_sections(
 def _infer_goal_slug_from_path(path: Path) -> str:
     parts = path.parts
     for index, part in enumerate(parts):
+        if part == "specs" and index > 0:
+            return parts[index - 1]
+    for index, part in enumerate(parts):
         if part == "goals" and index + 1 < len(parts):
-            return parts[index + 1]
+            next_part = parts[index + 1]
+            if index + 2 < len(parts) and next_part == "super-mario-bros-nes-v0":
+                return parts[index + 2]
+            return next_part
     return ""
 
 
+def _goal_slug_from_value(value: Any) -> str:
+    if isinstance(value, Mapping):
+        return str(value.get("goal_id") or value.get("goal") or value.get("goal_slug") or "").strip()
+    return str(value or "").strip()
+
+
 def _goal_slug_for_spec(path: Path, document: Mapping[str, Any]) -> str:
-    explicit = str(document.get("goal") or document.get("goal_slug") or "").strip()
+    explicit = _goal_slug_from_value(document.get("goal")) or _goal_slug_from_value(
+        document.get("goal_slug")
+    )
     return explicit or _infer_goal_slug_from_path(path)
 
 
@@ -630,11 +719,18 @@ def _goal_composition_for_spec(path: Path, document: Mapping[str, Any]) -> Compo
     if not goal_slug:
         return None
     inferred_path = path.resolve()
-    for parent in inferred_path.parents:
-        if parent.name == goal_slug and parent.parent.name == "goals":
-            candidate = parent / "goal.yaml"
+    if inferred_path.parent.name == "specs":
+        goal_dir = inferred_path.parent.parent
+        for filename in ("_goal.yaml", "goal.yaml"):
+            candidate = goal_dir / filename
             if candidate.is_file():
                 return load_composed_mapping(candidate, cycle_label="goal")
+    for parent in inferred_path.parents:
+        if parent.name == goal_slug:
+            for filename in ("_goal.yaml", "goal.yaml"):
+                candidate = parent / filename
+                if candidate.is_file():
+                    return load_composed_mapping(candidate, cycle_label="goal")
     return None
 
 
@@ -643,7 +739,7 @@ def _goal_slug_from_goal_document(
     *,
     path: Path | None = None,
 ) -> str:
-    goal_slug = str(goal_document.get("goal") or goal_document.get("goal_id") or "").strip()
+    goal_slug = _goal_slug_from_value(goal_document)
     if goal_slug:
         return goal_slug
     if path is not None:
@@ -662,13 +758,29 @@ def _materialize_goal_owned_fields(
     if goal_composition is None:
         return None
     goal_document = goal_composition.document
-    if "goal" not in materialized and "goal_slug" not in materialized:
-        materialized["goal"] = _goal_slug_from_goal_document(goal_document, path=path)
+    materialized["goal"] = copy.deepcopy(dict(goal_document))
     if "selection_policy" not in materialized:
         selection_policy = _selection_policy_from_goal(goal_document)
         if selection_policy is not None:
             materialized["selection_policy"] = copy.deepcopy(selection_policy)
     return goal_document
+
+
+def _materialize_goal_train_environment(
+    materialized: dict[str, Any],
+    goal_document: Mapping[str, Any] | None,
+) -> None:
+    if goal_document is None:
+        return
+    goal_environment = _document_train_environment(goal_document)
+    if not isinstance(goal_environment, Mapping):
+        return
+    train = _normalized_train_section(materialized.get("train"))
+    train["environment"] = deep_merge(
+        copy.deepcopy(dict(goal_environment)),
+        train.get("environment") if isinstance(train.get("environment"), Mapping) else {},
+    )
+    materialized["train"] = train
 
 
 def materialize_train_spec_document(
@@ -678,11 +790,15 @@ def materialize_train_spec_document(
     goal_composition: ComposedDocument | None = None,
 ) -> dict[str, Any]:
     materialized = copy.deepcopy(dict(document))
+    normalized_train = _normalized_train_section(materialized.get("train"))
+    if normalized_train:
+        materialized["train"] = normalized_train
     goal_document = _materialize_goal_owned_fields(
         materialized,
         path=path,
         goal_composition=goal_composition,
     )
+    _materialize_goal_train_environment(materialized, goal_document)
     train_config = _merge_train_config_sections(materialized, goal_document=goal_document)
     if train_config:
         materialized["train_config"] = train_config
@@ -740,7 +856,12 @@ def stable_json_hash(value: Any) -> str:
 
 
 def goal_path_for_slug(goal_slug: str) -> Path:
-    return Path("experiments/goals") / goal_slug / "goal.yaml"
+    goals_dir = Path("experiments/goals")
+    for filename in ("_goal.yaml", "goal.yaml"):
+        for candidate in sorted(goals_dir.rglob(f"{goal_slug}/{filename}")):
+            if ".deprecated" not in candidate.parts and candidate.is_file():
+                return candidate
+    return goals_dir / goal_slug / "goal.yaml"
 
 
 def load_goal_eval_spec(goal_slug: str) -> dict[str, Any]:
@@ -894,6 +1015,11 @@ def _configured_info_event_map(value: Any, *, label: str) -> Mapping[str, Any]:
     raise ValueError(f"{label} must define info_events_json as an object")
 
 
+def _provider_owned_info_event_names(train_config: Mapping[str, Any]) -> frozenset[str]:
+    provider_id = str(train_config.get("env_provider") or "").strip()
+    return PROVIDER_OWNED_INFO_EVENTS.get(provider_id, frozenset())
+
+
 def validate_launch_event_config(train_config: Mapping[str, Any], *, label: str = "train_config") -> None:
     legacy_keys = [
         key
@@ -911,11 +1037,17 @@ def validate_launch_event_config(train_config: Mapping[str, Any], *, label: str 
     )
     if not done_event_names:
         return
-    info_events = _configured_info_event_map(
-        train_config.get("info_events_json"),
-        label=label,
-    )
-    missing = [name for name in done_event_names if name not in info_events]
+    provider_owned_events = _provider_owned_info_event_names(train_config)
+    info_events_value = train_config.get("info_events_json")
+    if _non_empty_config_value(info_events_value):
+        info_events = _configured_info_event_map(info_events_value, label=label)
+    else:
+        info_events = {}
+    missing = [
+        name
+        for name in done_event_names
+        if name not in info_events and name not in provider_owned_events
+    ]
     if missing:
         raise ValueError(
             f"{label}.done_on_events references unconfigured info event(s): "
@@ -938,7 +1070,9 @@ def validate_launch_seed_config(
 
 
 def spec_goal_slug(document: Mapping[str, Any]) -> str:
-    return str(document.get("goal") or document.get("goal_slug") or "").strip()
+    return _goal_slug_from_value(document.get("goal")) or _goal_slug_from_value(
+        document.get("goal_slug")
+    )
 
 
 def _utc_stamp() -> str:

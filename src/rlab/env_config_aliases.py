@@ -98,6 +98,8 @@ def normalize_provider_env_config_aliases(
             result["info_events"] = done_on_rules
         if "done_on_events" not in result:
             result["done_on_events"] = list(done_on_rules)
+    elif isinstance(done_on, list | tuple) and "done_on_events" not in result:
+        result["done_on_events"] = [str(name) for name in done_on]
 
     if drop_provider_aliases:
         for key in STABLE_RETRO_TURBO_ENV_CONFIG_KEYS:

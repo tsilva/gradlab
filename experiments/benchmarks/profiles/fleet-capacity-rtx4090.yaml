@@ -6,7 +6,7 @@ target: rtx4090
 host: beast-3
 workers: 5
 env_threads: 4
-spec_file: experiments/goals/Level1-1/specs/b83-b55-post21-five-seed-l11-confirm.yaml
+spec_file: experiments/goals/super-mario-bros-nes-v0/Level1-1/specs/b83-b55-post21-five-seed-l11-confirm.yaml
 runtime_image_ref_file: rlab-train-image.json
 gates:
   expected_aggregate_wall_fps: 6200

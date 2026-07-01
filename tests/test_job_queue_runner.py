@@ -131,7 +131,7 @@ class FakeConnection:
 def valid_train_spec() -> dict:
     return {
         "schema_version": 1,
-        "goal": "Level1-1",
+        "goal": {"goal_id": "Level1-1"},
         "slug": "candidate",
         "hypothesis": "Candidate should reproduce the expected completion signal. Rank by completion rate, then reward.",
         "parent_spec_slug": None,
@@ -357,7 +357,8 @@ kind: train_experiment
 defaults:
 - ../recipes/base@_global_
 - _self_
-goal: Level1-1
+goal:
+  goal_id: Level1-1
 slug: candidate
 hypothesis: Candidate should reproduce the expected completion signal. Rank by completion rate, then reward.
 parent_spec_slug: null
@@ -398,7 +399,8 @@ overrides:
                 """
 schema_version: 1
 kind: train_experiment
-goal: Level1-1
+goal:
+  goal_id: Level1-1
 slug: candidate
 hypothesis: Candidate should reproduce the expected completion signal. Rank by completion rate, then reward.
 parent_spec_slug: null
@@ -462,7 +464,8 @@ logging:
                 """
 schema_version: 1
 kind: train_experiment
-goal: Level1-1
+goal:
+  goal_id: Level1-1
 slug: candidate
 hypothesis: Candidate should reproduce the expected completion signal. Rank by completion rate, then reward.
 parent_spec_slug: null
@@ -476,6 +479,8 @@ selection_gate:
   primary: train/completion_episode_rate
 train:
   environment:
+    n_envs: 16
+    env_threads: 4
     env_config:
       env_provider: stable-retro-turbo
       game: SuperMarioBros-Nes-v0
@@ -520,7 +525,7 @@ logging:
             goal_dir = root / "experiments" / "goals" / "Level1-1"
             specs_dir = goal_dir / "specs"
             specs_dir.mkdir(parents=True)
-            goal_dir.joinpath("goal.yaml").write_text(
+            goal_dir.joinpath("_goal.yaml").write_text(
                 """
 goal_id: Level1-1
 title: Level 1-1
@@ -535,6 +540,8 @@ objective:
     direction: maximize
 train:
   environment:
+    n_envs: 16
+    env_threads: 4
     env_config:
       env_provider: stable-retro-turbo
       game: SuperMarioBros-Nes-v0
@@ -555,7 +562,9 @@ train:
             spec.write_text(
                 """
 schema_version: 1
-goal: Level1-1
+defaults:
+- ../_goal@goal
+- _self_
 slug: candidate
 hypothesis: Candidate should inherit the goal contract. The queue materializes env identity and objective from the goal.
 parent_spec_slug: null
@@ -581,11 +590,17 @@ train_config:
             source_spec = yaml.safe_load(spec.read_text(encoding="utf-8"))
             loaded = job_queue.load_spec_document(spec)
 
-        self.assertEqual(loaded["goal"], "Level1-1")
-        self.assertEqual(source_spec["goal"], "Level1-1")
+        self.assertEqual(loaded["goal"]["goal_id"], "Level1-1")
+        self.assertNotIn("goal", source_spec)
+        self.assertNotIn("train", source_spec)
+        self.assertEqual(loaded["train"]["environment"]["n_envs"], 16)
+        self.assertEqual(loaded["train"]["environment"]["env_threads"], 4)
+        self.assertEqual(loaded["train"]["environment"]["env_config"]["state"], "Level1-1")
         self.assertEqual(loaded["train_config"]["game"], "SuperMarioBros-Nes-v0")
         self.assertEqual(loaded["train_config"]["state"], "Level1-1")
         self.assertEqual(loaded["train_config"]["action_set"], "simple")
+        self.assertEqual(loaded["train_config"]["n_envs"], 16)
+        self.assertEqual(loaded["train_config"]["env_threads"], 4)
         self.assertEqual(
             loaded["train_config"]["early_stop_metric"],
             TRAIN_INFO_LEVEL_COMPLETE_RATE_MIN_LAST,
@@ -594,7 +609,7 @@ train_config:
         self.assertEqual(loaded["train_config"]["timesteps"], 1024)
         self.assertIn("selection_policy", loaded)
         source_paths = [source["path"] for source in loaded["_composition"]["source_files"]]
-        self.assertTrue(any(path.endswith("goal.yaml") for path in source_paths))
+        self.assertTrue(any(path.endswith("_goal.yaml") for path in source_paths))
 
     def test_load_spec_document_rejects_missing_mandatory_schema_field(self) -> None:
         spec = valid_train_spec()
@@ -617,14 +632,14 @@ train_config:
                 job_queue.load_spec_document(path)
 
     def test_checked_in_goal_yaml_specs_match_train_spec_schema(self) -> None:
-        spec_paths = sorted(Path("experiments/goals").glob("*/specs/*.y*ml"))
+        spec_paths = sorted(Path("experiments/goals").rglob("specs/*.y*ml"))
         self.assertGreater(len(spec_paths), 0)
         for path in spec_paths:
             with self.subTest(path=str(path)):
                 job_queue.load_spec_document(path)
 
     def test_level1_3_specs_configure_goal_metric_early_stop(self) -> None:
-        spec_paths = sorted(Path("experiments/goals/Level1-3/specs").glob("*.yaml"))
+        spec_paths = sorted(Path("experiments/goals/super-mario-bros-nes-v0/Level1-3/specs").glob("*.yaml"))
         self.assertGreater(len(spec_paths), 0)
         for path in spec_paths:
             with self.subTest(path=str(path)):
@@ -812,6 +827,23 @@ train_config:
                 },
             )
 
+    def test_enqueue_train_job_allows_stable_retro_turbo_provider_owned_done_events(self) -> None:
+        row = job_queue.enqueue_train_job(
+            FakeConnection(row={"id": 7}),
+            goal_slug="goal",
+            spec_slug="spec",
+            profile_id=None,
+            runtime_image_ref=RUNTIME_IMAGE_REF,
+            run_target="rtx4090",
+            train_config={
+                "timesteps": 1024,
+                "env_provider": "stable-retro-turbo",
+                "done_on_events": "life_loss,level_change",
+            },
+        )
+
+        self.assertEqual(row["id"], 7)
+
     def test_enqueue_train_job_rejects_eval_reserved_seed_range(self) -> None:
         with self.assertRaisesRegex(ValueError, "reserved for eval"):
             job_queue.enqueue_train_job(
@@ -948,7 +980,7 @@ train_config:
             "id": 12,
             "goal_slug": "Level1-1",
             "spec_slug": "candidate",
-            "spec_path": "experiments/goals/Level1-1/specs/candidate.yaml",
+            "spec_path": "experiments/goals/super-mario-bros-nes-v0/Level1-1/specs/candidate.yaml",
             "runtime_image_ref": RUNTIME_IMAGE_REF,
             "run_name": "candidate_run",
             "train_config": {
@@ -1541,7 +1573,7 @@ class TrainRunnerTests(unittest.TestCase):
             },
             "goal_slug": "Levels_2_d25102",
             "spec_slug": "b52",
-            "spec_path": "experiments/goals/Levels_2_d25102/specs/b52.yaml",
+            "spec_path": "experiments/goals/super-mario-bros-nes-v0/Levels_2_d25102/specs/b52.yaml",
             "run_name": "b52_seed23",
             "run_description": "Codex-authored smoke job.",
             "wandb_group": "b52",
@@ -1564,7 +1596,7 @@ class TrainRunnerTests(unittest.TestCase):
         self.assertEqual(written_config["spec_slug"], "b52")
         self.assertEqual(
             written_config["spec_path"],
-            "experiments/goals/Levels_2_d25102/specs/b52.yaml",
+            "experiments/goals/super-mario-bros-nes-v0/Levels_2_d25102/specs/b52.yaml",
         )
         self.assertEqual(written_config["queue_train_job_id"], 12)
         self.assertEqual(written_config["run_name"], "b52_seed23")

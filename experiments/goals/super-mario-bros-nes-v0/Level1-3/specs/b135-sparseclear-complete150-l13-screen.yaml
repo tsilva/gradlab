@@ -1,0 +1,91 @@
+defaults:
+- ../_goal@goal
+- _self_
+schema_version: 1
+slug: b135-sparseclear-complete150-l13-screen
+hypothesis: >-
+  If even low scaled progress rewards keep optimizing partial x-position rather than real Level1-3
+  clears, a sparse true-clear reward arm with no progress reward should test whether the current
+  shaping is still distracting from the target. Seed 80 may learn more slowly, but any nonzero
+  clean-clear count would be high-value evidence that progress shaping is the wrong search signal for
+  Level1-3.
+parent_spec_slug: b129-lowprogress-complete100-slowent-l13-screen
+seeds:
+- 80
+run_target: rtx4090
+wandb_group: b135-l13-sparseclear-complete150-screen
+wandb_tags:
+- mario
+- level1-3
+- post21
+- b135
+- sparse-clear-reward
+- zero-progress-scale
+- death-penalty-75
+- completion-reward-150
+- screen
+- beast3
+run_name_template: b135_l13_sparseclear_complete150_s{seed}_{utc}
+run_description_template: Single-seed Beast3 screen for Level1-3 100/100, seed {seed}; sparse target-aligned reward shape with progress_reward_scale=0, death_penalty=75, completion_reward=150, and slow entropy floor. Primary metric is peak train/info/level_complete/rate/min/last; stop early when train/info/level_complete/rate/min/last > 0.99.
+selection_gate:
+  primary: max(train/info/level_complete/rate/min/last)
+  tie_breakers:
+  - max(train/info/level_complete/rate/mean/last)
+  training_metrics: primary_optimization_signal
+train_config:
+  game: SuperMarioBros-Nes-v0
+  state: Level1-3
+  n_envs: 16
+  env_threads: 4
+  torch_num_threads: 1
+  n_steps: 512
+  batch_size: 512
+  n_epochs: 10
+  learning_rate: 0.00015
+  learning_rate_final: 0.0001
+  learning_rate_schedule_timesteps: 4000000
+  ent_coef: 0.01
+  ent_coef_final: 0.001
+  ent_coef_schedule_timesteps: 4000000
+  gamma: 0.9
+  gae_lambda: 1.0
+  clip_range: 0.15
+  target_kl: 0.16
+  vf_coef: 1.0
+  adam_eps: 1.0e-08
+  normalize_advantage: true
+  reward_mode: score
+  progress_reward_cap: 30.0
+  progress_reward_scale: 0.0
+  terminal_reward: 50
+  time_penalty: 0.0
+  death_penalty: 75
+  completion_reward: 150
+  reward_scale: 10
+  score_progress_clipped: true
+  no_progress_timeout_steps: 0
+  no_progress_min_delta: 0
+  action_set: simple
+  frame_skip: 4
+  max_pool_frames: false
+  hud_crop_top: 32
+  max_episode_steps: 4500
+  info_events_json:
+    life_loss:
+    - lives
+    - decrease
+    level_change:
+    - - levelHi
+      - levelLo
+    - change
+  done_on_events: life_loss,level_change
+  eval_freq: 0
+  eval_episodes: 0
+  checkpoint_freq: 500000
+  early_stop_metric: train/info/level_complete/rate/min/last
+  early_stop_threshold: 0.99
+  early_stop_operator: '>'
+  timesteps: 5000000
+  wandb: true
+  wandb_mode: online
+  wandb_artifact_storage_uri: ${CHECKPOINT_BUCKET_URI}

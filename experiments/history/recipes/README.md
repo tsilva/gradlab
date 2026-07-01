@@ -1,0 +1,49 @@
+# Archived Experiment Recipes
+
+These machine-readable recipes are retained for older checked-in specs that
+still compose reusable training fragments. Prefer new goal-local specs under
+`experiments/goals/<game>/<goal>/specs/` for active research changes.
+
+Machine-readable recipes define reusable training ingredients: environment
+semantics, PPO hyperparameters, reward shaping, and logging defaults.
+
+Use a first-class `environment` section for the MDP interface the agent acts
+within. It should name the provider and `env_id`, then capture
+state sampling, action mapping, preprocessing, termination/event semantics, task
+conditioning, and reward shaping. `rlab` materializes this section into
+`train_config` for the existing runners and records a deterministic
+`environment_hash` over the canonicalized environment identity.
+Use `preprocessing.obs_resize: [height, width]` for observation resizing and
+`preprocessing.obs_crop: [top, right, bottom, left]` for observation cropping;
+do not duplicate them as runtime-specific `observation_size` or `hud_crop_top`
+fields in `environment`.
+
+Keep optimizer and execution details such as learning rate, rollout length,
+`n_envs`, `env_threads`, runtime image, and W&B naming outside `environment`;
+those change the training process, not the environment identity.
+
+Goal specs under `experiments/goals/<game>/<goal>/specs/` remain the launchable queue
+documents. A YAML spec may use Hydra `defaults` to compose recipe files, set goal-specific
+fields such as `environment.state`, `seeds`, and W&B naming, then
+use `overrides` for the small delta that defines the candidate.
+Queue-ready recipe fragments may also use `env`, `train`, `reward`, and
+`logging` sections; `rlab` merges those into the final `train_config` before
+validation. Prefer that shape when converting older specs that must preserve the
+exact runner-facing payload.
+
+Keep `experiments/goals/<game>/<goal>/_goal.yaml` as the stable goal contract. The
+curated pointer to the best training recipe so far belongs in
+`experiments/goals/.deprecated/<goal>/best.yml`. Keep `best.yml` small: store the recipe or
+spec identity, W&B run ids/names, relevant decision metrics, checkpoint or final
+artifact refs, status, and a short decision note. W&B remains the source of
+truth for full run history and raw metrics; `best.yml` is only the checked-in
+index of the current best recipe and why it matters.
+
+At enqueue time, `rlab train --spec-file <path>.yaml` resolves every Hydra
+`defaults` entry, materializes the final `train_config`, validates the existing expanded
+train-spec contract, and stores composition source hashes in `spec_payload_json`.
+The queue still executes a fully expanded immutable payload.
+
+Queue compatibility is owned by the immutable `runtime_image_ref`; do not add
+new `profile` or `run_target` fields to train specs unless an explicit migration
+brings those concepts back.

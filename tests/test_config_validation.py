@@ -149,7 +149,7 @@ environment_hash: sha256:deadbeef
                 validate_goal_contract(goal_path, root)
 
     def test_load_goal_contract_returns_composed_document(self) -> None:
-        document = load_goal_contract(Path("experiments/goals/Level1-3/goal.yaml"))
+        document = load_goal_contract(Path("experiments/goals/super-mario-bros-nes-v0/Level1-3/_goal.yaml"))
 
         self.assertNotIn("extends", document)
         self.assertNotIn("schema_version", document)
@@ -218,7 +218,7 @@ environment_hash: sha256:deadbeef
         self.assertEqual(document["eval"]["environment"]["env_config"]["max_steps"], 4500)
         self.assertEqual(
             document["eval"]["environment"]["env_config"]["done_on"],
-            {"level_change": [["levelHi", "levelLo"], "change"]},
+            ["level_change"],
         )
 
     def test_validate_is_registered_on_unified_cli(self) -> None:
@@ -238,7 +238,7 @@ environment_hash: sha256:deadbeef
             exit_code = validate_main(
                 [
                     "--load-goal",
-                    "experiments/goals/Level1-3/goal.yaml",
+                    "experiments/goals/super-mario-bros-nes-v0/Level1-3/_goal.yaml",
                     "--json",
                 ]
             )

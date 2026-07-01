@@ -292,14 +292,16 @@ class EnvConfigFromArgsTests(unittest.TestCase):
             {"level_change": (("levelHi", "levelLo"), "change")},
         )
 
-    def test_resolve_env_config_requires_done_events_to_be_info_events(self) -> None:
-        with self.assertRaisesRegex(ValueError, "references unconfigured info event"):
-            resolve_env_config(
-                EnvConfig(
-                    game="SuperMarioBros-Nes-v0",
-                    done_on_events=("life_loss",),
-                )
+    def test_resolve_env_config_allows_named_done_events_without_local_rules(self) -> None:
+        config = resolve_env_config(
+            EnvConfig(
+                game="SuperMarioBros-Nes-v0",
+                done_on_events=("life_loss",),
             )
+        )
+
+        self.assertEqual(config.info_events, {})
+        self.assertEqual(config.done_on_events, ("life_loss",))
 
     def test_resolve_env_config_preserves_explicit_info_events(self) -> None:
         config = resolve_env_config(
@@ -1279,6 +1281,53 @@ class NativeMixedStateVecEnvTests(unittest.TestCase):
         self.assertIsInstance(env, FakeNative)
         self.assertEqual(created[0]["done_on"], {"life_loss": ("lives", "decrease")})
 
+    def test_training_vec_env_passes_named_done_events_without_local_rules(self) -> None:
+        created: list[dict[str, object]] = []
+
+        class FakeNative:
+            observation_space = gym.spaces.Box(
+                low=0,
+                high=255,
+                shape=(4, 84, 84),
+                dtype=np.uint8,
+            )
+            action_space = gym.spaces.MultiBinary(2)
+
+            def __init__(self, game, **kwargs):
+                self.game = game
+                created.append(kwargs)
+
+            def seed(self, seed):
+                return [seed]
+
+        config = EnvConfig(
+            game="SuperMarioBros-Nes-v0",
+            action_set="native",
+            reward_mode="native",
+            done_on_events=("life_loss", "level_change"),
+            states=("Level1-1", "Level1-2"),
+            state_probs=(0.5, 0.5),
+        )
+        with (
+            patch("rlab.env.RetroVecEnv", FakeNative),
+            patch("rlab.env.native_vec_env_supports_done_on", return_value=True),
+            patch("rlab.env.native_vec_env_supports_named_done_on", return_value=True),
+            patch("rlab.env.VecRetroProgressInfo", side_effect=lambda env, config: env),
+            patch("rlab.env.VecMonitor", side_effect=lambda env: env),
+            patch("rlab.env.maybe_transpose_vec_image", side_effect=lambda env: env),
+            patch(
+                "rlab.env.retro.data.list_states",
+                return_value=["Level1-1", "Level1-2"],
+            ),
+        ):
+            env = make_training_vec_env(config, n_envs=16, seed=7)
+
+        self.assertIsInstance(env, FakeNative)
+        self.assertEqual(
+            created[0]["done_on"],
+            {"life_loss": None, "level_change": None},
+        )
+
     def test_training_vec_env_requires_native_done_on_support_when_rules_requested(
         self,
     ) -> None:
@@ -1306,6 +1355,22 @@ class NativeMixedStateVecEnvTests(unittest.TestCase):
             patch("rlab.env.native_vec_env_supports_done_on", return_value=False),
         ):
             with self.assertRaisesRegex(RuntimeError, "done_on support"):
+                make_training_vec_env(config, n_envs=1, seed=7)
+
+    def test_training_vec_env_requires_named_done_on_support_for_unresolved_events(
+        self,
+    ) -> None:
+        config = EnvConfig(
+            game="SuperMarioBros-Nes-v0",
+            action_set="native",
+            reward_mode="native",
+            done_on_events=("life_loss",),
+        )
+        with (
+            patch("rlab.env.native_vec_env_supports_done_on", return_value=True),
+            patch("rlab.env.native_vec_env_supports_named_done_on", return_value=False),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "metadata-backed named event support"):
                 make_training_vec_env(config, n_envs=1, seed=7)
 
     def test_done_on_support_detection(self) -> None:

@@ -1,0 +1,45 @@
+schema_version: 1
+kind: train_experiment
+defaults:
+- ../_goal@goal
+- ../../../../history/recipes/mario/b257-softupdate-no-bonus@_global_
+- _self_
+slug: b270-b257soft-complete25-l21-screen
+hypothesis: >-
+  B264 showed that the B257-soft no-completion-bonus recipe can discover many clean Level2-1 clears,
+  peaking at 0.31 rolling completion, but cannot retain strict reliability; adding a tiny
+  completion_reward=25 keeps the same soft PPO update shape while giving clean clears a modest
+  retention signal. Seed 95 should improve over B264 seed 91's 0.31 peak
+  train/info/level_complete/rate/min/last without relying on reward hacking; strict 100/100 is still
+  required before any confirmation or promotion.
+parent_spec_slug: b264-b263-b257soft-four-seed-l21-screen
+seeds:
+- 95
+run_target: rtx4090
+state: Level2-1
+wandb_group: b270-l21-b257soft-complete25-screen
+wandb_tags:
+- mario
+- level2-1
+- world2-1
+- post22
+- b270
+- b257
+- b55-transfer
+- soft-update
+- target-kl-010
+- clip-012
+- completion-reward-25
+- retention
+- screen
+- beast3
+run_name_template: b270_l21_b257soft_complete25_s{seed}_{utc}
+run_description_template: Single-seed Beast3 retention screen for World 2-1 100/100, seed {seed}; B257 soft-update recipe plus tiny clean completion_reward=25 after B264 seed 91 discovered many clears but plateaued far below strict reliability. Primary metric is peak train/info/level_complete/rate/min/last, matching train/info/level_complete/from/1-0/rate once the source window is full; stop early when train/info/level_complete/rate/min/last > 0.99.
+selection_gate:
+  primary: max(train/info/level_complete/rate/min/last)
+  threshold: 1.0
+  tie_breakers:
+  - max(train/info/level_complete/rate/mean/last)
+  training_metrics: primary_optimization_signal
+train_config:
+  completion_reward: 25

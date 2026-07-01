@@ -10,7 +10,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Gate promotion of a trained checkpoint against a goal contract."
     )
-    parser.add_argument("--goal", required=True, help="Goal id or path to goal.yaml.")
+    parser.add_argument("--goal", required=True, help="Goal id or path to _goal.yaml.")
     parser.add_argument(
         "--candidate",
         required=True,
@@ -29,10 +29,12 @@ def resolve_goal_path(value: str) -> Path:
     path = Path(value)
     if path.is_file():
         return path
-    yaml_path = Path("experiments/goals") / value / "goal.yaml"
-    if yaml_path.is_file():
-        return yaml_path
-    return Path("experiments/goals") / value / "goal.yaml"
+    goals_dir = Path("experiments/goals")
+    for filename in ("_goal.yaml", "goal.yaml"):
+        for yaml_path in sorted(goals_dir.rglob(f"{value}/{filename}")):
+            if ".deprecated" not in yaml_path.parts and yaml_path.is_file():
+                return yaml_path
+    return goals_dir / value / "goal.yaml"
 
 
 def main(argv: list[str] | None = None) -> None:

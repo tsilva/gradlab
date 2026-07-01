@@ -81,7 +81,7 @@ from rlab.runtime_refs import (
 
 
 DEFAULT_INSTANCES_CONFIG = Path("experiments/instances.yaml")
-DEFAULT_CAPACITY_POLICY = Path("experiments/policies/capacity_policy.yaml")
+DEFAULT_CAPACITY_POLICY = Path("experiments/history/policies/capacity_policy.yaml")
 DEFAULT_WATCH_LATEST_INTERVAL_SECONDS = 15.0
 DEFAULT_WATCH_STALE_OLDER_THAN_SECONDS = 300
 DEFAULT_WATCH_STALE_LIMIT = 50
@@ -477,7 +477,12 @@ def load_capacity_policy(repo_root: Path, path: Path | None = None) -> dict[str,
 
 
 def goal_contract_path(repo_root: Path, goal_slug: str) -> Path:
-    return repo_root / "experiments" / "goals" / goal_slug / "goal.yaml"
+    goals_dir = repo_root / "experiments" / "goals"
+    for filename in ("_goal.yaml", "goal.yaml"):
+        for candidate in sorted(goals_dir.rglob(f"{goal_slug}/{filename}")):
+            if ".deprecated" not in candidate.parts and candidate.is_file():
+                return candidate
+    return goals_dir / goal_slug / "goal.yaml"
 
 
 def load_goal_document(repo_root: Path, goal_slug: str) -> Mapping[str, Any]:
@@ -543,7 +548,12 @@ def discover_goal_slugs_with_eval_runner_requirements(repo_root: Path) -> tuple[
     if not goals_dir.is_dir():
         return ()
     slugs: list[str] = []
-    for path in sorted(goals_dir.glob("*/goal.yaml")):
+    goal_paths = sorted(
+        path
+        for path in [*goals_dir.rglob("_goal.yaml"), *goals_dir.rglob("goal.yaml")]
+        if ".deprecated" not in path.parts
+    )
+    for path in goal_paths:
         goal_slug = path.parent.name
         try:
             document = load_composed_mapping(path, cycle_label="goal").document

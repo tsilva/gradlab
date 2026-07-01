@@ -1,0 +1,39 @@
+schema_version: 1
+kind: train_experiment
+defaults:
+- ../_goal@goal
+- ../../../../history/recipes/mario/b55-single-level-no-bonus@_global_
+- _self_
+slug: b266-b55normadv-l21-screen
+hypothesis: >-
+  Advantage normalization may reduce seed sensitivity on World 2-1 while preserving the B55 reward
+  contract, testing whether B263's weak retention is partly update-scale variance rather than reward
+  semantics. Seed 90 should produce earlier clean Level2-1 clears than B263 and improve peak
+  train/info/level_complete/rate/min/last without PPO instability.
+parent_spec_slug: b263-b257soft-l21-screen
+seeds:
+- 90
+run_target: rtx4090
+state: Level2-1
+wandb_group: b266-l21-b55normadv-screen
+wandb_tags:
+- mario
+- level2-1
+- world2-1
+- post22
+- b266
+- b55-transfer
+- normalize-advantage
+- no-completion-bonus
+- screen
+- beast3
+run_name_template: b266_l21_normadv_s{seed}_{utc}
+run_description_template: Single-seed Beast3 robustness screen for World 2-1 100/100, seed {seed}; B55 no-completion-bonus recipe with normalize_advantage=true. Primary metric is peak train/info/level_complete/rate/min/last, matching train/info/level_complete/from/1-0/rate once the source window is full; stop early when train/info/level_complete/rate/min/last > 0.99.
+selection_gate:
+  primary: max(train/info/level_complete/rate/min/last)
+  threshold: 1.0
+  tie_breakers:
+  - max(train/info/level_complete/rate/mean/last)
+  training_metrics: primary_optimization_signal
+train_config:
+  normalize_advantage: true

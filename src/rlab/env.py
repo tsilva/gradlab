@@ -30,6 +30,8 @@ DEFAULT_HUD_CROP_TOP = GenericRetroTarget.default_hud_crop_top
 FRAME_STACK_CHANNELS = {1, 3, 4}
 DoneOnInfoRule = tuple[str | tuple[str, ...], str]
 DoneOnInfoRules = dict[str, DoneOnInfoRule]
+NativeDoneOnRule = DoneOnInfoRule | None
+NativeDoneOnRules = dict[str, NativeDoneOnRule]
 InfoEventRule = DoneOnInfoRule
 InfoEventRules = DoneOnInfoRules
 
@@ -40,6 +42,10 @@ def native_vec_env_supports_done_on() -> bool:
     except (OSError, TypeError):
         return False
     return "done_on" in signature.parameters
+
+
+def native_vec_env_supports_named_done_on() -> bool:
+    return callable(getattr(RetroVecEnv, "resolve_info_event_rules", None))
 
 
 def action_names_for_set(action_set: str, game: str = GAME) -> tuple[str, ...]:
@@ -84,12 +90,6 @@ class EnvConfig:
 
 def normalize_event_config(config: EnvConfig) -> EnvConfig:
     done_on_events = tuple(dict.fromkeys(str(item) for item in config.done_on_events))
-    missing = [name for name in done_on_events if name not in config.info_events]
-    if missing:
-        raise ValueError(
-            "--done-on-events references unconfigured info event(s): "
-            f"{', '.join(missing)}"
-        )
     if done_on_events != config.done_on_events:
         return replace(config, done_on_events=done_on_events)
     return config
@@ -832,16 +832,27 @@ def maybe_transpose_vec_image(vec_env):
     return vec_env
 
 
-def _native_done_on_rules(config: EnvConfig, *, done_on_supported: bool) -> DoneOnInfoRules:
+def _native_done_on_rules(
+    config: EnvConfig,
+    *,
+    done_on_supported: bool,
+    named_done_on_supported: bool,
+) -> NativeDoneOnRules:
     native_rules = {
-        name: rule
-        for name, rule in config.info_events.items()
-        if name in set(config.done_on_events)
+        name: config.info_events.get(name)
+        for name in config.done_on_events
     }
     if native_rules and not done_on_supported:
         raise RuntimeError(
             "configured done_on rules require stable-retro-turbo with native "
             "done_on support",
+        )
+    missing_rule_names = [name for name, rule in native_rules.items() if rule is None]
+    if missing_rule_names and not named_done_on_supported:
+        raise RuntimeError(
+            "configured named done_on events require stable-retro-turbo with "
+            "metadata-backed named event support; unresolved event(s): "
+            f"{', '.join(missing_rule_names)}",
         )
     return native_rules
 
@@ -851,7 +862,7 @@ def _native_vec_kwargs(
     *,
     n_envs: int,
     num_threads: int,
-    native_done_on_rules: DoneOnInfoRules,
+    native_done_on_rules: NativeDoneOnRules,
 ) -> dict[str, Any]:
     native_kwargs: dict[str, Any] = {
         "num_envs": n_envs,
@@ -912,6 +923,7 @@ def make_vec_envs(config: EnvConfig, n_envs: int, seed: int, start_method: str =
     native_done_on_rules = _native_done_on_rules(
         config,
         done_on_supported=native_vec_env_supports_done_on(),
+        named_done_on_supported=native_vec_env_supports_named_done_on(),
     )
     native_kwargs = _native_vec_kwargs(
         config,

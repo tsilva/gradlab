@@ -329,7 +329,10 @@ def _validate_env_config(
     if "info_filter" in env_config and not isinstance(env_config["info_filter"], str | Mapping):
         raise ValueError(f"{label}.info_filter must be a string or mapping")
     if "done_on" in env_config:
-        _require_mapping(env_config["done_on"], label=f"{label}.done_on")
+        if isinstance(env_config["done_on"], Mapping):
+            _require_mapping(env_config["done_on"], label=f"{label}.done_on")
+        else:
+            _require_string_list(env_config, "done_on", label=label)
 
 
 def _goal_train_section(document: Mapping[str, Any], *, label: str) -> Mapping[str, Any]:
@@ -747,6 +750,10 @@ def _capture_issue(issues: list[ValidationIssue], path: Path, repo_root: Path, a
         issues.append(ValidationIssue(path=_display_path(path, repo_root), message=str(exc)))
 
 
+def _active_experiment_path(path: Path) -> bool:
+    return ".deprecated" not in path.parts
+
+
 def validate_experiment_tree(repo_root: Path | str = Path(".")) -> ValidationReport:
     repo_root = Path(repo_root).resolve()
     experiments_dir = repo_root / "experiments"
@@ -766,17 +773,26 @@ def validate_experiment_tree(repo_root: Path | str = Path(".")) -> ValidationRep
     for path in json_files:
         issues.append(ValidationIssue(path=_display_path(path, repo_root), message="experiments configs must be YAML"))
 
-    goals = sorted((experiments_dir / "goals").glob("*/goal.yaml"))
+    goals_dir = experiments_dir / "goals"
+    goals = sorted(
+        path
+        for path in [*goals_dir.rglob("_goal.yaml"), *goals_dir.rglob("goal.yaml")]
+        if _active_experiment_path(path)
+    )
     counts["goals"] = len(goals)
     for path in goals:
         _capture_issue(issues, path, repo_root, lambda path=path: validate_goal_contract(path, repo_root))
 
-    specs = sorted((experiments_dir / "goals").glob("*/specs/*.yaml"))
+    specs = sorted(
+        path
+        for path in (experiments_dir / "goals").rglob("specs/*.yaml")
+        if _active_experiment_path(path)
+    )
     counts["train_specs"] = len(specs)
     for path in specs:
         _capture_issue(issues, path, repo_root, lambda path=path: load_spec_document(path))
 
-    recipes_dir = experiments_dir / "recipes"
+    recipes_dir = experiments_dir / "history" / "recipes"
     recipes = sorted(recipes_dir.rglob("*.yaml")) if recipes_dir.is_dir() else []
     counts["recipes"] = len(recipes)
     for path in recipes:
@@ -799,7 +815,7 @@ def validate_experiment_tree(repo_root: Path | str = Path(".")) -> ValidationRep
         )
 
     machines_path = experiments_dir / "machines.yaml"
-    capacity_path = experiments_dir / "policies" / "capacity_policy.yaml"
+    capacity_path = experiments_dir / "history" / "policies" / "capacity_policy.yaml"
     counts["machine_configs"] = int(machines_path.is_file())
     counts["capacity_policies"] = int(capacity_path.is_file())
     if machines_path.is_file():
@@ -809,7 +825,9 @@ def validate_experiment_tree(repo_root: Path | str = Path(".")) -> ValidationRep
     if machines_path.is_file() and capacity_path.is_file():
         _capture_issue(issues, capacity_path, repo_root, lambda: validate_fleet_and_capacity(repo_root))
     elif not capacity_path.is_file():
-        issues.append(ValidationIssue(path="experiments/policies/capacity_policy.yaml", message="file is required"))
+        issues.append(
+            ValidationIssue(path="experiments/history/policies/capacity_policy.yaml", message="file is required")
+        )
 
     benchmark_dir = experiments_dir / "benchmarks"
     benchmark_baselines = benchmark_dir / "baselines.yaml"
@@ -842,7 +860,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--load-goal",
         type=Path,
-        help="Print the final composed goal contract for a goal.yaml path.",
+        help="Print the final composed goal contract for a _goal.yaml path.",
     )
     parser.add_argument(
         "--format",

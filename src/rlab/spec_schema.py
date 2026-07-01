@@ -36,7 +36,14 @@ TRAIN_SPEC_SCHEMA: dict[str, Any] = {
     "required": list(TRAIN_SPEC_REQUIRED_FIELDS),
     "properties": {
         "schema_version": {"const": TRAIN_SPEC_SCHEMA_VERSION},
-        "goal": {"type": "string", "minLength": 1},
+        "goal": {
+            "type": "object",
+            "additionalProperties": True,
+            "required": ["goal_id"],
+            "properties": {
+                "goal_id": {"type": "string", "minLength": 1},
+            },
+        },
         "goal_slug": {"type": "string", "minLength": 1},
         "slug": {"type": "string", "minLength": 1},
         "hypothesis": {"type": "string", "minLength": 1},
@@ -245,7 +252,8 @@ def validate_train_spec_schema(document: Mapping[str, Any], *, label: str = "spe
             f"{TRAIN_SPEC_SCHEMA_VERSION}, got {schema_version}"
         )
 
-    _require_non_empty_string(document, "goal", label=label)
+    goal = _require_mapping(_require_key(document, "goal", label=label), label=_label_path(label, "goal"))
+    _require_non_empty_string(goal, "goal_id", label=_label_path(label, "goal"))
     _require_non_empty_string(document, "slug", label=label)
     _require_non_empty_string(document, "hypothesis", label=label)
     if "parent_spec_slug" in document:
