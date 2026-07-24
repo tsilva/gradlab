@@ -49,6 +49,7 @@ class DstackBackendTests(unittest.TestCase):
 
     def test_local_config_reuses_one_b3_fleet_machine(self) -> None:
         config = render_task_config(self.task())
+        self.assertEqual(config["working_dir"], "/root/rlab")
         self.assertEqual(config["fleets"], ["b3"])
         self.assertEqual(config["creation_policy"], "reuse")
         self.assertEqual(config["resources"]["cpu"], "12..")
