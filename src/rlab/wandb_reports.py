@@ -18,10 +18,10 @@ from rlab.metric_names import (
     EVAL_FULL_EPISODE_RETURN_MEAN,
     EVAL_FULL_SUCCESS_RATE_MEAN,
     EVAL_FULL_SUCCESS_RATE_MIN,
-    GLOBAL_STEP,
     EVAL_ACCEPTANCE_EPISODES_COMPLETED,
     EVAL_ACCEPTANCE_EPISODES_PLANNED,
     EVAL_ACCEPTANCE_PASS,
+    EVAL_CHECKPOINT_STEP,
     LEADER_CHECKPOINT_ARTIFACT_REF,
     LEADER_CHECKPOINT_EVAL_SOURCE,
     LEADER_CHECKPOINT_OBJECTIVE,
@@ -37,6 +37,7 @@ from rlab.metric_names import (
     TRAIN_A2C_VALUE_LOSS,
     TRAIN_ARTIFACT_SAVE_SECONDS,
     TRAIN_ARTIFACT_UPLOAD_SECONDS,
+    TRAIN_GLOBAL_STEP,
     TRAIN_OUTCOME_SUCCESS_CURRENT_RATE_MEAN,
     TRAIN_OUTCOME_SUCCESS_CURRENT_RATE_MIN,
     TRAIN_OUTCOME_SUCCESS_START_COVERAGE_RATE,
@@ -68,7 +69,6 @@ REPORT_SCHEMA_VERSION = 1
 MARIO_FAMILY = "SuperMarioBros-Nes-v0"
 REPORT_ID_MARKER = "rlab-report-id"
 REPORT_SOURCE_MARKER = "rlab-source-sha"
-LEGACY_PORTFOLIO_TITLE = "rlab checkpoint leaderboards by goal"
 
 PORTFOLIO_SECTIONS = frozenset({"goal_navigation", "checkpoint_leaders", "active_runs"})
 GOAL_SECTIONS = frozenset(
@@ -528,7 +528,7 @@ def _goal_section_blocks(wr, section: str, goal: GoalReportSpec, *, entity: str)
             wr.MarkdownBlock(
                 f"**Goal:** `{goal.goal_id}`  \n"
                 f"**Contract:** `{goal.goal_contract_sha256}`  \n"
-                f"**Reward shape:** `{goal.reward_shape or 'inline/legacy'}`  \n"
+                f"**Reward shape:** `{goal.reward_shape or 'inline'}`  \n"
                 f"**Starts:** {starts}  \n"
                 f"**Checkpoint ranking:** {rank}"
             ),
@@ -551,13 +551,13 @@ def _goal_section_blocks(wr, section: str, goal: GoalReportSpec, *, entity: str)
                     _line(
                         wr,
                         title="Acceptance result",
-                        x=GLOBAL_STEP,
+                        x=EVAL_CHECKPOINT_STEP,
                         y=[EVAL_ACCEPTANCE_PASS],
                     ),
                     _line(
                         wr,
                         title="Acceptance episode progress",
-                        x=GLOBAL_STEP,
+                        x=EVAL_CHECKPOINT_STEP,
                         y=[
                             EVAL_ACCEPTANCE_EPISODES_COMPLETED,
                             EVAL_ACCEPTANCE_EPISODES_PLANNED,
@@ -566,7 +566,7 @@ def _goal_section_blocks(wr, section: str, goal: GoalReportSpec, *, entity: str)
                     _line(
                         wr,
                         title=EVAL_FULL_EPISODE_RETURN_MEAN,
-                        x=GLOBAL_STEP,
+                        x=EVAL_CHECKPOINT_STEP,
                         y=[EVAL_FULL_EPISODE_RETURN_MEAN],
                     ),
                 ],
@@ -588,7 +588,7 @@ def _goal_section_blocks(wr, section: str, goal: GoalReportSpec, *, entity: str)
             _line(
                 wr,
                 title="Cumulative training success",
-                x=GLOBAL_STEP,
+                x=TRAIN_GLOBAL_STEP,
                 y=[
                     TRAIN_OUTCOME_SUCCESS_CURRENT_RATE_MIN,
                     TRAIN_OUTCOME_SUCCESS_CURRENT_RATE_MEAN,
@@ -597,7 +597,7 @@ def _goal_section_blocks(wr, section: str, goal: GoalReportSpec, *, entity: str)
             _line(
                 wr,
                 title="Window-100 training success",
-                x=GLOBAL_STEP,
+                x=TRAIN_GLOBAL_STEP,
                 y=[
                     TRAIN_OUTCOME_SUCCESS_WINDOW_100_RATE_MIN,
                     TRAIN_OUTCOME_SUCCESS_WINDOW_100_RATE_MEAN,
@@ -606,14 +606,16 @@ def _goal_section_blocks(wr, section: str, goal: GoalReportSpec, *, entity: str)
             _line(
                 wr,
                 title=TRAIN_OUTCOME_SUCCESS_START_COVERAGE_RATE,
-                x=GLOBAL_STEP,
+                x=TRAIN_GLOBAL_STEP,
                 y=[TRAIN_OUTCOME_SUCCESS_START_COVERAGE_RATE],
             ),
         ]
         if len(goal.starts) <= 4:
             for start in goal.starts:
                 metric = f"train/outcome/success/from/{start}/rate/window_100"
-                panels.append(_line(wr, title=metric, x=GLOBAL_STEP, y=[metric], w=12, h=7))
+                panels.append(
+                    _line(wr, title=metric, x=TRAIN_GLOBAL_STEP, y=[metric], w=12, h=7)
+                )
         return [
             wr.H2("Training progress (diagnostic only)"),
             wr.MarkdownBlock(
@@ -638,7 +640,7 @@ def _goal_section_blocks(wr, section: str, goal: GoalReportSpec, *, entity: str)
                 panels=[
                     wr.LinePlot(
                         title="Training failure-reason rates",
-                        x=GLOBAL_STEP,
+                        x=TRAIN_GLOBAL_STEP,
                         y=[],
                         metric_regex=r"train/outcome/reason/.*/rate/window_100",
                         layout=wr.Layout(w=12, h=8),
@@ -655,31 +657,31 @@ def _goal_section_blocks(wr, section: str, goal: GoalReportSpec, *, entity: str)
                     _line(
                         wr,
                         title="Explained variance",
-                        x=GLOBAL_STEP,
+                        x=TRAIN_GLOBAL_STEP,
                         y=[TRAIN_PPO_EXPLAINED_VARIANCE, TRAIN_A2C_EXPLAINED_VARIANCE],
                     ),
                     _line(
                         wr,
                         title="Value loss",
-                        x=GLOBAL_STEP,
+                        x=TRAIN_GLOBAL_STEP,
                         y=[TRAIN_PPO_VALUE_LOSS, TRAIN_A2C_VALUE_LOSS],
                     ),
                     _line(
                         wr,
                         title="Learning rate",
-                        x=GLOBAL_STEP,
+                        x=TRAIN_GLOBAL_STEP,
                         y=[TRAIN_PPO_LEARNING_RATE, TRAIN_A2C_LEARNING_RATE],
                     ),
                     _line(
                         wr,
                         title="Policy entropy",
-                        x=GLOBAL_STEP,
+                        x=TRAIN_GLOBAL_STEP,
                         y=[TRAIN_PPO_POLICY_ENTROPY, TRAIN_A2C_POLICY_ENTROPY],
                     ),
                     _line(
                         wr,
                         title="PPO update constraints",
-                        x=GLOBAL_STEP,
+                        x=TRAIN_GLOBAL_STEP,
                         y=[TRAIN_PPO_APPROX_KL, TRAIN_PPO_CLIP_FRACTION],
                     ),
                 ],
@@ -694,7 +696,7 @@ def _goal_section_blocks(wr, section: str, goal: GoalReportSpec, *, entity: str)
                     _line(
                         wr,
                         title="Training throughput",
-                        x=GLOBAL_STEP,
+                        x=TRAIN_GLOBAL_STEP,
                         y=[
                             TRAIN_THROUGHPUT_LOOP_FPS,
                             TRAIN_THROUGHPUT_ROLLOUT_FPS,
@@ -704,7 +706,7 @@ def _goal_section_blocks(wr, section: str, goal: GoalReportSpec, *, entity: str)
                     _line(
                         wr,
                         title="Between-rollout and overhead time",
-                        x=GLOBAL_STEP,
+                        x=TRAIN_GLOBAL_STEP,
                         y=[
                             TRAIN_THROUGHPUT_BETWEEN_ROLLOUTS_SECONDS,
                             TRAIN_THROUGHPUT_ROLLOUT_OVERHEAD_SECONDS,
@@ -713,7 +715,7 @@ def _goal_section_blocks(wr, section: str, goal: GoalReportSpec, *, entity: str)
                     _line(
                         wr,
                         title="Artifact timing",
-                        x=GLOBAL_STEP,
+                        x=TRAIN_GLOBAL_STEP,
                         y=[TRAIN_ARTIFACT_SAVE_SECONDS, TRAIN_ARTIFACT_UPLOAD_SECONDS],
                     ),
                 ],
@@ -858,20 +860,6 @@ def _preflight_existing(
     existing: dict[str, Any | None] = {
         spec.identity: (index.get(spec.identity) or [None])[0] for spec in specs
     }
-    portfolio = next(spec for spec in specs if isinstance(spec, PortfolioReportSpec))
-    if existing[portfolio.identity] is None:
-        legacy = [
-            report
-            for report in reports
-            if getattr(report, "display_name", None) == LEGACY_PORTFOLIO_TITLE
-            and extract_report_identity(getattr(report, "description", "")) is None
-        ]
-        if len(legacy) > 1:
-            raise ValueError(
-                "multiple legacy checkpoint leaderboard reports require manual cleanup"
-            )
-        if legacy:
-            existing[portfolio.identity] = legacy[0]
     return existing
 
 

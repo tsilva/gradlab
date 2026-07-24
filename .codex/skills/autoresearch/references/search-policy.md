@@ -32,7 +32,7 @@ success for every configured start. A missing start or zero success prevents the
 
 For paired evidence, define a seed as strong when
 `train/outcome/success/window_100/rate/min` reaches the frozen threshold at any logged
-`global_step`. Missing window-100 history is not strong. Rank eligible two-seed candidates
+`train/global_step`. Missing window-100 history is not strong. Rank eligible two-seed candidates
 lexicographically by:
 
 1. more strong seeds;

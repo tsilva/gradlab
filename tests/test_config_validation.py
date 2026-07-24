@@ -21,7 +21,6 @@ from rlab.config_validation import (
 from rlab.env_registry import resolve_env_provider
 from rlab.env_providers import _stable_retro_packaged_data_path
 from rlab.main import COMMANDS
-from rlab.metric_names import EVAL_FULL_SUCCESS_RATE_MIN
 from rlab.recipe_documents import compose_train_document
 from rlab.recipe_schema import validate_materialized_train_recipe
 
@@ -145,7 +144,7 @@ class ConfigValidationTests(unittest.TestCase):
             train_config["selection_rank"],
             [
                 "max(train/episode/return/shaped/from/target/mean)",
-                "min(global_step)",
+                "min(train/global_step)",
             ],
         )
 
@@ -287,7 +286,7 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertEqual(train_config["timesteps"], 10000000)
         self.assertEqual(train_config["checkpoint_eval_backend"], "none")
         self.assertIsNone(train_config["early_stop"])
-        self.assertEqual(train_config["checkpoint_eval_stages"], [])
+        self.assertNotIn("checkpoint_eval_stages", train_config)
 
     def test_level1_1_on_policy_recipes_share_common_config(self) -> None:
         ppo = compose_train_document(self.MARIO_L11_GOAL, self.MARIO_SINGLE_RECIPES / "ppo.yaml")
@@ -330,28 +329,6 @@ class ConfigValidationTests(unittest.TestCase):
                 label="goal",
             )
 
-    def test_candidate_stop_stage_allows_vectorized_evidence(self) -> None:
-        stages = config_validation.normalize_checkpoint_eval_stages(
-            [
-                {
-                    "name": "confirm",
-                    "episodes": 30,
-                    "n_envs": 4,
-                    "pass": [
-                        {
-                            "metric": EVAL_FULL_SUCCESS_RATE_MIN,
-                            "operator": ">=",
-                            "threshold": 1,
-                        }
-                    ],
-                    "candidate_stop": True,
-                }
-            ]
-        )
-
-        self.assertEqual(stages[0]["n_envs"], 4)
-        self.assertTrue(stages[0]["candidate_stop"])
-
     def test_checked_in_experiment_tree_validates(self) -> None:
         report = validate_experiment_tree(Path("."))
 
@@ -383,7 +360,7 @@ class ConfigValidationTests(unittest.TestCase):
             train_config["selection_rank"],
             [
                 "max(train/episode/return/shaped/from/target/mean)",
-                "min(global_step)",
+                "min(train/global_step)",
             ],
         )
         self.assertEqual(

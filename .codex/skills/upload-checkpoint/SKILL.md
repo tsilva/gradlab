@@ -18,7 +18,7 @@ Do not treat the Hugging Face and YouTube steps as alternatives. For visual RL c
 
 ## Required Inputs
 
-Resolve these from the user request, eval database, W&B artifact metadata, local artifacts, or generated summaries:
+Resolve these from the user request, private-R2 evaluation evidence, W&B metrics, public-R2 checkpoint metadata, local artifacts, or generated summaries:
 
 - checkpoint identity: run, seed, checkpoint step/timestep, artifact path, or local file
 - materialized goal contract and current model metadata; rlab generates the Hugging Face repo id
@@ -32,7 +32,7 @@ If a required fact is ambiguous and cannot be safely inferred from source artifa
 
 1. Gather source evidence.
    - Verify the checkpoint file or artifact exists.
-   - Verify reported metrics against the eval database, W&B metadata, model metadata, or generated eval summaries.
+   - Verify reported metrics against private-R2 evaluation evidence, W&B metrics, model metadata, or generated eval summaries.
    - Keep generated staging artifacts under ignored locations such as `runs/`.
 
 2. Resolve the deterministic publication identity.
@@ -74,24 +74,6 @@ If a required fact is ambiguous and cannot be safely inferred from source artifa
      replay encoding, and Collection membership through the Hugging Face API.
    - Save upload results under the staging directory, for example `runs/hf_upload/<repo>/youtube_upload_result.json`.
    - Report the Hugging Face model URL, Hugging Face commit URL when available, YouTube URL, playlist URL when available, and exact local staging paths.
-
-## One-time Legacy Migration
-
-- Generate the complete old-to-new mapping with
-  `scripts/migrate_huggingface_legacy_repos.py` before
-  changing the Hub. The legacy algorithm and crop behavior must be supplied explicitly from
-  repository and source-history evidence.
-- Review the collision-free mapping and retain its printed SHA-256. Applying it requires that
-  exact digest, authenticated ownership, and empty destination names.
-- Tag each historical source revision as `legacy-deterministic` before moving it. A move does
-  not make that historical revision a schema-v1 release.
-- Do not create `v1` until the checkpoint has new stochastic evaluation evidence, a validated
-  representative replay, and the exact eight-file release bundle.
-- Create or update the game-family Collection only after all repository moves succeed.
-- For the already-moved Mario repositories, use
-  `scripts/repair_huggingface_legacy_cards.py` to generate the canonical legacy cards and fill
-  Collection membership. Review the dry-run digest before applying it; the repair changes only
-  `README.md` and Collection membership and never creates a `v1` tag.
 
 ## Contract Ownership
 

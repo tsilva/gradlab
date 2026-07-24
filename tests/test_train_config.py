@@ -147,25 +147,17 @@ class TrainConfigFieldSchemaTests(unittest.TestCase):
             "none",
         )
 
-    def test_metrics_schema_version_accepts_frozen_v4_v5_and_active_v6(self) -> None:
-        self.assertEqual(
-            validate_and_normalize_train_config({"metrics_schema_version": 4})[
-                "metrics_schema_version"
-            ],
-            4,
-        )
-        self.assertEqual(
-            validate_and_normalize_train_config({"metrics_schema_version": 5})[
-                "metrics_schema_version"
-            ],
-            5,
-        )
+    def test_metrics_schema_version_accepts_only_active_v6(self) -> None:
         self.assertEqual(
             validate_and_normalize_train_config({"metrics_schema_version": 6})[
                 "metrics_schema_version"
             ],
             6,
         )
+        with self.assertRaisesRegex(ValueError, "must be >= 6"):
+            validate_and_normalize_train_config({"metrics_schema_version": 4})
+        with self.assertRaisesRegex(ValueError, "must be >= 6"):
+            validate_and_normalize_train_config({"metrics_schema_version": 5})
         with self.assertRaisesRegex(ValueError, "must be <= 6"):
             validate_and_normalize_train_config({"metrics_schema_version": 7})
 
@@ -176,34 +168,13 @@ class TrainConfigFieldSchemaTests(unittest.TestCase):
                     "checkpoint_eval_backend": "none",
                     "early_stop": [
                         {
-                            "metric": "eval/confirm/candidate/pass",
+                            "metric": "eval/full/outcome/success/rate/min",
                             "operator": ">=",
                             "threshold": 1.0,
                         }
                     ],
                 }
             )
-        with self.assertRaisesRegex(ValueError, "checkpoint_eval_stages must be empty"):
-            validate_and_normalize_train_config(
-                {
-                    "checkpoint_eval_backend": "none",
-                    "checkpoint_eval_stages": [
-                        {
-                            "name": "screen",
-                            "episodes": 1,
-                            "n_envs": 1,
-                            "pass": [
-                                {
-                                    "metric": "eval/full/outcome/success/rate/min",
-                                    "operator": ">=",
-                                    "threshold": 1.0,
-                                }
-                            ],
-                        }
-                    ],
-                }
-            )
-
     def test_train_config_rejects_deterministic_checkpoint_eval(self) -> None:
         with self.assertRaisesRegex(ValueError, "post_train_eval_stochastic must be true"):
             validate_and_normalize_train_config({"post_train_eval_stochastic": False})

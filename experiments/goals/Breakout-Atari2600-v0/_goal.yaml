@@ -9,7 +9,7 @@ title: Atari 2600 Breakout wall completion
 objective:
   rank:
   - max(train/episode/return/shaped/from/target/mean)
-  - min(global_step)
+  - min(train/global_step)
 train:
   checkpoint_eval_backend: none
   stop_on_acceptance: false

@@ -34,10 +34,9 @@ exact registry entry or a bounded template.
   W&B.
 
 The active checkpoint protocol is `acceptance`; complete accepted evidence additionally emits the
-`full` metric family. Historical `screen` and `confirm` rows remain readable but are not produced by
-new goal contracts. Dimension IDs must be unique and match `[A-Za-z0-9_.-]+`; unsafe IDs are rejected
-rather than silently rewritten. Starts use the same readable ID in training and evaluation. Provider
-`info` fields never become metrics automatically.
+`full` metric family. Dimension IDs must be unique and match `[A-Za-z0-9_.-]+`; unsafe IDs are
+rejected rather than silently rewritten. Starts use the same readable ID in training and evaluation.
+Provider `info` fields never become metrics automatically.
 
 Configuration-selected internal learner feedback, such as a snapshot curriculum's per-start
 priority statistic, is not telemetry merely because it has a readable name. Internal feedback
@@ -57,8 +56,8 @@ attribution. Frame skip remains run config. W&B uses three explicit axes:
 - `orchestration/event_seq`: durable supervisor delivery order.
 
 Asynchronous evaluations may arrive after later training rows without changing their scientific
-X-axis. The compatibility `global_step` field may remain in payloads while surviving producers are
-migrated, but new charts and orchestration logic use the three names above.
+X-axis. Each producer writes only its applicable scientific axis; durable delivery order uses
+`orchestration/event_seq`.
 
 Purged PostgreSQL/Fleet/W&B/R2 state has no compatibility guarantee. Newly materialized runs declare
 schema v6.
@@ -105,7 +104,7 @@ Episode-level evidence stays in R2. Confidence intervals and start-by-reason sca
 are intentionally computed offline rather than added to W&B history.
 
 An acceptance rejection is complete evidence of failure, but not a complete 100-episode
-evaluation. W&B history always receives `global_step`, pass, planned/completed episodes, and
+evaluation. W&B history always receives `eval/checkpoint_step`, pass, planned/completed episodes, and
 acceptance duration. It receives no partial `eval/full/*` result. Accepted projections additionally
 include variable return, length, progress, episode count, artifact, source, and `eval/full/by_start`.
 Constant acceptance success rates, per-start success scalars, failure-reason scalars, duplicate full
@@ -152,7 +151,6 @@ exit alone is never scientific success.
 <!-- METRIC_REGISTRY_START -->
 | Metric or template | Meaning | Unit | Cadence | Surface |
 |---|---|---|---|---|
-| `global_step` | Policy environment transitions consumed. | steps | frame | history |
 | `train/episode/return/shaped/mean` | Rolling mean shaped return over the latest 100 genuine completed training episodes across target and snapshot origins; a snapshot-origin return starts at restoration, and control boundaries are excluded. | scalar | rollout | history |
 | `train/episode/length/mean` | Rolling mean length over the latest 100 completed training episodes. | steps | rollout | history |
 | `train/outcome/terminal/count` | Cumulative terminal episode records. | episodes | rollout | history |

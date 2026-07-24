@@ -774,14 +774,10 @@ class RunSupervisor:
     def _publish_wandb(self) -> int:
         if self.projector is None:
             return 0
-        args = materialized_train_args(self.config_path)
-        config = resolve_env_config(env_config_from_args(args, include_states=True))
         started = time.monotonic()
         published = publish_pending_frames(
             self.metric_store,
             self.projector.run,
-            args=args,
-            config=config,
             limit=250,
         )
         elapsed = max(time.monotonic() - started, 1e-6)
@@ -1355,7 +1351,7 @@ class RunSupervisor:
             ),
             ORCHESTRATION_SCRATCH_USED_FRACTION: (usage.used / max(usage.total, 1)),
         }
-        step = int(self.metric_store.latest_metric("global_step") or 0)
+        step = int(self.metric_store.outbox_health().get("local_latest_step") or 0)
         self.metric_store.append_metrics(
             metrics,
             step=step,

@@ -11,7 +11,6 @@ from typing import Any
 import yaml
 
 from rlab.benchmark_profiles import load_benchmark_profiles
-from rlab.checkpoint_eval_config import normalize_checkpoint_eval_stages
 from rlab.config_loader import load_composed_mapping
 from rlab.early_stop import normalize_early_stop_config
 from rlab.env_identity import validate_task_config
@@ -342,13 +341,11 @@ def _validate_goal_eval(document: Mapping[str, Any], *, label: str) -> None:
         rank = objective.get("rank") if isinstance(objective, Mapping) else None
         criteria = parse_objective_rank(rank)
         if not criteria or any(
-            criterion.metric != "global_step"
-            and not criterion.metric.startswith("train/")
-            for criterion in criteria
+            not criterion.metric.startswith("train/") for criterion in criteria
         ):
             raise ValueError(
                 f"{label}.objective.rank for a training-only goal may use only "
-                "training metrics and global_step"
+                "training metrics"
             )
         return
     eval_section = _require_mapping(
@@ -581,15 +578,6 @@ def validate_goal_contract_document(
                 "goal.eval.acceptance is the sole acceptance source"
             )
         normalize_early_stop_config(train["early_stop"], label=f"{label}.train.early_stop")
-    if "checkpoint_eval_stages" in train:
-        if train.get("stop_on_acceptance") is True:
-            raise ValueError(
-                f"{label}.train.checkpoint_eval_stages is incompatible with stop_on_acceptance"
-            )
-        normalize_checkpoint_eval_stages(
-            train["checkpoint_eval_stages"],
-            label=f"{label}.train.checkpoint_eval_stages",
-        )
     if "stop_on_acceptance" in train:
         _require_bool(train, "stop_on_acceptance", label=f"{label}.train")
     environment = _goal_train_environment(document, train, label=label)
@@ -674,10 +662,6 @@ def _capture_issue(issues: list[ValidationIssue], path: Path, repo_root: Path, a
         issues.append(ValidationIssue(path=_display_path(path, repo_root), message=str(exc)))
 
 
-def _active_experiment_path(path: Path) -> bool:
-    return ".deprecated" not in path.parts
-
-
 def validate_experiment_tree(repo_root: Path | str = Path(".")) -> ValidationReport:
     repo_root = Path(repo_root).resolve()
     experiments_dir = repo_root / "experiments"
@@ -704,16 +688,14 @@ def validate_experiment_tree(repo_root: Path | str = Path(".")) -> ValidationRep
         )
 
     goals_dir = experiments_dir / "goals"
-    goals = sorted(path for path in goals_dir.rglob("_goal.yaml") if _active_experiment_path(path))
+    goals = sorted(goals_dir.rglob("_goal.yaml"))
     counts["goals"] = len(goals)
     for path in goals:
         _capture_issue(
             issues, path, repo_root, lambda path=path: validate_goal_contract(path, repo_root)
         )
 
-    report_manifests = sorted(
-        path for path in goals_dir.rglob("_reports.yaml") if _active_experiment_path(path)
-    )
+    report_manifests = sorted(goals_dir.rglob("_reports.yaml"))
     counts["report_manifests"] = len(report_manifests)
     if report_manifests:
         from rlab.wandb_reports import validate_report_declarations
@@ -725,11 +707,7 @@ def validate_experiment_tree(repo_root: Path | str = Path(".")) -> ValidationRep
             lambda: validate_report_declarations(repo_root),
         )
 
-    recipes = sorted(
-        path
-        for path in (experiments_dir / "goals").rglob("recipes/*.yaml")
-        if _active_experiment_path(path)
-    )
+    recipes = sorted((experiments_dir / "goals").rglob("recipes/*.yaml"))
     counts["train_recipes"] = len(recipes)
     recipes_by_goal = {path.parent.parent.resolve() for path in recipes}
     for goal_path in goals:
@@ -760,7 +738,7 @@ def validate_experiment_tree(repo_root: Path | str = Path(".")) -> ValidationRep
     shared_recipe_leaves = sorted(
         path
         for path in recipes_root.rglob("*.yaml")
-        if _active_experiment_path(path) and (not path.is_relative_to(recipes_root / "_presets"))
+        if not path.is_relative_to(recipes_root / "_presets")
     )
     for path in shared_recipe_leaves:
         issues.append(
@@ -773,9 +751,7 @@ def validate_experiment_tree(repo_root: Path | str = Path(".")) -> ValidationRep
             )
         )
 
-    env_configs = sorted(
-        path for path in goals_dir.glob("*/_env-*.yaml") if _active_experiment_path(path)
-    )
+    env_configs = sorted(goals_dir.glob("*/_env-*.yaml"))
     counts["env_configs"] = len(env_configs)
     for path in env_configs:
         _capture_issue(issues, path, repo_root, lambda path=path: validate_env_config_file(path))

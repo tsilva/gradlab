@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from rlab.file_utils import file_sha256 as _file_sha256
-from rlab.metric_names import METRICS_SCHEMA_VERSION, validate_metric_payload
+from rlab.metric_names import validate_metric_payload
 
 
 file_sha256 = _file_sha256
@@ -141,7 +141,6 @@ class MetricStore:
         source: str,
         created_at: float | None = None,
         publish: bool = True,
-        schema_version: int = METRICS_SCHEMA_VERSION,
     ) -> int:
         payload = {
             str(name): float(value)
@@ -152,8 +151,7 @@ class MetricStore:
         }
         if not payload:
             return 0
-        validate_metric_payload(payload, schema_version=schema_version)
-        payload.setdefault("global_step", float(step or 0))
+        validate_metric_payload(payload)
         now = time.time() if created_at is None else float(created_at)
         event_id = self._event_id(
             source=source,
@@ -205,7 +203,7 @@ class MetricStore:
                 """,
                 (step, now),
             )
-        return len(payload) - (0 if "global_step" in metrics else 1)
+        return len(payload)
 
     def enqueue_event(
         self,
@@ -218,8 +216,6 @@ class MetricStore:
         created_at: float | None = None,
     ) -> str:
         normalized = dict(payload)
-        if step is not None:
-            normalized.setdefault("global_step", step)
         identity = event_id or self._event_id(
             source=source,
             step=step,

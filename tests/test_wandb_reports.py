@@ -13,7 +13,6 @@ from rlab.config_validation import load_goal_contract
 from rlab.metric_names import validate_metric_name
 from rlab.recipe_documents import compose_train_document, goal_contract_sha256
 from rlab.wandb_reports import (
-    LEGACY_PORTFOLIO_TITLE,
     GoalReportSpec,
     PortfolioReportSpec,
     _preflight_existing,
@@ -182,7 +181,7 @@ class WandbReportSyncTests(unittest.TestCase):
         second.title = "manually edited"
         self.assertNotEqual(_structure_sha256(first), _structure_sha256(second))
 
-    def test_preflight_rejects_duplicate_identities_and_adopts_legacy_portfolio(self) -> None:
+    def test_preflight_rejects_duplicate_identities(self) -> None:
         specs = compile_report_specs(ROOT, goal="Level1-1")
         identity = specs[0].identity
         duplicate = [
@@ -191,15 +190,6 @@ class WandbReportSyncTests(unittest.TestCase):
         ]
         with self.assertRaisesRegex(ValueError, "duplicate"):
             _preflight_existing(specs, duplicate)
-
-        legacy = SimpleNamespace(
-            description="",
-            display_name=LEGACY_PORTFOLIO_TITLE,
-            url="https://legacy",
-        )
-        existing = _preflight_existing(specs, [legacy])
-        portfolio = next(item for item in specs if isinstance(item, PortfolioReportSpec))
-        self.assertIs(existing[portfolio.identity], legacy)
 
     def test_existing_report_is_replaced_from_source(self) -> None:
         desired = build_wandb_report(

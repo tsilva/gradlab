@@ -19,6 +19,3 @@ Current research state:
 - `recipes/`: active checked-in training recipes and presets.
 - `benchmarks/`: reproducible benchmark profiles and supporting documentation.
 - `scripts/`: active experiment utilities used by benchmarks and tooling.
-
-Historical goal reports, decisions, old recipe fragments, and the former `history/` tree
-live under repo-root `.deprecated/` for local reference only.

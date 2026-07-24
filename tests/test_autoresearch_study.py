@@ -625,7 +625,7 @@ class AutoresearchStudyTests(unittest.TestCase):
             state="finished",
             scan_history=lambda **_kwargs: [
                 {
-                "global_step": 50_176,
+                "train/global_step": 50_176,
                 "train/outcome/success/from/A/count": 2,
                 "train/outcome/success/from/B/count": 0,
                 "train/outcome/success/window_100/rate/min": 0.91,

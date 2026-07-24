@@ -431,7 +431,6 @@ def validate_and_normalize_train_config(
 ) -> dict[str, Any]:
     """Validate one flat train config and normalize its structured rule fields."""
 
-    from rlab.checkpoint_eval_config import normalize_checkpoint_eval_stages
     from rlab.early_stop import normalize_early_stop_config
     from rlab.snapshot_curriculum import normalize_snapshot_curriculum_config
 
@@ -445,23 +444,10 @@ def validate_and_normalize_train_config(
     if normalized.get("checkpoint_eval_backend") == "none":
         if normalized.get("early_stop") is not None:
             raise ValueError(f"{label}.early_stop must be null when checkpoint eval is disabled")
-        if normalized.get("checkpoint_eval_stages"):
-            raise ValueError(
-                f"{label}.checkpoint_eval_stages must be empty when checkpoint eval is disabled"
-            )
     if normalized.get("early_stop") is not None:
         normalized["early_stop"] = normalize_early_stop_config(
             normalized["early_stop"], label=f"{label}.early_stop"
         )
-    if normalized.get("checkpoint_eval_stages") is not None:
-        if not (
-            normalized.get("checkpoint_eval_backend") == "none"
-            and normalized.get("checkpoint_eval_stages") == []
-        ):
-            normalized["checkpoint_eval_stages"] = normalize_checkpoint_eval_stages(
-                normalized["checkpoint_eval_stages"],
-                label=f"{label}.checkpoint_eval_stages",
-            )
     if normalized.get("checkpoint_eval_acceptance") is not None:
         normalized["checkpoint_eval_acceptance"] = normalize_early_stop_config(
             normalized["checkpoint_eval_acceptance"],
@@ -474,15 +460,9 @@ def validate_and_normalize_train_config(
             label=f"{label}.snapshot_curriculum",
             n_envs=int(n_envs) if n_envs is not None else None,
         )
-        if int(normalized.get("metrics_schema_version", METRICS_SCHEMA_VERSION)) < 6:
-            raise ValueError(f"{label}.snapshot_curriculum requires metrics_schema_version >= 6")
     if normalized.get("stop_on_acceptance"):
         if normalized.get("early_stop") is not None:
             raise ValueError(f"{label}.early_stop is incompatible with stop_on_acceptance")
-        if normalized.get("checkpoint_eval_stages"):
-            raise ValueError(
-                f"{label}.checkpoint_eval_stages is incompatible with stop_on_acceptance"
-            )
         if not normalized.get("checkpoint_eval_acceptance"):
             raise ValueError(
                 f"{label}.checkpoint_eval_acceptance is required when stop_on_acceptance is true"
@@ -741,16 +721,6 @@ TRAIN_CONFIG_FIELDS: tuple[TrainConfigField, ...] = (
         help="Vector env count for checkpoint eval.",
     ),
     TrainConfigField(
-        "checkpoint_eval_stages",
-        "--checkpoint-eval-stages",
-        type_name="json",
-        default=None,
-        serialize="json",
-        owner="goal_objective",
-        source_section="goal_train",
-        help="JSON list of cheap checkpoint eval stages for async candidate-stop screening.",
-    ),
-    TrainConfigField(
         "checkpoint_eval_acceptance",
         "--checkpoint-eval-acceptance",
         type_name="json",
@@ -864,10 +834,10 @@ TRAIN_CONFIG_FIELDS: tuple[TrainConfigField, ...] = (
         "--metrics-schema-version",
         type_name="int",
         default=METRICS_SCHEMA_VERSION,
-        validation_min=4,
+        validation_min=METRICS_SCHEMA_VERSION,
         validation_max=METRICS_SCHEMA_VERSION,
         cli_exposed=False,
-        help="Run-owned telemetry schema used by validation and publication compatibility paths.",
+        help="Run-owned telemetry schema used by validation and publication.",
     ),
     TrainConfigField(
         "wandb",

@@ -47,7 +47,6 @@ def test_checked_in_modal_contract_is_cold_and_cost_bounded() -> None:
     assert config.buffer_containers == 0
     assert config.max_containers == 10
     assert config.max_attempts == 2
-    assert config.alert_per_run_usd == 5
 
 
 def test_modal_app_name_is_immutable_per_source() -> None:

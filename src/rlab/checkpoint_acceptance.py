@@ -316,7 +316,7 @@ def build_checkpoint_eval_contract(
             "fail_fast": "first_failed_episode",
             "complete_metrics_prefix": "eval/full",
             "partial_rejection_metrics": False,
-            "aggregate_validation": "fleet-recomputed-v1",
+            "aggregate_validation": "supervisor-recomputed-v1",
         },
         "asset": dict(asset) if isinstance(asset, Mapping) else None,
     }

@@ -77,10 +77,7 @@ def _start_wandb(args, *, run_dir: str, config):
         tags.append(family_tag)
     args.wandb_tags = ",".join(tags)
     wandb_config: dict[str, Any] = {**vars(args), **env_config_metadata(config)}
-    wandb_config["metrics_schema_version"] = int(
-        getattr(args, "metrics_schema_version", METRICS_SCHEMA_VERSION)
-        or METRICS_SCHEMA_VERSION
-    )
+    wandb_config["metrics_schema_version"] = METRICS_SCHEMA_VERSION
     training = training_metadata(
         config,
         rom_asset_manifest=getattr(args, "rom_asset_manifest", None),
@@ -196,21 +193,18 @@ class WandbProjector:
             raise errors[0]
 
 
-def _publish_frame(run, row: Mapping[str, Any], *, args) -> None:
+def _publish_frame(run, row: Mapping[str, Any]) -> None:
     if run is None:
         raise RuntimeError("W&B run is unavailable")
     payload = json.loads(str(row["payload_json"]))
     kind = str(row["kind"])
     event_seq = int(row["id"])
     event_id = str(row["event_id"])
-    step = int(row["step"] or payload.get("global_step") or 0)
+    step = int(row["step"] or 0)
     source = str(row.get("source") or "")
 
     if kind == "history":
-        validate_metric_payload(
-            payload,
-            schema_version=int(getattr(args, "metrics_schema_version", 6) or 6),
-        )
+        validate_metric_payload(payload)
         payload["orchestration/event_seq"] = event_seq
         payload["orchestration/event_id"] = event_id
         if source.startswith("eval"):
@@ -228,17 +222,13 @@ def _publish_frame(run, row: Mapping[str, Any], *, args) -> None:
         import wandb
 
         converted: dict[str, object] = {
-            "global_step": payload["global_step"],
             "train/global_step": step,
             "orchestration/event_seq": event_seq,
             "orchestration/event_id": event_id,
         }
         for name, values in payload.get("histograms", {}).items():
             converted[str(name)] = wandb.Histogram(values)
-        validate_metric_payload(
-            converted,
-            schema_version=int(getattr(args, "metrics_schema_version", 6) or 6),
-        )
+        validate_metric_payload(converted)
         run.log(converted, step=event_seq)
         return
 
@@ -250,7 +240,6 @@ def _publish_frame(run, row: Mapping[str, Any], *, args) -> None:
             raise ValueError("eval_by_start frame must contain rows")
         run.log(
             {
-                "global_step": step,
                 "eval/checkpoint_step": step,
                 "orchestration/event_seq": event_seq,
                 "orchestration/event_id": event_id,
@@ -282,18 +271,15 @@ def publish_pending_frames(
     store: MetricStore,
     run,
     *,
-    args,
-    config,
     limit: int,
 ) -> int:
-    del config
     published = 0
     for row in store.pending_metric_frames(limit=limit):
         frame_id = int(row["id"])
         if not store.claim_metric_frame(frame_id):
             continue
         try:
-            _publish_frame(run, row, args=args)
+            _publish_frame(run, row)
         except Exception as exc:
             store.mark_metric_frame_failed(frame_id, repr(exc))
             print(f"W&B frame publish failed id={frame_id}: {exc}", flush=True)

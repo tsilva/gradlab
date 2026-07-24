@@ -58,12 +58,6 @@ class ModalEvalConfig:
     environment_name: str
     app_name_prefix: str
     function_name: str
-    cleanup_enabled: bool
-    cleanup_interval_seconds: int
-    cleanup_grace_seconds: int
-    cleanup_max_stops_per_pass: int
-    hard_max_active: int
-    alert_per_run_usd: float
     cpu: float
     memory_mib: int
     min_containers: int
@@ -72,61 +66,32 @@ class ModalEvalConfig:
     single_use_containers: bool
     scaledown_window_seconds: int
     startup_timeout_seconds: int
-    screen_timeout_seconds: int
-    confirm_timeout_seconds: int
-    promotion_timeout_seconds: int
+    worker_timeout_seconds: int
     acceptance_timeout_seconds: int
     child_margin_seconds: int
     expiry_margin_seconds: int
-    estimated_hourly_usd: float
     max_attempts: int
-
-    def timeout_for(self, purpose: str, stage_index: int) -> int:
-        if purpose == "acceptance":
-            return self.acceptance_timeout_seconds
-        if purpose == "promotion":
-            return self.promotion_timeout_seconds
-        if stage_index > 0:
-            return self.confirm_timeout_seconds
-        return self.screen_timeout_seconds
 
 def load_modal_eval_config(path: Path = DEFAULT_MODAL_EVAL_CONFIG) -> ModalEvalConfig:
     document = load_mapping_document(path, label=str(path))
     allowed = {
         "enabled",
         "deployment",
-        "cleanup",
-        "limits",
         "resources",
         "timeouts",
-        "cost",
         "protocol",
     }
     unknown = sorted(set(document) - allowed)
     if unknown:
         raise ValueError(f"{path} has unknown field(s): {', '.join(unknown)}")
     deployment = _mapping(document.get("deployment"), label="deployment")
-    cleanup = _mapping(document.get("cleanup"), label="cleanup")
-    limits = _mapping(document.get("limits"), label="limits")
     resources = _mapping(document.get("resources"), label="resources")
     timeouts = _mapping(document.get("timeouts"), label="timeouts")
-    cost = _mapping(document.get("cost"), label="cost")
     protocol = _mapping(document.get("protocol"), label="protocol")
     sections = {
         "deployment": (
             deployment,
             {"environment_name", "app_name_prefix", "function_name"},
-        ),
-        "cleanup": (
-            cleanup,
-            {"enabled", "interval_seconds", "grace_seconds", "max_stops_per_pass"},
-        ),
-        "limits": (
-            limits,
-            {
-                "hard_max_active",
-                "alert_per_run_usd",
-            },
         ),
         "resources": (
             resources,
@@ -144,15 +109,12 @@ def load_modal_eval_config(path: Path = DEFAULT_MODAL_EVAL_CONFIG) -> ModalEvalC
         "timeouts": (
             timeouts,
             {
-                "screen_seconds",
-                "confirm_seconds",
-                "promotion_seconds",
+                "worker_seconds",
                 "acceptance_seconds",
                 "child_margin_seconds",
                 "expiry_margin_seconds",
             },
         ),
-        "cost": (cost, {"estimated_hourly_usd"}),
         "protocol": (protocol, {"max_attempts"}),
     }
     for section_name, (section, section_allowed) in sections.items():
@@ -161,10 +123,7 @@ def load_modal_eval_config(path: Path = DEFAULT_MODAL_EVAL_CONFIG) -> ModalEvalC
             raise ValueError(
                 f"{path} {section_name} has unknown field(s): {', '.join(section_unknown)}"
             )
-    hard_cap = _positive_int(limits.get("hard_max_active"), label="limits.hard_max_active")
     modal_cap = _positive_int(resources.get("max_containers"), label="resources.max_containers")
-    if hard_cap != modal_cap:
-        raise ValueError("limits.hard_max_active must equal resources.max_containers")
     max_attempts = _positive_int(protocol.get("max_attempts"), label="protocol.max_attempts")
     if max_attempts > 2:
         raise ValueError("protocol.max_attempts must not exceed 2")
@@ -178,20 +137,6 @@ def load_modal_eval_config(path: Path = DEFAULT_MODAL_EVAL_CONFIG) -> ModalEvalC
         environment_name=environment_name,
         app_name_prefix=prefix,
         function_name=function_name,
-        cleanup_enabled=_bool(cleanup.get("enabled", False), label="cleanup.enabled"),
-        cleanup_interval_seconds=_positive_int(
-            cleanup.get("interval_seconds"), label="cleanup.interval_seconds"
-        ),
-        cleanup_grace_seconds=_positive_int(
-            cleanup.get("grace_seconds"), label="cleanup.grace_seconds"
-        ),
-        cleanup_max_stops_per_pass=_positive_int(
-            cleanup.get("max_stops_per_pass"), label="cleanup.max_stops_per_pass"
-        ),
-        hard_max_active=hard_cap,
-        alert_per_run_usd=_positive_float(
-            limits.get("alert_per_run_usd"), label="limits.alert_per_run_usd"
-        ),
         cpu=_positive_float(resources.get("cpu"), label="resources.cpu"),
         memory_mib=_positive_int(resources.get("memory_mib"), label="resources.memory_mib"),
         min_containers=_nonnegative_int(
@@ -212,17 +157,11 @@ def load_modal_eval_config(path: Path = DEFAULT_MODAL_EVAL_CONFIG) -> ModalEvalC
         startup_timeout_seconds=_positive_int(
             resources.get("startup_timeout_seconds"), label="resources.startup_timeout_seconds"
         ),
-        screen_timeout_seconds=_positive_int(
-            timeouts.get("screen_seconds"), label="timeouts.screen_seconds"
-        ),
-        confirm_timeout_seconds=_positive_int(
-            timeouts.get("confirm_seconds"), label="timeouts.confirm_seconds"
-        ),
-        promotion_timeout_seconds=_positive_int(
-            timeouts.get("promotion_seconds"), label="timeouts.promotion_seconds"
+        worker_timeout_seconds=_positive_int(
+            timeouts.get("worker_seconds"), label="timeouts.worker_seconds"
         ),
         acceptance_timeout_seconds=_positive_int(
-            timeouts.get("acceptance_seconds", timeouts.get("promotion_seconds")),
+            timeouts.get("acceptance_seconds"),
             label="timeouts.acceptance_seconds",
         ),
         child_margin_seconds=_positive_int(
@@ -231,15 +170,10 @@ def load_modal_eval_config(path: Path = DEFAULT_MODAL_EVAL_CONFIG) -> ModalEvalC
         expiry_margin_seconds=_positive_int(
             timeouts.get("expiry_margin_seconds"), label="timeouts.expiry_margin_seconds"
         ),
-        estimated_hourly_usd=_positive_float(
-            cost.get("estimated_hourly_usd"), label="cost.estimated_hourly_usd"
-        ),
         max_attempts=max_attempts,
     )
     if result.child_margin_seconds >= min(
-        result.screen_timeout_seconds,
-        result.confirm_timeout_seconds,
-        result.promotion_timeout_seconds,
+        result.worker_timeout_seconds,
         result.acceptance_timeout_seconds,
     ):
         raise ValueError("timeouts.child_margin_seconds must be smaller than every eval timeout")

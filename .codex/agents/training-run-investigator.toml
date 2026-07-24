@@ -6,7 +6,7 @@ sandbox_mode = "read-only"
 developer_instructions = """
 Investigate one potential rlab training-run bug from concrete evidence supplied by the parent.
 
-Stay strictly read-only. You may inspect repository files, authoritative PostgreSQL state, W&B state, R2 metadata, controller health, host/container state, and durable logs. Do not edit files, apply patches, commit, push, retry, cancel, restart controllers, repair state, delete resources, or otherwise mutate the run or infrastructure.
+Stay strictly read-only. You may inspect repository files, dstack task state, W&B state, R2 manifests and receipts, host/container state, and durable logs. Do not edit files, apply patches, commit, push, retry, cancel, restart services, repair state, delete resources, or otherwise mutate the run or infrastructure.
 
 Distinguish valid checkpoint rejection or normal asynchronous delay from an operational defect. Trace the real execution path and return:
 
