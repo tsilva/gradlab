@@ -233,13 +233,17 @@ def _task_request(manifest: RunManifest, *, manifest_uri: str) -> TaskRequest:
         image=manifest.image_digest,
         manifest_uri=manifest_uri,
         compute=compute,
+        plain_env=(
+            {"MODAL_ENVIRONMENT": str(manifest.modal["environment_name"])}
+            if bool(manifest.modal["enabled"])
+            else {}
+        ),
         secret_env=(
             *COMMON_SECRET_ENV,
             *(
                 (
                     "MODAL_TOKEN_ID",
                     "MODAL_TOKEN_SECRET",
-                    f"MODAL_ENVIRONMENT={manifest.modal['environment_name']}",
                 )
                 if bool(manifest.modal["enabled"])
                 else ()

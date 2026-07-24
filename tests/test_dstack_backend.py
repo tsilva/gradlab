@@ -37,6 +37,7 @@ class DstackBackendTests(unittest.TestCase):
             "image": "docker:registry.example/rlab@sha256:" + "a" * 64,
             "manifest_uri": "s3://control/runs/manifest.json",
             "compute": self.compute(),
+            "plain_env": {"MODAL_ENVIRONMENT": "rlab-eval"},
             "secret_env": [
                 "RLAB_CONTROL_R2_ACCESS_KEY_ID",
                 "RLAB_CONTROL_R2_SECRET_ACCESS_KEY",
@@ -66,10 +67,13 @@ class DstackBackendTests(unittest.TestCase):
             config["env"],
         )
         self.assertNotIn("RLAB_CONTROL_R2_ACCESS_KEY_ID", config["env"])
+        self.assertIn("MODAL_ENVIRONMENT=rlab-eval", config["env"])
 
     def test_task_rejects_inline_secret_values(self) -> None:
         with self.assertRaisesRegex(ValueError, "names only"):
             self.task(secret_env=["WANDB_API_KEY=inline-value"]).validate()
+        with self.assertRaisesRegex(ValueError, "must use secret_env"):
+            self.task(plain_env={"WANDB_API_KEY": "inline-value"}).validate()
 
     def test_spot_requires_both_price_and_total_cost(self) -> None:
         with self.assertRaisesRegex(ValueError, "requires --max-price"):
