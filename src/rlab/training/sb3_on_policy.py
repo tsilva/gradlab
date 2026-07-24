@@ -219,7 +219,11 @@ def run_sb3_on_policy(
     from rlab.metric_store import metric_store_path
     from rlab.policy_bundle import write_canonical_json
     from rlab.schedules import EntropyCoefficientScheduleHelper
-    from rlab.training.sb3_helpers import GracefulStopHelper, Sb3HumanOutputFormatHelper
+    from rlab.training.sb3_helpers import (
+        GracefulStopHelper,
+        Sb3HumanOutputFormatHelper,
+        install_on_policy_safe_boundary_stop,
+    )
 
     args = context.args
     config = context.environment
@@ -256,11 +260,16 @@ def run_sb3_on_policy(
         print(f"Using torch device: {device}", flush=True)
         model = model_factory(context, env, config, device)
 
+        graceful_stop = GracefulStopHelper(
+            context.stop_flag,
+            marker_path=context.run_dir / "learner_stop_observed.json",
+        )
+        install_on_policy_safe_boundary_stop(
+            model,
+            graceful_stop=graceful_stop,
+        )
         components: list[Any] = [
-            GracefulStopHelper(
-                context.stop_flag,
-                marker_path=context.run_dir / "learner_stop_observed.json",
-            ),
+            graceful_stop,
             Sb3HumanOutputFormatHelper(),
             ThroughputHelper(
                 metric_store_path=store_path,
