@@ -15,6 +15,14 @@ Secrets are host-owned and never checked in:
 - `/etc/rlab/dstack/server.env` contains `DSTACK_SERVER_ADMIN_TOKEN`.
 - `/var/lib/rlab/dstack/config.yml` contains dstack's AES-256-GCM encryption key.
 - the local client receives `DSTACK_TOKEN` from the operator's private environment.
+- `rlab experiment launch` synchronizes workload credentials into encrypted,
+  project-scoped dstack secrets and submits only `${{ secrets.NAME }}`
+  references. It never embeds credential values in the dstack run
+  configuration.
+
+Do not use raw `dstack ps --json` as an operator-facing status interface.
+Use `rlab experiment status` or `follow`, which return a deliberately small
+allowlist of dstack fields plus the R2 semantic state.
 
 The B3 fleet deliberately has one unsplit host (`blocks: 1`). A task therefore
 owns the single GPU rather than recreating the former six-container oversubscription.
