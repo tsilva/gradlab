@@ -169,6 +169,23 @@ class RunSupervisorTests(unittest.TestCase):
         ):
             supervisor.validate_runtime()
 
+    def test_startup_failure_creates_resumable_terminal_receipt(self) -> None:
+        supervisor = self.supervisor()
+        with patch.object(
+            supervisor,
+            "validate_runtime",
+            side_effect=RuntimeError("invalid runtime"),
+        ):
+            self.assertEqual(supervisor.run(), 1)
+
+        receipt = self.authority.control.get_json(
+            f"runs/{self.run_id}/attempts/{self.manifest.attempt_id}/terminal.json"
+        )
+        self.assertEqual(receipt["state"], "resumable_failure")
+        self.assertEqual(receipt["stop_reason"], "supervisor_startup_failure")
+        self.assertEqual(receipt["drain"]["phase"], "startup")
+        self.assertIn("invalid runtime", receipt["drain"]["failure"])
+
         with (
             patch.dict("os.environ", {"RLAB_ORCHESTRATOR": "dstack"}),
             patch(
