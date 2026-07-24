@@ -284,7 +284,6 @@ def run_sb3_on_policy(
                     isinstance(config.task.get("termination"), Mapping)
                     and config.task["termination"].get("success")
                 ),
-                metrics_schema_version=int(args.metrics_schema_version),
             ),
         ]
         if getattr(args, "snapshot_curriculum", None) is not None:

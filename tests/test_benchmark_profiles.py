@@ -229,7 +229,7 @@ required_metrics: [train/throughput/not_real]
         train_config = json.loads(command.stdin)
         self.assertEqual(train_config["training_backend"]["id"], "sb3.ppo")
         self.assertEqual(train_config["checkpoint_eval_backend"], "none")
-        self.assertEqual(train_config["checkpoint_eval_stages"], [])
+        self.assertNotIn("checkpoint_eval_stages", train_config)
         self.assertIsNone(train_config["early_stop"])
         self.assertEqual(train_config["post_train_eval_episodes"], 0)
         self.assertFalse(train_config["wandb"])

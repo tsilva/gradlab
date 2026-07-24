@@ -995,7 +995,6 @@ class RuntimeMetricsHelper(CallbackHelper):
         active_reward_signals: Sequence[str] = (),
         configured_starts: Sequence[str] = (),
         track_success: bool = False,
-        metrics_schema_version: int = 6,
     ) -> None:
         super().__init__()
         self.reward_stats = _RewardStatsAccumulator(
@@ -1007,7 +1006,6 @@ class RuntimeMetricsHelper(CallbackHelper):
             _SuccessMetricsReducer(configured_starts=configured_starts) if track_success else None
         )
         self.pending_metrics: dict[str, int | float] = {}
-        self.metrics_schema_version = int(metrics_schema_version)
         self.target_returns: deque[float] = deque(maxlen=100)
 
     def _on_records(self, records: Iterable[Any]) -> bool:
@@ -1021,8 +1019,7 @@ class RuntimeMetricsHelper(CallbackHelper):
                 )
                 continue
             if (
-                self.metrics_schema_version >= 6
-                and hasattr(record, "episode_return")
+                hasattr(record, "episode_return")
                 and str(getattr(record, "start_origin", "target")) == "target"
             ):
                 self.target_returns.append(float(record.episode_return))

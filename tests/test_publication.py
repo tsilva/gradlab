@@ -37,7 +37,6 @@ from rlab.publication import (
     publication_source_from_model_metadata,
     release_artifact_records,
     render_model_card,
-    upgrade_legacy_model_metadata_for_publication,
     validate_release_bundle,
 )
 
@@ -273,29 +272,6 @@ def test_preprocessing_contract_reads_provider_rgb_and_stack_arguments() -> None
     assert contract["obs_grayscale"] is False
     assert contract["obs_resize"] == [96, 96]
     assert contract["frame_stack"] == 2
-
-
-def test_legacy_metadata_upgrade_requires_explicit_missing_facts() -> None:
-    legacy = model_metadata()
-    legacy.pop("algorithm_id")
-    legacy.pop("model_class")
-    training = legacy["training_metadata"]
-    training["preprocessing"].pop("obs_crop_mode")
-    training["environment"] = {
-        "env_id": "supermariobrosnes-turbo:SuperMarioBros-Nes-v0",
-        "action": {"action_set": "basic"},
-    }
-
-    upgraded = upgrade_legacy_model_metadata_for_publication(
-        legacy,
-        algorithm_id="ppo",
-        model_class="stable_baselines3.ppo.ppo.PPO",
-        crop_mode="remove",
-    )
-    identity = publication_identity_from_model_metadata("Level1-1", upgraded)
-
-    assert identity.policy_variant == "gray84-hudcrop-stack4-basic"
-    assert identity.algorithm == "ppo"
 
 
 def test_publication_evaluation_requires_stochastic_consistent_by_start() -> None:

@@ -62,7 +62,6 @@ def checkpoint_leader(
         success_rate_mean=rank_score[0],
         progress_max=None,
         return_mean=1.0,
-        steps_to_goal=None,
         checkpoint_step=1,
         artifact_ref="model:v1",
         eval_source="acceptance",
@@ -79,13 +78,13 @@ class WandbLeaderRewardShapeTests(unittest.TestCase):
                     "recipe_slug": "ppo",
                     "selection_rank": [
                         "max(train/episode/return/shaped/mean)",
-                        "min(global_step)",
+                        "min(train/global_step)",
                     ],
                 },
                 summary={
                     "train/episode/return/shaped/mean": 42.0,
                     "train/outcome/success/window_100/rate/min": 0.1,
-                    "global_step": 1_000_000,
+                    "train/global_step": 1_000_000,
                 },
                 tags=(),
                 id="run",

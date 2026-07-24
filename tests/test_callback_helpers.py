@@ -682,7 +682,8 @@ class ThroughputHelperTests(unittest.TestCase):
             rows = MetricStore(store_path).pending_metric_frames(limit=10)
 
         self.assertEqual(len(rows), 1)
-        self.assertEqual(json.loads(rows[0]["payload_json"])["global_step"], 100)
+        self.assertEqual(rows[0]["step"], 100)
+        self.assertNotIn("global_step", json.loads(rows[0]["payload_json"]))
 
 
 class RolloutDiagnosticsHelperTests(unittest.TestCase):

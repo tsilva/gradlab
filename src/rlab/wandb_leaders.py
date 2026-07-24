@@ -14,32 +14,26 @@ from rlab.metric_names import (
     EVAL_FULL_EPISODE_RETURN_MEAN,
     EVAL_FULL_SUCCESS_RATE_MEAN,
     EVAL_FULL_SUCCESS_RATE_MIN,
-    GLOBAL_STEP,
     LEADER_CHECKPOINT_ARTIFACT_REF,
     LEADER_CHECKPOINT_BEST_RETURN,
     LEADER_CHECKPOINT_EVAL_SOURCE,
     LEADER_CHECKPOINT_OBJECTIVE,
-    LEADER_CHECKPOINT_OBJECTIVE_NAME,
     LEADER_CHECKPOINT_PROGRESS_MAX,
-    LEADER_CHECKPOINT_RANK,
     LEADER_CHECKPOINT_RANK_VALUES,
     LEADER_CHECKPOINT_RETURN_MEAN,
     LEADER_CHECKPOINT_STEP,
-    LEADER_CHECKPOINT_STEPS_TO_GOAL,
     LEADER_CHECKPOINT_SUCCESS_RATE_MEAN,
     LEADER_CHECKPOINT_SUCCESS_RATE_MIN,
-    LEGACY_TRAIN_OUTCOME_SUCCESS_RATE_WINDOW_100_MIN,
-    METRICS_SCHEMA_VERSION,
     TRAIN_EPISODE_RETURN_SHAPED_MEAN,
+    TRAIN_GLOBAL_STEP,
     TRAIN_OUTCOME_SUCCESS_WINDOW_100_RATE_MIN,
 )
-from rlab.ranking import parse_objective_rank, parse_persisted_objective_rank, rank_score
+from rlab.ranking import parse_objective_rank, rank_score
 from rlab.wandb_utils import DEFAULT_WANDB_PROJECT_PATH, load_wandb_env
 
 
 RUN_OBJECTIVE_KEYS = (
     TRAIN_OUTCOME_SUCCESS_WINDOW_100_RATE_MIN,
-    LEGACY_TRAIN_OUTCOME_SUCCESS_RATE_WINDOW_100_MIN,
     TRAIN_EPISODE_RETURN_SHAPED_MEAN,
 )
 RUN_PRIMARY_ORDER = "-created_at"
@@ -48,7 +42,6 @@ CHECKPOINT_SUCCESS_MEAN_KEYS = (LEADER_CHECKPOINT_SUCCESS_RATE_MEAN,)
 CHECKPOINT_OBJECTIVE_KEYS = (LEADER_CHECKPOINT_OBJECTIVE,)
 CHECKPOINT_PROGRESS_KEYS = (LEADER_CHECKPOINT_PROGRESS_MAX,)
 CHECKPOINT_RETURN_KEYS = (LEADER_CHECKPOINT_RETURN_MEAN,)
-CHECKPOINT_STEPS_TO_GOAL_KEYS = (LEADER_CHECKPOINT_STEPS_TO_GOAL,)
 CHECKPOINT_STEP_KEYS = (LEADER_CHECKPOINT_STEP,)
 # API ordering is only a retrieval hint. Goal-specific ranking happens in Python,
 # because the primary objective may be either minimized or maximized.
@@ -105,7 +98,6 @@ class CheckpointLeader:
     success_rate_mean: float | None
     progress_max: float | None
     return_mean: float
-    steps_to_goal: float | None
     checkpoint_step: int | None
     artifact_ref: str
     eval_source: str
@@ -148,14 +140,6 @@ def _optional_int(value: Any) -> int | None:
         return None
 
 
-def _tag_value(tags: Iterable[Any], prefix: str) -> str:
-    for tag in tags:
-        text = str(tag or "")
-        if text.startswith(prefix):
-            return text[len(prefix) :]
-    return ""
-
-
 def _summary_metric_key(metric: str) -> str:
     return f"summary_metrics.{metric}"
 
@@ -176,13 +160,7 @@ def _and_filters(*filters: Mapping[str, Any] | None) -> dict[str, Any]:
 def goal_run_filter(goal: str | None) -> dict[str, Any]:
     if not goal:
         return {}
-    return {
-        "$or": [
-            {"config.goal_slug": goal},
-            {"tags": f"goal_id:{goal}"},
-            {"tags": f"goal:{goal}"},
-        ]
-    }
+    return {"config.goal_slug": goal}
 
 
 def run_objective_filter(objective_keys: Sequence[str]) -> dict[str, Any]:
@@ -214,14 +192,10 @@ def checkpoint_summary_filter() -> dict[str, Any]:
 def run_score(run: Any, *, objective_keys: Sequence[str]) -> RunScore | None:
     config = dict(getattr(run, "config", {}) or {})
     summary = getattr(run, "summary", {}) or {}
-    configured_rank = parse_persisted_objective_rank(config.get("selection_rank"))
+    configured_rank = parse_objective_rank(config.get("selection_rank"))
     configured_primary = (
         configured_rank[0].metric
-        if configured_rank
-        and (
-            configured_rank[0].metric.startswith("train/")
-            or configured_rank[0].metric == GLOBAL_STEP
-        )
+        if configured_rank and configured_rank[0].metric.startswith("train/")
         else ""
     )
     candidate_keys = tuple(
@@ -230,13 +204,8 @@ def run_score(run: Any, *, objective_keys: Sequence[str]) -> RunScore | None:
     objective = _first_float(summary, candidate_keys)
     if objective is None:
         return None
-    tags = tuple(getattr(run, "tags", ()) or ())
-    goal_slug = _first_text(
-        config.get("goal_slug"),
-        _tag_value(tags, "goal_id:"),
-        _tag_value(tags, "goal:"),
-    )
-    recipe_slug = _first_text(config.get("recipe_slug"), getattr(run, "group", ""))
+    goal_slug = _first_text(config.get("goal_slug"))
+    recipe_slug = _first_text(config.get("recipe_slug"))
     if not goal_slug or not recipe_slug:
         return None
     return RunScore(
@@ -245,8 +214,7 @@ def run_score(run: Any, *, objective_keys: Sequence[str]) -> RunScore | None:
         reward_shape=_first_text(config.get("reward_shape")),
         reward_shape_sha256=_first_text(config.get("reward_shape_sha256")),
         effective_goal_contract_sha256=_first_text(
-            config.get("effective_goal_contract_sha256"),
-            config.get("goal_contract_sha256"),
+            config.get("effective_goal_contract_sha256")
         ),
         reward_shape_is_default=bool(config.get("reward_shape_is_default", False)),
         run_id=str(getattr(run, "id", "") or ""),
@@ -254,14 +222,14 @@ def run_score(run: Any, *, objective_keys: Sequence[str]) -> RunScore | None:
         url=str(getattr(run, "url", "") or ""),
         seed=_optional_int(config.get("seed")),
         objective=float(objective),
-        steps=_optional_int(_mapping_value(summary, GLOBAL_STEP)),
+        steps=_optional_int(_mapping_value(summary, TRAIN_GLOBAL_STEP)),
     )
 
 
 def rank_run_leaders(scores: Iterable[RunScore], *, min_seeds: int = 1) -> list[RunLeader]:
     grouped: dict[tuple[str, str, str, str], list[RunScore]] = defaultdict(list)
     for score in scores:
-        shape_identity = score.reward_shape_sha256 or score.reward_shape or "legacy"
+        shape_identity = score.reward_shape_sha256 or score.reward_shape
         grouped[
             (
                 score.goal_slug,
@@ -329,11 +297,9 @@ def checkpoint_leader(run: Any) -> CheckpointLeader | None:
     success = _first_float(summary, CHECKPOINT_SUCCESS_KEYS)
     success_mean = _first_float(summary, CHECKPOINT_SUCCESS_MEAN_KEYS)
     objective = _first_float(summary, CHECKPOINT_OBJECTIVE_KEYS)
-    objective_name = _first_text(_mapping_value(summary, LEADER_CHECKPOINT_OBJECTIVE_NAME))
     progress = _first_float(summary, CHECKPOINT_PROGRESS_KEYS)
     episode_return = _first_float(summary, CHECKPOINT_RETURN_KEYS)
     checkpoint_step = _optional_int(_first_float(summary, CHECKPOINT_STEP_KEYS))
-    steps_to_goal = _first_float(summary, CHECKPOINT_STEPS_TO_GOAL_KEYS)
     artifact_ref = _first_text(
         _mapping_value(summary, LEADER_CHECKPOINT_ARTIFACT_REF),
     )
@@ -341,24 +307,12 @@ def checkpoint_leader(run: Any) -> CheckpointLeader | None:
         return None
     if episode_return is None or not artifact_ref:
         return None
-    tags = tuple(getattr(run, "tags", ()) or ())
-    try:
-        schema_version = int(config.get("metrics_schema_version", METRICS_SCHEMA_VERSION))
-    except TypeError, ValueError:
-        schema_version = 4
-    rank = parse_objective_rank(
-        _mapping_value(summary, LEADER_CHECKPOINT_RANK), schema_version=4
-    )
-    if not rank:
-        rank = parse_objective_rank(config.get("selection_rank"), schema_version=schema_version)
-    if not rank:
-        rank = parse_persisted_objective_rank(config.get("selection_rank"))
+    rank = parse_objective_rank(config.get("selection_rank"))
     rank_metrics: dict[str, Any] = {
         EVAL_FULL_SUCCESS_RATE_MIN: success,
         EVAL_FULL_SUCCESS_RATE_MEAN: success_mean,
         EVAL_FULL_EPISODE_RETURN_MEAN: episode_return,
         EVAL_FULL_EPISODE_RETURN_BEST: _first_float(summary, (LEADER_CHECKPOINT_BEST_RETURN,)),
-        LEADER_CHECKPOINT_STEPS_TO_GOAL: steps_to_goal,
         LEADER_CHECKPOINT_STEP: checkpoint_step,
         "checkpoint_step": checkpoint_step,
     }
@@ -377,29 +331,23 @@ def checkpoint_leader(run: Any) -> CheckpointLeader | None:
     if not rank:
         return None
     return CheckpointLeader(
-        goal_slug=_first_text(
-            config.get("goal_slug"),
-            _tag_value(tags, "goal_id:"),
-            _tag_value(tags, "goal:"),
-        ),
-        recipe_slug=_first_text(config.get("recipe_slug"), getattr(run, "group", "")),
+        goal_slug=_first_text(config.get("goal_slug")),
+        recipe_slug=_first_text(config.get("recipe_slug")),
         reward_shape=_first_text(config.get("reward_shape")),
         reward_shape_sha256=_first_text(config.get("reward_shape_sha256")),
         effective_goal_contract_sha256=_first_text(
-            config.get("effective_goal_contract_sha256"),
-            config.get("goal_contract_sha256"),
+            config.get("effective_goal_contract_sha256")
         ),
         reward_shape_is_default=bool(config.get("reward_shape_is_default", False)),
         run_id=str(getattr(run, "id", "") or ""),
         run_name=str(getattr(run, "name", "") or ""),
         url=str(getattr(run, "url", "") or ""),
         objective=objective,
-        objective_name=objective_name or rank[0].metric,
+        objective_name=rank[0].metric,
         success_rate_min=success,
         success_rate_mean=success_mean,
         progress_max=progress,
         return_mean=episode_return,
-        steps_to_goal=steps_to_goal,
         checkpoint_step=checkpoint_step,
         artifact_ref=artifact_ref,
         eval_source=_first_text(_mapping_value(summary, LEADER_CHECKPOINT_EVAL_SOURCE)),
@@ -410,7 +358,7 @@ def checkpoint_leader(run: Any) -> CheckpointLeader | None:
 def rank_checkpoint_leaders(leaders: Iterable[CheckpointLeader]) -> list[CheckpointLeader]:
     grouped: dict[tuple[str, str, str], list[CheckpointLeader]] = defaultdict(list)
     for leader in leaders:
-        shape_identity = leader.reward_shape_sha256 or leader.reward_shape or "legacy"
+        shape_identity = leader.reward_shape_sha256 or leader.reward_shape
         grouped[(leader.goal_slug, shape_identity, leader.effective_goal_contract_sha256)].append(
             leader
         )
@@ -418,7 +366,7 @@ def rank_checkpoint_leaders(leaders: Iterable[CheckpointLeader]) -> list[Checkpo
         grouped.values(),
         key=lambda rows: (
             not rows[0].reward_shape_is_default,
-            rows[0].reward_shape or "legacy",
+            rows[0].reward_shape,
         ),
     )
     return [
@@ -462,7 +410,7 @@ def print_run_leaders(rows: Sequence[RunLeader]) -> None:
     for row in rows:
         mean_steps = f"{row.mean_steps:.6g}" if row.mean_steps is not None else ""
         print(
-            f"{row.goal_slug}\t{row.recipe_slug}\t{row.reward_shape or 'legacy'}\t{row.seeds}\t"
+            f"{row.goal_slug}\t{row.recipe_slug}\t{row.reward_shape}\t{row.seeds}\t"
             f"{row.worst_seed:.6g}\t{row.mean_seed:.6g}\t{row.best_seed:.6g}\t{mean_steps}"
         )
 
@@ -470,20 +418,19 @@ def print_run_leaders(rows: Sequence[RunLeader]) -> None:
 def print_checkpoint_leaders(rows: Sequence[CheckpointLeader]) -> None:
     print(
         "goal_slug\trecipe_slug\treward_shape\tobjective\tobjective_name\tsuccess_min\t"
-        "success_mean\tsteps_to_goal\treturn\tprogress\tstep\trun\tartifact_ref"
+        "success_mean\treturn\tprogress\tstep\trun\tartifact_ref"
     )
     for row in rows:
-        steps_to_goal = f"{row.steps_to_goal:.6g}" if row.steps_to_goal is not None else ""
         success_rate = f"{row.success_rate_min:.6g}" if row.success_rate_min is not None else ""
         success_rate_mean = (
             f"{row.success_rate_mean:.6g}" if row.success_rate_mean is not None else ""
         )
         progress = f"{row.progress_max:.6g}" if row.progress_max is not None else ""
         print(
-            f"{row.goal_slug}\t{row.recipe_slug}\t{row.reward_shape or 'legacy'}\t"
+            f"{row.goal_slug}\t{row.recipe_slug}\t{row.reward_shape}\t"
             f"{row.objective:.6g}\t"
             f"{row.objective_name}\t{success_rate}\t"
-            f"{success_rate_mean}\t{steps_to_goal}\t{row.return_mean:.6g}\t"
+            f"{success_rate_mean}\t{row.return_mean:.6g}\t"
             f"{progress}\t"
             f"{row.checkpoint_step or ''}\t{row.run_name}\t{row.artifact_ref}"
         )

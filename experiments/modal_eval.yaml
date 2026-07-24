@@ -3,14 +3,6 @@ deployment:
   environment_name: rlab-eval
   app_name_prefix: rlab-eval-v2
   function_name: evaluate_checkpoint
-cleanup:
-  enabled: true
-  interval_seconds: 3600
-  grace_seconds: 86400
-  max_stops_per_pass: 10
-limits:
-  hard_max_active: 10
-  alert_per_run_usd: 5.0
 resources:
   cpu: 8.0
   memory_mib: 4096
@@ -21,13 +13,9 @@ resources:
   scaledown_window_seconds: 60
   startup_timeout_seconds: 120
 timeouts:
-  screen_seconds: 900
-  confirm_seconds: 1800
-  promotion_seconds: 3600
+  worker_seconds: 3600
   acceptance_seconds: 1200
   child_margin_seconds: 60
   expiry_margin_seconds: 900
-cost:
-  estimated_hourly_usd: 0.30
 protocol:
   max_attempts: 2

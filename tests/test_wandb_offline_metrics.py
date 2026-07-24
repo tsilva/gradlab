@@ -3,7 +3,6 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
-from types import SimpleNamespace
 
 import wandb
 
@@ -37,16 +36,8 @@ class WandbOfflineMetricIntegrationTests(unittest.TestCase):
             row = store.pending_metric_frames(limit=1)[0]
             run = FakeRun()
 
-            _publish_frame(
-                run,
-                row,
-                args=SimpleNamespace(metrics_schema_version=6),
-            )
-            _publish_frame(
-                run,
-                row,
-                args=SimpleNamespace(metrics_schema_version=6),
-            )
+            _publish_frame(run, row)
+            _publish_frame(run, row)
 
         self.assertEqual([step for _payload, step in run.calls], [row["id"], row["id"]])
         self.assertEqual(
@@ -93,8 +84,6 @@ class WandbOfflineMetricIntegrationTests(unittest.TestCase):
             published = publish_pending_frames(
                 store,
                 run,
-                args=SimpleNamespace(metrics_schema_version=6),
-                config=None,
                 limit=10,
             )
             publish_promotion_summary(

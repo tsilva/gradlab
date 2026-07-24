@@ -7,7 +7,6 @@ from typing import Any, Mapping
 
 
 METRICS_SCHEMA_VERSION = 6
-GLOBAL_STEP = "global_step"
 TRAIN_GLOBAL_STEP = "train/global_step"
 EVAL_CHECKPOINT_STEP = "eval/checkpoint_step"
 ORCHESTRATION_EVENT_SEQ = "orchestration/event_seq"
@@ -33,7 +32,6 @@ ORCHESTRATION_SCRATCH_USED_FRACTION = "orchestration/scratch/used_fraction"
 TRAIN_EPISODE_RETURN_SHAPED_MEAN = "train/episode/return/shaped/mean"
 TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_MEAN = "train/episode/return/shaped/from/target/mean"
 TRAIN_EPISODE_LENGTH_MEAN = "train/episode/length/mean"
-TRAIN_EPISODE_COUNT = "train/episode/count"
 
 TRAIN_SNAPSHOT_CURRICULUM_ROOT = "train/curriculum/snapshot"
 TRAIN_SNAPSHOT_ARCHIVE_CELL_COUNT = f"{TRAIN_SNAPSHOT_CURRICULUM_ROOT}/archive/cell/count"
@@ -69,9 +67,6 @@ TRAIN_OUTCOME_SUCCESS_CURRENT_RATE_MIN = f"{TRAIN_OUTCOME_SUCCESS_ROOT}/current/
 TRAIN_OUTCOME_SUCCESS_CURRENT_RATE_MEAN = f"{TRAIN_OUTCOME_SUCCESS_ROOT}/current/rate/mean"
 TRAIN_OUTCOME_SUCCESS_WINDOW_100_RATE_MIN = f"{TRAIN_OUTCOME_SUCCESS_ROOT}/window_100/rate/min"
 TRAIN_OUTCOME_SUCCESS_WINDOW_100_RATE_MEAN = f"{TRAIN_OUTCOME_SUCCESS_ROOT}/window_100/rate/mean"
-LEGACY_TRAIN_OUTCOME_SUCCESS_RATE_WINDOW_100_MIN = (
-    f"{TRAIN_OUTCOME_SUCCESS_ROOT}/rate/window_100/min"
-)
 TRAIN_OUTCOME_SUCCESS_START_COVERAGE_RATE = f"{TRAIN_OUTCOME_SUCCESS_ROOT}/start_coverage/rate"
 
 TRAIN_REWARD_ROOT = "train/reward"
@@ -134,7 +129,6 @@ TRAIN_THROUGHPUT_ROOT = "train/throughput"
 TRAIN_THROUGHPUT_LOOP_FPS = f"{TRAIN_THROUGHPUT_ROOT}/loop_fps"
 TRAIN_THROUGHPUT_ROLLOUT_FPS = f"{TRAIN_THROUGHPUT_ROOT}/rollout_fps"
 TRAIN_THROUGHPUT_ENV_STEP_FPS = f"{TRAIN_THROUGHPUT_ROOT}/env_step_fps"
-TRAIN_THROUGHPUT_LOOP_SECONDS = f"{TRAIN_THROUGHPUT_ROOT}/loop_seconds"
 TRAIN_THROUGHPUT_ROLLOUT_SECONDS = f"{TRAIN_THROUGHPUT_ROOT}/rollout_seconds"
 TRAIN_THROUGHPUT_ENV_STEP_SECONDS = f"{TRAIN_THROUGHPUT_ROOT}/env_step_seconds"
 TRAIN_THROUGHPUT_ROLLOUT_OVERHEAD_SECONDS = f"{TRAIN_THROUGHPUT_ROOT}/rollout_overhead_seconds"
@@ -144,8 +138,7 @@ TRAIN_ARTIFACT_SAVE_SECONDS = "train/artifact/save/seconds"
 TRAIN_ARTIFACT_UPLOAD_SECONDS = "train/artifact/upload/seconds"
 
 EVAL_ROOT = "eval"
-EVAL_PROTOCOLS = ("screen", "confirm", "full")
-ACTIVE_EVAL_PROTOCOLS = ("full",)
+EVAL_PROTOCOLS = ("full",)
 EVAL_FULL_ROOT = f"{EVAL_ROOT}/full"
 EVAL_FULL_EPISODE_RETURN_MEAN = f"{EVAL_FULL_ROOT}/episode/return/mean"
 EVAL_FULL_EPISODE_RETURN_STD = f"{EVAL_FULL_ROOT}/episode/return/std"
@@ -161,32 +154,22 @@ EVAL_FULL_CHECKPOINT_STEP = f"{EVAL_FULL_ROOT}/checkpoint/step"
 EVAL_FULL_CHECKPOINT_ARTIFACT = f"{EVAL_FULL_ROOT}/checkpoint/artifact"
 EVAL_FULL_DURATION_SECONDS = f"{EVAL_FULL_ROOT}/duration/seconds"
 EVAL_FULL_SOURCE = f"{EVAL_FULL_ROOT}/source"
-EVAL_SCREEN_PREVIEW = "eval/screen/preview"
 EVAL_ACCEPTANCE_PASS = "eval/acceptance/pass"
 EVAL_ACCEPTANCE_EPISODES_PLANNED = "eval/acceptance/episodes/planned"
 EVAL_ACCEPTANCE_EPISODES_COMPLETED = "eval/acceptance/episodes/completed"
 EVAL_ACCEPTANCE_FAILURE_COUNT = "eval/acceptance/failure/count"
 EVAL_ACCEPTANCE_DURATION_SECONDS = "eval/acceptance/duration/seconds"
 
-CHECKPOINT_EVAL_CANDIDATE_PASS = "eval/confirm/candidate/pass"
-CHECKPOINT_EVAL_CANDIDATE_STAGE_INDEX = "eval/confirm/candidate/stage_index"
-CHECKPOINT_EVAL_CANDIDATE_CHECKPOINT_STEP = "eval/confirm/candidate/checkpoint_step"
-CHECKPOINT_EVAL_CANDIDATE_EPISODES = "eval/confirm/candidate/episodes"
-
 LEADER_CHECKPOINT_SUCCESS_RATE_MIN = "leader/checkpoint/success_rate_min"
 LEADER_CHECKPOINT_SUCCESS_RATE_MEAN = "leader/checkpoint/success_rate_mean"
 LEADER_CHECKPOINT_ACCEPTANCE_PASS = "leader/checkpoint/acceptance_pass"
 LEADER_CHECKPOINT_OBJECTIVE = "leader/checkpoint/objective"
-LEADER_CHECKPOINT_OBJECTIVE_NAME = "leader/checkpoint/objective_name"
 LEADER_CHECKPOINT_RETURN_MEAN = "leader/checkpoint/return_mean"
 LEADER_CHECKPOINT_BEST_RETURN = "leader/checkpoint/best_return"
-LEADER_CHECKPOINT_RANK = "leader/checkpoint/rank"
 LEADER_CHECKPOINT_RANK_VALUES = "leader/checkpoint/rank_values"
 LEADER_CHECKPOINT_PROGRESS_MAX = "leader/checkpoint/progress_max"
 LEADER_CHECKPOINT_STEP = "leader/checkpoint/step"
-LEADER_CHECKPOINT_STEPS_TO_GOAL = "leader/checkpoint/steps_to_goal"
 LEADER_CHECKPOINT_ARTIFACT_REF = "leader/checkpoint/artifact_ref"
-LEADER_CHECKPOINT_LOCAL_PATH = "leader/checkpoint/local_path"
 LEADER_CHECKPOINT_EVAL_SOURCE = "leader/checkpoint/eval_source"
 LEADER_CHECKPOINT_UPDATED_AT = "leader/checkpoint/updated_at"
 
@@ -210,8 +193,7 @@ def _definition(
     return MetricDefinition(name, description, unit, cadence, storage)
 
 
-V5_METRIC_DEFINITIONS = (
-    _definition(GLOBAL_STEP, "Policy environment transitions consumed.", "steps", "frame"),
+SCIENTIFIC_METRIC_DEFINITIONS = (
     _definition(
         TRAIN_EPISODE_RETURN_SHAPED_MEAN,
         "Rolling mean shaped return over the latest 100 genuine completed training episodes "
@@ -594,7 +576,7 @@ V5_METRIC_DEFINITIONS = (
 )
 
 
-V6_ONLY_METRIC_DEFINITIONS = (
+ORCHESTRATED_METRIC_DEFINITIONS = (
     _definition(
         TRAIN_GLOBAL_STEP,
         "Scientific training X-axis: policy environment transitions consumed.",
@@ -782,77 +764,7 @@ V6_ONLY_METRIC_DEFINITIONS = (
     ),
 )
 
-METRIC_DEFINITIONS = (*V5_METRIC_DEFINITIONS, *V6_ONLY_METRIC_DEFINITIONS)
-
-
-V4_ONLY_METRIC_DEFINITIONS = (
-    _definition(TRAIN_EPISODE_COUNT, "Cumulative completed training episodes.", "episodes"),
-    _definition(
-        "train/outcome/success/from/{start}/rate/current",
-        "Cumulative success rate from a start.",
-        "fraction",
-    ),
-    _definition(
-        TRAIN_THROUGHPUT_LOOP_SECONDS,
-        "Wall time from one rollout start to the next rollout start.",
-        "seconds",
-    ),
-    _definition(
-        "eval/{protocol}/outcome/reason/{reason}/count",
-        "Failed evaluation episodes containing a reason.",
-        "episodes",
-        "evaluation",
-    ),
-    _definition(
-        "eval/{protocol}/checkpoint/step", "Evaluated checkpoint step.", "steps", "evaluation"
-    ),
-    _definition(
-        EVAL_SCREEN_PREVIEW,
-        "Historical checkpoint-screen preview; new acceptance jobs do not capture or publish previews.",
-        "html",
-        "historical evaluation",
-        "media",
-    ),
-    *(
-        _definition(
-            f"eval/{protocol}/candidate/pass",
-            "Historical staged checkpoint pass signal.",
-            "boolean",
-            "historical evaluation",
-        )
-        for protocol in ("screen", "confirm")
-    ),
-    *(
-        _definition(
-            f"eval/{protocol}/candidate/stage_index",
-            "Historical staged checkpoint protocol index.",
-            "index",
-            "historical evaluation",
-        )
-        for protocol in ("screen", "confirm")
-    ),
-    _definition(
-        CHECKPOINT_EVAL_CANDIDATE_CHECKPOINT_STEP,
-        "Historical confirmed candidate checkpoint step.",
-        "steps",
-        "historical evaluation",
-    ),
-    _definition(
-        CHECKPOINT_EVAL_CANDIDATE_EPISODES,
-        "Historical confirmed candidate evaluation episodes.",
-        "episodes",
-        "historical evaluation",
-    ),
-    *(
-        _definition(name, "Selected checkpoint summary field.", "summary", "selection", "summary")
-        for name in (
-            LEADER_CHECKPOINT_OBJECTIVE_NAME,
-            LEADER_CHECKPOINT_RANK,
-            LEADER_CHECKPOINT_STEPS_TO_GOAL,
-            LEADER_CHECKPOINT_LOCAL_PATH,
-        )
-    ),
-)
+METRIC_DEFINITIONS = (*SCIENTIFIC_METRIC_DEFINITIONS, *ORCHESTRATED_METRIC_DEFINITIONS)
 
 
 _SAFE_SEGMENT_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
@@ -864,10 +776,6 @@ _PLACEHOLDER_PATTERNS = {
     "component": "[A-Za-z0-9_.-]+",
     "signal": "[A-Za-z0-9_.-]+",
     "progress": "[A-Za-z0-9_.-]+",
-}
-_V4_PLACEHOLDER_PATTERNS = {
-    **_PLACEHOLDER_PATTERNS,
-    "protocol": "(?:screen|confirm|full)",
 }
 
 
@@ -887,56 +795,24 @@ def _definition_pattern(
 _DEFINITION_PATTERNS = tuple(
     (definition, _definition_pattern(definition.name)) for definition in METRIC_DEFINITIONS
 )
-_V5_DEFINITION_PATTERNS = tuple(
-    (definition, _definition_pattern(definition.name)) for definition in V5_METRIC_DEFINITIONS
-)
-_V4_DEFINITION_PATTERNS = tuple(
-    (
-        definition,
-        _definition_pattern(definition.name, placeholders=_V4_PLACEHOLDER_PATTERNS),
-    )
-    for definition in (*V5_METRIC_DEFINITIONS, *V4_ONLY_METRIC_DEFINITIONS)
-)
 
 
-def _supported_schema_version(schema_version: int) -> int:
-    try:
-        version = int(schema_version)
-    except (TypeError, ValueError) as exc:
-        raise ValueError(f"unsupported metrics schema version: {schema_version!r}") from exc
-    if version not in {4, 5, METRICS_SCHEMA_VERSION}:
-        raise ValueError(f"unsupported metrics schema version: {version}")
-    return version
-
-
-def metric_definition(
-    name: str, *, schema_version: int = METRICS_SCHEMA_VERSION
-) -> MetricDefinition | None:
-    version = _supported_schema_version(schema_version)
-    patterns = (
-        _V4_DEFINITION_PATTERNS
-        if version == 4
-        else _V5_DEFINITION_PATTERNS
-        if version == 5
-        else _DEFINITION_PATTERNS
-    )
-    for definition, pattern in patterns:
+def metric_definition(name: str) -> MetricDefinition | None:
+    for definition, pattern in _DEFINITION_PATTERNS:
         if pattern.fullmatch(name):
             return definition
     return None
 
 
-def validate_metric_name(name: str, *, schema_version: int = METRICS_SCHEMA_VERSION) -> str:
-    if metric_definition(name, schema_version=schema_version) is None:
+def validate_metric_name(name: str) -> str:
+    if metric_definition(name) is None:
         raise ValueError(f"unknown metric name: {name}")
     return name
 
 
-def validate_metric_payload(
-    payload: Mapping[str, Any], *, schema_version: int = METRICS_SCHEMA_VERSION
-) -> None:
+def validate_metric_payload(payload: Mapping[str, Any]) -> None:
     for name in payload:
-        validate_metric_name(str(name), schema_version=schema_version)
+        validate_metric_name(str(name))
 
 
 def metric_path_segment(value: object) -> str:
@@ -958,28 +834,11 @@ def stat_metric(prefix: str, stat: str) -> str:
     return validate_metric_name(f"{prefix}/{metric_path_segment(stat)}")
 
 
-def eval_metric(protocol: str, suffix: str, *, schema_version: int = METRICS_SCHEMA_VERSION) -> str:
+def eval_metric(protocol: str, suffix: str) -> str:
     protocol = metric_path_segment(protocol)
-    version = _supported_schema_version(schema_version)
-    protocols = EVAL_PROTOCOLS if version == 4 else ACTIVE_EVAL_PROTOCOLS
-    if protocol not in protocols:
+    if protocol not in EVAL_PROTOCOLS:
         raise ValueError(f"unknown evaluation protocol: {protocol}")
-    return validate_metric_name(
-        f"{EVAL_ROOT}/{protocol}/{suffix.strip('/')}", schema_version=schema_version
-    )
-
-
-def checkpoint_eval_stage_metric(stage_name: str, name: str) -> str:
-    return eval_metric(stage_name, name, schema_version=4)
-
-
-def staged_metric_name(stage_name: str, metric_name: str) -> str:
-    if metric_name == GLOBAL_STEP:
-        return metric_name
-    suffix = metric_name.removeprefix(f"{EVAL_FULL_ROOT}/")
-    if suffix == metric_name:
-        raise ValueError(f"staged evaluation requires an eval/full metric: {metric_name}")
-    return eval_metric(stage_name, suffix, schema_version=4)
+    return validate_metric_name(f"{EVAL_ROOT}/{protocol}/{suffix.strip('/')}")
 
 
 def train_outcome_reason_count_metric(reason: object) -> str:
@@ -1006,13 +865,6 @@ def train_success_attempts_metric(start: object) -> str:
     return train_success_from_metric(start, "attempts")
 
 
-def train_success_current_rate_metric(start: object) -> str:
-    return validate_metric_name(
-        f"{TRAIN_OUTCOME_SUCCESS_ROOT}/from/{metric_value_segment(start)}/rate/current",
-        schema_version=4,
-    )
-
-
 def train_success_window_rate_metric(start: object) -> str:
     return train_success_from_metric(start, "rate/window_100")
 
@@ -1029,55 +881,26 @@ def train_reward_signal_metric(signal: object, stat: str) -> str:
     )
 
 
-def eval_success_from_rate_metric(
-    protocol: str, start: object, *, schema_version: int = METRICS_SCHEMA_VERSION
-) -> str:
-    return eval_metric(
-        protocol,
-        f"outcome/success/from/{metric_value_segment(start)}/rate",
-        schema_version=schema_version,
-    )
+def eval_success_from_rate_metric(protocol: str, start: object) -> str:
+    return eval_metric(protocol, f"outcome/success/from/{metric_value_segment(start)}/rate")
 
 
-def eval_success_rate_metric(
-    protocol: str, stat: str, *, schema_version: int = METRICS_SCHEMA_VERSION
-) -> str:
-    return eval_metric(
-        protocol,
-        f"outcome/success/rate/{metric_path_segment(stat)}",
-        schema_version=schema_version,
-    )
+def eval_success_rate_metric(protocol: str, stat: str) -> str:
+    return eval_metric(protocol, f"outcome/success/rate/{metric_path_segment(stat)}")
 
 
-def eval_reason_count_metric(protocol: str, reason: object) -> str:
-    return eval_metric(
-        protocol,
-        f"outcome/reason/{metric_path_segment(reason)}/count",
-        schema_version=4,
-    )
-
-
-def eval_reason_rate_metric(
-    protocol: str, reason: object, *, schema_version: int = METRICS_SCHEMA_VERSION
-) -> str:
-    return eval_metric(
-        protocol,
-        f"outcome/reason/{metric_path_segment(reason)}/rate",
-        schema_version=schema_version,
-    )
+def eval_reason_rate_metric(protocol: str, reason: object) -> str:
+    return eval_metric(protocol, f"outcome/reason/{metric_path_segment(reason)}/rate")
 
 
 def eval_progress_metric(
     protocol: str,
     progress: object,
     stat: str,
-    *,
-    schema_version: int = METRICS_SCHEMA_VERSION,
 ) -> str:
     return eval_metric(
         protocol,
         f"progress/{metric_path_segment(progress)}/{metric_path_segment(stat)}",
-        schema_version=schema_version,
     )
 
 
@@ -1144,7 +967,7 @@ def canonical_training_scalars(
         elif algorithm_id == "ppo" and (mapped := SB3_PPO_SCALAR_MAP.get(raw_name)) is not None:
             name, multiplier = mapped
             payload[name] = numeric * multiplier
-        elif metric_definition(raw_name) is not None and raw_name != GLOBAL_STEP:
+        elif metric_definition(raw_name) is not None:
             payload[raw_name] = numeric
         elif raw_name in SB3_IGNORED_SCALARS:
             continue

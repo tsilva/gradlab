@@ -352,7 +352,7 @@ def _validate_reward_catalog_source_ownership(sources: Sequence[Path]) -> None:
 
 
 def _reject_active_specs_path(path: Path) -> None:
-    if "specs" in path.parts and ".deprecated" not in path.parts:
+    if "specs" in path.parts:
         raise ValueError(f"{path} is under removed active specs/ layout; use recipes/ instead")
 
 
@@ -449,7 +449,6 @@ def materialize_train_recipe_document(
         if accepts_first_training_success(train_config):
             train_config["checkpoint_eval_backend"] = "none"
             train_config["early_stop"] = None
-            train_config["checkpoint_eval_stages"] = []
     if train_config:
         materialized["train_config"] = train_config
     return materialized
@@ -710,7 +709,6 @@ def prepare_checkpoint_eval_mode(
     config["checkpoint_eval_backend"] = mode
     if mode == "none":
         config["early_stop"] = None
-        config["checkpoint_eval_stages"] = []
         config["stop_on_acceptance"] = False
     document["train_config"] = config
 

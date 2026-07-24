@@ -59,7 +59,7 @@ Rules:
 - Add hidden tags for search/context: reinforcement learning, deep reinforcement learning, AI gameplay, stable-baselines3, Stable Retro, rlab, algorithm, raw game id, human game name, raw level/state id, and human level/state name.
 - Avoid shorteners and redirect domains for YouTube descriptions; they can be visually truncated or treated suspiciously by YouTube.
 - Expect YouTube to visually ellipsize long links in collapsed views even when the actual link is correct and clickable.
-- Include extra eval claims only when the user asks for them or when they are needed for the video description and are backed by the current model card, eval database, W&B artifact metadata, or generated summary files.
+- Include extra eval claims only when the user asks for them or when they are needed for the video description and are backed by the current model card, private-R2 evaluation evidence, W&B metrics, or generated summary files.
 
 ## Upload Command
 

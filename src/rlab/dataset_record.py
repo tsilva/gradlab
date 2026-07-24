@@ -50,11 +50,9 @@ from rlab.dataset_store import (
     validate_tree,
 )
 from rlab.model_sources import (
-    download_artifact_ref_source,
-    download_huggingface_model_source,
+    download_remote_model_source,
     is_huggingface_model_ref,
-    is_wandb_run_ref,
-    model_ref_from_run_path,
+    is_public_checkpoint_manifest_ref,
 )
 from rlab.policy_models import load_policy_model
 from rlab.trusted_inputs import ApprovedModelInput, stage_and_approve_model
@@ -907,24 +905,8 @@ def record_command(args: Any) -> int:
             model_path = Path(source).expanduser()
             source_identity = source
             download_root = dataset_root(args.root) / "model-sources"
-            if is_huggingface_model_ref(source):
-                resolved = download_huggingface_model_source(source, root=download_root)
-                model_path = resolved.model_path
-                source_identity = resolved.artifact_name or source
-            elif is_wandb_run_ref(source):
-                artifact_ref = model_ref_from_run_path(
-                    source,
-                    default_project=None,
-                    kind="checkpoint",
-                    version="latest",
-                )
-                if artifact_ref is None:
-                    raise ValueError(f"could not resolve W&B run model source: {source}")
-                resolved = download_artifact_ref_source(artifact_ref, download_root)
-                model_path = resolved.model_path
-                source_identity = resolved.artifact_name or artifact_ref
-            elif ":" in source and "/" in source and not model_path.exists():
-                resolved = download_artifact_ref_source(source, download_root)
+            if is_huggingface_model_ref(source) or is_public_checkpoint_manifest_ref(source):
+                resolved = download_remote_model_source(source, root=download_root)
                 model_path = resolved.model_path
                 source_identity = resolved.artifact_name or source
             with stage_and_approve_model(model_path, source_identity=source_identity) as approved:

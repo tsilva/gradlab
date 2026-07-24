@@ -95,7 +95,6 @@ def resolve_wandb_namespace(
 
 def configure_wandb_metrics(run):
     if run is not None:
-        run.define_metric("global_step", summary="max")
         run.define_metric("train/global_step", summary="max")
         run.define_metric("eval/checkpoint_step", summary="max")
         run.define_metric("orchestration/event_seq", summary="max")

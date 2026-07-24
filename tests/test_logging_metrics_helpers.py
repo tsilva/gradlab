@@ -92,8 +92,9 @@ class MetricsDocumentationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "metric dimension"):
             metric_names.train_success_count_metric("unsafe start")
 
-    def test_schema_v5_rejects_removed_metrics_that_v4_still_accepts(self) -> None:
+    def test_registry_rejects_retired_metric_names(self) -> None:
         removed = (
+            "global_step",
             "train/episode/count",
             "train/outcome/success/from/Start/rate/current",
             "eval/full/outcome/reason/stalled/count",
@@ -109,18 +110,10 @@ class MetricsDocumentationTests(unittest.TestCase):
             with self.subTest(name=name):
                 with self.assertRaisesRegex(ValueError, "unknown metric"):
                     metric_names.validate_metric_name(name)
-                self.assertEqual(
-                    metric_names.validate_metric_name(name, schema_version=4),
-                    name,
-                )
-                with self.assertRaisesRegex(ValueError, "unknown metric"):
-                    metric_names.validate_metric_name(name, schema_version=5)
         self.assertEqual(
             metric_names.validate_metric_name("eval/acceptance/failure/count"),
             "eval/acceptance/failure/count",
         )
-        with self.assertRaisesRegex(ValueError, "unsupported metrics schema version"):
-            metric_names.validate_metric_name("global_step", schema_version=7)
 
     def test_logger_boundary_rejects_misspelled_rlab_metrics(self) -> None:
         with self.assertRaisesRegex(ValueError, "logger boundary"):
@@ -157,34 +150,31 @@ class MetricsDocumentationTests(unittest.TestCase):
         self.assertEqual(len(names), len(starts) + len(reasons))
         self.assertFalse(any("/reason/" in name and "/from/" in name for name in names))
 
-    def test_schema_v4_eval_outcome_cardinality_stays_bounded(self) -> None:
+    def test_eval_outcome_cardinality_stays_bounded(self) -> None:
         starts = [f"Start-{index}" for index in range(32)]
         reasons = [f"reason-{index}" for index in range(5)]
         names = set()
         for protocol in metric_names.EVAL_PROTOCOLS:
             names.update(
-                metric_names.eval_success_from_rate_metric(protocol, start, schema_version=4)
+                metric_names.eval_success_from_rate_metric(protocol, start)
                 for start in starts
             )
             names.update(
-                metric_names.eval_reason_count_metric(protocol, reason) for reason in reasons
-            )
-            names.update(
-                metric_names.eval_reason_rate_metric(protocol, reason, schema_version=4)
+                metric_names.eval_reason_rate_metric(protocol, reason)
                 for reason in reasons
             )
             names.update(
                 {
-                    metric_names.eval_success_rate_metric(protocol, "min", schema_version=4),
-                    metric_names.eval_success_rate_metric(protocol, "mean", schema_version=4),
+                    metric_names.eval_success_rate_metric(protocol, "min"),
+                    metric_names.eval_success_rate_metric(protocol, "mean"),
                 }
             )
 
-        self.assertEqual(len(names), 132)
-        self.assertLessEqual(len(names), 150)
+        self.assertEqual(len(names), 39)
+        self.assertLessEqual(len(names), 50)
         self.assertFalse(any("/reason/" in name and "/from/" in name for name in names))
 
-    def test_schema_v4_cardinality_margins_and_single_start_lifecycle(self) -> None:
+    def test_cardinality_margins_and_single_start_lifecycle(self) -> None:
         protocols = list(metric_names.EVAL_PROTOCOLS)
         starts = ["Start"]
         reasons = [f"reason-{index}" for index in range(5)]
@@ -214,11 +204,10 @@ class MetricsDocumentationTests(unittest.TestCase):
                 {
                     metric_names.train_success_count_metric("A"),
                     metric_names.train_success_attempts_metric("A"),
-                    metric_names.train_success_current_rate_metric("A"),
                     metric_names.train_success_window_rate_metric("A"),
                 }
             ),
-            4,
+            3,
         )
         self.assertEqual(
             len(

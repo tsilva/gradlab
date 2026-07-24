@@ -156,7 +156,6 @@ def test_jerk_backend_schema_is_strict_and_available() -> None:
         {
             "checkpoint_eval_backend": "none",
             "early_stop": None,
-            "checkpoint_eval_stages": [],
             **backend_config("rlab.jerk", acceptance_mode="first_training_success"),
         }
     )

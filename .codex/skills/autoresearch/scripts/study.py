@@ -23,8 +23,8 @@ from typing import Any, Iterator, Mapping
 from urllib.parse import urlparse
 
 from rlab.metric_names import (
-    GLOBAL_STEP,
     TRAIN_EPISODE_RETURN_SHAPED_MEAN,
+    TRAIN_GLOBAL_STEP,
     TRAIN_OUTCOME_SUCCESS_WINDOW_100_RATE_MIN,
 )
 from rlab.provider_config import provider_num_envs
@@ -1298,7 +1298,7 @@ def fetch_training_evidence(
         raise RuntimeError("W&B run identity does not match the recorded dstack run")
     count_keys = [f"train/outcome/success/from/{start}/count" for start in starts]
     keys = [
-        GLOBAL_STEP,
+        TRAIN_GLOBAL_STEP,
         *count_keys,
         TRAIN_OUTCOME_SUCCESS_WINDOW_100_RATE_MIN,
         TRAIN_EPISODE_RETURN_SHAPED_MEAN,
@@ -1319,7 +1319,10 @@ def fetch_training_evidence(
     }
     all_starts_succeeded = all(value > 0 for value in counts.values())
     rate_rows = [
-        (int(row.get(GLOBAL_STEP) or 0), float(row[TRAIN_OUTCOME_SUCCESS_WINDOW_100_RATE_MIN]))
+        (
+            int(row.get(TRAIN_GLOBAL_STEP) or 0),
+            float(row[TRAIN_OUTCOME_SUCCESS_WINDOW_100_RATE_MIN]),
+        )
         for row in history
         if row.get(TRAIN_OUTCOME_SUCCESS_WINDOW_100_RATE_MIN) is not None
     ]
@@ -1332,7 +1335,10 @@ def fetch_training_evidence(
         ),
         None,
     )
-    observed_max_step = max((int(row.get(GLOBAL_STEP) or 0) for row in history), default=0)
+    observed_max_step = max(
+        (int(row.get(TRAIN_GLOBAL_STEP) or 0) for row in history),
+        default=0,
+    )
     returns = [
         float(row[TRAIN_EPISODE_RETURN_SHAPED_MEAN])
         for row in history

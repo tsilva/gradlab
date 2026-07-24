@@ -33,7 +33,11 @@ def test_frame_publish_failure_is_retryable_and_success_drains_outbox() -> None:
     with tempfile.TemporaryDirectory() as temporary:
         store = MetricStore(Path(temporary) / "rlab.sqlite")
         store.init()
-        store.append_metrics({"global_step": 10}, step=10, source="learner")
+        store.append_metrics(
+            {"train/episode/return/shaped/mean": 10},
+            step=10,
+            source="learner",
+        )
         frame = store.pending_metric_frames()[0]
         assert store.claim_metric_frame(frame["id"])
         store.mark_metric_frame_failed(frame["id"], "offline")
@@ -48,7 +52,11 @@ def test_interrupted_publish_claim_is_recovered() -> None:
     with tempfile.TemporaryDirectory() as temporary:
         store = MetricStore(Path(temporary) / "rlab.sqlite")
         store.init()
-        store.append_metrics({"global_step": 1}, step=1, source="learner")
+        store.append_metrics(
+            {"train/episode/return/shaped/mean": 1},
+            step=1,
+            source="learner",
+        )
         frame_id = store.pending_metric_frames()[0]["id"]
         assert store.claim_metric_frame(frame_id)
         assert store.reset_interrupted_metric_frames() == 1

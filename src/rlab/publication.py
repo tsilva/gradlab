@@ -52,17 +52,6 @@ HUGGINGFACE_RELEASE_FILES = frozenset(
         "replay.mp4",
     }
 )
-LEGACY_HUGGINGFACE_RELEASE_FILES = frozenset(
-    {
-        ".gitattributes",
-        "README.md",
-        "LICENSE",
-        "model.zip",
-        "model_metadata.json",
-        "release_manifest.json",
-        "replay.mp4",
-    }
-)
 HASHED_RELEASE_FILES = HUGGINGFACE_RELEASE_FILES - {"release_manifest.json"}
 GITATTRIBUTES_TEXT = """*.zip filter=lfs diff=lfs merge=lfs -text
 *.mp4 filter=lfs diff=lfs merge=lfs -text
@@ -339,67 +328,6 @@ def publication_identity_from_model_metadata(
     )
 
 
-def upgrade_legacy_model_metadata_for_publication(
-    model_metadata: Mapping[str, Any],
-    *,
-    algorithm_id: str,
-    model_class: str,
-    crop_mode: str,
-) -> dict[str, Any]:
-    """Make an older rlab metadata document explicit enough to derive its identity.
-
-    Legacy metadata did not own algorithm identity, nested its action contract under
-    ``environment.action``, and omitted whether ``obs_crop`` removed or masked pixels.
-    Callers must supply those missing facts from inspected checkpoint/repository and
-    source-history evidence; this helper deliberately does not guess them.
-    """
-
-    result = deepcopy(dict(model_metadata))
-    algorithm = normalize_algorithm_id(algorithm_id)
-    class_name = validate_algorithm_model_class(algorithm, model_class)
-    if crop_mode not in {"mask", "remove"}:
-        raise ValueError("legacy crop_mode must be 'mask' or 'remove'")
-
-    training = _require_mapping(
-        result.get("training_metadata"), label="legacy model metadata training_metadata"
-    )
-    training = deepcopy(dict(training))
-    environment = _require_mapping(
-        training.get("environment"), label="legacy model metadata environment"
-    )
-    environment = deepcopy(dict(environment))
-    preprocessing = _require_mapping(
-        training.get("preprocessing"), label="legacy model metadata preprocessing"
-    )
-    preprocessing = deepcopy(dict(preprocessing))
-
-    if preprocessing.get("obs_crop_mode") not in {None, crop_mode}:
-        raise ValueError(
-            "legacy metadata crop mode conflicts with the explicitly supplied crop mode"
-        )
-    preprocessing["obs_crop_mode"] = crop_mode
-
-    task = environment.get("task")
-    if task is None:
-        legacy_action = environment.get("action")
-        action_set = legacy_action.get("action_set") if isinstance(legacy_action, Mapping) else None
-        if not action_set:
-            env_config = training.get("env_config")
-            action_set = env_config.get("action_set") if isinstance(env_config, Mapping) else None
-        if not action_set:
-            raise ValueError("legacy metadata does not contain an action-set contract")
-        environment["task"] = {"action": {"set": action_set}}
-    else:
-        _require_mapping(task, label="legacy model metadata environment.task")
-
-    training["environment"] = environment
-    training["preprocessing"] = preprocessing
-    result["training_metadata"] = training
-    result["algorithm_id"] = algorithm
-    result["model_class"] = class_name
-    return result
-
-
 def build_model_repo_id(identity: PublicationIdentity) -> str:
     for field, value in asdict(identity).items():
         normalized = normalize_publication_component(value, label=field)
@@ -657,8 +585,6 @@ def _render_model_card_template(context: Mapping[str, Any]) -> str:
 def render_model_card(
     manifest: Mapping[str, Any],
     model_metadata: Mapping[str, Any],
-    *,
-    legacy: bool = False,
 ) -> str:
     repository = _require_mapping(manifest.get("repository"), label="manifest repository")
     release = _require_mapping(manifest.get("release"), label="manifest release")
@@ -696,30 +622,22 @@ def render_model_card(
     run_id = str(source.get("run_id") or "").strip()
     project = str(source.get("wandb_project") or "").strip()
     wandb_url = f"https://wandb.ai/tsilva/{project}/runs/{run_id}" if project and run_id else ""
-    if legacy:
-        model_ref = f"https://huggingface.co/{repo_id}/resolve/legacy-deterministic/model.zip"
-        install = "Follow the current rlab installation instructions in the source repository."
-    else:
-        if not re.fullmatch(r"v[1-9][0-9]*", version):
-            raise ValueError("current model cards require a sequential release version")
-        commit = _required_text(source.get("commit"), label="manifest source.commit")
-        model_ref = f"https://huggingface.co/{repo_id}/resolve/{version}/model.zip"
-        install = "\n".join(
-            (
-                "```bash",
-                "git clone https://github.com/tsilva/rlab",
-                "cd rlab",
-                f"git checkout {commit}",
-                "uv sync --frozen",
-                "```",
-            )
+    if not re.fullmatch(r"v[1-9][0-9]*", version):
+        raise ValueError("model cards require a sequential release version")
+    commit = _required_text(source.get("commit"), label="manifest source.commit")
+    model_ref = f"https://huggingface.co/{repo_id}/resolve/{version}/model.zip"
+    install = "\n".join(
+        (
+            "```bash",
+            "git clone https://github.com/tsilva/rlab",
+            "cd rlab",
+            f"git checkout {commit}",
+            "uv sync --frozen",
+            "```",
         )
-    youtube_value = f"[Watch on YouTube]({youtube_url})" if youtube_url else "Not available"
-    manifest_purpose = (
-        "Legacy release identity and deterministic evaluation evidence"
-        if legacy
-        else "Release identity, evaluation evidence, and artifact hashes"
     )
+    youtube_value = f"[Watch on YouTube]({youtube_url})" if youtube_url else "Not available"
+    manifest_purpose = "Release identity, evaluation evidence, and artifact hashes"
     rows = "\n".join(
         "| {start} | {episodes} | {success_count} | {success_rate} | {return_mean:.3f} |".format(
             start=_markdown_value(row["start_id"]),
@@ -731,13 +649,6 @@ def render_model_card(
         for row in by_start
     )
     status = ""
-    if legacy:
-        status = """
-## Release Status
-
-This repository preserves a legacy release evaluated with deterministic action selection. It is
-not a schema-v1 release and has no `v1` tag. A current release requires new stochastic evaluation.
-"""
     is_jerk = algorithm == "jerk"
     library_name = "rlab" if is_jerk else "stable-baselines3"
     library_tag = "rlab-policy" if is_jerk else "stable-baselines3"
@@ -752,11 +663,8 @@ not a schema-v1 release and has no `v1` tag. A current release requires new stoc
         if is_jerk
         else "Stable-Baselines3 policy checkpoint"
     )
-    run_value = (
-        f"[{_markdown_value(source.get('run_name'))}]({wandb_url})"
-        if wandb_url
-        else _markdown_value(source.get("run_name") or "Legacy run")
-    )
+    run_name = _required_text(source.get("run_name"), label="manifest source.run_name")
+    run_value = f"[{_markdown_value(run_name)}]({wandb_url})" if wandb_url else run_name
     card = _render_model_card_template(
         {
             "library_name": library_name,
@@ -773,7 +681,7 @@ not a schema-v1 release and has no `v1` tag. A current release requires new stoc
             "success_min": _percent(success_min),
             "success_mean": _percent(success_mean),
             "return_mean": f"{return_mean:.3f}",
-            "version": version or "legacy-deterministic",
+            "version": version,
             "youtube_value": youtube_value,
             "install": install,
             "model_ref": model_ref,
@@ -785,13 +693,16 @@ not a schema-v1 release and has no `v1` tag. A current release requires new stoc
             ),
             "action": _markdown_value(json.dumps(action, sort_keys=True, separators=(",", ":"))),
             "run_value": run_value,
-            "recipe": _markdown_value(source.get("recipe") or "legacy"),
-            "seed": _markdown_value(
-                source.get("seed") if source.get("seed") is not None else "legacy"
+            "recipe": _markdown_value(
+                _required_text(source.get("recipe"), label="manifest source.recipe")
             ),
-            "source_commit": _markdown_value(source.get("commit") or "not recorded"),
+            "seed": _required_int(source.get("seed"), label="manifest source.seed"),
+            "source_commit": commit,
             "checkpoint_artifact": _markdown_value(
-                source.get("checkpoint_artifact") or evaluation.get("checkpoint_artifact")
+                _required_text(
+                    source.get("checkpoint_artifact"),
+                    label="manifest source.checkpoint_artifact",
+                )
             ),
             "model_file_description": model_file_description,
             "manifest_purpose": manifest_purpose,

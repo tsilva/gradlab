@@ -395,7 +395,6 @@ def _train_loop_config(
     )
     config = dict(require_mapping(document["train_config"], label="train_config"))
     config["checkpoint_eval_backend"] = "none"
-    config["checkpoint_eval_stages"] = []
     config["early_stop"] = None
     config["post_train_eval_episodes"] = 0
     config.pop("rom_asset_manifest", None)
