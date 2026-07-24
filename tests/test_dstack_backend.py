@@ -60,6 +60,16 @@ class DstackBackendTests(unittest.TestCase):
         self.assertNotIn("max_price", config)
         self.assertEqual(config["volumes"], ["/srv/rlab/roms-ro:/roms"])
         self.assertIn("RLAB_ROM_CACHE_READ_ONLY=1", config["env"])
+        self.assertIn(
+            "RLAB_CONTROL_R2_ACCESS_KEY_ID="
+            "${{ secrets.RLAB_CONTROL_R2_ACCESS_KEY_ID }}",
+            config["env"],
+        )
+        self.assertNotIn("RLAB_CONTROL_R2_ACCESS_KEY_ID", config["env"])
+
+    def test_task_rejects_inline_secret_values(self) -> None:
+        with self.assertRaisesRegex(ValueError, "names only"):
+            self.task(secret_env=["WANDB_API_KEY=inline-value"]).validate()
 
     def test_spot_requires_both_price_and_total_cost(self) -> None:
         with self.assertRaisesRegex(ValueError, "requires --max-price"):
@@ -179,18 +189,29 @@ class DstackBackendTests(unittest.TestCase):
         self.assertEqual(config["blocks"], 1)
         self.assertEqual(config["ssh_config"]["hosts"], ["host.docker.internal"])
 
+    @mock.patch("rlab.dstack_backend.urllib.request.urlopen")
     @mock.patch("rlab.dstack_backend.shutil.which", return_value="/bin/dstack")
     @mock.patch("rlab.dstack_backend.subprocess.run")
-    def test_submit_checks_version_and_sends_yaml_on_stdin(self, run, _which) -> None:
+    def test_submit_checks_version_and_sends_yaml_on_stdin(
+        self,
+        run,
+        _which,
+        urlopen,
+    ) -> None:
         run.side_effect = [
             subprocess.CompletedProcess(["dstack", "-v"], 0, DSTACK_VERSION + "\n", ""),
             subprocess.CompletedProcess(["dstack", "apply"], 0, "submitted\n", ""),
         ]
+        response = mock.MagicMock()
+        response.__enter__.return_value.read.return_value = b"{}"
+        urlopen.return_value = response
         backend = DstackBackend(
             environment={
                 "PATH": "/bin",
                 "DSTACK_SERVER_URL": "http://127.0.0.1:3000",
                 "DSTACK_TOKEN": "secret",
+                "RLAB_CONTROL_R2_ACCESS_KEY_ID": "access-key",
+                "RLAB_CONTROL_R2_SECRET_ACCESS_KEY": "secret-key",
             }
         )
         request = self.task()
@@ -199,6 +220,43 @@ class DstackBackendTests(unittest.TestCase):
         submitted = run.call_args_list[1]
         self.assertIn("on_events:", submitted.kwargs["input"])
         self.assertNotIn("DSTACK_TOKEN", submitted.kwargs["input"])
+
+    @mock.patch("rlab.dstack_backend.urllib.request.urlopen")
+    @mock.patch("rlab.dstack_backend.shutil.which", return_value="/bin/dstack")
+    @mock.patch("rlab.dstack_backend.subprocess.run")
+    def test_sync_project_secrets_uses_authenticated_server_api(
+        self,
+        run,
+        _which,
+        urlopen,
+    ) -> None:
+        run.return_value = subprocess.CompletedProcess(
+            ["dstack", "-v"],
+            0,
+            DSTACK_VERSION + "\n",
+            "",
+        )
+        response = mock.MagicMock()
+        response.__enter__.return_value.read.return_value = b"{}"
+        urlopen.return_value = response
+        backend = DstackBackend(
+            environment={
+                "PATH": "/bin",
+                "DSTACK_SERVER_URL": "http://127.0.0.1:3000",
+                "DSTACK_TOKEN": "admin-token",
+                "WANDB_API_KEY": "credential-value",
+            }
+        )
+
+        backend.sync_project_secrets(["WANDB_API_KEY"])
+
+        request = urlopen.call_args.args[0]
+        self.assertEqual(
+            json.loads(request.data),
+            {"name": "WANDB_API_KEY", "value": "credential-value"},
+        )
+        self.assertEqual(request.headers["Authorization"], "Bearer admin-token")
+        self.assertEqual(request.headers["X-api-version"], DSTACK_VERSION)
 
     @mock.patch("rlab.dstack_backend.subprocess.run")
     def test_status_reads_json(self, run) -> None:

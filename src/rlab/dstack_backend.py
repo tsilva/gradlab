@@ -3,8 +3,11 @@ from __future__ import annotations
 import json
 import math
 import os
+import re
 import shutil
 import subprocess
+import urllib.error
+import urllib.request
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from typing import Any, Literal
@@ -25,6 +28,7 @@ TERMINAL_DSTACK_STATUSES = {
     "terminated",
     "aborted",
 }
+SECRET_ENV_NAME_PATTERN = re.compile(r"[A-Z][A-Z0-9_]*")
 
 
 @dataclass(frozen=True)
@@ -116,6 +120,18 @@ class TaskRequest:
             raise ValueError("cpu must be positive")
         if not self.memory or not self.gpu or not self.disk:
             raise ValueError("memory, gpu, and disk requirements must not be empty")
+        invalid_secret_names = sorted(
+            {
+                str(name)
+                for name in self.secret_env
+                if SECRET_ENV_NAME_PATTERN.fullmatch(str(name)) is None
+            }
+        )
+        if invalid_secret_names:
+            raise ValueError(
+                "secret_env must contain environment-variable names only: "
+                + ", ".join(invalid_secret_names)
+            )
         if self.rom_mount is not None:
             source, separator, destination = self.rom_mount.partition(":")
             if (
@@ -161,7 +177,10 @@ def render_task_config(request: TaskRequest) -> dict[str, Any]:
         "env": [
             f"RLAB_RUN_MANIFEST_URI={request.manifest_uri}",
             "RLAB_ORCHESTRATOR=dstack",
-            *sorted(set(request.secret_env)),
+            *[
+                f"{name}=${{{{ secrets.{name} }}}}"
+                for name in sorted(set(request.secret_env))
+            ],
         ],
         "commands": [
             "python -m rlab.run_supervisor --manifest-uri "
@@ -286,6 +305,42 @@ class DstackBackend:
         if not self.environment.get("DSTACK_TOKEN", "").strip():
             raise RuntimeError("DSTACK_TOKEN must be set outside source control")
 
+    def sync_project_secrets(self, names: Sequence[str]) -> None:
+        self.preflight()
+        server_url = self.environment["DSTACK_SERVER_URL"].rstrip("/")
+        token = self.environment["DSTACK_TOKEN"]
+        for name in sorted(set(names)):
+            if SECRET_ENV_NAME_PATTERN.fullmatch(name) is None:
+                raise ValueError(f"invalid dstack secret environment name: {name}")
+            value = self.environment.get(name)
+            if value is None or not str(value):
+                raise RuntimeError(f"required launch secret is not set: {name}")
+            request = urllib.request.Request(
+                (
+                    f"{server_url}/api/project/{self.project}/"
+                    "secrets/create_or_update"
+                ),
+                data=json.dumps({"name": name, "value": value}).encode(),
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Content-Type": "application/json",
+                    "X-API-VERSION": DSTACK_VERSION,
+                },
+                method="POST",
+            )
+            try:
+                with urllib.request.urlopen(request, timeout=30) as response:
+                    response.read()
+            except urllib.error.HTTPError as exc:
+                raise RuntimeError(
+                    f"failed to synchronize dstack project secret {name}: "
+                    f"HTTP {exc.code}"
+                ) from exc
+            except urllib.error.URLError as exc:
+                raise RuntimeError(
+                    f"failed to synchronize dstack project secret {name}"
+                ) from exc
+
     def select_compute(
         self,
         request: ComputeRequest,
@@ -343,7 +398,7 @@ class DstackBackend:
         return cloud, None
 
     def submit(self, request: TaskRequest) -> DstackTask:
-        self.preflight()
+        self.sync_project_secrets(request.secret_env)
         config = render_task_config(request)
         self._command(
             [

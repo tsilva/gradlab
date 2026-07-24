@@ -32,9 +32,16 @@ a separate finalizer.
 - Persistent state: `/var/lib/rlab/dstack` on B3.
 - API binding: B3 loopback port 3000 only.
 - Client access: SSH tunnel to `http://127.0.0.1:3000`.
-- Secrets: `/etc/rlab/dstack/server.env`, local private environment/Keychain;
-  never source control.
+- Secrets: `/etc/rlab/dstack/server.env`, local private environment/Keychain,
+  and AES-256-GCM-encrypted project-scoped dstack secrets; never source
+  control or inline task environment values.
 - Checked-in operations: `ops/dstack/`.
+
+`rlab experiment launch` refreshes the project secrets from the operator's
+private environment, while the submitted task contains only
+`${{ secrets.NAME }}` references. Operator status must go through
+`rlab experiment status` or `follow`; raw dstack inventory is not a
+user-facing interface.
 
 Example tunnel:
 
