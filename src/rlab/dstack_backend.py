@@ -9,7 +9,7 @@ import subprocess
 import urllib.error
 import urllib.request
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from typing import Any, Literal
 
 import yaml
@@ -29,6 +29,9 @@ TERMINAL_DSTACK_STATUSES = {
     "aborted",
 }
 SECRET_ENV_NAME_PATTERN = re.compile(r"[A-Z][A-Z0-9_]*")
+SENSITIVE_ENV_NAME_PATTERN = re.compile(
+    r"(?:API_KEY|ACCESS_KEY|CREDENTIAL|PASSWORD|SECRET|TOKEN)"
+)
 
 
 @dataclass(frozen=True)
@@ -93,6 +96,7 @@ class TaskRequest:
     manifest_uri: str
     compute: ComputeRequest
     secret_env: Sequence[str]
+    plain_env: Mapping[str, str] = field(default_factory=dict)
     cpu: int = 12
     memory: str = "40GB"
     gpu: str = "1"
@@ -131,6 +135,44 @@ class TaskRequest:
             raise ValueError(
                 "secret_env must contain environment-variable names only: "
                 + ", ".join(invalid_secret_names)
+            )
+        invalid_plain_names = sorted(
+            {
+                str(name)
+                for name in self.plain_env
+                if SECRET_ENV_NAME_PATTERN.fullmatch(str(name)) is None
+            }
+        )
+        if invalid_plain_names:
+            raise ValueError(
+                "plain_env must contain environment-variable names only: "
+                + ", ".join(invalid_plain_names)
+            )
+        sensitive_plain_names = sorted(
+            name
+            for name in self.plain_env
+            if SENSITIVE_ENV_NAME_PATTERN.search(name) is not None
+        )
+        if sensitive_plain_names:
+            raise ValueError(
+                "secret-like environment names must use secret_env: "
+                + ", ".join(sensitive_plain_names)
+            )
+        overlapping_names = sorted(set(self.plain_env) & set(self.secret_env))
+        if overlapping_names:
+            raise ValueError(
+                "environment names cannot be both plain and secret: "
+                + ", ".join(overlapping_names)
+            )
+        invalid_plain_values = sorted(
+            name
+            for name, value in self.plain_env.items()
+            if not str(value) or any(character in str(value) for character in "\r\n\0")
+        )
+        if invalid_plain_values:
+            raise ValueError(
+                "plain_env values must be non-empty single-line text: "
+                + ", ".join(invalid_plain_values)
             )
         if self.rom_mount is not None:
             source, separator, destination = self.rom_mount.partition(":")
@@ -177,6 +219,10 @@ def render_task_config(request: TaskRequest) -> dict[str, Any]:
         "env": [
             f"RLAB_RUN_MANIFEST_URI={request.manifest_uri}",
             "RLAB_ORCHESTRATOR=dstack",
+            *[
+                f"{name}={value}"
+                for name, value in sorted(request.plain_env.items())
+            ],
             *[
                 f"{name}=${{{{ secrets.{name} }}}}"
                 for name in sorted(set(request.secret_env))
