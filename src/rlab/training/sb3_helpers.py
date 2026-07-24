@@ -53,35 +53,97 @@ class GracefulStopHelper(CallbackHelper):
         # any time, so acknowledge it here but let the on-policy rollout finish.
         return True
 
-    def _on_rollout_end(self) -> None:
-        if not self.stop_flag.requested:
+    def acknowledge_safe_boundary(self, *, num_timesteps: int) -> None:
+        if not self.stop_flag.requested or self.logged:
             return
         reason = self.stop_flag.reason or "graceful stop"
-        if not self.logged:
-            print(
-                f"graceful stop requested by {reason}; completing the safe "
-                f"on-policy boundary at num_timesteps={self.num_timesteps}",
-                flush=True,
-            )
-            if self.marker_path is not None:
-                self.marker_path.parent.mkdir(parents=True, exist_ok=True)
-                temporary = self.marker_path.with_suffix(self.marker_path.suffix + ".tmp")
-                temporary.write_text(
-                    json.dumps(
-                        {
-                            "observed_at": datetime.now(UTC).isoformat(),
-                            "reason": reason,
-                            "num_timesteps": int(self.num_timesteps),
-                            "pid": os.getpid(),
-                            "boundary": "on_policy_rollout_end",
-                        },
-                        sort_keys=True,
-                    )
-                    + "\n",
-                    encoding="utf-8",
+        print(
+            f"graceful stop requested by {reason}; stopped at the safe "
+            f"on-policy update boundary at num_timesteps={num_timesteps}",
+            flush=True,
+        )
+        if self.marker_path is not None:
+            self.marker_path.parent.mkdir(parents=True, exist_ok=True)
+            temporary = self.marker_path.with_suffix(self.marker_path.suffix + ".tmp")
+            temporary.write_text(
+                json.dumps(
+                    {
+                        "observed_at": datetime.now(UTC).isoformat(),
+                        "reason": reason,
+                        "num_timesteps": int(num_timesteps),
+                        "pid": os.getpid(),
+                        "boundary": "on_policy_update_end",
+                    },
+                    sort_keys=True,
                 )
-                temporary.replace(self.marker_path)
-            self.logged = True
-        # SB3 performs the update for this completed rollout, then its learn
-        # loop observes that the requested total has been reached and exits.
-        self.model._total_timesteps = int(self.num_timesteps)
+                + "\n",
+                encoding="utf-8",
+            )
+            temporary.replace(self.marker_path)
+        self.logged = True
+
+
+_STOP_AWARE_MODEL_CLASSES: dict[type, type] = {}
+
+
+def _stop_aware_model_class(original_class: type) -> type:
+    existing = _STOP_AWARE_MODEL_CLASSES.get(original_class)
+    if existing is not None:
+        return existing
+
+    def collect_rollouts(
+        model: Any,
+        env: Any,
+        callback: Any,
+        rollout_buffer: Any,
+        n_rollout_steps: int,
+    ) -> bool:
+        graceful_stop = model._rlab_graceful_stop
+        if graceful_stop.stop_flag.requested:
+            graceful_stop.acknowledge_safe_boundary(
+                num_timesteps=int(model.num_timesteps)
+            )
+            return False
+        return bool(
+            original_class.collect_rollouts(
+                model,
+                env,
+                callback,
+                rollout_buffer,
+                n_rollout_steps=n_rollout_steps,
+            )
+        )
+
+    def excluded_save_params(model: Any) -> list[str]:
+        return [
+            *original_class._excluded_save_params(model),
+            "_rlab_graceful_stop",
+        ]
+
+    stop_aware_class = type(
+        f"RlabStopAware{original_class.__name__}",
+        (original_class,),
+        {
+            "__module__": __name__,
+            "__slots__": (),
+            "_rlab_stop_aware": True,
+            "collect_rollouts": collect_rollouts,
+            "_excluded_save_params": excluded_save_params,
+        },
+    )
+    _STOP_AWARE_MODEL_CLASSES[original_class] = stop_aware_class
+    return stop_aware_class
+
+
+def install_on_policy_safe_boundary_stop(
+    model: Any,
+    *,
+    graceful_stop: GracefulStopHelper,
+) -> Any:
+    """Make the next SB3 rollout collection stop before stepping the environment."""
+
+    if not getattr(type(model), "_rlab_stop_aware", False):
+        original_class = type(model)
+        model.__class__ = _stop_aware_model_class(original_class)
+    model._rlab_graceful_stop = graceful_stop
+    return model

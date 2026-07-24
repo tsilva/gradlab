@@ -6,7 +6,10 @@ from stable_baselines3.common.callbacks import BaseCallback
 
 from rlab.callbacks import CallbackHelper, RlabCallback
 from rlab.schedules import EntropyCoefficientScheduleHelper
-from rlab.training.sb3_helpers import GracefulStopHelper
+from rlab.training.sb3_helpers import (
+    GracefulStopHelper,
+    install_on_policy_safe_boundary_stop,
+)
 from rlab.training.sb3_ppo import checkpoint_save_frequency
 from rlab.training_backend import GracefulStopFlag
 from rlab.seeds import (
@@ -65,12 +68,8 @@ class TrainTests(unittest.TestCase):
             validate_eval_seed(9999)
 
     def test_graceful_stop_callback_finishes_the_current_rollout(self) -> None:
-        class Model:
-            _total_timesteps = 1_000
-
         stop_flag = GracefulStopFlag()
         callback = GracefulStopHelper(stop_flag)
-        callback.model = Model()
         callback.num_timesteps = 123
 
         self.assertTrue(callback._on_step())
@@ -78,11 +77,58 @@ class TrainTests(unittest.TestCase):
         stop_flag.request("SIGUSR1")
 
         self.assertTrue(callback._on_step())
-        self.assertEqual(callback.model._total_timesteps, 1_000)
+        callback.acknowledge_safe_boundary(num_timesteps=123)
 
-        callback._on_rollout_end()
+        self.assertTrue(callback.logged)
 
-        self.assertEqual(callback.model._total_timesteps, 123)
+    def test_on_policy_loop_stops_before_collecting_another_rollout(self) -> None:
+        stop_flag = GracefulStopFlag()
+        graceful_stop = GracefulStopHelper(stop_flag)
+
+        class Model:
+            def __init__(self) -> None:
+                self.num_timesteps = 0
+                self.train_calls = 0
+                self.collect_calls = 0
+
+            def collect_rollouts(
+                self,
+                _env,
+                _callback,
+                _rollout_buffer,
+                *,
+                n_rollout_steps,
+            ) -> bool:
+                self.collect_calls += 1
+                self.num_timesteps += n_rollout_steps
+                stop_flag.request("SIGUSR1")
+                return True
+
+            def train(self) -> None:
+                self.train_calls += 1
+
+            def learn(self, *, total_timesteps: int) -> None:
+                while self.num_timesteps < total_timesteps:
+                    if not self.collect_rollouts(
+                        object(),
+                        object(),
+                        object(),
+                        n_rollout_steps=8,
+                    ):
+                        break
+                    self.train()
+
+        model = Model()
+        install_on_policy_safe_boundary_stop(
+            model,
+            graceful_stop=graceful_stop,
+        )
+        model.learn(total_timesteps=1_000)
+
+        self.assertEqual(model.num_timesteps, 8)
+        self.assertEqual(model.train_calls, 1)
+        self.assertEqual(model.collect_calls, 1)
+        self.assertTrue(graceful_stop.logged)
 
 
 if __name__ == "__main__":
