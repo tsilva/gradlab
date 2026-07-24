@@ -46,6 +46,7 @@ from rlab.metric_names import (
     ORCHESTRATION_WANDB_HIGH_WATER,
     ORCHESTRATION_WANDB_REMOTE_HIGH_WATER,
     ORCHESTRATION_WANDB_REMOTE_VISIBLE_LAG_SECONDS,
+    metric_definition,
 )
 from rlab.metric_store import MetricStore, metric_store_path
 from rlab.model_sources import download_public_checkpoint_manifest_source
@@ -1106,7 +1107,11 @@ class RunSupervisor:
         result: EvalResult,
         raw: Mapping[str, Any],
     ) -> None:
-        metrics = {str(name): value for name, value in dict(raw.get("metrics") or {}).items()}
+        metrics = {
+            str(name): value
+            for name, value in dict(raw.get("metrics") or {}).items()
+            if metric_definition(str(name)) is not None
+        }
         metrics.update(
             {
                 EVAL_ACCEPTANCE_PASS: 1.0 if result.status == "accepted" else 0.0,
@@ -1157,11 +1162,6 @@ class RunSupervisor:
             status=result.status,
             result=result.to_dict(),
         )
-        self._record_eval_metrics(row, result, raw)
-        print(
-            f"Modal eval terminal checkpoint={result.checkpoint_id} status={result.status}",
-            flush=True,
-        )
         if result.status == "accepted":
             observed = time.time()
             self.accepted_observed_at = self.accepted_observed_at or observed
@@ -1176,6 +1176,11 @@ class RunSupervisor:
             )
             if result_to_stop > 10.0 or requested - observed > 10.0:
                 raise RuntimeError("accepted eval did not issue stop within ten seconds")
+        self._record_eval_metrics(row, result, raw)
+        print(
+            f"Modal eval terminal checkpoint={result.checkpoint_id} status={result.status}",
+            flush=True,
+        )
         return True
 
     def _mark_expired(self, row: Mapping[str, Any], *, error: str) -> None:
@@ -1564,6 +1569,19 @@ class RunSupervisor:
             )
         return checkpoints, evals
 
+    def _wait_for_learner_exit_with_lease(self, timeout_seconds: float) -> bool:
+        learner = self.learner
+        if learner is None:
+            return True
+        deadline = time.monotonic() + timeout_seconds
+        while learner.poll() is None:
+            now = time.monotonic()
+            if now >= deadline or self.lease_lost:
+                return False
+            self._renew_lease(now)
+            time.sleep(0.25)
+        return True
+
     def _record_startup_failure(self, failure: BaseException) -> int:
         receipt = TerminalReceipt(
             run_id=self.manifest.run_id,
@@ -1710,11 +1728,11 @@ class RunSupervisor:
             failure = exc
             self._request_learner_stop("supervisor_failure")
             if self.learner is not None and self.learner.poll() is None:
-                try:
-                    self.learner.wait(timeout=120)
-                except subprocess.TimeoutExpired:
+                if not self._wait_for_learner_exit_with_lease(120):
                     self.learner.terminate()
-                    self.learner.wait(timeout=30)
+                    if not self._wait_for_learner_exit_with_lease(30):
+                        self.learner.kill()
+                        self._wait_for_learner_exit_with_lease(10)
             if not self.lease_lost:
                 try:
                     self._drain()

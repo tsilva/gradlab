@@ -3,7 +3,7 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from rlab.eval_backend import EvalHandle, EvalPoll
 from rlab.policy_bundle import (
@@ -307,6 +307,111 @@ class RunSupervisorTests(unittest.TestCase):
                 }
             ],
         )
+
+    def test_accepted_eval_metrics_ignore_private_r2_diagnostics(self) -> None:
+        supervisor = self.supervisor()
+        supervisor.metric_store.init()
+        result = EvalResult(
+            run_id=self.run_id,
+            checkpoint_id="checkpoint-4500000-" + "e" * 16,
+            idempotency_key="a" * 64,
+            modal_call_id="fc-accepted",
+            status="accepted",
+            episode_results=[
+                {
+                    "start_state": "Level1-1",
+                    "return": 1.0,
+                    "steps": 1,
+                    "outcome": "success",
+                }
+            ]
+            * 100,
+            aggregates={"failure_count": 0},
+            timings={},
+            evidence_sha256=[],
+            completed_at=utc_now(),
+        )
+        supervisor._record_eval_metrics(
+            {
+                "checkpoint_step": 4_500_000,
+                "idempotency_key": result.idempotency_key,
+                "intent": {"execution_contract": {"episodes": 100}},
+            },
+            result,
+            {
+                "duration_seconds": 1.0,
+                "metrics": {
+                    "death_count": 0,
+                    "success_count": 100,
+                    "eval/full/episode/count": 100,
+                },
+            },
+        )
+
+        self.assertEqual(
+            supervisor.metric_store.latest_metric("eval/full/episode/count"),
+            100,
+        )
+        self.assertIsNone(supervisor.metric_store.latest_metric("death_count"))
+        self.assertIsNone(supervisor.metric_store.latest_metric("success_count"))
+
+    def test_failure_wait_renews_writer_lease(self) -> None:
+        supervisor = self.supervisor()
+        learner = MagicMock()
+        learner.poll.side_effect = [None, 0]
+        supervisor.learner = learner
+        with (
+            patch.object(supervisor, "_renew_lease") as renew,
+            patch("rlab.run_supervisor.time.sleep"),
+        ):
+            self.assertTrue(supervisor._wait_for_learner_exit_with_lease(30))
+        renew.assert_called_once()
+
+    def test_accepted_eval_requests_stop_before_metric_projection(self) -> None:
+        supervisor = self.supervisor()
+        result = EvalResult(
+            run_id=self.run_id,
+            checkpoint_id="checkpoint-4500000-" + "e" * 16,
+            idempotency_key="a" * 64,
+            modal_call_id="fc-accepted",
+            status="accepted",
+            episode_results=[{}] * 100,
+            aggregates={},
+            timings={},
+            evidence_sha256=[],
+            completed_at=utc_now(),
+        )
+        row = {
+            "checkpoint_step": 4_500_000,
+            "idempotency_key": result.idempotency_key,
+        }
+        events: list[str] = []
+        with (
+            patch.object(supervisor.authority, "eval_result", return_value={}),
+            patch.object(supervisor, "_verified_result", return_value=result),
+            patch.object(supervisor.authority, "put_verified_eval_result"),
+            patch.object(supervisor.ledger, "mark_eval_terminal"),
+            patch.object(
+                supervisor,
+                "_request_learner_stop",
+                side_effect=lambda _reason: events.append("stop"),
+            ),
+            patch.object(
+                supervisor.ledger,
+                "mark_stop_requested",
+                return_value=0.0,
+            ),
+            patch.object(supervisor.metric_store, "append_metrics"),
+            patch.object(
+                supervisor,
+                "_record_eval_metrics",
+                side_effect=lambda *_args: events.append("metrics"),
+            ),
+            patch("rlab.run_supervisor.time.time", return_value=0.0),
+        ):
+            self.assertTrue(supervisor._observe_result(row))
+
+        self.assertEqual(events, ["stop", "metrics"])
 
     def test_ambiguous_modal_spawn_is_not_immediately_repeated(self) -> None:
         supervisor = self.supervisor()
