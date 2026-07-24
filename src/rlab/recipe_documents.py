@@ -538,8 +538,15 @@ def load_recipe_source_document(path: Path) -> ComposedDocument:
         composed.document,
         label=f"composed recipe file {path}",
     )
-    presets_root = (Path("experiments") / "recipes" / "_presets").resolve()
-    if not path.resolve().is_relative_to(presets_root):
+    resolved_path = path.resolve()
+    experiments_root = next(
+        (parent for parent in resolved_path.parents if parent.name == "experiments"),
+        None,
+    )
+    if experiments_root is None:
+        raise ValueError(f"recipe {path} is not under an experiments tree")
+    presets_root = experiments_root / "recipes" / "_presets"
+    if not resolved_path.is_relative_to(presets_root):
         for source in composed.sources[:-1]:
             if not source.resolve().is_relative_to(presets_root):
                 raise ValueError(

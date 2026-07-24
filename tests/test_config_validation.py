@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import inspect
 import json
+import os
 import tempfile
 import unittest
 from copy import deepcopy
@@ -33,6 +34,18 @@ class ConfigValidationTests(unittest.TestCase):
     MARIO_L11_GOAL = Path("experiments/goals/SuperMarioBros-Nes-v0/Level1-1/_goal.yaml")
     MARIO_END_TO_END_GOAL = Path("experiments/goals/SuperMarioBros-Nes-v0/EndToEnd/_goal.yaml")
     MARIO_SINGLE_RECIPES = MARIO_L11_GOAL.parent / "recipes"
+
+    def test_recipe_preset_allowlist_is_independent_of_current_directory(self) -> None:
+        goal = self.MARIO_L11_GOAL.resolve()
+        recipe = (self.MARIO_SINGLE_RECIPES / "ppo.yaml").resolve()
+        previous = Path.cwd()
+        with tempfile.TemporaryDirectory() as temporary:
+            try:
+                os.chdir(temporary)
+                document = compose_train_document(goal, recipe)
+            finally:
+                os.chdir(previous)
+        self.assertEqual(document["recipe_id"], "ppo")
 
     def test_explicit_goal_arg_contract_covers_provider_signatures(self) -> None:
         from ale_py.vector_env import AtariVectorEnv

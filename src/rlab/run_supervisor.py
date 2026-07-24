@@ -1564,9 +1564,49 @@ class RunSupervisor:
             )
         return checkpoints, evals
 
+    def _record_startup_failure(self, failure: BaseException) -> int:
+        receipt = TerminalReceipt(
+            run_id=self.manifest.run_id,
+            attempt_id=self.manifest.attempt_id,
+            state="resumable_failure",
+            acceptance_required=self.evaluation_required,
+            stop_reason="supervisor_startup_failure",
+            final_step=0,
+            checkpoint_inventory=(),
+            eval_inventory=(),
+            wandb_high_water_mark=0,
+            drain={
+                "complete": False,
+                "phase": "startup",
+                "metric_segment_high_water": 0,
+                "eval_terminal_count": 0,
+                "journal_archive": None,
+                "journal_expires_at": None,
+                "wandb_remote_high_water_mark": 0,
+                "publication_capacity_ratio": None,
+                "failure": repr(failure)[:4000],
+            },
+            completed_at=utc_now(),
+        )
+        try:
+            self.authority.create_attempt_terminal(receipt)
+        except ConditionalWriteConflict:
+            pass
+        except Exception as receipt_failure:
+            print(
+                "startup failure receipt incomplete: "
+                f"{receipt_failure!r}; original failure={failure!r}",
+                flush=True,
+            )
+        print(f"run failed during supervisor startup: {failure!r}", flush=True)
+        return 1
+
     def run(self) -> int:
-        self.validate_runtime()
-        self.materialize()
+        try:
+            self.validate_runtime()
+            self.materialize()
+        except BaseException as failure:
+            return self._record_startup_failure(failure)
         holder = f"{uuid.uuid4().hex}@{os.uname().nodename}"
         self.lease = self.authority.acquire_lease(
             run_id=self.manifest.run_id,
