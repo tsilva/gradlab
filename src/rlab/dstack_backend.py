@@ -215,7 +215,7 @@ def render_task_config(request: TaskRequest) -> dict[str, Any]:
         "type": "task",
         "name": request.task_name,
         "image": request.image.removeprefix("docker:"),
-        "working_dir": "/workspace",
+        "working_dir": "/root/rlab",
         "env": [
             f"RLAB_RUN_MANIFEST_URI={request.manifest_uri}",
             "RLAB_ORCHESTRATOR=dstack",
