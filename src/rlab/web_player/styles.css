@@ -635,6 +635,7 @@ td:last-child { text-align: right; }
 .event-list { list-style: none; margin: 0; padding: 0; display: grid; gap: .38rem; max-height: 19rem; overflow: auto; }
 .event-item { border-left: 2px solid var(--yellow); padding: .32rem .46rem; background: #09151c; font-size: .72rem; }
 .event-item.boundary { border-color: var(--red); }
+.event-item.selected { outline: 1px solid var(--cyan); background: #0b202a; }
 .event-meta { color: var(--muted); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 
 .timeline {

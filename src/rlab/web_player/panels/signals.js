@@ -15,6 +15,7 @@ export function mount({ definition }) {
       </div>
       <canvas data-chart class="chart" aria-label="Selected signal history"></canvas>
       <div class="table-scroll"><table><tbody data-body></tbody></table></div>
+      <p class="panel-foot">Post-action environment signals.</p>
     `,
   });
   const select = element.querySelector("[data-select]");
@@ -22,13 +23,20 @@ export function mount({ definition }) {
   const body = element.querySelector("[data-body]");
   let history = [];
   let selected = localStorage.getItem(SIGNAL_KEY) || "";
+  let view = {};
+  let currentSignals = {};
 
   const renderChart = () => {
     const name = select.value;
+    const cursorIndex = view.inspection
+      ? history.findIndex(
+        (point) => Number(point.sequence) === Number(view.selectedSequence),
+      )
+      : null;
     drawLines(chart, [{
-      values: history.slice(-1024).map((point) => Number(point.signals?.[name])),
+      values: history.map((point) => Number(point.signals?.[name])),
       color: "#f0c36a",
-    }]);
+    }], { cursorIndex });
   };
   const renderSignals = (signals = {}) => {
     const known = new Set([
@@ -63,8 +71,16 @@ export function mount({ definition }) {
 
   return {
     element,
-    render(snapshot) { renderSignals(snapshot?.transition?.signals || {}); },
-    renderHistory(next) { history = next; renderSignals(); },
+    render(snapshot, nextView = view) {
+      view = nextView || {};
+      currentSignals = snapshot?.transition?.signals || {};
+      renderSignals(currentSignals);
+    },
+    renderHistory(next, _snapshot = null, nextView = view) {
+      history = next;
+      view = nextView || {};
+      renderSignals(currentSignals);
+    },
     resize: renderChart,
   };
 }

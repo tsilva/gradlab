@@ -39,6 +39,7 @@ MAX_JSON_ITEMS = 128
 MAX_JSON_TEXT = 4096
 INPUT_HEARTBEAT_SECONDS = 0.25
 LAST_CLIENT_GRACE_SECONDS = 30.0
+PAIRED_START_GRACE_SECONDS = 2.0
 
 
 def _session_environment_id(session: Any, args: argparse.Namespace) -> str | None:
@@ -240,20 +241,23 @@ def _frame_packet(
         format="PNG",
         compress_level=1,
     )
-    return FRAME_HEADER.pack(
-        FRAME_MAGIC,
-        kind,
-        FRAME_CODEC_PNG,
-        0,
-        session_epoch,
-        sequence,
-    ) + output.getvalue()
+    return (
+        FRAME_HEADER.pack(
+            FRAME_MAGIC,
+            kind,
+            FRAME_CODEC_PNG,
+            0,
+            session_epoch,
+            sequence,
+        )
+        + output.getvalue()
+    )
 
 
 class FrameEncoder:
     def __init__(self) -> None:
         self._condition = threading.Condition()
-        self._pending: dict[int, tuple[int, int, np.ndarray]] = {}
+        self._pending: tuple[int, int, dict[int, np.ndarray]] | None = None
         self._latest: dict[int, tuple[int, bytes]] = {}
         self._epoch = 0
         self._closed = False
@@ -269,20 +273,31 @@ class FrameEncoder:
             if self._thread.is_alive():
                 raise RuntimeError("frame encoder epoch must be set before start")
             self._epoch = int(epoch)
-            self._pending.clear()
+            self._pending = None
             self._latest.clear()
 
     def start(self) -> None:
         self._thread.start()
 
     def submit(self, kind: int, sequence: int, frame: np.ndarray | None) -> None:
-        if frame is None:
+        self.submit_batch(sequence, {kind: frame})
+
+    def submit_batch(
+        self,
+        sequence: int,
+        frames: Mapping[int, np.ndarray | None],
+    ) -> None:
+        owned = {
+            int(kind): np.asarray(frame, dtype=np.uint8).copy()
+            for kind, frame in frames.items()
+            if frame is not None
+        }
+        if not owned:
             return
-        owned = np.asarray(frame, dtype=np.uint8).copy()
         with self._condition:
             if self._closed:
                 return
-            self._pending[kind] = (self._epoch, sequence, owned)
+            self._pending = (self._epoch, int(sequence), owned)
             self._condition.notify()
 
     def latest(self) -> dict[int, tuple[int, bytes]]:
@@ -299,13 +314,16 @@ class FrameEncoder:
     def _run(self) -> None:
         while True:
             with self._condition:
-                while not self._pending and not self._closed:
+                while self._pending is None and not self._closed:
                     self._condition.wait()
-                if self._closed and not self._pending:
+                if self._closed and self._pending is None:
                     return
                 pending = self._pending
-                self._pending = {}
-            for kind, (epoch, sequence, frame) in pending.items():
+                self._pending = None
+            if pending is None:
+                continue
+            epoch, sequence, frames = pending
+            for kind, frame in frames.items():
                 packet = _frame_packet(
                     kind,
                     sequence,
@@ -482,7 +500,6 @@ class WebPlaybackRunner:
             obs_frames = tuple(self.session.frames or ())
             attribution = None
             sequence = self.session.sequence
-        self.encoder.submit(FRAME_GAME, sequence, game_frame)
         obs_image = None
         if obs_frames:
             obs_image = render_obs_stack(
@@ -491,7 +508,13 @@ class WebPlaybackRunner:
                 heatmap=attribution,
                 heatmap_opacity=self.session.attribution_opacity,
             )
-            self.encoder.submit(FRAME_OBSERVATION, sequence, obs_image)
+        self.encoder.submit_batch(
+            sequence,
+            {
+                FRAME_GAME: game_frame,
+                FRAME_OBSERVATION: obs_image,
+            },
+        )
         payload = self._snapshot_payload(transition)
         episode_start_frames: dict[int, tuple[int, bytes]] = {}
         if transition is None and self.session.step_index == 0:
@@ -1426,9 +1449,9 @@ class PlaybackWebServer:
         self.ever_connected = False
         self.last_client_at = time.monotonic()
         self._auto_started_epoch = -1
-        self._observed_session_change = int(
-            getattr(self.runner, "session_change", 0)
-        )
+        self._auto_start_task: asyncio.Task[None] | None = None
+        self._auto_start_task_epoch = -1
+        self._observed_session_change = int(getattr(self.runner, "session_change", 0))
         self._secondary_opened = False
 
     @property
@@ -1567,7 +1590,67 @@ class PlaybackWebServer:
     def _runner_active(self) -> bool:
         return bool(getattr(self.runner, "has_active_runner", True))
 
-    def _maybe_auto_start(self, client_id: str) -> None:
+    def _cancel_auto_start_task(self) -> None:
+        task = self._auto_start_task
+        self._auto_start_task = None
+        self._auto_start_task_epoch = -1
+        if task is not None and task is not asyncio.current_task() and not task.done():
+            task.cancel()
+
+    def _auto_start_client(self, preferred_client_id: str | None = None) -> str | None:
+        preferred = self.clients.get(preferred_client_id or "")
+        if preferred is not None and (
+            self.control_holder is None or preferred.workspace_id == self.control_holder
+        ):
+            return preferred.client_id
+        for client in self.clients.values():
+            if self.control_holder is None or client.workspace_id == self.control_holder:
+                return client.client_id
+        return None
+
+    def _paired_workspace_ready(self) -> bool:
+        if not self.paired_windows or self.control_holder is None:
+            return not self.paired_windows
+        windows = {
+            client.window_id
+            for client in self.clients.values()
+            if client.workspace_id == self.control_holder
+        }
+        return {"main", "stats"}.issubset(windows)
+
+    def _start_epoch(self, epoch: int, preferred_client_id: str | None) -> None:
+        client_id = self._auto_start_client(preferred_client_id)
+        if (
+            epoch != self._runner_epoch()
+            or not self._runner_active()
+            or self._auto_started_epoch == epoch
+            or bool(getattr(self.args, "debug", False))
+            or client_id is None
+        ):
+            return
+        try:
+            self.runner.submit(PlaybackCommand(uuid.uuid4().hex, client_id, "play", {}, None))
+        except queue.Full:
+            return
+        self._auto_started_epoch = epoch
+        self._cancel_auto_start_task()
+
+    async def _auto_start_after_grace(
+        self,
+        epoch: int,
+        preferred_client_id: str | None,
+    ) -> None:
+        try:
+            await asyncio.sleep(PAIRED_START_GRACE_SECONDS)
+            self._start_epoch(epoch, preferred_client_id)
+        except asyncio.CancelledError:
+            return
+        finally:
+            if self._auto_start_task is asyncio.current_task():
+                self._auto_start_task = None
+                self._auto_start_task_epoch = -1
+
+    def _maybe_auto_start(self, client_id: str | None = None) -> None:
         epoch = self._runner_epoch()
         if (
             not self._runner_active()
@@ -1575,13 +1658,22 @@ class PlaybackWebServer:
             or bool(getattr(self.args, "debug", False))
         ):
             return
-        self._auto_started_epoch = epoch
-        self.runner.submit(
-            PlaybackCommand(uuid.uuid4().hex, client_id, "play", {}, None)
-        )
+        if not self.paired_windows or self._paired_workspace_ready():
+            self._start_epoch(epoch, client_id)
+            return
+        if (
+            self._auto_start_task is not None
+            and not self._auto_start_task.done()
+            and self._auto_start_task_epoch == epoch
+        ):
+            return
+        self._cancel_auto_start_task()
+        self._auto_start_task_epoch = epoch
+        self._auto_start_task = asyncio.create_task(self._auto_start_after_grace(epoch, client_id))
 
     def _announce_session_change(self) -> None:
         epoch = self._runner_epoch()
+        self._cancel_auto_start_task()
         for client in self.clients.values():
             client.reset_session(epoch)
             client.offer_reliable(
@@ -1592,11 +1684,7 @@ class PlaybackWebServer:
                 }
             )
             client.offer_reliable(self.runner.history_payload())
-        if (
-            self.paired_windows
-            and self.defer_secondary_window
-            and not self._secondary_opened
-        ):
+        if self.paired_windows and self.defer_secondary_window and not self._secondary_opened:
             self._secondary_opened = True
             stats_url = self.dashboard_urls()[1]
             print(f"Player stats: {stats_url}", flush=True)
@@ -1674,13 +1762,9 @@ class PlaybackWebServer:
             if callable(episode_start_payload):
                 episode_start_snapshot, episode_start_frames = episode_start_payload()
                 if episode_start_snapshot:
-                    client.offer_reliable(
-                        self._snapshot_for(client, episode_start_snapshot)
-                    )
+                    client.offer_reliable(self._snapshot_for(client, episode_start_snapshot))
                 for frame_kind, (_sequence, packet) in episode_start_frames.items():
-                    subscription = (
-                        "game" if frame_kind == FRAME_GAME else "observation"
-                    )
+                    subscription = "game" if frame_kind == FRAME_GAME else "observation"
                     if subscription in client.subscriptions:
                         client.offer_reliable(packet)
             client.offer_snapshot(self._snapshot_for(client, self.runner.snapshot()))
@@ -1749,12 +1833,13 @@ class PlaybackWebServer:
                             }
                         )
                         continue
+                    command_name = str(payload.get("name") or "")
                     try:
                         self.runner.submit(
                             PlaybackCommand(
                                 str(payload.get("id") or uuid.uuid4().hex),
                                 client_id,
-                                str(payload.get("name") or ""),
+                                command_name,
                                 payload.get("payload")
                                 if isinstance(payload.get("payload"), Mapping)
                                 else {},
@@ -1763,6 +1848,9 @@ class PlaybackWebServer:
                                 else None,
                             )
                         )
+                        if command_name == "play":
+                            self._auto_started_epoch = self._runner_epoch()
+                            self._cancel_auto_start_task()
                     except queue.Full:
                         client.offer_reliable(
                             {
@@ -1918,6 +2006,10 @@ class PlaybackWebServer:
         try:
             await self.stop_event.wait()
         finally:
+            auto_start_task = self._auto_start_task
+            self._cancel_auto_start_task()
+            if auto_start_task is not None:
+                await asyncio.gather(auto_start_task, return_exceptions=True)
             pump.cancel()
             await asyncio.gather(pump, return_exceptions=True)
             for client in tuple(self.clients.values()):

@@ -19,6 +19,7 @@ from rlab.play_web import (
     FRAME_GAME,
     FRAME_HEADER,
     FRAME_MAGIC,
+    FRAME_OBSERVATION,
     DatasetPlaybackRunner,
     FrameEncoder,
     HumanRecordingRunner,
@@ -190,9 +191,7 @@ def test_web_playback_requires_explicit_command_after_episode_boundary() -> None
     assert blocked["error"] == "episode complete; choose Play next episode"
     assert runner.awaiting_next_episode is True
 
-    runner._apply(
-        PlaybackCommand("next", "client", "next_episode", {}, runner.revision)
-    )
+    runner._apply(PlaybackCommand("next", "client", "next_episode", {}, runner.revision))
     accepted = runner.responses.get_nowait().payload
     assert accepted["ok"] is True
     assert runner.awaiting_next_episode is False
@@ -219,9 +218,7 @@ def test_web_playback_episode_limit_disables_next_episode() -> None:
 
 
 def test_human_dataset_recording_defaults_to_web_dashboard() -> None:
-    args = build_dataset_parser().parse_args(
-        ["record", "local-session", "--env-id", "Game-v0"]
-    )
+    args = build_dataset_parser().parse_args(["record", "local-session", "--env-id", "Game-v0"])
 
     assert args.agent == "human"
     assert not hasattr(args, "ui")
@@ -306,9 +303,8 @@ def test_paired_playback_server_opens_play_and_stats_windows() -> None:
             try:
                 deadline = asyncio.get_running_loop().time() + 3.0
                 while (
-                    (not server.origin or open_browser.call_count < 2)
-                    and asyncio.get_running_loop().time() < deadline
-                ):
+                    not server.origin or open_browser.call_count < 2
+                ) and asyncio.get_running_loop().time() < deadline:
                     await asyncio.sleep(0.01)
                 urls = server.dashboard_urls()
                 assert urls == (
@@ -316,7 +312,10 @@ def test_paired_playback_server_opens_play_and_stats_windows() -> None:
                     f"{server.origin}/workspace/stats?workspace=paired#token={server.token}",
                 )
                 assert [call.args[0] for call in open_browser.call_args_list] == list(urls)
-                assert all(call.kwargs == {"new": 1, "autoraise": True} for call in open_browser.call_args_list)
+                assert all(
+                    call.kwargs == {"new": 1, "autoraise": True}
+                    for call in open_browser.call_args_list
+                )
             finally:
                 runner.stop()
                 await asyncio.wait_for(task, timeout=3.0)
@@ -357,6 +356,193 @@ def test_frame_encoder_emits_versioned_latest_only_png_packet() -> None:
         7,
     )
     assert image.size == (4, 3)
+
+
+def test_frame_encoder_batches_game_and_observation_at_one_transition() -> None:
+    encoder = FrameEncoder()
+    encoder.start()
+    try:
+        encoder.submit_batch(
+            11,
+            {
+                FRAME_GAME: np.full((3, 4, 3), 91, dtype=np.uint8),
+                FRAME_OBSERVATION: np.full((5, 6, 3), 37, dtype=np.uint8),
+            },
+        )
+        deadline = time.monotonic() + 2.0
+        while (
+            set(encoder.latest()) != {FRAME_GAME, FRAME_OBSERVATION} and time.monotonic() < deadline
+        ):
+            time.sleep(0.005)
+        latest = encoder.latest()
+    finally:
+        encoder.close()
+
+    assert set(latest) == {FRAME_GAME, FRAME_OBSERVATION}
+    for kind, (sequence, packet) in latest.items():
+        (
+            magic,
+            header_kind,
+            codec,
+            flags,
+            session_epoch,
+            header_sequence,
+        ) = FRAME_HEADER.unpack(packet[: FRAME_HEADER.size])
+        assert (
+            magic,
+            header_kind,
+            codec,
+            flags,
+            session_epoch,
+            header_sequence,
+            sequence,
+        ) == (FRAME_MAGIC, kind, FRAME_CODEC_PNG, 0, 0, 11, 11)
+
+
+def test_paired_auto_start_waits_for_both_workspace_windows() -> None:
+    class Runner:
+        session_epoch = 3
+        has_active_runner = True
+
+        def __init__(self) -> None:
+            self.commands = []
+
+        def submit(self, command) -> None:
+            self.commands.append(command)
+
+    async def scenario() -> None:
+        runner = Runner()
+        server = PlaybackWebServer(
+            runner,
+            human_args(debug=False),
+            paired_windows=True,
+        )
+        server.control_holder = "workspace"
+        server.clients["main-client"] = argparse.Namespace(
+            client_id="main-client",
+            workspace_id="workspace",
+            window_id="main",
+        )
+        server._maybe_auto_start("main-client")
+        assert runner.commands == []
+        assert server._auto_start_task is not None
+
+        server.clients["stats-client"] = argparse.Namespace(
+            client_id="stats-client",
+            workspace_id="workspace",
+            window_id="stats",
+        )
+        server._maybe_auto_start("stats-client")
+        await asyncio.sleep(0)
+
+        assert [command.name for command in runner.commands] == ["play"]
+        assert server._auto_started_epoch == 3
+
+    asyncio.run(scenario())
+
+
+def test_paired_auto_start_falls_back_when_stats_window_is_missing() -> None:
+    class Runner:
+        session_epoch = 4
+        has_active_runner = True
+
+        def __init__(self) -> None:
+            self.commands = []
+
+        def submit(self, command) -> None:
+            self.commands.append(command)
+
+    async def scenario() -> None:
+        runner = Runner()
+        server = PlaybackWebServer(
+            runner,
+            human_args(debug=False),
+            paired_windows=True,
+        )
+        server.control_holder = "workspace"
+        server.clients["main-client"] = argparse.Namespace(
+            client_id="main-client",
+            workspace_id="workspace",
+            window_id="main",
+        )
+        with patch("rlab.play_web.PAIRED_START_GRACE_SECONDS", 0.01):
+            server._maybe_auto_start("main-client")
+            await asyncio.sleep(0.03)
+
+        assert [command.name for command in runner.commands] == ["play"]
+        assert server._auto_started_epoch == 4
+
+    asyncio.run(scenario())
+
+
+def test_non_paired_auto_start_is_immediate() -> None:
+    class Runner:
+        session_epoch = 5
+        has_active_runner = True
+
+        def __init__(self) -> None:
+            self.commands = []
+
+        def submit(self, command) -> None:
+            self.commands.append(command)
+
+    async def scenario() -> None:
+        runner = Runner()
+        server = PlaybackWebServer(
+            runner,
+            human_args(debug=False),
+            paired_windows=False,
+        )
+        server.clients["main-client"] = argparse.Namespace(
+            client_id="main-client",
+            workspace_id="workspace",
+            window_id="main",
+        )
+
+        server._maybe_auto_start("main-client")
+
+        assert [command.name for command in runner.commands] == ["play"]
+        assert server._auto_started_epoch == 5
+        assert server._auto_start_task is None
+
+    asyncio.run(scenario())
+
+
+def test_debug_mode_never_auto_starts_paired_workspace() -> None:
+    class Runner:
+        session_epoch = 6
+        has_active_runner = True
+
+        def __init__(self) -> None:
+            self.commands = []
+
+        def submit(self, command) -> None:
+            self.commands.append(command)
+
+    async def scenario() -> None:
+        runner = Runner()
+        server = PlaybackWebServer(
+            runner,
+            human_args(debug=True),
+            paired_windows=True,
+        )
+        server.control_holder = "workspace"
+        for window_id in ("main", "stats"):
+            client_id = f"{window_id}-client"
+            server.clients[client_id] = argparse.Namespace(
+                client_id=client_id,
+                workspace_id="workspace",
+                window_id=window_id,
+            )
+
+        server._maybe_auto_start("main-client")
+        await asyncio.sleep(0)
+
+        assert runner.commands == []
+        assert server._auto_started_epoch == -1
+        assert server._auto_start_task is None
+
+    asyncio.run(scenario())
 
 
 def test_transition_payload_keeps_before_decision_after_alignment() -> None:
@@ -449,9 +635,7 @@ def test_loopback_server_requires_exact_origin_and_fragment_token() -> None:
                 assert icon_response.status == 200
                 assert "image/svg+xml" in icon_response.headers["Content-Type"]
                 assert 'id="ti-player-play"' in await icon_response.text()
-                panel_response = await client.get(
-                    f"{server.origin}/assets/panels/catalog.js"
-                )
+                panel_response = await client.get(f"{server.origin}/assets/panels/catalog.js")
                 assert panel_response.status == 200
                 assert "javascript" in panel_response.headers["Content-Type"]
                 assert "PANEL_CATALOG" in await panel_response.text()
@@ -588,9 +772,7 @@ def test_catalog_http_api_requires_the_fragment_session_token() -> None:
             while not server.origin and asyncio.get_running_loop().time() < deadline:
                 await asyncio.sleep(0.01)
             async with ClientSession() as client:
-                denied = await client.get(
-                    f"{server.origin}/api/catalog/projects?q=mario"
-                )
+                denied = await client.get(f"{server.origin}/api/catalog/projects?q=mario")
                 assert denied.status == 401
                 accepted = await client.get(
                     f"{server.origin}/api/catalog/projects?q=mario",
@@ -636,7 +818,9 @@ def test_web_dashboard_assets_are_packaged_beside_server() -> None:
     controls_markup = (panel_root / "controls.js").read_text(encoding="utf-8")
     policy_markup = (panel_root / "policy.js").read_text(encoding="utf-8")
     reward_markup = (panel_root / "reward.js").read_text(encoding="utf-8")
+    actions_markup = (panel_root / "actions.js").read_text(encoding="utf-8")
     signals_markup = (panel_root / "signals.js").read_text(encoding="utf-8")
+    events_markup = (panel_root / "events.js").read_text(encoding="utf-8")
     raw_markup = (panel_root / "raw.js").read_text(encoding="utf-8")
     assert '<main id="dashboard" class="dashboard"></main>' in markup
     assert '<main id="source-browser" class="source-browser" hidden></main>' in markup
@@ -663,6 +847,17 @@ def test_web_dashboard_assets_are_packaged_beside_server() -> None:
     assert "function clearRetainedEpisode()" in script
     assert "prepareRetainedEpisode(message);" in script
     assert "state.frameBlobs.forEach((frames) => frames.clear());" in script
+    assert "state.historyLimit = Math.max(1, Number(message.history_limit) || 4096);" in script
+    assert "function pruneRetainedTrace(" in script
+    assert "function requiredFrameKinds(snapshot)" in script
+    assert "function requiredFramesAvailable(snapshot)" in script
+    assert "function exactFrameBlob(kind, sequence)" in script
+    assert "nearestFrameBlob" not in script
+    assert 'type: "inspection-cursor"' in script
+    assert 'type: "inspection-frame-request"' in script
+    assert 'type: "inspection-frame"' in script
+    assert "function maybePauseForInspection()" in script
+    assert 'state.inspectionPauseCommandId = command("pause");' in script
     assert "while (frames.size > 1024)" not in script
     assert "while (state.snapshots.size > 1024)" not in script
     assert "`EP ${" not in script
@@ -690,7 +885,10 @@ def test_web_dashboard_assets_are_packaged_beside_server() -> None:
     assert "if (index === state.timelineSequences.length - 1) returnToLive();" in script
     assert "data-return-chart" in reward_markup
     assert controls_markup.count("data-playback-toggle data-requires-active-episode class=") == 1
-    assert 'data-command="play" data-playback-toggle data-requires-active-episode class="primary icon-only"' in controls_markup
+    assert (
+        'data-command="play" data-playback-toggle data-requires-active-episode class="primary icon-only"'
+        in controls_markup
+    )
     assert 'data-command="pause" class="icon-only"' not in controls_markup
     assert "services.playFromCurrentPosition()" in controls_markup
     assert "function playFromCurrentPosition()" in script
@@ -705,10 +903,16 @@ def test_web_dashboard_assets_are_packaged_beside_server() -> None:
     assert "const reachedEpisodeEnd" in script
     assert "if (nextSequence === state.timelineSequences.at(-1)) returnToLive();" in script
     assert "stopInspectionReplay({ render: false });" in script
-    assert "if (view.inspection) snapshot = services.getState().liveSnapshot || snapshot;" in controls_markup
-    assert 'playbackToggle.dataset.command = command' in controls_markup
+    assert (
+        "if (view.inspection) snapshot = services.getState().liveSnapshot || snapshot;"
+        in controls_markup
+    )
+    assert "playbackToggle.dataset.command = command" in controls_markup
     assert "if (playbackToggle.dataset.command === command) return;" in controls_markup
-    assert 'playbackIcon.setAttribute("href", `/assets/tabler-icons.svg#ti-player-${command}`)' in controls_markup
+    assert (
+        'playbackIcon.setAttribute("href", `/assets/tabler-icons.svg#ti-player-${command}`)'
+        in controls_markup
+    )
     assert "repeat(4, minmax(0, 1fr))" in styles
     assert "Continue to episode boundary" not in controls_markup
     assert 'data-command="continue-done"' not in controls_markup
@@ -716,7 +920,10 @@ def test_web_dashboard_assets_are_packaged_beside_server() -> None:
     assert 'data-command="stop"' not in controls_markup
     assert "ti-flag-3" not in icons
     assert "ti-power" not in icons
-    assert 'data-command="step-ten" data-requires-active-episode class="icon-only" aria-label="Step 10 times"' in controls_markup
+    assert (
+        'data-command="step-ten" data-requires-active-episode class="icon-only" aria-label="Step 10 times"'
+        in controls_markup
+    )
     assert 'data-command="next-episode" data-next-episode' in controls_markup
     assert 'services.command("next_episode", {' in controls_markup
     assert "seed: seed.value" in controls_markup
@@ -752,8 +959,14 @@ def test_web_dashboard_assets_are_packaged_beside_server() -> None:
     assert ".next-episode-settings-body" in styles
     assert 'id="ti-refresh"' in icons
     assert 'id="layouts-toggle" class="quiet icon-only"' in markup
-    assert 'id="save-layout" class="primary button-with-icon" type="button" title="Save layout"' in markup
-    assert 'id="reset-layout" class="quiet button-with-icon" type="button" title="Reset default layout"' in markup
+    assert (
+        'id="save-layout" class="primary button-with-icon" type="button" title="Save layout"'
+        in markup
+    )
+    assert (
+        'id="reset-layout" class="quiet button-with-icon" type="button" title="Reset default layout"'
+        in markup
+    )
     assert 'id="panel-hide" class="button-with-icon" type="button" title="Hide panel"' in markup
     assert "ti-device-desktop-share" not in icons
     assert "Control from this window" not in controls_markup
@@ -775,11 +988,19 @@ def test_web_dashboard_assets_are_packaged_beside_server() -> None:
     assert "Research workspace" not in markup
     assert "panel-kicker" not in markup
     assert 'id="workspace-sequence"' not in markup
-    assert '#workspace-sequence' not in script
+    assert "#workspace-sequence" not in script
     assert "panel-shelf-title" not in script
     assert "scrollIntoView" not in script
-    assert '${snapshot.run_state.toUpperCase()} · ${snapshot.driver.toUpperCase()}' in controls_markup
+    assert (
+        "${snapshot.run_state.toUpperCase()} · ${snapshot.driver.toUpperCase()}" in controls_markup
+    )
     assert "drawLines(returnChart" in reward_markup
+    assert "cursorIndex" in reward_markup
+    assert "history.slice(-1024)" not in reward_markup
+    assert "history.slice(-1024)" not in signals_markup
+    assert "history.slice(-1024)" not in actions_markup
+    assert "highlightIndex" in actions_markup
+    assert '"selected"' in events_markup
     assert "data-drag-handle" in game_markup
     assert 'aria-label="Move game panel"' in game_markup
     assert "/assets/tabler-icons.svg#ti-player-play" in controls_markup
@@ -793,6 +1014,8 @@ def test_web_dashboard_assets_are_packaged_beside_server() -> None:
     assert "function lineChartScale(" in shared
     assert "function formatAxisValue(" in shared
     assert "context.fillText(labels[index], plot.left - 6, y)" in shared
+    assert "cursorIndex = null" in shared
+    assert "highlightIndex = null" in shared
     assert "const scale = lineChartScale([0, max])" in shared
     assert 'class="signal-toolbar-label">Chart signal</span>' in signals_markup
     assert "grid-template-columns: max-content minmax(0, 1fr)" in styles

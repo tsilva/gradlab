@@ -17,7 +17,7 @@ export function mount({ definition }) {
       <div data-stats class="stat-grid"></div>
       <div class="reward-plots">
         <section class="reward-plot" aria-labelledby="reward-plot-title">
-          <div class="chart-heading"><span id="reward-plot-title">Step reward</span></div>
+          <div class="chart-heading"><span id="reward-plot-title">After-action step reward</span></div>
           <canvas data-reward-chart class="chart reward-chart" aria-label="Provider and shaped step reward history"></canvas>
           <div data-reward-legend class="legend"></div>
         </section>
@@ -32,17 +32,22 @@ export function mount({ definition }) {
   const rewardChart = element.querySelector("[data-reward-chart]");
   const returnChart = element.querySelector("[data-return-chart]");
   let history = [];
+  let view = {};
 
-  const renderHistory = (next) => {
+  const renderHistory = (next, _snapshot = null, nextView = view) => {
     history = next;
-    const points = history.slice(-1024);
+    view = nextView || {};
+    const points = history;
+    const cursorIndex = view.inspection
+      ? points.findIndex((point) => Number(point.sequence) === Number(view.selectedSequence))
+      : null;
     drawLines(rewardChart, [
       { values: points.map((point) => Number(point.reward_provider)), color: "#76a9ff" },
       { values: points.map((point) => Number(point.reward_shaped)), color: "#d794ff" },
-    ]);
+    ], { cursorIndex });
     drawLines(returnChart, [
       { values: points.map((point) => Number(point.return)), color: "#60d394" },
-    ]);
+    ], { cursorIndex });
     legend(element.querySelector("[data-reward-legend]"), [
       ["Provider reward", "#76a9ff"], ["Shaped reward", "#d794ff"],
     ]);
@@ -62,6 +67,6 @@ export function mount({ definition }) {
       ]);
     },
     renderHistory,
-    resize() { renderHistory(history); },
+    resize() { renderHistory(history, null, view); },
   };
 }

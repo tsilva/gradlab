@@ -191,3 +191,49 @@ account = "api-key"
 
     assert "WANDB_API_KEY" not in environment
     assert report.unavailable_sources == {"WANDB_API_KEY": "macos-keychain"}
+
+
+def test_scoped_load_does_not_resolve_unrelated_keychain_or_modal(
+    tmp_path: Path,
+) -> None:
+    config_path = _write(
+        tmp_path / "operator.toml",
+        """
+schema_version = 1
+
+[environment]
+WANDB_ENTITY = "research"
+RLAB_CONTROL_R2_URI = "s3://control"
+
+[keychain.WANDB_API_KEY]
+service = "rlab-wandb"
+account = "api-key"
+
+[keychain.RLAB_CONTROL_R2_ACCESS_KEY_ID]
+service = "rlab-r2-control"
+account = "access-key-id"
+
+[modal]
+path = "/does/not/exist"
+""".strip()
+        + "\n",
+    )
+    calls: list[KeychainReference] = []
+    environment: dict[str, str] = {}
+
+    report = load_operator_environment(
+        environment=environment,
+        config_path=config_path,
+        keychain_lookup=lambda reference: calls.append(reference) or "wandb-key",
+        requested_names={"WANDB_API_KEY", "WANDB_ENTITY"},
+    )
+
+    assert environment == {
+        "WANDB_API_KEY": "wandb-key",
+        "WANDB_ENTITY": "research",
+    }
+    assert calls == [KeychainReference("rlab-wandb", "api-key")]
+    assert report.loaded_sources == {
+        "WANDB_API_KEY": "macos-keychain",
+        "WANDB_ENTITY": "operator-config",
+    }

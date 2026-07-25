@@ -10,21 +10,39 @@ export function mount({ definition }) {
 
   return {
     element,
-    renderHistory(history) {
+    renderHistory(history, _snapshot = null, view = {}) {
       const events = history
-        .filter((point) => point.boundary || point.events?.length)
-        .slice(-100)
-        .reverse();
-      if (!events.length) {
+        .filter((point) => point.boundary || point.events?.length);
+      const selected = view.inspection
+        ? events.find(
+          (point) => Number(point.sequence) === Number(view.selectedSequence),
+        )
+        : null;
+      const visible = events.slice(-100);
+      if (
+        selected
+        && !visible.some((point) => Number(point.sequence) === Number(selected.sequence))
+      ) {
+        visible.shift();
+        visible.unshift(selected);
+      }
+      visible.reverse();
+      if (!visible.length) {
         const empty = document.createElement("li");
         empty.className = "empty-state";
         empty.textContent = "No events observed.";
         list.replaceChildren(empty);
         return;
       }
-      list.replaceChildren(...events.map((point) => {
+      list.replaceChildren(...visible.map((point) => {
         const item = document.createElement("li");
-        item.className = `event-item ${point.boundary ? "boundary" : ""}`;
+        const isSelected = selected
+          && Number(point.sequence) === Number(selected.sequence);
+        item.className = [
+          "event-item",
+          point.boundary ? "boundary" : "",
+          isSelected ? "selected" : "",
+        ].filter(Boolean).join(" ");
         const label = document.createElement("div");
         label.textContent = point.events?.length ? point.events.join(" · ") : "episode boundary";
         const meta = document.createElement("div");

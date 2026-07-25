@@ -6,6 +6,10 @@ from pathlib import Path
 from rlab.dotenv import load_env_file
 from rlab.env_registry import game_family_for_environment, wandb_project_for_environment
 from rlab.metric_names import EVAL_ACCEPTANCE_PASS, TRAIN_EPISODE_RETURN_SHAPED_MEAN
+from rlab.operator_credentials import (
+    load_operator_environment,
+    reject_protected_dotenv,
+)
 
 DEFAULT_WANDB_ENTITY = "tsilva"
 DEFAULT_WANDB_PROJECT = "SuperMarioBros-Nes-v0"
@@ -15,10 +19,14 @@ WANDB_ENV_PREFIXES = ("WANDB_",)
 
 
 def load_wandb_env(dotenv_path: str | Path = ".env") -> None:
-    """Load W&B configuration without exposing object-storage credentials."""
+    """Resolve only W&B configuration from safe local operator sources."""
+    reject_protected_dotenv(dotenv_path)
     load_env_file(
         dotenv_path,
         key_filter=lambda key: key.startswith(WANDB_ENV_PREFIXES),
+    )
+    load_operator_environment(
+        requested_names={"WANDB_API_KEY", "WANDB_ENTITY"},
     )
 
 

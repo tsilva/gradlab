@@ -81,7 +81,14 @@ export function mount({ definition, services }) {
   return {
     element,
     async renderFrame(kind, blob) {
-      if (kind !== FRAME_GAME || !blob) return false;
+      if (kind !== FRAME_GAME) return false;
+      if (!blob) {
+        canvas.width = 1;
+        canvas.height = 1;
+        empty.textContent = "No exact post-action game frame was retained for this transition.";
+        empty.hidden = false;
+        return true;
+      }
       const bitmap = await createImageBitmap(blob);
       aspect = bitmap.width / Math.max(1, bitmap.height);
       fit();
@@ -91,6 +98,7 @@ export function mount({ definition, services }) {
       context.imageSmoothingEnabled = false;
       context.drawImage(bitmap, 0, 0);
       bitmap.close();
+      empty.textContent = "This environment has no RGB renderer.";
       empty.hidden = true;
       return true;
     },
