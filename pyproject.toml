@@ -58,6 +58,7 @@ packages = ["src/rlab"]
 
 [tool.hatch.build.targets.wheel.force-include]
 "THIRD_PARTY_NOTICES.md" = "THIRD_PARTY_NOTICES.md"
+"METRICS.md" = "rlab/METRICS.md"
 
 [tool.uv]
 exclude-newer = "7 days"

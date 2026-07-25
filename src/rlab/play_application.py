@@ -423,7 +423,10 @@ class PlaybackHost:
                 worker.start()
             elif command.name == "browse_sources":
                 with self._lock:
-                    if self._active is None:
+                    route = command.payload.get("route")
+                    if isinstance(route, Mapping):
+                        self._route = dict(route)
+                    elif self._active is None:
                         self._route = {"level": "projects"}
                     self._phase = "selecting"
                     self._message = ""

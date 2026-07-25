@@ -382,7 +382,7 @@ function ingestHistoryPoint(point) {
   const key = historyKey(point);
   const index = state.history.findIndex((candidate) => historyKey(candidate) === key);
   if (index >= 0) {
-    state.history[index] = point;
+    state.history[index] = { ...state.history[index], ...point };
     return true;
   }
   state.history.push(point);
@@ -1333,7 +1333,11 @@ function movePanelToNewWindow(name) {
 }
 
 function bindWorkspaceMenus() {
-  $("#change-source").addEventListener("click", () => command("browse_sources"));
+  $("#change-source").addEventListener("click", () => {
+    void ensureSourceBrowser()
+      .then((browser) => browser.browseCurrentSource())
+      .catch((error) => showToast(`Source browser failed: ${error.message || error}`, true));
+  });
   $("#layouts-toggle").addEventListener("click", (event) => {
     $("#panel-shelf").hidden = true;
     $("#panels-toggle").setAttribute("aria-expanded", "false");

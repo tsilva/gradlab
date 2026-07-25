@@ -50,6 +50,7 @@ from rlab.policy_observation import (
     task_info_vars,
     task_state_names,
 )
+from rlab.policy_runtime import reset_policy_state
 from rlab.seeds import DEFAULT_EVAL_SEED, EVAL_SEED_START
 from rlab.targets import target_for_game
 
@@ -641,9 +642,7 @@ class _PlaybackSession:
             self.model.policy.reset_noise()
         self.env.seed(seed)
         self.policy_obs = self.env.reset()
-        reset_episode = getattr(self.model, "reset_episode", None)
-        if callable(reset_episode):
-            reset_episode()
+        reset_policy_state(self.model)
         reset_info = dict(self.env.reset_infos[0])
         self._set_initial_conditioning(reset_info)
         self.active_seed = seed
@@ -805,9 +804,7 @@ class _PlaybackSession:
         )
         self.last_transition = transition
         if boundary:
-            reset_lanes = getattr(self.model, "reset_lanes", None)
-            if callable(reset_lanes):
-                reset_lanes([True])
+            reset_policy_state(self.model, [True])
             self.episode += 1
             self.step_index = 0
             self.total_reward = 0.0

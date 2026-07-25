@@ -201,13 +201,11 @@ def download_public_checkpoint_manifest_source(
         target_dir / RECIPE_FILENAME,
         expected_sha256=str(manifest["recipe_document_sha256"]),
     )
-    bundle = load_policy_bundle_from_checkpoint(
-        model_path,
+    bundle = load_policy_bundle(
+        target_dir,
         source=text,
         revision=path_sha256,
     )
-    if bundle is None:
-        raise ValueError("public checkpoint closure is not a versioned policy bundle")
     return ResolvedModelSource(
         model_path=model_path,
         artifact_name=text,
@@ -424,6 +422,30 @@ def download_huggingface_model_source(
     )
 
 
+def _download_model_ref(
+    ref: str,
+    *,
+    public_root: Path,
+    hf_root: Path,
+    filename: str | None = None,
+    revision: str | None = None,
+) -> ResolvedModelSource:
+    text = str(ref).strip()
+    if is_public_checkpoint_manifest_ref(text):
+        return download_public_checkpoint_manifest_source(text, root=public_root)
+    if is_huggingface_model_ref(text):
+        return download_huggingface_model_source(
+            text,
+            root=hf_root,
+            filename=filename,
+            revision=revision,
+        )
+    raise ValueError(
+        "remote model source must be an immutable public checkpoint manifest "
+        "or Hugging Face model"
+    )
+
+
 def download_remote_model_source(
     ref: str,
     *,
@@ -431,15 +453,7 @@ def download_remote_model_source(
     require_pinned: bool = False,
 ) -> ResolvedModelSource:
     text = str(ref).strip()
-    if is_public_checkpoint_manifest_ref(text):
-        resolved = download_public_checkpoint_manifest_source(text, root=root)
-    elif is_huggingface_model_ref(text):
-        resolved = download_huggingface_model_source(text, root=root)
-    else:
-        raise ValueError(
-            "remote model source must be an immutable public checkpoint manifest "
-            "or Hugging Face model"
-        )
+    resolved = _download_model_ref(text, public_root=root, hf_root=root)
     pinned = str(resolved.artifact_name or "")
     if not pinned:
         raise ValueError("remote model source did not resolve an immutable locator")
@@ -454,15 +468,13 @@ def resolve_single_model_source(
     resolved_ref: str | None = None,
 ) -> ResolvedModelSource:
     ref = resolved_ref if resolved_ref is not None else model_source_ref(args)
-    if ref and is_public_checkpoint_manifest_ref(ref):
-        return download_public_checkpoint_manifest_source(
+    if ref:
+        return _download_model_ref(
             ref,
-            root=Path(getattr(args, "public_model_root", "runs/public_models")),
-        )
-    if ref and is_huggingface_model_ref(ref):
-        return download_huggingface_model_source(
-            ref,
-            root=Path(getattr(args, "hf_model_root", "runs/hf_models")),
+            public_root=Path(
+                getattr(args, "public_model_root", "runs/public_models")
+            ),
+            hf_root=Path(getattr(args, "hf_model_root", "runs/hf_models")),
             filename=getattr(args, "hf_file", None),
             revision=getattr(args, "hf_revision", None),
         )

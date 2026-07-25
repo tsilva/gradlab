@@ -464,8 +464,8 @@ class CertificationFixture:
         )
         supervisor.recipe_document = self.recipe_document
         supervisor.eval_contract = evaluation_contract(self.recipe_document)
-        supervisor.metric_store.init()
-        supervisor.ledger.init()
+        supervisor.store.init()
+        supervisor.store.init()
         supervisor.projector = WandbProjector(object())
         supervisor.wandb_run_path = (
             f"certification/SuperMarioBros-Nes-v0/{manifest.run_id}"
@@ -500,7 +500,7 @@ class CertificationFixture:
             },
         )
         write_canonical_json(recipe_document_path(model_path), self.recipe_document)
-        return supervisor.metric_store.record_checkpoint(
+        return supervisor.store.record_checkpoint(
             run_name=supervisor.manifest.run_id,
             kind=kind,
             step=step,
@@ -575,7 +575,7 @@ def _write_raw_result(
     accepted: bool,
     position: int = 0,
 ) -> dict[str, Any]:
-    rows = prepared.supervisor.ledger.evals(statuses=("submitted",))
+    rows = prepared.supervisor.store.evals(statuses=("submitted",))
     row = rows[position]
     raw = _accepted_or_rejected_raw(row, accepted=accepted)
     prepared.supervisor.authority.evaluation.put_json(
@@ -651,7 +651,7 @@ class LifecycleVerifier:
                 {"checkpoint_id": checkpoint["checkpoint_id"]},
             )
 
-        eval_rows = supervisor.ledger.evals()
+        eval_rows = supervisor.store.evals()
         check(
             "checkpoint-eval-bijection",
             {row["checkpoint_id"] for row in checkpoint_rows}
@@ -803,8 +803,8 @@ def _finalize_success(prepared: PreparedSupervisor) -> TerminalReceipt:
         wandb_high_water_mark=wandb_high_water,
         drain={
             "complete": True,
-            "metric_segment_high_water": supervisor.ledger.metric_segment_high_water(),
-            "eval_terminal_count": supervisor.ledger.terminal_eval_count(),
+            "metric_segment_high_water": supervisor.store.metric_segment_high_water(),
+            "eval_terminal_count": supervisor.store.terminal_eval_count(),
             "journal_archive": journal,
             "journal_expires_at": (
                 supervisor.clock.utc_datetime()
@@ -836,7 +836,7 @@ def _scenario_full_lifecycle(root: Path) -> dict[str, Any]:
     fixture = CertificationFixture(root)
     prepared = fixture.prepare(run_number=1)
     supervisor = prepared.supervisor
-    supervisor.metric_store.append_metrics(
+    supervisor.store.append_metrics(
         {"train/episode/return/shaped/mean": 1.0},
         step=250_000,
         source="learner",
@@ -844,7 +844,7 @@ def _scenario_full_lifecycle(root: Path) -> dict[str, Any]:
     fixture.record_checkpoint(prepared, step=250_000, kind="checkpoint")
     fixture.clock.advance(5)
     supervisor.active_iteration()
-    first_eval = supervisor.ledger.evals()[0]
+    first_eval = supervisor.store.evals()[0]
     _write_raw_result(prepared, accepted=True)
     fixture.clock.advance(2)
     supervisor.active_iteration()
@@ -857,7 +857,7 @@ def _scenario_full_lifecycle(root: Path) -> dict[str, Any]:
     fixture.record_checkpoint(prepared, step=260_000, kind="final")
     fixture.clock.advance(5)
     supervisor.active_iteration()
-    pending = supervisor.ledger.evals(statuses=("submitted",))
+    pending = supervisor.store.evals(statuses=("submitted",))
     final_position = next(
         index
         for index, row in enumerate(pending)
@@ -878,10 +878,10 @@ def _scenario_full_lifecycle(root: Path) -> dict[str, Any]:
     )
     recorder.require(
         "final-rejection-does-not-displace-earlier-acceptance",
-        prepared.supervisor.ledger.evals()[-1]["status"] == "rejected"
+        prepared.supervisor.store.evals()[-1]["status"] == "rejected"
         and receipt.state == "succeeded",
         evidence={
-            "final_status": prepared.supervisor.ledger.evals()[-1]["status"],
+            "final_status": prepared.supervisor.store.evals()[-1]["status"],
             "terminal_state": receipt.state,
         },
     )
@@ -890,8 +890,8 @@ def _scenario_full_lifecycle(root: Path) -> dict[str, Any]:
         "invariants": recorder.invariants + verifier_checks,
         "evidence": {
             "run_id": supervisor.manifest.run_id,
-            "checkpoint_count": len(supervisor.ledger.checkpoint_publications()),
-            "eval_statuses": [row["status"] for row in supervisor.ledger.evals()],
+            "checkpoint_count": len(supervisor.store.checkpoint_publications()),
+            "eval_statuses": [row["status"] for row in supervisor.store.evals()],
             "wandb_event_count": len(prepared.runtime.wandb_events),
             "terminal_state": receipt.state,
             "stop_reason": receipt.stop_reason,
@@ -906,7 +906,7 @@ def _scenario_parallel_run_isolation(root: Path) -> dict[str, Any]:
     first = fixture.prepare(run_number=11)
     second = fixture.prepare(run_number=12)
     for index, prepared in enumerate((first, second), start=1):
-        prepared.supervisor.metric_store.append_metrics(
+        prepared.supervisor.store.append_metrics(
             {"train/episode/return/shaped/mean": float(index)},
             step=100 * index,
             source="learner",
@@ -1031,21 +1031,21 @@ def _scenario_wandb_retry_deduplication(root: Path) -> dict[str, Any]:
     fixture = CertificationFixture(root)
     prepared = fixture.prepare(run_number=31, publish_failures=1)
     supervisor = prepared.supervisor
-    supervisor.metric_store.append_metrics(
+    supervisor.store.append_metrics(
         {"train/episode/return/shaped/mean": 3.0},
         step=300,
         source="learner",
     )
     fixture.clock.advance(5)
     supervisor.active_iteration()
-    pending = supervisor.metric_store.pending_metric_frames()
+    pending = supervisor.store.pending_metric_frames()
     recorder.require(
         "wandb-failure-remains-retryable",
         len(pending) == 1 and int(pending[0]["attempts"]) == 1,
         evidence={"pending": len(pending)},
     )
     supervisor.active_iteration()
-    with supervisor.ledger.connection() as connection:
+    with supervisor.store.connection() as connection:
         attempts = int(
             connection.execute(
                 "SELECT attempts FROM metric_frames ORDER BY id LIMIT 1"
@@ -1055,7 +1055,7 @@ def _scenario_wandb_retry_deduplication(root: Path) -> dict[str, Any]:
         "wandb-retry-publishes-once",
         attempts == 2
         and len(prepared.runtime.wandb_events) == 1
-        and supervisor.metric_store.metric_outbox_stats()["frames"] == 0,
+        and supervisor.store.metric_outbox_stats()["frames"] == 0,
         evidence={
             "attempts": attempts,
             "remote_events": len(prepared.runtime.wandb_events),
@@ -1072,7 +1072,7 @@ def _scenario_wandb_visibility_gating(root: Path) -> dict[str, Any]:
     fixture = CertificationFixture(root)
     prepared = fixture.prepare(run_number=36)
     supervisor = prepared.supervisor
-    supervisor.metric_store.append_metrics(
+    supervisor.store.append_metrics(
         {"train/episode/return/shaped/mean": 3.6},
         step=360,
         source="learner",
@@ -1117,21 +1117,21 @@ def _scenario_checkpoint_upload_retry(root: Path) -> dict[str, Any]:
         side_effect=RuntimeError("simulated interrupted checkpoint upload"),
     ):
         supervisor.active_iteration()
-    failed = supervisor.metric_store.checkpoints()[0]
+    failed = supervisor.store.checkpoints()[0]
     recorder.require(
         "interrupted-upload-does-not-create-eval-intent",
         failed["upload_status"] == "failed_retryable"
-        and not supervisor.ledger.evals()
-        and supervisor.ledger.checkpoint_publication(checkpoint_ledger_id) is None,
+        and not supervisor.store.evals()
+        and supervisor.store.checkpoint_publication(checkpoint_ledger_id) is None,
         evidence={"upload_status": failed["upload_status"]},
     )
     supervisor.active_iteration()
-    published = supervisor.ledger.checkpoint_publication(checkpoint_ledger_id)
+    published = supervisor.store.checkpoint_publication(checkpoint_ledger_id)
     recorder.require(
         "verified-retry-unlocks-eval-dispatch",
         published is not None
-        and supervisor.metric_store.checkpoints()[0]["upload_status"] == "uploaded"
-        and len(supervisor.ledger.evals()) == 1
+        and supervisor.store.checkpoints()[0]["upload_status"] == "uploaded"
+        and len(supervisor.store.evals()) == 1
         and len(prepared.backend.submissions) == 1,
         evidence={
             "checkpoint_id": (published or {}).get("checkpoint_id"),
@@ -1152,7 +1152,7 @@ def _scenario_modal_ambiguous_submit(root: Path) -> dict[str, Any]:
     fixture.record_checkpoint(prepared, step=400, kind="checkpoint")
     fixture.clock.advance(5)
     prepared.supervisor.active_iteration()
-    row = prepared.supervisor.ledger.evals()[0]
+    row = prepared.supervisor.store.evals()[0]
     prepared.supervisor.active_iteration()
     recorder.require(
         "ambiguous-submit-not-immediately-repeated",
@@ -1161,7 +1161,7 @@ def _scenario_modal_ambiguous_submit(root: Path) -> dict[str, Any]:
         and row["modal_call_id"] == "",
         evidence={"submissions": len(backend.submissions), "attempt": row["attempt"]},
     )
-    with prepared.supervisor.ledger.connection() as connection:
+    with prepared.supervisor.store.connection() as connection:
         connection.execute(
             "UPDATE eval_dispatches SET attempt_expires_at = ?",
             (fixture.clock.time() + 1,),
@@ -1169,7 +1169,7 @@ def _scenario_modal_ambiguous_submit(root: Path) -> dict[str, Any]:
     fixture.clock.advance(2)
     prepared.supervisor.active_iteration()
     prepared.supervisor.active_iteration()
-    retried = prepared.supervisor.ledger.evals()[0]
+    retried = prepared.supervisor.store.evals()[0]
     recorder.require(
         "ambiguous-submit-retries-after-expiry",
         len(backend.submissions) == 2
@@ -1192,12 +1192,12 @@ def _scenario_cancellation_terminalization(root: Path) -> dict[str, Any]:
     prepared.supervisor.active_iteration()
     prepared.supervisor.cancel_requested = True
     prepared.supervisor.drain_iteration()
-    row = prepared.supervisor.ledger.evals()[0]
+    row = prepared.supervisor.store.evals()[0]
     recorder.require(
         "cancel-terminalizes-eval",
         row["status"] == "canceled"
         and len(prepared.backend.canceled) == 1
-        and prepared.supervisor.ledger.all_evals_terminal(),
+        and prepared.supervisor.store.all_evals_terminal(),
         evidence={
             "status": row["status"],
             "canceled_calls": prepared.backend.canceled,
@@ -1211,7 +1211,7 @@ def _scenario_scratch_preservation_stop(root: Path) -> dict[str, Any]:
     fixture = CertificationFixture(root)
     prepared = fixture.prepare(run_number=56)
     supervisor = prepared.supervisor
-    supervisor.metric_store.append_metrics(
+    supervisor.store.append_metrics(
         {"train/episode/return/shaped/mean": 5.6},
         step=560,
         source="learner",
@@ -1231,10 +1231,10 @@ def _scenario_scratch_preservation_stop(root: Path) -> dict[str, Any]:
         "scratch-pressure-stops-before-evidence-loss",
         stopped
         and supervisor.stop_reason == "scratch_storage_above_80_percent"
-        and supervisor.ledger.metric_segment_high_water() == 1,
+        and supervisor.store.metric_segment_high_water() == 1,
         evidence={
             "stop_reason": supervisor.stop_reason,
-            "r2_high_water": supervisor.ledger.metric_segment_high_water(),
+            "r2_high_water": supervisor.store.metric_segment_high_water(),
         },
     )
     return {
@@ -1247,7 +1247,7 @@ def _scenario_drain_only_recovery(root: Path) -> dict[str, Any]:
     recorder = ScenarioRecorder("drain-only-recovery", [])
     fixture = CertificationFixture(root)
     first = fixture.prepare(run_number=61)
-    first.supervisor.metric_store.append_metrics(
+    first.supervisor.store.append_metrics(
         {"train/episode/return/shaped/mean": 6.0},
         step=600,
         source="learner",
@@ -1267,14 +1267,14 @@ def _scenario_drain_only_recovery(root: Path) -> dict[str, Any]:
         recovery_mode="drain-only",
     )
     recovered.supervisor._recover_durable_state()
-    recovered_rows = recovered.supervisor.ledger.evals()
+    recovered_rows = recovered.supervisor.store.evals()
     recorder.require(
         "drain-only-recovers-checkpoint-and-eval",
-        len(recovered.supervisor.ledger.checkpoint_publications()) == 1
+        len(recovered.supervisor.store.checkpoint_publications()) == 1
         and len(recovered_rows) == 1
         and recovered_rows[0]["status"] == "accepted",
         evidence={
-            "checkpoints": len(recovered.supervisor.ledger.checkpoint_publications()),
+            "checkpoints": len(recovered.supervisor.store.checkpoint_publications()),
             "eval_status": recovered_rows[0]["status"],
         },
     )
@@ -1350,7 +1350,7 @@ def _scenario_verifier_tamper_detection(root: Path) -> dict[str, Any]:
     fixture.record_checkpoint(prepared, step=700, kind="checkpoint")
     fixture.clock.advance(5)
     prepared.supervisor.active_iteration()
-    checkpoint = prepared.supervisor.ledger.checkpoint_publications()[0]
+    checkpoint = prepared.supervisor.store.checkpoint_publications()[0]
     key = (
         f"runs/{prepared.supervisor.manifest.run_id}/checkpoints/"
         f"{checkpoint['step']}-{checkpoint['sha256']}/model.zip"

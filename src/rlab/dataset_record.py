@@ -48,7 +48,7 @@ from rlab.dataset_store import (
     preflight_recording_reference,
     validate_tree,
 )
-from rlab.json_utils import canonical_json_bytes
+from rlab.json_utils import canonical_json_bytes, json_value
 from rlab.model_sources import (
     download_remote_model_source,
     is_huggingface_model_ref,
@@ -78,18 +78,6 @@ ROW_CONTEXT_COLUMNS = (
     "policy_mode",
     "policy_seed",
 )
-
-
-def _json_value(value: Any) -> Any:
-    if isinstance(value, np.generic):
-        return value.item()
-    if isinstance(value, np.ndarray):
-        return value.tolist()
-    if isinstance(value, Mapping):
-        return {str(key): _json_value(item) for key, item in value.items()}
-    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray, memoryview)):
-        return [_json_value(item) for item in value]
-    return value
 
 
 @dataclass(frozen=True)
@@ -322,13 +310,13 @@ def _transition_row(
     return {
         **context,
         "step_index": step,
-        "actions": _json_value(action),
-        "policy_actions": _json_value(policy_action),
+        "actions": json_value(action),
+        "policy_actions": json_value(policy_action),
         "rewards": float(reward),
         "terminations": bool(terminated),
         "truncations": bool(truncated),
         "infos": json.dumps(
-            _json_value(info), sort_keys=True, separators=(",", ":"), allow_nan=False
+            json_value(info), sort_keys=True, separators=(",", ":"), allow_nan=False
         ),
         "collector_terminated": False,
         "video_path": video_path,
@@ -1016,7 +1004,7 @@ def reexecute_dataset(validation: Any) -> None:
                 ):
                     raise ValueError(f"episode {episode_id} boundary differs at step {step}")
                 encoded_info = json.dumps(
-                    _json_value(info), sort_keys=True, separators=(",", ":"), allow_nan=False
+                    json_value(info), sort_keys=True, separators=(",", ":"), allow_nan=False
                 )
                 if encoded_info != str(row["infos"]):
                     raise ValueError(f"episode {episode_id} info differs at step {step}")

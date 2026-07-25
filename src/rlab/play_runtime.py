@@ -275,9 +275,9 @@ class PlaybackLoader:
             rom_binding=candidate.rom_binding,
         )
         try:
-            bind_action_space = getattr(model, "bind_action_space", None)
-            if callable(bind_action_space):
-                bind_action_space(policy_env.action_space)
+            from rlab.policy_runtime import bind_policy_action_space
+
+            bind_policy_action_space(model, policy_env.action_space)
             session = _PlaybackSession(
                 model=model,
                 env=policy_env,

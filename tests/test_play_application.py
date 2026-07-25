@@ -149,6 +149,24 @@ def test_playback_host_starts_without_a_source_then_activates_selection() -> Non
     host.stop()
 
 
+def test_browse_sources_updates_the_shared_resource_route() -> None:
+    host = PlaybackHost(FakeLoader())
+    route = {
+        "level": "checkpoints",
+        "entity": "research",
+        "project": "Mario",
+        "run_id": "rlab-" + "b" * 32,
+        "checkpoint_id": "",
+    }
+
+    host.submit(source_command("browse_sources", {"route": route}))
+
+    snapshot = host.snapshot()
+    assert snapshot["app"]["phase"] == "selecting"
+    assert snapshot["app"]["route"] == route
+    host.stop()
+
+
 def test_playback_host_requires_the_exact_browser_approval_hash() -> None:
     loader = FakeLoader(approval_required=True)
     source = PlaySourceSpec("local", "/tmp/model.zip")

@@ -12,6 +12,7 @@ from rlab.metric_names import (
     eval_success_from_rate_metric,
     eval_success_rate_metric,
 )
+from rlab.policy_runtime import reset_policy_state
 from rlab.targets import EvalSemantics, target_for_game
 from rlab.task_kernels import Outcome
 
@@ -405,9 +406,7 @@ def run_eval_episode(
     observation_callback: Callable[[object], object] | None = None,
 ) -> dict[str, Any]:
     semantics = semantics or default_eval_semantics()
-    reset_episode = getattr(model, "reset_episode", None)
-    if callable(reset_episode):
-        reset_episode()
+    reset_policy_state(model)
     env.seed(seed)
     obs = env.reset()
     actions: list[Any] = []
