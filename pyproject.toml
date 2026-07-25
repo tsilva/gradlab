@@ -91,7 +91,9 @@ dev = [
 ]
 modal-deploy = [
     "hydra-core>=1.3,<2",
+    "jinja2>=3.1,<4",
     "modal>=1.3,<2",
+    "pydantic>=2.13,<3",
 ]
 train-image-build = [
     "packaging>=25,<26",

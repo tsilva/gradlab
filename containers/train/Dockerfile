@@ -119,6 +119,7 @@ WORKDIR /src
 
 COPY pyproject.toml ./
 COPY THIRD_PARTY_NOTICES.md ./
+COPY METRICS.md ./
 COPY src ./src
 
 RUN --mount=type=cache,target=/root/.cache/uv \
@@ -128,6 +129,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 FROM scratch AS runtime-overlay
 
 COPY --from=app-package /opt/rlab /opt/rlab
+COPY METRICS.md /root/rlab/METRICS.md
 COPY src /root/rlab/src
 COPY scripts /root/rlab/scripts
 COPY experiments/goals /root/rlab/experiments/goals

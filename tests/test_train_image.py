@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import subprocess
 import tempfile
+import tomllib
 import unittest
 from pathlib import Path
 
@@ -34,6 +35,29 @@ class TrainImageTests(unittest.TestCase):
         self.assertNotIn("containers/train/gpu-linux-amd64.lock", RUNTIME_INPUT_PATHS)
         self.assertNotIn("tests", RUNTIME_INPUT_PATHS)
         self.assertNotIn("README.md", RUNTIME_INPUT_PATHS)
+
+    def test_wheel_force_includes_are_runtime_image_inputs(self) -> None:
+        project = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
+        force_includes = project["tool"]["hatch"]["build"]["targets"]["wheel"]["force-include"]
+        dockerfile = Path("containers/train/Dockerfile").read_text(encoding="utf-8")
+        app_package = dockerfile.split("FROM ${PYTHON_IMAGE} AS app-package", maxsplit=1)[1].split(
+            "FROM scratch AS runtime-overlay", maxsplit=1
+        )[0]
+
+        for source in force_includes:
+            with self.subTest(source=source):
+                self.assertTrue(Path(source).is_file())
+                self.assertIn(source, RUNTIME_INPUT_PATHS)
+                self.assertIn(f"COPY {source} ./", app_package)
+
+    def test_modal_deploy_group_covers_config_runtime(self) -> None:
+        project = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
+        dependencies = project["dependency-groups"]["modal-deploy"]
+
+        self.assertTrue(any(requirement.startswith("hydra-core") for requirement in dependencies))
+        self.assertTrue(any(requirement.startswith("jinja2") for requirement in dependencies))
+        self.assertTrue(any(requirement.startswith("modal") for requirement in dependencies))
+        self.assertTrue(any(requirement.startswith("pydantic") for requirement in dependencies))
 
     def test_overlay_key_tracks_indexed_content_path_mode_and_runtime_docker_section(
         self,
@@ -147,6 +171,7 @@ class TrainImageTests(unittest.TestCase):
         self.assertIn("FROM scratch AS dependency-overlay", dockerfile)
         self.assertIn("FROM ${GPU_BASE} AS dependencies", dockerfile)
         self.assertIn("FROM scratch AS runtime-overlay", dockerfile)
+        self.assertIn("COPY METRICS.md /root/rlab/METRICS.md", dockerfile)
         self.assertIn("FROM ${RUNTIME_BASE} AS runtime", dockerfile)
         runtime = dockerfile.split("FROM ${RUNTIME_BASE} AS runtime", maxsplit=1)[1]
         instructions = [line.strip() for line in runtime.splitlines() if line and not line.startswith(" ")]
