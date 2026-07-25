@@ -5,15 +5,11 @@ from __future__ import annotations
 import argparse
 import contextlib
 import os
-import selectors
-import signal
 import sys
-import time
 from collections import deque
 from collections.abc import Mapping
 from copy import deepcopy
-from dataclasses import asdict, dataclass, replace
-from itertools import count
+from dataclasses import dataclass
 from pathlib import Path
 
 os.environ.setdefault("MPLCONFIGDIR", os.path.abspath(".matplotlib"))
@@ -23,24 +19,17 @@ import numpy as np
 import torch
 from tqdm import tqdm
 
-from rlab.artifacts import load_playback_env_config, playback_env_config
 from rlab.action_contract import configured_action_meanings, configured_action_name
 from rlab.batch_runtime import StepDiagnostics
 from rlab.cli_args import explicit_arg_dests
-from rlab.device import resolve_sb3_device
 from rlab.env import (
-    assert_provider_runtime_available,
     info_value_from_state_name,
-    make_eval_vec_env,
     state_name_candidates_from_level_id,
     task_conditioning,
     task_max_episode_steps,
     task_reward,
     task_termination,
-    resolve_env_config,
 )
-from rlab.env_metadata import env_config_from_config_dict
-from rlab.env_registry import resolve_env_provider
 from rlab.eval_metrics import (
     batch_metrics_for_lane,
     drain_runtime_records,
@@ -48,38 +37,15 @@ from rlab.eval_metrics import (
     episode_result_from_record,
     is_level_complete,
 )
-from rlab.rom_assets import rom_asset_manifest_for_game
-from rlab.rom_runtime import ensure_local_rom_binding
 from rlab.model_sources import (
     DEFAULT_PUBLIC_MODELS_BASE_URL,
-    download_public_run_source,
-    model_source_ref,
     positional_model_source_arg,
-    resolve_single_model_source,
 )
 from rlab.play_attribution import PolicyActionAttributor
-from rlab.policy_bundle import playback_contract
 from rlab.play_debug import (
-    DebugCommandError,
     PolicyDecision,
-    action_display_name,
-    ansi,
-    debug_help,
-    debug_prompt,
-    field,
-    format_action,
-    format_model_input,
-    format_policy_detail,
-    format_raw,
     inspect_policy,
-    model_input_lines,
-    parse_debug_command,
-    policy_summary_lines,
-    reward_text,
     sample_policy_decision,
-    section,
-    status_message,
-    terminal_panel,
 )
 from rlab.policy_observation import (
     model_observation,
@@ -87,7 +53,7 @@ from rlab.policy_observation import (
     task_info_vars,
     task_state_names,
 )
-from rlab.seeds import DEFAULT_EVAL_SEED, EVAL_SEED_START, validate_eval_seed
+from rlab.seeds import DEFAULT_EVAL_SEED, EVAL_SEED_START
 from rlab.targets import target_for_game
 
 
@@ -190,13 +156,6 @@ def playback_should_end_episode(terminated: bool, truncated: bool, completed: bo
     return bool(terminated or truncated)
 
 
-def playback_step_indices(max_episode_steps: int):
-    """Iterate forever when zero denotes an unbounded episode."""
-    if max_episode_steps <= 0:
-        return count()
-    return range(max_episode_steps)
-
-
 def vector_env_frame(env) -> np.ndarray:
     images = env.get_images()
     if not images or images[0] is None:
@@ -248,12 +207,19 @@ def render_obs_stack(
 
 
 def add_play_source_args(parser: argparse.ArgumentParser) -> None:
+    def positional_play_source_arg(value: str) -> str:
+        from rlab.play_catalog import is_wandb_url
+
+        if is_wandb_url(value):
+            return value
+        return positional_model_source_arg(value)
+
     parser.add_argument(
         "artifact_ref",
         nargs="?",
-        type=positional_model_source_arg,
+        type=positional_play_source_arg,
         help=(
-            "Immutable public checkpoint manifest or Hugging Face model ref. "
+            "W&B project/run URL, immutable public checkpoint manifest, or Hugging Face model ref. "
             "Use --model for a local checkpoint or --run for an rlab public run."
         ),
     )
@@ -273,6 +239,10 @@ def add_play_source_args(parser: argparse.ArgumentParser) -> None:
         "--public-models-base-url",
         default=DEFAULT_PUBLIC_MODELS_BASE_URL,
         help="Public models bucket URL. Defaults to rlab's checked-in public endpoint.",
+    )
+    parser.add_argument(
+        "--wandb-entity",
+        help="W&B entity to browse. Defaults to WANDB_ENTITY or the authenticated entity.",
     )
     parser.add_argument(
         "--public-model-root",
@@ -310,7 +280,10 @@ def attribution_opacity_arg(value: str) -> float:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="rlab play",
-        description="Run and inspect an rlab policy in the interactive player dashboard",
+        description=(
+            "Browse W&B runs and public checkpoints, then inspect a policy in the "
+            "interactive web player"
+        ),
     )
     add_play_source_args(parser)
     parser.add_argument(
@@ -729,9 +702,6 @@ class _PlaybackSession:
         self.current_frame = optional_vector_env_frame(self.env)
         self.frames = optional_fast_env_frames(self.policy_obs)
 
-    def inspect_policy(self) -> PolicyDecision:
-        return inspect_policy(self.model, self.model_obs)
-
     def step(self, *, deterministic: bool = False) -> _PlaybackTransition:
         decision = (
             inspect_policy(self.model, self.model_obs)
@@ -748,8 +718,12 @@ class _PlaybackSession:
         requested = {str(label).strip().casefold() for label in labels if str(label).strip()}
         for index, meaning in enumerate(self.action_names):
             normalized = str(meaning).strip().casefold()
-            parts = set() if normalized in {"", "noop", "no_op", "none"} else set(
-                part for part in normalized.split("_") if part and not part.startswith("p1")
+            parts = (
+                set()
+                if normalized in {"", "noop", "no_op", "none"}
+                else set(
+                    part for part in normalized.split("_") if part and not part.startswith("p1")
+                )
             )
             if parts == requested:
                 return index
@@ -890,437 +864,6 @@ class _PlaybackSession:
             self.step_index += 1
         return transition
 
-    def render(self) -> bool:
-        return True
-
-
-def _transition_debug_text(
-    transition: _PlaybackTransition,
-    action_names: tuple[str, ...],
-) -> str:
-    diagnostics = transition.diagnostics
-    if diagnostics is None:
-        raise RuntimeError("debug playback step did not produce runtime diagnostics")
-    components = {
-        name: value
-        for name, value in diagnostics.task_metrics.items()
-        if name.endswith("_component") and np.any(np.asarray(value) != 0)
-    }
-    deltas = {
-        name: value
-        for name, value in diagnostics.task_metrics.items()
-        if name.endswith("_delta") and np.any(np.asarray(value) != 0)
-    }
-    selected = (
-        None if transition.decision is None else transition.decision.selected_discrete_action
-    )
-    controller = (
-        action_display_name(selected, action_names)
-        if selected is not None
-        else format_action(diagnostics.native_action)
-    )
-    event_labels = []
-    for event in diagnostics.events:
-        lowered = event.lower()
-        icon = (
-            "💀"
-            if "life_loss" in lowered or "death" in lowered or "fail" in lowered
-            else "🏁"
-            if "complete" in lowered or "success" in lowered
-            else "◆"
-        )
-        style = "red" if icon == "💀" else "green" if icon == "🏁" else "yellow"
-        event_labels.append(f"{icon} {ansi(event.replace('_', ' ').upper(), style)}")
-    boundary_parts = []
-    if diagnostics.provider_terminated:
-        boundary_parts.append("provider terminated")
-    if diagnostics.provider_truncated:
-        boundary_parts.append("provider truncated")
-    if diagnostics.task_terminated:
-        boundary_parts.append("task terminated")
-    if diagnostics.task_truncated:
-        boundary_parts.append("task truncated")
-    outcome = diagnostics.outcome.name.lower()
-    outcome_style = "green" if outcome == "success" else "red" if outcome == "failure" else "dim"
-
-    lines = [
-        section("👁", "INPUT", style="blue"),
-        field("trajectory", f"episode {transition.episode}  ·  policy step {transition.step}"),
-        field("scenario", f"seed {transition.seed}  ·  start {transition.start_id or 'default'}"),
-        field(
-            "conditioning",
-            repr(transition.pre_task) if transition.pre_task is not None else ansi("none", "dim"),
-        ),
-        field("observation", _observation_shape(transition.model_obs)),
-        "",
-        section("🎲", "POLICY", style="magenta"),
-        *(
-            policy_summary_lines(transition.decision, action_names)
-            if transition.decision is not None
-            else [field("action source", ansi("human intervention", "yellow"))]
-        ),
-        "",
-        section("⚙", "TRANSITION", style="yellow"),
-        field("controller", ansi(controller, "bold")),
-        field(
-            "reward",
-            f"provider {reward_text(diagnostics.provider_reward)}  →  "
-            f"training {reward_text(diagnostics.reward)}",
-        ),
-    ]
-    for name, value in components.items():
-        component_value = float(np.asarray(value).reshape(-1)[0])
-        lines.append(
-            field(
-                f"↳ {name.removesuffix('_component').replace('_', ' ')}",
-                reward_text(component_value),
-            )
-        )
-    if deltas:
-        lines.append(
-            field(
-                "signal deltas",
-                "  ·  ".join(
-                    f"{name.removesuffix('_delta').replace('_', ' ')} {format_action(value)}"
-                    for name, value in deltas.items()
-                ),
-            )
-        )
-    if diagnostics.event_transitions:
-        lines.append(
-            field(
-                "signal changes",
-                "  ·  ".join(
-                    f"{name.replace('_', ' ')} {format_action(source)}→{format_action(target)}"
-                    for name, (source, target) in diagnostics.event_transitions.items()
-                ),
-            )
-        )
-    lines.extend(
-        [
-            field("events", "  ·  ".join(event_labels) if event_labels else ansi("none", "dim")),
-            field(
-                "boundary",
-                ansi("  ·  ".join(boundary_parts), "red" if outcome == "failure" else "yellow")
-                if boundary_parts
-                else ansi("continuing", "green"),
-            ),
-            field("outcome", ansi(outcome.upper(), outcome_style)),
-            "",
-            section("↻" if transition.boundary else "→", "NEXT", style="green"),
-            field(
-                "conditioning",
-                repr(transition.next_task)
-                if transition.next_task is not None
-                else ansi("none", "dim"),
-            ),
-        ]
-    )
-    if transition.boundary:
-        lines.extend(
-            [
-                field("observation", ansi("same-step reset", "yellow")),
-                field("terminal frame", ansi("preserved for inspection", "green")),
-                field("next seed", diagnostics.next_episode_seed),
-            ]
-        )
-    else:
-        lines.append(field("observation", ansi("ordinary successor", "green")))
-    title = f"TRANSITION  ·  EPISODE {transition.episode}  ·  STEP {transition.step}"
-    accent = "red" if outcome == "failure" else "green" if outcome == "success" else "cyan"
-    return terminal_panel(title, lines, accent=accent)
-
-
-def _raw_transition_payload(transition: _PlaybackTransition) -> dict[str, object]:
-    diagnostics = transition.diagnostics
-    terminal_observation = transition.info.get("terminal_observation")
-    return {
-        "runtime": None if diagnostics is None else asdict(diagnostics),
-        "sb3_info_keys": sorted(transition.info),
-        "terminal_observation_present": "terminal_observation" in transition.info,
-        "terminal_observation": (
-            None if terminal_observation is None else model_input_lines(terminal_observation)
-        ),
-        "reset_info": transition.info.get("reset_info"),
-    }
-
-
-def _read_debug_line(session: _PlaybackSession) -> str | None:
-    prompt = debug_prompt()
-    if not sys.stdin.isatty():
-        try:
-            return input(prompt)
-        except EOFError:
-            return None
-    try:
-        selector = selectors.DefaultSelector()
-        selector.register(sys.stdin, selectors.EVENT_READ)
-    except AttributeError, OSError, ValueError:
-        try:
-            return input(prompt)
-        except EOFError:
-            return None
-    print(prompt, end="", flush=True)
-    try:
-        while True:
-            if not session.render():
-                print()
-                return None
-            if selector.select(timeout=0.02):
-                line = sys.stdin.readline()
-                return None if line == "" else line.rstrip("\n")
-    finally:
-        selector.close()
-
-
-@contextlib.contextmanager
-def _deferred_sigint():
-    interrupted = False
-    previous = signal.getsignal(signal.SIGINT)
-
-    def handle_interrupt(_signum, _frame):
-        nonlocal interrupted
-        interrupted = True
-
-    signal.signal(signal.SIGINT, handle_interrupt)
-    try:
-        yield lambda: interrupted
-    finally:
-        signal.signal(signal.SIGINT, previous)
-
-
-def _run_debugger(
-    session: _PlaybackSession,
-    args: argparse.Namespace,
-    config_text: str,
-) -> int:
-    event_names = tuple(session.env.runtime.kernel.event_names)
-    boundaries = 0
-    print(
-        terminal_panel(
-            "INTERACTIVE POLICY DEBUGGER",
-            [
-                section("🧪", "READY", style="cyan"),
-                field("Enter", "take one policy step"),
-                field("continue", "run to an event or boundary"),
-                field("inspect", "show policy  ·  show input  ·  show raw"),
-                field("commands", "enter help for the full command list"),
-            ],
-            accent="cyan",
-        ),
-        flush=True,
-    )
-    if not session.render():
-        return 0
-    while True:
-        try:
-            line = _read_debug_line(session)
-        except KeyboardInterrupt:
-            print(
-                "\n" + status_message("■", "interrupted; debugger is still active", style="yellow"),
-                flush=True,
-            )
-            continue
-        if line is None:
-            return 0
-        try:
-            command = parse_debug_command(line, event_names)
-        except DebugCommandError as exc:
-            print(status_message("✗", str(exc), style="red"), flush=True)
-            continue
-        if command.name == "quit":
-            return 0
-        if command.name == "help":
-            print(debug_help(event_names), flush=True)
-            continue
-        if command.name == "show":
-            if command.target == "policy":
-                print(
-                    format_policy_detail(session.inspect_policy(), session.action_names),
-                    flush=True,
-                )
-            elif command.target == "input":
-                print(format_model_input(session.model_obs), flush=True)
-            elif command.target == "raw":
-                if session.last_transition is None:
-                    print(
-                        status_message("○", "no transition has been stepped", style="yellow"),
-                        flush=True,
-                    )
-                else:
-                    print(format_raw(_raw_transition_payload(session.last_transition)), flush=True)
-            elif command.target == "config":
-                print(
-                    terminal_panel(
-                        "PLAYBACK CONFIG",
-                        [
-                            *config_text.splitlines(),
-                            "",
-                            section("●", "ACTIVE SESSION", style="green"),
-                            field("seed", session.active_seed),
-                            field("conditioning", repr(session.active_task)),
-                        ],
-                        accent="blue",
-                    ),
-                    flush=True,
-                )
-            elif session.last_transition is None:
-                print(
-                    status_message("○", "no transition has been stepped", style="yellow"),
-                    flush=True,
-                )
-            else:
-                print(
-                    _transition_debug_text(session.last_transition, session.action_names),
-                    flush=True,
-                )
-            continue
-        if command.name == "reset":
-            try:
-                seed = (
-                    session.initial_seed
-                    if command.seed is None
-                    else validate_eval_seed(command.seed)
-                )
-                session.restart(seed)
-            except ValueError as exc:
-                print(status_message("✗", str(exc), style="red"), flush=True)
-                continue
-            print(status_message("↻", f"reset complete  ·  seed {seed}", style="green"), flush=True)
-            if not session.render():
-                return 0
-            continue
-
-        try:
-            if command.name == "step":
-                with _deferred_sigint() as interrupted:
-                    for _ in range(command.count):
-                        transition = session.step()
-                        print(
-                            _transition_debug_text(transition, session.action_names),
-                            flush=True,
-                        )
-                        if not session.render():
-                            return 0
-                        if transition.boundary:
-                            boundaries += 1
-                            if args.episodes > 0 and boundaries >= args.episodes:
-                                return 0
-                        if interrupted():
-                            print(
-                                status_message(
-                                    "■",
-                                    "interrupted after the completed step",
-                                    style="yellow",
-                                ),
-                                flush=True,
-                            )
-                            break
-            else:
-                transition = None
-                advanced = 0
-                matched = False
-                with _deferred_sigint() as interrupted:
-                    for advanced in range(1, 10_001):
-                        transition = session.step()
-                        if not session.render():
-                            return 0
-                        if transition.boundary:
-                            boundaries += 1
-                        matched = (
-                            transition.boundary
-                            if command.target == "done"
-                            else bool(transition.events)
-                            if command.target is None
-                            else command.target in transition.events
-                        )
-                        if matched or transition.boundary or interrupted():
-                            break
-                        if args.episodes > 0 and boundaries >= args.episodes:
-                            break
-                was_interrupted = interrupted()
-                if transition is not None:
-                    print(
-                        status_message("⏩", f"advanced {advanced:,} steps", style="cyan"),
-                        flush=True,
-                    )
-                    print(
-                        _transition_debug_text(transition, session.action_names),
-                        flush=True,
-                    )
-                if was_interrupted:
-                    print(
-                        status_message("■", "interrupted after the completed step", style="yellow"),
-                        flush=True,
-                    )
-                if (
-                    advanced == 10_000
-                    and transition is not None
-                    and not (matched or transition.boundary)
-                ):
-                    print(
-                        status_message(
-                            "⚠",
-                            "continue stopped at the 10,000-step safety limit",
-                            style="yellow",
-                        ),
-                        flush=True,
-                    )
-                if args.episodes > 0 and boundaries >= args.episodes:
-                    return 0
-        except KeyboardInterrupt:
-            print(
-                "\n" + status_message("■", "interrupted; debugger is still active", style="yellow"),
-                flush=True,
-            )
-
-
-def _run_normal_playback(
-    session: _PlaybackSession,
-    args: argparse.Namespace,
-    throttle,
-) -> int:
-    episode_iter = count() if args.episodes <= 0 else range(args.episodes)
-    for episode in episode_iter:
-        if episode:
-            session.restart(args.seed + episode)
-        if not session.render():
-            return 0
-        throttle()
-        max_episode_steps = task_max_episode_steps(session.config)
-        final_transition = None
-        for _ in playback_step_indices(max_episode_steps):
-            final_transition = session.step()
-            if not session.render():
-                return 0
-            throttle()
-            if final_transition.boundary:
-                status = (
-                    "complete"
-                    if final_transition.completed
-                    else "terminated"
-                    if final_transition.terminated
-                    else "truncated"
-                )
-                print(
-                    f"episode={episode + 1} seed={final_transition.seed} "
-                    f"reward={final_transition.total_reward:.2f} "
-                    f"max_x={final_transition.max_x_pos} steps={final_transition.step} "
-                    f"status={status} complete={final_transition.completed}",
-                    flush=True,
-                )
-                time.sleep(0.5)
-                break
-        else:
-            print(
-                f"episode={episode + 1} seed={args.seed + episode} "
-                f"reward={0.0 if final_transition is None else final_transition.total_reward:.2f} "
-                f"max_x={0 if final_transition is None else final_transition.max_x_pos} "
-                f"steps={max_episode_steps} status=max_steps",
-                flush=True,
-            )
-    return 0
-
 
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
@@ -1334,150 +877,55 @@ def main(argv: list[str] | None = None) -> int:
             args.run,
         )
     )
-    if selected_sources == 0:
-        parser.error(
-            "a model source is required; pass --run, an immutable manifest, an hf:// "
-            "model ref, or --model /path/to/checkpoint.zip"
-        )
     if selected_sources > 1:
         parser.error("pass exactly one of --run, a positional remote source, or --model")
     args.respect_task_termination = not args.continuous_play
     explicit_dests = explicit_arg_dests(parser, argv_list)
     if args.attribution_interval is None:
         args.attribution_interval = 8 if args.attribution == "occlusion" else 1
-    with startup_progress("Resolving model reference", disabled=args.no_progress):
-        ref = model_source_ref(args) if not args.run else None
-    if not args.run and ref is None and not Path(str(args.model)).expanduser().is_file():
-        parser.error(f"local model checkpoint not found: {args.model}")
-    with startup_progress(
-        "Downloading model" if ref is not None else "Opening local model",
-        disabled=args.no_progress,
-    ):
-        source = (
-            download_public_run_source(
-                str(args.run),
-                root=Path(args.public_model_root),
-                public_base_url=str(args.public_models_base_url),
-            )
-            if args.run
-            else resolve_single_model_source(args, resolved_ref=ref)
-        )
-    args.model = str(source.model_path)
-    if ref is not None or args.run:
-        print(f"Downloaded model: {args.model}", flush=True)
-    with startup_progress("Loading playback metadata", disabled=args.no_progress):
-        if source.bundle is not None:
-            contract = playback_contract(source.bundle.recipe)
-            artifact_config = env_config_from_config_dict(contract["environment"])
-            if artifact_config is None:
-                raise ValueError("policy bundle recipe has no playback environment")
-            artifact_config = resolve_env_config(artifact_config)
-            if "seed" not in explicit_dests:
-                args.seed = int(contract["seed"])
-            if args.continuous_play:
-                artifact_config = playback_env_config(
-                    artifact_config,
-                    respect_task_termination=False,
-                )
+
+    from rlab.model_sources import is_huggingface_model_ref
+    from rlab.play_application import PlaybackHost
+    from rlab.play_catalog import PlayCatalog, parse_wandb_location
+    from rlab.play_runtime import PlaySourceSpec, PlaybackLoader
+    from rlab.play_web import run_web_player_application
+
+    initial_route: dict[str, object] = {
+        "level": "projects",
+        "entity": str(args.wandb_entity or ""),
+    }
+    initial_source: PlaySourceSpec | None = None
+    if args.run:
+        initial_source = PlaySourceSpec("public_run", str(args.run), run_id=str(args.run))
+    elif args.model:
+        initial_source = PlaySourceSpec("local", str(Path(args.model).expanduser()))
+    elif args.artifact_ref:
+        wandb_location = parse_wandb_location(args.artifact_ref)
+        if wandb_location is not None:
+            initial_route = {
+                "level": "checkpoints" if wandb_location.run_id else "runs",
+                "entity": wandb_location.entity,
+                "project": wandb_location.project,
+                "run_id": wandb_location.run_id or "",
+            }
+            args.wandb_entity = wandb_location.entity
+        elif is_huggingface_model_ref(args.artifact_ref):
+            initial_source = PlaySourceSpec("huggingface", str(args.artifact_ref))
         else:
-            artifact_config = load_playback_env_config(
-                source.model_path,
-                respect_task_termination=args.respect_task_termination,
-            )
-        if args.env_provider:
-            artifact_config = resolve_env_config(
-                replace(artifact_config, env_provider=str(args.env_provider))
-            )
-    args.seed = validate_eval_seed(args.seed)
-    config = artifact_config
-    display_config = display_replay_config(config)
-    print_resolved_play_launch(
+            initial_source = PlaySourceSpec("manifest", str(args.artifact_ref))
+
+    loader = PlaybackLoader(
         args,
         argv=argv_list,
-        artifact_ref=ref,
-        policy_config=config,
-        display_config=display_config,
+        explicit_seed="seed" in explicit_dests,
     )
-    with startup_progress("Checking provider runtime", disabled=args.no_progress):
-        rom_binding = None
-        if resolve_env_provider(config.env_provider).requires_external_rom_asset:
-            asset = contract.get("asset") if source.bundle is not None else None
-            rom_binding = (
-                ensure_local_rom_binding(asset, game=config.game)
-                if isinstance(asset, Mapping)
-                else ensure_local_rom_binding(
-                    rom_asset_manifest_for_game(config.game),
-                    game=config.game,
-                )
-            )
-        assert_provider_runtime_available(config, rom_binding=rom_binding)
-
-    with startup_progress("Loading policy runtime", disabled=args.no_progress):
-        from rlab.policy_models import load_external_policy_model
-
-    with startup_progress("Loading model checkpoint", disabled=args.no_progress):
-        model = load_external_policy_model(
-            args.model,
-            device=resolve_sb3_device(args.device),
-            source_identity=str(source.artifact_name or ref or args.model),
-        )
-    if args.attribution != "none":
-        if not hasattr(model, "policy"):
-            raise ValueError("policy attribution is unavailable for non-neural policies")
-        with startup_progress("Preparing policy attribution", disabled=args.no_progress):
-            attributor = PolicyActionAttributor(model)
-    else:
-        attributor = None
-
-    with startup_progress("Creating policy environment", disabled=args.no_progress):
-        policy_env = make_eval_vec_env(
-            config=config,
-            n_envs=1,
-            seed=args.seed,
-            capture_step_diagnostics=True,
-            rom_binding=rom_binding,
-        )
-    bind_action_space = getattr(model, "bind_action_space", None)
-    if callable(bind_action_space):
-        bind_action_space(policy_env.action_space)
-
-    session = _PlaybackSession(
-        model=model,
-        env=policy_env,
-        config=config,
-        initial_seed=args.seed,
-        attributor=attributor,
-        attribution_mode=args.attribution,
-        attribution_interval=args.attribution_interval,
-        attribution_opacity=args.attribution_opacity,
+    host = PlaybackHost(
+        loader,
+        initial_route=initial_route,
+        initial_source=initial_source,
     )
-    with startup_progress("Resetting policy environment", disabled=args.no_progress):
-        session.restart(args.seed)
-
-    try:
-        config_text = "\n".join(
-            resolved_play_launch_lines(
-                args,
-                argv=argv_list,
-                artifact_ref=ref,
-                policy_config=config,
-                display_config=display_config,
-            )
-        )
-        config_text += (
-            "\n"
-            f"checkpoint_step={source.checkpoint_step or '-'} "
-            f"environment_hash={source.run_config.get('environment_hash', '-')}"
-        )
-        from rlab.play_web import run_web_playback
-
-        return run_web_playback(session, args, config_text=config_text)
-    finally:
-        try:
-            policy_env.close()
-        except Exception:
-            pass
-    return 0
+    catalog = PlayCatalog(public_models_base_url=args.public_models_base_url)
+    return run_web_player_application(host, args, catalog=catalog)
 
 
 if __name__ == "__main__":

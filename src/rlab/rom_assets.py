@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import unquote, urlparse
 
-from rlab.file_utils import file_sha256
+from rlab.file_utils import file_sha256, fsync_path
 
 
 ROM_ASSET_SCHEMA_VERSION = 2
@@ -161,10 +161,9 @@ def portable_rom_asset_identity(value: Mapping[str, Any]) -> dict[str, Any]:
 def rom_asset_manifests_equal(left: Mapping[str, Any], right: Mapping[str, Any]) -> bool:
     left_manifest = validate_rom_asset_manifest(left)
     right_manifest = validate_rom_asset_manifest(right)
-    return (
-        left_manifest["game"] == right_manifest["game"]
-        and portable_rom_asset_identity(left_manifest) == portable_rom_asset_identity(right_manifest)
-    )
+    return left_manifest["game"] == right_manifest["game"] and portable_rom_asset_identity(
+        left_manifest
+    ) == portable_rom_asset_identity(right_manifest)
 
 
 def manifest_from_train_config(
@@ -212,9 +211,10 @@ def verify_rom_file(path: Path, manifest: Mapping[str, Any]) -> Path:
         raise ValueError(f"ROM size mismatch for {path}")
     if file_sha256(path) != normalized["sha256"]:
         raise ValueError(f"ROM sha256 mismatch for {path}")
-    if provider_rom_identity(path, normalized["provider_rom_identity_algorithm"]) != normalized[
-        "provider_rom_identity"
-    ]:
+    if (
+        provider_rom_identity(path, normalized["provider_rom_identity_algorithm"])
+        != normalized["provider_rom_identity"]
+    ):
         raise ValueError(f"ROM provider identity mismatch for {path}")
     return path
 
@@ -224,20 +224,7 @@ def cache_path(cache_root: Path, manifest: Mapping[str, Any]) -> Path:
         manifest,
         require_object_uri=False,
     )
-    return (
-        cache_root.expanduser()
-        / "sha256"
-        / normalized["sha256"]
-        / normalized["filename"]
-    )
-
-
-def _fsync_directory(path: Path) -> None:
-    descriptor = os.open(path, os.O_RDONLY)
-    try:
-        os.fsync(descriptor)
-    finally:
-        os.close(descriptor)
+    return cache_root.expanduser() / "sha256" / normalized["sha256"] / normalized["filename"]
 
 
 def install_rom_file(source: Path, manifest: Mapping[str, Any], cache_root: Path) -> Path:
@@ -256,7 +243,7 @@ def install_rom_file(source: Path, manifest: Mapping[str, Any], cache_root: Path
         try:
             try:
                 return verify_rom_file(destination, normalized)
-            except (FileNotFoundError, ValueError):
+            except FileNotFoundError, ValueError:
                 destination.unlink(missing_ok=True)
             fd, name = tempfile.mkstemp(
                 prefix=f".{destination.stem}.",
@@ -272,7 +259,7 @@ def install_rom_file(source: Path, manifest: Mapping[str, Any], cache_root: Path
                     os.fsync(target_handle.fileno())
                 verify_rom_file(temporary, normalized)
                 os.replace(temporary, destination)
-                _fsync_directory(destination.parent)
+                fsync_path(destination.parent)
             finally:
                 temporary.unlink(missing_ok=True)
             return verify_rom_file(destination, normalized)
@@ -289,7 +276,7 @@ def ensure_rom_cache(
     destination = cache_path(cache_root, normalized)
     try:
         return verify_rom_file(destination, normalized)
-    except (FileNotFoundError, ValueError):
+    except FileNotFoundError, ValueError:
         pass
     parsed = urlparse(str(normalized["object_uri"]))
     if parsed.scheme != "file":
@@ -368,8 +355,7 @@ def rom_asset_manifest_for_game(
     value = load_rom_asset_state().get("games", {}).get(game)
     if not isinstance(value, Mapping):
         raise ValueError(
-            f"ROM asset for {game!r} is not registered locally; "
-            f"run: rlab rom sync --game {game}"
+            f"ROM asset for {game!r} is not registered locally; run: rlab rom sync --game {game}"
         )
     manifest = validate_rom_asset_manifest(value, expected_game=game)
     verify_rom_file(cache_path(DEFAULT_LOCAL_ROM_CACHE, manifest), manifest)

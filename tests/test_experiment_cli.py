@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from types import SimpleNamespace
+from unittest import mock
 
 import pytest
 
@@ -12,12 +13,16 @@ from rlab.experiment_cli import (
     _compute,
     _follow_fingerprint,
     _public_dstack_state,
+    _required_operator_environment,
     _run_completed,
     _stage_rom,
     _task_name,
     _task_request,
     build_parser,
+    cmd_launch,
+    main,
 )
+from rlab.operator_credentials import OperatorConfigurationError
 from rlab.policy_bundle import build_recipe_document
 from rlab.recipe_documents import compose_train_document
 from rlab.run_contracts import new_attempt_id, new_run_id
@@ -74,6 +79,67 @@ def test_auto_without_cloud_budget_stays_local() -> None:
     assert compute.kind == "auto"
     assert compute.max_price is None
     assert compute.bounded_duration_seconds == 3600
+
+
+def test_operator_preflight_parser_defaults_to_modal() -> None:
+    args = build_parser().parse_args(["operator-preflight", "--json"])
+
+    assert args.checkpoint_eval_backend == "modal"
+    assert args.json is True
+
+
+def test_launch_operator_preflight_runs_before_runtime_readiness(tmp_path: Path) -> None:
+    goal = tmp_path / "experiments/goals/example/_goal.yaml"
+    recipe = goal.parent / "recipes/ppo.yaml"
+    args = SimpleNamespace(
+        goal_file=goal,
+        recipe_file=recipe,
+        recipe_overrides=[],
+        checkpoint_eval_backend="modal",
+        compute="local",
+        target="b3",
+        max_price=None,
+        max_cost_usd=None,
+        allow_on_demand=False,
+        max_duration=3600,
+    )
+
+    with (
+        mock.patch("rlab.experiment_cli.repository_root", return_value=tmp_path),
+        mock.patch("rlab.experiment_cli.clean_git_source_sha", return_value="a" * 40),
+        mock.patch("rlab.experiment_cli.current_git_branch", return_value="main"),
+        mock.patch(
+            "rlab.experiment_cli._tracked_committed_path",
+            side_effect=[goal, recipe],
+        ),
+        mock.patch("rlab.experiment_cli.compose_train_document", return_value={}),
+        mock.patch(
+            "rlab.experiment_cli._operator_preflight",
+            side_effect=OperatorConfigurationError("missing operator credentials"),
+        ),
+        mock.patch("rlab.experiment_cli.runtime_release_from_args") as runtime_release,
+    ):
+        with pytest.raises(OperatorConfigurationError, match="missing operator"):
+            cmd_launch(args)
+
+    runtime_release.assert_not_called()
+
+
+def test_operator_configuration_error_is_concise_without_traceback(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setenv("RLAB_OPERATOR_CONFIG", str(tmp_path / "missing.toml"))
+    for name in _required_operator_environment("none"):
+        monkeypatch.delenv(name, raising=False)
+
+    assert main(["operator-preflight", "--checkpoint-eval-backend", "none"]) == 2
+
+    error = capsys.readouterr().err
+    assert "operator configuration error" in error
+    assert "DSTACK_TOKEN" in error
+    assert "Traceback" not in error
 
 
 def test_public_dstack_state_never_exposes_raw_task_environment() -> None:

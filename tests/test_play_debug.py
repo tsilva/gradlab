@@ -9,10 +9,8 @@ import torch
 from stable_baselines3.common.policies import ActorCriticPolicy
 
 from rlab.play_debug import (
-    format_policy_detail,
-    format_raw,
-    format_model_input,
     inspect_policy,
+    model_input_lines,
     sample_policy_decision,
 )
 
@@ -79,49 +77,8 @@ def test_policy_inspection_does_not_sample_or_change_rng() -> None:
 
 
 def test_large_model_input_is_summarized_with_content_hash() -> None:
-    text = format_model_input(np.arange(128, dtype=np.float32).reshape(1, 128))
+    text = "\n".join(model_input_lines(np.arange(128, dtype=np.float32).reshape(1, 128)))
 
     assert "shape=(1, 128)" in text
     assert "sha256=" in text
     assert "values=" not in text
-
-
-def test_policy_detail_uses_a_color_optional_terminal_card(monkeypatch) -> None:
-    monkeypatch.setenv("RLAB_NO_COLOR", "1")
-    model, observation = make_model(gym.spaces.Discrete(3))
-
-    text = format_policy_detail(
-        sample_policy_decision(model, observation),
-        ("noop", "right_a", "left"),
-    )
-
-    assert "╭─ POLICY INSPECTOR" in text
-    assert "🎲  POLICY DISTRIBUTION" in text
-    assert "█" in text
-    assert "\033[" not in text
-
-
-def test_policy_inspector_labels_unsampled_action_as_the_mode(monkeypatch) -> None:
-    monkeypatch.setenv("RLAB_NO_COLOR", "1")
-    model, observation = make_model(gym.spaces.Discrete(3))
-
-    text = format_policy_detail(inspect_policy(model, observation))
-
-    assert "policy mode" in text
-    assert "sampled action" not in text
-
-
-def test_raw_output_groups_fields_instead_of_dumping_a_python_dict(monkeypatch) -> None:
-    monkeypatch.setenv("RLAB_NO_COLOR", "1")
-
-    text = format_raw(
-        {
-            "runtime": {"provider_reward": 0.0, "events": ("life_loss",)},
-            "terminal_observation": ["observation: shape=(4, 84, 84) dtype=uint8"],
-        }
-    )
-
-    assert "⚙  RUNTIME" in text
-    assert "provider reward" in text
-    assert "▧  TERMINAL OBSERVATION" in text
-    assert "{'runtime':" not in text

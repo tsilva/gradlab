@@ -96,7 +96,7 @@ def _dataset(argv: Sequence[str]) -> int:
 COMMANDS: dict[str, tuple[str, Callable[[Sequence[str]], int]]] = {
     "experiment": ("launch and observe dstack training experiments", _experiment),
     "eval": ("run a direct local evaluation", _eval),
-    "play": ("render a local, public-run, or Hugging Face model in a GUI window", _play),
+    "play": ("browse and inspect W&B, public-run, local, or Hugging Face models", _play),
     "import-roms": ("import ROMs into the installed rlab runtime", _import_roms),
     "benchmark": ("run gated local-smoke and throughput profiles", _benchmark),
     "validate": (

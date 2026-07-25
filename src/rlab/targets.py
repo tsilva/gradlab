@@ -6,6 +6,8 @@ from typing import ClassVar
 
 import numpy as np
 
+from rlab.action_contract import MARIO_ACTION_TABLES
+
 
 def target_class_name_for_game(game: str) -> str:
     parts = re.findall(r"[A-Za-z0-9]+", game)
@@ -17,6 +19,17 @@ def _button_mask(size: int, *buttons: int) -> np.ndarray:
     for button in buttons:
         mask[button] = 1
     return mask
+
+
+_MARIO_BUTTON_INDICES = {
+    name: index
+    for index, name in enumerate(("B", None, "SELECT", "START", "UP", "DOWN", "LEFT", "RIGHT", "A"))
+    if name is not None
+}
+
+
+def _mario_action_name(buttons: tuple[str, ...]) -> str:
+    return "noop" if not buttons else "_".join(button.lower() for button in buttons)
 
 
 @dataclass(frozen=True)
@@ -80,41 +93,17 @@ class SuperMarioBrosNesV0Target(RetroTarget):
         best_episode_rank=("completion", "progress", "reward"),
     )
 
-    # Stable Retro NES button order: B, -, SELECT, START, UP, DOWN, LEFT, RIGHT, A.
     action_library = {
-        "noop": _button_mask(9),
-        "right": _button_mask(9, 7),
-        "right_b": _button_mask(9, 7, 0),
-        "right_a": _button_mask(9, 7, 8),
-        "right_a_b": _button_mask(9, 7, 8, 0),
-        "a": _button_mask(9, 8),
-        "left": _button_mask(9, 6),
-        "down": _button_mask(9, 5),
-        "start": _button_mask(9, 3),
+        _mario_action_name(buttons): _button_mask(
+            max(_MARIO_BUTTON_INDICES.values()) + 1,
+            *(_MARIO_BUTTON_INDICES[button] for button in buttons),
+        )
+        for table in MARIO_ACTION_TABLES.values()
+        for buttons in table
     }
     action_sets = {
-        "basic": ("noop", "right", "right_b", "right_a", "right_a_b", "a", "left"),
-        "standard": (
-            "noop",
-            "right",
-            "right_b",
-            "right_a",
-            "right_a_b",
-            "a",
-            "left",
-            "down",
-        ),
-        "basic-start": (
-            "noop",
-            "right",
-            "right_b",
-            "right_a",
-            "right_a_b",
-            "a",
-            "left",
-            "start",
-        ),
-        "right-jump": ("right", "right_b", "right_a", "right_a_b"),
+        name: tuple(_mario_action_name(buttons) for buttons in table)
+        for name, table in MARIO_ACTION_TABLES.items()
     }
 
 

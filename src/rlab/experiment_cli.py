@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
+import tempfile
 import time
 from collections.abc import Mapping
 from dataclasses import replace
@@ -25,7 +27,13 @@ from rlab.env_registry import resolve_env_provider
 from rlab.file_utils import file_sha256
 from rlab.json_utils import json_safe
 from rlab.modal_eval_config import load_modal_eval_config
-from rlab.r2_store import RunStorageConfig
+from rlab.operator_credentials import (
+    OperatorConfigurationError,
+    OperatorEnvironmentReport,
+    load_operator_environment,
+    reject_protected_dotenv,
+)
+from rlab.r2_store import R2Bucket, RunStorageConfig
 from rlab.policy_bundle import build_recipe_document, canonical_json_sha256
 from rlab.recipe_documents import (
     compose_train_document,
@@ -84,6 +92,14 @@ COMMON_SECRET_ENV = (
     "RLAB_MODELS_R2_SECRET_ACCESS_KEY",
     "RLAB_MODELS_R2_PUBLIC_BASE_URL",
 )
+OPERATOR_DSTACK_ENV = (
+    "DSTACK_SERVER_URL",
+    "DSTACK_TOKEN",
+)
+OPERATOR_MODAL_ENV = (
+    "MODAL_TOKEN_ID",
+    "MODAL_TOKEN_SECRET",
+)
 
 
 def _git(root: Path, *arguments: str) -> str:
@@ -104,10 +120,13 @@ def repository_root() -> Path:
     return Path(_git(Path.cwd(), "rev-parse", "--show-toplevel")).resolve()
 
 
-def _load_environment(root: Path) -> None:
+def _load_environment(root: Path) -> OperatorEnvironmentReport:
     from rlab.dotenv import load_env_file
 
-    load_env_file(root / ".env")
+    dotenv_path = root / ".env"
+    reject_protected_dotenv(dotenv_path)
+    load_env_file(dotenv_path)
+    return load_operator_environment()
 
 
 def _tracked_committed_path(root: Path, path: Path, *, label: str) -> Path:
@@ -160,8 +179,107 @@ def _require_run_id(value: str) -> str:
 
 def _storage(root: Path) -> tuple[RunStorageConfig, RunAuthority]:
     _load_environment(root)
-    storage = RunStorageConfig.from_env()
+    try:
+        storage = RunStorageConfig.from_env()
+    except ValueError as exc:
+        raise OperatorConfigurationError(str(exc)) from exc
     return storage, RunAuthority(storage)
+
+
+def _required_operator_environment(checkpoint_eval_backend: str) -> tuple[str, ...]:
+    return (
+        *OPERATOR_DSTACK_ENV,
+        *COMMON_SECRET_ENV,
+        *(
+            OPERATOR_MODAL_ENV
+            if str(checkpoint_eval_backend) == "modal"
+            else ()
+        ),
+    )
+
+
+def _operator_preflight(
+    root: Path,
+    *,
+    checkpoint_eval_backend: str,
+) -> tuple[
+    RunStorageConfig,
+    RunAuthority,
+    DstackBackend,
+    dict[str, Any],
+]:
+    environment_report = _load_environment(root)
+    required = _required_operator_environment(checkpoint_eval_backend)
+    missing = [
+        name for name in required if not str(os.environ.get(name) or "").strip()
+    ]
+    if missing:
+        raise OperatorConfigurationError(
+            "operator environment is incomplete; missing "
+            + ", ".join(sorted(missing))
+            + f". Configure {environment_report.config_path} from "
+            "ops/operator.example.toml or provide the values through the process environment"
+        )
+    truncated = [
+        name for name in required if "…" in str(os.environ.get(name) or "")
+    ]
+    if truncated:
+        raise OperatorConfigurationError(
+            f"{sorted(truncated)[0]} is visibly truncated; use the exact "
+            "machine-readable value, not human-formatted command output"
+        )
+    try:
+        storage = RunStorageConfig.from_env()
+    except ValueError as exc:
+        raise OperatorConfigurationError(str(exc)) from exc
+    dstack_backend = DstackBackend()
+    try:
+        dstack_backend.preflight()
+    except (RuntimeError, ValueError) as exc:
+        raise OperatorConfigurationError(f"dstack preflight failed: {exc}") from exc
+    scopes = {
+        "control": storage.control,
+        "evaluation": storage.evaluation,
+        "models": storage.models,
+    }
+    for label, config in scopes.items():
+        try:
+            next(R2Bucket(config).iter_keys(""), None)
+        except Exception as exc:
+            raise OperatorConfigurationError(
+                f"{label} R2 read preflight failed ({type(exc).__name__}); "
+                f"verify the {label} endpoint, bucket, and credential pair"
+            ) from exc
+    sources = {
+        name: environment_report.source_for(name, os.environ)
+        for name in sorted(required)
+    }
+    report = {
+        "status": "ready",
+        "checkpoint_eval_backend": checkpoint_eval_backend,
+        "operator_config": {
+            "path": str(environment_report.config_path),
+            "present": environment_report.config_present,
+        },
+        "resolved_sources": sources,
+        "storage": {name: "readable" for name in scopes},
+        "dstack": {
+            "project": dstack_backend.project,
+            "server": "authenticated",
+        },
+        "wandb": {"entity": wandb_entity_from_env()},
+        "modal": {
+            "credentials": (
+                "resolved" if checkpoint_eval_backend == "modal" else "not-required"
+            )
+        },
+    }
+    return (
+        storage,
+        RunAuthority(storage),
+        dstack_backend,
+        report,
+    )
 
 
 def _stage_rom(
@@ -296,7 +414,6 @@ def _bind_launch_contract(
 
 def cmd_launch(args: argparse.Namespace) -> int:
     root = repository_root()
-    _load_environment(root)
     source_sha = clean_git_source_sha(root)
     branch = current_git_branch(root)
     goal_path = _tracked_committed_path(root, args.goal_file, label="goal")
@@ -312,6 +429,12 @@ def cmd_launch(args: argparse.Namespace) -> int:
             checkpoint_eval_backend=checkpoint_eval_backend,
         ),
     )
+    compute = _compute(args)
+    storage, authority, dstack_backend, _preflight_report = _operator_preflight(
+        root,
+        checkpoint_eval_backend=checkpoint_eval_backend,
+    )
+    selected_compute, selected_offer = dstack_backend.select_compute(compute)
     release = runtime_release_from_args(
         args,
         repo_root=root,
@@ -320,10 +443,6 @@ def cmd_launch(args: argparse.Namespace) -> int:
     )
     if release.source_sha != source_sha:
         raise RuntimeError("runtime release source does not match committed HEAD")
-    compute = _compute(args)
-    dstack_backend = DstackBackend()
-    selected_compute, selected_offer = dstack_backend.select_compute(compute)
-    storage, authority = _storage(root)
     config = dict(document["train_config"])
     asset = _stage_rom(
         authority,
@@ -426,6 +545,24 @@ def cmd_launch(args: argparse.Namespace) -> int:
             f"index={output['public_run_index_url']}"
         )
     )
+    return 0
+
+
+def cmd_operator_preflight(args: argparse.Namespace) -> int:
+    root = repository_root()
+    _storage_config, _authority, _dstack_backend, report = _operator_preflight(
+        root,
+        checkpoint_eval_backend=str(args.checkpoint_eval_backend),
+    )
+    if args.json:
+        print(json.dumps(report, sort_keys=True))
+    else:
+        print(
+            "Operator preflight ready: "
+            f"dstack={report['dstack']['server']} "
+            f"R2={','.join(report['storage'])} "
+            f"Modal={report['modal']['credentials']}"
+        )
     return 0
 
 
@@ -666,6 +803,82 @@ def cmd_retry(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_certify(args: argparse.Namespace) -> int:
+    from rlab.lifecycle_certification import (
+        DEFAULT_SCENARIOS,
+        SCENARIOS,
+        preserve_failure_bundle,
+        replay_simulated_certification,
+        run_simulated_certification,
+    )
+
+    if args.list_scenarios:
+        for name in SCENARIOS:
+            print(name)
+        return 0
+    selected = tuple(args.scenario or DEFAULT_SCENARIOS)
+    if args.artifacts_dir is not None:
+        artifact_root = args.artifacts_dir.resolve()
+        if artifact_root.exists() and any(artifact_root.iterdir()):
+            raise ValueError(f"--artifacts-dir must be empty: {artifact_root}")
+        artifact_root.mkdir(parents=True, exist_ok=True)
+        if args.replay is not None:
+            report = replay_simulated_certification(
+                args.replay,
+                artifact_root=artifact_root,
+            )
+        else:
+            report = run_simulated_certification(
+                scenarios=selected,
+                artifact_root=artifact_root,
+            )
+        failure_bundle: Path | None = artifact_root if report["status"] == "failed" else None
+    else:
+        with tempfile.TemporaryDirectory(prefix="rlab-tier1-cli-") as temporary:
+            artifact_root = Path(temporary)
+            if args.replay is not None:
+                report = replay_simulated_certification(
+                    args.replay,
+                    artifact_root=artifact_root,
+                )
+            else:
+                report = run_simulated_certification(
+                    scenarios=selected,
+                    artifact_root=artifact_root,
+                )
+            failure_bundle = None
+            if report["status"] == "failed":
+                destination = (
+                    Path("runs")
+                    / "certification"
+                    / f"failure-{str(report['report_sha256'])[:16]}"
+                ).resolve()
+                if destination.exists():
+                    failure_bundle = destination
+                else:
+                    failure_bundle = preserve_failure_bundle(
+                        artifact_root,
+                        destination,
+                    )
+    output = {
+        "report": report,
+        "failure_bundle": str(failure_bundle) if failure_bundle is not None else None,
+    }
+    if args.json:
+        print(json.dumps(output, sort_keys=True))
+    else:
+        print(
+            f"Tier 1 lifecycle certification: {report['status']} "
+            f"({len(report['scenarios'])} scenarios, "
+            f"report {report['report_sha256']})"
+        )
+        for scenario in report["scenarios"]:
+            print(f"  {scenario['status']}: {scenario['name']}")
+        if failure_bundle is not None:
+            print(f"Failure evidence and replay: {failure_bundle}")
+    return 0 if report["status"] == "passed" else 1
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="rlab experiment",
@@ -736,6 +949,22 @@ def build_parser() -> argparse.ArgumentParser:
     launch.add_argument("--json", action="store_true")
     launch.set_defaults(func=cmd_launch)
 
+    operator_preflight = commands.add_parser(
+        "operator-preflight",
+        help="Validate local credentials and live service access before launch.",
+        description=(
+            "Resolve the private operator environment, authenticate dstack, and "
+            "read-check all three R2 scopes without launching or mutating a run."
+        ),
+    )
+    operator_preflight.add_argument(
+        "--checkpoint-eval-backend",
+        choices=("modal", "none"),
+        default="modal",
+    )
+    operator_preflight.add_argument("--json", action="store_true")
+    operator_preflight.set_defaults(func=cmd_operator_preflight)
+
     status = commands.add_parser("status", help="Inspect dstack and R2 run state.")
     status.add_argument("--run", dest="run_id", type=_require_run_id, required=True)
     status.add_argument("--json", action="store_true")
@@ -767,12 +996,49 @@ def build_parser() -> argparse.ArgumentParser:
     logs.add_argument("--tail", type=int, default=100)
     logs.add_argument("--since")
     logs.set_defaults(func=cmd_logs)
+
+    certify = commands.add_parser(
+        "certify",
+        help="Run the credential-free deterministic orchestration lifecycle gate.",
+    )
+    certify.add_argument(
+        "--tier",
+        choices=("simulated",),
+        default="simulated",
+    )
+    certify.add_argument(
+        "--scenario",
+        action="append",
+        help="Run one named scenario; repeat to select multiple scenarios.",
+    )
+    certify.add_argument(
+        "--list",
+        dest="list_scenarios",
+        action="store_true",
+        help="List deterministic Tier 1 scenarios and exit.",
+    )
+    certify.add_argument(
+        "--replay",
+        type=Path,
+        help="Replay the exact scenario set from a preserved replay.json.",
+    )
+    certify.add_argument(
+        "--artifacts-dir",
+        type=Path,
+        help="Keep raw buckets, SQLite ledgers, transcripts, report, and replay here.",
+    )
+    certify.add_argument("--json", action="store_true")
+    certify.set_defaults(func=cmd_certify)
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(sys.argv[1:] if argv is None else argv)
-    return int(args.func(args))
+    try:
+        return int(args.func(args))
+    except OperatorConfigurationError as exc:
+        print(f"rlab experiment: operator configuration error: {exc}", file=sys.stderr)
+        return 2
 
 
 if __name__ == "__main__":

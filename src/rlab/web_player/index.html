@@ -15,6 +15,7 @@
         <h1 id="page-title">Environment</h1>
       </div>
       <div class="header-status">
+        <button id="change-source" class="quiet icon-only" type="button" aria-label="Choose another checkpoint" title="Choose another checkpoint" hidden><svg class="icon" aria-hidden="true"><use href="/assets/tabler-icons.svg#ti-folder-search"></use></svg></button>
         <button id="layouts-toggle" class="quiet icon-only" type="button" aria-label="Layouts" title="Layouts"><svg class="icon" aria-hidden="true"><use href="/assets/tabler-icons.svg#ti-layout-dashboard"></use></svg></button>
         <button id="panels-toggle" class="quiet icon-only" type="button" aria-label="Panels" title="Panels" aria-controls="panel-shelf" aria-expanded="false"><svg class="icon" aria-hidden="true"><use href="/assets/tabler-icons.svg#ti-layout-grid"></use></svg></button>
         <button id="new-window" class="quiet icon-only" type="button" aria-label="Open synchronized window" title="Open synchronized window"><svg class="icon" aria-hidden="true"><use href="/assets/tabler-icons.svg#ti-external-link"></use></svg></button>
@@ -46,6 +47,7 @@
       <div id="panel-shelf-items" class="panel-shelf-items"></div>
     </div>
 
+    <main id="source-browser" class="source-browser" hidden></main>
     <main id="dashboard" class="dashboard"></main>
 
     <section id="timeline" class="timeline" aria-label="Bounded trajectory inspection">

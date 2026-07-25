@@ -22,6 +22,7 @@ from rlab.env_metadata import (
     env_config_from_metadata,
     training_metadata,
 )
+from rlab.file_utils import fsync_path
 from rlab.policy_bundle import (
     CHECKPOINT_FILENAME,
     MODEL_FILENAME,
@@ -196,19 +197,6 @@ def write_model_metadata(
     return path
 
 
-def _fsync_file(path: Path) -> None:
-    with path.open("rb") as handle:
-        os.fsync(handle.fileno())
-
-
-def _fsync_directory(path: Path) -> None:
-    descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
-    try:
-        os.fsync(descriptor)
-    finally:
-        os.close(descriptor)
-
-
 def install_model_bundle(
     model_path: Path,
     *,
@@ -233,7 +221,7 @@ def install_model_bundle(
             raise FileNotFoundError(
                 f"checkpoint saver did not create {staged_checkpoint}"
             )
-        _fsync_file(staged_checkpoint)
+        fsync_path(staged_checkpoint)
         metadata = build_model_metadata(
             args,
             config,
@@ -257,7 +245,7 @@ def install_model_bundle(
                     f"checkpoint bundle validation failed: {staged_checkpoint}"
                 )
         for staged in staged_paths:
-            _fsync_file(staged)
+            fsync_path(staged)
 
         destinations: list[tuple[Path, Path]] = [
             (staged_metadata, _model_metadata_path(model_path))
@@ -287,10 +275,10 @@ def install_model_bundle(
         for staged, destination in destinations:
             os.replace(staged, destination)
             staged_paths.remove(staged)
-        _fsync_directory(model_path.parent)
+        fsync_path(model_path.parent)
         os.replace(staged_checkpoint, model_path)
         staged_paths.remove(staged_checkpoint)
-        _fsync_directory(model_path.parent)
+        fsync_path(model_path.parent)
         load_policy_bundle_from_checkpoint(model_path)
         return model_path, _model_metadata_path(model_path)
     finally:

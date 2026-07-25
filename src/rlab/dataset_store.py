@@ -25,6 +25,7 @@ from rlab.dataset_contract import (
     validate_v3,
 )
 from rlab.dataset_media import iter_episode_frames, iter_selected_frames
+from rlab.file_utils import atomic_write_json, fsync_path, fsync_tree
 
 
 COLLECTION_IDENTITY_VERSION = 1
@@ -95,39 +96,6 @@ def collection_paths(reference: str, root: Path | None = None) -> CollectionPath
     return CollectionPaths(reference, base / "collections" / _reference_key(reference))
 
 
-def _fsync_file(path: Path) -> None:
-    descriptor = os.open(path, os.O_RDONLY)
-    try:
-        os.fsync(descriptor)
-    finally:
-        os.close(descriptor)
-
-
-def _fsync_directory(path: Path) -> None:
-    descriptor = os.open(path, os.O_RDONLY)
-    try:
-        os.fsync(descriptor)
-    finally:
-        os.close(descriptor)
-
-
-def _atomic_json(path: Path, document: Mapping[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
-    payload = json.dumps(document, sort_keys=True, separators=(",", ":"), allow_nan=False)
-    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    try:
-        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
-            stream.write(payload)
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.replace(temporary, path)
-        _fsync_directory(path.parent)
-    except Exception:
-        temporary.unlink(missing_ok=True)
-        raise
-
-
 @contextlib.contextmanager
 def _collection_lock(paths: CollectionPaths, *, exclusive: bool) -> Iterator[None]:
     paths.directory.mkdir(parents=True, exist_ok=True)
@@ -160,7 +128,7 @@ def _ensure_identity(paths: CollectionPaths) -> None:
         if _read_json(paths.identity) != expected:
             raise ValueError(f"dataset collection identity mismatch at {paths.directory}")
     else:
-        _atomic_json(paths.identity, expected)
+        atomic_write_json(paths.identity, expected)
 
 
 def _check_identity(paths: CollectionPaths) -> None:
@@ -238,7 +206,7 @@ def stage_dataset_tree(source: Path) -> StagedDatasetTree:
             destination = staged / path.relative_to(source)
             destination.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
             _stage_regular_file(path, destination)
-        _fsync_tree(staged)
+        fsync_tree(staged)
         return StagedDatasetTree(staged, temporary)
     except Exception:
         temporary.cleanup()
@@ -318,21 +286,10 @@ def validate_tree(path: Path) -> TreeValidation:
     )
 
 
-def _fsync_tree(path: Path) -> None:
-    directories = [path]
-    for entry in path.rglob("*"):
-        if entry.is_file():
-            _fsync_file(entry)
-        elif entry.is_dir():
-            directories.append(entry)
-    for directory in sorted(directories, key=lambda value: len(value.parts), reverse=True):
-        _fsync_directory(directory)
-
-
 def _write_phase(paths: CollectionPaths, document: Mapping[str, Any], phase: str) -> None:
     updated = dict(document)
     updated["phase"] = phase
-    _atomic_json(paths.phase, updated)
+    atomic_write_json(paths.phase, updated)
 
 
 def _quarantine_transaction(paths: CollectionPaths, reason: str) -> None:
@@ -347,12 +304,12 @@ def _quarantine_transaction(paths: CollectionPaths, reason: str) -> None:
         if candidate.exists():
             os.replace(candidate, destination / candidate.name)
             moved.append(candidate.name)
-    _atomic_json(
+    atomic_write_json(
         destination / "report.json",
         {"version": 1, "reason": reason, "moved": moved, "transaction_id": transaction_id},
     )
-    _fsync_directory(destination)
-    _fsync_directory(paths.directory)
+    fsync_path(destination)
+    fsync_path(paths.directory)
 
 
 def _recover_locked(paths: CollectionPaths) -> None:
@@ -378,7 +335,7 @@ def _recover_locked(paths: CollectionPaths) -> None:
                 and not paths.backup.exists()
             ):
                 os.replace(paths.current, paths.backup)
-                _fsync_directory(paths.directory)
+                fsync_path(paths.directory)
                 _write_phase(paths, document, "backup_moved")
                 phase = "backup_moved"
             elif (
@@ -396,7 +353,7 @@ def _recover_locked(paths: CollectionPaths) -> None:
                 and not paths.backup.exists()
             ):
                 os.replace(paths.next, paths.current)
-                _fsync_directory(paths.directory)
+                fsync_path(paths.directory)
                 _write_phase(paths, document, "current_installed")
                 phase = "current_installed"
             elif (
@@ -418,7 +375,7 @@ def _recover_locked(paths: CollectionPaths) -> None:
                 and paths.backup.exists()
             ):
                 os.replace(paths.next, paths.current)
-                _fsync_directory(paths.directory)
+                fsync_path(paths.directory)
                 _write_phase(paths, document, "current_installed")
                 phase = "current_installed"
             elif (
@@ -450,9 +407,9 @@ def _recover_locked(paths: CollectionPaths) -> None:
                 raise ValueError("impossible current_validated transaction layout")
             if paths.backup.exists():
                 shutil.rmtree(paths.backup)
-                _fsync_directory(paths.directory)
+                fsync_path(paths.directory)
             paths.phase.unlink()
-            _fsync_directory(paths.directory)
+            fsync_path(paths.directory)
             return
         raise ValueError(f"unknown transaction phase {phase!r}")
     except Exception as exc:
@@ -481,7 +438,7 @@ def _install_next_locked(
         "new_fingerprint": new_fingerprint,
         "phase": "prepared",
     }
-    _fsync_tree(paths.next)
+    fsync_tree(paths.next)
     validate_tree(paths.next)
     _write_phase(paths, document, "prepared")
     _recover_locked(paths)
