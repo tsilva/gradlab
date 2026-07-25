@@ -29,9 +29,9 @@ const pairedWorkspace = new URLSearchParams(location.search).get("workspace") ==
 const token = new URLSearchParams(location.hash.slice(1)).get("token") || "";
 const WORKSPACE_ID_KEY = "rlab.player.workspace.id";
 const LAYOUT_KEY = pairedWorkspace
-  ? "rlab.player.workspace.v3.paired"
-  : "rlab.player.workspace.v3.single";
-const SAVED_LAYOUTS_KEY = "rlab.player.workspace.saved.v3";
+  ? "rlab.player.workspace.v4.paired"
+  : "rlab.player.workspace.v4.single";
+const SAVED_LAYOUTS_KEY = "rlab.player.workspace.saved.v4";
 const STATS_WINDOW_ID = "stats";
 const workspaceId = localStorage.getItem(WORKSPACE_ID_KEY) || crypto.randomUUID();
 localStorage.setItem(WORKSPACE_ID_KEY, workspaceId);

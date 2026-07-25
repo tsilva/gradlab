@@ -51,11 +51,14 @@ const SINGLE_LAYOUT = Object.freeze({
   controls: { x: 7, y: 0, w: 2, h: 15, visible: true, window: "main" },
   policy: { x: 9, y: 0, w: 3, h: 7, visible: true, window: "main" },
   reward: { x: 9, y: 7, w: 3, h: 8, visible: true, window: "main" },
-  actions: { x: 0, y: 15, w: 4, h: 8, visible: false, window: "main" },
-  observation: { x: 4, y: 15, w: 5, h: 8, visible: false, window: "main" },
-  signals: { x: 9, y: 15, w: 3, h: 8, visible: false, window: "main" },
-  events: { x: 0, y: 23, w: 4, h: 7, visible: false, window: "main" },
-  raw: { x: 4, y: 23, w: 8, h: 7, visible: false, window: "main" },
+  value: { x: 0, y: 15, w: 4, h: 9, visible: true, window: "main" },
+  "step-reward": { x: 4, y: 15, w: 4, h: 9, visible: true, window: "main" },
+  "episode-return": { x: 8, y: 15, w: 4, h: 9, visible: true, window: "main" },
+  actions: { x: 0, y: 24, w: 4, h: 8, visible: false, window: "main" },
+  observation: { x: 4, y: 24, w: 5, h: 8, visible: false, window: "main" },
+  signals: { x: 9, y: 24, w: 3, h: 8, visible: false, window: "main" },
+  events: { x: 0, y: 32, w: 4, h: 7, visible: false, window: "main" },
+  raw: { x: 4, y: 32, w: 8, h: 7, visible: false, window: "main" },
 });
 
 const PAIRED_LAYOUT = Object.freeze({
@@ -64,10 +67,13 @@ const PAIRED_LAYOUT = Object.freeze({
   policy: { x: 0, y: 0, w: 4, h: 7, visible: true, window: "stats" },
   reward: { x: 4, y: 0, w: 4, h: 8, visible: true, window: "stats" },
   actions: { x: 8, y: 0, w: 4, h: 8, visible: true, window: "stats" },
-  observation: { x: 0, y: 8, w: 6, h: 8, visible: true, window: "stats" },
-  signals: { x: 6, y: 8, w: 3, h: 8, visible: true, window: "stats" },
-  events: { x: 9, y: 8, w: 3, h: 8, visible: true, window: "stats" },
-  raw: { x: 0, y: 16, w: 12, h: 7, visible: true, window: "stats" },
+  value: { x: 0, y: 8, w: 4, h: 9, visible: true, window: "stats" },
+  "step-reward": { x: 4, y: 8, w: 4, h: 9, visible: true, window: "stats" },
+  "episode-return": { x: 8, y: 8, w: 4, h: 9, visible: true, window: "stats" },
+  observation: { x: 0, y: 17, w: 6, h: 8, visible: true, window: "stats" },
+  signals: { x: 6, y: 17, w: 3, h: 8, visible: true, window: "stats" },
+  events: { x: 9, y: 17, w: 3, h: 8, visible: true, window: "stats" },
+  raw: { x: 0, y: 25, w: 12, h: 7, visible: true, window: "stats" },
 });
 
 export const BUILTIN_PANEL_PRESETS = Object.freeze({
@@ -101,7 +107,7 @@ export const BUILTIN_PANEL_PRESETS = Object.freeze({
   },
   reward: {
     type: "telemetry",
-    title: "Reward and return",
+    title: "Reward summary",
     config: {
       blocks: [
         {
@@ -116,17 +122,41 @@ export const BUILTIN_PANEL_PRESETS = Object.freeze({
             "transition/outcome",
           ],
         },
+      ],
+    },
+  },
+  value: {
+    type: "telemetry",
+    title: "Value estimate",
+    config: {
+      blocks: [
         {
           kind: "line",
           title: "Value estimate vs realized return-to-go",
           metrics: ["policy/value", "policy/realized-return"],
           foot: "Selected-step error is V(s) − G(s): positive overestimates, negative underestimates. G(s) is available after the episode ends.",
         },
+      ],
+    },
+  },
+  "step-reward": {
+    type: "telemetry",
+    title: "Step reward",
+    config: {
+      blocks: [
         {
           kind: "line",
           title: "After-action step reward",
           metrics: ["reward/provider", "reward/shaped"],
         },
+      ],
+    },
+  },
+  "episode-return": {
+    type: "telemetry",
+    title: "Episode return",
+    config: {
+      blocks: [
         {
           kind: "line",
           title: "Episode return",
