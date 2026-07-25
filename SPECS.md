@@ -45,6 +45,7 @@ rlab is a reproducible reinforcement-learning workbench for game-agent researche
 ### Playback and Human Control
 
 - Playback must support local and remote artifacts under the evaluation contract, keep concurrent viewers on one trajectory, and refresh mutable references when their content changes.
+- Bare playback must open a searchable W&B project-to-run-to-public-checkpoint selection flow before entering the player; a less-specific CLI W&B reference must preselect its matching level, while an exact CLI checkpoint source may enter playback directly.
 - Interactive playback must provide independently arrangeable, synchronized views of game frames, policy inputs and decisions, transition facts, and bounded histories without inspection changing the trajectory or policy randomness.
 - Human control must preserve declared action semantics, fail safe when focus or control is lost, and keep all human-intervened results ineligible for acceptance or promotion.
 
@@ -53,5 +54,6 @@ rlab is a reproducible reinforcement-learning workbench for game-agent researche
 - Queued execution must be explicit, fail closed, isolated, and reproducible. Attempts must preserve exact provenance and durable results across interruption and retries, report only evidence-backed states, and clean unused resources without affecting active work.
 - Each v1 training run must execute in one container while compute placement supports local machines and cost-bounded cloud capacity without provider-specific research code.
 - The orchestration stack must minimize independently operated services and must not require a project-owned relational database.
+- The orchestration lifecycle must provide a credential-free deterministic certification gate with replayable failure evidence for authority, delivery, evaluation-driven stopping, recovery, cancellation, and terminal-state correctness.
 - The clean-slate orchestration refactor is accepted only after a B3 Mario Level1-1 run reports its training and evaluation metrics, durably publishes every checkpoint, completes the goal-owned 100-episode acceptance evaluation, and early-stops because all 100 episodes succeed.
 - Benchmark claims must be reproducible and compare equivalent environments, semantics, workloads, concurrency, and host-load conditions.

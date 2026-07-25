@@ -13,6 +13,17 @@ terminal semantics. Never infer scientific success from dstack exit status.
 Read `SPECS.md` before either launch or existing-run monitoring. Before a new
 launch also read `INSTANCES.md`, the selected goal, and the selected recipe.
 
+Before a new launch, run the credential-safe read-only operator gate:
+
+```bash
+rlab experiment operator-preflight --json
+```
+
+It must report ready before launch. Never reconstruct credentials by parsing
+human-formatted `dstack secret` output, write protected values into the
+repository `.env`, or inline them in a command. `launch` repeats this preflight
+before runtime readiness or external mutation.
+
 ## Safety mode
 
 - **Observe mode (default):** launch and monitor only. Diagnose potential bugs

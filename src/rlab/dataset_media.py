@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import shutil
 import subprocess
 import contextlib
@@ -18,6 +17,7 @@ from rlab.dataset_contract import (
     STORAGE_FORMAT_LOSSLESS_VIDEO,
     observation_to_rgb,
 )
+from rlab.file_utils import fsync_path
 
 
 MAX_IMAGE_PIXELS = 100_000_000
@@ -360,8 +360,8 @@ class LosslessVideoWriter:
         if return_code:
             self.output.unlink(missing_ok=True)
             raise RuntimeError(stderr.decode("utf-8", errors="replace")[-1000:])
-        _fsync_file(self.output)
-        _fsync_directory(self.output.parent)
+        fsync_path(self.output)
+        fsync_path(self.output.parent)
 
     def abort(self, *, preserve: bool = False) -> None:
         if self._process is not None:
@@ -378,26 +378,10 @@ class LosslessVideoWriter:
                     self._process.kill()
             self._process.wait()
         if preserve and self.output.is_file():
-            _fsync_file(self.output)
-            _fsync_directory(self.output.parent)
+            fsync_path(self.output)
+            fsync_path(self.output.parent)
         else:
             self.output.unlink(missing_ok=True)
-
-
-def _fsync_file(path: Path) -> None:
-    descriptor = os.open(path, os.O_RDONLY)
-    try:
-        os.fsync(descriptor)
-    finally:
-        os.close(descriptor)
-
-
-def _fsync_directory(path: Path) -> None:
-    descriptor = os.open(path, os.O_RDONLY)
-    try:
-        os.fsync(descriptor)
-    finally:
-        os.close(descriptor)
 
 
 def iter_selected_frames(

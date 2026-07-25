@@ -25,12 +25,12 @@ from rlab.play import _PlaybackSession, _PlaybackTransition, render_obs_stack
 from rlab.play_debug import ANSI_PATTERN, PolicyDecision, model_input_lines
 
 
-PROTOCOL_VERSION = 1
+PROTOCOL_VERSION = 2
 HISTORY_LIMIT = 4096
 COMMAND_QUEUE_LIMIT = 64
 CLIENT_QUEUE_LIMIT = 64
-FRAME_HEADER = struct.Struct(">4sBBHQ")
-FRAME_MAGIC = b"RLP1"
+FRAME_HEADER = struct.Struct(">4sBBHQQ")
+FRAME_MAGIC = b"RLP2"
 FRAME_CODEC_PNG = 1
 FRAME_GAME = 1
 FRAME_OBSERVATION = 2
@@ -227,7 +227,13 @@ def history_point(transition: _PlaybackTransition) -> dict[str, Any]:
     }
 
 
-def _frame_packet(kind: int, sequence: int, frame: np.ndarray) -> bytes:
+def _frame_packet(
+    kind: int,
+    sequence: int,
+    frame: np.ndarray,
+    *,
+    session_epoch: int = 0,
+) -> bytes:
     output = io.BytesIO()
     Image.fromarray(frame, mode="RGB").save(
         output,
@@ -239,6 +245,7 @@ def _frame_packet(kind: int, sequence: int, frame: np.ndarray) -> bytes:
         kind,
         FRAME_CODEC_PNG,
         0,
+        session_epoch,
         sequence,
     ) + output.getvalue()
 
@@ -246,10 +253,24 @@ def _frame_packet(kind: int, sequence: int, frame: np.ndarray) -> bytes:
 class FrameEncoder:
     def __init__(self) -> None:
         self._condition = threading.Condition()
-        self._pending: dict[int, tuple[int, np.ndarray]] = {}
+        self._pending: dict[int, tuple[int, int, np.ndarray]] = {}
         self._latest: dict[int, tuple[int, bytes]] = {}
+        self._epoch = 0
         self._closed = False
         self._thread = threading.Thread(target=self._run, name="rlab-frame-encoder")
+
+    @property
+    def epoch(self) -> int:
+        with self._condition:
+            return self._epoch
+
+    def set_epoch(self, epoch: int) -> None:
+        with self._condition:
+            if self._thread.is_alive():
+                raise RuntimeError("frame encoder epoch must be set before start")
+            self._epoch = int(epoch)
+            self._pending.clear()
+            self._latest.clear()
 
     def start(self) -> None:
         self._thread.start()
@@ -261,7 +282,7 @@ class FrameEncoder:
         with self._condition:
             if self._closed:
                 return
-            self._pending[kind] = (sequence, owned)
+            self._pending[kind] = (self._epoch, sequence, owned)
             self._condition.notify()
 
     def latest(self) -> dict[int, tuple[int, bytes]]:
@@ -284,8 +305,13 @@ class FrameEncoder:
                     return
                 pending = self._pending
                 self._pending = {}
-            for kind, (sequence, frame) in pending.items():
-                packet = _frame_packet(kind, sequence, frame)
+            for kind, (epoch, sequence, frame) in pending.items():
+                packet = _frame_packet(
+                    kind,
+                    sequence,
+                    frame,
+                    session_epoch=epoch,
+                )
                 with self._condition:
                     self._latest[kind] = (sequence, packet)
 
@@ -472,12 +498,22 @@ class WebPlaybackRunner:
             if game_frame is not None:
                 episode_start_frames[FRAME_GAME] = (
                     sequence,
-                    _frame_packet(FRAME_GAME, sequence, game_frame),
+                    _frame_packet(
+                        FRAME_GAME,
+                        sequence,
+                        game_frame,
+                        session_epoch=self.encoder.epoch,
+                    ),
                 )
             if obs_image is not None:
                 episode_start_frames[FRAME_OBSERVATION] = (
                     sequence,
-                    _frame_packet(FRAME_OBSERVATION, sequence, obs_image),
+                    _frame_packet(
+                        FRAME_OBSERVATION,
+                        sequence,
+                        obs_image,
+                        session_epoch=self.encoder.epoch,
+                    ),
                 )
         with self._snapshot_lock:
             self._latest_snapshot = payload
@@ -796,7 +832,12 @@ class DatasetPlaybackRunner:
                 self._episode_start_frames = {
                     FRAME_GAME: (
                         self.sequence,
-                        _frame_packet(FRAME_GAME, self.sequence, self.current_frame),
+                        _frame_packet(
+                            FRAME_GAME,
+                            self.sequence,
+                            self.current_frame,
+                            session_epoch=self.encoder.epoch,
+                        ),
                     )
                 }
 
@@ -1295,8 +1336,8 @@ class WebClient:
         self.reliable: asyncio.Queue[str | bytes] = asyncio.Queue(CLIENT_QUEUE_LIMIT)
         self.event = asyncio.Event()
         self.latest_snapshot: str | None = None
-        self.latest_snapshot_key: tuple[int, int, int] = (-1, -1, -1)
-        self.sent_snapshot_key: tuple[int, int, int] = (-1, -1, -1)
+        self.latest_snapshot_key: tuple[int, int, int, int] = (-1, -1, -1, -1)
+        self.sent_snapshot_key: tuple[int, int, int, int] = (-1, -1, -1, -1)
         self.latest_frames: dict[int, tuple[int, bytes]] = {}
         self.sent_frames: dict[int, tuple[int, bytes]] = {}
         self.closed = False
@@ -1315,6 +1356,7 @@ class WebClient:
 
     def offer_snapshot(self, payload: Mapping[str, Any]) -> None:
         key = (
+            int(payload.get("session_epoch", 0)),
             int(payload.get("revision", 0)),
             int(payload.get("sequence", 0)),
             int(payload.get("control_epoch", 0)),
@@ -1328,6 +1370,14 @@ class WebClient:
         if sequence >= self.latest_frames.get(kind, (-1, b""))[0]:
             self.latest_frames[kind] = (sequence, packet)
             self.event.set()
+
+    def reset_session(self, epoch: int) -> None:
+        self.latest_snapshot = None
+        self.latest_snapshot_key = (int(epoch), -1, -1, -1)
+        self.sent_snapshot_key = (int(epoch), -1, -1, -1)
+        self.latest_frames.clear()
+        self.sent_frames.clear()
+        self.event.set()
 
     async def write(self) -> None:
         while not self.closed and not self.socket.closed:
@@ -1358,10 +1408,14 @@ class PlaybackWebServer:
         args: argparse.Namespace,
         *,
         paired_windows: bool = False,
+        catalog: Any | None = None,
+        defer_secondary_window: bool = False,
     ) -> None:
         self.runner = runner
         self.args = args
         self.paired_windows = paired_windows
+        self.catalog = catalog
+        self.defer_secondary_window = bool(defer_secondary_window)
         self.token = secrets.token_urlsafe(32)
         self.origin = ""
         self.clients: dict[str, WebClient] = {}
@@ -1371,7 +1425,11 @@ class PlaybackWebServer:
         self.stop_event = asyncio.Event()
         self.ever_connected = False
         self.last_client_at = time.monotonic()
-        self._auto_started = False
+        self._auto_started_epoch = -1
+        self._observed_session_change = int(
+            getattr(self.runner, "session_change", 0)
+        )
+        self._secondary_opened = False
 
     @property
     def asset_root(self) -> Path:
@@ -1417,6 +1475,73 @@ class PlaybackWebServer:
             raise web.HTTPNotFound()
         return web.FileResponse(candidate)
 
+    def _authorize_api(self, request: web.Request) -> None:
+        origin = request.headers.get("Origin")
+        if origin and origin != self.origin:
+            raise web.HTTPForbidden(text="invalid request origin")
+        authorization = request.headers.get("Authorization", "")
+        scheme, _, supplied = authorization.partition(" ")
+        if scheme.casefold() != "bearer" or not secrets.compare_digest(
+            supplied,
+            self.token,
+        ):
+            raise web.HTTPUnauthorized(text="catalog token required")
+
+    async def catalog_projects(self, request: web.Request) -> web.Response:
+        self._authorize_api(request)
+        if self.catalog is None:
+            raise web.HTTPNotFound()
+        from rlab.play_catalog import normalize_search_query
+
+        try:
+            entity = await asyncio.to_thread(
+                self.catalog.default_entity,
+                request.query.get("entity") or getattr(self.args, "wandb_entity", None),
+            )
+            page = await asyncio.to_thread(
+                self.catalog.projects,
+                entity=entity,
+                query=normalize_search_query(request.query.get("q")),
+                cursor=request.query.get("cursor"),
+            )
+        except Exception as exc:
+            return web.json_response({"error": str(exc)}, status=502)
+        return web.json_response({"entity": entity, **page.to_dict()})
+
+    async def catalog_runs(self, request: web.Request) -> web.Response:
+        self._authorize_api(request)
+        if self.catalog is None:
+            raise web.HTTPNotFound()
+        from rlab.play_catalog import normalize_search_query
+
+        try:
+            page = await asyncio.to_thread(
+                self.catalog.runs,
+                entity=request.match_info["entity"],
+                project=request.match_info["project"],
+                query=normalize_search_query(request.query.get("q")),
+                cursor=request.query.get("cursor"),
+            )
+        except Exception as exc:
+            return web.json_response({"error": str(exc)}, status=502)
+        return web.json_response(page.to_dict())
+
+    async def catalog_checkpoints(self, request: web.Request) -> web.Response:
+        self._authorize_api(request)
+        if self.catalog is None:
+            raise web.HTTPNotFound()
+        from rlab.play_catalog import normalize_search_query
+
+        try:
+            items = await asyncio.to_thread(
+                self.catalog.checkpoints,
+                run_id=request.match_info["run_id"],
+                query=normalize_search_query(request.query.get("q")),
+            )
+        except Exception as exc:
+            return web.json_response({"error": str(exc)}, status=502)
+        return web.json_response({"items": list(items), "next_cursor": None})
+
     def _snapshot_for(self, client: WebClient, snapshot: Mapping[str, Any]) -> dict[str, Any]:
         return {
             **snapshot,
@@ -1435,6 +1560,48 @@ class PlaybackWebServer:
         snapshot = self.runner.snapshot()
         for client in self.clients.values():
             client.offer_snapshot(self._snapshot_for(client, snapshot))
+
+    def _runner_epoch(self) -> int:
+        return int(getattr(self.runner, "session_epoch", 0))
+
+    def _runner_active(self) -> bool:
+        return bool(getattr(self.runner, "has_active_runner", True))
+
+    def _maybe_auto_start(self, client_id: str) -> None:
+        epoch = self._runner_epoch()
+        if (
+            not self._runner_active()
+            or self._auto_started_epoch == epoch
+            or bool(getattr(self.args, "debug", False))
+        ):
+            return
+        self._auto_started_epoch = epoch
+        self.runner.submit(
+            PlaybackCommand(uuid.uuid4().hex, client_id, "play", {}, None)
+        )
+
+    def _announce_session_change(self) -> None:
+        epoch = self._runner_epoch()
+        for client in self.clients.values():
+            client.reset_session(epoch)
+            client.offer_reliable(
+                {
+                    "type": "session_changed",
+                    "protocol": PROTOCOL_VERSION,
+                    "session_epoch": epoch,
+                }
+            )
+            client.offer_reliable(self.runner.history_payload())
+        if (
+            self.paired_windows
+            and self.defer_secondary_window
+            and not self._secondary_opened
+        ):
+            self._secondary_opened = True
+            stats_url = self.dashboard_urls()[1]
+            print(f"Player stats: {stats_url}", flush=True)
+            if not bool(getattr(self.args, "no_open", False)):
+                webbrowser.open(stats_url, new=1, autoraise=True)
 
     async def websocket(self, request: web.Request) -> web.WebSocketResponse:
         if request.headers.get("Origin") != self.origin:
@@ -1523,11 +1690,7 @@ class PlaybackWebServer:
                     client.offer_frame(frame_kind, sequence, packet)
             writer = asyncio.create_task(client.write())
             self._broadcast_control()
-            if not self._auto_started and not bool(getattr(self.args, "debug", False)):
-                self._auto_started = True
-                self.runner.submit(
-                    PlaybackCommand(uuid.uuid4().hex, client_id, "play", {}, None)
-                )
+            self._maybe_auto_start(client_id)
             async for message in socket:
                 if message.type == WSMsgType.ERROR:
                     break
@@ -1648,11 +1811,23 @@ class PlaybackWebServer:
         return socket
 
     async def pump(self) -> None:
-        latest_snapshot_key = (-1, -1)
+        latest_snapshot_key = (-1, -1, -1)
         latest_frames: dict[int, tuple[int, bytes]] = {}
         while not self.stop_event.is_set():
+            session_change = int(getattr(self.runner, "session_change", 0))
+            if session_change != self._observed_session_change:
+                self._observed_session_change = session_change
+                latest_snapshot_key = (-1, -1, -1)
+                latest_frames.clear()
+                self._announce_session_change()
+                if self.clients:
+                    self._maybe_auto_start(next(iter(self.clients)))
             snapshot = self.runner.snapshot()
-            key = (int(snapshot.get("revision", 0)), int(snapshot.get("sequence", 0)))
+            key = (
+                int(snapshot.get("session_epoch", 0)),
+                int(snapshot.get("revision", 0)),
+                int(snapshot.get("sequence", 0)),
+            )
             if key != latest_snapshot_key:
                 latest_snapshot_key = key
                 for client in tuple(self.clients.values()):
@@ -1667,9 +1842,17 @@ class PlaybackWebServer:
                     if subscription in client.subscriptions:
                         client.offer_frame(kind, sequence, packet)
             while True:
-                try:
-                    response = self.runner.responses.get_nowait()
-                except queue.Empty:
+                poll_response = getattr(self.runner, "poll_response", None)
+                if callable(poll_response):
+                    response = poll_response()
+                    if response is None:
+                        break
+                else:
+                    try:
+                        response = self.runner.responses.get_nowait()
+                    except queue.Empty:
+                        break
+                if response is None:
                     break
                 client = self.clients.get(response.client_id)
                 if client is not None:
@@ -1698,7 +1881,17 @@ class PlaybackWebServer:
                 web.get("/", self.page),
                 web.get("/panel/{panel}", self.page),
                 web.get("/workspace/{window}", self.page),
+                web.get("/sources/{path:.*}", self.page),
                 web.get("/assets/{path:.*}", self.asset),
+                web.get("/api/catalog/projects", self.catalog_projects),
+                web.get(
+                    "/api/catalog/projects/{entity}/{project}/runs",
+                    self.catalog_runs,
+                ),
+                web.get(
+                    "/api/catalog/runs/{run_id}/checkpoints",
+                    self.catalog_checkpoints,
+                ),
                 web.get("/ws", self.websocket),
             ]
         )
@@ -1714,12 +1907,13 @@ class PlaybackWebServer:
         urls = self.dashboard_urls()
         dashboard_label = str(getattr(self.args, "dashboard_label", "Player dashboard"))
         print(f"{dashboard_label}: {urls[0]}", flush=True)
-        if self.paired_windows:
+        if self.paired_windows and not self.defer_secondary_window:
             print(f"Player stats: {urls[1]}", flush=True)
         self.runner.start()
         pump = asyncio.create_task(self.pump())
         if not bool(getattr(self.args, "no_open", False)):
-            for url in urls:
+            launch_urls = urls[:1] if self.defer_secondary_window else urls
+            for url in launch_urls:
                 webbrowser.open(url, new=1, autoraise=True)
         try:
             await self.stop_event.wait()
@@ -1745,6 +1939,26 @@ def run_web_playback(
         return asyncio.run(server.run())
     except KeyboardInterrupt:
         runner.stop()
+        return 130
+
+
+def run_web_player_application(
+    host: Any,
+    args: argparse.Namespace,
+    *,
+    catalog: Any,
+) -> int:
+    server = PlaybackWebServer(
+        host,
+        args,
+        paired_windows=True,
+        catalog=catalog,
+        defer_secondary_window=True,
+    )
+    try:
+        return asyncio.run(server.run())
+    except KeyboardInterrupt:
+        host.stop()
         return 130
 
 
@@ -1838,6 +2052,7 @@ __all__ = [
     "WebHumanController",
     "history_point",
     "run_web_dataset_playback",
+    "run_web_player_application",
     "run_web_playback",
     "transition_payload",
 ]

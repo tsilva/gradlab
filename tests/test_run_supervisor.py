@@ -159,8 +159,9 @@ class RunSupervisorTests(unittest.TestCase):
         supervisor = self.supervisor()
         with (
             patch.dict("os.environ", {"RLAB_ORCHESTRATOR": "dstack"}),
-            patch(
-                "rlab.run_supervisor.runtime_contract",
+            patch.object(
+                supervisor.runtime,
+                "runtime_contract",
                 return_value={
                     "runtime_build_source_sha": BUILD_SOURCE_SHA,
                     "runtime_input_sha256": RUNTIME_INPUT_SHA256,
@@ -188,8 +189,9 @@ class RunSupervisorTests(unittest.TestCase):
 
         with (
             patch.dict("os.environ", {"RLAB_ORCHESTRATOR": "dstack"}),
-            patch(
-                "rlab.run_supervisor.runtime_contract",
+            patch.object(
+                supervisor.runtime,
+                "runtime_contract",
                 return_value={
                     "runtime_build_source_sha": SOURCE_SHA,
                     "runtime_input_sha256": RUNTIME_INPUT_SHA256,
@@ -362,7 +364,7 @@ class RunSupervisorTests(unittest.TestCase):
         supervisor.learner = learner
         with (
             patch.object(supervisor, "_renew_lease") as renew,
-            patch("rlab.run_supervisor.time.sleep"),
+            patch.object(supervisor.clock, "sleep"),
         ):
             self.assertTrue(supervisor._wait_for_learner_exit_with_lease(30))
         renew.assert_called_once()
@@ -407,7 +409,7 @@ class RunSupervisorTests(unittest.TestCase):
                 "_record_eval_metrics",
                 side_effect=lambda *_args: events.append("metrics"),
             ),
-            patch("rlab.run_supervisor.time.time", return_value=0.0),
+            patch.object(supervisor.clock, "time", return_value=0.0),
         ):
             self.assertTrue(supervisor._observe_result(row))
 
@@ -448,7 +450,7 @@ class RunSupervisorTests(unittest.TestCase):
         self.assertEqual(supervisor.ledger.evals()[0]["attempt"], 1)
         with supervisor.ledger.connection() as connection:
             connection.execute("UPDATE eval_dispatches SET attempt_expires_at = 1000")
-        with patch("rlab.run_supervisor.time.time", return_value=1001):
+        with patch.object(supervisor.clock, "time", return_value=1001):
             self.assertEqual(supervisor._poll_evals(10.0), 0)
         self.assertEqual(supervisor.ledger.evals()[0]["status"], "pending")
 

@@ -17,6 +17,7 @@ from typing import Any
 import numpy as np
 
 from rlab import __version__
+from rlab.file_utils import atomic_write_json, fsync_path, fsync_tree
 from rlab.dataset_contract import (
     COLLECTOR_ARTIFACT_DIR,
     COLLECTION_DOCUMENT_TYPE,
@@ -91,31 +92,6 @@ def _json_value(value: Any) -> Any:
     return value
 
 
-def _atomic_json(path: Path, value: Mapping[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
-    payload = json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False)
-    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    try:
-        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
-            stream.write(payload)
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.replace(temporary, path)
-        _fsync_directory(path.parent)
-    except Exception:
-        temporary.unlink(missing_ok=True)
-        raise
-
-
-def _fsync_directory(path: Path) -> None:
-    descriptor = os.open(path, os.O_RDONLY)
-    try:
-        os.fsync(descriptor)
-    finally:
-        os.close(descriptor)
-
-
 @dataclass(frozen=True)
 class CollectorArtifact:
     contract_id: str
@@ -143,12 +119,12 @@ class EpisodeJournal:
             output.flush()
             os.fsync(output.fileno())
         os.replace(temporary, candidate)
-        _fsync_directory(self.directory)
+        fsync_path(self.directory)
         digest = hashlib.sha256(frame.tobytes()).hexdigest()
         self._candidates.append(candidate)
         while len(self._candidates) > 2:
             self._candidates.pop(0).unlink(missing_ok=True)
-            _fsync_directory(self.directory)
+            fsync_path(self.directory)
         return candidate, digest
 
     def append(self, value: Mapping[str, Any]) -> None:
@@ -163,7 +139,7 @@ class EpisodeJournal:
         self._stream.close()
         for candidate in self._candidates:
             candidate.unlink(missing_ok=True)
-        _fsync_directory(self.directory)
+        fsync_path(self.directory)
 
     def close(self) -> None:
         if not self._stream.closed:
@@ -314,21 +290,6 @@ def _write_artifacts(
         (collector_directory / filename).write_bytes(payload)
 
 
-def _fsync_tree(root: Path) -> None:
-    directories = [root]
-    for path in root.rglob("*"):
-        if path.is_file():
-            descriptor = os.open(path, os.O_RDONLY)
-            try:
-                os.fsync(descriptor)
-            finally:
-                os.close(descriptor)
-        elif path.is_dir():
-            directories.append(path)
-    for directory in sorted(directories, key=lambda value: len(value.parts), reverse=True):
-        _fsync_directory(directory)
-
-
 def _dataset_from_rows(rows: Sequence[Mapping[str, Any]]):
     try:
         import datasets
@@ -421,7 +382,7 @@ def _write_episode_tree(
         _write_artifacts(temporary, environment=environment, collector=collector)
         validate_tree(temporary)
         os.replace(temporary, package)
-        _fsync_directory(package.parent)
+        fsync_path(package.parent)
     except Exception:
         shutil.rmtree(temporary, ignore_errors=True)
         raise
@@ -453,7 +414,7 @@ def _record_one(
     transitions: list[dict[str, Any]] = []
     try:
         _write_artifacts(journal.directory, environment=environment, collector=collector)
-        _fsync_tree(journal.directory)
+        fsync_tree(journal.directory)
         observation, _reset_info = session.env.reset(seed=seed)
         frame = observation_to_rgb(session.recording_observation(observation))
         if not _has_headroom(
@@ -658,7 +619,7 @@ def _recording_reservation(args: Any):
     fcntl.flock(lock_descriptor, fcntl.LOCK_EX)
     manifest_path = session_directory / "manifest.json"
     manifest = _session_manifest(manifest_path, reference=args.reference, session_id=session_id)
-    _atomic_json(manifest_path, manifest)
+    atomic_write_json(manifest_path, manifest)
     reservation = RecordingReservation(
         session_id, pending_root, session_directory, manifest_path, manifest
     )
@@ -669,7 +630,7 @@ def _recording_reservation(args: Any):
         os.close(lock_descriptor)
         if session_directory.is_dir() and not list(session_directory.glob("episode-*")):
             shutil.rmtree(session_directory)
-            _fsync_directory(pending_root)
+            fsync_path(pending_root)
 
 
 def _record_session(
@@ -752,7 +713,7 @@ def _record_session(
                 "state": "pending",
             }
         )
-        _atomic_json(manifest_path, manifest)
+        atomic_write_json(manifest_path, manifest)
         completed += 1
         print(f"recorded episode {completed}: {episode_id}", flush=True)
         if live_appender is not None:
@@ -763,10 +724,10 @@ def _record_session(
                 live_appender = None
             else:
                 manifest["packages"][-1]["state"] = "uploaded_pending_local"
-                _atomic_json(manifest_path, manifest)
+                atomic_write_json(manifest_path, manifest)
     if not packages:
         manifest["state"] = "empty"
-        _atomic_json(manifest_path, manifest)
+        atomic_write_json(manifest_path, manifest)
         print("no complete episode was recorded")
         return 0
     combined = session_directory / "combined"
@@ -774,9 +735,9 @@ def _record_session(
     result = adopt_tree(combined, args.reference, root=root)
     manifest["state"] = "committed"
     manifest["collection_fingerprint"] = result.collection_fingerprint
-    _atomic_json(manifest_path, manifest)
+    atomic_write_json(manifest_path, manifest)
     shutil.rmtree(session_directory)
-    _fsync_directory(pending_root)
+    fsync_path(pending_root)
     print(
         f"committed {completed} episode(s) to {args.reference!r}; "
         f"fingerprint={result.collection_fingerprint}"
@@ -861,7 +822,7 @@ def recover_pending(reference: str, *, root: Path | None) -> None:
                     known_paths.add(relative)
             if failures:
                 manifest["recovery_failures"] = failures
-            _atomic_json(manifest_path, manifest)
+            atomic_write_json(manifest_path, manifest)
             packages = []
             inventoried = {
                 path for path in session_directory.glob("episode-*/package") if path.is_dir()
@@ -884,7 +845,7 @@ def recover_pending(reference: str, *, root: Path | None) -> None:
             result = adopt_tree(combined, reference, root=root)
             manifest["state"] = "committed"
             manifest["collection_fingerprint"] = result.collection_fingerprint
-            _atomic_json(manifest_path, manifest)
+            atomic_write_json(manifest_path, manifest)
         finally:
             with contextlib.suppress(OSError):
                 fcntl.flock(descriptor, fcntl.LOCK_UN)
@@ -996,9 +957,9 @@ def _recover_active_episode(episode_directory: Path, package: Path) -> str:
                 if source.is_dir():
                     shutil.copytree(source, temporary / artifact_dir)
             validate_tree(temporary)
-            _fsync_tree(temporary)
+            fsync_tree(temporary)
             os.replace(temporary, package)
-            _fsync_directory(package.parent)
+            fsync_path(package.parent)
         except Exception:
             shutil.rmtree(temporary, ignore_errors=True)
             raise

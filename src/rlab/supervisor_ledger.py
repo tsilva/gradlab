@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import json
 import sqlite3
-import time
 from collections.abc import Mapping, Sequence
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator
+
+from rlab.clock import Clock, SystemClock
 
 
 SCHEMA_SQL = """
@@ -59,9 +60,16 @@ CREATE INDEX IF NOT EXISTS eval_dispatches_status_idx
 
 
 class SupervisorLedger:
-    def __init__(self, path: Path | str, *, timeout: float = 5.0):
+    def __init__(
+        self,
+        path: Path | str,
+        *,
+        timeout: float = 5.0,
+        clock: Clock | None = None,
+    ):
         self.path = Path(path)
         self.timeout = timeout
+        self.clock = clock or SystemClock()
 
     def connect(self) -> sqlite3.Connection:
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -101,7 +109,7 @@ class SupervisorLedger:
         return default if row is None else json.loads(str(row["value_json"]))
 
     def set_state(self, key: str, value: Any) -> None:
-        now = time.time()
+        now = self.clock.time()
         payload = json.dumps(value, sort_keys=True, separators=(",", ":"), default=str)
         with self.connection() as connection:
             connection.execute(
@@ -155,7 +163,7 @@ class SupervisorLedger:
             raise ValueError("metric segment cannot be empty")
         first = int(events[0]["event_seq"])
         last = int(events[-1]["event_seq"])
-        now = time.time()
+        now = self.clock.time()
         with self.connection() as connection:
             previous = connection.execute(
                 "SELECT COALESCE(MAX(last_event_seq), 0) FROM metric_segments"
@@ -184,7 +192,7 @@ class SupervisorLedger:
         checkpoint_ledger_id: int,
         manifest: Mapping[str, Any],
     ) -> None:
-        now = time.time()
+        now = self.clock.time()
         payload = json.dumps(dict(manifest), sort_keys=True, separators=(",", ":"))
         with self.connection() as connection:
             connection.execute(
@@ -257,7 +265,7 @@ class SupervisorLedger:
         checkpoint_ledger_id: int,
         intent: Mapping[str, Any],
     ) -> None:
-        now = time.time()
+        now = self.clock.time()
         payload = json.dumps(dict(intent), sort_keys=True, separators=(",", ":"))
         with self.connection() as connection:
             connection.execute(
@@ -320,7 +328,7 @@ class SupervisorLedger:
         modal_call_id: str,
         attempt_expires_at: float,
     ) -> None:
-        now = time.time()
+        now = self.clock.time()
         with self.connection() as connection:
             cursor = connection.execute(
                 """
@@ -341,7 +349,7 @@ class SupervisorLedger:
                 raise RuntimeError(f"eval intent is not pending: {idempotency_key}")
 
     def reset_expired_eval(self, *, idempotency_key: str, error: str) -> None:
-        now = time.time()
+        now = self.clock.time()
         with self.connection() as connection:
             cursor = connection.execute(
                 """
@@ -356,7 +364,7 @@ class SupervisorLedger:
                 raise RuntimeError(f"eval cannot be retried: {idempotency_key}")
 
     def record_eval_error(self, *, idempotency_key: str, error: str) -> None:
-        now = time.time()
+        now = self.clock.time()
         with self.connection() as connection:
             cursor = connection.execute(
                 """
@@ -379,7 +387,7 @@ class SupervisorLedger:
     ) -> None:
         if status not in {"accepted", "rejected", "failed", "expired", "canceled"}:
             raise ValueError(f"invalid terminal eval status: {status}")
-        now = time.time()
+        now = self.clock.time()
         payload = json.dumps(dict(result), sort_keys=True, separators=(",", ":"), default=str)
         with self.connection() as connection:
             cursor = connection.execute(
@@ -405,7 +413,7 @@ class SupervisorLedger:
                     raise RuntimeError(f"eval terminal result conflicts: {idempotency_key}")
 
     def mark_stop_requested(self, *, idempotency_key: str) -> float:
-        now = time.time()
+        now = self.clock.time()
         with self.connection() as connection:
             cursor = connection.execute(
                 """

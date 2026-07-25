@@ -9,7 +9,7 @@ import {
 import { PanelRuntime } from "./panels/runtime.js";
 import { text } from "./panels/shared.js";
 
-const FRAME_HEADER_BYTES = 16;
+const FRAME_HEADER_BYTES = 24;
 const panelName = location.pathname.startsWith("/panel/")
   ? location.pathname.slice("/panel/".length)
   : null;
@@ -68,8 +68,14 @@ const state = {
   dragTarget: null,
   remoteDrag: null,
   activeWindows: new Map(),
+  sessionEpoch: 0,
+  sourceMode: false,
+  applicationSnapshot: null,
+  workspaceReady: false,
 };
 let panelRuntime = null;
+let sourceBrowser = null;
+let sourceBrowserPromise = null;
 
 const workspaceChannel = "BroadcastChannel" in window
   ? new BroadcastChannel(`rlab-player-${workspaceId}`)
@@ -151,6 +157,59 @@ function updateConnection(label, kind = "") {
   badge.className = `sync-status ${kind}`.trim();
 }
 
+function resetSession(epoch) {
+  state.sessionEpoch = Number(epoch) || 0;
+  state.retainedEpisode = null;
+  state.pendingSnapshot = null;
+  state.inspectionSequence = null;
+  state.liveSnapshot = null;
+  state.snapshot = null;
+  state.history = [];
+  clearRetainedEpisode();
+  stopInspectionReplay({ render: false });
+}
+
+async function ensureSourceBrowser() {
+  if (sourceBrowser) return sourceBrowser;
+  if (!sourceBrowserPromise) {
+    sourceBrowserPromise = import("./sources/browser.js").then(({ SourceBrowser }) => {
+      sourceBrowser = new SourceBrowser($("#source-browser"), {
+        token,
+        command,
+        getState: () => state,
+        showToast,
+      });
+      return sourceBrowser;
+    });
+  }
+  return sourceBrowserPromise;
+}
+
+function setSourceMode(active, snapshot = null) {
+  state.sourceMode = Boolean(active);
+  document.body.classList.toggle("source-selection", state.sourceMode);
+  $("#source-browser").hidden = !state.sourceMode;
+  $("#change-source").hidden = (
+    state.sourceMode
+    || !(snapshot?.app?.has_active_runner || state.liveSnapshot?.app?.has_active_runner)
+  );
+  if (!state.sourceMode) {
+    sourceBrowser?.stop();
+    if (!state.workspaceReady) {
+      state.workspaceReady = true;
+      void applyLayout();
+    }
+    updateLayoutTitle();
+    return;
+  }
+  $("#page-title").textContent = "Select checkpoint";
+  document.title = "Select checkpoint · rlab player";
+  const expected = snapshot;
+  void ensureSourceBrowser().then((browser) => {
+    if (state.sourceMode && state.applicationSnapshot === expected) browser.render(expected);
+  }).catch((error) => showToast(`Source browser failed: ${error.message || error}`, true));
+}
+
 function connect() {
   if (!token) {
     updateConnection("Missing session token", "error");
@@ -193,11 +252,31 @@ function handleMessage(message) {
     return;
   }
   if (message.type === "history") {
+    if (
+      message.session_epoch !== undefined
+      && Number(message.session_epoch) !== state.sessionEpoch
+    ) return;
     state.history = Array.isArray(message.points) ? message.points : [];
     renderHistory();
     return;
   }
+  if (message.type === "session_changed") {
+    resetSession(message.session_epoch);
+    return;
+  }
   if (message.type === "snapshot") {
+    const epoch = Number(message.session_epoch || 0);
+    if (epoch !== state.sessionEpoch) resetSession(epoch);
+    state.applicationSnapshot = message;
+    state.hasControl = Boolean(message.control?.has_control);
+    updateControlState();
+    if (message.app && message.app.phase !== "active") {
+      state.liveSnapshot = message;
+      state.snapshot = message;
+      setSourceMode(true, message);
+      return;
+    }
+    setSourceMode(false, message);
     prepareRetainedEpisode(message);
     const frameKind = requiredFrameKind(message);
     if (frameKind && (state.frameSequence.get(frameKind) ?? -1) < message.sequence) {
@@ -223,9 +302,11 @@ async function handleFrame(buffer) {
   const view = new DataView(buffer);
   if (buffer.byteLength <= FRAME_HEADER_BYTES) return;
   const magic = String.fromCharCode(...new Uint8Array(buffer, 0, 4));
-  if (magic !== "RLP1") return;
+  if (magic !== "RLP2") return;
   const kind = view.getUint8(4);
-  const sequence = Number(view.getBigUint64(8));
+  const epoch = Number(view.getBigUint64(8));
+  const sequence = Number(view.getBigUint64(16));
+  if (epoch !== state.sessionEpoch) return;
   if (sequence < (state.receivedFrameSequence.get(kind) ?? -1)) return;
   state.receivedFrameSequence.set(kind, sequence);
   const blob = new Blob([buffer.slice(FRAME_HEADER_BYTES)], { type: "image/png" });
@@ -1059,6 +1140,7 @@ function movePanelToNewWindow(name) {
 }
 
 function bindWorkspaceMenus() {
+  $("#change-source").addEventListener("click", () => command("browse_sources"));
   $("#layouts-toggle").addEventListener("click", (event) => {
     $("#panel-shelf").hidden = true;
     $("#panels-toggle").setAttribute("aria-expanded", "false");
@@ -1294,7 +1376,6 @@ function initWorkspace() {
   bindWorkspaceMenus();
   bindWorkspaceSync();
   bindTimeline();
-  applyLayout();
 }
 
 panelRuntime = new PanelRuntime({

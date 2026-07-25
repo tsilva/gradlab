@@ -1,0 +1,4 @@
+interface:
+  display_name: "Certify Lifecycle"
+  short_description: "Run deterministic orchestration lifecycle checks"
+  default_prompt: "Use $certify-lifecycle to certify the orchestration lifecycle and interpret any replayable failure evidence."

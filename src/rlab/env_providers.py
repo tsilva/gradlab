@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import hashlib
-import inspect
 from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
@@ -927,26 +926,8 @@ def _breakout_turbo_make_vec_env(
         raise ValueError(
             "breakout snapshot starts require both snapshot_bank_uri and snapshot_bank_sha256"
         )
-    if "game" in inspect.signature(env_type).parameters:
-        raw_state = "Start" if snapshot_bank_uri else (config.state or "Start")
-        env = env_type(config.game, state=raw_state, **kwargs)
-    else:
-        legacy_unsupported = {
-            "info",
-            "inttype",
-            "noop_reset_max",
-            "obs_type",
-            "players",
-            "record",
-            "reward_clip",
-            "rom_path",
-            "scenario",
-            "use_fire_reset",
-            "use_restricted_actions",
-        }
-        env = env_type(
-            **{key: value for key, value in kwargs.items() if key not in legacy_unsupported}
-        )
+    raw_state = "Start" if snapshot_bank_uri else (config.state or "Start")
+    env = env_type(config.game, state=raw_state, **kwargs)
     env = _require_disabled_autoreset_mode(env, BREAKOUT_TURBO_ENV_PROVIDER.provider_id)
     if snapshot_bank_uri:
         from rlab.snapshot_banks import (

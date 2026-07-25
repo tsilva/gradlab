@@ -60,6 +60,21 @@ image.
 
 ## Launch and observe
 
+Keep non-sensitive operator metadata and Keychain references in the private
+user config, using the checked-in example as the schema:
+
+```bash
+mkdir -p ~/.config/rlab
+install -m 600 ops/operator.example.toml ~/.config/rlab/operator.toml
+rlab experiment operator-preflight --json
+```
+
+Replace the example placeholders and create the referenced generic-password
+items in macOS Keychain Access. Secret values never belong in
+`operator.toml` or the repository `.env`; explicit process environment values
+remain supported for CI and non-macOS operators. Modal tokens remain in
+Modal's active `~/.modal.toml` profile, which must use mode `0600`.
+
 ```bash
 rlab experiment launch \
   --goal-file experiments/goals/SuperMarioBros-Nes-v0/Level1-1/_goal.yaml \
@@ -72,10 +87,11 @@ rlab experiment launch \
   --json
 ```
 
-`launch` requires a clean, pushed source revision and waits for its verified
-immutable training image and source-specific Modal deployment. It returns the
-rlab run ID, attempt ID, dstack task, selected compute offer, source/image
-digest, W&B URL, and public run-index URL.
+`launch` runs the same read-only operator preflight before runtime readiness or
+R2 mutation, then requires a clean, pushed source revision and waits for its
+verified immutable training image and source-specific Modal deployment. It
+returns the rlab run ID, attempt ID, dstack task, selected compute offer,
+source/image digest, W&B URL, and public run-index URL.
 
 Compute policy:
 
@@ -119,16 +135,22 @@ runs/<run-id>/index.json
 
 The public index is mutable through ETag compare-and-swap and served with
 `Cache-Control: no-store`; checkpoint objects are immutable and cacheable.
-Playback needs no private credentials:
+Start the web player without a source to browse W&B projects, runs, and their
+public checkpoints. A W&B project or run URL preselects that level; an exact
+source still opens directly:
 
 ```bash
+rlab play
+rlab play "https://wandb.ai/<entity>/<project>"
+rlab play "https://wandb.ai/<entity>/<project>/runs/<rlab-run-id>"
 rlab play --run <rlab-run-id>
-rlab play <local-checkpoint>
+rlab play --model <local-checkpoint>
 rlab play hf://<owner>/<repository>
 ```
 
-W&B contains metrics, hashes, metadata, and R2 URLs only. Model bytes, videos,
-episode evidence, ROMs, and recovery journals remain in R2.
+W&B supplies catalog metadata only. Playback downloads model bytes from the
+public checkpoint store; videos, episode evidence, ROMs, and recovery journals
+remain in R2.
 
 ## Evaluation and early stop
 

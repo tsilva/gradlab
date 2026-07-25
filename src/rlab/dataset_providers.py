@@ -9,7 +9,6 @@ from __future__ import annotations
 import copy
 import hashlib
 import importlib.metadata
-import inspect
 import json
 import os
 import stat
@@ -371,26 +370,6 @@ def _resolve_enum(value: Any, enum_type: Any) -> Any:
         raise ValueError(f"unknown {enum_type.__name__} value {value!r}") from exc
 
 
-def _state_hashes(data: Any, stable_retro: Any, env_id: str, state: Any, inttype: Any):
-    if state == stable_retro.State.NONE or state == stable_retro.State.DEFAULT:
-        return {}
-    values = state.keys() if isinstance(state, Mapping) else state
-    if not isinstance(values, Sequence) or isinstance(values, (str, bytes)):
-        values = (values,)
-    result = {}
-    for value in values:
-        raw = str(value)
-        path = Path(raw).expanduser()
-        if not path.exists():
-            path = Path(
-                data.get_file_path(
-                    env_id, raw if raw.endswith(".state") else f"{raw}.state", inttype
-                )
-            )
-        result[raw] = _file_sha256(path)
-    return result
-
-
 def _stable_retro_session(environment_id: str, config: Mapping[str, Any]) -> ProviderSession:
     import stable_retro
     from stable_retro import data
@@ -406,8 +385,7 @@ def _stable_retro_session(environment_id: str, config: Mapping[str, Any]) -> Pro
     inttype = _resolve_enum(kwargs.get("inttype", data.Integrations.STABLE), data.Integrations)
     if "inttype" in kwargs:
         kwargs["inttype"] = inttype
-    if "autoreset_mode" in inspect.signature(stable_retro.RetroVecEnv).parameters:
-        kwargs["autoreset_mode"] = "Disabled"
+    kwargs["autoreset_mode"] = "Disabled"
     stage = _AssetStage()
     try:
         rom_source = kwargs.get("rom_path") or data.get_original_romfile_path(

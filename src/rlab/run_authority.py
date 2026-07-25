@@ -2,14 +2,15 @@ from __future__ import annotations
 
 import hashlib
 import json
-import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
+from rlab.clock import Clock, SystemClock
 from rlab.r2_store import (
+    BucketConfig,
     ConditionalWriteConflict,
     R2Bucket,
     RunStorageConfig,
@@ -22,7 +23,6 @@ from rlab.run_contracts import (
     RunManifest,
     TerminalReceipt,
     checkpoint_id,
-    utc_now,
 )
 from rlab.policy_bundle import model_document_path, recipe_document_path
 
@@ -78,11 +78,18 @@ class Lease:
 
 
 class RunAuthority:
-    def __init__(self, storage: RunStorageConfig):
+    def __init__(
+        self,
+        storage: RunStorageConfig,
+        *,
+        clock: Clock | None = None,
+        bucket_factory: Callable[[BucketConfig], R2Bucket] = R2Bucket,
+    ):
         self.storage = storage
-        self.control = R2Bucket(storage.control)
-        self.evaluation = R2Bucket(storage.evaluation)
-        self.models = R2Bucket(storage.models)
+        self.clock = clock or SystemClock()
+        self.control = bucket_factory(storage.control)
+        self.evaluation = bucket_factory(storage.evaluation)
+        self.models = bucket_factory(storage.models)
 
     @staticmethod
     def run_prefix(run_id: str) -> str:
@@ -116,7 +123,7 @@ class RunAuthority:
         holder_id: str,
         now: datetime | None = None,
     ) -> Lease:
-        instant = (now or datetime.now(UTC)).astimezone(UTC)
+        instant = (now or self.clock.utc_datetime()).astimezone(UTC)
         key = f"{self.run_prefix(run_id)}/writer-lease.json"
         current = self.control.get_json_optional(key)
         current_etag = str(self.control.head(key)["etag"]) if current is not None else None
@@ -161,7 +168,7 @@ class RunAuthority:
         return Lease.from_document(document, etag=etag)
 
     def renew_lease(self, lease: Lease, *, now: datetime | None = None) -> Lease:
-        instant = (now or datetime.now(UTC)).astimezone(UTC)
+        instant = (now or self.clock.utc_datetime()).astimezone(UTC)
         if _parse_timestamp(lease.expires_at) <= instant:
             raise LeaseUnavailable("writer lease expired before renewal")
         key = f"{self.run_prefix(lease.run_id)}/writer-lease.json"
@@ -324,7 +331,7 @@ class RunAuthority:
                 contract_hashes["evaluation_contract_sha256"]
             ),
             recovery_sidecar_key=sidecar_key,
-            created_at=str(created_at or utc_now()),
+            created_at=str(created_at or self.clock.utc_now()),
         )
         self.models.put_json(
             manifest_key,
@@ -377,7 +384,7 @@ class RunAuthority:
             document = {
                 "schema_version": 1,
                 "run_id": run_id,
-                "updated_at": utc_now(),
+                "updated_at": self.clock.utc_now(),
                 "checkpoints": rows,
                 "promotion": promoted,
             }
@@ -421,7 +428,7 @@ class RunAuthority:
                 "idempotency_key": idempotency_key,
                 "attempt": int(attempt),
                 "modal_call_id": modal_call_id,
-                "dispatched_at": utc_now(),
+                "dispatched_at": self.clock.utc_now(),
             },
             create_only=True,
         )
@@ -629,5 +636,5 @@ class RunAuthority:
             ),
             "attempts": attempt_manifests,
             "attempt_terminals": attempt_terminals,
-            "observed_at": time.time(),
+            "observed_at": self.clock.time(),
         }

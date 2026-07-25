@@ -13,6 +13,7 @@ from PIL import Image
 
 from rlab.dataset_cli import build_parser as build_dataset_parser
 from rlab.play import _PlaybackSession, _PlaybackTransition
+from rlab.play_catalog import CatalogPage
 from rlab.play_web import (
     FRAME_CODEC_PNG,
     FRAME_GAME,
@@ -86,9 +87,10 @@ def test_web_playback_retains_step_zero_snapshot_and_frame() -> None:
     sequence, packet = frames[FRAME_GAME]
     assert sequence == 0
     assert FRAME_HEADER.unpack_from(packet) == (
-        b"RLP1",
+        b"RLP2",
         FRAME_GAME,
         FRAME_CODEC_PNG,
+        0,
         0,
         0,
     )
@@ -341,14 +343,15 @@ def test_frame_encoder_emits_versioned_latest_only_png_packet() -> None:
     finally:
         encoder.close()
 
-    magic, kind, codec, flags, header_sequence = FRAME_HEADER.unpack(
+    magic, kind, codec, flags, session_epoch, header_sequence = FRAME_HEADER.unpack(
         packet[: FRAME_HEADER.size]
     )
     image = Image.open(io.BytesIO(packet[FRAME_HEADER.size :]))
-    assert (magic, kind, codec, flags, header_sequence, sequence) == (
+    assert (magic, kind, codec, flags, session_epoch, header_sequence, sequence) == (
         FRAME_MAGIC,
         FRAME_GAME,
         FRAME_CODEC_PNG,
+        0,
         0,
         7,
         7,
@@ -555,12 +558,60 @@ def test_loopback_server_requires_exact_origin_and_fragment_token() -> None:
     asyncio.run(scenario())
 
 
+def test_catalog_http_api_requires_the_fragment_session_token() -> None:
+    class FakeCatalog:
+        @staticmethod
+        def default_entity(explicit=None):
+            return explicit or "research"
+
+        @staticmethod
+        def projects(*, entity, query, cursor):
+            assert (entity, query, cursor) == ("research", "mario", None)
+            return CatalogPage(
+                items=(
+                    {
+                        "entity": "research",
+                        "name": "Mario",
+                        "created_at": "",
+                        "url": "",
+                    },
+                ),
+                next_cursor=None,
+            )
+
+    async def scenario() -> None:
+        runner = HumanRecordingRunner(FakeHumanSession(), human_args())
+        server = PlaybackWebServer(runner, human_args(), catalog=FakeCatalog())
+        task = asyncio.create_task(server.run())
+        try:
+            deadline = asyncio.get_running_loop().time() + 3.0
+            while not server.origin and asyncio.get_running_loop().time() < deadline:
+                await asyncio.sleep(0.01)
+            async with ClientSession() as client:
+                denied = await client.get(
+                    f"{server.origin}/api/catalog/projects?q=mario"
+                )
+                assert denied.status == 401
+                accepted = await client.get(
+                    f"{server.origin}/api/catalog/projects?q=mario",
+                    headers={"Authorization": f"Bearer {server.token}"},
+                )
+                assert accepted.status == 200
+                assert (await accepted.json())["items"][0]["name"] == "Mario"
+        finally:
+            runner.stop()
+            await asyncio.wait_for(task, timeout=3.0)
+
+    asyncio.run(scenario())
+
+
 def test_web_dashboard_assets_are_packaged_beside_server() -> None:
     root = Path(__file__).parents[1] / "src" / "rlab" / "web_player"
     assert (root / "index.html").is_file()
     assert (root / "styles.css").is_file()
     assert (root / "tabler-icons.svg").is_file()
     assert (root / "tabler-chevron-down.svg").is_file()
+    assert (root / "sources" / "browser.js").is_file()
     panel_root = root / "panels"
     panel_names = {
         "game",
@@ -588,6 +639,7 @@ def test_web_dashboard_assets_are_packaged_beside_server() -> None:
     signals_markup = (panel_root / "signals.js").read_text(encoding="utf-8")
     raw_markup = (panel_root / "raw.js").read_text(encoding="utf-8")
     assert '<main id="dashboard" class="dashboard"></main>' in markup
+    assert '<main id="source-browser" class="source-browser" hidden></main>' in markup
     assert '<h1 id="page-title">Environment</h1>' in markup
     assert 'class="workspace-status"' not in markup
     assert markup.index('id="new-window"') < markup.index('id="connection-status"')
@@ -698,7 +750,7 @@ def test_web_dashboard_assets_are_packaged_beside_server() -> None:
     assert ".playback-sampling" in styles
     assert ".playback-settings-body" in styles
     assert ".next-episode-settings-body" in styles
-    assert "ti-refresh" not in icons
+    assert 'id="ti-refresh"' in icons
     assert 'id="layouts-toggle" class="quiet icon-only"' in markup
     assert 'id="save-layout" class="primary button-with-icon" type="button" title="Save layout"' in markup
     assert 'id="reset-layout" class="quiet button-with-icon" type="button" title="Reset default layout"' in markup
@@ -710,7 +762,7 @@ def test_web_dashboard_assets_are_packaged_beside_server() -> None:
     assert 'data-command="inspect"' not in controls_markup
     assert "inspect_policy" not in controls_markup
     assert "panel-inspection" not in script
-    assert "ti-search" not in icons
+    assert 'id="ti-search"' in icons
     assert 'class="driver-switch" role="group" aria-label="Driver selection"' in controls_markup
     assert 'data-driver-option="policy"' in controls_markup
     assert 'data-driver-option="human"' in controls_markup

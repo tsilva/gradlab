@@ -4,12 +4,12 @@ import hashlib
 import json
 import math
 import sqlite3
-import time
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
+from rlab.clock import Clock, SystemClock
 from rlab.file_utils import file_sha256 as _file_sha256
 from rlab.metric_names import validate_metric_payload
 
@@ -85,9 +85,16 @@ CREATE TABLE IF NOT EXISTS recovery_manifest (
 class MetricStore:
     """Container-local SQLite WAL outbox shared only by learner and supervisor."""
 
-    def __init__(self, path: Path | str, *, timeout: float = 5.0) -> None:
+    def __init__(
+        self,
+        path: Path | str,
+        *,
+        timeout: float = 5.0,
+        clock: Clock | None = None,
+    ) -> None:
         self.path = Path(path)
         self.timeout = timeout
+        self.clock = clock or SystemClock()
 
     def connect(self) -> sqlite3.Connection:
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -152,7 +159,7 @@ class MetricStore:
         if not payload:
             return 0
         validate_metric_payload(payload)
-        now = time.time() if created_at is None else float(created_at)
+        now = self.clock.time() if created_at is None else float(created_at)
         event_id = self._event_id(
             source=source,
             step=step,
@@ -222,7 +229,7 @@ class MetricStore:
             kind=kind,
             payload=normalized,
         )
-        now = time.time() if created_at is None else float(created_at)
+        now = self.clock.time() if created_at is None else float(created_at)
         with self.connection() as connection:
             connection.execute(
                 """
@@ -258,7 +265,7 @@ class MetricStore:
         return [dict(row) for row in rows]
 
     def claim_metric_frame(self, frame_id: int) -> bool:
-        now = time.time()
+        now = self.clock.time()
         with self.connection() as connection:
             cursor = connection.execute(
                 """
@@ -276,7 +283,7 @@ class MetricStore:
         *,
         step: int | None,
     ) -> None:
-        now = time.time()
+        now = self.clock.time()
         with self.connection() as connection:
             connection.execute(
                 """
@@ -305,7 +312,7 @@ class MetricStore:
             )
 
     def mark_metric_frame_failed(self, frame_id: int, error: str) -> None:
-        now = time.time()
+        now = self.clock.time()
         message = str(error)[:4000]
         with self.connection() as connection:
             connection.execute(
@@ -331,7 +338,7 @@ class MetricStore:
             )
 
     def reset_interrupted_metric_frames(self) -> int:
-        now = time.time()
+        now = self.clock.time()
         with self.connection() as connection:
             cursor = connection.execute(
                 """
@@ -405,7 +412,7 @@ class MetricStore:
             default=str,
         )
         digest = hashlib.sha256(payload.encode()).hexdigest()
-        now = time.time()
+        now = self.clock.time()
         with self.connection() as connection:
             connection.execute(
                 """
@@ -436,7 +443,7 @@ class MetricStore:
         created_at: float | None = None,
         eval_required: bool = True,
     ) -> int:
-        now = time.time() if created_at is None else float(created_at)
+        now = self.clock.time() if created_at is None else float(created_at)
         values = {
             "run_name": str(run_name),
             "kind": str(kind),
@@ -507,7 +514,7 @@ class MetricStore:
                     last_error = NULL, updated_at = ?
                 WHERE id = ?
                 """,
-                (str(public_url), time.time(), int(checkpoint_id)),
+                (str(public_url), self.clock.time(), int(checkpoint_id)),
             )
 
     def mark_checkpoint_upload_failed(self, checkpoint_id: int, error: str) -> None:
@@ -518,7 +525,7 @@ class MetricStore:
                 SET upload_status = 'failed_retryable', last_error = ?, updated_at = ?
                 WHERE id = ?
                 """,
-                (str(error)[:4000], time.time(), int(checkpoint_id)),
+                (str(error)[:4000], self.clock.time(), int(checkpoint_id)),
             )
 
 

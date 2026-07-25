@@ -43,6 +43,25 @@ private environment, while the submitted task contains only
 `rlab experiment status` or `follow`; raw dstack inventory is not a
 user-facing interface.
 
+The Mac operator credential boundary is:
+
+- explicit process environment values win for CI and portable automation;
+- `~/.config/rlab/operator.toml` contains non-sensitive endpoints, bucket
+  identities, W&B entity, and macOS Keychain references only;
+- W&B, R2, and dstack secret values live in the referenced Keychain
+  generic-password items;
+- Modal remains the source of truth for its active `~/.modal.toml` profile,
+  whose file mode must be `0600`;
+- the repository `.env` may contain non-sensitive local metadata but launch
+  rejects protected credential names there;
+- `rlab experiment operator-preflight --json` authenticates dstack and
+  read-checks control, evaluation, and model R2 scopes without launching or
+  mutating a run.
+
+Use `ops/operator.example.toml` as the configuration schema. Never reconstruct
+credentials by parsing `dstack secret` tables: that interface is human-formatted
+and may abbreviate long values.
+
 Example tunnel:
 
 ```bash

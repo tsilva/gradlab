@@ -81,20 +81,54 @@ class BucketConfig:
                 else ""
             ),
         )
-        config.validate(public=public)
+        config.validate(public=public, label=normalized)
         return config
 
-    def validate(self, *, public: bool = False) -> None:
+    def validate(self, *, public: bool = False, label: str = "R2") -> None:
+        if not self.uri:
+            raise ValueError(f"{label}_URI is not set")
+        values = {
+            "URI": self.uri,
+            "ENDPOINT_URL": self.endpoint_url,
+            "PUBLIC_BASE_URL": self.public_base_url,
+        }
+        truncated = [name for name, value in values.items() if "…" in value]
+        if truncated:
+            raise ValueError(
+                f"{label}_{truncated[0]} is visibly truncated; use the exact "
+                "machine-readable value, not human-formatted command output"
+            )
         parsed = urlparse(self.uri)
         if parsed.scheme not in {"s3", "file"} or not parsed.netloc and parsed.scheme == "s3":
-            raise ValueError("R2 bucket URI must use s3://bucket[/prefix] or file:///path")
+            raise ValueError(
+                f"{label}_URI must use s3://bucket[/prefix] or file:///path"
+            )
         if parsed.scheme == "s3":
             if not self.endpoint_url:
-                raise ValueError("R2 S3 configuration requires an endpoint URL")
+                raise ValueError(f"{label}_ENDPOINT_URL is not set")
+            endpoint = urlparse(self.endpoint_url)
+            if endpoint.scheme not in {"http", "https"} or not endpoint.netloc:
+                raise ValueError(
+                    f"{label}_ENDPOINT_URL must be a complete http:// or https:// URL"
+                )
             if not self.access_key_id or not self.secret_access_key:
-                raise ValueError("R2 S3 configuration requires explicit credentials")
+                raise ValueError(
+                    f"{label} requires explicit ACCESS_KEY_ID and SECRET_ACCESS_KEY"
+                )
         if public and not self.public_base_url:
-            raise ValueError("public model storage requires a public base URL")
+            raise ValueError(f"{label}_PUBLIC_BASE_URL is not set")
+        if public:
+            public_base = urlparse(self.public_base_url)
+            valid_remote = (
+                public_base.scheme in {"http", "https"}
+                and bool(public_base.netloc)
+            )
+            valid_local = public_base.scheme == "file" and bool(public_base.path)
+            if not valid_remote and not valid_local:
+                raise ValueError(
+                    f"{label}_PUBLIC_BASE_URL must be a complete http://, https://, "
+                    "or file:/// URL"
+                )
 
 
 @dataclass(frozen=True)
