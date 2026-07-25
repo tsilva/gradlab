@@ -171,6 +171,7 @@ class TrainImageTests(unittest.TestCase):
         self.assertIn("FROM scratch AS dependency-overlay", dockerfile)
         self.assertIn("FROM ${GPU_BASE} AS dependencies", dockerfile)
         self.assertIn("FROM scratch AS runtime-overlay", dockerfile)
+        self.assertIn("COPY METRICS.md /root/rlab/METRICS.md", dockerfile)
         self.assertIn("FROM ${RUNTIME_BASE} AS runtime", dockerfile)
         runtime = dockerfile.split("FROM ${RUNTIME_BASE} AS runtime", maxsplit=1)[1]
         instructions = [line.strip() for line in runtime.splitlines() if line and not line.startswith(" ")]
