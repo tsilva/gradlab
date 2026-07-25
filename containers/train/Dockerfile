@@ -119,6 +119,7 @@ WORKDIR /src
 
 COPY pyproject.toml ./
 COPY THIRD_PARTY_NOTICES.md ./
+COPY METRICS.md ./
 COPY src ./src
 
 RUN --mount=type=cache,target=/root/.cache/uv \
