@@ -1,76 +1,127 @@
 export class PanelRuntime {
-  constructor({ catalog, container, services, onMount, onError }) {
-    this.catalog = catalog;
+  constructor({
+    definitionFor,
+    container,
+    services,
+    onMount,
+    onLayout,
+    onUnmount,
+    onError,
+  }) {
+    this.definitionFor = definitionFor;
     this.container = container;
     this.services = services;
     this.onMount = onMount;
+    this.onLayout = onLayout;
+    this.onUnmount = onUnmount;
     this.onError = onError;
     this.instances = new Map();
     this.loading = new Map();
-    this.desired = new Set();
+    this.desired = new Map();
     this.generation = 0;
     this.view = { snapshot: null, history: [], inspection: false };
   }
 
-  async sync(layout, windowId) {
+  async sync(workspace, windowId) {
     const generation = ++this.generation;
-    this.desired = new Set(
-      Object.entries(layout.panels)
-        .filter(([, config]) => config.visible && config.window === windowId)
-        .map(([name]) => name),
+    this.desired = new Map(
+      Object.entries(workspace.panels)
+        .filter(([, panel]) => (
+          panel.placement.visible && panel.placement.window === windowId
+        ))
+        .map(([id]) => [id, this.definitionFor(workspace, id)])
+        .filter(([, definition]) => definition),
     );
 
-    [...this.instances.keys()].forEach((name) => {
-      if (!this.desired.has(name)) this.unmount(name);
+    [...this.instances.entries()].forEach(([id, instance]) => {
+      const desired = this.desired.get(id);
+      if (!desired || instance.fingerprint !== this.fingerprint(desired)) {
+        this.unmount(id);
+      }
     });
 
-    await Promise.all([...this.desired].map((name) => this.ensureMounted(name)));
+    await Promise.all([...this.desired.keys()].map((id) => this.ensureMounted(id)));
     if (generation !== this.generation) return;
-    this.instances.forEach((instance, name) => {
-      const config = layout.panels[name];
-      if (!config || !this.desired.has(name)) return;
-      instance.element.style.gridColumn = `${config.col} / span ${config.w}`;
-      instance.element.style.gridRow = `${config.row} / span ${config.h}`;
+    await Promise.all(
+      [...this.desired.keys()]
+        .filter((id) => !this.instances.has(id))
+        .map((id) => this.ensureMounted(id)),
+    );
+    if (generation !== this.generation) return;
+    this.instances.forEach((instance, id) => {
+      const panel = workspace.panels[id];
+      if (!panel || !this.desired.has(id)) return;
+      this.onLayout?.(
+        instance.element,
+        id,
+        panel.placement,
+        instance.gridItem,
+        instance.definition,
+      );
     });
   }
 
-  async ensureMounted(name) {
-    if (this.instances.has(name)) return this.instances.get(name);
-    if (this.loading.has(name)) return this.loading.get(name);
-    const loading = this.loadPanel(name);
-    this.loading.set(name, loading);
+  fingerprint(definition) {
+    return JSON.stringify([
+      definition.type,
+      definition.title,
+      definition.config,
+    ]);
+  }
+
+  async ensureMounted(id) {
+    if (this.instances.has(id)) return this.instances.get(id);
+    if (this.loading.has(id)) return this.loading.get(id);
+    const definition = this.desired.get(id);
+    if (!definition) return null;
+    const loading = this.loadPanel(id, definition);
+    this.loading.set(id, loading);
     try {
       return await loading;
     } finally {
-      this.loading.delete(name);
+      this.loading.delete(id);
     }
   }
 
-  async loadPanel(name) {
-    const definition = this.catalog[name];
-    if (!definition) return null;
+  async loadPanel(id, definition) {
     try {
       const module = await import(definition.module);
-      if (!this.desired.has(name)) return null;
+      const current = this.desired.get(id);
+      if (!current || current.module !== definition.module) return null;
+      definition = current;
       const instance = await module.mount({
-        definition: { ...definition, id: name },
+        definition,
         services: this.services,
       });
-      if (!instance?.element) throw new Error(`Panel ${name} did not return an element.`);
-      if (!this.desired.has(name)) {
+      if (!instance?.element) throw new Error(`Panel ${id} did not return an element.`);
+      const desired = this.desired.get(id);
+      if (
+        !desired
+        || this.fingerprint(desired) !== this.fingerprint(definition)
+      ) {
         instance.destroy?.();
         return null;
       }
-      instance.element.dataset.panel = name;
-      this.container.append(instance.element);
-      const observer = new ResizeObserver(() => this.safeCall(name, "resize"));
+      instance.element.dataset.panel = id;
+      instance.element.classList.add("grid-stack-item-content");
+      const gridItem = document.createElement("div");
+      gridItem.className = "grid-stack-item";
+      gridItem.dataset.panel = id;
+      gridItem.append(instance.element);
+      this.container.append(gridItem);
+      const observer = new ResizeObserver(() => this.safeCall(id, "resize"));
       observer.observe(instance.element);
-      instance.observer = observer;
-      this.instances.set(name, instance);
-      this.onMount(instance.element, name, definition);
-      this.safeCall(name, "render", this.view.snapshot, this.view);
+      Object.assign(instance, {
+        definition,
+        fingerprint: this.fingerprint(definition),
+        observer,
+        gridItem,
+      });
+      this.instances.set(id, instance);
+      this.onMount?.(instance.element, id, definition, gridItem);
+      this.safeCall(id, "render", this.view.snapshot, this.view);
       this.safeCall(
-        name,
+        id,
         "renderHistory",
         this.view.history,
         this.view.snapshot,
@@ -78,40 +129,41 @@ export class PanelRuntime {
       );
       return instance;
     } catch (error) {
-      this.onError(name, error);
+      this.onError?.(id, error);
       return null;
     }
   }
 
-  unmount(name) {
-    const instance = this.instances.get(name);
+  unmount(id) {
+    const instance = this.instances.get(id);
     if (!instance) return;
     instance.observer?.disconnect();
-    this.safeCall(name, "destroy");
-    instance.element.remove();
-    this.instances.delete(name);
+    this.onUnmount?.(instance.element, id, instance.gridItem);
+    this.safeCall(id, "destroy");
+    instance.gridItem.remove();
+    this.instances.delete(id);
   }
 
-  safeCall(name, method, ...args) {
-    const callback = this.instances.get(name)?.[method];
+  safeCall(id, method, ...args) {
+    const callback = this.instances.get(id)?.[method];
     if (typeof callback !== "function") return undefined;
     try {
       return callback(...args);
     } catch (error) {
-      this.onError(name, error);
+      this.onError?.(id, error);
       return undefined;
     }
   }
 
   renderSnapshot(snapshot, view = {}) {
     this.view = { ...this.view, ...view, snapshot };
-    this.instances.forEach((_, name) => this.safeCall(name, "render", snapshot, this.view));
+    this.instances.forEach((_, id) => this.safeCall(id, "render", snapshot, this.view));
   }
 
   renderHistory(history, snapshot = this.view.snapshot, view = {}) {
     this.view = { ...this.view, ...view, history, snapshot };
-    this.instances.forEach((_, name) => this.safeCall(
-      name,
+    this.instances.forEach((_, id) => this.safeCall(
+      id,
       "renderHistory",
       history,
       snapshot,
@@ -121,21 +173,21 @@ export class PanelRuntime {
 
   async renderFrame(kind, blob) {
     const tasks = [...this.instances.entries()]
-      .filter(([name]) => this.catalog[name]?.frameKinds.includes(kind))
-      .map(([name]) => Promise.resolve(this.safeCall(name, "renderFrame", kind, blob))
+      .filter(([, instance]) => instance.definition.frameKinds.includes(kind))
+      .map(([id]) => Promise.resolve(this.safeCall(id, "renderFrame", kind, blob))
         .catch((error) => {
-          this.onError(name, error);
+          this.onError?.(id, error);
           return false;
         }));
     const results = await Promise.all(tasks);
     return results.some(Boolean);
   }
 
-  invoke(name, method, ...args) {
-    return this.safeCall(name, method, ...args);
+  invoke(id, method, ...args) {
+    return this.safeCall(id, method, ...args);
   }
 
   resize() {
-    this.instances.forEach((_, name) => this.safeCall(name, "resize"));
+    this.instances.forEach((_, id) => this.safeCall(id, "resize"));
   }
 }

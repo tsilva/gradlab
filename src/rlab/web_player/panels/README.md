@@ -1,12 +1,36 @@
 # Player panel contract
 
-The player shell owns the synchronized session, workspace layout, panel placement,
-and transport connection. It does not own panel markup or visualization logic.
+The player is a versioned workspace of panel instances. The shell owns the
+synchronized session, workspace persistence, GridStack placement, transport,
+and bounded trajectory cursor. A panel module owns its DOM and visualization.
 
-`catalog.js` is the single registration point for a panel. Each entry declares
-its label, lazy module path, default and minimum layout, frame subscriptions, and
-frame kinds. The runtime imports a module only while that panel is placed in the
-current window.
+`catalog.js` has two registries:
+
+- `PANEL_TYPES` declares lazy module paths, minimum sizes, frame subscriptions,
+  and singleton behavior for reusable panel types.
+- `BUILTIN_PANEL_PRESETS` instantiates the default research workspace. Policy,
+  reward, action, and signal views are presets of the same `telemetry` type;
+  game, controls, observation, events, and raw transition inspection remain
+  specialized types.
+
+`workspace.js` owns the v3 persisted shape. Each instance has `type`, `title`,
+`config`, `builtin`, and a zero-based GridStack `placement`. Custom instances
+are telemetry panels. Old workspace versions are intentionally discarded
+instead of migrated.
+
+Telemetry configuration is a list of visualization blocks:
+
+- `stats`: current or selected-transition values for multiple metrics.
+- `line`: compatible scalar history series sharing one unit.
+- `histogram`: retained categorical history.
+- `distribution`: the current policy distribution.
+- `namespace-explorer`: dynamically discovered environment signals or reward
+  components.
+
+`telemetry.js` is the descriptor registry for the live playback protocol. These
+keys are local visualization descriptors, not W&B metric names. A descriptor
+defines its label, value type, unit, transition phase, formatting, and accessors
+for snapshots and history points.
 
 A panel module exports:
 
@@ -23,14 +47,12 @@ export function mount({ definition, services }) {
 }
 ```
 
-Only `element` is required. A module owns its DOM, event listeners, local view
-state, and cleanup. `services` provides the narrow shared capabilities
-`getState`, `send`, `command`, and `showToast`.
+Only `element` is required. The shared `view` identifies the selected and live
+transition with `sessionEpoch`, `selectedSequence`, `liveSequence`, and
+`inspection`. History is already filtered to the active episode. Panels render
+the supplied selected snapshot; controls intentionally read the live snapshot.
 
-The shared `view` identifies the selected and live transition with
-`sessionEpoch`, `selectedSequence`, `liveSequence`, and `inspection`. History is
-already filtered to the active episode. Panels must render the supplied selected
-snapshot while the controls panel intentionally reads the live snapshot.
-
-To add a panel, add one module and one catalog entry. Do not add its markup,
-subscriptions, rendering, or controls to `index.html` or `app.js`.
+Add a visualization metric by adding a descriptor. Add a reusable visualization
+shape by extending telemetry block validation, the editor, and the generic
+renderer. Add a specialized panel only when it needs behavior that does not fit
+the telemetry contract.

@@ -26,7 +26,7 @@ from rlab.play import _PlaybackSession, _PlaybackTransition, render_obs_stack
 from rlab.play_debug import ANSI_PATTERN, PolicyDecision, model_input_lines
 
 
-PROTOCOL_VERSION = 2
+PROTOCOL_VERSION = 3
 HISTORY_LIMIT = 4096
 COMMAND_QUEUE_LIMIT = 64
 CLIENT_QUEUE_LIMIT = 64
@@ -228,22 +228,28 @@ def transition_payload(transition: _PlaybackTransition) -> dict[str, Any]:
 
 
 def history_point(transition: _PlaybackTransition) -> dict[str, Any]:
-    payload = transition_payload(transition)
+    return history_point_payload(transition_payload(transition))
+
+
+def history_point_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
     decision = payload["decision"] or {}
     reward = payload["reward"]
     return {
-        "sequence": transition.sequence,
-        "episode": transition.episode,
-        "step": transition.step,
-        "action": decision.get("selected_action"),
-        "action_source": transition.action_source,
+        "sequence": payload["sequence"],
+        "episode": payload["episode"],
+        "step": payload["step"],
+        "policy_action": decision.get("selected_action"),
+        "executed_action": payload.get("executed_action"),
+        "action_source": payload.get("action_source"),
         "reward_provider": reward["provider"],
         "reward_shaped": reward["shaped"],
         "return": reward["return"],
         "value": decision.get("value"),
         "entropy": decision.get("entropy"),
+        "log_probability": decision.get("log_probability"),
+        "outcome": payload.get("outcome"),
         "events": payload["events"],
-        "boundary": transition.boundary,
+        "boundary": bool(payload.get("boundary")),
         "signals": payload["signals"],
         "components": reward["components"],
     }
@@ -529,6 +535,13 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
 
     def _snapshot_payload(self, transition: _PlaybackTransition | None) -> dict[str, Any]:
         current = transition_payload(transition) if transition is not None else None
+        current_history = (
+            dict(self.history[-1])
+            if transition is not None
+            and self.history
+            and int(self.history[-1]["sequence"]) == transition.sequence
+            else None
+        )
         try:
             event_names = list(self.session.env.runtime.kernel.event_names)
         except AttributeError:
@@ -562,6 +575,7 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
                 "config": self.config_text,
             },
             "transition": current,
+            "history_point": current_history,
         }
 
     def _publish(self, transition: _PlaybackTransition | None = None) -> None:
@@ -833,6 +847,13 @@ class DatasetPlaybackRunner(_PlaybackRunnerProtocol):
         return None
 
     def _snapshot_payload(self) -> dict[str, Any]:
+        current_history = (
+            dict(self.history[-1])
+            if self._transition is not None
+            and self.history
+            and int(self.history[-1]["sequence"]) == self.sequence
+            else None
+        )
         return {
             "type": "snapshot",
             "protocol": PROTOCOL_VERSION,
@@ -865,6 +886,7 @@ class DatasetPlaybackRunner(_PlaybackRunnerProtocol):
                 ),
             },
             "transition": self._transition,
+            "history_point": current_history,
         }
 
     def _publish(self) -> None:
@@ -1017,24 +1039,7 @@ class DatasetPlaybackRunner(_PlaybackRunnerProtocol):
             ),
             "attribution": False,
         }
-        self.history.append(
-            {
-                "sequence": self.sequence,
-                "episode": 1,
-                "step": int(row.get("step_index") or 0),
-                "action": action,
-                "action_source": "recorded",
-                "reward_provider": reward,
-                "reward_shaped": reward,
-                "return": self.total_reward,
-                "value": None,
-                "entropy": None,
-                "events": events,
-                "boundary": boundary,
-                "signals": _numeric_signals(info),
-                "components": {},
-            }
-        )
+        self.history.append(history_point_payload(self._transition))
         self.revision += 1
         if boundary:
             self.run_state = "paused"
@@ -1181,6 +1186,13 @@ class HumanRecordingRunner(_PlaybackRunnerProtocol):
 
     def _publish(self) -> None:
         with self._snapshot_lock:
+            current_history = (
+                dict(self.history[-1])
+                if self._transition is not None
+                and self.history
+                and int(self.history[-1]["sequence"]) == self.sequence
+                else None
+            )
             self._latest_snapshot = {
                 "type": "snapshot",
                 "protocol": PROTOCOL_VERSION,
@@ -1213,6 +1225,7 @@ class HumanRecordingRunner(_PlaybackRunnerProtocol):
                     ),
                 },
                 "transition": self._transition,
+                "history_point": current_history,
             }
 
     def action(self, frame: np.ndarray) -> tuple[Any | None, bool]:
@@ -1298,24 +1311,7 @@ class HumanRecordingRunner(_PlaybackRunnerProtocol):
             "outcome": "boundary" if boundary else "continuing",
             "attribution": False,
         }
-        self.history.append(
-            {
-                "sequence": self.sequence,
-                "episode": 1,
-                "step": self.sequence,
-                "action": None,
-                "action_source": "human",
-                "reward_provider": float(reward),
-                "reward_shaped": float(reward),
-                "return": self.total_reward,
-                "value": None,
-                "entropy": None,
-                "events": [],
-                "boundary": boundary,
-                "signals": _numeric_signals(info),
-                "components": {},
-            }
-        )
+        self.history.append(history_point_payload(self._transition))
         self.encoder.submit(FRAME_GAME, self.sequence, next_frame)
         self.revision += 1
         self._publish()
@@ -2174,6 +2170,7 @@ __all__ = [
     "WebPlaybackRunner",
     "WebHumanController",
     "history_point",
+    "history_point_payload",
     "run_web_dataset_playback",
     "run_web_player_application",
     "run_web_playback",

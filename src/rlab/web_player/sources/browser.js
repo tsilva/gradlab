@@ -301,7 +301,12 @@ export class SourceBrowser {
   render(snapshot) {
     this.app = snapshot?.app || { phase: "active" };
     const appRoute = this.app.route || {};
-    if (this.pendingLocationRoute) {
+    if (
+      this.pendingLocationRoute
+      && location.pathname !== "/"
+      && this.app.phase === "selecting"
+      && !this.app.source
+    ) {
       const pending = {
         ...this.pendingLocationRoute,
         entity: this.pendingLocationRoute.entity || appRoute.entity || "",
@@ -310,6 +315,8 @@ export class SourceBrowser {
       this.lastAppRoute = routeSignature(appRoute);
       this.applyRoute(pending);
       this.command("browse_sources", { route: { ...pending } });
+    } else {
+      this.pendingLocationRoute = null;
     }
     const signature = routeSignature(appRoute);
     if (signature !== this.lastAppRoute) {

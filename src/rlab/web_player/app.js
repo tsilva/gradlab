@@ -1,13 +1,22 @@
 import {
   FRAME_GAME,
   FRAME_OBSERVATION,
-  PANEL_CATALOG,
-  defaultPanelLayout,
+  PANEL_TYPES,
+  panelDefinition,
   panelLabels,
   panelSubscriptions,
 } from "./panels/catalog.js";
+import { PanelManager } from "./panels/manager.js";
 import { PanelRuntime } from "./panels/runtime.js";
 import { text } from "./panels/shared.js";
+import {
+  bumpWorkspaceRevision,
+  compareWorkspaceRevisions,
+  createDefaultWorkspace,
+  createTelemetryInstance,
+  normalizePanelConfig,
+  normalizeWorkspace,
+} from "./panels/workspace.js";
 
 const FRAME_HEADER_BYTES = 24;
 const panelName = location.pathname.startsWith("/panel/")
@@ -20,22 +29,16 @@ const pairedWorkspace = new URLSearchParams(location.search).get("workspace") ==
 const token = new URLSearchParams(location.hash.slice(1)).get("token") || "";
 const WORKSPACE_ID_KEY = "rlab.player.workspace.id";
 const LAYOUT_KEY = pairedWorkspace
-  ? "rlab.player.workspace.layout.v2"
-  : "rlab.player.workspace.layout.v1";
-const SAVED_LAYOUTS_KEY = "rlab.player.workspace.saved.v1";
+  ? "rlab.player.workspace.v3.paired"
+  : "rlab.player.workspace.v3.single";
+const SAVED_LAYOUTS_KEY = "rlab.player.workspace.saved.v3";
 const STATS_WINDOW_ID = "stats";
 const workspaceId = localStorage.getItem(WORKSPACE_ID_KEY) || crypto.randomUUID();
 localStorage.setItem(WORKSPACE_ID_KEY, workspaceId);
 const windowId = panelName ? `panel-${panelName}` : (workspaceWindowName || "main");
-const PANEL_LABELS = panelLabels();
 
 function defaultLayout() {
-  return {
-    version: pairedWorkspace ? 2 : 1,
-    revision: 0,
-    name: "Default layout",
-    panels: defaultPanelLayout({ paired: pairedWorkspace }),
-  };
+  return createDefaultWorkspace({ paired: pairedWorkspace, writer: windowId });
 }
 
 const state = {
@@ -65,10 +68,6 @@ const state = {
   windowId,
   layout: null,
   selectedPanel: null,
-  draggingPanel: null,
-  dragSession: null,
-  dragTarget: null,
-  remoteDrag: null,
   activeWindows: new Map(),
   sessionEpoch: 0,
   sourceMode: false,
@@ -78,6 +77,9 @@ const state = {
 let panelRuntime = null;
 let sourceBrowser = null;
 let sourceBrowserPromise = null;
+let gridStack = null;
+let syncingGrid = false;
+let panelManager = null;
 
 const workspaceChannel = "BroadcastChannel" in window
   ? new BroadcastChannel(`rlab-player-${workspaceId}`)
@@ -90,35 +92,12 @@ function clamp(value, minimum, maximum) {
   return Math.max(minimum, Math.min(maximum, Number(value) || minimum));
 }
 
-function normalizeLayout(value) {
-  const fallback = defaultLayout();
-  const source = value && typeof value === "object" ? value : {};
-  const panels = {};
-  Object.entries(fallback.panels).forEach(([name, defaults]) => {
-    const candidate = source.panels?.[name] || {};
-    const minimum = PANEL_CATALOG[name].minimum;
-    const w = clamp(candidate.w ?? defaults.w, minimum.w, 12);
-    const h = clamp(candidate.h ?? defaults.h, minimum.h, 40);
-    panels[name] = {
-      col: clamp(candidate.col ?? defaults.col, 1, 13 - w),
-      row: clamp(candidate.row ?? defaults.row, 1, 200),
-      w,
-      h,
-      visible: candidate.visible === undefined ? defaults.visible : Boolean(candidate.visible),
-      window: typeof candidate.window === "string" && candidate.window ? candidate.window : defaults.window,
-    };
-  });
-  return {
-    version: fallback.version,
-    revision: Number(source.revision) || 0,
-    name: typeof source.name === "string" && source.name.trim() ? source.name.trim().slice(0, 48) : fallback.name,
-    panels,
-  };
-}
-
 function readStoredLayout() {
   try {
-    return normalizeLayout(JSON.parse(localStorage.getItem(LAYOUT_KEY) || "null"));
+    return normalizeWorkspace(
+      JSON.parse(localStorage.getItem(LAYOUT_KEY) || "null"),
+      { paired: pairedWorkspace, writer: windowId },
+    );
   } catch {
     return defaultLayout();
   }
@@ -127,12 +106,14 @@ function readStoredLayout() {
 function panelsInThisWindow() {
   if (!state.layout) return [];
   return Object.entries(state.layout.panels)
-    .filter(([, panel]) => panel.visible && panel.window === state.windowId)
+    .filter(([, panel]) => (
+      panel.placement.visible && panel.placement.window === state.windowId
+    ))
     .map(([name]) => name);
 }
 
 function subscriptions() {
-  return panelSubscriptions(panelsInThisWindow());
+  return panelSubscriptions(state.layout, panelsInThisWindow());
 }
 
 function setDetachedLayout() {
@@ -340,11 +321,17 @@ async function handleFrame(buffer) {
 }
 
 function requiredFrameKinds(snapshot) {
-  const visible = new Set(panelsInThisWindow());
+  const visible = new Set(
+    panelsInThisWindow().flatMap(
+      (id) => panelDefinition(state.layout, id)?.frameKinds || [],
+    ),
+  );
   const required = [];
-  if (visible.has("game") && snapshot.transition?.after?.game_frame) required.push(FRAME_GAME);
+  if (visible.has(FRAME_GAME) && snapshot.transition?.after?.game_frame) {
+    required.push(FRAME_GAME);
+  }
   if (
-    visible.has("observation")
+    visible.has(FRAME_OBSERVATION)
     && Number(snapshot.transition?.before?.observation_frames || 0) > 0
   ) required.push(FRAME_OBSERVATION);
   return required;
@@ -468,8 +455,8 @@ function applySnapshot(snapshot) {
   state.snapshots.set(Number(snapshot.sequence), snapshot);
   pruneRetainedTrace();
   state.hasControl = Boolean(snapshot.control?.has_control);
-  const historyChanged = snapshot.transition
-    ? ingestHistoryPoint(historyFromTransition(snapshot.transition))
+  const historyChanged = snapshot.history_point
+    ? ingestHistoryPoint(snapshot.history_point)
     : false;
   if (state.inspectionSequence === null) {
     state.snapshot = snapshot;
@@ -633,25 +620,6 @@ function configureMode(mode) {
     : (dataset ? "DATASET PLAYBACK" : "RLAB PLAYER");
 }
 
-function historyFromTransition(transition) {
-  return {
-    sequence: transition.sequence,
-    episode: transition.episode,
-    step: transition.step,
-    action: transition.decision?.selected_action ?? transition.executed_action ?? null,
-    action_source: transition.action_source,
-    reward_provider: transition.reward?.provider,
-    reward_shaped: transition.reward?.shaped,
-    return: transition.reward?.return,
-    value: transition.decision?.value,
-    entropy: transition.decision?.entropy,
-    events: transition.events || [],
-    boundary: transition.boundary,
-    signals: transition.signals || {},
-    components: transition.reward?.components || {},
-  };
-}
-
 function renderHistory() {
   panelRuntime.renderHistory(currentEpisodeHistory(), state.snapshot, panelView());
   renderTimeline();
@@ -662,10 +630,11 @@ function exactFrameBlob(kind, sequence) {
 }
 
 async function showFramesForSequence(sequence) {
-  const visible = new Set(panelsInThisWindow());
-  const kinds = [];
-  if (visible.has("game")) kinds.push(FRAME_GAME);
-  if (visible.has("observation")) kinds.push(FRAME_OBSERVATION);
+  const kinds = [...new Set(
+    panelsInThisWindow().flatMap(
+      (id) => panelDefinition(state.layout, id)?.frameKinds || [],
+    ),
+  )];
   const missing = [];
   await Promise.all(kinds.map(async (kind) => {
     const blob = exactFrameBlob(kind, sequence);
@@ -828,40 +797,50 @@ function renderTimeline() {
   }));
 }
 
-function panelsOverlap(a, b) {
-  return a.col < b.col + b.w
-    && a.col + a.w > b.col
-    && a.row < b.row + b.h
-    && a.row + a.h > b.row;
+function maxPanelRow(targetWindow = state.windowId) {
+  return Math.max(0, ...Object.values(state.layout.panels)
+    .filter((panel) => (
+      panel.placement.visible && panel.placement.window === targetWindow
+    ))
+    .map((panel) => panel.placement.y + panel.placement.h));
 }
 
-function resolveCollisions(movedName) {
-  const moved = state.layout.panels[movedName];
-  if (!moved?.visible) return;
-  moved.col = clamp(moved.col, 1, 13 - moved.w);
-  moved.row = clamp(moved.row, 1, 200);
-  const placed = [moved];
-  const others = Object.entries(state.layout.panels)
-    .filter(([name, panel]) => name !== movedName && panel.visible && panel.window === moved.window)
-    .sort(([, a], [, b]) => a.row - b.row || a.col - b.col);
-  others.forEach(([, panel]) => {
-    let collisions = placed.filter((candidate) => panelsOverlap(panel, candidate));
-    while (collisions.length) {
-      panel.row = Math.max(...collisions.map((candidate) => candidate.row + candidate.h));
-      collisions = placed.filter((candidate) => panelsOverlap(panel, candidate));
-    }
-    placed.push(panel);
+function panelLabel(id) {
+  return panelLabels(state.layout)[id] || id;
+}
+
+function gridWidgetFor(name, placement = state.layout.panels[name]?.placement) {
+  const definition = panelDefinition(state.layout, name);
+  const minimum = definition?.minimum || PANEL_TYPES.telemetry.minimum;
+  return {
+    id: name,
+    x: placement.x,
+    y: placement.y,
+    w: placement.w,
+    h: placement.h,
+    minW: minimum.w,
+    minH: minimum.h,
+    maxH: 40,
+  };
+}
+
+function syncGridNodes(nodes = null) {
+  const current = nodes || $$(".grid-stack-item")
+    .map((item) => item.gridstackNode)
+    .filter(Boolean);
+  current.forEach((node) => {
+    const name = node.el?.dataset.panel;
+    const placement = state.layout.panels[name]?.placement;
+    if (!placement) return;
+    placement.x = Number(node.x || 0);
+    placement.y = Number(node.y || 0);
+    placement.w = Number(node.w || placement.w);
+    placement.h = Number(node.h || placement.h);
   });
 }
 
-function maxPanelRow(targetWindow = state.windowId) {
-  return Math.max(0, ...Object.values(state.layout.panels)
-    .filter((panel) => panel.visible && panel.window === targetWindow)
-    .map((panel) => panel.row + panel.h - 1));
-}
-
 function persistLayout({ announce = true } = {}) {
-  state.layout.revision = Number(state.layout.revision || 0) + 1;
+  bumpWorkspaceRevision(state.layout, state.windowId);
   localStorage.setItem(LAYOUT_KEY, JSON.stringify(state.layout));
   if (announce) workspaceChannel?.postMessage({ type: "layout", layout: state.layout, source: state.windowId });
 }
@@ -870,7 +849,7 @@ function updateLayoutTitle() {
   const environmentId = String(state.liveSnapshot?.session?.env_id || "").trim();
   const environmentTitle = environmentId || "Environment";
   const title = panelName
-    ? `${environmentTitle} · ${PANEL_LABELS[panelName] || panelName}`
+    ? `${environmentTitle} · ${panelLabel(panelName)}`
     : pairedWorkspace && state.windowId === STATS_WINDOW_ID
       ? `${environmentTitle} · Stats`
       : environmentTitle;
@@ -880,24 +859,32 @@ function updateLayoutTitle() {
 }
 
 async function applyLayout() {
-  const dashboard = $("#dashboard");
   const visibleHere = panelsInThisWindow();
   document.body.classList.toggle("empty-workspace", visibleHere.length === 0);
-  const rows = Math.max(8, maxPanelRow());
-  dashboard.style.minHeight = `${rows * 32 + Math.max(0, rows - 1) * 10 + 12}px`;
   updateLayoutTitle();
-  renderPanelShelf();
+  panelManager?.renderShelf();
   renderSavedLayouts();
   send({ type: "subscribe", subscriptions: subscriptions() });
-  await panelRuntime.sync(state.layout, state.windowId);
+  syncingGrid = true;
+  gridStack.batchUpdate();
+  try {
+    await panelRuntime.sync(state.layout, state.windowId);
+  } finally {
+    gridStack.batchUpdate(false);
+    syncingGrid = false;
+  }
+  syncGridNodes();
   if (state.snapshot) {
     panelRuntime.renderSnapshot(state.snapshot, panelView());
     panelRuntime.renderHistory(currentEpisodeHistory(), state.snapshot, panelView());
     const sequence = Number(state.snapshot.sequence);
-    if (visibleHere.includes("game")) {
+    const visibleKinds = new Set(visibleHere.flatMap(
+      (id) => panelDefinition(state.layout, id)?.frameKinds || [],
+    ));
+    if (visibleKinds.has(FRAME_GAME)) {
       panelRuntime.renderFrame(FRAME_GAME, exactFrameBlob(FRAME_GAME, sequence));
     }
-    if (visibleHere.includes("observation")) {
+    if (visibleKinds.has(FRAME_OBSERVATION)) {
       panelRuntime.renderFrame(
         FRAME_OBSERVATION,
         exactFrameBlob(FRAME_OBSERVATION, sequence),
@@ -928,7 +915,10 @@ function renderSavedLayouts() {
     load.textContent = name;
     load.title = `Load layout ${name}`;
     load.addEventListener("click", () => {
-      state.layout = normalizeLayout(saved[name]);
+      state.layout = normalizeWorkspace(saved[name], {
+        paired: pairedWorkspace,
+        writer: state.windowId,
+      });
       state.layout.name = name;
       persistLayout();
       applyLayout();
@@ -958,334 +948,35 @@ function renderSavedLayouts() {
 }
 
 function renderPanelShelf() {
-  const target = $("#panel-shelf-items");
-  const entries = Object.entries(PANEL_LABELS).filter(([name]) => {
-    const panel = state.layout.panels[name];
-    return !panel.visible || panel.window !== state.windowId;
-  });
-  const buttons = entries.map(([name, label]) => {
-    const config = state.layout.panels[name];
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = "shelf-item";
-    button.setAttribute("aria-label", config.visible ? `Move ${label} to this window` : `Show ${label}`);
-    button.title = button.getAttribute("aria-label");
-    const title = document.createElement("span");
-    title.textContent = label;
-    button.append(title);
-    if (config.visible) {
-      const status = document.createElement("small");
-      status.textContent = "Other window";
-      button.append(status);
-    }
-    button.addEventListener("click", () => {
-      const windowHasPanels = Object.entries(state.layout.panels).some(([otherName, panel]) =>
-        otherName !== name && panel.visible && panel.window === state.windowId
-      );
-      config.visible = true;
-      config.window = state.windowId;
-      if (!windowHasPanels) {
-        config.col = 1;
-        config.row = 1;
-      } else if (Object.entries(state.layout.panels).some(([otherName, panel]) =>
-        otherName !== name && panel.visible && panel.window === state.windowId && panelsOverlap(config, panel)
-      )) config.row = maxPanelRow() + 1;
-      resolveCollisions(name);
-      persistLayout();
-      applyLayout();
-      $("#panel-shelf").hidden = true;
-      $("#panels-toggle").setAttribute("aria-expanded", "false");
-      showToast(`${label} moved into this window.`);
-    });
-    return button;
-  });
-  if (!buttons.length) {
-    const empty = document.createElement("span");
-    empty.className = "empty-state";
-    empty.textContent = "Every panel is visible in this window.";
-    target.replaceChildren(empty);
-  } else target.replaceChildren(...buttons);
-}
-
-function gridMetrics() {
-  const dashboard = $("#dashboard");
-  const rect = dashboard.getBoundingClientRect();
-  const style = getComputedStyle(dashboard);
-  const gap = Number.parseFloat(style.columnGap) || 10;
-  const row = Number.parseFloat(style.gridAutoRows) || 32;
-  const paddingLeft = Number.parseFloat(style.paddingLeft) || 0;
-  const paddingRight = Number.parseFloat(style.paddingRight) || 0;
-  const paddingTop = Number.parseFloat(style.paddingTop) || 0;
-  const paddingBottom = Number.parseFloat(style.paddingBottom) || 0;
-  const contentWidth = Math.max(0, rect.width - paddingLeft - paddingRight);
-  const contentHeight = Math.max(0, rect.height - paddingTop - paddingBottom);
-  const column = Math.max(0, (contentWidth - gap * 11) / 12);
-  return {
-    dashboard,
-    rect,
-    gap,
-    column,
-    row,
-    paddingLeft,
-    paddingTop,
-    contentWidth,
-    contentHeight,
-    rowPitch: row + gap,
-    columnPitch: column + gap,
-  };
-}
-
-function dropTargetAt(clientX, clientY, config) {
-  const metrics = gridMetrics();
-  const { rect, paddingLeft, paddingTop, contentWidth, contentHeight, columnPitch, rowPitch } = metrics;
-  const x = clientX - rect.left - paddingLeft;
-  const y = clientY - rect.top - paddingTop;
-  if (x < 0 || x > contentWidth || y < 0 || y > contentHeight) return null;
-  return {
-    cell: {
-      col: clamp(Math.floor(x / columnPitch) + 1, 1, 13 - config.w),
-      row: clamp(Math.floor(y / rowPitch) + 1, 1, 200),
-    },
-    metrics,
-  };
-}
-
-function showDropPreview(config, cell, metrics = gridMetrics()) {
-  const preview = $("#drop-preview");
-  const { paddingLeft, paddingTop, column, row, gap, columnPitch, rowPitch } = metrics;
-  preview.hidden = false;
-  preview.style.left = `${paddingLeft + (cell.col - 1) * columnPitch}px`;
-  preview.style.top = `${paddingTop + (cell.row - 1) * rowPitch}px`;
-  preview.style.width = `${column * config.w + gap * (config.w - 1)}px`;
-  preview.style.height = `${row * config.h + gap * (config.h - 1)}px`;
-  preview.dataset.panel = state.draggingPanel || state.remoteDrag?.name || "";
-  preview.dataset.targetWindow = state.windowId;
-}
-
-function hideDropPreview() {
-  const preview = $("#drop-preview");
-  preview.hidden = true;
-  delete preview.dataset.panel;
-  delete preview.dataset.targetWindow;
-}
-
-function ensurePanelDragOverlay() {
-  let overlay = $("#panel-drag-overlay");
-  if (overlay) return overlay;
-  overlay = document.createElement("div");
-  overlay.id = "panel-drag-overlay";
-  overlay.className = "panel-drag-overlay";
-  overlay.hidden = true;
-  overlay.setAttribute("aria-hidden", "true");
-  document.body.append(overlay);
-  return overlay;
-}
-
-function showPanelDragOverlay(name, clientX, clientY) {
-  const overlay = ensurePanelDragOverlay();
-  overlay.textContent = PANEL_LABELS[name] || name;
-  overlay.style.left = `${clientX}px`;
-  overlay.style.top = `${clientY}px`;
-  overlay.hidden = clientX < 0 || clientX > innerWidth || clientY < 0 || clientY > innerHeight;
-}
-
-function setPanelDragUi(active, { source = false } = {}) {
-  document.body.classList.toggle("panel-drag-active", active);
-  $("#dashboard").classList.toggle("drag-origin", active && source);
-  $("#dashboard").classList.toggle("drag-receiving", active && !source);
-  if (active) return;
-  hideDropPreview();
-  const overlay = $("#panel-drag-overlay");
-  if (overlay) overlay.hidden = true;
-}
-
-function clientPointFromScreen(screenX, screenY) {
-  const sideChrome = Math.max(0, (outerWidth - innerWidth) / 2);
-  const topChrome = Math.max(0, outerHeight - innerHeight - sideChrome);
-  return {
-    x: Number(screenX) - window.screenX - sideChrome,
-    y: Number(screenY) - window.screenY - topChrome,
-  };
-}
-
-function publishPanelDragMove(session, event) {
-  const screenX = Number(event.screenX);
-  const screenY = Number(event.screenY);
-  if (session.lastScreen?.x === screenX && session.lastScreen?.y === screenY) return;
-  session.lastScreen = { x: screenX, y: screenY };
-  session.move += 1;
-  const config = state.layout.panels[session.name];
-  const localTarget = dropTargetAt(event.clientX, event.clientY, config);
-  state.dragTarget = localTarget
-    ? { window: state.windowId, cell: localTarget.cell, move: session.move }
-    : null;
-  showPanelDragOverlay(session.name, event.clientX, event.clientY);
-  if (localTarget) showDropPreview(config, localTarget.cell, localTarget.metrics);
-  else hideDropPreview();
-  workspaceChannel?.postMessage({
-    type: "panel-drag-move",
-    drag: session.id,
-    source: state.windowId,
-    name: session.name,
-    move: session.move,
-    screenX,
-    screenY,
-  });
-}
-
-function clearPanelDragSession(session, panel) {
-  if (state.dragSession?.id !== session.id) return;
-  panel.classList.remove("dragging");
-  state.draggingPanel = null;
-  state.dragSession = null;
-  state.dragTarget = null;
-  setPanelDragUi(false);
-  workspaceChannel?.postMessage({ type: "panel-drag-end", drag: session.id, source: state.windowId });
-}
-
-function ensureResizeHandle(panel) {
-  if (panel.querySelector(".panel-resize")) return;
-  const handle = document.createElement("button");
-  handle.type = "button";
-  handle.className = "panel-resize";
-  handle.setAttribute("aria-label", `Resize ${PANEL_LABELS[panel.dataset.panel] || panel.dataset.panel}`);
-  handle.title = handle.getAttribute("aria-label");
-  const label = document.createElement("span");
-  label.textContent = "Resize";
-  handle.append(label);
-  panel.append(handle);
-  handle.addEventListener("pointerdown", (event) => beginResize(event, panel));
-}
-
-function beginResize(event, panel) {
-  event.preventDefault();
-  event.stopPropagation();
-  const name = panel.dataset.panel;
-  const config = state.layout.panels[name];
-  const start = { x: event.clientX, y: event.clientY, w: config.w, h: config.h };
-  const { columnPitch, rowPitch } = gridMetrics();
-  panel.classList.add("resizing");
-  const move = (next) => {
-    const { w: minW, h: minH } = PANEL_CATALOG[name].minimum;
-    config.w = clamp(start.w + Math.round((next.clientX - start.x) / columnPitch), minW, 13 - config.col);
-    config.h = clamp(start.h + Math.round((next.clientY - start.y) / rowPitch), minH, 40);
-    panel.style.gridColumn = `${config.col} / span ${config.w}`;
-    panel.style.gridRow = `${config.row} / span ${config.h}`;
-    requestAnimationFrame(() => panelRuntime.resize());
-  };
-  const finish = () => {
-    panel.classList.remove("resizing");
-    document.removeEventListener("pointermove", move);
-    document.removeEventListener("pointerup", finish);
-    resolveCollisions(name);
-    persistLayout();
-    applyLayout();
-    showToast(`${PANEL_LABELS[name]} resized.`);
-  };
-  document.addEventListener("pointermove", move);
-  document.addEventListener("pointerup", finish, { once: true });
-}
-
-function beginPanelDrag(event, panel) {
-  if (event.button !== 0) return;
-  const name = panel.dataset.panel;
-  const config = state.layout.panels[name];
-  const handle = event.currentTarget;
-  const start = { x: event.clientX, y: event.clientY };
-  let moved = false;
-  let finishing = false;
-  try { handle.setPointerCapture(event.pointerId); } catch { /* Pointer capture is optional. */ }
-  const move = (next) => {
-    if (!moved && Math.hypot(next.clientX - start.x, next.clientY - start.y) < 5) return;
-    next.preventDefault();
-    if (!moved) {
-      moved = true;
-      const session = { id: crypto.randomUUID(), name, move: 0, lastScreen: null };
-      state.draggingPanel = name;
-      state.dragSession = session;
-      state.dragTarget = null;
-      panel.classList.add("dragging");
-      setPanelDragUi(true, { source: true });
-      workspaceChannel?.postMessage({
-        type: "panel-drag-start",
-        drag: session.id,
-        source: state.windowId,
-        name,
-        width: config.w,
-        height: config.h,
-      });
-    }
-    publishPanelDragMove(state.dragSession, next);
-  };
-  const removeListeners = () => {
-    document.removeEventListener("pointermove", move);
-    document.removeEventListener("pointerup", finish);
-    document.removeEventListener("pointercancel", cancel);
-    document.removeEventListener("keydown", keydown);
-  };
-  const complete = (cancelled = false) => {
-    const session = state.dragSession;
-    try { handle.releasePointerCapture(event.pointerId); } catch { /* Capture may already be released. */ }
-    if (!moved || !session) return;
-    if (!cancelled && state.dragTarget?.move === session.move) {
-      const target = state.dragTarget;
-      Object.assign(config, target.cell, { visible: true, window: target.window });
-      resolveCollisions(name);
-      persistLayout();
-      applyLayout();
-      const destination = target.window === state.windowId ? "" : " to the other window";
-      showToast(`${PANEL_LABELS[name]} moved${destination}.`);
-    }
-    clearPanelDragSession(session, panel);
-  };
-  const finish = (next) => {
-    if (finishing) return;
-    finishing = true;
-    removeListeners();
-    if (!moved) { complete(); return; }
-    publishPanelDragMove(state.dragSession, next);
-    // Give the destination window one animation frame to claim the final pointer position.
-    setTimeout(() => complete(false), 50);
-  };
-  const cancel = () => {
-    if (finishing) return;
-    finishing = true;
-    removeListeners();
-    complete(true);
-  };
-  const keydown = (next) => {
-    if (next.key !== "Escape") return;
-    next.preventDefault();
-    cancel();
-  };
-  document.addEventListener("pointermove", move);
-  document.addEventListener("pointerup", finish, { once: true });
-  document.addEventListener("pointercancel", cancel, { once: true });
-  document.addEventListener("keydown", keydown);
+  panelManager?.renderShelf();
 }
 
 function bindPanelElement(panel, name) {
-  ensureResizeHandle(panel);
   const handle = panel.querySelector("[data-drag-handle]");
   if (handle) {
     handle.draggable = false;
-    handle.addEventListener("pointerdown", (event) => beginPanelDrag(event, panel));
     handle.addEventListener("keydown", (event) => {
       if (!event.altKey || !["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key)) return;
       event.preventDefault();
-      const config = state.layout.panels[name];
-      const minimum = PANEL_CATALOG[name].minimum;
+      const placement = state.layout.panels[name].placement;
+      const minimum = panelDefinition(state.layout, name).minimum;
       const amount = event.key === "ArrowLeft" || event.key === "ArrowUp" ? -1 : 1;
       if (event.shiftKey) {
         if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
-          config.w = clamp(config.w + amount, minimum.w, 13 - config.col);
-        } else config.h = clamp(config.h + amount, minimum.h, 40);
+          placement.w = clamp(placement.w + amount, minimum.w, 12 - placement.x);
+        } else placement.h = clamp(placement.h + amount, minimum.h, 40);
       } else if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
-        config.col = clamp(config.col + amount, 1, 13 - config.w);
-      } else config.row = clamp(config.row + amount, 1, 200);
-      resolveCollisions(name);
+        placement.x = clamp(placement.x + amount, 0, 12 - placement.w);
+      } else placement.y = clamp(placement.y + amount, 0, 199);
+      gridStack.update(panel.closest(".grid-stack-item"), {
+        x: placement.x,
+        y: placement.y,
+        w: placement.w,
+        h: placement.h,
+      });
+      syncGridNodes();
       persistLayout();
-      applyLayout();
+      requestAnimationFrame(() => panelRuntime.resize());
     });
   }
   const menu = panel.querySelector("[data-panel-menu]");
@@ -1296,7 +987,32 @@ function bindPanelElement(panel, name) {
 }
 
 function bindPanelLayout() {
-  $("#dashboard").append($("#drop-preview"));
+  gridStack = window.GridStack.init({
+    animate: false,
+    cellHeight: 32,
+    column: 12,
+    draggable: { handle: ".panel-drag", scroll: true },
+    float: false,
+    margin: 5,
+    maxRow: 200,
+    minRow: 8,
+    resizable: { handles: "se" },
+  }, $("#dashboard"));
+  gridStack.on("change", (_event, nodes) => {
+    if (!syncingGrid) syncGridNodes(nodes);
+  });
+  gridStack.on("resizestop", (_event, item) => {
+    syncGridNodes([item.gridstackNode]);
+    persistLayout();
+    panelRuntime.resize();
+    showToast(`${panelLabel(item.dataset.panel)} resized.`);
+  });
+  gridStack.on("dragstop", (_event, item) => {
+    syncGridNodes([item.gridstackNode]);
+    persistLayout();
+    panelRuntime.resize();
+    showToast(`${panelLabel(item.dataset.panel)} moved.`);
+  });
 }
 
 function positionMenu(menu, anchor) {
@@ -1309,8 +1025,12 @@ function positionMenu(menu, anchor) {
 
 function openPanelMenu(name, anchor) {
   state.selectedPanel = name;
-  $("#panel-menu-title").textContent = PANEL_LABELS[name] || name;
+  const instance = state.layout.panels[name];
+  $("#panel-menu-title").textContent = panelLabel(name);
   $("#panel-dock-main").hidden = state.windowId === "main";
+  $("#panel-edit").hidden = instance?.type !== "telemetry";
+  $("#panel-duplicate").hidden = instance?.type !== "telemetry";
+  $("#panel-remove").hidden = Boolean(instance?.builtin);
   positionMenu($("#panel-menu"), anchor);
 }
 
@@ -1322,14 +1042,84 @@ function movePanelToNewWindow(name) {
   const targetWindow = `window-${crypto.randomUUID().slice(0, 8)}`;
   const popup = window.open(windowUrl(targetWindow), `rlab-${targetWindow}`, "popup");
   if (!popup) { showToast("The browser blocked the new workspace window.", true); return; }
-  const config = state.layout.panels[name];
-  config.window = targetWindow;
-  config.visible = true;
-  config.col = 1;
-  config.row = 1;
+  const placement = state.layout.panels[name].placement;
+  placement.window = targetWindow;
+  placement.visible = true;
+  placement.x = 0;
+  placement.y = 0;
   persistLayout();
   applyLayout();
-  showToast(`${PANEL_LABELS[name]} moved to a synchronized window.`);
+  showToast(`${panelLabel(name)} moved to a synchronized window.`);
+}
+
+function revealPanel(name) {
+  const panel = state.layout.panels[name];
+  if (!panel) return;
+  const windowHasPanels = Object.entries(state.layout.panels).some(
+    ([otherName, candidate]) => (
+      otherName !== name
+      && candidate.placement.visible
+      && candidate.placement.window === state.windowId
+    ),
+  );
+  panel.placement.visible = true;
+  panel.placement.window = state.windowId;
+  panel.placement.x = 0;
+  panel.placement.y = windowHasPanels ? maxPanelRow() : 0;
+  persistLayout();
+  void applyLayout();
+  $("#panel-shelf").hidden = true;
+  $("#panels-toggle").setAttribute("aria-expanded", "false");
+  showToast(`${panel.title} moved into this window.`);
+}
+
+function createTelemetryPanel({ title, config }) {
+  const id = `panel-${crypto.randomUUID()}`;
+  const panel = createTelemetryInstance({
+    id,
+    title,
+    config,
+    window: state.windowId,
+    y: maxPanelRow(),
+  });
+  if (!panel) {
+    showToast("The telemetry panel could not be created.", true);
+    return;
+  }
+  state.layout.panels[id] = panel;
+  persistLayout();
+  void applyLayout();
+  showToast(`${panel.title} added.`);
+}
+
+function updateTelemetryPanel(name, { title, config }) {
+  const panel = state.layout.panels[name];
+  if (panel?.type !== "telemetry") return;
+  panel.title = title.trim().slice(0, 80);
+  panel.config = normalizePanelConfig(config);
+  persistLayout();
+  void applyLayout();
+  showToast(`${panel.title} updated.`);
+}
+
+function duplicateTelemetryPanel(name) {
+  const source = state.layout.panels[name];
+  if (source?.type !== "telemetry") return;
+  createTelemetryPanel({
+    title: `${source.title} copy`,
+    config: structuredClone(source.config),
+  });
+}
+
+function removeTelemetryPanel(name) {
+  const panel = state.layout.panels[name];
+  if (!panel || panel.builtin) return;
+  const label = panel.title;
+  delete state.layout.panels[name];
+  state.selectedPanel = null;
+  persistLayout();
+  void applyLayout();
+  showToast(`${label} removed.`);
 }
 
 function bindWorkspaceMenus() {
@@ -1368,38 +1158,47 @@ function bindWorkspaceMenus() {
   $("#panel-dock-main").addEventListener("click", () => {
     const name = state.selectedPanel;
     if (!name) return;
-    const config = state.layout.panels[name];
-    const appendRow = maxPanelRow("main") + 1;
-    config.window = "main";
-    config.visible = true;
-    if (Object.entries(state.layout.panels).some(([otherName, panel]) =>
-      otherName !== name && panel.visible && panel.window === "main" && panelsOverlap(config, panel)
-    )) config.row = appendRow;
-    resolveCollisions(name);
+    const placement = state.layout.panels[name].placement;
+    placement.window = "main";
+    placement.visible = true;
+    placement.x = 0;
+    placement.y = maxPanelRow("main");
     persistLayout();
     applyLayout();
     $("#panel-menu").hidden = true;
-    showToast(`${PANEL_LABELS[name]} docked to the main window.`);
+    showToast(`${panelLabel(name)} docked to the main window.`);
     if (state.windowId !== "main" && !panelsInThisWindow().length) setTimeout(() => window.close(), 250);
+  });
+  $("#panel-edit").addEventListener("click", () => {
+    if (state.selectedPanel) panelManager.openEditor(state.selectedPanel);
+    $("#panel-menu").hidden = true;
+  });
+  $("#panel-duplicate").addEventListener("click", () => {
+    if (state.selectedPanel) panelManager.duplicate(state.selectedPanel);
+    $("#panel-menu").hidden = true;
   });
   $("#panel-hide").addEventListener("click", () => {
     const name = state.selectedPanel;
     if (!name) return;
-    state.layout.panels[name].visible = false;
+    state.layout.panels[name].placement.visible = false;
     persistLayout();
     applyLayout();
     $("#panel-menu").hidden = true;
-    showToast(`${PANEL_LABELS[name]} moved to the panel shelf.`);
+    showToast(`${panelLabel(name)} moved to the panel shelf.`);
   });
   $("#panel-reset-size").addEventListener("click", () => {
     const name = state.selectedPanel;
     if (!name) return;
-    const defaults = defaultLayout().panels[name];
-    Object.assign(state.layout.panels[name], { w: defaults.w, h: defaults.h });
-    state.layout.panels[name].col = clamp(state.layout.panels[name].col, 1, 13 - defaults.w);
-    resolveCollisions(name);
+    const placement = state.layout.panels[name].placement;
+    const defaults = defaultLayout().panels[name]?.placement || { w: 4, h: 8 };
+    Object.assign(placement, { w: defaults.w, h: defaults.h });
+    placement.x = clamp(placement.x, 0, 12 - defaults.w);
     persistLayout();
     applyLayout();
+    $("#panel-menu").hidden = true;
+  });
+  $("#panel-remove").addEventListener("click", () => {
+    if (state.selectedPanel) panelManager.remove(state.selectedPanel);
     $("#panel-menu").hidden = true;
   });
   $("#panels-toggle").addEventListener("click", (event) => {
@@ -1432,14 +1231,10 @@ function reclaimWindow(closedWindow) {
   if (state.windowId !== "main") return;
   if (pairedWorkspace && closedWindow === STATS_WINDOW_ID) return;
   let changed = false;
-  Object.entries(state.layout.panels).forEach(([name, panel]) => {
-    if (panel.visible && panel.window === closedWindow) {
-      const appendRow = maxPanelRow("main") + 1;
-      panel.window = "main";
-      if (Object.entries(state.layout.panels).some(([otherName, candidate]) =>
-        otherName !== name && candidate.visible && candidate.window === "main" && panelsOverlap(panel, candidate)
-      )) panel.row = appendRow;
-      resolveCollisions(name);
+  Object.values(state.layout.panels).forEach((panel) => {
+    if (panel.placement.visible && panel.placement.window === closedWindow) {
+      panel.placement.window = "main";
+      panel.placement.y = maxPanelRow("main");
       changed = true;
     }
   });
@@ -1455,8 +1250,11 @@ function bindWorkspaceSync() {
     workspaceChannel.addEventListener("message", (event) => {
       const message = event.data || {};
       if (message.type === "layout" && message.source !== state.windowId) {
-        const next = normalizeLayout(message.layout);
-        if (next.revision >= Number(state.layout.revision || 0)) {
+        const next = normalizeWorkspace(message.layout, {
+          paired: pairedWorkspace,
+          writer: state.windowId,
+        });
+        if (compareWorkspaceRevisions(next.revision, state.layout.revision) > 0) {
           state.layout = next;
           applyLayout();
         }
@@ -1513,42 +1311,6 @@ function bindWorkspaceSync() {
           Number(message.sequence),
         );
         void panelRuntime.renderFrame(Number(message.kind), message.blob);
-      } else if (message.type === "panel-drag-start" && message.source !== state.windowId && PANEL_LABELS[message.name]) {
-        state.remoteDrag = { id: message.drag, source: message.source, name: message.name };
-        setPanelDragUi(true, { source: false });
-      } else if (message.type === "panel-drag-move" && state.remoteDrag?.id === message.drag) {
-        const config = state.layout.panels[state.remoteDrag.name];
-        const point = clientPointFromScreen(message.screenX, message.screenY);
-        const target = dropTargetAt(point.x, point.y, config);
-        showPanelDragOverlay(state.remoteDrag.name, point.x, point.y);
-        if (target) showDropPreview(config, target.cell, target.metrics);
-        else hideDropPreview();
-        workspaceChannel.postMessage({
-          type: "panel-drag-target",
-          drag: message.drag,
-          source: message.source,
-          target: state.windowId,
-          move: message.move,
-          cell: target?.cell || null,
-        });
-      } else if (message.type === "panel-drag-target" && state.dragSession?.id === message.drag && message.source === state.windowId) {
-        if (message.move < state.dragSession.move) return;
-        if (
-          state.dragTarget?.window === state.windowId
-          && state.dragTarget.move >= message.move
-        ) return;
-        if (message.cell) {
-          state.dragTarget = {
-            window: message.target,
-            cell: message.cell,
-            move: message.move,
-          };
-        } else if (state.dragTarget?.window === message.target && state.dragTarget.move <= message.move) {
-          state.dragTarget = null;
-        }
-      } else if (message.type === "panel-drag-end" && state.remoteDrag?.id === message.drag) {
-        state.remoteDrag = null;
-        setPanelDragUi(false);
       } else if (message.type === "window-closing" && state.windowId === "main") {
         setTimeout(() => {
           const lastSeen = state.activeWindows.get(message.window) || 0;
@@ -1560,8 +1322,11 @@ function bindWorkspaceSync() {
   window.addEventListener("storage", (event) => {
     if (event.key !== LAYOUT_KEY || !event.newValue) return;
     try {
-      const next = normalizeLayout(JSON.parse(event.newValue));
-      if (next.revision >= Number(state.layout.revision || 0)) {
+      const next = normalizeWorkspace(JSON.parse(event.newValue), {
+        paired: pairedWorkspace,
+        writer: state.windowId,
+      });
+      if (compareWorkspaceRevisions(next.revision, state.layout.revision) > 0) {
         state.layout = next;
         applyLayout();
       }
@@ -1571,7 +1336,6 @@ function bindWorkspaceSync() {
   heartbeat();
   setInterval(heartbeat, 1000);
   window.addEventListener("beforeunload", () => {
-    if (state.dragSession) workspaceChannel?.postMessage({ type: "panel-drag-end", drag: state.dragSession.id, source: state.windowId });
     workspaceChannel?.postMessage({ type: "window-closing", window: state.windowId });
   });
 }
@@ -1615,10 +1379,24 @@ function bindTimeline() {
 function initWorkspace() {
   state.layout = readStoredLayout();
   if (panelName && state.layout.panels[panelName]) {
-    state.layout.panels[panelName].visible = true;
-    state.layout.panels[panelName].window = state.windowId;
+    state.layout.panels[panelName].placement.visible = true;
+    state.layout.panels[panelName].placement.window = state.windowId;
     persistLayout();
   }
+  panelManager = new PanelManager({
+    getWorkspace: () => state.layout,
+    getContext: () => ({
+      snapshot: state.snapshot,
+      history: currentEpisodeHistory(),
+    }),
+    getWindowId: () => state.windowId,
+    onReveal: revealPanel,
+    onCreate: createTelemetryPanel,
+    onUpdate: updateTelemetryPanel,
+    onDuplicate: duplicateTelemetryPanel,
+    onRemove: removeTelemetryPanel,
+    showToast,
+  });
   setDetachedLayout();
   bindPanelLayout();
   bindWorkspaceMenus();
@@ -1627,7 +1405,7 @@ function initWorkspace() {
 }
 
 panelRuntime = new PanelRuntime({
-  catalog: PANEL_CATALOG,
+  definitionFor: panelDefinition,
   container: $("#dashboard"),
   services: {
     getState: () => state,
@@ -1637,11 +1415,31 @@ panelRuntime = new PanelRuntime({
     playFromCurrentPosition,
     pauseCurrentPlayback,
     showToast,
+    updatePanelConfig: (name, config) => {
+      const panel = state.layout.panels[name];
+      if (panel?.type === "telemetry") {
+        updateTelemetryPanel(name, { title: panel.title, config });
+      }
+    },
   },
-  onMount: bindPanelElement,
+  onMount: (panel, name, _definition, gridItem) => {
+    gridStack.makeWidget(gridItem, gridWidgetFor(name));
+    const resizeHandle = gridItem.querySelector(".ui-resizable-se");
+    if (resizeHandle) {
+      resizeHandle.setAttribute("aria-label", `Resize ${panelLabel(name)}`);
+      resizeHandle.title = resizeHandle.getAttribute("aria-label");
+    }
+    bindPanelElement(panel, name);
+  },
+  onLayout: (_panel, name, placement, gridItem) => {
+    gridStack.update(gridItem, gridWidgetFor(name, placement));
+  },
+  onUnmount: (_panel, _name, gridItem) => {
+    gridStack.removeWidget(gridItem, false, false);
+  },
   onError: (name, error) => {
     console.error(`Panel ${name} failed`, error);
-    showToast(`${PANEL_LABELS[name] || name} panel failed to load.`, true);
+    showToast(`${panelLabel(name)} panel failed to load.`, true);
   },
 });
 

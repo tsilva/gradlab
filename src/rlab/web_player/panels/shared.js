@@ -23,12 +23,20 @@ export function createPanel({
   element.setAttribute("aria-labelledby", heading);
   element.innerHTML = `
     <header class="panel-header ${headerClass}">
-      <button data-drag-handle class="icon-button icon-only panel-drag" type="button" aria-label="Move ${label.toLowerCase()} panel" title="Move ${label.toLowerCase()} panel"><svg class="icon" aria-hidden="true"><use href="${ICONS}#ti-grip-vertical"></use></svg></button>
-      <div class="panel-title"><h2 id="${heading}">${label}</h2></div>
-      <button data-panel-menu="${id}" class="icon-button icon-only" type="button" aria-label="${label} panel options" title="${label} panel options"><svg class="icon" aria-hidden="true"><use href="${ICONS}#ti-dots-vertical"></use></svg></button>
+      <button data-drag-handle class="icon-button icon-only panel-drag" type="button"><svg class="icon" aria-hidden="true"><use href="${ICONS}#ti-grip-vertical"></use></svg></button>
+      <div class="panel-title"><h2 id="${heading}"></h2></div>
+      <button data-panel-menu="${id}" class="icon-button icon-only" type="button"><svg class="icon" aria-hidden="true"><use href="${ICONS}#ti-dots-vertical"></use></svg></button>
     </header>
     ${body}
   `;
+  const renderedLabel = text(label, "Panel");
+  const drag = element.querySelector("[data-drag-handle]");
+  const menu = element.querySelector("[data-panel-menu]");
+  element.querySelector("h2").textContent = renderedLabel;
+  drag.setAttribute("aria-label", `Move ${renderedLabel} panel`);
+  drag.title = drag.getAttribute("aria-label");
+  menu.setAttribute("aria-label", `${renderedLabel} panel options`);
+  menu.title = menu.getAttribute("aria-label");
   return element;
 }
 

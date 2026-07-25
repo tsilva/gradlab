@@ -9,6 +9,7 @@ __pycache__/
 venv/
 env/
 .uv-cache/
+node_modules/
 
 # Python build artifacts
 build/
