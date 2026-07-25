@@ -149,9 +149,10 @@ rlab play hf://<owner>/<repository>
 ```
 
 The player uses shareable hierarchical routes: `/` lists projects,
-`/projects/<project-id>` lists runs,
-`/projects/<project-id>/runs/<run-id>` lists checkpoints, and the nested
-`/checkpoints/<checkpoint-id>` route identifies the selected checkpoint.
+`/projects/<project-id>` lists goals,
+`/projects/<project-id>/goals/<goal-id>` lists runs, and the nested
+`/runs/<run-id>/checkpoints/<checkpoint-id>` route identifies a checkpoint.
+Checkpoint rows show goal-required acceptance results from W&B when available.
 Browser Back and Forward navigation follow the same resource hierarchy.
 
 W&B supplies catalog metadata only. Playback downloads model bytes from the
