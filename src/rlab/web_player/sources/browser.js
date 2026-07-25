@@ -25,9 +25,27 @@ function button(label, { iconName = null, quiet = false, primary = false } = {})
   return element;
 }
 
-function formatDate(value) {
+export function formatDate(value, nowValue = Date.now()) {
   const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? "—" : date.toLocaleString();
+  if (Number.isNaN(date.getTime())) return "—";
+  const now = new Date(nowValue);
+  if (
+    !Number.isNaN(now.getTime())
+    && date.getFullYear() === now.getFullYear()
+    && date.getMonth() === now.getMonth()
+    && date.getDate() === now.getDate()
+  ) {
+    const elapsedMilliseconds = now.getTime() - date.getTime();
+    const absoluteMilliseconds = Math.abs(elapsedMilliseconds);
+    const [amount, unit] = absoluteMilliseconds < 60_000
+      ? [Math.floor(absoluteMilliseconds / 1_000), "second"]
+      : absoluteMilliseconds < 3_600_000
+        ? [Math.floor(absoluteMilliseconds / 60_000), "minute"]
+        : [Math.floor(absoluteMilliseconds / 3_600_000), "hour"];
+    const label = `${unit}${amount === 1 ? "" : "s"}`;
+    return elapsedMilliseconds >= 0 ? `${amount} ${label} ago` : `in ${amount} ${label}`;
+  }
+  return date.toLocaleString();
 }
 
 function formatBytes(value) {
@@ -36,6 +54,38 @@ function formatBytes(value) {
   const units = ["B", "KiB", "MiB", "GiB"];
   const unit = Math.min(units.length - 1, Math.floor(Math.log(bytes) / Math.log(1024)));
   return `${(bytes / (1024 ** unit)).toFixed(unit ? 1 : 0)} ${units[unit]}`;
+}
+
+function runStatePresentation(value) {
+  const state = String(value || "").trim().toLowerCase();
+  if (state === "finished") {
+    return { iconName: "check", tone: "finished", label: "Finished" };
+  }
+  if (state === "running") {
+    return { iconName: "activity-heartbeat", tone: "running", label: "Running" };
+  }
+  if (state === "failed" || state === "crashed") {
+    return {
+      iconName: "x",
+      tone: "failed",
+      label: state === "crashed" ? "Crashed" : "Failed",
+    };
+  }
+  if (["pending", "queued", "starting"].includes(state)) {
+    return {
+      iconName: "player-pause",
+      tone: "pending",
+      label: state ? humanizeMetricPart(state) : "Pending",
+    };
+  }
+  if (["killed", "cancelled", "canceled", "preempted"].includes(state)) {
+    return { iconName: "x", tone: "stopped", label: humanizeMetricPart(state) };
+  }
+  return {
+    iconName: "activity-heartbeat",
+    tone: "unknown",
+    label: state ? humanizeMetricPart(state) : "Unknown",
+  };
 }
 
 function humanizeMetricPart(value) {
@@ -552,7 +602,7 @@ export class SourceBrowser {
     if (this.route.level === "checkpoints") return "Choose a checkpoint";
     if (this.route.level === "runs") return "Choose a run";
     if (this.route.level === "goals") return "Choose a goal";
-    return "Choose a W&B project";
+    return "Choose a project";
   }
 
   renderBreadcrumbs() {
@@ -683,7 +733,8 @@ export class SourceBrowser {
       const name = document.createElement("strong");
       name.textContent = project.name;
       const meta = document.createElement("span");
-      meta.textContent = `${project.entity} · created ${formatDate(project.created_at)}`;
+      const goalLabel = Number(project.goal_count) === 1 ? "goal" : "goals";
+      meta.textContent = `${project.entity} · ${Number(project.goal_count).toLocaleString()} ${goalLabel}`;
       row.append(name, meta);
       row.addEventListener("click", () => this.navigate({
         level: "goals",
@@ -716,8 +767,8 @@ export class SourceBrowser {
         identity.append(slug);
       }
       const meta = document.createElement("span");
-      const runLabel = Number(goal.run_count) === 1 ? "run" : "runs";
-      meta.textContent = `${Number(goal.run_count).toLocaleString()} ${runLabel} · updated ${formatDate(goal.updated_at)}`;
+      const recipeLabel = Number(goal.recipe_count) === 1 ? "recipe" : "recipes";
+      meta.textContent = `${goal.title || goal.goal_slug} · ${Number(goal.recipe_count).toLocaleString()} ${recipeLabel}`;
       row.append(identity, meta);
       row.addEventListener("click", () => this.navigate({
         level: "runs",
@@ -738,7 +789,7 @@ export class SourceBrowser {
     const head = document.createElement("thead");
     const headerRow = document.createElement("tr");
     const columns = this.route.level === "runs"
-      ? ["Run", "State", "Recipe", "Seed", "Updated"]
+      ? ["Run", "Recipe", "Seed", "Updated"]
       : ["Checkpoint", "Purpose", "Step", "Evaluation", "Size", "Created"];
     columns.forEach((label) => {
       const cell = document.createElement("th");
@@ -755,8 +806,7 @@ export class SourceBrowser {
       row.setAttribute("aria-disabled", String(!this.hasControl()));
       const values = this.route.level === "runs"
         ? [
-            [item.name || item.run_id, item.run_id],
-            [item.state || "—"],
+            [item.name || item.run_id, item.run_id, "run-cell"],
             [item.recipe || "—"],
             [item.seed ?? "—"],
             [formatDate(item.updated_at || item.created_at)],
@@ -775,8 +825,30 @@ export class SourceBrowser {
         const main = document.createElement("span");
         if (className.includes("evaluation-cell")) main.className = "evaluation-verdict";
         main.textContent = String(primary);
-        cell.append(main);
-        if (secondary) {
+        if (className.includes("run-cell")) {
+          const presentation = runStatePresentation(item.state);
+          const identity = document.createElement("div");
+          identity.className = "run-identity";
+          const state = document.createElement("span");
+          state.className = `run-state ${presentation.tone}`;
+          state.title = `Run state: ${presentation.label}`;
+          state.setAttribute("aria-label", `Run state: ${presentation.label}`);
+          state.append(icon(presentation.iconName));
+          const text = document.createElement("div");
+          text.className = "run-identity-text";
+          main.className = "run-name";
+          text.append(main);
+          if (secondary) {
+            const small = document.createElement("small");
+            small.textContent = String(secondary);
+            text.append(small);
+          }
+          identity.append(state, text);
+          cell.append(identity);
+        } else {
+          cell.append(main);
+        }
+        if (secondary && !className.includes("run-cell")) {
           const small = document.createElement("small");
           small.textContent = String(secondary);
           cell.append(small);

@@ -12,8 +12,11 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from functools import lru_cache
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any, Literal
 
+from pydantic import Field, StringConstraints
+
+from rlab.boundary_schema import BoundaryModel, validate_boundary
 from rlab.runtime_contract import (
     RUNTIME_DESCRIPTOR_SCHEMA_VERSION,
     train_config_contract_sha256,
@@ -31,6 +34,59 @@ DEFAULT_RUNTIME_READINESS_TIMEOUT_SECONDS = 20 * 60
 
 DIGEST_IMAGE_REF_RE = re.compile(r"^docker:[^\s@]+@sha256:(?P<digest>[0-9a-fA-F]{64})$")
 ACTIVE_WORKFLOW_STATUSES = frozenset({"queued", "in_progress", "pending", "requested", "waiting"})
+
+NonEmptyText = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
+Sha256 = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, to_lower=True, pattern=r"^[0-9a-f]{64}$"),
+]
+BuildSourceSha = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, pattern=r"^[0-9a-fA-F]{40,64}$"),
+]
+
+
+class _BaseImages(BoundaryModel):
+    gpu: str = ""
+    dependencies: str = ""
+    python: NonEmptyText | None = None
+    uv: NonEmptyText | None = None
+
+
+class _RuntimeReleasePayload(BoundaryModel):
+    schema_version: Literal[RUNTIME_DESCRIPTOR_SCHEMA_VERSION]
+    runtime_image_ref: NonEmptyText
+    source_sha: NonEmptyText
+    runtime_input_sha256: Sha256
+    runtime_build_source_sha: BuildSourceSha
+    overlay_key: Sha256
+    dependency_key: Sha256
+    gpu_key: Sha256
+    train_plan_sha256: Sha256
+    gpu_plan_sha256: Sha256
+    tags: list[NonEmptyText]
+    uv_lock_sha256: Sha256
+    base_images: _BaseImages
+    workflow_run_id: NonEmptyText
+    digest: str = ""
+    image: str = ""
+    workflow_run_attempt: str = ""
+    commit_message: str = ""
+    published_at: str = ""
+    created_at: str = ""
+    published_at_legacy: str = Field(default="", alias="publishedAt")
+
+
+class _ModalReadinessPayload(BoundaryModel):
+    schema_version: Literal[MODAL_READINESS_SCHEMA_VERSION]
+    runtime_image_ref: NonEmptyText
+    source_sha: NonEmptyText
+    runtime_input_sha256: Sha256
+    runtime_build_source_sha: BuildSourceSha
+    modal_app_name: NonEmptyText
+    startup_probe: dict[str, Any]
+    workflow_run_id: str = ""
+    workflow_run_attempt: str = ""
 
 
 @dataclass(frozen=True)
@@ -109,83 +165,48 @@ def runtime_release_from_payload(
         raise ValueError(
             f"{label} schema_version must be {RUNTIME_DESCRIPTOR_SCHEMA_VERSION}"
         )
-    runtime_image_ref = runtime_image_ref_from_payload(payload, label=label)
-    source_sha = str(payload.get("source_sha") or "").strip()
+    receipt = validate_boundary(_RuntimeReleasePayload, payload, label=label)
+    runtime_image_ref = normalize_runtime_image_ref(receipt.runtime_image_ref)
+    source_sha = receipt.source_sha
     if source_sha != expected_source_sha:
         raise ValueError(
             f"{label} source_sha mismatch: expected {expected_source_sha}, "
             f"got {source_sha or 'missing'}"
         )
-    digest = str(payload.get("digest") or "").strip().removeprefix("sha256:")
+    digest = receipt.digest.removeprefix("sha256:")
     if digest and digest.lower() != runtime_image_digest(runtime_image_ref):
         raise ValueError(f"{label} digest does not match runtime_image_ref")
-    runtime_input_sha256 = str(payload.get("runtime_input_sha256") or "").strip().lower()
-    runtime_build_source_sha = str(payload.get("runtime_build_source_sha") or "").strip()
-    if not re.fullmatch(r"[0-9a-f]{64}", runtime_input_sha256):
-        raise ValueError(f"{label} must include a valid runtime_input_sha256")
-    if not re.fullmatch(r"[0-9a-fA-F]{40,64}", runtime_build_source_sha):
-        raise ValueError(f"{label} must include a valid runtime_build_source_sha")
-    tags = payload.get("tags")
+    runtime_input_sha256 = receipt.runtime_input_sha256
+    runtime_build_source_sha = receipt.runtime_build_source_sha
     expected_tag = f"runtime-{runtime_input_sha256}"
-    if not isinstance(tags, Sequence) or isinstance(tags, str) or expected_tag not in tags:
+    if expected_tag not in receipt.tags:
         raise ValueError(f"{label} must include its content-addressed runtime tag")
-    uv_lock_sha256 = str(payload.get("uv_lock_sha256") or "").strip().lower()
-    if not re.fullmatch(r"[0-9a-f]{64}", uv_lock_sha256):
-        raise ValueError(f"{label} must include a valid uv_lock_sha256")
-    base_images = payload.get("base_images")
-    dependency_image = (
-        str(base_images.get("dependencies") or "").strip()
-        if isinstance(base_images, Mapping)
-        else ""
-    )
     try:
-        normalize_runtime_image_ref(dependency_image)
+        normalize_runtime_image_ref(receipt.base_images.dependencies)
     except ValueError as exc:
         raise ValueError(
             f"{label} must include an immutable dependency image identity"
         ) from exc
-    if not str(payload.get("workflow_run_id") or "").strip():
-        raise ValueError(f"{label} must include workflow_run_id")
-    image_keys: dict[str, str] = {}
-    for field in (
-        "overlay_key",
-        "dependency_key",
-        "gpu_key",
-        "train_plan_sha256",
-        "gpu_plan_sha256",
-    ):
-        value = str(payload.get(field) or "").strip().lower()
-        if not re.fullmatch(r"[0-9a-f]{64}", value):
-            raise ValueError(f"{label} must include a valid {field}")
-        image_keys[field] = value
-    gpu_image = (
-        str(base_images.get("gpu") or "").strip()
-        if isinstance(base_images, Mapping)
-        else ""
-    )
     try:
-        normalize_runtime_image_ref(gpu_image)
+        normalize_runtime_image_ref(receipt.base_images.gpu)
     except ValueError as exc:
         raise ValueError(f"{label} must include an immutable GPU image identity") from exc
     return RuntimeImageInfo(
         runtime_image_ref=runtime_image_ref,
         source_sha=source_sha,
-        commit_message=str(payload.get("commit_message") or "").strip(),
-        published_at=str(
-            payload.get("published_at")
-            or payload.get("created_at")
-            or payload.get("publishedAt")
-            or ""
-        ).strip(),
-        workflow_run_id=str(payload.get("workflow_run_id") or "").strip(),
+        commit_message=receipt.commit_message,
+        published_at=(
+            receipt.published_at or receipt.created_at or receipt.published_at_legacy
+        ),
+        workflow_run_id=receipt.workflow_run_id,
         schema_version=schema_version,
         runtime_input_sha256=runtime_input_sha256,
         runtime_build_source_sha=runtime_build_source_sha,
-        overlay_key=image_keys.get("overlay_key", ""),
-        dependency_key=image_keys.get("dependency_key", ""),
-        gpu_key=image_keys.get("gpu_key", ""),
-        train_plan_sha256=image_keys.get("train_plan_sha256", ""),
-        gpu_plan_sha256=image_keys.get("gpu_plan_sha256", ""),
+        overlay_key=receipt.overlay_key,
+        dependency_key=receipt.dependency_key,
+        gpu_key=receipt.gpu_key,
+        train_plan_sha256=receipt.train_plan_sha256,
+        gpu_plan_sha256=receipt.gpu_plan_sha256,
         train_config_contract_sha256=train_config_contract_sha256(),
     )
 
@@ -204,22 +225,21 @@ def modal_readiness_from_payload(
         raise ValueError(
             f"{label} schema_version must be {MODAL_READINESS_SCHEMA_VERSION}"
         )
-    source_sha = str(payload.get("source_sha") or "").strip()
+    receipt = validate_boundary(_ModalReadinessPayload, payload, label=label)
+    source_sha = receipt.source_sha
     if source_sha != expected_source_sha:
         raise ValueError(
             f"{label} source_sha mismatch: expected {expected_source_sha}, "
             f"got {source_sha or 'missing'}"
         )
-    runtime_image_ref = runtime_image_ref_from_payload(payload, label=label)
+    runtime_image_ref = normalize_runtime_image_ref(receipt.runtime_image_ref)
     expected_runtime_image_ref = normalize_runtime_image_ref(expected_runtime_image_ref)
     if runtime_image_ref != expected_runtime_image_ref:
         raise ValueError(f"{label} runtime image does not match the image receipt")
-    modal_app_name = str(payload.get("modal_app_name") or "").strip()
-    startup_probe = payload.get("startup_probe")
-    if not modal_app_name or not isinstance(startup_probe, Mapping):
-        raise ValueError(f"{label} must include Modal app and startup-probe evidence")
-    runtime_input_sha256 = str(payload.get("runtime_input_sha256") or "").strip().lower()
-    runtime_build_source_sha = str(payload.get("runtime_build_source_sha") or "").strip()
+    modal_app_name = receipt.modal_app_name
+    startup_probe = receipt.startup_probe
+    runtime_input_sha256 = receipt.runtime_input_sha256
+    runtime_build_source_sha = receipt.runtime_build_source_sha
     expected_runtime_input_sha256 = str(expected_runtime_input_sha256).strip().lower()
     expected_runtime_build_source_sha = str(expected_runtime_build_source_sha).strip()
     if (
@@ -250,8 +270,8 @@ def modal_readiness_from_payload(
         runtime_image_ref=runtime_image_ref,
         source_sha=source_sha,
         modal_app_name=modal_app_name,
-        startup_probe=dict(startup_probe),
-        workflow_run_id=str(payload.get("workflow_run_id") or "").strip(),
+        startup_probe=startup_probe,
+        workflow_run_id=receipt.workflow_run_id,
         schema_version=schema_version,
         runtime_input_sha256=runtime_input_sha256,
         runtime_build_source_sha=runtime_build_source_sha,

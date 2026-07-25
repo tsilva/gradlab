@@ -8,12 +8,14 @@ from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from dataclasses import asdict, dataclass
 from pathlib import Path, PureWindowsPath
-from typing import Any
+from typing import Annotated, Any, Literal
 
 from huggingface_hub import ModelCard
 from huggingface_hub.utils import validate_repo_id
 from jinja2 import Environment, FileSystemLoader, StrictUndefined
+from pydantic import Field, StringConstraints
 
+from rlab.boundary_schema import BoundaryModel, validate_boundary
 from rlab.env_registry import game_family_for_environment
 from rlab.file_utils import file_sha256 as sha256_file
 from rlab.metric_names import (
@@ -91,6 +93,83 @@ ALGORITHM_MODEL_CLASSES: dict[str, frozenset[str]] = {
     "dqn": frozenset({"stable_baselines3.dqn.dqn.DQN"}),
     "recurrent-ppo": frozenset({"sb3_contrib.ppo_recurrent.ppo_recurrent.RecurrentPPO"}),
 }
+
+NonEmptyText = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
+Sha256 = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, to_lower=True, pattern=r"^[0-9a-f]{64}$"),
+]
+PositiveInt = Annotated[int, Field(strict=True, ge=1)]
+
+
+class _ReleaseRepository(BoundaryModel):
+    repo_id: NonEmptyText
+    game_family: NonEmptyText
+    goal: NonEmptyText
+    policy_variant: NonEmptyText
+    algorithm: NonEmptyText
+
+
+class _ReleaseDetails(BoundaryModel):
+    version: NonEmptyText
+    published_at: NonEmptyText
+    youtube_url: NonEmptyText | None = None
+
+
+class _ReleaseModel(BoundaryModel):
+    algorithm_id: Any
+    model_class: Any
+    qualified_env_id: Any
+    environment_hash: Any
+    preprocessing: Any
+    action: Any
+
+
+class _ReleaseSource(BoundaryModel):
+    repository: Any
+    commit: Any
+    run_id: Any
+    run_name: Any
+    wandb_project: Any
+    recipe: Any
+    seed: Any
+    checkpoint_step: Any
+    checkpoint_artifact: Any
+
+
+class _ReleaseEvaluation(BoundaryModel):
+    action_sampling: Any
+    protocol: Any
+    checkpoint_step: Any
+    checkpoint_artifact: Any
+    episodes: Any
+    success_rate_min: Any
+    success_rate_mean: Any
+    return_mean: Any
+    by_start: Any
+    checkpoint_sha256: Any
+    recipe_sha256: Any
+    recipe_format_version: Any
+    evaluation_contract_sha256: Any
+    exact_contract: Any
+    progress_max: Any = None
+
+
+class _ArtifactRecord(BoundaryModel):
+    sha256: Sha256
+    size_bytes: PositiveInt
+
+
+class _ReleaseManifest(BoundaryModel):
+    document_type: Literal[RELEASE_MANIFEST_DOCUMENT_TYPE]
+    format_version: Literal[RELEASE_MANIFEST_VERSION]
+    repo_naming_schema: Literal[REPO_NAMING_SCHEMA_VERSION]
+    repository: _ReleaseRepository
+    release: _ReleaseDetails
+    model: _ReleaseModel
+    source: _ReleaseSource
+    evaluation: _ReleaseEvaluation
+    artifacts: dict[str, _ArtifactRecord]
 
 
 @dataclass(frozen=True)
@@ -828,111 +907,16 @@ def build_release_manifest(
 
 
 def _validate_release_manifest_v1(document: Mapping[str, Any], source: str) -> dict[str, Any]:
-    allowed = {
-        "document_type",
-        "format_version",
-        "repo_naming_schema",
-        "repository",
-        "release",
-        "model",
-        "source",
-        "evaluation",
-        "artifacts",
-    }
-    unknown = sorted(set(document) - allowed)
-    if unknown:
-        raise PolicyDocumentError(f"{source} has unknown field(s): " + ", ".join(unknown))
-    required = allowed
-    missing = sorted(required - set(document))
-    if missing:
-        raise PolicyDocumentError(f"{source} is missing required field(s): " + ", ".join(missing))
-    for field in ("repository", "release", "model", "source", "evaluation", "artifacts"):
-        if not isinstance(document.get(field), Mapping):
-            raise PolicyDocumentError(f"{source}.{field} must be an object")
-    nested_schemas = {
-        "repository": (
-            {"repo_id", "game_family", "goal", "policy_variant", "algorithm"},
-            set(),
-        ),
-        "release": ({"version", "published_at"}, {"youtube_url"}),
-        "model": (
-            {
-                "algorithm_id",
-                "model_class",
-                "qualified_env_id",
-                "environment_hash",
-                "preprocessing",
-                "action",
-            },
-            set(),
-        ),
-        "source": (
-            {
-                "repository",
-                "commit",
-                "run_id",
-                "run_name",
-                "wandb_project",
-                "recipe",
-                "seed",
-                "checkpoint_step",
-                "checkpoint_artifact",
-            },
-            set(),
-        ),
-        "evaluation": (
-            {
-                "action_sampling",
-                "protocol",
-                "checkpoint_step",
-                "checkpoint_artifact",
-                "episodes",
-                "success_rate_min",
-                "success_rate_mean",
-                "return_mean",
-                "by_start",
-                "checkpoint_sha256",
-                "recipe_sha256",
-                "recipe_format_version",
-                "evaluation_contract_sha256",
-                "exact_contract",
-            },
-            {"progress_max"},
-        ),
-    }
-    for field, (nested_required, nested_optional) in nested_schemas.items():
-        nested = document[field]
-        nested_unknown = sorted(set(nested) - nested_required - nested_optional)
-        nested_missing = sorted(nested_required - set(nested))
-        if nested_unknown:
-            raise PolicyDocumentError(
-                f"{source}.{field} has unknown field(s): " + ", ".join(nested_unknown)
-            )
-        if nested_missing:
-            raise PolicyDocumentError(
-                f"{source}.{field} is missing required field(s): " + ", ".join(nested_missing)
-            )
-    artifacts = document["artifacts"]
-    if set(artifacts) != HASHED_RELEASE_FILES:
+    manifest = validate_boundary(
+        _ReleaseManifest,
+        document,
+        label=source,
+        error_type=PolicyDocumentError,
+    )
+    if set(manifest.artifacts) != HASHED_RELEASE_FILES:
         raise PolicyDocumentError(
             f"{source}.artifacts must describe exactly: " + ", ".join(sorted(HASHED_RELEASE_FILES))
         )
-    for filename, raw_record in artifacts.items():
-        if not isinstance(raw_record, Mapping):
-            raise PolicyDocumentError(f"{source}.artifacts.{filename} must be an object")
-        if set(raw_record) != {"sha256", "size_bytes"}:
-            raise PolicyDocumentError(
-                f"{source}.artifacts.{filename} must contain only sha256 and size_bytes"
-            )
-        if not re.fullmatch(r"[0-9a-f]{64}", str(raw_record.get("sha256") or "")):
-            raise PolicyDocumentError(
-                f"{source}.artifacts.{filename}.sha256 must be a SHA-256 digest"
-            )
-        size = raw_record.get("size_bytes")
-        if not isinstance(size, int) or isinstance(size, bool) or size <= 0:
-            raise PolicyDocumentError(
-                f"{source}.artifacts.{filename}.size_bytes must be a positive integer"
-            )
     return deepcopy(dict(document))
 
 

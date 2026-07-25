@@ -828,8 +828,7 @@ def test_catalog_http_api_requires_the_fragment_session_token() -> None:
                     {
                         "entity": "research",
                         "name": "Mario",
-                        "created_at": "",
-                        "url": "",
+                        "goal_count": 1,
                     },
                 ),
                 next_cursor=None,
@@ -850,8 +849,9 @@ def test_catalog_http_api_requires_the_fragment_session_token() -> None:
                         "project": project,
                         "goal_id": "Level1-1",
                         "goal_slug": "Mario/Level1-1",
-                        "run_count": 2,
-                        "updated_at": "2026-07-25T00:00:00Z",
+                        "title": "Mario Level 1-1 completion",
+                        "recipe_count": 1,
+                        "goal_path": "experiments/goals/Mario/Level1-1/_goal.yaml",
                     },
                 ),
                 next_cursor=None,
@@ -973,6 +973,8 @@ def test_web_dashboard_assets_are_packaged_beside_server() -> None:
     assert '<h1 id="page-title">Environment</h1>' in markup
     assert 'export function sourceRouteFromPath(' in source_browser
     assert 'export function sourceRoutePath(' in source_browser
+    assert "export function formatDate(value, nowValue = Date.now())" in source_browser
+    assert '`${amount} ${label} ago`' in source_browser
     assert 'history.pushState(null, "", target);' in source_browser
     assert 'window.addEventListener("popstate", this.onPopState);' in source_browser
     assert 'if (this.route.level === "goals") return "Choose a goal";' in source_browser
@@ -981,7 +983,13 @@ def test_web_dashboard_assets_are_packaged_beside_server() -> None:
     assert 'evaluation.pass ? "Passed" : "Failed"' in source_browser
     assert "evaluationMetricLabel" in source_browser
     assert "criterion.value !== null" in source_browser
+    assert '? ["Run", "Recipe", "Seed", "Updated"]' in source_browser
+    assert '"run-cell"' in source_browser
+    assert "runStatePresentation(item.state)" in source_browser
+    assert 'state.setAttribute("aria-label", `Run state: ${presentation.label}`)' in source_browser
     assert 'checkpoint_id: item.checkpoint_id' in source_browser
+    assert ".source-table .run-state.finished { color: var(--green); }" in styles
+    assert ".source-table .run-state.failed { color: var(--red); }" in styles
     assert 'class="workspace-status"' not in markup
     assert markup.index('id="new-window"') < markup.index('id="connection-status"')
     assert markup.index('id="connection-status"') < markup.index('id="sampling-status"')

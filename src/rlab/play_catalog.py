@@ -6,9 +6,11 @@ import threading
 import time
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import asdict, dataclass
+from pathlib import Path
 from typing import Any, Literal
 from urllib.parse import unquote, urlparse
 
+from rlab.config_validation import load_goal_contract
 from rlab.early_stop import EARLY_STOP_OPERATORS, normalize_early_stop_config
 from rlab.metric_names import (
     EVAL_ACCEPTANCE_EPISODES_COMPLETED,
@@ -19,7 +21,11 @@ from rlab.metric_names import (
 )
 from rlab.model_sources import DEFAULT_PUBLIC_MODELS_BASE_URL, _public_json
 from rlab.run_contracts import CheckpointManifest, RUN_ID_PATTERN
-from rlab.wandb_utils import load_wandb_env
+from rlab.wandb_utils import (
+    load_wandb_env,
+    resolve_wandb_project,
+    wandb_entity_from_env,
+)
 
 
 WANDB_HOSTS = {"wandb.ai", "www.wandb.ai"}
@@ -47,8 +53,7 @@ class CatalogPage:
 class ProjectSummary:
     entity: str
     name: str
-    created_at: str
-    url: str
+    goal_count: int
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -60,8 +65,9 @@ class GoalSummary:
     project: str
     goal_id: str
     goal_slug: str
-    run_count: int
-    updated_at: str
+    title: str
+    recipe_count: int
+    goal_path: str
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -100,6 +106,16 @@ class CheckpointSummary:
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+
+@dataclass(frozen=True)
+class _RepositoryGoal:
+    project: str
+    goal_id: str
+    goal_slug: str
+    title: str
+    recipe_count: int
+    goal_path: str
 
 
 def parse_wandb_location(value: object) -> WandbLocation | None:
@@ -147,10 +163,6 @@ def _search_text(*values: object) -> str:
     return " ".join(str(value or "") for value in values).casefold()
 
 
-def _goal_id(goal_slug: object) -> str:
-    return str(goal_slug or "").strip().rsplit("/", 1)[-1]
-
-
 def _safe_int(value: object) -> int | None:
     if value in {None, ""}:
         return None
@@ -165,6 +177,16 @@ def _safe_float(value: object) -> float | None:
         return None
     numeric = float(value)
     return numeric if numeric == numeric and abs(numeric) != float("inf") else None
+
+
+def _page_items(items: list[dict[str, Any]], cursor: str | None) -> CatalogPage:
+    offset = _cursor_offset(cursor)
+    selected = tuple(items[offset : offset + CATALOG_PAGE_SIZE])
+    next_offset = offset + CATALOG_PAGE_SIZE
+    return CatalogPage(
+        items=selected,
+        next_cursor=_cursor_for(next_offset) if next_offset < len(items) else None,
+    )
 
 
 class _CatalogStream:
@@ -189,13 +211,28 @@ class _CatalogStream:
 
 
 class PlayCatalog:
-    """Backend-only W&B metadata and public-checkpoint discovery."""
+    """Repository catalog, W&B run metadata, and public-checkpoint discovery."""
 
-    def __init__(self, *, public_models_base_url: str = DEFAULT_PUBLIC_MODELS_BASE_URL) -> None:
+    def __init__(
+        self,
+        *,
+        public_models_base_url: str = DEFAULT_PUBLIC_MODELS_BASE_URL,
+        repo_root: Path | str | None = None,
+    ) -> None:
         self.public_models_base_url = str(public_models_base_url).rstrip("/")
+        self.repo_root = (
+            Path(repo_root).resolve()
+            if repo_root is not None
+            else Path(__file__).resolve().parents[2]
+        )
+        self.goals_root = self.repo_root / "experiments" / "goals"
         self._api: Any | None = None
         self._lock = threading.Lock()
         self._streams: dict[tuple[str, ...], _CatalogStream] = {}
+        self._repository_cache: tuple[
+            tuple[tuple[str, int, int], ...],
+            tuple[_RepositoryGoal, ...],
+        ] | None = None
         self._evaluation_cache: dict[
             tuple[str, str, str],
             tuple[float, dict[int, dict[str, Any]]],
@@ -205,13 +242,8 @@ class PlayCatalog:
         text = str(explicit or "").strip()
         if text:
             return text
-        api = self._wandb_api()
-        entity = str(getattr(api, "default_entity", "") or "").strip()
-        if not entity:
-            raise ValueError(
-                "W&B has no default entity; pass --wandb-entity or set WANDB_ENTITY"
-            )
-        return entity
+        load_wandb_env()
+        return wandb_entity_from_env()
 
     def _wandb_api(self):
         if self._api is None:
@@ -232,6 +264,77 @@ class PlayCatalog:
             self._streams[key] = stream
         return stream
 
+    def _repository_goals(self) -> tuple[_RepositoryGoal, ...]:
+        if not self.goals_root.is_dir():
+            raise ValueError(f"repository goals directory does not exist: {self.goals_root}")
+        paths = tuple(sorted(self.goals_root.rglob("_goal.yaml")))
+        catalog_sources = tuple(
+            sorted(
+                (
+                    *self.goals_root.rglob("*.yaml"),
+                    *self.goals_root.rglob("*.yml"),
+                )
+            )
+        )
+        fingerprint = tuple(
+            (
+                path.relative_to(self.repo_root).as_posix(),
+                path.stat().st_mtime_ns,
+                path.stat().st_size,
+            )
+            for path in catalog_sources
+        )
+        with self._lock:
+            cached = self._repository_cache
+            if cached is not None and cached[0] == fingerprint:
+                return cached[1]
+
+        goals: list[_RepositoryGoal] = []
+        for path in paths:
+            document = load_goal_contract(path, self.repo_root, validate=False)
+            train = document.get("train")
+            if not isinstance(train, Mapping):
+                raise ValueError(f"repository goal has no train contract: {path}")
+            environment = train.get("environment")
+            if not isinstance(environment, Mapping):
+                raise ValueError(f"repository goal has no training environment: {path}")
+            env_config = environment.get("env_config", environment)
+            if not isinstance(env_config, Mapping):
+                raise ValueError(f"repository goal has invalid environment config: {path}")
+            project = resolve_wandb_project(
+                None,
+                str(env_config.get("game") or ""),
+                env_provider=environment.get("env_provider")
+                or env_config.get("env_provider"),
+            )
+            goal_id = str(document.get("goal_id") or "").strip()
+            if not project or not goal_id:
+                raise ValueError(f"repository goal has no project or goal identity: {path}")
+            goal_slug = path.parent.relative_to(self.goals_root).as_posix()
+            goals.append(
+                _RepositoryGoal(
+                    project=project,
+                    goal_id=goal_id,
+                    goal_slug=goal_slug,
+                    title=str(document.get("title") or goal_id).strip(),
+                    recipe_count=sum(1 for _ in path.parent.glob("recipes/*.yaml")),
+                    goal_path=path.relative_to(self.repo_root).as_posix(),
+                )
+            )
+        identities = [(goal.project, goal.goal_id) for goal in goals]
+        if len(identities) != len(set(identities)):
+            raise ValueError("repository goals contain duplicate project/goal identities")
+        result = tuple(sorted(goals, key=lambda goal: (goal.project, goal.goal_id)))
+        with self._lock:
+            self._repository_cache = (fingerprint, result)
+        return result
+
+    def _repository_goal(self, *, project: str, goal_id: str) -> _RepositoryGoal:
+        for goal in self._repository_goals():
+            if goal.project == project and goal.goal_id == goal_id:
+                return goal
+        raise ValueError(f"repository has no goal {project}/{goal_id}")
+
     def projects(
         self,
         *,
@@ -240,27 +343,19 @@ class PlayCatalog:
         cursor: str | None = None,
     ) -> CatalogPage:
         normalized = str(query or "").strip().casefold()
-
-        def values() -> Iterator[dict[str, Any]]:
-            for project in self._wandb_api().projects(entity=entity, per_page=200):
-                summary = ProjectSummary(
-                    entity=str(getattr(project, "entity", entity) or entity),
-                    name=str(getattr(project, "name", "") or ""),
-                    created_at=str(getattr(project, "created_at", "") or ""),
-                    url=str(getattr(project, "url", "") or ""),
-                )
-                if not summary.name:
-                    continue
-                if normalized and normalized not in _search_text(
-                    summary.entity,
-                    summary.name,
-                ):
-                    continue
-                yield summary.to_dict()
-
-        with self._lock:
-            stream = self._stream(("projects", entity, normalized), values)
-            return stream.page(_cursor_offset(cursor), CATALOG_PAGE_SIZE)
+        goal_counts: dict[str, int] = {}
+        for goal in self._repository_goals():
+            goal_counts[goal.project] = goal_counts.get(goal.project, 0) + 1
+        items = [
+            ProjectSummary(
+                entity=entity,
+                name=project,
+                goal_count=goal_count,
+            ).to_dict()
+            for project, goal_count in sorted(goal_counts.items())
+            if not normalized or normalized in _search_text(entity, project)
+        ]
+        return _page_items(items, cursor)
 
     def runs(
         self,
@@ -273,6 +368,11 @@ class PlayCatalog:
     ) -> CatalogPage:
         normalized = str(query or "").strip().casefold()
         selected_goal = str(goal_id or "").strip()
+        selected_goal_slug = (
+            self._repository_goal(project=project, goal_id=selected_goal).goal_slug
+            if selected_goal
+            else ""
+        )
 
         def values() -> Iterator[dict[str, Any]]:
             api_runs = self._wandb_api().runs(
@@ -287,7 +387,7 @@ class PlayCatalog:
                     continue
                 config = dict(getattr(run, "config", {}) or {})
                 goal_slug = str(config.get("goal_slug") or "")
-                if selected_goal and _goal_id(goal_slug) != selected_goal:
+                if selected_goal_slug and goal_slug != selected_goal_slug:
                     continue
                 summary = RunSummary(
                     entity=entity,
@@ -330,59 +430,43 @@ class PlayCatalog:
         cursor: str | None = None,
     ) -> CatalogPage:
         normalized = str(query or "").strip().casefold()
-
-        def values() -> Iterator[dict[str, Any]]:
-            summaries: dict[str, GoalSummary] = {}
-            api_runs = self._wandb_api().runs(
-                f"{entity}/{project}",
-                order="-created_at",
-                per_page=200,
-                lazy=True,
+        items = [
+            GoalSummary(
+                entity=entity,
+                project=project,
+                goal_id=goal.goal_id,
+                goal_slug=goal.goal_slug,
+                title=goal.title,
+                recipe_count=goal.recipe_count,
+                goal_path=goal.goal_path,
+            ).to_dict()
+            for goal in self._repository_goals()
+            if goal.project == project
+            and (
+                not normalized
+                or normalized
+                in _search_text(
+                    goal.goal_id,
+                    goal.goal_slug,
+                    goal.title,
+                    goal.goal_path,
+                )
             )
-            for run in api_runs:
-                run_id = str(getattr(run, "id", "") or "")
-                if RUN_ID_PATTERN.fullmatch(run_id) is None:
-                    continue
-                config = dict(getattr(run, "config", {}) or {})
-                goal_slug = str(config.get("goal_slug") or "").strip()
-                goal_id = _goal_id(goal_slug)
-                if not goal_id:
-                    continue
-                existing = summaries.get(goal_slug)
-                updated_at = str(
-                    getattr(run, "updated_at", "")
-                    or getattr(run, "created_at", "")
-                    or ""
-                )
-                summaries[goal_slug] = GoalSummary(
-                    entity=entity,
-                    project=project,
-                    goal_id=goal_id,
-                    goal_slug=goal_slug,
-                    run_count=(existing.run_count + 1 if existing is not None else 1),
-                    updated_at=existing.updated_at if existing is not None else updated_at,
-                )
-            for summary in summaries.values():
-                if normalized and normalized not in _search_text(
-                    summary.goal_id,
-                    summary.goal_slug,
-                ):
-                    continue
-                yield summary.to_dict()
-
-        with self._lock:
-            stream = self._stream(("goals", entity, project, normalized), values)
-            return stream.page(_cursor_offset(cursor), CATALOG_PAGE_SIZE)
+        ]
+        return _page_items(items, cursor)
 
     def run_goal(self, *, entity: str, project: str, run_id: str) -> str:
         if RUN_ID_PATTERN.fullmatch(run_id) is None:
             raise ValueError("run id must match rlab-<32 lowercase hex>")
         run = self._wandb_api().run(f"{entity}/{project}/{run_id}")
         config = dict(getattr(run, "config", {}) or {})
-        goal_id = _goal_id(config.get("goal_slug"))
-        if not goal_id:
+        goal_slug = str(config.get("goal_slug") or "").strip()
+        for goal in self._repository_goals():
+            if goal.project == project and goal.goal_slug == goal_slug:
+                return goal.goal_id
+        if not goal_slug:
             raise ValueError("W&B run has no goal identity")
-        return goal_id
+        raise ValueError(f"W&B run goal is not declared in the repository: {goal_slug}")
 
     def _checkpoint_evaluations(
         self,

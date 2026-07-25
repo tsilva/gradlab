@@ -5,10 +5,11 @@ import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from string import Formatter
 from typing import Any
 
 from hydra import compose, initialize_config_dir
+from jinja2 import StrictUndefined, TemplateError, meta
+from jinja2.sandbox import SandboxedEnvironment
 from omegaconf import OmegaConf
 import yaml
 from yaml.constructor import ConstructorError
@@ -26,6 +27,10 @@ RECIPE_TEMPLATE_VALUES: dict[str, Any] = {
 RECIPE_TEMPLATE_FIELDS = frozenset(RECIPE_TEMPLATE_VALUES)
 
 _LEVEL_ID_RE = re.compile(r"^Level(?P<world>\d+)-(?P<level>\d+)$", re.IGNORECASE)
+_TEMPLATE_ENV = SandboxedEnvironment(
+    autoescape=False,
+    undefined=StrictUndefined,
+)
 
 
 class _UniqueKeySafeLoader(yaml.SafeLoader):
@@ -227,18 +232,13 @@ def template_context_from_path(
     }
 
 
-def _template_field_root(field_name: str) -> str:
-    return field_name.split(".", 1)[0].split("[", 1)[0]
+def _template_fields(value: str) -> set[str]:
+    return set(meta.find_undeclared_variables(_TEMPLATE_ENV.parse(value)))
 
 
 def _referenced_template_fields(value: Any) -> set[str]:
     if isinstance(value, str):
-        fields: set[str] = set()
-        for _, field_name, format_spec, _ in Formatter().parse(value):
-            if field_name is not None:
-                fields.add(_template_field_root(field_name))
-                fields.update(_referenced_template_fields(format_spec))
-        return fields
+        return _template_fields(value)
     if isinstance(value, Mapping):
         return set().union(
             *(
@@ -300,27 +300,6 @@ def _template_vars_from_document(
     return rendered
 
 
-def _format_deferred_field(field_name: str, conversion: str | None, format_spec: str) -> str:
-    text = "{" + field_name
-    if conversion:
-        text += f"!{conversion}"
-    if format_spec:
-        text += f":{format_spec}"
-    return text + "}"
-
-
-def _apply_conversion(value: Any, conversion: str | None) -> Any:
-    if conversion == "s":
-        return str(value)
-    if conversion == "r":
-        return repr(value)
-    if conversion == "a":
-        return ascii(value)
-    if conversion:
-        raise ValueError(f"unsupported template conversion: !{conversion}")
-    return value
-
-
 def _render_template_string(
     value: str,
     *,
@@ -328,38 +307,21 @@ def _render_template_string(
     deferred_fields: frozenset[str],
     label: str,
 ) -> str:
-    chunks: list[str] = []
     try:
-        parsed = list(Formatter().parse(value))
-    except ValueError as exc:
-        raise ValueError(f"{label} is not a valid format template: {exc}") from exc
-    for literal_text, field_name, format_spec, conversion in parsed:
-        chunks.append(literal_text)
-        if field_name is None:
-            continue
-        root_name = _template_field_root(field_name)
-        if root_name in deferred_fields:
-            chunks.append(_format_deferred_field(field_name, conversion, format_spec))
-        elif root_name in context:
-            rendered_format_spec = (
-                _render_template_string(
-                    format_spec,
-                    context=context,
-                    deferred_fields=deferred_fields,
-                    label=f"{label} format spec",
-                )
-                if format_spec
-                else ""
-            )
-            chunks.append(
-                format(_apply_conversion(context[root_name], conversion), rendered_format_spec)
-            )
-        else:
+        fields = _template_fields(value)
+        unknown = sorted(fields - set(context) - deferred_fields)
+        if unknown:
             allowed = ", ".join(sorted({*context, *deferred_fields}))
             raise ValueError(
-                f"{label} uses unknown template field {root_name!r}; allowed: {allowed}"
+                f"{label} uses unknown template field {unknown[0]!r}; allowed: {allowed}"
             )
-    return "".join(chunks)
+        deferred_context = {
+            field: "{{ " + field + " }}"
+            for field in fields & deferred_fields
+        }
+        return _TEMPLATE_ENV.from_string(value).render({**context, **deferred_context})
+    except TemplateError as exc:
+        raise ValueError(f"{label} is not a valid Jinja template: {exc}") from exc
 
 
 def validate_template_string(
@@ -370,14 +332,9 @@ def validate_template_string(
     label: str,
 ) -> frozenset[str]:
     try:
-        parsed = list(Formatter().parse(value))
-    except ValueError as exc:
-        raise ValueError(f"{label} is not a valid format template: {exc}") from exc
-    fields = frozenset(
-        _template_field_root(field_name)
-        for _literal, field_name, _format_spec, _conversion in parsed
-        if field_name
-    )
+        fields = frozenset(_template_fields(value))
+    except TemplateError as exc:
+        raise ValueError(f"{label} is not a valid Jinja template: {exc}") from exc
     unknown = sorted(fields - set(allowed_values))
     if unknown:
         raise ValueError(f"{label} uses unsupported template field(s): {', '.join(unknown)}")
@@ -443,7 +400,7 @@ def render_template_vars(
     extra_context: Mapping[str, Any] | None = None,
     deferred_fields_by_path: Mapping[tuple[str, ...], frozenset[str]] | None = None,
 ) -> dict[str, Any]:
-    """Render checked-in `{}` template variables and remove `template_vars`.
+    """Render checked-in Jinja template variables and remove `template_vars`.
 
     This is intentionally stricter than OmegaConf interpolation: unknown fields fail
     unless the caller marks a specific document path as a deferred runtime template.

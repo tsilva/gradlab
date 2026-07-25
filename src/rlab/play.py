@@ -240,7 +240,7 @@ def add_play_source_args(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument(
         "--wandb-entity",
-        help="W&B entity to browse. Defaults to WANDB_ENTITY or the authenticated entity.",
+        help="W&B entity containing repository-declared runs. Defaults to WANDB_ENTITY.",
     )
     parser.add_argument(
         "--public-model-root",
@@ -841,7 +841,10 @@ def main(argv: list[str] | None = None) -> int:
     from rlab.play_runtime import PlaySourceSpec, PlaybackLoader
     from rlab.play_web import run_web_player_application
 
-    catalog = PlayCatalog(public_models_base_url=args.public_models_base_url)
+    catalog = PlayCatalog(
+        public_models_base_url=args.public_models_base_url,
+        repo_root=Path(__file__).resolve().parents[2],
+    )
     initial_route: dict[str, object] = {
         "level": "projects",
         "entity": str(args.wandb_entity or ""),

@@ -3,7 +3,7 @@ defaults:
 - _self_
 recipe_id: ppo
 description: >-
-  Seed {seed} trains the three-action no-NOOP Breakout ablation for {goal_id} with the baseline
+  Seed {{ seed }} trains the three-action no-NOOP Breakout ablation for {{ goal_id }} with the baseline
   128 environments, 64-step rollouts, resource cap, optimizer schedule, and otherwise unchanged
   goal-owned training contract.
 train:
