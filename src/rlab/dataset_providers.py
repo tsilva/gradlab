@@ -23,7 +23,7 @@ import gymnasium as gym
 import numpy as np
 
 from rlab.action_contract import MARIO_ACTION_TABLES
-from rlab.json_utils import canonical_json_bytes
+from rlab.json_utils import canonical_json_bytes, json_value
 
 
 PROVIDER_CONTRACT_VERSION = 1
@@ -34,20 +34,6 @@ BUILTIN_ACTION_SETS = MARIO_ACTION_TABLES
 MANAGED_CONFIG_KEYS = frozenset(
     {"game", "num_envs", "num_threads", "render_mode", "autoreset_mode"}
 )
-
-
-def _json_value(value: Any) -> Any:
-    if hasattr(value, "name") and hasattr(value, "value"):
-        return str(value.name)
-    if isinstance(value, np.generic):
-        return value.item()
-    if isinstance(value, np.ndarray):
-        return value.tolist()
-    if isinstance(value, Mapping):
-        return {str(key): _json_value(item) for key, item in value.items()}
-    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray, memoryview)):
-        return [_json_value(item) for item in value]
-    return value
 
 
 def _lane_info(infos: Any) -> dict[str, Any]:
@@ -68,7 +54,7 @@ def _lane_info(infos: Any) -> dict[str, Any]:
             and len(value) == 1
         ):
             value = value[0]
-        result[str(key)] = _json_value(value)
+        result[str(key)] = json_value(value)
     return result
 
 
@@ -293,7 +279,7 @@ class ProviderSession:
         self.provenance = {
             "distribution": provider_id,
             "version": importlib.metadata.version(provider_id),
-            "assets": _json_value(assets),
+            "assets": json_value(assets),
         }
 
     def policy_observation(self, observation: Any) -> Any:
@@ -558,10 +544,10 @@ def space_contract(space: Any) -> dict[str, Any]:
     for name in ("low", "high"):
         value = getattr(space, name, None)
         if value is not None:
-            document[name] = _json_value(value)
+            document[name] = json_value(value)
     nvec = getattr(space, "nvec", None)
     if nvec is not None:
-        document["nvec"] = _json_value(nvec)
+        document["nvec"] = json_value(nvec)
     return document
 
 

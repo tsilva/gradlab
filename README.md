@@ -148,6 +148,12 @@ rlab play --model <local-checkpoint>
 rlab play hf://<owner>/<repository>
 ```
 
+The player uses shareable hierarchical routes: `/` lists projects,
+`/projects/<project-id>` lists runs,
+`/projects/<project-id>/runs/<run-id>` lists checkpoints, and the nested
+`/checkpoints/<checkpoint-id>` route identifies the selected checkpoint.
+Browser Back and Forward navigation follow the same resource hierarchy.
+
 W&B supplies catalog metadata only. Playback downloads model bytes from the
 public checkpoint store; videos, episode evidence, ROMs, and recovery journals
 remain in R2.

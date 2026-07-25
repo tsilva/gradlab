@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import math
 from collections.abc import Mapping
 from typing import Any
@@ -13,6 +12,7 @@ from rlab.checkpoint_acceptance import (
     evaluate_acceptance,
     validate_episode_rows,
 )
+from rlab.json_utils import canonical_json_text
 
 
 PROTOCOL_SCHEMA_VERSION = 3
@@ -26,7 +26,7 @@ def _sha256(value: object, *, label: str) -> str:
 
 
 def canonical_json(value: object) -> str:
-    return json.dumps(value, sort_keys=True, separators=(",", ":"), default=str)
+    return canonical_json_text(value, default=str, allow_nan=True)
 
 
 def stable_hash(value: object) -> str:

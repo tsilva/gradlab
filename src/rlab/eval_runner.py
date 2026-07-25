@@ -42,6 +42,7 @@ from rlab.policy_models import (
     load_internal_policy_model,
     resolve_policy_algorithm,
 )
+from rlab.policy_runtime import bind_policy_action_space, reset_policy_state
 from rlab.targets import EvalSemantics, target_for_game
 from rlab.video import PolicyObservationPreview, write_video
 
@@ -66,24 +67,6 @@ def _eval_runtime_config(
         success=success,
         failure=failure,
     )
-
-
-def _bind_policy_action_space(model: Any, action_space: Any) -> None:
-    bind_action_space = getattr(model, "bind_action_space", None)
-    if callable(bind_action_space):
-        bind_action_space(action_space)
-
-
-def _reset_policy_episode(model: Any) -> None:
-    reset_episode = getattr(model, "reset_episode", None)
-    if callable(reset_episode):
-        reset_episode()
-
-
-def _reset_policy_lanes(model: Any, dones: Any) -> None:
-    reset_lanes = getattr(model, "reset_lanes", None)
-    if callable(reset_lanes):
-        reset_lanes(dones)
 
 
 def _acceptance_runtime_config(
@@ -155,14 +138,14 @@ def _evaluate_model_episodes_vector(
     planned = manifest_index(acceptance_contract) if acceptance_contract is not None else None
     rejected = False
     try:
-        _bind_policy_action_space(model, getattr(eval_env, "action_space", None))
-        _reset_policy_episode(model)
+        bind_policy_action_space(model, getattr(eval_env, "action_space", None))
+        reset_policy_state(model)
         torch.manual_seed(seed)
         obs = eval_env.reset()
         while len(episode_results) < episodes and not rejected:
             action, _ = model.predict(obs, deterministic=deterministic)
             obs, _step_rewards, dones, infos = eval_env.step(action)
-            _reset_policy_lanes(model, dones)
+            reset_policy_state(model, dones)
             if preview_capture is not None:
                 preview_capture.capture(obs)
             terminal_infos = {
@@ -276,7 +259,7 @@ def evaluate_model_episodes(
                 rom_binding=rom_binding,
             )
             try:
-                _bind_policy_action_space(model, getattr(eval_env, "action_space", None))
+                bind_policy_action_space(model, getattr(eval_env, "action_space", None))
                 for episode_idx in range(episodes):
                     manifest_entry = (
                         planned.get((0, episode_idx)) if planned is not None else None

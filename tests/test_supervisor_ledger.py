@@ -4,7 +4,6 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from rlab.metric_store import MetricStore
 from rlab.supervisor_ledger import SupervisorLedger
 
 
@@ -12,8 +11,6 @@ class SupervisorLedgerTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
         self.path = Path(self.temporary.name) / "rlab.sqlite"
-        self.metrics = MetricStore(self.path)
-        self.metrics.init()
         self.ledger = SupervisorLedger(self.path)
         self.ledger.init()
 
@@ -21,12 +18,12 @@ class SupervisorLedgerTests(unittest.TestCase):
         self.temporary.cleanup()
 
     def test_segments_advance_contiguously(self) -> None:
-        self.metrics.append_metrics(
+        self.ledger.append_metrics(
             {"train/throughput/loop_fps": 1.0},
             step=10,
             source="train",
         )
-        self.metrics.append_metrics(
+        self.ledger.append_metrics(
             {"train/throughput/loop_fps": 2.0},
             step=20,
             source="train",

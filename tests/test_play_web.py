@@ -27,7 +27,9 @@ from rlab.play_web import (
     PlaybackWebServer,
     WebPlaybackRunner,
     _session_environment_id,
+    annotate_realized_returns,
     run_web_playback,
+    source_browser_path,
     transition_payload,
 )
 
@@ -84,6 +86,7 @@ def test_web_playback_retains_step_zero_snapshot_and_frame() -> None:
     snapshot, frames = runner.episode_start_payload()
     assert snapshot["sequence"] == 0
     assert snapshot["session"]["step"] == 0
+    assert snapshot["session"]["value_discount"] is None
     assert snapshot["transition"] is None
     sequence, packet = frames[FRAME_GAME]
     assert sequence == 0
@@ -95,6 +98,46 @@ def test_web_playback_retains_step_zero_snapshot_and_frame() -> None:
         0,
         0,
     )
+
+
+def test_completed_episode_history_gets_discounted_value_targets_and_signed_error() -> None:
+    points = [
+        {"episode": 1, "reward_shaped": 1.0, "value": 3.0},
+        {"episode": 1, "reward_shaped": 2.0, "value": 1.0},
+        {"episode": 2, "reward_shaped": 9.0, "value": 9.0},
+    ]
+
+    annotate_realized_returns(points, episode=1, discount=0.5)
+
+    assert points[0]["realized_return"] == 2.0
+    assert points[0]["value_error"] == 1.0
+    assert points[1]["realized_return"] == 2.0
+    assert points[1]["value_error"] == -1.0
+    assert "realized_return" not in points[2]
+
+
+def test_web_playback_exposes_loaded_models_value_discount() -> None:
+    session = argparse.Namespace(
+        model=argparse.Namespace(gamma=0.9),
+        config={"game": "Game-v0"},
+        current_frame=None,
+        frames=(),
+        sequence=0,
+        step_index=0,
+        episode=1,
+        active_seed=42,
+        active_task=None,
+        total_reward=0.0,
+        max_x_pos=0,
+        action_names=(),
+        interactive=False,
+        last_transition=None,
+    )
+    runner = WebPlaybackRunner(session, human_args(episodes=0), config_text="")
+
+    runner._publish(None)
+
+    assert runner.snapshot()["session"]["value_discount"] == 0.9
 
 
 def test_next_episode_dispatches_seed_sampling_and_driver_atomically() -> None:
@@ -288,6 +331,26 @@ def test_run_web_playback_requests_paired_browser_windows() -> None:
         assert run_web_playback(object(), args, config_text="config") == 0
 
     server_type.assert_called_once_with(runner, args, paired_windows=True)
+
+
+def test_source_browser_paths_are_hierarchical_and_url_encoded() -> None:
+    run_id = "rlab-" + "a" * 32
+    checkpoint_id = "checkpoint-250000-" + "b" * 16
+
+    assert source_browser_path(None) == "/"
+    assert source_browser_path({"project": "Mario Bros"}) == "/projects/Mario%20Bros"
+    assert source_browser_path(
+        {"project": "Mario Bros", "run_id": run_id}
+    ) == f"/projects/Mario%20Bros/runs/{run_id}"
+    assert source_browser_path(
+        {
+            "project": "Mario Bros",
+            "run_id": run_id,
+            "checkpoint_id": checkpoint_id,
+        }
+    ) == (
+        f"/projects/Mario%20Bros/runs/{run_id}/checkpoints/{checkpoint_id}"
+    )
 
 
 def test_paired_playback_server_opens_play_and_stats_windows() -> None:
@@ -780,6 +843,18 @@ def test_catalog_http_api_requires_the_fragment_session_token() -> None:
                 )
                 assert accepted.status == 200
                 assert (await accepted.json())["items"][0]["name"] == "Mario"
+                for route in (
+                    "/",
+                    "/projects/Mario",
+                    f"/projects/Mario/runs/rlab-{'a' * 32}",
+                    (
+                        f"/projects/Mario/runs/rlab-{'a' * 32}"
+                        f"/checkpoints/checkpoint-1-{'b' * 16}"
+                    ),
+                ):
+                    page = await client.get(f"{server.origin}{route}")
+                    assert page.status == 200
+                    assert "<title>rlab player</title>" in await page.text()
         finally:
             runner.stop()
             await asyncio.wait_for(task, timeout=3.0)
@@ -810,6 +885,7 @@ def test_web_dashboard_assets_are_packaged_beside_server() -> None:
     markup = (root / "index.html").read_text(encoding="utf-8")
     styles = (root / "styles.css").read_text(encoding="utf-8")
     script = (root / "app.js").read_text(encoding="utf-8")
+    source_browser = (root / "sources" / "browser.js").read_text(encoding="utf-8")
     icons = (root / "tabler-icons.svg").read_text(encoding="utf-8")
     catalog = (panel_root / "catalog.js").read_text(encoding="utf-8")
     runtime = (panel_root / "runtime.js").read_text(encoding="utf-8")
@@ -825,6 +901,11 @@ def test_web_dashboard_assets_are_packaged_beside_server() -> None:
     assert '<main id="dashboard" class="dashboard"></main>' in markup
     assert '<main id="source-browser" class="source-browser" hidden></main>' in markup
     assert '<h1 id="page-title">Environment</h1>' in markup
+    assert 'export function sourceRouteFromPath(' in source_browser
+    assert 'export function sourceRoutePath(' in source_browser
+    assert 'history.pushState(null, "", target);' in source_browser
+    assert 'window.addEventListener("popstate", this.onPopState);' in source_browser
+    assert 'checkpoint_id: item.checkpoint_id' in source_browser
     assert 'class="workspace-status"' not in markup
     assert markup.index('id="new-window"') < markup.index('id="connection-status"')
     assert markup.index('id="connection-status"') < markup.index('id="sampling-status"')
@@ -884,6 +965,13 @@ def test_web_dashboard_assets_are_packaged_beside_server() -> None:
     assert 'scrubber.step = "1";' in script
     assert "if (index === state.timelineSequences.length - 1) returnToLive();" in script
     assert "data-return-chart" in reward_markup
+    assert "data-value-chart" in reward_markup
+    assert "Value estimate vs realized return-to-go" in reward_markup
+    assert '["V − G", number(point?.value_error, 3)]' in reward_markup
+    assert "positive overestimates, negative underestimates" in reward_markup
+    assert "point.realized_return" in reward_markup
+    assert "value_discount" in reward_markup
+    assert "state.history[index] = { ...state.history[index], ...point };" in script
     assert controls_markup.count("data-playback-toggle data-requires-active-episode class=") == 1
     assert (
         'data-command="play" data-playback-toggle data-requires-active-episode class="primary icon-only"'

@@ -15,7 +15,6 @@ from rlab.config_validation import (
     load_goal_contract,
     main as validate_main,
     validate_experiment_tree,
-    validate_goal_contract,
     validate_goal_contract_document,
 )
 from rlab.env_registry import resolve_env_provider
@@ -536,126 +535,19 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertEqual(document["environment"]["preprocessing"]["frame_skip"], 4)
 
     def test_goal_validator_rejects_legacy_eval_driven_early_stop(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            goal_dir = root / "experiments" / "goals" / "bad"
-            goal_dir.mkdir(parents=True)
-            goal_path = goal_dir / "_goal.yaml"
-            goal_path.write_text(
-                """
-goal_id: bad
-title: Bad Goal
-objective:
-  states: [Level1-1]
-  rank:
-  - max(train/outcome/success/window_100/rate/min)
-train:
-  early_stop:
-  - metric: train/outcome/success/window_100/rate/min
-    operator: '>'
-    threshold: 0.99
-  environment:
-    env_config:
-      env_provider: stable-retro-turbo
-      game: SuperMarioBros-Nes-v0
-      state: Level1-1
-      n_envs: 1
-      env_args:
-        scenario: scenario
-        info: data
-        use_restricted_actions: filtered
-        record: false
-        players: 1
-        inttype: stable
-        obs_type: image
-        render_mode: rgb_array
-        num_threads: 1
-        rom_path: null
-        obs_copy: safe_view
-        obs_grayscale: true
-        obs_layout: chw
-        frame_stack: 4
-        noop_reset_max: 0
-        reward_clip: false
-        info_filter: all
-        use_fire_reset: false
-      frame_skip: 4
-      max_pool_frames: false
-      sticky_action_prob: 0.0
-      observation_size: 84
-      obs_crop: [32, 0, 0, 0]
-      obs_crop_mode: mask
-      obs_crop_fill: 0
-      obs_resize_algorithm: area
-    task:
-      id: mario
-      action: {set: simple}
-      signals:
-        lives: lives
-        level: [levelHi, levelLo]
-      events:
-        life_loss: {signal: lives, operation: decrease}
-        level_change: {signal: level, operation: change}
-      termination:
-        failure: [life_loss]
-        success: [level_change]
-        max_episode_steps: 4500
-      reward: {}
-eval:
-  episodes: 100
-  environment:
-    env_config:
-      env_provider: stable-retro-turbo
-      game: SuperMarioBros-Nes-v0
-      state: Level1-1
-      n_envs: 1
-      env_args:
-        scenario: scenario
-        info: data
-        use_restricted_actions: filtered
-        record: false
-        players: 1
-        inttype: stable
-        obs_type: image
-        render_mode: rgb_array
-        num_threads: 1
-        rom_path: null
-        obs_copy: safe_view
-        obs_grayscale: true
-        obs_layout: chw
-        frame_stack: 4
-        noop_reset_max: 0
-        reward_clip: false
-        info_filter: all
-        use_fire_reset: false
-      frame_skip: 4
-      max_pool_frames: false
-      sticky_action_prob: 0.0
-      observation_size: 84
-      obs_crop: [32, 0, 0, 0]
-      obs_crop_mode: mask
-      obs_crop_fill: 0
-      obs_resize_algorithm: area
-    task:
-      id: mario
-      action: {set: simple}
-      signals:
-        lives: lives
-        level: [levelHi, levelLo]
-      events:
-        life_loss: {signal: lives, operation: decrease}
-        level_change: {signal: level, operation: change}
-      termination:
-        failure: []
-        success: [level_change]
-        max_episode_steps: 4500
-      reward: {}
-""",
-                encoding="utf-8",
-            )
+        path = self.MARIO_L11_GOAL.resolve()
+        document = load_goal_contract(path)
+        document["train"]["early_stop"] = [
+            {
+                "metric": "train/outcome/success/window_100/rate/min",
+                "operator": ">",
+                "threshold": 0.99,
+            }
+        ]
+        document["train"]["stop_on_acceptance"] = False
 
-            with self.assertRaisesRegex(ValueError, "unknown field.*early_stop"):
-                validate_goal_contract(goal_path, root)
+        with self.assertRaisesRegex(ValueError, "unknown field.*early_stop"):
+            validate_goal_contract_document(document, path, Path(".").resolve())
 
     def test_goal_validator_rejects_rank_forms_the_runtime_cannot_parse(self) -> None:
         with self.assertRaisesRegex(ValueError, "max\\(metric\\) or min\\(metric\\)"):
@@ -706,159 +598,88 @@ eval:
             )
 
     def test_goal_validator_requires_slug_to_match_goal_directory(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            goal_dir = root / "experiments" / "goals" / "real-goal"
-            goal_dir.mkdir(parents=True)
-            goal_path = goal_dir / "_goal.yaml"
-            goal_path.write_text(
-                """
-goal_id: stale-short-name
-title: Bad Goal
-objective: {}
-""",
-                encoding="utf-8",
-            )
+        path = self.MARIO_L11_GOAL.resolve()
+        document = load_goal_contract(path)
+        document["goal_id"] = "stale-short-name"
 
-            with self.assertRaisesRegex(
-                ValueError, "goal_id.*must match goal directory name: real-goal"
-            ):
-                validate_goal_contract(goal_path, root)
+        with self.assertRaisesRegex(
+            ValueError, "goal_id.*must match goal directory name: Level1-1"
+        ):
+            validate_goal_contract_document(document, path, Path(".").resolve())
 
     def test_goal_validator_rejects_objective_success(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            goal_dir = root / "experiments" / "goals" / "bad"
-            goal_dir.mkdir(parents=True)
-            goal_path = goal_dir / "_goal.yaml"
-            goal_path.write_text(
-                """
-goal_id: bad
-title: Bad Goal
-objective:
-  success:
-    metric: train/outcome/success/window_100/rate/min
-    operator: '>'
-    threshold: 0.99
-  rank:
-  - max(train/outcome/success/window_100/rate/min)
-train:
-  environment:
-    env_config:
-      env_provider: stable-retro-turbo
-      game: SuperMarioBros-Nes-v0
-      state: Level1-1
-      frame_skip: 4
-      max_pool_frames: false
-      sticky_action_prob: 0.0
-      observation_size: 84
-      hud_crop_top: 32
-      obs_resize_algorithm: area
-      task:
-        id: identity
-        action: {set: native}
-        signals: {}
-        events: {}
-        termination: {max_episode_steps: 4500}
-        reward: {reward_mode: native}
-eval:
-  episodes: 100
-  environment:
-    env_config:
-      env_provider: stable-retro-turbo
-      game: SuperMarioBros-Nes-v0
-      frame_skip: 4
-      max_pool_frames: false
-      sticky_action_prob: 0.0
-      observation_size: 84
-      hud_crop_top: 32
-      obs_resize_algorithm: area
-      task:
-        id: identity
-        action: {set: native}
-        signals: {}
-        events: {}
-        termination: {max_episode_steps: 4500}
-        reward: {reward_mode: native}
-""",
-                encoding="utf-8",
-            )
+        path = self.MARIO_L11_GOAL.resolve()
+        document = load_goal_contract(path)
+        document["objective"]["success"] = {
+            "metric": "train/outcome/success/window_100/rate/min",
+            "operator": ">",
+            "threshold": 0.99,
+        }
 
-            with self.assertRaisesRegex(
-                ValueError, "objective\\.success moved to train\\.early_stop"
-            ):
-                validate_goal_contract(goal_path, root)
+        with self.assertRaisesRegex(
+            ValueError, "objective\\.success moved to train\\.early_stop"
+        ):
+            validate_goal_contract_document(document, path, Path(".").resolve())
 
     def test_goal_validator_rejects_environment_hash(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            goal_dir = root / "experiments" / "goals" / "bad"
-            goal_dir.mkdir(parents=True)
-            goal_path = goal_dir / "_goal.yaml"
-            goal_path.write_text(
-                """
-goal_id: bad
-title: Bad Goal
-objective:
-  states: [Level1-1]
-  rank:
-  - max(train/outcome/success/window_100/rate/min)
-train:
-  early_stop:
-  - metric: train/outcome/success/window_100/rate/min
-    operator: '>'
-    threshold: 0.99
-  environment:
-    env_config:
-      env_provider: stable-retro-turbo
-      game: SuperMarioBros-Nes-v0
-      state: Level1-1
-      action_set: basic
-      frame_skip: 4
-      observation_size: 84
-      hud_crop_top: 32
-      max_episode_steps: 4500
-environment_hash: sha256:deadbeef
-""",
-                encoding="utf-8",
-            )
+        path = self.MARIO_L11_GOAL.resolve()
+        document = load_goal_contract(path)
+        document["environment_hash"] = "sha256:deadbeef"
 
-            with self.assertRaisesRegex(ValueError, "environment_hash"):
-                validate_goal_contract(goal_path, root)
+        with self.assertRaisesRegex(ValueError, "environment_hash"):
+            validate_goal_contract_document(document, path, Path(".").resolve())
 
     def test_load_goal_contract_returns_composed_document(self) -> None:
         document = load_goal_contract(
             Path("experiments/goals/SuperMarioBros-Nes-v0/Level1-1/_goal.yaml")
         )
 
-        self.assertNotIn("extends", document)
-        self.assertNotIn("schema_version", document)
-        self.assertNotIn("status", document)
         self.assertEqual(document["goal_id"], "Level1-1")
-        self.assertNotIn("seed_protocol", document)
-        self.assertNotIn("historical_context", document)
-        self.assertNotIn("updated_at", document)
-        self.assertNotIn("notes", document)
-        self.assertNotIn("runtime", document)
-        self.assertNotIn("search_protocol", document)
-        self.assertNotIn("batch_record_fields", document)
-        self.assertNotIn("capacity_policy_file", document)
-        self.assertNotIn("cap_policy", document)
-        self.assertNotIn("constraints", document)
-        self.assertNotIn("default_eval_profile", document)
-        self.assertNotIn("default_train_profile", document)
-        self.assertNotIn("environment_hash", document)
-        self.assertNotIn("execution", document)
-        self.assertNotIn("game", document["objective"])
-        self.assertNotIn("algorithm", document["objective"])
-        self.assertNotIn("states", document["objective"])
-        self.assertNotIn("forbidden_stop_rules", document["objective"])
-        self.assertNotIn("max_train_timesteps", document["objective"])
-        self.assertNotIn("success", document["objective"])
-        self.assertNotIn("early_stop", document["train"])
-        self.assertNotIn("checkpoint_eval_stages", document["train"])
+        absent_fields = (
+            (
+                document,
+                {
+                    "extends",
+                    "schema_version",
+                    "status",
+                    "seed_protocol",
+                    "historical_context",
+                    "updated_at",
+                    "notes",
+                    "runtime",
+                    "search_protocol",
+                    "batch_record_fields",
+                    "capacity_policy_file",
+                    "cap_policy",
+                    "constraints",
+                    "default_eval_profile",
+                    "default_train_profile",
+                    "environment_hash",
+                    "execution",
+                    "selection_policy",
+                },
+            ),
+            (
+                document["objective"],
+                {
+                    "game",
+                    "algorithm",
+                    "states",
+                    "forbidden_stop_rules",
+                    "max_train_timesteps",
+                    "success",
+                },
+            ),
+            (
+                document["train"],
+                {"early_stop", "checkpoint_eval_stages", "max_train_timesteps"},
+            ),
+        )
+        for mapping, fields in absent_fields:
+            for field in fields:
+                with self.subTest(field=field):
+                    self.assertNotIn(field, mapping)
         self.assertTrue(document["train"]["stop_on_acceptance"])
-        self.assertEqual(document["eval"]["episodes"], 100)
         self.assertEqual(
             document["eval"]["acceptance"],
             [
@@ -876,60 +697,38 @@ environment_hash: sha256:deadbeef
                 "max(eval/full/episode/return/mean)",
             ],
         )
-        self.assertNotIn("selection_policy", document)
-        self.assertNotIn("max_train_timesteps", document["train"])
-        self.assertEqual(
-            document["train"]["environment"]["env_provider"],
-            "supermariobrosnes-turbo",
-        )
-        self.assertNotIn("env_provider", document["train"]["environment"]["env_config"])
-        self.assertEqual(
-            document["train"]["environment"]["env_config"]["game"], "SuperMarioBros-Nes-v0"
-        )
-        self.assertEqual(document["train"]["environment"]["env_config"]["state"], "Level1-1")
-        self.assertEqual(document["train"]["environment"]["env_config"]["n_envs"], 16)
-        self.assertNotIn("env_threads", document["train"]["environment"]["env_config"])
-        self.assertNotIn("reward_mode", document["train"]["environment"]["env_config"])
-        self.assertEqual(document["train"]["environment"]["env_config"]["obs_crop"], [32, 0, 0, 0])
-        self.assertEqual(document["train"]["environment"]["env_config"]["observation_size"], 84)
-        self.assertEqual(document["train"]["environment"]["env_config"]["max_pool_frames"], False)
-        self.assertEqual(document["train"]["environment"]["env_config"]["sticky_action_prob"], 0.0)
         stalled_event = {"signal": "x", "operation": "unchanged_for", "steps": 300}
-        self.assertEqual(
-            document["train"]["environment"]["task"]["events"]["stalled"],
-            stalled_event,
-        )
+        for phase in ("train", "eval"):
+            environment = document[phase]["environment"]
+            config = environment["env_config"]
+            task = environment["task"]
+            with self.subTest(phase=phase):
+                self.assertEqual(environment["env_provider"], "supermariobrosnes-turbo")
+                self.assertEqual(config["game"], "SuperMarioBros-Nes-v0")
+                self.assertEqual(config["n_envs"], 16)
+                self.assertEqual(config["obs_crop"], [32, 0, 0, 0])
+                self.assertEqual(config["observation_size"], 84)
+                self.assertTrue({"env_provider", "env_threads", "reward_mode"}.isdisjoint(config))
+                self.assertEqual(task["events"]["stalled"], stalled_event)
+        train_config = document["train"]["environment"]["env_config"]
+        self.assertEqual(train_config["state"], "Level1-1")
+        self.assertFalse(train_config["max_pool_frames"])
+        self.assertEqual(train_config["sticky_action_prob"], 0.0)
         self.assertEqual(
             document["train"]["environment"]["task"]["termination"]["failure"],
             ["life_loss", "stalled"],
         )
-        self.assertNotIn("policy", document["eval"])
-        self.assertNotIn("schema_version", document["eval"])
-        self.assertEqual(
-            document["eval"]["environment"]["env_provider"],
-            "supermariobrosnes-turbo",
-        )
-        self.assertNotIn("env_provider", document["eval"]["environment"]["env_config"])
-        self.assertEqual(
-            document["eval"]["environment"]["env_config"]["game"], "SuperMarioBros-Nes-v0"
-        )
-        self.assertEqual(document["eval"]["environment"]["env_config"]["n_envs"], 16)
-        self.assertNotIn("env_threads", document["eval"]["environment"]["env_config"])
-        self.assertNotIn("reward_mode", document["eval"]["environment"]["env_config"])
-        self.assertEqual(document["eval"]["environment"]["env_config"]["obs_crop"], [32, 0, 0, 0])
-        self.assertEqual(document["eval"]["environment"]["env_config"]["observation_size"], 84)
-        self.assertEqual(
-            document["eval"]["environment"]["task"]["events"]["stalled"],
-            stalled_event,
-        )
+        self.assertTrue({"policy", "schema_version"}.isdisjoint(document["eval"]))
         self.assertEqual(
             document["eval"]["environment"]["task"]["termination"]["failure"],
             [],
         )
         self.assertEqual(document["eval"]["episodes"], 100)
-        self.assertNotIn("max_episodes", document["eval"]["environment"]["env_config"])
-        self.assertNotIn("seed", document["eval"]["environment"]["env_config"])
-        self.assertNotIn("max_steps", document["eval"]["environment"]["env_config"])
+        self.assertTrue(
+            {"max_episodes", "seed", "max_steps"}.isdisjoint(
+                document["eval"]["environment"]["env_config"]
+            )
+        )
         self.assertEqual(
             document["eval"]["environment"]["task"]["termination"]["success"],
             ["level_change"],
@@ -973,33 +772,12 @@ environment_hash: sha256:deadbeef
         self.assertEqual(document["release"]["huggingface"], {})
 
     def test_goal_validator_rejects_manual_huggingface_release_identity(self) -> None:
-        source = """
-goal_id: Level1-1
-title: Manual publication identity
-objective:
-  rank: [max(eval/full/outcome/success/rate/min)]
-train:
-  environment:
-    env_provider: gymnasium
-    env_config:
-      game: CustomNativeVector-v0
-      env_args: {}
-    task:
-      id: identity
-      action: {set: native}
-      signals: {}
-      events: {}
-      termination: {failure: [], success: [], timeout: [], max_episode_steps: 1}
-      reward: {reward_mode: native}
-release:
-  huggingface:
-    repo: manual-name
-"""
-        with tempfile.TemporaryDirectory() as temporary:
-            path = Path(temporary) / "_goal.yaml"
-            path.write_text(source, encoding="utf-8")
-            with self.assertRaisesRegex(ValueError, "marker-only"):
-                load_goal_contract(path)
+        path = self.MARIO_L11_GOAL.resolve()
+        document = load_goal_contract(path)
+        document["release"]["huggingface"]["repo"] = "manual-name"
+
+        with self.assertRaisesRegex(ValueError, "marker-only"):
+            validate_goal_contract_document(document, path, Path(".").resolve())
 
     def test_validate_cli_success(self) -> None:
         stdout = io.StringIO()

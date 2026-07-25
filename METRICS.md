@@ -91,6 +91,12 @@ schema v6.
   not named optimization time.
 - Reward components are emitted only when active. Each component has mean, nonzero rate, and share;
   raw reward appears only when it differs from shaped reward.
+- Episode-return means are neither a best-episode metric nor the score of a currently visible lane:
+  they reduce the latest 100 completed episodes across all applicable vector lanes. W&B chart
+  smoothing, when enabled, is applied on top of that already-rolling value. Under the root Breakout
+  contract (`reward_mode: native`, unclipped), shaped episode return is the sum of Atari row-score
+  deltas, so individual 400-plus games can coexist with a much lower mean when other lanes finish
+  with lower scores.
 
 ## Full-evaluation table
 

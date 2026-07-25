@@ -4,7 +4,7 @@ import json
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-from rlab.metric_store import SqliteStore
+from rlab.metric_store import MetricStore
 
 
 SCHEMA_SQL = """
@@ -56,10 +56,10 @@ CREATE INDEX IF NOT EXISTS eval_dispatches_status_idx
 """
 
 
-class SupervisorLedger(SqliteStore):
+class SupervisorLedger(MetricStore):
     def init(self) -> None:
+        super().init()
         with self.connection() as connection:
-            connection.execute("PRAGMA journal_mode=WAL")
             connection.executescript(SCHEMA_SQL)
             eval_columns = {
                 str(row[1])
@@ -290,6 +290,34 @@ class SupervisorLedger(SqliteStore):
         ]
         return rows[0] if rows else None
 
+    def _transition_eval(
+        self,
+        idempotency_key: str,
+        *,
+        from_statuses: Sequence[str],
+        conflict: str,
+        predicate: str = "",
+        **fields: Any,
+    ) -> None:
+        assignments = ", ".join(f"{name} = ?" for name in fields)
+        statuses = ",".join("?" for _ in from_statuses)
+        with self.connection() as connection:
+            cursor = connection.execute(
+                f"""
+                UPDATE eval_dispatches
+                SET {assignments}, updated_at = ?
+                WHERE idempotency_key = ? AND status IN ({statuses}) {predicate}
+                """,
+                (
+                    *fields.values(),
+                    self.clock.time(),
+                    idempotency_key,
+                    *from_statuses,
+                ),
+            )
+        if cursor.rowcount != 1:
+            raise RuntimeError(f"{conflict}: {idempotency_key}")
+
     def mark_eval_submitted(
         self,
         *,
@@ -298,55 +326,36 @@ class SupervisorLedger(SqliteStore):
         modal_call_id: str,
         attempt_expires_at: float,
     ) -> None:
-        now = self.clock.time()
-        with self.connection() as connection:
-            cursor = connection.execute(
-                """
-                UPDATE eval_dispatches
-                SET status = 'submitted', attempt = ?, modal_call_id = ?,
-                    attempt_expires_at = ?, last_error = NULL, updated_at = ?
-                WHERE idempotency_key = ? AND status = 'pending'
-                """,
-                (
-                    int(attempt),
-                    modal_call_id,
-                    float(attempt_expires_at),
-                    now,
-                    idempotency_key,
-                ),
-            )
-            if cursor.rowcount != 1:
-                raise RuntimeError(f"eval intent is not pending: {idempotency_key}")
+        self._transition_eval(
+            idempotency_key,
+            from_statuses=("pending",),
+            conflict="eval intent is not pending",
+            status="submitted",
+            attempt=int(attempt),
+            modal_call_id=modal_call_id,
+            attempt_expires_at=float(attempt_expires_at),
+            last_error=None,
+        )
 
     def reset_expired_eval(self, *, idempotency_key: str, error: str) -> None:
-        now = self.clock.time()
-        with self.connection() as connection:
-            cursor = connection.execute(
-                """
-                UPDATE eval_dispatches
-                SET status = 'pending', modal_call_id = NULL, attempt_expires_at = NULL,
-                    last_error = ?, updated_at = ?
-                WHERE idempotency_key = ? AND status = 'submitted' AND attempt < 2
-                """,
-                (error[:4000], now, idempotency_key),
-            )
-            if cursor.rowcount != 1:
-                raise RuntimeError(f"eval cannot be retried: {idempotency_key}")
+        self._transition_eval(
+            idempotency_key,
+            from_statuses=("submitted",),
+            predicate="AND attempt < 2",
+            conflict="eval cannot be retried",
+            status="pending",
+            modal_call_id=None,
+            attempt_expires_at=None,
+            last_error=error[:4000],
+        )
 
     def record_eval_error(self, *, idempotency_key: str, error: str) -> None:
-        now = self.clock.time()
-        with self.connection() as connection:
-            cursor = connection.execute(
-                """
-                UPDATE eval_dispatches
-                SET last_error = ?, updated_at = ?
-                WHERE idempotency_key = ?
-                  AND status IN ('pending', 'submitted')
-                """,
-                (error[:4000], now, idempotency_key),
-            )
-            if cursor.rowcount != 1:
-                raise RuntimeError(f"active eval not found: {idempotency_key}")
+        self._transition_eval(
+            idempotency_key,
+            from_statuses=("pending", "submitted"),
+            conflict="active eval not found",
+            last_error=error[:4000],
+        )
 
     def mark_eval_terminal(
         self,

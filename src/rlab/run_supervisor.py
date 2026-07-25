@@ -43,7 +43,7 @@ from rlab.metric_names import (
     ORCHESTRATION_WANDB_REMOTE_VISIBLE_LAG_SECONDS,
     metric_definition,
 )
-from rlab.metric_store import MetricStore, metric_store_path
+from rlab.metric_store import metric_store_path
 from rlab.model_sources import download_public_checkpoint_manifest_source
 from rlab.modal_eval_backend import ModalEvalBackend
 from rlab.modal_eval_config import load_modal_eval_config
@@ -257,8 +257,7 @@ class RunSupervisor:
                 ),
                 environment_name=str(self.manifest.modal.get("environment_name") or "rlab-eval"),
             )
-        self.metric_store = MetricStore(metric_store_path(self.run_dir), clock=self.clock)
-        self.ledger = SupervisorLedger(metric_store_path(self.run_dir), clock=self.clock)
+        self.store = SupervisorLedger(metric_store_path(self.run_dir), clock=self.clock)
         self.train_config: dict[str, Any] = {}
         self.recipe_document: dict[str, Any] = {}
         self.eval_contract: dict[str, Any] = {}
@@ -570,7 +569,7 @@ class RunSupervisor:
                 event = json.loads(encoded)
                 if not isinstance(event, Mapping):
                     raise ValueError(f"metric journal event is not a mapping: {key}")
-                self.metric_store.enqueue_event(
+                self.store.enqueue_event(
                     kind=str(event["kind"]),
                     payload=dict(event["payload"]),
                     step=(None if event.get("step") is None else int(event["step"])),
@@ -589,13 +588,13 @@ class RunSupervisor:
             checkpoint = CheckpointManifest(**document)
             checkpoint.validate()
             ledger_id = -position
-            self.ledger.record_checkpoint_publication(
+            self.store.record_checkpoint_publication(
                 checkpoint_ledger_id=ledger_id,
                 manifest=checkpoint.to_dict(),
             )
             self._ensure_eval(ledger_id, checkpoint)
 
-        for initial in self.ledger.evals(statuses=("pending",)):
+        for initial in self.store.evals(statuses=("pending",)):
             key = str(initial["idempotency_key"])
             selected_attempt = 0
             selected_prepared: Mapping[str, Any] | None = None
@@ -616,7 +615,7 @@ class RunSupervisor:
                     attempt=attempt,
                 )
             if selected_prepared is not None:
-                self.ledger.mark_eval_submitted(
+                self.store.mark_eval_submitted(
                     idempotency_key=key,
                     attempt=selected_attempt,
                     modal_call_id=str((selected_dispatch or {}).get("modal_call_id") or ""),
@@ -633,14 +632,14 @@ class RunSupervisor:
             if verified is not None:
                 result = EvalResult(**verified)
                 result.validate()
-                self.ledger.mark_eval_terminal(
+                self.store.mark_eval_terminal(
                     idempotency_key=key,
                     status=result.status,
                     result=result.to_dict(),
                 )
                 if raw is not None:
                     self._record_eval_metrics(
-                        self.ledger.eval(key) or initial,
+                        self.store.eval(key) or initial,
                         result,
                         raw,
                     )
@@ -648,7 +647,7 @@ class RunSupervisor:
                     self.stop_reason = "eval_acceptance"
                 continue
             if raw is not None:
-                row = self.ledger.eval(key)
+                row = self.store.eval(key)
                 if row is None:
                     raise RuntimeError(f"recovered eval disappeared from the ledger: {key}")
                 if int(row["attempt"] or 0) == 0:
@@ -657,19 +656,19 @@ class RunSupervisor:
                         attempt = int(raw_attempt_id.rsplit("-a", 1)[1])
                     except (IndexError, ValueError) as exc:
                         raise ValueError("raw eval result has no recoverable attempt") from exc
-                    self.ledger.mark_eval_submitted(
+                    self.store.mark_eval_submitted(
                         idempotency_key=key,
                         attempt=attempt,
                         modal_call_id="",
                         attempt_expires_at=0.0,
                     )
-                    row = self.ledger.eval(key)
+                    row = self.store.eval(key)
                     assert row is not None
                 self._observe_result(row)
         if recovered_events or checkpoints:
             print(
                 f"recovered durable state events={recovered_events} "
-                f"checkpoints={len(checkpoints)} evals={len(self.ledger.evals())}",
+                f"checkpoints={len(checkpoints)} evals={len(self.store.evals())}",
                 flush=True,
             )
 
@@ -692,7 +691,7 @@ class RunSupervisor:
             return False
         result = EvalResult(**document)
         result.validate()
-        self.ledger.mark_eval_terminal(
+        self.store.mark_eval_terminal(
             idempotency_key=result.idempotency_key,
             status=result.status,
             result=result.to_dict(),
@@ -700,7 +699,7 @@ class RunSupervisor:
         return True
 
     def _cancel_outstanding_evals(self) -> None:
-        for row in self.ledger.evals(statuses=("pending", "submitted")):
+        for row in self.store.evals(statuses=("pending", "submitted")):
             if self._observe_result(row) or self._reconcile_verified_eval_result(row):
                 continue
             call_id = str(row.get("modal_call_id") or "")
@@ -729,7 +728,7 @@ class RunSupervisor:
                 if not self._reconcile_verified_eval_result(row):
                     raise
                 continue
-            self.ledger.mark_eval_terminal(
+            self.store.mark_eval_terminal(
                 idempotency_key=result.idempotency_key,
                 status=result.status,
                 result=result.to_dict(),
@@ -758,7 +757,7 @@ class RunSupervisor:
             self._emit("writer_lease_renewed", holder_id=self.lease.holder_id)
 
     def _seal_metrics(self, now: float, *, force: bool = False) -> int:
-        events = self.ledger.next_metric_events(limit=METRIC_SEGMENT_EVENTS)
+        events = self.store.next_metric_events(limit=METRIC_SEGMENT_EVENTS)
         if not events:
             self.last_segment = now
             return 0
@@ -773,7 +772,7 @@ class RunSupervisor:
             attempt_id=self.manifest.attempt_id,
             events=events,
         )
-        self.ledger.record_metric_segment(
+        self.store.record_metric_segment(
             events=events,
             object_key=key,
             sha256=digest,
@@ -793,7 +792,7 @@ class RunSupervisor:
             return 0
         started = self.clock.monotonic()
         published = self.runtime.publish_frames(
-            self.metric_store,
+            self.store,
             self.projector,
             limit=250,
         )
@@ -822,9 +821,9 @@ class RunSupervisor:
                 )
             ),
         }
-        for checkpoint in self.metric_store.checkpoints():
+        for checkpoint in self.store.checkpoints():
             ledger_id = int(checkpoint["id"])
-            if self.ledger.checkpoint_publication(ledger_id) is not None:
+            if self.store.checkpoint_publication(ledger_id) is not None:
                 continue
             path = Path(str(checkpoint["path"]))
             if not path.is_file():
@@ -849,21 +848,21 @@ class RunSupervisor:
                     created_at=_timestamp(float(checkpoint["created_at"])),
                 )
             except Exception as exc:
-                self.metric_store.mark_checkpoint_upload_failed(ledger_id, repr(exc))
+                self.store.mark_checkpoint_upload_failed(ledger_id, repr(exc))
                 print(f"checkpoint publication failed id={ledger_id}: {exc}", flush=True)
                 continue
-            existing = self.ledger.checkpoint_publication_by_id(manifest.checkpoint_id)
+            existing = self.store.checkpoint_publication_by_id(manifest.checkpoint_id)
             if existing is not None:
-                self.metric_store.mark_checkpoint_uploaded(
+                self.store.mark_checkpoint_uploaded(
                     ledger_id,
                     manifest.public_url,
                 )
                 continue
-            self.ledger.record_checkpoint_publication(
+            self.store.record_checkpoint_publication(
                 checkpoint_ledger_id=ledger_id,
                 manifest=manifest.to_dict(),
             )
-            self.metric_store.mark_checkpoint_uploaded(
+            self.store.mark_checkpoint_uploaded(
                 ledger_id,
                 manifest.public_url,
             )
@@ -938,7 +937,7 @@ class RunSupervisor:
             expires_at=(created + timedelta(seconds=timeout)).isoformat().replace("+00:00", "Z"),
         )
         self.authority.put_eval_intent(intent)
-        self.ledger.ensure_eval(
+        self.store.ensure_eval(
             checkpoint_ledger_id=checkpoint_ledger_id,
             intent={
                 **intent.to_dict(),
@@ -995,7 +994,7 @@ class RunSupervisor:
 
     def _submit_pending_evals(self) -> int:
         submitted = 0
-        for row in self.ledger.evals(statuses=("pending",)):
+        for row in self.store.evals(statuses=("pending",)):
             attempt = int(row["attempt"] or 0) + 1
             if attempt > int(self.modal_config.max_attempts):
                 self._mark_expired(row, error="eval exhausted two attempts")
@@ -1011,7 +1010,7 @@ class RunSupervisor:
                     idempotency_key=str(row["idempotency_key"]),
                     attempt=attempt,
                 )
-                self.ledger.mark_eval_submitted(
+                self.store.mark_eval_submitted(
                     idempotency_key=str(row["idempotency_key"]),
                     attempt=attempt,
                     modal_call_id=str((dispatch or {}).get("modal_call_id") or ""),
@@ -1034,13 +1033,13 @@ class RunSupervisor:
                 assert self.eval_backend is not None
                 handle = self.eval_backend.submit(payload)
             except Exception as exc:
-                self.ledger.mark_eval_submitted(
+                self.store.mark_eval_submitted(
                     idempotency_key=str(row["idempotency_key"]),
                     attempt=attempt,
                     modal_call_id="",
                     attempt_expires_at=expires_at,
                 )
-                self.ledger.record_eval_error(
+                self.store.record_eval_error(
                     idempotency_key=str(row["idempotency_key"]),
                     error=f"ambiguous submit: {exc!r}",
                 )
@@ -1055,7 +1054,7 @@ class RunSupervisor:
                 attempt=attempt,
                 modal_call_id=handle.call_id,
             )
-            self.ledger.mark_eval_submitted(
+            self.store.mark_eval_submitted(
                 idempotency_key=str(row["idempotency_key"]),
                 attempt=attempt,
                 modal_call_id=handle.call_id,
@@ -1155,13 +1154,13 @@ class RunSupervisor:
                 EVAL_ACCEPTANCE_DURATION_SECONDS: float(raw.get("duration_seconds") or 0.0),
             }
         )
-        self.metric_store.append_metrics(
+        self.store.append_metrics(
             metrics,
             step=int(row["checkpoint_step"]),
             source=f"eval:{row['idempotency_key']}",
         )
         if result.status == "accepted":
-            self.metric_store.enqueue_event(
+            self.store.enqueue_event(
                 kind="eval_by_start",
                 payload={
                     "rows": eval_by_start_rows(
@@ -1182,14 +1181,14 @@ class RunSupervisor:
         try:
             result = self._verified_result(row, raw)
         except Exception as exc:
-            self.ledger.record_eval_error(
+            self.store.record_eval_error(
                 idempotency_key=str(row["idempotency_key"]),
                 error=f"invalid result: {exc!r}",
             )
             print(f"invalid Modal result ignored key={row['idempotency_key']}: {exc}", flush=True)
             return False
         self.authority.put_verified_eval_result(result)
-        self.ledger.mark_eval_terminal(
+        self.store.mark_eval_terminal(
             idempotency_key=result.idempotency_key,
             status=result.status,
             result=result.to_dict(),
@@ -1205,9 +1204,9 @@ class RunSupervisor:
             self.accepted_observed_at = self.accepted_observed_at or observed
             self._request_learner_stop("eval_acceptance")
             signal_sent = self.clock.time()
-            requested = self.ledger.mark_stop_requested(idempotency_key=result.idempotency_key)
+            requested = self.store.mark_stop_requested(idempotency_key=result.idempotency_key)
             result_to_stop = signal_sent - observed
-            self.metric_store.append_metrics(
+            self.store.append_metrics(
                 {ORCHESTRATION_RESULT_TO_STOP_SECONDS: result_to_stop},
                 step=int(row["checkpoint_step"]),
                 source=f"orchestration:stop:{result.idempotency_key}",
@@ -1236,7 +1235,7 @@ class RunSupervisor:
             error=error,
         )
         self.authority.put_verified_eval_result(result)
-        self.ledger.mark_eval_terminal(
+        self.store.mark_eval_terminal(
             idempotency_key=result.idempotency_key,
             status=result.status,
             result=result.to_dict(),
@@ -1248,7 +1247,7 @@ class RunSupervisor:
         self.last_eval_poll = now
         wall_now = self.clock.time()
         completed = 0
-        for row in self.ledger.evals(statuses=("submitted",)):
+        for row in self.store.evals(statuses=("submitted",)):
             if self._observe_result(row):
                 completed += 1
                 continue
@@ -1258,7 +1257,7 @@ class RunSupervisor:
                 assert self.eval_backend is not None
                 poll = self.eval_backend.poll(handle)
                 if poll.status == "failed" and poll.error:
-                    self.ledger.record_eval_error(
+                    self.store.record_eval_error(
                         idempotency_key=str(row["idempotency_key"]),
                         error=poll.error,
                     )
@@ -1266,7 +1265,7 @@ class RunSupervisor:
             if expires_at > wall_now:
                 continue
             if int(row["attempt"] or 0) < int(self.modal_config.max_attempts):
-                self.ledger.reset_expired_eval(
+                self.store.reset_expired_eval(
                     idempotency_key=str(row["idempotency_key"]),
                     error="attempt expired without a valid result",
                 )
@@ -1288,7 +1287,7 @@ class RunSupervisor:
             )
 
     def _frame_high_waters(self) -> tuple[int, int]:
-        with self.ledger.connection() as connection:
+        with self.store.connection() as connection:
             row = connection.execute(
                 """
                 SELECT COALESCE(MAX(id), 0) AS local_high_water,
@@ -1320,7 +1319,7 @@ class RunSupervisor:
                 self.wandb_remote_high_water,
                 remote_high_water,
             )
-            with self.ledger.connection() as connection:
+            with self.store.connection() as connection:
                 unseen = connection.execute(
                     "SELECT MIN(created_at) FROM metric_frames WHERE id > ?",
                     (self.wandb_remote_high_water,),
@@ -1332,7 +1331,7 @@ class RunSupervisor:
                 else max(0.0, self.clock.time() - float(oldest_unseen))
             )
         except Exception as exc:
-            self.ledger.set_state(
+            self.store.set_state(
                 "wandb_remote_probe_error",
                 {"error": repr(exc)[:1000], "at": self.clock.utc_now()},
             )
@@ -1364,35 +1363,35 @@ class RunSupervisor:
         self._probe_wandb_remote(now, local_high_water=local_high_water)
         usage = self.runtime.disk_usage(self.output_root)
         metrics = {
-            ORCHESTRATION_QUEUE_DEPTH: float(self.metric_store.metric_outbox_stats()["frames"]),
+            ORCHESTRATION_QUEUE_DEPTH: float(self.store.metric_outbox_stats()["frames"]),
             ORCHESTRATION_OLDEST_UNPUBLISHED_SECONDS: self._oldest_unpublished_age(),
             ORCHESTRATION_INGRESS_RATE: ingress_rate,
             ORCHESTRATION_PUBLISH_RATE: publish_rate,
             ORCHESTRATION_PUBLICATION_CAPACITY_RATIO: capacity_ratio,
             ORCHESTRATION_LOCAL_HIGH_WATER: float(local_high_water),
-            ORCHESTRATION_R2_HIGH_WATER: float(self.ledger.metric_segment_high_water()),
+            ORCHESTRATION_R2_HIGH_WATER: float(self.store.metric_segment_high_water()),
             ORCHESTRATION_WANDB_HIGH_WATER: float(wandb_high_water),
             ORCHESTRATION_WANDB_REMOTE_HIGH_WATER: float(self.wandb_remote_high_water),
             ORCHESTRATION_WANDB_REMOTE_VISIBLE_LAG_SECONDS: (self.wandb_remote_visible_lag_seconds),
             ORCHESTRATION_CHECKPOINT_BACKLOG: float(
-                len(self.metric_store.checkpoints()) - len(self.ledger.checkpoint_publications())
+                len(self.store.checkpoints()) - len(self.store.checkpoint_publications())
             ),
             ORCHESTRATION_PENDING_EVALS: float(
                 len(
-                    self.ledger.evals(
+                    self.store.evals(
                         statuses=("pending", "submitted"),
                     )
                 )
             ),
             ORCHESTRATION_SCRATCH_USED_FRACTION: (usage.used / max(usage.total, 1)),
         }
-        step = int(self.metric_store.outbox_health().get("local_latest_step") or 0)
-        self.metric_store.append_metrics(
+        step = int(self.store.outbox_health().get("local_latest_step") or 0)
+        self.store.append_metrics(
             metrics,
             step=step,
             source="orchestration:health",
         )
-        self.ledger.set_state(
+        self.store.set_state(
             "backpressure",
             {
                 **metrics,
@@ -1405,14 +1404,14 @@ class RunSupervisor:
         self.last_health_wandb_high_water = wandb_high_water
 
     def _oldest_unpublished_age(self) -> float:
-        health = self.metric_store.outbox_health()
+        health = self.store.outbox_health()
         oldest = health.get("oldest_created_at")
         return 0.0 if oldest is None else max(0.0, self.clock.time() - float(oldest))
 
     def _all_ready_checkpoints_published(self) -> bool:
-        for checkpoint in self.metric_store.checkpoints():
+        for checkpoint in self.store.checkpoints():
             ledger_id = int(checkpoint["id"])
-            if self.ledger.checkpoint_publication(ledger_id) is not None:
+            if self.store.checkpoint_publication(ledger_id) is not None:
                 continue
             digest = str(checkpoint.get("sha256") or "")
             if not digest:
@@ -1421,7 +1420,7 @@ class RunSupervisor:
                     return False
                 digest = file_sha256(path)
             checkpoint_id = f"checkpoint-{int(checkpoint['step'] or 0)}-{digest[:16]}"
-            if self.ledger.checkpoint_publication_by_id(checkpoint_id) is None:
+            if self.store.checkpoint_publication_by_id(checkpoint_id) is None:
                 return False
         return True
 
@@ -1447,7 +1446,7 @@ class RunSupervisor:
                 flush=True,
             )
         if unpublished_age >= WANDB_UNHEALTHY_SECONDS:
-            self.ledger.set_state(
+            self.store.set_state(
                 "wandb_unhealthy",
                 {
                     "oldest_unpublished_seconds": unpublished_age,
@@ -1472,10 +1471,10 @@ class RunSupervisor:
             activity += self._submit_pending_evals()
         activity += self._poll_evals(instant)
         activity += self._publish_wandb()
-        pending_frames = self.metric_store.metric_outbox_stats()["frames"]
+        pending_frames = self.store.metric_outbox_stats()["frames"]
         converged = (
             self._all_ready_checkpoints_published()
-            and self.ledger.all_evals_terminal()
+            and self.store.all_evals_terminal()
             and pending_frames == 0
         )
         return activity, converged
@@ -1511,7 +1510,7 @@ class RunSupervisor:
             receipt.validate()
             self.authority.create_promotion(receipt)
             return receipt
-        accepted = self.ledger.evals(statuses=("accepted",))
+        accepted = self.store.evals(statuses=("accepted",))
         if not accepted:
             return None
         selected = min(
@@ -1540,7 +1539,7 @@ class RunSupervisor:
         return receipt
 
     def _publish_promotion(self, receipt: PromotionReceipt) -> None:
-        selected = self.ledger.eval(receipt.eval_idempotency_key)
+        selected = self.store.eval(receipt.eval_idempotency_key)
         if selected is None:
             raise RuntimeError("promoted eval is absent from the supervisor ledger")
         raw = self.authority.eval_result(
@@ -1549,7 +1548,7 @@ class RunSupervisor:
         )
         if raw is None:
             raise RuntimeError("promoted eval raw result is absent from private R2")
-        checkpoint = self.ledger.checkpoint_publication_by_id(receipt.checkpoint_id)
+        checkpoint = self.store.checkpoint_publication_by_id(receipt.checkpoint_id)
         if checkpoint is None:
             raise RuntimeError("promoted checkpoint is absent from the public inventory")
         metrics = dict(raw.get("metrics") or {})
@@ -1576,7 +1575,7 @@ class RunSupervisor:
                 ):
                     return
             except Exception as exc:
-                self.ledger.set_state(
+                self.store.set_state(
                     "wandb_promotion_probe_error",
                     {"error": repr(exc)[:1000], "at": self.clock.utc_now()},
                 )
@@ -1604,7 +1603,7 @@ class RunSupervisor:
             self.clock.sleep(WANDB_DRAIN_REMOTE_PROBE_SECONDS)
 
     def _wandb_high_water(self) -> int:
-        with self.ledger.connection() as connection:
+        with self.store.connection() as connection:
             row = connection.execute(
                 "SELECT COALESCE(MAX(id), 0) FROM metric_frames WHERE status = 'published'"
             ).fetchone()
@@ -1622,9 +1621,9 @@ class RunSupervisor:
         return high_water
 
     def _terminal_inventory(self) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-        checkpoints = self.ledger.checkpoint_publications()
+        checkpoints = self.store.checkpoint_publications()
         evals = []
-        for row in self.ledger.evals():
+        for row in self.store.evals():
             result = dict(row.get("result") or {})
             evals.append(
                 {
@@ -1703,9 +1702,8 @@ class RunSupervisor:
         )
         self._emit("writer_lease_acquired", holder_id=holder)
         self.last_lease_renewal = self.clock.monotonic()
-        self.metric_store.init()
-        self.ledger.init()
-        self.metric_store.reset_interrupted_metric_frames()
+        self.store.init()
+        self.store.reset_interrupted_metric_frames()
         self._recover_durable_state()
         self._start_wandb()
         if self.recovery_mode == "drain-only":
@@ -1744,18 +1742,18 @@ class RunSupervisor:
                 self._cancel_outstanding_evals()
                 raise RuntimeError("run canceled")
             self._publish_checkpoints()
-            self.ledger.set_state(
+            self.store.set_state(
                 "checkpoint_set_frozen",
                 {
                     "checkpoint_ledger_ids": [
-                        int(row["id"]) for row in self.metric_store.checkpoints()
+                        int(row["id"]) for row in self.store.checkpoints()
                     ],
                     "frozen_at": self.clock.utc_now(),
                 },
             )
             self._drain()
             assert learner_exited_at is not None
-            self.metric_store.append_metrics(
+            self.store.append_metrics(
                 {
                     ORCHESTRATION_IDLE_GPU_TAIL_SECONDS: max(
                         0.0,
@@ -1763,7 +1761,7 @@ class RunSupervisor:
                     )
                 },
                 step=max(
-                    (int(row.get("step") or 0) for row in self.metric_store.checkpoints()),
+                    (int(row.get("step") or 0) for row in self.store.checkpoints()),
                     default=0,
                 ),
                 source="orchestration:drain",
@@ -1844,8 +1842,8 @@ class RunSupervisor:
             wandb_high_water_mark=wandb_high_water,
             drain={
                 "complete": failure is None,
-                "metric_segment_high_water": self.ledger.metric_segment_high_water(),
-                "eval_terminal_count": self.ledger.terminal_eval_count(),
+                "metric_segment_high_water": self.store.metric_segment_high_water(),
+                "eval_terminal_count": self.store.terminal_eval_count(),
                 "journal_archive": journal_archive,
                 "journal_expires_at": journal_expires_at,
                 "wandb_remote_high_water_mark": self.wandb_remote_high_water,

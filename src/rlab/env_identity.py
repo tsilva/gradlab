@@ -1,15 +1,14 @@
 from __future__ import annotations
 
 import hashlib
-import json
 from collections.abc import Mapping
 from copy import deepcopy
 from typing import Any
 
-from rlab.metric_names import metric_path_segment
 from rlab.action_contract import normalize_action_configuration
-
 from rlab.env_registry import resolve_env_id
+from rlab.json_utils import canonical_json_text
+from rlab.metric_names import metric_path_segment
 from rlab.provider_config import provider_env_id, provider_game, semantic_provider_args
 from rlab.preprocessing import preprocessing_contract
 from rlab.rom_assets import manifest_from_train_config, portable_rom_asset_identity
@@ -66,12 +65,7 @@ def _normalize_preprocessing(identity: dict[str, Any]) -> None:
 
 
 def canonical_json(value: Any) -> str:
-    return json.dumps(
-        value,
-        sort_keys=True,
-        separators=(",", ":"),
-        default=str,
-    )
+    return canonical_json_text(value, default=str, allow_nan=True)
 
 
 def environment_hash(environment: Mapping[str, Any]) -> str:

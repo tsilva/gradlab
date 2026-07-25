@@ -11,6 +11,7 @@ from pathlib import Path, PureWindowsPath
 from typing import Any, Callable
 
 from rlab.file_utils import file_sha256 as sha256_file
+from rlab.json_utils import canonical_json_line_bytes
 
 
 RECIPE_DOCUMENT_TYPE = "rlab.recipe"
@@ -191,16 +192,9 @@ class PolicyBundle:
 def canonical_json_bytes(value: object) -> bytes:
     _assert_finite_json(value)
     try:
-        text = json.dumps(
-            value,
-            ensure_ascii=False,
-            allow_nan=False,
-            sort_keys=True,
-            separators=(",", ":"),
-        )
+        return canonical_json_line_bytes(value)
     except (TypeError, ValueError) as exc:
         raise PolicyDocumentError(f"document is not canonical JSON: {exc}") from exc
-    return (text + "\n").encode("utf-8")
 
 
 def canonical_json_sha256(value: object) -> str:
@@ -921,6 +915,36 @@ def _validate_cross_document_contract(model: Mapping[str, Any], recipe: Mapping[
         raise PolicyDocumentError("model.json training environment hash disagrees with recipe.json")
 
 
+def _load_policy_bundle_paths(
+    checkpoint_path: Path,
+    model_path: Path,
+    recipe_path: Path,
+    *,
+    source: str,
+    revision: str | None,
+) -> PolicyBundle:
+    model = load_model_document(model_path)
+    recipe = load_recipe_document(recipe_path)
+    for path, binding in (
+        (checkpoint_path, model["checkpoint"]),
+        (recipe_path, model["recipe"]),
+    ):
+        if sha256_file(path) != binding["sha256"]:
+            raise PolicyDocumentError(f"{path} hash does not match {model_path}")
+        if path.stat().st_size != binding["size_bytes"]:
+            raise PolicyDocumentError(f"{path} size does not match {model_path}")
+    _validate_cross_document_contract(model, recipe)
+    return PolicyBundle(
+        checkpoint_path=checkpoint_path,
+        model_path=model_path,
+        recipe_path=recipe_path,
+        model=model,
+        recipe=recipe,
+        source=source,
+        revision=revision,
+    )
+
+
 def load_policy_bundle(
     root: Path,
     *,
@@ -935,25 +959,10 @@ def load_policy_bundle(
     ]
     if missing:
         raise PolicyDocumentError(f"policy bundle {root} is missing: {', '.join(missing)}")
-    model = load_model_document(model_path)
-    recipe = load_recipe_document(recipe_path)
-    checkpoint = model["checkpoint"]
-    recipe_binding = model["recipe"]
-    if sha256_file(checkpoint_path) != checkpoint["sha256"]:
-        raise PolicyDocumentError(f"{root}/model.zip hash does not match model.json")
-    if checkpoint_path.stat().st_size != checkpoint["size_bytes"]:
-        raise PolicyDocumentError(f"{root}/model.zip size does not match model.json")
-    if sha256_file(recipe_path) != recipe_binding["sha256"]:
-        raise PolicyDocumentError(f"{root}/recipe.json hash does not match model.json")
-    if recipe_path.stat().st_size != recipe_binding["size_bytes"]:
-        raise PolicyDocumentError(f"{root}/recipe.json size does not match model.json")
-    _validate_cross_document_contract(model, recipe)
-    return PolicyBundle(
-        checkpoint_path=checkpoint_path,
-        model_path=model_path,
-        recipe_path=recipe_path,
-        model=model,
-        recipe=recipe,
+    return _load_policy_bundle_paths(
+        checkpoint_path,
+        model_path,
+        recipe_path,
         source=source or str(root),
         revision=revision,
     )
@@ -983,23 +992,10 @@ def load_policy_bundle_from_checkpoint(
         raise PolicyDocumentError(
             f"versioned policy checkpoint {checkpoint_path} is missing: {', '.join(missing)}"
         )
-    model = load_model_document(model_path)
-    recipe = load_recipe_document(recipe_path)
-    if sha256_file(checkpoint_path) != model["checkpoint"]["sha256"]:
-        raise PolicyDocumentError(f"{checkpoint_path} hash does not match {model_path}")
-    if checkpoint_path.stat().st_size != model["checkpoint"]["size_bytes"]:
-        raise PolicyDocumentError(f"{checkpoint_path} size does not match {model_path}")
-    if sha256_file(recipe_path) != model["recipe"]["sha256"]:
-        raise PolicyDocumentError(f"{recipe_path} hash does not match {model_path}")
-    if recipe_path.stat().st_size != model["recipe"]["size_bytes"]:
-        raise PolicyDocumentError(f"{recipe_path} size does not match {model_path}")
-    _validate_cross_document_contract(model, recipe)
-    return PolicyBundle(
-        checkpoint_path=checkpoint_path,
-        model_path=model_path,
-        recipe_path=recipe_path,
-        model=model,
-        recipe=recipe,
+    return _load_policy_bundle_paths(
+        checkpoint_path,
+        model_path,
+        recipe_path,
         source=source or str(checkpoint_path),
         revision=revision,
     )

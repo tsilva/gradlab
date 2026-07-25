@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import hashlib
-import json
 import re
 import secrets
 from collections.abc import Mapping, Sequence
@@ -9,29 +7,21 @@ from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from typing import Any, Literal
 
+from rlab.json_utils import (
+    canonical_json_bytes,
+    canonical_json_sha256 as document_sha256,
+)
+
 
 SCHEMA_VERSION = 1
 RUN_ID_PATTERN = re.compile(r"^rlab-[0-9a-f]{32}$")
 ATTEMPT_ID_PATTERN = re.compile(r"^attempt-[0-9a-f]{16}$")
+canonical_json = canonical_json_bytes
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 
 
 def utc_now() -> str:
     return datetime.now(UTC).isoformat().replace("+00:00", "Z")
-
-
-def canonical_json(value: object) -> bytes:
-    return json.dumps(
-        value,
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=False,
-        allow_nan=False,
-    ).encode("utf-8")
-
-
-def document_sha256(value: object) -> str:
-    return hashlib.sha256(canonical_json(value)).hexdigest()
 
 
 def new_run_id() -> str:

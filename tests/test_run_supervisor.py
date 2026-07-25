@@ -277,7 +277,7 @@ class RunSupervisorTests(unittest.TestCase):
                 return RemoteRun()
 
         supervisor = self.supervisor()
-        supervisor.ledger.init()
+        supervisor.store.init()
         supervisor.projector = None
         supervisor.wandb_run_path = f"entity/project/{self.run_id}"
         api = Api()
@@ -312,7 +312,7 @@ class RunSupervisorTests(unittest.TestCase):
 
     def test_accepted_eval_metrics_ignore_private_r2_diagnostics(self) -> None:
         supervisor = self.supervisor()
-        supervisor.metric_store.init()
+        supervisor.store.init()
         result = EvalResult(
             run_id=self.run_id,
             checkpoint_id="checkpoint-4500000-" + "e" * 16,
@@ -351,11 +351,11 @@ class RunSupervisorTests(unittest.TestCase):
         )
 
         self.assertEqual(
-            supervisor.metric_store.latest_metric("eval/full/episode/count"),
+            supervisor.store.latest_metric("eval/full/episode/count"),
             100,
         )
-        self.assertIsNone(supervisor.metric_store.latest_metric("death_count"))
-        self.assertIsNone(supervisor.metric_store.latest_metric("success_count"))
+        self.assertIsNone(supervisor.store.latest_metric("death_count"))
+        self.assertIsNone(supervisor.store.latest_metric("success_count"))
 
     def test_failure_wait_renews_writer_lease(self) -> None:
         supervisor = self.supervisor()
@@ -392,18 +392,18 @@ class RunSupervisorTests(unittest.TestCase):
             patch.object(supervisor.authority, "eval_result", return_value={}),
             patch.object(supervisor, "_verified_result", return_value=result),
             patch.object(supervisor.authority, "put_verified_eval_result"),
-            patch.object(supervisor.ledger, "mark_eval_terminal"),
+            patch.object(supervisor.store, "mark_eval_terminal"),
             patch.object(
                 supervisor,
                 "_request_learner_stop",
                 side_effect=lambda _reason: events.append("stop"),
             ),
             patch.object(
-                supervisor.ledger,
+                supervisor.store,
                 "mark_stop_requested",
                 return_value=0.0,
             ),
-            patch.object(supervisor.metric_store, "append_metrics"),
+            patch.object(supervisor.store, "append_metrics"),
             patch.object(
                 supervisor,
                 "_record_eval_metrics",
@@ -419,8 +419,8 @@ class RunSupervisorTests(unittest.TestCase):
         supervisor = self.supervisor()
         with patch("rlab.run_supervisor.verify_rom_file"):
             supervisor.materialize()
-        supervisor.metric_store.init()
-        supervisor.ledger.init()
+        supervisor.store.init()
+        supervisor.store.init()
         checkpoint = CheckpointManifest(
             run_id=self.run_id,
             checkpoint_id="checkpoint-250000-" + "e" * 16,
@@ -442,23 +442,23 @@ class RunSupervisorTests(unittest.TestCase):
         )
         supervisor._ensure_eval(1, checkpoint)
         self.assertEqual(supervisor._submit_pending_evals(), 0)
-        row = supervisor.ledger.evals()[0]
+        row = supervisor.store.evals()[0]
         self.assertEqual(row["status"], "submitted")
         self.assertEqual(row["attempt"], 1)
         self.assertEqual(row["modal_call_id"], "")
         self.assertEqual(supervisor._submit_pending_evals(), 0)
-        self.assertEqual(supervisor.ledger.evals()[0]["attempt"], 1)
-        with supervisor.ledger.connection() as connection:
+        self.assertEqual(supervisor.store.evals()[0]["attempt"], 1)
+        with supervisor.store.connection() as connection:
             connection.execute("UPDATE eval_dispatches SET attempt_expires_at = 1000")
         with patch.object(supervisor.clock, "time", return_value=1001):
             self.assertEqual(supervisor._poll_evals(10.0), 0)
-        self.assertEqual(supervisor.ledger.evals()[0]["status"], "pending")
+        self.assertEqual(supervisor.store.evals()[0]["status"], "pending")
 
     def test_rejected_final_checkpoint_does_not_displace_earlier_acceptance(
         self,
     ) -> None:
         supervisor = self.supervisor()
-        supervisor.ledger.init()
+        supervisor.store.init()
         checkpoints = [
             {
                 "checkpoint_id": "checkpoint-250000-" + "e" * 16,
@@ -484,12 +484,12 @@ class RunSupervisorTests(unittest.TestCase):
             create_only=True,
         )
         for ledger_id, checkpoint in enumerate(checkpoints, start=1):
-            supervisor.ledger.record_checkpoint_publication(
+            supervisor.store.record_checkpoint_publication(
                 checkpoint_ledger_id=ledger_id,
                 manifest=checkpoint,
             )
             key = str(ledger_id) * 64
-            supervisor.ledger.ensure_eval(
+            supervisor.store.ensure_eval(
                 checkpoint_ledger_id=ledger_id,
                 intent={
                     "idempotency_key": key,
@@ -497,7 +497,7 @@ class RunSupervisorTests(unittest.TestCase):
                     "checkpoint_step": checkpoint["step"],
                 },
             )
-            supervisor.ledger.mark_eval_terminal(
+            supervisor.store.mark_eval_terminal(
                 idempotency_key=key,
                 status="accepted" if ledger_id == 1 else "rejected",
                 result={

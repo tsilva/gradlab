@@ -38,12 +38,56 @@ function formatBytes(value) {
   return `${(bytes / (1024 ** unit)).toFixed(unit ? 1 : 0)} ${units[unit]}`;
 }
 
+function decodePathPart(value) {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return "";
+  }
+}
+
+export function sourceRouteFromPath(pathname = location.pathname) {
+  const parts = String(pathname || "").split("/").filter(Boolean);
+  if (!parts.length) {
+    return { level: "projects", entity: "", project: "", run_id: "", checkpoint_id: "" };
+  }
+  if (parts[0] !== "projects" || !parts[1]) return null;
+  const project = decodePathPart(parts[1]);
+  if (!project) return null;
+  if (parts.length === 2) {
+    return { level: "runs", entity: "", project, run_id: "", checkpoint_id: "" };
+  }
+  if (parts[2] !== "runs" || !parts[3]) return null;
+  const run_id = decodePathPart(parts[3]);
+  if (!run_id) return null;
+  if (parts.length === 4) {
+    return { level: "checkpoints", entity: "", project, run_id, checkpoint_id: "" };
+  }
+  if (parts.length !== 6 || parts[4] !== "checkpoints" || !parts[5]) return null;
+  const checkpoint_id = decodePathPart(parts[5]);
+  if (!checkpoint_id) return null;
+  return { level: "checkpoints", entity: "", project, run_id, checkpoint_id };
+}
+
+export function sourceRoutePath(route) {
+  const project = String(route?.project || "").trim();
+  const runId = String(route?.run_id || "").trim();
+  const checkpointId = String(route?.checkpoint_id || "").trim();
+  if (!project) return "/";
+  let path = `/projects/${encodeURIComponent(project)}`;
+  if (!runId) return path;
+  path += `/runs/${encodeURIComponent(runId)}`;
+  if (!checkpointId) return path;
+  return `${path}/checkpoints/${encodeURIComponent(checkpointId)}`;
+}
+
 function routeSignature(route) {
   return JSON.stringify({
     level: route?.level || "projects",
     entity: route?.entity || "",
     project: route?.project || "",
     run_id: route?.run_id || "",
+    checkpoint_id: route?.checkpoint_id || "",
   });
 }
 
@@ -54,7 +98,13 @@ export class SourceBrowser {
     this.command = command;
     this.getState = getState;
     this.showToast = showToast;
-    this.route = { level: "projects", entity: "", project: "", run_id: "" };
+    this.route = {
+      level: "projects",
+      entity: "",
+      project: "",
+      run_id: "",
+      checkpoint_id: "",
+    };
     this.query = "";
     this.items = [];
     this.nextCursor = null;
@@ -66,11 +116,36 @@ export class SourceBrowser {
     this.requestSerial = 0;
     this.searchTimer = null;
     this.pollTimer = null;
+    this.autoSelectedRoute = "";
+    this.historyEnabled = (
+      location.pathname === "/"
+      || location.pathname.startsWith("/projects/")
+    );
+    this.pendingLocationRoute = this.historyEnabled
+      ? sourceRouteFromPath(location.pathname)
+      : null;
+    this.onPopState = () => {
+      const route = sourceRouteFromPath(location.pathname);
+      if (!route) return;
+      this.applyRoute(route);
+      this.command("browse_sources", { route: { ...this.route } });
+    };
+    if (this.historyEnabled) window.addEventListener("popstate", this.onPopState);
   }
 
   render(snapshot) {
     this.app = snapshot?.app || { phase: "active" };
     const appRoute = this.app.route || {};
+    if (this.pendingLocationRoute) {
+      const pending = {
+        ...this.pendingLocationRoute,
+        entity: this.pendingLocationRoute.entity || appRoute.entity || "",
+      };
+      this.pendingLocationRoute = null;
+      this.lastAppRoute = routeSignature(appRoute);
+      this.applyRoute(pending);
+      this.command("browse_sources", { route: { ...pending } });
+    }
     const signature = routeSignature(appRoute);
     if (signature !== this.lastAppRoute) {
       this.lastAppRoute = signature;
@@ -79,12 +154,15 @@ export class SourceBrowser {
         entity: appRoute.entity || "",
         project: appRoute.project || "",
         run_id: appRoute.run_id || "",
+        checkpoint_id: appRoute.checkpoint_id || "",
       };
       this.query = "";
       this.items = [];
       this.nextCursor = null;
       this.loadedKey = "";
       this.error = "";
+      this.autoSelectedRoute = "";
+      this.syncUrl("replace");
     }
     this.renderView();
     if (this.app.phase === "selecting") this.ensureLoaded();
@@ -151,6 +229,18 @@ export class SourceBrowser {
       this.nextCursor = payload.next_cursor || null;
       this.loadedKey = key;
       this.error = "";
+      if (this.route.checkpoint_id && !append) {
+        const selected = received.find(
+          (item) => item.checkpoint_id === this.route.checkpoint_id,
+        );
+        if (!selected) {
+          throw new Error(`Checkpoint ${this.route.checkpoint_id} was not found`);
+        }
+        if (this.autoSelectedRoute !== key) {
+          this.autoSelectedRoute = key;
+          this.selectCheckpoint(selected, { historyMode: "replace" });
+        }
+      }
     } catch (error) {
       if (serial !== this.requestSerial) return;
       this.error = String(error?.message || error);
@@ -176,23 +266,80 @@ export class SourceBrowser {
     }
   }
 
-  navigate(route) {
+  applyRoute(route) {
     this.route = { ...this.route, ...route };
     this.query = "";
     this.items = [];
     this.nextCursor = null;
     this.loadedKey = "";
     this.error = "";
+    this.autoSelectedRoute = "";
     this.renderView();
     this.ensureLoaded();
     this.updatePolling();
   }
 
+  syncUrl(mode = "push") {
+    if (!this.historyEnabled) return;
+    const path = sourceRoutePath(this.route);
+    const target = `${path}${location.search}${location.hash}`;
+    const current = `${location.pathname}${location.search}${location.hash}`;
+    if (target === current) return;
+    if (mode === "replace") history.replaceState(null, "", target);
+    else history.pushState(null, "", target);
+  }
+
+  navigate(route, { historyMode = "push" } = {}) {
+    this.applyRoute(route);
+    this.syncUrl(historyMode);
+    this.command("browse_sources", { route: { ...this.route } });
+  }
+
+  browseCurrentSource() {
+    const route = this.app.route || this.route;
+    const next = route.run_id
+      ? { ...route, level: "checkpoints", checkpoint_id: "" }
+      : {
+          level: "projects",
+          entity: route.entity || "",
+          project: "",
+          run_id: "",
+          checkpoint_id: "",
+        };
+    this.navigate(next);
+  }
+
+  selectCheckpoint(item, { historyMode = "push" } = {}) {
+    const route = {
+      ...this.route,
+      level: "checkpoints",
+      checkpoint_id: item.checkpoint_id,
+    };
+    this.route = route;
+    this.syncUrl(historyMode);
+    this.command("select_source", {
+      source: {
+        kind: "manifest",
+        value: item.manifest_url,
+        entity: route.entity,
+        project: route.project,
+        run_id: item.run_id,
+        checkpoint_id: item.checkpoint_id,
+      },
+      route: { ...route },
+    });
+  }
+
   back() {
     if (this.route.level === "checkpoints") {
-      this.navigate({ level: "runs", run_id: "" });
+      this.navigate({ level: "runs", run_id: "", checkpoint_id: "" });
     } else if (this.route.level === "runs") {
-      this.navigate({ level: "projects", project: "", run_id: "" });
+      this.navigate({
+        level: "projects",
+        project: "",
+        run_id: "",
+        checkpoint_id: "",
+      });
     }
   }
 
@@ -287,12 +434,17 @@ export class SourceBrowser {
       level: "projects",
       project: "",
       run_id: "",
+      checkpoint_id: "",
     }));
     nav.append(projects);
     if (this.route.project) {
       const project = button(this.route.project, { quiet: true });
       project.disabled = this.route.level === "runs";
-      project.addEventListener("click", () => this.navigate({ level: "runs", run_id: "" }));
+      project.addEventListener("click", () => this.navigate({
+        level: "runs",
+        run_id: "",
+        checkpoint_id: "",
+      }));
       nav.append(project);
     }
     if (this.route.run_id) {
@@ -391,6 +543,7 @@ export class SourceBrowser {
         entity: project.entity || this.route.entity,
         project: project.name,
         run_id: "",
+        checkpoint_id: "",
       }));
       list.append(row);
     });
@@ -450,19 +603,13 @@ export class SourceBrowser {
       const activate = () => {
         if (!this.hasControl()) return;
         if (this.route.level === "runs") {
-          this.navigate({ level: "checkpoints", run_id: item.run_id });
-        } else {
-          this.command("select_source", {
-            source: {
-              kind: "manifest",
-              value: item.manifest_url,
-              entity: this.route.entity,
-              project: this.route.project,
-              run_id: item.run_id,
-              checkpoint_id: item.checkpoint_id,
-            },
-            route: { ...this.route },
+          this.navigate({
+            level: "checkpoints",
+            run_id: item.run_id,
+            checkpoint_id: "",
           });
+        } else {
+          this.selectCheckpoint(item);
         }
       };
       row.addEventListener("click", activate);
@@ -516,7 +663,7 @@ export class SourceBrowser {
     retry.addEventListener("click", () => this.command("retry_source"));
     const choose = button("Choose another", { iconName: "folder-search", quiet: true });
     choose.disabled = !this.hasControl();
-    choose.addEventListener("click", () => this.command("browse_sources"));
+    choose.addEventListener("click", () => this.browseCurrentSource());
     actions.append(retry, choose);
     if (this.app.has_active_runner) {
       const cancel = button("Back to current run", { iconName: "arrow-left", quiet: true });

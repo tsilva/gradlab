@@ -16,6 +16,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import asdict, dataclass, is_dataclass
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 import numpy as np
 from aiohttp import WSMsgType, web
@@ -40,6 +41,22 @@ MAX_JSON_TEXT = 4096
 INPUT_HEARTBEAT_SECONDS = 0.25
 LAST_CLIENT_GRACE_SECONDS = 30.0
 PAIRED_START_GRACE_SECONDS = 2.0
+
+
+def source_browser_path(route: Mapping[str, Any] | None) -> str:
+    route = route or {}
+    project = str(route.get("project") or "").strip()
+    run_id = str(route.get("run_id") or "").strip()
+    checkpoint_id = str(route.get("checkpoint_id") or "").strip()
+    if not project:
+        return "/"
+    path = f"/projects/{quote(project, safe='')}"
+    if not run_id:
+        return path
+    path += f"/runs/{quote(run_id, safe='')}"
+    if not checkpoint_id:
+        return path
+    return f"{path}/checkpoints/{quote(checkpoint_id, safe='')}"
 
 
 def _session_environment_id(session: Any, args: argparse.Namespace) -> str | None:
@@ -226,6 +243,45 @@ def history_point(transition: _PlaybackTransition) -> dict[str, Any]:
         "signals": payload["signals"],
         "components": reward["components"],
     }
+
+
+def _value_discount_factor(model: Any) -> float | None:
+    value = getattr(model, "gamma", None)
+    if isinstance(value, bool) or not isinstance(value, int | float | np.number):
+        return None
+    discount = float(value)
+    return discount if np.isfinite(discount) and 0.0 <= discount <= 1.0 else None
+
+
+def annotate_realized_returns(
+    points: Sequence[dict[str, Any]],
+    *,
+    episode: int,
+    discount: float | None,
+) -> None:
+    """Attach completed Monte Carlo value targets to one episode's history."""
+
+    if discount is None:
+        return
+    realized_return = 0.0
+    for point in reversed(points):
+        if int(point.get("episode", -1)) != episode:
+            continue
+        reward = point.get("reward_shaped")
+        if isinstance(reward, bool) or not isinstance(reward, int | float | np.number):
+            return
+        numeric_reward = float(reward)
+        if not np.isfinite(numeric_reward):
+            return
+        realized_return = numeric_reward + discount * realized_return
+        point["realized_return"] = realized_return
+        value = point.get("value")
+        if (
+            not isinstance(value, bool)
+            and isinstance(value, int | float | np.number)
+            and np.isfinite(float(value))
+        ):
+            point["value_error"] = float(value) - realized_return
 
 
 def _frame_packet(
@@ -453,6 +509,7 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
         self._input_focused = False
         self._status_message: str | None = None
         self.environment_id = _session_environment_id(session, args)
+        self.value_discount = _value_discount_factor(getattr(session, "model", None))
 
     def update_input(self, labels: Sequence[str], *, focused: bool) -> None:
         with self._input_lock:
@@ -492,6 +549,7 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
                 "event_names": event_names,
                 "env_id": self.environment_id,
                 "sampling_mode": self.sampling_mode,
+                "value_discount": self.value_discount,
                 "target_fps": self.target_fps,
                 "episodes_limit": int(self.args.episodes),
                 "awaiting_next_episode": self.awaiting_next_episode,
@@ -507,6 +565,12 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
             not self.history or int(self.history[-1]["sequence"]) != transition.sequence
         ):
             self.history.append(history_point(transition))
+            if transition.boundary:
+                annotate_realized_returns(
+                    self.history,
+                    episode=transition.episode,
+                    discount=self.value_discount,
+                )
         if transition is not None:
             game_frame = transition.after_frame
             obs_frames = transition.before_frames
@@ -1370,13 +1434,19 @@ class PlaybackWebServer:
         return Path(__file__).with_name("web_player")
 
     def dashboard_urls(self) -> tuple[str, ...]:
+        main_path = "/"
+        if self.catalog is not None:
+            snapshot = self.runner.snapshot()
+            app = snapshot.get("app") if isinstance(snapshot, Mapping) else None
+            route = app.get("route") if isinstance(app, Mapping) else None
+            main_path = source_browser_path(route if isinstance(route, Mapping) else None)
         if self.paired_windows:
             query = "?workspace=paired"
             return (
-                f"{self.origin}/{query}#token={self.token}",
+                f"{self.origin}{main_path}{query}#token={self.token}",
                 f"{self.origin}/workspace/stats{query}#token={self.token}",
             )
-        return (f"{self.origin}/#token={self.token}",)
+        return (f"{self.origin}{main_path}#token={self.token}",)
 
     @web.middleware
     async def security_headers(self, request: web.Request, handler):
@@ -1831,6 +1901,11 @@ class PlaybackWebServer:
                 latest_snapshot_key = key
                 for client in tuple(self.clients.values()):
                     if "telemetry" in client.subscriptions:
+                        if (
+                            bool((snapshot.get("transition") or {}).get("boundary"))
+                            and (snapshot.get("session") or {}).get("value_discount") is not None
+                        ):
+                            client.offer_reliable(self.runner.history_payload())
                         client.offer_snapshot(self._snapshot_for(client, snapshot))
             for kind, (sequence, packet) in self.runner.encoder.latest().items():
                 if (sequence, packet) == latest_frames.get(kind):
@@ -1878,6 +1953,12 @@ class PlaybackWebServer:
         app.add_routes(
             [
                 web.get("/", self.page),
+                web.get("/projects/{project_id}", self.page),
+                web.get("/projects/{project_id}/runs/{run_id}", self.page),
+                web.get(
+                    "/projects/{project_id}/runs/{run_id}/checkpoints/{checkpoint_id}",
+                    self.page,
+                ),
                 web.get("/panel/{panel}", self.page),
                 web.get("/workspace/{window}", self.page),
                 web.get("/sources/{path:.*}", self.page),
@@ -2057,5 +2138,6 @@ __all__ = [
     "run_web_dataset_playback",
     "run_web_player_application",
     "run_web_playback",
+    "source_browser_path",
     "transition_payload",
 ]
