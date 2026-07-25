@@ -82,9 +82,7 @@ CREATE TABLE IF NOT EXISTS recovery_manifest (
 """
 
 
-class MetricStore:
-    """Container-local SQLite WAL outbox shared only by learner and supervisor."""
-
+class SqliteStore:
     def __init__(
         self,
         path: Path | str,
@@ -112,6 +110,10 @@ class MetricStore:
                 yield connection
         finally:
             connection.close()
+
+
+class MetricStore(SqliteStore):
+    """Container-local SQLite WAL outbox shared only by learner and supervisor."""
 
     def init(self) -> None:
         with self.connection() as connection:

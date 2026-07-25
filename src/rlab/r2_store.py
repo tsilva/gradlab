@@ -11,6 +11,8 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote, unquote, urlparse
 
+from rlab.json_utils import canonical_json_line_bytes as _canonical_json
+
 
 class ObjectNotFound(FileNotFoundError):
     pass
@@ -28,19 +30,6 @@ def public_object_request(url: str) -> urllib.request.Request:
         str(url),
         headers={"User-Agent": PUBLIC_OBJECT_USER_AGENT},
     )
-
-
-def _canonical_json(value: Mapping[str, Any]) -> bytes:
-    return (
-        json.dumps(
-            dict(value),
-            sort_keys=True,
-            separators=(",", ":"),
-            ensure_ascii=False,
-            allow_nan=False,
-        )
-        + "\n"
-    ).encode("utf-8")
 
 
 def _clean_env(value: str | None) -> str:

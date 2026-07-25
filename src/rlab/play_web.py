@@ -349,45 +349,20 @@ class PlaybackResponse:
     payload: Mapping[str, Any]
 
 
-class WebPlaybackRunner:
-    """The only thread allowed to call the policy or environment."""
-
-    def __init__(
-        self,
-        session: _PlaybackSession,
-        args: argparse.Namespace,
-        *,
-        config_text: str,
-    ) -> None:
-        self.session = session
-        self.args = args
-        self.config_text = ANSI_PATTERN.sub("", config_text)
-        self.commands: queue.Queue[PlaybackCommand] = queue.Queue(COMMAND_QUEUE_LIMIT)
+class _PlaybackRunnerProtocol:
+    def _init_protocol(self, *, thread_name: str | None = None) -> None:
         self.responses: queue.SimpleQueue[PlaybackResponse] = queue.SimpleQueue()
         self.encoder = FrameEncoder()
         self.history: deque[dict[str, Any]] = deque(maxlen=HISTORY_LIMIT)
         self._snapshot_lock = threading.Lock()
         self._latest_snapshot: dict[str, Any] = {}
-        self._episode_start_snapshot: dict[str, Any] = {}
-        self._episode_start_frames: dict[int, tuple[int, bytes]] = {}
         self._stop = threading.Event()
-        self._thread = threading.Thread(target=self._run, name="rlab-playback-runtime")
         self.revision = 0
-        self.run_state = "paused"
-        self.driver = "policy"
-        self.sampling_mode = "stochastic"
-        self.target_fps = max(0.0, float(args.fps))
-        self.remaining_steps = 0
-        self.continue_target: str | None = None
-        self.continue_count = 0
-        self.boundaries = 0
-        self.awaiting_next_episode = False
-        self._input_lock = threading.Lock()
-        self._pressed: tuple[str, ...] = ()
-        self._input_updated_at = 0.0
-        self._input_focused = False
-        self._status_message: str | None = None
-        self.environment_id = _session_environment_id(session, args)
+        if thread_name is not None:
+            self.commands: queue.Queue[PlaybackCommand] = queue.Queue(COMMAND_QUEUE_LIMIT)
+            self._episode_start_snapshot: dict[str, Any] = {}
+            self._episode_start_frames: dict[int, tuple[int, bytes]] = {}
+            self._thread = threading.Thread(target=self._run, name=thread_name)
 
     @property
     def stopped(self) -> bool:
@@ -395,29 +370,20 @@ class WebPlaybackRunner:
 
     def start(self) -> None:
         self.encoder.start()
-        self._publish(None)
-        self._thread.start()
+        self._publish()
+        thread = getattr(self, "_thread", None)
+        if thread is not None:
+            thread.start()
 
     def stop(self) -> None:
         self._stop.set()
-        if self._thread.is_alive():
-            self._thread.join(timeout=10.0)
+        thread = getattr(self, "_thread", None)
+        if thread is not None and thread.is_alive():
+            thread.join(timeout=10.0)
         self.encoder.close()
 
     def submit(self, command: PlaybackCommand) -> None:
         self.commands.put_nowait(command)
-
-    def update_input(self, labels: Sequence[str], *, focused: bool) -> None:
-        with self._input_lock:
-            self._pressed = tuple(sorted({str(label).casefold() for label in labels}))
-            self._input_updated_at = time.monotonic()
-            self._input_focused = bool(focused)
-
-    def clear_input(self) -> None:
-        with self._input_lock:
-            self._pressed = ()
-            self._input_focused = False
-            self._input_updated_at = 0.0
 
     def snapshot(self) -> dict[str, Any]:
         with self._snapshot_lock:
@@ -428,8 +394,8 @@ class WebPlaybackRunner:
     ) -> tuple[dict[str, Any], dict[int, tuple[int, bytes]]]:
         with self._snapshot_lock:
             return (
-                dict(self._episode_start_snapshot),
-                dict(self._episode_start_frames),
+                dict(getattr(self, "_episode_start_snapshot", {})),
+                dict(getattr(self, "_episode_start_frames", {})),
             )
 
     def history_payload(self) -> dict[str, Any]:
@@ -448,6 +414,57 @@ class WebPlaybackRunner:
                 },
             )
         )
+
+    def _drain_commands(self) -> None:
+        for _ in range(COMMAND_QUEUE_LIMIT):
+            try:
+                command = self.commands.get_nowait()
+            except queue.Empty:
+                return
+            self._apply(command)
+
+
+class WebPlaybackRunner(_PlaybackRunnerProtocol):
+    """The only thread allowed to call the policy or environment."""
+
+    def __init__(
+        self,
+        session: _PlaybackSession,
+        args: argparse.Namespace,
+        *,
+        config_text: str,
+    ) -> None:
+        self._init_protocol(thread_name="rlab-playback-runtime")
+        self.session = session
+        self.args = args
+        self.config_text = ANSI_PATTERN.sub("", config_text)
+        self.run_state = "paused"
+        self.driver = "policy"
+        self.sampling_mode = "stochastic"
+        self.target_fps = max(0.0, float(args.fps))
+        self.remaining_steps = 0
+        self.continue_target: str | None = None
+        self.continue_count = 0
+        self.boundaries = 0
+        self.awaiting_next_episode = False
+        self._input_lock = threading.Lock()
+        self._pressed: tuple[str, ...] = ()
+        self._input_updated_at = 0.0
+        self._input_focused = False
+        self._status_message: str | None = None
+        self.environment_id = _session_environment_id(session, args)
+
+    def update_input(self, labels: Sequence[str], *, focused: bool) -> None:
+        with self._input_lock:
+            self._pressed = tuple(sorted({str(label).casefold() for label in labels}))
+            self._input_updated_at = time.monotonic()
+            self._input_focused = bool(focused)
+
+    def clear_input(self) -> None:
+        with self._input_lock:
+            self._pressed = ()
+            self._input_focused = False
+            self._input_updated_at = 0.0
 
     def _snapshot_payload(self, transition: _PlaybackTransition | None) -> dict[str, Any]:
         current = transition_payload(transition) if transition is not None else None
@@ -485,7 +502,7 @@ class WebPlaybackRunner:
             "transition": current,
         }
 
-    def _publish(self, transition: _PlaybackTransition | None) -> None:
+    def _publish(self, transition: _PlaybackTransition | None = None) -> None:
         if transition is not None and (
             not self.history or int(self.history[-1]["sequence"]) != transition.sequence
         ):
@@ -641,14 +658,6 @@ class WebPlaybackRunner:
             return
         self._response(command, ok=True)
 
-    def _drain_commands(self) -> None:
-        for _ in range(COMMAND_QUEUE_LIMIT):
-            try:
-                command = self.commands.get_nowait()
-            except queue.Empty:
-                return
-            self._apply(command)
-
     def _human_labels(self) -> tuple[str, ...]:
         with self._input_lock:
             fresh = time.monotonic() - self._input_updated_at <= INPUT_HEARTBEAT_SECONDS
@@ -715,7 +724,7 @@ class WebPlaybackRunner:
             self._step_once()
 
 
-class DatasetPlaybackRunner:
+class DatasetPlaybackRunner(_PlaybackRunnerProtocol):
     """Provider-free playback for one verified Gymrec episode."""
 
     def __init__(
@@ -728,21 +737,11 @@ class DatasetPlaybackRunner:
     ) -> None:
         if len(rows) < 2:
             raise ValueError("dataset playback requires at least one transition")
+        self._init_protocol(thread_name="rlab-dataset-playback")
         self.args = args
         self.rows = rows
         self._frames = iter(frames)
         self.current_frame = np.asarray(next(self._frames), dtype=np.uint8)
-        self.commands: queue.Queue[PlaybackCommand] = queue.Queue(COMMAND_QUEUE_LIMIT)
-        self.responses: queue.SimpleQueue[PlaybackResponse] = queue.SimpleQueue()
-        self.encoder = FrameEncoder()
-        self.history: deque[dict[str, Any]] = deque(maxlen=HISTORY_LIMIT)
-        self._snapshot_lock = threading.Lock()
-        self._latest_snapshot: dict[str, Any] = {}
-        self._episode_start_snapshot: dict[str, Any] = {}
-        self._episode_start_frames: dict[int, tuple[int, bytes]] = {}
-        self._stop = threading.Event()
-        self._thread = threading.Thread(target=self._run, name="rlab-dataset-playback")
-        self.revision = 0
         self.sequence = 0
         self.transition_index = 0
         self.total_reward = 0.0
@@ -759,56 +758,11 @@ class DatasetPlaybackRunner:
         self.sampling_mode = str(first.get("policy_mode") or "recorded")
         self._transition: dict[str, Any] | None = None
 
-    @property
-    def stopped(self) -> bool:
-        return self._stop.is_set()
-
-    def start(self) -> None:
-        self.encoder.start()
-        self._publish()
-        self._thread.start()
-
-    def stop(self) -> None:
-        self._stop.set()
-        if self._thread.is_alive():
-            self._thread.join(timeout=10.0)
-        self.encoder.close()
-
-    def submit(self, command: PlaybackCommand) -> None:
-        self.commands.put_nowait(command)
-
     def update_input(self, _labels: Sequence[str], *, focused: bool) -> None:
         del focused
 
     def clear_input(self) -> None:
         return None
-
-    def snapshot(self) -> dict[str, Any]:
-        with self._snapshot_lock:
-            return dict(self._latest_snapshot)
-
-    def episode_start_payload(
-        self,
-    ) -> tuple[dict[str, Any], dict[int, tuple[int, bytes]]]:
-        with self._snapshot_lock:
-            return dict(self._episode_start_snapshot), dict(self._episode_start_frames)
-
-    def history_payload(self) -> dict[str, Any]:
-        return {"type": "history", "points": list(self.history)}
-
-    def _response(self, command: PlaybackCommand, *, ok: bool, **extra: Any) -> None:
-        self.responses.put(
-            PlaybackResponse(
-                command.client_id,
-                {
-                    "type": "command_result",
-                    "id": command.command_id,
-                    "ok": ok,
-                    "revision": self.revision,
-                    **extra,
-                },
-            )
-        )
 
     def _snapshot_payload(self) -> dict[str, Any]:
         return {
@@ -919,14 +873,6 @@ class DatasetPlaybackRunner:
             self._response(command, ok=False, error=str(exc))
             return
         self._response(command, ok=True)
-
-    def _drain_commands(self) -> None:
-        for _ in range(COMMAND_QUEUE_LIMIT):
-            try:
-                command = self.commands.get_nowait()
-            except queue.Empty:
-                return
-            self._apply(command)
 
     def _step_once(self) -> None:
         row = self.rows[self.transition_index]
@@ -1087,53 +1033,32 @@ def _max_x_pos(transition: Mapping[str, Any] | None) -> float | None:
     return float(value) if isinstance(value, int | float) else None
 
 
-class HumanRecordingRunner:
+class HumanRecordingRunner(_PlaybackRunnerProtocol):
     """Bridge the synchronous dataset recorder to the shared web dashboard."""
 
     def __init__(self, session: Any, args: argparse.Namespace) -> None:
+        self._init_protocol()
         self.session = session
         self.args = args
-        self.encoder = FrameEncoder()
-        self.responses: queue.SimpleQueue[PlaybackResponse] = queue.SimpleQueue()
         self._condition = threading.Condition()
-        self._stop = threading.Event()
-        self._snapshot_lock = threading.Lock()
-        self._latest_snapshot: dict[str, Any] = {}
         self._pressed: tuple[str, ...] = ()
         self._input_updated_at = 0.0
         self._input_focused = False
         self._next_action_at = time.perf_counter()
-        self.history: deque[dict[str, Any]] = deque(maxlen=HISTORY_LIMIT)
         self._transition: dict[str, Any] | None = None
         self._last_action: Any = None
         self.total_reward = 0.0
-        self.revision = 0
         self.sequence = 0
         self.run_state = "paused"
         self.target_fps = max(float(getattr(args, "fps", None) or session.fps), 1.0)
         self._status_message = "Focus the game view, then press Play to begin recording"
         self.environment_id = _session_environment_id(session, args)
 
-    @property
-    def stopped(self) -> bool:
-        return self._stop.is_set()
-
-    def start(self) -> None:
-        self.encoder.start()
-        self._publish()
-
     def stop(self) -> None:
         self._stop.set()
         with self._condition:
             self._condition.notify_all()
         self.encoder.close()
-
-    def snapshot(self) -> dict[str, Any]:
-        with self._snapshot_lock:
-            return dict(self._latest_snapshot)
-
-    def history_payload(self) -> dict[str, Any]:
-        return {"type": "history", "points": list(self.history)}
 
     def clear_input(self) -> None:
         with self._condition:
@@ -1148,20 +1073,6 @@ class HumanRecordingRunner:
             self._input_updated_at = time.monotonic()
             self._input_focused = bool(focused)
             self._condition.notify_all()
-
-    def _response(self, command: PlaybackCommand, *, ok: bool, **extra: Any) -> None:
-        self.responses.put(
-            PlaybackResponse(
-                command.client_id,
-                {
-                    "type": "command_result",
-                    "id": command.command_id,
-                    "ok": ok,
-                    "revision": self.revision,
-                    **extra,
-                },
-            )
-        )
 
     def submit(self, command: PlaybackCommand) -> None:
         try:

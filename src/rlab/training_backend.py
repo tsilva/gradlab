@@ -12,10 +12,6 @@ from pathlib import Path
 from typing import Any, Protocol
 
 
-class BackendUnavailableError(RuntimeError):
-    """Raised when a known training backend is intentionally unavailable."""
-
-
 class GracefulStopFlag:
     def __init__(self) -> None:
         self.requested = False
@@ -68,10 +64,8 @@ class TrainingBackend(Protocol):
 
 _BACKEND_MODULES = {
     "rlab.jerk": "rlab.training.jerk",
-    "sb3.a2c": "rlab.training.sb3_a2c",
-    "sb3.ppo": "rlab.training.sb3_ppo",
-    "rlab.ppo": "rlab.training.planned",
-    "rlab.a2c": "rlab.training.planned",
+    "sb3.a2c": "rlab.training.sb3",
+    "sb3.ppo": "rlab.training.sb3",
 }
 
 CHECKPOINT_EVAL_ACCEPTANCE = "checkpoint_eval"
@@ -149,7 +143,11 @@ def normalize_training_backend(
     if not isinstance(backend_config, Mapping):
         raise ValueError(f"{label}.config must be an object")
     module = _backend_module(backend_id)
-    normalized = module.normalize_config(dict(backend_config), label=f"{label}.config")
+    normalized = module.normalize_config(
+        backend_id,
+        dict(backend_config),
+        label=f"{label}.config",
+    )
     backend = module.backend_for_id(backend_id)
     backend.validate(common_config, normalized)
     from rlab.snapshot_curriculum import validate_snapshot_curriculum_runtime_contract

@@ -18,7 +18,7 @@ from rlab.runtime_contract import train_config_contract_payload, train_config_co
 from rlab.task_kernels import IdentityTaskDefinition
 from rlab.train import main as train_main
 from rlab.train_config import materialized_train_args, validate_and_normalize_train_config
-from rlab.training_backend import BackendContext, BackendUnavailableError
+from rlab.training_backend import BackendContext
 
 
 def backend_config(backend_id: str = "sb3.ppo", **config) -> dict[str, object]:
@@ -162,23 +162,6 @@ def test_jerk_backend_schema_is_strict_and_available() -> None:
     assert accepted["training_backend"]["config"]["acceptance_mode"] == ("first_training_success")
 
 
-@pytest.mark.parametrize("backend_id", ["rlab.ppo", "rlab.a2c"])
-def test_planned_backends_and_optional_components_fail_preflight(
-    backend_id: str,
-) -> None:
-    payload = backend_config(
-        backend_id,
-        model={"id": "model2", "config": {}},
-        value_normalization={"id": "popart", "config": {}},
-        intrinsic_rewards=[
-            {"id": "rnd", "config": {}},
-            {"id": "phash", "config": {}},
-        ],
-    )
-    with pytest.raises(BackendUnavailableError, match="future milestone"):
-        validate_and_normalize_train_config(payload)
-
-
 def test_unavailable_backend_fails_before_run_resources_are_created() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
@@ -198,7 +181,7 @@ def test_unavailable_backend_fails_before_run_resources_are_created() -> None:
         )
         with (
             mock.patch.dict("os.environ", {"RLAB_INTERNAL_LEARNER": "1"}),
-            pytest.raises(BackendUnavailableError),
+            pytest.raises(ValueError, match="unknown training backend"),
         ):
             train_main(["--train-config-json", str(config_path)])
         assert not (root / "runs" / "must-not-exist").exists()
@@ -220,9 +203,9 @@ def test_materialized_args_are_a_temporary_flat_backend_view() -> None:
 
 def test_backend_schemas_participate_in_runtime_contract_hash(monkeypatch) -> None:
     before = train_config_contract_sha256()
-    from rlab.training import sb3_ppo
+    from rlab.training import sb3
 
-    monkeypatch.setitem(sb3_ppo.DEFAULT_CONFIG, "test_contract_field", 1)
+    monkeypatch.setitem(sb3.PPO_DEFAULT_CONFIG, "test_contract_field", 1)
     after = train_config_contract_sha256()
     assert before != after
     assert "training_backends" in train_config_contract_payload()

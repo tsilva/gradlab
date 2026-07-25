@@ -10,7 +10,7 @@ from rlab.training.sb3_helpers import (
     GracefulStopHelper,
     install_on_policy_safe_boundary_stop,
 )
-from rlab.training.sb3_ppo import checkpoint_save_frequency
+from rlab.training.sb3_on_policy import checkpoint_save_frequency
 from rlab.training_backend import GracefulStopFlag
 from rlab.seeds import (
     DEFAULT_EVAL_SEED,

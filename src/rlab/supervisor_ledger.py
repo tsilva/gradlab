@@ -1,13 +1,10 @@
 from __future__ import annotations
 
 import json
-import sqlite3
 from collections.abc import Mapping, Sequence
-from contextlib import contextmanager
-from pathlib import Path
-from typing import Any, Iterator
+from typing import Any
 
-from rlab.clock import Clock, SystemClock
+from rlab.metric_store import SqliteStore
 
 
 SCHEMA_SQL = """
@@ -59,34 +56,7 @@ CREATE INDEX IF NOT EXISTS eval_dispatches_status_idx
 """
 
 
-class SupervisorLedger:
-    def __init__(
-        self,
-        path: Path | str,
-        *,
-        timeout: float = 5.0,
-        clock: Clock | None = None,
-    ):
-        self.path = Path(path)
-        self.timeout = timeout
-        self.clock = clock or SystemClock()
-
-    def connect(self) -> sqlite3.Connection:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        connection = sqlite3.connect(self.path, timeout=self.timeout)
-        connection.row_factory = sqlite3.Row
-        connection.execute(f"PRAGMA busy_timeout={max(0, int(self.timeout * 1000))}")
-        return connection
-
-    @contextmanager
-    def connection(self) -> Iterator[sqlite3.Connection]:
-        connection = self.connect()
-        try:
-            with connection:
-                yield connection
-        finally:
-            connection.close()
-
+class SupervisorLedger(SqliteStore):
     def init(self) -> None:
         with self.connection() as connection:
             connection.execute("PRAGMA journal_mode=WAL")

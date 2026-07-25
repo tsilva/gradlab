@@ -57,6 +57,10 @@ class TrainConfigField:
         return self.environment
 
 
+def _field(dest: str, *, flag: str | None = None, **metadata: Any) -> TrainConfigField:
+    return TrainConfigField(dest, flag or f"--{dest.replace('_', '-')}", **metadata)
+
+
 def _env_default(env_defaults: EnvConfig, field: TrainConfigField) -> Any:
     if field.env_default is None:
         return field.default
@@ -216,10 +220,6 @@ def train_config_field_for_key(key: str) -> TrainConfigField | None:
         if field.dest == key:
             return field
     return None
-
-
-def recipe_required_train_config_fields() -> tuple[str, ...]:
-    return tuple(field.dest for field in TRAIN_CONFIG_FIELDS if field.recipe_required)
 
 
 def env_config_arg_fields() -> tuple[TrainConfigField, ...]:
@@ -482,18 +482,16 @@ def validate_and_normalize_train_config(
 
 
 TRAIN_CONFIG_FIELDS: tuple[TrainConfigField, ...] = (
-    TrainConfigField(
+    _field(
         "timesteps",
-        "--timesteps",
         type_name="int",
         default=1_000_000,
         recipe_required=True,
         validation_min=1,
         source_section="train",
     ),
-    TrainConfigField(
+    _field(
         "snapshot_curriculum",
-        "--snapshot-curriculum",
         type_name="json",
         default=None,
         serialize="json",
@@ -501,9 +499,8 @@ TRAIN_CONFIG_FIELDS: tuple[TrainConfigField, ...] = (
         source_section="train",
         help="Optional bounded live-state restart curriculum configuration.",
     ),
-    TrainConfigField(
+    _field(
         "training_backend",
-        "--training-backend",
         type_name="json",
         default=None,
         serialize="json",
@@ -511,17 +508,15 @@ TRAIN_CONFIG_FIELDS: tuple[TrainConfigField, ...] = (
         recipe_required=True,
         help="Selected training backend id and backend-local configuration.",
     ),
-    TrainConfigField(
+    _field(
         "n_envs",
-        "--n-envs",
         type_name="int",
         default=8,
         validation_min=1,
         owner="goal_environment",
     ),
-    TrainConfigField(
+    _field(
         "seed",
-        "--seed",
         type_name="int",
         default=DEFAULT_TRAIN_SEED,
         help=(
@@ -529,17 +524,15 @@ TRAIN_CONFIG_FIELDS: tuple[TrainConfigField, ...] = (
             f"{EVAL_SEED_START}; seeds >= {EVAL_SEED_START} are reserved for eval."
         ),
     ),
-    TrainConfigField("run_name", "--run-name", default="ppo_retro"),
-    TrainConfigField(
+    _field("run_name", default="ppo_retro"),
+    _field(
         "run_description",
-        "--run-description",
         default="",
         help="Human-readable description of the experiment or ablation being run.",
     ),
-    TrainConfigField("runs_dir", "--runs-dir", default="runs"),
-    TrainConfigField(
+    _field("runs_dir", default="runs"),
+    _field(
         "env_provider",
-        "--env-provider",
         env_default="env_provider",
         environment=True,
         non_empty=True,
@@ -548,18 +541,16 @@ TRAIN_CONFIG_FIELDS: tuple[TrainConfigField, ...] = (
             "supermariobrosnes-turbo, ale-py, gymnasium."
         ),
     ),
-    TrainConfigField(
+    _field(
         "game",
-        "--game",
         env_default="game",
         environment=True,
         recipe_required=True,
         non_empty=True,
         help="Provider game id. Defaults to RETRO_GAME when set.",
     ),
-    TrainConfigField(
+    _field(
         "env_args",
-        "--env-args",
         type_name="json",
         default={},
         env_default="env_args",
@@ -568,9 +559,9 @@ TRAIN_CONFIG_FIELDS: tuple[TrainConfigField, ...] = (
         mapping_value=True,
         help="Provider-native environment constructor arguments, serialized as a JSON object.",
     ),
-    TrainConfigField(
+    _field(
         "task",
-        "--task-json",
+        flag="--task-json",
         type_name="json",
         default={},
         env_default="task",
@@ -579,94 +570,83 @@ TRAIN_CONFIG_FIELDS: tuple[TrainConfigField, ...] = (
         mapping_value=True,
         help="Canonical bound-task definition as a JSON object.",
     ),
-    TrainConfigField(
+    _field(
         "state",
-        "--state",
         env_default="state",
         environment=True,
         non_empty=True,
         help="Provider state. If omitted, registered targets may provide a default.",
     ),
-    TrainConfigField(
+    _field(
         "states",
-        "--states",
         default="",
         serialize="csv",
         environment=True,
         sequence_items="str",
         help="Comma-separated provider states. Without --state-probs, provide exactly one state per env slot in order.",
     ),
-    TrainConfigField(
+    _field(
         "state_probs",
-        "--state-probs",
         default="",
         serialize="csv",
         environment=True,
         sequence_items="number",
         help="Comma-separated non-negative sampling weights for --states. The native vector env normalizes weights and samples independently on each episode reset.",
     ),
-    TrainConfigField(
+    _field(
         "frame_skip",
-        "--frame-skip",
         type_name="int",
         default=4,
         environment=True,
         validation_min=1,
     ),
-    TrainConfigField(
+    _field(
         "sticky_action_prob",
-        "--sticky-action-prob",
         type_name="float",
         env_default="sticky_action_prob",
         environment=True,
         help="Probability of replaying the previous high-level action; 0 disables sticky actions.",
     ),
-    TrainConfigField(
+    _field(
         "max_pool_frames",
-        "--max-pool-frames",
         kind="bool_optional",
         default=True,
         environment=True,
         help="Max-pool over the last two raw frames inside each frame-skip step.",
     ),
-    TrainConfigField(
+    _field(
         "observation_size",
-        "--observation-size",
         type_name="int",
         env_default="observation_size",
         environment=True,
         validation_min=0,
     ),
-    TrainConfigField(
+    _field(
         "hud_crop_top",
-        "--hud-crop-top",
         type_name="int",
         env_default="hud_crop_top",
         environment=True,
         validation_min=-1,
         help="Crop this many pixels from the top of raw frames before grayscale resize; -1 uses the target default.",
     ),
-    TrainConfigField(
+    _field(
         "obs_crop",
-        "--obs-crop",
         type_name="obs_crop",
         env_default="obs_crop",
         serialize="csv",
         environment=True,
         help="Four-sided raw-frame crop as top,right,bottom,left before grayscale resize.",
     ),
-    TrainConfigField(
+    _field(
         "obs_crop_mode",
-        "--obs-crop-mode",
         env_default="obs_crop_mode",
         choices=("remove", "mask"),
         environment=True,
         non_empty=True,
         help="Whether obs_crop removes pixels or masks them before resize.",
     ),
-    TrainConfigField(
+    _field(
         "obs_crop_fill",
-        "--obs-crop-fill",
         type_name="int",
         env_default="obs_crop_fill",
         environment=True,
@@ -674,34 +654,30 @@ TRAIN_CONFIG_FIELDS: tuple[TrainConfigField, ...] = (
         validation_max=255,
         help="Pixel fill value for obs_crop_mode=mask.",
     ),
-    TrainConfigField(
+    _field(
         "obs_resize_algorithm",
-        "--obs-resize-algorithm",
         env_default="obs_resize_algorithm",
         environment=True,
         non_empty=True,
         help="Resize algorithm for native frame preprocessing.",
     ),
-    TrainConfigField(
+    _field(
         "checkpoint_freq",
-        "--checkpoint-freq",
         type_name="int",
         default=500_000,
         validation_min=0,
         source_section="goal_train",
     ),
-    TrainConfigField(
+    _field(
         "post_train_eval_episodes",
-        "--post-train-eval-episodes",
         type_name="int",
         default=100,
         owner="goal_objective",
         source_section="goal_train",
         help="Episodes per checkpoint for post-training checkpoint eval.",
     ),
-    TrainConfigField(
+    _field(
         "checkpoint_eval_environment",
-        "--checkpoint-eval-environment",
         type_name="json",
         default=None,
         serialize="json",
@@ -710,9 +686,8 @@ TRAIN_CONFIG_FIELDS: tuple[TrainConfigField, ...] = (
         source_section="goal_train",
         help="Resolved goal-owned environment contract for checkpoint evaluation.",
     ),
-    TrainConfigField(
+    _field(
         "checkpoint_eval_n_envs",
-        "--checkpoint-eval-n-envs",
         type_name="int",
         default=20,
         validation_min=1,
@@ -720,9 +695,8 @@ TRAIN_CONFIG_FIELDS: tuple[TrainConfigField, ...] = (
         source_section="goal_train",
         help="Vector env count for checkpoint eval.",
     ),
-    TrainConfigField(
+    _field(
         "checkpoint_eval_acceptance",
-        "--checkpoint-eval-acceptance",
         type_name="json",
         default=None,
         serialize="json",
@@ -731,9 +705,8 @@ TRAIN_CONFIG_FIELDS: tuple[TrainConfigField, ...] = (
         cli_exposed=False,
         help="Canonical goal.eval acceptance rules for checkpoint evaluation.",
     ),
-    TrainConfigField(
+    _field(
         "checkpoint_eval_contract",
-        "--checkpoint-eval-contract",
         type_name="json",
         default=None,
         serialize="json",
@@ -741,17 +714,15 @@ TRAIN_CONFIG_FIELDS: tuple[TrainConfigField, ...] = (
         cli_exposed=False,
         help="Immutable acceptance evidence contract materialized by the queue.",
     ),
-    TrainConfigField(
+    _field(
         "stop_on_acceptance",
-        "--stop-on-acceptance",
         kind="bool_optional",
         default=False,
         source_section="goal_train",
         help="Stop the learner when the first checkpoint proves goal.eval acceptance.",
     ),
-    TrainConfigField(
+    _field(
         "checkpoint_eval_backend",
-        "--checkpoint-eval-backend",
         default="modal",
         choices=("local", "modal", "none"),
         non_empty=True,
@@ -762,9 +733,8 @@ TRAIN_CONFIG_FIELDS: tuple[TrainConfigField, ...] = (
             "establish promotion or acceptance."
         ),
     ),
-    TrainConfigField(
+    _field(
         "rom_asset_manifest",
-        "--rom-asset-manifest",
         type_name="json",
         default=None,
         serialize="json",
@@ -772,36 +742,32 @@ TRAIN_CONFIG_FIELDS: tuple[TrainConfigField, ...] = (
         cli_exposed=False,
         help="Supervisor-materialized immutable external ROM identity.",
     ),
-    TrainConfigField(
+    _field(
         "checkpoint_eval_seed_protocol",
-        "--checkpoint-eval-seed-protocol",
         default=SEED_PROTOCOL,
         choices=(SEED_PROTOCOL,),
         non_empty=True,
         cli_exposed=False,
         help="Versioned stochastic checkpoint-evaluation seed trace protocol.",
     ),
-    TrainConfigField(
+    _field(
         "checkpoint_eval_seed",
-        "--checkpoint-eval-seed",
         type_name="int",
         default=EVAL_SEED_START,
         validation_min=EVAL_SEED_START,
         cli_exposed=False,
         help="Materialized base seed for checkpoint evaluation.",
     ),
-    TrainConfigField(
+    _field(
         "post_train_eval_max_steps",
-        "--post-train-eval-max-steps",
         type_name="int",
         default=0,
         owner="goal_objective",
         source_section="goal_train",
         help="Max steps per post-training eval episode; <=0 uses --max-episode-steps.",
     ),
-    TrainConfigField(
+    _field(
         "post_train_eval_stochastic",
-        "--post-train-eval-stochastic",
         kind="bool_optional",
         default=True,
         owner="goal_objective",
@@ -809,9 +775,8 @@ TRAIN_CONFIG_FIELDS: tuple[TrainConfigField, ...] = (
         help="Fixed true: post-training checkpoint eval uses stochastic policy sampling.",
         cli_exposed=False,
     ),
-    TrainConfigField(
+    _field(
         "early_stop",
-        "--early-stop",
         type_name="json",
         default=None,
         serialize="json",
@@ -819,9 +784,8 @@ TRAIN_CONFIG_FIELDS: tuple[TrainConfigField, ...] = (
         source_section="goal_train",
         help="JSON early-stop list of AND-combined metric threshold rules.",
     ),
-    TrainConfigField(
+    _field(
         "selection_rank",
-        "--selection-rank",
         type_name="json",
         default=(),
         serialize="json",
@@ -829,9 +793,8 @@ TRAIN_CONFIG_FIELDS: tuple[TrainConfigField, ...] = (
         owner="goal_objective",
         help="Ordered objective.rank contract carried into checkpoint selection.",
     ),
-    TrainConfigField(
+    _field(
         "metrics_schema_version",
-        "--metrics-schema-version",
         type_name="int",
         default=METRICS_SCHEMA_VERSION,
         validation_min=METRICS_SCHEMA_VERSION,
@@ -839,183 +802,156 @@ TRAIN_CONFIG_FIELDS: tuple[TrainConfigField, ...] = (
         cli_exposed=False,
         help="Run-owned telemetry schema used by validation and publication.",
     ),
-    TrainConfigField(
+    _field(
         "wandb",
-        "--wandb",
         kind="store_true",
         default=False,
         recipe_required=True,
         help="Log training to Weights & Biases",
     ),
-    TrainConfigField("wandb_project", "--wandb-project", default=None),
-    TrainConfigField("wandb_entity", "--wandb-entity", default=None),
-    TrainConfigField("wandb_group", "--wandb-group", default=None),
-    TrainConfigField("wandb_tags", "--wandb-tags", default="", help="Comma-separated W&B tags"),
-    TrainConfigField(
+    _field("wandb_project", default=None),
+    _field("wandb_entity", default=None),
+    _field("wandb_group", default=None),
+    _field("wandb_tags", default="", help="Comma-separated W&B tags"),
+    _field(
         "wandb_mode",
-        "--wandb-mode",
         default="online",
         choices=WANDB_MODE_CHOICES,
         recipe_required=True,
         non_empty=True,
     ),
-    TrainConfigField(
+    _field(
         "runtime_image_ref",
-        "--runtime-image-ref",
         default="",
         help="Immutable runtime image ref recorded as run metadata; does not affect training.",
     ),
-    TrainConfigField(
+    _field(
         "runtime_input_sha256",
-        "--runtime-input-sha256",
         default="",
         cli_exposed=False,
         help="Content-addressed runtime-input identity recorded in run metadata.",
     ),
-    TrainConfigField(
+    _field(
         "runtime_build_source_sha",
-        "--runtime-build-source-sha",
         default="",
         cli_exposed=False,
         help="Source revision that originally built the reused runtime image.",
     ),
-    TrainConfigField(
+    _field(
         "source_sha",
-        "--source-sha",
         default="",
         cli_exposed=False,
         help="Exact pushed source revision defining this run and recipe composition.",
     ),
-    TrainConfigField(
+    _field(
         "compute_target",
-        "--compute-target",
         default="",
         cli_exposed=False,
         help="Selected dstack fleet or instance recorded in W&B config.",
     ),
-    TrainConfigField(
+    _field(
         "attempt_id",
-        "--attempt-id",
         default="",
         cli_exposed=False,
         help="Immutable orchestration attempt recorded in W&B config.",
     ),
-    TrainConfigField(
+    _field(
         "dstack_task",
-        "--dstack-task",
         default="",
         cli_exposed=False,
         help="dstack task identity recorded in W&B config.",
     ),
-    TrainConfigField(
+    _field(
         "campaign_id",
-        "--campaign-id",
         default="",
         cli_exposed=False,
         help="Optional checked-in research campaign recorded in W&B config.",
     ),
-    TrainConfigField(
+    _field(
         "game_family",
-        "--game-family",
         default="",
         cli_exposed=False,
         help="Provider-neutral game family recorded in W&B config.",
     ),
-    TrainConfigField(
-        "goal_slug", "--goal-slug", default="", help="Research goal slug recorded in W&B config."
-    ),
-    TrainConfigField(
+    _field("goal_slug", default="", help="Research goal slug recorded in W&B config."),
+    _field(
         "goal_path",
-        "--goal-path",
         default="",
         help="Research goal path recorded in W&B config.",
     ),
-    TrainConfigField(
+    _field(
         "goal_sha256",
-        "--goal-sha256",
         default="",
         cli_exposed=False,
         help="Exact checked-in goal file hash recorded in W&B config.",
     ),
-    TrainConfigField(
+    _field(
         "goal_contract_sha256",
-        "--goal-contract-sha256",
         default="",
         cli_exposed=False,
         help="Semantic hash of the fully composed goal contract recorded in W&B config.",
     ),
-    TrainConfigField(
+    _field(
         "effective_goal_contract_sha256",
-        "--effective-goal-contract-sha256",
         default="",
         cli_exposed=False,
         help="Semantic hash of the selected, catalog-free effective goal contract.",
     ),
-    TrainConfigField(
+    _field(
         "reward_program_kind",
-        "--reward-program-kind",
         default="",
         cli_exposed=False,
         help="Versioned task-specific reward program compiler kind.",
     ),
-    TrainConfigField(
+    _field(
         "reward_program_revision",
-        "--reward-program-revision",
         default="",
         cli_exposed=False,
         help="Executable reward-kernel revision selected by the reward program.",
     ),
-    TrainConfigField(
+    _field(
         "reward_shape",
-        "--reward-shape",
         default="",
         cli_exposed=False,
         help="Goal-owned named reward shape selected for this run.",
     ),
-    TrainConfigField(
+    _field(
         "reward_shape_sha256",
-        "--reward-shape-sha256",
         default="",
         cli_exposed=False,
         help="Semantic hash of the selected executable reward shape.",
     ),
-    TrainConfigField(
+    _field(
         "reward_shape_is_default",
-        "--reward-shape-is-default",
         kind="bool_optional",
         default=False,
         cli_exposed=False,
         help="Whether the selected reward shape is the goal catalog default.",
     ),
-    TrainConfigField(
+    _field(
         "recipe_slug",
-        "--recipe-slug",
         default="",
         help="Experiment recipe slug recorded in W&B config.",
     ),
-    TrainConfigField(
+    _field(
         "recipe_path",
-        "--recipe-path",
         default="",
         help="Experiment recipe path recorded in W&B config.",
     ),
-    TrainConfigField(
+    _field(
         "recipe_json_path",
-        "--recipe-json-path",
         default="",
         cli_exposed=False,
         help="Canonical versioned policy recipe staged beside the queue train config.",
     ),
-    TrainConfigField(
+    _field(
         "recipe_sha256",
-        "--recipe-sha256",
         default="",
         cli_exposed=False,
         help="Exact checked-in recipe file hash recorded in W&B config.",
     ),
-    TrainConfigField(
+    _field(
         "recipe_composition",
-        "--recipe-composition",
         type_name="json",
         default={},
         serialize="json",
@@ -1023,17 +959,15 @@ TRAIN_CONFIG_FIELDS: tuple[TrainConfigField, ...] = (
         cli_exposed=False,
         help="Exact goal and recipe source-file composition recorded in W&B config.",
     ),
-    TrainConfigField(
+    _field(
         "recipe_overrides",
-        "--recipe-overrides",
         type_name="json",
         default=(),
         serialize="json",
         help="Hydra/OmegaConf dotlist overrides applied to the checked-in recipe.",
     ),
-    TrainConfigField(
+    _field(
         "wandb_run_id",
-        "--wandb-run-id",
         default="",
         cli_exposed=False,
         help="Stable W&B run id owned by the in-container supervisor.",

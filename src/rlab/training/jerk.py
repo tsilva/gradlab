@@ -69,7 +69,14 @@ _ACTION_FIELDS = {"fallback_action"}
 _ACCEPTANCE_MODES = {CHECKPOINT_EVAL_ACCEPTANCE, FIRST_TRAINING_SUCCESS_ACCEPTANCE}
 
 
-def normalize_config(config: Mapping[str, Any], *, label: str) -> dict[str, Any]:
+def normalize_config(
+    backend_id: str,
+    config: Mapping[str, Any],
+    *,
+    label: str,
+) -> dict[str, Any]:
+    if backend_id != "rlab.jerk":
+        raise ValueError(f"JERK backend module does not define {backend_id!r}")
     unexpected = sorted(set(config) - set(DEFAULT_CONFIG))
     if unexpected:
         raise ValueError(f"{label} has unexpected fields: {unexpected}")
@@ -421,7 +428,7 @@ class JerkBackend:
         common_config: Mapping[str, Any],
         backend_config: Mapping[str, Any],
     ) -> None:
-        normalized = normalize_config(backend_config, label="training_backend.config")
+        normalized = backend_config
         if (
             normalized["acceptance_mode"] == FIRST_TRAINING_SUCCESS_ACCEPTANCE
             and common_config.get("checkpoint_eval_backend") != "none"
@@ -441,7 +448,13 @@ _BACKEND = JerkBackend()
 def acceptance_mode(backend_id: str, backend_config: Mapping[str, Any]) -> str:
     if backend_id != "rlab.jerk":
         raise ValueError(f"JERK backend module does not define {backend_id!r}")
-    return str(normalize_config(backend_config, label="training_backend.config")["acceptance_mode"])
+    return str(
+        normalize_config(
+            backend_id,
+            backend_config,
+            label="training_backend.config",
+        )["acceptance_mode"]
+    )
 
 
 def backend_for_id(backend_id: str) -> JerkBackend:
