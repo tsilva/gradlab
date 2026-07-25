@@ -48,6 +48,10 @@ class FakeApi:
                     "recipe_slug": "ppo",
                     "seed": 3,
                 },
+                summary={
+                    "train/outcome/success/window_100/rate/min": 0.75,
+                    "train/episode/return/shaped/from/target/mean": 123.5,
+                },
                 notes="accepted",
                 created_at="2026-01-02T00:00:00Z",
                 updated_at="2026-01-03T00:00:00Z",
@@ -71,6 +75,10 @@ def write_goal_catalog(repo_root: Path) -> None:
                 "- _self_",
                 "goal_id: Level1-1",
                 "title: Mario Level 1-1 completion",
+                "objective:",
+                "  rank:",
+                "  - min(leader/checkpoint/step)",
+                "  - max(eval/full/episode/return/mean)",
                 "train:",
                 "  environment:",
                 "    env_provider: gymnasium",
@@ -185,6 +193,20 @@ def test_catalog_uses_repository_projects_and_goals_before_querying_wandb(
     assert goals.items[0]["goal_path"].endswith("/Level1-1/_goal.yaml")
     assert [item["run_id"] for item in runs.items] == [RUN_ID]
     assert runs.items[0]["recipe"] == "ppo"
+    assert runs.metric_columns == (
+        {
+            "metric": "train/outcome/success/window_100/rate/min",
+            "direction": "max",
+        },
+        {
+            "metric": "train/episode/return/shaped/from/target/mean",
+            "direction": "max",
+        },
+    )
+    assert runs.items[0]["metrics"] == {
+        "train/outcome/success/window_100/rate/min": 0.75,
+        "train/episode/return/shaped/from/target/mean": 123.5,
+    }
     assert catalog.run_goal(entity="research", project="Mario", run_id=RUN_ID) == "Level1-1"
 
 

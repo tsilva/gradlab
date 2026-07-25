@@ -30,6 +30,7 @@ class ConfigValidationTests(unittest.TestCase):
     BREAKOUT_NO_NOOP_GOAL = BREAKOUT_GOAL.parent / "no-noop/_goal.yaml"
     BREAKOUT_NO_NOOP_RECIPE = BREAKOUT_NO_NOOP_GOAL.parent / "recipes/ppo.yaml"
     MARIO_L11_GOAL = Path("experiments/goals/SuperMarioBros-Nes-v0/Level1-1/_goal.yaml")
+    MARIO_L12_GOAL = Path("experiments/goals/SuperMarioBros-Nes-v0/Level1-2/_goal.yaml")
     MARIO_END_TO_END_GOAL = Path("experiments/goals/SuperMarioBros-Nes-v0/EndToEnd/_goal.yaml")
     MARIO_SINGLE_RECIPES = MARIO_L11_GOAL.parent / "recipes"
 
@@ -734,6 +735,27 @@ class ConfigValidationTests(unittest.TestCase):
             ["level_change"],
         )
         self.assertEqual(document["train"]["environment"]["task"]["id"], "mario")
+
+    def test_level_1_2_resets_no_progress_attractor_and_caps_ppo_at_30m(self) -> None:
+        recipe = self.MARIO_L12_GOAL.parent / "recipes/ppo.yaml"
+        document = compose_train_document(self.MARIO_L12_GOAL, recipe)
+        stalled_event = {"signal": "x", "operation": "unchanged_for", "steps": 300}
+
+        self.assertEqual(document["train_config"]["timesteps"], 30_000_000)
+        self.assertEqual(
+            document["train_config"]["training_backend"]["config"]["target_kl"],
+            0.03,
+        )
+        self.assertEqual(document["train_config"]["state"], "Level1-2")
+        self.assertEqual(document["train_config"]["task"]["events"]["stalled"], stalled_event)
+        self.assertEqual(
+            document["train_config"]["task"]["termination"]["failure"],
+            ["life_loss", "stalled"],
+        )
+        eval_task = document["goal"]["eval"]["environment"]["task"]
+        self.assertEqual(eval_task["events"]["stalled"], stalled_event)
+        self.assertEqual(eval_task["termination"]["failure"], [])
+        self.assertEqual(eval_task["termination"]["success"], ["level_change"])
 
     def test_end_to_end_mario_goal_only_terminates_successfully_after_level_8_4(self) -> None:
         document = load_goal_contract(self.MARIO_END_TO_END_GOAL)

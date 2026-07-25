@@ -94,9 +94,13 @@ function humanizeMetricPart(value) {
     .replace(/\b\w/g, (character) => character.toUpperCase());
 }
 
-function evaluationMetricLabel(metric) {
+export function metricLabel(metric) {
   const name = String(metric || "");
   const known = {
+    "leader/checkpoint/step": "Checkpoint step",
+    "train/global_step": "Global step",
+    "train/episode/return/shaped/from/target/mean": "Target return",
+    "train/outcome/success/window_100/rate/min": "Min success (100)",
     "eval/full/outcome/success/rate/min": "Min success",
     "eval/full/outcome/success/rate/mean": "Mean success",
     "eval/full/episode/return/mean": "Mean return",
@@ -109,10 +113,14 @@ function evaluationMetricLabel(metric) {
   if (progress) {
     return `${humanizeMetricPart(progress[1])} ${progress[2]}`;
   }
-  return name.replace(/^eval\/full\//, "").replaceAll("/", " · ");
+  return name
+    .replace(/^(eval\/full|leader|train)\//, "")
+    .split("/")
+    .map(humanizeMetricPart)
+    .join(" · ");
 }
 
-function formatEvaluationValue(metric, value) {
+export function formatMetricValue(metric, value) {
   if (value === null || value === undefined || value === "") return "—";
   const numeric = Number(value);
   if (!Number.isFinite(numeric)) return "—";
@@ -120,6 +128,33 @@ function formatEvaluationValue(metric, value) {
     return `${(numeric * 100).toLocaleString(undefined, { maximumFractionDigits: 2 })}%`;
   }
   return numeric.toLocaleString(undefined, { maximumFractionDigits: 3 });
+}
+
+export function sortRunItems(items, sort) {
+  const metric = String(sort?.metric || "");
+  const direction = sort?.direction === "ascending" ? "ascending" : "descending";
+  if (!metric) return [...items];
+  return items
+    .map((item, index) => ({ item, index }))
+    .sort((left, right) => {
+      const leftRaw = left.item?.metrics?.[metric];
+      const rightRaw = right.item?.metrics?.[metric];
+      const leftValue = Number(leftRaw);
+      const rightValue = Number(rightRaw);
+      const leftMissing = leftRaw === null
+        || leftRaw === undefined
+        || !Number.isFinite(leftValue);
+      const rightMissing = rightRaw === null
+        || rightRaw === undefined
+        || !Number.isFinite(rightValue);
+      if (leftMissing !== rightMissing) return leftMissing ? 1 : -1;
+      if (leftMissing) return left.index - right.index;
+      const difference = direction === "ascending"
+        ? leftValue - rightValue
+        : rightValue - leftValue;
+      return difference || left.index - right.index;
+    })
+    .map(({ item }) => item);
 }
 
 function checkpointEvaluationCell(item) {
@@ -132,15 +167,15 @@ function checkpointEvaluationCell(item) {
     details.push(`${completed.toLocaleString()} / ${planned.toLocaleString()} episodes`);
   }
   (Array.isArray(evaluation.criteria) ? evaluation.criteria : []).forEach((criterion) => {
-    const label = evaluationMetricLabel(criterion.metric);
-    const threshold = formatEvaluationValue(criterion.metric, criterion.threshold);
+    const label = metricLabel(criterion.metric);
+    const threshold = formatMetricValue(criterion.metric, criterion.threshold);
     if (
       criterion.value !== null
       && criterion.value !== undefined
       && criterion.value !== ""
       && Number.isFinite(Number(criterion.value))
     ) {
-      const value = formatEvaluationValue(criterion.metric, criterion.value);
+      const value = formatMetricValue(criterion.metric, criterion.value);
       details.push(`${label}: ${value} ${criterion.operator} ${threshold}`);
     } else {
       details.push(`${label} ${criterion.operator} ${threshold}`);
@@ -272,6 +307,8 @@ export class SourceBrowser {
     };
     this.query = "";
     this.items = [];
+    this.metricColumns = [];
+    this.sort = { metric: "", direction: "" };
     this.nextCursor = null;
     this.loading = false;
     this.error = "";
@@ -331,6 +368,8 @@ export class SourceBrowser {
       };
       this.query = "";
       this.items = [];
+      this.metricColumns = [];
+      this.sort = { metric: "", direction: "" };
       this.nextCursor = null;
       this.loadedKey = "";
       this.error = "";
@@ -404,6 +443,17 @@ export class SourceBrowser {
       }
       const received = Array.isArray(payload.items) ? payload.items : [];
       this.items = append ? [...this.items, ...received] : received;
+      if (!append) {
+        this.metricColumns = Array.isArray(payload.metric_columns)
+          ? payload.metric_columns
+          : [];
+        if (
+          this.sort.metric
+          && !this.metricColumns.some((column) => column.metric === this.sort.metric)
+        ) {
+          this.sort = { metric: "", direction: "" };
+        }
+      }
       this.nextCursor = payload.next_cursor || null;
       this.loadedKey = key;
       this.error = "";
@@ -448,6 +498,8 @@ export class SourceBrowser {
     this.route = { ...this.route, ...route };
     this.query = "";
     this.items = [];
+    this.metricColumns = [];
+    this.sort = { metric: "", direction: "" };
     this.nextCursor = null;
     this.loadedKey = "";
     this.error = "";
@@ -796,17 +848,71 @@ export class SourceBrowser {
     const head = document.createElement("thead");
     const headerRow = document.createElement("tr");
     const columns = this.route.level === "runs"
-      ? ["Run", "Recipe", "Seed", "Updated"]
-      : ["Checkpoint", "Purpose", "Step", "Evaluation", "Size", "Created"];
-    columns.forEach((label) => {
+      ? [
+          { label: "Run" },
+          { label: "Recipe" },
+          { label: "Seed" },
+          ...this.metricColumns.map((column) => ({
+            ...column,
+            label: metricLabel(column.metric),
+          })),
+          { label: "Updated" },
+        ]
+      : [
+          { label: "Checkpoint" },
+          { label: "Purpose" },
+          { label: "Step" },
+          { label: "Evaluation" },
+          { label: "Size" },
+          { label: "Created" },
+        ];
+    columns.forEach((column) => {
       const cell = document.createElement("th");
       cell.scope = "col";
-      cell.textContent = label;
+      if (column.metric) {
+        const active = this.sort.metric === column.metric;
+        const defaultDirection = column.direction === "min" ? "ascending" : "descending";
+        const nextDirection = active && this.sort.direction === "ascending"
+          ? "descending"
+          : active && this.sort.direction === "descending"
+            ? "ascending"
+            : defaultDirection;
+        cell.setAttribute("aria-sort", active ? this.sort.direction : "none");
+        const sortButton = document.createElement("button");
+        sortButton.type = "button";
+        sortButton.className = "source-sort";
+        sortButton.title = `${column.label} · ${
+          column.direction === "min" ? "lower is better" : "higher is better"
+        }`;
+        sortButton.setAttribute(
+          "aria-label",
+          `Sort by ${column.label}, ${nextDirection}`,
+        );
+        const label = document.createElement("span");
+        label.textContent = column.label;
+        const indicator = document.createElement("span");
+        indicator.className = "source-sort-indicator";
+        indicator.setAttribute("aria-hidden", "true");
+        indicator.textContent = active
+          ? this.sort.direction === "ascending" ? "↑" : "↓"
+          : "↕";
+        sortButton.append(label, indicator);
+        sortButton.addEventListener("click", () => {
+          this.sort = { metric: column.metric, direction: nextDirection };
+          this.renderView();
+        });
+        cell.append(sortButton);
+      } else {
+        cell.textContent = column.label;
+      }
       headerRow.append(cell);
     });
     head.append(headerRow);
     const body = document.createElement("tbody");
-    this.items.forEach((item) => {
+    const items = this.route.level === "runs"
+      ? sortRunItems(this.items, this.sort)
+      : this.items;
+    items.forEach((item) => {
       const row = document.createElement("tr");
       row.tabIndex = this.hasControl() ? 0 : -1;
       row.setAttribute("role", "button");
@@ -816,6 +922,9 @@ export class SourceBrowser {
             [item.name || item.run_id, item.run_id, "run-cell"],
             [item.recipe || "—"],
             [item.seed ?? "—"],
+            ...this.metricColumns.map((column) => [
+              formatMetricValue(column.metric, item.metrics?.[column.metric]),
+            ]),
             [formatDate(item.updated_at || item.created_at)],
           ]
         : [

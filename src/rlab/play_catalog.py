@@ -18,8 +18,12 @@ from rlab.metric_names import (
     EVAL_ACCEPTANCE_FAILURE_COUNT,
     EVAL_ACCEPTANCE_PASS,
     EVAL_CHECKPOINT_STEP,
+    TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_MEAN,
+    TRAIN_EPISODE_RETURN_SHAPED_MEAN,
+    TRAIN_OUTCOME_SUCCESS_WINDOW_100_RATE_MIN,
 )
 from rlab.model_sources import DEFAULT_PUBLIC_MODELS_BASE_URL, _public_json
+from rlab.ranking import RankCriterion, parse_objective_rank
 from rlab.run_contracts import CheckpointManifest, RUN_ID_PATTERN
 from rlab.wandb_utils import (
     load_wandb_env,
@@ -31,6 +35,25 @@ from rlab.wandb_utils import (
 WANDB_HOSTS = {"wandb.ai", "www.wandb.ai"}
 CATALOG_PAGE_SIZE = 50
 EVALUATION_CACHE_SECONDS = 10.0
+LIVE_TRAINING_METRICS = (
+    (
+        RankCriterion(
+            direction="max",
+            metric=TRAIN_OUTCOME_SUCCESS_WINDOW_100_RATE_MIN,
+        ),
+        (TRAIN_OUTCOME_SUCCESS_WINDOW_100_RATE_MIN,),
+    ),
+    (
+        RankCriterion(
+            direction="max",
+            metric=TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_MEAN,
+        ),
+        (
+            TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_MEAN,
+            TRAIN_EPISODE_RETURN_SHAPED_MEAN,
+        ),
+    ),
+)
 
 
 @dataclass(frozen=True)
@@ -44,9 +67,16 @@ class WandbLocation:
 class CatalogPage:
     items: tuple[dict[str, Any], ...]
     next_cursor: str | None
+    metric_columns: tuple[dict[str, str], ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
-        return {"items": list(self.items), "next_cursor": self.next_cursor}
+        payload: dict[str, Any] = {
+            "items": list(self.items),
+            "next_cursor": self.next_cursor,
+        }
+        if self.metric_columns:
+            payload["metric_columns"] = list(self.metric_columns)
+        return payload
 
 
 @dataclass(frozen=True)
@@ -86,6 +116,7 @@ class RunSummary:
     created_at: str
     updated_at: str
     url: str
+    metrics: Mapping[str, float | None]
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -116,6 +147,7 @@ class _RepositoryGoal:
     title: str
     recipe_count: int
     goal_path: str
+    rank: tuple[RankCriterion, ...]
 
 
 def parse_wandb_location(value: object) -> WandbLocation | None:
@@ -177,6 +209,22 @@ def _safe_float(value: object) -> float | None:
         return None
     numeric = float(value)
     return numeric if numeric == numeric and abs(numeric) != float("inf") else None
+
+
+def _first_summary_float(summary: Any, metrics: Iterable[str]) -> float | None:
+    for metric in metrics:
+        value = _safe_float(summary.get(metric))
+        if value is not None:
+            return value
+    return None
+
+
+def _run_metric_specs(
+    rank: tuple[RankCriterion, ...],
+) -> tuple[tuple[RankCriterion, tuple[str, ...]], ...]:
+    if rank and all(criterion.metric.startswith("train/") for criterion in rank):
+        return tuple((criterion, (criterion.metric,)) for criterion in rank)
+    return LIVE_TRAINING_METRICS
 
 
 def _page_items(items: list[dict[str, Any]], cursor: str | None) -> CatalogPage:
@@ -310,6 +358,10 @@ class PlayCatalog:
             goal_id = str(document.get("goal_id") or "").strip()
             if not project or not goal_id:
                 raise ValueError(f"repository goal has no project or goal identity: {path}")
+            objective = document.get("objective")
+            rank = parse_objective_rank(
+                objective.get("rank") if isinstance(objective, Mapping) else None
+            )
             goal_slug = path.parent.relative_to(self.goals_root).as_posix()
             goals.append(
                 _RepositoryGoal(
@@ -319,6 +371,7 @@ class PlayCatalog:
                     title=str(document.get("title") or goal_id).strip(),
                     recipe_count=sum(1 for _ in path.parent.glob("recipes/*.yaml")),
                     goal_path=path.relative_to(self.repo_root).as_posix(),
+                    rank=rank,
                 )
             )
         identities = [(goal.project, goal.goal_id) for goal in goals]
@@ -368,10 +421,17 @@ class PlayCatalog:
     ) -> CatalogPage:
         normalized = str(query or "").strip().casefold()
         selected_goal = str(goal_id or "").strip()
-        selected_goal_slug = (
-            self._repository_goal(project=project, goal_id=selected_goal).goal_slug
+        repository_goal = (
+            self._repository_goal(project=project, goal_id=selected_goal)
             if selected_goal
-            else ""
+            else None
+        )
+        selected_goal_slug = repository_goal.goal_slug if repository_goal else ""
+        rank = repository_goal.rank if repository_goal else ()
+        metric_specs = _run_metric_specs(rank) if repository_goal else ()
+        metric_columns = tuple(
+            {"metric": criterion.metric, "direction": criterion.direction}
+            for criterion, _sources in metric_specs
         )
 
         def values() -> Iterator[dict[str, Any]]:
@@ -389,6 +449,7 @@ class PlayCatalog:
                 goal_slug = str(config.get("goal_slug") or "")
                 if selected_goal_slug and goal_slug != selected_goal_slug:
                     continue
+                run_metrics = getattr(run, "summary", {}) or {}
                 summary = RunSummary(
                     entity=entity,
                     project=project,
@@ -401,6 +462,10 @@ class PlayCatalog:
                     created_at=str(getattr(run, "created_at", "") or ""),
                     updated_at=str(getattr(run, "updated_at", "") or ""),
                     url=str(getattr(run, "url", "") or ""),
+                    metrics={
+                        criterion.metric: _first_summary_float(run_metrics, sources)
+                        for criterion, sources in metric_specs
+                    },
                 )
                 if normalized and normalized not in _search_text(
                     summary.run_id,
@@ -419,7 +484,12 @@ class PlayCatalog:
                 ("runs", entity, project, selected_goal, normalized),
                 values,
             )
-            return stream.page(_cursor_offset(cursor), CATALOG_PAGE_SIZE)
+            page = stream.page(_cursor_offset(cursor), CATALOG_PAGE_SIZE)
+        return CatalogPage(
+            items=page.items,
+            next_cursor=page.next_cursor,
+            metric_columns=metric_columns,
+        )
 
     def goals(
         self,
