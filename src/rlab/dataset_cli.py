@@ -119,14 +119,7 @@ def build_parser() -> argparse.ArgumentParser:
     record.add_argument("--model", default=None, help="Approved PPO checkpoint source.")
     record.add_argument("--episodes", type=_positive_int, default=None)
     record.add_argument("--seed", type=int, default=0)
-    record.add_argument("--headless", action="store_true")
     record.add_argument("--fps", type=_positive_float, default=None)
-    record.add_argument(
-        "--ui",
-        choices=("web", "pygame"),
-        default="web",
-        help="Human-control interface (default: web dashboard).",
-    )
     record.add_argument(
         "--port",
         type=_nonnegative_int,
@@ -154,7 +147,17 @@ def build_parser() -> argparse.ArgumentParser:
     play.add_argument("source")
     play.add_argument("--episode", type=_positive_int, default=1)
     play.add_argument("--fps", type=float, default=None)
-    play.add_argument("--scale", type=_positive_int, default=3)
+    play.add_argument(
+        "--port",
+        type=_nonnegative_int,
+        default=0,
+        help="Loopback web dashboard port; 0 chooses a free port.",
+    )
+    play.add_argument(
+        "--no-open",
+        action="store_true",
+        help="Print the dashboard URL without opening a browser.",
+    )
     _dataset_root_arg(play)
     play.set_defaults(handler=_play)
 

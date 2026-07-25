@@ -24,7 +24,7 @@ import gymnasium as gym
 import numpy as np
 
 from rlab.action_contract import MARIO_ACTION_TABLES
-from rlab.dataset_contract import canonical_json_bytes
+from rlab.json_utils import canonical_json_bytes
 
 
 PROVIDER_CONTRACT_VERSION = 1

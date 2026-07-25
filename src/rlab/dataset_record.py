@@ -8,7 +8,6 @@ import json
 import os
 import shutil
 import sys
-import time
 import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -29,7 +28,6 @@ from rlab.dataset_contract import (
     STORAGE_FORMAT_LOSSLESS_VIDEO,
     VIDEO_ARTIFACT_DIR,
     canonical_column_order,
-    canonical_json_bytes,
     dataset_fields,
     observation_to_rgb,
 )
@@ -49,6 +47,7 @@ from rlab.dataset_store import (
     preflight_recording_reference,
     validate_tree,
 )
+from rlab.json_utils import canonical_json_bytes
 from rlab.model_sources import (
     download_remote_model_source,
     is_huggingface_model_ref,
@@ -169,95 +168,6 @@ class EpisodeJournal:
     def close(self) -> None:
         if not self._stream.closed:
             self._stream.close()
-
-
-class HumanController:
-    KEY_LABELS = {
-        "K_UP": "UP",
-        "K_DOWN": "DOWN",
-        "K_LEFT": "LEFT",
-        "K_RIGHT": "RIGHT",
-        "K_z": "B",
-        "K_x": "A",
-        "K_RETURN": "START",
-        "K_RSHIFT": "SELECT",
-    }
-
-    def __init__(self, session: ProviderSession, frame: np.ndarray, *, headless: bool) -> None:
-        if headless:
-            raise ValueError("human recording cannot be headless")
-        from rlab.play import PygameViewer
-
-        self.session = session
-        self.viewer = PygameViewer(frame.shape, 3)
-        self.fps = max(int(round(session.fps)), 1)
-        self._started = False
-        self._help_visible = True
-        self._special_keys: set[int] = set()
-        self._last_tick = time.monotonic()
-
-    def _overlay(self) -> list[str] | None:
-        if not self._help_visible:
-            return None
-        prefix = [] if self._started else ["Press SPACE to start"]
-        return [
-            *prefix,
-            "Arrows move · Z=B · X=A · Enter=START · Right Shift=SELECT",
-            "Tab help · +/- speed · Esc/Q stop",
-            f"{self.fps} FPS",
-        ]
-
-    def _handle_special_keys(self, pressed: Any) -> None:
-        pygame = self.viewer.pygame
-        current = {
-            key
-            for key in (
-                pygame.K_TAB,
-                pygame.K_EQUALS,
-                getattr(pygame, "K_PLUS", pygame.K_EQUALS),
-                getattr(pygame, "K_KP_PLUS", pygame.K_EQUALS),
-                pygame.K_MINUS,
-                getattr(pygame, "K_KP_MINUS", pygame.K_MINUS),
-            )
-            if pressed[key]
-        }
-        newly_pressed = current - self._special_keys
-        if pygame.K_TAB in newly_pressed:
-            self._help_visible = not self._help_visible
-        plus = {
-            pygame.K_EQUALS,
-            getattr(pygame, "K_PLUS", pygame.K_EQUALS),
-            getattr(pygame, "K_KP_PLUS", pygame.K_EQUALS),
-        }
-        minus = {pygame.K_MINUS, getattr(pygame, "K_KP_MINUS", pygame.K_MINUS)}
-        if newly_pressed.intersection(plus):
-            self.fps += 5
-        if newly_pressed.intersection(minus):
-            self.fps = max(1, self.fps - 5)
-        self._special_keys = current
-
-    def action(self, frame: np.ndarray) -> tuple[Any | None, bool]:
-        while True:
-            remaining = (1.0 / self.fps) - (time.monotonic() - self._last_tick)
-            if remaining > 0:
-                time.sleep(remaining)
-            self._last_tick = time.monotonic()
-            if not self.viewer.show(frame, overlay=self._overlay()):
-                return None, False
-            pressed = self.viewer.pygame.key.get_pressed()
-            self._handle_special_keys(pressed)
-            if self._started or pressed[self.viewer.pygame.K_SPACE]:
-                self._started = True
-                break
-        labels = {
-            label
-            for key_name, label in self.KEY_LABELS.items()
-            if pressed[getattr(self.viewer.pygame, key_name)]
-        }
-        return self.session.action_from_labels(labels), True
-
-    def close(self) -> None:
-        self.viewer.close()
 
 
 def _current_tree_size(root: Path, reference: str) -> int:
@@ -529,9 +439,7 @@ def _record_one(
     episode_directory: Path,
     package: Path,
     session_id: str,
-    headless: bool,
     projected_rebuild: int,
-    ui: str = "pygame",
     no_open: bool = False,
     port: int = 0,
 ) -> str | None:
@@ -554,23 +462,20 @@ def _record_one(
             return None
         writer.write(frame)
         if agent == "human":
-            if ui == "web":
-                from argparse import Namespace
+            from argparse import Namespace
 
-                from rlab.play_web import WebHumanController
+            from rlab.play_web import WebHumanController
 
-                controller = WebHumanController(
-                    session,
-                    Namespace(
-                        fps=session.fps,
-                        episodes=1,
-                        port=port,
-                        no_open=no_open,
-                        debug=False,
-                    ),
-                )
-            else:
-                controller = HumanController(session, frame, headless=headless)
+            controller = WebHumanController(
+                session,
+                Namespace(
+                    fps=session.fps,
+                    episodes=1,
+                    port=port,
+                    no_open=no_open,
+                    debug=False,
+                ),
+            )
         elif agent == "random":
             session.env.action_space.seed(policy_seed)
         else:
@@ -833,9 +738,7 @@ def _record_session(
             episode_directory=episode_directory,
             package=package,
             session_id=session_id,
-            headless=bool(args.headless),
             projected_rebuild=projected_rebuild,
-            ui=str(getattr(args, "ui", "web")),
             no_open=bool(getattr(args, "no_open", False)),
             port=int(getattr(args, "port", 0)),
         )
@@ -886,8 +789,6 @@ def record_command(args: Any) -> int:
         raise ValueError("--agent ppo requires --model")
     if args.agent != "ppo" and args.model:
         raise ValueError("--model is valid only with --agent ppo")
-    if args.agent == "human" and args.headless:
-        raise ValueError("human recording cannot be headless")
     if args.upload_live and "/" not in args.reference:
         raise ValueError("--upload-live requires reference to be a Hugging Face owner/repository")
     validate_provider_request(args.env_config)

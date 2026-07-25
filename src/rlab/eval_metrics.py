@@ -6,8 +6,6 @@ from typing import Any
 import numpy as np
 
 from rlab.metric_names import (
-    EVAL_FULL_SUCCESS_RATE_MEAN,
-    EVAL_FULL_SUCCESS_RATE_MIN,
     eval_metric,
     eval_progress_metric,
     eval_reason_rate_metric,
@@ -393,24 +391,6 @@ def summarize_episode_results(
     if extra:
         metrics = {**extra, **metrics}
     return metrics
-
-
-def metric_float(metrics: dict[str, Any] | Any, key: str, default: float = float("-inf")) -> float:
-    value = metrics.get(key) if hasattr(metrics, "get") else None
-    if value is None:
-        return default
-    try:
-        return float(value)
-    except TypeError, ValueError:
-        return default
-
-
-def completion_score(metrics: dict[str, Any]) -> tuple[float, float] | None:
-    completion_min = metric_float(metrics, EVAL_FULL_SUCCESS_RATE_MIN)
-    completion_mean = metric_float(metrics, EVAL_FULL_SUCCESS_RATE_MEAN)
-    if completion_min == float("-inf"):
-        return None
-    return (float(completion_min), float(completion_mean))
 
 
 def run_eval_episode(

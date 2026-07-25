@@ -3,7 +3,9 @@ from __future__ import annotations
 import hashlib
 import json
 import uuid
+from argparse import Namespace
 from pathlib import Path
+from unittest.mock import patch
 
 import numpy as np
 import pytest
@@ -13,9 +15,9 @@ datasets = pytest.importorskip("datasets")
 from rlab.dataset_contract import (  # noqa: E402
     ENVIRONMENT_DOCUMENT_FILENAME,
     canonical_column_order,
-    canonical_json_bytes,
 )
-from rlab.dataset_store import adopt_tree, collection_paths, open_source  # noqa: E402
+from rlab.json_utils import canonical_json_bytes  # noqa: E402
+from rlab.dataset_store import adopt_tree, collection_paths, open_source, play_command  # noqa: E402
 
 
 def _environment_document() -> dict:
@@ -127,6 +129,35 @@ def test_adopt_rejects_duplicate_uuid_with_different_content(tmp_path):
 
     with pytest.raises(ValueError, match="episode UUID conflict"):
         adopt_tree(second_source, "fixture", root=root)
+
+
+def test_play_routes_verified_dataset_frames_to_web_dashboard(tmp_path):
+    source = tmp_path / "source"
+    root = tmp_path / "root"
+    _write_tree(source)
+    adopt_tree(source, "fixture", root=root)
+    captured = {}
+
+    def fake_dashboard(frames, rows, _args, *, fps):
+        captured["frames"] = list(frames)
+        captured["rows"] = rows
+        captured["fps"] = fps
+        return 0
+
+    args = Namespace(
+        source="fixture",
+        root=root,
+        episode=1,
+        fps=None,
+        port=0,
+        no_open=True,
+    )
+    with patch("rlab.play_web.run_web_dataset_playback", side_effect=fake_dashboard):
+        assert play_command(args) == 0
+
+    assert len(captured["frames"]) == 2
+    assert len(captured["rows"]) == 2
+    assert captured["fps"] == 30.0
 
 
 def test_reader_recovers_rename_boundary(tmp_path):

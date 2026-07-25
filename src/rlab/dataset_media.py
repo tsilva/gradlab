@@ -400,17 +400,6 @@ def _fsync_directory(path: Path) -> None:
         os.close(descriptor)
 
 
-def validate_episode_media(
-    rows: Sequence[Mapping[str, Any]],
-    *,
-    root: Path,
-) -> tuple[str, ...]:
-    return tuple(
-        hashlib.sha256(frame.tobytes()).hexdigest()
-        for frame in iter_episode_frames(rows, root=root)
-    )
-
-
 def iter_selected_frames(
     episodes: Iterable[Sequence[Mapping[str, Any]]],
     *,

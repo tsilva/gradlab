@@ -15,11 +15,9 @@ from copy import deepcopy
 from dataclasses import asdict, dataclass, replace
 from itertools import count
 from pathlib import Path
-from types import ModuleType
 
 os.environ.setdefault("MPLCONFIGDIR", os.path.abspath(".matplotlib"))
 os.makedirs(os.environ["MPLCONFIGDIR"], exist_ok=True)
-os.environ.setdefault("PYGAME_HIDE_SUPPORT_PROMPT", "1")
 
 import numpy as np
 import torch
@@ -66,22 +64,22 @@ from rlab.play_debug import (
     PolicyDecision,
     action_display_name,
     ansi,
-    debug_prompt,
     debug_help,
+    debug_prompt,
     field,
     format_action,
     format_model_input,
     format_policy_detail,
     format_raw,
+    inspect_policy,
     model_input_lines,
+    parse_debug_command,
     policy_summary_lines,
     reward_text,
+    sample_policy_decision,
     section,
     status_message,
     terminal_panel,
-    inspect_policy,
-    parse_debug_command,
-    sample_policy_decision,
 )
 from rlab.policy_observation import (
     model_observation,
@@ -103,8 +101,6 @@ ANSI_STYLES = {
     "yellow": "\033[33m",
     "magenta": "\033[35m",
 }
-DEFAULT_VIEWER_SCALE = 4
-DEFAULT_OBS_VIEWER_SCALE = 4
 ATTRIBUTION_MODES = ("none", "gradcam", "occlusion")
 
 
@@ -124,34 +120,6 @@ def _format_sequence(value) -> str:
     if isinstance(value, str):
         return value
     return ",".join(str(item) for item in value)
-
-
-@contextlib.contextmanager
-def _suppress_native_stderr():
-    """Hide noisy native-library import chatter while keeping normal stderr intact."""
-
-    try:
-        stderr_fd = sys.stderr.fileno()
-    except AttributeError, OSError, ValueError:
-        yield
-        return
-    saved_stderr_fd = os.dup(stderr_fd)
-    try:
-        with open(os.devnull, "w") as devnull:
-            os.dup2(devnull.fileno(), stderr_fd)
-        yield
-    finally:
-        os.dup2(saved_stderr_fd, stderr_fd)
-        os.close(saved_stderr_fd)
-
-
-def import_pygame() -> ModuleType:
-    if "pygame" in sys.modules:
-        return sys.modules["pygame"]
-    os.environ.setdefault("PYGAME_HIDE_SUPPORT_PROMPT", "1")
-    with _suppress_native_stderr():
-        import pygame
-    return pygame
 
 
 def fast_env_image_obs(obs) -> np.ndarray:
@@ -201,22 +169,6 @@ def task_conditioning_change_message(
     return (
         "task_conditioning_change "
         f"episode={episode} step={step} old={old_task!r} new={new_task!r} "
-        f"index={task_index} one_hot={task_vector}"
-    )
-
-
-def task_conditioning_start_message(
-    *,
-    episode: int,
-    step: int,
-    task: object,
-    task_index: int,
-    task_count: int,
-) -> str:
-    task_vector = [1 if index == task_index else 0 for index in range(task_count)]
-    return (
-        "task_conditioning_start "
-        f"episode={episode} step={step} task={task!r} "
         f"index={task_index} one_hot={task_vector}"
     )
 
@@ -293,96 +245,6 @@ def render_obs_stack(
             panel = ((1.0 - alpha) * panel.astype(np.float32) + alpha * heat_color).astype(np.uint8)
         panels.append(panel)
     return np.concatenate(panels, axis=1)
-
-
-class PygameViewer:
-    def __init__(
-        self, frame_shape: tuple[int, int, int], scale: int, position: tuple[int, int] | None = None
-    ):
-        if scale < 1:
-            raise ValueError("viewer scale must be >= 1")
-        self.pygame = import_pygame()
-        height, width, _channels = frame_shape
-        self.size = (width * scale, height * scale)
-        if position is not None:
-            os.environ["SDL_VIDEO_WINDOW_POS"] = f"{position[0]},{position[1]}"
-        with _suppress_native_stderr():
-            self.pygame.init()
-            self.pygame.display.set_caption("rlab")
-            self.screen = self.pygame.display.set_mode(self.size)
-            self.font = self.pygame.font.Font(None, max(16, 5 * scale))
-
-    def show(self, frame: np.ndarray, overlay: list[str] | None = None) -> bool:
-        for event in self.pygame.event.get():
-            if event.type in {self.pygame.QUIT, self.pygame.WINDOWCLOSE}:
-                return False
-            if event.type == self.pygame.KEYDOWN and getattr(event, "key", None) in {
-                self.pygame.K_ESCAPE,
-                self.pygame.K_q,
-            }:
-                return False
-        surface = self.pygame.surfarray.make_surface(np.transpose(frame, (1, 0, 2)))
-        surface = self.pygame.transform.scale(surface, self.size)
-        self.screen.blit(surface, (0, 0))
-        if overlay:
-            self.draw_overlay(overlay)
-        self.pygame.display.flip()
-        return True
-
-    def draw_overlay(self, lines: list[str]) -> None:
-        padding = 6
-        line_height = self.font.get_height() + 2
-        width = max(self.font.size(line)[0] for line in lines) + padding * 2
-        height = line_height * len(lines) + padding * 2
-        background = self.pygame.Surface((width, height), self.pygame.SRCALPHA)
-        background.fill((0, 0, 0, 160))
-        self.screen.blit(background, (0, 0))
-        for idx, line in enumerate(lines):
-            text = self.font.render(line, True, (255, 255, 255))
-            self.screen.blit(text, (padding, padding + idx * line_height))
-
-    def close(self) -> None:
-        self.pygame.quit()
-
-
-class ObsStackViewer:
-    def __init__(self, scale: int, position: tuple[int, int] | None = None):
-        self.scale = scale
-        self.position = position
-        self.pygame = import_pygame()
-        self.window = None
-        self.surface = None
-
-    def _ensure_window(self, image: np.ndarray) -> None:
-        height, width = image.shape[:2]
-        if self.window is not None and self.window.size == (width, height):
-            return
-        if self.window is not None:
-            self.window.destroy()
-        kwargs = {"size": (width, height)}
-        if self.position is not None:
-            kwargs["position"] = self.position
-        self.window = self.pygame.Window("rlab obs framestack", **kwargs)
-        self.surface = self.window.get_surface()
-
-    def show(
-        self,
-        frames: deque[np.ndarray],
-        heatmap: np.ndarray | None = None,
-        heatmap_opacity: float = 0.45,
-    ) -> bool:
-        image = render_obs_stack(frames, self.scale, heatmap, heatmap_opacity)
-        self._ensure_window(image)
-        frame_surface = self.pygame.surfarray.make_surface(np.transpose(image, (1, 0, 2)))
-        self.surface.blit(frame_surface, (0, 0))
-        self.window.flip()
-        return True
-
-    def close(self) -> None:
-        if self.window is not None:
-            self.window.destroy()
-            self.window = None
-            self.surface = None
 
 
 def add_play_source_args(parser: argparse.ArgumentParser) -> None:
@@ -473,12 +335,6 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--fps", type=float, default=0.0)
     parser.add_argument(
-        "--ui",
-        choices=("web", "pygame"),
-        default="web",
-        help="Use the browser dashboard (default) or the temporary PyGame compatibility UI.",
-    )
-    parser.add_argument(
         "--port",
         type=nonnegative_int_arg,
         default=0,
@@ -506,14 +362,6 @@ def build_parser() -> argparse.ArgumentParser:
         "--no-progress",
         action="store_true",
         help="Disable model-download and player-startup progress bars.",
-    )
-    parser.add_argument(
-        "--show-obs",
-        action="store_true",
-        help=(
-            "With --ui pygame, open a second window showing the four preprocessed policy frames. "
-            "The web dashboard exposes them automatically."
-        ),
     )
     parser.add_argument(
         "--attribution",
@@ -587,7 +435,7 @@ def resolved_play_launch_lines(
             f"seed={args.seed} episodes={args.episodes} "
             f"max_steps={task_max_episode_steps(policy_config)} "
             f"debug={getattr(args, 'debug', False)} "
-            f"ui={getattr(args, 'ui', 'web')} "
+            "interface=web "
             f"respect_task_termination={getattr(args, 'respect_task_termination', False)}",
             "green",
         ),
@@ -774,8 +622,6 @@ class _PlaybackSession:
         self.attribution_mode = attribution_mode
         self.attribution_interval = attribution_interval
         self.attribution_opacity = attribution_opacity
-        self.viewer: PygameViewer | None = None
-        self.obs_viewer: ObsStackViewer | None = None
         self.info_vars = task_info_vars(config)
         self.conditioning_enabled = bool(task_conditioning(config).get("enabled"))
         self.configured_task_states = task_state_names(config) if self.conditioning_enabled else ()
@@ -1045,33 +891,6 @@ class _PlaybackSession:
         return transition
 
     def render(self) -> bool:
-        if self.viewer is not None and self.current_frame is not None:
-            transition = self.last_transition
-            overlay = (
-                ["r_step: 0.00", "r_total: 0.00", f"step: 0 seed: {self.active_seed}"]
-                if transition is None
-                else [
-                    f"r_step: {transition.reward:.2f}",
-                    f"r_total: {transition.total_reward:.2f}",
-                    f"max_x: {transition.max_x_pos}",
-                    f"step: {transition.step} seed: {transition.seed}",
-                ]
-            )
-            if not self.viewer.show(self.current_frame, overlay):
-                return False
-        if self.obs_viewer is not None and self.frames is not None:
-            transition = self.last_transition
-            if (
-                transition is not None
-                and transition.attribution is not None
-                and transition.before_frames
-            ):
-                return self.obs_viewer.show(
-                    deque(transition.before_frames, maxlen=len(transition.before_frames)),
-                    heatmap=transition.attribution,
-                    heatmap_opacity=self.attribution_opacity,
-                )
-            return self.obs_viewer.show(self.frames)
         return True
 
 
@@ -1228,7 +1047,7 @@ def _raw_transition_payload(transition: _PlaybackTransition) -> dict[str, object
 
 def _read_debug_line(session: _PlaybackSession) -> str | None:
     prompt = debug_prompt()
-    if session.viewer is None or not sys.stdin.isatty():
+    if not sys.stdin.isatty():
         try:
             return input(prompt)
         except EOFError:
@@ -1615,7 +1434,7 @@ def main(argv: list[str] | None = None) -> int:
             config=config,
             n_envs=1,
             seed=args.seed,
-            capture_step_diagnostics=args.debug or args.ui == "web",
+            capture_step_diagnostics=True,
             rom_binding=rom_binding,
         )
     bind_action_space = getattr(model, "bind_action_space", None)
@@ -1634,63 +1453,6 @@ def main(argv: list[str] | None = None) -> int:
     )
     with startup_progress("Resetting policy environment", disabled=args.no_progress):
         session.restart(args.seed)
-    if args.ui == "pygame" and session.current_frame is not None:
-        with startup_progress("Creating game viewer", disabled=args.no_progress):
-            session.viewer = PygameViewer(
-                session.current_frame.shape,
-                scale=DEFAULT_VIEWER_SCALE,
-                position=None,
-            )
-    if (
-        args.ui == "pygame"
-        and (args.show_obs or attributor is not None)
-        and session.frames is not None
-    ):
-        with startup_progress("Creating observation viewer", disabled=args.no_progress):
-            session.obs_viewer = ObsStackViewer(
-                scale=DEFAULT_OBS_VIEWER_SCALE,
-                position=(40, 240),
-            )
-    elif args.ui == "pygame" and args.show_obs:
-        print("warning: policy observation is not a four-frame image stack", flush=True)
-    if args.ui == "pygame" and session.viewer is None and not args.debug and args.episodes <= 0:
-        raise ValueError("non-rendering playback requires --debug or a positive --episodes limit")
-    current_fps = args.fps
-    actual_fps: float | None = None
-    fps_ema_alpha = 0.12
-    last_frame_at = time.perf_counter()
-
-    def throttle() -> None:
-        nonlocal actual_fps, last_frame_at
-        if current_fps <= 0:
-            now = time.perf_counter()
-            elapsed = now - last_frame_at
-            if elapsed > 0:
-                instantaneous_fps = 1.0 / elapsed
-                actual_fps = (
-                    instantaneous_fps
-                    if actual_fps is None
-                    else (1.0 - fps_ema_alpha) * actual_fps + fps_ema_alpha * instantaneous_fps
-                )
-            last_frame_at = time.perf_counter()
-            return
-
-        target_interval = 1.0 / current_fps
-        now = time.perf_counter()
-        target_frame_at = last_frame_at + target_interval
-        while now < target_frame_at:
-            delay = target_frame_at - now
-            time.sleep(min(delay, 0.02))
-            now = time.perf_counter()
-        elapsed = now - last_frame_at
-        if elapsed > 0:
-            instantaneous_fps = 1.0 / elapsed
-            actual_fps = (
-                instantaneous_fps
-                if actual_fps is None
-                else (1.0 - fps_ema_alpha) * actual_fps + fps_ema_alpha * instantaneous_fps
-            )
-        last_frame_at = now
 
     try:
         config_text = "\n".join(
@@ -1707,18 +1469,10 @@ def main(argv: list[str] | None = None) -> int:
             f"checkpoint_step={source.checkpoint_step or '-'} "
             f"environment_hash={source.run_config.get('environment_hash', '-')}"
         )
-        if args.ui == "web":
-            from rlab.play_web import run_web_playback
+        from rlab.play_web import run_web_playback
 
-            return run_web_playback(session, args, config_text=config_text)
-        if args.debug:
-            return _run_debugger(session, args, config_text)
-        return _run_normal_playback(session, args, throttle)
+        return run_web_playback(session, args, config_text=config_text)
     finally:
-        if session.obs_viewer is not None:
-            session.obs_viewer.close()
-        if session.viewer is not None:
-            session.viewer.close()
         try:
             policy_env.close()
         except Exception:

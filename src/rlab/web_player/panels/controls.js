@@ -167,6 +167,8 @@ export function mount({ definition, services }) {
         );
       });
       const recording = snapshot.mode === "recording";
+      const dataset = snapshot.mode === "dataset";
+      nextEpisodeSettings.hidden = dataset;
       driverSwitch.classList.toggle("single-option", recording);
       nextEpisodeHeading.textContent = recording ? "Driver" : "Next episode";
       seedField.hidden = recording;

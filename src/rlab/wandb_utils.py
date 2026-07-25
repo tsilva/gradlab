@@ -27,12 +27,6 @@ def wandb_entity_from_env(*, fallback: str = DEFAULT_WANDB_ENTITY) -> str:
     return entity or fallback
 
 
-def default_wandb_project_path(project: str | None = None) -> str:
-    load_wandb_env()
-    project_name = str(project or DEFAULT_WANDB_PROJECT).strip() or DEFAULT_WANDB_PROJECT
-    return f"{wandb_entity_from_env()}/{project_name}"
-
-
 def canonical_wandb_environment(
     env_provider: object,
     env_id: object,

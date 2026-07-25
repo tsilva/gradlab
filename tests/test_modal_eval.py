@@ -10,10 +10,11 @@ from types import SimpleNamespace
 import pytest
 
 from rlab.eval_backend import EvalHandle
+from rlab.file_utils import file_sha256
 from rlab.modal_eval_backend import ModalEvalBackend
 from rlab.modal_eval_config import load_modal_eval_config, modal_app_name
 from rlab.modal_eval_protocol import SEED_PROTOCOL, build_execution_contract
-from rlab.modal_eval_storage import file_sha256, write_downloaded_file
+from rlab.modal_eval_storage import write_downloaded_file
 from rlab.modal_eval_worker import execute_attempt
 from rlab.r2_store import PUBLIC_OBJECT_USER_AGENT
 

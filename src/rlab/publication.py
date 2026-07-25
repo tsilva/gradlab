@@ -343,19 +343,6 @@ def build_model_repo_id(identity: PublicationIdentity) -> str:
     return repo_id
 
 
-def assert_unique_repo_ids(identities: Sequence[PublicationIdentity]) -> None:
-    seen: dict[str, PublicationIdentity] = {}
-    for identity in identities:
-        repo_id = build_model_repo_id(identity)
-        previous = seen.get(repo_id)
-        if previous is not None and previous != identity:
-            raise ValueError(
-                f"publication identities normalize to the same repository {repo_id!r}: "
-                f"{previous!r} and {identity!r}"
-            )
-        seen[repo_id] = identity
-
-
 def publication_model_metadata(
     model_metadata: Mapping[str, Any],
     identity: PublicationIdentity,

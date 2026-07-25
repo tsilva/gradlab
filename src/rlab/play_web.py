@@ -12,7 +12,7 @@ import time
 import uuid
 import webbrowser
 from collections import deque
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import asdict, dataclass, is_dataclass
 from pathlib import Path
 from typing import Any
@@ -654,6 +654,373 @@ class WebPlaybackRunner:
                     continue
                 next_step_at = max(next_step_at + 1.0 / fps, now)
             self._step_once()
+
+
+class DatasetPlaybackRunner:
+    """Provider-free playback for one verified Gymrec episode."""
+
+    def __init__(
+        self,
+        frames: Iterable[np.ndarray],
+        rows: Sequence[Mapping[str, Any]],
+        args: argparse.Namespace,
+        *,
+        fps: float,
+    ) -> None:
+        if len(rows) < 2:
+            raise ValueError("dataset playback requires at least one transition")
+        self.args = args
+        self.rows = rows
+        self._frames = iter(frames)
+        self.current_frame = np.asarray(next(self._frames), dtype=np.uint8)
+        self.commands: queue.Queue[PlaybackCommand] = queue.Queue(COMMAND_QUEUE_LIMIT)
+        self.responses: queue.SimpleQueue[PlaybackResponse] = queue.SimpleQueue()
+        self.encoder = FrameEncoder()
+        self.history: deque[dict[str, Any]] = deque(maxlen=HISTORY_LIMIT)
+        self._snapshot_lock = threading.Lock()
+        self._latest_snapshot: dict[str, Any] = {}
+        self._episode_start_snapshot: dict[str, Any] = {}
+        self._episode_start_frames: dict[int, tuple[int, bytes]] = {}
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._run, name="rlab-dataset-playback")
+        self.revision = 0
+        self.sequence = 0
+        self.transition_index = 0
+        self.total_reward = 0.0
+        self.run_state = "paused"
+        self.target_fps = max(0.0, float(fps))
+        self.remaining_steps = 0
+        self.continue_target: str | None = None
+        self.continue_count = 0
+        self._status_message = "verified recorded episode ready"
+        first = rows[0]
+        self.environment_id = str(first.get("env_id") or "") or None
+        self.episode_id = str(first.get("episode_id") or "")
+        self.seed = int(first.get("seed") or 0)
+        self.sampling_mode = str(first.get("policy_mode") or "recorded")
+        self._transition: dict[str, Any] | None = None
+
+    @property
+    def stopped(self) -> bool:
+        return self._stop.is_set()
+
+    def start(self) -> None:
+        self.encoder.start()
+        self._publish()
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop.set()
+        if self._thread.is_alive():
+            self._thread.join(timeout=10.0)
+        self.encoder.close()
+
+    def submit(self, command: PlaybackCommand) -> None:
+        self.commands.put_nowait(command)
+
+    def update_input(self, _labels: Sequence[str], *, focused: bool) -> None:
+        del focused
+
+    def clear_input(self) -> None:
+        return None
+
+    def snapshot(self) -> dict[str, Any]:
+        with self._snapshot_lock:
+            return dict(self._latest_snapshot)
+
+    def episode_start_payload(
+        self,
+    ) -> tuple[dict[str, Any], dict[int, tuple[int, bytes]]]:
+        with self._snapshot_lock:
+            return dict(self._episode_start_snapshot), dict(self._episode_start_frames)
+
+    def history_payload(self) -> dict[str, Any]:
+        return {"type": "history", "points": list(self.history)}
+
+    def _response(self, command: PlaybackCommand, *, ok: bool, **extra: Any) -> None:
+        self.responses.put(
+            PlaybackResponse(
+                command.client_id,
+                {
+                    "type": "command_result",
+                    "id": command.command_id,
+                    "ok": ok,
+                    "revision": self.revision,
+                    **extra,
+                },
+            )
+        )
+
+    def _snapshot_payload(self) -> dict[str, Any]:
+        return {
+            "type": "snapshot",
+            "protocol": PROTOCOL_VERSION,
+            "mode": "dataset",
+            "revision": self.revision,
+            "sequence": self.sequence,
+            "run_state": self.run_state,
+            "driver": "recorded",
+            "interactive": False,
+            "status_message": self._status_message,
+            "session": {
+                "episode": 1,
+                "step": self.transition_index,
+                "seed": self.seed,
+                "task": None,
+                "total_reward": self.total_reward,
+                "max_x_pos": _max_x_pos(self._transition),
+                "action_names": [],
+                "event_names": [],
+                "env_id": self.environment_id,
+                "sampling_mode": self.sampling_mode,
+                "target_fps": self.target_fps,
+                "episodes_limit": 1,
+                "awaiting_next_episode": self.transition_index >= len(self.rows) - 1,
+                "can_start_next_episode": False,
+                "history_size": len(self.history),
+                "config": (
+                    f"Gymrec v3 episode {self.episode_id}\n"
+                    "Recorded dataset playback is never checkpoint-promotion evidence."
+                ),
+            },
+            "transition": self._transition,
+        }
+
+    def _publish(self) -> None:
+        self.encoder.submit(FRAME_GAME, self.sequence, self.current_frame)
+        payload = self._snapshot_payload()
+        with self._snapshot_lock:
+            self._latest_snapshot = payload
+            if self.sequence == 0:
+                self._episode_start_snapshot = payload
+                self._episode_start_frames = {
+                    FRAME_GAME: (
+                        self.sequence,
+                        _frame_packet(FRAME_GAME, self.sequence, self.current_frame),
+                    )
+                }
+
+    def _set_state(self, state: str, *, message: str | None = None) -> None:
+        self.run_state = state
+        self._status_message = message
+        self.revision += 1
+        self._publish()
+
+    def _apply(self, command: PlaybackCommand) -> None:
+        try:
+            complete = self.transition_index >= len(self.rows) - 1
+            if command.name == "pause":
+                self.remaining_steps = 0
+                self.continue_target = None
+                self._set_state("paused", message="paused at a recorded transition")
+            elif command.name == "play":
+                if complete:
+                    raise ValueError("recorded episode is complete")
+                self.remaining_steps = 0
+                self.continue_target = None
+                self._set_state("playing")
+            elif command.name == "step":
+                if complete:
+                    raise ValueError("recorded episode is complete")
+                count = int(command.payload.get("count", 1))
+                if not 1 <= count <= 100:
+                    raise ValueError("step count must be in [1, 100]")
+                self.remaining_steps = count
+                self.continue_target = None
+                self._set_state("stepping")
+            elif command.name == "continue":
+                if complete:
+                    raise ValueError("recorded episode is complete")
+                self.remaining_steps = 0
+                self.continue_target = str(command.payload.get("target") or "any")
+                self.continue_count = 0
+                self._set_state("continuing")
+            elif command.name == "set_fps":
+                fps = float(command.payload.get("fps", 0.0))
+                if fps < 0 or not np.isfinite(fps):
+                    raise ValueError("fps must be a finite value >= 0")
+                self.target_fps = fps
+                self.revision += 1
+                self._publish()
+            elif command.name == "stop":
+                self._response(command, ok=True)
+                self._stop.set()
+                return
+            elif command.name in {"next_episode", "set_driver", "restart"}:
+                raise ValueError("dataset playback is read-only")
+            else:
+                raise ValueError(f"unknown playback command {command.name!r}")
+        except Exception as exc:
+            self._set_state("paused", message=str(exc))
+            self._response(command, ok=False, error=str(exc))
+            return
+        self._response(command, ok=True)
+
+    def _drain_commands(self) -> None:
+        for _ in range(COMMAND_QUEUE_LIMIT):
+            try:
+                command = self.commands.get_nowait()
+            except queue.Empty:
+                return
+            self._apply(command)
+
+    def _step_once(self) -> None:
+        row = self.rows[self.transition_index]
+        terminal = self.rows[self.transition_index + 1]
+        self.current_frame = np.asarray(next(self._frames), dtype=np.uint8)
+        self.transition_index += 1
+        self.sequence += 1
+        reward = float(row["rewards"])
+        self.total_reward += reward
+        self._status_message = None
+        info = _dataset_info(row.get("infos"))
+        terminated = bool(row.get("terminations"))
+        truncated = bool(row.get("truncations"))
+        collector_terminated = bool(terminal.get("collector_terminated"))
+        boundary = self.transition_index >= len(self.rows) - 1
+        action = _json_value(row.get("actions"))
+        events_value = info.get("events", ())
+        events = (
+            [str(value) for value in events_value]
+            if isinstance(events_value, Sequence)
+            and not isinstance(events_value, str | bytes | bytearray)
+            else []
+        )
+        boundary_reasons = [
+            reason
+            for active, reason in (
+                (terminated, "provider_terminated"),
+                (truncated, "provider_truncated"),
+                (collector_terminated, "collector_terminated"),
+            )
+            if active
+        ]
+        self._transition = {
+            "sequence": self.sequence,
+            "episode": 1,
+            "step": int(row.get("step_index") or 0),
+            "seed": int(row.get("seed") or self.seed),
+            "start_id": self.episode_id,
+            "action_source": "recorded",
+            "executed_action": action,
+            "decision": None,
+            "before": {
+                "task": None,
+                "model_input": [],
+                "game_frame": True,
+                "observation_frames": 0,
+            },
+            "after": {"task": None, "game_frame": True, "observation_frames": 0},
+            "reward": {
+                "provider": reward,
+                "shaped": reward,
+                "step": reward,
+                "return": self.total_reward,
+                "components": {},
+            },
+            "events": events,
+            "event_transitions": {},
+            "signals": _numeric_signals(info),
+            "info": _json_value(info),
+            "max_x_pos": _info_max_x_pos(info),
+            "terminated": terminated,
+            "truncated": truncated,
+            "completed": terminated,
+            "boundary": boundary,
+            "boundary_reasons": boundary_reasons,
+            "outcome": (
+                "terminated"
+                if terminated
+                else "truncated"
+                if truncated
+                else "collector_terminated"
+                if collector_terminated
+                else "continuing"
+            ),
+            "attribution": False,
+        }
+        self.history.append(
+            {
+                "sequence": self.sequence,
+                "episode": 1,
+                "step": int(row.get("step_index") or 0),
+                "action": action,
+                "action_source": "recorded",
+                "reward_provider": reward,
+                "reward_shaped": reward,
+                "return": self.total_reward,
+                "value": None,
+                "entropy": None,
+                "events": events,
+                "boundary": boundary,
+                "signals": _numeric_signals(info),
+                "components": {},
+            }
+        )
+        self.revision += 1
+        if boundary:
+            self.run_state = "paused"
+            self.remaining_steps = 0
+            self.continue_target = None
+            self._status_message = "recorded episode complete"
+        elif self.run_state == "stepping":
+            self.remaining_steps -= 1
+            if self.remaining_steps <= 0:
+                self.run_state = "paused"
+        elif self.run_state == "continuing":
+            self.continue_count += 1
+            target = self.continue_target or "any"
+            matched = bool(events) if target == "any" else target in events
+            if matched or self.continue_count >= 10_000:
+                self.run_state = "paused"
+                if self.continue_count >= 10_000 and not matched:
+                    self._status_message = "continue reached the 10,000-step safety limit"
+        self._publish()
+
+    def _run(self) -> None:
+        next_step_at = time.perf_counter()
+        while not self._stop.is_set():
+            self._drain_commands()
+            if self.run_state not in {"playing", "stepping", "continuing"}:
+                time.sleep(0.005)
+                continue
+            if self.target_fps > 0:
+                now = time.perf_counter()
+                if now < next_step_at:
+                    time.sleep(min(next_step_at - now, 0.005))
+                    continue
+                next_step_at = max(next_step_at + 1.0 / self.target_fps, now)
+            try:
+                self._step_once()
+            except (StopIteration, IndexError) as exc:
+                self._set_state("paused", message=f"recorded media ended early: {exc}")
+
+
+def _dataset_info(value: Any) -> Mapping[str, Any]:
+    if isinstance(value, Mapping):
+        return value
+    if not isinstance(value, str):
+        return {}
+    try:
+        decoded = json.loads(value)
+    except json.JSONDecodeError:
+        return {}
+    return decoded if isinstance(decoded, Mapping) else {}
+
+
+def _info_max_x_pos(info: Mapping[str, Any]) -> float | None:
+    for key in ("max_x_pos", "x_pos", "x"):
+        value = info.get(key)
+        if isinstance(value, int | float | np.number) and np.isfinite(value):
+            return float(value)
+    return None
+
+
+def _max_x_pos(transition: Mapping[str, Any] | None) -> float | None:
+    if transition is None:
+        return None
+    value = transition.get("max_x_pos")
+    return float(value) if isinstance(value, int | float) else None
 
 
 class HumanRecordingRunner:
@@ -1381,6 +1748,23 @@ def run_web_playback(
         return 130
 
 
+def run_web_dataset_playback(
+    frames: Iterable[np.ndarray],
+    rows: Sequence[Mapping[str, Any]],
+    args: argparse.Namespace,
+    *,
+    fps: float,
+) -> int:
+    runner = DatasetPlaybackRunner(frames, rows, args, fps=fps)
+    args.dashboard_label = "Dataset dashboard"
+    server = PlaybackWebServer(runner, args)
+    try:
+        return asyncio.run(server.run())
+    except KeyboardInterrupt:
+        runner.stop()
+        return 130
+
+
 class WebHumanController:
     """Synchronous human controller backed by a loopback web dashboard."""
 
@@ -1445,6 +1829,7 @@ __all__ = [
     "FRAME_HEADER",
     "FRAME_MAGIC",
     "FRAME_OBSERVATION",
+    "DatasetPlaybackRunner",
     "HumanRecordingRunner",
     "PlaybackCommand",
     "PlaybackWebServer",
@@ -1452,6 +1837,7 @@ __all__ = [
     "WebPlaybackRunner",
     "WebHumanController",
     "history_point",
+    "run_web_dataset_playback",
     "run_web_playback",
     "transition_payload",
 ]

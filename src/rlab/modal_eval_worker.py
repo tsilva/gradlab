@@ -13,8 +13,9 @@ from pathlib import Path
 from typing import Any, Mapping
 from urllib.parse import unquote, urlparse
 
+from rlab.file_utils import file_sha256
 from rlab.modal_eval_protocol import PROTOCOL_SCHEMA_VERSION, canonical_json, execution_key
-from rlab.modal_eval_storage import file_sha256, write_downloaded_file
+from rlab.modal_eval_storage import write_downloaded_file
 from rlab.policy_bundle import (
     evaluation_contract,
     evaluation_contract_sha256,

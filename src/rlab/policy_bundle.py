@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import hashlib
-import importlib.metadata
 import json
 import math
 import re
@@ -149,14 +148,6 @@ _OPERATIONAL_TRAIN_FIELDS = frozenset(
         "wandb_tags",
     }
 )
-_RUNTIME_PACKAGES = (
-    "rlab",
-    "stable-baselines3",
-    "stable-retro-turbo",
-    "supermariobrosnes-turbo",
-)
-
-
 class PolicyDocumentError(ValueError):
     """Base error for a policy document that cannot be interpreted safely."""
 
@@ -808,21 +799,6 @@ def build_recipe_document(
         "provenance": provenance,
     }
     return _validate_recipe_v1(document, RECIPE_FILENAME)
-
-
-def finalize_recipe_runtime(path: Path) -> dict[str, Any]:
-    document = load_recipe_document(path)
-    runtime = dict(document["provenance"].get("runtime") or {})
-    packages: dict[str, str] = {}
-    for package in _RUNTIME_PACKAGES:
-        try:
-            packages[package] = importlib.metadata.version(package)
-        except importlib.metadata.PackageNotFoundError:
-            continue
-    runtime["packages"] = packages
-    document["provenance"]["runtime"] = runtime
-    write_canonical_json(path, document)
-    return load_recipe_document(path)
 
 
 def build_model_document(

@@ -32,7 +32,6 @@ TRAIN_RECIPE_REQUIRED_FIELDS = (
     "train_config",
 )
 TRAIN_RECIPE_REQUIRED_TRAIN_CONFIG_FIELDS = recipe_required_train_config_fields()
-EXPLICIT_RECIPE_TRAIN_CONFIG_FIELDS = TRAIN_RECIPE_REQUIRED_TRAIN_CONFIG_FIELDS
 TRAIN_RECIPE_OPTIONAL_FIELDS = frozenset(
     {
         "schema_version",
@@ -55,21 +54,6 @@ TRAIN_RECIPE_OPTIONAL_FIELDS = frozenset(
     }
 )
 TRAIN_RECIPE_ALLOWED_FIELDS = frozenset(TRAIN_RECIPE_REQUIRED_FIELDS) | TRAIN_RECIPE_OPTIONAL_FIELDS
-
-
-def require_explicit_recipe_train_config(
-    train_config: Mapping[str, Any],
-    *,
-    label: str = "train_config",
-) -> None:
-    missing = [key for key in EXPLICIT_RECIPE_TRAIN_CONFIG_FIELDS if key not in train_config]
-    if missing:
-        raise ValueError(
-            f"{label} missing required recipe-defined field(s): "
-            f"{', '.join(missing)}; train tasks must define these values in recipes"
-        )
-
-
 def _require_template(
     document: Mapping[str, Any],
     key: str,

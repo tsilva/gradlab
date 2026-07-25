@@ -3,8 +3,6 @@ from __future__ import annotations
 import hashlib
 import shutil
 from pathlib import Path
-from types import SimpleNamespace
-from unittest.mock import patch
 
 import gymnasium as gym
 import numpy as np
@@ -12,11 +10,11 @@ import pytest
 
 pytest.importorskip("datasets")
 
-from rlab.dataset_contract import canonical_json_bytes  # noqa: E402
 from rlab.dataset_media import iter_episode_frames  # noqa: E402
 from rlab.dataset_providers import EnvironmentArtifact, validate_provider_request  # noqa: E402
-from rlab.dataset_record import HumanController, _record_one, _recover_active_episode  # noqa: E402
+from rlab.dataset_record import _record_one, _recover_active_episode  # noqa: E402
 from rlab.dataset_store import validate_tree  # noqa: E402
+from rlab.json_utils import canonical_json_bytes  # noqa: E402
 
 
 class FakeEnv:
@@ -88,58 +86,6 @@ def test_recording_rejects_collection_valued_states_before_provider_construction
         validate_provider_request({"state": state})
 
 
-def test_manual_controller_has_start_gate_and_provider_control_mapping():
-    class Pressed(dict):
-        def __getitem__(self, key):
-            return self.get(key, False)
-
-    pygame = SimpleNamespace(
-        K_UP=1,
-        K_DOWN=2,
-        K_LEFT=3,
-        K_RIGHT=4,
-        K_z=5,
-        K_x=6,
-        K_RETURN=7,
-        K_RSHIFT=8,
-        K_SPACE=9,
-        K_TAB=10,
-        K_EQUALS=11,
-        K_PLUS=12,
-        K_KP_PLUS=13,
-        K_MINUS=14,
-        K_KP_MINUS=15,
-        key=SimpleNamespace(get_pressed=lambda: Pressed({1: True, 5: True, 9: True})),
-    )
-
-    class Viewer:
-        def __init__(self, *_args):
-            self.pygame = pygame
-            self.overlays = []
-
-        def show(self, _frame, overlay=None):
-            self.overlays.append(overlay)
-            return True
-
-        def close(self):
-            return None
-
-    class Session:
-        fps = 60.0
-
-        @staticmethod
-        def action_from_labels(labels):
-            return tuple(sorted(labels))
-
-    with patch("rlab.play.PygameViewer", Viewer), patch("rlab.dataset_record.time.sleep"):
-        controller = HumanController(Session(), np.zeros((4, 5, 3), dtype=np.uint8), headless=False)
-        action, keep_recording = controller.action(np.zeros((4, 5, 3), dtype=np.uint8))
-
-    assert keep_recording
-    assert action == ("B", "UP")
-    assert controller.viewer.overlays[0][0] == "Press SPACE to start"
-
-
 @pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg is not installed")
 def test_record_one_streams_n_plus_one_video_rows(tmp_path: Path):
     session = FakeSession()
@@ -158,7 +104,6 @@ def test_record_one_streams_n_plus_one_video_rows(tmp_path: Path):
         episode_directory=episode_directory,
         package=package,
         session_id="12251a8e-c032-47fa-bb24-fbc90f68f8f7",
-        headless=True,
         projected_rebuild=0,
     )
 
@@ -190,7 +135,6 @@ def test_interrupted_episode_recovers_only_verified_durable_prefix(tmp_path: Pat
         episode_directory=episode_directory,
         package=package,
         session_id="12251a8e-c032-47fa-bb24-fbc90f68f8f7",
-        headless=True,
         projected_rebuild=0,
     )
     original = validate_tree(package)

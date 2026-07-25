@@ -405,7 +405,7 @@ function renderWorkspaceStatus() {
   const shown = state.snapshot || live;
   const samplingMode = live?.session?.sampling_mode || "stochastic";
   const samplingStatus = $("#sampling-status");
-  samplingStatus.hidden = live?.mode === "recording";
+  samplingStatus.hidden = ["recording", "dataset"].includes(live?.mode);
   samplingStatus.textContent = samplingMode === "deterministic" ? "Deterministic" : "Stochastic";
   samplingStatus.className = `badge ${samplingMode === "deterministic" ? "warning" : "muted"}`;
   const timelineContext = [
@@ -449,8 +449,11 @@ function configureMode(mode) {
   if (state.mode === mode) return;
   state.mode = mode;
   const recording = mode === "recording";
+  const dataset = mode === "dataset";
   document.body.classList.toggle("recording", recording);
-  document.querySelector(".eyebrow").textContent = recording ? "HUMAN RECORDING" : "RLAB PLAYER";
+  document.querySelector(".eyebrow").textContent = recording
+    ? "HUMAN RECORDING"
+    : (dataset ? "DATASET PLAYBACK" : "RLAB PLAYER");
 }
 
 function historyFromTransition(transition) {
@@ -458,7 +461,7 @@ function historyFromTransition(transition) {
     sequence: transition.sequence,
     episode: transition.episode,
     step: transition.step,
-    action: transition.decision?.selected_action ?? null,
+    action: transition.decision?.selected_action ?? transition.executed_action ?? null,
     action_source: transition.action_source,
     reward_provider: transition.reward?.provider,
     reward_shaped: transition.reward?.shaped,

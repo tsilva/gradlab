@@ -78,12 +78,6 @@ def normalize_runtime_image_ref(value: str | None) -> str:
     return text
 
 
-def docker_image_ref(runtime_image_ref: str) -> str:
-    """Return Docker's image spelling for an immutable rlab runtime ref."""
-
-    return normalize_runtime_image_ref(runtime_image_ref).removeprefix("docker:")
-
-
 def runtime_image_payload_from_file(path: Path) -> dict[str, Any]:
     text = path.read_text(encoding="utf-8").strip()
     if not text:
@@ -103,11 +97,6 @@ def runtime_image_ref_from_payload(
     if not value:
         raise ValueError(f"{label} must include runtime_image_ref")
     return normalize_runtime_image_ref(str(value))
-
-
-def runtime_image_ref_from_file(path: Path) -> str:
-    payload = runtime_image_payload_from_file(path)
-    return runtime_image_ref_from_payload(payload, label=f"runtime image ref JSON in {path}")
 
 
 def runtime_release_from_payload(
@@ -490,46 +479,6 @@ def _matching_runs(
     ]
 
 
-def recent_runtime_images(
-    *,
-    workflow: str = DEFAULT_IMAGE_WORKFLOW,
-    branch: str = DEFAULT_IMAGE_BRANCH,
-    artifact_name: str = DEFAULT_IMAGE_ARTIFACT,
-    limit: int = 3,
-) -> tuple[RuntimeImageInfo, ...]:
-    if limit <= 0:
-        return ()
-    images: list[RuntimeImageInfo] = []
-    for run in _workflow_runs(workflow=workflow, branch=branch, limit=max(limit * 3, limit)):
-        run_id = str(run.get("databaseId") or "").strip()
-        if not run_id:
-            continue
-        payload = _artifact_payload_for_run(run_id, artifact_name, DEFAULT_IMAGE_ARTIFACT_FILE)
-        if payload is None:
-            continue
-        source_sha = str(payload.get("source_sha") or run.get("headSha") or "").strip()
-        info = runtime_release_from_payload(
-            payload,
-            label=f"runtime image receipt {run_id}",
-            expected_source_sha=source_sha,
-        )
-        images.append(
-            replace(
-                info,
-                commit_message=str(run.get("displayTitle") or info.commit_message).strip(),
-                published_at=str(
-                    run.get("updatedAt") or run.get("createdAt") or info.published_at
-                ).strip(),
-                workflow_run_id=info.workflow_run_id or run_id,
-            )
-        )
-        if len(images) >= limit:
-            break
-    if not images:
-        raise RuntimeError(f"no usable {workflow!r} image receipts found on branch {branch!r}")
-    return tuple(images)
-
-
 def runtime_release_for_source(
     *,
     source_sha: str,
@@ -801,40 +750,6 @@ def runtime_release_from_args(
             image_workflow=workflow,
         )
     return release
-
-
-def latest_runtime_image_ref(
-    *,
-    workflow: str = DEFAULT_IMAGE_WORKFLOW,
-    branch: str = DEFAULT_IMAGE_BRANCH,
-    artifact_name: str = DEFAULT_IMAGE_ARTIFACT,
-) -> str:
-    return recent_runtime_images(
-        workflow=workflow,
-        branch=branch,
-        artifact_name=artifact_name,
-        limit=1,
-    )[0].runtime_image_ref
-
-
-def runtime_image_ref_from_args(
-    args: Any,
-    *,
-    default_latest: bool = False,
-) -> str | None:
-    ref_file = getattr(args, "runtime_image_ref_file", None)
-    if ref_file:
-        return runtime_image_ref_from_file(Path(ref_file))
-    value = getattr(args, "runtime_image_ref", None)
-    if value:
-        return normalize_runtime_image_ref(value)
-    if not default_latest:
-        return None
-    return latest_runtime_image_ref(
-        workflow=getattr(args, "image_workflow", DEFAULT_IMAGE_WORKFLOW),
-        branch=getattr(args, "image_branch", None) or DEFAULT_IMAGE_BRANCH,
-        artifact_name=getattr(args, "image_artifact", DEFAULT_IMAGE_ARTIFACT),
-    )
 
 
 def runtime_image_digest(value: str) -> str:
