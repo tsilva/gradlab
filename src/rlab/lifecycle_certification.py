@@ -465,7 +465,6 @@ class CertificationFixture:
         supervisor.recipe_document = self.recipe_document
         supervisor.eval_contract = evaluation_contract(self.recipe_document)
         supervisor.store.init()
-        supervisor.store.init()
         supervisor.projector = WandbProjector(object())
         supervisor.wandb_run_path = (
             f"certification/SuperMarioBros-Nes-v0/{manifest.run_id}"

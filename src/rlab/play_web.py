@@ -46,11 +46,15 @@ PAIRED_START_GRACE_SECONDS = 2.0
 def source_browser_path(route: Mapping[str, Any] | None) -> str:
     route = route or {}
     project = str(route.get("project") or "").strip()
+    goal_id = str(route.get("goal_id") or "").strip()
     run_id = str(route.get("run_id") or "").strip()
     checkpoint_id = str(route.get("checkpoint_id") or "").strip()
     if not project:
         return "/"
     path = f"/projects/{quote(project, safe='')}"
+    if not goal_id:
+        return path
+    path += f"/goals/{quote(goal_id, safe='')}"
     if not run_id:
         return path
     path += f"/runs/{quote(run_id, safe='')}"
@@ -1523,6 +1527,25 @@ class PlaybackWebServer:
                 self.catalog.runs,
                 entity=request.match_info["entity"],
                 project=request.match_info["project"],
+                goal_id=request.match_info.get("goal_id", ""),
+                query=normalize_search_query(request.query.get("q")),
+                cursor=request.query.get("cursor"),
+            )
+        except Exception as exc:
+            return web.json_response({"error": str(exc)}, status=502)
+        return web.json_response(page.to_dict())
+
+    async def catalog_goals(self, request: web.Request) -> web.Response:
+        self._authorize_api(request)
+        if self.catalog is None:
+            raise web.HTTPNotFound()
+        from rlab.play_catalog import normalize_search_query
+
+        try:
+            page = await asyncio.to_thread(
+                self.catalog.goals,
+                entity=request.match_info["entity"],
+                project=request.match_info["project"],
                 query=normalize_search_query(request.query.get("q")),
                 cursor=request.query.get("cursor"),
             )
@@ -1541,6 +1564,8 @@ class PlaybackWebServer:
                 self.catalog.checkpoints,
                 run_id=request.match_info["run_id"],
                 query=normalize_search_query(request.query.get("q")),
+                entity=request.query.get("entity", ""),
+                project=request.query.get("project", ""),
             )
         except Exception as exc:
             return web.json_response({"error": str(exc)}, status=502)
@@ -1954,9 +1979,16 @@ class PlaybackWebServer:
             [
                 web.get("/", self.page),
                 web.get("/projects/{project_id}", self.page),
-                web.get("/projects/{project_id}/runs/{run_id}", self.page),
+                web.get("/projects/{project_id}/goals/{goal_id}", self.page),
                 web.get(
-                    "/projects/{project_id}/runs/{run_id}/checkpoints/{checkpoint_id}",
+                    "/projects/{project_id}/goals/{goal_id}/runs/{run_id}",
+                    self.page,
+                ),
+                web.get(
+                    (
+                        "/projects/{project_id}/goals/{goal_id}/runs/{run_id}"
+                        "/checkpoints/{checkpoint_id}"
+                    ),
                     self.page,
                 ),
                 web.get("/panel/{panel}", self.page),
@@ -1965,7 +1997,14 @@ class PlaybackWebServer:
                 web.get("/assets/{path:.*}", self.asset),
                 web.get("/api/catalog/projects", self.catalog_projects),
                 web.get(
-                    "/api/catalog/projects/{entity}/{project}/runs",
+                    "/api/catalog/projects/{entity}/{project}/goals",
+                    self.catalog_goals,
+                ),
+                web.get(
+                    (
+                        "/api/catalog/projects/{entity}/{project}/goals/{goal_id}"
+                        "/runs"
+                    ),
                     self.catalog_runs,
                 ),
                 web.get(

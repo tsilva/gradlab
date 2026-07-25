@@ -340,16 +340,25 @@ def test_source_browser_paths_are_hierarchical_and_url_encoded() -> None:
     assert source_browser_path(None) == "/"
     assert source_browser_path({"project": "Mario Bros"}) == "/projects/Mario%20Bros"
     assert source_browser_path(
-        {"project": "Mario Bros", "run_id": run_id}
-    ) == f"/projects/Mario%20Bros/runs/{run_id}"
+        {"project": "Mario Bros", "goal_id": "Level 1-1"}
+    ) == "/projects/Mario%20Bros/goals/Level%201-1"
     assert source_browser_path(
         {
             "project": "Mario Bros",
+            "goal_id": "Level 1-1",
+            "run_id": run_id,
+        }
+    ) == f"/projects/Mario%20Bros/goals/Level%201-1/runs/{run_id}"
+    assert source_browser_path(
+        {
+            "project": "Mario Bros",
+            "goal_id": "Level 1-1",
             "run_id": run_id,
             "checkpoint_id": checkpoint_id,
         }
     ) == (
-        f"/projects/Mario%20Bros/runs/{run_id}/checkpoints/{checkpoint_id}"
+        f"/projects/Mario%20Bros/goals/Level%201-1/runs/{run_id}"
+        f"/checkpoints/{checkpoint_id}"
     )
 
 
@@ -826,6 +835,51 @@ def test_catalog_http_api_requires_the_fragment_session_token() -> None:
                 next_cursor=None,
             )
 
+        @staticmethod
+        def goals(*, entity, project, query, cursor):
+            assert (entity, project, query, cursor) == (
+                "research",
+                "Mario",
+                "",
+                None,
+            )
+            return CatalogPage(
+                items=(
+                    {
+                        "entity": entity,
+                        "project": project,
+                        "goal_id": "Level1-1",
+                        "goal_slug": "Mario/Level1-1",
+                        "run_count": 2,
+                        "updated_at": "2026-07-25T00:00:00Z",
+                    },
+                ),
+                next_cursor=None,
+            )
+
+        @staticmethod
+        def checkpoints(*, run_id, query, entity, project):
+            assert (
+                run_id,
+                query,
+                entity,
+                project,
+            ) == ("rlab-" + "a" * 32, "", "research", "Mario")
+            return (
+                {
+                    "run_id": run_id,
+                    "checkpoint_id": "checkpoint-1-" + "b" * 16,
+                    "evaluation": {
+                        "status": "accepted",
+                        "pass": True,
+                        "episodes_planned": 100,
+                        "episodes_completed": 100,
+                        "failure_count": 0,
+                        "criteria": [],
+                    },
+                },
+            )
+
     async def scenario() -> None:
         runner = HumanRecordingRunner(FakeHumanSession(), human_args())
         server = PlaybackWebServer(runner, human_args(), catalog=FakeCatalog())
@@ -843,12 +897,28 @@ def test_catalog_http_api_requires_the_fragment_session_token() -> None:
                 )
                 assert accepted.status == 200
                 assert (await accepted.json())["items"][0]["name"] == "Mario"
+                goals = await client.get(
+                    f"{server.origin}/api/catalog/projects/research/Mario/goals",
+                    headers={"Authorization": f"Bearer {server.token}"},
+                )
+                assert goals.status == 200
+                assert (await goals.json())["items"][0]["goal_id"] == "Level1-1"
+                checkpoints = await client.get(
+                    (
+                        f"{server.origin}/api/catalog/runs/rlab-{'a' * 32}/checkpoints"
+                        "?entity=research&project=Mario"
+                    ),
+                    headers={"Authorization": f"Bearer {server.token}"},
+                )
+                assert checkpoints.status == 200
+                assert (await checkpoints.json())["items"][0]["evaluation"]["pass"] is True
                 for route in (
                     "/",
                     "/projects/Mario",
-                    f"/projects/Mario/runs/rlab-{'a' * 32}",
+                    "/projects/Mario/goals/Level1-1",
+                    f"/projects/Mario/goals/Level1-1/runs/rlab-{'a' * 32}",
                     (
-                        f"/projects/Mario/runs/rlab-{'a' * 32}"
+                        f"/projects/Mario/goals/Level1-1/runs/rlab-{'a' * 32}"
                         f"/checkpoints/checkpoint-1-{'b' * 16}"
                     ),
                 ):
@@ -905,6 +975,12 @@ def test_web_dashboard_assets_are_packaged_beside_server() -> None:
     assert 'export function sourceRoutePath(' in source_browser
     assert 'history.pushState(null, "", target);' in source_browser
     assert 'window.addEventListener("popstate", this.onPopState);' in source_browser
+    assert 'if (this.route.level === "goals") return "Choose a goal";' in source_browser
+    assert "renderGoals()" in source_browser
+    assert '"Evaluation", "Size", "Created"' in source_browser
+    assert 'evaluation.pass ? "Passed" : "Failed"' in source_browser
+    assert "evaluationMetricLabel" in source_browser
+    assert "criterion.value !== null" in source_browser
     assert 'checkpoint_id: item.checkpoint_id' in source_browser
     assert 'class="workspace-status"' not in markup
     assert markup.index('id="new-window"') < markup.index('id="connection-status"')

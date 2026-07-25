@@ -841,6 +841,7 @@ def main(argv: list[str] | None = None) -> int:
     from rlab.play_runtime import PlaySourceSpec, PlaybackLoader
     from rlab.play_web import run_web_player_application
 
+    catalog = PlayCatalog(public_models_base_url=args.public_models_base_url)
     initial_route: dict[str, object] = {
         "level": "projects",
         "entity": str(args.wandb_entity or ""),
@@ -853,10 +854,20 @@ def main(argv: list[str] | None = None) -> int:
     elif args.artifact_ref:
         wandb_location = parse_wandb_location(args.artifact_ref)
         if wandb_location is not None:
+            goal_id = (
+                catalog.run_goal(
+                    entity=wandb_location.entity,
+                    project=wandb_location.project,
+                    run_id=wandb_location.run_id,
+                )
+                if wandb_location.run_id
+                else ""
+            )
             initial_route = {
-                "level": "checkpoints" if wandb_location.run_id else "runs",
+                "level": "checkpoints" if wandb_location.run_id else "goals",
                 "entity": wandb_location.entity,
                 "project": wandb_location.project,
+                "goal_id": goal_id,
                 "run_id": wandb_location.run_id or "",
             }
             args.wandb_entity = wandb_location.entity
@@ -875,7 +886,6 @@ def main(argv: list[str] | None = None) -> int:
         initial_route=initial_route,
         initial_source=initial_source,
     )
-    catalog = PlayCatalog(public_models_base_url=args.public_models_base_url)
     return run_web_player_application(host, args, catalog=catalog)
 
 

@@ -62,6 +62,10 @@ class FakeApi:
             ),
         ]
 
+    def run(self, path: str):
+        assert path == f"research/Mario/{RUN_ID}"
+        return self.runs("research/Mario", order="-created_at", per_page=200, lazy=True)[1]
+
 
 def checkpoint_row(*, step: int, digest: str, purpose: str) -> dict[str, object]:
     identifier = checkpoint_id(step=step, sha256=digest)
@@ -127,11 +131,20 @@ def test_catalog_searches_projects_and_only_returns_canonical_rlab_runs() -> Non
     catalog._api = FakeApi()
 
     projects = catalog.projects(entity="research", query="mario")
-    runs = catalog.runs(entity="research", project="Mario", query="seed 3")
+    goals = catalog.goals(entity="research", project="Mario")
+    runs = catalog.runs(
+        entity="research",
+        project="Mario",
+        goal_id="Level1-1",
+        query="seed 3",
+    )
 
     assert [item["name"] for item in projects.items] == ["Mario"]
+    assert [item["goal_id"] for item in goals.items] == ["Level1-1"]
+    assert goals.items[0]["run_count"] == 1
     assert [item["run_id"] for item in runs.items] == [RUN_ID]
     assert runs.items[0]["recipe"] == "ppo"
+    assert catalog.run_goal(entity="research", project="Mario", run_id=RUN_ID) == "Level1-1"
 
 
 def test_catalog_validates_and_orders_public_checkpoints(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -156,3 +169,87 @@ def test_catalog_validates_and_orders_public_checkpoints(monkeypatch: pytest.Mon
     ]
     assert rows[0]["promoted"] is True
     assert rows[0]["manifest_url"].endswith("/manifest.json")
+
+
+def test_catalog_attaches_goal_required_eval_results_by_checkpoint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    periodic = checkpoint_row(step=250_000, digest="2" * 64, purpose="periodic")
+    final = checkpoint_row(step=500_000, digest="3" * 64, purpose="final")
+    monkeypatch.setattr(
+        "rlab.play_catalog._public_json",
+        lambda _url: {
+            "schema_version": 1,
+            "run_id": RUN_ID,
+            "checkpoints": [final, periodic],
+            "promotion": {"checkpoint_id": periodic["checkpoint_id"]},
+        },
+    )
+    required_metric = "eval/full/outcome/success/rate/min"
+
+    class EvalRun:
+        config = {
+            "checkpoint_eval_contract": {
+                "acceptance": [
+                    {
+                        "metric": required_metric,
+                        "operator": ">=",
+                        "threshold": 1.0,
+                    }
+                ]
+            }
+        }
+
+        def scan_history(self, *, keys, page_size):
+            assert required_metric in keys
+            assert page_size == 10_000
+            return [
+                {
+                    "eval/checkpoint_step": 250_000,
+                    "eval/acceptance/pass": 1.0,
+                    "eval/acceptance/episodes/planned": 100.0,
+                    "eval/acceptance/episodes/completed": 100.0,
+                    "eval/acceptance/failure/count": 0.0,
+                    required_metric: 1.0,
+                },
+                {
+                    "eval/checkpoint_step": 500_000,
+                    "eval/acceptance/pass": 0.0,
+                    "eval/acceptance/episodes/planned": 100.0,
+                    "eval/acceptance/episodes/completed": 1.0,
+                    "eval/acceptance/failure/count": 1.0,
+                },
+            ]
+
+    class EvalApi:
+        @staticmethod
+        def run(path):
+            assert path == f"research/Mario/{RUN_ID}"
+            return EvalRun()
+
+    catalog = PlayCatalog(public_models_base_url="https://models.example")
+    catalog._api = EvalApi()
+
+    rows = catalog.checkpoints(
+        entity="research",
+        project="Mario",
+        run_id=RUN_ID,
+    )
+
+    accepted = rows[0]["evaluation"]
+    assert accepted["status"] == "accepted"
+    assert accepted["episodes_completed"] == 100
+    assert accepted["criteria"] == [
+        {
+            "metric": required_metric,
+            "operator": ">=",
+            "threshold": 1.0,
+            "value": 1.0,
+            "passed": True,
+        }
+    ]
+    rejected = rows[1]["evaluation"]
+    assert rejected["status"] == "rejected"
+    assert rejected["episodes_completed"] == 1
+    assert rejected["failure_count"] == 1
+    assert rejected["criteria"][0]["value"] is None

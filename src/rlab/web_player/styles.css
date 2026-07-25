@@ -243,8 +243,10 @@ h2 { font-size: .9rem; margin: 0; font-weight: 650; }
   background: var(--surface);
 }
 
-.project-list { display: grid; }
-.project-row {
+.project-list,
+.goal-list { display: grid; }
+.project-row,
+.goal-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
@@ -258,9 +260,21 @@ h2 { font-size: .9rem; margin: 0; font-weight: 650; }
   background: transparent;
   text-align: left;
 }
-.project-row:last-child { border-bottom: 0; }
-.project-row strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-.project-row span { color: var(--muted); font-size: .72rem; white-space: nowrap; }
+.project-row:last-child,
+.goal-row:last-child { border-bottom: 0; }
+.project-row strong,
+.goal-row strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.project-row span,
+.goal-row span { color: var(--muted); font-size: .72rem; white-space: nowrap; }
+.goal-row > div { min-width: 0; }
+.goal-row small {
+  display: block;
+  margin-top: .18rem;
+  overflow: hidden;
+  color: var(--muted);
+  font: .62rem ui-monospace, SFMono-Regular, Menlo, monospace;
+  text-overflow: ellipsis;
+}
 
 .source-table-scroll { overflow: auto; }
 .source-table {
@@ -293,6 +307,10 @@ h2 { font-size: .9rem; margin: 0; font-weight: 650; }
 .source-table td span,
 .source-table td small { display: block; overflow: hidden; text-overflow: ellipsis; }
 .source-table td small { margin-top: .16rem; color: var(--muted); font: .62rem ui-monospace, SFMono-Regular, Menlo, monospace; }
+.source-table .evaluation-cell { min-width: 18rem; }
+.source-table .evaluation-verdict { font-weight: 700; }
+.source-table .evaluation-cell.accepted .evaluation-verdict { color: var(--green); }
+.source-table .evaluation-cell.rejected .evaluation-verdict { color: var(--red); }
 .source-table tbody tr { cursor: pointer; transition: background .12s ease; }
 .source-table tbody tr:hover,
 .source-table tbody tr:focus-visible { outline: 0; background: rgba(83, 212, 232, .07); }

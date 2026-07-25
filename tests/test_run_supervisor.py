@@ -420,7 +420,6 @@ class RunSupervisorTests(unittest.TestCase):
         with patch("rlab.run_supervisor.verify_rom_file"):
             supervisor.materialize()
         supervisor.store.init()
-        supervisor.store.init()
         checkpoint = CheckpointManifest(
             run_id=self.run_id,
             checkpoint_id="checkpoint-250000-" + "e" * 16,
