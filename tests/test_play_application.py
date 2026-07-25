@@ -46,7 +46,7 @@ class FakeRunner:
     def snapshot(self):
         return {
             "type": "snapshot",
-            "protocol": 2,
+            "protocol": 3,
             "revision": 4,
             "sequence": 9,
             "run_state": "paused",

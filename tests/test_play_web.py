@@ -28,6 +28,7 @@ from rlab.play_web import (
     WebPlaybackRunner,
     _session_environment_id,
     annotate_realized_returns,
+    history_point_payload,
     run_web_playback,
     source_browser_path,
     transition_payload,
@@ -656,6 +657,41 @@ def test_transition_payload_keeps_before_decision_after_alignment() -> None:
     assert payload["info"]["credential_token"] == "<redacted>"
 
 
+def test_history_point_keeps_policy_and_executed_actions_distinct() -> None:
+    point = history_point_payload(
+        {
+            "sequence": 8,
+            "episode": 2,
+            "step": 4,
+            "decision": {
+                "selected_action": 3,
+                "value": 1.25,
+                "entropy": 0.4,
+                "log_probability": -0.7,
+            },
+            "executed_action": 1,
+            "action_source": "human_override",
+            "reward": {
+                "provider": 2.0,
+                "shaped": 1.5,
+                "return": 7.0,
+                "components": {"progress": 1.5},
+            },
+            "outcome": "continuing",
+            "events": ["coin"],
+            "boundary": False,
+            "signals": {"x_pos": 12.0},
+        }
+    )
+
+    assert point["policy_action"] == 3
+    assert point["executed_action"] == 1
+    assert point["action_source"] == "human_override"
+    assert point["log_probability"] == -0.7
+    assert point["outcome"] == "continuing"
+    assert "action" not in point
+
+
 def test_human_recording_runner_requires_fresh_focus_and_streams_transition_stats() -> None:
     runner = HumanRecordingRunner(FakeHumanSession(), human_args())
     frame = np.zeros((4, 5, 3), dtype=np.uint8)
@@ -682,6 +718,8 @@ def test_human_recording_runner_requires_fresh_focus_and_streams_transition_stat
     assert snapshot["session"]["env_id"] == "Game-v0"
     assert snapshot["transition"]["reward"]["return"] == 2.5
     assert snapshot["transition"]["signals"] == {"x_pos": 11.0}
+    assert snapshot["history_point"]["executed_action"] == ["A", "RIGHT"]
+    assert snapshot["history_point"]["policy_action"] is None
     assert runner.history_payload()["points"][0]["action_source"] == "human"
 
 
@@ -710,7 +748,7 @@ def test_loopback_server_requires_exact_origin_and_fragment_token() -> None:
                 panel_response = await client.get(f"{server.origin}/assets/panels/catalog.js")
                 assert panel_response.status == 200
                 assert "javascript" in panel_response.headers["Content-Type"]
-                assert "PANEL_CATALOG" in await panel_response.text()
+                assert "PANEL_TYPES" in await panel_response.text()
                 try:
                     await client.ws_connect(f"{server.origin}/ws", origin="http://example.test")
                 except WSServerHandshakeError as exc:
@@ -934,315 +972,94 @@ def test_catalog_http_api_requires_the_fragment_session_token() -> None:
 
 def test_web_dashboard_assets_are_packaged_beside_server() -> None:
     root = Path(__file__).parents[1] / "src" / "rlab" / "web_player"
-    assert (root / "index.html").is_file()
-    assert (root / "styles.css").is_file()
-    assert (root / "tabler-icons.svg").is_file()
-    assert (root / "tabler-chevron-down.svg").is_file()
-    assert (root / "sources" / "browser.js").is_file()
     panel_root = root / "panels"
-    panel_names = {
-        "game",
-        "controls",
-        "policy",
-        "reward",
-        "actions",
-        "observation",
-        "signals",
-        "events",
-        "raw",
-    }
-    assert all((panel_root / f"{name}.js").is_file() for name in panel_names)
+    expected_assets = (
+        root / "index.html",
+        root / "styles.css",
+        root / "tabler-icons.svg",
+        root / "tabler-chevron-down.svg",
+        root / "vendor" / "gridstack" / "gridstack-all.js",
+        root / "vendor" / "gridstack" / "gridstack.min.css",
+        root / "sources" / "browser.js",
+        panel_root / "catalog.js",
+        panel_root / "manager.js",
+        panel_root / "runtime.js",
+        panel_root / "shared.js",
+        panel_root / "telemetry.js",
+        panel_root / "telemetry-panel.js",
+        panel_root / "workspace.js",
+    )
+    assert all(path.is_file() for path in expected_assets)
+    specialized_panels = {"game", "controls", "observation", "events", "raw"}
+    assert all((panel_root / f"{name}.js").is_file() for name in specialized_panels)
+    removed_metric_panels = {"policy", "reward", "actions", "signals"}
+    assert all(not (panel_root / f"{name}.js").exists() for name in removed_metric_panels)
+
     markup = (root / "index.html").read_text(encoding="utf-8")
     styles = (root / "styles.css").read_text(encoding="utf-8")
     script = (root / "app.js").read_text(encoding="utf-8")
     source_browser = (root / "sources" / "browser.js").read_text(encoding="utf-8")
-    icons = (root / "tabler-icons.svg").read_text(encoding="utf-8")
     catalog = (panel_root / "catalog.js").read_text(encoding="utf-8")
+    manager = (panel_root / "manager.js").read_text(encoding="utf-8")
     runtime = (panel_root / "runtime.js").read_text(encoding="utf-8")
-    shared = (panel_root / "shared.js").read_text(encoding="utf-8")
-    game_markup = (panel_root / "game.js").read_text(encoding="utf-8")
-    controls_markup = (panel_root / "controls.js").read_text(encoding="utf-8")
-    policy_markup = (panel_root / "policy.js").read_text(encoding="utf-8")
-    reward_markup = (panel_root / "reward.js").read_text(encoding="utf-8")
-    actions_markup = (panel_root / "actions.js").read_text(encoding="utf-8")
-    signals_markup = (panel_root / "signals.js").read_text(encoding="utf-8")
-    events_markup = (panel_root / "events.js").read_text(encoding="utf-8")
-    raw_markup = (panel_root / "raw.js").read_text(encoding="utf-8")
-    assert '<main id="dashboard" class="dashboard"></main>' in markup
+    telemetry = (panel_root / "telemetry.js").read_text(encoding="utf-8")
+    telemetry_panel = (panel_root / "telemetry-panel.js").read_text(encoding="utf-8")
+    workspace = (panel_root / "workspace.js").read_text(encoding="utf-8")
+    icons = (root / "tabler-icons.svg").read_text(encoding="utf-8")
+
+    assert '<main id="dashboard" class="dashboard grid-stack"></main>' in markup
+    assert 'href="/assets/vendor/gridstack/gridstack.min.css"' in markup
+    assert 'src="/assets/vendor/gridstack/gridstack-all.js"' in markup
     assert '<main id="source-browser" class="source-browser" hidden></main>' in markup
-    assert '<h1 id="page-title">Environment</h1>' in markup
+    assert 'id="panel-add"' in markup
+    assert 'id="panel-edit"' in markup
+    assert 'id="panel-duplicate"' in markup
+    assert 'id="panel-remove"' in markup
+    assert 'id="panel-editor"' in markup
+    for icon in ("ti-plus", "ti-edit", "ti-copy", "ti-trash"):
+        assert f'id="{icon}"' in icons
+
+    assert "PANEL_TYPES" in catalog
+    assert "BUILTIN_PANEL_PRESETS" in catalog
+    assert 'module: "./telemetry-panel.js"' in catalog
+    assert '"policy/value"' in catalog
+    assert '"reward/shaped"' in catalog
+    assert '"action/executed"' in catalog
+    assert '"namespace-explorer"' in catalog
+    assert "WORKSPACE_VERSION = 3" in workspace
+    assert "createTelemetryInstance" in workspace
+    assert "value.version !== WORKSPACE_VERSION" in workspace
+    assert "compareWorkspaceRevisions" in workspace
+    assert "class PanelManager" in manager
+    assert "compatibleMetricKeys" in manager
+    assert "class PanelRuntime" in runtime
+    assert "this.definitionFor(workspace, id)" in runtime
+    assert "import(definition.module)" in runtime
+    assert "makeLineBlock" in telemetry_panel
+    assert "makeHistogramBlock" in telemetry_panel
+    assert "makeDistributionBlock" in telemetry_panel
+    assert "makeNamespaceBlock" in telemetry_panel
+    assert '"action/policy"' in telemetry
+    assert '"action/executed"' in telemetry
+    assert "dynamicDescriptorKey" in telemetry
+
+    assert '"rlab.player.workspace.v3.paired"' in script
+    assert '"rlab.player.workspace.v3.single"' in script
+    assert "createTelemetryPanel" in script
+    assert "updateTelemetryPanel" in script
+    assert "snapshot.history_point" in script
+    assert "historyFromTransition" not in script
+    assert "window.GridStack.init" in script
+    assert "column: 12" in script
+    assert "cellHeight: 32" in script
+    assert 'gridStack.on("dragstop"' in script
+    assert 'gridStack.on("resizestop"' in script
+    assert "panel-drag-target" not in script
+    assert ".telemetry-blocks" in styles
+    assert ".panel-editor" in styles
+
     assert 'export function sourceRouteFromPath(' in source_browser
     assert 'export function sourceRoutePath(' in source_browser
     assert "export function formatDate(value, nowValue = Date.now())" in source_browser
-    assert '`${amount} ${label} ago`' in source_browser
     assert 'history.pushState(null, "", target);' in source_browser
     assert 'window.addEventListener("popstate", this.onPopState);' in source_browser
-    assert 'if (this.route.level === "goals") return "Choose a goal";' in source_browser
-    assert "renderGoals()" in source_browser
-    assert '"Evaluation", "Size", "Created"' in source_browser
-    assert 'evaluation.pass ? "Passed" : "Failed"' in source_browser
-    assert "evaluationMetricLabel" in source_browser
-    assert "criterion.value !== null" in source_browser
-    assert '? ["Run", "Recipe", "Seed", "Updated"]' in source_browser
-    assert '"run-cell"' in source_browser
-    assert "runStatePresentation(item.state)" in source_browser
-    assert 'state.setAttribute("aria-label", `Run state: ${presentation.label}`)' in source_browser
-    assert 'checkpoint_id: item.checkpoint_id' in source_browser
-    assert ".source-table .run-state.finished { color: var(--green); }" in styles
-    assert ".source-table .run-state.failed { color: var(--red); }" in styles
-    assert 'class="workspace-status"' not in markup
-    assert markup.index('id="new-window"') < markup.index('id="connection-status"')
-    assert markup.index('id="connection-status"') < markup.index('id="sampling-status"')
-    assert "grid-template-columns: minmax(0, 1fr) auto;" in styles
-    assert 'value="Default layout"' in markup
-    assert "Mario debug" not in markup
-    assert 'data-panel="' not in markup
-    assert 'className: "control-panel transport"' in controls_markup
-    assert "ENVIRONMENT" not in game_markup
-    assert "Focus the game for human input" not in game_markup
-    assert 'class="game-actions panel-actions"' in game_markup
-    assert "game-overlay" not in game_markup
-    assert ".game-overlay" not in styles
-    assert 'id="timeline-label">STEP — · SEQ —' in markup
-    assert 'id="timeline-step"' not in markup
-    assert 'id="timeline-sequence"' not in markup
-    assert '$("#timeline-label").textContent' in script
-    assert 'state.inspectionSequence === null ? null : "INSPECTING"' in script
-    assert "function episodeForSnapshot(snapshot)" in script
-    assert "function clearRetainedEpisode()" in script
-    assert "prepareRetainedEpisode(message);" in script
-    assert "state.frameBlobs.forEach((frames) => frames.clear());" in script
-    assert "state.historyLimit = Math.max(1, Number(message.history_limit) || 4096);" in script
-    assert "function pruneRetainedTrace(" in script
-    assert "function requiredFrameKinds(snapshot)" in script
-    assert "function requiredFramesAvailable(snapshot)" in script
-    assert "function exactFrameBlob(kind, sequence)" in script
-    assert "nearestFrameBlob" not in script
-    assert 'type: "inspection-cursor"' in script
-    assert 'type: "inspection-frame-request"' in script
-    assert 'type: "inspection-frame"' in script
-    assert "function maybePauseForInspection()" in script
-    assert 'state.inspectionPauseCommandId = command("pause");' in script
-    assert "while (frames.size > 1024)" not in script
-    assert "while (state.snapshots.size > 1024)" not in script
-    assert "`EP ${" not in script
-    assert "grid-template-columns: minmax(0, 1fr)" in styles
-    assert ".timeline-labels { min-width: 0; overflow: hidden;" in styles
-    assert "aspect-ratio: 256 / 240" in styles
-    assert "grid-template-columns: repeat(12" in styles
-    assert ".icon-only" in styles
-    assert 'id="timeline-scrubber" type="range" min="0" max="0" step="1"' in markup
-    assert 'title="Left/Right: move one step · Space: play or pause"' in markup
-    assert 'event.key === "ArrowLeft" || event.key === "ArrowRight"' in script
-    assert 'if (event.code !== "Space" || event.repeat) return;' in script
-    assert "if (running) pauseCurrentPlayback();" in script
-    assert "else playFromCurrentPosition();" in script
-    assert 'id="return-live"' not in markup
-    assert 'id="timeline-zoom-out"' not in markup
-    assert 'id="timeline-zoom-in"' not in markup
-    assert 'id="timeline-zoom-label"' not in markup
-    assert "timelineWindow" not in script
-    assert "const currentEpisode = episodeForSnapshot(state.liveSnapshot);" in script
-    assert "currentEpisode === null || episodeForSnapshot(snapshot) === currentEpisode" in script
-    assert "currentEpisode === null || Number(point.episode) === currentEpisode" in script
-    assert "previousEpisode !== nextEpisode" in script
-    assert 'scrubber.step = "1";' in script
-    assert "if (index === state.timelineSequences.length - 1) returnToLive();" in script
-    assert "data-return-chart" in reward_markup
-    assert "data-value-chart" in reward_markup
-    assert "Value estimate vs realized return-to-go" in reward_markup
-    assert '["V − G", number(point?.value_error, 3)]' in reward_markup
-    assert "positive overestimates, negative underestimates" in reward_markup
-    assert "point.realized_return" in reward_markup
-    assert "value_discount" in reward_markup
-    assert "state.history[index] = { ...state.history[index], ...point };" in script
-    assert controls_markup.count("data-playback-toggle data-requires-active-episode class=") == 1
-    assert (
-        'data-command="play" data-playback-toggle data-requires-active-episode class="primary icon-only"'
-        in controls_markup
-    )
-    assert 'data-command="pause" class="icon-only"' not in controls_markup
-    assert "services.playFromCurrentPosition()" in controls_markup
-    assert "function playFromCurrentPosition()" in script
-    assert 'command("play");' in script
-    assert "services.pauseCurrentPlayback()" in controls_markup
-    assert "services.canReplayInspection()" in controls_markup
-    assert "state.replayingInspection" in controls_markup
-    assert "Replay from the selected step" in controls_markup
-    assert "function canReplayInspection()" in script
-    assert 'state.liveSnapshot?.run_state !== "paused"' in script
-    assert "function scheduleInspectionReplay()" in script
-    assert "const reachedEpisodeEnd" in script
-    assert "if (nextSequence === state.timelineSequences.at(-1)) returnToLive();" in script
-    assert "stopInspectionReplay({ render: false });" in script
-    assert (
-        "if (view.inspection) snapshot = services.getState().liveSnapshot || snapshot;"
-        in controls_markup
-    )
-    assert "playbackToggle.dataset.command = command" in controls_markup
-    assert "if (playbackToggle.dataset.command === command) return;" in controls_markup
-    assert (
-        'playbackIcon.setAttribute("href", `/assets/tabler-icons.svg#ti-player-${command}`)'
-        in controls_markup
-    )
-    assert "repeat(4, minmax(0, 1fr))" in styles
-    assert "Continue to episode boundary" not in controls_markup
-    assert 'data-command="continue-done"' not in controls_markup
-    assert "End session" not in controls_markup
-    assert 'data-command="stop"' not in controls_markup
-    assert "ti-flag-3" not in icons
-    assert "ti-power" not in icons
-    assert (
-        'data-command="step-ten" data-requires-active-episode class="icon-only" aria-label="Step 10 times"'
-        in controls_markup
-    )
-    assert 'data-command="next-episode" data-next-episode' in controls_markup
-    assert 'services.command("next_episode", {' in controls_markup
-    assert "seed: seed.value" in controls_markup
-    assert "sampling_mode: sampling.value" in controls_markup
-    assert "driver: nextDriver" in controls_markup
-    assert "Boolean(session.awaiting_next_episode)" in controls_markup
-    assert "nextEpisode.disabled = !canPrepareNextEpisode" in controls_markup
-    assert "seed.disabled = !canPrepareNextEpisode" in controls_markup
-    assert "sampling.disabled = !canPrepareNextEpisode" in controls_markup
-    assert "option.disabled = recording || !canPrepareNextEpisode" in controls_markup
-    assert '<label for="playback-fps">Play FPS</label>' in controls_markup
-    assert '<details class="playback-settings">' in controls_markup
-    assert "<summary>Playback settings</summary>" in controls_markup
-    assert '<details class="playback-settings" open>' not in controls_markup
-    assert '<div class="playback-settings-body">' in controls_markup
-    assert 'id="playback-fps" data-fps type="number" min="0"' in controls_markup
-    assert 'data-command="set-fps"' in controls_markup
-    assert '<select id="playback-sampling" data-sampling' in controls_markup
-    assert '<option value="stochastic">Stochastic</option>' in controls_markup
-    assert '<option value="deterministic">Deterministic</option>' in controls_markup
-    assert '<h3 id="next-episode-heading"' in controls_markup
-    assert 'class="next-episode-settings-body"' in controls_markup
-    assert 'class="next-episode-seed"' in controls_markup
-    assert "set_sampling_mode" not in controls_markup
-    assert 'data-command="reset"' not in controls_markup
-    assert 'services.command("set_driver"' not in controls_markup
-    assert 'fps.addEventListener("keydown"' in controls_markup
-    assert 'commands["set-fps"]();' in controls_markup
-    assert "Session settings" not in controls_markup
-    assert ".playback-fps" in styles
-    assert ".playback-sampling" in styles
-    assert ".playback-settings-body" in styles
-    assert ".next-episode-settings-body" in styles
-    assert 'id="ti-refresh"' in icons
-    assert 'id="layouts-toggle" class="quiet icon-only"' in markup
-    assert (
-        'id="save-layout" class="primary button-with-icon" type="button" title="Save layout"'
-        in markup
-    )
-    assert (
-        'id="reset-layout" class="quiet button-with-icon" type="button" title="Reset default layout"'
-        in markup
-    )
-    assert 'id="panel-hide" class="button-with-icon" type="button" title="Hide panel"' in markup
-    assert "ti-device-desktop-share" not in icons
-    assert "Control from this window" not in controls_markup
-    assert "data-acquire" not in controls_markup
-    assert "Inspect policy" not in controls_markup
-    assert 'data-command="inspect"' not in controls_markup
-    assert "inspect_policy" not in controls_markup
-    assert "panel-inspection" not in script
-    assert 'id="ti-search"' in icons
-    assert 'class="driver-switch" role="group" aria-label="Driver selection"' in controls_markup
-    assert 'data-driver-option="policy"' in controls_markup
-    assert 'data-driver-option="human"' in controls_markup
-    assert 'aria-pressed="true" aria-label="Use policy driver for next episode"' in controls_markup
-    assert 'aria-pressed="false" aria-label="Use human driver for next episode"' in controls_markup
-    assert "option.dataset.driverOption === nextDriver" in controls_markup
-    assert '.driver-option[aria-pressed="true"]' in styles
-    assert "separate scale" not in markup
-    assert "shared scale" not in markup
-    assert "Research workspace" not in markup
-    assert "panel-kicker" not in markup
-    assert 'id="workspace-sequence"' not in markup
-    assert "#workspace-sequence" not in script
-    assert "panel-shelf-title" not in script
-    assert "scrollIntoView" not in script
-    assert (
-        "${snapshot.run_state.toUpperCase()} · ${snapshot.driver.toUpperCase()}" in controls_markup
-    )
-    assert "drawLines(returnChart" in reward_markup
-    assert "cursorIndex" in reward_markup
-    assert "history.slice(-1024)" not in reward_markup
-    assert "history.slice(-1024)" not in signals_markup
-    assert "history.slice(-1024)" not in actions_markup
-    assert "highlightIndex" in actions_markup
-    assert '"selected"' in events_markup
-    assert "data-drag-handle" in game_markup
-    assert 'aria-label="Move game panel"' in game_markup
-    assert "/assets/tabler-icons.svg#ti-player-play" in controls_markup
-    assert 'id="ti-grip-vertical"' in icons
-    assert 'id="ti-player-play"' in icons
-    assert 'id="panel-shelf" class="floating-menu panel-shelf" hidden' in markup
-    assert "requestFullscreen" in game_markup
-    assert 'data-transition class="json-view"' in raw_markup
-    assert "function renderJson(" in shared
-    assert "function niceTickStep(" in shared
-    assert "function lineChartScale(" in shared
-    assert "function formatAxisValue(" in shared
-    assert "context.fillText(labels[index], plot.left - 6, y)" in shared
-    assert "cursorIndex = null" in shared
-    assert "highlightIndex = null" in shared
-    assert "const scale = lineChartScale([0, max])" in shared
-    assert 'class="signal-toolbar-label">Chart signal</span>' in signals_markup
-    assert "grid-template-columns: max-content minmax(0, 1fr)" in styles
-    assert ".signal-toolbar select" in styles
-    assert 'background-image: url("/assets/tabler-chevron-down.svg")' in styles
-    assert "background-position: right .85rem center" in styles
-    assert "padding-right: 2.2rem" in styles
-    assert "text-overflow: ellipsis" in styles
-    for token_class in (
-        "json-key",
-        "json-string",
-        "json-number",
-        "json-boolean",
-        "json-null",
-    ):
-        assert f".{token_class}" in styles
-    assert "/panel/" in script
-    assert "/workspace/" in script
-    assert "workspace_id" in script
-    assert "BroadcastChannel" in script
-    assert 'type: "panel-drag-start"' in script
-    assert 'type: "panel-drag-move"' in script
-    assert 'type: "panel-drag-target"' in script
-    assert 'type: "panel-drag-end"' in script
-    assert "state.dragTarget?.window === state.windowId" in script
-    assert "state.dragTarget.move >= message.move" in script
-    assert "setPointerCapture" in script
-    assert "clientPointFromScreen" in script
-    assert "preview.style.width" in script
-    assert "preview.style.height" in script
-    assert ".panel-drag-overlay" in styles
-    assert ".dashboard.drag-receiving" in styles
-    assert "visibilitychange" in game_markup
-    assert "PANEL_CATALOG" in catalog
-    assert "const PAIRED_PANEL_LAYOUT" in catalog
-    assert 'window: "stats"' in catalog
-    assert "defaultPanelLayout({ paired = false } = {})" in catalog
-    assert 'module: "./game.js"' in catalog
-    assert "defaultPanelLayout" in catalog
-    assert "import(definition.module)" in runtime
-    assert "async ensureMounted" in runtime
-    assert "this.unmount(name)" in runtime
-    assert "new PanelRuntime" in script
-    assert "load.title = `Load layout ${name}`" in script
-    assert "remove.title = `Delete layout ${name}`" in script
-    assert 'button.title = button.getAttribute("aria-label")' in script
-    assert 'handle.title = handle.getAttribute("aria-label")' in script
-    assert 'id="sampling-status" class="badge muted" hidden' in markup
-    assert 'samplingMode === "deterministic" ? "Deterministic" : "Stochastic"' in script
-    assert 'decision.sampled ? "Stochastic" : "Deterministic"' in policy_markup
-    assert 'panelRuntime.invoke("controls", "render", snapshot)' in script
-    assert 'name: "Default layout"' in script
-    assert "state.liveSnapshot?.session?.env_id" in script
-    assert "Mario debug" not in script
-    assert 'new URLSearchParams(location.search).get("workspace") === "paired"' in script
-    assert '"rlab.player.workspace.layout.v2"' in script
-    assert "pairedWorkspace && closedWindow === STATS_WINDOW_ID" in script
-    assert "body.stats-window #timeline" in styles

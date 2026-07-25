@@ -32,6 +32,10 @@ exact registry entry or a bounded template.
   create-only private-R2 `PromotionReceipt` is the authoritative selection.
 - Heavy model bytes, videos, replays, episode rows, diagnostics, and recovery payloads never go to
   W&B.
+- Interactive playback uses local descriptor keys such as `reward/shaped`, `policy/value`, and
+  `action/executed` to configure live panels. They are typed projections of one streamed transition
+  or its bounded in-browser history, are not emitted metrics, and must not be interpreted as aliases
+  for similarly named W&B registry entries.
 
 The active checkpoint protocol is `acceptance`; complete accepted evidence additionally emits the
 `full` metric family. Dimension IDs must be unique and match `[A-Za-z0-9_.-]+`; unsafe IDs are

@@ -1,112 +1,220 @@
 export const FRAME_GAME = 1;
 export const FRAME_OBSERVATION = 2;
 
-const PAIRED_PANEL_LAYOUT = Object.freeze({
-  game: { col: 1, row: 1, w: 9, h: 15, visible: true, window: "main" },
-  controls: { col: 10, row: 1, w: 3, h: 15, visible: true, window: "main" },
-  policy: { col: 1, row: 1, w: 4, h: 7, visible: true, window: "stats" },
-  reward: { col: 5, row: 1, w: 4, h: 8, visible: true, window: "stats" },
-  actions: { col: 9, row: 1, w: 4, h: 8, visible: true, window: "stats" },
-  observation: { col: 1, row: 9, w: 6, h: 8, visible: true, window: "stats" },
-  signals: { col: 7, row: 9, w: 3, h: 8, visible: true, window: "stats" },
-  events: { col: 10, row: 9, w: 3, h: 8, visible: true, window: "stats" },
-  raw: { col: 1, row: 17, w: 12, h: 7, visible: true, window: "stats" },
-});
-
-export const PANEL_CATALOG = Object.freeze({
+export const PANEL_TYPES = Object.freeze({
   game: {
-    label: "Game",
     module: "./game.js",
-    layout: { col: 1, row: 1, w: 7, h: 15, visible: true, window: "main" },
     minimum: { w: 4, h: 8 },
     subscriptions: ["game"],
     frameKinds: [FRAME_GAME],
+    singleton: true,
   },
   controls: {
-    label: "Controls",
     module: "./controls.js",
-    layout: { col: 8, row: 1, w: 2, h: 15, visible: true, window: "main" },
     minimum: { w: 2, h: 4 },
     subscriptions: [],
     frameKinds: [],
-  },
-  policy: {
-    label: "Policy distribution",
-    module: "./policy.js",
-    layout: { col: 10, row: 1, w: 3, h: 7, visible: true, window: "main" },
-    minimum: { w: 2, h: 4 },
-    subscriptions: [],
-    frameKinds: [],
-  },
-  reward: {
-    label: "Reward and return",
-    module: "./reward.js",
-    layout: { col: 10, row: 8, w: 3, h: 8, visible: true, window: "main" },
-    minimum: { w: 2, h: 4 },
-    subscriptions: [],
-    frameKinds: [],
-  },
-  actions: {
-    label: "Action history",
-    module: "./actions.js",
-    layout: { col: 1, row: 16, w: 4, h: 8, visible: false, window: "main" },
-    minimum: { w: 2, h: 4 },
-    subscriptions: [],
-    frameKinds: [],
+    singleton: true,
   },
   observation: {
-    label: "Observation and attribution",
     module: "./observation.js",
-    layout: { col: 5, row: 16, w: 5, h: 8, visible: false, window: "main" },
     minimum: { w: 2, h: 4 },
     subscriptions: ["observation"],
     frameKinds: [FRAME_OBSERVATION],
+    singleton: true,
   },
-  signals: {
-    label: "Live signals",
-    module: "./signals.js",
-    layout: { col: 10, row: 16, w: 3, h: 8, visible: false, window: "main" },
+  telemetry: {
+    module: "./telemetry-panel.js",
     minimum: { w: 2, h: 4 },
     subscriptions: [],
     frameKinds: [],
+    singleton: false,
   },
   events: {
-    label: "Events",
     module: "./events.js",
-    layout: { col: 1, row: 24, w: 4, h: 7, visible: false, window: "main" },
     minimum: { w: 2, h: 4 },
     subscriptions: [],
     frameKinds: [],
+    singleton: true,
   },
   raw: {
-    label: "Transition inspector",
     module: "./raw.js",
-    layout: { col: 5, row: 24, w: 8, h: 7, visible: false, window: "main" },
     minimum: { w: 2, h: 4 },
     subscriptions: [],
     frameKinds: [],
+    singleton: true,
   },
 });
 
-export function panelLabels() {
-  return Object.fromEntries(
-    Object.entries(PANEL_CATALOG).map(([name, definition]) => [name, definition.label]),
-  );
+const SINGLE_LAYOUT = Object.freeze({
+  game: { x: 0, y: 0, w: 7, h: 15, visible: true, window: "main" },
+  controls: { x: 7, y: 0, w: 2, h: 15, visible: true, window: "main" },
+  policy: { x: 9, y: 0, w: 3, h: 7, visible: true, window: "main" },
+  reward: { x: 9, y: 7, w: 3, h: 8, visible: true, window: "main" },
+  actions: { x: 0, y: 15, w: 4, h: 8, visible: false, window: "main" },
+  observation: { x: 4, y: 15, w: 5, h: 8, visible: false, window: "main" },
+  signals: { x: 9, y: 15, w: 3, h: 8, visible: false, window: "main" },
+  events: { x: 0, y: 23, w: 4, h: 7, visible: false, window: "main" },
+  raw: { x: 4, y: 23, w: 8, h: 7, visible: false, window: "main" },
+});
+
+const PAIRED_LAYOUT = Object.freeze({
+  game: { x: 0, y: 0, w: 9, h: 15, visible: true, window: "main" },
+  controls: { x: 9, y: 0, w: 3, h: 15, visible: true, window: "main" },
+  policy: { x: 0, y: 0, w: 4, h: 7, visible: true, window: "stats" },
+  reward: { x: 4, y: 0, w: 4, h: 8, visible: true, window: "stats" },
+  actions: { x: 8, y: 0, w: 4, h: 8, visible: true, window: "stats" },
+  observation: { x: 0, y: 8, w: 6, h: 8, visible: true, window: "stats" },
+  signals: { x: 6, y: 8, w: 3, h: 8, visible: true, window: "stats" },
+  events: { x: 9, y: 8, w: 3, h: 8, visible: true, window: "stats" },
+  raw: { x: 0, y: 16, w: 12, h: 7, visible: true, window: "stats" },
+});
+
+export const BUILTIN_PANEL_PRESETS = Object.freeze({
+  game: {
+    type: "game",
+    title: "Game",
+    config: {},
+  },
+  controls: {
+    type: "controls",
+    title: "Controls",
+    config: {},
+  },
+  policy: {
+    type: "telemetry",
+    title: "Policy distribution",
+    config: {
+      blocks: [
+        {
+          kind: "stats",
+          metrics: [
+            "policy/mode",
+            "policy/value",
+            "policy/entropy",
+            "policy/log-probability",
+          ],
+        },
+        { kind: "distribution", metric: "policy/distribution" },
+      ],
+    },
+  },
+  reward: {
+    type: "telemetry",
+    title: "Reward and return",
+    config: {
+      blocks: [
+        {
+          kind: "stats",
+          metrics: [
+            "reward/provider",
+            "reward/shaped",
+            "reward/return",
+            "policy/value",
+            "policy/realized-return",
+            "policy/value-error",
+            "transition/outcome",
+          ],
+        },
+        {
+          kind: "line",
+          title: "Value estimate vs realized return-to-go",
+          metrics: ["policy/value", "policy/realized-return"],
+          foot: "Selected-step error is V(s) − G(s): positive overestimates, negative underestimates. G(s) is available after the episode ends.",
+        },
+        {
+          kind: "line",
+          title: "After-action step reward",
+          metrics: ["reward/provider", "reward/shaped"],
+        },
+        {
+          kind: "line",
+          title: "Episode return",
+          metrics: ["reward/return"],
+        },
+      ],
+    },
+  },
+  actions: {
+    type: "telemetry",
+    title: "Action history",
+    config: {
+      blocks: [
+        { kind: "histogram", metric: "action/executed" },
+      ],
+    },
+  },
+  observation: {
+    type: "observation",
+    title: "Observation and attribution",
+    config: {},
+  },
+  signals: {
+    type: "telemetry",
+    title: "Live signals",
+    config: {
+      blocks: [
+        { kind: "namespace-explorer", namespace: "signal", metric: "" },
+      ],
+    },
+  },
+  events: {
+    type: "events",
+    title: "Events",
+    config: {},
+  },
+  raw: {
+    type: "raw",
+    title: "Transition inspector",
+    config: {},
+  },
+});
+
+function clone(value) {
+  return JSON.parse(JSON.stringify(value));
 }
 
-export function defaultPanelLayout({ paired = false } = {}) {
+export function defaultPanelInstances({ paired = false } = {}) {
+  const layout = paired ? PAIRED_LAYOUT : SINGLE_LAYOUT;
   return Object.fromEntries(
-    Object.entries(PANEL_CATALOG).map(([name, definition]) => [
-      name,
-      { ...(paired ? PAIRED_PANEL_LAYOUT[name] : definition.layout) },
+    Object.entries(BUILTIN_PANEL_PRESETS).map(([id, preset]) => [
+      id,
+      {
+        ...clone(preset),
+        builtin: true,
+        placement: clone(layout[id]),
+      },
     ]),
   );
 }
 
-export function panelSubscriptions(names) {
+export function panelDefinition(workspace, id) {
+  const instance = workspace?.panels?.[id];
+  const type = instance ? PANEL_TYPES[instance.type] : null;
+  if (!instance || !type) return null;
+  return {
+    ...type,
+    id,
+    label: instance.title,
+    title: instance.title,
+    type: instance.type,
+    config: instance.config,
+    builtin: Boolean(instance.builtin),
+  };
+}
+
+export function panelLabels(workspace) {
+  return Object.fromEntries(
+    Object.entries(workspace?.panels || {}).map(([id, panel]) => [id, panel.title]),
+  );
+}
+
+export function panelSubscriptions(workspace, names) {
   const values = new Set(["telemetry"]);
-  names.forEach((name) => {
-    PANEL_CATALOG[name]?.subscriptions.forEach((subscription) => values.add(subscription));
+  names.forEach((id) => {
+    panelDefinition(workspace, id)?.subscriptions.forEach((subscription) => {
+      values.add(subscription);
+    });
   });
   return [...values];
 }

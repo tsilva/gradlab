@@ -155,6 +155,14 @@ The player uses shareable hierarchical routes: `/` lists projects,
 Checkpoint rows show goal-required acceptance results from W&B when available.
 Browser Back and Forward navigation follow the same resource hierarchy.
 
+The playback dashboard is a GridStack workspace. Policy, reward, action, signal,
+and reward-component views are instances of one configurable telemetry panel:
+use **Panels → Add** to combine stats, compatible line series, histograms,
+policy distributions, and dynamic metric explorers. Panels can be edited,
+duplicated, hidden, resized, rearranged, or moved to a synchronized window.
+Workspace v3 intentionally starts clean instead of migrating older saved
+layouts.
+
 The checked-in goal catalog supplies projects and goals. W&B supplies run
 metadata and available goal-required acceptance results only after a goal is
 selected. Playback downloads model bytes from the public checkpoint store;
