@@ -3,6 +3,15 @@ defaults:
 - _self_
 reward_shape: score-v1
 recipe_id: ppo
+train:
+  # The last accepted baseline cleared 100/100 by 28.6M transitions. Treat
+  # failure to recover by 30M as a failed trajectory instead of spending 50M.
+  timesteps: 30000000
+  backend:
+    config:
+      # Keep rollout updates near the 0.015-0.024 KL regime observed in the
+      # accepted Level1-2 run and stop before destructive policy drift.
+      target_kl: 0.03
 description: >-
   Seed {{ seed }} trains the stable low-KL late-decay {{ goal_id }} PPO policy-search baseline,
   using the goal contract's clear-rate gate and async checkpoint evaluation for promotion.

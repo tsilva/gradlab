@@ -4,3 +4,25 @@ defaults:
 - ../_goal-common@_global_
 # Apply this file after the shared contract; goal-specific overrides can live here when needed.
 - _self_
+
+# Level1-2 policies can enter a no-progress attractor around the bonus/warp-zone
+# transition. Reset those training lanes promptly instead of filling rollouts
+# with episodes that survive until the shared hard cap.
+train:
+  environment:
+    task:
+      events:
+        stalled: {signal: x, operation: unchanged_for, steps: 300}
+      termination:
+        failure: [life_loss, stalled]
+
+# Track the same no-progress event during evaluation for diagnostics, but leave
+# it non-terminal. The existing step limit and 100/100 level-change acceptance
+# gate remain unchanged.
+eval:
+  environment:
+    task:
+      events:
+        stalled: {signal: x, operation: unchanged_for, steps: 300}
+      termination:
+        failure: []

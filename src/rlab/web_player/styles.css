@@ -296,6 +296,34 @@ h2 { font-size: .9rem; margin: 0; font-weight: 650; }
   text-align: left;
   text-transform: uppercase;
 }
+.source-sort {
+  display: inline-flex;
+  align-items: center;
+  gap: .3rem;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-weight: inherit;
+  letter-spacing: inherit;
+  text-align: inherit;
+  text-transform: inherit;
+  cursor: pointer;
+}
+.source-sort:hover,
+.source-sort:focus-visible { color: var(--text); }
+.source-sort:focus-visible {
+  border-radius: .2rem;
+  outline: 1px solid var(--cyan);
+  outline-offset: .2rem;
+}
+.source-sort-indicator {
+  color: var(--cyan);
+  font-size: .72rem;
+  letter-spacing: 0;
+}
 .source-table td {
   max-width: 28rem;
   padding: .72rem;
