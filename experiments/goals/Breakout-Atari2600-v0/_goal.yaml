@@ -2,9 +2,9 @@ defaults:
 - _self_
 goal_id: Breakout-Atari2600-v0
 tags:
-- "goal_id:{goal_id}"
-- "recipe_id:{recipe_id}"
-- "env_id:{env_id}"
+- "goal_id:{{ goal_id }}"
+- "recipe_id:{{ recipe_id }}"
+- "env_id:{{ env_id }}"
 title: Atari 2600 Breakout wall completion
 objective:
   rank:

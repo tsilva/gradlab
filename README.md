@@ -135,9 +135,9 @@ runs/<run-id>/index.json
 
 The public index is mutable through ETag compare-and-swap and served with
 `Cache-Control: no-store`; checkpoint objects are immutable and cacheable.
-Start the web player without a source to browse W&B projects, runs, and their
-public checkpoints. A W&B project or run URL preselects that level; an exact
-source still opens directly:
+Start the web player without a source to browse repository-declared projects
+and goals, then their W&B runs and public checkpoints. A W&B project or run URL
+preselects that level; an exact source still opens directly:
 
 ```bash
 rlab play
@@ -155,9 +155,10 @@ The player uses shareable hierarchical routes: `/` lists projects,
 Checkpoint rows show goal-required acceptance results from W&B when available.
 Browser Back and Forward navigation follow the same resource hierarchy.
 
-W&B supplies catalog metadata only. Playback downloads model bytes from the
-public checkpoint store; videos, episode evidence, ROMs, and recovery journals
-remain in R2.
+The checked-in goal catalog supplies projects and goals. W&B supplies run
+metadata and available goal-required acceptance results only after a goal is
+selected. Playback downloads model bytes from the public checkpoint store;
+videos, episode evidence, ROMs, and recovery journals remain in R2.
 
 ## Evaluation and early stop
 

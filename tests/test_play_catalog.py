@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -15,24 +16,16 @@ RUN_ID = "rlab-" + "a" * 32
 class FakeApi:
     default_entity = "research"
 
+    def __init__(self) -> None:
+        self.runs_calls = 0
+
     def projects(self, *, entity: str, per_page: int):
-        assert (entity, per_page) == ("research", 200)
-        return [
-            SimpleNamespace(
-                entity=entity,
-                name="Mario",
-                created_at="2026-01-01T00:00:00Z",
-                url="https://wandb.ai/research/Mario",
-            ),
-            SimpleNamespace(
-                entity=entity,
-                name="Breakout",
-                created_at="2026-01-02T00:00:00Z",
-                url="https://wandb.ai/research/Breakout",
-            ),
-        ]
+        raise AssertionError(
+            f"repository-backed projects must not query W&B: {entity=}, {per_page=}"
+        )
 
     def runs(self, path: str, **kwargs):
+        self.runs_calls += 1
         assert path == "research/Mario"
         assert kwargs["order"] == "-created_at"
         return [
@@ -65,6 +58,30 @@ class FakeApi:
     def run(self, path: str):
         assert path == f"research/Mario/{RUN_ID}"
         return self.runs("research/Mario", order="-created_at", per_page=200, lazy=True)[1]
+
+
+def write_goal_catalog(repo_root: Path) -> None:
+    goal_root = repo_root / "experiments" / "goals" / "Mario" / "Level1-1"
+    recipes = goal_root / "recipes"
+    recipes.mkdir(parents=True)
+    (goal_root / "_goal.yaml").write_text(
+        "\n".join(
+            (
+                "defaults:",
+                "- _self_",
+                "goal_id: Level1-1",
+                "title: Mario Level 1-1 completion",
+                "train:",
+                "  environment:",
+                "    env_provider: gymnasium",
+                "    env_config:",
+                "      game: Mario",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    (recipes / "ppo.yaml").write_text("defaults: [_self_]\n", encoding="utf-8")
 
 
 def checkpoint_row(*, step: int, digest: str, purpose: str) -> dict[str, object]:
@@ -126,12 +143,33 @@ def test_play_parser_allows_bare_launch_and_wandb_preselection() -> None:
     )
 
 
-def test_catalog_searches_projects_and_only_returns_canonical_rlab_runs() -> None:
-    catalog = PlayCatalog()
-    catalog._api = FakeApi()
+def test_catalog_default_entity_does_not_initialize_wandb(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    catalog = PlayCatalog(repo_root=tmp_path)
+    monkeypatch.setenv("WANDB_ENTITY", "research")
+    monkeypatch.setattr(
+        catalog,
+        "_wandb_api",
+        lambda: (_ for _ in ()).throw(AssertionError("must not initialize W&B")),
+    )
+
+    assert catalog.default_entity() == "research"
+
+
+def test_catalog_uses_repository_projects_and_goals_before_querying_wandb(
+    tmp_path: Path,
+) -> None:
+    write_goal_catalog(tmp_path)
+    catalog = PlayCatalog(repo_root=tmp_path)
+    api = FakeApi()
+    catalog._api = api
 
     projects = catalog.projects(entity="research", query="mario")
     goals = catalog.goals(entity="research", project="Mario")
+    assert api.runs_calls == 0
+
     runs = catalog.runs(
         entity="research",
         project="Mario",
@@ -140,8 +178,11 @@ def test_catalog_searches_projects_and_only_returns_canonical_rlab_runs() -> Non
     )
 
     assert [item["name"] for item in projects.items] == ["Mario"]
+    assert projects.items[0]["goal_count"] == 1
     assert [item["goal_id"] for item in goals.items] == ["Level1-1"]
-    assert goals.items[0]["run_count"] == 1
+    assert goals.items[0]["title"] == "Mario Level 1-1 completion"
+    assert goals.items[0]["recipe_count"] == 1
+    assert goals.items[0]["goal_path"].endswith("/Level1-1/_goal.yaml")
     assert [item["run_id"] for item in runs.items] == [RUN_ID]
     assert runs.items[0]["recipe"] == "ppo"
     assert catalog.run_goal(entity="research", project="Mario", run_id=RUN_ID) == "Level1-1"

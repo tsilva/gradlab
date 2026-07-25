@@ -9,7 +9,7 @@ portfolio:
 
 goal:
   enabled: true
-  title: "{goal_id}: {goal_title}"
+  title: "{{ goal_id }}: {{ goal_title }}"
   sections:
   - objective_summary
   - checkpoint_leaderboard

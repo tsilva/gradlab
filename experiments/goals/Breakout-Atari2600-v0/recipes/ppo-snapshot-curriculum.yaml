@@ -3,7 +3,7 @@ defaults:
 - _self_
 recipe_id: ppo-snapshot-curriculum
 description: >-
-  Seed {seed} trains the default high-throughput Breakout PPO policy for {goal_id} while reserving
+  Seed {{ seed }} trains the default high-throughput Breakout PPO policy for {{ goal_id }} while reserving
   approximately 20 percent of lanes for a bounded live-state curriculum keyed by 50-point score
   stages and prioritized by value error plus staleness.
 train:

@@ -8,8 +8,11 @@ from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path, PureWindowsPath
-from typing import Any, Callable
+from typing import Annotated, Any, Callable, Literal
 
+from pydantic import Field, StringConstraints, model_validator
+
+from rlab.boundary_schema import BoundaryModel, validate_boundary
 from rlab.file_utils import file_sha256 as sha256_file
 from rlab.json_utils import canonical_json_line_bytes
 
@@ -23,95 +26,6 @@ RECIPE_FILENAME = "recipe.json"
 MODEL_FILENAME = "model.json"
 CHECKPOINT_FILENAME = "model.zip"
 
-_RECIPE_FIELDS = frozenset({"document_type", "format_version", "recipe", "provenance"})
-_MODEL_FIELDS = frozenset(
-    {"document_type", "format_version", "checkpoint", "recipe", "policy", "provenance"}
-)
-_CHECKPOINT_FIELDS = frozenset(
-    {"filename", "sha256", "size_bytes", "kind", "step", "algorithm_id", "model_class"}
-)
-_RECIPE_BINDING_FIELDS = frozenset(
-    {"filename", "document_type", "format_version", "sha256", "size_bytes"}
-)
-_POLICY_FIELDS = frozenset(
-    {
-        "algorithm_id",
-        "model_class",
-        "training_backend_id",
-        "training_backend_config_hash",
-    }
-)
-_RECIPE_VALUE_FIELDS = frozenset(
-    {
-        "schema_version",
-        "goal",
-        "recipe_id",
-        "description",
-        "tags",
-        "campaign_id",
-        "seeds",
-        "recipe_overrides",
-        "train",
-        "train_config",
-        "environment",
-        "environment_hash",
-        "eval",
-        "playback",
-    }
-)
-_EVAL_FIELDS = frozenset(
-    {
-        "environment",
-        "action_sampling",
-        "episodes",
-        "n_envs",
-        "max_steps",
-        "seed",
-        "seed_protocol",
-        "protocol_version",
-        "deterministic",
-        "acceptance",
-        "manifest",
-        "evidence_policy",
-        "asset",
-    }
-)
-_PLAYBACK_FIELDS = frozenset({"environment", "seed", "asset"})
-_RECIPE_PROVENANCE_FIELDS = frozenset({"source_commit", "source_files", "runtime", "asset"})
-_MODEL_PROVENANCE_FIELDS = frozenset(
-    {
-        "metadata_version",
-        "kind",
-        "run_name",
-        "run_description",
-        "wandb_run_id",
-        "wandb_project",
-        "wandb_run_path",
-        "campaign_id",
-        "game_family",
-        "goal_slug",
-        "goal_sha256",
-        "goal_contract_sha256",
-        "effective_goal_contract_sha256",
-        "reward_program_kind",
-        "reward_program_revision",
-        "reward_shape",
-        "reward_shape_sha256",
-        "reward_shape_is_default",
-        "recipe_slug",
-        "recipe_sha256",
-        "runtime_image_ref",
-        "seed",
-        "repo_git_commit",
-        "training_metadata",
-        "training_metadata_hash",
-        "attempt_id",
-        "compute_target",
-        "dstack_task",
-        "snapshot_curriculum_preflight_sha256",
-        "snapshot_curriculum_session",
-    }
-)
 _SECRET_FRAGMENTS = (
     "api_key",
     "access_key",
@@ -121,6 +35,145 @@ _SECRET_FRAGMENTS = (
     "credential",
     "database_url",
 )
+
+NonEmptyText = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
+Sha256 = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, to_lower=True, pattern=r"^[0-9a-f]{64}$"),
+]
+PositiveInt = Annotated[int, Field(strict=True, ge=1)]
+NonNegativeInt = Annotated[int, Field(strict=True, ge=0)]
+
+
+class _EvaluationDocument(BoundaryModel):
+    environment: dict[str, Any]
+    action_sampling: Any = None
+    episodes: Any = None
+    n_envs: Any = None
+    max_steps: Any = None
+    seed: Any = None
+    seed_protocol: Any = None
+    protocol_version: Any = None
+    deterministic: Any = None
+    acceptance: Any = None
+    manifest: Any = None
+    evidence_policy: Any = None
+    asset: Any = None
+
+
+class _PlaybackDocument(BoundaryModel):
+    environment: dict[str, Any]
+    seed: Any = None
+    asset: Any = None
+
+
+class _RecipeValueDocument(BoundaryModel):
+    goal: dict[str, Any]
+    recipe_id: NonEmptyText
+    description: NonEmptyText
+    train: dict[str, Any]
+    train_config: dict[str, Any]
+    schema_version: Any = None
+    tags: Any = None
+    campaign_id: Any = None
+    seeds: Any = None
+    recipe_overrides: Any = None
+    environment: Any = None
+    environment_hash: Any = None
+    eval: _EvaluationDocument | None = None
+    playback: _PlaybackDocument | None = None
+
+    @model_validator(mode="after")
+    def validate_portable_contract(self) -> "_RecipeValueDocument":
+        if self.eval is None and self.playback is None:
+            raise ValueError("must define eval or playback")
+        if self.eval is not None and self.playback is not None:
+            raise ValueError("cannot define both eval and playback")
+        return self
+
+
+class _RecipeProvenanceDocument(BoundaryModel):
+    source_commit: Any = None
+    source_files: Any = None
+    runtime: Any = None
+    asset: Any = None
+
+
+class _RecipeDocument(BoundaryModel):
+    document_type: Literal[RECIPE_DOCUMENT_TYPE]
+    format_version: Literal[RECIPE_FORMAT_VERSION]
+    recipe: _RecipeValueDocument
+    provenance: _RecipeProvenanceDocument
+
+
+class _CheckpointDocument(BoundaryModel):
+    filename: Literal[CHECKPOINT_FILENAME]
+    sha256: Sha256
+    size_bytes: PositiveInt
+    kind: Literal["checkpoint", "best", "final", "interrupted"]
+    step: NonNegativeInt | None
+    algorithm_id: NonEmptyText
+    model_class: NonEmptyText
+
+
+class _RecipeBindingDocument(BoundaryModel):
+    filename: Literal[RECIPE_FILENAME]
+    document_type: Literal[RECIPE_DOCUMENT_TYPE]
+    format_version: Literal[RECIPE_FORMAT_VERSION]
+    sha256: Sha256
+    size_bytes: PositiveInt
+
+
+class _PolicyDocument(BoundaryModel):
+    algorithm_id: NonEmptyText
+    model_class: NonEmptyText
+    training_backend_id: NonEmptyText
+    training_backend_config_hash: Sha256
+
+
+class _ModelProvenanceDocument(BoundaryModel):
+    metadata_version: Any = None
+    kind: Any = None
+    run_name: Any = None
+    run_description: Any = None
+    wandb_run_id: Any = None
+    wandb_project: Any = None
+    wandb_run_path: Any = None
+    campaign_id: Any = None
+    game_family: Any = None
+    goal_slug: Any = None
+    goal_sha256: Any = None
+    goal_contract_sha256: Any = None
+    effective_goal_contract_sha256: Any = None
+    reward_program_kind: Any = None
+    reward_program_revision: Any = None
+    reward_shape: Any = None
+    reward_shape_sha256: Any = None
+    reward_shape_is_default: Any = None
+    recipe_slug: Any = None
+    recipe_sha256: Any = None
+    runtime_image_ref: Any = None
+    seed: Any = None
+    repo_git_commit: Any = None
+    training_metadata: Any = None
+    training_metadata_hash: Any = None
+    attempt_id: Any = None
+    compute_target: Any = None
+    dstack_task: Any = None
+    snapshot_curriculum_preflight_sha256: Any = None
+    snapshot_curriculum_session: Any = None
+
+
+_MODEL_PROVENANCE_FIELDS = frozenset(_ModelProvenanceDocument.model_fields)
+
+
+class _ModelDocument(BoundaryModel):
+    document_type: Literal[MODEL_DOCUMENT_TYPE]
+    format_version: Literal[MODEL_FORMAT_VERSION]
+    checkpoint: _CheckpointDocument
+    recipe: _RecipeBindingDocument
+    policy: _PolicyDocument
+    provenance: _ModelProvenanceDocument
 _OPERATIONAL_TRAIN_FIELDS = frozenset(
     {
         "attempt_id",
@@ -238,18 +291,6 @@ def _required_sha256(value: object, *, label: str) -> str:
     return text
 
 
-def _required_size(value: object, *, label: str) -> int:
-    if isinstance(value, bool):
-        raise PolicyDocumentError(f"{label} must be a positive integer")
-    try:
-        size = int(value)
-    except (TypeError, ValueError) as exc:
-        raise PolicyDocumentError(f"{label} must be a positive integer") from exc
-    if size <= 0:
-        raise PolicyDocumentError(f"{label} must be a positive integer")
-    return size
-
-
 def _reject_unknown(mapping: Mapping[str, Any], allowed: frozenset[str], *, label: str) -> None:
     unknown = sorted(str(key) for key in mapping if key not in allowed)
     if unknown:
@@ -335,41 +376,24 @@ def load_json_object(path: Path) -> dict[str, Any]:
 
 
 def _validate_recipe_v1(document: Mapping[str, Any], source: str) -> dict[str, Any]:
-    _reject_unknown(document, _RECIPE_FIELDS, label=source)
-    recipe = _required_mapping(document.get("recipe"), label=f"{source}.recipe")
-    provenance = _required_mapping(document.get("provenance"), label=f"{source}.provenance")
-    _reject_unknown(recipe, _RECIPE_VALUE_FIELDS, label=f"{source}.recipe")
-    _reject_unknown(provenance, _RECIPE_PROVENANCE_FIELDS, label=f"{source}.provenance")
-    required_recipe = {"goal", "recipe_id", "description", "train", "train_config"}
-    missing = sorted(required_recipe - set(recipe))
-    if missing:
-        raise PolicyDocumentError(
-            f"{source}.recipe missing required field(s): {', '.join(missing)}"
-        )
-    goal = _required_mapping(recipe.get("goal"), label=f"{source}.recipe.goal")
-    train_config = _required_mapping(
-        recipe.get("train_config"), label=f"{source}.recipe.train_config"
+    validate_boundary(
+        _RecipeDocument,
+        document,
+        label=source,
+        error_type=PolicyDocumentError,
     )
+    recipe = document["recipe"]
+    provenance = document["provenance"]
+    assert isinstance(recipe, Mapping)
+    assert isinstance(provenance, Mapping)
+    goal = recipe["goal"]
+    train_config = recipe["train_config"]
+    assert isinstance(goal, Mapping)
+    assert isinstance(train_config, Mapping)
     evaluation_value = recipe.get("eval")
     playback_value = recipe.get("playback")
-    evaluation = (
-        _required_mapping(evaluation_value, label=f"{source}.recipe.eval")
-        if evaluation_value is not None
-        else None
-    )
-    playback = (
-        _required_mapping(playback_value, label=f"{source}.recipe.playback")
-        if playback_value is not None
-        else None
-    )
-    if evaluation is None and playback is None:
-        raise PolicyDocumentError(f"{source}.recipe must define eval or playback")
-    if evaluation is not None and playback is not None:
-        raise PolicyDocumentError(f"{source}.recipe cannot define both eval and playback")
-    if evaluation is not None:
-        _reject_unknown(evaluation, _EVAL_FIELDS, label=f"{source}.recipe.eval")
-    if playback is not None:
-        _reject_unknown(playback, _PLAYBACK_FIELDS, label=f"{source}.recipe.playback")
+    evaluation = evaluation_value if isinstance(evaluation_value, Mapping) else None
+    playback = playback_value if isinstance(playback_value, Mapping) else None
     from rlab.env_identity import validate_task_config
     from rlab.env_registry import resolve_env_provider
     from rlab.goal_schema import validate_goal_document_shape
@@ -551,49 +575,15 @@ def _validate_snapshot_curriculum_session(value: object, *, label: str) -> None:
 def _validate_model(
     document: Mapping[str, Any],
     source: str,
-    *,
-    provenance_fields: frozenset[str],
 ) -> dict[str, Any]:
-    _reject_unknown(document, _MODEL_FIELDS, label=source)
-    checkpoint = _required_mapping(document.get("checkpoint"), label=f"{source}.checkpoint")
-    recipe = _required_mapping(document.get("recipe"), label=f"{source}.recipe")
-    policy = _required_mapping(document.get("policy"), label=f"{source}.policy")
-    provenance = _required_mapping(document.get("provenance"), label=f"{source}.provenance")
-    _reject_unknown(checkpoint, _CHECKPOINT_FIELDS, label=f"{source}.checkpoint")
-    _reject_unknown(recipe, _RECIPE_BINDING_FIELDS, label=f"{source}.recipe")
-    _reject_unknown(policy, _POLICY_FIELDS, label=f"{source}.policy")
-    _reject_unknown(provenance, provenance_fields, label=f"{source}.provenance")
-    if checkpoint.get("filename") != CHECKPOINT_FILENAME:
-        raise PolicyDocumentError(f"{source}.checkpoint.filename must be {CHECKPOINT_FILENAME!r}")
-    _required_sha256(checkpoint.get("sha256"), label=f"{source}.checkpoint.sha256")
-    _required_size(checkpoint.get("size_bytes"), label=f"{source}.checkpoint.size_bytes")
-    if checkpoint.get("kind") not in {"checkpoint", "best", "final", "interrupted"}:
-        raise PolicyDocumentError(
-            f"{source}.checkpoint.kind must be 'checkpoint', 'best', 'final', or 'interrupted'"
-        )
-    step = checkpoint.get("step")
-    if step is not None and (not isinstance(step, int) or isinstance(step, bool) or step < 0):
-        raise PolicyDocumentError(f"{source}.checkpoint.step must be a non-negative integer")
-    _required_text(checkpoint.get("algorithm_id"), label=f"{source}.checkpoint.algorithm_id")
-    _required_text(checkpoint.get("model_class"), label=f"{source}.checkpoint.model_class")
-    _required_text(policy.get("algorithm_id"), label=f"{source}.policy.algorithm_id")
-    _required_text(policy.get("model_class"), label=f"{source}.policy.model_class")
-    _required_text(
-        policy.get("training_backend_id"),
-        label=f"{source}.policy.training_backend_id",
+    validate_boundary(
+        _ModelDocument,
+        document,
+        label=source,
+        error_type=PolicyDocumentError,
     )
-    _required_sha256(
-        policy.get("training_backend_config_hash"),
-        label=f"{source}.policy.training_backend_config_hash",
-    )
-    if recipe.get("filename") != RECIPE_FILENAME:
-        raise PolicyDocumentError(f"{source}.recipe.filename must be {RECIPE_FILENAME!r}")
-    if recipe.get("document_type") != RECIPE_DOCUMENT_TYPE:
-        raise PolicyDocumentError(f"{source}.recipe.document_type must be {RECIPE_DOCUMENT_TYPE!r}")
-    if recipe.get("format_version") != RECIPE_FORMAT_VERSION:
-        raise PolicyDocumentError(f"{source}.recipe.format_version must be {RECIPE_FORMAT_VERSION}")
-    _required_sha256(recipe.get("sha256"), label=f"{source}.recipe.sha256")
-    _required_size(recipe.get("size_bytes"), label=f"{source}.recipe.size_bytes")
+    provenance = document["provenance"]
+    assert isinstance(provenance, Mapping)
     if "snapshot_curriculum_preflight_sha256" in provenance:
         _required_sha256(
             provenance["snapshot_curriculum_preflight_sha256"],
@@ -610,11 +600,7 @@ def _validate_model(
 
 
 def _validate_model_v2(document: Mapping[str, Any], source: str) -> dict[str, Any]:
-    return _validate_model(
-        document,
-        source,
-        provenance_fields=_MODEL_PROVENANCE_FIELDS,
-    )
+    return _validate_model(document, source)
 
 
 _MODEL_HANDLERS = {

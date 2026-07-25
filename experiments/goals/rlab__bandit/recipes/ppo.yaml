@@ -1,6 +1,6 @@
 recipe_id: ppo
 description: >-
-  Seed {seed} trains the deterministic {goal_id} ROM-free native-vector smoke target. PPO
+  Seed {{ seed }} trains the deterministic {{ goal_id }} ROM-free native-vector smoke target. PPO
   must learn arm 1 under stochastic evaluation while exercising masked-reset lifecycle.
 train:
   timesteps: 256

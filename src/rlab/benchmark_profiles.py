@@ -6,84 +6,117 @@ import sys
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any, Literal
 
+from pydantic import Field, StringConstraints, field_validator, model_validator
+
+from rlab.boundary_schema import BoundaryModel, validate_boundary
 from rlab.config_loader import load_mapping_document
 from rlab.metric_names import validate_metric_name
 from rlab.recipe_documents import compose_train_document
 from rlab.train_config import validate_and_normalize_train_config
-from rlab.validation import int_list
-from rlab.validation import require_int
-from rlab.validation import require_mapping
-from rlab.validation import require_non_empty_string
-from rlab.validation import require_schema_version
-from rlab.validation import string_list
+from rlab.validation import int_list, require_mapping, string_list
 
 
 BENCHMARK_PROFILE_SCHEMA_VERSION = 1
 DEFAULT_PROFILE_DIR = Path("experiments/benchmarks/profiles")
 DEFAULT_RESULT_DIR = Path("logs/benchmarks")
-ALLOWED_KINDS = {
-    "env_throughput",
-    "local_smoke",
-    "train_loop_comparison",
-    "train_loop_throughput",
-}
-COMMON_PROFILE_FIELDS = frozenset({"schema_version", "name", "kind", "description"})
-PROFILE_FIELDS_BY_KIND = {
-    "env_throughput": frozenset(
-        {
-            "allow_state_none",
-            "env_provider",
-            "envs",
-            "game",
-            "max_runtime_overhead",
-            "modes",
-            "repeats",
-            "script",
-            "seed",
-            "state",
-            "steps",
-            "warmup",
-        }
-    ),
-    "local_smoke": frozenset(
-        {
-            "goal_file",
-            "max_duration",
-            "recipe_file",
-            "runtime_image_ref_file",
-            "seed",
-            "target",
-        }
-    ),
-    "train_loop_throughput": frozenset(
-        {
-            "goal_file",
-            "recipe_file",
-            "recipe_overrides",
-            "required_metrics",
-            "run_description",
-            "run_name",
-            "seed",
-        }
-    ),
-    "train_loop_comparison": frozenset(
-        {
-            "goal_file",
-            "baseline_recipe_file",
-            "candidate_recipe_file",
-            "recipe_overrides",
-            "required_metrics",
-            "candidate_required_metrics",
-            "run_description",
-            "seed",
-            "repeats",
-            "max_candidate_slowdown",
-        }
-    ),
-}
 STATE_NONE_VALUES = {"", "none", "state.none"}
+NonEmptyText = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
+PositiveInt = Annotated[int, Field(strict=True, ge=1)]
+NonNegativeInt = Annotated[int, Field(strict=True, ge=0)]
+NonNegativeNumber = Annotated[int | float, Field(ge=0)]
+
+
+class _Profile(BoundaryModel):
+    schema_version: Literal[BENCHMARK_PROFILE_SCHEMA_VERSION]
+    name: NonEmptyText
+    description: str = ""
+
+
+class _EnvironmentThroughputProfile(_Profile):
+    kind: Literal["env_throughput"]
+    env_provider: NonEmptyText
+    game: NonEmptyText
+    state: NonEmptyText
+    modes: list[NonEmptyText] = ["compare"]
+    envs: list[PositiveInt] = [1]
+    steps: PositiveInt
+    warmup: NonNegativeInt
+    max_runtime_overhead: NonNegativeNumber | None = None
+    allow_state_none: bool = False
+    repeats: PositiveInt | None = None
+    script: NonEmptyText | None = None
+    seed: NonNegativeInt | None = None
+
+    @model_validator(mode="after")
+    def validate_gate(self) -> "_EnvironmentThroughputProfile":
+        if self.state.strip().lower() in STATE_NONE_VALUES and not self.allow_state_none:
+            raise ValueError(
+                f"state must be an actual saved state for {self.game}; "
+                "set allow_state_none=true only for emulator hot-path diagnostics"
+            )
+        if self.modes != ["compare"]:
+            raise ValueError("modes must be [compare] for an executable overhead gate")
+        return self
+
+
+class _LocalSmokeProfile(_Profile):
+    kind: Literal["local_smoke"]
+    goal_file: NonEmptyText
+    recipe_file: NonEmptyText
+    target: NonEmptyText
+    seed: NonNegativeInt
+    max_duration: NonEmptyText | None = None
+    runtime_image_ref_file: NonEmptyText | None = None
+
+
+class _MetricProfile(_Profile):
+    recipe_overrides: list[NonEmptyText] = []
+    required_metrics: list[NonEmptyText]
+    run_description: str = ""
+    seed: NonNegativeInt | None = None
+
+    @field_validator("required_metrics")
+    @classmethod
+    def validate_required_metrics(cls, values: list[str]) -> list[str]:
+        if not values:
+            raise ValueError("must not be empty")
+        for metric_name in values:
+            validate_metric_name(metric_name)
+        return values
+
+
+class _TrainLoopThroughputProfile(_MetricProfile):
+    kind: Literal["train_loop_throughput"]
+    goal_file: NonEmptyText
+    recipe_file: NonEmptyText
+    run_name: str = ""
+
+
+class _TrainLoopComparisonProfile(_MetricProfile):
+    kind: Literal["train_loop_comparison"]
+    goal_file: NonEmptyText
+    baseline_recipe_file: NonEmptyText
+    candidate_recipe_file: NonEmptyText
+    candidate_required_metrics: list[NonEmptyText] = []
+    repeats: PositiveInt | None = None
+    max_candidate_slowdown: Annotated[int | float, Field(ge=0, lt=1)]
+
+    @field_validator("candidate_required_metrics")
+    @classmethod
+    def validate_candidate_metrics(cls, values: list[str]) -> list[str]:
+        for metric_name in values:
+            validate_metric_name(metric_name)
+        return values
+
+
+_PROFILE_MODELS = {
+    "env_throughput": _EnvironmentThroughputProfile,
+    "local_smoke": _LocalSmokeProfile,
+    "train_loop_comparison": _TrainLoopComparisonProfile,
+    "train_loop_throughput": _TrainLoopThroughputProfile,
+}
 
 
 @dataclass(frozen=True)
@@ -142,17 +175,10 @@ def _profile_payload(path: Path) -> dict[str, Any]:
 
 
 def validate_benchmark_profile(payload: Mapping[str, Any], *, label: str = "profile") -> None:
-    require_mapping(payload, label=label)
-    require_schema_version(
-        payload,
-        BENCHMARK_PROFILE_SCHEMA_VERSION,
-        label=label,
-        require_present=False,
-    )
-    require_non_empty_string(payload, "name", label=label, require_present=False)
-    kind = require_non_empty_string(payload, "kind", label=label, require_present=False)
-    if kind not in ALLOWED_KINDS:
-        known = ", ".join(sorted(ALLOWED_KINDS))
+    kind = payload.get("kind")
+    model = _PROFILE_MODELS.get(kind) if isinstance(kind, str) else None
+    if model is None:
+        known = ", ".join(sorted(_PROFILE_MODELS))
         raise ValueError(f"{label}.kind must be one of {known}")
     if "expectations" in payload or "gates" in payload:
         raise ValueError(
@@ -162,115 +188,31 @@ def validate_benchmark_profile(payload: Mapping[str, Any], *, label: str = "prof
         raise ValueError(
             f"{label}.environment_contract is unsupported; derive it from executed inputs"
         )
+    validated = validate_boundary(model, payload, label=label)
 
-    if kind == "env_throughput":
-        require_non_empty_string(payload, "env_provider", label=label, require_present=False)
-        game = require_non_empty_string(payload, "game", label=label, require_present=False)
-        state = require_non_empty_string(payload, "state", label=label, require_present=False)
-        if _is_state_none(state) and not payload.get("allow_state_none"):
-            raise ValueError(
-                f"{label}.state must be an actual saved state for {game}; "
-                "set allow_state_none=true only for emulator hot-path diagnostics"
-            )
-        modes = string_list(payload.get("modes", ["compare"]), label=f"{label}.modes")
-        if modes != ["compare"]:
-            raise ValueError(f"{label}.modes must be [compare] for an executable overhead gate")
-        envs = int_list(payload.get("envs", [1]), label=f"{label}.envs")
-        if any(env_count < 1 for env_count in envs):
-            raise ValueError(f"{label}.envs values must be >= 1")
-        require_int(payload, "steps", label=label, minimum=1, require_present=False)
-        require_int(payload, "warmup", label=label, minimum=0, require_present=False)
-        if "repeats" in payload:
-            require_int(payload, "repeats", label=label, minimum=1)
-        max_overhead = payload.get("max_runtime_overhead")
-        if (
-            isinstance(max_overhead, bool)
-            or not isinstance(max_overhead, int | float)
-            or max_overhead < 0
-        ):
-            raise ValueError(f"{label}.max_runtime_overhead must be a non-negative number")
+    if (
+        kind == "env_throughput"
+        and isinstance(validated, _EnvironmentThroughputProfile)
+        and validated.max_runtime_overhead is None
+    ):
+        raise ValueError(f"{label}.max_runtime_overhead must be a non-negative number")
 
     if kind == "train_loop_throughput":
-        require_non_empty_string(payload, "goal_file", label=label, require_present=False)
-        require_non_empty_string(payload, "recipe_file", label=label, require_present=False)
-        string_list(
-            payload.get("recipe_overrides", ()),
-            label=f"{label}.recipe_overrides",
-            allow_empty=True,
-        )
-        required_metrics = string_list(
-            payload.get("required_metrics", ()), label=f"{label}.required_metrics"
-        )
-        if not required_metrics:
-            raise ValueError(f"{label}.required_metrics must not be empty")
-        for metric_name in required_metrics:
-            validate_metric_name(metric_name)
         config = _train_loop_config(payload)
-        require_non_empty_string(
-            config,
-            "game",
-            label=f"{label}.train_config",
-            require_present=False,
-        )
-        require_int(config, "timesteps", label=f"{label}.train_config", require_present=False)
-        require_int(payload, "seed", label=label, minimum=0, require_present=False)
+        if not str(config.get("game") or "").strip():
+            raise ValueError(f"{label}.train_config.game must be a non-empty string")
+        if not isinstance(config.get("timesteps"), int) or isinstance(
+            config.get("timesteps"), bool
+        ):
+            raise ValueError(f"{label}.train_config.timesteps must be an integer")
+        if isinstance(validated, _TrainLoopThroughputProfile) and validated.seed is None:
+            raise ValueError(f"{label}.seed must be an integer")
 
     if kind == "train_loop_comparison":
-        require_non_empty_string(payload, "goal_file", label=label, require_present=False)
-        require_non_empty_string(
-            payload,
-            "baseline_recipe_file",
-            label=label,
-            require_present=False,
-        )
-        require_non_empty_string(
-            payload,
-            "candidate_recipe_file",
-            label=label,
-            require_present=False,
-        )
-        string_list(
-            payload.get("recipe_overrides", ()),
-            label=f"{label}.recipe_overrides",
-            allow_empty=True,
-        )
-        required_metrics = string_list(
-            payload.get("required_metrics", ()), label=f"{label}.required_metrics"
-        )
-        candidate_metrics = string_list(
-            payload.get("candidate_required_metrics", ()),
-            label=f"{label}.candidate_required_metrics",
-            allow_empty=True,
-        )
-        if not required_metrics:
-            raise ValueError(f"{label}.required_metrics must not be empty")
-        for metric_name in (*required_metrics, *candidate_metrics):
-            validate_metric_name(metric_name)
         for recipe_field in ("baseline_recipe_file", "candidate_recipe_file"):
             _train_loop_config(payload, recipe_file=str(payload[recipe_field]))
-        require_int(payload, "seed", label=label, minimum=0, require_present=False)
-        if "repeats" in payload:
-            require_int(payload, "repeats", label=label, minimum=1)
-        slowdown = payload.get("max_candidate_slowdown")
-        if (
-            isinstance(slowdown, bool)
-            or not isinstance(slowdown, int | float)
-            or not 0.0 <= float(slowdown) < 1.0
-        ):
-            raise ValueError(f"{label}.max_candidate_slowdown must be in [0, 1)")
-
-    if kind == "local_smoke":
-        if "workers" in payload:
-            raise ValueError(f"{label} does not support invocation-local workers")
-        require_non_empty_string(payload, "goal_file", label=label, require_present=False)
-        require_non_empty_string(payload, "recipe_file", label=label, require_present=False)
-        require_non_empty_string(payload, "target", label=label, require_present=False)
-        require_int(payload, "seed", label=label, minimum=0, require_present=False)
-
-    allowed_fields = COMMON_PROFILE_FIELDS | PROFILE_FIELDS_BY_KIND[kind]
-    unknown_fields = sorted(set(payload) - allowed_fields)
-    if unknown_fields:
-        raise ValueError(f"{label} has unknown field(s) for {kind}: {', '.join(unknown_fields)}")
+        if isinstance(validated, _TrainLoopComparisonProfile) and validated.seed is None:
+            raise ValueError(f"{label}.seed must be an integer")
 
 
 def load_benchmark_profile(path: Path) -> BenchmarkProfile:

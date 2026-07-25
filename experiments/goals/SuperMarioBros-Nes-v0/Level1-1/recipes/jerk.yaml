@@ -3,7 +3,7 @@ defaults:
 reward_shape: score-v1
 recipe_id: jerk
 description: >-
-  Seed {seed} searches deterministic {goal_id} attempts with vectorized Just Enough Retained
+  Seed {{ seed }} searches deterministic {{ goal_id }} attempts with vectorized Just Enough Retained
   Knowledge, accepting and publishing the first open-loop action sequence that completes the
   level; exhausting the transition budget without a completion is unsuccessful.
 train:

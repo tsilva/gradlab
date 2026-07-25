@@ -2,9 +2,9 @@ defaults:
 - _self_
 goal_id: post400-r400
 tags:
-- "goal_id:{goal_id}"
-- "recipe_id:{recipe_id}"
-- "env_id:{env_id}"
+- "goal_id:{{ goal_id }}"
+- "recipe_id:{{ recipe_id }}"
+- "env_id:{{ env_id }}"
 - post400-snapshot-curriculum
 title: Atari 2600 Breakout completion from diverse post-400 snapshots
 objective:

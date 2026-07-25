@@ -307,6 +307,28 @@ h2 { font-size: .9rem; margin: 0; font-weight: 650; }
 .source-table td span,
 .source-table td small { display: block; overflow: hidden; text-overflow: ellipsis; }
 .source-table td small { margin-top: .16rem; color: var(--muted); font: .62rem ui-monospace, SFMono-Regular, Menlo, monospace; }
+.source-table .run-identity {
+  display: flex;
+  align-items: flex-start;
+  gap: .48rem;
+  min-width: 0;
+}
+.source-table .run-identity-text { min-width: 0; }
+.source-table .run-state {
+  display: inline-grid;
+  flex: 0 0 auto;
+  place-items: center;
+  width: 1rem;
+  height: 1rem;
+  margin-top: .05rem;
+  color: var(--muted);
+}
+.source-table .run-state .icon { width: .9rem; height: .9rem; }
+.source-table .run-state.finished { color: var(--green); }
+.source-table .run-state.running { color: var(--cyan); }
+.source-table .run-state.failed { color: var(--red); }
+.source-table .run-state.pending { color: var(--yellow); }
+.source-table .run-state.stopped { color: var(--muted); }
 .source-table .evaluation-cell { min-width: 18rem; }
 .source-table .evaluation-verdict { font-weight: 700; }
 .source-table .evaluation-cell.accepted .evaluation-verdict { color: var(--green); }

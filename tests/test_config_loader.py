@@ -20,7 +20,7 @@ class ConfigLoaderTests(unittest.TestCase):
             render_template_vars(
                 {
                     "template_vars": {"used": "value", "unused": "dead"},
-                    "name": "{used}",
+                    "name": "{{ used }}",
                 },
                 path=Path("config.yaml"),
                 label="test document",
@@ -29,8 +29,8 @@ class ConfigLoaderTests(unittest.TestCase):
     def test_render_template_vars_keeps_transitive_declarations(self) -> None:
         rendered = render_template_vars(
             {
-                "template_vars": {"suffix": "value", "name": "prefix-{suffix}"},
-                "label": "{name}",
+                "template_vars": {"suffix": "value", "name": "prefix-{{ suffix }}"},
+                "label": "{{ name }}",
             },
             path=Path("config.yaml"),
             label="test document",

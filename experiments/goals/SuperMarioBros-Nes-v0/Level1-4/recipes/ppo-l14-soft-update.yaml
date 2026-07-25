@@ -4,7 +4,7 @@ defaults:
 reward_shape: score-v1
 recipe_id: ppo-l14-soft-update
 description: >-
-  Seed {seed} trains the {goal_id} B257 soft-update PPO recipe, preserving the common
+  Seed {{ seed }} trains the {{ goal_id }} B257 soft-update PPO recipe, preserving the common
   single-level reward contract while lowering update pressure for stable World 1-4 clears.
 train:
   backend:
