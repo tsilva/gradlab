@@ -6,7 +6,7 @@ import stat
 import subprocess
 import sys
 import tomllib
-from collections.abc import Callable, Mapping, MutableMapping
+from collections.abc import Callable, Collection, Mapping, MutableMapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -29,6 +29,7 @@ PROTECTED_ENV_NAMES = frozenset(
         "RLAB_MODELS_R2_SECRET_ACCESS_KEY",
     }
 )
+MODAL_ENV_NAMES = frozenset({"MODAL_TOKEN_ID", "MODAL_TOKEN_SECRET"})
 
 
 class OperatorConfigurationError(RuntimeError):
@@ -218,6 +219,7 @@ def _load_modal_environment(
     *,
     environment: MutableMapping[str, str],
     loaded_sources: dict[str, str],
+    requested_names: Collection[str] | None = None,
 ) -> None:
     raw = document.get("modal")
     if raw is None:
@@ -245,6 +247,8 @@ def _load_modal_environment(
         ("MODAL_TOKEN_ID", "token_id"),
         ("MODAL_TOKEN_SECRET", "token_secret"),
     ):
+        if requested_names is not None and environment_name not in requested_names:
+            continue
         if str(environment.get(environment_name) or "").strip():
             continue
         value = str(profile.get(field_name) or "").strip()
@@ -261,6 +265,7 @@ def load_operator_environment(
     environment: MutableMapping[str, str] | None = None,
     config_path: Path | None = None,
     keychain_lookup: Callable[[KeychainReference], str | None] | None = None,
+    requested_names: Collection[str] | None = None,
 ) -> OperatorEnvironmentReport:
     values = os.environ if environment is None else environment
     path = (
@@ -288,15 +293,30 @@ def load_operator_environment(
         raise OperatorConfigurationError(
             f"operator config schema_version must be {OPERATOR_CONFIG_SCHEMA_VERSION}: {path}"
         )
+    selected_names = (
+        None
+        if requested_names is None
+        else frozenset(
+            _validate_environment_name(
+                name,
+                label="requested operator environment name",
+            )
+            for name in requested_names
+        )
+    )
     loaded_sources: dict[str, str] = {}
     unavailable_sources: dict[str, str] = {}
     for name, value in _plain_environment(document).items():
+        if selected_names is not None and name not in selected_names:
+            continue
         if str(values.get(name) or "").strip():
             continue
         values[name] = value
         loaded_sources[name] = "operator-config"
     lookup = _keychain_lookup if keychain_lookup is None else keychain_lookup
     for name, reference in _keychain_references(document).items():
+        if selected_names is not None and name not in selected_names:
+            continue
         if str(values.get(name) or "").strip():
             continue
         value = lookup(reference)
@@ -305,11 +325,13 @@ def load_operator_environment(
             continue
         values[name] = value
         loaded_sources[name] = "macos-keychain"
-    _load_modal_environment(
-        document,
-        environment=values,
-        loaded_sources=loaded_sources,
-    )
+    if selected_names is None or selected_names & MODAL_ENV_NAMES:
+        _load_modal_environment(
+            document,
+            environment=values,
+            loaded_sources=loaded_sources,
+            requested_names=selected_names,
+        )
     return OperatorEnvironmentReport(
         config_path=path,
         config_present=True,

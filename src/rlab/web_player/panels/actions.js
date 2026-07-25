@@ -13,26 +13,46 @@ export function mount({ definition }) {
   const caption = element.querySelector("[data-caption]");
   let history = [];
   let snapshot = null;
+  let view = {};
 
   const render = () => {
     const names = snapshot?.session?.action_names || [];
     const counts = Array.from({ length: names.length || 1 }, () => 0);
-    history.slice(-1024).forEach((point) => {
+    history.forEach((point) => {
       if (Number.isInteger(point.action) && point.action >= 0) {
         counts[point.action] = (counts[point.action] || 0) + 1;
       }
     });
-    drawHistogram(canvas, counts, names);
+    const selectedPoint = view.inspection
+      ? history.find(
+        (point) => Number(point.sequence) === Number(view.selectedSequence),
+      )
+      : null;
+    const highlightIndex = Number.isInteger(selectedPoint?.action)
+      ? selectedPoint.action
+      : null;
+    drawHistogram(canvas, counts, names, { highlightIndex });
     const total = counts.reduce((sum, value) => sum + value, 0);
     caption.textContent = total
-      ? `${total} sampled policy actions in the visible history.`
+      ? `${total} actions in the retained episode${highlightIndex === null
+        ? "."
+        : ` · selected ${names[highlightIndex] || highlightIndex}.`}`
       : "No policy actions observed.";
   };
 
   return {
     element,
-    render(next) { snapshot = next; render(); },
-    renderHistory(next, current) { history = next; snapshot = current; render(); },
+    render(next, nextView = view) {
+      snapshot = next;
+      view = nextView || {};
+      render();
+    },
+    renderHistory(next, current, nextView = view) {
+      history = next;
+      snapshot = current;
+      view = nextView || {};
+      render();
+    },
     resize: render,
   };
 }

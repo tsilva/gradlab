@@ -124,7 +124,7 @@ function formatAxisValue(value, step) {
   return rendered === "-0" ? "0" : rendered;
 }
 
-export function drawLines(canvas, series) {
+export function drawLines(canvas, series, { cursorIndex = null } = {}) {
   const { context, ratio, width, height } = resizeCanvas(canvas);
   context.setTransform(ratio, 0, 0, ratio, 0, 0);
   context.clearRect(0, 0, width, height);
@@ -178,6 +178,24 @@ export function drawLines(canvas, series) {
     });
     context.stroke();
   });
+  const pointCount = Math.max(0, ...series.map((item) => item.values.length));
+  if (
+    Number.isInteger(cursorIndex)
+    && cursorIndex >= 0
+    && cursorIndex < pointCount
+  ) {
+    const x = plot.left
+      + (cursorIndex / Math.max(1, pointCount - 1)) * (plot.right - plot.left);
+    context.save();
+    context.strokeStyle = "#f0c36a";
+    context.lineWidth = 1.5;
+    context.setLineDash([4, 3]);
+    context.beginPath();
+    context.moveTo(x, plot.top);
+    context.lineTo(x, plot.bottom);
+    context.stroke();
+    context.restore();
+  }
 }
 
 function fitCanvasLabel(context, value, maxWidth) {
@@ -188,7 +206,12 @@ function fitCanvasLabel(context, value, maxWidth) {
   return end > 0 ? `${label.slice(0, end)}…` : "…";
 }
 
-export function drawHistogram(canvas, counts, names) {
+export function drawHistogram(
+  canvas,
+  counts,
+  names,
+  { highlightIndex = null } = {},
+) {
   const { context, ratio, width, height } = resizeCanvas(canvas);
   context.setTransform(ratio, 0, 0, ratio, 0, 0);
   context.clearRect(0, 0, width, height);
@@ -227,7 +250,7 @@ export function drawHistogram(canvas, counts, names) {
   counts.forEach((count, index) => {
     const barHeight = (count / scale.max) * Math.max(0, plot.bottom - plot.top);
     const x = plot.left + index * (barWidth + gap);
-    context.fillStyle = "#53d4e8";
+    context.fillStyle = index === highlightIndex ? "#f0c36a" : "#53d4e8";
     context.fillRect(x, plot.bottom - barHeight, barWidth, barHeight);
     context.fillStyle = "#d7e5ea";
     context.font = "600 12px system-ui, sans-serif";

@@ -49,8 +49,10 @@ const state = {
   inspectionSequence: null,
   replayingInspection: false,
   inspectionReplayTimer: null,
+  inspectionPauseCommandId: null,
   timelineSequences: [],
   history: [],
+  historyLimit: 4096,
   hasControl: false,
   frameSequence: new Map(),
   receivedFrameSequence: new Map(),
@@ -162,6 +164,7 @@ function resetSession(epoch) {
   state.retainedEpisode = null;
   state.pendingSnapshot = null;
   state.inspectionSequence = null;
+  state.inspectionPauseCommandId = null;
   state.liveSnapshot = null;
   state.snapshot = null;
   state.history = [];
@@ -248,6 +251,7 @@ function handleMessage(message) {
   if (message.type === "welcome") {
     state.connected = true;
     state.clientId = message.client_id;
+    state.historyLimit = Math.max(1, Number(message.history_limit) || 4096);
     updateConnection("Synced", "");
     return;
   }
@@ -256,7 +260,7 @@ function handleMessage(message) {
       message.session_epoch !== undefined
       && Number(message.session_epoch) !== state.sessionEpoch
     ) return;
-    state.history = Array.isArray(message.points) ? message.points : [];
+    state.history = normalizedHistory(message.points);
     renderHistory();
     return;
   }
@@ -278,8 +282,7 @@ function handleMessage(message) {
     }
     setSourceMode(false, message);
     prepareRetainedEpisode(message);
-    const frameKind = requiredFrameKind(message);
-    if (frameKind && (state.frameSequence.get(frameKind) ?? -1) < message.sequence) {
+    if (!requiredFramesAvailable(message)) {
       state.pendingSnapshot = message;
     } else {
       applySnapshot(message);
@@ -287,15 +290,27 @@ function handleMessage(message) {
     return;
   }
   if (message.type === "command_result") {
+    if (message.id === state.inspectionPauseCommandId && !message.ok) {
+      state.inspectionPauseCommandId = null;
+    }
     if (!message.ok) showToast(message.error || "Command failed", true);
     return;
   }
   if (message.type === "error") showToast(message.error || "Player error", true);
 }
 
-function rememberFrame(kind, sequence, blob) {
+function rememberFrame(kind, sequence, blob, preserveSequence = null) {
   const frames = state.frameBlobs.get(kind);
   frames.set(sequence, blob);
+  while (frames.size > state.historyLimit) {
+    const candidates = [...frames.keys()].filter(
+      (candidate) => preserveSequence === null
+        || Number(candidate) !== Number(preserveSequence),
+    );
+    if (!candidates.length) break;
+    const oldest = Math.min(...candidates);
+    frames.delete(oldest);
+  }
 }
 
 async function handleFrame(buffer) {
@@ -311,23 +326,108 @@ async function handleFrame(buffer) {
   state.receivedFrameSequence.set(kind, sequence);
   const blob = new Blob([buffer.slice(FRAME_HEADER_BYTES)], { type: "image/png" });
   rememberFrame(kind, sequence, blob);
-  if (state.inspectionSequence === null || state.inspectionSequence === sequence) {
+  if (
+    state.inspectionSequence === sequence
+    || (
+      state.inspectionSequence === null
+      && Number(state.liveSnapshot?.sequence) === sequence
+    )
+  ) {
     await panelRuntime.renderFrame(kind, blob);
   }
   state.frameSequence.set(kind, sequence);
   flushPendingSnapshot();
 }
 
-function requiredFrameKind(snapshot) {
+function requiredFrameKinds(snapshot) {
   const visible = new Set(panelsInThisWindow());
-  if (visible.has("game") && snapshot.transition?.after?.game_frame) return FRAME_GAME;
-  if (visible.has("observation") && Number(snapshot.transition?.before?.observation_frames || 0) > 0) return FRAME_OBSERVATION;
-  return null;
+  const required = [];
+  if (visible.has("game") && snapshot.transition?.after?.game_frame) required.push(FRAME_GAME);
+  if (
+    visible.has("observation")
+    && Number(snapshot.transition?.before?.observation_frames || 0) > 0
+  ) required.push(FRAME_OBSERVATION);
+  return required;
+}
+
+function requiredFramesAvailable(snapshot) {
+  const sequence = Number(snapshot?.sequence);
+  return requiredFrameKinds(snapshot).every(
+    (kind) => state.frameBlobs.get(kind)?.has(sequence),
+  );
 }
 
 function episodeForSnapshot(snapshot) {
   const episode = snapshot?.transition?.episode ?? snapshot?.session?.episode;
   return episode === undefined || episode === null ? null : Number(episode);
+}
+
+function historyKey(point) {
+  return `${Number(point?.episode)}:${Number(point?.sequence)}`;
+}
+
+function normalizedHistory(points) {
+  const byTransition = new Map();
+  (Array.isArray(points) ? points : []).forEach((point) => {
+    if (!point || !Number.isFinite(Number(point.sequence))) return;
+    byTransition.set(historyKey(point), point);
+  });
+  return [...byTransition.values()]
+    .sort((a, b) => Number(a.sequence) - Number(b.sequence))
+    .slice(-state.historyLimit);
+}
+
+function ingestHistoryPoint(point) {
+  if (!point || !Number.isFinite(Number(point.sequence))) return false;
+  const key = historyKey(point);
+  const index = state.history.findIndex((candidate) => historyKey(candidate) === key);
+  if (index >= 0) {
+    state.history[index] = point;
+    return true;
+  }
+  state.history.push(point);
+  state.history = normalizedHistory(state.history);
+  return true;
+}
+
+function currentEpisodeHistory() {
+  const episode = episodeForSnapshot(state.liveSnapshot) ?? state.retainedEpisode;
+  if (episode === null) return state.history;
+  return state.history.filter((point) => Number(point.episode) === episode);
+}
+
+function panelView() {
+  return {
+    history: currentEpisodeHistory(),
+    inspection: state.inspectionSequence !== null,
+    sessionEpoch: state.sessionEpoch,
+    selectedSequence: state.inspectionSequence ?? state.snapshot?.sequence ?? null,
+    liveSequence: state.liveSnapshot?.sequence ?? null,
+  };
+}
+
+function pruneRetainedTrace(preserveSequence = null) {
+  const sequences = [...state.snapshots.keys()].sort((a, b) => a - b);
+  const remove = sequences
+    .filter(
+      (sequence) => preserveSequence === null
+        || Number(sequence) !== Number(preserveSequence),
+    )
+    .slice(0, Math.max(0, sequences.length - state.historyLimit));
+  remove.forEach((sequence) => {
+    state.snapshots.delete(sequence);
+    state.frameBlobs.forEach((frames) => frames.delete(sequence));
+  });
+  if (
+    state.inspectionSequence !== null
+    && !state.snapshots.has(Number(state.inspectionSequence))
+  ) {
+    stopInspectionReplay({ render: false });
+    state.inspectionSequence = null;
+    state.snapshot = state.liveSnapshot;
+    showToast("The selected transition expired from the bounded history.", true);
+    broadcastInspection(null);
+  }
 }
 
 function clearRetainedEpisode() {
@@ -358,33 +458,36 @@ function applySnapshot(snapshot) {
     && previousEpisode !== nextEpisode
   );
   state.liveSnapshot = snapshot;
+  if (snapshot.run_state === "paused") state.inspectionPauseCommandId = null;
   if (snapshot.session?.env_id !== previousEnvironmentId) updateLayoutTitle();
-  state.snapshots.set(Number(snapshot.sequence), snapshot);
-  state.hasControl = Boolean(snapshot.control?.has_control);
-  if (
-    state.inspectionSequence !== null
-    && episodeChanged
-  ) {
+  if (state.inspectionSequence !== null && episodeChanged) {
     stopInspectionReplay({ render: false });
     state.inspectionSequence = null;
     state.snapshot = snapshot;
   }
+  state.snapshots.set(Number(snapshot.sequence), snapshot);
+  pruneRetainedTrace();
+  state.hasControl = Boolean(snapshot.control?.has_control);
+  const historyChanged = snapshot.transition
+    ? ingestHistoryPoint(historyFromTransition(snapshot.transition))
+    : false;
   if (state.inspectionSequence === null) {
     state.snapshot = snapshot;
     renderSnapshot();
+    void showFramesForSequence(Number(snapshot.sequence));
   } else {
     panelRuntime.invoke("controls", "render", snapshot);
     updateControlState();
     renderWorkspaceStatus();
     renderTimeline();
   }
+  if (historyChanged) renderHistory();
 }
 
 function flushPendingSnapshot() {
   const snapshot = state.pendingSnapshot;
   if (!snapshot) return;
-  const frameKind = requiredFrameKind(snapshot);
-  if (!frameKind || (state.frameSequence.get(frameKind) ?? -1) >= snapshot.sequence) applySnapshot(snapshot);
+  if (requiredFramesAvailable(snapshot)) applySnapshot(snapshot);
 }
 
 function send(value) {
@@ -394,15 +497,17 @@ function send(value) {
 function command(name, payload = {}) {
   if (!state.hasControl) {
     showToast("This window is an observer. Choose Control here first.", true);
-    return;
+    return null;
   }
+  const id = crypto.randomUUID();
   send({
     type: "command",
-    id: crypto.randomUUID(),
+    id,
     name,
     payload,
     expected_revision: state.liveSnapshot?.revision ?? null,
   });
+  return id;
 }
 
 function inspectionEpisodeSequences() {
@@ -451,7 +556,7 @@ function scheduleInspectionReplay() {
     const reachedEpisodeEnd = selectedIndex + 1 === sequences.length - 1;
     if (reachedEpisodeEnd) state.replayingInspection = false;
     if (nextSequence === state.timelineSequences.at(-1)) returnToLive();
-    else inspectSequence(nextSequence);
+    else setInspectionCursor(nextSequence, { preserveReplay: true });
     if (!reachedEpisodeEnd) scheduleInspectionReplay();
   }, inspectionReplayDelay());
 }
@@ -501,7 +606,6 @@ function renderWorkspaceStatus() {
 function renderSnapshot() {
   const snapshot = state.snapshot;
   const session = snapshot.session || {};
-  const transition = snapshot.transition;
   configureMode(snapshot.mode || "playback");
   updateControlState();
   renderWorkspaceStatus();
@@ -514,15 +618,7 @@ function renderSnapshot() {
     state.lastStatus = snapshot.status_message;
     showToast(snapshot.status_message, snapshot.run_state === "paused" && /error|expired|unsupported|no configured/i.test(snapshot.status_message));
   }
-  panelRuntime.renderSnapshot(snapshot, {
-    history: state.history,
-    inspection: state.inspectionSequence !== null,
-  });
-  if (state.inspectionSequence === null && transition && (!state.history.length || state.history.at(-1)?.sequence !== transition.sequence)) {
-    state.history.push(historyFromTransition(transition));
-    if (state.history.length > 4096) state.history.shift();
-    renderHistory();
-  }
+  panelRuntime.renderSnapshot(snapshot, panelView());
   renderTimeline();
 }
 
@@ -557,42 +653,139 @@ function historyFromTransition(transition) {
 }
 
 function renderHistory() {
-  panelRuntime.renderHistory(state.history, state.snapshot);
+  panelRuntime.renderHistory(currentEpisodeHistory(), state.snapshot, panelView());
   renderTimeline();
 }
 
-function nearestFrameBlob(kind, sequence) {
-  const frames = state.frameBlobs.get(kind);
-  if (frames.has(sequence)) return frames.get(sequence);
-  const candidate = [...frames.keys()].filter((value) => value <= sequence).at(-1);
-  return candidate === undefined ? null : frames.get(candidate);
+function exactFrameBlob(kind, sequence) {
+  return state.frameBlobs.get(kind)?.get(Number(sequence)) || null;
 }
 
 async function showFramesForSequence(sequence) {
   const visible = new Set(panelsInThisWindow());
-  const tasks = [];
-  if (visible.has("game")) tasks.push(panelRuntime.renderFrame(FRAME_GAME, nearestFrameBlob(FRAME_GAME, sequence)));
-  if (visible.has("observation")) tasks.push(panelRuntime.renderFrame(FRAME_OBSERVATION, nearestFrameBlob(FRAME_OBSERVATION, sequence)));
-  const results = await Promise.all(tasks);
-  if (tasks.length && !results.some(Boolean)) showToast("This retained transition has telemetry but no retained image frame.", true);
+  const kinds = [];
+  if (visible.has("game")) kinds.push(FRAME_GAME);
+  if (visible.has("observation")) kinds.push(FRAME_OBSERVATION);
+  const missing = [];
+  await Promise.all(kinds.map(async (kind) => {
+    const blob = exactFrameBlob(kind, sequence);
+    if (!blob) missing.push(kind);
+    await panelRuntime.renderFrame(kind, blob);
+  }));
+  return missing;
+}
+
+function inspectionFrames(sequence) {
+  return [FRAME_GAME, FRAME_OBSERVATION]
+    .map((kind) => ({ kind, blob: exactFrameBlob(kind, sequence) }))
+    .filter((item) => item.blob);
+}
+
+function broadcastInspection(sequence) {
+  if (!workspaceChannel) return;
+  if (sequence === null) {
+    workspaceChannel.postMessage({
+      type: "inspection-cursor",
+      session_epoch: state.sessionEpoch,
+      episode: episodeForSnapshot(state.liveSnapshot),
+      sequence: null,
+      source: state.windowId,
+    });
+    return;
+  }
+  const snapshot = state.snapshots.get(Number(sequence)) || state.snapshot;
+  workspaceChannel.postMessage({
+    type: "inspection-cursor",
+    session_epoch: state.sessionEpoch,
+    episode: episodeForSnapshot(snapshot),
+    sequence: Number(sequence),
+    snapshot,
+    frames: inspectionFrames(sequence),
+    source: state.windowId,
+  });
+}
+
+function requestInspectionFrames(sequence, kinds) {
+  if (!workspaceChannel || !kinds.length) return;
+  workspaceChannel.postMessage({
+    type: "inspection-frame-request",
+    session_epoch: state.sessionEpoch,
+    sequence: Number(sequence),
+    kinds,
+    source: state.windowId,
+  });
+}
+
+function maybePauseForInspection() {
+  if (
+    !state.hasControl
+    || state.inspectionPauseCommandId !== null
+    || state.liveSnapshot?.mode === "recording"
+    || !["playing", "stepping", "continuing"].includes(state.liveSnapshot?.run_state)
+  ) return;
+  state.inspectionPauseCommandId = command("pause");
+}
+
+function setInspectionCursor(
+  sequence,
+  {
+    announce = true,
+    snapshot: suppliedSnapshot = null,
+    frames = [],
+    preserveReplay = false,
+  } = {},
+) {
+  if (sequence === null) {
+    returnToLive({ announce });
+    return;
+  }
+  const numericSequence = Number(sequence);
+  const snapshot = suppliedSnapshot || state.snapshots.get(numericSequence);
+  if (!snapshot) {
+    showToast("That transition is not retained in this window.", true);
+    return;
+  }
+  if (
+    Number(snapshot.session_epoch || 0) !== state.sessionEpoch
+    || (
+      state.retainedEpisode !== null
+      && episodeForSnapshot(snapshot) !== state.retainedEpisode
+    )
+  ) return;
+  frames.forEach(({ kind, blob }) => {
+    if ([FRAME_GAME, FRAME_OBSERVATION].includes(Number(kind)) && blob instanceof Blob) {
+      rememberFrame(Number(kind), numericSequence, blob, numericSequence);
+    }
+  });
+  state.snapshots.set(numericSequence, snapshot);
+  pruneRetainedTrace(numericSequence);
+  if (!preserveReplay) stopInspectionReplay({ render: false });
+  if (announce) maybePauseForInspection();
+  state.inspectionSequence = numericSequence;
+  state.snapshot = snapshot;
+  renderSnapshot();
+  renderHistory();
+  void showFramesForSequence(numericSequence).then((missing) => {
+    if (!missing.length) return;
+    requestInspectionFrames(numericSequence, missing);
+  });
+  if (announce) broadcastInspection(numericSequence);
 }
 
 function inspectSequence(sequence) {
-  const snapshot = state.snapshots.get(Number(sequence));
-  if (!snapshot) return;
-  state.inspectionSequence = Number(sequence);
-  state.snapshot = snapshot;
-  renderSnapshot();
-  showFramesForSequence(Number(sequence));
+  setInspectionCursor(sequence);
 }
 
-function returnToLive() {
+function returnToLive({ announce = true } = {}) {
+  stopInspectionReplay({ render: false });
   state.inspectionSequence = null;
   state.snapshot = state.liveSnapshot;
   if (state.snapshot) {
     renderSnapshot();
-    showFramesForSequence(Number(state.snapshot.sequence));
+    renderHistory();
+    void showFramesForSequence(Number(state.snapshot.sequence));
   }
+  if (announce) broadcastInspection(null);
 }
 
 function renderTimeline() {
@@ -620,7 +813,7 @@ function renderTimeline() {
   const minimum = sequences[0];
   const maximum = sequences.at(-1);
   const range = Math.max(1, maximum - minimum);
-  const interesting = state.history.filter((point) =>
+  const interesting = currentEpisodeHistory().filter((point) =>
     Number(point.sequence) >= minimum
     && Number(point.sequence) <= maximum
     && (currentEpisode === null || Number(point.episode) === currentEpisode)
@@ -698,17 +891,17 @@ async function applyLayout() {
   send({ type: "subscribe", subscriptions: subscriptions() });
   await panelRuntime.sync(state.layout, state.windowId);
   if (state.snapshot) {
-    panelRuntime.renderSnapshot(state.snapshot, {
-      history: state.history,
-      inspection: state.inspectionSequence !== null,
-    });
-    panelRuntime.renderHistory(state.history, state.snapshot);
+    panelRuntime.renderSnapshot(state.snapshot, panelView());
+    panelRuntime.renderHistory(currentEpisodeHistory(), state.snapshot, panelView());
     const sequence = Number(state.snapshot.sequence);
-    const gameFrame = nearestFrameBlob(FRAME_GAME, sequence);
-    const observationFrame = nearestFrameBlob(FRAME_OBSERVATION, sequence);
-    if (visibleHere.includes("game") && gameFrame) panelRuntime.renderFrame(FRAME_GAME, gameFrame);
-    if (visibleHere.includes("observation") && observationFrame) {
-      panelRuntime.renderFrame(FRAME_OBSERVATION, observationFrame);
+    if (visibleHere.includes("game")) {
+      panelRuntime.renderFrame(FRAME_GAME, exactFrameBlob(FRAME_GAME, sequence));
+    }
+    if (visibleHere.includes("observation")) {
+      panelRuntime.renderFrame(
+        FRAME_OBSERVATION,
+        exactFrameBlob(FRAME_OBSERVATION, sequence),
+      );
     }
   }
   requestAnimationFrame(() => panelRuntime.resize());
@@ -1265,6 +1458,57 @@ function bindWorkspaceSync() {
         }
       } else if (message.type === "heartbeat") {
         state.activeWindows.set(message.window, Date.now());
+      } else if (
+        message.type === "inspection-cursor"
+        && message.source !== state.windowId
+        && Number(message.session_epoch || 0) === state.sessionEpoch
+      ) {
+        if (message.sequence === null) {
+          returnToLive({ announce: false });
+        } else if (
+          message.snapshot
+          && Number(message.episode) === episodeForSnapshot(message.snapshot)
+        ) {
+          setInspectionCursor(Number(message.sequence), {
+            announce: false,
+            snapshot: message.snapshot,
+            frames: Array.isArray(message.frames) ? message.frames : [],
+          });
+        }
+      } else if (
+        message.type === "inspection-frame-request"
+        && message.source !== state.windowId
+        && Number(message.session_epoch || 0) === state.sessionEpoch
+      ) {
+        (Array.isArray(message.kinds) ? message.kinds : []).forEach((kind) => {
+          const numericKind = Number(kind);
+          const blob = exactFrameBlob(numericKind, Number(message.sequence));
+          if (!blob) return;
+          workspaceChannel.postMessage({
+            type: "inspection-frame",
+            session_epoch: state.sessionEpoch,
+            sequence: Number(message.sequence),
+            kind: numericKind,
+            blob,
+            source: state.windowId,
+            target: message.source,
+          });
+        });
+      } else if (
+        message.type === "inspection-frame"
+        && message.target === state.windowId
+        && Number(message.session_epoch || 0) === state.sessionEpoch
+        && Number(message.sequence) === Number(state.inspectionSequence)
+        && [FRAME_GAME, FRAME_OBSERVATION].includes(Number(message.kind))
+        && message.blob instanceof Blob
+      ) {
+        rememberFrame(
+          Number(message.kind),
+          Number(message.sequence),
+          message.blob,
+          Number(message.sequence),
+        );
+        void panelRuntime.renderFrame(Number(message.kind), message.blob);
       } else if (message.type === "panel-drag-start" && message.source !== state.windowId && PANEL_LABELS[message.name]) {
         state.remoteDrag = { id: message.drag, source: message.source, name: message.name };
         setPanelDragUi(true, { source: false });

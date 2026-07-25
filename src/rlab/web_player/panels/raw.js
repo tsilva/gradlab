@@ -6,7 +6,7 @@ export function mount({ definition }) {
     label: definition.label,
     className: "raw-panel",
     body: `
-      <details open><summary>Current transition</summary><pre data-transition class="json-view">No transition yet.</pre></details>
+      <details open><summary>Selected transition</summary><pre data-transition class="json-view">No transition yet.</pre></details>
       <details><summary>Resolved playback configuration</summary><pre data-config>Waiting…</pre></details>
     `,
   });

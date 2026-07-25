@@ -69,7 +69,13 @@ export class PanelRuntime {
       this.instances.set(name, instance);
       this.onMount(instance.element, name, definition);
       this.safeCall(name, "render", this.view.snapshot, this.view);
-      this.safeCall(name, "renderHistory", this.view.history, this.view.snapshot);
+      this.safeCall(
+        name,
+        "renderHistory",
+        this.view.history,
+        this.view.snapshot,
+        this.view,
+      );
       return instance;
     } catch (error) {
       this.onError(name, error);
@@ -102,9 +108,15 @@ export class PanelRuntime {
     this.instances.forEach((_, name) => this.safeCall(name, "render", snapshot, this.view));
   }
 
-  renderHistory(history, snapshot = this.view.snapshot) {
-    this.view = { ...this.view, history, snapshot };
-    this.instances.forEach((_, name) => this.safeCall(name, "renderHistory", history, snapshot));
+  renderHistory(history, snapshot = this.view.snapshot, view = {}) {
+    this.view = { ...this.view, ...view, history, snapshot };
+    this.instances.forEach((_, name) => this.safeCall(
+      name,
+      "renderHistory",
+      history,
+      snapshot,
+      this.view,
+    ));
   }
 
   async renderFrame(kind, blob) {

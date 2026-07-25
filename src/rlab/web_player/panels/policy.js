@@ -7,6 +7,7 @@ export function mount({ definition, services }) {
     body: `
       <div data-summary class="stat-grid"></div>
       <div data-actions class="action-probabilities empty-state">No sampled decision yet.</div>
+      <p class="panel-foot">Decision computed from the pre-action policy input.</p>
     `,
   });
   const summary = element.querySelector("[data-summary]");
