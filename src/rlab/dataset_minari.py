@@ -7,8 +7,9 @@ from typing import Any
 
 import numpy as np
 
-from rlab.dataset_contract import canonical_json_bytes, grouped_episode_rows
+from rlab.dataset_contract import grouped_episode_rows
 from rlab.dataset_media import iter_episode_frames
+from rlab.json_utils import canonical_json_bytes
 
 
 MAX_MATERIALIZED_BYTES = 16 * 1024**3

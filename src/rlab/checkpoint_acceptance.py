@@ -322,51 +322,6 @@ def build_checkpoint_eval_contract(
     }
 
 
-def checkpoint_eval_contract_from_train_config(
-    train_config: Mapping[str, Any], *, portable_asset: bool = False
-) -> dict[str, Any]:
-    compiler = CheckpointEvalContractCompiler.from_train_config(
-        train_config,
-        portable_asset=portable_asset,
-        require_asset=not portable_asset,
-    )
-    return compiler.contract(require_acceptance=True)
-
-
-def validate_checkpoint_eval_contract(
-    contract: Mapping[str, Any], *, portable_asset: bool = False
-) -> dict[str, Any]:
-    """Validate a serialized acceptance contract without changing its bytes or shape."""
-
-    environment = contract.get("environment")
-    acceptance = contract.get("acceptance")
-    if not isinstance(environment, Mapping):
-        raise ValueError("checkpoint eval contract environment is invalid")
-    if not isinstance(acceptance, list):
-        raise ValueError("checkpoint eval contract acceptance rules are invalid")
-    if int(contract.get("protocol_version") or 0) != ACCEPTANCE_PROTOCOL_VERSION:
-        raise ValueError("checkpoint eval contract protocol version mismatch")
-    serialized = dict(contract)
-    compiler = CheckpointEvalContractCompiler.from_train_config(
-        {
-            "checkpoint_eval_environment": environment,
-            "post_train_eval_episodes": contract.get("episodes"),
-            "checkpoint_eval_n_envs": contract.get("n_envs"),
-            "post_train_eval_max_steps": contract.get("max_steps"),
-            "checkpoint_eval_seed": contract.get("seed"),
-            "checkpoint_eval_seed_protocol": contract.get("seed_protocol"),
-            "checkpoint_eval_acceptance": acceptance,
-            "rom_asset_manifest": contract.get("asset"),
-        },
-        portable_asset=portable_asset,
-        require_asset=not portable_asset,
-    )
-    if compiler.contract(require_acceptance=True) != serialized:
-        raise ValueError("checkpoint eval contract is not canonical")
-    manifest_index(serialized)
-    return deepcopy(serialized)
-
-
 def manifest_index(contract: Mapping[str, Any]) -> dict[tuple[int, int], dict[str, Any]]:
     manifest = contract.get("manifest")
     if not isinstance(manifest, Mapping):

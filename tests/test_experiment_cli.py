@@ -12,6 +12,7 @@ from rlab.experiment_cli import (
     _compute,
     _follow_fingerprint,
     _public_dstack_state,
+    _run_completed,
     _stage_rom,
     _task_name,
     _task_request,
@@ -122,6 +123,64 @@ def test_follow_fingerprint_ignores_only_poll_observation_time() -> None:
         {"attempt_id": "attempt-" + "c" * 16},
     ]
     assert _follow_fingerprint(first) != _follow_fingerprint(second)
+
+
+@pytest.mark.parametrize(
+    ("semantic_terminal", "attempt_terminal", "dstack_terminal", "expected"),
+    [
+        (None, None, False, False),
+        (
+            None,
+            {"state": "succeeded", "acceptance_required": True},
+            False,
+            False,
+        ),
+        (
+            None,
+            {"state": "succeeded", "acceptance_required": True},
+            True,
+            False,
+        ),
+        (
+            {"state": "succeeded"},
+            {"state": "succeeded", "acceptance_required": True},
+            True,
+            True,
+        ),
+        (
+            None,
+            {"state": "succeeded", "acceptance_required": False},
+            True,
+            True,
+        ),
+        (
+            None,
+            {"state": "failed", "acceptance_required": True},
+            True,
+            True,
+        ),
+        (
+            None,
+            {"state": "resumable_failure", "acceptance_required": True},
+            True,
+            True,
+        ),
+    ],
+)
+def test_run_completed_requires_receipts_expected_for_the_attempt(
+    semantic_terminal: dict[str, object] | None,
+    attempt_terminal: dict[str, object] | None,
+    dstack_terminal: bool,
+    expected: bool,
+) -> None:
+    assert (
+        _run_completed(
+            semantic_terminal=semantic_terminal,
+            attempt_terminal=attempt_terminal,
+            dstack_terminal=dstack_terminal,
+        )
+        is expected
+    )
 
 
 def test_on_demand_requires_explicit_permission() -> None:

@@ -34,10 +34,13 @@ from rlab.policy_bundle import (
     recipe_document_path,
     write_canonical_json,
 )
-from rlab.model_paths import model_metadata_path
 
 
 MODEL_METADATA_VERSION = 7
+
+
+def _model_metadata_path(model_path: Path) -> Path:
+    return model_path.with_suffix(".metadata.json")
 
 
 def stable_json_hash(value: Any) -> str:
@@ -125,7 +128,7 @@ def write_model_metadata_payload(
     model_path: Path,
     metadata: Mapping[str, Any],
 ) -> Path:
-    path = model_metadata_path(model_path)
+    path = _model_metadata_path(model_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, temporary_name = tempfile.mkstemp(
         prefix=f".{path.name}.", dir=path.parent, text=True
@@ -257,7 +260,7 @@ def install_model_bundle(
             _fsync_file(staged)
 
         destinations: list[tuple[Path, Path]] = [
-            (staged_metadata, model_metadata_path(model_path))
+            (staged_metadata, _model_metadata_path(model_path))
         ]
         if staged_model_document is not None and staged_recipe is not None:
             destinations.extend(
@@ -279,7 +282,7 @@ def install_model_bundle(
                     "checkpoint destination conflicts with an existing committed bundle: "
                     + ", ".join(str(path) for path in mismatches)
                 )
-            return model_path, model_metadata_path(model_path)
+            return model_path, _model_metadata_path(model_path)
 
         for staged, destination in destinations:
             os.replace(staged, destination)
@@ -289,7 +292,7 @@ def install_model_bundle(
         staged_paths.remove(staged_checkpoint)
         _fsync_directory(model_path.parent)
         load_policy_bundle_from_checkpoint(model_path)
-        return model_path, model_metadata_path(model_path)
+        return model_path, _model_metadata_path(model_path)
     finally:
         for staged in staged_paths:
             staged.unlink(missing_ok=True)
@@ -303,7 +306,7 @@ def load_model_metadata(model_path: Path) -> dict[str, Any]:
         versioned_path = canonical_path
     if versioned_path.is_file():
         return model_document_as_metadata(load_model_document(versioned_path))
-    path = model_metadata_path(model_path)
+    path = _model_metadata_path(model_path)
     if not path.is_file():
         return {}
     try:

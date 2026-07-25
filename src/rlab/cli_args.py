@@ -24,13 +24,3 @@ def explicit_arg_dests(parser: argparse.ArgumentParser, argv: Sequence[str]) -> 
         for argument in argv
         if argument.split("=", 1)[0] in option_dests
     }
-
-
-def add_dry_run_arg(parser: argparse.ArgumentParser) -> None:
-    parser.set_defaults(execute=True)
-    parser.add_argument(
-        "--dry-run",
-        dest="execute",
-        action="store_false",
-        help="Preview planned changes without applying them.",
-    )

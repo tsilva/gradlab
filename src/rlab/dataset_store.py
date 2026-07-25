@@ -8,11 +8,9 @@ import os
 import shutil
 import stat
 import tempfile
-import time
 import uuid
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
-from itertools import chain
 from pathlib import Path
 from typing import Any
 
@@ -796,62 +794,21 @@ def video_command(args: Any) -> int:
 
 
 def play_command(args: Any) -> int:
+    from rlab.play_web import run_web_dataset_playback
+
     with open_source(args.source, root=args.root) as loaded:
         episodes = list(grouped_episode_rows(loaded.dataset).values())
         index = int(args.episode) - 1
         if index >= len(episodes):
             raise ValueError(f"episode {args.episode} does not exist")
         rows = episodes[index]
-        frames = iter(iter_episode_frames(rows, root=loaded.path))
-        first = next(frames)
-        viewer = _DatasetViewer(first.shape, int(args.scale))
         fps = float(args.fps or _environment_fps(loaded.validation, rows))
-        delay = 1.0 / fps
-        try:
-            for frame in chain((first,), frames):
-                started = time.monotonic()
-                if not viewer.show(frame):
-                    break
-                time.sleep(max(0.0, delay - (time.monotonic() - started)))
-        finally:
-            viewer.close()
-    return 0
-
-
-class _DatasetViewer:
-    """Small provider-free viewer for already-decoded dataset RGB frames."""
-
-    def __init__(self, frame_shape: tuple[int, int, int], scale: int) -> None:
-        if scale < 1:
-            raise ValueError("viewer scale must be >= 1")
-        os.environ.setdefault("PYGAME_HIDE_SUPPORT_PROMPT", "1")
-        import pygame
-
-        self.pygame = pygame
-        height, width, channels = frame_shape
-        if channels != 3:
-            raise ValueError(f"dataset playback requires RGB frames, got {frame_shape}")
-        self.size = (width * scale, height * scale)
-        pygame.init()
-        pygame.display.set_caption("rlab dataset")
-        self.screen = pygame.display.set_mode(self.size)
-
-    def show(self, frame: Any) -> bool:
-        for event in self.pygame.event.get():
-            if event.type in {self.pygame.QUIT, self.pygame.WINDOWCLOSE}:
-                return False
-            if event.type == self.pygame.KEYDOWN and getattr(event, "key", None) in {
-                self.pygame.K_ESCAPE,
-                self.pygame.K_q,
-            }:
-                return False
-        surface = self.pygame.surfarray.make_surface(frame.swapaxes(0, 1))
-        self.screen.blit(self.pygame.transform.scale(surface, self.size), (0, 0))
-        self.pygame.display.flip()
-        return True
-
-    def close(self) -> None:
-        self.pygame.quit()
+        return run_web_dataset_playback(
+            iter_episode_frames(rows, root=loaded.path),
+            rows,
+            args,
+            fps=fps,
+        )
 
 
 def adopt_command(args: Any) -> int:

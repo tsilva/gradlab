@@ -26,14 +26,11 @@ from rlab.env_identity import (
     validate_task_config,
 )
 from rlab.file_utils import file_sha256
-from rlab.provider_config import provider_num_envs
 from rlab.recipe_schema import (
-    TRAIN_RECIPE_SCHEMA_VERSION,
     train_recipe_id,
     validate_materialized_train_recipe,
 )
 from rlab.reward_programs import select_goal_reward_shape
-from rlab.seeds import validate_training_seed
 from rlab.train_config import train_config_keys_in_source_section, train_config_keys_owned_by
 
 
@@ -264,12 +261,6 @@ def _merge_train_config_sections(
             train_config = deep_merge(train_config, explicit_environment)
 
     return train_config
-
-
-def _goal_slug_from_value(value: Any) -> str:
-    if isinstance(value, Mapping):
-        return str(value.get("goal_id") or "").strip()
-    return ""
 
 
 def _goal_with_environment_provider(
@@ -731,60 +722,8 @@ def repo_git_commit(cwd: Path = Path(".")) -> str | None:
     return _git_text(("rev-parse", "HEAD"), cwd=cwd)
 
 
-def repo_is_dirty(cwd: Path = Path(".")) -> bool:
-    text = _git_text(("status", "--porcelain"), cwd=cwd)
-    return bool(text)
-
-
 def recipe_slug(document: Mapping[str, Any]) -> str:
     return train_recipe_id(document)
-
-
-def compiled_recipe_payload(document: Mapping[str, Any]) -> dict[str, Any]:
-    """Return the compact, traceable recipe identity persisted with a queue row.
-
-    The queue row separately owns the resolved train config and execution metadata;
-    source file hashes in ``_composition`` preserve the exact goal/recipe inputs.
-    """
-
-    payload: dict[str, Any] = {
-        "schema_version": TRAIN_RECIPE_SCHEMA_VERSION,
-        "goal_id": recipe_goal_slug(document),
-        "recipe_id": recipe_slug(document),
-        "description": document.get("description"),
-        "tags": recipe_tags(document),
-    }
-    for key in ("campaign_id", "recipe_overrides", "_composition"):
-        value = document.get(key)
-        if value not in (None, "", (), [], {}):
-            payload[key] = copy.deepcopy(value)
-    return payload
-
-
-def recipe_metadata(
-    goal_path: Path,
-    recipe_path: Path,
-    document: Mapping[str, Any],
-) -> dict[str, Any]:
-    slug = recipe_slug(document)
-    return {
-        "goal_slug": recipe_goal_slug(document),
-        "goal_path": str(goal_path),
-        "goal_sha256": file_sha256(goal_path),
-        "goal_contract_sha256": str(
-            document.get("train_config", {}).get("goal_contract_sha256") or ""
-        ),
-        "recipe_slug": slug,
-        "recipe_path": str(recipe_path),
-        "recipe_sha256": file_sha256(recipe_path),
-        "recipe_payload": compiled_recipe_payload(document),
-        "repo_git_commit": repo_git_commit(),
-        "repo_dirty": repo_is_dirty(),
-    }
-
-
-def _non_empty_config_value(value: Any) -> bool:
-    return value not in (None, "", (), [], {})
 
 
 def validate_launch_event_config(
@@ -793,24 +732,6 @@ def validate_launch_event_config(
     task = train_config.get("task")
     if isinstance(task, Mapping):
         validate_task_config(task, label=f"{label}.task")
-
-
-def validate_launch_seed_config(
-    train_config: Mapping[str, Any],
-    *,
-    seed: int | None = None,
-    label: str = "train_config",
-) -> None:
-    config_seed = train_config.get("seed")
-    seed_span = provider_num_envs(train_config, explicit_n_envs=train_config.get("n_envs"))
-    if _non_empty_config_value(config_seed):
-        validate_training_seed(config_seed, label=f"{label}.seed", seed_span=seed_span)
-    if seed is not None:
-        validate_training_seed(seed, label="seed", seed_span=seed_span)
-
-
-def recipe_goal_slug(document: Mapping[str, Any]) -> str:
-    return _goal_slug_from_value(document.get("goal"))
 
 
 def recipe_tags(document: Mapping[str, Any]) -> list[str]:

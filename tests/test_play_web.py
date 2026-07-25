@@ -18,6 +18,7 @@ from rlab.play_web import (
     FRAME_GAME,
     FRAME_HEADER,
     FRAME_MAGIC,
+    DatasetPlaybackRunner,
     FrameEncoder,
     HumanRecordingRunner,
     PlaybackCommand,
@@ -221,9 +222,59 @@ def test_human_dataset_recording_defaults_to_web_dashboard() -> None:
     )
 
     assert args.agent == "human"
-    assert args.ui == "web"
+    assert not hasattr(args, "ui")
+    assert not hasattr(args, "headless")
     assert args.port == 0
     assert args.no_open is False
+
+
+def test_dataset_playback_uses_web_runner_and_preserves_recorded_telemetry() -> None:
+    rows = [
+        {
+            "episode_id": "episode-1",
+            "step_index": 0,
+            "seed": 7,
+            "actions": 1,
+            "rewards": 2.5,
+            "terminations": True,
+            "truncations": False,
+            "infos": '{"x_pos": 12, "lives": 2}',
+            "collector_terminated": False,
+            "env_id": "fixture-v0",
+            "policy_mode": "random",
+        },
+        {
+            "episode_id": "episode-1",
+            "step_index": 1,
+            "seed": 7,
+            "actions": None,
+            "rewards": None,
+            "terminations": None,
+            "truncations": None,
+            "infos": None,
+            "collector_terminated": False,
+            "env_id": "fixture-v0",
+            "policy_mode": "random",
+        },
+    ]
+    frames = [
+        np.zeros((4, 5, 3), dtype=np.uint8),
+        np.full((4, 5, 3), 17, dtype=np.uint8),
+    ]
+    runner = DatasetPlaybackRunner(frames, rows, human_args(), fps=30.0)
+
+    runner._publish()
+    assert runner.snapshot()["mode"] == "dataset"
+    assert runner.snapshot()["session"]["env_id"] == "fixture-v0"
+
+    runner._step_once()
+
+    snapshot = runner.snapshot()
+    assert snapshot["run_state"] == "paused"
+    assert snapshot["session"]["total_reward"] == 2.5
+    assert snapshot["transition"]["action_source"] == "recorded"
+    assert snapshot["transition"]["signals"] == {"lives": 2.0, "x_pos": 12.0}
+    assert snapshot["transition"]["boundary"] is True
 
 
 def test_run_web_playback_requests_paired_browser_windows() -> None:

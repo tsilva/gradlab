@@ -13,6 +13,9 @@ from typing import Any
 
 import numpy as np
 
+from rlab.file_utils import file_sha256
+from rlab.json_utils import canonical_json_bytes
+
 
 DATASET_FORMAT_VERSION = 3
 STORAGE_FORMAT_IMAGES = "images"
@@ -99,25 +102,6 @@ class DatasetSummary:
     transitions: int
     environment_contracts: tuple[str, ...]
     collector_contracts: tuple[str, ...]
-
-
-def canonical_json_bytes(value: Any) -> bytes:
-    return json.dumps(
-        value,
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=False,
-        allow_nan=False,
-    ).encode("utf-8")
-
-
-def sha256_file(path: Path) -> str:
-    with path.open("rb") as stream:
-        return hashlib.file_digest(stream, "sha256").hexdigest()
-
-
-def sha256_rgb(frame: Any) -> str:
-    return hashlib.sha256(observation_to_rgb(frame).tobytes()).hexdigest()
 
 
 def observation_to_rgb(observation: Any) -> np.ndarray:
@@ -420,7 +404,7 @@ def validate_contract_artifacts(root: Path, summary: DatasetSummary) -> dict[str
             filename = _safe_binding_filename(binding.get("filename"))
             expected_names.add(filename)
             artifact_path = directory / filename
-            if sha256_file(artifact_path) != binding.get("sha256"):
+            if file_sha256(artifact_path) != binding.get("sha256"):
                 raise ValueError(f"collector {contract_id}/{filename} hash mismatch")
             documents[f"collector:{contract_id}:{filename}"] = artifact_path.read_bytes()
         actual_names = {path.name for path in directory.iterdir() if path.is_file()}

@@ -459,6 +459,21 @@ def _public_dstack_state(task: DstackTask) -> dict[str, Any]:
     }
 
 
+def _run_completed(
+    *,
+    semantic_terminal: Mapping[str, Any] | None,
+    attempt_terminal: Mapping[str, Any] | None,
+    dstack_terminal: bool,
+) -> bool:
+    if attempt_terminal is None or not dstack_terminal:
+        return False
+    canonical_terminal_expected = (
+        str(attempt_terminal.get("state") or "") == "succeeded"
+        and attempt_terminal.get("acceptance_required") is True
+    )
+    return semantic_terminal is not None or not canonical_terminal_expected
+
+
 def _status(root: Path, run_id: str) -> dict[str, Any]:
     _storage_config, authority = _storage(root)
     semantic = authority.semantic_state(run_id)
@@ -482,7 +497,11 @@ def _status(root: Path, run_id: str) -> dict[str, Any]:
         "dstack": dstack_value,
         "semantic": semantic,
         "attempt_terminal": attempt_terminal,
-        "completed": attempt_terminal is not None,
+        "completed": _run_completed(
+            semantic_terminal=semantic.get("terminal"),
+            attempt_terminal=attempt_terminal,
+            dstack_terminal=bool(dstack_value["terminal"]),
+        ),
         "scientific_success": semantic.get("terminal") is not None,
     }
 

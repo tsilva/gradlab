@@ -14,12 +14,12 @@ from rlab.dataset_contract import (
     DATASET_FORMAT_VERSION,
     ENVIRONMENT_DOCUMENT_FILENAME,
     IMAGE_FIELDS,
-    canonical_json_bytes,
     episode_content_fingerprint,
     features_append_compatible,
     validate_contract_artifacts,
     validate_v3,
 )
+from rlab.json_utils import canonical_json_bytes
 
 
 class Rows(list):

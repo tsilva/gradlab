@@ -15,6 +15,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from rlab.dotenv import load_env_file
+from rlab.json_utils import canonical_json_bytes
 
 
 MAX_MODEL_FILES = 64
@@ -106,19 +107,9 @@ class ApprovedModelInput:
         self.cleanup()
 
 
-def _canonical_json(value: Any) -> bytes:
-    return json.dumps(
-        value,
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=False,
-        allow_nan=False,
-    ).encode("utf-8")
-
-
 def _manifest_hash(manifest: tuple[ManifestEntry, ...], *, source_identity: str | None) -> str:
     return hashlib.sha256(
-        _canonical_json(
+        canonical_json_bytes(
             {
                 "domain": "rlab.approved-model-input",
                 "version": 1,
