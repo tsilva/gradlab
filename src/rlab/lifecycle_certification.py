@@ -22,6 +22,7 @@ from rlab.eval_backend import EvalHandle, EvalPoll
 from rlab.modal_eval_protocol import execution_key
 from rlab.policy_bundle import (
     build_recipe_document,
+    canonical_json_bytes as _canonical_bytes,
     canonical_json_sha256,
     evaluation_contract,
     model_document_path,
@@ -67,21 +68,8 @@ DEFAULT_SCENARIOS = (
 )
 
 
-def _canonical_bytes(value: object) -> bytes:
-    return (
-        json.dumps(
-            value,
-            sort_keys=True,
-            separators=(",", ":"),
-            ensure_ascii=False,
-            allow_nan=False,
-        )
-        + "\n"
-    ).encode("utf-8")
-
-
 def _sha256(value: object) -> str:
-    return hashlib.sha256(_canonical_bytes(value)).hexdigest()
+    return canonical_json_sha256(value)
 
 
 class DeterministicClock:

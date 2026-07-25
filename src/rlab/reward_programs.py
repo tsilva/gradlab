@@ -1,14 +1,14 @@
 from __future__ import annotations
 
 import copy
-import hashlib
-import json
 import math
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from numbers import Real
 from typing import Any
+
+from rlab.json_utils import canonical_json_sha256
 
 
 REWARD_PROGRAM_KIND_MARIO_V1 = "mario-v1"
@@ -50,19 +50,8 @@ class RewardShapeSelection:
     reward: dict[str, Any]
 
 
-def _canonical_json(value: Any) -> str:
-    return json.dumps(
-        value,
-        allow_nan=False,
-        ensure_ascii=False,
-        separators=(",", ":"),
-        sort_keys=True,
-    )
-
-
 def _sha256(value: Mapping[str, Any]) -> str:
-    digest = hashlib.sha256(_canonical_json(value).encode("utf-8")).hexdigest()
-    return f"sha256:{digest}"
+    return f"sha256:{canonical_json_sha256(value)}"
 
 
 def _normalize_zero(value: float) -> float:

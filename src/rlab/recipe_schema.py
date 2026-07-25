@@ -7,10 +7,7 @@ from rlab.config_loader import RECIPE_TEMPLATE_VALUES, validate_template_string
 from rlab.env_registry import env_supports_states, validate_provider_constructor_args
 from rlab.goal_schema import validate_goal_document_shape
 from rlab.seeds import validate_training_seed
-from rlab.train_config import (
-    recipe_required_train_config_fields,
-    validate_and_normalize_train_config,
-)
+from rlab.train_config import validate_and_normalize_train_config
 from rlab.provider_config import provider_num_envs
 from rlab.validation import (
     int_list,
@@ -31,7 +28,6 @@ TRAIN_RECIPE_REQUIRED_FIELDS = (
     "tags",
     "train_config",
 )
-TRAIN_RECIPE_REQUIRED_TRAIN_CONFIG_FIELDS = recipe_required_train_config_fields()
 TRAIN_RECIPE_OPTIONAL_FIELDS = frozenset(
     {
         "schema_version",

@@ -21,7 +21,6 @@ from rlab.runtime_contract import (
 
 
 DEFAULT_IMAGE_WORKFLOW = "rlab train image"
-DEFAULT_IMAGE_BRANCH = "main"
 DEFAULT_IMAGE_ARTIFACT = "rlab-train-image"
 DEFAULT_IMAGE_ARTIFACT_FILE = "rlab-train-image.json"
 DEFAULT_MODAL_WORKFLOW = "rlab Modal eval deployment"

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable, Mapping
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -13,6 +14,68 @@ from rlab.training_backend import BackendContext
 
 
 ModelFactory = Callable[[BackendContext, Any, Any, str], Any]
+ConfigNormalizer = Callable[..., dict[str, Any]]
+ModelClassResolver = Callable[[Mapping[str, Any]], str]
+
+
+@dataclass(frozen=True)
+class OnPolicyBackend:
+    """Shared module protocol for one available SB3 on-policy algorithm."""
+
+    backend_id: str
+    defaults: Mapping[str, Any]
+    normalize_config: ConfigNormalizer
+    model_factory: ModelFactory
+    model_class: str | ModelClassResolver
+
+    @property
+    def algorithm_id(self) -> str:
+        return self.backend_id.rsplit(".", 1)[-1]
+
+    def _require_id(self, backend_id: str) -> None:
+        if backend_id != self.backend_id:
+            name = f"SB3 {self.algorithm_id.upper()}"
+            raise ValueError(f"{name} backend module does not define {backend_id!r}")
+
+    def validate(
+        self,
+        common_config: Mapping[str, Any],
+        backend_config: Mapping[str, Any],
+    ) -> None:
+        del common_config, backend_config
+
+    def run(self, context: BackendContext) -> None:
+        run_sb3_on_policy(context, algorithm_id=self.algorithm_id, model_factory=self.model_factory)
+
+    def backend_for_id(self, backend_id: str) -> OnPolicyBackend:
+        self._require_id(backend_id)
+        return self
+
+    def snapshot_curriculum_priority_metrics(self, backend_id: str) -> tuple[str, ...]:
+        self._require_id(backend_id)
+        return ("value_error",)
+
+    def contract_payload(self, backend_id: str) -> dict[str, Any]:
+        self._require_id(backend_id)
+        return {
+            "schema_version": 1,
+            "status": "available",
+            "defaults": self.defaults,
+            "snapshot_curriculum_priority_metrics": ["value_error"],
+        }
+
+    def runtime_metadata(
+        self,
+        backend_id: str,
+        backend_config: Mapping[str, Any],
+    ) -> Mapping[str, str]:
+        self._require_id(backend_id)
+        model_class = self.model_class(backend_config) if callable(self.model_class) else self.model_class
+        return {
+            "training_backend_id": backend_id,
+            "algorithm_id": self.algorithm_id,
+            "model_class": model_class,
+        }
 
 _INTEGER_FIELDS = (
     "learning_rate_schedule_timesteps",

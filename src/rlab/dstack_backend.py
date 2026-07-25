@@ -18,9 +18,6 @@ from rlab.run_contracts import RUN_ID_PATTERN
 
 
 DSTACK_VERSION = "0.20.28"
-DSTACK_SERVER_IMAGE = (
-    "dstackai/dstack@sha256:86b820cf5f6e0cfc54dd387527493168a4045b362ca9459265ea9828eef0b4af"
-)
 TERMINAL_DSTACK_STATUSES = {
     "done",
     "failed",

@@ -24,7 +24,7 @@ from rlab.task_kernels import (
     MarioTaskDefinition,
     Outcome,
 )
-from rlab.training.sb3_ppo import validate_action_space
+from rlab.training.sb3_on_policy import validate_action_space
 
 
 def done_flags(step) -> np.ndarray:
@@ -302,7 +302,7 @@ class ProviderContractTests(unittest.TestCase):
         kernel = IdentityTaskDefinition().bind(descriptor, provider.num_envs)
         self.assertIs(kernel.action_space, descriptor.native_action_space)
         with self.assertRaisesRegex(ValueError, "configure a task action codec"):
-            validate_action_space(kernel.action_space)
+            validate_action_space(kernel.action_space, algorithm_id="ppo")
         with self.assertRaisesRegex(ValueError, "absent from the start catalog"):
             ProviderDescriptor(
                 provider_id="bad-lanes",

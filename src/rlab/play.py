@@ -3,7 +3,6 @@ from __future__ import annotations
 # ruff: noqa: E402
 
 import argparse
-import contextlib
 import os
 import sys
 from collections import deque
@@ -17,8 +16,6 @@ os.makedirs(os.environ["MPLCONFIGDIR"], exist_ok=True)
 
 import numpy as np
 import torch
-from tqdm import tqdm
-
 from rlab.action_contract import configured_action_meanings, configured_action_name
 from rlab.batch_runtime import StepDiagnostics
 from rlab.cli_args import explicit_arg_dests
@@ -363,16 +360,6 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def display_replay_config(config):
-    """Return the policy config because playback has exactly one environment.
-
-    Native providers expose their best available frame through ``get_images``.
-    Creating a second RGB-configured environment can silently diverge from the
-    policy state when the provider has stochastic transitions.
-    """
-    return config
-
-
 def resolved_play_launch_lines(
     args: argparse.Namespace,
     *,
@@ -455,39 +442,6 @@ def resolved_play_launch_lines(
             "green",
         ),
     ]
-
-
-def print_resolved_play_launch(
-    args: argparse.Namespace,
-    *,
-    argv: list[str],
-    artifact_ref: str | None,
-    policy_config,
-    display_config,
-) -> None:
-    lines = resolved_play_launch_lines(
-        args,
-        argv=argv,
-        artifact_ref=artifact_ref,
-        policy_config=policy_config,
-        display_config=display_config,
-    )
-    print("\n".join(lines), flush=True)
-
-
-@contextlib.contextmanager
-def startup_progress(name: str, *, disabled: bool = False):
-    """Show one independently timed progress bar for a startup operation."""
-
-    with tqdm(
-        total=1,
-        desc=name,
-        unit="operation",
-        dynamic_ncols=True,
-        disable=disabled,
-    ) as progress:
-        yield
-        progress.update(1)
 
 
 def optional_vector_env_frame(env) -> np.ndarray | None:

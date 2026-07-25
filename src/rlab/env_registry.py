@@ -74,6 +74,46 @@ class CanonicalEnvironmentIdentity:
     env_id_wandb_project_fallback: bool = True
 
 
+_TURBO_CANONICAL_ARGS = frozenset(
+    {
+        "frame_skip",
+        "game",
+        "maxpool_last_two",
+        "num_envs",
+        "obs_crop",
+        "obs_crop_fill",
+        "obs_crop_mode",
+        "obs_resize",
+        "obs_resize_algorithm",
+        "state",
+        "state_catalog",
+        "sticky_action_prob",
+    }
+)
+_TURBO_EXPLICIT_ENV_ARGS = frozenset(
+    {
+        "frame_stack",
+        "info",
+        "info_filter",
+        "inttype",
+        "noop_reset_max",
+        "num_threads",
+        "obs_copy",
+        "obs_grayscale",
+        "obs_layout",
+        "obs_type",
+        "players",
+        "record",
+        "render_mode",
+        "reward_clip",
+        "rom_path",
+        "scenario",
+        "use_fire_reset",
+        "use_restricted_actions",
+    }
+)
+
+
 STABLE_RETRO_TURBO_PROVIDER = EnvProvider(
     provider_id="stable-retro-turbo",
     import_name="stable_retro",
@@ -86,44 +126,8 @@ STABLE_RETRO_TURBO_PROVIDER = EnvProvider(
     ),
     external_rom_asset_strategy=STABLE_RETRO_DIRECT_PATH_V1,
     constructor_contract=ProviderConstructorContract(
-        canonical_args=frozenset(
-            {
-                "frame_skip",
-                "game",
-                "maxpool_last_two",
-                "num_envs",
-                "obs_crop",
-                "obs_crop_fill",
-                "obs_crop_mode",
-                "obs_resize",
-                "obs_resize_algorithm",
-                "state",
-                "state_catalog",
-                "sticky_action_prob",
-            }
-        ),
-        explicit_env_args=frozenset(
-            {
-                "frame_stack",
-                "info",
-                "info_filter",
-                "inttype",
-                "noop_reset_max",
-                "num_threads",
-                "obs_copy",
-                "obs_grayscale",
-                "obs_layout",
-                "obs_type",
-                "players",
-                "record",
-                "render_mode",
-                "reward_clip",
-                "rom_path",
-                "scenario",
-                "use_fire_reset",
-                "use_restricted_actions",
-            }
-        ),
+        canonical_args=_TURBO_CANONICAL_ARGS,
+        explicit_env_args=_TURBO_EXPLICIT_ENV_ARGS,
         required_values={},
     ),
 )
@@ -135,44 +139,8 @@ SUPERMARIOBROS_NES_TURBO_PROVIDER = EnvProvider(
     env_ids=("SuperMarioBros-Nes-v0",),
     external_rom_asset_strategy=STABLE_RETRO_DIRECT_PATH_V1,
     constructor_contract=ProviderConstructorContract(
-        canonical_args=frozenset(
-            {
-                "frame_skip",
-                "game",
-                "maxpool_last_two",
-                "num_envs",
-                "obs_crop",
-                "obs_crop_fill",
-                "obs_crop_mode",
-                "obs_resize",
-                "obs_resize_algorithm",
-                "state",
-                "state_catalog",
-                "sticky_action_prob",
-            }
-        ),
-        explicit_env_args=frozenset(
-            {
-                "frame_stack",
-                "info",
-                "info_filter",
-                "inttype",
-                "noop_reset_max",
-                "num_threads",
-                "obs_copy",
-                "obs_grayscale",
-                "obs_layout",
-                "obs_type",
-                "players",
-                "record",
-                "render_mode",
-                "reward_clip",
-                "rom_path",
-                "scenario",
-                "state_dir",
-                "use_restricted_actions",
-            }
-        ),
+        canonical_args=_TURBO_CANONICAL_ARGS,
+        explicit_env_args=(_TURBO_EXPLICIT_ENV_ARGS - {"use_fire_reset"}) | {"state_dir"},
         required_values={},
     ),
 )
@@ -183,44 +151,8 @@ BREAKOUT_TURBO_ENV_PROVIDER = EnvProvider(
     distribution_name="breakout-turbo-env",
     env_ids=("Breakout-Atari2600-v0", "BreakoutTurbo-v0"),
     constructor_contract=ProviderConstructorContract(
-        canonical_args=frozenset(
-            {
-                "frame_skip",
-                "game",
-                "maxpool_last_two",
-                "num_envs",
-                "obs_crop",
-                "obs_crop_fill",
-                "obs_crop_mode",
-                "obs_resize",
-                "obs_resize_algorithm",
-                "state",
-                "state_catalog",
-                "sticky_action_prob",
-            }
-        ),
-        explicit_env_args=frozenset(
-            {
-                "frame_stack",
-                "info",
-                "info_filter",
-                "inttype",
-                "noop_reset_max",
-                "num_threads",
-                "obs_copy",
-                "obs_grayscale",
-                "obs_layout",
-                "obs_type",
-                "players",
-                "record",
-                "render_mode",
-                "reward_clip",
-                "rom_path",
-                "scenario",
-                "use_fire_reset",
-                "use_restricted_actions",
-            }
-        ),
+        canonical_args=_TURBO_CANONICAL_ARGS,
+        explicit_env_args=_TURBO_EXPLICIT_ENV_ARGS,
         required_values={},
         optional_env_args=frozenset({"snapshot_bank_sha256", "snapshot_bank_uri"}),
     ),
