@@ -1026,7 +1026,7 @@ def test_web_dashboard_assets_are_packaged_beside_server() -> None:
     assert '"reward/shaped"' in catalog
     assert '"action/executed"' in catalog
     assert '"namespace-explorer"' in catalog
-    assert "WORKSPACE_VERSION = 3" in workspace
+    assert "WORKSPACE_VERSION = 4" in workspace
     assert "createTelemetryInstance" in workspace
     assert "value.version !== WORKSPACE_VERSION" in workspace
     assert "compareWorkspaceRevisions" in workspace
@@ -1043,8 +1043,8 @@ def test_web_dashboard_assets_are_packaged_beside_server() -> None:
     assert '"action/executed"' in telemetry
     assert "dynamicDescriptorKey" in telemetry
 
-    assert '"rlab.player.workspace.v3.paired"' in script
-    assert '"rlab.player.workspace.v3.single"' in script
+    assert '"rlab.player.workspace.v4.paired"' in script
+    assert '"rlab.player.workspace.v4.single"' in script
     assert "createTelemetryPanel" in script
     assert "updateTelemetryPanel" in script
     assert "snapshot.history_point" in script

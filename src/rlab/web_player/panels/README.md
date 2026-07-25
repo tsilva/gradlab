@@ -13,7 +13,7 @@ and bounded trajectory cursor. A panel module owns its DOM and visualization.
   game, controls, observation, events, and raw transition inspection remain
   specialized types.
 
-`workspace.js` owns the v3 persisted shape. Each instance has `type`, `title`,
+`workspace.js` owns the v4 persisted shape. Each instance has `type`, `title`,
 `config`, `builtin`, and a zero-based GridStack `placement`. Custom instances
 are telemetry panels. Old workspace versions are intentionally discarded
 instead of migrated.

@@ -12,11 +12,27 @@ import {
 
 const CUSTOM_ID = "panel-00000000-0000-4000-8000-000000000000";
 
-test("default workspace is a v3 collection of typed panel instances", () => {
+test("default workspace is a v4 collection of typed panel instances", () => {
   const workspace = createDefaultWorkspace({ writer: "main" });
   assert.equal(workspace.version, WORKSPACE_VERSION);
   assert.equal(workspace.panels.reward.type, "telemetry");
   assert.equal(workspace.panels.reward.builtin, true);
+  assert.deepEqual(
+    workspace.panels.reward.config.blocks.map((block) => block.kind),
+    ["stats"],
+  );
+  assert.deepEqual(
+    ["value", "step-reward", "episode-return"].map(
+      (id) => workspace.panels[id].config.blocks.length,
+    ),
+    [1, 1, 1],
+  );
+  assert.deepEqual(
+    ["value", "step-reward", "episode-return"].map(
+      (id) => workspace.panels[id].config.blocks[0].kind,
+    ),
+    ["line", "line", "line"],
+  );
   assert.deepEqual(workspace.panels.game.placement, {
     x: 0,
     y: 0,
@@ -25,11 +41,33 @@ test("default workspace is a v3 collection of typed panel instances", () => {
     visible: true,
     window: "main",
   });
+  assert.deepEqual(workspace.panels["step-reward"].placement, {
+    x: 4,
+    y: 15,
+    w: 4,
+    h: 9,
+    visible: true,
+    window: "main",
+  });
+});
+
+test("paired workspace keeps independent graph panels in one stats row", () => {
+  const workspace = createDefaultWorkspace({ paired: true });
+  assert.deepEqual(
+    ["value", "step-reward", "episode-return"].map((id) => (
+      workspace.panels[id].placement
+    )),
+    [
+      { x: 0, y: 8, w: 4, h: 9, visible: true, window: "stats" },
+      { x: 4, y: 8, w: 4, h: 9, visible: true, window: "stats" },
+      { x: 8, y: 8, w: 4, h: 9, visible: true, window: "stats" },
+    ],
+  );
 });
 
 test("legacy workspace data is deliberately replaced instead of migrated", () => {
   const workspace = normalizeWorkspace({
-    version: 2,
+    version: 3,
     panels: {
       game: { col: 9, row: 99, w: 1, h: 1 },
     },

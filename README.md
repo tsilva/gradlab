@@ -160,8 +160,10 @@ and reward-component views are instances of one configurable telemetry panel:
 use **Panels → Add** to combine stats, compatible line series, histograms,
 policy distributions, and dynamic metric explorers. Panels can be edited,
 duplicated, hidden, resized, rearranged, or moved to a synchronized window.
-Workspace v3 intentionally starts clean instead of migrating older saved
-layouts.
+The reward summary, value estimate, step reward, and episode return each have
+their own built-in panel so history graphs never force the summary panel to
+scroll. Workspace v4 intentionally starts clean instead of migrating older
+saved layouts.
 
 The checked-in goal catalog supplies projects and goals. W&B supplies run
 metadata and available goal-required acceptance results only after a goal is
