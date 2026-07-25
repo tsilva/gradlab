@@ -50,6 +50,15 @@ class TrainImageTests(unittest.TestCase):
                 self.assertIn(source, RUNTIME_INPUT_PATHS)
                 self.assertIn(f"COPY {source} ./", app_package)
 
+    def test_modal_deploy_group_covers_config_runtime(self) -> None:
+        project = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
+        dependencies = project["dependency-groups"]["modal-deploy"]
+
+        self.assertTrue(any(requirement.startswith("hydra-core") for requirement in dependencies))
+        self.assertTrue(any(requirement.startswith("jinja2") for requirement in dependencies))
+        self.assertTrue(any(requirement.startswith("modal") for requirement in dependencies))
+        self.assertTrue(any(requirement.startswith("pydantic") for requirement in dependencies))
+
     def test_overlay_key_tracks_indexed_content_path_mode_and_runtime_docker_section(
         self,
     ) -> None:
