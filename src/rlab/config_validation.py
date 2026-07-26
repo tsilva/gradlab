@@ -12,7 +12,10 @@ import yaml
 
 from rlab.benchmark_profiles import load_benchmark_profiles
 from rlab.config_loader import load_composed_mapping
-from rlab.early_stop import normalize_early_stop_config
+from rlab.early_stop import (
+    normalize_metric_early_stop_config,
+    normalize_metric_threshold_rules,
+)
 from rlab.env_identity import validate_task_config
 from rlab.env_registry import (
     env_supports_states,
@@ -361,7 +364,7 @@ def _validate_goal_eval(document: Mapping[str, Any], *, label: str) -> None:
         train.get("stop_on_acceptance") is True
     )
     if acceptance_enabled:
-        normalize_early_stop_config(
+        normalize_metric_threshold_rules(
             _require_key(eval_section, "acceptance", label=f"{label}.eval"),
             label=f"{label}.eval.acceptance",
         )
@@ -572,12 +575,19 @@ def validate_goal_contract_document(
             f"{label}.train.policy is retired; use train.backend with an explicit id and config"
         )
     if "early_stop" in train:
-        if train.get("stop_on_acceptance") is True:
+        early_stop = normalize_metric_early_stop_config(
+            train["early_stop"],
+            label=f"{label}.train.early_stop",
+        )
+        conditions = early_stop["conditions"]
+        if train.get("stop_on_acceptance") is True and any(
+            str(condition["outcome"]) == "success"
+            for condition in conditions.values()
+        ):
             raise ValueError(
-                f"{label}.train.early_stop is incompatible with stop_on_acceptance; "
-                "goal.eval.acceptance is the sole acceptance source"
+                f"{label}.train.early_stop success conditions are incompatible with "
+                "stop_on_acceptance; goal.eval.acceptance is the sole success authority"
             )
-        normalize_early_stop_config(train["early_stop"], label=f"{label}.train.early_stop")
     if "stop_on_acceptance" in train:
         _require_bool(train, "stop_on_acceptance", label=f"{label}.train")
     environment = _goal_train_environment(document, train, label=label)

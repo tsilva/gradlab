@@ -19,9 +19,9 @@ from stable_baselines3.common.vec_env import DummyVecEnv
 from rlab.callbacks import (
     CallbackHelper,
     LedgerCheckpointHelper,
+    MetricEarlyStopHelper,
     MetricStoreLoggerHelper,
     MetricStoreOutputFormat,
-    MetricThresholdStopHelper,
     RlabCallback,
     RolloutDiagnosticsHelper,
     RuntimeMetricsHelper,
@@ -31,7 +31,10 @@ from rlab.callbacks import (
 )
 from rlab.env import EnvConfig
 from rlab.metric_store import MetricStore
-from rlab.metric_names import EVAL_FULL_SUCCESS_RATE_MIN, TRAIN_OUTCOME_SUCCESS_WINDOW_100_RATE_MIN
+from rlab.metric_names import (
+    TRAIN_OUTCOME_SUCCESS_WINDOW_100_RATE_MIN,
+    train_early_stop_metric,
+)
 
 
 ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
@@ -286,115 +289,98 @@ class RuntimeMetricsCompletionTests(unittest.TestCase):
         self.assertEqual(logger.records["train/outcome/success/window_100/rate/mean"], 0.5)
 
 
-class MetricThresholdStopHelperTests(unittest.TestCase):
+class MetricEarlyStopHelperTests(unittest.TestCase):
     class FakeLogger:
         def __init__(self) -> None:
             self.records: dict[str, int | float] = {}
 
+        def record(self, name: str, value: int | float) -> None:
+            self.records[name] = value
+
     class FakeModel:
         def __init__(self) -> None:
-            self.logger = MetricThresholdStopHelperTests.FakeLogger()
+            self.logger = MetricEarlyStopHelperTests.FakeLogger()
 
-    def make_callback(self, marker_path: Path) -> tuple[MetricThresholdStopHelper, FakeModel]:
+    def make_callback(self, decision_path: Path) -> tuple[MetricEarlyStopHelper, FakeModel]:
         model = self.FakeModel()
-        callback = MetricThresholdStopHelper(
-            detector=[
-                {
-                    "metric": TRAIN_OUTCOME_SUCCESS_WINDOW_100_RATE_MIN,
-                    "operator": ">",
-                    "threshold": 0.99,
+        callback = MetricEarlyStopHelper(
+            config={
+                "conditions": {
+                    "clear_100": {
+                        "metric": TRAIN_OUTCOME_SUCCESS_WINDOW_100_RATE_MIN,
+                        "trigger": "threshold",
+                        "operator": ">",
+                        "threshold": 0.99,
+                        "patience_steps": 0,
+                        "outcome": "success",
+                        "action": "stop",
+                    }
                 }
-            ],
-            marker_path=marker_path,
+            },
+            decision_path=decision_path,
         )
         callback.model = model  # type: ignore[assignment]
         return callback, model
 
     def test_waits_until_metric_crosses_threshold(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            marker_path = Path(tmp) / "run" / "early_stop.txt"
-            callback, model = self.make_callback(marker_path)
+            decision_path = Path(tmp) / "run" / "early-stop.json"
+            callback, model = self.make_callback(decision_path)
             callback.num_timesteps = 100
 
             self.assertTrue(callback._on_step())
-            self.assertFalse(marker_path.exists())
+            self.assertFalse(decision_path.exists())
 
             model.logger.records[TRAIN_OUTCOME_SUCCESS_WINDOW_100_RATE_MIN] = 0.99
+            callback._on_rollout_end()
             self.assertTrue(callback._on_step())
-            self.assertFalse(marker_path.exists())
+            self.assertFalse(decision_path.exists())
 
             model.logger.records[TRAIN_OUTCOME_SUCCESS_WINDOW_100_RATE_MIN] = 1.0
             callback.num_timesteps = 200
+            callback._on_rollout_end()
             self.assertFalse(callback._on_step())
 
-            marker = marker_path.read_text(encoding="utf-8")
-            self.assertIn("early_stop=metric_threshold", marker)
-            self.assertIn(f"early_stop_metric={TRAIN_OUTCOME_SUCCESS_WINDOW_100_RATE_MIN}", marker)
-            self.assertIn("early_stop_operator=>", marker)
-            self.assertIn("early_stop_threshold=0.99", marker)
-            self.assertIn("early_stop_value=1", marker)
-            self.assertIn("timesteps=200", marker)
-
-    def test_structured_detector_requires_all_metric_rules(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            marker_path = Path(tmp) / "run" / "early_stop.txt"
-            model = self.FakeModel()
-            callback = MetricThresholdStopHelper(
-                detector=[
-                    {
-                        "metric": TRAIN_OUTCOME_SUCCESS_WINDOW_100_RATE_MIN,
-                        "operator": ">",
-                        "threshold": 0.99,
-                    },
-                    {
-                        "metric": "train/episode/return/shaped/mean",
-                        "operator": ">=",
-                        "threshold": 1000,
-                    },
+            decision = json.loads(decision_path.read_text(encoding="utf-8"))
+            self.assertEqual(decision["condition_id"], "clear_100")
+            self.assertEqual(decision["outcome"], "success")
+            self.assertEqual(decision["metric_step"], 200)
+            self.assertEqual(decision["value"], 1.0)
+            self.assertEqual(
+                model.logger.records[
+                    train_early_stop_metric("clear_100", "would_trigger")
                 ],
-                marker_path=marker_path,
+                1.0,
             )
-            callback.model = model  # type: ignore[assignment]
-            callback.num_timesteps = 100
 
-            model.logger.records[TRAIN_OUTCOME_SUCCESS_WINDOW_100_RATE_MIN] = 1.0
-            model.logger.records["train/episode/return/shaped/mean"] = 999
-            self.assertTrue(callback._on_step())
-            self.assertFalse(marker_path.exists())
-
-            model.logger.records["train/episode/return/shaped/mean"] = 1000
-            callback.num_timesteps = 200
-            self.assertFalse(callback._on_step())
-
-            marker = marker_path.read_text(encoding="utf-8")
-            self.assertIn("early_stop_detector_json=", marker)
-            self.assertIn("early_stop_value/train/episode/return/shaped/mean=1000", marker)
-
-    def test_polls_metric_store_at_rollout_boundary(self) -> None:
+    def test_reads_a_fresh_metric_store_sample_at_rollout_boundary(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             store_path = Path(tmp) / "run" / "rlab.sqlite"
-            marker_path = Path(tmp) / "run" / "early_stop.txt"
+            decision_path = Path(tmp) / "run" / "early-stop.json"
             store = MetricStore(store_path)
             store.init()
             store.append_metrics(
-                {EVAL_FULL_SUCCESS_RATE_MIN: 1.0},
+                {TRAIN_OUTCOME_SUCCESS_WINDOW_100_RATE_MIN: 1.0},
                 step=120000,
-                source="eval",
+                source="train",
             )
             model = self.FakeModel()
-            clock_value = 100.0
-            callback = MetricThresholdStopHelper(
-                detector=[
-                    {
-                        "metric": EVAL_FULL_SUCCESS_RATE_MIN,
-                        "operator": ">=",
-                        "threshold": 1.0,
+            callback = MetricEarlyStopHelper(
+                config={
+                    "conditions": {
+                        "clear_100": {
+                            "metric": TRAIN_OUTCOME_SUCCESS_WINDOW_100_RATE_MIN,
+                            "trigger": "threshold",
+                            "operator": ">=",
+                            "threshold": 1.0,
+                            "patience_steps": 0,
+                            "outcome": "success",
+                            "action": "stop",
+                        }
                     }
-                ],
-                marker_path=marker_path,
+                },
+                decision_path=decision_path,
                 metric_store_path=store_path,
-                poll_seconds=30.0,
-                clock=lambda: clock_value,
             )
             callback.model = model  # type: ignore[assignment]
             callback.num_timesteps = 130000
@@ -403,10 +389,9 @@ class MetricThresholdStopHelperTests(unittest.TestCase):
             callback._on_rollout_end()
             self.assertFalse(callback._on_step())
 
-            marker = marker_path.read_text(encoding="utf-8")
-            self.assertIn(f"early_stop_metric={EVAL_FULL_SUCCESS_RATE_MIN}", marker)
-            self.assertIn("early_stop_value=1", marker)
-            self.assertIn("timesteps=130000", marker)
+            decision = json.loads(decision_path.read_text(encoding="utf-8"))
+            self.assertEqual(decision["metric_step"], 120000)
+            self.assertEqual(decision["value"], 1.0)
 
     def test_metric_store_output_format_writes_complete_numeric_dump(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

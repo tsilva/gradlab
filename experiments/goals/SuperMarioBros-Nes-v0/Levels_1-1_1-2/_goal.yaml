@@ -23,6 +23,18 @@ train:
   checkpoint_eval_backend: modal
   checkpoint_freq: 250000
   stop_on_acceptance: true
+  early_stop:
+    conditions:
+      return_plateau:
+        metric: train/episode/return/shaped/from/target/mean
+        trigger: no_improvement
+        direction: maximize
+        min_delta: 0.01
+        delta_mode: relative
+        start_after_steps: 1000000
+        patience_steps: 1000000
+        outcome: failure
+        action: observe
   environment:
     env_provider: &mario_env_provider supermariobrosnes-turbo
     env_config:

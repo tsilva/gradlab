@@ -1,4 +1,4 @@
-# Metrics schema v6
+# Metrics schema v7
 
 This file is the human contract for rlab telemetry. The Python registry in
 `src/rlab/metric_names.py` is the executable source of truth. Every emitted metric must match an
@@ -17,7 +17,7 @@ exact registry entry or a bounded template.
 - Public model R2 contains immutable checkpoint closures and a mutable no-cache run index. Private
   eval R2 contains intents, results, and episode evidence. Private control R2 contains leases,
   journals, promotions, and terminal receipts.
-- W&B config contains run-defining dimensions: `metrics_schema_version: 6`, `training_backend_id`,
+- W&B config contains run-defining dimensions: `metrics_schema_version: 7`, `training_backend_id`,
   `training_backend_config_hash`, `algorithm_id`, goal,
   environment, starts, seed, frame skip, environment count, hyperparameters, eval protocol, and
   runtime versions.
@@ -64,7 +64,7 @@ X-axis. Each producer writes only its applicable scientific axis; durable delive
 `orchestration/event_seq`.
 
 Purged PostgreSQL/Fleet/W&B/R2 state has no compatibility guarantee. Newly materialized runs declare
-schema v6.
+schema v7.
 
 ## Research interpretation
 
@@ -101,13 +101,14 @@ schema v6.
   contract (`reward_mode: native`, unclipped), shaped episode return is the sum of Atari row-score
   deltas, so individual 400-plus games can coexist with a much lower mean when other lanes finish
   with lower scores.
-- No registered training scalar currently detects learning stagnation across rollouts. Episode
-  returns, success rates, failure reasons, policy entropy, and optimizer diagnostics describe
-  performance or mechanism, but none measures how long task-aligned progress has remained
-  unimproved; no one of them should be treated as a generic stall-stop signal. A generic plateau
-  detector may watch a configured score metric, but its minimum meaningful improvement, warmup, and
-  patience remain part of the goal or recipe contract. Its result means only that the selected
-  score has not improved, not that the task is impossible or that a checkpoint is accepted.
+- Episode returns, success rates, failure reasons, policy entropy, and optimizer diagnostics
+  describe performance or mechanism; no one of them should be treated as a generic stall-stop
+  signal. A configured plateau condition may watch any registered numeric training metric, with
+  direction, minimum meaningful improvement, warmup, and patience owned by the goal or recipe.
+  `train/early_stop/{condition}/*` projects that condition's local state for diagnosis and shadow
+  calibration. It means only that the selected metric has not improved under the declared
+  condition, not that the task is impossible or that a checkpoint is accepted. Private control-R2
+  receipts, never W&B diagnostics, are authoritative for an active early-stop outcome.
 
 ## Full-evaluation table
 
@@ -181,6 +182,11 @@ exit alone is never scientific success.
 | `train/outcome/success/window_100/rate/min` | Minimum window-100 success rate after every start has 100 attempts. | fraction | rollout | history |
 | `train/outcome/success/window_100/rate/mean` | Mean window-100 success rate after every start has 100 attempts. | fraction | rollout | history |
 | `train/outcome/success/start_coverage/rate` | Configured starts with an attempt divided by configured starts. | fraction | rollout | history |
+| `train/early_stop/{condition}/value` | Current finite value consumed by a configured metric early-stop condition. | scalar | watched metric sample | history |
+| `train/early_stop/{condition}/best` | Best value retained by a configured metric early-stop condition. | scalar | watched metric sample | history |
+| `train/early_stop/{condition}/patience/elapsed_steps` | Policy steps elapsed in the condition's current patience interval. | steps | watched metric sample | history |
+| `train/early_stop/{condition}/patience/progress` | Condition patience progress capped at one; one means the condition would trigger. | fraction | watched metric sample | history |
+| `train/early_stop/{condition}/would_trigger` | Whether the configured condition would trigger at this sample, regardless of observe or stop action. | boolean | watched metric sample | history |
 | `train/reward/shaped/mean` | Distribution of shaped per-step reward. | scalar | rollout | history |
 | `train/reward/shaped/std` | Distribution of shaped per-step reward. | scalar | rollout | history |
 | `train/reward/shaped/min` | Distribution of shaped per-step reward. | scalar | rollout | history |

@@ -17,6 +17,7 @@ from rlab.r2_store import (
 )
 from rlab.run_contracts import (
     CheckpointManifest,
+    EarlyStopReceipt,
     EvalIntent,
     EvalResult,
     PromotionReceipt,
@@ -505,6 +506,33 @@ class RunAuthority:
         )
         self._update_public_index(receipt.run_id, promotion=receipt)
         return etag
+
+    def early_stop_receipt(
+        self,
+        *,
+        run_id: str,
+        attempt_id: str,
+    ) -> dict[str, Any] | None:
+        return self.control.get_json_optional(
+            f"{self.run_prefix(run_id)}/attempts/{attempt_id}/early-stop.json"
+        )
+
+    def create_early_stop(self, receipt: EarlyStopReceipt) -> str:
+        key = (
+            f"{self.run_prefix(receipt.run_id)}/attempts/"
+            f"{receipt.attempt_id}/early-stop.json"
+        )
+        document = receipt.to_dict()
+        existing = self.control.get_json_optional(key)
+        if existing is not None:
+            validated = EarlyStopReceipt(**existing)
+            validated.validate()
+            if validated.to_dict() != document:
+                raise ConditionalWriteConflict(
+                    f"early-stop receipt already exists with different content: {key}"
+                )
+            return "existing"
+        return self.control.put_json(key, document, create_only=True)
 
     def create_terminal(self, receipt: TerminalReceipt) -> str:
         receipt.validate()

@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 
-METRICS_SCHEMA_VERSION = 6
+METRICS_SCHEMA_VERSION = 7
 TRAIN_GLOBAL_STEP = "train/global_step"
 EVAL_CHECKPOINT_STEP = "eval/checkpoint_step"
 ORCHESTRATION_EVENT_SEQ = "orchestration/event_seq"
@@ -71,6 +71,7 @@ TRAIN_OUTCOME_SUCCESS_WINDOW_100_RATE_MIN = f"{TRAIN_OUTCOME_SUCCESS_ROOT}/windo
 TRAIN_OUTCOME_SUCCESS_WINDOW_100_RATE_MEAN = f"{TRAIN_OUTCOME_SUCCESS_ROOT}/window_100/rate/mean"
 TRAIN_OUTCOME_SUCCESS_START_COVERAGE_RATE = f"{TRAIN_OUTCOME_SUCCESS_ROOT}/start_coverage/rate"
 
+TRAIN_EARLY_STOP_ROOT = "train/early_stop"
 TRAIN_REWARD_ROOT = "train/reward"
 
 TRAIN_ALGORITHM_ROOT = "train/algorithm"
@@ -216,6 +217,7 @@ _PLACEHOLDER_PATTERNS = {
     "reason": "[A-Za-z0-9_.-]+",
     "start": "[A-Za-z0-9_.-]+",
     "component": "[A-Za-z0-9_.-]+",
+    "condition": "[A-Za-z0-9_.-]+",
     "signal": "[A-Za-z0-9_.-]+",
     "progress": "[A-Za-z0-9_.-]+",
 }
@@ -290,6 +292,12 @@ def train_outcome_reason_count_metric(reason: object) -> str:
 def train_outcome_reason_window_rate_metric(reason: object) -> str:
     return validate_metric_name(
         f"train/outcome/reason/{metric_path_segment(reason)}/rate/window_100"
+    )
+
+
+def train_early_stop_metric(condition: object, suffix: str) -> str:
+    return validate_metric_name(
+        f"{TRAIN_EARLY_STOP_ROOT}/{metric_path_segment(condition)}/{suffix.strip('/')}"
     )
 
 

@@ -13,8 +13,9 @@ from gymnasium import spaces
 from rlab.artifacts import install_model_bundle
 from rlab.action_contract import configured_action_meanings
 from rlab.batch_runtime import EpisodeRecord
-from rlab.early_stop import evaluate_early_stop_config
+from rlab.early_stop import MetricEarlyStopStateMachine, MetricSample
 from rlab.env import make_training_vec_env
+from rlab.file_utils import atomic_write_json
 from rlab.jerk import JerkSearch
 from rlab.metric_names import (
     TRAIN_ALGORITHM_JERK_BEST_RETURN_MEAN,
@@ -23,6 +24,7 @@ from rlab.metric_names import (
     TRAIN_ALGORITHM_JERK_EXPLOIT_PROBABILITY,
     TRAIN_ALGORITHM_JERK_RETAINED_COUNT,
     TRAIN_EPISODE_LENGTH_MEAN,
+    TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_MEAN,
     TRAIN_EPISODE_RETURN_SHAPED_MEAN,
     TRAIN_OUTCOME_SUCCESS_CURRENT_RATE_MEAN,
     TRAIN_OUTCOME_SUCCESS_CURRENT_RATE_MIN,
@@ -32,6 +34,7 @@ from rlab.metric_names import (
     TRAIN_OUTCOME_TERMINAL_COUNT,
     TRAIN_THROUGHPUT_LOOP_FPS,
     metric_value_segment,
+    train_early_stop_metric,
     train_success_attempts_metric,
     train_success_count_metric,
     train_success_window_rate_metric,
@@ -212,9 +215,11 @@ def _publish_metrics(
     step: int,
     elapsed: float,
     returns: list[float],
+    target_returns: list[float],
     lengths: list[int],
     outcome_metrics: _OutcomeMetrics,
-) -> None:
+    early_stop: MetricEarlyStopStateMachine | None,
+) -> bool:
     candidate = search.best_candidate()
     payload: dict[str, int | float] = {
         TRAIN_ALGORITHM_JERK_RETAINED_COUNT: search.retained_count,
@@ -233,31 +238,65 @@ def _publish_metrics(
     if returns:
         payload[TRAIN_EPISODE_RETURN_SHAPED_MEAN] = float(np.mean(returns[-100:]))
         payload[TRAIN_EPISODE_LENGTH_MEAN] = float(np.mean(lengths[-100:]))
+    if target_returns:
+        payload[TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_MEAN] = float(
+            np.mean(target_returns[-100:])
+        )
     payload.update(outcome_metrics.payload())
+    update = (
+        early_stop.update(
+            {
+                metric: MetricSample(value=float(payload[metric]), step=step)
+                for metric in {
+                    str(condition["metric"])
+                    for condition in early_stop.conditions.values()
+                }
+                if metric in payload
+            }
+        )
+        if early_stop is not None
+        else None
+    )
+    if update is not None:
+        for condition_id, observation in update.observations.items():
+            payload.update(
+                {
+                    train_early_stop_metric(condition_id, "value"): observation.value,
+                    train_early_stop_metric(condition_id, "best"): observation.best_value,
+                    train_early_stop_metric(
+                        condition_id,
+                        "patience/elapsed_steps",
+                    ): observation.elapsed_steps,
+                    train_early_stop_metric(
+                        condition_id,
+                        "patience/progress",
+                    ): observation.patience_progress,
+                    train_early_stop_metric(
+                        condition_id,
+                        "would_trigger",
+                    ): float(observation.would_trigger),
+                }
+            )
     context.metric_store.append_metrics(
         payload,
         step=step,
         source="train",
         publish=context.wandb_enabled,
     )
-
-
-def _early_stop_requested(context: BackendContext, *, step: int) -> bool:
-    detector = context.args.early_stop
-    if not detector:
+    if update is None or update.stop_decision is None:
         return False
-    matched, values = evaluate_early_stop_config(
-        detector,
-        lambda metric: context.metric_store.latest_metric(metric),
+    atomic_write_json(
+        context.run_dir / f"early_stop_decision-{str(context.args.attempt_id)}.json",
+        update.stop_decision,
     )
-    if matched is not True:
-        return False
-    path = context.run_dir / "early_stop.txt"
-    path.write_text(
-        "early_stop=metric_threshold\n"
-        + f"timesteps={step}\n"
-        + "".join(f"{name}={value:.12g}\n" for name, value in sorted(values.items())),
-        encoding="utf-8",
+    print(
+        "early stop: "
+        f"condition={update.stop_decision['condition_id']} "
+        f"outcome={update.stop_decision['outcome']} "
+        f"metric={update.stop_decision['metric']} "
+        f"value={float(update.stop_decision['value']):.12g} "
+        f"step={int(update.stop_decision['metric_step'])}",
+        flush=True,
     )
     return True
 
@@ -295,8 +334,8 @@ def run_jerk(context: BackendContext) -> None:
         started_at = time.perf_counter()
         next_log = args.log_interval_steps
         next_checkpoint = args.checkpoint_freq if args.checkpoint_freq > 0 else None
-        next_early_stop_poll = time.monotonic() + 30.0
         episode_returns: list[float] = []
+        target_episode_returns: list[float] = []
         episode_lengths: list[int] = []
         configured_starts = tuple(
             str(start)
@@ -310,6 +349,11 @@ def run_jerk(context: BackendContext) -> None:
         fallback_start = configured_starts[0] if configured_starts else "default"
         outcome_metrics = _OutcomeMetrics(configured_starts=configured_starts)
         acceptance_mode = str(args.acceptance_mode)
+        early_stop_machine = (
+            MetricEarlyStopStateMachine(args.early_stop, label="early_stop")
+            if args.early_stop
+            else None
+        )
         accepted = False
         early_stopped = False
         while search.global_step < args.timesteps and not context.stop_flag.requested:
@@ -322,6 +366,8 @@ def run_jerk(context: BackendContext) -> None:
                 if isinstance(record, EpisodeRecord):
                     records_by_lane[int(record.lane)] = record
                     episode_returns.append(float(record.episode_return))
+                    if str(getattr(record, "start_origin", "target")) == "target":
+                        target_episode_returns.append(float(record.episode_return))
                     episode_lengths.append(int(record.episode_length))
                     outcome_metrics.consume(record, fallback_start=fallback_start)
                     if _is_success(record):
@@ -346,14 +392,16 @@ def run_jerk(context: BackendContext) -> None:
                 )
                 break
             if step >= next_log:
-                _publish_metrics(
+                early_stopped = _publish_metrics(
                     context,
                     search,
                     step=step,
                     elapsed=time.perf_counter() - started_at,
                     returns=episode_returns,
+                    target_returns=target_episode_returns,
                     lengths=episode_lengths,
                     outcome_metrics=outcome_metrics,
+                    early_stop=early_stop_machine,
                 )
                 next_log += args.log_interval_steps
             while next_checkpoint is not None and step >= next_checkpoint:
@@ -368,12 +416,8 @@ def run_jerk(context: BackendContext) -> None:
                     step=step,
                 )
                 next_checkpoint += args.checkpoint_freq
-            if time.monotonic() >= next_early_stop_poll:
-                next_early_stop_poll = time.monotonic() + 30.0
-                if _early_stop_requested(context, step=step):
-                    print(f"early stop: checkpoint evaluation accepted at step={step}")
-                    early_stopped = True
-                    break
+            if early_stopped:
+                break
 
         step = search.global_step
         _publish_metrics(
@@ -382,8 +426,10 @@ def run_jerk(context: BackendContext) -> None:
             step=step,
             elapsed=time.perf_counter() - started_at,
             returns=episode_returns,
+            target_returns=target_episode_returns,
             lengths=episode_lengths,
             outcome_metrics=outcome_metrics,
+            early_stop=None if accepted else early_stop_machine,
         )
         if context.stop_flag.requested and args.checkpoint_freq > 0:
             interrupted = context.checkpoint_dir / (

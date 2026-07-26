@@ -137,7 +137,7 @@ class TrainConfigFieldSchemaTests(unittest.TestCase):
         )
 
         self.assertEqual(parser.parse_args([]).checkpoint_eval_backend, "modal")
-        self.assertEqual(parser.parse_args([]).metrics_schema_version, 6)
+        self.assertEqual(parser.parse_args([]).metrics_schema_version, 7)
         self.assertEqual(
             parser.parse_args(["--checkpoint-eval-backend", "local"]).checkpoint_eval_backend,
             "local",
@@ -147,32 +147,40 @@ class TrainConfigFieldSchemaTests(unittest.TestCase):
             "none",
         )
 
-    def test_metrics_schema_version_accepts_only_active_v6(self) -> None:
+    def test_metrics_schema_version_accepts_only_active_v7(self) -> None:
         self.assertEqual(
-            validate_and_normalize_train_config({"metrics_schema_version": 6})[
+            validate_and_normalize_train_config({"metrics_schema_version": 7})[
                 "metrics_schema_version"
             ],
-            6,
+            7,
         )
-        with self.assertRaisesRegex(ValueError, "must be >= 6"):
+        with self.assertRaisesRegex(ValueError, "must be >= 7"):
             validate_and_normalize_train_config({"metrics_schema_version": 4})
-        with self.assertRaisesRegex(ValueError, "must be >= 6"):
+        with self.assertRaisesRegex(ValueError, "must be >= 7"):
             validate_and_normalize_train_config({"metrics_schema_version": 5})
-        with self.assertRaisesRegex(ValueError, "must be <= 6"):
-            validate_and_normalize_train_config({"metrics_schema_version": 7})
+        with self.assertRaisesRegex(ValueError, "must be >= 7"):
+            validate_and_normalize_train_config({"metrics_schema_version": 6})
+        with self.assertRaisesRegex(ValueError, "must be <= 7"):
+            validate_and_normalize_train_config({"metrics_schema_version": 8})
 
     def test_no_eval_config_rejects_eval_metric_stop_behavior(self) -> None:
-        with self.assertRaisesRegex(ValueError, "may use only train/\\* metrics"):
+        with self.assertRaisesRegex(ValueError, "must use a train/\\* metric"):
             validate_and_normalize_train_config(
                 {
                     "checkpoint_eval_backend": "none",
-                    "early_stop": [
-                        {
-                            "metric": "eval/full/outcome/success/rate/min",
-                            "operator": ">=",
-                            "threshold": 1.0,
+                    "early_stop": {
+                        "conditions": {
+                            "invalid": {
+                                "metric": "eval/full/outcome/success/rate/min",
+                                "trigger": "threshold",
+                                "operator": ">=",
+                                "threshold": 1.0,
+                                "patience_steps": 0,
+                                "outcome": "failure",
+                                "action": "stop",
+                            }
                         }
-                    ],
+                    },
                 }
             )
 
@@ -180,26 +188,89 @@ class TrainConfigFieldSchemaTests(unittest.TestCase):
         config = validate_and_normalize_train_config(
             {
                 "checkpoint_eval_backend": "none",
-                "early_stop": [
-                    {
-                        "metric": "train/outcome/success/window_100/rate/min",
-                        "operator": ">=",
-                        "threshold": 1.0,
+                "early_stop": {
+                    "conditions": {
+                        "clear": {
+                            "metric": "train/outcome/success/window_100/rate/min",
+                            "trigger": "threshold",
+                            "operator": ">=",
+                            "threshold": 1.0,
+                            "patience_steps": 0,
+                            "outcome": "success",
+                            "action": "stop",
+                        }
                     }
-                ],
+                },
             }
         )
 
         self.assertEqual(
             config["early_stop"],
-            [
-                {
-                    "metric": "train/outcome/success/window_100/rate/min",
-                    "operator": ">=",
-                    "threshold": 1.0,
+            {
+                "conditions": {
+                    "clear": {
+                        "metric": "train/outcome/success/window_100/rate/min",
+                        "trigger": "threshold",
+                        "outcome": "success",
+                        "action": "stop",
+                        "start_after_steps": 0,
+                        "patience_steps": 0,
+                        "operator": ">=",
+                        "threshold": 1.0,
+                    }
                 }
-            ],
+            },
         )
+
+    def test_eval_acceptance_allows_failure_but_rejects_training_success(self) -> None:
+        failure_condition = {
+            "metric": "train/episode/return/shaped/from/target/mean",
+            "trigger": "no_improvement",
+            "direction": "maximize",
+            "min_delta": 0.01,
+            "delta_mode": "relative",
+            "start_after_steps": 1_000_000,
+            "patience_steps": 1_000_000,
+            "outcome": "failure",
+            "action": "observe",
+        }
+        acceptance = [
+            {
+                "metric": "eval/full/outcome/success/rate/min",
+                "operator": ">=",
+                "threshold": 1.0,
+            }
+        ]
+        config = validate_and_normalize_train_config(
+            {
+                "stop_on_acceptance": True,
+                "checkpoint_eval_acceptance": acceptance,
+                "early_stop": {"conditions": {"plateau": failure_condition}},
+            }
+        )
+        self.assertEqual(
+            config["early_stop"]["conditions"]["plateau"]["outcome"],
+            "failure",
+        )
+
+        success_condition = {
+            "metric": "train/outcome/success/window_100/rate/min",
+            "trigger": "threshold",
+            "operator": ">=",
+            "threshold": 1.0,
+            "patience_steps": 0,
+            "outcome": "success",
+            "action": "stop",
+        }
+        with self.assertRaisesRegex(ValueError, "sole success authority"):
+            validate_and_normalize_train_config(
+                {
+                    "stop_on_acceptance": True,
+                    "checkpoint_eval_acceptance": acceptance,
+                    "early_stop": {"conditions": {"clear": success_condition}},
+                }
+            )
+
     def test_train_config_rejects_deterministic_checkpoint_eval(self) -> None:
         with self.assertRaisesRegex(ValueError, "post_train_eval_stochastic must be true"):
             validate_and_normalize_train_config({"post_train_eval_stochastic": False})

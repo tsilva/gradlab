@@ -265,7 +265,7 @@ def run_sb3_on_policy(
     from rlab.callbacks import (
         LedgerCheckpointHelper,
         MetricStoreLoggerHelper,
-        MetricThresholdStopHelper,
+        MetricEarlyStopHelper,
         RlabCallback,
         RolloutDiagnosticsHelper,
         RuntimeMetricsHelper,
@@ -353,9 +353,12 @@ def run_sb3_on_policy(
             components.append(SnapshotCurriculumFeedbackHelper())
         if args.early_stop:
             components.append(
-                MetricThresholdStopHelper(
-                    marker_path=context.run_dir / "early_stop.txt",
-                    detector=args.early_stop,
+                MetricEarlyStopHelper(
+                    decision_path=(
+                        context.run_dir
+                        / f"early_stop_decision-{str(args.attempt_id)}.json"
+                    ),
+                    config=args.early_stop,
                     metric_store_path=store_path,
                 )
             )

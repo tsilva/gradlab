@@ -11,7 +11,7 @@ from typing import Any, Literal
 from urllib.parse import unquote, urlparse
 
 from rlab.config_validation import load_goal_contract
-from rlab.early_stop import EARLY_STOP_OPERATORS, normalize_early_stop_config
+from rlab.early_stop import EARLY_STOP_OPERATORS, normalize_metric_threshold_rules
 from rlab.metric_names import (
     EVAL_ACCEPTANCE_EPISODES_COMPLETED,
     EVAL_ACCEPTANCE_EPISODES_PLANNED,
@@ -562,7 +562,7 @@ class PlayCatalog:
             if not isinstance(contract, Mapping):
                 evaluations = {}
             else:
-                rules = normalize_early_stop_config(
+                rules = normalize_metric_threshold_rules(
                     contract.get("acceptance"),
                     label="checkpoint_eval_contract.acceptance",
                 )

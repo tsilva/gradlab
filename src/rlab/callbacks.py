@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import math
 import time
 from collections import deque
@@ -15,12 +14,12 @@ from stable_baselines3.common.logger import KVWriter
 
 from rlab.artifacts import install_model_bundle
 from rlab.early_stop import (
-    evaluate_early_stop_config,
-    flat_metric_rule_from_early_stop,
-    normalize_early_stop_config,
+    MetricEarlyStopStateMachine,
+    MetricSample,
 )
 from rlab.env import EnvConfig
 from rlab.eval_metrics import episode_reason_names
+from rlab.file_utils import atomic_write_json
 from rlab.metric_names import (
     canonical_training_scalars,
     TRAIN_ARTIFACT_SAVE_SECONDS,
@@ -55,6 +54,7 @@ from rlab.metric_names import (
     TRAIN_THROUGHPUT_ROLLOUT_SECONDS,
     stat_metric,
     train_algorithm_metric,
+    train_early_stop_metric,
     train_outcome_reason_count_metric,
     train_outcome_reason_window_rate_metric,
     train_reward_component_metric,
@@ -302,64 +302,82 @@ class ThroughputHelper(CallbackHelper):
             self.logger.record(name, value)
 
 
-class MetricThresholdStopHelper(CallbackHelper):
+class MetricEarlyStopHelper(CallbackHelper):
     def __init__(
         self,
         *,
-        marker_path: Path,
-        detector: Any,
+        decision_path: Path,
+        config: Any,
         metric_store_path: Path | None = None,
-        poll_seconds: float = 30.0,
-        clock: Callable[[], float] | None = None,
     ) -> None:
         super().__init__()
-        self.detector = normalize_early_stop_config(detector, label="early_stop")
-        self.flat_rule = flat_metric_rule_from_early_stop(self.detector)
-        self.metric_name = str(self.flat_rule["metric"]) if self.flat_rule else ""
-        self.threshold = float(self.flat_rule["threshold"]) if self.flat_rule else None
-        self.operator = str(self.flat_rule["operator"]) if self.flat_rule else ""
-        self.marker_path = marker_path
+        self.machine = MetricEarlyStopStateMachine(config, label="early_stop")
+        self.watched_metrics = tuple(
+            sorted(
+                {
+                    str(condition["metric"])
+                    for condition in self.machine.conditions.values()
+                }
+            )
+        )
+        self.decision_path = decision_path
         self.triggered = False
         self.stop_requested = False
         self.metric_store = (
             MetricStore(metric_store_path, timeout=0.05) if metric_store_path else None
         )
-        self.poll_seconds = poll_seconds
-        self.clock = clock or time.perf_counter
-        self.last_poll: float | None = None
-        self.last_lookup_warning: float | None = None
 
     def _on_step(self) -> bool:
-        if self.metric_store is not None:
-            return not self.stop_requested
-        return self.evaluate_now()
+        return not self.stop_requested
 
     def _on_rollout_end(self) -> None:
-        if self.metric_store is None or self.stop_requested:
+        if self.stop_requested:
             return
-        now = self.clock()
-        if self.last_poll is not None and now - self.last_poll < self.poll_seconds:
-            return
-        self.last_poll = now
         self.evaluate_now()
 
     def evaluate_now(self) -> bool:
-        result, values = evaluate_early_stop_config(self.detector, self.current_metric_value)
-        if result is not True:
+        samples = {
+            metric: sample
+            for metric in self.watched_metrics
+            if (sample := self.current_metric_sample(metric)) is not None
+        }
+        update = self.machine.update(samples)
+        for condition_id, observation in update.observations.items():
+            values = {
+                train_early_stop_metric(condition_id, "value"): observation.value,
+                train_early_stop_metric(condition_id, "best"): observation.best_value,
+                train_early_stop_metric(
+                    condition_id,
+                    "patience/elapsed_steps",
+                ): observation.elapsed_steps,
+                train_early_stop_metric(
+                    condition_id,
+                    "patience/progress",
+                ): observation.patience_progress,
+                train_early_stop_metric(
+                    condition_id,
+                    "would_trigger",
+                ): float(observation.would_trigger),
+            }
+            for name, value in values.items():
+                self.logger.record(name, value)
+        if update.stop_decision is None:
             return True
         self.triggered = True
         self.stop_requested = True
-        self.write_marker(values)
+        atomic_write_json(self.decision_path, update.stop_decision)
         print(
             "early stop: "
-            f"{self.describe_trigger(values)}; "
-            f"stopping at num_timesteps={self.num_timesteps}",
+            f"condition={update.stop_decision['condition_id']} "
+            f"outcome={update.stop_decision['outcome']} "
+            f"metric={update.stop_decision['metric']} "
+            f"value={float(update.stop_decision['value']):.12g} "
+            f"step={int(update.stop_decision['metric_step'])}",
             flush=True,
         )
         return False
 
-    def current_metric_value(self, metric_name: str | None = None) -> float | None:
-        metric_name = self.metric_name if metric_name is None else str(metric_name)
+    def current_metric_sample(self, metric_name: str) -> MetricSample | None:
         logger = getattr(self.model, "logger", None)
         for attr in ("name_to_value", "records"):
             values = getattr(logger, attr, None)
@@ -369,59 +387,25 @@ class MetricThresholdStopHelper(CallbackHelper):
                 value = float(values[metric_name])
             except TypeError, ValueError:
                 return None
-            return value if math.isfinite(value) else None
+            return (
+                MetricSample(value=value, step=int(self.num_timesteps))
+                if math.isfinite(value)
+                else None
+            )
         if self.metric_store is not None:
             try:
-                return self.metric_store.latest_metric(metric_name)
+                sample = self.metric_store.latest_metric_sample(metric_name)
             except Exception as exc:
-                now = self.clock()
-                if self.last_lookup_warning is None or now - self.last_lookup_warning >= 60:
-                    print(
-                        f"warning: metric store lookup failed for early stop metric "
-                        f"{metric_name}: {exc}",
-                        flush=True,
-                    )
-                    self.last_lookup_warning = now
+                print(
+                    f"warning: metric store lookup failed for early stop metric "
+                    f"{metric_name}: {exc}",
+                    flush=True,
+                )
+                return None
+            if sample is not None:
+                value, step = sample
+                return MetricSample(value=value, step=step)
         return None
-
-    def describe_trigger(self, values: Mapping[str, float]) -> str:
-        if self.flat_rule:
-            value = values.get(self.metric_name)
-            if value is not None:
-                return (
-                    f"{self.metric_name} {value:.12g} {self.operator} {float(self.threshold):.12g}"
-                )
-        return "early_stop metrics matched"
-
-    def write_marker(self, values: Mapping[str, float]) -> None:
-        self.marker_path.parent.mkdir(parents=True, exist_ok=True)
-        lines = [
-            "early_stop=metric_threshold",
-            f"early_stop_timesteps={self.num_timesteps}",
-            f"early_stop_detector_json={json.dumps(self.detector, sort_keys=True, separators=(',', ':'))}",
-            f"timesteps={self.num_timesteps}",
-        ]
-        if self.flat_rule:
-            value = values.get(self.metric_name)
-            if value is not None:
-                lines.extend(
-                    [
-                        f"early_stop_metric={self.metric_name}",
-                        f"early_stop_operator={self.operator}",
-                        f"early_stop_threshold={float(self.threshold):.12g}",
-                        f"early_stop_value={value:.12g}",
-                        f"{self.metric_name}={value:.12g}",
-                    ]
-                )
-        else:
-            lines.extend(
-                f"early_stop_value/{metric}={value:.12g}"
-                for metric, value in sorted(values.items())
-            )
-        self.marker_path.write_text(
-            "\n".join(lines) + "\n",
-            encoding="utf-8",
-        )
 
 
 class MetricStoreOutputFormat(KVWriter):

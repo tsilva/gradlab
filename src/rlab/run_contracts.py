@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import re
 import secrets
 from collections.abc import Mapping, Sequence
@@ -372,6 +373,64 @@ class PromotionReceipt:
 
 
 @dataclass(frozen=True)
+class EarlyStopReceipt:
+    run_id: str
+    attempt_id: str
+    condition_id: str
+    matched_condition_ids: Sequence[str]
+    outcome: Literal["success", "failure"]
+    trigger: Literal["threshold", "no_improvement"]
+    metric: str
+    metric_step: int
+    value: float
+    best_value: float
+    elapsed_steps: int
+    patience_progress: float
+    condition: Mapping[str, Any]
+    early_stop_config_sha256: str
+    decision_sha256: str
+    recorded_at: str
+    schema_version: int = SCHEMA_VERSION
+
+    def validate(self) -> None:
+        _require_run_id(self.run_id)
+        _require_attempt_id(self.attempt_id)
+        condition_id = _require_text(self.condition_id, "condition_id")
+        matched = [str(item) for item in self.matched_condition_ids]
+        if not matched or matched != sorted(set(matched)) or condition_id not in matched:
+            raise ValueError(
+                "matched_condition_ids must be sorted, unique, and contain condition_id"
+            )
+        if self.outcome not in {"success", "failure"}:
+            raise ValueError(f"invalid early-stop outcome: {self.outcome}")
+        if self.trigger not in {"threshold", "no_improvement"}:
+            raise ValueError(f"invalid early-stop trigger: {self.trigger}")
+        metric = _require_text(self.metric, "metric")
+        if not metric.startswith("train/"):
+            raise ValueError("early-stop metric must use the train/* namespace")
+        if int(self.metric_step) < 0 or int(self.elapsed_steps) < 0:
+            raise ValueError("early-stop step fields must be non-negative")
+        for label, value in (
+            ("value", self.value),
+            ("best_value", self.best_value),
+            ("patience_progress", self.patience_progress),
+        ):
+            if not math.isfinite(float(value)):
+                raise ValueError(f"{label} must be finite")
+        if not math.isclose(float(self.patience_progress), 1.0):
+            raise ValueError("patience_progress must be one for an early-stop receipt")
+        if not isinstance(self.condition, Mapping):
+            raise ValueError("condition must be an object")
+        _require_sha256(self.early_stop_config_sha256, "early_stop_config_sha256")
+        _require_sha256(self.decision_sha256, "decision_sha256")
+        _require_text(self.recorded_at, "recorded_at")
+
+    def to_dict(self) -> dict[str, Any]:
+        self.validate()
+        return asdict(self)
+
+
+@dataclass(frozen=True)
 class TerminalReceipt:
     run_id: str
     attempt_id: str
@@ -384,6 +443,7 @@ class TerminalReceipt:
     wandb_high_water_mark: int
     drain: Mapping[str, Any]
     completed_at: str
+    early_stop: Mapping[str, Any] | None = None
     schema_version: int = SCHEMA_VERSION
 
     def validate(self) -> None:
@@ -404,6 +464,8 @@ class TerminalReceipt:
             raise ValueError("final_step must be non-negative")
         if int(self.wandb_high_water_mark) < 0:
             raise ValueError("wandb_high_water_mark must be non-negative")
+        if self.early_stop is not None:
+            EarlyStopReceipt(**self.early_stop).validate()
         _require_text(self.completed_at, "completed_at")
 
     def to_dict(self) -> dict[str, Any]:

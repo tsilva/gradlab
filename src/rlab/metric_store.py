@@ -394,6 +394,16 @@ class MetricStore(SqliteStore):
             ).fetchone()
         return None if row is None else float(row["value"])
 
+    def latest_metric_sample(self, name: str) -> tuple[float, int] | None:
+        with self.connection() as connection:
+            row = connection.execute(
+                "SELECT value, step FROM metric_latest WHERE name = ?",
+                (str(name),),
+            ).fetchone()
+        if row is None or row["step"] is None:
+            return None
+        return float(row["value"]), int(row["step"])
+
     def register_recovery_manifest(self, manifest: Mapping[str, object]) -> str:
         forbidden = {
             key

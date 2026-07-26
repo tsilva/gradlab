@@ -9,7 +9,10 @@ from typing import Any
 import numpy as np
 
 from rlab.checkpoint_eval_config import checkpoint_eval_max_steps
-from rlab.early_stop import evaluate_early_stop_config, normalize_early_stop_config
+from rlab.early_stop import (
+    evaluate_metric_threshold_rules,
+    normalize_metric_threshold_rules,
+)
 from rlab.eval_metrics import episode_is_complete, episode_start_state
 from rlab.env_registry import resolve_env_provider
 from rlab.metric_names import EVAL_FULL_SUCCESS_RATE_MEAN, EVAL_FULL_SUCCESS_RATE_MIN
@@ -290,7 +293,7 @@ def build_checkpoint_eval_contract(
         raise ValueError("acceptance seed must be non-negative")
     if str(seed_protocol) != SEED_PROTOCOL:
         raise ValueError(f"unsupported checkpoint eval seed protocol: {seed_protocol!r}")
-    rules = normalize_early_stop_config(acceptance, label="goal.eval.acceptance")
+    rules = normalize_metric_threshold_rules(acceptance, label="goal.eval.acceptance")
     if not rules:
         raise ValueError("goal.eval.acceptance must contain at least one rule")
     manifest = build_episode_manifest(
@@ -455,4 +458,4 @@ def evaluate_acceptance(
     rules = contract.get("acceptance")
     if not isinstance(rules, list):
         raise ValueError("acceptance contract rules are invalid")
-    return evaluate_early_stop_config(rules, lambda metric: aggregates.get(metric))
+    return evaluate_metric_threshold_rules(rules, lambda metric: aggregates.get(metric))
