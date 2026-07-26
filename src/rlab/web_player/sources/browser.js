@@ -130,6 +130,55 @@ export function formatMetricValue(metric, value) {
   return numeric.toLocaleString(undefined, { maximumFractionDigits: 3 });
 }
 
+function compactRecipeOverride(value) {
+  const text = String(value || "").trim();
+  const separator = text.indexOf("=");
+  if (separator < 0) return text;
+  let key = text.slice(0, separator).trim();
+  const overrideValue = text.slice(separator + 1).trim();
+  for (const prefix of [
+    "train.backend.config.",
+    "train.environment.env_config.",
+    "train.environment.task.",
+    "train.",
+  ]) {
+    if (key.startsWith(prefix)) {
+      key = key.slice(prefix.length);
+      break;
+    }
+  }
+  return `${key}=${overrideValue}`;
+}
+
+export function recipeVariantPresentation(item) {
+  const overrides = Array.isArray(item?.recipe_overrides)
+    ? item.recipe_overrides.map((value) => String(value || "").trim()).filter(Boolean)
+    : [];
+  const variantId = String(item?.recipe_variant_id || "").trim();
+  if (!overrides.length) {
+    if (variantId === "base") {
+      return {
+        summary: "base",
+        detail: "Checked-in recipe with no launch-time configuration overrides.",
+      };
+    }
+    return {
+      summary: "variation unknown",
+      detail: "This run predates explicit recipe-variation metadata.",
+    };
+  }
+  const visible = overrides.slice(0, 2).map(compactRecipeOverride);
+  if (overrides.length > visible.length) visible.push(`+${overrides.length - visible.length}`);
+  if (variantId) visible.push(variantId);
+  return {
+    summary: visible.join(" · "),
+    detail: [
+      variantId ? `Recipe variant ${variantId}` : "Launch-time recipe overrides",
+      ...overrides,
+    ].join("\n"),
+  };
+}
+
 export function sortRunItems(items, sort) {
   const metric = String(sort?.metric || "");
   const direction = sort?.direction === "ascending" ? "ascending" : "descending";
@@ -827,7 +876,7 @@ export class SourceBrowser {
       : this.route.level === "goals"
         ? "Search goals"
         : this.route.level === "runs"
-          ? "Search run ID, name, recipe, or seed"
+          ? "Search run, description, recipe, variant, override, or seed"
           : "Search checkpoint, step, hash, purpose, or evaluation";
     input.setAttribute("aria-label", input.placeholder);
     input.addEventListener("input", (event) => this.setSearch(event.target.value));
@@ -997,6 +1046,12 @@ export class SourceBrowser {
     const name = document.createElement("strong");
     name.textContent = item.recipe || "Unnamed recipe";
     recipe.append(name);
+    const variant = recipeVariantPresentation(item);
+    const variantLabel = document.createElement("code");
+    variantLabel.className = "recipe-variant";
+    variantLabel.textContent = variant.summary;
+    variantLabel.title = variant.detail;
+    recipe.append(variantLabel);
     const revision = String(item.recipe_sha256 || "").trim();
     if (revision) {
       const hash = document.createElement("code");
@@ -1045,7 +1100,7 @@ export class SourceBrowser {
     const columns = this.route.level === "runs"
       ? [
           { label: "Run" },
-          { label: "Recipe" },
+          { label: "Recipe / variant" },
           { label: "Seed" },
           ...runMetricColumns.map((column) => ({
             ...column,
@@ -1121,10 +1176,10 @@ export class SourceBrowser {
       row.setAttribute("aria-disabled", String(!this.hasControl()));
       const values = this.route.level === "runs"
         ? [
-            [item.name || item.run_id, item.run_id, "run-cell"],
+            [item.description || item.name || item.run_id, item.run_id, "run-cell"],
             [
               item.recipe || "—",
-              item.recipe_sha256 ? `rev ${String(item.recipe_sha256).slice(0, 12)}` : "",
+              "",
               "recipe-cell",
             ],
             [item.seed ?? "—"],
@@ -1177,6 +1232,21 @@ export class SourceBrowser {
             ? "Most efficient"
             : "Training lead";
           cell.append(badge);
+        }
+        if (className.includes("recipe-cell")) {
+          const variant = recipeVariantPresentation(item);
+          const variation = document.createElement("small");
+          variation.className = "recipe-variant";
+          variation.textContent = variant.summary;
+          variation.title = variant.detail;
+          cell.append(variation);
+          if (item.recipe_sha256) {
+            const revision = document.createElement("small");
+            revision.className = "recipe-revision";
+            revision.textContent = `rev ${String(item.recipe_sha256).slice(0, 12)}`;
+            revision.title = `Recipe SHA-256: ${item.recipe_sha256}`;
+            cell.append(revision);
+          }
         }
         if (secondary && !className.includes("run-cell")) {
           const small = document.createElement("small");

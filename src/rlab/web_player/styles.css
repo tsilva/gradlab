@@ -286,6 +286,7 @@ h2 { font-size: .9rem; margin: 0; font-weight: 650; }
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.source-efficiency-recipe .recipe-variant { color: var(--cyan); }
 .source-efficiency-identity p {
   margin: .28rem 0 .18rem;
   color: var(--muted);
@@ -441,6 +442,8 @@ h2 { font-size: .9rem; margin: 0; font-weight: 650; }
 .source-table td small { display: block; overflow: hidden; text-overflow: ellipsis; }
 .source-table td small { margin-top: .16rem; color: var(--muted); font: .62rem ui-monospace, SFMono-Regular, Menlo, monospace; }
 .source-table .recipe-cell { min-width: 8rem; }
+.source-table .recipe-variant { color: var(--cyan); }
+.source-table .recipe-revision { opacity: .72; }
 .source-table .source-leader-badge {
   display: inline-flex;
   margin-top: .36rem;

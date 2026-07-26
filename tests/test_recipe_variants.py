@@ -41,6 +41,6 @@ def test_recipe_variant_identity_is_stable_across_override_order() -> None:
 
 
 def test_wandb_json_recipe_overrides_remain_exact() -> None:
-    assert normalize_recipe_overrides(
-        '["train.backend.config.learning_rate=0.0002"]'
-    ) == ("train.backend.config.learning_rate=0.0002",)
+    assert normalize_recipe_overrides('["train.backend.config.learning_rate=0.0002"]') == (
+        "train.backend.config.learning_rate=0.0002",
+    )

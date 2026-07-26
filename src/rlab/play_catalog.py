@@ -29,6 +29,7 @@ from rlab.metric_names import (
 )
 from rlab.model_sources import DEFAULT_PUBLIC_MODELS_BASE_URL, _public_json
 from rlab.ranking import RankCriterion, parse_objective_rank
+from rlab.recipe_variants import normalize_recipe_overrides, recipe_variant_id
 from rlab.run_contracts import CheckpointManifest, RUN_ID_PATTERN
 from rlab.wandb_utils import (
     load_wandb_env,
@@ -131,6 +132,9 @@ class RunSummary:
     goal: str
     recipe: str
     recipe_sha256: str
+    recipe_overrides: tuple[str, ...]
+    recipe_variant_id: str
+    description: str
     seed: int | None
     created_at: str
     updated_at: str
@@ -283,7 +287,11 @@ def _rank_run_summaries(
     primary: tuple[tuple[RankCriterion, tuple[str, ...]], ...],
     fallback: tuple[tuple[RankCriterion, tuple[str, ...]], ...],
 ) -> None:
-    active = primary if any(_complete_run_rank(item, primary) is not None for item in items) else fallback
+    active = (
+        primary
+        if any(_complete_run_rank(item, primary) is not None for item in items)
+        else fallback
+    )
     if not active:
         return
     items.sort(
@@ -909,6 +917,17 @@ class PlayCatalog:
                 if selected_goal_slug and goal_slug != selected_goal_slug:
                     continue
                 run_metrics = getattr(run, "summary", {}) or {}
+                overrides = normalize_recipe_overrides(config.get("recipe_overrides"))
+                configured_variant_id = str(config.get("recipe_variant_id") or "").strip()
+                variant_id = configured_variant_id or (
+                    recipe_variant_id(
+                        recipe_slug=config.get("recipe_slug"),
+                        source_sha=config.get("source_sha"),
+                        recipe_overrides=overrides,
+                    )
+                    if overrides
+                    else ""
+                )
                 summary = RunSummary(
                     entity=entity,
                     project=project,
@@ -918,6 +937,13 @@ class PlayCatalog:
                     goal=goal_slug,
                     recipe=str(config.get("recipe_slug") or ""),
                     recipe_sha256=str(config.get("recipe_sha256") or ""),
+                    recipe_overrides=overrides,
+                    recipe_variant_id=variant_id,
+                    description=str(
+                        getattr(run, "notes", "")
+                        or config.get("run_description")
+                        or ""
+                    ).strip(),
                     seed=_safe_int(config.get("seed")),
                     created_at=str(getattr(run, "created_at", "") or ""),
                     updated_at=str(getattr(run, "updated_at", "") or ""),
@@ -934,8 +960,10 @@ class PlayCatalog:
                     summary.goal,
                     summary.recipe,
                     summary.recipe_sha256,
+                    summary.recipe_overrides,
+                    summary.recipe_variant_id,
+                    summary.description,
                     summary.seed,
-                    getattr(run, "notes", ""),
                 ):
                     continue
                 summaries.append(summary.to_dict())

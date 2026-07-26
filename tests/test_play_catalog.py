@@ -8,6 +8,7 @@ import pytest
 
 from rlab.play import build_parser as build_play_parser
 from rlab.play_catalog import PlayCatalog, parse_wandb_location
+from rlab.recipe_variants import recipe_variant_id
 from rlab.run_contracts import checkpoint_id
 
 
@@ -48,6 +49,10 @@ class FakeApi:
                     "goal_slug": "Mario/Level1-1",
                     "recipe_slug": "ppo",
                     "recipe_sha256": "f" * 64,
+                    "recipe_overrides": [
+                        "train.backend.config.learning_rate=0.0002",
+                    ],
+                    "source_sha": "c" * 40,
                     "seed": 3,
                 },
                 summary={
@@ -340,6 +345,15 @@ def test_catalog_uses_repository_projects_and_goals_before_querying_wandb(
     assert goals.items[0]["goal_path"].endswith("/Level1-1/_goal.yaml")
     assert [item["run_id"] for item in runs.items] == [RUN_ID]
     assert runs.items[0]["recipe"] == "ppo"
+    assert runs.items[0]["description"] == "accepted"
+    assert runs.items[0]["recipe_overrides"] == (
+        "train.backend.config.learning_rate=0.0002",
+    )
+    assert runs.items[0]["recipe_variant_id"] == recipe_variant_id(
+        recipe_slug="ppo",
+        source_sha="c" * 40,
+        recipe_overrides=["train.backend.config.learning_rate=0.0002"],
+    )
     assert runs.items[0]["recipe_sha256"] == "f" * 64
     assert runs.metric_columns == (
         {
@@ -372,6 +386,13 @@ def test_catalog_uses_repository_projects_and_goals_before_querying_wandb(
         "train/episode/return/shaped/from/target/mean": 123.5,
         "train/global_step": 2_000_000.0,
     }
+    override_runs = catalog.runs(
+        entity="research",
+        project="Mario",
+        goal_id="Level1-1",
+        query="learning_rate=0.0002",
+    )
+    assert [item["run_id"] for item in override_runs.items] == [RUN_ID]
     assert catalog.run_goal(entity="research", project="Mario", run_id=RUN_ID) == "Level1-1"
 
 

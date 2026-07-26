@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -497,6 +498,9 @@ class RunSupervisorTests(unittest.TestCase):
         self.assertEqual(supervisor.train_config["timesteps"], 50_000_000)
         self.assertEqual(supervisor.train_config["checkpoint_freq"], 250_000)
         self.assertEqual(supervisor.train_config["n_envs"], 16)
+        self.assertEqual(supervisor.train_config["recipe_overrides"], [])
+        self.assertEqual(supervisor.train_config["recipe_variant_id"], "base")
+        self.assertIn("recipe_variant:base", supervisor.train_config["wandb_tags"])
         self.assertEqual(supervisor.eval_contract["episodes"], 100)
         self.assertEqual(
             supervisor.eval_contract["acceptance"],
@@ -507,6 +511,43 @@ class RunSupervisorTests(unittest.TestCase):
                     "threshold": 1.0,
                 }
             ],
+        )
+
+    def test_materializes_launch_time_recipe_variant_metadata(self) -> None:
+        supervisor = self.supervisor()
+        overrides = ("train.timesteps=50000000",)
+        document = compose_train_document(
+            GOAL,
+            RECIPE,
+            recipe_overrides=overrides,
+        )
+        contract_document = dict(document)
+        contract_config = dict(contract_document["train_config"])
+        contract_config["rom_asset_manifest"] = self.asset
+        contract_config["checkpoint_eval_backend"] = "modal"
+        contract_document["train_config"] = contract_config
+        portable_recipe = build_recipe_document(
+            contract_document,
+            repo_root=Path.cwd(),
+            source_commit=SOURCE_SHA,
+            run_description=self.manifest.run_description,
+            seed=self.manifest.seed,
+            runtime_image_ref=IMAGE,
+        )
+        supervisor.manifest = replace(
+            supervisor.manifest,
+            recipe_overrides=overrides,
+            recipe_sha256=canonical_json_sha256(portable_recipe),
+        )
+
+        with patch("rlab.run_supervisor.verify_rom_file"):
+            supervisor.materialize()
+
+        self.assertEqual(supervisor.train_config["recipe_overrides"], list(overrides))
+        self.assertRegex(supervisor.train_config["recipe_variant_id"], r"^v-[0-9a-f]{8}$")
+        self.assertIn(
+            f"recipe_variant:{supervisor.train_config['recipe_variant_id']}",
+            supervisor.train_config["wandb_tags"],
         )
 
     def test_accepted_eval_metrics_ignore_private_r2_diagnostics(self) -> None:
