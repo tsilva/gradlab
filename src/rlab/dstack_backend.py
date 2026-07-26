@@ -106,7 +106,7 @@ class TaskRequest:
             raise ValueError("run_id must be the immutable rlab run id")
         if (
             not self.task_name
-            or len(self.task_name) > 63
+            or len(self.task_name) > 40
             or any(
                 character not in "abcdefghijklmnopqrstuvwxyz0123456789-"
                 for character in self.task_name

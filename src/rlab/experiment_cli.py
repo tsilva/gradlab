@@ -333,7 +333,10 @@ def _compute(args: argparse.Namespace) -> ComputeRequest:
 
 
 def _task_name(run_id: str, attempt_id: str, *, initial: bool) -> str:
-    return run_id if initial else f"{run_id}-a{attempt_id.removeprefix('attempt-')}"
+    if initial:
+        return run_id
+    attempt_suffix = attempt_id.removeprefix("attempt-")
+    return f"{run_id[:30]}-a{attempt_suffix[:8]}"
 
 
 def _task_request(manifest: RunManifest, *, manifest_uri: str) -> TaskRequest:
