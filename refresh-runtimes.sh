@@ -8,6 +8,7 @@ PACKAGES=(
     breakout-turbo-env
     stable-retro-turbo
     supermariobrosnes-turbo
+    vizdoom-turbo
 )
 
 CUTOFF="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
@@ -37,6 +38,7 @@ update_cutoffs "${UV_CONFIG_FILE:-${XDG_CONFIG_HOME:-$HOME/.config}/uv/uv.toml}"
 uv lock \
     --upgrade-package breakout-turbo-env \
     --upgrade-package stable-retro-turbo \
-    --upgrade-package supermariobrosnes-turbo
+    --upgrade-package supermariobrosnes-turbo \
+    --upgrade-package vizdoom-turbo
 
 "$ROOT/install.sh" "$@"

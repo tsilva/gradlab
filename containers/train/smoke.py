@@ -28,7 +28,14 @@ def main() -> None:
     print("rlab_container_smoke=ok")
     print(f"python={platform.python_version()}")
     print(f"platform={platform.platform()}")
-    for package in ("rlab", "stable-retro-turbo", "stable-baselines3", "torch", "wandb"):
+    for package in (
+        "rlab",
+        "stable-retro-turbo",
+        "vizdoom-turbo",
+        "stable-baselines3",
+        "torch",
+        "wandb",
+    ):
         print(f"package/{package}={package_version(package)}")
 
     lock_path = root / "uv.lock"

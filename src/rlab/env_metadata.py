@@ -22,6 +22,7 @@ RUNTIME_VERSION_PACKAGES = {
     "stable_retro_turbo": "stable-retro-turbo",
     "supermariobrosnes_turbo": "supermariobrosnes-turbo",
     "breakout_turbo_env": "breakout-turbo-env",
+    "vizdoom_turbo": "vizdoom-turbo",
     "stable_baselines3": "stable-baselines3",
 }
 
@@ -86,6 +87,7 @@ def training_metadata(
             "stable_retro_turbo": _package_version("stable-retro-turbo"),
             "supermariobrosnes_turbo": _package_version("supermariobrosnes-turbo"),
             "breakout_turbo_env": _package_version("breakout-turbo-env"),
+            "vizdoom_turbo": _package_version("vizdoom-turbo"),
             "stable_baselines3": _package_version("stable-baselines3"),
         },
     }
