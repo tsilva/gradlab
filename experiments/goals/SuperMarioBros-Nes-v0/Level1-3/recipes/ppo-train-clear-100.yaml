@@ -1,0 +1,16 @@
+defaults:
+- ../../../../recipes/_presets/mario-single-ppo@_global_
+- _self_
+reward_shape: score-v1
+recipe_id: ppo-train-clear-100
+description: >-
+  Seed {{ seed }} trains the stable low-KL late-decay {{ goal_id }} PPO policy as a training-only
+  run, with checkpoint evaluation disabled, and stops when all of the latest 100 level attempts
+  complete successfully. The run publishes checkpoints and training evidence but cannot establish
+  checkpoint promotion or goal acceptance.
+train:
+  checkpoint_eval_backend: none
+  early_stop:
+  - metric: train/outcome/success/window_100/rate/min
+    operator: '>='
+    threshold: 1.0

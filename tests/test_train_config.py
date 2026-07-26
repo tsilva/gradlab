@@ -161,8 +161,8 @@ class TrainConfigFieldSchemaTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "must be <= 6"):
             validate_and_normalize_train_config({"metrics_schema_version": 7})
 
-    def test_no_eval_config_rejects_eval_owned_stop_behavior(self) -> None:
-        with self.assertRaisesRegex(ValueError, "early_stop must be null"):
+    def test_no_eval_config_rejects_eval_metric_stop_behavior(self) -> None:
+        with self.assertRaisesRegex(ValueError, "may use only train/\\* metrics"):
             validate_and_normalize_train_config(
                 {
                     "checkpoint_eval_backend": "none",
@@ -175,6 +175,31 @@ class TrainConfigFieldSchemaTests(unittest.TestCase):
                     ],
                 }
             )
+
+    def test_no_eval_config_allows_training_metric_stop_behavior(self) -> None:
+        config = validate_and_normalize_train_config(
+            {
+                "checkpoint_eval_backend": "none",
+                "early_stop": [
+                    {
+                        "metric": "train/outcome/success/window_100/rate/min",
+                        "operator": ">=",
+                        "threshold": 1.0,
+                    }
+                ],
+            }
+        )
+
+        self.assertEqual(
+            config["early_stop"],
+            [
+                {
+                    "metric": "train/outcome/success/window_100/rate/min",
+                    "operator": ">=",
+                    "threshold": 1.0,
+                }
+            ],
+        )
     def test_train_config_rejects_deterministic_checkpoint_eval(self) -> None:
         with self.assertRaisesRegex(ValueError, "post_train_eval_stochastic must be true"):
             validate_and_normalize_train_config({"post_train_eval_stochastic": False})

@@ -38,6 +38,10 @@ from rlab.training_backend import training_backend_config, training_backend_conf
 
 GOAL = Path("experiments/goals/SuperMarioBros-Nes-v0/Level1-1/_goal.yaml")
 RECIPE = Path("experiments/goals/SuperMarioBros-Nes-v0/Level1-1/recipes/ppo.yaml")
+LEVEL1_3_GOAL = Path("experiments/goals/SuperMarioBros-Nes-v0/Level1-3/_goal.yaml")
+LEVEL1_3_TRAIN_CLEAR_RECIPE = (
+    LEVEL1_3_GOAL.parent / "recipes/ppo-train-clear-100.yaml"
+)
 RUNTIME = "docker:ghcr.io/tsilva/rlab/rlab-train@sha256:" + "b" * 64
 POST400_GOAL = Path("experiments/goals/Breakout-Atari2600-v0/post400-r400/_goal.yaml")
 POST400_RECIPE = POST400_GOAL.parent / "recipes/ppo-resume-129991680.yaml"
@@ -77,6 +81,42 @@ def test_breakout_bundle_is_playable_but_has_no_evaluation_contract(
     assert len(playback_contract_sha256(document)) == 64
     with pytest.raises(PolicyDocumentError, match="no evaluation contract"):
         evaluation_contract(document)
+
+
+def test_level1_3_training_clear_bundle_omits_eval_and_preserves_early_stop() -> None:
+    materialized = compose_train_document(
+        LEVEL1_3_GOAL,
+        LEVEL1_3_TRAIN_CLEAR_RECIPE,
+    )
+    materialized["train_config"]["rom_asset_manifest"] = {
+        "schema_version": 2,
+        "game": "SuperMarioBros-Nes-v0",
+        "filename": "mario.nes",
+        "size_bytes": 1024,
+        "sha256": "c" * 64,
+        "provider_rom_identity": "d" * 40,
+        "provider_rom_identity_algorithm": "sha1-provider-body-v1",
+        "object_uri": "s3://private-bucket/mario.nes",
+    }
+    document = build_recipe_document(
+        materialized,
+        repo_root=Path.cwd(),
+        source_commit="a" * 40,
+        run_description="Level1-3 training-only 100-of-100 clear-rate run",
+        seed=123,
+        runtime_image_ref=RUNTIME,
+    )
+
+    recipe = document["recipe"]
+    assert "eval" not in recipe
+    assert recipe["train_config"]["checkpoint_eval_backend"] == "none"
+    assert recipe["train_config"]["early_stop"] == [
+        {
+            "metric": "train/outcome/success/window_100/rate/min",
+            "operator": ">=",
+            "threshold": 1.0,
+        }
+    ]
 
 
 def test_atomic_bundle_install_commits_only_a_complete_replayable_bundle(

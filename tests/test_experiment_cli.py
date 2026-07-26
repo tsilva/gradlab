@@ -57,7 +57,7 @@ def test_launch_parser_exposes_bounded_compute_and_hash_bound_overrides() -> Non
     )
 
     assert args.recipe_overrides == ["train.backend.config.learning_rate=0.0002"]
-    assert args.checkpoint_eval_backend == "modal"
+    assert args.checkpoint_eval_backend is None
     compute = _compute(args)
     assert compute.kind == "spot"
     assert compute.target == "aws"
@@ -112,7 +112,10 @@ def test_launch_operator_preflight_runs_before_runtime_readiness(tmp_path: Path)
             "rlab.experiment_cli._tracked_committed_path",
             side_effect=[goal, recipe],
         ),
-        mock.patch("rlab.experiment_cli.compose_train_document", return_value={}),
+        mock.patch(
+            "rlab.experiment_cli.compose_train_document",
+            return_value={"train_config": {"checkpoint_eval_backend": "modal"}},
+        ),
         mock.patch(
             "rlab.experiment_cli._operator_preflight",
             side_effect=OperatorConfigurationError("missing operator credentials"),
