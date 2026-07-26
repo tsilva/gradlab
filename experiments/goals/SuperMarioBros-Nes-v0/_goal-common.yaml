@@ -26,7 +26,7 @@ train:
   checkpoint_freq: 250000
   # Acceptance is evaluated asynchronously and commands a graceful learner stop.
   stop_on_acceptance: true
-  # Shadow-calibrated training failure detector; observation mode cannot stop a run.
+  # Calibrated training failure detector; stops sustained task-aligned return plateaus.
   early_stop:
     conditions:
       return_plateau:
@@ -38,7 +38,7 @@ train:
         start_after_steps: 1000000
         patience_steps: 1000000
         outcome: failure
-        action: observe
+        action: stop
   environment:
     # SuperMarioBros-NES Turbo supplies SuperMarioBrosNesTurboVecEnv.
     env_provider: &mario_env_provider supermariobrosnes-turbo

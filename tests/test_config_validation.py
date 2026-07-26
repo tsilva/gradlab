@@ -288,7 +288,7 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertEqual(train_config["checkpoint_eval_backend"], "none")
         self.assertEqual(
             train_config["early_stop"]["conditions"]["return_plateau"]["action"],
-            "observe",
+            "stop",
         )
         self.assertEqual(
             train_config["early_stop"]["conditions"]["return_plateau"]["outcome"],
@@ -364,7 +364,7 @@ class ConfigValidationTests(unittest.TestCase):
                 conditions = document["train_config"]["early_stop"]["conditions"]
                 self.assertIn("return_plateau", conditions)
                 self.assertEqual(conditions["return_plateau"]["outcome"], "failure")
-                self.assertEqual(conditions["return_plateau"]["action"], "observe")
+                self.assertEqual(conditions["return_plateau"]["action"], "stop")
                 if recipe_path.name == "ppo-train-clear-100.yaml":
                     self.assertIn("clear_100", conditions)
                 if recipe_path.name == "dstack-smoke.yaml":
@@ -741,7 +741,7 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertTrue(document["train"]["stop_on_acceptance"])
         self.assertEqual(
             document["train"]["early_stop"]["conditions"]["return_plateau"]["action"],
-            "observe",
+            "stop",
         )
         self.assertEqual(
             document["eval"]["acceptance"],
