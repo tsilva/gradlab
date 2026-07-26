@@ -19,7 +19,7 @@ exclude-newer = "0001-01-01T00:00:00Z" # This has no effect and is included for 
 exclude-newer-span = "P7D"
 
 [options.exclude-newer-package]
-vizdoom-turbo = "2026-07-26T20:12:54Z"
+vizdoom-turbo = "2026-07-26T21:37:59Z"
 supermariobrosnes-turbo = "2026-07-23T11:52:37Z"
 breakout-turbo-env = "2026-07-23T11:27:02Z"
 stable-retro-turbo = "2026-07-22T17:30:25Z"
@@ -1805,8 +1805,8 @@ requires-dist = [
     { name = "torch", marker = "platform_machine == 'arm64' and sys_platform == 'darwin'", specifier = "==2.11.0" },
     { name = "torch", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'", specifier = "==2.12.0" },
     { name = "tqdm", specifier = ">=4.67,<5" },
-    { name = "vizdoom-turbo", marker = "platform_machine == 'arm64' and sys_platform == 'darwin'", specifier = ">=0.1.1" },
-    { name = "vizdoom-turbo", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'", specifier = ">=0.1.1" },
+    { name = "vizdoom-turbo", marker = "platform_machine == 'arm64' and sys_platform == 'darwin'", specifier = ">=0.1.2" },
+    { name = "vizdoom-turbo", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'", specifier = ">=0.1.2" },
     { name = "wandb", specifier = ">=0.18,<0.23" },
     { name = "wandb-workspaces", specifier = ">=0.4,<0.5" },
 ]
@@ -1844,7 +1844,7 @@ train-runtime = [
     { name = "tensorboard", specifier = ">=2.16,<3" },
     { name = "torch", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'", specifier = "==2.12.0" },
     { name = "tqdm", specifier = ">=4.67,<5" },
-    { name = "vizdoom-turbo", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'", specifier = ">=0.1.1" },
+    { name = "vizdoom-turbo", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'", specifier = ">=0.1.2" },
     { name = "wandb", specifier = ">=0.18,<0.23" },
 ]
 
@@ -2242,17 +2242,17 @@ wheels = [
 
 [[package]]
 name = "vizdoom-turbo"
-version = "0.1.1"
+version = "0.1.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "gymnasium", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'linux')" },
     { name = "numpy", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'linux')" },
     { name = "vizdoom", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'linux')" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/40/f6/5097f3997e887007ec1216b7791bfaf3371ac6d7076abc073a594b59e2e2/vizdoom_turbo-0.1.1.tar.gz", hash = "sha256:20304c941e46936fd99f4975af78350a1099975489cc1d84a013d4b50a0b4495", size = 2099531, upload-time = "2026-07-26T19:56:55.843Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/8b/c5/cbf791c7fd07de31405416507fb56743155281804b613273ce584bf35a59/vizdoom_turbo-0.1.2.tar.gz", hash = "sha256:44e148044bab062e1989973a7eb813dc3f7bedc46e2e24eeee028f2831de64c2", size = 73103, upload-time = "2026-07-26T21:35:26.696Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/6e/48/98581f7cf67fcac7b1698c3ebb0940142573e01e08e34442e239805119a2/vizdoom_turbo-0.1.1-cp311-abi3-macosx_11_0_arm64.whl", hash = "sha256:307ea2b8af99012b76e2e4538b2b6b805f98bc66bd95dd699bda389fba4adde5", size = 220896, upload-time = "2026-07-26T19:56:52.124Z" },
-    { url = "https://files.pythonhosted.org/packages/5d/0b/991984fe03abe8e77eec7cd59f002e01472dd2f7f7e891d3ca79908517fd/vizdoom_turbo-0.1.1-cp311-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:d43b7f7d282618d6f494fe0004dfd4867cea7ca1151710d39a114b20a87e79c3", size = 245898, upload-time = "2026-07-26T19:56:54.626Z" },
+    { url = "https://files.pythonhosted.org/packages/31/3c/815baae505f823d933180ede224e82dc03abb7a884019e62becdd025046c/vizdoom_turbo-0.1.2-cp311-abi3-macosx_11_0_arm64.whl", hash = "sha256:34f80c5de56b638e2d0a11cd4499f561ea6e4df27dc95b65c3c9875c849dcd8f", size = 221034, upload-time = "2026-07-26T21:35:22.403Z" },
+    { url = "https://files.pythonhosted.org/packages/e7/69/a55c928ea5ede9de1e76b012ba1dae5710ac3a95bd6c1904e10f4b0b6241/vizdoom_turbo-0.1.2-cp311-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:74342b816b06613748c5fc85c979de50b7c82a3673271a1ba1c516a3227a7f6d", size = 245999, upload-time = "2026-07-26T21:35:25.371Z" },
 ]
 
 [[package]]
