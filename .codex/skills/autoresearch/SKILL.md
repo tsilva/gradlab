@@ -133,8 +133,10 @@ URLs immediately.
 
 - Record `potential_bug` or `attention_required` and pause later waves.
 - Do not repair, retry, cancel, restart, or mutate infrastructure.
-- Accept only remotely published, training-only `completed` terminals. Any eval-backed,
-  canceled, failed, mismatched, or unverified terminal pauses the study.
+- Accept remotely published, training-only `completed` terminals and fully drained typed
+  `early_stop_failure:<condition_id>` terminals backed by a matching unsuccessful `action: stop`
+  receipt. Preserve the latter's W&B evidence but censor it as a non-winning trial. Any other
+  eval-backed, canceled, failed, mismatched, or unverified terminal pauses the study.
 
 ```bash
 uv run python .codex/skills/autoresearch/scripts/study.py record-terminal \

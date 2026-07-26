@@ -555,6 +555,115 @@ class AutoresearchStudyTests(unittest.TestCase):
             0.94,
         )
 
+    def test_designed_early_stop_failure_is_censored_negative_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            state_path = root / "runs/autoresearch/test/study.json"
+            state = base_state(root)
+            run_id = immutable_run_id(10)
+            wave = {
+                "phase": "baseline-screen",
+                "round": 0,
+                "candidate_id": state["baseline_candidate_id"],
+                "seeds": [123],
+                "timesteps": 20_480,
+                "submission_key": "plateau-terminal",
+                "status": "launched",
+                "run_ids": [run_id],
+                "terminal_runs": [],
+                "closed": False,
+            }
+            state["waves"].append(wave)
+            study.atomic_json(state_path, state)
+            early_stop = {
+                "condition_id": "return_plateau",
+                "outcome": "failure",
+                "condition": {
+                    "trigger": "no_improvement",
+                    "outcome": "failure",
+                    "action": "stop",
+                },
+            }
+            event = {
+                "run_id": run_id,
+                "scientific_success": False,
+                "dstack": {"terminal": True},
+                "attempt_terminal": {
+                    "state": "failed",
+                    "stop_reason": "early_stop_failure:return_plateau",
+                    "early_stop": early_stop,
+                    "acceptance_required": False,
+                    "wandb_high_water_mark": 12,
+                    "drain": {
+                        "complete": True,
+                        "wandb_remote_high_water_mark": 12,
+                    },
+                },
+                "semantic": {
+                    "terminal": None,
+                    "manifest": {
+                        "seed": 123,
+                        "compute": {"submission_key": "plateau-terminal"},
+                        "wandb": {
+                            "run_id": run_id,
+                            "url": f"https://wandb.ai/e/p/runs/{run_id}",
+                        },
+                    },
+                },
+            }
+            with redirect_stdout(io.StringIO()):
+                study.command_record_terminal(
+                    SimpleNamespace(
+                        study=str(state_path),
+                        submission_key=None,
+                        run_id=None,
+                        seed=None,
+                        event_json=json.dumps(event),
+                        event_file=None,
+                    )
+                )
+            recorded = study.load_state(state_path)
+            terminal_record = recorded["waves"][0]["terminal_runs"][0]
+            self.assertEqual(recorded["status"], "active")
+            self.assertEqual(
+                terminal_record["classification"],
+                study.DESIGNED_EARLY_STOP_FAILURE,
+            )
+            self.assertEqual(
+                terminal_record["stop_reason"],
+                "early_stop_failure:return_plateau",
+            )
+            observed = training_evidence(
+                all_starts=True,
+                strong=True,
+                step=18_000,
+                peak=1.0,
+                run_id=run_id,
+            )
+            with (
+                mock.patch.object(study, "git_head", return_value=state["source_sha"]),
+                mock.patch.object(study, "fetch_training_evidence", return_value=observed),
+                redirect_stdout(io.StringIO()),
+            ):
+                study.command_collect_training_evidence(
+                    SimpleNamespace(study=str(state_path), run_id=run_id)
+                )
+            evidence = study.load_state(state_path)["waves"][0]["terminal_runs"][0][
+                "training_evidence"
+            ]
+
+        self.assertTrue(evidence["censored"])
+        self.assertEqual(
+            evidence["censor_reason"],
+            "early_stop_failure:return_plateau",
+        )
+        self.assertTrue(evidence["observed_all_starts_succeeded"])
+        self.assertTrue(evidence["observed_strong"])
+        self.assertEqual(evidence["observed_first_strong_step"], 18_000)
+        self.assertFalse(evidence["all_starts_succeeded"])
+        self.assertFalse(evidence["strong"])
+        self.assertIsNone(evidence["first_strong_step"])
+
     def test_passed_screen_is_promoted_while_other_screens_are_still_running(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             state = base_state(Path(temporary))
