@@ -142,7 +142,8 @@ def test_minimize_plateau_uses_absolute_improvement() -> None:
 
     update(machine, TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_MEAN, 10.0, 0)
     small = update(machine, TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_MEAN, 9.0, 5)
-    assert small.observations["loss"].best_value == 10.0
+    assert small.observations["loss"].best_value == 9.0
+    assert small.observations["loss"].elapsed_steps == 5
     improved = update(machine, TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_MEAN, 8.0, 8)
     assert improved.observations["loss"].best_value == 8.0
     result = update(machine, TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_MEAN, 8.5, 18)
@@ -256,6 +257,7 @@ def test_decision_validation_rejects_tampering() -> None:
     [
         ([], "must be an object"),
         ({"conditions": {}}, "non-empty object"),
+        ({"conditions": {1: threshold_condition()}}, "non-string condition id"),
         (
             {"conditions": {"bad/id": threshold_condition()}},
             "invalid condition id",

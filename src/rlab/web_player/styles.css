@@ -193,6 +193,11 @@ h2 { font-size: .9rem; margin: 0; font-weight: 650; }
   overflow-x: auto;
 }
 
+.header-breadcrumbs {
+  flex: 1 1 auto;
+  margin-bottom: 0;
+}
+
 .source-breadcrumbs button {
   min-width: 0;
   padding: .28rem .45rem;
@@ -236,7 +241,6 @@ h2 { font-size: .9rem; margin: 0; font-weight: 650; }
 }
 
 .source-results {
-  min-height: 18rem;
   border: 1px solid var(--border);
   border-radius: .7rem;
   overflow: hidden;
@@ -264,8 +268,13 @@ h2 { font-size: .9rem; margin: 0; font-weight: 650; }
 .goal-row:last-child { border-bottom: 0; }
 .project-row strong,
 .goal-row strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-.project-row span,
-.goal-row span { color: var(--muted); font-size: .72rem; white-space: nowrap; }
+.project-row span { color: var(--muted); font-size: .72rem; white-space: nowrap; }
+.goal-row span {
+  display: block;
+  margin-top: .18rem;
+  color: var(--muted);
+  font-size: .72rem;
+}
 .goal-row > div { min-width: 0; }
 .goal-row small {
   display: block;

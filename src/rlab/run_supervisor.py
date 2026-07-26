@@ -180,6 +180,11 @@ def _terminal_outcome(
         return "succeeded", "completed_after_eval_acceptance"
     if early_stop is not None:
         if early_stop.outcome == "success":
+            if evaluation_required:
+                return (
+                    "failed",
+                    f"early_stop_success_without_acceptance:{early_stop.condition_id}",
+                )
             return "succeeded", f"early_stop_success:{early_stop.condition_id}"
         return "failed", f"early_stop_failure:{early_stop.condition_id}"
     if evaluation_required:
@@ -297,23 +302,33 @@ class RunSupervisor:
                 raise ValueError(
                     "authoritative early-stop receipt exists without configured conditions"
                 )
-            if existing.early_stop_config_sha256 != canonical_json_sha256(
-                early_stop_config
-            ):
-                raise ValueError(
-                    "authoritative early-stop receipt does not match the train config"
-                )
-            conditions = early_stop_config.get("conditions")
-            configured = (
-                conditions.get(existing.condition_id)
-                if isinstance(conditions, Mapping)
-                else None
+            authoritative_decision = {
+                "schema_version": 1,
+                "kind": "metric_early_stop",
+                "condition_id": existing.condition_id,
+                "matched_condition_ids": list(existing.matched_condition_ids),
+                "outcome": existing.outcome,
+                "action": "stop",
+                "trigger": existing.trigger,
+                "metric": existing.metric,
+                "metric_step": existing.metric_step,
+                "value": existing.value,
+                "best_value": existing.best_value,
+                "elapsed_steps": existing.elapsed_steps,
+                "patience_progress": existing.patience_progress,
+                "condition": dict(existing.condition),
+                "early_stop_config_sha256": existing.early_stop_config_sha256,
+            }
+            validated_authoritative_decision = validate_metric_early_stop_decision(
+                authoritative_decision,
+                early_stop_config,
+                label="authoritative early-stop receipt",
             )
-            if not isinstance(configured, Mapping) or dict(configured) != dict(
-                existing.condition
+            if existing.decision_sha256 != canonical_json_sha256(
+                validated_authoritative_decision
             ):
                 raise ValueError(
-                    "authoritative early-stop receipt condition is not configured"
+                    "authoritative early-stop receipt decision hash does not match"
                 )
 
         decision_path = (

@@ -1062,6 +1062,8 @@ def test_web_dashboard_assets_are_packaged_beside_server() -> None:
     assert 'href="/assets/vendor/gridstack/gridstack.min.css"' in markup
     assert 'src="/assets/vendor/gridstack/gridstack-all.js"' in markup
     assert '<main id="source-browser" class="source-browser" hidden></main>' in markup
+    assert 'id="source-breadcrumbs"' in markup
+    assert '$("#source-breadcrumbs")' in script
     assert 'id="panel-add"' in markup
     assert 'id="panel-edit"' in markup
     assert 'id="panel-duplicate"' in markup

@@ -61,6 +61,20 @@ def test_parallel_scenario_interleaves_independent_launches() -> None:
     assert len(scenario["evidence"]["interleaving"]) == 2
 
 
+def test_early_stop_scenario_covers_failure_success_tamper_and_promotion_race() -> None:
+    report = run_simulated_certification(scenarios=["early-stop-outcomes"])
+    scenario = report["scenarios"][0]
+    invariants = {row["name"] for row in scenario["invariants"]}
+
+    assert scenario["status"] == "passed"
+    assert {
+        "failure-stop-is-designed-non-resumable-failure",
+        "training-only-success-stop-succeeds",
+        "evaluation-promotion-overrides-simultaneous-failure-stop",
+        "early-stop-receipt-corruption-rejected",
+    } <= invariants
+
+
 def test_report_keeps_raw_evidence_and_replays_scenario_set(tmp_path: Path) -> None:
     artifacts = tmp_path / "first"
     report = run_simulated_certification(

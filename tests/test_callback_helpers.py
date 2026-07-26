@@ -35,6 +35,7 @@ from rlab.metric_names import (
     TRAIN_OUTCOME_SUCCESS_WINDOW_100_RATE_MIN,
     train_early_stop_metric,
 )
+from rlab.training_backend import GracefulStopFlag
 
 
 ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
@@ -318,6 +319,7 @@ class MetricEarlyStopHelperTests(unittest.TestCase):
                 }
             },
             decision_path=decision_path,
+            stop_flag=GracefulStopFlag(),
         )
         callback.model = model  # type: ignore[assignment]
         return callback, model
@@ -339,7 +341,9 @@ class MetricEarlyStopHelperTests(unittest.TestCase):
             model.logger.records[TRAIN_OUTCOME_SUCCESS_WINDOW_100_RATE_MIN] = 1.0
             callback.num_timesteps = 200
             callback._on_rollout_end()
-            self.assertFalse(callback._on_step())
+            self.assertTrue(callback._on_step())
+            self.assertTrue(callback.stop_flag.requested)
+            self.assertEqual(callback.stop_flag.reason, "early_stop:clear_100")
 
             decision = json.loads(decision_path.read_text(encoding="utf-8"))
             self.assertEqual(decision["condition_id"], "clear_100")
@@ -380,6 +384,7 @@ class MetricEarlyStopHelperTests(unittest.TestCase):
                     }
                 },
                 decision_path=decision_path,
+                stop_flag=GracefulStopFlag(),
                 metric_store_path=store_path,
             )
             callback.model = model  # type: ignore[assignment]
@@ -387,7 +392,8 @@ class MetricEarlyStopHelperTests(unittest.TestCase):
 
             self.assertTrue(callback._on_step())
             callback._on_rollout_end()
-            self.assertFalse(callback._on_step())
+            self.assertTrue(callback._on_step())
+            self.assertTrue(callback.stop_flag.requested)
 
             decision = json.loads(decision_path.read_text(encoding="utf-8"))
             self.assertEqual(decision["metric_step"], 120000)

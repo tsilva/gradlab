@@ -186,6 +186,7 @@ class MetricsDocumentationTests(unittest.TestCase):
             "component": ["progress"],
             "signal": ["progress"],
             "progress": ["x"],
+            "condition": ["return_plateau"],
         }
         scalar_names: set[str] = set()
         for definition in metric_names.METRIC_DEFINITIONS:

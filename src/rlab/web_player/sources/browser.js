@@ -291,8 +291,9 @@ function routeSignature(route) {
 }
 
 export class SourceBrowser {
-  constructor(root, { token, command, getState, showToast }) {
+  constructor(root, breadcrumbsRoot, { token, command, getState, showToast }) {
     this.root = root;
+    this.breadcrumbsRoot = breadcrumbsRoot;
     this.token = token;
     this.command = command;
     this.getState = getState;
@@ -387,6 +388,8 @@ export class SourceBrowser {
     this.pollTimer = null;
     this.requestSerial += 1;
     this.loading = false;
+    this.breadcrumbsRoot.replaceChildren();
+    this.breadcrumbsRoot.hidden = true;
   }
 
   hasControl() {
@@ -635,6 +638,21 @@ export class SourceBrowser {
       shell.append(observer);
     }
 
+    const showsCatalog = ![
+      "approval_required",
+      "error",
+      "resolving",
+      "verifying",
+      "loading",
+    ].includes(this.app.phase);
+    if (showsCatalog) {
+      this.renderBreadcrumbs(this.breadcrumbsRoot);
+      this.breadcrumbsRoot.hidden = false;
+    } else {
+      this.breadcrumbsRoot.replaceChildren();
+      this.breadcrumbsRoot.hidden = true;
+    }
+
     if (this.app.phase === "approval_required") {
       shell.append(this.renderApproval());
     } else if (this.app.phase === "error") {
@@ -642,7 +660,7 @@ export class SourceBrowser {
     } else if (["resolving", "verifying", "loading"].includes(this.app.phase)) {
       shell.append(this.renderProgress());
     } else {
-      shell.append(this.renderBreadcrumbs(), this.renderSearch(), this.renderResults());
+      shell.append(this.renderSearch(), this.renderResults());
     }
     this.root.replaceChildren(shell);
     if (restoreSearchFocus) {
@@ -664,10 +682,8 @@ export class SourceBrowser {
     return "Choose a project";
   }
 
-  renderBreadcrumbs() {
-    const nav = document.createElement("nav");
-    nav.className = "source-breadcrumbs";
-    nav.setAttribute("aria-label", "Playback source");
+  renderBreadcrumbs(nav) {
+    nav.replaceChildren();
     const projects = button("Projects", { quiet: true });
     projects.disabled = this.route.level === "projects";
     projects.addEventListener("click", () => this.navigate({
@@ -820,15 +836,16 @@ export class SourceBrowser {
       const name = document.createElement("strong");
       name.textContent = goal.goal_id;
       identity.append(name);
+      const meta = document.createElement("span");
+      const recipeLabel = Number(goal.recipe_count) === 1 ? "recipe" : "recipes";
+      meta.textContent = `${goal.title || goal.goal_slug} · ${Number(goal.recipe_count).toLocaleString()} ${recipeLabel}`;
+      identity.append(meta);
       if (goal.goal_slug && goal.goal_slug !== goal.goal_id) {
         const slug = document.createElement("small");
         slug.textContent = goal.goal_slug;
         identity.append(slug);
       }
-      const meta = document.createElement("span");
-      const recipeLabel = Number(goal.recipe_count) === 1 ? "recipe" : "recipes";
-      meta.textContent = `${goal.title || goal.goal_slug} · ${Number(goal.recipe_count).toLocaleString()} ${recipeLabel}`;
-      row.append(identity, meta);
+      row.append(identity);
       row.addEventListener("click", () => this.navigate({
         level: "runs",
         goal_id: goal.goal_id,
