@@ -66,6 +66,7 @@ from rlab.recipe_documents import (
     prepare_checkpoint_eval_mode,
     recipe_tags,
 )
+from rlab.recipe_variants import recipe_variant_id
 from rlab.rom_assets import (
     CONTAINER_ROM_CACHE,
     cache_path,
@@ -501,6 +502,11 @@ class RunSupervisor:
         )
         if canonical_json_sha256(self.recipe_document) != self.manifest.recipe_sha256:
             raise RuntimeError("portable recipe hash does not match the run manifest")
+        variant_id = recipe_variant_id(
+            recipe_slug=self.manifest.recipe_slug,
+            source_sha=self.manifest.source_sha,
+            recipe_overrides=self.manifest.recipe_overrides,
+        )
         config.update(
             {
                 "seed": int(self.manifest.seed),
@@ -513,6 +519,8 @@ class RunSupervisor:
                 "recipe_slug": self.manifest.recipe_slug,
                 "recipe_path": str(recipe_path),
                 "recipe_sha256": self.manifest.recipe_sha256,
+                "recipe_overrides": list(self.manifest.recipe_overrides),
+                "recipe_variant_id": variant_id,
                 "source_sha": self.manifest.source_sha,
                 "runtime_build_source_sha": str(self.manifest.compute["runtime_build_source_sha"]),
                 "runtime_input_sha256": str(os.environ.get("RLAB_RUNTIME_INPUT_SHA256") or ""),
@@ -538,6 +546,7 @@ class RunSupervisor:
                         *recipe_tags(materialized),
                         f"rlab_run_id:{self.manifest.run_id}",
                         f"attempt_id:{self.manifest.attempt_id}",
+                        f"recipe_variant:{variant_id}",
                         "orchestrator:dstack",
                     ]
                 ),

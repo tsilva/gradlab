@@ -1163,6 +1163,9 @@ def test_web_dashboard_assets_are_packaged_beside_server() -> None:
     assert "export function sourceRouteFromPath(" in source_browser
     assert "export function sourceRoutePath(" in source_browser
     assert "export function formatDate(value, nowValue = Date.now())" in source_browser
+    assert "export function recipeVariantPresentation(item)" in source_browser
+    assert '{ label: "Recipe / variant" }' in source_browser
+    assert "item.description || item.name || item.run_id" in source_browser
     assert 'history.pushState(null, "", target);' in source_browser
     assert 'window.addEventListener("popstate", this.onPopState);' in source_browser
     assert "hydrateInitialProjects()" in source_browser
