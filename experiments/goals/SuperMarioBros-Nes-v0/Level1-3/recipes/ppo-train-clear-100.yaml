@@ -11,6 +11,12 @@ description: >-
 train:
   checkpoint_eval_backend: none
   early_stop:
-  - metric: train/outcome/success/window_100/rate/min
-    operator: '>='
-    threshold: 1.0
+    conditions:
+      clear_100:
+        metric: train/outcome/success/window_100/rate/min
+        trigger: threshold
+        operator: '>='
+        threshold: 1.0
+        patience_steps: 0
+        outcome: success
+        action: stop

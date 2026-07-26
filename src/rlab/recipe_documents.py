@@ -439,7 +439,6 @@ def materialize_train_recipe_document(
 
         if accepts_first_training_success(train_config):
             train_config["checkpoint_eval_backend"] = "none"
-            train_config["early_stop"] = None
         if train_config.get("checkpoint_eval_backend") == "none":
             train_config["stop_on_acceptance"] = False
     if train_config:

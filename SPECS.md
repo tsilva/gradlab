@@ -11,6 +11,7 @@ rlab is a reproducible reinforcement-learning workbench for game-agent researche
 - Invalid or internally inconsistent goals, run configurations, benchmarks, capacity rules, or execution settings must be rejected before execution or external mutation.
 - A run must resolve one complete declared observation, action, reward, event, start-state, and episode-boundary contract and preserve it across training, evaluation, and evidence-bearing playback.
 - Mario Level1-1 must provide a full reward system with game-score progress and a speedrun reward system without it; both must include a per-step deduction negligible relative to forward-progress reward.
+- Every launchable Mario recipe must configure an unsuccessful early-stop condition for sustained lack of improvement in a task-aligned training metric; that condition must not establish goal acceptance or checkpoint promotion.
 - Training-only curricula or phase-specific behavior must be explicitly declared, and evidence produced outside the finalized evaluation contract must not establish acceptance or promotion.
 
 ### Evaluation and Evidence

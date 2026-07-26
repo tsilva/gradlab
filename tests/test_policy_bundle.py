@@ -110,13 +110,20 @@ def test_level1_3_training_clear_bundle_omits_eval_and_preserves_early_stop() ->
     recipe = document["recipe"]
     assert "eval" not in recipe
     assert recipe["train_config"]["checkpoint_eval_backend"] == "none"
-    assert recipe["train_config"]["early_stop"] == [
-        {
-            "metric": "train/outcome/success/window_100/rate/min",
-            "operator": ">=",
-            "threshold": 1.0,
-        }
-    ]
+    assert set(recipe["train_config"]["early_stop"]["conditions"]) == {
+        "clear_100",
+        "return_plateau",
+    }
+    assert recipe["train_config"]["early_stop"]["conditions"]["clear_100"] == {
+        "metric": "train/outcome/success/window_100/rate/min",
+        "trigger": "threshold",
+        "outcome": "success",
+        "action": "stop",
+        "start_after_steps": 0,
+        "patience_steps": 0,
+        "operator": ">=",
+        "threshold": 1.0,
+    }
 
 
 def test_atomic_bundle_install_commits_only_a_complete_replayable_bundle(

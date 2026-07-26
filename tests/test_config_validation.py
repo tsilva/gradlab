@@ -286,7 +286,14 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertEqual(backend["config"]["acceptance_mode"], "first_training_success")
         self.assertEqual(train_config["timesteps"], 10000000)
         self.assertEqual(train_config["checkpoint_eval_backend"], "none")
-        self.assertIsNone(train_config["early_stop"])
+        self.assertEqual(
+            train_config["early_stop"]["conditions"]["return_plateau"]["action"],
+            "observe",
+        )
+        self.assertEqual(
+            train_config["early_stop"]["conditions"]["return_plateau"]["outcome"],
+            "failure",
+        )
         self.assertNotIn("checkpoint_eval_stages", train_config)
 
     def test_level1_3_training_clear_recipe_disables_eval_and_stops_at_100_of_100(
@@ -302,14 +309,20 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertEqual(train_config["checkpoint_eval_backend"], "none")
         self.assertFalse(train_config["stop_on_acceptance"])
         self.assertEqual(
-            train_config["early_stop"],
-            [
-                {
-                    "metric": "train/outcome/success/window_100/rate/min",
-                    "operator": ">=",
-                    "threshold": 1.0,
-                }
-            ],
+            set(train_config["early_stop"]["conditions"]),
+            {"clear_100", "return_plateau"},
+        )
+        self.assertEqual(
+            train_config["early_stop"]["conditions"]["clear_100"],
+            {
+                "metric": "train/outcome/success/window_100/rate/min",
+                "trigger": "threshold",
+                "outcome": "success",
+                "action": "stop",
+                "patience_steps": 0,
+                "operator": ">=",
+                "threshold": 1.0,
+            },
         )
 
     def test_level1_1_on_policy_recipes_share_common_config(self) -> None:
@@ -338,6 +351,22 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertEqual(a2c["train_config"]["timesteps"], 50000000)
         self.assertTrue(ppo["train_config"]["wandb"])
         self.assertTrue(a2c["train_config"]["wandb"])
+
+    def test_every_mario_recipe_composes_the_shared_plateau_condition(self) -> None:
+        mario_root = Path("experiments/goals/SuperMarioBros-Nes-v0")
+        recipes = sorted(mario_root.glob("*/recipes/*.yaml"))
+
+        self.assertEqual(len(recipes), 24)
+        for recipe_path in recipes:
+            with self.subTest(recipe=recipe_path):
+                goal_path = recipe_path.parent.parent / "_goal.yaml"
+                document = compose_train_document(goal_path, recipe_path)
+                conditions = document["train_config"]["early_stop"]["conditions"]
+                self.assertIn("return_plateau", conditions)
+                self.assertEqual(conditions["return_plateau"]["outcome"], "failure")
+                self.assertEqual(conditions["return_plateau"]["action"], "observe")
+                if recipe_path.name == "ppo-train-clear-100.yaml":
+                    self.assertIn("clear_100", conditions)
 
     def test_removed_provider_lifecycle_args_are_rejected(self) -> None:
         for provider_id in ("stable-retro-turbo", "supermariobrosnes-turbo"):
@@ -571,7 +600,7 @@ class ConfigValidationTests(unittest.TestCase):
         ]
         document["train"]["stop_on_acceptance"] = False
 
-        with self.assertRaisesRegex(ValueError, "unknown field.*early_stop"):
+        with self.assertRaisesRegex(ValueError, "must be an object"):
             validate_goal_contract_document(document, path, Path(".").resolve())
 
     def test_goal_validator_rejects_rank_forms_the_runtime_cannot_parse(self) -> None:
@@ -697,7 +726,7 @@ class ConfigValidationTests(unittest.TestCase):
             ),
             (
                 document["train"],
-                {"early_stop", "checkpoint_eval_stages", "max_train_timesteps"},
+                {"checkpoint_eval_stages", "max_train_timesteps"},
             ),
         )
         for mapping, fields in absent_fields:
@@ -705,6 +734,10 @@ class ConfigValidationTests(unittest.TestCase):
                 with self.subTest(field=field):
                     self.assertNotIn(field, mapping)
         self.assertTrue(document["train"]["stop_on_acceptance"])
+        self.assertEqual(
+            document["train"]["early_stop"]["conditions"]["return_plateau"]["action"],
+            "observe",
+        )
         self.assertEqual(
             document["eval"]["acceptance"],
             [

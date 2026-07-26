@@ -12,6 +12,7 @@ GOAL_TRAIN_FIELDS = frozenset(
     {
         "checkpoint_eval_backend",
         "checkpoint_freq",
+        "early_stop",
         "environment",
         "policy",
         "stop_on_acceptance",

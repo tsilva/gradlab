@@ -5,7 +5,10 @@ import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+from rlab.early_stop import MetricEarlyStopStateMachine, MetricSample
 from rlab.eval_backend import EvalHandle, EvalPoll
+from rlab.file_utils import atomic_write_json
+from rlab.metric_names import TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_MEAN
 from rlab.policy_bundle import (
     build_recipe_document,
     canonical_json_sha256,
@@ -16,6 +19,7 @@ from rlab.recipe_documents import compose_train_document
 from rlab.run_authority import RunAuthority
 from rlab.run_contracts import (
     CheckpointManifest,
+    EarlyStopReceipt,
     EvalResult,
     PromotionReceipt,
     RunManifest,
@@ -248,6 +252,7 @@ class RunSupervisorTests(unittest.TestCase):
             failure=None,
             evaluation_required=True,
             promotion=None,
+            early_stop=None,
         )
 
         self.assertEqual(state, "failed")
@@ -259,10 +264,174 @@ class RunSupervisorTests(unittest.TestCase):
             failure=RuntimeError("network failure"),
             evaluation_required=True,
             promotion=None,
+            early_stop=None,
         )
 
         self.assertEqual(state, "resumable_failure")
         self.assertEqual(stop_reason, "supervisor_failure")
+
+    def _early_stop_receipt(self, *, outcome: str = "failure") -> EarlyStopReceipt:
+        return EarlyStopReceipt(
+            run_id=self.run_id,
+            attempt_id=self.manifest.attempt_id,
+            condition_id="return_plateau",
+            matched_condition_ids=("return_plateau",),
+            outcome=outcome,  # type: ignore[arg-type]
+            trigger="no_improvement",
+            metric="train/episode/return/shaped/from/target/mean",
+            metric_step=2_000_000,
+            value=650.0,
+            best_value=650.0,
+            elapsed_steps=1_000_000,
+            patience_progress=1.0,
+            condition={
+                "metric": "train/episode/return/shaped/from/target/mean",
+                "trigger": "no_improvement",
+            },
+            early_stop_config_sha256="d" * 64,
+            decision_sha256="e" * 64,
+            recorded_at=utc_now(),
+        )
+
+    def test_failure_early_stop_is_a_clean_scientific_failure(self) -> None:
+        receipt = self._early_stop_receipt()
+
+        state, stop_reason = _terminal_outcome(
+            cancel_requested=False,
+            failure=None,
+            evaluation_required=True,
+            promotion=None,
+            early_stop=receipt,
+        )
+
+        self.assertEqual(state, "failed")
+        self.assertEqual(stop_reason, "early_stop_failure:return_plateau")
+
+    def test_training_only_success_early_stop_succeeds_the_attempt(self) -> None:
+        receipt = self._early_stop_receipt(outcome="success")
+
+        state, stop_reason = _terminal_outcome(
+            cancel_requested=False,
+            failure=None,
+            evaluation_required=False,
+            promotion=None,
+            early_stop=receipt,
+        )
+
+        self.assertEqual(state, "succeeded")
+        self.assertEqual(stop_reason, "early_stop_success:return_plateau")
+
+    def test_evaluation_promotion_overrides_failure_early_stop(self) -> None:
+        promotion = PromotionReceipt(
+            run_id=self.run_id,
+            checkpoint_id="checkpoint-1-" + "a" * 16,
+            checkpoint_step=1,
+            eval_idempotency_key="b" * 64,
+            eval_result_sha256="c" * 64,
+            accepted_episode_count=100,
+            promoted_at=utc_now(),
+        )
+
+        state, stop_reason = _terminal_outcome(
+            cancel_requested=False,
+            failure=None,
+            evaluation_required=True,
+            promotion=promotion,
+            early_stop=self._early_stop_receipt(),
+        )
+
+        self.assertEqual(state, "succeeded")
+        self.assertEqual(stop_reason, "completed_after_eval_acceptance")
+
+    def test_supervisor_validates_and_persists_learner_early_stop_decision(self) -> None:
+        supervisor = self.supervisor()
+        config = {
+            "conditions": {
+                "return_plateau": {
+                    "metric": TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_MEAN,
+                    "trigger": "no_improvement",
+                    "direction": "maximize",
+                    "min_delta": 0.01,
+                    "delta_mode": "relative",
+                    "start_after_steps": 0,
+                    "patience_steps": 10,
+                    "outcome": "failure",
+                    "action": "stop",
+                }
+            }
+        }
+        machine = MetricEarlyStopStateMachine(config)
+        machine.update(
+            {
+                TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_MEAN: MetricSample(
+                    value=100.0,
+                    step=0,
+                )
+            }
+        )
+        update = machine.update(
+            {
+                TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_MEAN: MetricSample(
+                    value=100.0,
+                    step=10,
+                )
+            }
+        )
+        self.assertIsNotNone(update.stop_decision)
+        supervisor.train_config = {"early_stop": machine.config}
+        decision_path = (
+            supervisor.run_dir
+            / f"early_stop_decision-{self.manifest.attempt_id}.json"
+        )
+        atomic_write_json(decision_path, update.stop_decision or {})
+
+        receipt = supervisor._resolve_early_stop_receipt()
+
+        self.assertIsNotNone(receipt)
+        assert receipt is not None
+        self.assertEqual(receipt.condition_id, "return_plateau")
+        self.assertEqual(receipt.outcome, "failure")
+        stored = self.authority.early_stop_receipt(
+            run_id=self.run_id,
+            attempt_id=self.manifest.attempt_id,
+        )
+        self.assertEqual(stored["decision_sha256"], receipt.decision_sha256)
+
+    def test_supervisor_rejects_tampered_learner_early_stop_decision(self) -> None:
+        supervisor = self.supervisor()
+        config = {
+            "conditions": {
+                "clear": {
+                    "metric": "train/outcome/success/window_100/rate/min",
+                    "trigger": "threshold",
+                    "operator": ">=",
+                    "threshold": 1.0,
+                    "patience_steps": 0,
+                    "outcome": "success",
+                    "action": "stop",
+                }
+            }
+        }
+        machine = MetricEarlyStopStateMachine(config)
+        update = machine.update(
+            {
+                "train/outcome/success/window_100/rate/min": MetricSample(
+                    value=1.0,
+                    step=10,
+                )
+            }
+        )
+        decision = dict(update.stop_decision or {})
+        decision["outcome"] = "failure"
+        supervisor.train_config = {"early_stop": machine.config}
+        atomic_write_json(
+            supervisor.run_dir
+            / f"early_stop_decision-{self.manifest.attempt_id}.json",
+            decision,
+        )
+
+        with self.assertRaisesRegex(ValueError, "does not match"):
+            supervisor._resolve_early_stop_receipt()
 
     def test_wandb_remote_probe_survives_sdk_finish(self) -> None:
         class RemoteRun:

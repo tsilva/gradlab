@@ -14,6 +14,7 @@ from typing import Any
 
 from rlab.checkpoint_acceptance import manifest_index
 from rlab.dstack_backend import DSTACK_VERSION
+from rlab.early_stop import validate_metric_early_stop_decision
 from rlab.env import resolve_env_config
 from rlab.env_config import env_config_from_args
 from rlab.eval_metrics import eval_by_start_rows
@@ -81,6 +82,7 @@ from rlab.run_authority import (
 )
 from rlab.run_contracts import (
     CheckpointManifest,
+    EarlyStopReceipt,
     EvalIntent,
     EvalResult,
     PromotionReceipt,
@@ -168,15 +170,20 @@ def _terminal_outcome(
     failure: BaseException | None,
     evaluation_required: bool,
     promotion: PromotionReceipt | None,
+    early_stop: EarlyStopReceipt | None,
 ) -> tuple[str, str]:
     if cancel_requested:
         return "canceled", "canceled"
     if failure is not None:
         return "resumable_failure", "supervisor_failure"
-    if evaluation_required and promotion is None:
-        return "failed", "training_cap_without_acceptance"
-    if evaluation_required:
+    if evaluation_required and promotion is not None:
         return "succeeded", "completed_after_eval_acceptance"
+    if early_stop is not None:
+        if early_stop.outcome == "success":
+            return "succeeded", f"early_stop_success:{early_stop.condition_id}"
+        return "failed", f"early_stop_failure:{early_stop.condition_id}"
+    if evaluation_required:
+        return "failed", "training_cap_without_acceptance"
     return "succeeded", "training_cap_complete"
 
 
@@ -275,6 +282,92 @@ class RunSupervisor:
                 **payload,
             },
         )
+
+    def _resolve_early_stop_receipt(self) -> EarlyStopReceipt | None:
+        existing_document = self.authority.early_stop_receipt(
+            run_id=self.manifest.run_id,
+            attempt_id=self.manifest.attempt_id,
+        )
+        existing: EarlyStopReceipt | None = None
+        if existing_document is not None:
+            existing = EarlyStopReceipt(**existing_document)
+            existing.validate()
+            early_stop_config = self.train_config.get("early_stop")
+            if not isinstance(early_stop_config, Mapping):
+                raise ValueError(
+                    "authoritative early-stop receipt exists without configured conditions"
+                )
+            if existing.early_stop_config_sha256 != canonical_json_sha256(
+                early_stop_config
+            ):
+                raise ValueError(
+                    "authoritative early-stop receipt does not match the train config"
+                )
+            conditions = early_stop_config.get("conditions")
+            configured = (
+                conditions.get(existing.condition_id)
+                if isinstance(conditions, Mapping)
+                else None
+            )
+            if not isinstance(configured, Mapping) or dict(configured) != dict(
+                existing.condition
+            ):
+                raise ValueError(
+                    "authoritative early-stop receipt condition is not configured"
+                )
+
+        decision_path = (
+            self.run_dir
+            / f"early_stop_decision-{self.manifest.attempt_id}.json"
+        )
+        if not decision_path.is_file():
+            return existing
+        raw = json.loads(decision_path.read_text(encoding="utf-8"))
+        early_stop_config = self.train_config.get("early_stop")
+        if early_stop_config is None:
+            raise ValueError("learner wrote an early-stop decision without configured conditions")
+        decision = validate_metric_early_stop_decision(
+            raw,
+            early_stop_config,
+            label=f"learner early-stop decision {decision_path}",
+        )
+        decision_sha256 = canonical_json_sha256(decision)
+        if existing is not None:
+            if existing.decision_sha256 != decision_sha256:
+                raise ValueError(
+                    "local early-stop decision conflicts with the authoritative receipt"
+                )
+            return existing
+
+        receipt = EarlyStopReceipt(
+            run_id=self.manifest.run_id,
+            attempt_id=self.manifest.attempt_id,
+            condition_id=str(decision["condition_id"]),
+            matched_condition_ids=tuple(
+                str(item) for item in decision["matched_condition_ids"]
+            ),
+            outcome=str(decision["outcome"]),  # type: ignore[arg-type]
+            trigger=str(decision["trigger"]),  # type: ignore[arg-type]
+            metric=str(decision["metric"]),
+            metric_step=int(decision["metric_step"]),
+            value=float(decision["value"]),
+            best_value=float(decision["best_value"]),
+            elapsed_steps=int(decision["elapsed_steps"]),
+            patience_progress=float(decision["patience_progress"]),
+            condition=dict(decision["condition"]),
+            early_stop_config_sha256=str(decision["early_stop_config_sha256"]),
+            decision_sha256=decision_sha256,
+            recorded_at=self.clock.utc_now(),
+        )
+        self.authority.create_early_stop(receipt)
+        self._emit(
+            "early_stop_receipt_created",
+            condition_id=receipt.condition_id,
+            outcome=receipt.outcome,
+            metric_step=receipt.metric_step,
+            decision_sha256=receipt.decision_sha256,
+        )
+        return receipt
 
     @staticmethod
     def _checkpoint_manifest_url(checkpoint: Mapping[str, Any]) -> str:
@@ -1721,6 +1814,7 @@ class RunSupervisor:
         handler_token = self.runtime.install_cancel_handlers(cancel)
         failure: BaseException | None = None
         promotion: PromotionReceipt | None = None
+        early_stop: EarlyStopReceipt | None = None
         try:
             while self.learner is not None and self.learner.poll() is None:
                 self.active_iteration()
@@ -1734,8 +1828,11 @@ class RunSupervisor:
                 if log is not None:
                     log.close()
                 print(f"learner exited returncode={learner_returncode}", flush=True)
+                early_stop = self._resolve_early_stop_receipt()
                 if learner_returncode != 0:
                     raise RuntimeError(f"learner exited with code {learner_returncode}")
+            else:
+                early_stop = self._resolve_early_stop_receipt()
             if self.lease_lost:
                 raise LeaseUnavailable("writer lease was lost")
             if self.cancel_requested:
@@ -1828,6 +1925,7 @@ class RunSupervisor:
             failure=failure,
             evaluation_required=self.evaluation_required,
             promotion=promotion,
+            early_stop=early_stop,
         )
         stop_reason = self.stop_reason or default_stop_reason
         receipt = TerminalReceipt(
@@ -1855,6 +1953,7 @@ class RunSupervisor:
                 "failure": repr(failure)[:4000] if failure is not None else None,
             },
             completed_at=self.clock.utc_now(),
+            early_stop=(early_stop.to_dict() if early_stop is not None else None),
         )
         self.authority.create_attempt_terminal(receipt)
         self._emit(

@@ -431,7 +431,10 @@ def validate_and_normalize_train_config(
 ) -> dict[str, Any]:
     """Validate one flat train config and normalize its structured rule fields."""
 
-    from rlab.early_stop import normalize_early_stop_config
+    from rlab.early_stop import (
+        normalize_metric_early_stop_config,
+        normalize_metric_threshold_rules,
+    )
     from rlab.snapshot_curriculum import normalize_snapshot_curriculum_config
 
     normalized = dict(train_config)
@@ -442,20 +445,11 @@ def validate_and_normalize_train_config(
             "all policy evaluation uses stochastic sampling"
         )
     if normalized.get("early_stop") is not None:
-        normalized["early_stop"] = normalize_early_stop_config(
+        normalized["early_stop"] = normalize_metric_early_stop_config(
             normalized["early_stop"], label=f"{label}.early_stop"
         )
-    if normalized.get("checkpoint_eval_backend") == "none":
-        early_stop = normalized.get("early_stop")
-        if early_stop is not None and any(
-            not str(rule["metric"]).startswith("train/") for rule in early_stop
-        ):
-            raise ValueError(
-                f"{label}.early_stop may use only train/* metrics when checkpoint eval "
-                "is disabled"
-            )
     if normalized.get("checkpoint_eval_acceptance") is not None:
-        normalized["checkpoint_eval_acceptance"] = normalize_early_stop_config(
+        normalized["checkpoint_eval_acceptance"] = normalize_metric_threshold_rules(
             normalized["checkpoint_eval_acceptance"],
             label=f"{label}.checkpoint_eval_acceptance",
         )
@@ -467,8 +461,21 @@ def validate_and_normalize_train_config(
             n_envs=int(n_envs) if n_envs is not None else None,
         )
     if normalized.get("stop_on_acceptance"):
-        if normalized.get("early_stop") is not None:
-            raise ValueError(f"{label}.early_stop is incompatible with stop_on_acceptance")
+        early_stop = normalized.get("early_stop")
+        conditions = (
+            early_stop.get("conditions")
+            if isinstance(early_stop, Mapping)
+            else None
+        )
+        if isinstance(conditions, Mapping) and any(
+            str(condition.get("outcome")) == "success"
+            for condition in conditions.values()
+            if isinstance(condition, Mapping)
+        ):
+            raise ValueError(
+                f"{label}.early_stop success conditions are incompatible with "
+                "stop_on_acceptance; goal.eval.acceptance is the sole success authority"
+            )
         if not normalized.get("checkpoint_eval_acceptance"):
             raise ValueError(
                 f"{label}.checkpoint_eval_acceptance is required when stop_on_acceptance is true"
@@ -484,6 +491,24 @@ def validate_and_normalize_train_config(
             common_config=common_config,
             label=f"{label}.training_backend",
         )
+        from rlab.training_backend import accepts_first_training_success
+
+        if accepts_first_training_success(normalized):
+            early_stop = normalized.get("early_stop")
+            conditions = (
+                early_stop.get("conditions")
+                if isinstance(early_stop, Mapping)
+                else None
+            )
+            if isinstance(conditions, Mapping) and any(
+                str(condition.get("outcome")) == "success"
+                for condition in conditions.values()
+                if isinstance(condition, Mapping)
+            ):
+                raise ValueError(
+                    f"{label}.early_stop success conditions are incompatible with "
+                    "first-training-success backend acceptance"
+                )
     return normalized
 
 
@@ -788,8 +813,8 @@ TRAIN_CONFIG_FIELDS: tuple[TrainConfigField, ...] = (
         serialize="json",
         source_section="train",
         help=(
-            "JSON early-stop list of AND-combined metric threshold rules. "
-            "Training-only recipes may use only train/* metrics."
+            "Keyed metric early-stop conditions with explicit success/failure outcomes, "
+            "trigger semantics, patience, and observe/stop actions."
         ),
     ),
     _field(
