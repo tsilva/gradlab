@@ -220,6 +220,7 @@ def validate_reward_shape_catalog(
                 f"{label}.{phase}.environment.task.reward must be omitted when reward_shapes is declared"
             )
     _validate_catalog_phase_semantics(document, label=label)
+    _validate_mario_level_termination(document, label=label)
 
 
 def _phase_semantic_projection(environment: Mapping[str, Any]) -> dict[str, Any]:
@@ -231,10 +232,6 @@ def _phase_semantic_projection(environment: Mapping[str, Any]) -> dict[str, Any]
     task = projection.get("task")
     if isinstance(task, dict):
         task.pop("reward", None)
-        termination = task.get("termination")
-        if isinstance(termination, dict):
-            for key in ("failure", "success", "timeout", "neutral", "max_episode_steps"):
-                termination.pop(key, None)
     return projection
 
 
@@ -253,9 +250,47 @@ def _validate_catalog_phase_semantics(
         eval_environment
     ):
         raise ValueError(
-            f"{label} catalog-backed train/eval environments may differ only in declared "
-            "termination policy and execution-only evaluation settings"
+            f"{label} catalog-backed train/eval environments must preserve task semantics, "
+            "including termination; only execution settings may differ"
         )
+
+
+def _validate_mario_level_termination(
+    document: Mapping[str, Any],
+    *,
+    label: str,
+) -> None:
+    train_task = document["train"]["environment"]["task"]
+    train_termination = train_task.get("termination")
+    if not isinstance(train_termination, Mapping):
+        return
+    if train_termination.get("success") != ["level_change"]:
+        return
+
+    expected_failure = ["life_loss", "stalled"]
+    expected_success = ["level_change"]
+    expected_stalled = {"signal": "x", "operation": "unchanged_for", "steps": 300}
+    for phase in ("train", "eval"):
+        task = document[phase]["environment"]["task"]
+        termination = task.get("termination")
+        events = task.get("events")
+        if not isinstance(termination, Mapping):
+            raise ValueError(f"{label}.{phase} Mario level task must declare termination")
+        if termination.get("failure") != expected_failure:
+            raise ValueError(
+                f"{label}.{phase} Mario level task termination.failure must be "
+                f"{expected_failure!r}"
+            )
+        if termination.get("success") != expected_success:
+            raise ValueError(
+                f"{label}.{phase} Mario level task termination.success must be "
+                f"{expected_success!r}"
+            )
+        stalled = events.get("stalled") if isinstance(events, Mapping) else None
+        if stalled != expected_stalled:
+            raise ValueError(
+                f"{label}.{phase} Mario level task must declare stalled={expected_stalled!r}"
+            )
 
 
 def select_goal_reward_shape(

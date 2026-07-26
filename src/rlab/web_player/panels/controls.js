@@ -26,6 +26,13 @@ export function mount({ definition, services }) {
               <button data-command="set-fps" class="quiet icon-only" aria-label="Apply play FPS" title="Apply play FPS"><svg class="icon" aria-hidden="true"><use href="/assets/tabler-icons.svg#ti-check"></use></svg></button>
             </div>
             <p id="playback-fps-hint" class="control-hint">0 runs playback uncapped</p>
+            <fieldset class="termination-settings" data-termination-settings>
+              <legend>Episode termination</legend>
+              <p class="control-hint" data-termination-source></p>
+              <div class="termination-options" data-termination-options></div>
+              <button data-command="apply-termination" data-apply-termination class="quiet control-wide" type="button">Apply and reset episode</button>
+              <p class="control-hint">Changes are available before the first step or between episodes.</p>
+            </fieldset>
           </div>
         </details>
       </section>
@@ -67,6 +74,10 @@ export function mount({ definition, services }) {
   const playbackSampling = element.querySelector(".playback-sampling");
   const driverSwitch = element.querySelector(".driver-switch");
   const driverOptions = [...element.querySelectorAll("[data-driver-option]")];
+  const terminationSettings = element.querySelector("[data-termination-settings]");
+  const terminationOptions = element.querySelector("[data-termination-options]");
+  const terminationSource = element.querySelector("[data-termination-source]");
+  const applyTermination = element.querySelector("[data-apply-termination]");
   let nextDriver = "policy";
   let wasAwaitingNextEpisode = false;
   const commands = {
@@ -81,6 +92,10 @@ export function mount({ definition, services }) {
       driver: nextDriver,
     }),
     "set-fps": () => services.command("set_fps", { fps: Number(fps.value) }),
+    "apply-termination": () => services.command("set_termination_conditions", {
+      enabled: [...terminationOptions.querySelectorAll("input:checked")]
+        .map((input) => input.value),
+    }),
   };
   element.querySelectorAll("[data-command]").forEach((button) => {
     button.addEventListener("click", () => commands[button.dataset.command]());
@@ -114,6 +129,15 @@ export function mount({ definition, services }) {
       && !services.canReplayInspection()
     );
     const recording = (state.liveSnapshot?.mode || state.snapshot?.mode) === "recording";
+    const canChangeTermination = (
+      !recording
+      && state.hasControl
+      && (Number(session.step || 0) === 0 || Boolean(session.awaiting_next_episode))
+    );
+    applyTermination.disabled = !canChangeTermination;
+    terminationOptions.querySelectorAll("input").forEach((input) => {
+      input.disabled = !canChangeTermination;
+    });
     const canPrepareNextEpisode = (
       !recording && state.hasControl && Boolean(session.can_start_next_episode)
     );
@@ -168,6 +192,29 @@ export function mount({ definition, services }) {
       });
       const recording = snapshot.mode === "recording";
       const dataset = snapshot.mode === "dataset";
+      const terminationConditions = Array.isArray(session.termination_conditions)
+        ? session.termination_conditions
+        : [];
+      terminationSettings.hidden = recording || dataset || terminationConditions.length === 0;
+      terminationSource.textContent = `Defaults: ${session.termination_source || "training"}`;
+      const terminationKey = JSON.stringify(terminationConditions);
+      if (terminationOptions.dataset.key !== terminationKey) {
+        terminationOptions.dataset.key = terminationKey;
+        terminationOptions.replaceChildren(...terminationConditions.map((condition) => {
+          const label = document.createElement("label");
+          label.className = "termination-option";
+          const input = document.createElement("input");
+          input.type = "checkbox";
+          input.value = condition.id;
+          input.checked = Boolean(condition.enabled);
+          const name = document.createElement("span");
+          name.textContent = condition.label;
+          const outcome = document.createElement("small");
+          outcome.textContent = condition.outcome;
+          label.append(input, name, outcome);
+          return label;
+        }));
+      }
       nextEpisodeSettings.hidden = dataset;
       driverSwitch.classList.toggle("single-option", recording);
       nextEpisodeHeading.textContent = recording ? "Driver" : "Next episode";

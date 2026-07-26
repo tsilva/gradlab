@@ -573,6 +573,12 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
                 "can_start_next_episode": self._can_start_next_episode(),
                 "history_size": len(self.history),
                 "config": self.config_text,
+                "termination_source": getattr(
+                    self.session,
+                    "termination_source",
+                    "training",
+                ),
+                "termination_conditions": list(getattr(self.session, "termination_conditions", ())),
             },
             "transition": current,
             "history_point": current_history,
@@ -728,6 +734,32 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
                 self.target_fps = fps
                 self.revision += 1
                 self._publish(self.session.last_transition)
+            elif command.name == "set_termination_conditions":
+                if self.session.step_index != 0 and not self.awaiting_next_episode:
+                    raise ValueError(
+                        "termination conditions can change before the first step "
+                        "or between episodes"
+                    )
+                enabled = command.payload.get("enabled")
+                if not isinstance(enabled, list) or any(
+                    not isinstance(value, str) for value in enabled
+                ):
+                    raise ValueError("enabled termination conditions must be a list of ids")
+                was_awaiting_next_episode = self.awaiting_next_episode
+                self.session.set_termination_conditions(enabled)
+                self.session.last_transition = None
+                self.awaiting_next_episode = was_awaiting_next_episode
+                self.remaining_steps = 0
+                self.continue_target = None
+                self.clear_input()
+                self._set_state(
+                    "paused",
+                    message=(
+                        "termination conditions applied · choose Play next episode"
+                        if self.awaiting_next_episode
+                        else "termination conditions applied · episode ready"
+                    ),
+                )
             elif command.name == "stop":
                 self._response(command, ok=True)
                 self._stop.set()

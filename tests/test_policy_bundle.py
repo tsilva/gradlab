@@ -256,14 +256,15 @@ def write_bundle(root: Path) -> None:
     )
 
 
-def test_level1_1_recipe_fixture_preserves_distinct_train_and_eval_contracts() -> None:
+def test_level1_1_recipe_fixture_preserves_aligned_train_and_eval_contracts() -> None:
     document = level1_1_recipe_document()
     train_task = document["recipe"]["train_config"]["task"]
     eval_contract = evaluation_contract(document)
     eval_task = eval_contract["environment"]["task"]
 
     assert train_task["termination"]["failure"] == ["life_loss", "stalled"]
-    assert eval_task["termination"]["failure"] == []
+    assert eval_task["termination"]["failure"] == ["life_loss", "stalled"]
+    assert playback_contract(document)["environment"]["task"] == eval_task
     assert document["recipe"]["train_config"]["obs_crop"] == [32, 0, 0, 0]
     assert eval_contract["action_sampling"] == "stochastic"
     assert eval_contract["seed_protocol"] == "vector-lane-v1"

@@ -602,6 +602,11 @@ select {
 .playback-settings { margin-top: .5rem; border-top: 1px solid rgba(49, 80, 94, .45); padding-top: .5rem; }
 .playback-settings summary { color: var(--muted); font-size: .64rem; letter-spacing: .1em; text-transform: uppercase; }
 .playback-settings-body { display: grid; gap: .4rem; margin-top: .5rem; }
+.termination-settings { display: grid; gap: .4rem; min-width: 0; margin: .35rem 0 0; padding: .55rem 0 0; border: 0; border-top: 1px solid rgba(49, 80, 94, .45); }
+.termination-settings legend { padding: 0; color: var(--text); font-size: .72rem; font-weight: 700; }
+.termination-options { display: grid; gap: .28rem; }
+.termination-option { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: .42rem; font-size: .72rem; }
+.termination-option small { color: var(--muted); font-size: .6rem; letter-spacing: .06em; text-transform: uppercase; }
 .playback-fps {
   display: grid;
   grid-template-columns: max-content minmax(0, 1fr) auto;

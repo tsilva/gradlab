@@ -1,4 +1,5 @@
 defaults:
+- ../_reward-shapes-common@_global_
 - _self_
 goal_id: "{{ goal_id }}"
 tags:
@@ -17,34 +18,6 @@ objective:
   rank:
   - min(leader/checkpoint/step)
   - max(eval/full/episode/return/mean)
-reward_shapes:
-  program_kind: mario-v1
-  default: score-v1
-  definitions:
-    score-v1:
-      reward_mode: score
-      use_native_reward: false
-      clip_rewards: false
-      progress_reward_cap: 30.0
-      progress_reward_scale: 1.0
-      terminal_reward: 50.0
-      reward_scale: 10.0
-      time_penalty: 0.0
-      death_penalty: 25.0
-      completion_reward: 0.0
-      score_progress_clipped: false
-    score-step-0p01-v1:
-      reward_mode: score
-      use_native_reward: false
-      clip_rewards: false
-      progress_reward_cap: 30.0
-      progress_reward_scale: 1.0
-      terminal_reward: 50.0
-      reward_scale: 10.0
-      time_penalty: 0.01
-      death_penalty: 25.0
-      completion_reward: 0.0
-      score_progress_clipped: false
 train:
   # Run checkpoint evaluation outside the training machine on Modal.
   checkpoint_eval_backend: modal
@@ -106,8 +79,9 @@ train:
       events:
         life_loss: {signal: lives, operation: decrease}
         level_change: {signal: level, operation: change}
+        stalled: {signal: x, operation: unchanged_for, steps: 300}
       termination:
-        failure: [life_loss]
+        failure: [life_loss, stalled]
         success: [level_change]
         max_episode_steps: 4500
       conditioning:
@@ -131,7 +105,7 @@ eval:
     task:
       <<: *mario_task
       termination:
-        failure: []
+        failure: [life_loss, stalled]
         success: [level_change]
         max_episode_steps: 4500
 release:

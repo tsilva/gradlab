@@ -22,18 +22,29 @@ def test_mario_reward_shape_defaults_and_cli_override_materialize_both_phases() 
     selected = compose_train_document(
         MARIO_GOAL,
         MARIO_RECIPE,
-        recipe_overrides=("reward_shape=score-step-0p01-v1",),
+        recipe_overrides=("reward_shape=full-v1",),
     )
 
     default_config = default["train_config"]
     selected_config = selected["train_config"]
-    assert default_config["reward_shape"] == "score-v1"
+    assert default_config["reward_shape"] == "speedrun-v1"
     assert default_config["reward_shape_is_default"] is True
-    assert default_config["task"]["reward"]["time_penalty"] == 0.0
-    assert selected_config["reward_shape"] == "score-step-0p01-v1"
+    assert default_config["task"]["reward"]["reward_mode"] == "additive"
+    assert default_config["task"]["reward"]["time_penalty"] == 0.001
+    assert (
+        default_config["checkpoint_eval_environment"]["task"]["reward"]["time_penalty"] == 0.001
+    )
+    assert selected_config["reward_shape"] == "full-v1"
     assert selected_config["reward_shape_is_default"] is False
-    assert selected_config["task"]["reward"]["time_penalty"] == 0.01
-    assert selected_config["checkpoint_eval_environment"]["task"]["reward"]["time_penalty"] == 0.01
+    assert selected_config["task"]["reward"]["reward_mode"] == "score"
+    assert selected_config["task"]["reward"]["time_penalty"] == 0.001
+    assert (
+        selected_config["checkpoint_eval_environment"]["task"]["reward"]["reward_mode"]
+        == "score"
+    )
+    assert (
+        selected_config["checkpoint_eval_environment"]["task"]["reward"]["time_penalty"] == 0.001
+    )
     assert default_config["reward_shape_sha256"] != selected_config["reward_shape_sha256"]
     assert default_config["goal_contract_sha256"] == selected_config["goal_contract_sha256"]
     assert (
@@ -41,6 +52,24 @@ def test_mario_reward_shape_defaults_and_cli_override_materialize_both_phases() 
         != selected_config["effective_goal_contract_sha256"]
     )
     assert "reward_shapes" not in selected["goal"]
+
+
+def test_all_mario_recipes_select_the_speedrun_default() -> None:
+    goal_root = Path("experiments/goals/SuperMarioBros-Nes-v0")
+    recipes = sorted(goal_root.glob("*/recipes/*.yaml"))
+    assert recipes
+
+    for recipe in recipes:
+        goal = recipe.parent.parent / "_goal.yaml"
+        document = compose_train_document(goal, recipe)
+        config = document["train_config"]
+        assert config["reward_shape"] == "speedrun-v1", recipe
+        assert config["reward_shape_is_default"] is True, recipe
+        assert config["task"]["reward"]["reward_mode"] == "additive", recipe
+        assert config["task"]["reward"]["time_penalty"] == 0.001, recipe
+        assert (
+            config["checkpoint_eval_environment"]["task"]["reward"]["reward_mode"] == "additive"
+        ), recipe
 
 
 def test_catalog_selector_and_raw_reward_override_fail_closed() -> None:
@@ -72,21 +101,32 @@ def test_non_catalog_goal_remains_compatible() -> None:
 def test_catalog_definitions_are_complete_strict_and_semantically_unique() -> None:
     goal = load_goal_contract(MARIO_GOAL)
     malformed = copy.deepcopy(goal)
-    malformed["reward_shapes"]["definitions"]["score-v1"]["clip_rewards"] = 1
+    malformed["reward_shapes"]["definitions"]["full-v1"]["clip_rewards"] = 1
     with pytest.raises(ValueError, match="clip_rewards must be a boolean"):
         validate_reward_shape_catalog(malformed)
 
     incomplete = copy.deepcopy(goal)
-    del incomplete["reward_shapes"]["definitions"]["score-v1"]["death_penalty"]
+    del incomplete["reward_shapes"]["definitions"]["full-v1"]["death_penalty"]
     with pytest.raises(ValueError, match="missing required field.*death_penalty"):
         validate_reward_shape_catalog(incomplete)
 
     duplicate = copy.deepcopy(goal)
     duplicate["reward_shapes"]["definitions"]["alias-v1"] = copy.deepcopy(
-        duplicate["reward_shapes"]["definitions"]["score-v1"]
+        duplicate["reward_shapes"]["definitions"]["full-v1"]
     )
     with pytest.raises(ValueError, match="identical executable semantics"):
         validate_reward_shape_catalog(duplicate)
+
+    mismatched_termination = copy.deepcopy(goal)
+    mismatched_termination["eval"]["environment"]["task"]["termination"]["failure"] = []
+    with pytest.raises(ValueError, match="including termination"):
+        validate_reward_shape_catalog(mismatched_termination)
+
+    missing_stall = copy.deepcopy(goal)
+    for phase in ("train", "eval"):
+        del missing_stall[phase]["environment"]["task"]["events"]["stalled"]
+    with pytest.raises(ValueError, match="must declare stalled"):
+        validate_reward_shape_catalog(missing_stall)
 
 
 def test_yaml_loader_rejects_duplicate_mapping_keys(tmp_path: Path) -> None:
