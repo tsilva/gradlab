@@ -371,9 +371,10 @@ def test_retry_task_name_preserves_run_and_changes_attempt() -> None:
 
     assert _task_name(run_id, attempt_id, initial=True) == run_id
     retry_name = _task_name(run_id, attempt_id, initial=False)
-    assert retry_name.startswith(run_id + "-a")
-    assert retry_name.endswith(attempt_id.removeprefix("attempt-"))
-    assert len(retry_name) <= 63
+    assert retry_name.startswith(run_id[:30] + "-a")
+    assert retry_name.endswith(attempt_id.removeprefix("attempt-")[:8])
+    assert len(retry_name) == 40
+    assert _task_name(run_id, new_attempt_id(), initial=False) != retry_name
 
 
 def test_resume_submit_recovers_only_the_original_manifest(
