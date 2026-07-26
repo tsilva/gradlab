@@ -440,6 +440,8 @@ def materialize_train_recipe_document(
         if accepts_first_training_success(train_config):
             train_config["checkpoint_eval_backend"] = "none"
             train_config["early_stop"] = None
+        if train_config.get("checkpoint_eval_backend") == "none":
+            train_config["stop_on_acceptance"] = False
     if train_config:
         materialized["train_config"] = train_config
     return materialized
@@ -689,17 +691,20 @@ def compose_train_document(
 def prepare_checkpoint_eval_mode(
     document: dict[str, Any],
     *,
-    checkpoint_eval_backend: str,
+    checkpoint_eval_backend: str | None,
 ) -> None:
     """Materialize the execution mode before recipe validation and hashing."""
 
-    mode = str(checkpoint_eval_backend).strip()
+    config = dict(document["train_config"])
+    mode = str(
+        checkpoint_eval_backend
+        if checkpoint_eval_backend is not None
+        else config.get("checkpoint_eval_backend") or "modal"
+    ).strip()
     if mode not in {"modal", "none"}:
         raise ValueError(f"unsupported checkpoint eval backend: {mode}")
-    config = dict(document["train_config"])
     config["checkpoint_eval_backend"] = mode
     if mode == "none":
-        config["early_stop"] = None
         config["stop_on_acceptance"] = False
     document["train_config"] = config
 

@@ -419,16 +419,17 @@ def cmd_launch(args: argparse.Namespace) -> int:
     goal_path = _tracked_committed_path(root, args.goal_file, label="goal")
     recipe_path = _tracked_committed_path(root, args.recipe_file, label="recipe")
     recipe_overrides = tuple(str(value) for value in args.recipe_overrides)
-    checkpoint_eval_backend = str(args.checkpoint_eval_backend)
+    requested_checkpoint_eval_backend = args.checkpoint_eval_backend
     document = compose_train_document(
         goal_path,
         recipe_path,
         recipe_overrides=recipe_overrides,
         prepare_materialized=partial(
             prepare_checkpoint_eval_mode,
-            checkpoint_eval_backend=checkpoint_eval_backend,
+            checkpoint_eval_backend=requested_checkpoint_eval_backend,
         ),
     )
+    checkpoint_eval_backend = str(document["train_config"]["checkpoint_eval_backend"])
     compute = _compute(args)
     storage, authority, dstack_backend, _preflight_report = _operator_preflight(
         root,
@@ -911,10 +912,11 @@ def build_parser() -> argparse.ArgumentParser:
     launch.add_argument(
         "--checkpoint-eval-backend",
         choices=("modal", "none"),
-        default="modal",
+        default=None,
         help=(
-            "Use Modal acceptance evaluation, or publish training-only evidence "
-            "without promotion or goal acceptance."
+            "Override the recipe's checkpoint-evaluation mode. Modal establishes "
+            "acceptance; none publishes training-only evidence without promotion or "
+            "goal acceptance."
         ),
     )
     launch.add_argument(

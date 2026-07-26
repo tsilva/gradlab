@@ -441,13 +441,19 @@ def validate_and_normalize_train_config(
             f"{label}.post_train_eval_stochastic must be true; "
             "all policy evaluation uses stochastic sampling"
         )
-    if normalized.get("checkpoint_eval_backend") == "none":
-        if normalized.get("early_stop") is not None:
-            raise ValueError(f"{label}.early_stop must be null when checkpoint eval is disabled")
     if normalized.get("early_stop") is not None:
         normalized["early_stop"] = normalize_early_stop_config(
             normalized["early_stop"], label=f"{label}.early_stop"
         )
+    if normalized.get("checkpoint_eval_backend") == "none":
+        early_stop = normalized.get("early_stop")
+        if early_stop is not None and any(
+            not str(rule["metric"]).startswith("train/") for rule in early_stop
+        ):
+            raise ValueError(
+                f"{label}.early_stop may use only train/* metrics when checkpoint eval "
+                "is disabled"
+            )
     if normalized.get("checkpoint_eval_acceptance") is not None:
         normalized["checkpoint_eval_acceptance"] = normalize_early_stop_config(
             normalized["checkpoint_eval_acceptance"],
@@ -726,7 +732,7 @@ TRAIN_CONFIG_FIELDS: tuple[TrainConfigField, ...] = (
         default="modal",
         choices=("local", "modal", "none"),
         non_empty=True,
-        source_section="goal_train",
+        source_section="train",
         help=(
             "Checkpoint evaluation backend. Orchestrated runs default to Modal; "
             "local is an explicit fallback; none creates a training-only run that cannot "
@@ -780,9 +786,11 @@ TRAIN_CONFIG_FIELDS: tuple[TrainConfigField, ...] = (
         type_name="json",
         default=None,
         serialize="json",
-        owner="goal_objective",
-        source_section="goal_train",
-        help="JSON early-stop list of AND-combined metric threshold rules.",
+        source_section="train",
+        help=(
+            "JSON early-stop list of AND-combined metric threshold rules. "
+            "Training-only recipes may use only train/* metrics."
+        ),
     ),
     _field(
         "selection_rank",

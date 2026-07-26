@@ -31,6 +31,7 @@ class ConfigValidationTests(unittest.TestCase):
     BREAKOUT_NO_NOOP_RECIPE = BREAKOUT_NO_NOOP_GOAL.parent / "recipes/ppo.yaml"
     MARIO_L11_GOAL = Path("experiments/goals/SuperMarioBros-Nes-v0/Level1-1/_goal.yaml")
     MARIO_L12_GOAL = Path("experiments/goals/SuperMarioBros-Nes-v0/Level1-2/_goal.yaml")
+    MARIO_L13_GOAL = Path("experiments/goals/SuperMarioBros-Nes-v0/Level1-3/_goal.yaml")
     MARIO_END_TO_END_GOAL = Path("experiments/goals/SuperMarioBros-Nes-v0/EndToEnd/_goal.yaml")
     MARIO_SINGLE_RECIPES = MARIO_L11_GOAL.parent / "recipes"
 
@@ -288,6 +289,29 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertIsNone(train_config["early_stop"])
         self.assertNotIn("checkpoint_eval_stages", train_config)
 
+    def test_level1_3_training_clear_recipe_disables_eval_and_stops_at_100_of_100(
+        self,
+    ) -> None:
+        document = compose_train_document(
+            self.MARIO_L13_GOAL,
+            self.MARIO_L13_GOAL.parent / "recipes/ppo-train-clear-100.yaml",
+        )
+
+        train_config = document["train_config"]
+        self.assertEqual(document["recipe_id"], "ppo-train-clear-100")
+        self.assertEqual(train_config["checkpoint_eval_backend"], "none")
+        self.assertFalse(train_config["stop_on_acceptance"])
+        self.assertEqual(
+            train_config["early_stop"],
+            [
+                {
+                    "metric": "train/outcome/success/window_100/rate/min",
+                    "operator": ">=",
+                    "threshold": 1.0,
+                }
+            ],
+        )
+
     def test_level1_1_on_policy_recipes_share_common_config(self) -> None:
         ppo = compose_train_document(self.MARIO_L11_GOAL, self.MARIO_SINGLE_RECIPES / "ppo.yaml")
         a2c = compose_train_document(self.MARIO_L11_GOAL, self.MARIO_SINGLE_RECIPES / "a2c.yaml")
@@ -336,7 +360,7 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertEqual(report.counts["json_files"], 0)
         self.assertGreaterEqual(report.counts["yaml_files"], 15)
         self.assertGreaterEqual(report.counts["goals"], 1)
-        self.assertEqual(report.counts["train_recipes"], 31)
+        self.assertEqual(report.counts["train_recipes"], 32)
         self.assertGreaterEqual(report.counts["env_configs"], 0)
         self.assertEqual(report.counts["benchmark_profiles"], 4)
 
