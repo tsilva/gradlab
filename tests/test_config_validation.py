@@ -34,6 +34,8 @@ class ConfigValidationTests(unittest.TestCase):
     MARIO_L13_GOAL = Path("experiments/goals/SuperMarioBros-Nes-v0/Level1-3/_goal.yaml")
     MARIO_END_TO_END_GOAL = Path("experiments/goals/SuperMarioBros-Nes-v0/EndToEnd/_goal.yaml")
     MARIO_SINGLE_RECIPES = MARIO_L11_GOAL.parent / "recipes"
+    VIZDOOM_BASIC_GOAL = Path("experiments/goals/VizdoomBasic-v1/_goal.yaml")
+    VIZDOOM_BASIC_RECIPE = VIZDOOM_BASIC_GOAL.parent / "recipes/ppo.yaml"
 
     def test_recipe_preset_allowlist_is_independent_of_current_directory(self) -> None:
         goal = self.MARIO_L11_GOAL.resolve()
@@ -113,6 +115,7 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertEqual(train_config["state"], "Start")
         self.assertEqual(train_config["task"]["action"]["set"], "native")
         self.assertFalse(train_config["max_pool_frames"])
+
         self.assertEqual(train_config["sticky_action_prob"], 0.0)
         self.assertEqual(train_config["env_args"]["noop_reset_max"], 30)
         self.assertEqual(train_config["obs_crop"], [17, 0, 0, 0])
@@ -161,6 +164,44 @@ class ConfigValidationTests(unittest.TestCase):
             self.assertEqual(train_config[key], stable_train[key])
         self.assertEqual(document["goal"]["objective"], stable_retro["goal"]["objective"])
         self.assertNotIn("eval", stable_retro["goal"])
+
+    def test_vizdoom_basic_ppo_recipe_has_evaluated_kill_contract(self) -> None:
+        document = compose_train_document(
+            self.VIZDOOM_BASIC_GOAL,
+            self.VIZDOOM_BASIC_RECIPE,
+        )
+
+        train_config = document["train_config"]
+        self.assertEqual(document["goal"]["goal_id"], "VizdoomBasic-v1")
+        self.assertEqual(document["recipe_id"], "ppo")
+        self.assertEqual(train_config["timesteps"], 2_000_000)
+        self.assertEqual(train_config["training_backend"]["id"], "sb3.ppo")
+        self.assertEqual(train_config["env_provider"], "vizdoom-turbo")
+        self.assertEqual(train_config["game"], "VizdoomBasic-v1")
+        self.assertEqual(train_config["state"], "default")
+        self.assertEqual(train_config["n_envs"], 32)
+        self.assertEqual(train_config["env_args"]["use_restricted_actions"], "discrete")
+        self.assertEqual(train_config["env_args"]["game_variables"], ["KILLCOUNT"])
+        self.assertEqual(
+            train_config["task"]["events"]["monster_killed"],
+            {"signal": "kills", "operation": "increase"},
+        )
+        self.assertEqual(
+            train_config["task"]["termination"],
+            {"success": ["monster_killed"], "max_episode_steps": 72},
+        )
+        self.assertEqual(document["goal"]["train"]["checkpoint_eval_backend"], "modal")
+        self.assertEqual(
+            document["goal"]["eval"]["acceptance"],
+            [
+                {
+                    "metric": "eval/full/outcome/success/rate/min",
+                    "operator": ">=",
+                    "threshold": 0.95,
+                }
+            ],
+        )
+        self.assertEqual(document["goal"]["release"], {"huggingface": {}})
 
     def test_breakout_no_noop_ablation_changes_only_goal_identity_and_action_table(self) -> None:
         baseline = compose_train_document(
@@ -394,7 +435,7 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertEqual(report.counts["json_files"], 0)
         self.assertGreaterEqual(report.counts["yaml_files"], 15)
         self.assertGreaterEqual(report.counts["goals"], 1)
-        self.assertEqual(report.counts["train_recipes"], 32)
+        self.assertEqual(report.counts["train_recipes"], 33)
         self.assertGreaterEqual(report.counts["env_configs"], 0)
         self.assertEqual(report.counts["benchmark_profiles"], 4)
 

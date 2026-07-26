@@ -1041,6 +1041,37 @@ class RlabVecEnvTests(unittest.TestCase):
         np.testing.assert_array_equal(second.terminated, [False, True])
         np.testing.assert_array_equal(provider.reset_calls[-1]["mask"], [False, True])
 
+    def test_identity_increase_success_resets_only_the_scoring_lane(self):
+        provider = DeterministicNativeVectorProvider()
+        descriptor = descriptor_for(provider)
+        kernel = IdentityTaskDefinition(
+            signals={"kills": "score"},
+            events={
+                "monster_killed": {
+                    "signal": "kills",
+                    "operation": "increase",
+                }
+            },
+            termination={"success": ["monster_killed"]},
+        ).bind(descriptor, provider.num_envs)
+        runtime = BatchRuntime(provider, descriptor, kernel, run_seed=11)
+        runtime.reset()
+
+        provider.queue_step(score=[1, 0], rewards=[96.0, -4.0])
+        step = runtime.step(np.zeros((2, 3), dtype=np.int8))
+
+        np.testing.assert_array_equal(step.terminated, [True, False])
+        np.testing.assert_array_equal(step.truncated, [False, False])
+        np.testing.assert_array_equal(provider.reset_calls[-1]["mask"], [True, False])
+        records = runtime.drain_records()
+        record = next(record for record in records if isinstance(record, EpisodeRecord))
+        event_record = next(
+            record for record in records if isinstance(record, TaskEventRecord)
+        )
+        self.assertEqual(record.events, ("monster_killed",))
+        self.assertEqual(record.outcome, Outcome.SUCCESS)
+        self.assertEqual(event_record.transitions["monster_killed"], (0, 1))
+
     def test_identity_decrease_arms_on_first_step_when_reset_signal_is_unavailable(self):
         provider = DeterministicNativeVectorProvider()
         descriptor = ProviderDescriptor(

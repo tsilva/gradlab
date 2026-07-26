@@ -145,11 +145,11 @@ class EnvironmentTaskConfigTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "action has unexpected keys"):
             validate_task_config(task_auto_fire)
 
-    def test_identity_task_accepts_equals_for_and_decrease_events(self) -> None:
+    def test_identity_task_accepts_equals_for_decrease_and_increase_events(self) -> None:
         task = {
             "id": "identity",
             "action": {"set": "native"},
-            "signals": {"ball_y": "ball_y", "lives": "lives"},
+            "signals": {"ball_y": "ball_y", "lives": "lives", "kills": "killcount"},
             "events": {
                 "serve_stall": {
                     "signal": "ball_y",
@@ -161,8 +161,15 @@ class EnvironmentTaskConfigTests(unittest.TestCase):
                     "signal": "lives",
                     "operation": "decrease",
                 },
+                "monster_killed": {
+                    "signal": "kills",
+                    "operation": "increase",
+                },
             },
-            "termination": {"failure": ["serve_stall", "life_loss"]},
+            "termination": {
+                "success": ["monster_killed"],
+                "failure": ["serve_stall", "life_loss"],
+            },
             "reward": {"reward_mode": "native"},
         }
 

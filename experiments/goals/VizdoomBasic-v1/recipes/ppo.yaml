@@ -1,0 +1,9 @@
+defaults:
+- ../../../recipes/_presets/atari-ppo@_global_
+- _self_
+recipe_id: ppo
+description: >-
+  Seed {{ seed }} trains PPO to eliminate the single monster in {{ goal_id }} from pixels, with
+  stochastic 100-episode evaluation and checkpoint promotion at 95% success.
+train:
+  timesteps: 2000000
