@@ -55,6 +55,7 @@ class ConfigValidationTests(unittest.TestCase):
         from rlab.bandit_env import BanditVectorEnv
         from stable_retro import RetroVecEnv
         from supermariobrosnes_turbo import SuperMarioBrosNesTurboVecEnv
+        from vizdoom_turbo import VizdoomTurboVecEnv
 
         constructors = {
             "ale-py": AtariVectorEnv,
@@ -62,6 +63,7 @@ class ConfigValidationTests(unittest.TestCase):
             "rlab": BanditVectorEnv,
             "stable-retro-turbo": RetroVecEnv,
             "supermariobrosnes-turbo": SuperMarioBrosNesTurboVecEnv,
+            "vizdoom-turbo": VizdoomTurboVecEnv,
         }
         for provider_id, constructor in constructors.items():
             with self.subTest(provider_id=provider_id):
