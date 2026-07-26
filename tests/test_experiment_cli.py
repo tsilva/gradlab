@@ -13,7 +13,9 @@ from rlab.experiment_cli import (
     _bind_launch_contract,
     _compute,
     _follow_fingerprint,
+    _latest_attempt_terminal,
     _public_dstack_state,
+    _record_pre_submit_failure,
     _require_retryable_attempt_terminal,
     _required_operator_environment,
     _run_completed,
@@ -371,10 +373,56 @@ def test_retry_task_name_preserves_run_and_changes_attempt() -> None:
 
     assert _task_name(run_id, attempt_id, initial=True) == run_id
     retry_name = _task_name(run_id, attempt_id, initial=False)
-    assert retry_name.startswith(run_id[:30] + "-a")
-    assert retry_name.endswith(attempt_id.removeprefix("attempt-")[:8])
-    assert len(retry_name) == 40
+    assert retry_name.startswith("rlab-")
+    assert len(retry_name) == len(run_id)
+    assert _task_name(run_id, attempt_id, initial=False) == retry_name
+    assert _task_name(new_run_id(), attempt_id, initial=False) != retry_name
     assert _task_name(run_id, new_attempt_id(), initial=False) != retry_name
+
+
+def test_latest_attempt_terminal_does_not_reuse_prior_attempt_receipt() -> None:
+    first = _manifest_only_run().to_dict()
+    second = {
+        **first,
+        "attempt_id": new_attempt_id(),
+        "created_at": "2026-07-26T00:00:01Z",
+    }
+    first_terminal = {
+        "attempt_id": first["attempt_id"],
+        "completed_at": "2026-07-26T00:00:00Z",
+    }
+    state = {
+        "attempts": [first, second],
+        "attempt_terminals": [first_terminal],
+    }
+
+    assert _latest_attempt_terminal(state) is None
+    second_terminal = {
+        "attempt_id": second["attempt_id"],
+        "completed_at": "2026-07-26T00:00:02Z",
+    }
+    state["attempt_terminals"].append(second_terminal)
+    assert _latest_attempt_terminal(state) == second_terminal
+
+
+def test_pre_submit_failure_records_typed_attempt_evidence() -> None:
+    manifest = _manifest_only_run()
+    authority = mock.MagicMock()
+    prefix = f"runs/{manifest.run_id}"
+    authority.run_prefix.return_value = prefix
+    authority.control.iter_keys.return_value = iter(
+        [f"{prefix}/attempts/{manifest.attempt_id}/manifest.json"]
+    )
+
+    _record_pre_submit_failure(authority, manifest)
+
+    receipt = authority.create_attempt_terminal.call_args.args[0]
+    assert receipt.run_id == manifest.run_id
+    assert receipt.attempt_id == manifest.attempt_id
+    assert receipt.state == "resumable_failure"
+    assert receipt.stop_reason == "pre_submit_failure"
+    assert receipt.final_step == 0
+    assert receipt.drain["complete"] is False
 
 
 def test_resume_submit_recovers_only_the_original_manifest(

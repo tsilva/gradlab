@@ -76,9 +76,11 @@ class DstackBackendTests(unittest.TestCase):
             self.task(plain_env={"WANDB_API_KEY": "inline-value"}).validate()
 
     def test_task_rejects_names_longer_than_dstack_limit(self) -> None:
-        self.task(task_name="r" * 40).validate()
+        self.task(task_name="r" * 41).validate()
         with self.assertRaisesRegex(ValueError, "DNS-style name"):
-            self.task(task_name="r" * 41).validate()
+            self.task(task_name="r" * 42).validate()
+        with self.assertRaisesRegex(ValueError, "DNS-style name"):
+            self.task(task_name="1-invalid").validate()
 
     def test_spot_requires_both_price_and_total_cost(self) -> None:
         with self.assertRaisesRegex(ValueError, "requires --max-price"):
