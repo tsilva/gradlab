@@ -121,6 +121,9 @@ Every generated command uses one deterministic request key and batch. Reconcile 
 
 Operational failure, cancellation, observer failure, `potential_bug`, `attention_required`,
 source drift, runtime drift, or unverified publication pauses rather than consuming a new wave.
+A fully drained typed `early_stop_failure:<condition_id>` with a matching unsuccessful
+`action: stop` receipt is designed negative evidence instead: preserve its W&B observations,
+censor its success fields, and continue the study without allowing that run to win a rung.
 Transient W&B evidence reads remain retryable without state mutation.
 
 Reserve five jobs for confirmation throughout search. Stop after three stale rounds or when the

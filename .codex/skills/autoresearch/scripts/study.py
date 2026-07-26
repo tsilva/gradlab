@@ -50,6 +50,7 @@ RETURN_TAIL_FRACTION = 0.10
 EVIDENCE_SUCCESS = "success"
 EVIDENCE_RETURN = "return"
 EVIDENCE_MODES = frozenset({EVIDENCE_SUCCESS, EVIDENCE_RETURN})
+DESIGNED_EARLY_STOP_FAILURE = "designed_early_stop_failure"
 
 SCREEN_PHASES = frozenset({"baseline-screen", "search-screen"})
 PAIR_PHASES = frozenset({"baseline-pair", "search-pair"})
@@ -1219,13 +1220,29 @@ def command_record_terminal(args: argparse.Namespace) -> None:
         terminal = payload.get("attempt_terminal") or {}
         drain = terminal.get("drain") or {}
         wandb = manifest.get("wandb") or {}
+        stop_reason = str(terminal.get("stop_reason") or "")
+        early_stop = terminal.get("early_stop") or {}
+        condition = early_stop.get("condition") or {}
+        condition_id = str(early_stop.get("condition_id") or "")
+        designed_failure = (
+            str(terminal.get("state") or "") == "failed"
+            and stop_reason == f"early_stop_failure:{condition_id}"
+            and bool(condition_id)
+            and str(early_stop.get("outcome") or "") == "failure"
+            and str(condition.get("outcome") or "") == "failure"
+            and str(condition.get("action") or "") == "stop"
+        )
         classification = (
-            "completed" if str(terminal.get("state") or "") == "succeeded" else "failed"
+            "completed"
+            if str(terminal.get("state") or "") == "succeeded"
+            else DESIGNED_EARLY_STOP_FAILURE
+            if designed_failure
+            else "failed"
         )
         high_water = int(terminal.get("wandb_high_water_mark") or 0)
         remote_high_water = int(drain.get("wandb_remote_high_water_mark") or 0)
         valid = (
-            classification == "completed"
+            classification in {"completed", DESIGNED_EARLY_STOP_FAILURE}
             and terminal.get("acceptance_required") is False
             and drain.get("complete") is True
             and high_water > 0
@@ -1240,6 +1257,8 @@ def command_record_terminal(args: argparse.Namespace) -> None:
             "run_id": run_id,
             "seed": seed,
             "classification": classification,
+            "stop_reason": stop_reason,
+            "early_stop": copy.deepcopy(early_stop) if designed_failure else None,
             "wandb_run_id": wandb.get("run_id"),
             "wandb_url": wandb.get("url"),
             "training_evidence": None,
@@ -1427,6 +1446,15 @@ def command_collect_training_evidence(args: argparse.Namespace) -> None:
             state["policy"].get("return_tail_fraction", RETURN_TAIL_FRACTION)
         ),
     )
+    if record.get("classification") == DESIGNED_EARLY_STOP_FAILURE:
+        evidence["observed_all_starts_succeeded"] = evidence["all_starts_succeeded"]
+        evidence["observed_strong"] = evidence["strong"]
+        evidence["observed_first_strong_step"] = evidence["first_strong_step"]
+        evidence["all_starts_succeeded"] = False
+        evidence["strong"] = False
+        evidence["first_strong_step"] = None
+        evidence["censored"] = True
+        evidence["censor_reason"] = str(record.get("stop_reason") or "")
     with edit_state(path) as current:
         source_guard(current)
         current_matches: list[tuple[dict[str, Any], dict[str, Any]]] = []
