@@ -10,6 +10,12 @@ from rlab.main import main
 
 
 class PublicCliHelpTests(unittest.TestCase):
+    def test_eval_without_a_subcommand_prints_help_and_returns_usage_error(self) -> None:
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout):
+            self.assertEqual(main(["eval"]), 2)
+        self.assertTrue(stdout.getvalue().startswith("usage: rlab eval"))
+
     def test_ordinary_help_does_not_import_optional_dataset_stack(self) -> None:
         script = """
 import sys

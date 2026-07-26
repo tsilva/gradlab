@@ -48,15 +48,12 @@ def test_staging_copies_known_bundle_closure_with_private_permissions() -> None:
             staged.cleanup()
 
 
-def test_staging_uses_current_metadata_precedence_and_ignores_lower_sidecar() -> None:
+def test_staging_rejects_a_model_without_current_bundle_files() -> None:
     with tempfile.TemporaryDirectory() as temporary:
-        checkpoint = _checkpoint(Path(temporary))
-        checkpoint.with_suffix(".metadata.json").write_text('{"ignored": true}')
-        staged = stage_model_input(checkpoint)
-        try:
-            assert "model.metadata.json" not in {entry.path for entry in staged.manifest}
-        finally:
-            staged.cleanup()
+        checkpoint = Path(temporary) / "model.zip"
+        checkpoint.write_bytes(b"checkpoint")
+        with pytest.raises(ValueError, match="missing current policy bundle"):
+            stage_model_input(checkpoint)
 
 
 def test_release_manifest_missing_bound_file_is_rejected() -> None:

@@ -29,13 +29,16 @@ from rlab.callbacks import (
     ThroughputHelper,
     task_metric_source,
 )
-from rlab.env import EnvConfig
+from rlab.env import EnvConfig, resolve_env_config
+from rlab.env_config import env_config_from_mapping
 from rlab.metric_store import MetricStore
 from rlab.metric_names import (
     TRAIN_OUTCOME_SUCCESS_WINDOW_100_RATE_MIN,
     train_early_stop_metric,
 )
-from rlab.training_backend import GracefulStopFlag
+from rlab.policy_bundle import build_recipe_document, write_canonical_json
+from rlab.recipe_documents import compose_train_document
+from rlab.training_backend import GracefulStopFlag, training_backend_config_hash
 
 
 ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
@@ -535,9 +538,35 @@ class LedgerCheckpointHelperTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             run_dir = Path(tmp) / "run"
             store_path = run_dir / "rlab.sqlite"
+            recipe_document = build_recipe_document(
+                compose_train_document(
+                    Path("experiments/goals/rlab__bandit/_goal.yaml"),
+                    Path("experiments/goals/rlab__bandit/recipes/ppo.yaml"),
+                ),
+                repo_root=Path.cwd(),
+                source_commit="a" * 40,
+                run_description="Exact SB3 checkpoint path regression.",
+                runtime_image_ref="docker:example/runtime@sha256:" + "b" * 64,
+            )
+            train_config = recipe_document["recipe"]["train_config"]
+            recipe_path = write_canonical_json(run_dir / "recipe.json", recipe_document)
             callback = LedgerCheckpointHelper(
-                args=argparse.Namespace(run_name="run", run_description=""),
-                config=EnvConfig(game="SuperMarioBros-Nes-v0", state="Level1-1"),
+                args=argparse.Namespace(
+                    **{
+                        **train_config,
+                        "run_name": "run",
+                        "run_description": "Exact SB3 checkpoint path regression.",
+                        "recipe_json_path": str(recipe_path),
+                        "source_sha": "a" * 40,
+                        "algorithm_id": "ppo",
+                        "model_class": "stable_baselines3.ppo.ppo.PPO",
+                        "training_backend_id": "sb3.ppo",
+                        "training_backend_config_hash": training_backend_config_hash(
+                            train_config
+                        ),
+                    }
+                ),
+                config=resolve_env_config(env_config_from_mapping(train_config)),
                 save_freq=1,
                 save_path=run_dir / "checkpoints",
                 name_prefix="ppo_supermariobros-nes-v0",

@@ -134,7 +134,7 @@ def _packaged_action_sets(provider_id: str, game: str) -> Mapping[str, Any]:
     return action_sets if isinstance(action_sets, Mapping) else {}
 
 
-def _provider_buttons(provider_id: str, game: str) -> tuple[str | None, ...]:
+def provider_buttons(provider_id: str, game: str) -> tuple[str | None, ...]:
     if provider_id == "supermariobrosnes-turbo":
         from supermariobrosnes_turbo import NES_BUTTONS
 
@@ -204,7 +204,7 @@ def declared_action_contract(config: Any) -> dict[str, Any] | None:
         or not table
     ):
         raise ValueError("custom use_restricted_actions must be a non-empty action table")
-    buttons = _provider_buttons(provider_id, game)
+    buttons = provider_buttons(provider_id, game)
     button_to_index = {name: index for index, name in enumerate(buttons) if name is not None}
     players = int(env_args.get("players", 1))
     if players <= 0:
@@ -312,7 +312,7 @@ def configured_action_values(config: Any) -> tuple[tuple[int, ...], ...] | None:
         else getattr(config, "env_args", {})
     )
     players = int(env_args.get("players", 1)) if isinstance(env_args, Mapping) else 1
-    buttons = _provider_buttons(provider_id, game)
+    buttons = provider_buttons(provider_id, game)
     values: list[tuple[int, ...]] = []
     for action in contract["table"]:
         player_actions = [action] if players == 1 else action

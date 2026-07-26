@@ -1,29 +1,14 @@
 from __future__ import annotations
 
 import argparse
+import importlib
 import sys
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
 
 
-CommandMain = Callable[[list[str] | None], object]
-
-
-def _run(command: CommandMain, argv: Sequence[str]) -> int:
-    result = command(list(argv))
-    return int(result) if isinstance(result, int) else 0
-
-
-def _experiment(argv: Sequence[str]) -> int:
-    from rlab.experiment_cli import main as experiment_main
-
-    return _run(experiment_main, argv)
-
-
-def _eval(argv: Sequence[str]) -> int:
+def _eval_argv(argv: Sequence[str]) -> list[str] | None:
     if argv and argv[0] == "run":
-        from rlab.eval import main as eval_main
-
-        return _run(eval_main, argv[1:])
+        return list(argv[1:])
     parser = argparse.ArgumentParser(
         prog="rlab eval",
         description="Run an ad-hoc evaluation locally.",
@@ -34,80 +19,28 @@ def _eval(argv: Sequence[str]) -> int:
         parser.parse_args(["--help"])
     if not argv:
         parser.print_help()
-        return 2
+        return None
     parser.error(f"unknown eval command: {argv[0]}")
-    return 2
 
 
-def _leaders(argv: Sequence[str]) -> int:
-    from rlab.wandb_leaders import main as leaders_main
-
-    return _run(leaders_main, argv)
-
-
-def _reports(argv: Sequence[str]) -> int:
-    from rlab.wandb_reports import main as reports_main
-
-    return _run(reports_main, argv)
-
-
-def _play(argv: Sequence[str]) -> int:
-    from rlab.play import main as play_main
-
-    return _run(play_main, argv)
-
-
-def _import_roms(argv: Sequence[str]) -> int:
-    from rlab.import_roms import main as import_roms_main
-
-    return _run(import_roms_main, argv)
-
-
-def _benchmark(argv: Sequence[str]) -> int:
-    from rlab.benchmark import main as benchmark_main
-
-    return _run(benchmark_main, argv)
-
-
-def _validate(argv: Sequence[str]) -> int:
-    from rlab.config_validation import main as validate_main
-
-    return _run(validate_main, argv)
-
-
-def _env(argv: Sequence[str]) -> int:
-    from rlab.env_cli import main as env_main
-
-    return _run(env_main, argv)
-
-
-def _rom(argv: Sequence[str]) -> int:
-    from rlab.rom_cli import main as rom_main
-
-    return _run(rom_main, argv)
-
-
-def _dataset(argv: Sequence[str]) -> int:
-    from rlab.dataset_cli import main as dataset_main
-
-    return _run(dataset_main, argv)
-
-
-COMMANDS: dict[str, tuple[str, Callable[[Sequence[str]], int]]] = {
-    "experiment": ("launch and observe dstack training experiments", _experiment),
-    "eval": ("run a direct local evaluation", _eval),
-    "play": ("browse and inspect W&B, public-run, local, or Hugging Face models", _play),
-    "import-roms": ("import ROMs into the installed rlab runtime", _import_roms),
-    "benchmark": ("run gated local-smoke and throughput profiles", _benchmark),
+COMMANDS: dict[str, tuple[str, str]] = {
+    "experiment": ("launch and observe dstack training experiments", "rlab.experiment_cli"),
+    "eval": ("run a direct local evaluation", "rlab.eval"),
+    "play": ("browse and inspect W&B, public-run, local, or Hugging Face models", "rlab.play"),
+    "import-roms": ("import ROMs into the installed rlab runtime", "rlab.import_roms"),
+    "benchmark": ("run gated local-smoke and throughput profiles", "rlab.benchmark"),
     "validate": (
         "validate checked-in YAML experiments, recipes, benchmarks, and ops configs",
-        _validate,
+        "rlab.config_validation",
     ),
-    "env": ("list, inspect, and preflight environment providers", _env),
-    "rom": ("provision, verify, and warm immutable ROM assets", _rom),
-    "dataset": ("record, inspect, verify, migrate, and publish gameplay datasets", _dataset),
-    "leaders": ("query accepted runs and promoted checkpoints", _leaders),
-    "reports": ("plan, synchronize, and verify declarative W&B reports", _reports),
+    "env": ("list, inspect, and preflight environment providers", "rlab.env_cli"),
+    "rom": ("provision, verify, and warm immutable ROM assets", "rlab.rom_cli"),
+    "dataset": (
+        "record, inspect, verify, migrate, and publish gameplay datasets",
+        "rlab.dataset_cli",
+    ),
+    "leaders": ("query accepted runs and promoted checkpoints", "rlab.wandb_leaders"),
+    "reports": ("plan, synchronize, and verify declarative W&B reports", "rlab.wandb_reports"),
 }
 
 
@@ -122,7 +55,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     subparsers = parser.add_subparsers(dest="command", metavar="<command>")
     for name in COMMANDS:
-        help_text, _handler = COMMANDS[name]
+        help_text, _module_name = COMMANDS[name]
         subparser = subparsers.add_parser(name, help=help_text, add_help=False)
         subparser.add_argument("args", nargs=argparse.REMAINDER)
     return parser
@@ -137,8 +70,12 @@ def main(argv: list[str] | None = None) -> int:
     command = argv_list[0]
     if command not in COMMANDS:
         parser.error(f"unknown command: {command}")
-    _help, handler = COMMANDS[command]
-    return handler(argv_list[1:])
+    _help, module_name = COMMANDS[command]
+    command_argv = _eval_argv(argv_list[1:]) if command == "eval" else argv_list[1:]
+    if command_argv is None:
+        return 2
+    result = importlib.import_module(module_name).main(list(command_argv))
+    return int(result) if isinstance(result, int) else 0
 
 
 if __name__ == "__main__":

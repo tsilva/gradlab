@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import os
 from datetime import UTC, datetime
 from pathlib import Path
@@ -9,6 +8,7 @@ from typing import Any
 from stable_baselines3.common.logger import HumanOutputFormat
 
 from rlab.callbacks import CallbackHelper
+from rlab.file_utils import atomic_write_json
 
 
 SB3_HUMAN_OUTPUT_MAX_LENGTH = 512
@@ -63,23 +63,16 @@ class GracefulStopHelper(CallbackHelper):
             flush=True,
         )
         if self.marker_path is not None:
-            self.marker_path.parent.mkdir(parents=True, exist_ok=True)
-            temporary = self.marker_path.with_suffix(self.marker_path.suffix + ".tmp")
-            temporary.write_text(
-                json.dumps(
-                    {
-                        "observed_at": datetime.now(UTC).isoformat(),
-                        "reason": reason,
-                        "num_timesteps": int(num_timesteps),
-                        "pid": os.getpid(),
-                        "boundary": "on_policy_update_end",
-                    },
-                    sort_keys=True,
-                )
-                + "\n",
-                encoding="utf-8",
+            atomic_write_json(
+                self.marker_path,
+                {
+                    "observed_at": datetime.now(UTC).isoformat(),
+                    "reason": reason,
+                    "num_timesteps": int(num_timesteps),
+                    "pid": os.getpid(),
+                    "boundary": "on_policy_update_end",
+                },
             )
-            temporary.replace(self.marker_path)
         self.logged = True
 
 

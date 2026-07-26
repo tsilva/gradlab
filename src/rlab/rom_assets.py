@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import unquote, urlparse
 
-from rlab.file_utils import file_sha256, fsync_path
+from rlab.file_utils import atomic_write_json, file_sha256, fsync_path
 
 
 ROM_ASSET_SCHEMA_VERSION = 2
@@ -61,18 +61,7 @@ def load_rom_asset_state(path: Path | None = None) -> dict[str, Any]:
 
 def write_rom_asset_state(value: Mapping[str, Any], path: Path | None = None) -> Path:
     target = rom_asset_state_path() if path is None else path
-    target.parent.mkdir(parents=True, exist_ok=True)
-    payload = json.dumps(dict(value), indent=2, sort_keys=True) + "\n"
-    fd, name = tempfile.mkstemp(prefix=".rom-assets-", dir=target.parent, text=True)
-    temporary = Path(name)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            handle.write(payload)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary, target)
-    finally:
-        temporary.unlink(missing_ok=True)
+    atomic_write_json(target, value)
     return target
 
 

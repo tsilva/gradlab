@@ -136,7 +136,7 @@ class LedgerCheckpointHelper(CallbackHelper):
     def save_checkpoint(self, step: int, *, kind: str) -> Path:
         started = time.perf_counter()
         final_path = self.save_path / f"{self.name_prefix}_{step}_steps.zip"
-        final_path, metadata_path = install_model_bundle(
+        final_path = install_model_bundle(
             final_path,
             save_checkpoint=lambda path: self.model.save(str(path)),
             args=self.args,
@@ -152,7 +152,6 @@ class LedgerCheckpointHelper(CallbackHelper):
             kind=kind,
             step=step,
             path=final_path,
-            metadata_path=metadata_path,
             sha256=None,
             eval_required=self.eval_required,
         )

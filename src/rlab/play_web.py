@@ -1460,6 +1460,8 @@ class PlaybackWebServer:
         self._auto_start_task_epoch = -1
         self._observed_session_change = int(getattr(self.runner, "session_change", 0))
         self._secondary_opened = False
+        self._catalog_entity = ""
+        self._initial_project_catalog: dict[str, Any] | None = None
 
     @property
     def asset_root(self) -> Path:
@@ -1530,10 +1532,13 @@ class PlaybackWebServer:
         from rlab.play_catalog import normalize_search_query
 
         try:
-            entity = await asyncio.to_thread(
-                self.catalog.default_entity,
-                request.query.get("entity") or getattr(self.args, "wandb_entity", None),
-            )
+            requested_entity = str(
+                request.query.get("entity") or getattr(self.args, "wandb_entity", None) or ""
+            ).strip()
+            entity = requested_entity or self._catalog_entity
+            if not entity:
+                entity = await asyncio.to_thread(self.catalog.default_entity)
+                self._catalog_entity = entity
             page = await asyncio.to_thread(
                 self.catalog.projects,
                 entity=entity,
@@ -1543,6 +1548,21 @@ class PlaybackWebServer:
         except Exception as exc:
             return web.json_response({"error": str(exc)}, status=502)
         return web.json_response({"entity": entity, **page.to_dict()})
+
+    async def _prepare_initial_catalog(self) -> None:
+        if self.catalog is None:
+            return
+        initial_projects = getattr(self.catalog, "initial_projects", None)
+        if not callable(initial_projects):
+            return
+        payload = await asyncio.to_thread(
+            initial_projects,
+            getattr(self.args, "wandb_entity", None),
+        )
+        if not isinstance(payload, Mapping):
+            raise ValueError("initial project catalog must be a mapping")
+        self._catalog_entity = str(payload.get("entity") or "").strip()
+        self._initial_project_catalog = dict(payload)
 
     async def catalog_runs(self, request: web.Request) -> web.Response:
         self._authorize_api(request)
@@ -1600,7 +1620,7 @@ class PlaybackWebServer:
         return web.json_response({"items": list(items), "next_cursor": None})
 
     def _snapshot_for(self, client: WebClient, snapshot: Mapping[str, Any]) -> dict[str, Any]:
-        return {
+        payload = {
             **snapshot,
             "control_epoch": self.control_epoch,
             "control": {
@@ -1612,6 +1632,20 @@ class PlaybackWebServer:
                 "has_control": self.control_holder == client.workspace_id,
             },
         }
+        app = payload.get("app")
+        route = app.get("route") if isinstance(app, Mapping) else None
+        if (
+            self._initial_project_catalog is not None
+            and isinstance(app, Mapping)
+            and app.get("phase") == "selecting"
+            and isinstance(route, Mapping)
+            and route.get("level", "projects") == "projects"
+        ):
+            payload["app"] = {
+                **app,
+                "catalog": dict(self._initial_project_catalog),
+            }
+        return payload
 
     def _broadcast_control(self) -> None:
         snapshot = self.runner.snapshot()
@@ -2002,6 +2036,7 @@ class PlaybackWebServer:
             await asyncio.sleep(1.0 / 120.0)
 
     async def run(self) -> int:
+        await self._prepare_initial_catalog()
         app = web.Application(middlewares=[self.security_headers])
         app.add_routes(
             [
@@ -2029,10 +2064,7 @@ class PlaybackWebServer:
                     self.catalog_goals,
                 ),
                 web.get(
-                    (
-                        "/api/catalog/projects/{entity}/{project}/goals/{goal_id}"
-                        "/runs"
-                    ),
+                    ("/api/catalog/projects/{entity}/{project}/goals/{goal_id}/runs"),
                     self.catalog_runs,
                 ),
                 web.get(

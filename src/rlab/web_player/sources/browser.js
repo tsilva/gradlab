@@ -157,6 +157,60 @@ export function sortRunItems(items, sort) {
     .map(({ item }) => item);
 }
 
+function hasCompleteRunMetrics(item, columns) {
+  return columns.length > 0 && columns.every((column) => {
+    const raw = item?.metrics?.[column.metric];
+    return raw !== null && raw !== undefined && Number.isFinite(Number(raw));
+  });
+}
+
+export function activeRunMetricColumns(items, primaryColumns, fallbackColumns = []) {
+  const primary = Array.isArray(primaryColumns) ? primaryColumns : [];
+  const fallback = Array.isArray(fallbackColumns) ? fallbackColumns : [];
+  if (primary.some(Boolean) && items.some((item) => hasCompleteRunMetrics(item, primary))) {
+    return primary;
+  }
+  return fallback.length ? fallback : primary;
+}
+
+export function rankRunItems(items, columns) {
+  const criteria = Array.isArray(columns) ? columns : [];
+  if (!criteria.length) return [...items];
+  return items
+    .map((item, index) => ({ item, index }))
+    .sort((left, right) => {
+      const leftComplete = hasCompleteRunMetrics(left.item, criteria);
+      const rightComplete = hasCompleteRunMetrics(right.item, criteria);
+      if (leftComplete !== rightComplete) return leftComplete ? -1 : 1;
+      if (!leftComplete) return left.index - right.index;
+      for (const criterion of criteria) {
+        const leftValue = Number(left.item.metrics[criterion.metric]);
+        const rightValue = Number(right.item.metrics[criterion.metric]);
+        const difference = criterion.direction === "min"
+          ? leftValue - rightValue
+          : rightValue - leftValue;
+        if (difference) return difference;
+      }
+      return left.index - right.index;
+    })
+    .map(({ item }) => item);
+}
+
+export function bestRunEfficiency(items, primaryColumns, fallbackColumns = []) {
+  const columns = activeRunMetricColumns(items, primaryColumns, fallbackColumns);
+  const ranked = rankRunItems(items, columns);
+  if (!ranked.length || !hasCompleteRunMetrics(ranked[0], columns)) return null;
+  const usesPrimary = columns === primaryColumns;
+  const evaluated = usesPrimary && columns.some(
+    (column) => /^(eval\/|leader\/)/.test(String(column.metric || "")),
+  );
+  return {
+    item: ranked[0],
+    columns,
+    evidence: evaluated ? "evaluation" : "training",
+  };
+}
+
 function checkpointEvaluationCell(item) {
   const evaluation = item?.evaluation;
   if (!evaluation || typeof evaluation !== "object") return ["—"];
@@ -309,6 +363,7 @@ export class SourceBrowser {
     this.query = "";
     this.items = [];
     this.metricColumns = [];
+    this.fallbackMetricColumns = [];
     this.sort = { metric: "", direction: "" };
     this.nextCursor = null;
     this.loading = false;
@@ -320,6 +375,7 @@ export class SourceBrowser {
     this.searchTimer = null;
     this.pollTimer = null;
     this.autoSelectedRoute = "";
+    this.initialProjectCatalog = null;
     this.historyEnabled = (
       location.pathname === "/"
       || location.pathname.startsWith("/projects/")
@@ -338,6 +394,9 @@ export class SourceBrowser {
 
   render(snapshot) {
     this.app = snapshot?.app || { phase: "active" };
+    if (this.app.catalog && typeof this.app.catalog === "object") {
+      this.initialProjectCatalog = this.app.catalog;
+    }
     const appRoute = this.app.route || {};
     if (
       this.pendingLocationRoute
@@ -370,6 +429,7 @@ export class SourceBrowser {
       this.query = "";
       this.items = [];
       this.metricColumns = [];
+      this.fallbackMetricColumns = [];
       this.sort = { metric: "", direction: "" };
       this.nextCursor = null;
       this.loadedKey = "";
@@ -377,6 +437,7 @@ export class SourceBrowser {
       this.autoSelectedRoute = "";
       this.syncUrl("replace");
     }
+    this.hydrateInitialProjects();
     this.renderView();
     if (this.app.phase === "selecting") this.ensureLoaded();
     this.updatePolling();
@@ -398,6 +459,30 @@ export class SourceBrowser {
 
   routeKey() {
     return `${routeSignature(this.route)}:${this.query.trim().toLocaleLowerCase()}`;
+  }
+
+  hydrateInitialProjects() {
+    const catalog = this.initialProjectCatalog;
+    if (
+      !catalog
+      || this.route.level !== "projects"
+      || this.query.trim()
+      || this.loadedKey
+    ) {
+      return false;
+    }
+    if (catalog.entity && !this.route.entity) this.route.entity = catalog.entity;
+    this.items = Array.isArray(catalog.items) ? [...catalog.items] : [];
+    this.metricColumns = Array.isArray(catalog.metric_columns)
+      ? [...catalog.metric_columns]
+      : [];
+    this.fallbackMetricColumns = Array.isArray(catalog.fallback_metric_columns)
+      ? [...catalog.fallback_metric_columns]
+      : [];
+    this.nextCursor = catalog.next_cursor || null;
+    this.loadedKey = this.routeKey();
+    this.error = "";
+    return true;
   }
 
   endpoint(cursor = null) {
@@ -450,9 +535,13 @@ export class SourceBrowser {
         this.metricColumns = Array.isArray(payload.metric_columns)
           ? payload.metric_columns
           : [];
+        this.fallbackMetricColumns = Array.isArray(payload.fallback_metric_columns)
+          ? payload.fallback_metric_columns
+          : [];
         if (
           this.sort.metric
-          && !this.metricColumns.some((column) => column.metric === this.sort.metric)
+          && ![...this.metricColumns, ...this.fallbackMetricColumns]
+            .some((column) => column.metric === this.sort.metric)
         ) {
           this.sort = { metric: "", direction: "" };
         }
@@ -502,11 +591,13 @@ export class SourceBrowser {
     this.query = "";
     this.items = [];
     this.metricColumns = [];
+    this.fallbackMetricColumns = [];
     this.sort = { metric: "", direction: "" };
     this.nextCursor = null;
     this.loadedKey = "";
     this.error = "";
     this.autoSelectedRoute = "";
+    this.hydrateInitialProjects();
     this.renderView();
     this.ensureLoaded();
     this.updatePolling();
@@ -785,7 +876,9 @@ export class SourceBrowser {
         ? this.renderProjects()
         : this.route.level === "goals"
           ? this.renderGoals()
-          : this.renderTable(),
+          : this.route.level === "runs"
+            ? this.renderRunResults()
+            : this.renderTable(),
     );
     if (this.nextCursor) {
       const more = button(this.loading ? "Loading…" : "Load more");
@@ -857,19 +950,104 @@ export class SourceBrowser {
     return list;
   }
 
-  renderTable() {
+  activeRunMetricColumns() {
+    return activeRunMetricColumns(
+      this.items,
+      this.metricColumns,
+      this.fallbackMetricColumns,
+    );
+  }
+
+  runEfficiency() {
+    return bestRunEfficiency(
+      this.items,
+      this.metricColumns,
+      this.fallbackMetricColumns,
+    );
+  }
+
+  renderRunResults() {
+    const fragment = document.createDocumentFragment();
+    const efficiency = this.runEfficiency();
+    if (efficiency) fragment.append(this.renderEfficiencySummary(efficiency));
+    fragment.append(this.renderTable(efficiency));
+    return fragment;
+  }
+
+  renderEfficiencySummary(efficiency) {
+    const { item, columns, evidence } = efficiency;
+    const summary = document.createElement("aside");
+    summary.className = `source-efficiency ${evidence}`;
+    summary.setAttribute(
+      "aria-label",
+      evidence === "evaluation"
+        ? "Most efficient evaluated recipe"
+        : "Leading training signal",
+    );
+
+    const identity = document.createElement("div");
+    identity.className = "source-efficiency-identity";
+    const eyebrow = document.createElement("span");
+    eyebrow.className = "eyebrow";
+    eyebrow.textContent = evidence === "evaluation"
+      ? "MOST EFFICIENT RECIPE"
+      : "LEADING TRAINING SIGNAL";
+    const recipe = document.createElement("div");
+    recipe.className = "source-efficiency-recipe";
+    const name = document.createElement("strong");
+    name.textContent = item.recipe || "Unnamed recipe";
+    recipe.append(name);
+    const revision = String(item.recipe_sha256 || "").trim();
+    if (revision) {
+      const hash = document.createElement("code");
+      hash.textContent = `@ ${revision.slice(0, 12)}`;
+      hash.title = `Recipe SHA-256: ${revision}`;
+      recipe.append(hash);
+    }
+    const badge = document.createElement("span");
+    badge.className = "source-evidence-badge";
+    badge.textContent = evidence === "evaluation" ? "GOAL EVAL" : "TRAINING";
+    recipe.append(badge);
+    const detail = document.createElement("p");
+    detail.textContent = evidence === "evaluation"
+      ? "Best run with complete evaluation evidence in the goal-defined ranking order."
+      : "No complete goal-ranked evaluation is available; training signals do not establish goal achievement.";
+    const run = document.createElement("small");
+    run.textContent = item.run_id;
+    identity.append(eyebrow, recipe, detail, run);
+
+    const metrics = document.createElement("dl");
+    metrics.className = "source-efficiency-metrics";
+    columns.forEach((column) => {
+      const metric = document.createElement("div");
+      const label = document.createElement("dt");
+      label.textContent = metricLabel(column.metric);
+      const value = document.createElement("dd");
+      value.textContent = formatMetricValue(
+        column.metric,
+        item.metrics?.[column.metric],
+      );
+      metric.append(label, value);
+      metrics.append(metric);
+    });
+    summary.append(identity, metrics);
+    return summary;
+  }
+
+  renderTable(efficiency = null) {
     const scroll = document.createElement("div");
     scroll.className = "source-table-scroll";
     const table = document.createElement("table");
     table.className = "source-table";
     const head = document.createElement("thead");
     const headerRow = document.createElement("tr");
+    const runMetricColumns = this.activeRunMetricColumns();
     const columns = this.route.level === "runs"
       ? [
           { label: "Run" },
           { label: "Recipe" },
           { label: "Seed" },
-          ...this.metricColumns.map((column) => ({
+          ...runMetricColumns.map((column) => ({
             ...column,
             label: metricLabel(column.metric),
           })),
@@ -927,19 +1105,30 @@ export class SourceBrowser {
     head.append(headerRow);
     const body = document.createElement("tbody");
     const items = this.route.level === "runs"
-      ? sortRunItems(this.items, this.sort)
+      ? this.sort.metric
+        ? sortRunItems(this.items, this.sort)
+        : rankRunItems(this.items, runMetricColumns)
       : this.items;
     items.forEach((item) => {
       const row = document.createElement("tr");
+      const isEfficiencyLeader = (
+        this.route.level === "runs"
+        && efficiency?.item?.run_id === item.run_id
+      );
+      if (isEfficiencyLeader) row.classList.add("efficiency-leader");
       row.tabIndex = this.hasControl() ? 0 : -1;
       row.setAttribute("role", "button");
       row.setAttribute("aria-disabled", String(!this.hasControl()));
       const values = this.route.level === "runs"
         ? [
             [item.name || item.run_id, item.run_id, "run-cell"],
-            [item.recipe || "—"],
+            [
+              item.recipe || "—",
+              item.recipe_sha256 ? `rev ${String(item.recipe_sha256).slice(0, 12)}` : "",
+              "recipe-cell",
+            ],
             [item.seed ?? "—"],
-            ...this.metricColumns.map((column) => [
+            ...runMetricColumns.map((column) => [
               formatMetricValue(column.metric, item.metrics?.[column.metric]),
             ]),
             [formatDate(item.updated_at || item.created_at)],
@@ -980,6 +1169,14 @@ export class SourceBrowser {
           cell.append(identity);
         } else {
           cell.append(main);
+        }
+        if (className.includes("recipe-cell") && isEfficiencyLeader) {
+          const badge = document.createElement("span");
+          badge.className = "source-leader-badge";
+          badge.textContent = efficiency.evidence === "evaluation"
+            ? "Most efficient"
+            : "Training lead";
+          cell.append(badge);
         }
         if (secondary && !className.includes("run-cell")) {
           const small = document.createElement("small");

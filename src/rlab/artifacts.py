@@ -1,12 +1,9 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
-import json
 import os
 import re
 import shutil
-import sys
 import tempfile
 from collections.abc import Callable, Mapping
 from copy import deepcopy
@@ -37,24 +34,12 @@ from rlab.policy_bundle import (
 )
 
 
-MODEL_METADATA_VERSION = 7
-
-
-def _model_metadata_path(model_path: Path) -> Path:
-    return model_path.with_suffix(".metadata.json")
-
-
-def stable_json_hash(value: Any) -> str:
-    data = json.dumps(value, sort_keys=True, separators=(",", ":"), default=str)
-    return hashlib.sha256(data.encode("utf-8")).hexdigest()
-
-
 def checkpoint_step(path: Path) -> int | None:
     match = re.search(r"_(\d+)_steps$", path.stem)
     return int(match.group(1)) if match is not None else None
 
 
-def build_model_metadata(
+def build_model_provenance(
     args: argparse.Namespace,
     config: EnvConfig,
     model_path: Path,
@@ -66,8 +51,7 @@ def build_model_metadata(
         config,
         rom_asset_manifest=getattr(args, "rom_asset_manifest", None),
     )
-    metadata = {
-        "metadata_version": MODEL_METADATA_VERSION,
+    provenance = {
         "kind": kind,
         "filename": model_path.name,
         "run_name": getattr(args, "run_name", ""),
@@ -111,39 +95,17 @@ def build_model_metadata(
         "algorithm_id": str(getattr(args, "algorithm_id", "") or "").strip(),
         "model_class": str(getattr(args, "model_class", "") or "").strip(),
         "training_metadata": training,
-        "training_metadata_hash": stable_json_hash(training),
     }
     preflight_sha256 = str(
         getattr(args, "snapshot_curriculum_preflight_sha256", "") or ""
     ).strip()
     if preflight_sha256:
-        metadata["snapshot_curriculum_preflight_sha256"] = preflight_sha256
+        provenance["snapshot_curriculum_preflight_sha256"] = preflight_sha256
     if snapshot_curriculum_session is not None:
-        metadata["snapshot_curriculum_session"] = deepcopy(
+        provenance["snapshot_curriculum_session"] = deepcopy(
             dict(snapshot_curriculum_session)
         )
-    return metadata
-
-
-def write_model_metadata_payload(
-    model_path: Path,
-    metadata: Mapping[str, Any],
-) -> Path:
-    path = _model_metadata_path(model_path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, temporary_name = tempfile.mkstemp(
-        prefix=f".{path.name}.", dir=path.parent, text=True
-    )
-    temporary = Path(temporary_name)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            handle.write(json.dumps(dict(metadata), indent=2, sort_keys=True) + "\n")
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary, path)
-    finally:
-        temporary.unlink(missing_ok=True)
-    return path
+    return provenance
 
 
 def write_policy_bundle_sidecars(
@@ -172,31 +134,6 @@ def write_policy_bundle_sidecars(
     return model_sidecar, recipe_sidecar
 
 
-def write_model_metadata(
-    model_path: Path,
-    args: argparse.Namespace,
-    config: EnvConfig,
-    kind: str,
-    checkpoint_step_value: int | None = None,
-    snapshot_curriculum_session: Mapping[str, Any] | None = None,
-) -> Path | None:
-    if not model_path.is_file():
-        return None
-    metadata = build_model_metadata(
-        args,
-        config,
-        model_path,
-        kind,
-        checkpoint_step_value=checkpoint_step_value,
-        snapshot_curriculum_session=snapshot_curriculum_session,
-    )
-    path = write_model_metadata_payload(model_path, metadata)
-    recipe_source = Path(str(getattr(args, "recipe_json_path", "") or ""))
-    if recipe_source.is_file():
-        write_policy_bundle_sidecars(model_path, recipe_source, metadata)
-    return path
-
-
 def install_model_bundle(
     model_path: Path,
     *,
@@ -206,7 +143,7 @@ def install_model_bundle(
     kind: str,
     checkpoint_step_value: int | None,
     snapshot_curriculum_session: Mapping[str, Any] | None = None,
-) -> tuple[Path, Path]:
+) -> Path:
     """Atomically install checkpoint bytes and their reproducible policy sidecars."""
 
     model_path.parent.mkdir(parents=True, exist_ok=True)
@@ -222,7 +159,7 @@ def install_model_bundle(
                 f"checkpoint saver did not create {staged_checkpoint}"
             )
         fsync_path(staged_checkpoint)
-        metadata = build_model_metadata(
+        provenance = build_model_provenance(
             args,
             config,
             model_path,
@@ -230,33 +167,27 @@ def install_model_bundle(
             checkpoint_step_value=checkpoint_step_value,
             snapshot_curriculum_session=snapshot_curriculum_session,
         )
-        staged_metadata = write_model_metadata_payload(staged_checkpoint, metadata)
-        staged_paths.append(staged_metadata)
         recipe_source = Path(str(getattr(args, "recipe_json_path", "") or ""))
-        staged_model_document: Path | None = None
-        staged_recipe: Path | None = None
-        if recipe_source.is_file():
-            staged_model_document = model_document_path(staged_checkpoint)
-            staged_recipe = recipe_document_path(staged_checkpoint)
-            staged_paths.extend((staged_model_document, staged_recipe))
-            write_policy_bundle_sidecars(staged_checkpoint, recipe_source, metadata)
-            if load_policy_bundle_from_checkpoint(staged_checkpoint) is None:
-                raise ValueError(
-                    f"checkpoint bundle validation failed: {staged_checkpoint}"
-                )
+        if not recipe_source.is_file():
+            raise FileNotFoundError(
+                "checkpoint creation requires args.recipe_json_path to name a "
+                f"canonical recipe document: {recipe_source}"
+            )
+        staged_model_document = model_document_path(staged_checkpoint)
+        staged_recipe = recipe_document_path(staged_checkpoint)
+        staged_paths.extend((staged_model_document, staged_recipe))
+        write_policy_bundle_sidecars(staged_checkpoint, recipe_source, provenance)
+        if load_policy_bundle_from_checkpoint(staged_checkpoint) is None:
+            raise ValueError(
+                f"checkpoint bundle validation failed: {staged_checkpoint}"
+            )
         for staged in staged_paths:
             fsync_path(staged)
 
         destinations: list[tuple[Path, Path]] = [
-            (staged_metadata, _model_metadata_path(model_path))
+            (staged_recipe, recipe_document_path(model_path)),
+            (staged_model_document, model_document_path(model_path)),
         ]
-        if staged_model_document is not None and staged_recipe is not None:
-            destinations.extend(
-                (
-                    (staged_recipe, recipe_document_path(model_path)),
-                    (staged_model_document, model_document_path(model_path)),
-                )
-            )
         if model_path.exists():
             expected = [(staged_checkpoint, model_path), *destinations]
             mismatches = [
@@ -270,7 +201,7 @@ def install_model_bundle(
                     "checkpoint destination conflicts with an existing committed bundle: "
                     + ", ".join(str(path) for path in mismatches)
                 )
-            return model_path, _model_metadata_path(model_path)
+            return model_path
 
         for staged, destination in destinations:
             os.replace(staged, destination)
@@ -279,8 +210,9 @@ def install_model_bundle(
         os.replace(staged_checkpoint, model_path)
         staged_paths.remove(staged_checkpoint)
         fsync_path(model_path.parent)
-        load_policy_bundle_from_checkpoint(model_path)
-        return model_path, _model_metadata_path(model_path)
+        if load_policy_bundle_from_checkpoint(model_path) is None:
+            raise ValueError(f"checkpoint bundle validation failed: {model_path}")
+        return model_path
     finally:
         for staged in staged_paths:
             staged.unlink(missing_ok=True)
@@ -288,21 +220,16 @@ def install_model_bundle(
 
 
 def load_model_metadata(model_path: Path) -> dict[str, Any]:
-    versioned_path = model_document_path(model_path)
-    canonical_path = model_path.with_name(MODEL_FILENAME)
-    if not versioned_path.is_file() and model_path.name == CHECKPOINT_FILENAME:
-        versioned_path = canonical_path
-    if versioned_path.is_file():
-        return model_document_as_metadata(load_model_document(versioned_path))
-    path = _model_metadata_path(model_path)
-    if not path.is_file():
-        return {}
-    try:
-        metadata = json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
-        print(f"warning: could not parse model metadata {path}: {exc}", file=sys.stderr)
-        return {}
-    return metadata if isinstance(metadata, dict) else {}
+    bundle = load_policy_bundle_from_checkpoint(model_path)
+    if bundle is None:
+        versioned_path = model_document_path(model_path)
+        if model_path.name == CHECKPOINT_FILENAME:
+            versioned_path = model_path.with_name(MODEL_FILENAME)
+        raise FileNotFoundError(
+            f"{model_path} is missing its current policy bundle beginning at "
+            f"{versioned_path}"
+        )
+    return model_document_as_metadata(bundle.model)
 
 
 def playback_env_config(

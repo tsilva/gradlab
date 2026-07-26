@@ -173,6 +173,7 @@ function setSourceMode(active, snapshot = null) {
   state.sourceMode = Boolean(active);
   document.body.classList.toggle("source-selection", state.sourceMode);
   $("#source-browser").hidden = !state.sourceMode;
+  $("#page-title").hidden = state.sourceMode;
   $("#change-source").hidden = (
     state.sourceMode
     || !(snapshot?.app?.has_active_runner || state.liveSnapshot?.app?.has_active_runner)
@@ -186,7 +187,6 @@ function setSourceMode(active, snapshot = null) {
     updateLayoutTitle();
     return;
   }
-  $("#page-title").textContent = "Select checkpoint";
   document.title = "Select checkpoint · rlab player";
   const expected = snapshot;
   void ensureSourceBrowser().then((browser) => {

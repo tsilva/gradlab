@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import base64
+import hashlib
+import json
+import os
 import re
 import threading
 import time
@@ -10,6 +13,7 @@ from pathlib import Path
 from typing import Any, Literal
 from urllib.parse import unquote, urlparse
 
+from rlab.config_loader import load_mapping_document
 from rlab.config_validation import load_goal_contract
 from rlab.early_stop import EARLY_STOP_OPERATORS, normalize_metric_threshold_rules
 from rlab.metric_names import (
@@ -20,6 +24,7 @@ from rlab.metric_names import (
     EVAL_CHECKPOINT_STEP,
     TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_MEAN,
     TRAIN_EPISODE_RETURN_SHAPED_MEAN,
+    TRAIN_GLOBAL_STEP,
     TRAIN_OUTCOME_SUCCESS_WINDOW_100_RATE_MIN,
 )
 from rlab.model_sources import DEFAULT_PUBLIC_MODELS_BASE_URL, _public_json
@@ -34,6 +39,9 @@ from rlab.wandb_utils import (
 
 WANDB_HOSTS = {"wandb.ai", "www.wandb.ai"}
 CATALOG_PAGE_SIZE = 50
+CATALOG_INDEX_SCHEMA_VERSION = 1
+CATALOG_CACHE_SCHEMA_VERSION = 1
+CATALOG_INDEX_FILENAME = "_catalog.yaml"
 EVALUATION_CACHE_SECONDS = 10.0
 LIVE_TRAINING_METRICS = (
     (
@@ -53,6 +61,13 @@ LIVE_TRAINING_METRICS = (
             TRAIN_EPISODE_RETURN_SHAPED_MEAN,
         ),
     ),
+    (
+        RankCriterion(
+            direction="min",
+            metric=TRAIN_GLOBAL_STEP,
+        ),
+        (TRAIN_GLOBAL_STEP,),
+    ),
 )
 
 
@@ -68,6 +83,7 @@ class CatalogPage:
     items: tuple[dict[str, Any], ...]
     next_cursor: str | None
     metric_columns: tuple[dict[str, str], ...] = ()
+    fallback_metric_columns: tuple[dict[str, str], ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
@@ -76,6 +92,8 @@ class CatalogPage:
         }
         if self.metric_columns:
             payload["metric_columns"] = list(self.metric_columns)
+        if self.fallback_metric_columns:
+            payload["fallback_metric_columns"] = list(self.fallback_metric_columns)
         return payload
 
 
@@ -112,6 +130,7 @@ class RunSummary:
     state: str
     goal: str
     recipe: str
+    recipe_sha256: str
     seed: int | None
     created_at: str
     updated_at: str
@@ -147,7 +166,14 @@ class _RepositoryGoal:
     title: str
     recipe_count: int
     goal_path: str
-    rank: tuple[RankCriterion, ...]
+    rank: tuple[RankCriterion, ...] | None
+
+
+@dataclass(frozen=True)
+class _RepositoryNamespace:
+    directory: str
+    project: str
+    title_template: str
 
 
 def parse_wandb_location(value: object) -> WandbLocation | None:
@@ -200,7 +226,7 @@ def _safe_int(value: object) -> int | None:
         return None
     try:
         return int(value)
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return None
 
 
@@ -222,9 +248,50 @@ def _first_summary_float(summary: Any, metrics: Iterable[str]) -> float | None:
 def _run_metric_specs(
     rank: tuple[RankCriterion, ...],
 ) -> tuple[tuple[RankCriterion, tuple[str, ...]], ...]:
-    if rank and all(criterion.metric.startswith("train/") for criterion in rank):
-        return tuple((criterion, (criterion.metric,)) for criterion in rank)
+    return tuple((criterion, (criterion.metric,)) for criterion in rank)
+
+
+def _run_fallback_metric_specs(
+    rank: tuple[RankCriterion, ...],
+) -> tuple[tuple[RankCriterion, tuple[str, ...]], ...]:
+    if not rank or all(criterion.metric.startswith("train/") for criterion in rank):
+        return ()
     return LIVE_TRAINING_METRICS
+
+
+def _complete_run_rank(
+    item: Mapping[str, Any],
+    metric_specs: tuple[tuple[RankCriterion, tuple[str, ...]], ...],
+) -> tuple[float, ...] | None:
+    if not metric_specs:
+        return None
+    metrics = item.get("metrics")
+    if not isinstance(metrics, Mapping):
+        return None
+    score: list[float] = []
+    for criterion, _sources in metric_specs:
+        value = _safe_float(metrics.get(criterion.metric))
+        if value is None:
+            return None
+        score.append(value if criterion.direction == "min" else -value)
+    return tuple(score)
+
+
+def _rank_run_summaries(
+    items: list[dict[str, Any]],
+    *,
+    primary: tuple[tuple[RankCriterion, tuple[str, ...]], ...],
+    fallback: tuple[tuple[RankCriterion, tuple[str, ...]], ...],
+) -> None:
+    active = primary if any(_complete_run_rank(item, primary) is not None for item in items) else fallback
+    if not active:
+        return
+    items.sort(
+        key=lambda item: (
+            _complete_run_rank(item, active) is None,
+            _complete_run_rank(item, active) or (),
+        )
+    )
 
 
 def _page_items(items: list[dict[str, Any]], cursor: str | None) -> CatalogPage:
@@ -266,6 +333,7 @@ class PlayCatalog:
         *,
         public_models_base_url: str = DEFAULT_PUBLIC_MODELS_BASE_URL,
         repo_root: Path | str | None = None,
+        cache_path: Path | str | None = None,
     ) -> None:
         self.public_models_base_url = str(public_models_base_url).rstrip("/")
         self.repo_root = (
@@ -274,24 +342,61 @@ class PlayCatalog:
             else Path(__file__).resolve().parents[2]
         )
         self.goals_root = self.repo_root / "experiments" / "goals"
+        self.cache_path = (
+            Path(cache_path).expanduser().resolve() if cache_path is not None else None
+        )
         self._api: Any | None = None
         self._lock = threading.Lock()
+        self._cache_lock = threading.Lock()
         self._streams: dict[tuple[str, ...], _CatalogStream] = {}
-        self._repository_cache: tuple[
-            tuple[tuple[str, int, int], ...],
-            tuple[_RepositoryGoal, ...],
-        ] | None = None
+        self._repository_cache: (
+            tuple[
+                tuple[tuple[str, int, int], ...],
+                tuple[_RepositoryGoal, ...],
+            ]
+            | None
+        ) = None
+        self._repository_project_cache: dict[
+            str,
+            tuple[
+                tuple[tuple[str, int, int], ...],
+                tuple[_RepositoryGoal, ...],
+            ],
+        ] = {}
+        self._repository_details: dict[tuple[str, str], _RepositoryGoal] = {}
+        self._namespace_cache: (
+            tuple[
+                tuple[int, int],
+                tuple[_RepositoryNamespace, ...],
+            ]
+            | None
+        ) = None
+        self._default_entity: str | None = None
         self._evaluation_cache: dict[
             tuple[str, str, str],
             tuple[float, dict[int, dict[str, Any]]],
         ] = {}
 
+    @staticmethod
+    def default_cache_path(repo_root: Path | str) -> Path:
+        resolved = Path(repo_root).resolve()
+        identity = hashlib.sha256(str(resolved).encode("utf-8")).hexdigest()[:16]
+        cache_root = Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache").expanduser()
+        return cache_root / "rlab" / "play-catalog" / f"{identity}.json"
+
     def default_entity(self, explicit: object = None) -> str:
         text = str(explicit or "").strip()
         if text:
             return text
+        with self._cache_lock:
+            cached = self._default_entity
+        if cached is not None:
+            return cached
         load_wandb_env()
-        return wandb_entity_from_env()
+        entity = wandb_entity_from_env()
+        with self._cache_lock:
+            self._default_entity = entity
+        return entity
 
     def _wandb_api(self):
         if self._api is None:
@@ -312,7 +417,273 @@ class PlayCatalog:
             self._streams[key] = stream
         return stream
 
-    def _repository_goals(self) -> tuple[_RepositoryGoal, ...]:
+    def _catalog_fingerprint(
+        self,
+        paths: Iterable[Path],
+    ) -> tuple[tuple[str, int, int], ...]:
+        entries: list[tuple[str, int, int]] = []
+        for path in sorted(set(paths)):
+            stat_result = path.stat()
+            entries.append(
+                (
+                    path.relative_to(self.repo_root).as_posix(),
+                    stat_result.st_mtime_ns,
+                    stat_result.st_size,
+                )
+            )
+        return tuple(entries)
+
+    def _repository_namespaces(self) -> tuple[_RepositoryNamespace, ...] | None:
+        index_path = self.goals_root / CATALOG_INDEX_FILENAME
+        if not index_path.is_file():
+            return None
+        stat_result = index_path.stat()
+        fingerprint = (stat_result.st_mtime_ns, stat_result.st_size)
+        with self._cache_lock:
+            cached = self._namespace_cache
+            if cached is not None and cached[0] == fingerprint:
+                return cached[1]
+
+        document = load_mapping_document(index_path, label="repository goal catalog")
+        if document.get("schema_version") != CATALOG_INDEX_SCHEMA_VERSION:
+            raise ValueError(
+                "repository goal catalog schema_version must be "
+                f"{CATALOG_INDEX_SCHEMA_VERSION}: {index_path}"
+            )
+        raw_namespaces = document.get("namespaces")
+        if not isinstance(raw_namespaces, Mapping) or not raw_namespaces:
+            raise ValueError(f"repository goal catalog has no namespaces: {index_path}")
+
+        namespaces: list[_RepositoryNamespace] = []
+        for raw_directory, raw_metadata in raw_namespaces.items():
+            directory = str(raw_directory or "").strip()
+            if (
+                not directory
+                or Path(directory).is_absolute()
+                or len(Path(directory).parts) != 1
+                or directory in {".", ".."}
+            ):
+                raise ValueError(
+                    f"repository goal catalog namespace must be one directory: {directory!r}"
+                )
+            if not isinstance(raw_metadata, Mapping):
+                raise ValueError(
+                    f"repository goal catalog namespace {directory!r} must be a mapping"
+                )
+            extra = set(raw_metadata) - {"project", "title_template"}
+            if extra:
+                raise ValueError(
+                    f"repository goal catalog namespace {directory!r} has unknown keys: "
+                    + ", ".join(sorted(str(key) for key in extra))
+                )
+            project = str(raw_metadata.get("project") or "").strip()
+            title_template = str(raw_metadata.get("title_template") or "").strip()
+            if not project:
+                raise ValueError(f"repository goal catalog namespace {directory!r} has no project")
+            namespace_root = self.goals_root / directory
+            if not namespace_root.is_dir():
+                raise ValueError(
+                    f"repository goal catalog namespace does not exist: {namespace_root}"
+                )
+            if title_template:
+                try:
+                    title_template.format(goal_id="example")
+                except (IndexError, KeyError, ValueError) as exc:
+                    raise ValueError(
+                        f"repository goal catalog namespace {directory!r} has an invalid "
+                        "title_template"
+                    ) from exc
+            namespaces.append(
+                _RepositoryNamespace(
+                    directory=directory,
+                    project=project,
+                    title_template=title_template,
+                )
+            )
+
+        declared = {namespace.directory for namespace in namespaces}
+        discovered = {
+            path.relative_to(self.goals_root).parts[0]
+            for path in self.goals_root.rglob("_goal.yaml")
+        }
+        missing = discovered - declared
+        stale = declared - discovered
+        if missing:
+            raise ValueError(
+                "repository goal catalog is missing namespaces: " + ", ".join(sorted(missing))
+            )
+        if stale:
+            raise ValueError(
+                "repository goal catalog declares empty namespaces: " + ", ".join(sorted(stale))
+            )
+        result = tuple(sorted(namespaces, key=lambda item: item.directory))
+        with self._cache_lock:
+            self._namespace_cache = (fingerprint, result)
+        return result
+
+    def _project_namespaces(
+        self,
+        project: str,
+        namespaces: tuple[_RepositoryNamespace, ...],
+    ) -> tuple[_RepositoryNamespace, ...]:
+        return tuple(namespace for namespace in namespaces if namespace.project == project)
+
+    def _indexed_project_fingerprint(
+        self,
+        namespaces: tuple[_RepositoryNamespace, ...],
+    ) -> tuple[tuple[str, int, int], ...]:
+        paths: list[Path] = [self.goals_root / CATALOG_INDEX_FILENAME]
+        for namespace in namespaces:
+            namespace_root = self.goals_root / namespace.directory
+            paths.extend(namespace_root.rglob("*.yaml"))
+            paths.extend(namespace_root.rglob("*.yml"))
+        return self._catalog_fingerprint(paths)
+
+    def _read_persistent_project(
+        self,
+        *,
+        project: str,
+        fingerprint: tuple[tuple[str, int, int], ...],
+    ) -> tuple[_RepositoryGoal, ...] | None:
+        if self.cache_path is None or not self.cache_path.is_file():
+            return None
+        try:
+            payload = json.loads(self.cache_path.read_text(encoding="utf-8"))
+            if (
+                not isinstance(payload, Mapping)
+                or payload.get("schema_version") != CATALOG_CACHE_SCHEMA_VERSION
+                or payload.get("repo_root") != str(self.repo_root)
+            ):
+                return None
+            projects = payload.get("projects")
+            entry = projects.get(project) if isinstance(projects, Mapping) else None
+            if not isinstance(entry, Mapping):
+                return None
+            cached_fingerprint = tuple(
+                (str(item[0]), int(item[1]), int(item[2]))
+                for item in entry.get("fingerprint", ())
+                if isinstance(item, list | tuple) and len(item) == 3
+            )
+            if cached_fingerprint != fingerprint:
+                return None
+            raw_goals = entry.get("goals")
+            if not isinstance(raw_goals, list):
+                return None
+            goals: list[_RepositoryGoal] = []
+            for raw_goal in raw_goals:
+                if not isinstance(raw_goal, Mapping):
+                    return None
+                goal = _RepositoryGoal(
+                    project=str(raw_goal.get("project") or ""),
+                    goal_id=str(raw_goal.get("goal_id") or ""),
+                    goal_slug=str(raw_goal.get("goal_slug") or ""),
+                    title=str(raw_goal.get("title") or ""),
+                    recipe_count=int(raw_goal.get("recipe_count") or 0),
+                    goal_path=str(raw_goal.get("goal_path") or ""),
+                    rank=None,
+                )
+                if (
+                    goal.project != project
+                    or not goal.goal_id
+                    or not goal.goal_slug
+                    or not goal.title
+                    or not goal.goal_path
+                ):
+                    return None
+                goals.append(goal)
+            return tuple(goals)
+        except OSError, TypeError, ValueError, json.JSONDecodeError:
+            return None
+
+    def _write_persistent_project(
+        self,
+        *,
+        project: str,
+        fingerprint: tuple[tuple[str, int, int], ...],
+        goals: tuple[_RepositoryGoal, ...],
+    ) -> None:
+        if self.cache_path is None:
+            return
+        with self._cache_lock:
+            payload: dict[str, Any] = {
+                "schema_version": CATALOG_CACHE_SCHEMA_VERSION,
+                "repo_root": str(self.repo_root),
+                "projects": {},
+            }
+            if self.cache_path.is_file():
+                try:
+                    existing = json.loads(self.cache_path.read_text(encoding="utf-8"))
+                    if (
+                        isinstance(existing, dict)
+                        and existing.get("schema_version") == CATALOG_CACHE_SCHEMA_VERSION
+                        and existing.get("repo_root") == str(self.repo_root)
+                        and isinstance(existing.get("projects"), dict)
+                    ):
+                        payload = existing
+                except OSError, json.JSONDecodeError:
+                    pass
+            projects = payload["projects"]
+            projects[project] = {
+                "fingerprint": [list(item) for item in fingerprint],
+                "goals": [
+                    {
+                        "project": goal.project,
+                        "goal_id": goal.goal_id,
+                        "goal_slug": goal.goal_slug,
+                        "title": goal.title,
+                        "recipe_count": goal.recipe_count,
+                        "goal_path": goal.goal_path,
+                    }
+                    for goal in goals
+                ],
+            }
+            temporary = self.cache_path.with_name(
+                f".{self.cache_path.name}.{os.getpid()}.{threading.get_ident()}.tmp"
+            )
+            try:
+                self.cache_path.parent.mkdir(parents=True, exist_ok=True)
+                temporary.write_text(
+                    json.dumps(payload, sort_keys=True, separators=(",", ":")),
+                    encoding="utf-8",
+                )
+                temporary.chmod(0o600)
+                temporary.replace(self.cache_path)
+            except OSError:
+                temporary.unlink(missing_ok=True)
+
+    def _compose_repository_goal(self, path: Path) -> _RepositoryGoal:
+        document = load_goal_contract(path, self.repo_root, validate=False)
+        train = document.get("train")
+        if not isinstance(train, Mapping):
+            raise ValueError(f"repository goal has no train contract: {path}")
+        environment = train.get("environment")
+        if not isinstance(environment, Mapping):
+            raise ValueError(f"repository goal has no training environment: {path}")
+        env_config = environment.get("env_config", environment)
+        if not isinstance(env_config, Mapping):
+            raise ValueError(f"repository goal has invalid environment config: {path}")
+        project = resolve_wandb_project(
+            None,
+            str(env_config.get("game") or ""),
+            env_provider=environment.get("env_provider") or env_config.get("env_provider"),
+        )
+        goal_id = str(document.get("goal_id") or "").strip()
+        if not project or not goal_id:
+            raise ValueError(f"repository goal has no project or goal identity: {path}")
+        objective = document.get("objective")
+        return _RepositoryGoal(
+            project=project,
+            goal_id=goal_id,
+            goal_slug=path.parent.relative_to(self.goals_root).as_posix(),
+            title=str(document.get("title") or goal_id).strip(),
+            recipe_count=sum(1 for _ in path.parent.glob("recipes/*.yaml")),
+            goal_path=path.relative_to(self.repo_root).as_posix(),
+            rank=parse_objective_rank(
+                objective.get("rank") if isinstance(objective, Mapping) else None
+            ),
+        )
+
+    def _legacy_repository_goals(self) -> tuple[_RepositoryGoal, ...]:
         if not self.goals_root.is_dir():
             raise ValueError(f"repository goals directory does not exist: {self.goals_root}")
         paths = tuple(sorted(self.goals_root.rglob("_goal.yaml")))
@@ -339,41 +710,7 @@ class PlayCatalog:
 
         goals: list[_RepositoryGoal] = []
         for path in paths:
-            document = load_goal_contract(path, self.repo_root, validate=False)
-            train = document.get("train")
-            if not isinstance(train, Mapping):
-                raise ValueError(f"repository goal has no train contract: {path}")
-            environment = train.get("environment")
-            if not isinstance(environment, Mapping):
-                raise ValueError(f"repository goal has no training environment: {path}")
-            env_config = environment.get("env_config", environment)
-            if not isinstance(env_config, Mapping):
-                raise ValueError(f"repository goal has invalid environment config: {path}")
-            project = resolve_wandb_project(
-                None,
-                str(env_config.get("game") or ""),
-                env_provider=environment.get("env_provider")
-                or env_config.get("env_provider"),
-            )
-            goal_id = str(document.get("goal_id") or "").strip()
-            if not project or not goal_id:
-                raise ValueError(f"repository goal has no project or goal identity: {path}")
-            objective = document.get("objective")
-            rank = parse_objective_rank(
-                objective.get("rank") if isinstance(objective, Mapping) else None
-            )
-            goal_slug = path.parent.relative_to(self.goals_root).as_posix()
-            goals.append(
-                _RepositoryGoal(
-                    project=project,
-                    goal_id=goal_id,
-                    goal_slug=goal_slug,
-                    title=str(document.get("title") or goal_id).strip(),
-                    recipe_count=sum(1 for _ in path.parent.glob("recipes/*.yaml")),
-                    goal_path=path.relative_to(self.repo_root).as_posix(),
-                    rank=rank,
-                )
-            )
+            goals.append(self._compose_repository_goal(path))
         identities = [(goal.project, goal.goal_id) for goal in goals]
         if len(identities) != len(set(identities)):
             raise ValueError("repository goals contain duplicate project/goal identities")
@@ -382,10 +719,125 @@ class PlayCatalog:
             self._repository_cache = (fingerprint, result)
         return result
 
+    def _indexed_repository_goals(
+        self,
+        *,
+        project: str,
+        namespaces: tuple[_RepositoryNamespace, ...],
+    ) -> tuple[_RepositoryGoal, ...]:
+        project_namespaces = self._project_namespaces(project, namespaces)
+        if not project_namespaces:
+            return ()
+        fingerprint = self._indexed_project_fingerprint(project_namespaces)
+        with self._cache_lock:
+            cached = self._repository_project_cache.get(project)
+            if cached is not None and cached[0] == fingerprint:
+                return cached[1]
+
+        persisted = self._read_persistent_project(
+            project=project,
+            fingerprint=fingerprint,
+        )
+        if persisted is not None:
+            with self._cache_lock:
+                self._repository_project_cache[project] = (fingerprint, persisted)
+            return persisted
+
+        goals: list[_RepositoryGoal] = []
+        for namespace in project_namespaces:
+            namespace_root = self.goals_root / namespace.directory
+            for path in sorted(namespace_root.rglob("_goal.yaml")):
+                goal_id = path.parent.name
+                raw_document = load_mapping_document(
+                    path,
+                    label=f"repository goal metadata {path}",
+                )
+                title = str(raw_document.get("title") or "").strip()
+                if not title and namespace.title_template:
+                    title = namespace.title_template.format(goal_id=goal_id)
+                goals.append(
+                    _RepositoryGoal(
+                        project=project,
+                        goal_id=goal_id,
+                        goal_slug=path.parent.relative_to(self.goals_root).as_posix(),
+                        title=title or goal_id,
+                        recipe_count=sum(1 for _ in path.parent.glob("recipes/*.yaml")),
+                        goal_path=path.relative_to(self.repo_root).as_posix(),
+                        rank=None,
+                    )
+                )
+        identities = [(goal.project, goal.goal_id) for goal in goals]
+        if len(identities) != len(set(identities)):
+            raise ValueError("repository goals contain duplicate project/goal identities")
+        result = tuple(sorted(goals, key=lambda goal: goal.goal_id))
+        with self._cache_lock:
+            self._repository_project_cache[project] = (fingerprint, result)
+            for key in tuple(self._repository_details):
+                if key[0] == project:
+                    self._repository_details.pop(key, None)
+        self._write_persistent_project(
+            project=project,
+            fingerprint=fingerprint,
+            goals=result,
+        )
+        return result
+
+    def _repository_goals(self, *, project: str | None = None) -> tuple[_RepositoryGoal, ...]:
+        if not self.goals_root.is_dir():
+            raise ValueError(f"repository goals directory does not exist: {self.goals_root}")
+        namespaces = self._repository_namespaces()
+        if namespaces is None:
+            goals = self._legacy_repository_goals()
+            return tuple(goal for goal in goals if project is None or goal.project == project)
+        projects = sorted({namespace.project for namespace in namespaces})
+        selected_projects = [project] if project is not None else projects
+        return tuple(
+            goal
+            for selected_project in selected_projects
+            for goal in self._indexed_repository_goals(
+                project=selected_project,
+                namespaces=namespaces,
+            )
+        )
+
+    def _repository_projects(self) -> dict[str, int]:
+        namespaces = self._repository_namespaces()
+        if namespaces is None:
+            counts: dict[str, int] = {}
+            for goal in self._legacy_repository_goals():
+                counts[goal.project] = counts.get(goal.project, 0) + 1
+            return counts
+        counts = {}
+        for namespace in namespaces:
+            count = sum(1 for _ in (self.goals_root / namespace.directory).rglob("_goal.yaml"))
+            counts[namespace.project] = counts.get(namespace.project, 0) + count
+        return counts
+
     def _repository_goal(self, *, project: str, goal_id: str) -> _RepositoryGoal:
-        for goal in self._repository_goals():
+        for goal in self._repository_goals(project=project):
             if goal.project == project and goal.goal_id == goal_id:
-                return goal
+                if goal.rank is not None:
+                    return goal
+                key = (project, goal_id)
+                with self._cache_lock:
+                    detailed = self._repository_details.get(key)
+                if detailed is not None:
+                    return detailed
+                path = self.repo_root / goal.goal_path
+                detailed = self._compose_repository_goal(path)
+                if (
+                    detailed.project != goal.project
+                    or detailed.goal_id != goal.goal_id
+                    or detailed.goal_slug != goal.goal_slug
+                    or detailed.title != goal.title
+                ):
+                    raise ValueError(
+                        "repository goal browse metadata does not match the composed "
+                        f"contract: {goal.goal_path}"
+                    )
+                with self._cache_lock:
+                    self._repository_details[key] = detailed
+                return detailed
         raise ValueError(f"repository has no goal {project}/{goal_id}")
 
     def projects(
@@ -396,9 +848,7 @@ class PlayCatalog:
         cursor: str | None = None,
     ) -> CatalogPage:
         normalized = str(query or "").strip().casefold()
-        goal_counts: dict[str, int] = {}
-        for goal in self._repository_goals():
-            goal_counts[goal.project] = goal_counts.get(goal.project, 0) + 1
+        goal_counts = self._repository_projects()
         items = [
             ProjectSummary(
                 entity=entity,
@@ -409,6 +859,11 @@ class PlayCatalog:
             if not normalized or normalized in _search_text(entity, project)
         ]
         return _page_items(items, cursor)
+
+    def initial_projects(self, explicit_entity: object = None) -> dict[str, Any]:
+        entity = self.default_entity(explicit_entity)
+        page = self.projects(entity=entity)
+        return {"entity": entity, **page.to_dict()}
 
     def runs(
         self,
@@ -422,16 +877,19 @@ class PlayCatalog:
         normalized = str(query or "").strip().casefold()
         selected_goal = str(goal_id or "").strip()
         repository_goal = (
-            self._repository_goal(project=project, goal_id=selected_goal)
-            if selected_goal
-            else None
+            self._repository_goal(project=project, goal_id=selected_goal) if selected_goal else None
         )
         selected_goal_slug = repository_goal.goal_slug if repository_goal else ""
-        rank = repository_goal.rank if repository_goal else ()
+        rank = (repository_goal.rank or ()) if repository_goal else ()
         metric_specs = _run_metric_specs(rank) if repository_goal else ()
+        fallback_metric_specs = _run_fallback_metric_specs(rank) if repository_goal else ()
         metric_columns = tuple(
             {"metric": criterion.metric, "direction": criterion.direction}
             for criterion, _sources in metric_specs
+        )
+        fallback_metric_columns = tuple(
+            {"metric": criterion.metric, "direction": criterion.direction}
+            for criterion, _sources in fallback_metric_specs
         )
 
         def values() -> Iterator[dict[str, Any]]:
@@ -441,6 +899,7 @@ class PlayCatalog:
                 per_page=200,
                 lazy=True,
             )
+            summaries: list[dict[str, Any]] = []
             for run in api_runs:
                 run_id = str(getattr(run, "id", "") or "")
                 if RUN_ID_PATTERN.fullmatch(run_id) is None:
@@ -458,13 +917,14 @@ class PlayCatalog:
                     state=str(getattr(run, "state", "") or ""),
                     goal=goal_slug,
                     recipe=str(config.get("recipe_slug") or ""),
+                    recipe_sha256=str(config.get("recipe_sha256") or ""),
                     seed=_safe_int(config.get("seed")),
                     created_at=str(getattr(run, "created_at", "") or ""),
                     updated_at=str(getattr(run, "updated_at", "") or ""),
                     url=str(getattr(run, "url", "") or ""),
                     metrics={
                         criterion.metric: _first_summary_float(run_metrics, sources)
-                        for criterion, sources in metric_specs
+                        for criterion, sources in (*metric_specs, *fallback_metric_specs)
                     },
                 )
                 if normalized and normalized not in _search_text(
@@ -473,22 +933,32 @@ class PlayCatalog:
                     summary.state,
                     summary.goal,
                     summary.recipe,
+                    summary.recipe_sha256,
                     summary.seed,
                     getattr(run, "notes", ""),
                 ):
                     continue
-                yield summary.to_dict()
+                summaries.append(summary.to_dict())
+            _rank_run_summaries(
+                summaries,
+                primary=metric_specs,
+                fallback=fallback_metric_specs,
+            )
+            yield from summaries
 
         with self._lock:
-            stream = self._stream(
-                ("runs", entity, project, selected_goal, normalized),
-                values,
-            )
+            stream_key = ("runs", entity, project, selected_goal, normalized)
+            if cursor is None:
+                stream = _CatalogStream(values())
+                self._streams[stream_key] = stream
+            else:
+                stream = self._stream(stream_key, values)
             page = stream.page(_cursor_offset(cursor), CATALOG_PAGE_SIZE)
         return CatalogPage(
             items=page.items,
             next_cursor=page.next_cursor,
             metric_columns=metric_columns,
+            fallback_metric_columns=fallback_metric_columns,
         )
 
     def goals(
@@ -510,9 +980,8 @@ class PlayCatalog:
                 recipe_count=goal.recipe_count,
                 goal_path=goal.goal_path,
             ).to_dict()
-            for goal in self._repository_goals()
-            if goal.project == project
-            and (
+            for goal in self._repository_goals(project=project)
+            if (
                 not normalized
                 or normalized
                 in _search_text(
@@ -531,8 +1000,8 @@ class PlayCatalog:
         run = self._wandb_api().run(f"{entity}/{project}/{run_id}")
         config = dict(getattr(run, "config", {}) or {})
         goal_slug = str(config.get("goal_slug") or "").strip()
-        for goal in self._repository_goals():
-            if goal.project == project and goal.goal_slug == goal_slug:
+        for goal in self._repository_goals(project=project):
+            if goal.goal_slug == goal_slug:
                 return goal.goal_id
         if not goal_slug:
             raise ValueError("W&B run has no goal identity")
@@ -597,24 +1066,18 @@ class PlayCatalog:
                                 "passed": (
                                     None
                                     if value is None
-                                    else bool(
-                                        EARLY_STOP_OPERATORS[operator](value, threshold)
-                                    )
+                                    else bool(EARLY_STOP_OPERATORS[operator](value, threshold))
                                 ),
                             }
                         )
                     evaluations[step] = {
                         "status": "accepted" if accepted >= 0.5 else "rejected",
                         "pass": accepted >= 0.5,
-                        "episodes_planned": _safe_int(
-                            raw.get(EVAL_ACCEPTANCE_EPISODES_PLANNED)
-                        ),
+                        "episodes_planned": _safe_int(raw.get(EVAL_ACCEPTANCE_EPISODES_PLANNED)),
                         "episodes_completed": _safe_int(
                             raw.get(EVAL_ACCEPTANCE_EPISODES_COMPLETED)
                         ),
-                        "failure_count": _safe_int(
-                            raw.get(EVAL_ACCEPTANCE_FAILURE_COUNT)
-                        ),
+                        "failure_count": _safe_int(raw.get(EVAL_ACCEPTANCE_FAILURE_COUNT)),
                         "criteria": criteria,
                     }
         except Exception:
@@ -642,9 +1105,7 @@ class PlayCatalog:
             raise ValueError("public run index identity mismatch")
         promotion = index.get("promotion")
         promoted_id = (
-            str(promotion.get("checkpoint_id") or "")
-            if isinstance(promotion, Mapping)
-            else ""
+            str(promotion.get("checkpoint_id") or "") if isinstance(promotion, Mapping) else ""
         )
         normalized = str(query or "").strip().casefold()
         evaluations = self._checkpoint_evaluations(

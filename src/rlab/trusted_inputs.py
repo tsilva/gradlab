@@ -152,17 +152,20 @@ def _closure_paths(model_path: Path) -> tuple[Path, ...]:
     names = {model_path.name}
     versioned_model = model_path.with_suffix(".model.json")
     versioned_recipe = model_path.with_suffix(".recipe.json")
-    adjacent_metadata = model_path.with_suffix(".metadata.json")
-    if versioned_model.is_file():
-        names.add(versioned_model.name)
-        if versioned_recipe.is_file():
-            names.add(versioned_recipe.name)
-    elif model_path.name == "model.zip" and (parent / "model.json").is_file():
-        names.add("model.json")
-        if (parent / "recipe.json").is_file():
-            names.add("recipe.json")
-    elif adjacent_metadata.is_file():
-        names.add(adjacent_metadata.name)
+    if model_path.name == "model.zip":
+        versioned_model = parent / "model.json"
+        versioned_recipe = parent / "recipe.json"
+    missing = [
+        path.name
+        for path in (versioned_model, versioned_recipe)
+        if not path.is_file()
+    ]
+    if missing:
+        raise ValueError(
+            "model input is missing current policy bundle files: "
+            + ", ".join(missing)
+        )
+    names.update((versioned_model.name, versioned_recipe.name))
     release_manifest = parent / "release_manifest.json"
     if release_manifest.is_file():
         names.add(release_manifest.name)

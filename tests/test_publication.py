@@ -82,7 +82,6 @@ def model_metadata(
     if crop is None and game == "SuperMarioBros-Nes-v0":
         crop = [32, 0, 0, 0]
     return {
-        "metadata_version": 6,
         "algorithm_id": algorithm,
         "model_class": model_class,
         "training_backend_id": "sb3.ppo",
@@ -317,7 +316,7 @@ def test_model_card_template_preserves_current_jerk_golden_output() -> None:
 
     ModelCard(card).validate(repo_type="model")
     assert hashlib.sha256(card.encode()).hexdigest() == (
-        "6ad6a1b54e3c867604baadd4e3426fb8a89740a9eafd9b157b815a863738663d"
+        "73089a96695e580f4f14537f82ee17389c3e0ac7b1de1746da0a89e442c6a8a1"
     )
 
 

@@ -14,8 +14,51 @@ import numpy as np
 from rlab.task_kernels import Outcome
 
 
-JERK_POLICY_SCHEMA_VERSION = 1
+JERK_POLICY_SCHEMA_VERSION = 2
+LEGACY_JERK_POLICY_SCHEMA_VERSION = 1
 JERK_POLICY_MEMBER = "jerk_policy.json"
+
+
+@dataclass(frozen=True, order=True)
+class ActionRun:
+    """One action held for a positive number of environment steps."""
+
+    action: int
+    duration: int
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "action", int(self.action))
+        object.__setattr__(self, "duration", int(self.duration))
+        if self.duration < 1:
+            raise ValueError("JERK action-run durations must be positive")
+
+
+def canonicalize_action_runs(runs: Sequence[ActionRun]) -> tuple[ActionRun, ...]:
+    """Merge adjacent equal actions into the unique canonical run program."""
+
+    canonical: list[ActionRun] = []
+    for raw_run in runs:
+        run = ActionRun(raw_run.action, raw_run.duration)
+        if canonical and canonical[-1].action == run.action:
+            previous = canonical[-1]
+            canonical[-1] = ActionRun(previous.action, previous.duration + run.duration)
+        else:
+            canonical.append(run)
+    return tuple(canonical)
+
+
+def action_runs_from_sequence(actions: Sequence[int]) -> tuple[ActionRun, ...]:
+    """Run-length encode a flat action sequence."""
+
+    runs: list[ActionRun] = []
+    for raw_action in actions:
+        action = int(raw_action)
+        if runs and runs[-1].action == action:
+            previous = runs[-1]
+            runs[-1] = ActionRun(action, previous.duration + 1)
+        else:
+            runs.append(ActionRun(action, 1))
+    return tuple(runs)
 
 
 @dataclass
@@ -272,7 +315,7 @@ class JerkSearch:
         candidate = self.best_candidate()
         return JerkPolicy(
             action_names=self.action_names,
-            action_sequence=() if candidate is None else candidate.actions,
+            action_runs=(() if candidate is None else action_runs_from_sequence(candidate.actions)),
             fallback_action=self.fallback_action,
         )
 
@@ -284,24 +327,33 @@ class JerkPolicy:
         self,
         *,
         action_names: Sequence[str],
-        action_sequence: Sequence[int],
+        action_runs: Sequence[ActionRun],
         fallback_action: int,
     ) -> None:
         self.action_names = tuple(str(name) for name in action_names)
-        self.action_sequence = tuple(int(action) for action in action_sequence)
+        self.action_runs = canonicalize_action_runs(action_runs)
         self.fallback_action = int(fallback_action)
         self.action_space: gym.Space | None = None
         self.observation_space = None
-        self._indices = np.zeros(1, dtype=np.int64)
+        self._run_indices = np.zeros(1, dtype=np.int64)
+        self._run_remaining = np.zeros(1, dtype=np.int64)
         self._validate_actions()
 
     def _validate_actions(self) -> None:
         count = len(self.action_names)
         if count < 1:
             raise ValueError("JERK policy requires at least one action name")
-        values = (*self.action_sequence, self.fallback_action)
+        values = (*(run.action for run in self.action_runs), self.fallback_action)
         if any(action < 0 or action >= count for action in values):
             raise ValueError("JERK policy contains an action outside its action-name table")
+
+    @property
+    def run_count(self) -> int:
+        return len(self.action_runs)
+
+    @property
+    def step_count(self) -> int:
+        return sum(run.duration for run in self.action_runs)
 
     @staticmethod
     def _batch_size(observation: Any) -> int:
@@ -313,16 +365,29 @@ class JerkPolicy:
         return int(array.shape[0]) if array.ndim > 0 else 1
 
     def _ensure_lanes(self, count: int) -> None:
-        if self._indices.shape != (count,):
-            self._indices = np.zeros(count, dtype=np.int64)
+        if self._run_indices.shape != (count,):
+            self._run_indices = np.zeros(count, dtype=np.int64)
+            self._run_remaining = np.zeros(count, dtype=np.int64)
 
     def _peek(self, lane: int) -> int:
-        index = int(self._indices[lane])
+        index = int(self._run_indices[lane])
         return (
-            self.action_sequence[index]
-            if index < len(self.action_sequence)
+            self.action_runs[index].action
+            if index < len(self.action_runs)
             else self.fallback_action
         )
+
+    def _next_action(self, lane: int) -> int:
+        index = int(self._run_indices[lane])
+        if index >= len(self.action_runs):
+            return self.fallback_action
+        run = self.action_runs[index]
+        if self._run_remaining[lane] == 0:
+            self._run_remaining[lane] = run.duration
+        self._run_remaining[lane] -= 1
+        if self._run_remaining[lane] == 0:
+            self._run_indices[lane] += 1
+        return run.action
 
     def bind_action_space(self, action_space: gym.Space) -> None:
         if not isinstance(action_space, gym.spaces.Discrete):
@@ -334,31 +399,33 @@ class JerkPolicy:
         self.action_space = action_space
 
     def reset_episode(self) -> None:
-        self._indices.fill(0)
+        self._run_indices.fill(0)
+        self._run_remaining.fill(0)
 
     def reset_lanes(self, dones: Sequence[bool]) -> None:
         mask = np.asarray(dones, dtype=bool)
         self._ensure_lanes(int(mask.size))
-        self._indices[mask] = 0
+        self._run_indices[mask] = 0
+        self._run_remaining[mask] = 0
 
     def predict(self, observation: Any, deterministic: bool = False):
         if deterministic:
             raise ValueError("JERK participates in rlab's stochastic sampling protocol")
         count = self._batch_size(observation)
         self._ensure_lanes(count)
-        actions = np.asarray([self._peek(lane) for lane in range(count)], dtype=np.int64)
-        self._indices += 1
+        actions = np.asarray(
+            [self._next_action(lane) for lane in range(count)],
+            dtype=np.int64,
+        )
         return actions, None
 
     def _decision(self, *, sampled: bool):
         from rlab.play_debug import PolicyDecision
 
         self._ensure_lanes(1)
-        action = self._peek(0)
+        action = self._next_action(0) if sampled else self._peek(0)
         probabilities = np.zeros(len(self.action_names), dtype=np.float64)
         probabilities[action] = 1.0
-        if sampled:
-            self._indices[0] += 1
         value = np.asarray(action, dtype=np.int64)
         return PolicyDecision(
             distribution_kind="categorical",
@@ -384,7 +451,7 @@ class JerkPolicy:
             "algorithm_id": "jerk",
             "model_class": "rlab.jerk.JerkPolicy",
             "action_names": list(self.action_names),
-            "action_sequence": list(self.action_sequence),
+            "action_runs": [[run.action, run.duration] for run in self.action_runs],
             "fallback_action": self.fallback_action,
         }
 
@@ -401,12 +468,21 @@ class JerkPolicy:
     def load(cls, path: str | Path) -> "JerkPolicy":
         with zipfile.ZipFile(Path(path)) as archive:
             payload = json.loads(archive.read(JERK_POLICY_MEMBER))
-        if int(payload.get("schema_version") or 0) != JERK_POLICY_SCHEMA_VERSION:
+        schema_version = int(payload.get("schema_version") or 0)
+        if schema_version not in {
+            LEGACY_JERK_POLICY_SCHEMA_VERSION,
+            JERK_POLICY_SCHEMA_VERSION,
+        }:
             raise ValueError("unsupported JERK policy schema version")
         if payload.get("algorithm_id") != "jerk":
             raise ValueError("JERK policy payload has the wrong algorithm id")
+        action_runs = (
+            action_runs_from_sequence(payload["action_sequence"])
+            if schema_version == LEGACY_JERK_POLICY_SCHEMA_VERSION
+            else tuple(ActionRun(*run) for run in payload["action_runs"])
+        )
         return cls(
             action_names=payload["action_names"],
-            action_sequence=payload["action_sequence"],
+            action_runs=action_runs,
             fallback_action=payload["fallback_action"],
         )

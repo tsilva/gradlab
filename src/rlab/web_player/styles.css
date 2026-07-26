@@ -247,6 +247,102 @@ h2 { font-size: .9rem; margin: 0; font-weight: 650; }
   background: var(--surface);
 }
 
+.source-efficiency {
+  display: grid;
+  grid-template-columns: minmax(15rem, 1.2fr) minmax(18rem, 1fr);
+  align-items: center;
+  gap: 1rem;
+  padding: .85rem .95rem;
+  border-bottom: 1px solid var(--border);
+  background:
+    linear-gradient(100deg, rgba(96, 211, 148, .11), transparent 58%),
+    #0c1a22;
+}
+.source-efficiency.training {
+  background:
+    linear-gradient(100deg, rgba(240, 195, 106, .1), transparent 58%),
+    #0c1a22;
+}
+.source-efficiency-identity { min-width: 0; }
+.source-efficiency-recipe {
+  display: flex;
+  align-items: center;
+  gap: .45rem;
+  min-width: 0;
+  margin-top: .2rem;
+}
+.source-efficiency-recipe strong {
+  overflow: hidden;
+  color: var(--text);
+  font-size: .95rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.source-efficiency-recipe code,
+.source-efficiency-identity small {
+  overflow: hidden;
+  color: var(--muted);
+  font: .62rem ui-monospace, SFMono-Regular, Menlo, monospace;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.source-efficiency-identity p {
+  margin: .28rem 0 .18rem;
+  color: var(--muted);
+  font-size: .7rem;
+}
+.source-evidence-badge,
+.source-leader-badge {
+  display: inline-flex;
+  align-items: center;
+  width: max-content;
+  border: 1px solid rgba(96, 211, 148, .5);
+  border-radius: 99rem;
+  background: rgba(96, 211, 148, .09);
+  color: var(--green);
+  font-size: .56rem;
+  font-weight: 800;
+  letter-spacing: .06em;
+  line-height: 1;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.source-evidence-badge { padding: .24rem .4rem; }
+.source-efficiency.training .source-evidence-badge,
+.source-efficiency.training + .source-table-scroll .source-leader-badge {
+  border-color: rgba(240, 195, 106, .5);
+  background: rgba(240, 195, 106, .08);
+  color: var(--yellow);
+}
+.source-efficiency-metrics {
+  display: flex;
+  justify-content: flex-end;
+  gap: .45rem;
+  margin: 0;
+}
+.source-efficiency-metrics div {
+  min-width: 7.6rem;
+  padding: .5rem .6rem;
+  border: 1px solid rgba(49, 80, 94, .78);
+  border-radius: .42rem;
+  background: rgba(5, 13, 18, .56);
+}
+.source-efficiency-metrics dt {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: .57rem;
+  font-weight: 700;
+  letter-spacing: .06em;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.source-efficiency-metrics dd {
+  margin: .2rem 0 0;
+  color: var(--text);
+  font: 700 .78rem ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
 .project-list,
 .goal-list { display: grid; }
 .project-row,
@@ -344,6 +440,12 @@ h2 { font-size: .9rem; margin: 0; font-weight: 650; }
 .source-table td span,
 .source-table td small { display: block; overflow: hidden; text-overflow: ellipsis; }
 .source-table td small { margin-top: .16rem; color: var(--muted); font: .62rem ui-monospace, SFMono-Regular, Menlo, monospace; }
+.source-table .recipe-cell { min-width: 8rem; }
+.source-table .source-leader-badge {
+  display: inline-flex;
+  margin-top: .36rem;
+  padding: .2rem .35rem;
+}
 .source-table .run-identity {
   display: flex;
   align-items: flex-start;
@@ -371,6 +473,14 @@ h2 { font-size: .9rem; margin: 0; font-weight: 650; }
 .source-table .evaluation-cell.accepted .evaluation-verdict { color: var(--green); }
 .source-table .evaluation-cell.rejected .evaluation-verdict { color: var(--red); }
 .source-table tbody tr { cursor: pointer; transition: background .12s ease; }
+.source-table tbody tr.efficiency-leader {
+  background: rgba(96, 211, 148, .055);
+  box-shadow: inset 2px 0 var(--green);
+}
+.source-efficiency.training + .source-table-scroll tr.efficiency-leader {
+  background: rgba(240, 195, 106, .045);
+  box-shadow: inset 2px 0 var(--yellow);
+}
 .source-table tbody tr:hover,
 .source-table tbody tr:focus-visible { outline: 0; background: rgba(83, 212, 232, .07); }
 .source-table tbody tr[aria-disabled="true"] { cursor: not-allowed; opacity: .55; }
@@ -783,4 +893,6 @@ body.recording #timeline { opacity: .72; }
   .project-row { grid-template-columns: 1fr; gap: .2rem; }
   .project-row span { white-space: normal; }
   .source-inline-error { align-items: stretch; flex-direction: column; }
+  .source-efficiency { grid-template-columns: 1fr; }
+  .source-efficiency-metrics { justify-content: flex-start; overflow-x: auto; }
 }

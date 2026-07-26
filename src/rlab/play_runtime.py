@@ -148,7 +148,6 @@ class PlaybackLoader:
                 download_huggingface_model_source(
                     spec.value,
                     root=Path(args.hf_model_root),
-                    filename=getattr(args, "hf_file", None),
                     revision=getattr(args, "hf_revision", None),
                 ),
                 spec.value,

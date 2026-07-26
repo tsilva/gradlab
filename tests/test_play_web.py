@@ -391,16 +391,20 @@ def test_source_browser_paths_are_hierarchical_and_url_encoded() -> None:
 
     assert source_browser_path(None) == "/"
     assert source_browser_path({"project": "Mario Bros"}) == "/projects/Mario%20Bros"
-    assert source_browser_path(
-        {"project": "Mario Bros", "goal_id": "Level 1-1"}
-    ) == "/projects/Mario%20Bros/goals/Level%201-1"
-    assert source_browser_path(
-        {
-            "project": "Mario Bros",
-            "goal_id": "Level 1-1",
-            "run_id": run_id,
-        }
-    ) == f"/projects/Mario%20Bros/goals/Level%201-1/runs/{run_id}"
+    assert (
+        source_browser_path({"project": "Mario Bros", "goal_id": "Level 1-1"})
+        == "/projects/Mario%20Bros/goals/Level%201-1"
+    )
+    assert (
+        source_browser_path(
+            {
+                "project": "Mario Bros",
+                "goal_id": "Level 1-1",
+                "run_id": run_id,
+            }
+        )
+        == f"/projects/Mario%20Bros/goals/Level%201-1/runs/{run_id}"
+    )
     assert source_browser_path(
         {
             "project": "Mario Bros",
@@ -408,10 +412,7 @@ def test_source_browser_paths_are_hierarchical_and_url_encoded() -> None:
             "run_id": run_id,
             "checkpoint_id": checkpoint_id,
         }
-    ) == (
-        f"/projects/Mario%20Bros/goals/Level%201-1/runs/{run_id}"
-        f"/checkpoints/{checkpoint_id}"
-    )
+    ) == (f"/projects/Mario%20Bros/goals/Level%201-1/runs/{run_id}/checkpoints/{checkpoint_id}")
 
 
 def test_paired_playback_server_opens_play_and_stats_windows() -> None:
@@ -1021,6 +1022,51 @@ def test_catalog_http_api_requires_the_fragment_session_token() -> None:
     asyncio.run(scenario())
 
 
+def test_initial_project_catalog_is_embedded_in_selection_snapshots() -> None:
+    class FakeCatalog:
+        calls = 0
+
+        @classmethod
+        def initial_projects(cls, explicit_entity=None):
+            cls.calls += 1
+            assert explicit_entity is None
+            return {
+                "entity": "research",
+                "items": [
+                    {
+                        "entity": "research",
+                        "name": "Mario",
+                        "goal_count": 1,
+                    }
+                ],
+                "next_cursor": None,
+            }
+
+    runner = argparse.Namespace(session_change=0)
+    server = PlaybackWebServer(runner, human_args(), catalog=FakeCatalog())
+    asyncio.run(server._prepare_initial_catalog())
+    client = argparse.Namespace(
+        client_id="client",
+        workspace_id="workspace",
+        window_id="main",
+    )
+
+    snapshot = server._snapshot_for(
+        client,
+        {
+            "type": "snapshot",
+            "app": {
+                "phase": "selecting",
+                "route": {"level": "projects"},
+            },
+        },
+    )
+
+    assert FakeCatalog.calls == 1
+    assert snapshot["app"]["catalog"]["entity"] == "research"
+    assert snapshot["app"]["catalog"]["items"][0]["name"] == "Mario"
+
+
 def test_web_dashboard_assets_are_packaged_beside_server() -> None:
     root = Path(__file__).parents[1] / "src" / "rlab" / "web_player"
     panel_root = root / "panels"
@@ -1062,8 +1108,11 @@ def test_web_dashboard_assets_are_packaged_beside_server() -> None:
     assert 'href="/assets/vendor/gridstack/gridstack.min.css"' in markup
     assert 'src="/assets/vendor/gridstack/gridstack-all.js"' in markup
     assert '<main id="source-browser" class="source-browser" hidden></main>' in markup
+    assert '<h1 id="page-title" hidden>Environment</h1>' in markup
     assert 'id="source-breadcrumbs"' in markup
     assert '$("#source-breadcrumbs")' in script
+    assert '$("#page-title").hidden = state.sourceMode' in script
+    assert '$("#page-title").textContent = "Select checkpoint"' not in script
     assert 'id="panel-add"' in markup
     assert 'id="panel-edit"' in markup
     assert 'id="panel-duplicate"' in markup
@@ -1111,8 +1160,9 @@ def test_web_dashboard_assets_are_packaged_beside_server() -> None:
     assert ".telemetry-blocks" in styles
     assert ".panel-editor" in styles
 
-    assert 'export function sourceRouteFromPath(' in source_browser
-    assert 'export function sourceRoutePath(' in source_browser
+    assert "export function sourceRouteFromPath(" in source_browser
+    assert "export function sourceRoutePath(" in source_browser
     assert "export function formatDate(value, nowValue = Date.now())" in source_browser
     assert 'history.pushState(null, "", target);' in source_browser
     assert 'window.addEventListener("popstate", this.onPopState);' in source_browser
+    assert "hydrateInitialProjects()" in source_browser

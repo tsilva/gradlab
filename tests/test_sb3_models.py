@@ -5,8 +5,9 @@ import pytest
 from rlab.sb3_models import resolve_sb3_algorithm
 
 
-def test_metadata_less_checkpoints_default_to_historical_ppo() -> None:
-    assert resolve_sb3_algorithm({}) == "ppo"
+def test_checkpoint_identity_is_required() -> None:
+    with pytest.raises(ValueError, match="must identify"):
+        resolve_sb3_algorithm({})
 
 
 def test_a2c_checkpoint_identity_resolves_consistently() -> None:
