@@ -63,8 +63,7 @@ class DstackBackendTests(unittest.TestCase):
         self.assertEqual(config["volumes"], ["/srv/rlab/roms-ro:/roms"])
         self.assertIn("RLAB_ROM_CACHE_READ_ONLY=1", config["env"])
         self.assertIn(
-            "RLAB_CONTROL_R2_ACCESS_KEY_ID="
-            "${{ secrets.RLAB_CONTROL_R2_ACCESS_KEY_ID }}",
+            "RLAB_CONTROL_R2_ACCESS_KEY_ID=${{ secrets.RLAB_CONTROL_R2_ACCESS_KEY_ID }}",
             config["env"],
         )
         self.assertNotIn("RLAB_CONTROL_R2_ACCESS_KEY_ID", config["env"])
@@ -205,6 +204,7 @@ class DstackBackendTests(unittest.TestCase):
     ) -> None:
         run.side_effect = [
             subprocess.CompletedProcess(["dstack", "-v"], 0, DSTACK_VERSION + "\n", ""),
+            subprocess.CompletedProcess(["dstack", "ps"], 0, '{"runs": []}\n', ""),
             subprocess.CompletedProcess(["dstack", "apply"], 0, "submitted\n", ""),
         ]
         response = mock.MagicMock()
@@ -222,9 +222,31 @@ class DstackBackendTests(unittest.TestCase):
         request = self.task()
         task = backend.submit(request)
         self.assertEqual(task.name, request.task_name)
-        submitted = run.call_args_list[1]
+        submitted = run.call_args_list[2]
         self.assertIn("on_events:", submitted.kwargs["input"])
         self.assertNotIn("DSTACK_TOKEN", submitted.kwargs["input"])
+
+    @mock.patch("rlab.dstack_backend.shutil.which", return_value="/bin/dstack")
+    @mock.patch("rlab.dstack_backend.subprocess.run")
+    def test_preflight_authenticates_to_the_live_server(self, run, _which) -> None:
+        run.side_effect = [
+            subprocess.CompletedProcess(["dstack", "-v"], 0, DSTACK_VERSION + "\n", ""),
+            subprocess.CompletedProcess(["dstack", "ps"], 0, '{"runs": []}\n', ""),
+        ]
+        backend = DstackBackend(
+            environment={
+                "PATH": "/bin",
+                "DSTACK_SERVER_URL": "http://127.0.0.1:3000",
+                "DSTACK_TOKEN": "admin-token",
+            }
+        )
+
+        backend.preflight()
+
+        self.assertEqual(
+            run.call_args_list[1].args[0],
+            ["dstack", "ps", "--project", "main", "--all", "--json"],
+        )
 
     @mock.patch("rlab.dstack_backend.urllib.request.urlopen")
     @mock.patch("rlab.dstack_backend.shutil.which", return_value="/bin/dstack")

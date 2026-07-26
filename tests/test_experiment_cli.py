@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
@@ -20,12 +21,82 @@ from rlab.experiment_cli import (
     _task_request,
     build_parser,
     cmd_launch,
+    cmd_resume_submit,
     main,
 )
 from rlab.operator_credentials import OperatorConfigurationError
 from rlab.policy_bundle import build_recipe_document
 from rlab.recipe_documents import compose_train_document
-from rlab.run_contracts import new_attempt_id, new_run_id
+from rlab.run_contracts import RunManifest, new_attempt_id, new_run_id
+
+
+def _manifest_only_run() -> RunManifest:
+    run_id = new_run_id()
+    attempt_id = new_attempt_id()
+    source_sha = "a" * 40
+    compute = {
+        "request": {
+            "kind": "local",
+            "target": "b3",
+            "max_price": None,
+            "max_cost_usd": None,
+            "allow_on_demand": False,
+            "max_duration_seconds": 3600,
+        },
+        "selected": {
+            "kind": "local",
+            "target": "b3",
+            "max_price": None,
+            "max_cost_usd": None,
+            "allow_on_demand": False,
+            "max_duration_seconds": 3600,
+        },
+        "selected_offer": None,
+        "dstack_task": run_id,
+        "runtime_workflow_run_id": "12345",
+        "runtime_input_sha256": "b" * 64,
+        "runtime_build_source_sha": source_sha,
+    }
+    manifest = RunManifest(
+        run_id=run_id,
+        attempt_id=attempt_id,
+        created_at=(datetime.now(UTC) - timedelta(minutes=1))
+        .isoformat()
+        .replace("+00:00", "Z"),
+        source_sha=source_sha,
+        image_digest="docker:example/rlab@sha256:" + "c" * 64,
+        goal_slug="example/goal",
+        goal_sha256="d" * 64,
+        recipe_slug="ppo",
+        recipe_sha256="e" * 64,
+        recipe_overrides=[],
+        environment_sha256="f" * 64,
+        seed=123,
+        run_description="manifest-only recovery regression",
+        compute=compute,
+        wandb={
+            "run_id": run_id,
+            "entity": "example",
+            "project": "example",
+            "url": f"https://wandb.example/runs/{run_id}",
+        },
+        modal={
+            "enabled": True,
+            "environment_name": "rlab-eval",
+            "app_name": f"rlab-eval-v2-{source_sha[:12]}",
+            "function_name": "evaluate_checkpoint",
+            "deployment_source_sha": source_sha,
+            "rom_asset_manifest": None,
+        },
+        storage={
+            "control": "s3://control-private",
+            "evaluation": "s3://eval-private",
+            "models": "s3://models-public",
+            "public_models_base_url": "https://models.example",
+        },
+    )
+    manifest.validate()
+    return manifest
 
 
 def test_launch_parser_exposes_bounded_compute_and_hash_bound_overrides() -> None:
@@ -88,7 +159,17 @@ def test_operator_preflight_parser_defaults_to_modal() -> None:
     assert args.json is True
 
 
-def test_launch_operator_preflight_runs_before_runtime_readiness(tmp_path: Path) -> None:
+def test_resume_submit_parser_requires_one_existing_run() -> None:
+    run_id = new_run_id()
+    args = build_parser().parse_args(["resume-submit", "--run", run_id, "--json"])
+
+    assert args.run_id == run_id
+    assert args.json is True
+
+
+def test_launch_operator_preflight_runs_before_runtime_readiness(
+    tmp_path: Path,
+) -> None:
     goal = tmp_path / "experiments/goals/example/_goal.yaml"
     recipe = goal.parent / "recipes/ppo.yaml"
     args = SimpleNamespace(
@@ -275,6 +356,120 @@ def test_retry_task_name_preserves_run_and_changes_attempt() -> None:
     assert retry_name.startswith(run_id + "-a")
     assert retry_name.endswith(attempt_id.removeprefix("attempt-"))
     assert len(retry_name) <= 63
+
+
+def test_resume_submit_recovers_only_the_original_manifest(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    manifest = _manifest_only_run()
+    document = manifest.to_dict()
+    prefix = f"runs/{manifest.run_id}"
+    authority = mock.MagicMock()
+    authority.run_prefix.return_value = prefix
+    authority.semantic_state.return_value = {
+        "run_id": manifest.run_id,
+        "manifest": document,
+        "terminal": None,
+        "promotion": None,
+        "public_index": None,
+        "eval_intents": 0,
+        "eval_results": 0,
+        "verified_eval_results": 0,
+        "attempts": [document],
+        "attempt_terminals": [],
+    }
+    authority.control.iter_keys.return_value = iter(
+        [
+            f"{prefix}/manifest.json",
+            f"{prefix}/attempts/{manifest.attempt_id}/manifest.json",
+        ]
+    )
+    authority.evaluation.iter_keys.return_value = iter(())
+    authority.models.iter_keys.return_value = iter(())
+    authority.models.public_url.return_value = (
+        f"https://models.example/runs/{manifest.run_id}/index.json"
+    )
+    storage = SimpleNamespace(
+        control=SimpleNamespace(
+            uri=lambda key: f"s3://control-private/{key}",
+        )
+    )
+    backend = mock.MagicMock()
+    backend.status.side_effect = KeyError("not found")
+    backend.submit.return_value = DstackTask(
+        project="main",
+        name=manifest.run_id,
+        status="submitted",
+    )
+
+    with (
+        mock.patch("rlab.experiment_cli.repository_root", return_value=tmp_path),
+        mock.patch(
+            "rlab.experiment_cli._storage",
+            return_value=(storage, authority),
+        ),
+        mock.patch(
+            "rlab.experiment_cli._operator_preflight",
+            return_value=(storage, authority, backend, {"status": "ready"}),
+        ),
+    ):
+        assert (
+            cmd_resume_submit(SimpleNamespace(run_id=manifest.run_id, json=True)) == 0
+        )
+
+    submitted_request = backend.submit.call_args.args[0]
+    assert submitted_request.run_id == manifest.run_id
+    assert submitted_request.task_name == manifest.run_id
+    assert submitted_request.manifest_uri == (
+        f"s3://control-private/runs/{manifest.run_id}/manifest.json"
+    )
+    output = json.loads(capsys.readouterr().out)
+    assert output["run_id"] == manifest.run_id
+    assert output["attempt_id"] == manifest.attempt_id
+    assert output["resumed_submission"] is True
+
+
+def test_resume_submit_rejects_any_post_manifest_run_state(
+    tmp_path: Path,
+) -> None:
+    manifest = _manifest_only_run()
+    document = manifest.to_dict()
+    prefix = f"runs/{manifest.run_id}"
+    authority = mock.MagicMock()
+    authority.run_prefix.return_value = prefix
+    authority.semantic_state.return_value = {
+        "run_id": manifest.run_id,
+        "manifest": document,
+        "terminal": None,
+        "promotion": None,
+        "public_index": None,
+        "eval_intents": 0,
+        "eval_results": 0,
+        "verified_eval_results": 0,
+        "attempts": [document],
+        "attempt_terminals": [],
+    }
+    authority.control.iter_keys.return_value = iter(
+        [
+            f"{prefix}/manifest.json",
+            f"{prefix}/writer-lease.json",
+            f"{prefix}/attempts/{manifest.attempt_id}/manifest.json",
+        ]
+    )
+
+    with (
+        mock.patch("rlab.experiment_cli.repository_root", return_value=tmp_path),
+        mock.patch(
+            "rlab.experiment_cli._storage",
+            return_value=(SimpleNamespace(), authority),
+        ),
+        mock.patch("rlab.experiment_cli._operator_preflight") as preflight,
+        pytest.raises(RuntimeError, match="control state beyond"),
+    ):
+        cmd_resume_submit(SimpleNamespace(run_id=manifest.run_id, json=True))
+
+    preflight.assert_not_called()
 
 
 def test_launch_parser_supports_explicit_training_only_runs() -> None:
