@@ -206,6 +206,27 @@ class RunSupervisorTests(unittest.TestCase):
         ):
             supervisor.validate_runtime()
 
+    def test_recovery_failure_after_lease_creates_terminal_receipt(self) -> None:
+        supervisor = self.supervisor()
+        with (
+            patch.object(supervisor, "validate_runtime"),
+            patch.object(supervisor, "materialize"),
+            patch.object(
+                supervisor,
+                "_recover_durable_state",
+                side_effect=RuntimeError("recovery exploded"),
+            ),
+        ):
+            self.assertEqual(supervisor.run(), 1)
+
+        receipt = self.authority.control.get_json(
+            f"runs/{self.run_id}/attempts/{self.manifest.attempt_id}/terminal.json"
+        )
+        self.assertEqual(receipt["state"], "resumable_failure")
+        self.assertEqual(receipt["stop_reason"], "supervisor_startup_failure")
+        self.assertEqual(receipt["drain"]["phase"], "startup/recovery")
+        self.assertIn("recovery exploded", receipt["drain"]["failure"])
+
     def test_training_only_contract_omits_null_eval_contract(self) -> None:
         config = {"checkpoint_eval_contract": None}
         contract = _bind_evaluation_contract(
@@ -464,6 +485,85 @@ class RunSupervisorTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "does not match"):
             supervisor._resolve_early_stop_receipt()
 
+    def test_drain_only_recovery_preserves_prior_early_stop_outcome(self) -> None:
+        original = self.supervisor()
+        config = {
+            "conditions": {
+                "return_plateau": {
+                    "metric": TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_MEAN,
+                    "trigger": "no_improvement",
+                    "direction": "maximize",
+                    "min_delta": 0.01,
+                    "delta_mode": "relative",
+                    "start_after_steps": 0,
+                    "patience_steps": 10,
+                    "outcome": "failure",
+                    "action": "stop",
+                }
+            }
+        }
+        machine = MetricEarlyStopStateMachine(config)
+        machine.update(
+            {
+                TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_MEAN: MetricSample(
+                    value=100.0,
+                    step=0,
+                )
+            }
+        )
+        update = machine.update(
+            {
+                TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_MEAN: MetricSample(
+                    value=100.0,
+                    step=10,
+                )
+            }
+        )
+        original.train_config = {"early_stop": machine.config}
+        atomic_write_json(
+            original.run_dir
+            / f"early_stop_decision-{self.manifest.attempt_id}.json",
+            update.stop_decision or {},
+        )
+        originating_receipt = original._resolve_early_stop_receipt()
+        self.assertIsNotNone(originating_receipt)
+
+        retry_manifest = replace(
+            self.manifest,
+            attempt_id=new_attempt_id(),
+            created_at="9999-01-01T00:00:00Z",
+            compute={**self.manifest.compute, "recovery_mode": "drain-only"},
+        )
+        self.authority.create_attempt_manifest(retry_manifest)
+        retry = RunSupervisor(
+            manifest_uri=self.authority.control.uri(
+                f"runs/{self.run_id}/attempts/{retry_manifest.attempt_id}/manifest.json"
+            ),
+            storage=self.storage,
+            eval_backend=FailingSpawnBackend(),
+            repo_root=Path.cwd(),
+            work_root=Path(self.temporary.name) / "retry-work",
+        )
+        retry.train_config = {"early_stop": machine.config}
+
+        recovered = retry._resolve_early_stop_receipt()
+
+        assert recovered is not None
+        assert originating_receipt is not None
+        self.assertEqual(recovered.condition_id, originating_receipt.condition_id)
+        self.assertEqual(recovered.outcome, originating_receipt.outcome)
+        self.assertEqual(recovered.decision_sha256, originating_receipt.decision_sha256)
+        self.assertEqual(recovered.attempt_id, self.manifest.attempt_id)
+        state, stop_reason = _terminal_outcome(
+            cancel_requested=False,
+            failure=None,
+            evaluation_required=False,
+            promotion=None,
+            early_stop=recovered,
+        )
+        self.assertEqual(state, "failed")
+        self.assertEqual(stop_reason, "early_stop_failure:return_plateau")
+
     def test_wandb_remote_probe_survives_sdk_finish(self) -> None:
         class RemoteRun:
             summary = {"orchestration/event_seq": {"max": 10}}
@@ -692,6 +792,74 @@ class RunSupervisorTests(unittest.TestCase):
         with patch.object(supervisor.clock, "time", return_value=1001):
             self.assertEqual(supervisor._poll_evals(10.0), 0)
         self.assertEqual(supervisor.store.evals()[0]["status"], "pending")
+
+    def test_training_only_checkpoint_recovery_does_not_create_evals(self) -> None:
+        supervisor = self.supervisor()
+        supervisor.evaluation_required = False
+        supervisor.eval_contract = {}
+        supervisor.store.init()
+        checkpoint = CheckpointManifest(
+            run_id=self.run_id,
+            checkpoint_id="checkpoint-250000-" + "e" * 16,
+            step=250_000,
+            purpose="periodic",
+            sha256="e" * 64,
+            size_bytes=10,
+            public_url="https://models.example/model.zip",
+            model_document_url="https://models.example/model.json",
+            model_document_sha256="f" * 64,
+            recipe_document_url="https://models.example/recipe.json",
+            recipe_document_sha256="1" * 64,
+            goal_sha256=self.manifest.goal_sha256,
+            recipe_sha256=self.manifest.recipe_sha256,
+            environment_sha256=self.manifest.environment_sha256,
+            evaluation_contract_sha256="2" * 64,
+            recovery_sidecar_key="recovery.json",
+            created_at=utc_now(),
+        )
+        self.authority.models.put_json(
+            f"runs/{self.run_id}/index.json",
+            {"checkpoints": [checkpoint.to_dict()]},
+        )
+
+        with patch.object(supervisor, "_ensure_eval") as ensure_eval:
+            supervisor._recover_durable_state()
+
+        ensure_eval.assert_not_called()
+        self.assertEqual(len(supervisor.store.checkpoint_publications()), 1)
+        self.assertEqual(supervisor.store.evals(), [])
+
+    def test_evaluated_checkpoint_recovery_recreates_eval(self) -> None:
+        supervisor = self.supervisor()
+        supervisor.store.init()
+        checkpoint = CheckpointManifest(
+            run_id=self.run_id,
+            checkpoint_id="checkpoint-250000-" + "e" * 16,
+            step=250_000,
+            purpose="periodic",
+            sha256="e" * 64,
+            size_bytes=10,
+            public_url="https://models.example/model.zip",
+            model_document_url="https://models.example/model.json",
+            model_document_sha256="f" * 64,
+            recipe_document_url="https://models.example/recipe.json",
+            recipe_document_sha256="1" * 64,
+            goal_sha256=self.manifest.goal_sha256,
+            recipe_sha256=self.manifest.recipe_sha256,
+            environment_sha256=self.manifest.environment_sha256,
+            evaluation_contract_sha256="2" * 64,
+            recovery_sidecar_key="recovery.json",
+            created_at=utc_now(),
+        )
+        self.authority.models.put_json(
+            f"runs/{self.run_id}/index.json",
+            {"checkpoints": [checkpoint.to_dict()]},
+        )
+
+        with patch.object(supervisor, "_ensure_eval") as ensure_eval:
+            supervisor._recover_durable_state()
+
+        ensure_eval.assert_called_once_with(-1, checkpoint)
 
     def test_rejected_final_checkpoint_does_not_displace_earlier_acceptance(
         self,

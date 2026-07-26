@@ -636,6 +636,43 @@ def _record_pre_submit_failure(
     )
 
 
+def _record_terminal_task_without_receipt(
+    authority: RunAuthority,
+    manifest: RunManifest,
+    task: DstackTask,
+) -> None:
+    if not task.terminal:
+        raise RuntimeError("cannot seal an orphan attempt while its dstack task is active")
+    authority.create_attempt_terminal(
+        TerminalReceipt(
+            run_id=manifest.run_id,
+            attempt_id=manifest.attempt_id,
+            state="resumable_failure",
+            acceptance_required=bool(manifest.modal["enabled"]),
+            stop_reason="supervisor_startup_failure",
+            final_step=0,
+            checkpoint_inventory=(),
+            eval_inventory=(),
+            wandb_high_water_mark=0,
+            drain={
+                "complete": False,
+                "phase": "startup/recovery",
+                "metric_segment_high_water": 0,
+                "eval_terminal_count": 0,
+                "journal_archive": None,
+                "journal_expires_at": None,
+                "wandb_remote_high_water_mark": 0,
+                "publication_capacity_ratio": None,
+                "failure": (
+                    "dstack task reached terminal status "
+                    f"{task.status!r} without an authoritative attempt receipt"
+                ),
+            },
+            completed_at=utc_now(),
+        )
+    )
+
+
 def _require_retryable_attempt_terminal(
     attempt_terminal: Mapping[str, Any] | None,
 ) -> None:
@@ -967,6 +1004,14 @@ def cmd_retry(args: argparse.Namespace) -> int:
         raise RuntimeError(
             "the previous dstack task is not found without typed pre-submit evidence"
         )
+    if previous_task is not None and previous_task.terminal and attempt_terminal is None:
+        _record_terminal_task_without_receipt(
+            authority,
+            previous_manifest,
+            previous_task,
+        )
+        state = authority.semantic_state(args.run_id)
+        attempt_terminal = _latest_attempt_terminal(state)
     _require_retryable_attempt_terminal(attempt_terminal)
     if previous_task is not None and (
         previous_task.status.lower().replace("_", "-")
@@ -1001,6 +1046,75 @@ def cmd_retry(args: argparse.Namespace) -> int:
         created_at=utc_now(),
         compute=compute,
     )
+    if bool(getattr(args, "repair_runtime", False)):
+        checkpoint_eval_backend = (
+            "modal" if bool(previous_manifest.modal["enabled"]) else "none"
+        )
+        source_sha = clean_git_source_sha(root)
+        branch = current_git_branch(root)
+        release = runtime_release_from_args(
+            args,
+            repo_root=root,
+            checkpoint_eval_backend=checkpoint_eval_backend,
+            wait_for_modal=checkpoint_eval_backend == "modal",
+        )
+        if release.source_sha != source_sha:
+            raise RuntimeError("repair runtime source does not match committed HEAD")
+        goal_path = root / "experiments" / "goals" / manifest.goal_slug / "_goal.yaml"
+        recipe_path = goal_path.parent / "recipes" / f"{manifest.recipe_slug}.yaml"
+        document = compose_train_document(
+            goal_path,
+            recipe_path,
+            recipe_overrides=manifest.recipe_overrides,
+            prepare_materialized=partial(
+                prepare_checkpoint_eval_mode,
+                checkpoint_eval_backend=checkpoint_eval_backend,
+            ),
+        )
+        if (
+            str(document["train_config"]["effective_goal_contract_sha256"])
+            != manifest.goal_sha256
+        ):
+            raise RuntimeError("repair runtime changed the effective goal contract")
+        if (
+            str(document["environment_hash"]).removeprefix("sha256:")
+            != manifest.environment_sha256
+        ):
+            raise RuntimeError("repair runtime changed the environment contract")
+        contract_document = _bind_launch_contract(
+            document,
+            asset=dict(manifest.modal["rom_asset_manifest"]),
+            checkpoint_eval_backend=checkpoint_eval_backend,
+        )
+        portable_recipe = build_recipe_document(
+            contract_document,
+            repo_root=root,
+            source_commit=source_sha,
+            run_description=manifest.run_description,
+            seed=manifest.seed,
+            runtime_image_ref=release.runtime_image_ref,
+        )
+        compute.update(
+            {
+                "source_branch": branch,
+                "runtime_workflow_run_id": release.workflow_run_id,
+                "runtime_input_sha256": release.runtime_input_sha256,
+                "runtime_build_source_sha": release.runtime_build_source_sha,
+            }
+        )
+        modal = {
+            **manifest.modal,
+            "app_name": str(release.modal_app_name or ""),
+            "deployment_source_sha": source_sha,
+        }
+        manifest = replace(
+            manifest,
+            source_sha=source_sha,
+            image_digest=release.runtime_image_ref,
+            recipe_sha256=canonical_json_sha256(portable_recipe),
+            compute=compute,
+            modal=modal,
+        )
     manifest.validate()
     manifest_key = f"runs/{args.run_id}/attempts/{attempt_id}/manifest.json"
     manifest_uri = authority.control.uri(manifest_key)
@@ -1219,6 +1333,14 @@ def build_parser() -> argparse.ArgumentParser:
 
     retry = commands.add_parser("retry", help="Retry a terminal failed attempt.")
     retry.add_argument("--run", dest="run_id", type=_require_run_id, required=True)
+    retry.add_argument(
+        "--repair-runtime",
+        action="store_true",
+        help=(
+            "Use the exact-source runtime for committed HEAD while preserving the "
+            "logical run, goal, environment, seed, and recipe overrides."
+        ),
+    )
     retry.set_defaults(func=cmd_retry)
 
     resume_submit = commands.add_parser(

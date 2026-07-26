@@ -16,6 +16,7 @@ from rlab.experiment_cli import (
     _latest_attempt_terminal,
     _public_dstack_state,
     _record_pre_submit_failure,
+    _record_terminal_task_without_receipt,
     _require_retryable_attempt_terminal,
     _required_operator_environment,
     _run_completed,
@@ -423,6 +424,31 @@ def test_pre_submit_failure_records_typed_attempt_evidence() -> None:
     assert receipt.stop_reason == "pre_submit_failure"
     assert receipt.final_step == 0
     assert receipt.drain["complete"] is False
+
+
+def test_terminal_task_without_receipt_records_typed_startup_failure() -> None:
+    manifest = _manifest_only_run()
+    authority = mock.MagicMock()
+    task = DstackTask(project="main", name="rlab-retry", status="failed")
+
+    _record_terminal_task_without_receipt(authority, manifest, task)
+
+    receipt = authority.create_attempt_terminal.call_args.args[0]
+    assert receipt.run_id == manifest.run_id
+    assert receipt.attempt_id == manifest.attempt_id
+    assert receipt.state == "resumable_failure"
+    assert receipt.stop_reason == "supervisor_startup_failure"
+    assert receipt.drain["phase"] == "startup/recovery"
+    assert "terminal status 'failed'" in receipt.drain["failure"]
+
+
+def test_active_task_without_receipt_cannot_be_sealed() -> None:
+    manifest = _manifest_only_run()
+    authority = mock.MagicMock()
+    task = DstackTask(project="main", name="rlab-retry", status="running")
+
+    with pytest.raises(RuntimeError, match="while its dstack task is active"):
+        _record_terminal_task_without_receipt(authority, manifest, task)
 
 
 def test_resume_submit_recovers_only_the_original_manifest(

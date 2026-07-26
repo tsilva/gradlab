@@ -289,55 +289,100 @@ class RunSupervisor:
             },
         )
 
-    def _resolve_early_stop_receipt(self) -> EarlyStopReceipt | None:
+    def _authoritative_early_stop_receipt(
+        self,
+        *,
+        attempt_id: str,
+    ) -> EarlyStopReceipt | None:
         existing_document = self.authority.early_stop_receipt(
             run_id=self.manifest.run_id,
-            attempt_id=self.manifest.attempt_id,
+            attempt_id=attempt_id,
         )
-        existing: EarlyStopReceipt | None = None
-        if existing_document is not None:
-            existing = EarlyStopReceipt(**existing_document)
-            existing.validate()
-            early_stop_config = self.train_config.get("early_stop")
-            if not isinstance(early_stop_config, Mapping):
-                raise ValueError(
-                    "authoritative early-stop receipt exists without configured conditions"
-                )
-            authoritative_decision = {
-                "schema_version": 1,
-                "kind": "metric_early_stop",
-                "condition_id": existing.condition_id,
-                "matched_condition_ids": list(existing.matched_condition_ids),
-                "outcome": existing.outcome,
-                "action": "stop",
-                "trigger": existing.trigger,
-                "metric": existing.metric,
-                "metric_step": existing.metric_step,
-                "value": existing.value,
-                "best_value": existing.best_value,
-                "elapsed_steps": existing.elapsed_steps,
-                "patience_progress": existing.patience_progress,
-                "condition": dict(existing.condition),
-                "early_stop_config_sha256": existing.early_stop_config_sha256,
-            }
-            validated_authoritative_decision = validate_metric_early_stop_decision(
-                authoritative_decision,
-                early_stop_config,
-                label="authoritative early-stop receipt",
+        if existing_document is None:
+            return None
+        existing = EarlyStopReceipt(**existing_document)
+        existing.validate()
+        early_stop_config = self.train_config.get("early_stop")
+        if not isinstance(early_stop_config, Mapping):
+            raise ValueError(
+                "authoritative early-stop receipt exists without configured conditions"
             )
-            if existing.decision_sha256 != canonical_json_sha256(
-                validated_authoritative_decision
-            ):
-                raise ValueError(
-                    "authoritative early-stop receipt decision hash does not match"
-                )
+        authoritative_decision = {
+            "schema_version": 1,
+            "kind": "metric_early_stop",
+            "condition_id": existing.condition_id,
+            "matched_condition_ids": list(existing.matched_condition_ids),
+            "outcome": existing.outcome,
+            "action": "stop",
+            "trigger": existing.trigger,
+            "metric": existing.metric,
+            "metric_step": existing.metric_step,
+            "value": existing.value,
+            "best_value": existing.best_value,
+            "elapsed_steps": existing.elapsed_steps,
+            "patience_progress": existing.patience_progress,
+            "condition": dict(existing.condition),
+            "early_stop_config_sha256": existing.early_stop_config_sha256,
+        }
+        validated_authoritative_decision = validate_metric_early_stop_decision(
+            authoritative_decision,
+            early_stop_config,
+            label="authoritative early-stop receipt",
+        )
+        if existing.decision_sha256 != canonical_json_sha256(
+            validated_authoritative_decision
+        ):
+            raise ValueError(
+                "authoritative early-stop receipt decision hash does not match"
+            )
+        return existing
+
+    def _prior_drain_early_stop_receipt(self) -> EarlyStopReceipt | None:
+        if self.recovery_mode != "drain-only":
+            return None
+        prefix = f"runs/{self.manifest.run_id}/attempts"
+        manifests = [
+            self.authority.control.get_json(key)
+            for key in self.authority.control.iter_keys(prefix)
+            if key.endswith("/manifest.json")
+        ]
+        manifests.sort(
+            key=lambda row: (
+                str(row.get("created_at") or ""),
+                str(row.get("attempt_id") or ""),
+            )
+        )
+        current_index = next(
+            (
+                index
+                for index, row in enumerate(manifests)
+                if str(row.get("attempt_id") or "") == self.manifest.attempt_id
+            ),
+            None,
+        )
+        if current_index is None:
+            raise ValueError(
+                f"current attempt manifest is missing: {self.manifest.attempt_id}"
+            )
+        for row in reversed(manifests[:current_index]):
+            receipt = self._authoritative_early_stop_receipt(
+                attempt_id=str(row["attempt_id"])
+            )
+            if receipt is not None:
+                return receipt
+        return None
+
+    def _resolve_early_stop_receipt(self) -> EarlyStopReceipt | None:
+        existing = self._authoritative_early_stop_receipt(
+            attempt_id=self.manifest.attempt_id
+        )
 
         decision_path = (
             self.run_dir
             / f"early_stop_decision-{self.manifest.attempt_id}.json"
         )
         if not decision_path.is_file():
-            return existing
+            return existing or self._prior_drain_early_stop_receipt()
         raw = json.loads(decision_path.read_text(encoding="utf-8"))
         early_stop_config = self.train_config.get("early_stop")
         if early_stop_config is None:
@@ -709,7 +754,8 @@ class RunSupervisor:
                 checkpoint_ledger_id=ledger_id,
                 manifest=checkpoint.to_dict(),
             )
-            self._ensure_eval(ledger_id, checkpoint)
+            if self.evaluation_required:
+                self._ensure_eval(ledger_id, checkpoint)
 
         for initial in self.store.evals(statuses=("pending",)):
             key = str(initial["idempotency_key"])
@@ -1768,7 +1814,12 @@ class RunSupervisor:
             self.clock.sleep(0.25)
         return True
 
-    def _record_startup_failure(self, failure: BaseException) -> int:
+    def _record_startup_failure(
+        self,
+        failure: BaseException,
+        *,
+        phase: str = "startup",
+    ) -> int:
         receipt = TerminalReceipt(
             run_id=self.manifest.run_id,
             attempt_id=self.manifest.attempt_id,
@@ -1781,7 +1832,7 @@ class RunSupervisor:
             wandb_high_water_mark=0,
             drain={
                 "complete": False,
-                "phase": "startup",
+                "phase": phase,
                 "metric_segment_high_water": 0,
                 "eval_terminal_count": 0,
                 "journal_archive": None,
@@ -1811,22 +1862,42 @@ class RunSupervisor:
             self.materialize()
         except BaseException as failure:
             return self._record_startup_failure(failure)
-        holder = self.runtime.holder_id()
-        self.lease = self.authority.acquire_lease(
-            run_id=self.manifest.run_id,
-            attempt_id=self.manifest.attempt_id,
-            holder_id=holder,
-        )
-        self._emit("writer_lease_acquired", holder_id=holder)
-        self.last_lease_renewal = self.clock.monotonic()
-        self.store.init()
-        self.store.reset_interrupted_metric_frames()
-        self._recover_durable_state()
-        self._start_wandb()
-        if self.recovery_mode == "drain-only":
-            print("drain-only recovery: learner will not restart", flush=True)
-        else:
-            self._start_learner()
+        try:
+            holder = self.runtime.holder_id()
+            self.lease = self.authority.acquire_lease(
+                run_id=self.manifest.run_id,
+                attempt_id=self.manifest.attempt_id,
+                holder_id=holder,
+            )
+            self._emit("writer_lease_acquired", holder_id=holder)
+            self.last_lease_renewal = self.clock.monotonic()
+            self.store.init()
+            self.store.reset_interrupted_metric_frames()
+            self._recover_durable_state()
+            self._start_wandb()
+            if self.recovery_mode == "drain-only":
+                print("drain-only recovery: learner will not restart", flush=True)
+            else:
+                self._start_learner()
+        except BaseException as failure:
+            projector = self.projector
+            self.projector = None
+            if projector is not None:
+                try:
+                    self.runtime.close_wandb(
+                        projector,
+                        timeout_seconds=WANDB_DRAIN_TIMEOUT_SECONDS,
+                    )
+                except Exception as close_failure:
+                    print(
+                        "startup W&B cleanup incomplete: "
+                        f"{close_failure!r}; original failure={failure!r}",
+                        flush=True,
+                    )
+            return self._record_startup_failure(
+                failure,
+                phase="startup/recovery",
+            )
         learner_exited_at: float | None = (
             self.clock.time() if self.recovery_mode == "drain-only" else None
         )
