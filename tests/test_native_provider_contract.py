@@ -1139,6 +1139,89 @@ class MarioNativeProviderTests(unittest.TestCase):
         self.assertTrue(kernel.observation_encoding_is_view)
 
 
+class VizdoomTurboProviderTests(unittest.TestCase):
+    class FakeVizdoomEnv:
+        metadata = {
+            "autoreset_mode": gym.vector.AutoresetMode.DISABLED,
+            "render_modes": ["rgb_array"],
+        }
+
+        def __init__(self, game: str, **kwargs):
+            self.game = game
+            self.kwargs = kwargs
+            self.num_envs = int(kwargs["num_envs"])
+            self.autoreset_mode = gym.vector.AutoresetMode.DISABLED
+            self.obs_copy = kwargs["obs_copy"]
+            self.state_catalog = ("default",)
+            self.single_observation_space = gym.spaces.Box(
+                0, 255, shape=(4, 84, 84), dtype=np.uint8
+            )
+            self.observation_space = gym.vector.utils.batch_space(
+                self.single_observation_space, self.num_envs
+            )
+            self.single_action_space = gym.spaces.Discrete(4)
+            self.action_space = gym.vector.utils.batch_space(
+                self.single_action_space, self.num_envs
+            )
+            self.signal_schema = {
+                "health": {"dtype": np.float64, "shape": ()},
+            }
+
+        def capture_snapshots(self, mask):
+            return tuple(object() if selected else None for selected in mask)
+
+    def test_compiles_and_constructs_native_vector_provider(self) -> None:
+        config = EnvConfig(
+            env_provider="vizdoom-turbo",
+            game="VizdoomBasic-v1",
+            state="",
+            sticky_action_prob=0.25,
+            env_args={
+                "use_restricted_actions": "discrete",
+                "game_variables": ("HEALTH",),
+            },
+            task={
+                "id": "identity",
+                "action": {"set": "native"},
+                "signals": {},
+                "events": {},
+                "termination": {},
+                "reward": {"reward_mode": "native"},
+            },
+        )
+        kwargs = provider_native_vec_kwargs(
+            config,
+            n_envs=6,
+            native_obs_crop=lambda _config: (12, 0, 0, 0),
+            state_weight_mapping=lambda _config: {},
+        )
+
+        env = make_provider_vec_env(
+            config,
+            native_kwargs=kwargs,
+            vizdoom_vec_env_type=lambda: self.FakeVizdoomEnv,
+        )
+        descriptor = provider_descriptor(
+            config,
+            env,
+            state_weight_mapping=lambda _config: {},
+        )
+
+        self.assertEqual(env.game, "VizdoomBasic-v1")
+        self.assertEqual(env.num_envs, 6)
+        self.assertEqual(env.kwargs["obs_resize"], (84, 84))
+        self.assertEqual(env.kwargs["obs_crop"], (12, 0, 0, 0))
+        self.assertEqual(env.kwargs["frame_stack"], 4)
+        self.assertEqual(env.kwargs["sticky_action_prob"], 0.25)
+        self.assertEqual(env.kwargs["state"], None)
+        self.assertEqual(env.kwargs["use_restricted_actions"], "discrete")
+        self.assertEqual(env.kwargs["game_variables"], ("HEALTH",))
+        self.assertEqual(descriptor.observation_buffer_depth, 2)
+        self.assertTrue(descriptor.supports_live_snapshots)
+        self.assertTrue(descriptor.live_snapshots_deterministic)
+        self.assertIn("health", descriptor.signal_schema)
+
+
 class AleManualLifecycleTests(unittest.TestCase):
     def test_next_step_engine_cannot_autoreset_behind_runtime(self) -> None:
         class FakeAle:

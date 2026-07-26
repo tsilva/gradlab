@@ -145,6 +145,38 @@ SUPERMARIOBROS_NES_TURBO_PROVIDER = EnvProvider(
     ),
 )
 
+VIZDOOM_TURBO_PROVIDER = EnvProvider(
+    provider_id="vizdoom-turbo",
+    import_name="vizdoom_turbo",
+    distribution_name="vizdoom-turbo",
+    env_ids=(
+        "VizdoomBasic-v1",
+        "VizdoomDeadlyCorridor-v1",
+        "VizdoomDefendCenter-v1",
+        "VizdoomDefendLine-v1",
+        "VizdoomHealthGathering-v1",
+        "VizdoomHealthGatheringSupreme-v1",
+        "VizdoomMyWayHome-v1",
+        "VizdoomPredictPosition-v1",
+        "VizdoomTakeCover-v1",
+    ),
+    allows_unregistered_env_ids=True,
+    constructor_contract=ProviderConstructorContract(
+        canonical_args=_TURBO_CANONICAL_ARGS,
+        explicit_env_args=_TURBO_EXPLICIT_ENV_ARGS
+        | {
+            "doom_map",
+            "doom_skill",
+            "game_args",
+            "game_variables",
+            "state_dir",
+            "treat_episode_timeout_as_truncation",
+            "vizdoom_config",
+        },
+        required_values={},
+    ),
+)
+
 BREAKOUT_TURBO_ENV_PROVIDER = EnvProvider(
     provider_id="breakout-turbo-env",
     import_name="breakout_turbo_env",
@@ -226,6 +258,7 @@ ENV_PROVIDERS: dict[str, EnvProvider] = {
     BREAKOUT_TURBO_ENV_PROVIDER.provider_id: BREAKOUT_TURBO_ENV_PROVIDER,
     STABLE_RETRO_TURBO_PROVIDER.provider_id: STABLE_RETRO_TURBO_PROVIDER,
     SUPERMARIOBROS_NES_TURBO_PROVIDER.provider_id: SUPERMARIOBROS_NES_TURBO_PROVIDER,
+    VIZDOOM_TURBO_PROVIDER.provider_id: VIZDOOM_TURBO_PROVIDER,
     ALE_PY_PROVIDER.provider_id: ALE_PY_PROVIDER,
     GYMNASIUM_PROVIDER.provider_id: GYMNASIUM_PROVIDER,
 }
@@ -279,6 +312,37 @@ CANONICAL_ENVIRONMENT_IDENTITIES: Mapping[
             "stable-retro-turbo",
             "MsPacman-Atari2600-v0",
         ): CanonicalEnvironmentIdentity("Atari2600-MsPacman", "MsPacman-Atari2600-v0"),
+        ("vizdoom-turbo", "VizdoomBasic-v1"): CanonicalEnvironmentIdentity(
+            "Doom-ViZDoom-Basic", "VizdoomBasic-v1"
+        ),
+        ("vizdoom-turbo", "VizdoomDeadlyCorridor-v1"): CanonicalEnvironmentIdentity(
+            "Doom-ViZDoom-DeadlyCorridor", "VizdoomDeadlyCorridor-v1"
+        ),
+        ("vizdoom-turbo", "VizdoomDefendCenter-v1"): CanonicalEnvironmentIdentity(
+            "Doom-ViZDoom-DefendCenter", "VizdoomDefendCenter-v1"
+        ),
+        ("vizdoom-turbo", "VizdoomDefendLine-v1"): CanonicalEnvironmentIdentity(
+            "Doom-ViZDoom-DefendLine", "VizdoomDefendLine-v1"
+        ),
+        ("vizdoom-turbo", "VizdoomHealthGathering-v1"): CanonicalEnvironmentIdentity(
+            "Doom-ViZDoom-HealthGathering", "VizdoomHealthGathering-v1"
+        ),
+        (
+            "vizdoom-turbo",
+            "VizdoomHealthGatheringSupreme-v1",
+        ): CanonicalEnvironmentIdentity(
+            "Doom-ViZDoom-HealthGatheringSupreme",
+            "VizdoomHealthGatheringSupreme-v1",
+        ),
+        ("vizdoom-turbo", "VizdoomMyWayHome-v1"): CanonicalEnvironmentIdentity(
+            "Doom-ViZDoom-MyWayHome", "VizdoomMyWayHome-v1"
+        ),
+        ("vizdoom-turbo", "VizdoomPredictPosition-v1"): CanonicalEnvironmentIdentity(
+            "Doom-ViZDoom-PredictPosition", "VizdoomPredictPosition-v1"
+        ),
+        ("vizdoom-turbo", "VizdoomTakeCover-v1"): CanonicalEnvironmentIdentity(
+            "Doom-ViZDoom-TakeCover", "VizdoomTakeCover-v1"
+        ),
     }
 )
 

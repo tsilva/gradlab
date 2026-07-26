@@ -135,6 +135,10 @@ def _packaged_action_sets(provider_id: str, game: str) -> Mapping[str, Any]:
 
 
 def provider_buttons(provider_id: str, game: str) -> tuple[str | None, ...]:
+    if provider_id == "vizdoom-turbo":
+        from vizdoom_turbo import scenario_buttons
+
+        return scenario_buttons(game)
     if provider_id == "supermariobrosnes-turbo":
         from supermariobrosnes_turbo import NES_BUTTONS
 

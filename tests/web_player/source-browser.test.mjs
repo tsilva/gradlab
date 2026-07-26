@@ -8,9 +8,30 @@ import {
   metricLabel,
   rankRunItems,
   sortRunItems,
+  sourceRouteFromPath,
+  sourceRoutePath,
 } from "../../src/rlab/web_player/sources/browser.js";
 
 const METRIC = "eval/full/episode/return/mean";
+
+test("playback home is the root project route", () => {
+  assert.deepEqual(sourceRouteFromPath("/"), {
+    level: "projects",
+    entity: "",
+    project: "",
+    goal_id: "",
+    run_id: "",
+    checkpoint_id: "",
+  });
+  assert.equal(sourceRoutePath({
+    level: "projects",
+    entity: "research",
+    project: "",
+    goal_id: "",
+    run_id: "",
+    checkpoint_id: "",
+  }), "/");
+});
 
 test("run metrics use compact labels and values", () => {
   assert.equal(metricLabel("leader/checkpoint/step"), "Checkpoint step");
