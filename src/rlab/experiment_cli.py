@@ -811,7 +811,7 @@ def cmd_resume_submit(args: argparse.Namespace) -> int:
         raise RuntimeError(
             f"dstack task already exists with status {existing.status}: {task_name}"
         )
-    manifest_uri = storage.control.uri(f"runs/{args.run_id}/manifest.json")
+    manifest_uri = authority.control.uri(f"runs/{args.run_id}/manifest.json")
     task = dstack_backend.submit(_task_request(manifest, manifest_uri=manifest_uri))
     output = {
         "schema_version": 1,
