@@ -34,7 +34,7 @@ train:
         start_after_steps: 1000000
         patience_steps: 1000000
         outcome: failure
-        action: observe
+        action: stop
   environment:
     env_provider: &mario_env_provider supermariobrosnes-turbo
     env_config:
