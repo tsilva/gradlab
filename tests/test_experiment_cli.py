@@ -385,16 +385,15 @@ def test_resume_submit_recovers_only_the_original_manifest(
             f"{prefix}/attempts/{manifest.attempt_id}/manifest.json",
         ]
     )
+    authority.control.uri.side_effect = (
+        lambda key: f"s3://control-private/{key}"
+    )
     authority.evaluation.iter_keys.return_value = iter(())
     authority.models.iter_keys.return_value = iter(())
     authority.models.public_url.return_value = (
         f"https://models.example/runs/{manifest.run_id}/index.json"
     )
-    storage = SimpleNamespace(
-        control=SimpleNamespace(
-            uri=lambda key: f"s3://control-private/{key}",
-        )
-    )
+    storage = SimpleNamespace()
     backend = mock.MagicMock()
     backend.status.side_effect = KeyError("not found")
     backend.submit.return_value = DstackTask(
