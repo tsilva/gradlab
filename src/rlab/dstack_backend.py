@@ -26,6 +26,7 @@ TERMINAL_DSTACK_STATUSES = {
     "aborted",
 }
 SECRET_ENV_NAME_PATTERN = re.compile(r"[A-Z][A-Z0-9_]*")
+DSTACK_TASK_NAME_PATTERN = re.compile(r"[a-z][a-z0-9-]{1,40}")
 SENSITIVE_ENV_NAME_PATTERN = re.compile(
     r"(?:API_KEY|ACCESS_KEY|CREDENTIAL|PASSWORD|SECRET|TOKEN)"
 )
@@ -106,11 +107,7 @@ class TaskRequest:
             raise ValueError("run_id must be the immutable rlab run id")
         if (
             not self.task_name
-            or len(self.task_name) > 40
-            or any(
-                character not in "abcdefghijklmnopqrstuvwxyz0123456789-"
-                for character in self.task_name
-            )
+            or DSTACK_TASK_NAME_PATTERN.fullmatch(self.task_name) is None
         ):
             raise ValueError("dstack task_name must be a lowercase DNS-style name")
         if "@sha256:" not in self.image:

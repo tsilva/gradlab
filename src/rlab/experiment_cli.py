@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -51,6 +52,7 @@ from rlab.run_authority import RunAuthority
 from rlab.run_contracts import (
     RUN_ID_PATTERN,
     RunManifest,
+    TerminalReceipt,
     new_attempt_id,
     new_run_id,
     utc_now,
@@ -335,8 +337,10 @@ def _compute(args: argparse.Namespace) -> ComputeRequest:
 def _task_name(run_id: str, attempt_id: str, *, initial: bool) -> str:
     if initial:
         return run_id
-    attempt_suffix = attempt_id.removeprefix("attempt-")
-    return f"{run_id[:30]}-a{attempt_suffix[:8]}"
+    digest = hashlib.sha256(
+        f"dstack-attempt-v1:{run_id}:{attempt_id}".encode()
+    ).hexdigest()
+    return f"rlab-{digest[:32]}"
 
 
 def _task_request(manifest: RunManifest, *, manifest_uri: str) -> TaskRequest:
@@ -583,8 +587,53 @@ def _latest_attempt(state: dict[str, Any]) -> dict[str, Any]:
 
 
 def _latest_attempt_terminal(state: dict[str, Any]) -> dict[str, Any] | None:
-    terminals = list(state.get("attempt_terminals") or [])
-    return dict(terminals[-1]) if terminals else None
+    attempt_id = str(_latest_attempt(state).get("attempt_id") or "")
+    terminals = [
+        dict(row)
+        for row in state.get("attempt_terminals") or []
+        if str(row.get("attempt_id") or "") == attempt_id
+    ]
+    return terminals[-1] if terminals else None
+
+
+def _record_pre_submit_failure(
+    authority: RunAuthority,
+    manifest: RunManifest,
+) -> None:
+    prefix = (
+        f"{authority.run_prefix(manifest.run_id)}/attempts/{manifest.attempt_id}"
+    )
+    keys = sorted(authority.control.iter_keys(prefix))
+    expected = [f"{prefix}/manifest.json"]
+    if keys != expected:
+        raise RuntimeError(
+            "not-found dstack task has attempt activity beyond its manifest"
+        )
+    authority.create_attempt_terminal(
+        TerminalReceipt(
+            run_id=manifest.run_id,
+            attempt_id=manifest.attempt_id,
+            state="resumable_failure",
+            acceptance_required=bool(manifest.modal["enabled"]),
+            stop_reason="pre_submit_failure",
+            final_step=0,
+            checkpoint_inventory=(),
+            eval_inventory=(),
+            wandb_high_water_mark=0,
+            drain={
+                "complete": False,
+                "phase": "pre-submit",
+                "metric_segment_high_water": 0,
+                "eval_terminal_count": 0,
+                "journal_archive": None,
+                "journal_expires_at": None,
+                "wandb_remote_high_water_mark": 0,
+                "publication_capacity_ratio": None,
+                "failure": "dstack task was not created",
+            },
+            completed_at=utc_now(),
+        )
+    )
 
 
 def _require_retryable_attempt_terminal(
@@ -884,18 +933,46 @@ def cmd_retry(args: argparse.Namespace) -> int:
     state = authority.semantic_state(args.run_id)
     if state.get("terminal") is not None:
         raise RuntimeError("a scientifically successful run must not be retried")
-    attempt_terminal = _latest_attempt_terminal(state)
-    _require_retryable_attempt_terminal(attempt_terminal)
     previous = _latest_attempt(state)
+    previous_manifest = RunManifest(**previous)
+    previous_manifest.validate()
+    attempt_terminal = _latest_attempt_terminal(state)
     dstack_backend = DstackBackend()
-    previous_task = dstack_backend.status(str(previous["compute"]["dstack_task"]))
-    if previous_task.status.lower().replace("_", "-") not in TERMINAL_DSTACK_STATUSES:
-        raise RuntimeError("the previous dstack attempt must be terminal before retry")
+    try:
+        previous_task = dstack_backend.status(
+            str(previous["compute"]["dstack_task"])
+        )
+    except KeyError:
+        previous_task = None
     expiry = _lease_expiry(authority, args.run_id)
     if expiry is not None and expiry > datetime.now(UTC):
         raise RuntimeError(
             f"the previous writer lease has not expired: {expiry.isoformat()}"
         )
+    if previous_task is None and attempt_terminal is None:
+        created_at = datetime.fromisoformat(
+            str(previous_manifest.created_at).replace("Z", "+00:00")
+        ).astimezone(UTC)
+        if (datetime.now(UTC) - created_at).total_seconds() < QUIESCENCE_SECONDS:
+            raise RuntimeError(
+                "not-found attempt has not reached the 30-second quiescence interval"
+            )
+        _record_pre_submit_failure(authority, previous_manifest)
+        state = authority.semantic_state(args.run_id)
+        attempt_terminal = _latest_attempt_terminal(state)
+    if previous_task is None and (
+        attempt_terminal is None
+        or str(attempt_terminal.get("stop_reason") or "") != "pre_submit_failure"
+    ):
+        raise RuntimeError(
+            "the previous dstack task is not found without typed pre-submit evidence"
+        )
+    _require_retryable_attempt_terminal(attempt_terminal)
+    if previous_task is not None and (
+        previous_task.status.lower().replace("_", "-")
+        not in TERMINAL_DSTACK_STATUSES
+    ):
+        raise RuntimeError("the previous dstack attempt must be terminal before retry")
     time.sleep(QUIESCENCE_SECONDS)
     attempt_id = new_attempt_id()
     task_name = _task_name(args.run_id, attempt_id, initial=False)
@@ -925,10 +1002,19 @@ def cmd_retry(args: argparse.Namespace) -> int:
         compute=compute,
     )
     manifest.validate()
-    authority.create_attempt_manifest(manifest)
     manifest_key = f"runs/{args.run_id}/attempts/{attempt_id}/manifest.json"
     manifest_uri = authority.control.uri(manifest_key)
-    task = dstack_backend.submit(_task_request(manifest, manifest_uri=manifest_uri))
+    task_request = _task_request(manifest, manifest_uri=manifest_uri)
+    task_request.validate()
+    authority.create_attempt_manifest(manifest)
+    try:
+        task = dstack_backend.submit(task_request)
+    except Exception:
+        try:
+            dstack_backend.status(task_name)
+        except KeyError:
+            _record_pre_submit_failure(authority, manifest)
+        raise
     print(
         json.dumps(
             {
