@@ -216,18 +216,14 @@ def render_task_config(request: TaskRequest) -> dict[str, Any]:
         "env": [
             f"RLAB_RUN_MANIFEST_URI={request.manifest_uri}",
             "RLAB_ORCHESTRATOR=dstack",
-            *[
-                f"{name}={value}"
-                for name, value in sorted(request.plain_env.items())
-            ],
+            *[f"{name}={value}" for name, value in sorted(request.plain_env.items())],
             *[
                 f"{name}=${{{{ secrets.{name} }}}}"
                 for name in sorted(set(request.secret_env))
             ],
         ],
         "commands": [
-            "python -m rlab.run_supervisor --manifest-uri "
-            '"$RLAB_RUN_MANIFEST_URI"'
+            'python -m rlab.run_supervisor --manifest-uri "$RLAB_RUN_MANIFEST_URI"'
         ],
         "resources": {
             # An unsplit SSH fleet contributes the whole machine as one block.
@@ -330,8 +326,7 @@ class DstackBackend:
         if result.returncode != 0:
             detail = (result.stderr or result.stdout).strip()
             raise RuntimeError(
-                f"dstack {' '.join(arguments[:2])} failed with exit {result.returncode}: "
-                f"{detail}"
+                f"dstack {' '.join(arguments[:2])} failed with exit {result.returncode}: {detail}"
             )
         return result
 
@@ -344,9 +339,15 @@ class DstackBackend:
                 f"dstack CLI must be {DSTACK_VERSION}, got {result.stdout.strip() or 'unknown'}"
             )
         if not self.environment.get("DSTACK_SERVER_URL", "").strip():
-            raise RuntimeError("DSTACK_SERVER_URL must identify the pinned private server")
+            raise RuntimeError(
+                "DSTACK_SERVER_URL must identify the pinned private server"
+            )
         if not self.environment.get("DSTACK_TOKEN", "").strip():
             raise RuntimeError("DSTACK_TOKEN must be set outside source control")
+        self._command(
+            ["ps", "--project", self.project, "--all", "--json"],
+            timeout=30,
+        )
 
     def sync_project_secrets(self, names: Sequence[str]) -> None:
         self.preflight()
@@ -359,10 +360,7 @@ class DstackBackend:
             if value is None or not str(value):
                 raise RuntimeError(f"required launch secret is not set: {name}")
             request = urllib.request.Request(
-                (
-                    f"{server_url}/api/project/{self.project}/"
-                    "secrets/create_or_update"
-                ),
+                (f"{server_url}/api/project/{self.project}/secrets/create_or_update"),
                 data=json.dumps({"name": name, "value": value}).encode(),
                 headers={
                     "Authorization": f"Bearer {token}",
@@ -376,8 +374,7 @@ class DstackBackend:
                     response.read()
             except urllib.error.HTTPError as exc:
                 raise RuntimeError(
-                    f"failed to synchronize dstack project secret {name}: "
-                    f"HTTP {exc.code}"
+                    f"failed to synchronize dstack project secret {name}: HTTP {exc.code}"
                 ) from exc
             except urllib.error.URLError as exc:
                 raise RuntimeError(
@@ -480,16 +477,17 @@ class DstackBackend:
                 continue
             run_spec = row.get("run_spec")
             configuration = (
-                run_spec.get("configuration")
-                if isinstance(run_spec, Mapping)
-                else None
+                run_spec.get("configuration") if isinstance(run_spec, Mapping) else None
             )
             configured_name = (
                 configuration.get("name")
                 if isinstance(configuration, Mapping)
                 else None
             )
-            if str(row.get("name") or row.get("run_name") or configured_name or "") != name:
+            if (
+                str(row.get("name") or row.get("run_name") or configured_name or "")
+                != name
+            ):
                 continue
             status = str(row.get("status") or row.get("state") or "unknown")
             return DstackTask(
