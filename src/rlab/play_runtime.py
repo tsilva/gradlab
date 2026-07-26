@@ -7,7 +7,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Literal
 
-from rlab.artifacts import load_playback_env_config, playback_env_config
+from rlab.artifacts import load_playback_env_config
 from rlab.device import resolve_sb3_device
 from rlab.env import assert_provider_runtime_available, make_eval_vec_env, resolve_env_config
 from rlab.env_metadata import env_config_from_config_dict
@@ -19,6 +19,10 @@ from rlab.model_sources import (
     download_public_run_source,
 )
 from rlab.policy_bundle import load_policy_bundle_from_checkpoint, playback_contract
+from rlab.play_termination import (
+    configured_termination_ids,
+    with_enabled_termination_conditions,
+)
 from rlab.rom_assets import rom_asset_manifest_for_game
 from rlab.rom_runtime import ensure_local_rom_binding
 from rlab.seeds import validate_eval_seed
@@ -66,6 +70,8 @@ class PlaybackCandidate:
     source_identity: str
     artifact_ref: str | None
     approval_required: bool
+    termination_base_config: Any
+    termination_source: str
 
     def approval_payload(self) -> dict[str, Any]:
         return {
@@ -94,7 +100,9 @@ class ActivePlayback:
             self.runner.stop()
         finally:
             try:
-                self.policy_env.close()
+                session = getattr(self.runner, "session", None)
+                active_env = getattr(session, "env", self.policy_env)
+                active_env.close()
             except Exception:
                 pass
 
@@ -168,28 +176,38 @@ class PlaybackLoader:
 
         progress("verifying", "Validating playback contract")
         contract: Mapping[str, Any] | None = None
+        termination_source = "training"
         if source.bundle is not None:
             contract = playback_contract(source.bundle.recipe)
+            recipe = source.bundle.recipe.get("recipe", {})
+            termination_source = (
+                "evaluation"
+                if isinstance(recipe, Mapping) and isinstance(recipe.get("eval"), Mapping)
+                else "training"
+            )
             artifact_config = env_config_from_config_dict(contract["environment"])
             if artifact_config is None:
                 raise ValueError("policy bundle recipe has no playback environment")
             artifact_config = resolve_env_config(artifact_config)
             if not self.explicit_seed:
                 args.seed = int(contract["seed"])
-            if args.continuous_play:
-                artifact_config = playback_env_config(
-                    artifact_config,
-                    respect_task_termination=False,
-                )
         else:
             artifact_config = load_playback_env_config(
                 source.model_path,
-                respect_task_termination=args.respect_task_termination,
+                respect_task_termination=True,
             )
         if args.env_provider:
             artifact_config = resolve_env_config(
                 replace(artifact_config, env_provider=str(args.env_provider))
             )
+        termination_base_config = artifact_config
+        enabled_termination_ids = (
+            () if args.continuous_play else configured_termination_ids(termination_base_config)
+        )
+        artifact_config = with_enabled_termination_conditions(
+            termination_base_config,
+            enabled_termination_ids,
+        )
         args.seed = validate_eval_seed(args.seed)
         display_config = artifact_config
 
@@ -229,6 +247,8 @@ class PlaybackLoader:
             source_identity=source_identity,
             artifact_ref=artifact_ref,
             approval_required=approval_required,
+            termination_base_config=termination_base_config,
+            termination_source=termination_source,
         )
 
     def activate(
@@ -267,13 +287,17 @@ class PlaybackLoader:
             attributor = None
 
         progress("loading", "Creating policy environment")
-        policy_env = make_eval_vec_env(
-            config=candidate.config,
-            n_envs=1,
-            seed=args.seed,
-            capture_step_diagnostics=True,
-            rom_binding=candidate.rom_binding,
-        )
+
+        def make_policy_env(config, seed):
+            return make_eval_vec_env(
+                config=config,
+                n_envs=1,
+                seed=seed,
+                capture_step_diagnostics=True,
+                rom_binding=candidate.rom_binding,
+            )
+
+        policy_env = make_policy_env(candidate.config, args.seed)
         try:
             from rlab.policy_runtime import bind_policy_action_space
 
@@ -287,6 +311,9 @@ class PlaybackLoader:
                 attribution_mode=args.attribution,
                 attribution_interval=args.attribution_interval,
                 attribution_opacity=args.attribution_opacity,
+                env_factory=make_policy_env,
+                termination_base_config=candidate.termination_base_config,
+                termination_source=candidate.termination_source,
             )
             progress("loading", "Resetting policy environment")
             session.restart(args.seed)

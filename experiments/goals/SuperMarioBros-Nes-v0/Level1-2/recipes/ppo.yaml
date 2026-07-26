@@ -1,7 +1,7 @@
 defaults:
 - ../../../../recipes/_presets/mario-single-ppo@_global_
 - _self_
-reward_shape: score-v1
+reward_shape: speedrun-v1
 recipe_id: ppo
 train:
   # The last accepted baseline cleared 100/100 by 28.6M transitions. Treat

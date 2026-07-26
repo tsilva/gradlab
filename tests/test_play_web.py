@@ -210,6 +210,57 @@ def test_play_does_not_mutate_active_episode_dispatch_settings() -> None:
     assert runner.driver == "policy"
 
 
+def test_termination_conditions_can_change_before_first_step() -> None:
+    session = argparse.Namespace(
+        config={"game": "Game-v0"},
+        step_index=0,
+        last_transition=None,
+        set_termination_conditions=Mock(),
+    )
+    runner = WebPlaybackRunner(session, human_args(episodes=0), config_text="")
+    runner._publish = Mock()
+
+    runner._apply(
+        PlaybackCommand(
+            "termination",
+            "client",
+            "set_termination_conditions",
+            {"enabled": ["event:life_loss"]},
+            None,
+        )
+    )
+
+    session.set_termination_conditions.assert_called_once_with(["event:life_loss"])
+    assert runner.awaiting_next_episode is False
+    assert runner.run_state == "paused"
+
+
+def test_termination_conditions_cannot_change_mid_episode() -> None:
+    session = argparse.Namespace(
+        config={"game": "Game-v0"},
+        step_index=12,
+        last_transition=None,
+        set_termination_conditions=Mock(),
+    )
+    runner = WebPlaybackRunner(session, human_args(episodes=0), config_text="")
+    runner._publish = Mock()
+
+    runner._apply(
+        PlaybackCommand(
+            "termination",
+            "client",
+            "set_termination_conditions",
+            {"enabled": []},
+            None,
+        )
+    )
+
+    session.set_termination_conditions.assert_not_called()
+    response = runner.responses.get_nowait().payload
+    assert response["ok"] is False
+    assert "before the first step or between episodes" in response["error"]
+
+
 def test_web_playback_requires_explicit_command_after_episode_boundary() -> None:
     transition = argparse.Namespace(boundary=True, events=(), episode=1)
     session = argparse.Namespace(

@@ -101,6 +101,13 @@ schema v6.
   contract (`reward_mode: native`, unclipped), shaped episode return is the sum of Atari row-score
   deltas, so individual 400-plus games can coexist with a much lower mean when other lanes finish
   with lower scores.
+- No registered training scalar currently detects learning stagnation across rollouts. Episode
+  returns, success rates, failure reasons, policy entropy, and optimizer diagnostics describe
+  performance or mechanism, but none measures how long task-aligned progress has remained
+  unimproved; no one of them should be treated as a generic stall-stop signal. A generic plateau
+  detector may watch a configured score metric, but its minimum meaningful improvement, warmup, and
+  patience remain part of the goal or recipe contract. Its result means only that the selected
+  score has not improved, not that the task is impossible or that a checkpoint is accepted.
 
 ## Full-evaluation table
 

@@ -51,6 +51,11 @@ from rlab.policy_observation import (
     task_state_names,
 )
 from rlab.policy_runtime import reset_policy_state
+from rlab.play_termination import (
+    configured_termination_ids,
+    termination_condition_payload,
+    with_enabled_termination_conditions,
+)
 from rlab.seeds import DEFAULT_EVAL_SEED, EVAL_SEED_START
 from rlab.targets import target_for_game
 
@@ -541,6 +546,9 @@ class _PlaybackSession:
         attribution_mode: str,
         attribution_interval: int,
         attribution_opacity: float,
+        env_factory=None,
+        termination_base_config=None,
+        termination_source: str = "training",
     ):
         self.model = model
         self.env = env
@@ -550,6 +558,9 @@ class _PlaybackSession:
         self.attribution_mode = attribution_mode
         self.attribution_interval = attribution_interval
         self.attribution_opacity = attribution_opacity
+        self.env_factory = env_factory
+        self.termination_base_config = termination_base_config or config
+        self.termination_source = termination_source
         self.info_vars = task_info_vars(config)
         self.conditioning_enabled = bool(task_conditioning(config).get("enabled"))
         self.configured_task_states = task_state_names(config) if self.conditioning_enabled else ()
@@ -570,6 +581,43 @@ class _PlaybackSession:
         self.max_x_pos = 0
         self.interactive = False
         self.last_transition: _PlaybackTransition | None = None
+
+    @property
+    def termination_conditions(self) -> list[dict[str, object]]:
+        return termination_condition_payload(self.termination_base_config, self.config)
+
+    def set_termination_conditions(self, enabled_ids: list[str] | tuple[str, ...]) -> None:
+        if self.env_factory is None:
+            raise RuntimeError("this playback session cannot reconfigure termination conditions")
+        enabled = tuple(str(condition_id) for condition_id in enabled_ids)
+        configured = set(configured_termination_ids(self.termination_base_config))
+        unknown = sorted(set(enabled) - configured)
+        if unknown:
+            raise ValueError(f"unknown termination condition(s): {', '.join(unknown)}")
+        next_config = with_enabled_termination_conditions(
+            self.termination_base_config,
+            enabled,
+        )
+        if next_config.task == self.config.task:
+            return
+
+        seed = self.initial_seed if self.active_seed is None else int(self.active_seed)
+        previous_env = self.env
+        previous_config = self.config
+        next_env = self.env_factory(next_config, seed)
+        try:
+            from rlab.policy_runtime import bind_policy_action_space
+
+            bind_policy_action_space(self.model, next_env.action_space)
+            self.env = next_env
+            self.config = next_config
+            self.restart(seed, reset_episode_index=False)
+        except Exception:
+            self.env = previous_env
+            self.config = previous_config
+            next_env.close()
+            raise
+        previous_env.close()
 
     @property
     def active_task(self):

@@ -1000,7 +1000,7 @@ def evaluation_contract(recipe_document: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def playback_contract(recipe_document: Mapping[str, Any]) -> dict[str, Any]:
-    """Return the portable environment used for interactive policy playback."""
+    """Return evaluation playback defaults, falling back to the training contract."""
     validated = preflight_document(
         recipe_document,
         source=RECIPE_FILENAME,
@@ -1008,14 +1008,14 @@ def playback_contract(recipe_document: Mapping[str, Any]) -> dict[str, Any]:
         handlers={RECIPE_FORMAT_VERSION: _validate_recipe_v1},
     )
     recipe = validated["recipe"]
-    if "playback" in recipe:
-        return deepcopy(dict(recipe["playback"]))
-    evaluation = dict(recipe["eval"])
-    return {
-        "environment": deepcopy(dict(evaluation["environment"])),
-        "seed": int(evaluation["seed"]),
-        "asset": deepcopy(evaluation.get("asset")),
-    }
+    if "eval" in recipe:
+        evaluation = dict(recipe["eval"])
+        return {
+            "environment": deepcopy(dict(evaluation["environment"])),
+            "seed": int(evaluation["seed"]),
+            "asset": deepcopy(evaluation.get("asset")),
+        }
+    return deepcopy(dict(recipe["playback"]))
 
 
 def evaluation_contract_sha256(recipe_document: Mapping[str, Any]) -> str:

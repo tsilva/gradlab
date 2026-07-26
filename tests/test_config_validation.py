@@ -746,7 +746,7 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertTrue({"policy", "schema_version"}.isdisjoint(document["eval"]))
         self.assertEqual(
             document["eval"]["environment"]["task"]["termination"]["failure"],
-            [],
+            ["life_loss", "stalled"],
         )
         self.assertEqual(document["eval"]["episodes"], 100)
         self.assertTrue(
@@ -778,7 +778,7 @@ class ConfigValidationTests(unittest.TestCase):
         )
         eval_task = document["goal"]["eval"]["environment"]["task"]
         self.assertEqual(eval_task["events"]["stalled"], stalled_event)
-        self.assertEqual(eval_task["termination"]["failure"], [])
+        self.assertEqual(eval_task["termination"]["failure"], ["life_loss", "stalled"])
         self.assertEqual(eval_task["termination"]["success"], ["level_change"])
 
     def test_end_to_end_mario_goal_only_terminates_successfully_after_level_8_4(self) -> None:
@@ -802,6 +802,31 @@ class ConfigValidationTests(unittest.TestCase):
             self.assertEqual(task["termination"]["failure"], [])
             self.assertEqual(task["termination"]["success"], ["game_complete"])
             self.assertEqual(task["termination"]["max_episode_steps"], 144000)
+
+    def test_all_mario_level_goals_share_attempt_termination_contract(self) -> None:
+        root = self.MARIO_L11_GOAL.parent.parent
+        expected_stalled = {"signal": "x", "operation": "unchanged_for", "steps": 300}
+        goal_paths = sorted(
+            path
+            for path in root.glob("*/_goal.yaml")
+            if path.parent.name != "EndToEnd"
+        )
+
+        self.assertEqual(len(goal_paths), 18)
+        for goal_path in goal_paths:
+            document = load_goal_contract(goal_path)
+            for phase in ("train", "eval"):
+                task = document[phase]["environment"]["task"]
+                with self.subTest(goal=goal_path.parent.name, phase=phase):
+                    self.assertEqual(task["events"]["stalled"], expected_stalled)
+                    self.assertEqual(
+                        task["termination"]["failure"],
+                        ["life_loss", "stalled"],
+                    )
+                    self.assertEqual(
+                        task["termination"]["success"],
+                        ["level_change"],
+                    )
 
     def test_validate_is_registered_on_unified_cli(self) -> None:
         self.assertIn("validate", COMMANDS)
