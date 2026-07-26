@@ -5,6 +5,8 @@ namespaces:
   SuperMarioBros-Nes-v0:
     project: SuperMarioBros-Nes-v0
     title_template: Sample-efficient SuperMarioBros-NES {goal_id} completion
+  VizdoomBasic-v1:
+    project: VizdoomBasic-v1
   alepy__mspacman:
     project: MsPacman-Atari2600-v0
   rlab__bandit:

@@ -253,6 +253,44 @@ def _identity_decrease_event_kernel(
 
 
 @njit(cache=True, nogil=True)
+def _identity_increase_event_kernel(
+    values,
+    previous_values,
+    previous_valid,
+    transition_sources,
+    transition_targets,
+    event_bit,
+    event_outcome,
+    terminated,
+    truncated,
+    outcomes,
+    event_bits,
+):
+    for lane in range(values.shape[0]):
+        current_value = values[lane]
+        transition_sources[lane] = previous_values[lane] if previous_valid[lane] else current_value
+        transition_targets[lane] = current_value
+        increased = previous_valid[lane] and current_value > previous_values[lane]
+        previous_values[lane] = current_value
+        previous_valid[lane] = True
+        if not increased:
+            continue
+
+        event_bits[lane] |= event_bit
+        if event_outcome == 2:
+            terminated[lane] = True
+            truncated[lane] = False
+            outcomes[lane] = 2
+        elif event_outcome == 1 and outcomes[lane] != 2:
+            terminated[lane] = True
+            truncated[lane] = False
+            outcomes[lane] = 1
+        elif event_outcome == 3 and not terminated[lane]:
+            truncated[lane] = True
+            outcomes[lane] = 3
+
+
+@njit(cache=True, nogil=True)
 def _mario_step_kernel(
     x_hi,
     x_lo,
@@ -733,9 +771,10 @@ class IdentityTaskDefinition:
         compiled_events: list[IdentityEvent] = []
         for name, rule in raw_events.items():
             operation = str(rule.get("operation", ""))
-            if operation not in {"decrease", "equals_for"}:
+            if operation not in {"decrease", "increase", "equals_for"}:
                 raise ValueError(
-                    f"identity event {name!r} supports only operations 'decrease' and 'equals_for'"
+                    f"identity event {name!r} supports only operations "
+                    "'decrease', 'increase', and 'equals_for'"
                 )
             if operation == "equals_for":
                 value = rule.get("value")
@@ -832,11 +871,11 @@ class IdentityTaskKernel:
             self._signal_bindings.scalar_dtype(event.signal) for event in self._event_configs
         )
         for event, dtype in zip(self._event_configs, event_dtypes, strict=True):
-            if event.operation == "decrease" and (
+            if event.operation in {"decrease", "increase"} and (
                 not np.issubdtype(dtype, np.number) or np.issubdtype(dtype, np.bool_)
             ):
                 raise ValueError(
-                    f"identity decrease event {event.name!r} requires a numeric signal"
+                    f"identity {event.operation} event {event.name!r} requires a numeric signal"
                 )
         self._event_previous_values = tuple(
             np.empty(self.num_envs, dtype=dtype) for dtype in event_dtypes
@@ -856,7 +895,7 @@ class IdentityTaskKernel:
                 self._event_transition_targets[index],
             )
             for index, event in enumerate(self._event_configs)
-            if event.operation == "decrease"
+            if event.operation in {"decrease", "increase"}
         }
         self._observation_mask = observation_mask
         self._observation_mask_fill = int(observation_mask_fill)
@@ -952,8 +991,22 @@ class IdentityTaskKernel:
                         self._outcomes,
                         self._events,
                     )
-                else:
+                elif event.operation == "decrease":
                     _identity_decrease_event_kernel(
+                        values,
+                        self._event_previous_values[index],
+                        self._event_previous_valid[index],
+                        self._event_transition_sources[index],
+                        self._event_transition_targets[index],
+                        np.uint64(1 << index),
+                        int(event.outcome),
+                        self._terminated,
+                        self._truncated,
+                        self._outcomes,
+                        self._events,
+                    )
+                else:
+                    _identity_increase_event_kernel(
                         values,
                         self._event_previous_values[index],
                         self._event_previous_valid[index],
@@ -999,7 +1052,7 @@ class IdentityTaskKernel:
                     else None
                 )
                 consecutive_steps[mask] = 0
-                if event.operation == "decrease":
+                if event.operation in {"decrease", "increase"}:
                     if reset_values is None:
                         self._event_previous_valid[index][mask] = False
                     else:
