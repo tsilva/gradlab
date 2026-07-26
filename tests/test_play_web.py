@@ -1109,8 +1109,12 @@ def test_web_dashboard_assets_are_packaged_beside_server() -> None:
     assert 'src="/assets/vendor/gridstack/gridstack-all.js"' in markup
     assert '<main id="source-browser" class="source-browser" hidden></main>' in markup
     assert '<h1 id="page-title" hidden>Environment</h1>' in markup
+    assert 'id="player-home"' in markup
+    assert 'aria-label="Return to playback home"' in markup
     assert 'id="source-breadcrumbs"' in markup
     assert '$("#source-breadcrumbs")' in script
+    assert '$("#player-home").addEventListener("click"' in script
+    assert ".then((browser) => browser.goHome())" in script
     assert '$("#page-title").hidden = state.sourceMode' in script
     assert '$("#page-title").textContent = "Select checkpoint"' not in script
     assert 'id="panel-add"' in markup
@@ -1168,4 +1172,5 @@ def test_web_dashboard_assets_are_packaged_beside_server() -> None:
     assert "item.description || item.name || item.run_id" in source_browser
     assert 'history.pushState(null, "", target);' in source_browser
     assert 'window.addEventListener("popstate", this.onPopState);' in source_browser
+    assert "goHome()" in source_browser
     assert "hydrateInitialProjects()" in source_browser

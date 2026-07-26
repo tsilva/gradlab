@@ -25,6 +25,7 @@ from rlab.env_registry import (
     RLAB_PROVIDER,
     STABLE_RETRO_TURBO_PROVIDER,
     SUPERMARIOBROS_NES_TURBO_PROVIDER,
+    VIZDOOM_TURBO_PROVIDER,
     is_stable_retro_atari_env,
     resolve_env_provider,
 )
@@ -358,6 +359,16 @@ def breakout_turbo_vec_env_type():
     return BreakoutVecEnv
 
 
+def vizdoom_turbo_vec_env_type():
+    try:
+        from vizdoom_turbo import VizdoomTurboVecEnv
+    except ImportError as exc:
+        raise ImportError(
+            "vizdoom-turbo provider requires vizdoom-turbo",
+        ) from exc
+    return VizdoomTurboVecEnv
+
+
 def _stable_retro_packaged_data_path(game: str, filename: str) -> Path:
     path = Path(retro.__file__).resolve().parent / "data" / "stable" / game / filename
     if not path.is_file():
@@ -683,6 +694,7 @@ def provider_descriptor(
         BREAKOUT_TURBO_ENV_PROVIDER.provider_id,
         STABLE_RETRO_TURBO_PROVIDER.provider_id,
         SUPERMARIOBROS_NES_TURBO_PROVIDER.provider_id,
+        VIZDOOM_TURBO_PROVIDER.provider_id,
     }
     declared_action = declared_action_contract(config)
     action_mode = getattr(native_env, "action_mode", None)
@@ -716,6 +728,7 @@ def provider_descriptor(
     snapshot_provider = provider.provider_id in {
         BREAKOUT_TURBO_ENV_PROVIDER.provider_id,
         STABLE_RETRO_TURBO_PROVIDER.provider_id,
+        VIZDOOM_TURBO_PROVIDER.provider_id,
     }
     snapshot_bank_configured = bool(
         isinstance(config.env_args, Mapping)
@@ -725,12 +738,19 @@ def provider_descriptor(
     )
     supports_live_snapshots = bool(
         snapshot_provider
-        and config.game == "Breakout-Atari2600-v0"
+        and (
+            provider.provider_id == VIZDOOM_TURBO_PROVIDER.provider_id
+            or config.game == "Breakout-Atari2600-v0"
+        )
         and not snapshot_bank_configured
         and callable(getattr(native_env, "capture_snapshots", None))
     )
     deterministic_snapshots = bool(
-        supports_live_snapshots and float(config.sticky_action_prob) == 0.0
+        supports_live_snapshots
+        and (
+            provider.provider_id == VIZDOOM_TURBO_PROVIDER.provider_id
+            or float(config.sticky_action_prob) == 0.0
+        )
     )
     return ProviderDescriptor(
         provider_id=provider.provider_id,
@@ -952,6 +972,18 @@ def _breakout_turbo_make_vec_env(
     return env
 
 
+def _vizdoom_turbo_make_vec_env(
+    config: Any,
+    *,
+    native_kwargs: Mapping[str, Any],
+    vizdoom_vec_env_type=vizdoom_turbo_vec_env_type,
+):
+    _require_provider(config, VIZDOOM_TURBO_PROVIDER.provider_id)
+    env_type = vizdoom_vec_env_type()
+    env = env_type(config.game, **dict(native_kwargs))
+    return _require_disabled_autoreset_mode(env, VIZDOOM_TURBO_PROVIDER.provider_id)
+
+
 def make_provider_vec_env(
     config: Any,
     *,
@@ -960,6 +992,7 @@ def make_provider_vec_env(
     super_mario_vec_env_type=super_mario_bros_nes_turbo_vec_env_type,
     ale_py_vec_env_type=ale_py_atari_vector_env_type,
     breakout_vec_env_type=breakout_turbo_vec_env_type,
+    vizdoom_vec_env_type=vizdoom_turbo_vec_env_type,
 ):
     provider = resolve_env_provider(config.env_provider)
     if provider.provider_id == RLAB_PROVIDER.provider_id:
@@ -987,6 +1020,12 @@ def make_provider_vec_env(
             config,
             native_kwargs=native_kwargs,
             breakout_vec_env_type=breakout_vec_env_type,
+        )
+    if provider.provider_id == VIZDOOM_TURBO_PROVIDER.provider_id:
+        return _vizdoom_turbo_make_vec_env(
+            config,
+            native_kwargs=native_kwargs,
+            vizdoom_vec_env_type=vizdoom_vec_env_type,
         )
     if provider.provider_id == GYMNASIUM_PROVIDER.provider_id:
         return _registered_native_gymnasium_vec_env(config, native_kwargs)

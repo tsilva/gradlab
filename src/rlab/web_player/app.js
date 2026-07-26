@@ -1123,6 +1123,11 @@ function removeTelemetryPanel(name) {
 }
 
 function bindWorkspaceMenus() {
+  $("#player-home").addEventListener("click", () => {
+    void ensureSourceBrowser()
+      .then((browser) => browser.goHome())
+      .catch((error) => showToast(`Source browser failed: ${error.message || error}`, true));
+  });
   $("#change-source").addEventListener("click", () => {
     void ensureSourceBrowser()
       .then((browser) => browser.browseCurrentSource())

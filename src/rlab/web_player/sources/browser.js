@@ -683,6 +683,17 @@ export class SourceBrowser {
     this.navigate(next);
   }
 
+  goHome() {
+    this.navigate({
+      level: "projects",
+      entity: this.route.entity || this.app.route?.entity || "",
+      project: "",
+      goal_id: "",
+      run_id: "",
+      checkpoint_id: "",
+    });
+  }
+
   selectCheckpoint(item, { historyMode = "push" } = {}) {
     const route = {
       ...this.route,

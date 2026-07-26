@@ -111,6 +111,19 @@ button.danger { color: #ffabb0; border-color: #673840; }
   white-space: nowrap;
 }
 
+.app-home {
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.app-home:hover:not(:disabled) {
+  border-color: transparent;
+  background: transparent;
+  color: var(--text);
+}
+
 h1 { font-size: .92rem; margin: 0; font-weight: 650; white-space: nowrap; }
 h2 { font-size: .9rem; margin: 0; font-weight: 650; }
 .sync-status { color: var(--green); font-size: .78rem; }

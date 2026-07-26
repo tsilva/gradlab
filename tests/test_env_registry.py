@@ -79,6 +79,21 @@ def test_resolves_registered_supermariobrosnes_turbo_env_id() -> None:
     assert provider.requires_external_rom_asset
 
 
+def test_resolves_vizdoom_turbo_builtin_and_custom_scenarios() -> None:
+    env_id = "vizdoom-turbo:VizdoomBasic-v1"
+
+    resolved = resolve_env_id(env_id)
+
+    assert env_id in registered_env_ids()
+    assert resolved.provider_id == "vizdoom-turbo"
+    assert resolved.provider_env_id == "VizdoomBasic-v1"
+    assert resolved.import_name == "vizdoom_turbo"
+    assert env_supports_states("vizdoom-turbo", "VizdoomBasic-v1")
+
+    custom = resolve_env_id("vizdoom-turbo:/tmp/custom-scenario.cfg")
+    assert custom.provider_env_id == "/tmp/custom-scenario.cfg"
+
+
 def test_resolves_registered_ale_py_env_id() -> None:
     env_id = "ale-py:breakout"
 
