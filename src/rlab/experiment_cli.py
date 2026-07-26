@@ -584,6 +584,23 @@ def _latest_attempt_terminal(state: dict[str, Any]) -> dict[str, Any] | None:
     return dict(terminals[-1]) if terminals else None
 
 
+def _require_retryable_attempt_terminal(
+    attempt_terminal: Mapping[str, Any] | None,
+) -> None:
+    if attempt_terminal is None:
+        return
+    state = str(attempt_terminal.get("state") or "")
+    stop_reason = str(attempt_terminal.get("stop_reason") or "")
+    if state == "succeeded":
+        raise RuntimeError(
+            "a successfully drained training-only run must not be retried"
+        )
+    if state == "failed" and stop_reason.startswith("early_stop_failure:"):
+        raise RuntimeError(
+            "a designed early-stop failure is non-resumable; launch a new recipe/run"
+        )
+
+
 def _public_dstack_state(task: DstackTask) -> dict[str, Any]:
     raw = dict(task.raw or {})
     fleet = raw.get("fleet")
@@ -865,13 +882,7 @@ def cmd_retry(args: argparse.Namespace) -> int:
     if state.get("terminal") is not None:
         raise RuntimeError("a scientifically successful run must not be retried")
     attempt_terminal = _latest_attempt_terminal(state)
-    if (
-        attempt_terminal is not None
-        and str(attempt_terminal.get("state") or "") == "succeeded"
-    ):
-        raise RuntimeError(
-            "a successfully drained training-only run must not be retried"
-        )
+    _require_retryable_attempt_terminal(attempt_terminal)
     previous = _latest_attempt(state)
     dstack_backend = DstackBackend()
     previous_task = dstack_backend.status(str(previous["compute"]["dstack_task"]))

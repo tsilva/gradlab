@@ -270,6 +270,14 @@ class TrainConfigFieldSchemaTests(unittest.TestCase):
                     "early_stop": {"conditions": {"clear": success_condition}},
                 }
             )
+        with self.assertRaisesRegex(ValueError, "checkpoint_eval_backend=none"):
+            validate_and_normalize_train_config(
+                {
+                    "stop_on_acceptance": False,
+                    "checkpoint_eval_backend": "modal",
+                    "early_stop": {"conditions": {"clear": success_condition}},
+                }
+            )
 
     def test_train_config_rejects_deterministic_checkpoint_eval(self) -> None:
         with self.assertRaisesRegex(ValueError, "post_train_eval_stochastic must be true"):

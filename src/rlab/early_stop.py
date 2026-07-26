@@ -275,7 +275,11 @@ def normalize_metric_early_stop_config(
         raise ValueError(f"{label}.conditions must be a non-empty object")
     normalized: dict[str, dict[str, Any]] = {}
     for raw_condition_id in sorted(conditions, key=str):
-        condition_id = str(raw_condition_id).strip()
+        if not isinstance(raw_condition_id, str):
+            raise ValueError(
+                f"{label}.conditions has non-string condition id: {raw_condition_id!r}"
+            )
+        condition_id = raw_condition_id.strip()
         try:
             metric_path_segment(condition_id)
         except ValueError as exc:
@@ -415,6 +419,7 @@ class MetricEarlyStopUpdate:
 class _MetricEarlyStopRuntime:
     last_sample_step: int | None = None
     best_value: float | None = None
+    patience_reference_value: float | None = None
     last_improvement_step: int | None = None
     predicate_since_step: int | None = None
 
@@ -545,14 +550,20 @@ class MetricEarlyStopStateMachine:
         initialized = state.best_value is not None
         if not initialized:
             state.best_value = sample.value
+            state.patience_reference_value = sample.value
             state.last_improvement_step = sample.step
         elif self._meaningful_improvement(
             condition,
-            best_value=float(state.best_value),
+            best_value=float(state.patience_reference_value),
             value=sample.value,
         ):
-            state.best_value = sample.value
+            state.patience_reference_value = sample.value
             state.last_improvement_step = sample.step
+        state.best_value = self._best_value(
+            state.best_value,
+            sample.value,
+            direction=str(condition["direction"]),
+        )
 
         eligible = sample.step >= int(condition["start_after_steps"])
         anchor = max(

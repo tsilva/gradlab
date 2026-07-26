@@ -321,6 +321,23 @@ class RunSupervisorTests(unittest.TestCase):
         self.assertEqual(state, "succeeded")
         self.assertEqual(stop_reason, "early_stop_success:return_plateau")
 
+    def test_training_success_cannot_establish_evaluated_goal_acceptance(self) -> None:
+        receipt = self._early_stop_receipt(outcome="success")
+
+        state, stop_reason = _terminal_outcome(
+            cancel_requested=False,
+            failure=None,
+            evaluation_required=True,
+            promotion=None,
+            early_stop=receipt,
+        )
+
+        self.assertEqual(state, "failed")
+        self.assertEqual(
+            stop_reason,
+            "early_stop_success_without_acceptance:return_plateau",
+        )
+
     def test_evaluation_promotion_overrides_failure_early_stop(self) -> None:
         promotion = PromotionReceipt(
             run_id=self.run_id,
@@ -396,6 +413,19 @@ class RunSupervisorTests(unittest.TestCase):
             attempt_id=self.manifest.attempt_id,
         )
         self.assertEqual(stored["decision_sha256"], receipt.decision_sha256)
+        tampered = dict(stored)
+        tampered["outcome"] = "success"
+        self.authority.control.put_json(
+            (
+                f"runs/{self.run_id}/attempts/"
+                f"{self.manifest.attempt_id}/early-stop.json"
+            ),
+            tampered,
+            create_only=False,
+        )
+        decision_path.unlink()
+        with self.assertRaisesRegex(ValueError, "does not match"):
+            supervisor._resolve_early_stop_receipt()
 
     def test_supervisor_rejects_tampered_learner_early_stop_decision(self) -> None:
         supervisor = self.supervisor()

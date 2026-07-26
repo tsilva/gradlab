@@ -18,6 +18,11 @@ from typing import Any
 from unittest.mock import patch
 
 from rlab.checkpoint_acceptance import acceptance_aggregates
+from rlab.early_stop import (
+    MetricEarlyStopStateMachine,
+    MetricSample,
+    validate_metric_early_stop_decision,
+)
 from rlab.eval_backend import EvalHandle, EvalPoll
 from rlab.modal_eval_protocol import execution_key
 from rlab.policy_bundle import (
@@ -37,10 +42,16 @@ from rlab.r2_store import (
 from rlab.recipe_documents import compose_train_document
 from rlab.run_authority import LEASE_TTL_SECONDS, LeaseUnavailable, RunAuthority
 from rlab.run_contracts import (
+    EarlyStopReceipt,
+    PromotionReceipt,
     RunManifest,
     TerminalReceipt,
 )
-from rlab.run_supervisor import METRIC_JOURNAL_RETENTION_DAYS, RunSupervisor
+from rlab.run_supervisor import (
+    METRIC_JOURNAL_RETENTION_DAYS,
+    RunSupervisor,
+    _terminal_outcome,
+)
 from rlab.supervisor_runtime import LifecycleObserver, SupervisorRuntime
 from rlab.wandb_publisher import WandbProjector
 
@@ -65,6 +76,7 @@ DEFAULT_SCENARIOS = (
     "drain-only-recovery",
     "terminal-receipt-gating",
     "verifier-tamper-detection",
+    "early-stop-outcomes",
 )
 
 
@@ -1397,6 +1409,149 @@ def _scenario_verifier_tamper_detection(root: Path) -> dict[str, Any]:
     return {"invariants": recorder.invariants, "evidence": {"tamper_repaired": True}}
 
 
+def _scenario_early_stop_outcomes(root: Path) -> dict[str, Any]:
+    recorder = ScenarioRecorder("early-stop-outcomes", [])
+    fixture = CertificationFixture(root)
+    manifest = fixture.manifest(run_number=76)
+    fixture.authority.create_manifest(manifest)
+    config = {
+        "conditions": {
+            "return_plateau": {
+                "metric": "train/episode/return/shaped/from/target/mean",
+                "trigger": "no_improvement",
+                "direction": "maximize",
+                "min_delta": 0.01,
+                "delta_mode": "relative",
+                "start_after_steps": 0,
+                "patience_steps": 10,
+                "outcome": "failure",
+                "action": "stop",
+            }
+        }
+    }
+    machine = MetricEarlyStopStateMachine(config)
+    metric = "train/episode/return/shaped/from/target/mean"
+    machine.update({metric: MetricSample(value=100.0, step=0)})
+    update = machine.update({metric: MetricSample(value=100.0, step=10)})
+    decision = validate_metric_early_stop_decision(update.stop_decision, config)
+    failure_receipt = EarlyStopReceipt(
+        run_id=manifest.run_id,
+        attempt_id=manifest.attempt_id,
+        condition_id=str(decision["condition_id"]),
+        matched_condition_ids=tuple(decision["matched_condition_ids"]),
+        outcome="failure",
+        trigger="no_improvement",
+        metric=metric,
+        metric_step=int(decision["metric_step"]),
+        value=float(decision["value"]),
+        best_value=float(decision["best_value"]),
+        elapsed_steps=int(decision["elapsed_steps"]),
+        patience_progress=float(decision["patience_progress"]),
+        condition=dict(decision["condition"]),
+        early_stop_config_sha256=str(decision["early_stop_config_sha256"]),
+        decision_sha256=canonical_json_sha256(decision),
+        recorded_at=fixture.clock.utc_now(),
+    )
+    fixture.authority.create_early_stop(failure_receipt)
+    state, reason = _terminal_outcome(
+        cancel_requested=False,
+        failure=None,
+        evaluation_required=True,
+        promotion=None,
+        early_stop=failure_receipt,
+    )
+    recorder.require(
+        "failure-stop-is-designed-non-resumable-failure",
+        state == "failed" and reason == "early_stop_failure:return_plateau",
+        evidence={"state": state, "reason": reason},
+    )
+
+    success_receipt = EarlyStopReceipt(
+        run_id=manifest.run_id,
+        attempt_id=manifest.attempt_id,
+        condition_id="clear_100",
+        matched_condition_ids=("clear_100",),
+        outcome="success",
+        trigger="threshold",
+        metric="train/outcome/success/window_100/rate/min",
+        metric_step=10,
+        value=1.0,
+        best_value=1.0,
+        elapsed_steps=0,
+        patience_progress=1.0,
+        condition={
+            "metric": "train/outcome/success/window_100/rate/min",
+            "trigger": "threshold",
+            "operator": ">=",
+            "threshold": 1.0,
+            "start_after_steps": 0,
+            "patience_steps": 0,
+            "outcome": "success",
+            "action": "stop",
+        },
+        early_stop_config_sha256="1" * 64,
+        decision_sha256="2" * 64,
+        recorded_at=fixture.clock.utc_now(),
+    )
+    success_receipt.validate()
+    success_state, success_reason = _terminal_outcome(
+        cancel_requested=False,
+        failure=None,
+        evaluation_required=False,
+        promotion=None,
+        early_stop=success_receipt,
+    )
+    recorder.require(
+        "training-only-success-stop-succeeds",
+        success_state == "succeeded"
+        and success_reason == "early_stop_success:clear_100",
+        evidence={"state": success_state, "reason": success_reason},
+    )
+
+    promotion = PromotionReceipt(
+        run_id=manifest.run_id,
+        checkpoint_id="checkpoint-accepted",
+        checkpoint_step=5,
+        eval_idempotency_key="3" * 64,
+        eval_result_sha256="4" * 64,
+        accepted_episode_count=100,
+        promoted_at=fixture.clock.utc_now(),
+    )
+    promoted_state, promoted_reason = _terminal_outcome(
+        cancel_requested=False,
+        failure=None,
+        evaluation_required=True,
+        promotion=promotion,
+        early_stop=failure_receipt,
+    )
+    recorder.require(
+        "evaluation-promotion-overrides-simultaneous-failure-stop",
+        promoted_state == "succeeded"
+        and promoted_reason == "completed_after_eval_acceptance",
+        evidence={"state": promoted_state, "reason": promoted_reason},
+    )
+
+    tampered = failure_receipt.to_dict()
+    tampered["decision_sha256"] = "corrupted"
+    corruption_rejected = False
+    try:
+        EarlyStopReceipt(**tampered).validate()
+    except ValueError:
+        corruption_rejected = True
+    recorder.require(
+        "early-stop-receipt-corruption-rejected",
+        corruption_rejected,
+        evidence={"decision_sha256": tampered["decision_sha256"]},
+    )
+    return {
+        "invariants": recorder.invariants,
+        "evidence": {
+            "condition_id": failure_receipt.condition_id,
+            "metric_step": failure_receipt.metric_step,
+        },
+    }
+
+
 SCENARIOS: dict[str, Callable[[Path], dict[str, Any]]] = {
     "full-lifecycle": _scenario_full_lifecycle,
     "parallel-run-isolation": _scenario_parallel_run_isolation,
@@ -1410,6 +1565,7 @@ SCENARIOS: dict[str, Callable[[Path], dict[str, Any]]] = {
     "drain-only-recovery": _scenario_drain_only_recovery,
     "terminal-receipt-gating": _scenario_terminal_receipt_gating,
     "verifier-tamper-detection": _scenario_verifier_tamper_detection,
+    "early-stop-outcomes": _scenario_early_stop_outcomes,
 }
 
 

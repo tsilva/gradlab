@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 from unittest import mock
 
@@ -8,10 +9,13 @@ import numpy as np
 import pytest
 
 from rlab.batch_runtime import EpisodeRecord
+from rlab.callbacks import MetricEarlyStopHelper
 from rlab.jerk import JerkPolicy, JerkSearch, RetainedSequence
+from rlab.metric_names import TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_MEAN
 from rlab.policy_models import load_policy_model, resolve_policy_algorithm
 from rlab.task_kernels import Outcome
 from rlab.training import jerk as jerk_training
+from rlab.training_backend import GracefulStopFlag
 
 
 ACTIONS = ("noop", "right", "right_b", "right_a", "right_a_b", "a", "left")
@@ -327,6 +331,7 @@ def _jerk_context(tmp_path, *, timesteps: int):
         early_stop=None,
         checkpoint_eval_backend="none",
         run_name="test-jerk",
+        attempt_id="attempt-0000000000000001",
     )
     return SimpleNamespace(
         args=args,
@@ -376,6 +381,59 @@ def test_first_training_success_saves_playable_checkpoint_and_stops(tmp_path) ->
     assert isinstance(JerkPolicy.load(checkpoint_path), JerkPolicy)
     final_metrics = context.metric_store.payloads[-1][0]
     assert final_metrics["train/outcome/success/from/Level1-1/count"] == 1
+
+
+def test_sb3_and_jerk_early_stop_adapters_make_identical_decisions(tmp_path) -> None:
+    condition = {
+        "metric": TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_MEAN,
+        "trigger": "no_improvement",
+        "direction": "maximize",
+        "min_delta": 0.01,
+        "delta_mode": "relative",
+        "start_after_steps": 0,
+        "patience_steps": 10,
+        "outcome": "failure",
+        "action": "stop",
+    }
+    config = {"conditions": {"return_plateau": condition}}
+
+    sb3_path = tmp_path / "sb3-decision.json"
+    sb3_logger = SimpleNamespace(records={})
+    sb3_logger.record = lambda name, value: sb3_logger.records.__setitem__(name, value)
+    sb3_helper = MetricEarlyStopHelper(
+        decision_path=sb3_path,
+        config=config,
+        stop_flag=GracefulStopFlag(),
+    )
+    sb3_helper.model = SimpleNamespace(logger=sb3_logger)  # type: ignore[assignment]
+    for step in (0, 10):
+        sb3_helper.num_timesteps = step
+        sb3_logger.records[TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_MEAN] = 100.0
+        sb3_helper._on_rollout_end()
+
+    jerk_context = _jerk_context(tmp_path / "jerk", timesteps=10)
+    jerk_machine = jerk_training.MetricEarlyStopStateMachine(config)
+    outcome_metrics = jerk_training._OutcomeMetrics(configured_starts=("Level1-1",))
+    for step in (0, 10):
+        jerk_training._publish_metrics(
+            jerk_context,
+            _search(),
+            step=step,
+            elapsed=1.0,
+            returns=[100.0],
+            target_returns=[100.0],
+            lengths=[1],
+            outcome_metrics=outcome_metrics,
+            early_stop=jerk_machine,
+        )
+
+    jerk_path = (
+        jerk_context.run_dir
+        / f"early_stop_decision-{jerk_context.args.attempt_id}.json"
+    )
+    assert json.loads(sb3_path.read_text(encoding="utf-8")) == json.loads(
+        jerk_path.read_text(encoding="utf-8")
+    )
 
 
 def test_first_training_success_budget_exhaustion_is_unsuccessful(tmp_path) -> None:

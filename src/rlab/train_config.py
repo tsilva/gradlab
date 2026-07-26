@@ -460,18 +460,19 @@ def validate_and_normalize_train_config(
             label=f"{label}.snapshot_curriculum",
             n_envs=int(n_envs) if n_envs is not None else None,
         )
+    early_stop = normalized.get("early_stop")
+    conditions = (
+        early_stop.get("conditions")
+        if isinstance(early_stop, Mapping)
+        else None
+    )
+    has_training_success_condition = isinstance(conditions, Mapping) and any(
+        str(condition.get("outcome")) == "success"
+        for condition in conditions.values()
+        if isinstance(condition, Mapping)
+    )
     if normalized.get("stop_on_acceptance"):
-        early_stop = normalized.get("early_stop")
-        conditions = (
-            early_stop.get("conditions")
-            if isinstance(early_stop, Mapping)
-            else None
-        )
-        if isinstance(conditions, Mapping) and any(
-            str(condition.get("outcome")) == "success"
-            for condition in conditions.values()
-            if isinstance(condition, Mapping)
-        ):
+        if has_training_success_condition:
             raise ValueError(
                 f"{label}.early_stop success conditions are incompatible with "
                 "stop_on_acceptance; goal.eval.acceptance is the sole success authority"
@@ -480,6 +481,13 @@ def validate_and_normalize_train_config(
             raise ValueError(
                 f"{label}.checkpoint_eval_acceptance is required when stop_on_acceptance is true"
             )
+    if has_training_success_condition and (
+        normalized.get("checkpoint_eval_backend") in {"local", "modal"}
+    ):
+        raise ValueError(
+            f"{label}.early_stop success conditions require "
+            "checkpoint_eval_backend=none; evaluated-goal acceptance must come from evaluation"
+        )
     if "training_backend" in normalized:
         from rlab.training_backend import normalize_training_backend
 
@@ -493,22 +501,11 @@ def validate_and_normalize_train_config(
         )
         from rlab.training_backend import accepts_first_training_success
 
-        if accepts_first_training_success(normalized):
-            early_stop = normalized.get("early_stop")
-            conditions = (
-                early_stop.get("conditions")
-                if isinstance(early_stop, Mapping)
-                else None
+        if accepts_first_training_success(normalized) and has_training_success_condition:
+            raise ValueError(
+                f"{label}.early_stop success conditions are incompatible with "
+                "first-training-success backend acceptance"
             )
-            if isinstance(conditions, Mapping) and any(
-                str(condition.get("outcome")) == "success"
-                for condition in conditions.values()
-                if isinstance(condition, Mapping)
-            ):
-                raise ValueError(
-                    f"{label}.early_stop success conditions are incompatible with "
-                    "first-training-success backend acceptance"
-                )
     return normalized
 
 

@@ -359,6 +359,7 @@ def run_sb3_on_policy(
                         / f"early_stop_decision-{str(args.attempt_id)}.json"
                     ),
                     config=args.early_stop,
+                    stop_flag=context.stop_flag,
                     metric_store_path=store_path,
                 )
             )

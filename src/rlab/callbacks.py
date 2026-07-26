@@ -308,6 +308,7 @@ class MetricEarlyStopHelper(CallbackHelper):
         *,
         decision_path: Path,
         config: Any,
+        stop_flag: Any,
         metric_store_path: Path | None = None,
     ) -> None:
         super().__init__()
@@ -321,6 +322,7 @@ class MetricEarlyStopHelper(CallbackHelper):
             )
         )
         self.decision_path = decision_path
+        self.stop_flag = stop_flag
         self.triggered = False
         self.stop_requested = False
         self.metric_store = (
@@ -328,7 +330,10 @@ class MetricEarlyStopHelper(CallbackHelper):
         )
 
     def _on_step(self) -> bool:
-        return not self.stop_requested
+        # The stop-aware on-policy model reads the shared flag before starting
+        # its next rollout. Returning False here would discard the first
+        # transition of that rollout instead of stopping at the safe boundary.
+        return True
 
     def _on_rollout_end(self) -> None:
         if self.stop_requested:
@@ -366,6 +371,9 @@ class MetricEarlyStopHelper(CallbackHelper):
         self.triggered = True
         self.stop_requested = True
         atomic_write_json(self.decision_path, update.stop_decision)
+        self.stop_flag.request(
+            f"early_stop:{str(update.stop_decision['condition_id'])}"
+        )
         print(
             "early stop: "
             f"condition={update.stop_decision['condition_id']} "

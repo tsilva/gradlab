@@ -367,6 +367,11 @@ class ConfigValidationTests(unittest.TestCase):
                 self.assertEqual(conditions["return_plateau"]["action"], "observe")
                 if recipe_path.name == "ppo-train-clear-100.yaml":
                     self.assertIn("clear_100", conditions)
+                if recipe_path.name == "dstack-smoke.yaml":
+                    self.assertLess(
+                        document["train_config"]["timesteps"],
+                        conditions["return_plateau"]["start_after_steps"],
+                    )
 
     def test_removed_provider_lifecycle_args_are_rejected(self) -> None:
         for provider_id in ("stable-retro-turbo", "supermariobrosnes-turbo"):

@@ -157,7 +157,7 @@ async function ensureSourceBrowser() {
   if (sourceBrowser) return sourceBrowser;
   if (!sourceBrowserPromise) {
     sourceBrowserPromise = import("./sources/browser.js").then(({ SourceBrowser }) => {
-      sourceBrowser = new SourceBrowser($("#source-browser"), {
+      sourceBrowser = new SourceBrowser($("#source-browser"), $("#source-breadcrumbs"), {
         token,
         command,
         getState: () => state,

@@ -228,3 +228,189 @@ final result: passed
 - None required for this change.
 
 final result: passed
+
+---
+
+# Content-sized source list design QA
+
+**Comparison target**
+
+- Source visual truth: `/var/folders/wz/x29jb7_x5rdc_5dcjr4qnhg00000gn/T/codex-clipboard-ae389e82-83a4-4fe3-a6c9-75c75def2608.png`
+- Browser-rendered implementation: `/Users/tsilva/repos/tsilva/rlab/runs/design-qa/project-list-no-trailing-space.png`
+- Normalized source: `/Users/tsilva/repos/tsilva/rlab/runs/design-qa/reference-normalized.png`
+- Full-view side-by-side comparison: `/Users/tsilva/repos/tsilva/rlab/runs/design-qa/reference-vs-implementation.png`
+- Viewport: 1743 × 597 CSS px at 1× implementation density.
+- Source pixels: 3486 × 1194 at 2× density, normalized to 1743 × 597. Implementation pixels: 1743 × 597.
+- State: dark desktop player, synced project-selection screen with four projects. The implementation is the controller window, which adds the unrelated Controller status badge.
+
+**Full-view comparison evidence**
+
+- The implementation preserves the source header, title, breadcrumb, search field, four project rows, typography, colors, borders, radii, and horizontal alignment.
+- The requested difference is isolated to the populated results container: it now ends directly after the last row instead of reserving an 18rem minimum height.
+- Browser measurements show a 181.375 CSS-pixel list inside a 183.375 CSS-pixel bordered container, with zero internal overflow and a computed minimum height of 0px.
+
+**Focused comparison evidence**
+
+- A separate crop was unnecessary because the full-view side-by-side comparison keeps the complete list and trailing edge readable at matched 1743 × 597 dimensions.
+
+**Required fidelity surfaces**
+
+- Fonts and typography: the existing families, sizes, weights, line heights, truncation, and hierarchy are unchanged.
+- Spacing and layout rhythm: row padding and separators are unchanged; only the populated results container's forced minimum height was removed.
+- Colors and visual tokens: background, surface, border, text, muted text, cyan, and green state tokens are unchanged.
+- Image quality and asset fidelity: existing packaged search and refresh icons are unchanged; no new image assets or substitutes were introduced.
+- Copy and content: all project names, goal counts, headings, labels, and placeholders are unchanged.
+
+**Findings**
+
+- No remaining actionable P0, P1, or P2 mismatch for the requested content-sized list.
+
+**Comparison history**
+
+- Initial P2: the populated four-row list inherited an 18rem minimum height, leaving a large empty region after the final row.
+- Fix: removed the minimum height from `.source-results`; loading, empty, and centered states retain their own intentional 18rem minimum height.
+- Post-fix evidence: the matched browser capture shows the bottom border directly after the fourth row, and the filtered one-row state measures 46.594 CSS px including borders.
+
+**Primary interactions and runtime verification**
+
+- Filtered the project list to “Mario” and verified the container shrank with the single matching row, then cleared the filter.
+- Browser console errors: none.
+- Automated checks: 28 web-player pytest cases and 12 JavaScript web-player tests passed.
+
+**Implementation checklist**
+
+- [x] Remove trailing empty space from populated source lists.
+- [x] Preserve deliberate loading and empty-state height.
+- [x] Verify full and filtered list sizing in the in-app browser.
+- [x] Check browser console and targeted automated tests.
+
+**Follow-up polish**
+
+- None required for this change.
+
+final result: passed
+
+---
+
+# Stacked goal descriptions design QA
+
+**Comparison target**
+
+- Source visual truth: `/var/folders/wz/x29jb7_x5rdc_5dcjr4qnhg00000gn/T/codex-clipboard-d565d4a5-5c62-48a2-a06b-1fc731b1ce57.png`
+- Browser-rendered implementation: `/Users/tsilva/repos/tsilva/rlab/runs/design-qa/goal-description-below-title.png`
+- Normalized source: `/Users/tsilva/repos/tsilva/rlab/runs/design-qa/goal-description-reference-normalized.png`
+- Full-view side-by-side comparison: `/Users/tsilva/repos/tsilva/rlab/runs/design-qa/goal-description-reference-vs-implementation.png`
+- Viewport: 1758 × 521 CSS px at 1× implementation density.
+- Source pixels: 3516 × 1042 at 2× density, normalized to 1758 × 521. Implementation pixels: 1758 × 521.
+- State: dark desktop player on the Breakout goal-selection screen. The source has the third row hovered; the implementation capture is neutral, while the unchanged hover treatment was outside this layout correction.
+
+**Full-view comparison evidence**
+
+- Every goal row now uses one left-aligned text stack: goal title, description with recipe count, then the optional repository goal path.
+- The previous right-hand description column is gone, while row borders, container width, breadcrumb, search field, and overall alignment remain unchanged.
+- Browser inspection confirms each `.goal-row` has one identity child and the description is the second element in that identity stack.
+
+**Focused comparison evidence**
+
+- A separate crop was unnecessary because the matched full-view comparison keeps all three title, description, and path stacks readable.
+
+**Required fidelity surfaces**
+
+- Fonts and typography: title, muted description, and monospace goal-path styles retain their existing family, weight, size, line height, and hierarchy.
+- Spacing and layout rhythm: descriptions sit 0.18rem below titles; optional paths retain the same 0.18rem inset below descriptions.
+- Colors and visual tokens: all existing surface, border, text, muted, hover, and focus tokens are unchanged.
+- Image quality and asset fidelity: this text-layout correction introduces no image or icon changes.
+- Copy and content: goal IDs, descriptions, recipe counts, and repository paths are unchanged and reordered only visually.
+
+**Findings**
+
+- No remaining actionable P0, P1, or P2 mismatch for the requested description placement.
+
+**Comparison history**
+
+- Initial P2: goal descriptions and recipe counts occupied a distant right-hand column, separating them from their titles.
+- Fix: moved each description/count into the identity block directly after the title and before the optional goal path; changed it to a block-level muted line.
+- Post-fix evidence: the browser-rendered capture and DOM order both show title → description/count → path for every goal.
+
+**Primary interactions and runtime verification**
+
+- Navigated from the project list into the Breakout goal list and verified all three goal rows.
+- Verified zero horizontal overflow at 1758px and 720px viewport widths.
+- Browser console errors: none.
+- Automated checks: 28 web-player pytest cases and 12 JavaScript web-player tests passed.
+
+**Implementation checklist**
+
+- [x] Place each goal description and recipe count directly below its title.
+- [x] Keep the optional goal path below the description.
+- [x] Preserve row interactions and existing visual tokens.
+- [x] Verify desktop and narrow layouts in the in-app browser.
+
+**Follow-up polish**
+
+- None required for this change.
+
+final result: passed
+
+---
+
+# Toolbar source namespace design QA
+
+**Comparison target**
+
+- Source visual truth: `/var/folders/wz/x29jb7_x5rdc_5dcjr4qnhg00000gn/T/codex-clipboard-59e53989-2606-4b4e-b6e7-992b35da21d8.png`
+- Browser-rendered implementation: `/Users/tsilva/repos/tsilva/rlab/runs/design-qa/source-namespace-in-toolbar.png`
+- Normalized source: `/Users/tsilva/repos/tsilva/rlab/runs/design-qa/source-namespace-reference-normalized.png`
+- Full-view side-by-side comparison: `/Users/tsilva/repos/tsilva/rlab/runs/design-qa/source-namespace-reference-vs-implementation.png`
+- Viewport: 1966 × 582 CSS px at 1× implementation density.
+- Source pixels: 2106 × 582, normalized to 1966 × 582 for the comparison. Implementation pixels: 1966 × 582.
+- State: dark desktop player on the Breakout goal-selection screen. The source is a partial crop that excludes the destination toolbar; the written instruction establishes the toolbar as the target location.
+
+**Full-view comparison evidence**
+
+- The Projects → Breakout namespace no longer occupies a standalone content row above search.
+- The same interactive breadcrumb now appears in the persistent top application toolbar after “Select checkpoint.”
+- The content column flows directly from its heading to search, while the prior goal-description and content-sized-list corrections remain intact.
+
+**Focused comparison evidence**
+
+- The full-view composite clearly shows both the removed content-row breadcrumb in the source and its toolbar placement in the implementation, so a separate crop was unnecessary.
+
+**Required fidelity surfaces**
+
+- Fonts and typography: breadcrumb labels retain their existing family, size, weight, truncation, and hierarchy.
+- Spacing and layout rhythm: the toolbar breadcrumb uses the existing header flex rhythm and removes the former 0.7rem breadcrumb margin above search.
+- Colors and visual tokens: breadcrumb buttons retain the existing quiet-button border, muted inactive text, and active text tokens.
+- Image quality and asset fidelity: no image or icon assets changed.
+- Copy and content: Projects, project, goal, and run namespace labels are unchanged and remain derived from the active route.
+
+**Findings**
+
+- No remaining actionable P0, P1, or P2 mismatch for the requested toolbar namespacing.
+
+**Comparison history**
+
+- Initial P2: the hierarchical namespace occupied a separate row between the screen title and search field.
+- Fix: introduced one toolbar-owned breadcrumb mount, rendered the existing navigation there, and removed it from the source-content shell.
+- Post-fix evidence: DOM inspection reports the breadcrumb parent as `.app-brand`, zero `.source-shell .source-breadcrumbs` elements, and no document overflow.
+
+**Primary interactions and runtime verification**
+
+- Clicked Projects in the toolbar breadcrumb and verified navigation to the project catalog, URL history, search placeholder, and toolbar namespace all updated.
+- Re-entered the Breakout project and verified the namespace returned to Projects → Breakout.
+- Verified zero document/header overflow at 1966px, 720px, and 360px viewport widths.
+- Browser console errors: none.
+- Automated checks: 28 web-player pytest cases and 12 JavaScript web-player tests passed.
+
+**Implementation checklist**
+
+- [x] Move the playback-source namespace into the top application toolbar.
+- [x] Remove the redundant breadcrumb row above search.
+- [x] Preserve breadcrumb navigation and browser-history behavior.
+- [x] Verify desktop and compact toolbar layouts.
+
+**Follow-up polish**
+
+- None required for this change.
+
+final result: passed

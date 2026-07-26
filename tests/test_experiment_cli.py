@@ -14,6 +14,7 @@ from rlab.experiment_cli import (
     _compute,
     _follow_fingerprint,
     _public_dstack_state,
+    _require_retryable_attempt_terminal,
     _required_operator_environment,
     _run_completed,
     _stage_rom,
@@ -330,6 +331,23 @@ def test_run_completed_requires_receipts_expected_for_the_attempt(
             dstack_terminal=dstack_terminal,
         )
         is expected
+    )
+
+
+def test_designed_early_stop_failure_is_non_resumable() -> None:
+    with pytest.raises(RuntimeError, match="non-resumable"):
+        _require_retryable_attempt_terminal(
+            {
+                "state": "failed",
+                "stop_reason": "early_stop_failure:return_plateau",
+            }
+        )
+
+    _require_retryable_attempt_terminal(
+        {
+            "state": "resumable_failure",
+            "stop_reason": "supervisor_failure",
+        }
     )
 
 
