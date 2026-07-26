@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import shutil
 from pathlib import Path
+from unittest.mock import patch
 
 import gymnasium as gym
 import numpy as np
@@ -11,7 +12,12 @@ import pytest
 pytest.importorskip("datasets")
 
 from rlab.dataset_media import iter_episode_frames  # noqa: E402
-from rlab.dataset_providers import EnvironmentArtifact, validate_provider_request  # noqa: E402
+from rlab.batch_runtime import ProviderDescriptor  # noqa: E402
+from rlab.dataset_providers import (  # noqa: E402
+    EnvironmentArtifact,
+    create_provider_session,
+    validate_provider_request,
+)
 from rlab.dataset_record import _record_one, _recover_active_episode  # noqa: E402
 from rlab.dataset_store import validate_tree  # noqa: E402
 from rlab.json_utils import canonical_json_bytes  # noqa: E402
@@ -84,6 +90,60 @@ def _environment() -> EnvironmentArtifact:
 def test_recording_rejects_collection_valued_states_before_provider_construction(state):
     with pytest.raises(ValueError, match="scalar state"):
         validate_provider_request({"state": state})
+
+
+def test_recording_constructs_the_shared_native_provider_runtime():
+    vector_env = type(
+        "FakeVectorEnv",
+        (),
+        {
+            "num_envs": 1,
+            "single_action_space": gym.spaces.Discrete(2),
+            "single_observation_space": gym.spaces.Box(
+                0, 255, (4, 84, 84), dtype=np.uint8
+            ),
+            "close": lambda self: None,
+        },
+    )()
+    descriptor = ProviderDescriptor(
+        provider_id="stable-retro-turbo",
+        native_observation_space=vector_env.single_observation_space,
+        native_action_space=vector_env.single_action_space,
+    )
+    binding = object()
+    with (
+        patch("rlab.dataset_providers.rom_asset_manifest_for_game", return_value={"game": "x"}),
+        patch("rlab.dataset_providers.bind_cached_rom", return_value=binding),
+        patch(
+            "rlab.dataset_providers.make_native_provider",
+            return_value=(vector_env, descriptor),
+        ) as make_provider,
+        patch("rlab.dataset_providers.portable_rom_asset_identity", return_value={"sha256": "a"}),
+        patch("rlab.dataset_providers.provider_buttons", return_value=("A", "B")),
+        patch("rlab.dataset_providers.declared_action_contract", return_value=None),
+    ):
+        session = create_provider_session(
+            "stable-retro-turbo",
+            "SuperMarioBros-Nes-v0",
+            {"frame_skip": 2, "env_args": {"players": 1}},
+        )
+
+    resolved, n_envs = make_provider.call_args.args
+    assert resolved.env_provider == "stable-retro-turbo"
+    assert resolved.game == "SuperMarioBros-Nes-v0"
+    assert resolved.frame_skip == 2
+    assert resolved.env_args["players"] == 1
+    assert n_envs == 1
+    assert make_provider.call_args.kwargs["rom_binding"] is binding
+    assert session.fps == 30.0
+    session.env.close()
+
+
+def test_recording_rejects_provider_constructor_arguments_at_the_dataset_boundary():
+    with pytest.raises(ValueError, match="unknown environment config"):
+        validate_provider_request({"rom_path": "/tmp/legacy.nes"})
+    with pytest.raises(ValueError, match="runtime owns"):
+        validate_provider_request({"env_args": {"num_envs": 2}})
 
 
 @pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg is not installed")

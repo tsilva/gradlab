@@ -2,9 +2,14 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any
 
 from rlab.artifacts import load_model_metadata
+from rlab.policy_registry import (
+    RUNTIME_POLICY_ALGORITHMS,
+    RuntimePolicyAlgorithmId,
+    resolve_policy_algorithm as resolve_registered_policy_algorithm,
+)
 from rlab.trusted_inputs import (
     ApprovedModelInput,
     approve_internal_model,
@@ -12,44 +17,14 @@ from rlab.trusted_inputs import (
 )
 
 
-PolicyAlgorithmId = Literal["ppo", "a2c", "jerk"]
-
-_BACKEND_ALGORITHMS: dict[str, PolicyAlgorithmId] = {
-    "sb3.ppo": "ppo",
-    "sb3.a2c": "a2c",
-    "rlab.jerk": "jerk",
-}
-_MODEL_CLASS_ALGORITHMS: dict[str, PolicyAlgorithmId] = {
-    "stable_baselines3.ppo.ppo.PPO": "ppo",
-    "rlab.task_advantage.PerTaskAdvantagePPO": "ppo",
-    "stable_baselines3.a2c.a2c.A2C": "a2c",
-    "rlab.jerk.JerkPolicy": "jerk",
-}
+PolicyAlgorithmId = RuntimePolicyAlgorithmId
 
 
 def resolve_policy_algorithm(metadata: Mapping[str, Any] | None) -> PolicyAlgorithmId:
-    metadata = metadata or {}
-    resolved: set[PolicyAlgorithmId] = set()
-    backend_id = str(metadata.get("training_backend_id") or "").strip()
-    if backend_id:
-        algorithm = _BACKEND_ALGORITHMS.get(backend_id)
-        if algorithm is None:
-            raise ValueError(f"unsupported checkpoint training backend: {backend_id}")
-        resolved.add(algorithm)
-    algorithm_id = str(metadata.get("algorithm_id") or "").strip()
-    if algorithm_id:
-        if algorithm_id not in {"ppo", "a2c", "jerk"}:
-            raise ValueError(f"unsupported checkpoint algorithm: {algorithm_id}")
-        resolved.add(algorithm_id)  # type: ignore[arg-type]
-    model_class = str(metadata.get("model_class") or "").strip()
-    if model_class:
-        algorithm = _MODEL_CLASS_ALGORITHMS.get(model_class)
-        if algorithm is None:
-            raise ValueError(f"unsupported checkpoint model class: {model_class}")
-        resolved.add(algorithm)
-    if len(resolved) > 1:
-        raise ValueError("checkpoint backend, algorithm, and model class metadata disagree")
-    return next(iter(resolved), "ppo")
+    return resolve_registered_policy_algorithm(
+        metadata,
+        allowed=RUNTIME_POLICY_ALGORITHMS,
+    )
 
 
 def load_policy_model(

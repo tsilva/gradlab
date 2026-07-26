@@ -230,7 +230,7 @@ def save_model_bundle(
     kind: str,
     step: int | None,
 ) -> Path:
-    model_path, metadata_path = install_model_bundle(
+    model_path = install_model_bundle(
         model_path,
         save_checkpoint=lambda path: model.save(str(path)),
         args=context.args,
@@ -246,7 +246,6 @@ def save_model_bundle(
         kind=kind,
         step=step,
         path=model_path,
-        metadata_path=metadata_path,
         sha256=None,
         eval_required=context.args.checkpoint_eval_backend != "none",
     )

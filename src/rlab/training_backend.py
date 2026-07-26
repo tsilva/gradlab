@@ -11,6 +11,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
+from rlab.policy_registry import TRAINING_BACKEND_MODULES
+
 
 class GracefulStopFlag:
     def __init__(self) -> None:
@@ -62,22 +64,16 @@ class TrainingBackend(Protocol):
     def run(self, context: BackendContext) -> None: ...
 
 
-_BACKEND_MODULES = {
-    "rlab.jerk": "rlab.training.jerk",
-    "sb3.a2c": "rlab.training.sb3",
-    "sb3.ppo": "rlab.training.sb3",
-}
-
 CHECKPOINT_EVAL_ACCEPTANCE = "checkpoint_eval"
 FIRST_TRAINING_SUCCESS_ACCEPTANCE = "first_training_success"
 
 
 def registered_training_backend_ids() -> tuple[str, ...]:
-    return tuple(sorted(_BACKEND_MODULES))
+    return tuple(sorted(TRAINING_BACKEND_MODULES))
 
 
 def _backend_module(backend_id: str):
-    module_name = _BACKEND_MODULES.get(backend_id)
+    module_name = TRAINING_BACKEND_MODULES.get(backend_id)
     if module_name is None:
         known = ", ".join(registered_training_backend_ids())
         raise ValueError(f"unknown training backend {backend_id!r}; known: {known}")

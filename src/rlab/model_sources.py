@@ -105,10 +105,6 @@ def add_model_source_args(
     if model_help is not None:
         model_kwargs["help"] = model_help
     parser.add_argument("--model", **model_kwargs)
-    parser.add_argument(
-        "--hf-file",
-        help="Checkpoint filename when a Hugging Face repo contains multiple ZIP files.",
-    )
     parser.add_argument("--hf-revision", help="Hugging Face revision. Defaults to main.")
     parser.add_argument("--hf-model-root", default="runs/hf_models")
     parser.add_argument("--public-model-root", default="runs/public_models")
@@ -259,7 +255,7 @@ def download_public_run_source(
     )
 
 
-def parse_huggingface_model_ref(value: str) -> tuple[str, str | None, str | None]:
+def parse_huggingface_model_ref(value: str) -> tuple[str, str | None]:
     text = str(value or "").strip()
     if text.startswith(HUGGINGFACE_MODEL_SCHEME):
         parts = [
@@ -267,24 +263,21 @@ def parse_huggingface_model_ref(value: str) -> tuple[str, str | None, str | None
             for part in text.removeprefix(HUGGINGFACE_MODEL_SCHEME).strip("/").split("/")
             if part
         ]
-        if len(parts) < 2:
+        if len(parts) != 2:
             raise ValueError(
                 f"expected Hugging Face model ref like hf://owner/repo, got {value!r}"
             )
         repo_name, separator, revision = parts[1].partition("@")
         if separator and not revision:
             raise ValueError(f"Hugging Face model ref has an empty revision: {value!r}")
-        return f"{parts[0]}/{repo_name}", "/".join(parts[2:]) or None, revision or None
+        return f"{parts[0]}/{repo_name}", revision or None
     parsed = urlparse(text)
     if parsed.scheme not in {"http", "https"} or parsed.netloc != HUGGINGFACE_MODEL_URL_HOST:
         raise ValueError(f"expected Hugging Face model ref, got {value!r}")
     parts = [unquote(part) for part in parsed.path.split("/") if part]
-    if len(parts) < 2:
+    if len(parts) != 2:
         raise ValueError(f"expected Hugging Face model URL with owner/repo, got {value!r}")
-    repo_id = "/".join(parts[:2])
-    if len(parts) >= 5 and parts[2] in {"blob", "raw", "resolve"}:
-        return repo_id, "/".join(parts[4:]), parts[3]
-    return repo_id, "/".join(parts[2:]) or None, None
+    return "/".join(parts), None
 
 
 def _download_huggingface_release_closure(
@@ -329,7 +322,6 @@ def download_huggingface_model_source(
     ref: str,
     *,
     root: Path,
-    filename: str | None = None,
     revision: str | None = None,
 ) -> ResolvedModelSource:
     try:
@@ -337,7 +329,7 @@ def download_huggingface_model_source(
     except ImportError as exc:
         raise SystemExit("huggingface-hub is required for hf:// model refs") from exc
     try:
-        repo_id, parsed_filename, parsed_revision = parse_huggingface_model_ref(ref)
+        repo_id, parsed_revision = parse_huggingface_model_ref(ref)
         requested_revision = revision or parsed_revision or "main"
         api = HfApi()
         immutable_revision = str(
@@ -356,69 +348,36 @@ def download_huggingface_model_source(
         raise SystemExit(f"Could not inspect Hugging Face model {ref}: {exc}") from exc
     target_dir = root / _safe_stem(f"{repo_id}@{immutable_revision}")
     target_dir.mkdir(parents=True, exist_ok=True)
-    if MODEL_FILENAME in repo_files:
-        for bundle_filename in (CHECKPOINT_FILENAME, MODEL_FILENAME, RECIPE_FILENAME):
-            if bundle_filename not in repo_files:
-                raise SystemExit(
-                    f"Hugging Face bundle {repo_id}@{immutable_revision} is missing "
-                    f"{bundle_filename}"
-                )
-            hf_hub_download(
-                repo_id=repo_id,
-                repo_type="model",
-                revision=immutable_revision,
-                filename=bundle_filename,
-                local_dir=target_dir,
-            )
-        _download_huggingface_release_closure(
-            repo_id=repo_id,
-            revision=immutable_revision,
-            repo_files=repo_files,
-            target_dir=target_dir,
-            hf_hub_download=hf_hub_download,
-        )
-        bundle = load_policy_bundle(
-            target_dir,
-            source=f"hf://{repo_id}",
-            revision=immutable_revision,
-        )
-        return ResolvedModelSource(
-            model_path=bundle.checkpoint_path,
-            artifact_name=f"hf://{repo_id}@{immutable_revision}",
-            checkpoint_step=bundle.model["checkpoint"].get("step"),
-            bundle=bundle,
-        )
-    selected = filename or parsed_filename
-    checkpoints = sorted(path for path in repo_files if path.endswith(".zip"))
-    if selected is None:
-        if len(checkpoints) != 1:
+    for bundle_filename in (CHECKPOINT_FILENAME, MODEL_FILENAME, RECIPE_FILENAME):
+        if bundle_filename not in repo_files:
             raise SystemExit(
-                f"Hugging Face repo {repo_id} must contain one ZIP or use --hf-file"
+                f"Hugging Face bundle {repo_id}@{immutable_revision} is missing "
+                f"{bundle_filename}"
             )
-        selected = checkpoints[0]
-    checkpoint_path = Path(
         hf_hub_download(
             repo_id=repo_id,
             repo_type="model",
             revision=immutable_revision,
-            filename=selected,
+            filename=bundle_filename,
             local_dir=target_dir,
         )
+    _download_huggingface_release_closure(
+        repo_id=repo_id,
+        revision=immutable_revision,
+        repo_files=repo_files,
+        target_dir=target_dir,
+        hf_hub_download=hf_hub_download,
     )
-    if "model_metadata.json" in repo_files:
-        metadata_path = Path(
-            hf_hub_download(
-                repo_id=repo_id,
-                repo_type="model",
-                revision=immutable_revision,
-                filename="model_metadata.json",
-                local_dir=target_dir,
-            )
-        )
-        shutil.copy2(metadata_path, checkpoint_path.with_suffix(".metadata.json"))
+    bundle = load_policy_bundle(
+        target_dir,
+        source=f"hf://{repo_id}",
+        revision=immutable_revision,
+    )
     return ResolvedModelSource(
-        model_path=checkpoint_path,
-        artifact_name=f"hf://{repo_id}@{immutable_revision}/{selected}",
+        model_path=bundle.checkpoint_path,
+        artifact_name=f"hf://{repo_id}@{immutable_revision}",
+        checkpoint_step=bundle.model["checkpoint"].get("step"),
+        bundle=bundle,
     )
 
 
@@ -427,7 +386,6 @@ def _download_model_ref(
     *,
     public_root: Path,
     hf_root: Path,
-    filename: str | None = None,
     revision: str | None = None,
 ) -> ResolvedModelSource:
     text = str(ref).strip()
@@ -437,7 +395,6 @@ def _download_model_ref(
         return download_huggingface_model_source(
             text,
             root=hf_root,
-            filename=filename,
             revision=revision,
         )
     raise ValueError(
@@ -475,7 +432,6 @@ def resolve_single_model_source(
                 getattr(args, "public_model_root", "runs/public_models")
             ),
             hf_root=Path(getattr(args, "hf_model_root", "runs/hf_models")),
-            filename=getattr(args, "hf_file", None),
             revision=getattr(args, "hf_revision", None),
         )
     model_path = Path(str(args.model))
@@ -505,7 +461,7 @@ def apply_model_source_defaults(
     apply_config_defaults(args, saved_config, parser_defaults, explicit_dests)
     if print_loaded_metadata:
         print(
-            f"loaded playback metadata: {source.model_path.with_suffix('.metadata.json')}",
+            f"loaded playback metadata: {source.bundle.model_path if source.bundle else source.model_path.with_suffix('.model.json')}",
             file=sys.stderr,
         )
     return True

@@ -2,8 +2,11 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  activeRunMetricColumns,
+  bestRunEfficiency,
   formatMetricValue,
   metricLabel,
+  rankRunItems,
   sortRunItems,
 } from "../../src/rlab/web_player/sources/browser.js";
 
@@ -36,4 +39,88 @@ test("run metric sorting respects direction and keeps missing values last", () =
       .map((item) => item.run_id),
     ["low", "high", "missing"],
   );
+});
+
+test("run efficiency prefers complete goal evaluation and follows its rank order", () => {
+  const primary = [
+    { metric: "leader/checkpoint/step", direction: "min" },
+    { metric: METRIC, direction: "max" },
+  ];
+  const fallback = [
+    {
+      metric: "train/outcome/success/window_100/rate/min",
+      direction: "max",
+    },
+    { metric: "train/global_step", direction: "min" },
+  ];
+  const items = [
+    {
+      run_id: "training-only",
+      recipe: "fast-training",
+      metrics: {
+        "train/outcome/success/window_100/rate/min": 1,
+        "train/global_step": 100,
+      },
+    },
+    {
+      run_id: "later-checkpoint",
+      recipe: "high-return",
+      metrics: {
+        "leader/checkpoint/step": 2_000,
+        [METRIC]: 500,
+      },
+    },
+    {
+      run_id: "earlier-checkpoint",
+      recipe: "sample-efficient",
+      metrics: {
+        "leader/checkpoint/step": 1_000,
+        [METRIC]: 100,
+      },
+    },
+  ];
+
+  assert.equal(activeRunMetricColumns(items, primary, fallback), primary);
+  assert.deepEqual(
+    rankRunItems(items, primary).map((item) => item.run_id),
+    ["earlier-checkpoint", "later-checkpoint", "training-only"],
+  );
+  const leader = bestRunEfficiency(items, primary, fallback);
+  assert.equal(leader.evidence, "evaluation");
+  assert.equal(leader.item.recipe, "sample-efficient");
+});
+
+test("run efficiency labels training fallback without evaluation evidence", () => {
+  const primary = [
+    { metric: "leader/checkpoint/step", direction: "min" },
+    { metric: METRIC, direction: "max" },
+  ];
+  const fallback = [
+    {
+      metric: "train/outcome/success/window_100/rate/min",
+      direction: "max",
+    },
+    { metric: "train/global_step", direction: "min" },
+  ];
+  const items = [
+    {
+      run_id: "slower",
+      metrics: {
+        "train/outcome/success/window_100/rate/min": 0.9,
+        "train/global_step": 2_000,
+      },
+    },
+    {
+      run_id: "faster",
+      metrics: {
+        "train/outcome/success/window_100/rate/min": 0.9,
+        "train/global_step": 1_000,
+      },
+    },
+  ];
+
+  assert.equal(activeRunMetricColumns(items, primary, fallback), fallback);
+  const leader = bestRunEfficiency(items, primary, fallback);
+  assert.equal(leader.evidence, "training");
+  assert.equal(leader.item.run_id, "faster");
 });

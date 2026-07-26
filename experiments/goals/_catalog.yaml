@@ -1,0 +1,11 @@
+schema_version: 1
+namespaces:
+  Breakout-Atari2600-v0:
+    project: Breakout-Atari2600-v0
+  SuperMarioBros-Nes-v0:
+    project: SuperMarioBros-Nes-v0
+    title_template: Sample-efficient SuperMarioBros-NES {goal_id} completion
+  alepy__mspacman:
+    project: MsPacman-Atari2600-v0
+  rlab__bandit:
+    project: Bandit-v0

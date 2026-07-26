@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -171,16 +170,11 @@ class EvalMetricTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp_dir:
             model_path = Path(tmp_dir) / "model.zip"
             model_path.write_bytes(b"model")
-            model_path.with_suffix(".metadata.json").write_text(
-                json.dumps(
-                    {
-                        "training_backend_id": "sb3.a2c",
-                        "algorithm_id": "a2c",
-                        "model_class": "stable_baselines3.a2c.a2c.A2C",
-                    }
-                ),
-                encoding="utf-8",
-            )
+            metadata = {
+                "training_backend_id": "sb3.a2c",
+                "algorithm_id": "a2c",
+                "model_class": "stable_baselines3.a2c.a2c.A2C",
+            }
 
             loaded = object()
             approved = MagicMock()
@@ -188,6 +182,7 @@ class EvalMetricTests(unittest.TestCase):
             approved.__exit__.return_value = None
             with (
                 patch("rlab.eval.stage_and_approve_model", return_value=approved),
+                patch("rlab.eval.load_model_metadata", return_value=metadata),
                 patch("rlab.eval.load_policy_model", return_value=loaded) as load_model,
             ):
                 model, policy = load_eval_model(model_path, device="cpu")

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import zipfile
 from types import SimpleNamespace
 from unittest import mock
 
@@ -10,7 +11,13 @@ import pytest
 
 from rlab.batch_runtime import EpisodeRecord
 from rlab.callbacks import MetricEarlyStopHelper
-from rlab.jerk import JerkPolicy, JerkSearch, RetainedSequence
+from rlab.jerk import (
+    JERK_POLICY_MEMBER,
+    ActionRun,
+    JerkPolicy,
+    JerkSearch,
+    RetainedSequence,
+)
 from rlab.metric_names import TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_MEAN
 from rlab.policy_models import load_policy_model, resolve_policy_algorithm
 from rlab.task_kernels import Outcome
@@ -227,23 +234,61 @@ def test_jerk_policy_round_trip_and_lane_resets(tmp_path) -> None:
     path = tmp_path / "model.zip"
     policy = JerkPolicy(
         action_names=ACTIONS,
-        action_sequence=(2, 4),
+        action_runs=(
+            ActionRun(2, 2),
+            ActionRun(2, 1),
+            ActionRun(4, 2),
+        ),
         fallback_action=0,
     )
     policy.save(path)
     loaded = JerkPolicy.load(path)
     loaded.bind_action_space(gym.spaces.Discrete(len(ACTIONS)))
 
+    assert loaded.action_runs == (ActionRun(2, 3), ActionRun(4, 2))
+    assert loaded.run_count == 2
+    assert loaded.step_count == 5
+    with zipfile.ZipFile(path) as archive:
+        payload = json.loads(archive.read(JERK_POLICY_MEMBER))
+    assert payload["schema_version"] == 2
+    assert payload["action_runs"] == [[2, 3], [4, 2]]
+    assert "action_sequence" not in payload
+
     obs = np.zeros((2, 1), dtype=np.float32)
+    assert loaded.predict(obs, deterministic=False)[0].tolist() == [2, 2]
+    assert loaded.predict(obs, deterministic=False)[0].tolist() == [2, 2]
     assert loaded.predict(obs, deterministic=False)[0].tolist() == [2, 2]
     assert loaded.predict(obs, deterministic=False)[0].tolist() == [4, 4]
     loaded.reset_lanes([True, False])
-    assert loaded.predict(obs, deterministic=False)[0].tolist() == [2, 0]
+    assert loaded.predict(obs, deterministic=False)[0].tolist() == [2, 4]
+
+
+def test_jerk_policy_loads_legacy_flat_action_sequence(tmp_path) -> None:
+    path = tmp_path / "legacy-model.zip"
+    payload = {
+        "schema_version": 1,
+        "algorithm_id": "jerk",
+        "model_class": "rlab.jerk.JerkPolicy",
+        "action_names": list(ACTIONS),
+        "action_sequence": [2, 2, 4],
+        "fallback_action": 0,
+    }
+    with zipfile.ZipFile(path, mode="w") as archive:
+        archive.writestr(JERK_POLICY_MEMBER, json.dumps(payload))
+
+    loaded = JerkPolicy.load(path)
+
+    assert loaded.action_runs == (ActionRun(2, 2), ActionRun(4, 1))
+    assert loaded.step_count == 3
 
 
 def test_generic_policy_loader_dispatches_jerk(tmp_path) -> None:
     path = tmp_path / "model.zip"
-    JerkPolicy(action_names=ACTIONS, action_sequence=(2,), fallback_action=0).save(path)
+    JerkPolicy(
+        action_names=ACTIONS,
+        action_runs=(ActionRun(2, 1),),
+        fallback_action=0,
+    ).save(path)
     metadata = {
         "training_backend_id": "rlab.jerk",
         "algorithm_id": "jerk",
@@ -251,9 +296,13 @@ def test_generic_policy_loader_dispatches_jerk(tmp_path) -> None:
     }
 
     assert resolve_policy_algorithm(metadata) == "jerk"
-    from rlab.trusted_inputs import approve_internal_model
+    from rlab.trusted_inputs import ApprovedModelInput
 
-    with approve_internal_model(path, execution_id="test-jerk") as approved:
+    approved = ApprovedModelInput(
+        staged=SimpleNamespace(model_path=path),
+        approval_hash="unit-test",
+    )
+    with mock.patch.object(approved, "verify"):
         loaded = load_policy_model(approved, device="cpu", metadata=metadata)
     assert isinstance(loaded, JerkPolicy)
 
@@ -348,9 +397,7 @@ def _jerk_context(tmp_path, *, timesteps: int):
 def _install_test_bundle(model_path, *, save_checkpoint, **_kwargs):
     model_path.parent.mkdir(parents=True, exist_ok=True)
     save_checkpoint(model_path)
-    metadata_path = model_path.with_suffix(".metadata.json")
-    metadata_path.write_text("{}\n", encoding="utf-8")
-    return model_path, metadata_path
+    return model_path
 
 
 def test_first_training_success_saves_playable_checkpoint_and_stops(tmp_path) -> None:

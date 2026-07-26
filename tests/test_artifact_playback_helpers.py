@@ -11,9 +11,10 @@ from rlab.artifacts import (
     load_model_metadata,
     load_playback_env_config,
     playback_env_config,
-    write_model_metadata,
 )
-from rlab.env import EnvConfig
+from rlab.env import EnvConfig, resolve_env_config
+from rlab.env_config import env_config_from_mapping
+from rlab.env_metadata import training_metadata
 from rlab.eval import build_parser as build_eval_parser
 from rlab.model_sources import (
     is_huggingface_model_ref,
@@ -32,38 +33,13 @@ from rlab.play_termination import (
     termination_condition_payload,
     with_enabled_termination_conditions,
 )
-
-
-def _metadata_args() -> argparse.Namespace:
-    return argparse.Namespace(
-        rom_asset_manifest=None,
-        run_name="run",
-        run_description="test",
-        wandb_run_id="rlab-" + "a" * 32,
-        wandb_project="Game-v0",
-        campaign_id="",
-        game_family="Game",
-        goal_slug="game/goal",
-        goal_path="experiments/goals/game/goal/_goal.yaml",
-        goal_sha256="b" * 64,
-        goal_contract_sha256="c" * 64,
-        effective_goal_contract_sha256="c" * 64,
-        reward_program_kind="task",
-        reward_program_revision="1",
-        reward_shape="default",
-        reward_shape_sha256="d" * 64,
-        reward_shape_is_default=True,
-        recipe_slug="ppo",
-        recipe_path="recipe.yaml",
-        recipe_sha256="e" * 64,
-        runtime_image_ref="docker:example/image@sha256:" + "f" * 64,
-        seed=123,
-        source_sha="1" * 40,
-        training_backend_id="sb3.ppo",
-        training_backend_config_hash="2" * 64,
-        algorithm_id="ppo",
-        model_class="stable_baselines3.ppo.ppo.PPO",
-    )
+from rlab.policy_bundle import (
+    build_model_document,
+    build_recipe_document,
+    write_canonical_json,
+)
+from rlab.recipe_documents import compose_train_document
+from rlab.training_backend import training_backend_config_hash
 
 
 def test_checkpoint_step_is_derived_from_learner_filename() -> None:
@@ -74,17 +50,43 @@ def test_checkpoint_step_is_derived_from_learner_filename() -> None:
 def test_model_metadata_round_trips_playback_environment(tmp_path: Path) -> None:
     model = tmp_path / "model_250000_steps.zip"
     model.write_bytes(b"checkpoint")
-    config = EnvConfig(env_provider="rlab", game="Bandit-v0", state=None)
-
-    path = write_model_metadata(
-        model,
-        _metadata_args(),
-        config,
-        "checkpoint",
-        checkpoint_step_value=250_000,
+    materialized = compose_train_document(
+        Path("experiments/goals/rlab__bandit/_goal.yaml"),
+        Path("experiments/goals/rlab__bandit/recipes/ppo.yaml"),
+    )
+    recipe_document = build_recipe_document(
+        materialized,
+        repo_root=Path.cwd(),
+        source_commit="a" * 40,
+        run_description="Versioned playback metadata regression.",
+        seed=123,
+        runtime_image_ref="docker:example/image@sha256:" + "f" * 64,
+    )
+    train_config = recipe_document["recipe"]["train_config"]
+    config = resolve_env_config(env_config_from_mapping(train_config))
+    recipe_path = write_canonical_json(
+        model.with_suffix(".recipe.json"),
+        recipe_document,
+    )
+    write_canonical_json(
+        model.with_suffix(".model.json"),
+        build_model_document(
+            model,
+            recipe_path,
+            {
+                "kind": "checkpoint",
+                "checkpoint_step": 250_000,
+                "algorithm_id": "ppo",
+                "model_class": "stable_baselines3.ppo.ppo.PPO",
+                "training_backend_id": "sb3.ppo",
+                "training_backend_config_hash": training_backend_config_hash(
+                    train_config
+                ),
+                "training_metadata": training_metadata(config),
+            },
+        ),
     )
 
-    assert path is not None
     assert load_model_metadata(model)["checkpoint_step"] == 250_000
     assert load_playback_env_config(model).game == "Bandit-v0"
 
@@ -241,12 +243,13 @@ def test_public_source_parsers_exclude_wandb_artifacts() -> None:
 
 
 def test_huggingface_refs_parse_and_resolve_from_cli_namespace() -> None:
-    assert is_huggingface_model_ref("hf://owner/repo@deadbeef/model.zip")
-    assert parse_huggingface_model_ref("hf://owner/repo@deadbeef/model.zip") == (
+    assert is_huggingface_model_ref("hf://owner/repo@deadbeef")
+    assert parse_huggingface_model_ref("hf://owner/repo@deadbeef") == (
         "owner/repo",
-        "model.zip",
         "deadbeef",
     )
+    with pytest.raises(ValueError, match="owner/repo"):
+        parse_huggingface_model_ref("hf://owner/repo/model.zip")
     args = argparse.Namespace(
         model_ref="hf://owner/repo",
         artifact_ref=None,

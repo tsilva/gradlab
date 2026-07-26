@@ -229,7 +229,7 @@ def add_play_source_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--model",
         default=None,
-        help="Local rlab policy path. The artifact must have a .metadata.json sidecar.",
+        help="Local rlab policy path. The artifact must have model.json and recipe.json sidecars.",
     )
     parser.add_argument(
         "--run",
@@ -253,7 +253,6 @@ def add_play_source_args(parser: argparse.ArgumentParser) -> None:
         help="Local cache for public run checkpoints.",
     )
     parser.set_defaults(
-        hf_file=None,
         hf_revision=None,
         hf_model_root="runs/hf_models",
     )
@@ -889,9 +888,11 @@ def main(argv: list[str] | None = None) -> int:
     from rlab.play_runtime import PlaySourceSpec, PlaybackLoader
     from rlab.play_web import run_web_player_application
 
+    repo_root = Path(__file__).resolve().parents[2]
     catalog = PlayCatalog(
         public_models_base_url=args.public_models_base_url,
-        repo_root=Path(__file__).resolve().parents[2],
+        repo_root=repo_root,
+        cache_path=PlayCatalog.default_cache_path(repo_root),
     )
     initial_route: dict[str, object] = {
         "level": "projects",

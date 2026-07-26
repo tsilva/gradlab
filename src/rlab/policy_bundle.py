@@ -132,7 +132,6 @@ class _PolicyDocument(BoundaryModel):
 
 
 class _ModelProvenanceDocument(BoundaryModel):
-    metadata_version: Any = None
     kind: Any = None
     run_name: Any = None
     run_description: Any = None
@@ -156,7 +155,6 @@ class _ModelProvenanceDocument(BoundaryModel):
     seed: Any = None
     repo_git_commit: Any = None
     training_metadata: Any = None
-    training_metadata_hash: Any = None
     attempt_id: Any = None
     compute_target: Any = None
     dstack_task: Any = None

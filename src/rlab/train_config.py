@@ -997,6 +997,12 @@ TRAIN_CONFIG_FIELDS: tuple[TrainConfigField, ...] = (
         help="Hydra/OmegaConf dotlist overrides applied to the checked-in recipe.",
     ),
     _field(
+        "recipe_variant_id",
+        default="",
+        cli_exposed=False,
+        help="Stable identity of the base recipe or canonical launch-time override set.",
+    ),
+    _field(
         "wandb_run_id",
         default="",
         cli_exposed=False,

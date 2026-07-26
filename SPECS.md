@@ -48,6 +48,7 @@ rlab is a reproducible reinforcement-learning workbench for game-agent researche
 
 - Playback must support local and remote artifacts under the evaluation contract, keep concurrent viewers on one trajectory, and refresh mutable references when their content changes.
 - Bare playback must open a searchable repository-backed project-to-goal selection flow followed by W&B-backed run and public-checkpoint selection; project, goal, run, and checkpoint selections must have hierarchical resource routes with browser-history navigation; checkpoint lists must show available goal-required acceptance results without fabricating unavailable partial evidence; a less-specific CLI W&B reference must preselect its matching level, while an exact CLI checkpoint source may enter playback directly.
+- Run-selection views must visibly distinguish checked-in recipes from launch-time configuration overrides and make exact override values searchable without requiring a new checked-in recipe.
 - Interactive playback must provide independently arrangeable, synchronized views of game frames, policy inputs and decisions, transition facts, and bounded histories without inspection changing the trajectory or policy randomness.
 - Human control must preserve declared action semantics, fail safe when focus or control is lost, and keep all human-intervened results ineligible for acceptance or promotion.
 

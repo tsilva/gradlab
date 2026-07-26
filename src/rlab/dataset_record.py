@@ -17,6 +17,7 @@ from typing import Any
 import numpy as np
 
 from rlab import __version__
+from rlab.artifacts import load_model_metadata
 from rlab.file_utils import atomic_write_json, fsync_path, fsync_tree
 from rlab.dataset_contract import (
     COLLECTOR_ARTIFACT_DIR,
@@ -55,6 +56,8 @@ from rlab.model_sources import (
     is_public_checkpoint_manifest_ref,
 )
 from rlab.policy_models import load_policy_model
+from rlab.policy_bundle import load_recipe_document
+from rlab.policy_models import resolve_policy_algorithm
 from rlab.trusted_inputs import ApprovedModelInput, stage_and_approve_model
 
 
@@ -573,11 +576,9 @@ def _resolve_deterministic(args: Any, approved: ApprovedModelInput | None) -> bo
     for path in candidates:
         if not path.is_file():
             continue
-        try:
-            document = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as exc:
-            raise ValueError(f"invalid approved recipe document: {path.name}") from exc
-        evaluation = document.get("eval", {}) if isinstance(document, Mapping) else {}
+        document = load_recipe_document(path)
+        recipe = document["recipe"]
+        evaluation = recipe.get("eval", {}) if isinstance(recipe, Mapping) else {}
         sampling = str(evaluation.get("action_sampling") or "").strip().lower()
         if sampling:
             if sampling not in {"deterministic", "stochastic"}:
@@ -633,11 +634,13 @@ def _record_session(
     manifest_path = reservation.manifest_path
     manifest = reservation.manifest
     deterministic = _resolve_deterministic(args, approved)
-    model = (
-        load_policy_model(approved, device="auto", metadata={"algorithm_id": "ppo"})
-        if approved is not None
-        else None
-    )
+    model = None
+    if approved is not None:
+        metadata = load_model_metadata(approved.model_path)
+        algorithm_id = resolve_policy_algorithm(metadata)
+        if algorithm_id != "ppo":
+            raise ValueError(f"--agent ppo requires a PPO checkpoint, got {algorithm_id}")
+        model = load_policy_model(approved, device="auto", metadata=metadata)
     session = create_provider_session(args.provider, args.env_id, args.env_config)
     if args.fps is not None:
         session.fps = float(args.fps)

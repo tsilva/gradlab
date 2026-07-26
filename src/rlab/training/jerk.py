@@ -187,7 +187,7 @@ def _save_policy_bundle(
     kind: str,
     step: int,
 ) -> Path:
-    model_path, metadata_path = install_model_bundle(
+    model_path = install_model_bundle(
         model_path,
         save_checkpoint=lambda path: search.policy().save(path),
         args=context.args,
@@ -200,7 +200,6 @@ def _save_policy_bundle(
         kind=kind,
         step=step,
         path=model_path,
-        metadata_path=metadata_path,
         sha256=None,
         eval_required=context.args.checkpoint_eval_backend != "none",
     )

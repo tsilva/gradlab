@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
@@ -46,11 +47,15 @@ class FakeApi:
                 config={
                     "goal_slug": "Mario/Level1-1",
                     "recipe_slug": "ppo",
+                    "recipe_sha256": "f" * 64,
                     "seed": 3,
                 },
                 summary={
+                    "leader/checkpoint/step": 1_500_000,
+                    "eval/full/episode/return/mean": 321.25,
                     "train/outcome/success/window_100/rate/min": 0.75,
                     "train/episode/return/shaped/from/target/mean": 123.5,
+                    "train/global_step": 2_000_000,
                 },
                 notes="accepted",
                 created_at="2026-01-02T00:00:00Z",
@@ -92,6 +97,52 @@ def write_goal_catalog(repo_root: Path) -> None:
     (recipes / "ppo.yaml").write_text("defaults: [_self_]\n", encoding="utf-8")
 
 
+def write_indexed_goal_catalog(repo_root: Path) -> None:
+    goals_root = repo_root / "experiments" / "goals"
+    for namespace, goal_id, title in (
+        ("Mario", "Level1-1", "Mario Level 1-1 completion"),
+        ("Atari", "Breakout", "Atari Breakout completion"),
+    ):
+        goal_root = goals_root / namespace / goal_id
+        recipes = goal_root / "recipes"
+        recipes.mkdir(parents=True)
+        (goal_root / "_goal.yaml").write_text(
+            "\n".join(
+                (
+                    "defaults:",
+                    "- _self_",
+                    f"goal_id: {goal_id}",
+                    f"title: {title}",
+                    "objective:",
+                    "  rank:",
+                    "  - min(leader/checkpoint/step)",
+                    "train:",
+                    "  environment:",
+                    "    env_provider: gymnasium",
+                    "    env_config:",
+                    f"      game: {namespace}",
+                    "",
+                )
+            ),
+            encoding="utf-8",
+        )
+        (recipes / "ppo.yaml").write_text("defaults: [_self_]\n", encoding="utf-8")
+    (goals_root / "_catalog.yaml").write_text(
+        "\n".join(
+            (
+                "schema_version: 1",
+                "namespaces:",
+                "  Atari:",
+                "    project: Atari",
+                "  Mario:",
+                "    project: Mario",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+
+
 def checkpoint_row(*, step: int, digest: str, purpose: str) -> dict[str, object]:
     identifier = checkpoint_id(step=step, sha256=digest)
     root = f"https://models.example/runs/{RUN_ID}/checkpoints/{identifier}"
@@ -129,9 +180,7 @@ def test_wandb_urls_preselect_projects_runs_or_checkpoints() -> None:
 
 
 def test_parse_wandb_location_ignores_query_and_returns_run() -> None:
-    location = parse_wandb_location(
-        f"https://wandb.ai/research/Mario/runs/{RUN_ID}?nw=user"
-    )
+    location = parse_wandb_location(f"https://wandb.ai/research/Mario/runs/{RUN_ID}?nw=user")
 
     assert location is not None
     assert (location.entity, location.project, location.run_id) == (
@@ -166,6 +215,104 @@ def test_catalog_default_entity_does_not_initialize_wandb(
     assert catalog.default_entity() == "research"
 
 
+def test_catalog_default_entity_loads_operator_configuration_once(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    calls = 0
+
+    def load_environment() -> None:
+        nonlocal calls
+        calls += 1
+
+    monkeypatch.delenv("WANDB_ENTITY", raising=False)
+    monkeypatch.setattr("rlab.play_catalog.load_wandb_env", load_environment)
+    monkeypatch.setattr("rlab.play_catalog.wandb_entity_from_env", lambda: "research")
+    catalog = PlayCatalog(repo_root=tmp_path)
+
+    assert catalog.default_entity() == "research"
+    assert catalog.default_entity() == "research"
+    assert calls == 1
+
+
+def test_indexed_project_listing_does_not_parse_goal_contracts_and_scopes_goal_reads(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    write_indexed_goal_catalog(tmp_path)
+    from rlab import play_catalog
+
+    loaded_paths: list[Path] = []
+    real_loader = play_catalog.load_mapping_document
+
+    def tracked_loader(path: Path, *, label: str | None = None) -> dict[str, Any]:
+        loaded_paths.append(path)
+        return real_loader(path, label=label)
+
+    monkeypatch.setattr(play_catalog, "load_mapping_document", tracked_loader)
+    monkeypatch.setattr(
+        play_catalog,
+        "load_goal_contract",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("browse-only catalog must not compose goal contracts")
+        ),
+    )
+    catalog = PlayCatalog(repo_root=tmp_path)
+
+    projects = catalog.projects(entity="research")
+    assert [item["name"] for item in projects.items] == ["Atari", "Mario"]
+    assert all(path.name != "_goal.yaml" for path in loaded_paths)
+
+    goals = catalog.goals(entity="research", project="Mario")
+    assert [item["goal_id"] for item in goals.items] == ["Level1-1"]
+    parsed_goals = [path for path in loaded_paths if path.name == "_goal.yaml"]
+    assert parsed_goals == [
+        tmp_path / "experiments" / "goals" / "Mario" / "Level1-1" / "_goal.yaml"
+    ]
+
+
+def test_indexed_goal_metadata_persists_across_catalog_instances(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    write_indexed_goal_catalog(tmp_path)
+    cache_path = tmp_path / "cache" / "catalog.json"
+    first = PlayCatalog(repo_root=tmp_path, cache_path=cache_path)
+    assert first.goals(entity="research", project="Mario").items
+    assert cache_path.is_file()
+
+    from rlab import play_catalog
+
+    real_loader = play_catalog.load_mapping_document
+
+    def index_only_loader(path: Path, *, label: str | None = None) -> dict[str, Any]:
+        if path.name == "_goal.yaml":
+            raise AssertionError("unchanged goal metadata must come from persistent cache")
+        return real_loader(path, label=label)
+
+    monkeypatch.setattr(play_catalog, "load_mapping_document", index_only_loader)
+    second = PlayCatalog(repo_root=tmp_path, cache_path=cache_path)
+
+    goals = second.goals(entity="research", project="Mario")
+    assert [item["title"] for item in goals.items] == ["Mario Level 1-1 completion"]
+
+
+def test_checked_in_browse_catalog_matches_composed_goal_contracts() -> None:
+    repo_root = Path(__file__).parents[1]
+    catalog = PlayCatalog(repo_root=repo_root)
+
+    for project in catalog.projects(entity="research").items:
+        for goal in catalog.goals(
+            entity="research",
+            project=str(project["name"]),
+        ).items:
+            detailed = catalog._repository_goal(
+                project=str(project["name"]),
+                goal_id=str(goal["goal_id"]),
+            )
+            assert detailed.title == goal["title"]
+
+
 def test_catalog_uses_repository_projects_and_goals_before_querying_wandb(
     tmp_path: Path,
 ) -> None:
@@ -193,7 +340,18 @@ def test_catalog_uses_repository_projects_and_goals_before_querying_wandb(
     assert goals.items[0]["goal_path"].endswith("/Level1-1/_goal.yaml")
     assert [item["run_id"] for item in runs.items] == [RUN_ID]
     assert runs.items[0]["recipe"] == "ppo"
+    assert runs.items[0]["recipe_sha256"] == "f" * 64
     assert runs.metric_columns == (
+        {
+            "metric": "leader/checkpoint/step",
+            "direction": "min",
+        },
+        {
+            "metric": "eval/full/episode/return/mean",
+            "direction": "max",
+        },
+    )
+    assert runs.fallback_metric_columns == (
         {
             "metric": "train/outcome/success/window_100/rate/min",
             "direction": "max",
@@ -202,10 +360,17 @@ def test_catalog_uses_repository_projects_and_goals_before_querying_wandb(
             "metric": "train/episode/return/shaped/from/target/mean",
             "direction": "max",
         },
+        {
+            "metric": "train/global_step",
+            "direction": "min",
+        },
     )
     assert runs.items[0]["metrics"] == {
+        "leader/checkpoint/step": 1_500_000.0,
+        "eval/full/episode/return/mean": 321.25,
         "train/outcome/success/window_100/rate/min": 0.75,
         "train/episode/return/shaped/from/target/mean": 123.5,
+        "train/global_step": 2_000_000.0,
     }
     assert catalog.run_goal(entity="research", project="Mario", run_id=RUN_ID) == "Level1-1"
 

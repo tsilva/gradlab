@@ -11,6 +11,7 @@ import torch
 from stable_baselines3 import A2C, PPO
 
 from rlab.bandit_env import BanditVectorEnv
+from rlab.artifacts import load_model_metadata
 from rlab.env import EnvConfig, make_vec_envs
 from rlab.env_registry import resolve_env_id, resolve_env_provider
 from rlab.metric_store import MetricStore
@@ -251,8 +252,7 @@ def test_bandit_runs_through_sb3_backend_and_records_backend_metadata(
     run_dir = tmp_path / "backend-smoke"
     assert (run_dir / "learner_ready.json").is_file()
     assert (run_dir / "final_model.zip").is_file()
-    metadata = json.loads((run_dir / "final_model.metadata.json").read_text())
-    assert metadata["metadata_version"] == 7
+    metadata = load_model_metadata(run_dir / "final_model.zip")
     assert metadata["training_backend_id"] == "sb3.ppo"
     assert len(metadata["training_backend_config_hash"]) == 64
 
@@ -297,7 +297,7 @@ def test_bandit_runs_through_a2c_backend_and_round_trips_checkpoint(
 
     run_dir = tmp_path / "a2c-backend-smoke"
     model_path = run_dir / "final_model.zip"
-    metadata = json.loads((run_dir / "final_model.metadata.json").read_text())
+    metadata = load_model_metadata(model_path)
     assert metadata["training_backend_id"] == "sb3.a2c"
     assert metadata["algorithm_id"] == "a2c"
     assert metadata["model_class"] == "stable_baselines3.a2c.a2c.A2C"

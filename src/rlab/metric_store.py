@@ -23,7 +23,6 @@ CREATE TABLE IF NOT EXISTS checkpoints (
   kind TEXT NOT NULL,
   step INTEGER,
   path TEXT NOT NULL UNIQUE,
-  metadata_path TEXT,
   sha256 TEXT,
   eval_required INTEGER NOT NULL,
   upload_status TEXT NOT NULL DEFAULT 'pending',
@@ -450,7 +449,6 @@ class MetricStore(SqliteStore):
         kind: str,
         step: int | None,
         path: Path | str,
-        metadata_path: Path | str | None,
         sha256: str | None = None,
         created_at: float | None = None,
         eval_required: bool = True,
@@ -461,9 +459,6 @@ class MetricStore(SqliteStore):
             "kind": str(kind),
             "step": step,
             "path": str(path),
-            "metadata_path": (
-                str(metadata_path) if metadata_path is not None else None
-            ),
             "sha256": sha256,
             "eval_required": int(bool(eval_required)),
         }
@@ -476,16 +471,15 @@ class MetricStore(SqliteStore):
                 cursor = connection.execute(
                     """
                     INSERT INTO checkpoints
-                      (run_name, kind, step, path, metadata_path, sha256,
+                      (run_name, kind, step, path, sha256,
                        eval_required, upload_status, created_at, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?)
                     """,
                     (
                         values["run_name"],
                         values["kind"],
                         values["step"],
                         values["path"],
-                        values["metadata_path"],
                         values["sha256"],
                         values["eval_required"],
                         now,
@@ -497,7 +491,6 @@ class MetricStore(SqliteStore):
                 "run_name",
                 "kind",
                 "step",
-                "metadata_path",
                 "eval_required",
             ):
                 if row[name] != values[name]:

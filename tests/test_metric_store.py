@@ -97,7 +97,6 @@ def test_checkpoint_rows_are_idempotent_and_record_eval_policy() -> None:
             kind="checkpoint",
             step=100,
             path=checkpoint,
-            metadata_path=None,
             eval_required=True,
         )
         replay = store.record_checkpoint(
@@ -105,7 +104,6 @@ def test_checkpoint_rows_are_idempotent_and_record_eval_policy() -> None:
             kind="checkpoint",
             step=100,
             path=checkpoint,
-            metadata_path=None,
             eval_required=True,
         )
         assert replay == first
@@ -116,7 +114,6 @@ def test_checkpoint_rows_are_idempotent_and_record_eval_policy() -> None:
                 kind="checkpoint",
                 step=100,
                 path=checkpoint,
-                metadata_path=None,
                 eval_required=False,
             )
 
@@ -133,7 +130,6 @@ def test_checkpoint_publication_status_is_local_delivery_state() -> None:
             kind="final",
             step=200,
             path=checkpoint,
-            metadata_path=None,
             eval_required=True,
         )
         store.mark_checkpoint_upload_failed(checkpoint_id, "network")

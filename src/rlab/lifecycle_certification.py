@@ -516,7 +516,6 @@ class CertificationFixture:
             kind=kind,
             step=step,
             path=model_path,
-            metadata_path=model_document_path(model_path),
             eval_required=True,
         )
 

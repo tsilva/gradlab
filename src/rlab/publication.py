@@ -36,6 +36,7 @@ from rlab.policy_bundle import (
     model_document_as_metadata,
     preflight_document,
 )
+from rlab.policy_registry import ALGORITHM_MODEL_CLASSES
 
 
 HUGGINGFACE_NAMESPACE = "tsilva"
@@ -80,19 +81,6 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 """
-
-ALGORITHM_MODEL_CLASSES: dict[str, frozenset[str]] = {
-    "jerk": frozenset({"rlab.jerk.JerkPolicy"}),
-    "ppo": frozenset(
-        {
-            "stable_baselines3.ppo.ppo.PPO",
-            "rlab.task_advantage.PerTaskAdvantagePPO",
-        }
-    ),
-    "a2c": frozenset({"stable_baselines3.a2c.a2c.A2C"}),
-    "dqn": frozenset({"stable_baselines3.dqn.dqn.DQN"}),
-    "recurrent-ppo": frozenset({"sb3_contrib.ppo_recurrent.ppo_recurrent.RecurrentPPO"}),
-}
 
 NonEmptyText = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
 Sha256 = Annotated[
@@ -725,7 +713,7 @@ def render_model_card(
         "trained and evaluated with"
     )
     model_file_description = (
-        "Portable rlab JERK action-sequence policy"
+        "Portable rlab JERK action-run policy"
         if is_jerk
         else "Stable-Baselines3 policy checkpoint"
     )
