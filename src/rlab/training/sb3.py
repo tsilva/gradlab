@@ -195,7 +195,7 @@ def _ppo_model_class(config: Mapping[str, Any]) -> str:
     )
 
 
-_BACKENDS = {
+BACKENDS = {
     "sb3.ppo": OnPolicyBackend(
         "sb3.ppo",
         PPO_DEFAULT_CONFIG,
@@ -211,38 +211,3 @@ _BACKENDS = {
         "stable_baselines3.a2c.a2c.A2C",
     ),
 }
-
-
-def _backend(backend_id: str) -> OnPolicyBackend:
-    try:
-        return _BACKENDS[backend_id]
-    except KeyError as exc:
-        raise ValueError(f"SB3 backend module does not define {backend_id!r}") from exc
-
-
-def normalize_config(
-    backend_id: str,
-    config: Mapping[str, Any],
-    *,
-    label: str,
-) -> dict[str, Any]:
-    return _backend(backend_id).normalize_config(config, label=label)
-
-
-def backend_for_id(backend_id: str) -> OnPolicyBackend:
-    return _backend(backend_id)
-
-
-def contract_payload(backend_id: str) -> dict[str, Any]:
-    return _backend(backend_id).contract_payload(backend_id)
-
-
-def state_archive_priority_metrics(backend_id: str) -> tuple[str, ...]:
-    return _backend(backend_id).state_archive_priority_metrics(backend_id)
-
-
-def runtime_metadata(
-    backend_id: str,
-    backend_config: Mapping[str, Any],
-) -> Mapping[str, str]:
-    return _backend(backend_id).runtime_metadata(backend_id, backend_config)

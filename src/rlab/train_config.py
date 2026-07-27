@@ -10,8 +10,7 @@ from typing import Any, Literal
 from rlab.env import EnvConfig
 from rlab.metric_names import METRICS_SCHEMA_VERSION
 from rlab.modal_eval_protocol import SEED_PROTOCOL
-from rlab.provider_config import provider_num_envs
-from rlab.seeds import DEFAULT_TRAIN_SEED, EVAL_SEED_START, validate_training_seed
+from rlab.seeds import DEFAULT_TRAIN_SEED, EVAL_SEED_START
 from rlab.validation import normalize_obs_crop
 
 
@@ -163,56 +162,12 @@ def load_materialized_train_config(path: Path) -> dict[str, Any]:
     payload = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(payload, dict):
         raise ValueError(f"train config file must contain a JSON object: {path}")
+    defaults = {field.dest: _env_default(EnvConfig(), field) for field in TRAIN_CONFIG_FIELDS}
     return validate_and_normalize_train_config(
-        payload,
+        {**defaults, **payload},
         label=f"train config file {path}",
         required_keys=("training_backend",),
     )
-
-
-def materialized_train_args(path: Path) -> argparse.Namespace:
-    """Load supervisor/runtime JSON without routing it through CLI parsing."""
-
-    payload = load_materialized_train_config(path)
-    defaults = {field.dest: _env_default(EnvConfig(), field) for field in TRAIN_CONFIG_FIELDS}
-    defaults.update(payload)
-    args = argparse.Namespace(**defaults)
-    apply_training_backend_arg_view(args, payload)
-    if isinstance(defaults.get("wandb_tags"), list | tuple):
-        args.wandb_tags = ",".join(str(tag) for tag in defaults["wandb_tags"])
-    args.train_config_json = path
-    args._train_config_json_fields = set(payload)
-    args._explicit_train_arg_dests = set()
-    args._materialized_train_config = payload
-    validate_training_seed(
-        args.seed,
-        label="train_config.seed",
-        seed_span=provider_num_envs(args, explicit_n_envs=payload.get("n_envs")),
-    )
-    return args
-
-
-def apply_training_backend_arg_view(
-    args: argparse.Namespace,
-    payload: Mapping[str, Any],
-) -> None:
-    from rlab.training_backend import (
-        training_backend_config,
-        training_backend_config_hash,
-        training_backend_id,
-    )
-
-    backend_config = training_backend_config(payload)
-    collisions = sorted(set(vars(args)) & set(backend_config))
-    if collisions:
-        raise ValueError(
-            "training_backend.config collides with common train fields: " + ", ".join(collisions)
-        )
-    for key, value in backend_config.items():
-        setattr(args, key, value)
-    args.training_backend_id = training_backend_id(payload)
-    args.training_backend_config = backend_config
-    args.training_backend_config_hash = training_backend_config_hash(payload)
 
 
 def train_config_field_for_key(key: str) -> TrainConfigField | None:

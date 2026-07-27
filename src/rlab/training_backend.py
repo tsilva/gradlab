@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import argparse
 import hashlib
 import importlib
 import json
@@ -9,9 +8,9 @@ import time
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Protocol, cast
 
-from rlab.policy_registry import TRAINING_BACKEND_MODULES
+from rlab.policy_registry import TRAINING_BACKEND_SPECS
 
 
 class GracefulStopFlag:
@@ -26,8 +25,7 @@ class GracefulStopFlag:
 
 @dataclass
 class BackendContext:
-    train_config: Mapping[str, Any]
-    args: argparse.Namespace
+    train_config: dict[str, Any]
     environment: Any
     run_dir: Path
     checkpoint_dir: Path
@@ -35,6 +33,10 @@ class BackendContext:
     wandb_enabled: bool
     stop_flag: Any
     rom_binding: Any | None
+
+    @property
+    def backend_config(self) -> dict[str, Any]:
+        return training_backend_config(self.train_config)
 
     def mark_ready(self) -> Path:
         path = self.run_dir / "learner_ready.json"
@@ -55,6 +57,15 @@ class BackendContext:
 
 
 class TrainingBackend(Protocol):
+    backend_id: str
+
+    def normalize_config(
+        self,
+        config: Mapping[str, Any],
+        *,
+        label: str,
+    ) -> dict[str, Any]: ...
+
     def validate(
         self,
         common_config: Mapping[str, Any],
@@ -63,26 +74,38 @@ class TrainingBackend(Protocol):
 
     def run(self, context: BackendContext) -> None: ...
 
+    def acceptance_mode(self, backend_config: Mapping[str, Any]) -> str: ...
+
+    def contract_payload(self) -> dict[str, Any]: ...
+
+    def state_archive_priority_metrics(self) -> tuple[str, ...]: ...
+
+    def runtime_metadata(self, backend_config: Mapping[str, Any]) -> Mapping[str, str]: ...
+
 
 CHECKPOINT_EVAL_ACCEPTANCE = "checkpoint_eval"
 FIRST_TRAINING_SUCCESS_ACCEPTANCE = "first_training_success"
 
 
 def registered_training_backend_ids() -> tuple[str, ...]:
-    return tuple(sorted(TRAINING_BACKEND_MODULES))
-
-
-def _backend_module(backend_id: str):
-    module_name = TRAINING_BACKEND_MODULES.get(backend_id)
-    if module_name is None:
-        known = ", ".join(registered_training_backend_ids())
-        raise ValueError(f"unknown training backend {backend_id!r}; known: {known}")
-    return importlib.import_module(module_name)
+    return tuple(sorted(TRAINING_BACKEND_SPECS))
 
 
 def load_training_backend(backend_id: str) -> TrainingBackend:
-    module = _backend_module(backend_id)
-    return module.backend_for_id(backend_id)
+    spec = TRAINING_BACKEND_SPECS.get(backend_id)
+    if spec is None:
+        known = ", ".join(registered_training_backend_ids())
+        raise ValueError(f"unknown training backend {backend_id!r}; known: {known}")
+    module = importlib.import_module(spec.module_name)
+    backends = getattr(module, "BACKENDS", None)
+    if not isinstance(backends, Mapping) or backend_id not in backends:
+        raise RuntimeError(f"{spec.module_name} does not register backend {backend_id!r}")
+    backend = cast(TrainingBackend, backends[backend_id])
+    if backend.backend_id != backend_id:
+        raise RuntimeError(
+            f"{spec.module_name} registered backend {backend.backend_id!r} as {backend_id!r}"
+        )
+    return backend
 
 
 def training_backend_id(config: Mapping[str, Any]) -> str:
@@ -110,10 +133,7 @@ def training_backend_acceptance_mode(config: Mapping[str, Any]) -> str:
 
     backend_id = training_backend_id(config)
     backend_config = training_backend_config(config)
-    resolver = getattr(_backend_module(backend_id), "acceptance_mode", None)
-    if resolver is None:
-        return CHECKPOINT_EVAL_ACCEPTANCE
-    mode = str(resolver(backend_id, backend_config)).strip()
+    mode = str(load_training_backend(backend_id).acceptance_mode(backend_config)).strip()
     return mode or CHECKPOINT_EVAL_ACCEPTANCE
 
 
@@ -138,29 +158,25 @@ def normalize_training_backend(
     backend_config = value.get("config", {})
     if not isinstance(backend_config, Mapping):
         raise ValueError(f"{label}.config must be an object")
-    module = _backend_module(backend_id)
-    normalized = module.normalize_config(
-        backend_id,
+    backend = load_training_backend(backend_id)
+    normalized = backend.normalize_config(
         dict(backend_config),
         label=f"{label}.config",
     )
-    backend = module.backend_for_id(backend_id)
     backend.validate(common_config, normalized)
     from rlab.state_archive import validate_state_archive_runtime_contract
 
-    priority_resolver = getattr(module, "state_archive_priority_metrics", None)
-    supported_priorities = priority_resolver(backend_id) if callable(priority_resolver) else ()
     validate_state_archive_runtime_contract(
         common_config,
         backend_id=backend_id,
-        supported_priority_metrics=supported_priorities,
+        supported_priority_metrics=backend.state_archive_priority_metrics(),
     )
     return {"id": backend_id, "config": normalized}
 
 
 def training_backend_contract_payload() -> dict[str, Any]:
     return {
-        backend_id: _backend_module(backend_id).contract_payload(backend_id)
+        backend_id: load_training_backend(backend_id).contract_payload()
         for backend_id in registered_training_backend_ids()
     }
 
@@ -194,5 +210,4 @@ def training_backend_runtime_metadata(
     backend_id: str,
     backend_config: Mapping[str, Any],
 ) -> dict[str, str]:
-    module = _backend_module(backend_id)
-    return dict(module.runtime_metadata(backend_id, backend_config))
+    return dict(load_training_backend(backend_id).runtime_metadata(backend_config))

@@ -11,6 +11,7 @@ import gymnasium as gym
 import numpy as np
 from numba import njit
 
+from rlab.action_contract import configured_action_values
 from rlab.reward_transform import RewardTransform, reward_transform_from_reward
 from rlab.state_archive import TaskLaneState
 
@@ -1329,17 +1330,8 @@ class MarioTaskConfig:
 
     @classmethod
     def from_env_config(cls, config: Any) -> MarioTaskConfig:
-        from rlab.targets import target_for_game
-
         task = config.task if isinstance(getattr(config, "task", None), Mapping) else {}
-        action = task.get("action", {}) if isinstance(task.get("action"), Mapping) else {}
-        action_set = str(action.get("set", "native"))
-        target = target_for_game(config.game)
-        masks = target.action_masks_for_set(action_set)
-        if not masks and config.env_provider == "stable-retro-turbo":
-            from rlab.action_contract import configured_action_values
-
-            masks = configured_action_values(config) or ()
+        masks = configured_action_values(config) or ()
         action_masks = np.stack(masks).astype(np.int8) if masks else None
         signals = task.get("signals", {}) if isinstance(task.get("signals"), Mapping) else {}
         termination = (

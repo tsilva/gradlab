@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import dataclass
 from typing import Any, Literal, TypeAlias, cast
 
 
@@ -14,17 +15,18 @@ PolicyAlgorithmId: TypeAlias = Literal[
 RuntimePolicyAlgorithmId: TypeAlias = Literal["ppo", "a2c", "jerk"]
 Sb3AlgorithmId: TypeAlias = Literal["ppo", "a2c"]
 
-TRAINING_BACKEND_MODULES: dict[str, str] = {
-    "rlab.go-explore": "rlab.training.go_explore",
-    "rlab.jerk": "rlab.training.jerk",
-    "sb3.a2c": "rlab.training.sb3",
-    "sb3.ppo": "rlab.training.sb3",
-}
-BACKEND_ALGORITHMS: dict[str, RuntimePolicyAlgorithmId] = {
-    "rlab.go-explore": "jerk",
-    "rlab.jerk": "jerk",
-    "sb3.a2c": "a2c",
-    "sb3.ppo": "ppo",
+
+@dataclass(frozen=True)
+class TrainingBackendSpec:
+    module_name: str
+    algorithm_id: RuntimePolicyAlgorithmId
+
+
+TRAINING_BACKEND_SPECS: dict[str, TrainingBackendSpec] = {
+    "rlab.go-explore": TrainingBackendSpec("rlab.training.go_explore", "jerk"),
+    "rlab.jerk": TrainingBackendSpec("rlab.training.jerk", "jerk"),
+    "sb3.a2c": TrainingBackendSpec("rlab.training.sb3", "a2c"),
+    "sb3.ppo": TrainingBackendSpec("rlab.training.sb3", "ppo"),
 }
 MODEL_CLASS_ALGORITHMS: dict[str, PolicyAlgorithmId] = {
     "rlab.jerk.JerkPolicy": "jerk",
@@ -57,10 +59,10 @@ def resolve_policy_algorithm(
 
     backend_id = str(metadata.get("training_backend_id") or "").strip()
     if backend_id:
-        algorithm = BACKEND_ALGORITHMS.get(backend_id)
-        if algorithm is None:
+        backend = TRAINING_BACKEND_SPECS.get(backend_id)
+        if backend is None:
             raise ValueError(f"unsupported checkpoint training backend: {backend_id}")
-        resolved.add(algorithm)
+        resolved.add(backend.algorithm_id)
 
     algorithm_id = str(metadata.get("algorithm_id") or "").strip()
     if algorithm_id:

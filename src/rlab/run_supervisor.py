@@ -16,7 +16,7 @@ from rlab.checkpoint_acceptance import manifest_index
 from rlab.dstack_backend import DSTACK_VERSION
 from rlab.early_stop import validate_metric_early_stop_decision
 from rlab.env import resolve_env_config
-from rlab.env_config import env_config_from_args
+from rlab.env_config import env_config_from_mapping
 from rlab.eval_metrics import eval_by_start_rows
 from rlab.eval_backend import EvalBackend, EvalHandle
 from rlab.file_utils import file_sha256
@@ -100,7 +100,7 @@ from rlab.supervisor_runtime import (
     SupervisorRuntime,
 )
 from rlab.train_config import (
-    materialized_train_args,
+    load_materialized_train_config,
     validate_and_normalize_train_config,
 )
 from rlab.trusted_inputs import stage_model_input
@@ -610,13 +610,13 @@ class RunSupervisor:
         write_canonical_json(self.config_path, self.train_config)
 
     def _start_wandb(self) -> None:
-        args = materialized_train_args(self.config_path)
-        config = resolve_env_config(env_config_from_args(args, include_states=True))
+        train_config = load_materialized_train_config(self.config_path)
+        config = resolve_env_config(env_config_from_mapping(train_config))
         receipt_key = f"runs/{self.manifest.run_id}/wandb.json"
         existing = self.authority.control.get_json_optional(receipt_key)
         if existing is None:
             self.projector = self.runtime.start_wandb(
-                args,
+                train_config,
                 run_dir=str(self.run_dir),
                 config=config,
             )

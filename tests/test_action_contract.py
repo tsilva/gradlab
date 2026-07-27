@@ -9,7 +9,6 @@ from rlab.action_contract import (
     declared_action_contract,
     normalize_action_configuration,
 )
-from rlab.targets import target_for_game
 
 
 BREAKOUT_NO_NOOP_ACTIONS = [["BUTTON"], ["RIGHT"], ["LEFT"]]
@@ -184,9 +183,7 @@ def test_mario_action_set_catalogs_stay_aligned(action_set, expected_meanings):
 
     assert contracts[0]["meanings"] == list(expected_meanings)
     assert contracts[0]["table_hash"] == contracts[1]["table_hash"]
-    assert target_for_game("SuperMarioBros-Nes-v0").action_names_for_set(action_set) == (
-        expected_meanings
-    )
+    assert configured_action_meanings(config) == expected_meanings
 
 
 def test_multiplayer_inline_table_is_joint_not_cartesian_and_order_stable():

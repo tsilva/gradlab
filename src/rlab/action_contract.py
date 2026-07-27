@@ -200,7 +200,8 @@ def declared_action_contract(config: Any) -> dict[str, Any] | None:
             preset, table = matches[request_name]
         except KeyError as exc:
             raise ValueError(
-                f"provider {provider_id!r} has no action preset {request!r} for {game!r}"
+                f"unknown action_set {request!r}: provider {provider_id!r} "
+                f"has no matching preset for {game!r}"
             ) from exc
     if (
         isinstance(table, (str, bytes, bytearray))
@@ -289,12 +290,11 @@ def configured_action_meanings(config: Any) -> tuple[str, ...]:
     contract = declared_action_contract(config)
     if contract is not None and contract.get("meanings") is not None:
         return tuple(str(value) for value in contract["meanings"])
-    game = str(
-        config.get("game", "") if isinstance(config, Mapping) else getattr(config, "game", "")
-    )
-    from rlab.targets import target_for_game
-
-    return target_for_game(game).action_names_for_set(configured_action_name(config))
+    action_set = configured_action_name(config)
+    if action_set == "native":
+        return ()
+    game = str(config.get("game", "") if isinstance(config, Mapping) else getattr(config, "game", ""))
+    raise ValueError(f"unknown action_set {action_set!r} for {game!r}")
 
 
 def configured_action_values(config: Any) -> tuple[tuple[int, ...], ...] | None:

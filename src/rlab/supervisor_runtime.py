@@ -55,8 +55,14 @@ class SupervisorRuntime:
     def disk_usage(self, path: Path) -> Any:
         return shutil.disk_usage(path)
 
-    def start_wandb(self, args: Any, *, run_dir: str, config: Any) -> WandbProjector:
-        return WandbProjector.start_live(args, run_dir=run_dir, config=config)
+    def start_wandb(
+        self,
+        train_config: Mapping[str, Any],
+        *,
+        run_dir: str,
+        config: Any,
+    ) -> WandbProjector:
+        return WandbProjector.start_live(train_config, run_dir=run_dir, config=config)
 
     def resume_wandb(
         self,
