@@ -6,11 +6,13 @@ import unittest
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch
 
 import gymnasium as gym
 import numpy as np
 
 from rlab.batch_runtime import BatchRuntime, ProviderDescriptor, SignalSpec
+from rlab.env import _state_archive_preflight_child
 from rlab.state_archive import (
     ArchiveCurriculum,
     ArchiveCurriculumConfig,
@@ -133,6 +135,60 @@ class PortableBreakoutProvider:
 
 
 class StateArchiveTests(unittest.TestCase):
+    def test_provider_preflight_closes_runtime_before_temporary_archive_cleanup(
+        self,
+    ) -> None:
+        class Connection:
+            def __init__(self) -> None:
+                self.messages: list[tuple[str, Any]] = []
+
+            def send(self, message: tuple[str, Any]) -> None:
+                self.messages.append(message)
+
+            def close(self) -> None:
+                return None
+
+        class Runtime:
+            state_archive = object()
+
+            def __init__(self, root: str) -> None:
+                self.root = Path(root)
+                self.closed = False
+
+            def preflight_state_archive_round_trip(self, *, seed: int):
+                return {"seed": seed}
+
+            def close(self) -> None:
+                self.assert_archive_root_exists()
+                self.closed = True
+
+            def assert_archive_root_exists(self) -> None:
+                if not self.root.is_dir():
+                    raise FileNotFoundError(self.root)
+
+        connection = Connection()
+        created: list[Runtime] = []
+
+        def make_runtime(*_args, state_archive_root: str, **_kwargs):
+            runtime = Runtime(state_archive_root)
+            created.append(runtime)
+            return runtime
+
+        with patch("rlab.env.make_training_batch_runtime", side_effect=make_runtime):
+            _state_archive_preflight_child(
+                connection,
+                object(),
+                3,
+                17,
+                None,
+                archive_config(curriculum=False),
+            )
+
+        self.assertEqual(connection.messages, [("ok", {"seed": 17})])
+        self.assertEqual(len(created), 1)
+        self.assertTrue(created[0].closed)
+        self.assertFalse(created[0].root.exists())
+
     def test_new_shape_rejects_removed_snapshot_fields(self) -> None:
         with self.assertRaisesRegex(ValueError, "unexpected fields"):
             normalize_state_archive_config(
