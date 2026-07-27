@@ -46,6 +46,13 @@ The project uses `uv`, a committed `uv.lock`, and a seven-day package-age gate.
 `breakout-turbo-env` have explicit forward-runtime exceptions recorded in
 `pyproject.toml` and `uv-tool.toml`.
 
+The four Turbo providers must implement Turbo Vector API v1. rlab validates
+their immutable capability and signal declarations at construction time,
+requires canonical `state_catalog`/`state_indices` reset selection, consumes
+the declared action contract directly, and uses `render_lane()`,
+`get_images()`, and lane-zero `render()` without provider-specific fallbacks.
+Providers that do not advertise exactly v1 are rejected.
+
 Register a local ROM without uploading it to source control:
 
 ```bash

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import unittest
 
+import pytest
+
 from rlab.env_identity import environment_identity_from_train_config
 from rlab.env_registry import (
     env_supports_states,
@@ -60,8 +62,8 @@ def test_resolves_registered_breakout_turbo_env_id() -> None:
     assert resolved.import_name == "breakout_turbo_env"
     assert env_supports_states("breakout-turbo-env", "Breakout-Atari2600-v0")
 
-    legacy = resolve_env_id("breakout-turbo-env:BreakoutTurbo-v0")
-    assert legacy.provider_env_id == "BreakoutTurbo-v0"
+    with pytest.raises(ValueError, match="does not register environment"):
+        resolve_env_id("breakout-turbo-env:BreakoutTurbo-v0")
 
 
 def test_resolves_registered_supermariobrosnes_turbo_env_id() -> None:

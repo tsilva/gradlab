@@ -3,6 +3,7 @@ from __future__ import annotations
 import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+from types import MappingProxyType
 from typing import Any, Protocol
 
 import gymnasium as gym
@@ -70,8 +71,11 @@ class ProviderDescriptor:
     lane_start_ids: tuple[str, ...] = ()
     render_support: tuple[str, ...] = ()
     autoreset_mode: str = "disabled"
-    # Number of rotating provider-owned observation batches.
-    observation_buffer_depth: int = 1
+    turbo_api_version: int | None = None
+    capabilities: Mapping[str, Any] = field(default_factory=dict)
+    observation_ownership: str = "unsafe_view"
+    # None denotes caller-owned observations; views declare their rotation depth.
+    observation_buffer_depth: int | None = 1
     action_mode: str | None = None
     action_preset: str | None = None
     action_table: tuple[Any, ...] | None = None
@@ -85,9 +89,22 @@ class ProviderDescriptor:
             raise ValueError("provider_id must not be empty")
         if self.autoreset_mode != "disabled":
             raise ValueError("the batch runtime requires disabled provider autoreset")
-        if int(self.observation_buffer_depth) < 1:
-            raise ValueError("provider observation_buffer_depth must be positive")
-        object.__setattr__(self, "observation_buffer_depth", int(self.observation_buffer_depth))
+        if self.observation_ownership not in {"owned", "safe_view", "unsafe_view"}:
+            raise ValueError("provider observation_ownership is invalid")
+        expected_depth = {
+            "owned": None,
+            "safe_view": 2,
+            "unsafe_view": 1,
+        }[self.observation_ownership]
+        if self.observation_buffer_depth != expected_depth:
+            raise ValueError(
+                "provider observation ownership/depth declaration is inconsistent"
+            )
+        object.__setattr__(
+            self,
+            "capabilities",
+            MappingProxyType(dict(self.capabilities)),
+        )
         if self.action_table is not None:
             object.__setattr__(self, "action_table", tuple(self.action_table))
         if self.action_meanings is not None:
@@ -97,7 +114,11 @@ class ProviderDescriptor:
             if key != spec.name:
                 raise ValueError(f"signal schema key {key!r} does not match {spec.name!r}")
             normalized[key] = spec
-        object.__setattr__(self, "signal_schema", normalized)
+        object.__setattr__(
+            self,
+            "signal_schema",
+            MappingProxyType(normalized),
+        )
         object.__setattr__(self, "start_catalog", tuple(self.start_catalog))
         probabilities = tuple(float(value) for value in self.start_probabilities)
         if probabilities:
@@ -543,8 +564,9 @@ class BatchRuntime:
         self._observation_buffers: list[Any] = []
         self._final_observation_buffers: list[Any] = []
         self._current_observation_buffer = 0
-        self._reuse_provider_observations = descriptor.observation_buffer_depth >= 2 and bool(
-            getattr(kernel, "observation_encoding_is_view", False)
+        self._reuse_provider_observations = (
+            descriptor.observation_ownership in {"owned", "safe_view"}
+            and bool(getattr(kernel, "observation_encoding_is_view", False))
         )
         self._started_at = time.monotonic()
         self._native_step_seconds_total = 0.0

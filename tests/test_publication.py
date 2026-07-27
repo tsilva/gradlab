@@ -177,7 +177,11 @@ def test_non_default_reward_shape_gets_a_bounded_repository_suffix() -> None:
     [
         ("stable-retro-turbo", "SuperMarioBros3-Nes-v0", "NES-SuperMarioBros3"),
         ("ale-py", "breakout", "Atari2600-Breakout"),
-        ("breakout-turbo-env", "BreakoutTurbo-v0", "Atari2600-Breakout"),
+        (
+            "breakout-turbo-env",
+            "Breakout-Atari2600-v0",
+            "Atari2600-Breakout",
+        ),
         ("stable-retro-turbo", "Breakout-Atari2600-v0", "Atari2600-Breakout"),
         ("ale-py", "ms_pacman", "Atari2600-MsPacman"),
     ],

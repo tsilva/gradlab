@@ -100,29 +100,25 @@ def fast_env_image_obs(obs) -> np.ndarray:
 
 
 def fast_env_obs(obs: np.ndarray) -> np.ndarray:
-    # Older native envs may expose HWC stacks; post12 exposes CHW stacks.
-    # The policy always receives SB3's channel-first batch layout.
     arr = fast_env_image_obs(obs)
-    if arr.ndim == 4 and arr.shape[0] == 1 and arr.shape[-1] == 4:
-        return np.transpose(arr, (0, 3, 1, 2))
     if arr.ndim == 4 and arr.shape[0] == 1 and arr.shape[1] == 4:
         return arr
-    if arr.ndim == 3 and arr.shape[-1] == 4:
-        return np.transpose(arr, (2, 0, 1))[None, ...]
     if arr.ndim == 3 and arr.shape[0] == 4:
         return arr[None, ...]
-    raise ValueError(f"expected fast env obs with 4 stacked frames, got shape {arr.shape}")
+    raise ValueError(
+        f"expected channel-first fast env obs with 4 stacked frames, got shape {arr.shape}"
+    )
 
 
 def fast_env_frames(obs: np.ndarray) -> deque[np.ndarray]:
     arr = fast_env_image_obs(obs)
     if arr.ndim == 4 and arr.shape[0] == 1:
         arr = arr[0]
-    if arr.ndim == 3 and arr.shape[-1] == 4:
-        return deque([arr[..., idx : idx + 1] for idx in range(arr.shape[-1])], maxlen=4)
     if arr.ndim == 3 and arr.shape[0] == 4:
         return deque([arr[idx, ..., None] for idx in range(arr.shape[0])], maxlen=4)
-    raise ValueError(f"expected fast env obs with 4 stacked frames, got shape {arr.shape}")
+    raise ValueError(
+        f"expected channel-first fast env obs with 4 stacked frames, got shape {arr.shape}"
+    )
 
 
 def task_conditioning_change_message(
