@@ -89,6 +89,15 @@ schema v8.
   Successful episodes contribute to success metrics, not the failure-reason families.
 - Positive PPO policy entropy, dominant-action rate, and the action histogram diagnose discrete
   policy collapse. Value prediction and advantage histograms are sampled every 64 rollouts.
+- For reward-transform ablations, first compare `train/reward/raw/*` with
+  `train/reward/shaped/*`. `task.reward.reward_scale` is a positive divisor, so a value below one
+  amplifies the policy-facing reward. If raw rewards match but shaped magnitudes diverge, inspect
+  value loss and explained variance before policy entropy, dominant-action rate, KL, and clip
+  fraction: squared-error value loss can grow roughly with the square of the target scale, while
+  advantage normalization does not protect the critic from poorly conditioned targets.
+- Do not compare shaped episode-return or value magnitudes as policy quality across different reward
+  transforms. Use task success and acceptance-evaluation metrics for the outcome comparison; use
+  reward, critic, and policy metrics to locate the causal chain.
 - Snapshot-curriculum `sampling/probability/max` and `sampling/effective_cell/count` summarize the
   current cell-probability distribution. They do not report realized per-cell selection frequency
   or identify which resident cells were selected.

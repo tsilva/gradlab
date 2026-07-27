@@ -241,6 +241,16 @@ class ConfigValidationTests(unittest.TestCase):
             train_config["task"]["termination"],
             {"success": ["monster_killed"], "max_episode_steps": 72},
         )
+        expected_reward = {
+            "reward_mode": "native",
+            "reward_scale": 100.0,
+            "reward_clip": False,
+        }
+        self.assertEqual(train_config["task"]["reward"], expected_reward)
+        self.assertEqual(
+            train_config["checkpoint_eval_environment"]["task"]["reward"],
+            expected_reward,
+        )
         self.assertEqual(document["goal"]["train"]["checkpoint_eval_backend"], "modal")
         eval_config = document["goal"]["eval"]["environment"]["env_config"]
         self.assertEqual(eval_config["n_envs"], 16)
