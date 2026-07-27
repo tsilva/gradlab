@@ -61,6 +61,22 @@ def level1_1_recipe_document(*, seed: int = 7) -> dict:
     )
 
 
+def test_wandb_display_name_is_not_part_of_portable_recipe() -> None:
+    materialized = compose_train_document(GOAL, RECIPE)
+    materialized["train_config"]["wandb_display_name"] = "Level1-1__ppo__s7__01234567"
+
+    document = build_recipe_document(
+        materialized,
+        repo_root=Path.cwd(),
+        source_commit="a" * 40,
+        run_description="W&B presentation identity regression",
+        seed=7,
+        runtime_image_ref=RUNTIME,
+    )
+
+    assert "wandb_display_name" not in document["recipe"]["train_config"]
+
+
 @pytest.mark.parametrize("recipe_path", BREAKOUT_RECIPES)
 def test_breakout_bundle_is_playable_but_has_no_evaluation_contract(
     recipe_path: Path,

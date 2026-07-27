@@ -11,8 +11,8 @@ dependencies = [
     "supermariobrosnes-turbo>=0.4.4; sys_platform == 'linux' and platform_machine == 'x86_64'",
     "breakout-turbo-env>=0.4.1; sys_platform == 'darwin' and platform_machine == 'arm64'",
     "breakout-turbo-env>=0.4.1; sys_platform == 'linux' and platform_machine == 'x86_64'",
-    "vizdoom-turbo>=0.1.3; sys_platform == 'darwin' and platform_machine == 'arm64'",
-    "vizdoom-turbo>=0.1.3; sys_platform == 'linux' and platform_machine == 'x86_64'",
+    "vizdoom-turbo>=1.3.0.post1; sys_platform == 'darwin' and platform_machine == 'arm64'",
+    "vizdoom-turbo>=1.3.0.post1; sys_platform == 'linux' and platform_machine == 'x86_64'",
     "stable-baselines3>=2.3,<3",
     "ale-py>=0.12,<0.13",
     "opencv-python>=4.13,<5",
@@ -62,6 +62,8 @@ packages = ["src/rlab"]
 [tool.hatch.build.targets.wheel.force-include]
 "THIRD_PARTY_NOTICES.md" = "THIRD_PARTY_NOTICES.md"
 "METRICS.md" = "rlab/METRICS.md"
+"experiments/goals" = "rlab/experiments/goals"
+"experiments/recipes" = "rlab/experiments/recipes"
 
 [tool.uv]
 exclude-newer = "7 days"
@@ -78,7 +80,7 @@ constraint-dependencies = [
 breakout-turbo-env = "2026-07-23T11:27:02Z"
 stable-retro-turbo = "2026-07-22T17:30:25Z"
 supermariobrosnes-turbo = "2026-07-23T11:52:37Z"
-vizdoom-turbo = "2026-07-27T08:27:00Z"
+vizdoom-turbo = "2026-07-27T10:40:00Z"
 
 [tool.ruff]
 line-length = 100
@@ -105,7 +107,7 @@ train-runtime = [
     "stable-retro-turbo==1.0.1.post35; sys_platform == 'linux' and platform_machine == 'x86_64'",
     "supermariobrosnes-turbo>=0.4.4; sys_platform == 'linux' and platform_machine == 'x86_64'",
     "breakout-turbo-env>=0.4.1; sys_platform == 'linux' and platform_machine == 'x86_64'",
-    "vizdoom-turbo>=0.1.3; sys_platform == 'linux' and platform_machine == 'x86_64'",
+    "vizdoom-turbo>=1.3.0.post1; sys_platform == 'linux' and platform_machine == 'x86_64'",
     "stable-baselines3>=2.3,<3",
     "ale-py>=0.12,<0.13",
     "opencv-python>=4.13,<5",

@@ -24,6 +24,7 @@ from PIL import Image
 
 from rlab.play import _PlaybackSession, _PlaybackTransition, render_obs_stack
 from rlab.play_debug import ANSI_PATTERN, PolicyDecision, model_input_lines
+from rlab.seeds import validate_playback_seed
 
 
 PROTOCOL_VERSION = 3
@@ -710,12 +711,6 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
                 driver = str(command.payload.get("driver") or self.driver)
                 if driver not in {"policy", "human"}:
                     raise ValueError(f"unsupported driver {driver!r}")
-                seed_value = command.payload.get("seed")
-                if seed_value not in {None, ""}:
-                    self.session.restart(
-                        int(seed_value),
-                        reset_episode_index=False,
-                    )
                 self.session.last_transition = None
                 self.sampling_mode = mode
                 self.driver = driver
@@ -726,6 +721,22 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
                 self._set_state(
                     "playing",
                     message="playing next episode",
+                )
+            elif command.name == "reset_episode":
+                if self.awaiting_next_episode and not self._can_start_next_episode():
+                    raise ValueError(f"episode limit reached ({self.boundaries})")
+                seed_value = command.payload.get("seed")
+                if isinstance(seed_value, bool):
+                    raise ValueError("seed must be an integer")
+                seed = None if seed_value in {None, ""} else validate_playback_seed(int(seed_value))
+                self.session.reset_episode(seed)
+                self.clear_input()
+                self.awaiting_next_episode = False
+                self.remaining_steps = 0
+                self.continue_target = None
+                self._set_state(
+                    "paused",
+                    message=f"episode reset · seed {self.session.active_seed}",
                 )
             elif command.name == "set_fps":
                 fps = float(command.payload.get("fps", 0.0))

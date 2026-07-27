@@ -25,7 +25,7 @@ from rlab.play_termination import (
 )
 from rlab.rom_assets import rom_asset_manifest_for_game
 from rlab.rom_runtime import ensure_local_rom_binding
-from rlab.seeds import validate_eval_seed
+from rlab.seeds import validate_eval_seed, validate_playback_seed
 from rlab.trusted_inputs import (
     ModelApprovalError,
     StagedModelInput,
@@ -46,8 +46,9 @@ class PlaySourceSpec:
     project: str = ""
     run_id: str = ""
     checkpoint_id: str = ""
+    seed: int | None = None
 
-    def to_dict(self) -> dict[str, str]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "kind": self.kind,
             "value": self.value,
@@ -55,7 +56,27 @@ class PlaySourceSpec:
             "project": self.project,
             "run_id": self.run_id,
             "checkpoint_id": self.checkpoint_id,
+            "seed": self.seed,
         }
+
+
+def _implicit_playback_seed(
+    recipe: Mapping[str, Any],
+    *,
+    evaluation_result_seed: int | None,
+) -> int:
+    if evaluation_result_seed is not None:
+        return validate_playback_seed(
+            evaluation_result_seed,
+            label="evaluation result seed",
+        )
+    train_config = recipe.get("train_config")
+    if not isinstance(train_config, Mapping):
+        raise ValueError("policy bundle recipe has no training seed")
+    return validate_playback_seed(
+        train_config.get("seed"),
+        label="training seed",
+    )
 
 
 @dataclass
@@ -189,7 +210,12 @@ class PlaybackLoader:
                 raise ValueError("policy bundle recipe has no playback environment")
             artifact_config = resolve_env_config(artifact_config)
             if not self.explicit_seed:
-                args.seed = int(contract["seed"])
+                if not isinstance(recipe, Mapping):
+                    raise ValueError("policy bundle recipe is invalid")
+                args.seed = _implicit_playback_seed(
+                    recipe,
+                    evaluation_result_seed=spec.seed,
+                )
         else:
             artifact_config = load_playback_env_config(
                 source.model_path,
@@ -207,7 +233,11 @@ class PlaybackLoader:
             termination_base_config,
             enabled_termination_ids,
         )
-        args.seed = validate_eval_seed(args.seed)
+        args.seed = (
+            validate_eval_seed(args.seed)
+            if self.explicit_seed
+            else validate_playback_seed(args.seed)
+        )
         display_config = artifact_config
 
         progress("verifying", "Checking environment provider")

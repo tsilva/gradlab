@@ -438,15 +438,17 @@ def test_catalog_attaches_goal_required_eval_results_by_checkpoint(
 
     class EvalRun:
         config = {
+            "seed": 7,
             "checkpoint_eval_contract": {
+                "seed": 42_000,
                 "acceptance": [
                     {
                         "metric": required_metric,
                         "operator": ">=",
                         "threshold": 1.0,
                     }
-                ]
-            }
+                ],
+            },
         }
 
         def scan_history(self, *, keys, page_size):
@@ -497,8 +499,64 @@ def test_catalog_attaches_goal_required_eval_results_by_checkpoint(
             "passed": True,
         }
     ]
+    assert rows[0]["playback_seed"] == 42_000
+    assert rows[0]["playback_seed_source"] == "evaluation"
     rejected = rows[1]["evaluation"]
     assert rejected["status"] == "rejected"
     assert rejected["episodes_completed"] == 1
     assert rejected["failure_count"] == 1
     assert rejected["criteria"][0]["value"] is None
+    assert rows[1]["playback_seed"] == 42_000
+    assert rows[1]["playback_seed_source"] == "evaluation"
+
+
+def test_catalog_uses_training_seed_when_checkpoint_has_no_eval_result(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    periodic = checkpoint_row(step=250_000, digest="2" * 64, purpose="periodic")
+    monkeypatch.setattr(
+        "rlab.play_catalog._public_json",
+        lambda _url: {
+            "schema_version": 1,
+            "run_id": RUN_ID,
+            "checkpoints": [periodic],
+            "promotion": None,
+        },
+    )
+
+    class UnevaluatedRun:
+        config = {
+            "seed": 7,
+            "checkpoint_eval_contract": {
+                "seed": 42_000,
+                "acceptance": [
+                    {
+                        "metric": "eval/full/outcome/success/rate/min",
+                        "operator": ">=",
+                        "threshold": 1.0,
+                    }
+                ],
+            },
+        }
+
+        @staticmethod
+        def scan_history(*, keys, page_size):
+            return []
+
+    class UnevaluatedApi:
+        @staticmethod
+        def run(_path):
+            return UnevaluatedRun()
+
+    catalog = PlayCatalog(public_models_base_url="https://models.example")
+    catalog._api = UnevaluatedApi()
+
+    row = catalog.checkpoints(
+        entity="research",
+        project="Mario",
+        run_id=RUN_ID,
+    )[0]
+
+    assert row["evaluation"] is None
+    assert row["playback_seed"] == 7
+    assert row["playback_seed_source"] == "training"

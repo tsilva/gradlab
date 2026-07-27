@@ -94,6 +94,7 @@ class _RecipeValueDocument(BoundaryModel):
 
 class _RecipeProvenanceDocument(BoundaryModel):
     source_commit: Any = None
+    source_distribution: Any = None
     source_files: Any = None
     runtime: Any = None
     asset: Any = None
@@ -192,6 +193,7 @@ _OPERATIONAL_TRAIN_FIELDS = frozenset(
         "source_sha",
         "train_config_json",
         "wandb",
+        "wandb_display_name",
         "wandb_entity",
         "wandb_group",
         "wandb_mode",
@@ -506,11 +508,65 @@ def _validate_recipe_v1(document: Mapping[str, Any], source: str) -> dict[str, A
             raise PolicyDocumentError(
                 f"{source}.recipe.playback.asset disagrees with provenance.asset"
             )
+    source_commit = provenance.get("source_commit")
+    source_distribution = provenance.get("source_distribution")
+    if source_commit is not None:
+        source_commit = _required_text(source_commit, label=f"{source} source_commit")
+        if not re.fullmatch(r"[0-9a-f]{40}", source_commit):
+            raise PolicyDocumentError(f"{source} source_commit must be a full lowercase Git SHA")
+    if source_distribution is not None:
+        source_distribution = _required_mapping(
+            source_distribution,
+            label=f"{source}.provenance.source_distribution",
+        )
+        _reject_unknown(
+            source_distribution,
+            frozenset({"name", "version"}),
+            label=f"{source}.provenance.source_distribution",
+        )
+        _required_text(
+            source_distribution.get("name"),
+            label=f"{source}.provenance.source_distribution.name",
+        )
+        _required_text(
+            source_distribution.get("version"),
+            label=f"{source}.provenance.source_distribution.version",
+        )
+    if source_commit is None and source_distribution is None:
+        raise PolicyDocumentError(
+            f"{source}.provenance must define source_commit or source_distribution"
+        )
     runtime = _required_mapping(provenance.get("runtime"), label=f"{source}.provenance.runtime")
     _reject_unknown(runtime, frozenset({"image_ref", "packages"}), label=f"{source}.runtime")
-    image_ref = _required_text(runtime.get("image_ref"), label=f"{source} runtime image_ref")
-    if not re.fullmatch(r"docker:[^\s]+@sha256:[0-9a-f]{64}", image_ref):
-        raise PolicyDocumentError(f"{source} runtime image_ref must be an immutable digest")
+    image_ref = runtime.get("image_ref")
+    packages = runtime.get("packages")
+    if image_ref is not None:
+        image_ref = _required_text(image_ref, label=f"{source} runtime image_ref")
+        if not re.fullmatch(r"docker:[^\s]+@sha256:[0-9a-f]{64}", image_ref):
+            raise PolicyDocumentError(f"{source} runtime image_ref must be an immutable digest")
+    if packages is not None:
+        package_mapping = isinstance(packages, Mapping) and bool(packages) and all(
+            isinstance(name, str)
+            and bool(name.strip())
+            and isinstance(version, str)
+            and bool(version.strip())
+            for name, version in packages.items()
+        )
+        package_list = (
+            isinstance(packages, Sequence)
+            and not isinstance(packages, str | bytes)
+            and bool(packages)
+            and all(isinstance(item, str) and "==" in item for item in packages)
+        )
+        if not package_mapping and not package_list:
+            raise PolicyDocumentError(
+                f"{source} runtime packages must be exact versions as a mapping or "
+                "a non-empty list of name==version strings"
+            )
+    if image_ref is None and packages is None:
+        raise PolicyDocumentError(
+            f"{source} runtime must define an immutable image_ref or exact packages"
+        )
     _assert_portable(recipe, label=f"{source}.recipe")
     _assert_portable(provenance, label=f"{source}.provenance")
     _assert_finite_json(document, label=source)
@@ -656,10 +712,12 @@ def build_recipe_document(
     materialized_recipe: Mapping[str, Any],
     *,
     repo_root: Path,
-    source_commit: str,
+    source_commit: str | None,
+    source_distribution: Mapping[str, str] | None = None,
     run_description: str | None = None,
     seed: int | None = None,
     runtime_image_ref: str | None = None,
+    runtime_packages: Sequence[str] | None = None,
 ) -> dict[str, Any]:
     recipe = deepcopy(dict(materialized_recipe))
     recipe.pop("logging", None)
@@ -762,14 +820,34 @@ def build_recipe_document(
                     ),
                 }
             )
+    runtime: dict[str, Any] = {}
+    if runtime_image_ref is not None:
+        runtime["image_ref"] = str(runtime_image_ref)
+    if runtime_packages is not None:
+        runtime["packages"] = [str(item) for item in runtime_packages]
     provenance: dict[str, Any] = {
-        "source_commit": _required_text(source_commit, label="recipe source_commit"),
         "source_files": source_files,
-        "runtime": {"image_ref": str(runtime_image_ref or "")},
+        "runtime": runtime,
         "asset": portable_asset,
     }
-    if not re.fullmatch(r"[0-9a-f]{40}", provenance["source_commit"]):
-        raise PolicyDocumentError("recipe source_commit must be a full lowercase Git SHA")
+    if source_commit is not None:
+        provenance["source_commit"] = _required_text(
+            source_commit,
+            label="recipe source_commit",
+        )
+        if not re.fullmatch(r"[0-9a-f]{40}", provenance["source_commit"]):
+            raise PolicyDocumentError("recipe source_commit must be a full lowercase Git SHA")
+    if source_distribution is not None:
+        provenance["source_distribution"] = {
+            "name": _required_text(
+                source_distribution.get("name"),
+                label="recipe source distribution name",
+            ),
+            "version": _required_text(
+                source_distribution.get("version"),
+                label="recipe source distribution version",
+            ),
+        }
     document = {
         "document_type": RECIPE_DOCUMENT_TYPE,
         "format_version": RECIPE_FORMAT_VERSION,

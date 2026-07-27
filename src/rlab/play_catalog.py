@@ -156,6 +156,8 @@ class CheckpointSummary:
     sha256: str
     manifest_url: str
     promoted: bool
+    playback_seed: int | None
+    playback_seed_source: Literal["evaluation", "training"] | None
     evaluation: Mapping[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
@@ -178,6 +180,13 @@ class _RepositoryNamespace:
     directory: str
     project: str
     title_template: str
+
+
+@dataclass(frozen=True)
+class _CheckpointEvaluationData:
+    evaluations: Mapping[int, dict[str, Any]]
+    training_seed: int | None
+    evaluation_seed: int | None
 
 
 def parse_wandb_location(value: object) -> WandbLocation | None:
@@ -382,7 +391,7 @@ class PlayCatalog:
         self._default_entity: str | None = None
         self._evaluation_cache: dict[
             tuple[str, str, str],
-            tuple[float, dict[int, dict[str, Any]]],
+            tuple[float, _CheckpointEvaluationData],
         ] = {}
 
     @staticmethod
@@ -1041,11 +1050,11 @@ class PlayCatalog:
         entity: str,
         project: str,
         run_id: str,
-    ) -> dict[int, dict[str, Any]]:
+    ) -> _CheckpointEvaluationData:
         entity = str(entity or "").strip()
         project = str(project or "").strip()
         if not entity or not project:
-            return {}
+            return _CheckpointEvaluationData({}, None, None)
         cache_key = (entity, project, run_id)
         now = time.monotonic()
         with self._lock:
@@ -1055,10 +1064,13 @@ class PlayCatalog:
         try:
             run = self._wandb_api().run(f"{entity}/{project}/{run_id}")
             config = dict(getattr(run, "config", {}) or {})
+            training_seed = _safe_int(config.get("seed"))
             contract = config.get("checkpoint_eval_contract")
             if not isinstance(contract, Mapping):
                 evaluations = {}
+                evaluation_seed = None
             else:
+                evaluation_seed = _safe_int(contract.get("seed"))
                 rules = normalize_metric_threshold_rules(
                     contract.get("acceptance"),
                     label="checkpoint_eval_contract.acceptance",
@@ -1111,9 +1123,16 @@ class PlayCatalog:
         except Exception:
             # Public checkpoints remain playable when W&B history is unavailable.
             evaluations = {}
+            training_seed = None
+            evaluation_seed = None
+        data = _CheckpointEvaluationData(
+            evaluations=evaluations,
+            training_seed=training_seed,
+            evaluation_seed=evaluation_seed,
+        )
         with self._lock:
-            self._evaluation_cache[cache_key] = (now, evaluations)
-        return evaluations
+            self._evaluation_cache[cache_key] = (now, data)
+        return data
 
     def checkpoints(
         self,
@@ -1136,7 +1155,7 @@ class PlayCatalog:
             str(promotion.get("checkpoint_id") or "") if isinstance(promotion, Mapping) else ""
         )
         normalized = str(query or "").strip().casefold()
-        evaluations = self._checkpoint_evaluations(
+        evaluation_data = self._checkpoint_evaluations(
             entity=entity,
             project=project,
             run_id=run_id,
@@ -1149,6 +1168,19 @@ class PlayCatalog:
             manifest.validate()
             if manifest.run_id != run_id:
                 raise ValueError("checkpoint does not belong to the selected run")
+            evaluation = evaluation_data.evaluations.get(manifest.step)
+            playback_seed = (
+                evaluation_data.evaluation_seed
+                if evaluation is not None and evaluation_data.evaluation_seed is not None
+                else evaluation_data.training_seed
+            )
+            playback_seed_source = (
+                "evaluation"
+                if evaluation is not None and evaluation_data.evaluation_seed is not None
+                else "training"
+                if playback_seed is not None
+                else None
+            )
             row = CheckpointSummary(
                 run_id=run_id,
                 checkpoint_id=manifest.checkpoint_id,
@@ -1159,7 +1191,9 @@ class PlayCatalog:
                 sha256=manifest.sha256,
                 manifest_url=checkpoint_manifest_url(manifest.public_url),
                 promoted=manifest.checkpoint_id == promoted_id,
-                evaluation=evaluations.get(manifest.step),
+                playback_seed=playback_seed,
+                playback_seed_source=playback_seed_source,
+                evaluation=evaluation,
             )
             if normalized and normalized not in _search_text(
                 row.checkpoint_id,

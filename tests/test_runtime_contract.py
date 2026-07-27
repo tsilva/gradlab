@@ -89,13 +89,14 @@ class RuntimeContractTests(unittest.TestCase):
                 "runtime_image_ref": RUNTIME_IMAGE_REF,
                 "seed": 123,
                 "training_backend": {"id": "sb3.ppo", "config": {}},
+                "wandb_display_name": "Level1-1__ppo__s123__01234567",
                 "wandb_group": "rlab-0123456789abcdef0123456789abcdef",
                 "wandb_run_id": "rlab-test",
             }
         )
 
         self.assertTrue(receipt["validated"])
-        self.assertEqual(receipt["validated_field_count"], 9)
+        self.assertEqual(receipt["validated_field_count"], 10)
 
     def test_image_receipt_rejects_retired_schema_and_digest_mismatch(self) -> None:
         with self.assertRaisesRegex(ValueError, "schema_version must be 5"):

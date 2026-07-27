@@ -260,6 +260,13 @@ export function bestRunEfficiency(items, primaryColumns, fallbackColumns = []) {
   };
 }
 
+export function checkpointPlaybackSeed(item) {
+  const value = item?.playback_seed;
+  if (value === null || value === undefined || value === "") return null;
+  const seed = Number(value);
+  return Number.isSafeInteger(seed) && seed >= 0 ? seed : null;
+}
+
 function checkpointEvaluationCell(item) {
   const evaluation = item?.evaluation;
   if (!evaluation || typeof evaluation !== "object") return ["—"];
@@ -710,6 +717,7 @@ export class SourceBrowser {
         project: route.project,
         run_id: item.run_id,
         checkpoint_id: item.checkpoint_id,
+        seed: checkpointPlaybackSeed(item),
       },
       route: { ...route },
     });

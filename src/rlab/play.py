@@ -232,6 +232,19 @@ def add_play_source_args(parser: argparse.ArgumentParser) -> None:
         help="Local rlab policy path. The artifact must have model.json and recipe.json sidecars.",
     )
     parser.add_argument(
+        "--recipe",
+        help=(
+            "Play the newest completed local run for a built-in <goal-path>/<recipe> "
+            "reference or recipe YAML."
+        ),
+    )
+    parser.add_argument(
+        "--runs-dir",
+        type=Path,
+        default=Path("runs"),
+        help="Local run root searched by --recipe; defaults to ./runs.",
+    )
+    parser.add_argument(
         "--run",
         help=(
             "Immutable rlab run ID. Resolves its public promoted checkpoint without "
@@ -702,6 +715,14 @@ class _PlaybackSession:
         self.current_frame = optional_vector_env_frame(self.env)
         self.frames = optional_fast_env_frames(self.policy_obs)
 
+    def reset_episode(self, seed: int | None = None) -> None:
+        """Abandon the active trajectory and return to step zero."""
+
+        if self.step_index > 0:
+            self.episode += 1
+        active_seed = self.active_seed if seed is None else seed
+        self.restart(active_seed, reset_episode_index=False)
+
     def step(self, *, deterministic: bool = False) -> _PlaybackTransition:
         decision = (
             inspect_policy(self.model, self.model_obs)
@@ -872,11 +893,35 @@ def main(argv: list[str] | None = None) -> int:
         for value in (
             args.artifact_ref,
             args.model,
+            args.recipe,
             args.run,
         )
     )
     if selected_sources > 1:
-        parser.error("pass exactly one of --run, a positional remote source, or --model")
+        parser.error(
+            "pass exactly one of --run, --recipe, a positional remote source, or --model"
+        )
+    if args.recipe:
+        from rlab.recipe_catalog import (
+            latest_local_recipe_model,
+            recipe_identity,
+            resolve_recipe_source,
+        )
+        from rlab.recipe_documents import compose_train_document
+
+        recipe_source = resolve_recipe_source(args.recipe)
+        materialized_recipe = compose_train_document(
+            recipe_source.goal_path,
+            recipe_source.recipe_path,
+        )
+        goal_id, recipe_id = recipe_identity(materialized_recipe)
+        args.model = str(
+            latest_local_recipe_model(
+                args.runs_dir,
+                goal_id=goal_id,
+                recipe_id=recipe_id,
+            )
+        )
     args.respect_task_termination = not args.continuous_play
     explicit_dests = explicit_arg_dests(parser, argv_list)
     if args.attribution_interval is None:
@@ -888,7 +933,9 @@ def main(argv: list[str] | None = None) -> int:
     from rlab.play_runtime import PlaySourceSpec, PlaybackLoader
     from rlab.play_web import run_web_player_application
 
-    repo_root = Path(__file__).resolve().parents[2]
+    from rlab.recipe_catalog import experiments_root
+
+    repo_root = experiments_root().parent
     catalog = PlayCatalog(
         public_models_base_url=args.public_models_base_url,
         repo_root=repo_root,

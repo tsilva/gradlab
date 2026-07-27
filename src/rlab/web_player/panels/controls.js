@@ -37,7 +37,7 @@ export function mount({ definition, services }) {
         </details>
       </section>
       <section class="control-section next-episode-settings" aria-labelledby="next-episode-heading">
-        <h3 id="next-episode-heading" data-next-episode-heading class="control-label">Next episode</h3>
+        <h3 id="next-episode-heading" data-next-episode-heading class="control-label">Episode</h3>
         <div class="next-episode-settings-body">
           <label class="next-episode-seed" for="next-episode-seed">Seed
             <input id="next-episode-seed" data-seed inputmode="numeric">
@@ -54,6 +54,7 @@ export function mount({ definition, services }) {
             <button type="button" data-driver-option="human" class="quiet button-with-icon driver-option" aria-pressed="false" aria-label="Use human driver for next episode" title="Use human driver for next episode"><svg class="icon" aria-hidden="true"><use href="/assets/tabler-icons.svg#ti-hand-grab"></use></svg><span>Human</span></button>
           </div>
           <p id="playback-sampling-hint" class="control-hint">Applies to the next playback episode only · evaluation remains stochastic</p>
+          <button data-command="reset-episode" data-reset-episode class="quiet button-with-icon control-wide" aria-label="Reset episode" title="Reset to the configured seed and pause"><svg class="icon" aria-hidden="true"><use href="/assets/tabler-icons.svg#ti-refresh"></use></svg><span>Reset episode</span></button>
           <button data-command="next-episode" data-next-episode class="primary button-with-icon control-wide" aria-label="Play next episode" title="Available after the current episode ends"><svg class="icon" aria-hidden="true"><use href="/assets/tabler-icons.svg#ti-player-play"></use></svg><span>Play next episode</span></button>
           <p data-next-episode-hint class="control-hint">Available after the current episode ends</p>
         </div>
@@ -66,6 +67,7 @@ export function mount({ definition, services }) {
   const sampling = element.querySelector("[data-sampling]");
   const playbackToggle = element.querySelector("[data-playback-toggle]");
   const playbackIcon = playbackToggle.querySelector("[data-playback-icon]");
+  const resetEpisode = element.querySelector("[data-reset-episode]");
   const nextEpisode = element.querySelector("[data-next-episode]");
   const nextEpisodeSettings = element.querySelector(".next-episode-settings");
   const nextEpisodeHeading = element.querySelector("[data-next-episode-heading]");
@@ -86,8 +88,10 @@ export function mount({ definition, services }) {
     step: () => services.command("step", { count: 1 }),
     "step-ten": () => services.command("step", { count: 10 }),
     "continue-event": () => services.command("continue", { target: "any" }),
-    "next-episode": () => services.command("next_episode", {
+    "reset-episode": () => services.command("reset_episode", {
       seed: seed.value,
+    }),
+    "next-episode": () => services.command("next_episode", {
       sampling_mode: sampling.value,
       driver: nextDriver,
     }),
@@ -141,13 +145,25 @@ export function mount({ definition, services }) {
     const canPrepareNextEpisode = (
       !recording && state.hasControl && Boolean(session.can_start_next_episode)
     );
+    const canResetEpisode = (
+      !recording
+      && state.hasControl
+      && (
+        !Boolean(session.awaiting_next_episode)
+        || Boolean(session.can_start_next_episode)
+      )
+    );
+    resetEpisode.disabled = !canResetEpisode;
     nextEpisode.disabled = !canPrepareNextEpisode;
-    seed.disabled = !canPrepareNextEpisode;
+    seed.disabled = !canResetEpisode;
     sampling.disabled = !canPrepareNextEpisode;
     driverOptions.forEach((option) => {
       option.disabled = recording || !canPrepareNextEpisode;
     });
-    nextEpisodeSettings.classList.toggle("available", canPrepareNextEpisode);
+    nextEpisodeSettings.classList.toggle(
+      "available",
+      canPrepareNextEpisode || canResetEpisode,
+    );
   };
 
   const renderPlaybackToggle = (runState) => {
@@ -217,10 +233,11 @@ export function mount({ definition, services }) {
       }
       nextEpisodeSettings.hidden = dataset;
       driverSwitch.classList.toggle("single-option", recording);
-      nextEpisodeHeading.textContent = recording ? "Driver" : "Next episode";
+      nextEpisodeHeading.textContent = recording ? "Driver" : "Episode";
       seedField.hidden = recording;
       playbackSampling.hidden = recording;
       nextEpisode.hidden = recording;
+      resetEpisode.hidden = recording;
       nextEpisodeHint.hidden = recording;
       nextEpisode.title = session.can_start_next_episode
         ? "Start the prepared next episode"
@@ -228,10 +245,15 @@ export function mount({ definition, services }) {
           ? "The configured episode limit has been reached"
           : "Available after the current episode ends");
       nextEpisodeHint.textContent = session.can_start_next_episode
-        ? "Dispatches Seed, Sampling, and Driver together"
+        ? "Dispatches Sampling and Driver together"
         : (session.awaiting_next_episode
           ? "The configured episode limit has been reached"
           : "Available after the current episode ends");
+      resetEpisode.title = session.awaiting_next_episode
+        ? (session.can_start_next_episode
+          ? "Reset the prepared next episode to the configured seed and pause"
+          : "The configured episode limit has been reached")
+        : "Reset the current episode to the configured seed and pause";
       fps.min = recording ? "1" : "0";
       element.querySelector("#playback-fps-hint").textContent = recording
         ? "Recording FPS must be at least 1"
