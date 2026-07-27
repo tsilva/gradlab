@@ -8,6 +8,7 @@ import {
   formatMetricValue,
   metricLabel,
   rankRunItems,
+  SourceBrowser,
   sortRunItems,
   sourceRouteFromPath,
   sourceRoutePath,
@@ -49,6 +50,77 @@ test("checkpoint playback seed accepts catalog provenance and rejects invalid va
   assert.equal(checkpointPlaybackSeed({ playback_seed: 0 }), 0);
   assert.equal(checkpointPlaybackSeed({ playback_seed: null }), null);
   assert.equal(checkpointPlaybackSeed({ playback_seed: -1 }), null);
+});
+
+test("late catalog responses cannot populate a newer route", async (context) => {
+  const originalLocation = globalThis.location;
+  const originalFetch = globalThis.fetch;
+  const requests = [];
+  globalThis.location = { pathname: "/embedded-player", search: "", hash: "" };
+  globalThis.fetch = (url) => new Promise((resolve) => requests.push({ url, resolve }));
+  context.after(() => {
+    if (originalLocation === undefined) delete globalThis.location;
+    else globalThis.location = originalLocation;
+    if (originalFetch === undefined) delete globalThis.fetch;
+    else globalThis.fetch = originalFetch;
+  });
+
+  const sourceBrowser = new SourceBrowser(
+    {},
+    { replaceChildren() {}, hidden: false },
+    {
+      token: "token",
+      command() {},
+      getState: () => ({ hasControl: true }),
+      showToast() {},
+    },
+  );
+  sourceBrowser.renderView = () => {};
+  sourceBrowser.updatePolling = () => {};
+  sourceBrowser.route.entity = "research";
+
+  const projectsRequest = sourceBrowser.load();
+  assert.equal(requests.length, 1);
+  assert.match(requests[0].url, /^\/api\/catalog\/projects/);
+
+  sourceBrowser.applyRoute({
+    level: "goals",
+    project: "Mario",
+    goal_id: "",
+    run_id: "",
+    checkpoint_id: "",
+  });
+  requests[0].resolve({
+    ok: true,
+    json: async () => ({
+      items: [{ entity: "research", name: "Mario", goal_count: 10 }],
+      next_cursor: null,
+    }),
+  });
+  await projectsRequest;
+
+  assert.equal(requests.length, 2);
+  assert.match(requests[1].url, /\/projects\/research\/Mario\/goals/);
+  assert.deepEqual(sourceBrowser.items, []);
+
+  requests[1].resolve({
+    ok: true,
+    json: async () => ({
+      items: [{
+        entity: "research",
+        project: "Mario",
+        goal_id: "Level1-1",
+        goal_slug: "Mario/Level1-1",
+        title: "Mario Level 1-1 completion",
+        recipe_count: 1,
+      }],
+      next_cursor: null,
+    }),
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(sourceBrowser.items[0].goal_id, "Level1-1");
+  assert.equal(sourceBrowser.items[0].recipe_count, 1);
 });
 
 test("run metric sorting respects direction and keeps missing values last", () => {

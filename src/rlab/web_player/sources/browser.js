@@ -581,7 +581,7 @@ export class SourceBrowser {
       });
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(payload.error || `Catalog request failed (${response.status})`);
-      if (serial !== this.requestSerial) return;
+      if (serial !== this.requestSerial || key !== this.routeKey()) return;
       if (this.route.level === "projects" && payload.entity && !this.route.entity) {
         this.route.entity = payload.entity;
       }
@@ -603,7 +603,7 @@ export class SourceBrowser {
         }
       }
       this.nextCursor = payload.next_cursor || null;
-      this.loadedKey = key;
+      this.loadedKey = this.routeKey();
       this.error = "";
       if (this.route.checkpoint_id && !append) {
         const selected = received.find(
@@ -618,13 +618,20 @@ export class SourceBrowser {
         }
       }
     } catch (error) {
-      if (serial !== this.requestSerial) return;
+      if (serial !== this.requestSerial || key !== this.routeKey()) return;
       this.error = String(error?.message || error);
       if (quiet) this.showToast(this.error, true);
     } finally {
       if (serial === this.requestSerial) {
         this.loading = false;
         this.renderView();
+        if (
+          key !== this.routeKey()
+          && this.loadedKey !== this.routeKey()
+          && this.app.phase === "selecting"
+        ) {
+          this.ensureLoaded();
+        }
       }
     }
   }
