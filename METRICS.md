@@ -1,4 +1,4 @@
-# Metrics schema v8
+# Metrics schema v9
 
 This file is the human contract for rlab telemetry. The Python registry in
 `src/rlab/metric_names.py` is the executable source of truth. Every emitted metric must match an
@@ -17,7 +17,7 @@ exact registry entry or a bounded template.
 - Public model R2 contains immutable checkpoint closures and a mutable no-cache run index. Private
   eval R2 contains intents, results, and episode evidence. Private control R2 contains leases,
   journals, promotions, and terminal receipts.
-- W&B config contains run-defining dimensions: `metrics_schema_version: 8`, `training_backend_id`,
+- W&B config contains run-defining dimensions: `metrics_schema_version: 9`, `training_backend_id`,
   `training_backend_config_hash`, `algorithm_id`, goal,
   environment, starts, seed, frame skip, environment count, hyperparameters, eval protocol, and
   runtime versions.
@@ -47,14 +47,14 @@ The active checkpoint protocol is `acceptance`; complete accepted evidence addit
 rejected rather than silently rewritten. Starts use the same readable ID in training and evaluation.
 Provider `info` fields never become metrics automatically.
 
-Configuration-selected internal learner feedback, such as a snapshot curriculum's per-start
+Configuration-selected internal learner feedback, such as an archive curriculum's per-start
 priority statistic, is not telemetry merely because it has a readable name. Internal feedback
 identifiers do not use metric paths and are not published to W&B unless a separately registered
 metric explicitly projects them. If projected, the emitted name and semantics must appear in the
-registry below. For SB3 PPO and A2C, snapshot-curriculum `priority_metric: value_error` specifically
-means the arithmetic mean of `abs(A_t)` over one completed snapshot-origin trajectory, where `A_t`
+registry below. For SB3 PPO and A2C, archive-curriculum `priority_metric: value_error` specifically
+means the arithmetic mean of `abs(A_t)` over one completed archive-origin trajectory, where `A_t`
 is raw GAE before PPO minibatch normalization. That scalar updates the archive's cell-level EMA and
-is intentionally not emitted; `train/curriculum/snapshot/feedback/trajectory/count` reports only how
+is intentionally not emitted; `train/curriculum/archive/feedback/trajectory/count` reports only how
 many such trajectory updates were committed.
 
 An episode metric is a **return**. `reward` is reserved for per-step shaping and component
@@ -75,7 +75,7 @@ schema v8.
 
 - Mario ranks checkpoints only after acceptance: earliest `leader/checkpoint/step`, then highest
   `eval/full/episode/return/mean`. Breakout is training-only and ranks current-contract seeded recipe
-  cohorts using `train/episode/return/shaped/from/target/mean`, which excludes snapshot-curriculum
+  cohorts using `train/episode/return/shaped/from/target/mean`, which excludes archive-curriculum
   origins and non-episode control boundaries; tied cohorts prefer fewer policy transitions.
 - Aggregate training `current/rate/*` is cumulative. Aggregate `window_100/rate/*` is the latest
   100 attempts. Global
@@ -185,13 +185,13 @@ exit alone is never scientific success.
 <!-- METRIC_REGISTRY_START -->
 | Metric or template | Meaning | Unit | Cadence | Surface |
 |---|---|---|---|---|
-| `train/episode/return/shaped/mean` | Rolling mean shaped return over the latest 100 genuine completed training episodes across target and snapshot origins; a snapshot-origin return starts at restoration, and control boundaries are excluded. | scalar | rollout | history |
+| `train/episode/return/shaped/mean` | Rolling mean shaped return over the latest 100 genuine completed training episodes across target and archive origins; a archive-origin return starts at restoration, and control boundaries are excluded. | scalar | rollout | history |
 | `train/episode/length/mean` | Rolling mean length over the latest 100 completed training episodes. | steps | rollout | history |
 | `train/outcome/terminal/count` | Cumulative terminal episode records. | episodes | rollout | history |
 | `train/outcome/reason/{reason}/count` | Cumulative failed episodes containing a reason. | episodes | rollout | history |
 | `train/outcome/reason/{reason}/rate/window_100` | Failure-reason incidence over the latest 100 terminal episodes. | fraction | rollout | history |
-| `train/outcome/success/from/{start}/count` | Cumulative successful genuine target-origin episodes from a start; snapshot-origin episodes are excluded. | episodes | rollout | history |
-| `train/outcome/success/from/{start}/attempts` | Cumulative genuine target-origin episode attempts from a start; snapshot-origin episodes are excluded. | episodes | rollout | history |
+| `train/outcome/success/from/{start}/count` | Cumulative successful genuine target-origin episodes from a start; archive-origin episodes are excluded. | episodes | rollout | history |
+| `train/outcome/success/from/{start}/attempts` | Cumulative genuine target-origin episode attempts from a start; archive-origin episodes are excluded. | episodes | rollout | history |
 | `train/outcome/success/from/{start}/rate/window_100` | Success rate over the latest 100 genuine target-origin attempts from a start. | fraction | rollout | history |
 | `train/outcome/success/current/rate/min` | Minimum cumulative target-origin success rate across observed starts. | fraction | rollout | history |
 | `train/outcome/success/current/rate/mean` | Mean cumulative target-origin success rate across observed starts. | fraction | rollout | history |
@@ -223,6 +223,24 @@ exit alone is never scientific success.
 | `train/algorithm/jerk/best/sequence_length` | Action length of JERK's highest-ranked retained sequence. | steps | rollout | history |
 | `train/algorithm/jerk/archive/selected_prefix_return_mean` | Cumulative mean retained-prefix return selected for JERK archive replay. | return | rollout | history |
 | `train/algorithm/jerk/exploit/probability` | Probability that JERK starts an episode by sampling a retained archive sequence. | fraction | rollout | history |
+| `train/algorithm/go_explore/archive/cell_count` | Semantic cells currently retained by Go-Explore. | cells | interval | history |
+| `train/algorithm/go_explore/archive/entry_count` | Immutable state-archive entries created by the search. | entries | interval | history |
+| `train/algorithm/go_explore/archive/blob_count` | Distinct content-addressed provider-state blobs retained by the search. | blobs | interval | history |
+| `train/algorithm/go_explore/archive/blob_bytes` | Uncompressed bytes in distinct retained provider-state blobs. | bytes | interval | history |
+| `train/algorithm/go_explore/archive/selection_count` | Cumulative archived-cell selections for restoration. | selections | interval | history |
+| `train/algorithm/go_explore/archive/visit_count` | Cumulative semantic cell visits. | visits | interval | history |
+| `train/algorithm/go_explore/archive/update_count` | Cumulative replacements of an existing cell by a better trajectory. | updates | interval | history |
+| `train/algorithm/go_explore/archive/recent_new_cell_rate` | New semantic cells divided by visits in the bounded recent visit window. | fraction | interval | history |
+| `train/algorithm/go_explore/archive/recent_visit_window` | Visit count represented by the recent new-cell-rate window. | visits | interval | history |
+| `train/algorithm/go_explore/archive/visits_per_cell` | Cumulative visits divided by current cell count. | ratio | interval | history |
+| `train/algorithm/go_explore/success_guided/cell_count` | Cells on the current best-success lineage. | cells | interval | history |
+| `train/algorithm/go_explore/success_guided/selection_count` | Cumulative selections made by success-lineage guidance. | selections | interval | history |
+| `train/algorithm/go_explore/best/progress` | Greatest task progress reached by the best retained trajectory. | progress | interval | history |
+| `train/algorithm/go_explore/best/return` | Shaped return of the best retained trajectory. | return | interval | history |
+| `train/algorithm/go_explore/best/program_steps` | Environment steps in the best retained JERK program. | steps | interval | history |
+| `train/algorithm/go_explore/best/program_runs` | Canonical action runs in the best retained JERK program. | runs | interval | history |
+| `train/algorithm/go_explore/best/completed` | Whether the best retained trajectory completed the task. | boolean | interval | history |
+| `train/algorithm/go_explore/best/improvement_count` | Successful-trajectory improvements after the first completion. | improvements | interval | history |
 | `train/algorithm/{algorithm}/value/explained_variance` | Actor-critic value-function explained variance. | scalar | rollout | history |
 | `train/algorithm/{algorithm}/update/policy_gradient_loss` | Actor-critic policy-gradient loss. | scalar | rollout | history |
 | `train/algorithm/{algorithm}/update/value_loss` | Actor-critic value loss. | scalar | rollout | history |
@@ -304,18 +322,18 @@ exit alone is never scientific success.
 | `orchestration/drain/idle_gpu_tail_seconds` | Time the training container retained its GPU after the learner exited. | seconds | terminal drain | history |
 | `orchestration/scratch/used_fraction` | Fraction of the task scratch filesystem currently used. | fraction | supervisor sample | history |
 | `train/episode/return/shaped/from/target/mean` | Rolling mean shaped return over the latest 100 genuine target-origin training episodes. | return | rollout | history |
-| `train/curriculum/snapshot/archive/cell/count` | Current snapshot archive cell count. | cells | rollout | history |
-| `train/curriculum/snapshot/archive/snapshot/count` | Current resident snapshot handle count. | snapshots | rollout | history |
-| `train/curriculum/snapshot/admission/candidate/count` | Non-terminal cell-crossing candidates observed during the rollout. | transitions | rollout | history |
-| `train/curriculum/snapshot/admission/accepted/count` | Snapshot candidates accepted into cell reservoirs during the rollout. | snapshots | rollout | history |
-| `train/curriculum/snapshot/archive/evicted/count` | Archive cells evicted during the rollout. | cells | rollout | history |
-| `train/curriculum/snapshot/capture/call/count` | Batched provider snapshot-capture calls during the rollout. | calls | rollout | history |
-| `train/curriculum/snapshot/reset/episode/count` | Snapshot-origin episodes started during the rollout. | episodes | rollout | history |
-| `train/curriculum/snapshot/reset/forced_boundary/count` | Non-episode control truncations used to activate snapshot lanes. | boundaries | rollout | history |
-| `train/curriculum/snapshot/feedback/trajectory/count` | Completed snapshot-origin trajectories committed to the priority sampler. | trajectories | rollout | history |
-| `train/curriculum/snapshot/transition/share` | Fraction of policy transitions whose origin is the snapshot curriculum. | fraction | rollout | history |
-| `train/curriculum/snapshot/sampling/probability/max` | Largest final cell probability in the snapshot sampler. | fraction | rollout | history |
-| `train/curriculum/snapshot/sampling/effective_cell/count` | Inverse-Simpson effective cell count of the snapshot sampling distribution. | cells | rollout | history |
-| `train/curriculum/snapshot/capture/seconds` | Provider snapshot-capture wall time accumulated during the rollout. | seconds | rollout | history |
-| `train/curriculum/snapshot/reset/seconds` | Provider reset wall time for reset calls containing snapshot lanes. | seconds | rollout | history |
+| `train/curriculum/archive/cell/count` | Current archive-curriculum cell count. | cells | rollout | history |
+| `train/curriculum/archive/entry/count` | Current immutable entry count retained by the curriculum view. | entries | rollout | history |
+| `train/curriculum/archive/admission/candidate/count` | Non-terminal cell-crossing candidates observed during the rollout. | transitions | rollout | history |
+| `train/curriculum/archive/admission/accepted/count` | Candidate entries accepted into cell reservoirs during the rollout. | entries | rollout | history |
+| `train/curriculum/archive/evicted/count` | Curriculum cells evicted during the rollout. | cells | rollout | history |
+| `train/curriculum/archive/capture/call/count` | Batched portable provider-state capture calls during the rollout. | calls | rollout | history |
+| `train/curriculum/archive/restore/episode/count` | Archive-origin episodes started during the rollout. | episodes | rollout | history |
+| `train/curriculum/archive/restore/forced_boundary/count` | Non-episode control truncations used to activate archive lanes. | boundaries | rollout | history |
+| `train/curriculum/archive/feedback/trajectory/count` | Completed archive-origin trajectories committed to the priority sampler. | trajectories | rollout | history |
+| `train/curriculum/archive/transition/share` | Fraction of policy transitions whose origin is the archive curriculum. | fraction | rollout | history |
+| `train/curriculum/archive/sampling/probability/max` | Largest final cell probability in the archive sampler. | fraction | rollout | history |
+| `train/curriculum/archive/sampling/effective_cell/count` | Inverse-Simpson effective cell count of the archive sampling distribution. | cells | rollout | history |
+| `train/curriculum/archive/capture/seconds` | Portable state capture wall time accumulated during the rollout. | seconds | rollout | history |
+| `train/curriculum/archive/restore/seconds` | Provider restore wall time for reset calls containing archive lanes. | seconds | rollout | history |
 <!-- METRIC_REGISTRY_END -->

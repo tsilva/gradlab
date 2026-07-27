@@ -72,9 +72,7 @@ def _normalize_ppo(config: Mapping[str, Any], *, label: str) -> dict[str, Any]:
             raise ValueError(f"{label}.{key} must be positive")
     for key in ("clip_range", "clip_range_vf", "adam_eps", "target_kl"):
         value = normalized[key]
-        if value is not None and (
-            not isinstance(value, int | float) or isinstance(value, bool)
-        ):
+        if value is not None and (not isinstance(value, int | float) or isinstance(value, bool)):
             raise ValueError(f"{label}.{key} must be a number or null")
     if normalized["advantage_normalization"] not in {"auto", "none", "global", "per-task"}:
         raise ValueError(
@@ -87,9 +85,7 @@ def _normalize_a2c(config: Mapping[str, Any], *, label: str) -> dict[str, Any]:
     normalized = normalize_on_policy_config(config, defaults=A2C_DEFAULT_CONFIG, label=label)
     for key in ("max_grad_norm", "rms_prop_eps"):
         value = normalized[key]
-        if value is not None and (
-            not isinstance(value, int | float) or isinstance(value, bool)
-        ):
+        if value is not None and (not isinstance(value, int | float) or isinstance(value, bool)):
             raise ValueError(f"{label}.{key} must be a number or null")
     if not isinstance(normalized["use_rms_prop"], bool):
         raise ValueError(f"{label}.use_rms_prop must be a boolean")
@@ -241,8 +237,8 @@ def contract_payload(backend_id: str) -> dict[str, Any]:
     return _backend(backend_id).contract_payload(backend_id)
 
 
-def snapshot_curriculum_priority_metrics(backend_id: str) -> tuple[str, ...]:
-    return _backend(backend_id).snapshot_curriculum_priority_metrics(backend_id)
+def state_archive_priority_metrics(backend_id: str) -> tuple[str, ...]:
+    return _backend(backend_id).state_archive_priority_metrics(backend_id)
 
 
 def runtime_metadata(

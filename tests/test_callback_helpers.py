@@ -25,7 +25,7 @@ from rlab.callbacks import (
     RlabCallback,
     RolloutDiagnosticsHelper,
     RuntimeMetricsHelper,
-    SnapshotCurriculumFeedbackHelper,
+    ArchiveCurriculumFeedbackHelper,
     ThroughputHelper,
     task_metric_source,
 )
@@ -398,9 +398,7 @@ class MetricEarlyStopHelperTests(unittest.TestCase):
             self.assertEqual(decision["metric_step"], 200)
             self.assertEqual(decision["value"], 1.0)
             self.assertEqual(
-                model.logger.records[
-                    train_early_stop_metric("clear_100", "would_trigger")
-                ],
+                model.logger.records[train_early_stop_metric("clear_100", "would_trigger")],
                 1.0,
             )
 
@@ -605,9 +603,7 @@ class LedgerCheckpointHelperTests(unittest.TestCase):
                         "algorithm_id": "ppo",
                         "model_class": "stable_baselines3.ppo.ppo.PPO",
                         "training_backend_id": "sb3.ppo",
-                        "training_backend_config_hash": training_backend_config_hash(
-                            train_config
-                        ),
+                        "training_backend_config_hash": training_backend_config_hash(train_config),
                     }
                 ),
                 config=resolve_env_config(env_config_from_mapping(train_config)),
@@ -843,7 +839,7 @@ class RolloutDiagnosticsHelperTests(unittest.TestCase):
         )
 
 
-class SnapshotCurriculumFeedbackHelperTests(unittest.TestCase):
+class ArchiveCurriculumFeedbackHelperTests(unittest.TestCase):
     def test_accumulates_absolute_raw_gae_across_rollout_fragments(self) -> None:
         class Source:
             def __init__(self) -> None:
@@ -879,7 +875,7 @@ class SnapshotCurriculumFeedbackHelperTests(unittest.TestCase):
             logger=logger,
             rollout_buffer=SimpleNamespace(advantages=np.asarray([[-2.0, 0.0], [1.0, 0.0]])),
         )
-        helper = SnapshotCurriculumFeedbackHelper()
+        helper = ArchiveCurriculumFeedbackHelper()
         helper.model = model  # type: ignore[assignment]
 
         source.steps = [step(done=False), step(done=False)]

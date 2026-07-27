@@ -28,9 +28,7 @@ class RlabVecEnv(VecEnv):
         self._actions: Any = None
         self._step_diagnostics: StepDiagnostics | None = None
         self._curriculum_step: Any | None = None
-        self._snapshot_curriculum_enabled = (
-            getattr(runtime, "snapshot_curriculum", None) is not None
-        )
+        self._archive_curriculum_enabled = getattr(runtime, "archive_curriculum", None) is not None
         self._seed_base: int | None = None
         self._dones = np.zeros(runtime.num_envs, dtype=bool)
         self._empty_infos: list[dict[str, Any]] = [{} for _ in range(runtime.num_envs)]
@@ -76,7 +74,7 @@ class RlabVecEnv(VecEnv):
         self.waiting = False
         self.reset_infos = self.runtime.reset_infos
         self._step_diagnostics = step.diagnostics
-        if self._snapshot_curriculum_enabled:
+        if self._archive_curriculum_enabled:
             self._curriculum_step = CurriculumStepAttribution(
                 curriculum_cell_ids=np.asarray(step.curriculum_cell_ids, dtype=object).copy(),
                 curriculum_generations=np.asarray(
@@ -143,8 +141,8 @@ class RlabVecEnv(VecEnv):
     def submit_curriculum_feedback(self, cell_id: str, value_error: float) -> None:
         self.runtime.submit_curriculum_feedback(cell_id, value_error)
 
-    def snapshot_curriculum_summary(self) -> Mapping[str, Any] | None:
-        return self.runtime.snapshot_curriculum_summary()
+    def state_archive_summary(self) -> Mapping[str, Any] | None:
+        return self.runtime.state_archive_summary()
 
     def drain_records(
         self,

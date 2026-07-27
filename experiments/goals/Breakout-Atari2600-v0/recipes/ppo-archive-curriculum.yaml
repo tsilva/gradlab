@@ -1,24 +1,26 @@
 defaults:
 - ../../../recipes/_presets/atari-ppo@_global_
 - _self_
-recipe_id: ppo-snapshot-curriculum
+recipe_id: ppo-archive-curriculum
 description: >-
   Seed {{ seed }} trains the default high-throughput Breakout PPO policy for {{ goal_id }} while reserving
   approximately 20 percent of lanes for a bounded live-state curriculum keyed by 50-point score
   stages and prioritized by value error plus staleness.
 train:
   timesteps: 500000000
-  snapshot_curriculum:
-    cell:
-      # The goal declares this provider signal; no Breakout-specific archive code is required.
-      signal: score
-      # One cell per 50 points separates the major brick-layout/control regimes.
-      bucket_size: 50
-    # With 128 envs this deterministically assigns 26 lanes to restored states and 102 to Start.
-    snapshot_share: 0.20
-    # PPO supplies mean absolute raw GAE per completed restored-state trajectory.
-    priority_metric: value_error
-    restore_snapshots: true
+  state_archive:
+    semantic_id: state-archive-v1
+    persistence: durable
+    restore_semantics: continuation
+    recorder:
+      mode: cell_transition
+      cell:
+        signal: score
+        bucket_size: 50
+    curriculum:
+      archive_share: 0.20
+      priority_metric: value_error
+      restore_entries: true
   backend:
     config:
       n_steps: 64

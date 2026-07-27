@@ -20,6 +20,7 @@ class FakeApi:
 
     def __init__(self) -> None:
         self.runs_calls = 0
+        self.runs_filters: list[object] = []
 
     def projects(self, *, entity: str, per_page: int):
         raise AssertionError(
@@ -28,6 +29,7 @@ class FakeApi:
 
     def runs(self, path: str, **kwargs):
         self.runs_calls += 1
+        self.runs_filters.append(kwargs.get("filters"))
         assert path == "research/Mario"
         assert kwargs["order"] == "-created_at"
         return [
@@ -338,6 +340,7 @@ def test_catalog_uses_repository_projects_and_goals_before_querying_wandb(
     )
 
     assert [item["name"] for item in projects.items] == ["Mario"]
+    assert api.runs_filters == [{"config.goal_slug": "Mario/Level1-1"}]
     assert projects.items[0]["goal_count"] == 1
     assert [item["goal_id"] for item in goals.items] == ["Level1-1"]
     assert goals.items[0]["title"] == "Mario Level 1-1 completion"
@@ -413,11 +416,11 @@ def test_catalog_validates_and_orders_public_checkpoints(monkeypatch: pytest.Mon
     rows = catalog.checkpoints(run_id=RUN_ID)
 
     assert [row["checkpoint_id"] for row in rows] == [
-        periodic["checkpoint_id"],
         final["checkpoint_id"],
+        periodic["checkpoint_id"],
     ]
-    assert rows[0]["promoted"] is True
-    assert rows[0]["manifest_url"].endswith("/manifest.json")
+    assert rows[1]["promoted"] is True
+    assert rows[1]["manifest_url"].endswith("/manifest.json")
 
 
 def test_catalog_attaches_goal_required_eval_results_by_checkpoint(
@@ -487,7 +490,9 @@ def test_catalog_attaches_goal_required_eval_results_by_checkpoint(
         run_id=RUN_ID,
     )
 
-    accepted = rows[0]["evaluation"]
+    assert [row["step"] for row in rows] == [500_000, 250_000]
+    rejected_row, accepted_row = rows
+    accepted = accepted_row["evaluation"]
     assert accepted["status"] == "accepted"
     assert accepted["episodes_completed"] == 100
     assert accepted["criteria"] == [
@@ -499,15 +504,15 @@ def test_catalog_attaches_goal_required_eval_results_by_checkpoint(
             "passed": True,
         }
     ]
-    assert rows[0]["playback_seed"] == 42_000
-    assert rows[0]["playback_seed_source"] == "evaluation"
-    rejected = rows[1]["evaluation"]
+    assert accepted_row["playback_seed"] == 42_000
+    assert accepted_row["playback_seed_source"] == "evaluation"
+    rejected = rejected_row["evaluation"]
     assert rejected["status"] == "rejected"
     assert rejected["episodes_completed"] == 1
     assert rejected["failure_count"] == 1
     assert rejected["criteria"][0]["value"] is None
-    assert rows[1]["playback_seed"] == 42_000
-    assert rows[1]["playback_seed_source"] == "evaluation"
+    assert rejected_row["playback_seed"] == 42_000
+    assert rejected_row["playback_seed_source"] == "evaluation"
 
 
 def test_catalog_uses_training_seed_when_checkpoint_has_no_eval_result(

@@ -435,7 +435,7 @@ def validate_and_normalize_train_config(
         normalize_metric_early_stop_config,
         normalize_metric_threshold_rules,
     )
-    from rlab.snapshot_curriculum import normalize_snapshot_curriculum_config
+    from rlab.state_archive import normalize_state_archive_config
 
     normalized = dict(train_config)
     validate_train_config_fields(normalized, label=label, required_keys=required_keys)
@@ -453,19 +453,15 @@ def validate_and_normalize_train_config(
             normalized["checkpoint_eval_acceptance"],
             label=f"{label}.checkpoint_eval_acceptance",
         )
-    if normalized.get("snapshot_curriculum") is not None:
+    if normalized.get("state_archive") is not None:
         n_envs = normalized.get("n_envs")
-        normalized["snapshot_curriculum"] = normalize_snapshot_curriculum_config(
-            normalized["snapshot_curriculum"],
-            label=f"{label}.snapshot_curriculum",
+        normalized["state_archive"] = normalize_state_archive_config(
+            normalized["state_archive"],
+            label=f"{label}.state_archive",
             n_envs=int(n_envs) if n_envs is not None else None,
         )
     early_stop = normalized.get("early_stop")
-    conditions = (
-        early_stop.get("conditions")
-        if isinstance(early_stop, Mapping)
-        else None
-    )
+    conditions = early_stop.get("conditions") if isinstance(early_stop, Mapping) else None
     has_training_success_condition = isinstance(conditions, Mapping) and any(
         str(condition.get("outcome")) == "success"
         for condition in conditions.values()
@@ -519,7 +515,7 @@ TRAIN_CONFIG_FIELDS: tuple[TrainConfigField, ...] = (
         source_section="train",
     ),
     _field(
-        "snapshot_curriculum",
+        "state_archive",
         type_name="json",
         default=None,
         serialize="json",

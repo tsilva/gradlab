@@ -42,7 +42,7 @@ class BenchmarkProfileTests(unittest.TestCase):
             [
                 "local-smoke-mario-l11",
                 "mario-env-throughput-l11",
-                "train-loop-comparison-breakout-snapshot-curriculum",
+                "train-loop-comparison-breakout-archive-curriculum",
                 "train-loop-throughput-mario-l11",
             ],
         )
@@ -237,7 +237,7 @@ required_metrics: [train/throughput/not_real]
         self.assertEqual(train_config["seed"], 123)
 
     def test_breakout_comparison_uses_ab_ba_order_and_algorithm_neutral_config(self) -> None:
-        profile = find_benchmark_profile("train-loop-comparison-breakout-snapshot-curriculum")
+        profile = find_benchmark_profile("train-loop-comparison-breakout-archive-curriculum")
         commands = build_benchmark_commands(profile)
 
         self.assertEqual(
@@ -246,11 +246,11 @@ required_metrics: [train/throughput/not_real]
         )
         candidate = json.loads(commands[1].stdin or "{}")
         baseline = json.loads(commands[0].stdin or "{}")
-        self.assertNotIn("snapshot_curriculum", baseline)
-        self.assertEqual(candidate["snapshot_curriculum"]["cell"]["signal"], "score")
-        self.assertEqual(candidate["snapshot_curriculum"]["priority_metric"], "value_error")
-        self.assertTrue(candidate["snapshot_curriculum"]["restore_snapshots"])
-        self.assertEqual(candidate["snapshot_curriculum"]["resolved_snapshot_lanes"], 3)
+        self.assertNotIn("state_archive", baseline)
+        self.assertEqual(candidate["state_archive"]["recorder"]["cell"]["signal"], "score")
+        self.assertEqual(candidate["state_archive"]["curriculum"]["priority_metric"], "value_error")
+        self.assertTrue(candidate["state_archive"]["curriculum"]["restore_entries"])
+        self.assertEqual(candidate["state_archive"]["curriculum"]["resolved_archive_lanes"], 3)
 
     def test_queue_backed_benchmark_commands_include_goal_and_recipe(self) -> None:
         command = build_benchmark_commands(find_benchmark_profile("local-smoke-mario-l11"))[0]
@@ -322,7 +322,7 @@ required_metrics: [train/throughput/not_real]
         )
 
     def test_train_loop_comparison_gates_candidate_slowdown(self) -> None:
-        profile = find_benchmark_profile("train-loop-comparison-breakout-snapshot-curriculum")
+        profile = find_benchmark_profile("train-loop-comparison-breakout-archive-curriculum")
         commands = build_benchmark_commands(profile)
         prepared = []
         results = []
@@ -342,8 +342,8 @@ required_metrics: [train/throughput/not_real]
                 if is_candidate:
                     payload.update(
                         {
-                            "train/curriculum/snapshot/transition/share": 0.2,
-                            "train/curriculum/snapshot/capture/call/count": 1.0,
+                            "train/curriculum/archive/transition/share": 0.2,
+                            "train/curriculum/archive/capture/call/count": 1.0,
                         }
                     )
                 store.append_metrics(payload, step=1, source="test", publish=False)

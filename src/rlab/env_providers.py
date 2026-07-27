@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import hashlib
 from collections.abc import Callable, Mapping
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
@@ -169,120 +169,6 @@ class _StartInfoAdapter:
         if "start_source" not in result or "_start_source" not in result:
             raise ValueError("Turbo API v1 reset infos must contain start_source and _start_source")
         return observations, result
-
-    def step(self, actions):
-        return self.env.step(actions)
-
-    def get_images(self):
-        return self.env.get_images()
-
-    def close(self):
-        return self.env.close()
-
-
-class _BreakoutSnapshotBankAdapter:
-    """Expose persisted Breakout states as deterministic provider start IDs."""
-
-    def __init__(self, env: Any, bank: Any):
-        self.env = env
-        self.bank = bank
-        self.num_envs = int(env.num_envs)
-        self.state_catalog = tuple(bank.state_ids)
-        self._active_starts = np.full(self.num_envs, None, dtype=object)
-
-    def __getattr__(self, name: str) -> Any:
-        if name in {"env", "bank"}:
-            raise AttributeError(name)
-        return getattr(self.env, name)
-
-    def reset(self, *, seed=None, options=None):
-        native_options = dict(options or {})
-        mask = np.asarray(
-            native_options.get("reset_mask", np.ones(self.num_envs, dtype=np.bool_)),
-            dtype=np.bool_,
-        )
-        if mask.shape != (self.num_envs,):
-            raise ValueError(f"reset_mask must have shape ({self.num_envs},)")
-        requested = native_options.pop("state_indices", None)
-        if requested is None:
-            requested_indices = np.zeros(self.num_envs, dtype=np.int32)
-        else:
-            if not isinstance(requested, np.ndarray):
-                raise TypeError("state_indices must be a NumPy array")
-            requested_indices = requested
-            if requested_indices.dtype != np.int32:
-                raise TypeError("state_indices must have dtype np.int32")
-            if requested_indices.shape != (self.num_envs,):
-                raise ValueError(f"state_indices must have shape ({self.num_envs},)")
-        requested_ids = np.full(self.num_envs, None, dtype=object)
-        snapshot_mask = np.zeros(self.num_envs, dtype=np.bool_)
-        for lane in np.flatnonzero(mask):
-            state_index = int(requested_indices[lane])
-            if not 0 <= state_index < len(self.state_catalog):
-                raise ValueError(
-                    f"state_indices entries must be in [0, {len(self.state_catalog) - 1}]"
-                )
-            state_id = self.state_catalog[state_index]
-            requested_ids[lane] = state_id
-            snapshot_mask[lane] = True
-
-        placeholder = self.bank.states[self.state_catalog[0]]
-        states = [placeholder for _ in range(self.num_envs)]
-        for lane in np.flatnonzero(snapshot_mask):
-            states[lane] = self.bank.states[str(requested_ids[lane])]
-        self.env.set_state(states, reset_mask=snapshot_mask)
-        native_options["snapshots"] = self.env.capture_snapshots(snapshot_mask)
-        native_options["state_indices"] = np.full(self.num_envs, -1, dtype=np.int32)
-
-        if seed is None:
-            normalized_seed = None
-        elif isinstance(seed, int):
-            normalized_seed = [seed + lane for lane in range(self.num_envs)]
-        else:
-            normalized_seed = list(seed)
-            if len(normalized_seed) != self.num_envs:
-                raise ValueError(f"seed must contain {self.num_envs} lane values")
-        if normalized_seed is not None:
-            for lane in np.flatnonzero(snapshot_mask):
-                normalized_seed[lane] = None
-
-        observations, infos = self.env.reset(seed=normalized_seed, options=native_options)
-        for lane in np.flatnonzero(snapshot_mask):
-            state_id = str(requested_ids[lane])
-            actual_hash = hashlib.sha256(
-                np.ascontiguousarray(observations[lane]).tobytes(order="C")
-            ).hexdigest()
-            expected_hash = self.bank.observation_sha256[state_id]
-            if actual_hash != expected_hash:
-                raise ValueError(
-                    f"snapshot {state_id!r} restored a different policy observation: "
-                    f"expected {expected_hash}, got {actual_hash}"
-                )
-        self._active_starts[snapshot_mask] = requested_ids[snapshot_mask]
-        if not isinstance(infos, Mapping):
-            return observations, infos
-        result = dict(infos)
-        result["state_index"] = self.active_state_indices().copy()
-        result["_state_index"] = mask.copy()
-        start_ids = np.asarray(
-            result.get("start_id", self._active_starts),
-            dtype=object,
-        ).copy()
-        start_ids[snapshot_mask] = requested_ids[snapshot_mask]
-        result["start_id"] = start_ids
-        result["_start_id"] = mask.copy()
-        result["start_source"] = np.full(self.num_envs, "snapshot", dtype=object)
-        result["_start_source"] = mask.copy()
-        return observations, result
-
-    def active_state_indices(self):
-        lookup = {name: index for index, name in enumerate(self.state_catalog)}
-        values = np.asarray(
-            [lookup.get(str(value), -1) for value in self._active_starts],
-            dtype=np.int32,
-        )
-        values.setflags(write=False)
-        return values
 
     def step(self, actions):
         return self.env.step(actions)
@@ -526,7 +412,7 @@ def provider_descriptor(
 
     provider = resolve_env_provider(config.env_provider)
     contract_env = native_env
-    while isinstance(contract_env, (_StartInfoAdapter, _BreakoutSnapshotBankAdapter)):
+    while isinstance(contract_env, _StartInfoAdapter):
         contract_env = contract_env.env
     contract_metadata = getattr(contract_env, "metadata", {})
     turbo_contract = (
@@ -680,15 +566,8 @@ def provider_descriptor(
             )
         if action_preset is None:
             action_preset = declared_action["preset"]
-    snapshot_bank_configured = bool(
-        isinstance(config.env_args, Mapping)
-        and (
-            config.env_args.get("snapshot_bank_uri") or config.env_args.get("snapshot_bank_sha256")
-        )
-    )
     supports_live_snapshots = bool(
         getattr(native_env, "supports_live_snapshots", False)
-        and not snapshot_bank_configured
         and callable(getattr(native_env, "capture_snapshots", None))
     )
     deterministic_snapshots = bool(
@@ -704,6 +583,20 @@ def provider_descriptor(
         buffer_depth = turbo_contract.observation_buffer_depth
         api_version = turbo_contract.api_version
         capabilities = turbo_contract.capabilities
+    snapshot_codec_id = {
+        SUPERMARIOBROS_NES_TURBO_PROVIDER.provider_id: ("supermariobrosnes-turbo.portable-v1"),
+        BREAKOUT_TURBO_ENV_PROVIDER.provider_id: "breakout-turbo-env.state-v1",
+    }.get(provider.provider_id)
+    snapshot_compatibility_id = None
+    if snapshot_codec_id is not None:
+        from rlab.env_identity import (
+            environment_hash,
+            environment_identity_from_train_config,
+        )
+
+        snapshot_compatibility_id = environment_hash(
+            environment_identity_from_train_config(asdict(config))
+        )
     return ProviderDescriptor(
         provider_id=provider.provider_id,
         native_observation_space=observation_space,
@@ -726,6 +619,8 @@ def provider_descriptor(
         action_table_hash=(str(action_table_hash) if action_table_hash is not None else None),
         supports_live_snapshots=supports_live_snapshots,
         live_snapshots_deterministic=deterministic_snapshots,
+        snapshot_codec_id=snapshot_codec_id,
+        snapshot_compatibility_id=snapshot_compatibility_id,
     )
 
 
@@ -899,37 +794,10 @@ def _breakout_turbo_make_vec_env(
     _require_provider(config, BREAKOUT_TURBO_ENV_PROVIDER.provider_id)
     env_type = breakout_vec_env_type()
     kwargs = dict(native_kwargs)
-    snapshot_bank_uri = str(kwargs.pop("snapshot_bank_uri", "") or "").strip()
-    snapshot_bank_sha256 = str(kwargs.pop("snapshot_bank_sha256", "") or "").strip()
-    if bool(snapshot_bank_uri) != bool(snapshot_bank_sha256):
-        raise ValueError(
-            "breakout snapshot starts require both snapshot_bank_uri and snapshot_bank_sha256"
-        )
-    raw_state = "Start" if snapshot_bank_uri else (config.state or "Start")
-    env = env_type(config.game, state=raw_state, **kwargs)
+    env = env_type(config.game, state=config.state or "Start", **kwargs)
     env = _require_disabled_autoreset_mode(env, BREAKOUT_TURBO_ENV_PROVIDER.provider_id)
     if breakout_vec_env_type is breakout_turbo_vec_env_type:
         validate_turbo_vector_env(env, BREAKOUT_TURBO_ENV_PROVIDER.provider_id)
-    if snapshot_bank_uri:
-        from rlab.snapshot_banks import (
-            load_breakout_snapshot_bank,
-            validate_breakout_snapshot_environment,
-        )
-
-        bank = load_breakout_snapshot_bank(snapshot_bank_uri, snapshot_bank_sha256)
-        validate_breakout_snapshot_environment(
-            bank,
-            game=config.game,
-            frame_skip=config.frame_skip,
-            frame_stack=int(kwargs.get("frame_stack", 4)),
-            observation_size=config.observation_size,
-            obs_crop=kwargs.get("obs_crop"),
-            obs_crop_mode=config.obs_crop_mode,
-            obs_crop_fill=config.obs_crop_fill,
-            obs_resize_algorithm=config.obs_resize_algorithm,
-            sticky_action_prob=config.sticky_action_prob,
-        )
-        env = _BreakoutSnapshotBankAdapter(env, bank)
     return _StartInfoAdapter(env)
 
 

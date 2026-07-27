@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 import json
-from collections import Counter
 from copy import deepcopy
 from dataclasses import replace
 from pathlib import Path
@@ -44,8 +43,6 @@ RECIPE = Path("experiments/goals/SuperMarioBros-Nes-v0/Level1-1/recipes/ppo.yaml
 LEVEL1_3_GOAL = Path("experiments/goals/SuperMarioBros-Nes-v0/Level1-3/_goal.yaml")
 LEVEL1_3_TRAIN_CLEAR_RECIPE = LEVEL1_3_GOAL.parent / "recipes/ppo-train-clear-100.yaml"
 RUNTIME = "docker:ghcr.io/tsilva/rlab/rlab-train@sha256:" + "b" * 64
-POST400_GOAL = Path("experiments/goals/Breakout-Atari2600-v0/post400-r400/_goal.yaml")
-POST400_RECIPE = POST400_GOAL.parent / "recipes/ppo-resume-129991680.yaml"
 BREAKOUT_GOAL = Path("experiments/goals/Breakout-Atari2600-v0/_goal.yaml")
 BREAKOUT_RECIPES = tuple(sorted((BREAKOUT_GOAL.parent / "recipes").glob("*.yaml")))
 BANDIT_GOAL = Path("experiments/goals/rlab__bandit/_goal.yaml")
@@ -304,62 +301,6 @@ def test_bundle_metadata_reconstructs_provider_action_contract(
         assert action["preset"] == expected_preset
 
 
-def test_post400_acceptance_assigns_every_snapshot_to_a_fixed_lane() -> None:
-    materialized = compose_train_document(POST400_GOAL, POST400_RECIPE)
-    document = build_recipe_document(
-        materialized,
-        repo_root=Path.cwd(),
-        source_commit="a" * 40,
-        run_description="post-400 acceptance lane regression",
-        seed=123,
-        runtime_image_ref=RUNTIME,
-    )
-
-    contract = evaluation_contract(document)
-    starts = [entry["start_state"] for entry in contract["manifest"]["episodes"]]
-    counts = Counter(starts)
-    assert contract["n_envs"] == 32
-    assert len(starts) == 100
-    assert len(counts) == 32
-    assert set(counts.values()) == {3, 4}
-
-
-def test_bundle_omits_unselected_reward_default_and_accepts_legacy_false(
-    tmp_path: Path,
-) -> None:
-    materialized = compose_train_document(POST400_GOAL, POST400_RECIPE)
-    recipe_document = build_recipe_document(
-        materialized,
-        repo_root=Path.cwd(),
-        source_commit="a" * 40,
-        run_description="no reward catalog regression",
-        seed=123,
-        runtime_image_ref=RUNTIME,
-    )
-    checkpoint = tmp_path / "model.zip"
-    checkpoint.write_bytes(b"checkpoint bytes")
-    recipe_path = write_canonical_json(tmp_path / "recipe.json", recipe_document)
-    metadata = {
-        "kind": "checkpoint",
-        "checkpoint_step": 500_000,
-        "algorithm_id": "ppo",
-        "model_class": "stable_baselines3.ppo.ppo.PPO",
-        "training_backend_id": "sb3.ppo",
-        "training_backend_config_hash": training_backend_config_hash(
-            recipe_document["recipe"]["train_config"]
-        ),
-        "reward_shape_is_default": False,
-    }
-    model_document = build_model_document(checkpoint, recipe_path, metadata)
-    assert "reward_shape_is_default" not in model_document["provenance"]
-
-    # Historical bundles emitted the argparse False default even when no reward
-    # program was selected; keep those exact artifacts evaluable.
-    model_document["provenance"]["reward_shape_is_default"] = False
-    write_canonical_json(tmp_path / "model.json", model_document)
-    load_policy_bundle(tmp_path)
-
-
 def write_bundle(root: Path) -> None:
     checkpoint = root / "model.zip"
     checkpoint.write_bytes(b"checkpoint bytes")
@@ -606,7 +547,7 @@ def test_future_model_version_fails_before_checkpoint_access(tmp_path: Path) -> 
     assert "[2]" in str(error.value)
 
 
-def test_model_v2_records_session_local_snapshot_curriculum_summary(tmp_path: Path) -> None:
+def test_model_v2_records_durable_state_archive_summary(tmp_path: Path) -> None:
     checkpoint = tmp_path / "model.zip"
     checkpoint.write_bytes(b"checkpoint bytes")
     recipe_document = level1_1_recipe_document()
@@ -620,15 +561,17 @@ def test_model_v2_records_session_local_snapshot_curriculum_summary(tmp_path: Pa
         "training_backend_config_hash": training_backend_config_hash(
             recipe_document["recipe"]["train_config"]
         ),
-        "snapshot_curriculum_preflight_sha256": "c" * 64,
-        "snapshot_curriculum_session": {
-            "semantic_id": "snapshot_curriculum_v1",
-            "generation": 1,
-            "persistence": "session_local",
-            "resume_behavior": "cold_archive",
-            "archive_cell_count": 17,
-            "archive_snapshot_count": 61,
-            "completed_rollout": 42,
+        "state_archive_preflight_sha256": "c" * 64,
+        "state_archive_summary": {
+            "semantic_id": "state-archive-v1",
+            "schema_version": 1,
+            "persistence": "durable",
+            "provider_id": "supermariobrosnes-turbo",
+            "codec_id": "supermariobrosnes-turbo.portable-v1",
+            "compatibility_id": "sha256:" + "d" * 64,
+            "entry_count": 61,
+            "blob_count": 17,
+            "blob_bytes": 123456,
         },
     }
     model = build_model_document(checkpoint, recipe_path, metadata)
@@ -637,10 +580,7 @@ def test_model_v2_records_session_local_snapshot_curriculum_summary(tmp_path: Pa
     bundle = load_policy_bundle(tmp_path)
 
     assert bundle.model["format_version"] == 2
-    assert (
-        bundle.model["provenance"]["snapshot_curriculum_session"]
-        == metadata["snapshot_curriculum_session"]
-    )
+    assert bundle.model["provenance"]["state_archive_summary"] == metadata["state_archive_summary"]
 
 
 def test_retired_model_v1_is_rejected(tmp_path: Path) -> None:

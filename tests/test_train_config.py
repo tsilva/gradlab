@@ -137,7 +137,7 @@ class TrainConfigFieldSchemaTests(unittest.TestCase):
         )
 
         self.assertEqual(parser.parse_args([]).checkpoint_eval_backend, "modal")
-        self.assertEqual(parser.parse_args([]).metrics_schema_version, 8)
+        self.assertEqual(parser.parse_args([]).metrics_schema_version, 9)
         self.assertEqual(
             parser.parse_args(["--checkpoint-eval-backend", "local"]).checkpoint_eval_backend,
             "local",
@@ -147,23 +147,17 @@ class TrainConfigFieldSchemaTests(unittest.TestCase):
             "none",
         )
 
-    def test_metrics_schema_version_accepts_only_active_v8(self) -> None:
+    def test_metrics_schema_version_accepts_only_active_v9(self) -> None:
         self.assertEqual(
-            validate_and_normalize_train_config({"metrics_schema_version": 8})[
+            validate_and_normalize_train_config({"metrics_schema_version": 9})[
                 "metrics_schema_version"
             ],
-            8,
+            9,
         )
-        with self.assertRaisesRegex(ValueError, "must be >= 8"):
-            validate_and_normalize_train_config({"metrics_schema_version": 4})
-        with self.assertRaisesRegex(ValueError, "must be >= 8"):
-            validate_and_normalize_train_config({"metrics_schema_version": 5})
-        with self.assertRaisesRegex(ValueError, "must be >= 8"):
-            validate_and_normalize_train_config({"metrics_schema_version": 6})
-        with self.assertRaisesRegex(ValueError, "must be >= 8"):
-            validate_and_normalize_train_config({"metrics_schema_version": 7})
-        with self.assertRaisesRegex(ValueError, "must be <= 8"):
-            validate_and_normalize_train_config({"metrics_schema_version": 9})
+        with self.assertRaisesRegex(ValueError, "must be >= 9"):
+            validate_and_normalize_train_config({"metrics_schema_version": 8})
+        with self.assertRaisesRegex(ValueError, "must be <= 9"):
+            validate_and_normalize_train_config({"metrics_schema_version": 10})
 
     def test_no_eval_config_rejects_eval_metric_stop_behavior(self) -> None:
         with self.assertRaisesRegex(ValueError, "must use a train/\\* metric"):

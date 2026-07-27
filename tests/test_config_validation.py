@@ -465,7 +465,7 @@ class ConfigValidationTests(unittest.TestCase):
         mario_root = Path("experiments/goals/SuperMarioBros-Nes-v0")
         recipes = sorted(mario_root.glob("*/recipes/*.yaml"))
 
-        self.assertEqual(len(recipes), 24)
+        self.assertEqual(len(recipes), 25)
         for recipe_path in recipes:
             with self.subTest(recipe=recipe_path):
                 goal_path = recipe_path.parent.parent / "_goal.yaml"
@@ -630,22 +630,23 @@ class ConfigValidationTests(unittest.TestCase):
                 str(recipe),
             )
 
-    def test_breakout_snapshot_curriculum_is_fully_opt_in(self) -> None:
-        recipe = self.BREAKOUT_GOAL.parent / "recipes" / "ppo-snapshot-curriculum.yaml"
+    def test_breakout_archive_curriculum_is_fully_opt_in(self) -> None:
+        recipe = self.BREAKOUT_GOAL.parent / "recipes" / "ppo-archive-curriculum.yaml"
         document = compose_train_document(self.BREAKOUT_GOAL, recipe)
 
-        self.assertEqual(document["recipe_id"], "ppo-snapshot-curriculum")
+        self.assertEqual(document["recipe_id"], "ppo-archive-curriculum")
+        archive = document["train_config"]["state_archive"]
+        self.assertEqual(archive["semantic_id"], "state-archive-v1")
+        self.assertEqual(archive["persistence"], "durable")
         self.assertEqual(
-            document["train_config"]["snapshot_curriculum"],
-            {
-                "cell": {"signal": "score", "bucket_size": 50},
-                "snapshot_share": 0.2,
-                "priority_metric": "value_error",
-                "restore_snapshots": True,
-            },
+            archive["recorder"]["cell"],
+            {"signal": "score", "bucket_size": 50.0},
         )
+        self.assertEqual(archive["curriculum"]["archive_share"], 0.2)
+        self.assertEqual(archive["curriculum"]["priority_metric"], "value_error")
+        self.assertTrue(archive["curriculum"]["restore_entries"])
         self.assertNotIn(
-            "snapshot_curriculum",
+            "state_archive",
             compose_train_document(self.BREAKOUT_GOAL, self.BREAKOUT_RECIPE)["train_config"],
         )
 
