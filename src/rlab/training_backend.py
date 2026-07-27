@@ -172,8 +172,17 @@ def training_backend_config_hash(config: Mapping[str, Any]) -> str:
     backend_config = backend.get("config")
     if not isinstance(backend_config, Mapping):
         return ""
+    hash_config = dict(backend_config)
+    # Resume source approval is an operational input injected after the
+    # canonical recipe is built. The recipe document already binds that source
+    # when it is user-configured; a supervisor recovery must keep attesting to
+    # the same scientific backend config while pinning equivalent checkpoint
+    # bytes for the learner.
+    for key in ("resume", "resume_approval_hash", "resume_manifest"):
+        if key in hash_config:
+            hash_config[key] = None
     encoded = json.dumps(
-        backend_config,
+        hash_config,
         sort_keys=True,
         separators=(",", ":"),
         default=str,
