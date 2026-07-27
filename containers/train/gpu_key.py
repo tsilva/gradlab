@@ -11,7 +11,7 @@ else:
     from dockerfile_inputs import marked_dockerfile_bytes
 
 
-GPU_KEY_SCHEMA = b"rlab-train-gpu-key-v1\0"
+GPU_KEY_SCHEMA = b"gradlab-train-gpu-key-v2\0"
 
 
 def gpu_key(*, dockerfile: Path, lockfile: Path) -> str:

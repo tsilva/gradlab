@@ -8,7 +8,7 @@ import pytest
 import torch
 from stable_baselines3.common.policies import ActorCriticPolicy
 
-from rlab.play_debug import (
+from gradlab.play_debug import (
     inspect_policy,
     model_input_lines,
     sample_policy_decision,

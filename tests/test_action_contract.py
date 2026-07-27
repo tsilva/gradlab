@@ -2,7 +2,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from rlab.action_contract import (
+from gradlab.action_contract import (
     configured_action_values,
     configured_action_meanings,
     configured_action_name,

@@ -9,13 +9,13 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from rlab.metric_names import validate_metric_name
-from rlab.recipe_documents import (
+from gradlab.metric_names import validate_metric_name
+from gradlab.recipe_documents import (
     compose_train_document,
     goal_contract_sha256,
     load_goal_contract,
 )
-from rlab.wandb_reports import (
+from gradlab.wandb_reports import (
     GoalReportSpec,
     PortfolioReportSpec,
     _preflight_existing,
@@ -63,7 +63,7 @@ class FakeApi:
 
 class FakeSavedReport:
     def __init__(self, *, identity: str, url: str, display_name: str = "generated"):
-        self.description = f"<!-- rlab-report-id:{identity} -->"
+        self.description = f"<!-- gradlab-report-id:{identity} -->"
         self.url = url
         self.display_name = display_name
 
@@ -251,7 +251,7 @@ class WandbReportSyncTests(unittest.TestCase):
                 "wandb_workspaces.reports.v2.interface.execute_graphql",
                 return_value={"project": {"internalId": "project-id"}},
             ),
-            patch("rlab.wandb_reports._replace_and_save", side_effect=save),
+            patch("gradlab.wandb_reports._replace_and_save", side_effect=save),
         ):
             with self.assertRaisesRegex(ConnectionError, "simulated"):
                 sync_reports(

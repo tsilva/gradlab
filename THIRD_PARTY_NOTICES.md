@@ -1,6 +1,6 @@
 # Third-party notices
 
-Rlab's Gymrec v3 dataset provider boundary and compatibility behavior include
+GradLab's Gymrec v3 dataset provider boundary and compatibility behavior include
 code adapted from Gymrec 0.1.1 (`08b0328c990d0955a0df12636117ce08458afb5b`).
 
 ## Gymrec

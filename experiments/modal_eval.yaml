@@ -1,6 +1,6 @@
 deployment:
-  environment_name: rlab-eval
-  app_name_prefix: rlab-eval-v2
+  environment_name: gradlab-eval
+  app_name_prefix: gradlab-eval-v3
   function_name: evaluate_checkpoint
 resources:
   cpu: 8.0

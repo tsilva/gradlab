@@ -3,14 +3,14 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from rlab.env_identity import environment_hash, environment_identity_from_train_config
-from rlab.reward_transform import (
+from gradlab.env_identity import environment_hash, environment_identity_from_train_config
+from gradlab.reward_transform import (
     LEGACY_SIGN_CLIP,
     migrate_legacy_artifact_reward_config,
     normalize_reward_mapping,
     reward_transform_from_reward,
 )
-from rlab.task_kernels import RewardTransformTaskKernel, TaskStep, with_reward_transform
+from gradlab.task_kernels import RewardTransformTaskKernel, TaskStep, with_reward_transform
 
 
 class _StaticKernel:
@@ -126,7 +126,7 @@ def test_reward_transform_changes_environment_hash() -> None:
     def identity(clip, *, scale=1.0):
         return environment_identity_from_train_config(
             {
-                "env_provider": "rlab",
+                "env_provider": "gradlab",
                 "game": "Bandit-v0",
                 "task": {
                     "id": "identity",

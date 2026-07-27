@@ -7,14 +7,14 @@ from typing import Any
 
 import pytest
 
-from rlab.play import build_parser as build_play_parser
-from rlab.play_catalog import PlayCatalog, parse_wandb_location
-from rlab.recipe_variants import recipe_variant_id
-from rlab.run_contracts import checkpoint_id
+from gradlab.play import build_parser as build_play_parser
+from gradlab.play_catalog import PlayCatalog, parse_wandb_location
+from gradlab.recipe_variants import recipe_variant_id
+from gradlab.run_contracts import checkpoint_id
 
 
-RUN_ID = "rlab-" + "a" * 32
-SECOND_RUN_ID = "rlab-" + "b" * 32
+RUN_ID = "gradlab-" + "a" * 32
+SECOND_RUN_ID = "gradlab-" + "b" * 32
 
 
 class FakeApi:
@@ -337,8 +337,8 @@ def test_catalog_default_entity_loads_operator_configuration_once(
         calls += 1
 
     monkeypatch.delenv("WANDB_ENTITY", raising=False)
-    monkeypatch.setattr("rlab.play_catalog.load_wandb_env", load_environment)
-    monkeypatch.setattr("rlab.play_catalog.wandb_entity_from_env", lambda: "research")
+    monkeypatch.setattr("gradlab.play_catalog.load_wandb_env", load_environment)
+    monkeypatch.setattr("gradlab.play_catalog.wandb_entity_from_env", lambda: "research")
     catalog = PlayCatalog(repo_root=tmp_path)
 
     assert catalog.default_entity() == "research"
@@ -351,7 +351,7 @@ def test_indexed_project_listing_does_not_parse_goal_contracts_and_scopes_goal_r
     tmp_path: Path,
 ) -> None:
     write_indexed_goal_catalog(tmp_path)
-    from rlab import play_catalog
+    from gradlab import play_catalog
 
     loaded_paths: list[Path] = []
     real_loader = play_catalog.load_mapping_document
@@ -392,7 +392,7 @@ def test_indexed_goal_metadata_persists_across_catalog_instances(
     assert first.goals(entity="research", project="Mario").items
     assert cache_path.is_file()
 
-    from rlab import play_catalog
+    from gradlab import play_catalog
 
     real_loader = play_catalog.load_mapping_document
 
@@ -609,7 +609,7 @@ def test_catalog_validates_and_orders_public_checkpoints(monkeypatch: pytest.Mon
     periodic = checkpoint_row(step=250_000, digest="2" * 64, purpose="periodic")
     final = checkpoint_row(step=500_000, digest="3" * 64, purpose="final")
     monkeypatch.setattr(
-        "rlab.play_catalog._public_json",
+        "gradlab.play_catalog._public_json",
         lambda _url: {
             "schema_version": 1,
             "run_id": RUN_ID,
@@ -635,7 +635,7 @@ def test_catalog_attaches_goal_required_eval_results_by_checkpoint(
     periodic = checkpoint_row(step=250_000, digest="2" * 64, purpose="periodic")
     final = checkpoint_row(step=500_000, digest="3" * 64, purpose="final")
     monkeypatch.setattr(
-        "rlab.play_catalog._public_json",
+        "gradlab.play_catalog._public_json",
         lambda _url: {
             "schema_version": 1,
             "run_id": RUN_ID,
@@ -726,7 +726,7 @@ def test_catalog_uses_training_seed_when_checkpoint_has_no_eval_result(
 ) -> None:
     periodic = checkpoint_row(step=250_000, digest="2" * 64, purpose="periodic")
     monkeypatch.setattr(
-        "rlab.play_catalog._public_json",
+        "gradlab.play_catalog._public_json",
         lambda _url: {
             "schema_version": 1,
             "run_id": RUN_ID,

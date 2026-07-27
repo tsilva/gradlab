@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from rlab.sb3_models import resolve_sb3_algorithm
+from gradlab.sb3_models import resolve_sb3_algorithm
 
 
 def test_checkpoint_identity_is_required() -> None:

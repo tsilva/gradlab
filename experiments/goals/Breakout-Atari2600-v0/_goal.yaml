@@ -55,7 +55,7 @@ train:
     task: &breakout_task
       id: identity
       action:
-        # Rlab normalizes both providers to 0=NOOP, 1=FIRE, 2=RIGHT, 3=LEFT.
+        # GradLab normalizes both providers to 0=NOOP, 1=FIRE, 2=RIGHT, 3=LEFT.
         set: native
       signals:
         ball_y: ball_y

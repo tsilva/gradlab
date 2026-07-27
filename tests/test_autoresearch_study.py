@@ -20,9 +20,9 @@ SPEC.loader.exec_module(study)
 
 
 def immutable_run_id(value: int | str) -> str:
-    if isinstance(value, str) and value.startswith("rlab-"):
+    if isinstance(value, str) and value.startswith("gradlab-"):
         return value
-    return f"rlab-{int(value):032x}"
+    return f"gradlab-{int(value):032x}"
 
 
 def training_evidence(
@@ -729,8 +729,8 @@ class AutoresearchStudyTests(unittest.TestCase):
         self,
     ) -> None:
         run = SimpleNamespace(
-            id="rlab-42",
-            url="https://wandb.ai/e/p/runs/rlab-42",
+            id="gradlab-42",
+            url="https://wandb.ai/e/p/runs/gradlab-42",
             state="finished",
             scan_history=lambda **_kwargs: [
                 {
@@ -745,11 +745,11 @@ class AutoresearchStudyTests(unittest.TestCase):
         fake_wandb = SimpleNamespace(Api=lambda: api)
         with (
             mock.patch.dict("sys.modules", {"wandb": fake_wandb}),
-            mock.patch("rlab.wandb_utils.load_wandb_env"),
+            mock.patch("gradlab.wandb_utils.load_wandb_env"),
         ):
             evidence = study.fetch_training_evidence(
-                url="https://wandb.ai/e/p/runs/rlab-42",
-                expected_run_id="rlab-42",
+                url="https://wandb.ai/e/p/runs/gradlab-42",
+                expected_run_id="gradlab-42",
                 starts=["A", "B"],
                 strong_threshold=0.9,
             )

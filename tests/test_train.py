@@ -4,27 +4,27 @@ import unittest
 
 from stable_baselines3.common.callbacks import BaseCallback
 
-from rlab.callbacks import CallbackHelper, RlabCallback
-from rlab.schedules import EntropyCoefficientScheduleHelper
-from rlab.training.sb3_helpers import (
+from gradlab.callbacks import CallbackHelper, GradLabCallback
+from gradlab.schedules import EntropyCoefficientScheduleHelper
+from gradlab.training.sb3_helpers import (
     GracefulStopHelper,
     install_on_policy_safe_boundary_stop,
 )
-from rlab.training.sb3_on_policy import checkpoint_save_frequency
-from rlab.training_backend import GracefulStopFlag
-from rlab.seeds import (
+from gradlab.training.sb3_on_policy import checkpoint_save_frequency
+from gradlab.training_backend import GracefulStopFlag
+from gradlab.seeds import (
     DEFAULT_EVAL_SEED,
     validate_eval_seed,
 )
 
 
 class TrainTests(unittest.TestCase):
-    def test_only_rlab_callback_implements_the_sb3_callback_protocol(self) -> None:
-        self.assertTrue(issubclass(RlabCallback, BaseCallback))
+    def test_only_gradlab_callback_implements_the_sb3_callback_protocol(self) -> None:
+        self.assertTrue(issubclass(GradLabCallback, BaseCallback))
         self.assertTrue(issubclass(GracefulStopHelper, CallbackHelper))
         self.assertFalse(issubclass(GracefulStopHelper, BaseCallback))
 
-    def test_rlab_callback_drives_entropy_schedule_component(self) -> None:
+    def test_gradlab_callback_drives_entropy_schedule_component(self) -> None:
         class Logger:
             def __init__(self) -> None:
                 self.records: dict[str, float] = {}
@@ -38,7 +38,7 @@ class TrainTests(unittest.TestCase):
                 self.logger = Logger()
 
         model = Model()
-        callback = RlabCallback(
+        callback = GradLabCallback(
             [EntropyCoefficientScheduleHelper(0.1, 0.0, schedule_timesteps=100)]
         )
         callback.model = model  # type: ignore[assignment]

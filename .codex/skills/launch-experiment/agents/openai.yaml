@@ -1,4 +1,4 @@
 interface:
   display_name: "Launch Experiment"
-  short_description: "Launch, monitor, and explicitly repair rlab runs"
+  short_description: "Launch, monitor, and explicitly repair gradlab runs"
   default_prompt: "Use $launch-experiment to launch this training recipe, monitor every run through its terminal event, and repair failures only if I explicitly authorize fixes."

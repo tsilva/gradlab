@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>gradlab player</title>
+    <link rel="stylesheet" href="/assets/vendor/gridstack/gridstack.min.css">
+    <link rel="stylesheet" href="/assets/styles.css">
+    <script src="/assets/vendor/gridstack/gridstack-all.js"></script>
+    <script type="module" src="/assets/app.js"></script>
+  </head>
+  <body>
+    <header class="app-header">
+      <div class="app-brand">
+        <button id="player-home" class="app-home eyebrow" type="button" aria-label="Return to playback home">GRADLAB PLAYER</button>
+        <span class="header-divider" aria-hidden="true"></span>
+        <h1 id="page-title" hidden>Environment</h1>
+        <nav id="source-breadcrumbs" class="source-breadcrumbs header-breadcrumbs" aria-label="Playback source" hidden></nav>
+      </div>
+      <div class="header-status">
+        <button id="change-source" class="quiet icon-only" type="button" aria-label="Choose another checkpoint" title="Choose another checkpoint" hidden><svg class="icon" aria-hidden="true"><use href="/assets/tabler-icons.svg#ti-folder-search"></use></svg></button>
+        <button id="layouts-toggle" class="quiet icon-only" type="button" aria-label="Layouts" title="Layouts"><svg class="icon" aria-hidden="true"><use href="/assets/tabler-icons.svg#ti-layout-dashboard"></use></svg></button>
+        <button id="panels-toggle" class="quiet icon-only" type="button" aria-label="Panels" title="Panels" aria-controls="panel-shelf" aria-expanded="false"><svg class="icon" aria-hidden="true"><use href="/assets/tabler-icons.svg#ti-layout-grid"></use></svg></button>
+        <button id="new-window" class="quiet icon-only" type="button" aria-label="Open synchronized window" title="Open synchronized window"><svg class="icon" aria-hidden="true"><use href="/assets/tabler-icons.svg#ti-external-link"></use></svg></button>
+        <span id="connection-status" class="sync-status warning" aria-live="polite">Connecting</span>
+        <span id="sampling-status" class="badge muted" hidden>Stochastic</span>
+        <span id="control-status" class="badge muted">Observer</span>
+      </div>
+    </header>
+
+    <div id="layout-menu" class="floating-menu layout-menu" hidden>
+      <label>Layout name <input id="layout-name-input" value="Default layout" maxlength="48"></label>
+      <div class="menu-actions">
+        <button id="save-layout" class="primary button-with-icon" type="button" title="Save layout"><svg class="icon" aria-hidden="true"><use href="/assets/tabler-icons.svg#ti-device-floppy"></use></svg><span>Save layout</span></button>
+        <button id="reset-layout" class="quiet button-with-icon" type="button" title="Reset default layout"><svg class="icon" aria-hidden="true"><use href="/assets/tabler-icons.svg#ti-restore"></use></svg><span>Reset default</span></button>
+      </div>
+      <div id="saved-layouts" class="saved-layouts"></div>
+    </div>
+
+    <div id="panel-menu" class="floating-menu panel-menu" hidden>
+      <strong id="panel-menu-title">Panel</strong>
+      <button id="panel-new-window" class="button-with-icon" type="button" title="Move panel to a new synchronized window"><svg class="icon" aria-hidden="true"><use href="/assets/tabler-icons.svg#ti-external-link"></use></svg><span>Move to new window</span></button>
+      <button id="panel-dock-main" class="button-with-icon" type="button" title="Dock panel in the main window"><svg class="icon" aria-hidden="true"><use href="/assets/tabler-icons.svg#ti-layout-dashboard"></use></svg><span>Dock to main window</span></button>
+      <button id="panel-edit" class="button-with-icon" type="button" title="Edit telemetry visualizations"><svg class="icon" aria-hidden="true"><use href="/assets/tabler-icons.svg#ti-edit"></use></svg><span>Edit</span></button>
+      <button id="panel-duplicate" class="button-with-icon" type="button" title="Duplicate as a telemetry panel"><svg class="icon" aria-hidden="true"><use href="/assets/tabler-icons.svg#ti-copy"></use></svg><span>Duplicate</span></button>
+      <button id="panel-hide" class="button-with-icon" type="button" title="Hide panel"><svg class="icon" aria-hidden="true"><use href="/assets/tabler-icons.svg#ti-eye-off"></use></svg><span>Hide panel</span></button>
+      <button id="panel-reset-size" class="button-with-icon" type="button" title="Reset panel size"><svg class="icon" aria-hidden="true"><use href="/assets/tabler-icons.svg#ti-restore"></use></svg><span>Reset size</span></button>
+      <button id="panel-remove" class="button-with-icon danger" type="button" title="Remove custom panel"><svg class="icon" aria-hidden="true"><use href="/assets/tabler-icons.svg#ti-trash"></use></svg><span>Remove</span></button>
+    </div>
+
+    <div id="panel-shelf" class="floating-menu panel-shelf" hidden aria-label="Available panels">
+      <div class="panel-shelf-heading">
+        <strong>Panels</strong>
+        <button id="panel-add" class="quiet button-with-icon" type="button" title="Add telemetry panel"><svg class="icon" aria-hidden="true"><use href="/assets/tabler-icons.svg#ti-plus"></use></svg><span>Add</span></button>
+      </div>
+      <div id="panel-shelf-items" class="panel-shelf-items"></div>
+    </div>
+
+    <main id="source-browser" class="source-browser" hidden></main>
+    <main id="dashboard" class="dashboard grid-stack"></main>
+
+    <section id="timeline" class="timeline" aria-label="Bounded trajectory inspection">
+      <div class="timeline-labels">
+        <strong id="timeline-label">STEP — · SEQ —</strong>
+      </div>
+      <div class="timeline-track">
+        <input id="timeline-scrubber" type="range" min="0" max="0" step="1" value="0" aria-label="Inspect a retained transition one step at a time" title="Left/Right: move one step · Space: play or pause">
+        <div id="timeline-markers" class="timeline-markers" aria-hidden="true"></div>
+      </div>
+    </section>
+
+    <dialog id="panel-editor" class="panel-editor" aria-labelledby="panel-editor-heading">
+      <form id="panel-editor-form" method="dialog">
+        <header>
+          <div>
+            <span class="eyebrow">PANEL BUILDER</span>
+            <h2 id="panel-editor-heading">Add telemetry panel</h2>
+          </div>
+        </header>
+        <label class="panel-editor-title">
+          <span>Panel title</span>
+          <input id="panel-editor-title" type="text" maxlength="80" required>
+        </label>
+        <div id="panel-editor-blocks" class="panel-editor-blocks"></div>
+        <button id="panel-editor-add-block" class="quiet button-with-icon" type="button"><svg class="icon" aria-hidden="true"><use href="/assets/tabler-icons.svg#ti-plus"></use></svg><span>Add visualization</span></button>
+        <footer class="panel-editor-actions">
+          <button id="panel-editor-cancel" class="quiet" type="button">Cancel</button>
+          <button class="primary" type="submit">Save panel</button>
+        </footer>
+      </form>
+    </dialog>
+
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  </body>
+</html>

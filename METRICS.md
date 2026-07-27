@@ -1,7 +1,7 @@
-# Metrics schema v9
+# Metrics schema v10
 
-This file is the human contract for rlab telemetry. The Python registry in
-`src/rlab/metric_names.py` is the executable source of truth. Every emitted metric must match an
+This file is the human contract for gradlab telemetry. The Python registry in
+`src/gradlab/metric_names.py` is the executable source of truth. Every emitted metric must match an
 exact registry entry or a bounded template.
 
 ## Surfaces and dimensions
@@ -17,7 +17,7 @@ exact registry entry or a bounded template.
 - Public model R2 contains immutable checkpoint closures and a mutable no-cache run index. Private
   eval R2 contains intents, results, and episode evidence. Private control R2 contains leases,
   journals, promotions, and terminal receipts.
-- W&B config contains run-defining dimensions: `metrics_schema_version: 9`, `training_backend_id`,
+- W&B config contains run-defining dimensions: `metrics_schema_version: 10`, `training_backend_id`,
   `training_backend_config_hash`, `algorithm_id`, goal,
   environment, starts, seed, frame skip, environment count, hyperparameters, eval protocol, and
   runtime versions.
@@ -36,7 +36,7 @@ exact registry entry or a bounded template.
   `action/executed` to configure live panels. They are typed projections of one streamed transition
   or its bounded in-browser history, are not emitted metrics, and must not be interpreted as aliases
   for similarly named W&B registry entries. `reward/provider` is the provider output before the
-  task program and rlab-owned reward transform; `reward/shaped` is the final policy-facing reward
+  task program and gradlab-owned reward transform; `reward/shaped` is the final policy-facing reward
   after task shaping, scaling, and clipping. Playback computes realized return-to-go and `V(s) -
   G(s)` only for a terminal, stochastic, policy-driven trajectory whose policy environment,
   reward stream, discount, action sampling, and boundary/bootstrap semantics match training.
@@ -73,8 +73,8 @@ Asynchronous evaluations may arrive after later training rows without changing t
 X-axis. Each producer writes only its applicable scientific axis; durable delivery order uses
 `orchestration/event_seq`.
 
-Purged PostgreSQL/Fleet/W&B/R2 state has no compatibility guarantee. Newly materialized runs declare
-schema v8.
+Purged legacy W&B and R2 state has no compatibility guarantee. Newly materialized runs declare
+schema v10.
 
 ## Research interpretation
 
@@ -153,7 +153,7 @@ acceptance W&B history.
 `eval/acceptance/pass` is per-checkpoint history. W&B summarizes that history with `max`, so the
 summary means that some checkpoint passed; it is not the run verdict. The authoritative verdict is
 the create-only private-R2 `PromotionReceipt`, whose selected result is hash-bound to the complete
-acceptance evidence. At terminal publication, that receipt restamps `rlab/goal/outcome`, the diagnostic
+acceptance evidence. At terminal publication, that receipt restamps `gradlab/goal/outcome`, the diagnostic
 `leader/checkpoint/*` fields, and the accepted W&B projection. Later rejected checkpoint projections
 remain in history and never modify the active projection. Raw acceptance aggregates and episode
 evidence remain authoritative in private eval R2.
@@ -208,13 +208,13 @@ exit alone is never scientific success.
 | `train/early_stop/{condition}/patience/elapsed_steps` | Policy steps elapsed in the condition's current patience interval. | steps | watched metric sample | history |
 | `train/early_stop/{condition}/patience/progress` | Condition patience progress capped at one; one means the condition would trigger. | fraction | watched metric sample | history |
 | `train/early_stop/{condition}/would_trigger` | Whether the configured condition would trigger at this sample, regardless of observe or stop action. | boolean | watched metric sample | history |
-| `train/reward/shaped/mean` | Distribution of learner-facing per-step reward after rlab applies the task reward scale and then clipping. | scalar | rollout | history |
-| `train/reward/shaped/std` | Distribution of learner-facing per-step reward after rlab applies the task reward scale and then clipping. | scalar | rollout | history |
-| `train/reward/shaped/min` | Distribution of learner-facing per-step reward after rlab applies the task reward scale and then clipping. | scalar | rollout | history |
-| `train/reward/shaped/max` | Distribution of learner-facing per-step reward after rlab applies the task reward scale and then clipping. | scalar | rollout | history |
-| `train/reward/shaped/nonzero_rate` | Distribution of learner-facing per-step reward after rlab applies the task reward scale and then clipping. | scalar | rollout | history |
-| `train/reward/raw/mean` | Distribution of completed task reward immediately before rlab-owned scaling and clipping, emitted when distinct from shaped reward. For an identity task this is the untransformed provider reward. | scalar | rollout | history |
-| `train/reward/raw/std` | Distribution of completed task reward immediately before rlab-owned scaling and clipping, emitted when distinct from shaped reward. For an identity task this is the untransformed provider reward. | scalar | rollout | history |
+| `train/reward/shaped/mean` | Distribution of learner-facing per-step reward after gradlab applies the task reward scale and then clipping. | scalar | rollout | history |
+| `train/reward/shaped/std` | Distribution of learner-facing per-step reward after gradlab applies the task reward scale and then clipping. | scalar | rollout | history |
+| `train/reward/shaped/min` | Distribution of learner-facing per-step reward after gradlab applies the task reward scale and then clipping. | scalar | rollout | history |
+| `train/reward/shaped/max` | Distribution of learner-facing per-step reward after gradlab applies the task reward scale and then clipping. | scalar | rollout | history |
+| `train/reward/shaped/nonzero_rate` | Distribution of learner-facing per-step reward after gradlab applies the task reward scale and then clipping. | scalar | rollout | history |
+| `train/reward/raw/mean` | Distribution of completed task reward immediately before gradlab-owned scaling and clipping, emitted when distinct from shaped reward. For an identity task this is the untransformed provider reward. | scalar | rollout | history |
+| `train/reward/raw/std` | Distribution of completed task reward immediately before gradlab-owned scaling and clipping, emitted when distinct from shaped reward. For an identity task this is the untransformed provider reward. | scalar | rollout | history |
 | `train/reward/component/{component}/mean` | Active reward-component attribution in pre-transform task-reward units. | scalar | rollout | history |
 | `train/reward/component/{component}/nonzero_rate` | Active reward-component attribution in pre-transform task-reward units. | scalar | rollout | history |
 | `train/reward/component/{component}/share` | Absolute contribution share computed from components in pre-transform task-reward units. | scalar | rollout | history |
@@ -274,10 +274,10 @@ exit alone is never scientific success.
 | `train/throughput/between_rollouts_seconds` | Wall time after rollout collection and before the next rollout, including optimizer updates, callbacks, and logging. | seconds | rollout | history |
 | `train/artifact/save/seconds` | Local model save duration. | seconds | artifact | history |
 | `train/artifact/upload/seconds` | Public R2 checkpoint publication duration. | seconds | artifact | history |
-| `eval/{protocol}/episode/return/mean` | Evaluation episode-return distribution accumulated from learner-facing rewards after rlab-owned scaling and clipping. | return | evaluation | history |
-| `eval/{protocol}/episode/return/std` | Evaluation episode-return distribution accumulated from learner-facing rewards after rlab-owned scaling and clipping. | return | evaluation | history |
-| `eval/{protocol}/episode/return/median` | Evaluation episode-return distribution accumulated from learner-facing rewards after rlab-owned scaling and clipping. | return | evaluation | history |
-| `eval/full/episode/return/best` | Best full-evaluation episode return accumulated after rlab-owned scaling and clipping. | return | evaluation | history |
+| `eval/{protocol}/episode/return/mean` | Evaluation episode-return distribution accumulated from learner-facing rewards after gradlab-owned scaling and clipping. | return | evaluation | history |
+| `eval/{protocol}/episode/return/std` | Evaluation episode-return distribution accumulated from learner-facing rewards after gradlab-owned scaling and clipping. | return | evaluation | history |
+| `eval/{protocol}/episode/return/median` | Evaluation episode-return distribution accumulated from learner-facing rewards after gradlab-owned scaling and clipping. | return | evaluation | history |
+| `eval/full/episode/return/best` | Best full-evaluation episode return accumulated after gradlab-owned scaling and clipping. | return | evaluation | history |
 | `eval/{protocol}/episode/length/mean` | Mean evaluation episode length. | steps | evaluation | history |
 | `eval/{protocol}/episode/count` | Evaluation episodes represented. | episodes | evaluation | history |
 | `eval/{protocol}/outcome/success/from/{start}/rate` | Evaluation success rate from a start. | fraction | evaluation | history |

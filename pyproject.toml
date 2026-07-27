@@ -1,5 +1,5 @@
 [project]
-name = "rlab"
+name = "gradlab"
 version = "0.1.0"
 description = "Generic reinforcement-learning lab for training and evaluating game agents"
 readme = "README.md"
@@ -39,7 +39,7 @@ dependencies = [
 ]
 
 [project.scripts]
-rlab = "rlab.main:main"
+gradlab = "gradlab.main:main"
 
 [project.optional-dependencies]
 dataset = [
@@ -57,13 +57,13 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/rlab"]
+packages = ["src/gradlab"]
 
 [tool.hatch.build.targets.wheel.force-include]
 "THIRD_PARTY_NOTICES.md" = "THIRD_PARTY_NOTICES.md"
-"METRICS.md" = "rlab/METRICS.md"
-"experiments/goals" = "rlab/experiments/goals"
-"experiments/recipes" = "rlab/experiments/recipes"
+"METRICS.md" = "gradlab/METRICS.md"
+"experiments/goals" = "gradlab/experiments/goals"
+"experiments/recipes" = "gradlab/experiments/recipes"
 
 [tool.uv]
 exclude-newer = "7 days"

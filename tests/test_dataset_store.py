@@ -12,24 +12,24 @@ import pytest
 
 datasets = pytest.importorskip("datasets")
 
-from rlab.dataset_contract import (  # noqa: E402
+from gradlab.dataset_contract import (  # noqa: E402
     ENVIRONMENT_DOCUMENT_FILENAME,
     canonical_column_order,
 )
-from rlab.json_utils import canonical_json_bytes  # noqa: E402
-from rlab.dataset_store import adopt_tree, collection_paths, open_source, play_command  # noqa: E402
+from gradlab.json_utils import canonical_json_bytes  # noqa: E402
+from gradlab.dataset_store import adopt_tree, collection_paths, open_source, play_command  # noqa: E402
 
 
 def _environment_document() -> dict:
     return {
         "document_type": "gymrec.environment",
         "format_version": 1,
-        "provider_id": "rlab",
+        "provider_id": "gradlab",
         "provider_contract_version": 1,
         "environment_id": "fixture-v0",
         "declared_config": {},
         "effective_config": {},
-        "provenance": {"distribution": "rlab", "version": "0.1.0", "assets": {}},
+        "provenance": {"distribution": "gradlab", "version": "0.1.0", "assets": {}},
         "action_space": {"type": "Discrete", "n": 2, "start": 0},
         "observation_space": {
             "type": "Box",
@@ -54,9 +54,9 @@ def _write_tree(path: Path, *, episode_id: str | None = None, reward: float = 1.
         "session_id": session_id,
         "dataset_format_version": 3,
         "collector": "random",
-        "gymrec_version": "rlab:0.1.0",
+        "gymrec_version": "gradlab:0.1.0",
         "storage_format": "images",
-        "provider_id": "rlab",
+        "provider_id": "gradlab",
         "env_id": "fixture-v0",
         "environment_contract_id": contract_id,
         "collector_contract_id": None,
@@ -152,7 +152,7 @@ def test_play_routes_verified_dataset_frames_to_web_dashboard(tmp_path):
         port=0,
         no_open=True,
     )
-    with patch("rlab.play_web.run_web_dataset_playback", side_effect=fake_dashboard):
+    with patch("gradlab.play_web.run_web_dataset_playback", side_effect=fake_dashboard):
         assert play_command(args) == 0
 
     assert len(captured["frames"]) == 2

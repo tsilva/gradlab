@@ -4,9 +4,9 @@ import unittest
 
 import numpy as np
 
-from rlab.env import EnvConfig
-from rlab.go_explore import GoExploreSearch
-from rlab.training.go_explore import (
+from gradlab.env import EnvConfig
+from gradlab.go_explore import GoExploreSearch
+from gradlab.training.go_explore import (
     GO_EXPLORE_PROVIDER_INFO_KEYS,
     _runtime_environment_config,
     normalize_config,
@@ -74,7 +74,7 @@ class GoExploreSearchTests(unittest.TestCase):
 
     def test_backend_uses_compaction_without_legacy_archive_recovery(self) -> None:
         config = normalize_config(
-            "rlab.go-explore",
+            "gradlab.go-explore",
             {"compaction_interval_steps": 500_000},
             label="backend",
         )
@@ -82,7 +82,7 @@ class GoExploreSearchTests(unittest.TestCase):
         self.assertEqual(config["compaction_interval_steps"], 500_000)
         with self.assertRaisesRegex(ValueError, "recovery_interval_steps"):
             normalize_config(
-                "rlab.go-explore",
+                "gradlab.go-explore",
                 {"recovery_interval_steps": 500_000},
                 label="backend",
             )

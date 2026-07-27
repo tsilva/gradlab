@@ -25,5 +25,5 @@ namespaces:
     project: VizdoomTakeCover-v1
   alepy__mspacman:
     project: MsPacman-Atari2600-v0
-  rlab__bandit:
+  gradlab__bandit:
     project: Bandit-v0

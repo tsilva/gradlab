@@ -1,0 +1,330 @@
+name: gradlab train image
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Exact pushed Git revision to build; defaults to the selected ref HEAD
+        required: false
+        type: string
+  push:
+    branches: [main]
+  pull_request:
+    paths:
+      - .dockerignore
+      - .github/workflows/gradlab-train-dependencies.yml
+      - .github/workflows/gradlab-train-image.yml
+      - containers/train/**
+      - experiments/goals/**
+      - ops/dstack/**
+      - experiments/modal_eval.yaml
+      - experiments/recipes/**
+      - scripts/**
+      - src/**
+      - pyproject.toml
+      - uv.lock
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ inputs.source_sha || github.event.pull_request.head.sha || github.sha }}
+  cancel-in-progress: true
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}/gradlab-train
+  GPU_IMAGE_NAME: ${{ github.repository }}/gradlab-train-gpu
+  DEPENDENCY_IMAGE_NAME: ${{ github.repository }}/gradlab-train-dependencies
+  SOURCE_SHA: ${{ inputs.source_sha || github.sha }}
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    outputs:
+      digest: ${{ steps.published_image.outputs.digest }}
+      runtime_image_ref: ${{ steps.published_image.outputs.runtime_image_ref }}
+      runtime_input_sha256: ${{ steps.runtime_meta.outputs.runtime_input_sha256 }}
+      runtime_build_source_sha: ${{ steps.runtime_identity.outputs.runtime_build_source_sha }}
+      deploy_required: ${{ steps.runtime_identity.outputs.deploy_required }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+      - run: test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+      - uses: astral-sh/setup-uv@v7
+      - name: Validate deterministic lock projections
+        run: uv run --frozen --only-group train-image-build python containers/train/lock_projection.py --check
+      - uses: docker/setup-buildx-action@v3
+      - if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Resolve foundation metadata
+        id: foundation_meta
+        run: |
+          {
+            echo "created=$(git show -s --format=%cI HEAD)"
+            echo "uv_lock_sha256=$(sha256sum uv.lock | awk '{print $1}')"
+            echo "gpu_key=$(python containers/train/gpu_key.py)"
+            echo "gpu_plan_sha256=$(sha256sum containers/train/gpu-linux-amd64.lock | awk '{print $1}')"
+            echo "train_plan_sha256=$(sha256sum containers/train/train-linux-amd64.lock | awk '{print $1}')"
+            echo "python_image=$(awk -F= '/^ARG PYTHON_IMAGE=/ {print $2; exit}' containers/train/Dockerfile)"
+            echo "uv_image=$(awk -F= '/^ARG UV_IMAGE=/ {print $2; exit}' containers/train/Dockerfile)"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Resolve immutable GPU image
+        id: existing_gpu
+        run: |
+          image="${REGISTRY}/${GPU_IMAGE_NAME}:build-${{ steps.foundation_meta.outputs.gpu_key }}"
+          if metadata=$(docker buildx imagetools inspect "$image" 2>/dev/null); then
+            echo "digest=$(awk '/^Digest:/ {print $2; exit}' <<<"$metadata")" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build GPU foundation
+        id: build_gpu
+        if: github.event_name != 'pull_request' && steps.existing_gpu.outputs.digest == ''
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: containers/train/Dockerfile
+          target: gpu
+          platforms: linux/amd64
+          push: true
+          provenance: true
+          sbom: true
+          tags: ${{ env.REGISTRY }}/${{ env.GPU_IMAGE_NAME }}:build-${{ steps.foundation_meta.outputs.gpu_key }}
+          build-args: GPU_PLAN_SHA256=${{ steps.foundation_meta.outputs.gpu_plan_sha256 }}
+
+      - name: Select GPU identity
+        id: gpu
+        env:
+          BUILT: ${{ steps.build_gpu.outputs.digest }}
+          EXISTING: ${{ steps.existing_gpu.outputs.digest }}
+          GPU_KEY: ${{ steps.foundation_meta.outputs.gpu_key }}
+        run: |
+          digest="${BUILT:-${EXISTING:-}}"
+          if [[ -n "$digest" ]]; then
+            base="${REGISTRY}/${GPU_IMAGE_NAME}@${digest}"
+            published=true
+          elif [[ "$GITHUB_EVENT_NAME" == "pull_request" ]]; then
+            digest="sha256:${GPU_KEY}"
+            base=gpu
+            published=false
+          else
+            echo "::error::No immutable GPU image is available"
+            exit 1
+          fi
+          {
+            echo "digest=$digest"
+            echo "base=$base"
+            echo "published=$published"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Resolve dependency key
+        id: dependency_meta
+        run: |
+          key=$(python containers/train/dependency_key.py --gpu-digest '${{ steps.gpu.outputs.digest }}')
+          echo "key=$key" >> "$GITHUB_OUTPUT"
+
+      - name: Resolve immutable dependency image
+        id: existing_dependency
+        if: steps.gpu.outputs.published == 'true'
+        run: |
+          image="${REGISTRY}/${DEPENDENCY_IMAGE_NAME}:build-${{ steps.dependency_meta.outputs.key }}"
+          if metadata=$(docker buildx imagetools inspect "$image" 2>/dev/null); then
+            echo "digest=$(awk '/^Digest:/ {print $2; exit}' <<<"$metadata")" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build train dependencies
+        id: build_dependency
+        if: github.event_name != 'pull_request' && steps.existing_dependency.outputs.digest == ''
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: containers/train/Dockerfile
+          target: dependencies
+          platforms: linux/amd64
+          push: true
+          provenance: true
+          sbom: true
+          tags: ${{ env.REGISTRY }}/${{ env.DEPENDENCY_IMAGE_NAME }}:build-${{ steps.dependency_meta.outputs.key }}
+          build-args: |
+            GPU_BASE=${{ steps.gpu.outputs.base }}
+            GPU_IMAGE=${{ env.REGISTRY }}/${{ env.GPU_IMAGE_NAME }}
+            GPU_IMAGE_DIGEST=${{ steps.gpu.outputs.digest }}
+            TRAIN_PLAN_SHA256=${{ steps.foundation_meta.outputs.train_plan_sha256 }}
+
+      - name: Select dependency identity
+        id: dependency
+        env:
+          BUILT: ${{ steps.build_dependency.outputs.digest }}
+          EXISTING: ${{ steps.existing_dependency.outputs.digest }}
+          DEPENDENCY_KEY: ${{ steps.dependency_meta.outputs.key }}
+        run: |
+          digest="${BUILT:-${EXISTING:-}}"
+          if [[ -n "$digest" ]]; then
+            runtime_base="${REGISTRY}/${DEPENDENCY_IMAGE_NAME}@${digest}"
+          elif [[ "$GITHUB_EVENT_NAME" == "pull_request" ]]; then
+            digest="sha256:${DEPENDENCY_KEY}"
+            runtime_base=dependencies
+          else
+            echo "::error::No immutable dependency image is available"
+            exit 1
+          fi
+          {
+            echo "digest=$digest"
+            echo "runtime_base=$runtime_base"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Resolve runtime metadata
+        id: runtime_meta
+        run: |
+          {
+            echo "overlay_key=$(python containers/train/runtime_key.py --overlay-only)"
+            echo "runtime_input_sha256=$(python containers/train/runtime_key.py --dependency-digest '${{ steps.dependency.outputs.digest }}')"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Resolve immutable runtime image
+        id: existing_image
+        if: github.event_name != 'pull_request'
+        run: |
+          image="${REGISTRY}/${IMAGE_NAME}:runtime-${{ steps.runtime_meta.outputs.runtime_input_sha256 }}"
+          if metadata=$(docker buildx imagetools inspect "$image" 2>/dev/null); then
+            echo "digest=$(awk '/^Digest:/ {print $2; exit}' <<<"$metadata")" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: type=raw,value=runtime-${{ steps.runtime_meta.outputs.runtime_input_sha256 }}
+
+      - name: Build image
+        id: build
+        if: github.event_name == 'pull_request' || steps.existing_image.outputs.digest == ''
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: containers/train/Dockerfile
+          platforms: linux/amd64
+          push: ${{ github.event_name != 'pull_request' }}
+          provenance: true
+          sbom: false
+          labels: ${{ steps.meta.outputs.labels }}
+          tags: ${{ steps.meta.outputs.tags }}
+          build-args: |
+            GPU_BASE=${{ steps.gpu.outputs.base }}
+            RUNTIME_BASE=${{ steps.dependency.outputs.runtime_base }}
+            BUILD_DATE=${{ steps.foundation_meta.outputs.created }}
+            VCS_REF=${{ env.SOURCE_SHA }}
+            RUNTIME_INPUT_SHA256=${{ steps.runtime_meta.outputs.runtime_input_sha256 }}
+            DEPENDENCY_IMAGE=${{ env.REGISTRY }}/${{ env.DEPENDENCY_IMAGE_NAME }}
+            DEPENDENCY_IMAGE_DIGEST=${{ steps.dependency.outputs.digest }}
+
+      - name: Resolve published digest
+        id: published_image
+        if: github.event_name != 'pull_request'
+        env:
+          BUILT: ${{ steps.build.outputs.digest }}
+          EXISTING: ${{ steps.existing_image.outputs.digest }}
+        run: |
+          digest="${BUILT:-${EXISTING:-}}"
+          test -n "$digest"
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          echo "runtime_image_ref=docker:${REGISTRY}/${IMAGE_NAME}@${digest}" >> "$GITHUB_OUTPUT"
+
+      - name: Resolve runtime build identity
+        id: runtime_identity
+        if: github.event_name != 'pull_request'
+        env:
+          EXISTING: ${{ steps.existing_image.outputs.digest }}
+        run: |
+          if [[ -n "$EXISTING" ]]; then
+            image="${REGISTRY}/${IMAGE_NAME}:runtime-${{ steps.runtime_meta.outputs.runtime_input_sha256 }}"
+            labels=$(docker buildx imagetools inspect "$image" --format '{{json .Image.Config.Labels}}')
+            source_sha=$(jq -r '."org.opencontainers.image.revision" // empty' <<<"$labels")
+            echo "deploy_required=false" >> "$GITHUB_OUTPUT"
+          else
+            source_sha="$SOURCE_SHA"
+            echo "deploy_required=true" >> "$GITHUB_OUTPUT"
+          fi
+          test -n "$source_sha"
+          echo "runtime_build_source_sha=$source_sha" >> "$GITHUB_OUTPUT"
+
+      - name: Write image receipt
+        if: github.event_name != 'pull_request'
+        env:
+          DIGEST: ${{ steps.published_image.outputs.digest }}
+          RUNTIME_IMAGE_REF: ${{ steps.published_image.outputs.runtime_image_ref }}
+          RUNTIME_INPUT_SHA256: ${{ steps.runtime_meta.outputs.runtime_input_sha256 }}
+          OVERLAY_KEY: ${{ steps.runtime_meta.outputs.overlay_key }}
+          UV_LOCK_SHA256: ${{ steps.foundation_meta.outputs.uv_lock_sha256 }}
+          PYTHON_IMAGE: ${{ steps.foundation_meta.outputs.python_image }}
+          UV_IMAGE: ${{ steps.foundation_meta.outputs.uv_image }}
+          DEPENDENCY_DIGEST: ${{ steps.dependency.outputs.digest }}
+          DEPENDENCY_KEY: ${{ steps.dependency_meta.outputs.key }}
+          GPU_DIGEST: ${{ steps.gpu.outputs.digest }}
+          GPU_KEY: ${{ steps.foundation_meta.outputs.gpu_key }}
+          GPU_PLAN_SHA256: ${{ steps.foundation_meta.outputs.gpu_plan_sha256 }}
+          TRAIN_PLAN_SHA256: ${{ steps.foundation_meta.outputs.train_plan_sha256 }}
+          RUNTIME_BUILD_SOURCE_SHA: ${{ steps.runtime_identity.outputs.runtime_build_source_sha }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+
+          registry = os.environ["REGISTRY"]
+          payload = {
+              "schema_version": 6,
+              "image": f"{registry}/{os.environ['IMAGE_NAME']}",
+              "digest": os.environ["DIGEST"],
+              "runtime_image_ref": os.environ["RUNTIME_IMAGE_REF"],
+              "source_sha": os.environ["SOURCE_SHA"],
+              "tags": [f"runtime-{os.environ['RUNTIME_INPUT_SHA256']}"],
+              "runtime_input_sha256": os.environ["RUNTIME_INPUT_SHA256"],
+              "overlay_key": os.environ["OVERLAY_KEY"],
+              "dependency_key": os.environ["DEPENDENCY_KEY"],
+              "gpu_key": os.environ["GPU_KEY"],
+              "runtime_build_source_sha": os.environ["RUNTIME_BUILD_SOURCE_SHA"],
+              "uv_lock_sha256": os.environ["UV_LOCK_SHA256"],
+              "train_plan_sha256": os.environ["TRAIN_PLAN_SHA256"],
+              "gpu_plan_sha256": os.environ["GPU_PLAN_SHA256"],
+              "base_images": {
+                  "python": os.environ["PYTHON_IMAGE"],
+                  "uv": os.environ["UV_IMAGE"],
+                  "gpu": f"docker:{registry}/{os.environ['GPU_IMAGE_NAME']}@{os.environ['GPU_DIGEST']}",
+                  "dependencies": f"docker:{registry}/{os.environ['DEPENDENCY_IMAGE_NAME']}@{os.environ['DEPENDENCY_DIGEST']}",
+              },
+              "workflow_run_id": os.environ["GITHUB_RUN_ID"],
+              "workflow_run_attempt": os.environ["GITHUB_RUN_ATTEMPT"],
+          }
+          with open("gradlab-train-image.json", "w", encoding="utf-8") as output:
+              json.dump(payload, output, indent=2, sort_keys=True)
+              output.write("\n")
+          PY
+          python -m json.tool gradlab-train-image.json
+
+      - name: Upload image receipt
+        if: github.event_name != 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: gradlab-train-image
+          path: gradlab-train-image.json
+
+  deploy-modal-evaluator:
+    if: github.event_name != 'pull_request'
+    needs: build
+    uses: ./.github/workflows/gradlab-modal-eval.yml
+    with:
+      runtime_image_ref: ${{ needs.build.outputs.runtime_image_ref }}
+      source_sha: ${{ inputs.source_sha || github.sha }}
+      runtime_input_sha256: ${{ needs.build.outputs.runtime_input_sha256 }}
+      runtime_build_source_sha: ${{ needs.build.outputs.runtime_build_source_sha }}
+      deploy_required: ${{ needs.build.outputs.deploy_required == 'true' }}
+    secrets: inherit

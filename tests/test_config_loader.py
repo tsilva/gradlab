@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from rlab.config_loader import (
+from gradlab.config_loader import (
     load_composed_mapping,
     render_template_vars,
     template_context_from_path,

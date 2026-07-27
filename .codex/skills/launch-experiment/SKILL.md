@@ -1,11 +1,11 @@
 ---
 name: launch-experiment
-description: Launch, continuously monitor, and when explicitly authorized repair dstack-backed rlab training from a checked-in goal and recipe. Use when the user asks to launch, run, start, execute, follow, watch, monitor, diagnose, fix, or harden an rlab training recipe, run, or research goal. Stay attached through the authoritative R2 terminal receipt, report the W&B URL immediately, preserve failed-attempt evidence, and return the promoted public checkpoint and exact playback command.
+description: Launch, continuously monitor, and when explicitly authorized repair dstack-backed gradlab training from a checked-in goal and recipe. Use when the user asks to launch, run, start, execute, follow, watch, monitor, diagnose, fix, or harden an gradlab training recipe, run, or research goal. Stay attached through the authoritative R2 terminal receipt, report the W&B URL immediately, preserve failed-attempt evidence, and return the promoted public checkpoint and exact playback command.
 ---
 
 # Launch Experiment
 
-Use `rlab experiment` for dstack-backed runs. dstack owns compute placement,
+Use `gradlab experiment` for dstack-backed runs. dstack owns compute placement,
 logs, cancellation, retries for genuine interruption/no-capacity, and resource
 release. Private R2 receipts own run, checkpoint, evaluation, promotion, and
 terminal semantics. Never infer scientific success from dstack exit status.
@@ -16,7 +16,7 @@ launch also read `INSTANCES.md`, the selected goal, and the selected recipe.
 Before a new launch, run the credential-safe read-only operator gate:
 
 ```bash
-rlab experiment operator-preflight --json
+gradlab experiment operator-preflight --json
 ```
 
 It must report ready before launch. Never reconstruct credentials by parsing
@@ -52,7 +52,7 @@ Default to `--compute auto`. For the known local B3 host use
 use a finite `--max-duration`.
 
 ```bash
-rlab experiment launch \
+gradlab experiment launch \
   --goal-file <goal-file> \
   --recipe-file <recipe-file> \
   --seed <seed> \
@@ -81,7 +81,7 @@ index.
 Start one yielded long-lived monitor per run and retain its session handle:
 
 ```bash
-rlab experiment follow --run <run-id>
+gradlab experiment follow --run <run-id>
 ```
 
 Resume the same process with empty polls. Do not send a newline or interrupt it.
@@ -98,8 +98,8 @@ Use these read-only commands only when the follow process fails or a snapshot
 shows an operational anomaly:
 
 ```bash
-rlab experiment status --run <run-id> --json
-rlab experiment logs --run <run-id> --tail 200
+gradlab experiment status --run <run-id> --json
+gradlab experiment logs --run <run-id> --tail 200
 ```
 
 If an active run reveals a potential bug, dispatch the project
@@ -117,7 +117,7 @@ Never blindly retry. A manual retry is permitted only after:
 4. the failure is supported as resumable.
 
 ```bash
-rlab experiment retry --run <run-id>
+gradlab experiment retry --run <run-id>
 ```
 
 The logical run ID remains stable and a new attempt ID is created. If a final
@@ -142,7 +142,7 @@ completion. A successful accepted run requires all of:
 - the lowest-step accepted checkpoint promoted exactly once;
 - W&B through its recorded high-water mark, written by the supervisor only;
 - dstack successful and the host released;
-- credential-free `rlab play --run <run-id>` from the public index.
+- credential-free `gradlab play --run <run-id>` from the public index.
 
 Report the run and attempt IDs, dstack task/compute, source and image digest,
 terminal stop reason and step, promoted checkpoint/evidence counts, W&B URL,

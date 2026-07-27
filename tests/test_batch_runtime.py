@@ -8,7 +8,7 @@ from unittest.mock import patch
 import gymnasium as gym
 import numpy as np
 
-from rlab.batch_runtime import (
+from gradlab.batch_runtime import (
     BatchMetricRecord,
     BatchRuntime,
     EpisodeRecord,
@@ -16,15 +16,15 @@ from rlab.batch_runtime import (
     SignalSpec,
     TaskEventRecord,
 )
-from rlab.env import EnvConfig
-from rlab.task_kernels import (
+from gradlab.env import EnvConfig
+from gradlab.task_kernels import (
     IdentityTaskDefinition,
     MarioTaskConfig,
     MarioTaskDefinition,
     Outcome,
 )
-from rlab.training.sb3_on_policy import validate_action_space
-from rlab.training.sb3_vec_env import RlabVecEnv
+from gradlab.training.sb3_on_policy import validate_action_space
+from gradlab.training.sb3_vec_env import GradLabVecEnv
 
 
 def done_flags(step) -> np.ndarray:
@@ -366,7 +366,7 @@ class BatchRuntimeTests(unittest.TestCase):
         runtime.reset()
 
         with patch(
-            "rlab.env_registry.resolve_env_provider",
+            "gradlab.env_registry.resolve_env_provider",
             side_effect=AssertionError("hot path consulted provider registry"),
         ):
             runtime.step(np.zeros((runtime.num_envs, 3), dtype=np.int8))
@@ -386,7 +386,7 @@ class BatchRuntimeTests(unittest.TestCase):
             run_seed=17,
             capture_step_diagnostics=True,
         )
-        env = RlabVecEnv(runtime)
+        env = GradLabVecEnv(runtime)
         env.seed(123)
         env.reset()
         provider.queue_step(
@@ -625,8 +625,8 @@ class BatchRuntimeTests(unittest.TestCase):
             provider.reset_calls[-1]["start_ids"][0],
             runtime._start_for(0, 1),
         )
-        self.assertEqual(step.transition_info["rlab_boundary_reason"][0], "forced_reset")
-        self.assertEqual(step.transition_info["rlab_reset_reason"][0], "curriculum")
+        self.assertEqual(step.transition_info["gradlab_boundary_reason"][0], "forced_reset")
+        self.assertEqual(step.transition_info["gradlab_reset_reason"][0], "curriculum")
         record = next(
             record for record in runtime.drain_records() if isinstance(record, EpisodeRecord)
         )
@@ -979,7 +979,7 @@ class MarioKernelTests(unittest.TestCase):
         self.assertEqual(compiled.action_masks.shape[0], 4)
 
 
-class RlabVecEnvTests(unittest.TestCase):
+class GradLabVecEnvTests(unittest.TestCase):
     def test_sb3_facade_exposes_forced_reset_as_done_with_terminal_observation(self):
         provider = DeterministicNativeVectorProvider()
         descriptor = descriptor_for(provider)
@@ -989,7 +989,7 @@ class RlabVecEnvTests(unittest.TestCase):
             IdentityTaskDefinition().bind(descriptor, provider.num_envs),
             run_seed=11,
         )
-        env = RlabVecEnv(runtime)
+        env = GradLabVecEnv(runtime)
         env.reset()
         runtime.request_resets(
             np.asarray([False, True], dtype=np.bool_),
@@ -1003,8 +1003,8 @@ class RlabVecEnvTests(unittest.TestCase):
         np.testing.assert_array_equal(observations["image"], [[3, 3], [0, 0]])
         np.testing.assert_array_equal(infos[1]["terminal_observation"]["image"], [8, 8])
         self.assertTrue(infos[1]["TimeLimit.truncated"])
-        self.assertEqual(infos[1]["rlab_boundary_reason"], "forced_reset")
-        self.assertEqual(infos[1]["rlab_reset_reason"], "external")
+        self.assertEqual(infos[1]["gradlab_boundary_reason"], "forced_reset")
+        self.assertEqual(infos[1]["gradlab_reset_reason"], "external")
 
     def test_identity_equals_for_failure_resets_only_the_stalled_lane(self):
         provider = DeterministicNativeVectorProvider()
@@ -1158,7 +1158,7 @@ class RlabVecEnvTests(unittest.TestCase):
             IdentityTaskDefinition().bind(descriptor, provider.num_envs),
             run_seed=11,
         )
-        env = RlabVecEnv(runtime)
+        env = GradLabVecEnv(runtime)
         env.seed(100)
         observations = env.reset()
         np.testing.assert_array_equal(observations["image"], np.zeros((2, 2)))

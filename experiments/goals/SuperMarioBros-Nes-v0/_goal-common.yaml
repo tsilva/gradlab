@@ -128,7 +128,7 @@ eval:
         failure: [life_loss, stalled]
         success: [level_change]
         max_episode_steps: 4500
-# Goal-level release target; winner identity is resolved from `rlab leaders checkpoints`.
+# Goal-level release target; winner identity is resolved from `gradlab leaders checkpoints`.
 release:
-  # Marker-only. rlab derives the repository identity and owns the release file contract.
+  # Marker-only. gradlab derives the repository identity and owns the release file contract.
   huggingface: {}

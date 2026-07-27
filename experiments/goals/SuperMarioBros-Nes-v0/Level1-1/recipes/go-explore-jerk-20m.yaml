@@ -29,7 +29,7 @@ train:
       mode: backend
     curriculum: null
   backend:
-    id: rlab.go-explore
+    id: gradlab.go-explore
     config:
       explore_steps: 128
       run_duration_mean: 4.0

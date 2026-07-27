@@ -33,7 +33,7 @@ if [[ -n "$EXTRA_NAME" ]]; then
     PACKAGE_TARGET=".[$EXTRA_NAME]"
 fi
 
-CONSTRAINTS="$(mktemp "${TMPDIR:-/tmp}/rlab-lock.XXXXXX.txt")"
+CONSTRAINTS="$(mktemp "${TMPDIR:-/tmp}/gradlab-lock.XXXXXX.txt")"
 trap 'rm -f "$CONSTRAINTS"' EXIT
 if [[ -n "$EXTRA_NAME" ]]; then
     uv export \
@@ -52,18 +52,18 @@ else
         --output-file "$CONSTRAINTS"
 fi
 
-if uv tool list | grep -q "^rlab "; then
-    echo "Existing rlab tool detected; reinstalling from the frozen lock."
+if uv tool list | grep -q "^gradlab "; then
+    echo "Existing gradlab tool detected; reinstalling from the frozen lock."
     uv tool install --project . "$PACKAGE_TARGET" \
         -e \
         --force \
         --constraints "$CONSTRAINTS"
 else
-    echo "Installing rlab as an editable uv tool from the frozen lock."
+    echo "Installing gradlab as an editable uv tool from the frozen lock."
     uv tool install --project . "$PACKAGE_TARGET" \
         -e \
         --constraints "$CONSTRAINTS"
 fi
 
-rlab --help >/dev/null
-uv tool list | grep -A1 '^rlab '
+gradlab --help >/dev/null
+uv tool list | grep -A1 '^gradlab '

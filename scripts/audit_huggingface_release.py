@@ -10,7 +10,7 @@ from typing import Any
 
 from huggingface_hub import HfApi, hf_hub_download
 
-from rlab.publication import (
+from gradlab.publication import (
     HUGGINGFACE_RELEASE_FILES,
     validate_release_bundle,
     verify_replay,
@@ -19,7 +19,7 @@ from rlab.publication import (
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Audit one immutable rlab model release on the Hugging Face Hub."
+        description="Audit one immutable gradlab model release on the Hugging Face Hub."
     )
     parser.add_argument("repo_id")
     parser.add_argument("--revision", required=True, help="Sequential release tag, such as v1.")
@@ -76,7 +76,7 @@ def audit_huggingface_release(
             f"extra={sorted(tagged_files - expected_files)}"
         )
 
-    with tempfile.TemporaryDirectory(prefix="rlab-hf-audit-") as temporary:
+    with tempfile.TemporaryDirectory(prefix="gradlab-hf-audit-") as temporary:
         root = Path(temporary)
         for filename in sorted(HUGGINGFACE_RELEASE_FILES):
             cached = hf_hub_download(

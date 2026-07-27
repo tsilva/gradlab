@@ -7,8 +7,8 @@ import numpy as np
 import torch
 from torch import nn
 
-from rlab.play import render_obs_stack
-from rlab.play_attribution import (
+from gradlab.play import render_obs_stack
+from gradlab.play_attribution import (
     ActionLogProbForward,
     PolicyActionAttributor,
     actor_image_feature_extractor,

@@ -21,9 +21,9 @@ composition, overrides, and runtime arguments; manually copied contract summarie
 are intentionally unsupported.
 
 ```bash
-rlab benchmark list
-rlab benchmark show mario-env-throughput-l11
-rlab benchmark run mario-env-throughput-l11 --dry-run
+gradlab benchmark list
+gradlab benchmark show mario-env-throughput-l11
+gradlab benchmark run mario-env-throughput-l11 --dry-run
 ```
 
 Run a profile only when its scope is appropriate for the machine. The local smoke
@@ -35,7 +35,7 @@ generated result and isolated run evidence under `logs/benchmarks/`.
 - `local_smoke`: dstack local smoke using `b3`, disabled
   checkpoint evaluation, and the same one-attempt container/result contract as
   Beast jobs.
-- `env_throughput`: paired native-provider and rlab runtime throughput benchmark
+- `env_throughput`: paired native-provider and gradlab runtime throughput benchmark
   for the current Mario provider.
 - `train_loop_throughput`: bounded W&B-disabled backend training-loop benchmark
 - `train_loop_comparison`: repeated AB/BA baseline-versus-candidate training-loop comparison with

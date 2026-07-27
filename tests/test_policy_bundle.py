@@ -8,11 +8,11 @@ from unittest.mock import patch
 
 import pytest
 
-from rlab.artifacts import install_model_bundle
-from rlab.env import resolve_env_config
-from rlab.env_config import env_config_from_mapping
-from rlab.env_metadata import training_metadata
-from rlab.policy_bundle import (
+from gradlab.artifacts import install_model_bundle
+from gradlab.env import resolve_env_config
+from gradlab.env_config import env_config_from_mapping
+from gradlab.env_metadata import training_metadata
+from gradlab.policy_bundle import (
     MODEL_DOCUMENT_TYPE,
     PolicyDocumentError,
     UnsupportedPolicyDocumentVersion,
@@ -31,20 +31,20 @@ from rlab.policy_bundle import (
     validate_recipe_document,
     write_canonical_json,
 )
-from rlab.eval_runner import normalized_evaluation_request
-from rlab.recipe_documents import compose_train_document
-from rlab.train_config import validate_and_normalize_train_config
-from rlab.training_backend import training_backend_config, training_backend_config_hash
+from gradlab.eval_runner import normalized_evaluation_request
+from gradlab.recipe_documents import compose_train_document
+from gradlab.train_config import validate_and_normalize_train_config
+from gradlab.training_backend import training_backend_config, training_backend_config_hash
 
 
 GOAL = Path("experiments/goals/SuperMarioBros-Nes-v0/Level1-1/_goal.yaml")
 RECIPE = Path("experiments/goals/SuperMarioBros-Nes-v0/Level1-1/recipes/ppo.yaml")
 LEVEL1_3_GOAL = Path("experiments/goals/SuperMarioBros-Nes-v0/Level1-3/_goal.yaml")
 LEVEL1_3_TRAIN_CLEAR_RECIPE = LEVEL1_3_GOAL.parent / "recipes/ppo-train-clear-100.yaml"
-RUNTIME = "docker:ghcr.io/tsilva/rlab/rlab-train@sha256:" + "b" * 64
+RUNTIME = "docker:ghcr.io/tsilva/gradlab/gradlab-train@sha256:" + "b" * 64
 BREAKOUT_GOAL = Path("experiments/goals/Breakout-Atari2600-v0/_goal.yaml")
 BREAKOUT_RECIPES = tuple(sorted((BREAKOUT_GOAL.parent / "recipes").glob("*.yaml")))
-BANDIT_GOAL = Path("experiments/goals/rlab__bandit/_goal.yaml")
+BANDIT_GOAL = Path("experiments/goals/gradlab__bandit/_goal.yaml")
 BANDIT_RECIPE = BANDIT_GOAL.parent / "recipes/ppo.yaml"
 VIZDOOM_GOAL = Path("experiments/goals/VizdoomBasic-v1/_goal.yaml")
 VIZDOOM_RECIPE = VIZDOOM_GOAL.parent / "recipes/ppo.yaml"
@@ -219,7 +219,7 @@ def test_legacy_model_environment_mismatch_still_fails_closed(tmp_path: Path) ->
     config = resolve_env_config(env_config_from_mapping(train_config))
     legacy_training = training_metadata(config)
     legacy_training["environment"] = deepcopy(legacy_training["environment"])
-    legacy_training["environment"]["env_id"] = "rlab:Bandit-v0"
+    legacy_training["environment"]["env_id"] = "gradlab:Bandit-v0"
     write_canonical_json(
         model_path.with_suffix(".model.json"),
         build_model_document(
@@ -512,7 +512,7 @@ def test_future_recipe_version_fails_with_source_and_supported_versions(tmp_path
     path.write_text(
         json.dumps(
             {
-                "document_type": "rlab.recipe",
+                "document_type": "gradlab.recipe",
                 "format_version": 999,
                 "recipe": {},
                 "provenance": {},
@@ -526,7 +526,7 @@ def test_future_recipe_version_fails_with_source_and_supported_versions(tmp_path
     assert str(path) in message
     assert "999" in message
     assert "[1]" in message
-    assert "Upgrade rlab" in message
+    assert "Upgrade gradlab" in message
 
 
 def test_future_model_version_fails_before_checkpoint_access(tmp_path: Path) -> None:
@@ -536,7 +536,7 @@ def test_future_model_version_fails_before_checkpoint_access(tmp_path: Path) -> 
     model["format_version"] = 999
     model_path.write_text(json.dumps(model), encoding="utf-8")
 
-    with patch("rlab.policy_bundle.sha256_file", side_effect=AssertionError("checkpoint read")):
+    with patch("gradlab.policy_bundle.sha256_file", side_effect=AssertionError("checkpoint read")):
         with pytest.raises(UnsupportedPolicyDocumentVersion) as error:
             load_policy_bundle(tmp_path)
     assert MODEL_DOCUMENT_TYPE in str(error.value)
@@ -629,10 +629,10 @@ def test_all_source_kinds_normalize_to_identical_eval_and_seed_requests(
         local,
         replace(
             local,
-            source="https://models.example/runs/rlab-test/checkpoints/1-a/model.zip",
+            source="https://models.example/runs/gradlab-test/checkpoints/1-a/model.zip",
             revision="a" * 64,
         ),
-        replace(local, source="rlab://run/rlab-test/checkpoint/a", revision="a" * 64),
+        replace(local, source="gradlab://run/gradlab-test/checkpoint/a", revision="a" * 64),
         replace(local, source="hf://tsilva/policy", revision="d" * 40),
     )
     requests = [normalized_evaluation_request(bundle, episodes=5, n_envs=1) for bundle in sources]

@@ -21,7 +21,7 @@ def test_provider_runtime_import_does_not_require_stable_retro_atari_vec_env(
     )
 
     result = subprocess.run(
-        [sys.executable, "-c", "import rlab.env_providers"],
+        [sys.executable, "-c", "import gradlab.env_providers"],
         check=False,
         capture_output=True,
         env=env,

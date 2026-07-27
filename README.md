@@ -1,10 +1,10 @@
 <div align="center">
-  <img src="./logo.png" alt="rlab" width="256" />
+  <img src="./logo.png" alt="gradlab" width="256" />
 
   **Reinforcement-learning workbench for training game agents**
 </div>
 
-rlab turns checked-in goals and recipes into portable, reproducible training
+gradlab turns checked-in goals and recipes into portable, reproducible training
 runs. Research code sees one container and does not contain provider-specific
 scheduling logic. dstack places that container on a local GPU, spot instance,
 or explicitly authorized on-demand machine; Modal evaluates immutable
@@ -35,19 +35,19 @@ inventories, promotion, W&B delivery, and drain.
 ## Install
 
 ```bash
-git clone git@github.com:tsilva/rlab.git
-cd rlab
+git clone git@github.com:tsilva/gradlab.git
+cd gradlab
 ./install.sh
-rlab validate
+gradlab validate
 ```
 
 The project uses `uv`, a committed `uv.lock`, and a seven-day package-age gate.
 The exact Turbo runtime is `stable-retro-turbo==1.0.1.post36`,
-`supermariobrosnes-turbo==0.5.0`, `breakout-turbo-env==0.5.1`, and
+`supermariobrosnes-turbo==0.6.0`, `breakout-turbo-env==0.5.1`, and
 `vizdoom-turbo==1.3.0.post2`. Their explicit package-age exceptions are
 recorded in `pyproject.toml` and `uv-tool.toml`.
 
-The four Turbo providers must implement Turbo Vector API v1. rlab validates
+The four Turbo providers must implement Turbo Vector API v1. gradlab validates
 their immutable capability and signal declarations, resolved action semantics,
 observation ownership and buffer depth, read-only active state indices, and
 per-lane rendering surface at construction time. It requires canonical
@@ -59,8 +59,8 @@ not advertise exactly v1 are rejected.
 Register a local ROM without uploading it to source control:
 
 ```bash
-rlab rom sync --game SuperMarioBros-Nes-v0
-rlab rom status --json
+gradlab rom sync --game SuperMarioBros-Nes-v0
+gradlab rom status --json
 ```
 
 Local dstack hosts use the hash-verified read-only ROM cache. Each Modal-backed
@@ -70,22 +70,20 @@ image.
 
 ## Train and play a recipe with uvx
 
-`uvx` can run a built-in recipe without cloning rlab. Select this distribution
-explicitly because the `rlab` project name on PyPI is owned by an unrelated
-package. Downstream repositories should replace `<immutable-rlab-ref>` with a
-release tag or full commit:
+`uvx` can run a built-in recipe without cloning GradLab. Pin the distribution
+version in downstream repositories when exact reproducibility matters:
 
 ```bash
-RLAB_SOURCE='git+https://github.com/tsilva/rlab.git@<immutable-rlab-ref>'
+GRADLAB_VERSION='0.1.0'
 
-uvx --from "$RLAB_SOURCE" rlab train Breakout-Atari2600-v0/ppo
-uvx --from "$RLAB_SOURCE" rlab play --recipe Breakout-Atari2600-v0/ppo
+uvx --from "gradlab==$GRADLAB_VERSION" gradlab train Breakout-Atari2600-v0/ppo
+uvx --from "gradlab==$GRADLAB_VERSION" gradlab play --recipe Breakout-Atari2600-v0/ppo
 
-uvx --from "$RLAB_SOURCE" rlab train SuperMarioBros-Nes-v0/Level1-1/ppo
-uvx --from "$RLAB_SOURCE" rlab play --recipe SuperMarioBros-Nes-v0/Level1-1/ppo
+uvx --from "gradlab==$GRADLAB_VERSION" gradlab train SuperMarioBros-Nes-v0/Level1-1/ppo
+uvx --from "gradlab==$GRADLAB_VERSION" gradlab play --recipe SuperMarioBros-Nes-v0/Level1-1/ppo
 
-uvx --from "$RLAB_SOURCE" rlab train VizdoomBasic-v1/ppo
-uvx --from "$RLAB_SOURCE" rlab play --recipe VizdoomBasic-v1/ppo
+uvx --from "gradlab==$GRADLAB_VERSION" gradlab train VizdoomBasic-v1/ppo
+uvx --from "gradlab==$GRADLAB_VERSION" gradlab play --recipe VizdoomBasic-v1/ppo
 ```
 
 Training writes a unique run below `./runs`; recipe playback selects the newest
@@ -96,13 +94,13 @@ acceptance or checkpoint promotion. Use repeatable `--set KEY=VALUE` overrides,
 repository also works when it lives at
 `experiments/goals/<goal>/recipes/<recipe>.yaml` beside its owning `_goal.yaml`.
 Mario additionally requires a lawful local ROM registered once with
-`rlab rom sync --game SuperMarioBros-Nes-v0`; local training verifies and binds
+`gradlab rom sync --game SuperMarioBros-Nes-v0`; local training verifies and binds
 that cache without sending the ROM anywhere.
 
 Reward transforms belong to the common task contract for every provider.
 `task.reward.reward_scale` is a positive divisor, followed by
 `task.reward.reward_clip`, which is `false`, `true` for `[-1, 1]`, or an
-explicit `[low, high]` pair. rlab disables provider-native reward transforms so
+explicit `[low, high]` pair. gradlab disables provider-native reward transforms so
 the same ordered transform is used in training, evaluation, and playback.
 
 ## Launch and observe
@@ -111,9 +109,9 @@ Keep non-sensitive operator metadata and Keychain references in the private
 user config, using the checked-in example as the schema:
 
 ```bash
-mkdir -p ~/.config/rlab
-install -m 600 ops/operator.example.toml ~/.config/rlab/operator.toml
-rlab experiment operator-preflight --json
+mkdir -p ~/.config/gradlab
+install -m 600 ops/operator.example.toml ~/.config/gradlab/operator.toml
+gradlab experiment operator-preflight --json
 ```
 
 Replace the example placeholders and create the referenced generic-password
@@ -123,7 +121,7 @@ remain supported for CI and non-macOS operators. Modal tokens remain in
 Modal's active `~/.modal.toml` profile, which must use mode `0600`.
 
 ```bash
-rlab experiment launch \
+gradlab experiment launch \
   --goal-file experiments/goals/SuperMarioBros-Nes-v0/Level1-1/_goal.yaml \
   --recipe-file experiments/goals/SuperMarioBros-Nes-v0/Level1-1/recipes/ppo.yaml \
   --seed 123 \
@@ -137,11 +135,11 @@ rlab experiment launch \
 `launch` runs the same read-only operator preflight before runtime readiness or
 R2 mutation, then requires a clean, pushed source revision and waits for its
 verified immutable training image and source-specific Modal deployment. It
-returns the rlab run ID, attempt ID, dstack task, selected compute offer,
+returns the gradlab run ID, attempt ID, dstack task, selected compute offer,
 source/image digest, W&B URL, and public run-index URL.
 
 W&B projects remain organized by canonical game family. New orchestrated runs
-keep their immutable `rlab-…` run ID while using a readable
+keep their immutable `gradlab-…` run ID while using a readable
 `<goal>__<recipe>__s<seed>__<short-run-id>` display name. Runs from a declared
 campaign share a campaign group; otherwise runs sharing a goal, recipe, and
 launch-time recipe variant share a cohort group.
@@ -157,12 +155,12 @@ Compute policy:
 Observe or control one logical run:
 
 ```bash
-rlab experiment status --run <rlab-run-id> --json
-rlab experiment follow --run <rlab-run-id>
-rlab experiment wait --run <rlab-run-id> --until terminal --timeout 48h
-rlab experiment logs --run <rlab-run-id> --tail 200
-rlab experiment cancel --run <rlab-run-id>
-rlab experiment retry --run <rlab-run-id>
+gradlab experiment status --run <gradlab-run-id> --json
+gradlab experiment follow --run <gradlab-run-id>
+gradlab experiment wait --run <gradlab-run-id> --until terminal --timeout 48h
+gradlab experiment logs --run <gradlab-run-id> --tail 200
+gradlab experiment cancel --run <gradlab-run-id>
+gradlab experiment retry --run <gradlab-run-id>
 ```
 
 Retry preserves the logical run ID and creates a new attempt ID. It requires a
@@ -193,12 +191,12 @@ and goals, then their W&B runs and public checkpoints. A W&B project or run URL
 preselects that level; an exact source still opens directly:
 
 ```bash
-rlab play
-rlab play "https://wandb.ai/<entity>/<project>"
-rlab play "https://wandb.ai/<entity>/<project>/runs/<rlab-run-id>"
-rlab play --run <rlab-run-id>
-rlab play --model <local-checkpoint>
-rlab play hf://<owner>/<repository>
+gradlab play
+gradlab play "https://wandb.ai/<entity>/<project>"
+gradlab play "https://wandb.ai/<entity>/<project>/runs/<gradlab-run-id>"
+gradlab play --run <gradlab-run-id>
+gradlab play --model <local-checkpoint>
+gradlab play hf://<owner>/<repository>
 ```
 
 The player uses shareable hierarchical routes: `/` lists projects,
@@ -249,39 +247,39 @@ checkpoint is promoted exactly once.
 Useful commands:
 
 ```bash
-rlab validate
-rlab env list
-rlab env inspect supermariobrosnes-turbo:SuperMarioBros-Nes-v0
-rlab env preflight \
+gradlab validate
+gradlab env list
+gradlab env inspect supermariobrosnes-turbo:SuperMarioBros-Nes-v0
+gradlab env preflight \
   --goal-file experiments/goals/SuperMarioBros-Nes-v0/Level1-1/_goal.yaml \
   --recipe-file experiments/goals/SuperMarioBros-Nes-v0/Level1-1/recipes/ppo.yaml
-rlab leaders runs --goal SuperMarioBros-Nes-v0/Level1-1 --min-seeds 3
-rlab leaders checkpoints --goal SuperMarioBros-Nes-v0/Level1-1 --limit 1 --json
-rlab reports plan --goal SuperMarioBros-Nes-v0/Level1-1
-rlab reports sync --goal SuperMarioBros-Nes-v0/Level1-1
-rlab reports verify --goal SuperMarioBros-Nes-v0/Level1-1
-rlab benchmark list
+gradlab leaders runs --goal SuperMarioBros-Nes-v0/Level1-1 --min-seeds 3
+gradlab leaders checkpoints --goal SuperMarioBros-Nes-v0/Level1-1 --limit 1 --json
+gradlab reports plan --goal SuperMarioBros-Nes-v0/Level1-1
+gradlab reports sync --goal SuperMarioBros-Nes-v0/Level1-1
+gradlab reports verify --goal SuperMarioBros-Nes-v0/Level1-1
+gradlab benchmark list
 ```
 
 ## Datasets and model release
 
-`rlab dataset` records and verifies Gymrec v3 gameplay data with provider-native
+`gradlab dataset` records and verifies Gymrec v3 gameplay data with provider-native
 actions, rewards, boundaries, seeds, environment contracts, and approved policy
 provenance:
 
 ```bash
-rlab dataset record mario-level1-1 \
+gradlab dataset record mario-level1-1 \
   --env-id SuperMarioBros-Nes-v0 \
   --provider supermariobrosnes-turbo \
   --agent human
-rlab dataset verify mario-level1-1
-rlab dataset play mario-level1-1 --episode 1
-rlab dataset upload mario-level1-1 <owner/repository>
+gradlab dataset verify mario-level1-1
+gradlab dataset play mario-level1-1 --episode 1
+gradlab dataset upload mario-level1-1 <owner/repository>
 ```
 
-External SB3 checkpoints are Python-executable content. rlab stages and hashes
+External SB3 checkpoints are Python-executable content. gradlab stages and hashes
 the complete model closure and requires approval before deserialization unless
-the exact source matches `RLAB_MODEL_SOURCE_ALLOWLIST`.
+the exact source matches `GRADLAB_MODEL_SOURCE_ALLOWLIST`.
 
 Published model releases use Hugging Face model cards and include a
 representative `replay.mp4` when the policy has visual behavior. Generated

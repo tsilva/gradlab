@@ -11,10 +11,10 @@ import numpy as np
 from aiohttp import ClientSession, WSServerHandshakeError, WSMsgType
 from PIL import Image
 
-from rlab.dataset_cli import build_parser as build_dataset_parser
-from rlab.play import _PlaybackSession, _PlaybackTransition
-from rlab.play_catalog import CatalogPage
-from rlab.play_web import (
+from gradlab.dataset_cli import build_parser as build_dataset_parser
+from gradlab.play import _PlaybackSession, _PlaybackTransition
+from gradlab.play_catalog import CatalogPage
+from gradlab.play_web import (
     FRAME_CODEC_PNG,
     FRAME_GAME,
     FRAME_HEADER,
@@ -522,8 +522,8 @@ def test_run_web_playback_requests_paired_browser_windows() -> None:
     server = AsyncMock()
     server.run.return_value = 0
     with (
-        patch("rlab.play_web.WebPlaybackRunner", return_value=runner),
-        patch("rlab.play_web.PlaybackWebServer", return_value=server) as server_type,
+        patch("gradlab.play_web.WebPlaybackRunner", return_value=runner),
+        patch("gradlab.play_web.PlaybackWebServer", return_value=server) as server_type,
     ):
         assert run_web_playback(object(), args, config_text="config") == 0
 
@@ -531,7 +531,7 @@ def test_run_web_playback_requests_paired_browser_windows() -> None:
 
 
 def test_source_browser_paths_are_hierarchical_and_url_encoded() -> None:
-    run_id = "rlab-" + "a" * 32
+    run_id = "gradlab-" + "a" * 32
     checkpoint_id = "checkpoint-250000-" + "b" * 16
 
     assert source_browser_path(None) == "/"
@@ -568,7 +568,7 @@ def test_paired_playback_server_opens_play_and_stats_windows() -> None:
             human_args(no_open=False),
             paired_windows=True,
         )
-        with patch("rlab.play_web.webbrowser.open") as open_browser:
+        with patch("gradlab.play_web.webbrowser.open") as open_browser:
             task = asyncio.create_task(server.run())
             try:
                 deadline = asyncio.get_running_loop().time() + 3.0
@@ -735,7 +735,7 @@ def test_paired_auto_start_falls_back_when_stats_window_is_missing() -> None:
             workspace_id="workspace",
             window_id="main",
         )
-        with patch("rlab.play_web.PAIRED_START_GRACE_SECONDS", 0.01):
+        with patch("gradlab.play_web.PAIRED_START_GRACE_SECONDS", 0.01):
             server._maybe_auto_start("main-client")
             await asyncio.sleep(0.03)
 
@@ -1100,7 +1100,7 @@ def test_catalog_http_api_requires_the_fragment_session_token() -> None:
                 query,
                 entity,
                 project,
-            ) == ("rlab-" + "a" * 32, "", "research", "Mario")
+            ) == ("gradlab-" + "a" * 32, "", "research", "Mario")
             return (
                 {
                     "run_id": run_id,
@@ -1141,7 +1141,7 @@ def test_catalog_http_api_requires_the_fragment_session_token() -> None:
                 assert (await goals.json())["items"][0]["goal_id"] == "Level1-1"
                 checkpoints = await client.get(
                     (
-                        f"{server.origin}/api/catalog/runs/rlab-{'a' * 32}/checkpoints"
+                        f"{server.origin}/api/catalog/runs/gradlab-{'a' * 32}/checkpoints"
                         "?entity=research&project=Mario"
                     ),
                     headers={"Authorization": f"Bearer {server.token}"},
@@ -1152,15 +1152,15 @@ def test_catalog_http_api_requires_the_fragment_session_token() -> None:
                     "/",
                     "/projects/Mario",
                     "/projects/Mario/goals/Level1-1",
-                    f"/projects/Mario/goals/Level1-1/runs/rlab-{'a' * 32}",
+                    f"/projects/Mario/goals/Level1-1/runs/gradlab-{'a' * 32}",
                     (
-                        f"/projects/Mario/goals/Level1-1/runs/rlab-{'a' * 32}"
+                        f"/projects/Mario/goals/Level1-1/runs/gradlab-{'a' * 32}"
                         f"/checkpoints/checkpoint-1-{'b' * 16}"
                     ),
                 ):
                     page = await client.get(f"{server.origin}{route}")
                     assert page.status == 200
-                    assert "<title>rlab player</title>" in await page.text()
+                    assert "<title>gradlab player</title>" in await page.text()
         finally:
             runner.stop()
             await asyncio.wait_for(task, timeout=3.0)
@@ -1231,7 +1231,7 @@ def test_initial_project_catalog_is_embedded_in_selection_snapshots() -> None:
 
 
 def test_web_dashboard_assets_are_packaged_beside_server() -> None:
-    root = Path(__file__).parents[1] / "src" / "rlab" / "web_player"
+    root = Path(__file__).parents[1] / "src" / "gradlab" / "web_player"
     panel_root = root / "panels"
     expected_assets = (
         root / "index.html",
@@ -1312,8 +1312,8 @@ def test_web_dashboard_assets_are_packaged_beside_server() -> None:
     assert '"action/executed"' in telemetry
     assert "dynamicDescriptorKey" in telemetry
 
-    assert '"rlab.player.workspace.v4.paired"' in script
-    assert '"rlab.player.workspace.v4.single"' in script
+    assert '"gradlab.player.workspace.v4.paired"' in script
+    assert '"gradlab.player.workspace.v4.single"' in script
     assert "createTelemetryPanel" in script
     assert "updateTelemetryPanel" in script
     assert "snapshot.history_point" in script

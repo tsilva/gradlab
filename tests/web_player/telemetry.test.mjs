@@ -11,9 +11,9 @@ import {
   encodeDynamicSegment,
   metricOptions,
   seriesForMetric,
-} from "../../src/rlab/web_player/panels/telemetry.js";
-import { cursorIndex } from "../../src/rlab/web_player/panels/telemetry-panel.js";
-import { lineCursorX } from "../../src/rlab/web_player/panels/shared.js";
+} from "../../src/gradlab/web_player/panels/telemetry.js";
+import { cursorIndex } from "../../src/gradlab/web_player/panels/telemetry-panel.js";
+import { lineCursorX } from "../../src/gradlab/web_player/panels/shared.js";
 
 test("dynamic metric names round-trip without path ambiguity", () => {
   const name = "coins / bonus%";

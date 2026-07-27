@@ -17,7 +17,7 @@ RUNTIME_INPUT_PATHS = (
     "METRICS.md",
     "THIRD_PARTY_NOTICES.md",
     "containers/train/entrypoint.sh",
-    "containers/train/rlab",
+    "containers/train/gradlab",
     "containers/train/smoke.py",
     "experiments/goals",
     "experiments/modal_eval.yaml",
@@ -27,8 +27,8 @@ RUNTIME_INPUT_PATHS = (
     "src",
 )
 
-OVERLAY_KEY_SCHEMA = b"rlab-runtime-overlay-key-v2\0"
-RUNTIME_KEY_SCHEMA = b"rlab-runtime-input-v2\0"
+OVERLAY_KEY_SCHEMA = b"gradlab-runtime-overlay-key-v3\0"
+RUNTIME_KEY_SCHEMA = b"gradlab-runtime-input-v3\0"
 
 
 def _indexed_blob_contents(

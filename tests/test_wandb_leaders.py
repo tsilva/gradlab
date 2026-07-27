@@ -3,7 +3,7 @@ from __future__ import annotations
 import unittest
 from types import SimpleNamespace
 
-from rlab.wandb_leaders import (
+from gradlab.wandb_leaders import (
     CheckpointLeader,
     RunScore,
     rank_checkpoint_leaders,

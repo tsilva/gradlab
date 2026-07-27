@@ -13,7 +13,7 @@ Before every task in this repository, use the `$specs-author` skill to read the 
 
 Before choosing hardware, launching training, changing concurrency, or recommending beast targets, read `INSTANCES.md`. It is the source of truth for known GPU instances, access commands, child counts, cleanup, and gotchas. Update it when benchmark or access facts change.
 
-When changing dstack host behavior, preserve the root-owned runtime-image cleanup contract: prune only unused rlab-managed images while preserving active containers and every immutable digest demanded by pending or active dstack tasks.
+When changing dstack host behavior, preserve the root-owned runtime-image cleanup contract: prune only unused gradlab-managed images while preserving active containers and every immutable digest demanded by pending or active dstack tasks.
 
 ## Stable Retro
 
@@ -21,7 +21,7 @@ When changing dstack host behavior, preserve the root-owned runtime-image cleanu
 - Current required Turbo API v1 runtimes are `stable-retro-turbo==1.0.1.post36`, `supermariobrosnes-turbo==0.6.0`, `breakout-turbo-env==0.5.1`, and `vizdoom-turbo==1.3.0.post2`.
 - Native-vector code should use `stable_retro.RetroVecEnv`, whose constructor follows the original `RetroEnv` positional signature plus vector-only keyword arguments.
 - Runtime version source of truth: the exact pins in `pyproject.toml` and the resolved versions in `uv.lock`. Use `uv sync --frozen`; make overrides explicit in recipes, compute policy, run descriptions, and W&B tags.
-- Every Turbo provider must declare and pass the strict Turbo Vector API v1 contract before rlab consumes it. Do not add provider probing or legacy fallbacks.
+- Every Turbo provider must declare and pass the strict Turbo Vector API v1 contract before gradlab consumes it. Do not add provider probing or legacy fallbacks.
 - Native-vector observations are channel-first `(n_envs, channels, height, width)`. Reject other layouts instead of transposing or guessing.
 - Keep version history and benchmark conclusions in `INSTANCES.md` or experiment reports.
 
@@ -30,14 +30,14 @@ When changing dstack host behavior, preserve the root-owned runtime-image cleanu
 - When asked to certify, regression-test, validate, or debug the orchestration lifecycle, use the project-level `$certify-lifecycle` skill in `.codex/skills/certify-lifecycle`. Its credential-free deterministic Tier 1 gate exercises the real supervisor core against file-backed R2 and SQLite plus scripted W&B, Modal, learner, clock, and host boundaries; preserve and replay its failure evidence before changing invariants.
 - When asked to launch, run, start, execute, or monitor a dstack-backed training recipe, use the project-level `$launch-experiment` skill in `.codex/skills/launch-experiment`. It reports the W&B URL immediately, monitors through the authoritative R2 terminal receipt, and delegates active-run potential-bug diagnosis to the read-only `training_run_investigator` custom agent. Its default mode is observation-only; explicit user authorization enables its evidence-preserving repair mode.
 - When asked to tune or optimize a checked-in SB3 PPO/A2C recipe for sample efficiency and stability across training seeds, use the project-level `$autoresearch` skill in `.codex/skills/autoresearch`. It runs a bounded training-only 20%/50% fixed-rung search, launches no checkpoint evaluations, confirms the winner from five untouched full-cap training seeds, and patches only the pointed leaf recipe. Its result is training-signal-confirmed, not checkpoint-promoted or goal-accepted.
-- Active research goal contracts live under goal-scoped folders in `experiments/goals/`. For current Mario Level1-1 work, read `experiments/goals/SuperMarioBros-Nes-v0/Level1-1/_goal.yaml` before choosing recipes, caps, metrics, or promotion criteria. Seed ranges are owned by `rlab.seeds`, not goal files.
+- Active research goal contracts live under goal-scoped folders in `experiments/goals/`. For current Mario Level1-1 work, read `experiments/goals/SuperMarioBros-Nes-v0/Level1-1/_goal.yaml` before choosing recipes, caps, metrics, or promotion criteria. Seed ranges are owned by `gradlab.seeds`, not goal files.
 - Launchable recipes live under their owning active goal's `recipes/` directory and may inherit reusable defaults from `experiments/recipes/_presets/`.
 - Keep generated artifacts out of source control; use `runs/`, `logs/`, and `models/`.
 - The training-container supervisor is the sole W&B writer. W&B stores metrics, metadata, hashes, and R2 URLs only; checkpoints, evidence, replays, ROMs, and recovery bytes belong in their scoped R2 buckets.
 - Every training run needs a specific description via `--run-description`.
 - Training tasks are profileless and locked to exact-source immutable runtime-image digests. One task owns one single-GPU host in v1.
-- Logical run IDs are `rlab-<32 lowercase hex>` and attempt IDs are `attempt-<16 lowercase hex>`. Retries preserve the run ID and create a new attempt ID. Do not introduce numeric database job IDs or batch IDs.
-- Route W&B projects by canonical game family and keep provider identity and `environment_hash` in config. The W&B run ID and group are the immutable rlab run ID.
+- Logical run IDs are `gradlab-<32 lowercase hex>` and attempt IDs are `attempt-<16 lowercase hex>`. Retries preserve the run ID and create a new attempt ID. Do not introduce numeric database job IDs or batch IDs.
+- Route W&B projects by canonical game family and keep provider identity and `environment_hash` in config. The W&B run ID and group are the immutable gradlab run ID.
 - Acceptance evaluation is the only checkpoint-promotion workflow for orchestrated runs. Evaluate every ready periodic checkpoint and the natural final model against the immutable goal-owned episode manifest, fail fast on the first valid failed episode, and atomically promote the lowest-step accepted checkpoint. Modal never receives W&B or control-private credentials.
 - dstack task success is not scientific success. Require the private R2 terminal receipt proving complete eval/checkpoint inventories, promotion, W&B high-water delivery, and drain.
 

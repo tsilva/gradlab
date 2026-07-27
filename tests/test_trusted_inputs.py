@@ -11,21 +11,21 @@ from unittest.mock import patch
 
 import pytest
 
-from rlab.trusted_inputs import (
+from gradlab.trusted_inputs import (
     ModelApprovalError,
     SOURCE_ALLOWLIST_ENV,
     approve_staged_model,
     stage_model_input,
 )
-from rlab.policy_models import load_pinned_remote_policy_model
+from gradlab.policy_models import load_pinned_remote_policy_model
 
 
 def _checkpoint(root: Path) -> Path:
     checkpoint = root / "model.zip"
     with zipfile.ZipFile(checkpoint, "w") as archive:
         archive.writestr("data", "safe fixture")
-    (root / "model.json").write_text(json.dumps({"document_type": "rlab.model"}))
-    (root / "recipe.json").write_text(json.dumps({"document_type": "rlab.recipe"}))
+    (root / "model.json").write_text(json.dumps({"document_type": "gradlab.model"}))
+    (root / "recipe.json").write_text(json.dumps({"document_type": "gradlab.recipe"}))
     return checkpoint
 
 
@@ -165,10 +165,10 @@ def test_pinned_remote_worker_reverifies_queued_manifest_before_load() -> None:
         sentinel = object()
         with (
             patch(
-                "rlab.model_sources.download_remote_model_source",
+                "gradlab.model_sources.download_remote_model_source",
                 return_value=SimpleNamespace(model_path=checkpoint, artifact_name=source),
             ),
-            patch("rlab.policy_models.load_policy_model", return_value=sentinel) as loader,
+            patch("gradlab.policy_models.load_policy_model", return_value=sentinel) as loader,
         ):
             loaded = load_pinned_remote_policy_model(
                 source,
@@ -183,7 +183,7 @@ def test_pinned_remote_worker_reverifies_queued_manifest_before_load() -> None:
 
 
 def test_sb3_deserialization_exists_only_behind_approved_loader() -> None:
-    source_root = Path(__file__).parents[1] / "src" / "rlab"
+    source_root = Path(__file__).parents[1] / "src" / "gradlab"
     offenders = []
     for path in source_root.rglob("*.py"):
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))

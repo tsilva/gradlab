@@ -9,7 +9,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from rlab.dataset_contract import (
+from gradlab.dataset_contract import (
     COMMON_FIELDS,
     DATASET_FORMAT_VERSION,
     ENVIRONMENT_DOCUMENT_FILENAME,
@@ -19,7 +19,7 @@ from rlab.dataset_contract import (
     validate_contract_artifacts,
     validate_v3,
 )
-from rlab.json_utils import canonical_json_bytes
+from gradlab.json_utils import canonical_json_bytes
 
 
 class Rows(list):

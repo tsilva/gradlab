@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from rlab.publication import HUGGINGFACE_RELEASE_FILES
+from gradlab.publication import HUGGINGFACE_RELEASE_FILES
 
 
 SCRIPT = Path(__file__).parents[1] / "scripts/audit_huggingface_release.py"

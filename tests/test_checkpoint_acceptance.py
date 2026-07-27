@@ -4,7 +4,7 @@ import copy
 
 import pytest
 
-from rlab.checkpoint_acceptance import (
+from gradlab.checkpoint_acceptance import (
     CheckpointEvalContractCompiler,
     acceptance_aggregates,
     aggregates_match,
@@ -13,7 +13,7 @@ from rlab.checkpoint_acceptance import (
     manifest_index,
     validate_episode_rows,
 )
-from rlab.modal_eval_protocol import (
+from gradlab.modal_eval_protocol import (
     SEED_PROTOCOL,
     execution_key,
 )
@@ -144,7 +144,7 @@ def test_checkpoint_eval_compiler_rejects_missing_materialized_fields(
 ) -> None:
     config = {
         "checkpoint_eval_environment": {
-            "env_provider": "rlab",
+            "env_provider": "gradlab",
             "game": "Bandit-v0",
             "task": {"termination": {"max_episode_steps": 50}},
         },
@@ -164,7 +164,7 @@ def test_checkpoint_eval_compiler_rejects_more_lanes_than_episodes() -> None:
         CheckpointEvalContractCompiler.from_train_config(
             {
                 "checkpoint_eval_environment": {
-                    "env_provider": "rlab",
+                    "env_provider": "gradlab",
                     "game": "Bandit-v0",
                     "task": {"termination": {"max_episode_steps": 50}},
                 },

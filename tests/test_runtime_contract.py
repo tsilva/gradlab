@@ -6,8 +6,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from rlab import runtime_refs
-from rlab.runtime_contract import (
+from gradlab import runtime_refs
+from gradlab.runtime_contract import (
     RUNTIME_DESCRIPTOR_SCHEMA_VERSION,
     runtime_contract,
     train_config_contract_sha256,
@@ -15,7 +15,7 @@ from rlab.runtime_contract import (
 )
 
 
-RUNTIME_IMAGE_REF = "docker:ghcr.io/tsilva/rlab/rlab-train@sha256:" + "a" * 64
+RUNTIME_IMAGE_REF = "docker:ghcr.io/tsilva/gradlab/gradlab-train@sha256:" + "a" * 64
 SOURCE_SHA = "1" * 40
 BUILD_SOURCE_SHA = "2" * 40
 
@@ -36,8 +36,8 @@ def release_payload(*, source_sha: str = SOURCE_SHA) -> dict:
         "tags": ["runtime-" + "d" * 64],
         "uv_lock_sha256": "e" * 64,
         "base_images": {
-            "gpu": "docker:ghcr.io/tsilva/rlab/rlab-train-gpu@sha256:" + "9" * 64,
-            "dependencies": "docker:ghcr.io/tsilva/rlab/rlab-train-dependencies@sha256:"
+            "gpu": "docker:ghcr.io/tsilva/gradlab/gradlab-train-gpu@sha256:" + "9" * 64,
+            "dependencies": "docker:ghcr.io/tsilva/gradlab/gradlab-train-dependencies@sha256:"
             + "f" * 64
         },
         "workflow_run_id": "123",
@@ -46,9 +46,9 @@ def release_payload(*, source_sha: str = SOURCE_SHA) -> dict:
 
 def modal_readiness_payload(*, source_sha: str = SOURCE_SHA) -> dict:
     contract_sha = train_config_contract_sha256()
-    app_name = "rlab-eval-" + "a" * 12
+    app_name = "gradlab-eval-" + "a" * 12
     return {
-        "schema_version": 2,
+        "schema_version": 3,
         "runtime_image_ref": RUNTIME_IMAGE_REF,
         "source_sha": source_sha,
         "runtime_input_sha256": "d" * 64,
@@ -70,7 +70,7 @@ class RuntimeContractTests(unittest.TestCase):
     def test_contract_is_stable_and_runtime_reports_source(self) -> None:
         with mock.patch.dict(
             os.environ,
-            {"RLAB_SOURCE_SHA": "abc123", "RLAB_RUNTIME_INPUT_SHA256": "d" * 64},
+            {"GRADLAB_SOURCE_SHA": "abc123", "GRADLAB_RUNTIME_INPUT_SHA256": "d" * 64},
         ):
             receipt = runtime_contract(runtime_image_ref=RUNTIME_IMAGE_REF)
 
@@ -84,14 +84,14 @@ class RuntimeContractTests(unittest.TestCase):
             {
                 "attempt_id": "attempt-0123456789abcdef",
                 "compute_target": "b3",
-                "dstack_task": "rlab-0123456789abcdef0123456789abcdef",
-                "run_name": "rlab-0123456789abcdef0123456789abcdef",
+                "dstack_task": "gradlab-0123456789abcdef0123456789abcdef",
+                "run_name": "gradlab-0123456789abcdef0123456789abcdef",
                 "runtime_image_ref": RUNTIME_IMAGE_REF,
                 "seed": 123,
                 "training_backend": {"id": "sb3.ppo", "config": {}},
                 "wandb_display_name": "Level1-1__ppo__s123__01234567",
-                "wandb_group": "rlab-0123456789abcdef0123456789abcdef",
-                "wandb_run_id": "rlab-test",
+                "wandb_group": "gradlab-0123456789abcdef0123456789abcdef",
+                "wandb_run_id": "gradlab-test",
             }
         )
 
@@ -99,7 +99,7 @@ class RuntimeContractTests(unittest.TestCase):
         self.assertEqual(receipt["validated_field_count"], 10)
 
     def test_image_receipt_rejects_retired_schema_and_digest_mismatch(self) -> None:
-        with self.assertRaisesRegex(ValueError, "schema_version must be 5"):
+        with self.assertRaisesRegex(ValueError, "schema_version must be 6"):
             runtime_refs.runtime_release_from_payload(
                 {"runtime_image_ref": RUNTIME_IMAGE_REF, "source_sha": SOURCE_SHA},
                 label="release",
@@ -123,7 +123,7 @@ class RuntimeContractTests(unittest.TestCase):
             )
         payload = modal_readiness_payload()
         payload["startup_probe"]["runtime_image_ref"] = (
-            "docker:ghcr.io/tsilva/rlab/rlab-train@sha256:" + "c" * 64
+            "docker:ghcr.io/tsilva/gradlab/gradlab-train@sha256:" + "c" * 64
         )
         with self.assertRaisesRegex(ValueError, "startup_probe.runtime_image_ref"):
             runtime_refs.modal_readiness_from_payload(

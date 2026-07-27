@@ -6,8 +6,8 @@ import shutil
 import numpy as np
 import pytest
 
-from rlab.dataset_contract import STORAGE_FORMAT_LOSSLESS_VIDEO
-from rlab.dataset_media import LosslessVideoWriter, iter_episode_frames
+from gradlab.dataset_contract import STORAGE_FORMAT_LOSSLESS_VIDEO
+from gradlab.dataset_media import LosslessVideoWriter, iter_episode_frames
 
 
 @pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg is not installed")

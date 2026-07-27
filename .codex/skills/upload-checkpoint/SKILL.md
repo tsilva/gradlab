@@ -1,6 +1,6 @@
 ---
 name: upload-checkpoint
-description: Composite rlab release workflow for trained checkpoints. Use when the user asks to upload, publish, release, or promote a checkpoint/model to Hugging Face, especially RL checkpoints with gameplay preview videos. Coordinates Hugging Face model-card publishing with video preview requirements and YouTube upload of the same preview video.
+description: Composite gradlab release workflow for trained checkpoints. Use when the user asks to upload, publish, release, or promote a checkpoint/model to Hugging Face, especially RL checkpoints with gameplay preview videos. Coordinates Hugging Face model-card publishing with video preview requirements and YouTube upload of the same preview video.
 ---
 
 # Upload Checkpoint
@@ -21,7 +21,7 @@ Do not treat the Hugging Face and YouTube steps as alternatives. For visual RL c
 Resolve these from the user request, private-R2 evaluation evidence, W&B metrics, public-R2 checkpoint metadata, local artifacts, or generated summaries:
 
 - checkpoint identity: run, seed, checkpoint step/timestep, artifact path, or local file
-- materialized goal contract and current model metadata; rlab generates the Hugging Face repo id
+- materialized goal contract and current model metadata; gradlab generates the Hugging Face repo id
 - environment/game, level/task, algorithm, source project, and training framework
 - eval result: completion/win rate, eval count, max progress, reward mean, and eval profile when available
 - representative preview episode video, or enough information to generate one

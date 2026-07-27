@@ -9,7 +9,7 @@ import pytest
 
 pytest.importorskip("minari")
 
-from rlab.dataset_minari import _materialize  # noqa: E402
+from gradlab.dataset_minari import _materialize  # noqa: E402
 
 
 class RowsDataset:
@@ -68,7 +68,7 @@ def test_minari_observation_space_comes_from_recorded_rgb_not_provider_space(tmp
         np.zeros((224, 256, 3), dtype=np.uint8),
         np.ones((224, 256, 3), dtype=np.uint8),
     ]
-    monkeypatch.setattr("rlab.dataset_minari.iter_episode_frames", lambda rows, root: iter(frames))
+    monkeypatch.setattr("gradlab.dataset_minari.iter_episode_frames", lambda rows, root: iter(frames))
 
     buffers, observation_space, action_space = _materialize(_validation(tmp_path))
 

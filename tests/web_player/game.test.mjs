@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { gameFramePhase } from "../../src/rlab/web_player/panels/game.js";
+import { gameFramePhase } from "../../src/gradlab/web_player/panels/game.js";
 
 test("game frame phase distinguishes initial, after-action, and terminal frames", () => {
   assert.equal(gameFramePhase({ transition: null }), "Initial observation");

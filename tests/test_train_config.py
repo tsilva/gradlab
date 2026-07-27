@@ -6,9 +6,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from rlab.env import EnvConfig
-from rlab.env_metadata import PLAYBACK_ENV_ARG_KEYS
-from rlab.train_config import (
+from gradlab.env import EnvConfig
+from gradlab.env_metadata import PLAYBACK_ENV_ARG_KEYS
+from gradlab.train_config import (
     add_env_config_args,
     add_train_config_args,
     env_config_arg_fields,
@@ -18,7 +18,7 @@ from rlab.train_config import (
     validate_train_config_fields,
     validate_train_config_value,
 )
-from rlab.train import build_parser as build_train_parser, parse_train_config
+from gradlab.train import build_parser as build_train_parser, parse_train_config
 
 
 class TrainConfigFieldSchemaTests(unittest.TestCase):
@@ -137,7 +137,7 @@ class TrainConfigFieldSchemaTests(unittest.TestCase):
         )
 
         self.assertEqual(parser.parse_args([]).checkpoint_eval_backend, "modal")
-        self.assertEqual(parser.parse_args([]).metrics_schema_version, 9)
+        self.assertEqual(parser.parse_args([]).metrics_schema_version, 10)
         self.assertEqual(
             parser.parse_args(["--checkpoint-eval-backend", "local"]).checkpoint_eval_backend,
             "local",
@@ -147,17 +147,17 @@ class TrainConfigFieldSchemaTests(unittest.TestCase):
             "none",
         )
 
-    def test_metrics_schema_version_accepts_only_active_v9(self) -> None:
+    def test_metrics_schema_version_accepts_only_active_v10(self) -> None:
         self.assertEqual(
-            validate_and_normalize_train_config({"metrics_schema_version": 9})[
+            validate_and_normalize_train_config({"metrics_schema_version": 10})[
                 "metrics_schema_version"
             ],
-            9,
+            10,
         )
-        with self.assertRaisesRegex(ValueError, "must be >= 9"):
-            validate_and_normalize_train_config({"metrics_schema_version": 8})
-        with self.assertRaisesRegex(ValueError, "must be <= 9"):
-            validate_and_normalize_train_config({"metrics_schema_version": 10})
+        with self.assertRaisesRegex(ValueError, "must be >= 10"):
+            validate_and_normalize_train_config({"metrics_schema_version": 9})
+        with self.assertRaisesRegex(ValueError, "must be <= 10"):
+            validate_and_normalize_train_config({"metrics_schema_version": 11})
 
     def test_no_eval_config_rejects_eval_metric_stop_behavior(self) -> None:
         with self.assertRaisesRegex(ValueError, "must use a train/\\* metric"):

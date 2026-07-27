@@ -4,8 +4,8 @@ import json
 import socket
 from pathlib import Path
 
-from rlab.experiment_cli import main as experiment_main
-from rlab.lifecycle_certification import (
+from gradlab.experiment_cli import main as experiment_main
+from gradlab.lifecycle_certification import (
     DEFAULT_SCENARIOS,
     SCENARIOS,
     replay_simulated_certification,

@@ -9,15 +9,15 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from rlab.benchmark import main as benchmark_main, validate_benchmark_results
-from rlab.benchmark_profiles import (
+from gradlab.benchmark import main as benchmark_main, validate_benchmark_results
+from gradlab.benchmark_profiles import (
     build_benchmark_commands,
     find_benchmark_profile,
     load_benchmark_profile,
     load_benchmark_profiles,
 )
-from rlab.main import COMMANDS
-from rlab.metric_store import MetricStore, metric_store_path
+from gradlab.main import COMMANDS
+from gradlab.metric_store import MetricStore, metric_store_path
 from experiments.scripts.benchmarks.benchmark_env_sps import benchmark_config
 
 
@@ -144,7 +144,7 @@ timstepz: 10
         )
         self.assertEqual(
             commands[0].argv[:3],
-            ("rlab", "experiment", "launch"),
+            ("gradlab", "experiment", "launch"),
         )
         self.assertIn("--compute", commands[0].argv)
         self.assertEqual(
@@ -157,7 +157,7 @@ timstepz: 10
         self.assertIn("--json", commands[0].argv)
         self.assertEqual(commands[0].argv[commands[0].argv.index("--seed") + 1], "123")
 
-        from rlab.experiment_cli import build_parser as build_experiment_parser
+        from gradlab.experiment_cli import build_parser as build_experiment_parser
 
         parsed = build_experiment_parser().parse_args(list(commands[0].argv[2:]))
         self.assertEqual(parsed.command, "launch")
@@ -379,7 +379,7 @@ required_metrics: [train/throughput/not_real]
         self.assertNotIn("execution_mode", payload)
         self.assertEqual(
             payload["commands"][0]["argv"][:3],
-            ["rlab", "experiment", "launch"],
+            ["gradlab", "experiment", "launch"],
         )
 
 

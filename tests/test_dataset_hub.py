@@ -5,7 +5,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from rlab.dataset_hub import HubAppendSession
+from gradlab.dataset_hub import HubAppendSession
 
 
 class FakeFeatures(dict):
@@ -86,8 +86,8 @@ def test_append_session_advances_expected_parent_without_rescanning(tmp_path):
     session = _session(api)
 
     with (
-        patch("rlab.dataset_store.validate_tree", return_value=incoming),
-        patch("rlab.dataset_hub._secret_egress_gate"),
+        patch("gradlab.dataset_store.validate_tree", return_value=incoming),
+        patch("gradlab.dataset_hub._secret_egress_gate"),
     ):
         first_head = session.append(tmp_path)
         no_op_head = session.append(tmp_path)

@@ -8,7 +8,7 @@ import {
   createDefaultWorkspace,
   createTelemetryInstance,
   normalizeWorkspace,
-} from "../../src/rlab/web_player/panels/workspace.js";
+} from "../../src/gradlab/web_player/panels/workspace.js";
 
 const CUSTOM_ID = "panel-00000000-0000-4000-8000-000000000000";
 

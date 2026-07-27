@@ -4,8 +4,8 @@ import unittest
 
 import pytest
 
-from rlab.env_identity import environment_identity_from_train_config
-from rlab.env_registry import (
+from gradlab.env_identity import environment_identity_from_train_config
+from gradlab.env_registry import (
     env_supports_states,
     registered_env_ids,
     resolve_env_id,

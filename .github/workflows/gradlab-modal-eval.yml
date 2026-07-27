@@ -1,0 +1,197 @@
+name: gradlab Modal eval deployment
+
+on:
+  workflow_call:
+    inputs:
+      runtime_image_ref:
+        description: Immutable docker:ghcr.io/...@sha256:... train/eval runtime
+        required: true
+        type: string
+      source_sha:
+        description: Exact pushed source revision mapped to the runtime
+        required: true
+        type: string
+      runtime_input_sha256:
+        description: Content-addressed train/eval runtime input identity
+        required: true
+        type: string
+      runtime_build_source_sha:
+        description: Source revision that originally built this runtime image
+        required: true
+        type: string
+      deploy_required:
+        description: Deploy a new digest-specific app before probing it
+        required: true
+        type: boolean
+    secrets:
+      MODAL_TOKEN_ID:
+        required: true
+      MODAL_TOKEN_SECRET:
+        required: true
+      GRADLAB_MODAL_REGISTRY_SECRET_NAME:
+        required: false
+  workflow_dispatch:
+    inputs:
+      runtime_image_ref:
+        description: Immutable docker:ghcr.io/...@sha256:... train/eval runtime
+        required: true
+        type: string
+      source_sha:
+        description: Exact pushed source revision mapped to the runtime
+        required: true
+        type: string
+      runtime_input_sha256:
+        description: Content-addressed train/eval runtime input identity
+        required: true
+        type: string
+      runtime_build_source_sha:
+        description: Source revision that originally built this runtime image
+        required: true
+        type: string
+      deploy_required:
+        description: Deploy a new digest-specific app before probing it
+        required: false
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  # Called workflows inherit the caller's github.workflow value. A literal
+  # namespace prevents this job from colliding with the train-image caller.
+  group: gradlab-modal-eval-${{ inputs.source_sha }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      app_name: ${{ steps.probe.outputs.app_name }}
+      startup_probe: ${{ steps.probe.outputs.startup_probe }}
+    env:
+      MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
+      MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
+      GRADLAB_MODAL_REGISTRY_SECRET: ${{ secrets.GRADLAB_MODAL_REGISTRY_SECRET_NAME }}
+      GRADLAB_MODAL_EVAL_RUNTIME_IMAGE: ${{ inputs.runtime_image_ref }}
+      GRADLAB_EXPECTED_SOURCE_SHA: ${{ inputs.source_sha }}
+      GRADLAB_RUNTIME_INPUT_SHA256: ${{ inputs.runtime_input_sha256 }}
+      GRADLAB_RUNTIME_BUILD_SOURCE_SHA: ${{ inputs.runtime_build_source_sha }}
+      MODAL_ENVIRONMENT: gradlab-eval
+      PYTHONPATH: src
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.source_sha }}
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+      - name: Install locked deployment runtime
+        run: uv sync --frozen --only-group modal-deploy --no-install-project
+      - name: Validate immutable runtime ref
+        run: |
+          case "$GRADLAB_MODAL_EVAL_RUNTIME_IMAGE" in
+            docker:*@sha256:*) ;;
+            *) echo "runtime_image_ref must be an immutable docker digest ref" >&2; exit 2 ;;
+          esac
+      - name: Resolve Modal deployment requirement
+        id: modal_deployment
+        env:
+          DEPLOY_REQUIRED: ${{ inputs.deploy_required }}
+        run: |
+          uv run --no-sync python - <<'PY'
+          import os
+
+          import modal
+
+          from gradlab.modal_eval_config import load_modal_eval_config, modal_app_name
+
+          required = os.environ["DEPLOY_REQUIRED"].lower() == "true"
+          if not required:
+              config = load_modal_eval_config()
+              app_name = modal_app_name(
+                  config.deployment.app_name_prefix,
+                  os.environ["GRADLAB_EXPECTED_SOURCE_SHA"],
+              )
+              try:
+                  modal.Function.from_name(
+                      app_name,
+                      config.deployment.function_name,
+                      environment_name=config.deployment.environment_name,
+                  ).hydrate()
+              except modal.exception.NotFoundError:
+                  required = True
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write(f"required={str(required).lower()}\n")
+          PY
+      - name: Deploy immutable Modal evaluator
+        if: steps.modal_deployment.outputs.required == 'true'
+        run: uv run --no-sync modal deploy --env gradlab-eval -m gradlab.modal_app
+      - name: Prove deployed worker image startup
+        id: probe
+        run: |
+          uv run --no-sync python - <<'PY'
+          import json
+          import os
+
+          import modal
+
+          from gradlab.contract_versions import TRAIN_CONFIG_CONTRACT_SCHEMA_VERSION
+          from gradlab.modal_eval_config import load_modal_eval_config, modal_app_name
+
+          runtime_image_ref = os.environ["GRADLAB_MODAL_EVAL_RUNTIME_IMAGE"]
+          config = load_modal_eval_config()
+          app_name = modal_app_name(
+              config.deployment.app_name_prefix,
+              os.environ["GRADLAB_EXPECTED_SOURCE_SHA"],
+          )
+          result = modal.Function.from_name(
+              app_name,
+              "startup_probe",
+              environment_name=config.deployment.environment_name,
+          ).remote()
+          expected = {
+              "app_name": app_name,
+              "runtime_image_ref": runtime_image_ref,
+              "runtime_build_source_sha": os.environ["GRADLAB_RUNTIME_BUILD_SOURCE_SHA"],
+              "runtime_input_sha256": os.environ["GRADLAB_RUNTIME_INPUT_SHA256"],
+          }
+          if any(result.get(key) != value for key, value in expected.items()):
+              raise SystemExit(f"unexpected Modal startup probe result: {result!r}")
+          if int(result.get("schema_version") or 0) != TRAIN_CONFIG_CONTRACT_SCHEMA_VERSION:
+              raise SystemExit(f"unexpected Modal startup probe schema: {result!r}")
+          if result.get("presigned_object_transport") is not True:
+              raise SystemExit(f"Modal presigned object transport is not configured: {result!r}")
+          contract_sha = str(result.get("train_config_contract_sha256") or "")
+          if len(contract_sha) != 64:
+              raise SystemExit(f"unexpected Modal train-config contract: {result!r}")
+          receipt = {
+              "schema_version": 3,
+              "source_sha": os.environ["GRADLAB_EXPECTED_SOURCE_SHA"],
+              "runtime_build_source_sha": os.environ["GRADLAB_RUNTIME_BUILD_SOURCE_SHA"],
+              "runtime_input_sha256": os.environ["GRADLAB_RUNTIME_INPUT_SHA256"],
+              "runtime_image_ref": runtime_image_ref,
+              "modal_app_name": app_name,
+              "startup_probe": result,
+              "workflow_run_id": os.environ["GITHUB_RUN_ID"],
+              "workflow_run_attempt": os.environ["GITHUB_RUN_ATTEMPT"],
+          }
+          with open("gradlab-modal-eval-readiness.json", "w", encoding="utf-8") as output:
+              json.dump(receipt, output, indent=2, sort_keys=True)
+              output.write("\n")
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write(f"app_name={app_name}\n")
+              output.write(
+                  "startup_probe="
+                  + json.dumps(result, sort_keys=True, separators=(",", ":"))
+                  + "\n"
+              )
+          print(f"Modal startup probe passed for {app_name}")
+          PY
+
+      - name: Upload Modal readiness receipt
+        uses: actions/upload-artifact@v4
+        with:
+          name: gradlab-modal-eval-readiness
+          path: gradlab-modal-eval-readiness.json

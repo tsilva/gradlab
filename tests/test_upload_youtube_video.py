@@ -17,24 +17,24 @@ def test_replace_description_link_block_preserves_existing_copy() -> None:
     existing = """A PPO agent completes Level 1-4.
 
 Model: https://huggingface.co/tsilva/old
-rlab: https://github.com/tsilva/rlab
+gradlab: https://github.com/tsilva/gradlab
 
 #ReinforcementLearning #PPO #SuperMarioBros"""
 
     updated = MODULE.replace_description_link_block(
         existing,
         "Model: https://huggingface.co/tsilva/new\n"
-        "rlab: https://github.com/tsilva/rlab",
+        "gradlab: https://github.com/tsilva/gradlab",
     )
 
     assert "A PPO agent completes Level 1-4." in updated
     assert "https://huggingface.co/tsilva/new" in updated
     assert "https://huggingface.co/tsilva/old" not in updated
     assert updated.count("Model:") == 1
-    assert updated.count("rlab:") == 1
+    assert updated.count("gradlab:") == 1
     assert updated.endswith("#ReinforcementLearning #PPO #SuperMarioBros")
 
 
 def test_replace_description_link_block_rejects_unrelated_lines() -> None:
-    with pytest.raises(ValueError, match="only Model: and rlab:"):
+    with pytest.raises(ValueError, match="only Model: and gradlab:"):
         MODULE.replace_description_link_block("existing", "Title: not allowed")

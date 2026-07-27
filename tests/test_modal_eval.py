@@ -9,14 +9,14 @@ from types import SimpleNamespace
 
 import pytest
 
-from rlab.eval_backend import EvalHandle
-from rlab.file_utils import file_sha256
-from rlab.modal_eval_backend import ModalEvalBackend
-from rlab.modal_eval_config import load_modal_eval_config, modal_app_name
-from rlab.modal_eval_protocol import SEED_PROTOCOL, build_execution_contract
-from rlab.modal_eval_storage import write_downloaded_file
-from rlab.modal_eval_worker import execute_attempt
-from rlab.r2_store import PUBLIC_OBJECT_USER_AGENT
+from gradlab.eval_backend import EvalHandle
+from gradlab.file_utils import file_sha256
+from gradlab.modal_eval_backend import ModalEvalBackend
+from gradlab.modal_eval_config import load_modal_eval_config, modal_app_name
+from gradlab.modal_eval_protocol import SEED_PROTOCOL, build_execution_contract
+from gradlab.modal_eval_storage import write_downloaded_file
+from gradlab.modal_eval_worker import execute_attempt
+from gradlab.r2_store import PUBLIC_OBJECT_USER_AGENT
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -25,8 +25,8 @@ ROOT = Path(__file__).resolve().parents[1]
 def _contract(model: Path) -> dict:
     return build_execution_contract(
         checkpoint_sha256=file_sha256(model),
-        runtime_image_ref="docker:example.invalid/rlab@sha256:" + "b" * 64,
-        eval_environment={"env_provider": "rlab", "game": "Bandit-v0", "task": {}},
+        runtime_image_ref="docker:example.invalid/gradlab@sha256:" + "b" * 64,
+        eval_environment={"env_provider": "gradlab", "game": "Bandit-v0", "task": {}},
         episodes=2,
         n_envs=2,
         max_steps=100,
@@ -60,12 +60,12 @@ def test_modal_contract_rejects_retired_enabled_flag(tmp_path: Path) -> None:
 
 
 def test_modal_app_name_is_immutable_per_source() -> None:
-    assert modal_app_name("rlab-eval-v2", "a" * 40) == "rlab-eval-v2-aaaaaaaaaaaa"
+    assert modal_app_name("gradlab-eval-v3", "a" * 40) == "gradlab-eval-v3-aaaaaaaaaaaa"
     with pytest.raises(ValueError, match="full lowercase Git SHA"):
-        modal_app_name("rlab-eval-v2", "main")
+        modal_app_name("gradlab-eval-v3", "main")
 
 
-def test_modal_download_uses_explicit_rlab_user_agent(
+def test_modal_download_uses_explicit_gradlab_user_agent(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -126,8 +126,8 @@ def test_backend_uses_spawn_poll_and_cancel(monkeypatch: pytest.MonkeyPatch) -> 
     fake_modal = SimpleNamespace(Function=Function, FunctionCall=FunctionCall)
     monkeypatch.setitem(sys.modules, "modal", fake_modal)
     backend = ModalEvalBackend(
-        app_name="rlab-eval-v2-aaaaaaaaaaaa",
-        environment_name="rlab-eval",
+        app_name="gradlab-eval-v3-aaaaaaaaaaaa",
+        environment_name="gradlab-eval",
     )
 
     handle = backend.submit({"intent": "value"})

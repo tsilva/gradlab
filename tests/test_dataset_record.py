@@ -11,16 +11,16 @@ import pytest
 
 pytest.importorskip("datasets")
 
-from rlab.dataset_media import iter_episode_frames  # noqa: E402
-from rlab.batch_runtime import ProviderDescriptor  # noqa: E402
-from rlab.dataset_providers import (  # noqa: E402
+from gradlab.dataset_media import iter_episode_frames  # noqa: E402
+from gradlab.batch_runtime import ProviderDescriptor  # noqa: E402
+from gradlab.dataset_providers import (  # noqa: E402
     EnvironmentArtifact,
     create_provider_session,
     validate_provider_request,
 )
-from rlab.dataset_record import _record_one, _recover_active_episode  # noqa: E402
-from rlab.dataset_store import validate_tree  # noqa: E402
-from rlab.json_utils import canonical_json_bytes  # noqa: E402
+from gradlab.dataset_record import _record_one, _recover_active_episode  # noqa: E402
+from gradlab.dataset_store import validate_tree  # noqa: E402
+from gradlab.json_utils import canonical_json_bytes  # noqa: E402
 
 
 class FakeEnv:
@@ -51,7 +51,7 @@ class FakeEnv:
 
 
 class FakeSession:
-    provider_id = "rlab"
+    provider_id = "gradlab"
     environment_id = "fixture-v0"
     fps = 30.0
 
@@ -66,12 +66,12 @@ def _environment() -> EnvironmentArtifact:
     document = {
         "document_type": "gymrec.environment",
         "format_version": 1,
-        "provider_id": "rlab",
+        "provider_id": "gradlab",
         "provider_contract_version": 1,
         "environment_id": "fixture-v0",
         "declared_config": {},
         "effective_config": {},
-        "provenance": {"distribution": "rlab", "version": "0.1.0", "assets": {}},
+        "provenance": {"distribution": "gradlab", "version": "0.1.0", "assets": {}},
         "action_space": {"type": "Discrete", "n": 2, "start": 0},
         "observation_space": {
             "type": "Box",
@@ -112,15 +112,15 @@ def test_recording_constructs_the_shared_native_provider_runtime():
     )
     binding = object()
     with (
-        patch("rlab.dataset_providers.rom_asset_manifest_for_game", return_value={"game": "x"}),
-        patch("rlab.dataset_providers.bind_cached_rom", return_value=binding),
+        patch("gradlab.dataset_providers.rom_asset_manifest_for_game", return_value={"game": "x"}),
+        patch("gradlab.dataset_providers.bind_cached_rom", return_value=binding),
         patch(
-            "rlab.dataset_providers.make_native_provider",
+            "gradlab.dataset_providers.make_native_provider",
             return_value=(vector_env, descriptor),
         ) as make_provider,
-        patch("rlab.dataset_providers.portable_rom_asset_identity", return_value={"sha256": "a"}),
-        patch("rlab.dataset_providers.provider_buttons", return_value=("A", "B")),
-        patch("rlab.dataset_providers.declared_action_contract", return_value=None),
+        patch("gradlab.dataset_providers.portable_rom_asset_identity", return_value={"sha256": "a"}),
+        patch("gradlab.dataset_providers.provider_buttons", return_value=("A", "B")),
+        patch("gradlab.dataset_providers.declared_action_contract", return_value=None),
     ):
         session = create_provider_session(
             "stable-retro-turbo",

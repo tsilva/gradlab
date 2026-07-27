@@ -9,9 +9,9 @@ import gymnasium as gym
 import numpy as np
 import stable_retro as retro
 
-from rlab.action_contract import MARIO_ACTION_TABLES
-from rlab.env import EnvConfig, _bound_task_kernel
-from rlab.env_providers import (
+from gradlab.action_contract import MARIO_ACTION_TABLES
+from gradlab.env import EnvConfig, _bound_task_kernel
+from gradlab.env_providers import (
     _AleManualResetAdapter,
     _StartInfoAdapter,
     make_provider_vec_env,
@@ -19,7 +19,7 @@ from rlab.env_providers import (
     provider_native_vec_kwargs,
     super_mario_bros_nes_turbo_vec_env_type,
 )
-from rlab.task_kernels import MarioTaskConfig, MarioTaskDefinition
+from gradlab.task_kernels import MarioTaskConfig, MarioTaskDefinition
 from packaging.version import Version
 
 
@@ -72,8 +72,8 @@ class RegisteredNativeVectorEnv(gym.vector.VectorEnv):
 
 
 class GenericNativeProviderTests(unittest.TestCase):
-    env_id = "RlabRegisteredNativeVector-v0"
-    scalar_env_id = "RlabScalarOnly-v0"
+    env_id = "GradLabRegisteredNativeVector-v0"
+    scalar_env_id = "GradLabScalarOnly-v0"
 
     @classmethod
     def setUpClass(cls) -> None:

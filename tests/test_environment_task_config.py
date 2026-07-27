@@ -2,17 +2,17 @@ from __future__ import annotations
 
 import unittest
 
-from rlab.env_identity import (
+from gradlab.env_identity import (
     ENVIRONMENT_HASH_ALGORITHM,
     environment_hash,
     environment_identity_from_train_config,
     validate_task_config,
 )
-from rlab.env_metadata import sanitize_env_config_metadata
+from gradlab.env_metadata import sanitize_env_config_metadata
 
 
 class EnvironmentTaskConfigTests(unittest.TestCase):
-    def test_environment_identity_uses_v3_canonical_task(self) -> None:
+    def test_environment_identity_uses_v4_canonical_task(self) -> None:
         identity = environment_identity_from_train_config(
             {
                 "env_provider": "supermariobrosnes-turbo",
@@ -39,8 +39,8 @@ class EnvironmentTaskConfigTests(unittest.TestCase):
             }
         )
 
-        self.assertEqual(ENVIRONMENT_HASH_ALGORITHM, "rlab.environment.v3")
-        self.assertEqual(identity["schema_version"], 3)
+        self.assertEqual(ENVIRONMENT_HASH_ALGORITHM, "gradlab.environment.v4")
+        self.assertEqual(identity["schema_version"], 4)
         self.assertEqual(identity["task"]["id"], "mario")
         self.assertEqual(identity["task"]["termination"]["failure"], ["life_loss"])
         self.assertEqual(identity["task"]["termination"]["success"], ["level_change"])

@@ -6,19 +6,19 @@ from dataclasses import replace
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from rlab.early_stop import MetricEarlyStopStateMachine, MetricSample
-from rlab.eval_backend import EvalHandle, EvalPoll
-from rlab.file_utils import atomic_write_json
-from rlab.metric_names import TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_MEAN
-from rlab.policy_bundle import (
+from gradlab.early_stop import MetricEarlyStopStateMachine, MetricSample
+from gradlab.eval_backend import EvalHandle, EvalPoll
+from gradlab.file_utils import atomic_write_json
+from gradlab.metric_names import TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_MEAN
+from gradlab.policy_bundle import (
     build_recipe_document,
     canonical_json_sha256,
     evaluation_contract_sha256,
 )
-from rlab.r2_store import BucketConfig, RunStorageConfig
-from rlab.recipe_documents import compose_train_document
-from rlab.run_authority import RunAuthority
-from rlab.run_contracts import (
+from gradlab.r2_store import BucketConfig, RunStorageConfig
+from gradlab.recipe_documents import compose_train_document
+from gradlab.run_authority import RunAuthority
+from gradlab.run_contracts import (
     CheckpointManifest,
     EarlyStopReceipt,
     EvalResult,
@@ -28,7 +28,7 @@ from rlab.run_contracts import (
     new_run_id,
     utc_now,
 )
-from rlab.run_supervisor import (
+from gradlab.run_supervisor import (
     RunSupervisor,
     _bind_evaluation_contract,
     _summary_scalar,
@@ -39,7 +39,7 @@ from rlab.run_supervisor import (
 SOURCE_SHA = "a" * 40
 BUILD_SOURCE_SHA = "f" * 40
 RUNTIME_INPUT_SHA256 = "e" * 64
-IMAGE = "docker:registry.example/rlab@sha256:" + "b" * 64
+IMAGE = "docker:registry.example/gradlab@sha256:" + "b" * 64
 GOAL = Path("experiments/goals/SuperMarioBros-Nes-v0/Level1-1/_goal.yaml")
 RECIPE = GOAL.parent / "recipes" / "ppo.yaml"
 
@@ -139,8 +139,8 @@ class RunSupervisorTests(unittest.TestCase):
             },
             modal={
                 "enabled": True,
-                "environment_name": "rlab-eval",
-                "app_name": f"rlab-eval-v2-{SOURCE_SHA[:12]}",
+                "environment_name": "gradlab-eval",
+                "app_name": f"gradlab-eval-v3-{SOURCE_SHA[:12]}",
                 "function_name": "evaluate_checkpoint",
                 "deployment_source_sha": SOURCE_SHA,
                 "rom_asset_manifest": self.asset,
@@ -165,7 +165,7 @@ class RunSupervisorTests(unittest.TestCase):
     def test_runtime_verification_uses_build_identity_and_runtime_input(self) -> None:
         supervisor = self.supervisor()
         with (
-            patch.dict("os.environ", {"RLAB_ORCHESTRATOR": "dstack"}),
+            patch.dict("os.environ", {"GRADLAB_ORCHESTRATOR": "dstack"}),
             patch.object(
                 supervisor.runtime,
                 "runtime_contract",
@@ -207,7 +207,7 @@ class RunSupervisorTests(unittest.TestCase):
         self.assertIn("invalid runtime", receipt["drain"]["failure"])
 
         with (
-            patch.dict("os.environ", {"RLAB_ORCHESTRATOR": "dstack"}),
+            patch.dict("os.environ", {"GRADLAB_ORCHESTRATOR": "dstack"}),
             patch.object(
                 supervisor.runtime,
                 "runtime_contract",
@@ -619,7 +619,7 @@ class RunSupervisorTests(unittest.TestCase):
 
     def test_materializes_exact_mario_acceptance_contract(self) -> None:
         supervisor = self.supervisor()
-        with patch("rlab.run_supervisor.verify_rom_file"):
+        with patch("gradlab.run_supervisor.verify_rom_file"):
             supervisor.materialize()
         self.assertEqual(supervisor.train_config["timesteps"], 50_000_000)
         self.assertEqual(supervisor.train_config["checkpoint_freq"], 250_000)
@@ -675,7 +675,7 @@ class RunSupervisorTests(unittest.TestCase):
             recipe_sha256=canonical_json_sha256(portable_recipe),
         )
 
-        with patch("rlab.run_supervisor.verify_rom_file"):
+        with patch("gradlab.run_supervisor.verify_rom_file"):
             supervisor.materialize()
 
         self.assertEqual(supervisor.train_config["recipe_overrides"], list(overrides))
@@ -792,7 +792,7 @@ class RunSupervisorTests(unittest.TestCase):
 
     def test_ambiguous_modal_spawn_is_not_immediately_repeated(self) -> None:
         supervisor = self.supervisor()
-        with patch("rlab.run_supervisor.verify_rom_file"):
+        with patch("gradlab.run_supervisor.verify_rom_file"):
             supervisor.materialize()
         supervisor.store.init()
         checkpoint = CheckpointManifest(

@@ -7,8 +7,8 @@ import unittest
 from pathlib import Path
 
 
-import rlab.metric_names as metric_names
-from rlab.training.sb3_helpers import (
+import gradlab.metric_names as metric_names
+from gradlab.training.sb3_helpers import (
     Sb3HumanOutputFormatHelper,
     disable_sb3_human_output_truncation,
 )
@@ -115,7 +115,7 @@ class MetricsDocumentationTests(unittest.TestCase):
             "eval/acceptance/failure/count",
         )
 
-    def test_logger_boundary_rejects_misspelled_rlab_metrics(self) -> None:
+    def test_logger_boundary_rejects_misspelled_gradlab_metrics(self) -> None:
         with self.assertRaisesRegex(ValueError, "logger boundary"):
             metric_names.canonical_training_scalars({"train/outcome/succes/current/rate/min": 0.5})
 

@@ -11,8 +11,8 @@ import pytest
 from huggingface_hub import ModelCard
 from jinja2 import UndefinedError
 
-from rlab.preprocessing import preprocessing_contract
-from rlab.policy_bundle import (
+from gradlab.preprocessing import preprocessing_contract
+from gradlab.policy_bundle import (
     PolicyDocumentError,
     UnsupportedPolicyDocumentVersion,
     build_model_document,
@@ -21,9 +21,9 @@ from rlab.policy_bundle import (
     sha256_file,
     write_canonical_json,
 )
-from rlab.recipe_documents import compose_train_document
-from rlab.training_backend import training_backend_config_hash
-from rlab.publication import (
+from gradlab.recipe_documents import compose_train_document
+from gradlab.training_backend import training_backend_config_hash
+from gradlab.publication import (
     GITATTRIBUTES_TEXT,
     HUGGINGFACE_RELEASE_FILES,
     MIT_LICENSE_TEXT,
@@ -222,7 +222,7 @@ def test_policy_variant_accepts_another_registered_action_set() -> None:
         ("ppo", "stable_baselines3.ppo.ppo.PPO"),
         ("a2c", "stable_baselines3.a2c.a2c.A2C"),
         ("dqn", "stable_baselines3.dqn.dqn.DQN"),
-        ("jerk", "rlab.jerk.JerkPolicy"),
+        ("jerk", "gradlab.jerk.JerkPolicy"),
         ("recurrent-ppo", "sb3_contrib.ppo_recurrent.ppo_recurrent.RecurrentPPO"),
     ],
 )
@@ -305,10 +305,10 @@ def test_publication_source_requires_explicit_seed_commit_and_matching_step() ->
 def test_model_card_template_uses_canonical_cli_commands() -> None:
     card = _render_current_model_card_fixture()
 
-    assert "uv run rlab rom import ~/roms" in card
-    assert "uv run rlab eval https://huggingface.co/" in card
-    assert "rlab import-roms" not in card
-    assert "rlab eval run" not in card
+    assert "uv run gradlab rom import ~/roms" in card
+    assert "uv run gradlab eval https://huggingface.co/" in card
+    assert "gradlab import-roms" not in card
+    assert "gradlab eval run" not in card
 
 
 def test_model_card_template_preserves_current_sb3_golden_output() -> None:
@@ -316,20 +316,20 @@ def test_model_card_template_preserves_current_sb3_golden_output() -> None:
 
     ModelCard(card).validate(repo_type="model")
     assert hashlib.sha256(card.encode()).hexdigest() == (
-        "30cace3f30d9e4cc9bc5a18384993e0bba0349004cb4b596e1fd1db5a566b986"
+        "c48895c4608bf5b34da0c33025bbd5ed8b9de8489d8c24cabfdcc5c3918f9d08"
     )
 
 
 def test_model_card_template_preserves_current_jerk_golden_output() -> None:
     card = _render_current_model_card_fixture(
         algorithm="jerk",
-        model_class="rlab.jerk.JerkPolicy",
+        model_class="gradlab.jerk.JerkPolicy",
         youtube_url=None,
     )
 
     ModelCard(card).validate(repo_type="model")
     assert hashlib.sha256(card.encode()).hexdigest() == (
-        "60e6d77339fe45a20b09c2e1b5f38953665382dde23a337d562b2e139b28d8e1"
+        "c853057fc6f53fda21c2cc5a06aa8a6fe3d285288301fb7a7e41585ccc4b820e"
     )
 
 
@@ -364,7 +364,7 @@ def test_release_bundle_has_exact_files_hashes_and_portable_identity() -> None:
             source_commit="a" * 40,
             run_description="release fixture",
             seed=7,
-            runtime_image_ref="docker:example.invalid/rlab@sha256:" + "b" * 64,
+            runtime_image_ref="docker:example.invalid/gradlab@sha256:" + "b" * 64,
         )
         write_canonical_json(root / "recipe.json", recipe_document)
         metadata["training_backend_id"] = recipe_document["recipe"]["train_config"][
@@ -423,7 +423,7 @@ def test_release_bundle_has_exact_files_hashes_and_portable_identity() -> None:
         future["format_version"] = 999
         write_canonical_json(root / "release_manifest.json", future)
         with patch(
-            "rlab.publication.load_policy_bundle",
+            "gradlab.publication.load_policy_bundle",
             side_effect=AssertionError("bundle access"),
         ):
             with pytest.raises(UnsupportedPolicyDocumentVersion, match="999"):

@@ -10,17 +10,17 @@ from copy import deepcopy
 from pathlib import Path
 from unittest.mock import patch
 
-from rlab import experiment_contracts
-from rlab.config_validation import (
+from gradlab import experiment_contracts
+from gradlab.config_validation import (
     main as validate_main,
     validate_experiment_tree,
 )
-from rlab.experiment_contracts import validate_goal_contract_document
-from rlab.env_registry import resolve_env_provider, validate_provider_constructor_args
-from rlab.env_providers import _stable_retro_packaged_data_path
-from rlab.main import COMMANDS
-from rlab.recipe_documents import compose_train_document, load_goal_contract
-from rlab.recipe_schema import validate_materialized_train_recipe
+from gradlab.experiment_contracts import validate_goal_contract_document
+from gradlab.env_registry import resolve_env_provider, validate_provider_constructor_args
+from gradlab.env_providers import _stable_retro_packaged_data_path
+from gradlab.main import COMMANDS
+from gradlab.recipe_documents import compose_train_document, load_goal_contract
+from gradlab.recipe_schema import validate_materialized_train_recipe
 
 
 class ConfigValidationTests(unittest.TestCase):
@@ -94,16 +94,16 @@ class ConfigValidationTests(unittest.TestCase):
     def test_explicit_goal_arg_contract_covers_provider_signatures(self) -> None:
         from ale_py.vector_env import AtariVectorEnv
         from breakout_turbo_env import BreakoutVecEnv
-        from rlab.bandit_env import BanditVectorEnv
+        from gradlab.bandit_env import BanditVectorEnv
         from stable_retro import RetroVecEnv
         from supermariobrosnes_turbo import SuperMarioBrosNesTurboVecEnv
         from vizdoom_turbo import VizdoomTurboVecEnv
-        from rlab.reward_transform import PROVIDER_REWARD_TRANSFORM_KEYS
+        from gradlab.reward_transform import PROVIDER_REWARD_TRANSFORM_KEYS
 
         constructors = {
             "ale-py": AtariVectorEnv,
             "breakout-turbo-env": BreakoutVecEnv,
-            "rlab": BanditVectorEnv,
+            "gradlab": BanditVectorEnv,
             "stable-retro-turbo": RetroVecEnv,
             "supermariobrosnes-turbo": SuperMarioBrosNesTurboVecEnv,
             "vizdoom-turbo": VizdoomTurboVecEnv,
@@ -124,7 +124,7 @@ class ConfigValidationTests(unittest.TestCase):
                 covered_args = set(contract.canonical_args) | set(contract.explicit_env_args)
                 public_signature_args = signature_args - PROVIDER_REWARD_TRANSFORM_KEYS
                 if provider_id == "breakout-turbo-env":
-                    # RLab's compatibility adapter accepts the shared Stable Retro
+                    # GradLab's compatibility adapter accepts the shared Stable Retro
                     # contract even when an older installed Turbo release ignores
                     # adapter-only fields through **unsupported.
                     self.assertLessEqual(public_signature_args, covered_args)
@@ -387,7 +387,7 @@ class ConfigValidationTests(unittest.TestCase):
 
         train_config = document["train_config"]
         backend = train_config["training_backend"]
-        self.assertEqual(backend["id"], "rlab.jerk")
+        self.assertEqual(backend["id"], "gradlab.jerk")
         self.assertEqual(backend["config"]["archive_replay_probability_initial"], 0.25)
         self.assertEqual(backend["config"]["archive_replay_probability_max"], 0.9)
         self.assertEqual(backend["config"]["protected_prefix_steps"], 128)
@@ -933,7 +933,7 @@ class ConfigValidationTests(unittest.TestCase):
 
     def test_load_goal_contract_can_skip_semantic_validation_for_catalogues(self) -> None:
         with patch(
-            "rlab.recipe_documents.validate_goal_contract_document",
+            "gradlab.recipe_documents.validate_goal_contract_document",
             side_effect=AssertionError("semantic validation should be skipped"),
         ):
             document = load_goal_contract(self.MARIO_L11_GOAL, validate=False)

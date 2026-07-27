@@ -11,9 +11,9 @@ from unittest.mock import patch
 import gymnasium as gym
 import numpy as np
 
-from rlab.batch_runtime import BatchRuntime, ProviderDescriptor, SignalSpec
-from rlab.env import _state_archive_preflight_child
-from rlab.state_archive import (
+from gradlab.batch_runtime import BatchRuntime, ProviderDescriptor, SignalSpec
+from gradlab.env import _state_archive_preflight_child
+from gradlab.state_archive import (
     ArchiveCurriculum,
     ArchiveCurriculumConfig,
     StateArchive,
@@ -21,7 +21,7 @@ from rlab.state_archive import (
     state_archive_artifact_summary,
     validate_state_archive_runtime_contract,
 )
-from rlab.task_kernels import IdentityTaskDefinition
+from gradlab.task_kernels import IdentityTaskDefinition
 
 
 def archive_config(
@@ -180,7 +180,7 @@ class StateArchiveTests(unittest.TestCase):
             created.append(runtime)
             return runtime
 
-        with patch("rlab.env.make_training_batch_runtime", side_effect=make_runtime):
+        with patch("gradlab.env.make_training_batch_runtime", side_effect=make_runtime):
             _state_archive_preflight_child(
                 connection,
                 object(),
@@ -213,7 +213,7 @@ class StateArchiveTests(unittest.TestCase):
         }
         validate_state_archive_runtime_contract(
             common,
-            backend_id="rlab.go-explore",
+            backend_id="gradlab.go-explore",
             supported_priority_metrics=(),
         )
 

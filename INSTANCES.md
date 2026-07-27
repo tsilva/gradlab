@@ -1,6 +1,6 @@
 # Compute instances
 
-This file is the source of truth for choosing and operating rlab compute.
+This file is the source of truth for choosing and operating gradlab compute.
 Research code always runs in one container and does not branch on the provider.
 dstack owns placement, logs, cancellation, interruption classification, and
 resource release.
@@ -29,24 +29,24 @@ a separate finalizer.
 - Version: CLI and server `0.20.28`.
 - Server: B3 systemd unit, pinned image
   `dstackai/dstack@sha256:86b820cf5f6e0cfc54dd387527493168a4045b362ca9459265ea9828eef0b4af`.
-- Persistent state: `/var/lib/rlab/dstack` on B3.
+- Persistent state: `/var/lib/gradlab/dstack` on B3.
 - API binding: B3 loopback port 3000 only.
 - Client access: SSH tunnel to `http://127.0.0.1:3000`.
-- Secrets: `/etc/rlab/dstack/server.env`, local private environment/Keychain,
+- Secrets: `/etc/gradlab/dstack/server.env`, local private environment/Keychain,
   and AES-256-GCM-encrypted project-scoped dstack secrets; never source
   control or inline task environment values.
 - Checked-in operations: `ops/dstack/`.
 
-`rlab experiment launch` refreshes the project secrets from the operator's
+`gradlab experiment launch` refreshes the project secrets from the operator's
 private environment, while the submitted task contains only
 `${{ secrets.NAME }}` references. Operator status must go through
-`rlab experiment status` or `follow`; raw dstack inventory is not a
+`gradlab experiment status` or `follow`; raw dstack inventory is not a
 user-facing interface.
 
 The Mac operator credential boundary is:
 
 - explicit process environment values win for CI and portable automation;
-- `~/.config/rlab/operator.toml` contains non-sensitive endpoints, bucket
+- `~/.config/gradlab/operator.toml` contains non-sensitive endpoints, bucket
   identities, W&B entity, and macOS Keychain references only;
 - W&B, R2, and dstack secret values live in the referenced Keychain
   generic-password items;
@@ -54,7 +54,7 @@ The Mac operator credential boundary is:
   whose file mode must be `0600`;
 - the repository `.env` may contain non-sensitive local metadata but launch
   rejects protected credential names there;
-- `rlab experiment operator-preflight --json` authenticates dstack and
+- `gradlab experiment operator-preflight --json` authenticates dstack and
   read-checks control, evaluation, and model R2 scopes without launching or
   mutating a run.
 
@@ -87,8 +87,8 @@ requires the previous task to be terminal, the R2 writer lease to expire, and a
 - Role: primary training and final Mario acceptance.
 - dstack blocks: 1 unsplit machine.
 - Container concurrency: 1 training task.
-- ROM cache source: `/var/lib/rlab/rom-cache-source`.
-- ROM cache mount: `/var/lib/rlab/rom-cache:/rom-cache`. A root-owned systemd
+- ROM cache source: `/var/lib/gradlab/rom-cache-source`.
+- ROM cache mount: `/var/lib/gradlab/rom-cache:/rom-cache`. A root-owned systemd
   service exposes the source as a kernel-enforced read-only bind mount before
   dstack maps it into the task.
 
@@ -132,8 +132,8 @@ acceptance path.
 Modal is the v1 `EvalBackend` because acceptance evaluations are short CPU
 jobs, it starts quickly, and it does not contend with local training GPUs.
 
-- environment: `rlab-eval`;
-- immutable app: `rlab-eval-v2-<source-sha12>`;
+- environment: `gradlab-eval`;
+- immutable app: `gradlab-eval-v3-<source-sha12>`;
 - worker: 8 CPU, 4 GiB RAM;
 - zero warm containers;
 - maximum concurrent containers: 10;
@@ -153,10 +153,10 @@ reservation.
 
 dstack 0.20.28 removes terminated containers but does not safely prune unused
 runtime images. B3 therefore runs the root-owned
-`rlab-dstack-image-cleanup.timer` every 30 minutes.
+`gradlab-dstack-image-cleanup.timer` every 30 minutes.
 
 The cleanup fails closed unless it can query valid dstack run inventory. It
-only considers immutable `ghcr.io/tsilva/rlab/rlab-train` images and preserves:
+only considers immutable `ghcr.io/tsilva/gradlab/gradlab-train` images and preserves:
 
 - images used by running containers;
 - images demanded by pending, submitted, provisioning, running, or terminating
@@ -199,8 +199,8 @@ Before a launch:
 During a run:
 
 ```bash
-rlab experiment follow --run <run-id>
-rlab experiment logs --run <run-id> --tail 200
+gradlab experiment follow --run <run-id>
+gradlab experiment logs --run <run-id> --tail 200
 ```
 
 After terminal state, verify the private R2 terminal receipt, dstack release,
