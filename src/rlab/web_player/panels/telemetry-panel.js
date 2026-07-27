@@ -57,11 +57,12 @@ function appendHeading(section, title) {
 }
 
 function appendFoot(section, value) {
-  if (!value) return;
+  if (!value) return null;
   const foot = document.createElement("p");
   foot.className = "panel-foot";
   foot.textContent = value;
   section.append(foot);
+  return foot;
 }
 
 function makeStatsBlock(block) {
@@ -108,11 +109,18 @@ function makeLineBlock(block) {
   const legend = document.createElement("div");
   legend.className = "legend";
   section.append(canvas, legend);
-  appendFoot(section, block.foot);
+  const foot = appendFoot(section, block.foot);
   setLegend(legend, descriptors);
   return {
     element: section,
-    render({ history, view }) {
+    render({ snapshot, history, view }) {
+      if (foot && block.metrics.includes("policy/realized-return")) {
+        const reasons = snapshot?.session?.critic_comparison?.reasons || [];
+        foot.textContent = reasons.length
+          ? `Comparison unavailable: ${reasons.join("; ")}.`
+          : block.foot;
+        foot.classList.toggle("warning", reasons.length > 0);
+      }
       drawLines(
         canvas,
         descriptors.map((descriptor) => ({

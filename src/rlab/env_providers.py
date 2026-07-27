@@ -29,6 +29,7 @@ from rlab.env_registry import (
     is_stable_retro_atari_env,
     resolve_env_provider,
 )
+from rlab.reward_transform import PROVIDER_REWARD_TRANSFORM_KEYS
 from rlab.turbo_api import validate_turbo_vector_env
 
 
@@ -166,9 +167,7 @@ class _StartInfoAdapter:
         result["start_id"] = active_starts
         result["_start_id"] = mask.copy()
         if "start_source" not in result or "_start_source" not in result:
-            raise ValueError(
-                "Turbo API v1 reset infos must contain start_source and _start_source"
-            )
+            raise ValueError("Turbo API v1 reset infos must contain start_source and _start_source")
         return observations, result
 
     def step(self, actions):
@@ -233,9 +232,7 @@ class _BreakoutSnapshotBankAdapter:
             states[lane] = self.bank.states[str(requested_ids[lane])]
         self.env.set_state(states, reset_mask=snapshot_mask)
         native_options["snapshots"] = self.env.capture_snapshots(snapshot_mask)
-        native_options["state_indices"] = np.full(
-            self.num_envs, -1, dtype=np.int32
-        )
+        native_options["state_indices"] = np.full(self.num_envs, -1, dtype=np.int32)
 
         if seed is None:
             normalized_seed = None
@@ -362,6 +359,8 @@ def provider_native_vec_kwargs(
         task=getattr(config, "task", None),
     )
     native_kwargs = dict(normalized_args)
+    for key in PROVIDER_REWARD_TRANSFORM_KEYS:
+        native_kwargs.pop(key, None)
     provider = resolve_env_provider(config.env_provider)
     if provider.provider_id == RLAB_PROVIDER.provider_id:
         if config.state or config.states or config.state_probs:
@@ -431,6 +430,7 @@ def provider_native_vec_kwargs(
             "info_filter": "all",
         }
         defaults.update(native_kwargs)
+        defaults["reward_clip"] = False
         return defaults
     if provider.provider_id == ALE_PY_PROVIDER.provider_id:
         if config.state or config.states or config.state_probs:
@@ -452,6 +452,7 @@ def provider_native_vec_kwargs(
             "reward_clipping": False,
         }
         defaults.update(native_kwargs)
+        defaults["reward_clipping"] = False
         return defaults
 
     defaults = {
@@ -475,6 +476,7 @@ def provider_native_vec_kwargs(
     else:
         defaults["state"] = config.state or None
     defaults.update(native_kwargs)
+    defaults["reward_clip"] = False
     if is_stable_retro_atari_env(config.env_provider, config.game):
         defaults.setdefault("use_fire_reset", False)
     task = config.task if isinstance(getattr(config, "task", None), Mapping) else {}
@@ -690,8 +692,7 @@ def provider_descriptor(
         and callable(getattr(native_env, "capture_snapshots", None))
     )
     deterministic_snapshots = bool(
-        supports_live_snapshots
-        and getattr(native_env, "live_snapshots_deterministic", False)
+        supports_live_snapshots and getattr(native_env, "live_snapshots_deterministic", False)
     )
     if turbo_contract is None:
         ownership = "unsafe_view"

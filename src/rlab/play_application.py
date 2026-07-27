@@ -4,6 +4,7 @@ import queue
 import threading
 import uuid
 from collections.abc import Mapping, Sequence
+from dataclasses import replace
 from typing import Any
 
 from rlab.play_runtime import (
@@ -28,6 +29,7 @@ class PlaybackHost:
         "cancel_source",
         "retry_source",
         "select_source",
+        "set_contract_mode",
     }
 
     def __init__(
@@ -247,25 +249,13 @@ class PlaybackHost:
                 return
         self._set_state(phase, message=message)
 
-    def _close_active_before_load(self, generation: int) -> bool:
-        with self._lock:
-            if generation != self._generation or self._stopped:
-                return False
-            active = self._active
-            self._active = None
-        if active is not None:
-            active.close()
-        return True
-
     def _activate_candidate(
         self,
         generation: int,
         candidate: PlaybackCandidate,
         approval_hash: str,
     ) -> None:
-        if not self._close_active_before_load(generation):
-            candidate.cleanup()
-            return
+        previous: ActivePlayback | None = None
         try:
             active = self.loader.activate(
                 candidate,
@@ -276,6 +266,7 @@ class PlaybackHost:
                 if generation != self._generation or self._stopped:
                     active.close()
                     return
+                previous = self._active
                 self._session_epoch += 1
                 set_epoch = getattr(active.runner.encoder, "set_epoch", None)
                 if callable(set_epoch):
@@ -289,12 +280,19 @@ class PlaybackHost:
                 self._approval = None
                 self._revision += 1
                 self._session_change += 1
+            if previous is not None:
+                previous.close()
         except Exception as exc:
             with self._lock:
                 current = generation == self._generation and not self._stopped
                 if current:
                     self._candidate = None
-            if current:
+                    has_previous = self._active is not None
+                else:
+                    has_previous = False
+            if current and has_previous:
+                self._set_state("active", error=str(exc))
+            elif current:
                 self._set_state("error", error=str(exc))
         finally:
             candidate.cleanup()
@@ -380,6 +378,15 @@ class PlaybackHost:
             isinstance(seed_value, bool) or not isinstance(seed_value, int)
         ):
             raise ValueError("playback source seed must be an integer")
+        contract_mode = str(source.get("contract_mode") or "training")
+        if contract_mode not in {"training", "evaluation", "counterfactual"}:
+            raise ValueError(f"unsupported playback contract mode {contract_mode!r}")
+        reward_clip_override = source.get("reward_clip_override")
+        if reward_clip_override is not None and not isinstance(
+            reward_clip_override,
+            bool,
+        ):
+            raise ValueError("reward clipping override must be a boolean or null")
         return PlaySourceSpec(
             kind=kind,  # type: ignore[arg-type]
             value=value,
@@ -388,6 +395,8 @@ class PlaybackHost:
             run_id=str(source.get("run_id") or ""),
             checkpoint_id=str(source.get("checkpoint_id") or ""),
             seed=seed_value,
+            contract_mode=contract_mode,  # type: ignore[arg-type]
+            reward_clip_override=reward_clip_override,
         )
 
     def submit(self, command) -> None:
@@ -407,6 +416,22 @@ class PlaybackHost:
                     with self._lock:
                         self._route = dict(route)
                 self._begin_prepare(source)
+            elif command.name == "set_contract_mode":
+                mode = str(command.payload.get("mode") or "")
+                if mode not in {"training", "evaluation", "counterfactual"}:
+                    raise ValueError(f"unsupported playback contract mode {mode!r}")
+                with self._lock:
+                    source = self._last_source
+                if source is None:
+                    raise ValueError("no playback source is active")
+                reward_clip_override = False if mode == "counterfactual" else None
+                self._begin_prepare(
+                    replace(
+                        source,
+                        contract_mode=mode,  # type: ignore[arg-type]
+                        reward_clip_override=reward_clip_override,
+                    )
+                )
             elif command.name == "approve_source":
                 approval_hash = str(command.payload.get("manifest_hash") or "").strip()
                 with self._lock:

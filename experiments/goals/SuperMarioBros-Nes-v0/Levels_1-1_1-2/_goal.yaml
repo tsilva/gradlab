@@ -59,7 +59,6 @@ train:
           obs_layout: chw
           frame_stack: 4
           noop_reset_max: 0
-          reward_clip: false
           info_filter: all
         states:
         - Level1-1

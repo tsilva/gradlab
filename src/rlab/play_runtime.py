@@ -3,14 +3,14 @@ from __future__ import annotations
 import argparse
 from collections.abc import Callable, Mapping
 from copy import deepcopy
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Literal
 
 from rlab.artifacts import load_playback_env_config
 from rlab.device import resolve_sb3_device
 from rlab.env import assert_provider_runtime_available, make_eval_vec_env, resolve_env_config
-from rlab.env_metadata import env_config_from_config_dict
+from rlab.env_metadata import env_config_from_config_dict, env_config_metadata
 from rlab.env_registry import resolve_env_provider
 from rlab.model_sources import (
     ResolvedModelSource,
@@ -18,7 +18,12 @@ from rlab.model_sources import (
     download_public_checkpoint_manifest_source,
     download_public_run_source,
 )
-from rlab.policy_bundle import load_policy_bundle_from_checkpoint, playback_contract
+from rlab.policy_bundle import (
+    critic_value_contract,
+    load_policy_bundle_from_checkpoint,
+    playback_contract,
+    playback_contract_audit,
+)
 from rlab.play_termination import (
     configured_termination_ids,
     with_enabled_termination_conditions,
@@ -36,6 +41,7 @@ from rlab.trusted_inputs import (
 
 ProgressCallback = Callable[[str, str], None]
 SourceKind = Literal["manifest", "huggingface", "local", "public_run"]
+PlaybackContractMode = Literal["training", "evaluation", "counterfactual"]
 
 
 @dataclass(frozen=True)
@@ -47,6 +53,8 @@ class PlaySourceSpec:
     run_id: str = ""
     checkpoint_id: str = ""
     seed: int | None = None
+    contract_mode: PlaybackContractMode = "training"
+    reward_clip_override: bool | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -57,6 +65,8 @@ class PlaySourceSpec:
             "run_id": self.run_id,
             "checkpoint_id": self.checkpoint_id,
             "seed": self.seed,
+            "contract_mode": self.contract_mode,
+            "reward_clip_override": self.reward_clip_override,
         }
 
 
@@ -93,6 +103,8 @@ class PlaybackCandidate:
     approval_required: bool
     termination_base_config: Any
     termination_source: str
+    contract_details: dict[str, Any] = field(default_factory=dict)
+    value_contract: dict[str, Any] | None = None
 
     def approval_payload(self) -> dict[str, Any]:
         return {
@@ -197,18 +209,79 @@ class PlaybackLoader:
         progress("verifying", "Validating playback contract")
         contract: Mapping[str, Any] | None = None
         termination_source = "training"
+        contract_details: dict[str, Any] = {
+            "mode": "training",
+            "available_modes": ["training"],
+            "matches_training": False,
+            "comparison_reasons": ["checkpoint has no portable training contract"],
+        }
+        value_contract: dict[str, Any] | None = None
         if source.bundle is not None:
-            contract = playback_contract(source.bundle.recipe)
+            requested_mode = str(spec.contract_mode or "training")
+            if requested_mode not in {"training", "evaluation", "counterfactual"}:
+                raise ValueError(f"unsupported playback contract mode {requested_mode!r}")
+            base_mode = "evaluation" if requested_mode == "evaluation" else "training"
+            contract = playback_contract(source.bundle.recipe, mode=base_mode)
             recipe = source.bundle.recipe.get("recipe", {})
-            termination_source = (
-                "evaluation"
-                if isinstance(recipe, Mapping) and isinstance(recipe.get("eval"), Mapping)
-                else "training"
-            )
-            artifact_config = env_config_from_config_dict(contract["environment"])
+            value_contract = critic_value_contract(source.bundle.recipe)
+            contract_audit = playback_contract_audit(source.bundle.recipe)
+            active_environment = deepcopy(dict(contract["environment"]))
+            if requested_mode == "counterfactual":
+                if spec.reward_clip_override is None:
+                    raise ValueError(
+                        "counterfactual playback requires an explicit reward clipping override"
+                    )
+                task = active_environment.get("task")
+                if not isinstance(task, dict):
+                    raise ValueError("playback environment has no configurable task reward")
+                reward = task.get("reward")
+                if not isinstance(reward, dict):
+                    raise ValueError("playback environment has no configurable reward contract")
+                reward["reward_clip"] = bool(spec.reward_clip_override)
+            artifact_config = env_config_from_config_dict(active_environment)
             if artifact_config is None:
                 raise ValueError("policy bundle recipe has no playback environment")
             artifact_config = resolve_env_config(artifact_config)
+            from rlab.env_identity import policy_environment_hash
+
+            active_hash = policy_environment_hash(env_config_metadata(artifact_config))
+            training_hash = str(contract["training_policy_environment_hash"])
+            evaluation_available = isinstance(recipe, Mapping) and isinstance(
+                recipe.get("eval"), Mapping
+            )
+            evaluation_matches_training: bool | None = None
+            if evaluation_available:
+                evaluation_matches_training = bool(
+                    playback_contract(source.bundle.recipe, mode="evaluation")["matches_training"]
+                )
+            available_modes = ["training"]
+            if evaluation_available:
+                available_modes.append("evaluation")
+            available_modes.append("counterfactual")
+            comparison_reasons = (
+                []
+                if active_hash == training_hash
+                else ["active policy environment differs from training"]
+            )
+            contract_details = {
+                "mode": requested_mode,
+                "available_modes": available_modes,
+                "reward_clip_override": spec.reward_clip_override,
+                "policy_environment_hash": active_hash,
+                "training_policy_environment_hash": training_hash,
+                "matches_training": not comparison_reasons,
+                "comparison_reasons": comparison_reasons,
+                "evaluation_matches_training": evaluation_matches_training,
+                "legacy_mismatch": bool(
+                    evaluation_available and evaluation_matches_training is False
+                ),
+                "mismatch_paths": list(contract_audit["mismatch_paths"]),
+                "legacy_override_provenance": bool(contract_audit["legacy_override_provenance"]),
+                "requested_policy_override_paths": list(
+                    contract_audit["requested_policy_override_paths"]
+                ),
+            }
+            termination_source = requested_mode
             if not self.explicit_seed:
                 if not isinstance(recipe, Mapping):
                     raise ValueError("policy bundle recipe is invalid")
@@ -217,6 +290,10 @@ class PlaybackLoader:
                     evaluation_result_seed=spec.seed,
                 )
         else:
+            if spec.contract_mode != "training" or spec.reward_clip_override is not None:
+                raise ValueError(
+                    "contract selection requires a versioned policy bundle with recipe.json"
+                )
             artifact_config = load_playback_env_config(
                 source.model_path,
                 respect_task_termination=True,
@@ -225,6 +302,12 @@ class PlaybackLoader:
             artifact_config = resolve_env_config(
                 replace(artifact_config, env_provider=str(args.env_provider))
             )
+            if source.bundle is not None:
+                contract_details["mode"] = "counterfactual"
+                contract_details["matches_training"] = False
+                contract_details["comparison_reasons"] = [
+                    "environment provider override differs from training"
+                ]
         termination_base_config = artifact_config
         enabled_termination_ids = (
             () if args.continuous_play else configured_termination_ids(termination_base_config)
@@ -278,6 +361,8 @@ class PlaybackLoader:
             approval_required=approval_required,
             termination_base_config=termination_base_config,
             termination_source=termination_source,
+            contract_details=contract_details,
+            value_contract=value_contract,
         )
 
     def activate(
@@ -360,7 +445,13 @@ class PlaybackLoader:
                 f"checkpoint_step={candidate.source.checkpoint_step or '-'} "
                 f"environment_hash={candidate.source.run_config.get('environment_hash', '-')}"
             )
-            runner = WebPlaybackRunner(session, args, config_text=config_text)
+            runner = WebPlaybackRunner(
+                session,
+                args,
+                config_text=config_text,
+                contract_details=candidate.contract_details,
+                value_contract=candidate.value_contract,
+            )
             return ActivePlayback(
                 runner=runner,
                 policy_env=policy_env,

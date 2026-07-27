@@ -9,7 +9,7 @@ rlab is a reproducible reinforcement-learning workbench for game-agent researche
 - Each research goal must declare whether it is evaluated or training-only. Evaluated goals must define their environment, success criteria, ranking, evaluation, and release rules. Training-only goals must remain ineligible for goal acceptance, goal completion, checkpoint promotion, or release.
 - Every launchable training configuration must belong to one goal, declare a finite resource limit and meaningful description, and resolve every choice needed for execution.
 - Invalid or internally inconsistent goals, run configurations, benchmarks, capacity rules, or execution settings must be rejected before execution or external mutation.
-- A run must resolve one complete declared observation, action, reward, event, start-state, and episode-boundary contract and preserve it across training, evaluation, and evidence-bearing playback.
+- A run must resolve one complete declared observation, action, reward, discount, event, start-state, and episode-boundary contract and preserve its policy-facing semantics across training, evaluation, and evidence-bearing playback.
 - Mario Level1-1 must provide a full reward system with game-score progress and a speedrun reward system without it; both must include a per-step deduction negligible relative to forward-progress reward.
 - Every launchable Mario recipe must configure an unsuccessful early-stop condition for sustained lack of improvement in a task-aligned training metric; that condition must not establish goal acceptance or checkpoint promotion.
 - Training-only curricula or phase-specific behavior must be explicitly declared, and evidence produced outside the finalized evaluation contract must not establish acceptance or promotion.
@@ -33,6 +33,7 @@ rlab is a reproducible reinforcement-learning workbench for game-agent researche
 
 - Supported environment providers must provide correct, isolated parallel execution with deterministic, nonduplicated episode streams. Resetting, completing, or forcing a boundary in one lane must not disturb any other lane.
 - Equivalent providers must preserve the same declared observations, actions, rewards, events, and episode semantics across training, evaluation, and playback. Switching providers must change only provider identity and remain traceable.
+- Rlab must own reward scaling and clipping uniformly across all environments; scaling is applied before clipping, and equivalent environment-provider reward transforms must be disabled and ignored.
 - Provider-specific requirements must not leak into common workflows, and every supported environment must remain trainable, evaluable, and playable through those workflows.
 
 ### Training Results and Publication
@@ -46,10 +47,11 @@ rlab is a reproducible reinforcement-learning workbench for game-agent researche
 
 ### Playback and Human Control
 
-- Playback must support local and remote artifacts under the evaluation contract, keep concurrent viewers on one trajectory, and refresh mutable references when their content changes.
+- Playback must support local and remote artifacts, default to the checkpoint’s training-time policy-facing semantics, make evaluation-contract reproduction and counterfactual departures explicit, keep concurrent viewers on one trajectory, and refresh mutable references when their content changes.
 - Bare playback must open a searchable repository-backed project-to-goal selection flow followed by W&B-backed run and public-checkpoint selection; project, goal, run, and checkpoint selections must have hierarchical resource routes with browser-history navigation; checkpoint lists must show available goal-required acceptance results without fabricating unavailable partial evidence; a less-specific CLI W&B reference must preselect its matching level, while an exact CLI checkpoint source may enter playback directly.
 - Run-selection views must visibly distinguish checked-in recipes from launch-time configuration overrides and make exact override values searchable without requiring a new checked-in recipe.
 - Interactive playback must provide independently arrangeable, synchronized views of game frames, policy inputs and decisions, transition facts, and bounded histories without inspection changing the trajectory or policy randomness.
+- Critic calibration diagnostics must compare value estimates with realized returns only when environment, reward, discount, action-sampling, and episode-boundary/bootstrap semantics match training; otherwise the comparison must be visibly unavailable.
 - Human control must preserve declared action semantics, fail safe when focus or control is lost, and keep all human-intervened results ineligible for acceptance or promotion.
 
 ### Queued Operation and Benchmarks

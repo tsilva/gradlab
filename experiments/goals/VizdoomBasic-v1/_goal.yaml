@@ -39,7 +39,6 @@ train:
             obs_layout: chw
             frame_stack: 4
             noop_reset_max: 0
-            reward_clip: false
             info_filter:
               mode: all
               keys: [killcount]
@@ -75,6 +74,8 @@ train:
         max_episode_steps: 72
       reward:
         reward_mode: native
+        reward_scale: 1.0
+        reward_clip: false
 eval:
   episodes: 100
   acceptance:

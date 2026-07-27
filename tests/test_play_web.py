@@ -117,6 +117,75 @@ def test_completed_episode_history_gets_discounted_value_targets_and_signed_erro
     assert "realized_return" not in points[2]
 
 
+def test_incomparable_episode_suppresses_realized_value_diagnostics() -> None:
+    points = [
+        {"episode": 1, "reward_shaped": 1.0, "value": 3.0},
+        {"episode": 1, "reward_shaped": 2.0, "value": 1.0},
+    ]
+
+    annotate_realized_returns(
+        points,
+        episode=1,
+        discount=0.5,
+        comparison_reasons=("active policy environment differs from training",),
+    )
+
+    assert all("realized_return" not in point for point in points)
+    assert all("value_error" not in point for point in points)
+    assert points[0]["value_comparison_reasons"] == [
+        "active policy environment differs from training"
+    ]
+
+
+def test_realized_value_diagnostics_reject_mixed_driver_history() -> None:
+    points = [
+        {
+            "episode": 1,
+            "reward_shaped": 1.0,
+            "value": 3.0,
+            "action_source": "policy",
+            "policy_sampled": True,
+        },
+        {
+            "episode": 1,
+            "reward_shaped": 2.0,
+            "value": 1.0,
+            "action_source": "human",
+            "policy_sampled": None,
+        },
+    ]
+
+    annotate_realized_returns(points, episode=1, discount=0.5)
+
+    assert all("realized_return" not in point for point in points)
+    assert points[0]["value_comparison_reasons"] == ["episode contains non-policy actions"]
+
+
+def test_critic_comparison_requires_stochastic_policy_and_terminal_boundary() -> None:
+    config = {"game": "Game-v0", "task": {"termination": {}}}
+    session = argparse.Namespace(
+        model=argparse.Namespace(gamma=0.9),
+        config=config,
+        termination_base_config=config,
+    )
+    runner = WebPlaybackRunner(
+        session,
+        human_args(),
+        config_text="",
+        contract_details={"comparison_reasons": []},
+        value_contract={"discount": 0.9},
+    )
+
+    assert runner._critic_comparison_reasons() == []
+    runner.sampling_mode = "deterministic"
+    assert "deterministic trajectories" in runner._critic_comparison_reasons()[0]
+    runner.sampling_mode = "stochastic"
+    assert (
+        "truncated episodes"
+        in runner._critic_comparison_reasons(argparse.Namespace(truncated=True))[0]
+    )
+
+
 def test_web_playback_exposes_loaded_models_value_discount() -> None:
     session = argparse.Namespace(
         model=argparse.Namespace(gamma=0.9),

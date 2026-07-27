@@ -78,8 +78,12 @@ class _RecipeValueDocument(BoundaryModel):
     campaign_id: Any = None
     seeds: Any = None
     recipe_overrides: Any = None
+    effective_recipe_overrides: Any = None
     environment: Any = None
     environment_hash: Any = None
+    policy_environment_hash: Any = None
+    evaluation_environment_hash: Any = None
+    value_contract: Any = None
     eval: _EvaluationDocument | None = None
     playback: _PlaybackDocument | None = None
 
@@ -173,6 +177,8 @@ class _ModelDocument(BoundaryModel):
     recipe: _RecipeBindingDocument
     policy: _PolicyDocument
     provenance: _ModelProvenanceDocument
+
+
 _OPERATIONAL_TRAIN_FIELDS = frozenset(
     {
         "attempt_id",
@@ -202,6 +208,8 @@ _OPERATIONAL_TRAIN_FIELDS = frozenset(
         "wandb_tags",
     }
 )
+
+
 class PolicyDocumentError(ValueError):
     """Base error for a policy document that cannot be interpreted safely."""
 
@@ -545,12 +553,16 @@ def _validate_recipe_v1(document: Mapping[str, Any], source: str) -> dict[str, A
         if not re.fullmatch(r"docker:[^\s]+@sha256:[0-9a-f]{64}", image_ref):
             raise PolicyDocumentError(f"{source} runtime image_ref must be an immutable digest")
     if packages is not None:
-        package_mapping = isinstance(packages, Mapping) and bool(packages) and all(
-            isinstance(name, str)
-            and bool(name.strip())
-            and isinstance(version, str)
-            and bool(version.strip())
-            for name, version in packages.items()
+        package_mapping = (
+            isinstance(packages, Mapping)
+            and bool(packages)
+            and all(
+                isinstance(name, str)
+                and bool(name.strip())
+                and isinstance(version, str)
+                and bool(version.strip())
+                for name, version in packages.items()
+            )
         )
         package_list = (
             isinstance(packages, Sequence)
@@ -746,6 +758,34 @@ def build_recipe_document(
     )
     recipe["environment"] = effective_training_metadata["environment"]
     recipe["environment_hash"] = effective_training_metadata["environment_hash"]
+    from rlab.env_identity import policy_environment_hash
+
+    training_policy_environment_hash = policy_environment_hash(
+        effective_training_metadata["env_config"]
+    )
+    recipe["policy_environment_hash"] = training_policy_environment_hash
+    backend_value = train_config.get("training_backend")
+    backend = backend_value if isinstance(backend_value, Mapping) else {}
+    backend_config_value = backend.get("config")
+    backend_config = backend_config_value if isinstance(backend_config_value, Mapping) else {}
+    gamma_value = backend_config.get("gamma")
+    discount = (
+        float(gamma_value)
+        if not isinstance(gamma_value, bool)
+        and isinstance(gamma_value, int | float)
+        and math.isfinite(float(gamma_value))
+        and 0.0 <= float(gamma_value) <= 1.0
+        else None
+    )
+    backend_id = str(backend.get("id") or "")
+    recipe["value_contract"] = {
+        "schema_version": 1,
+        "policy_environment_hash": training_policy_environment_hash,
+        "reward_stream": "task",
+        "discount": discount,
+        "action_sampling": "stochastic",
+        "truncation_bootstrap": ("terminal-value" if backend_id.startswith("sb3.") else "unknown"),
+    }
     from rlab.checkpoint_acceptance import (
         CheckpointEvalContractCompiler,
         portable_asset_from_train_config,
@@ -780,6 +820,19 @@ def build_recipe_document(
             materialize_seed_defaults=True,
         )
         portable_asset = eval_compiler.asset
+        from rlab.env_metadata import sanitize_env_config_metadata
+
+        evaluation_policy_environment_hash = policy_environment_hash(
+            sanitize_env_config_metadata(dict(eval_compiler.environment))
+        )
+        recipe["evaluation_environment_hash"] = evaluation_policy_environment_hash
+        if evaluation_policy_environment_hash != training_policy_environment_hash:
+            raise ValueError(
+                "training and evaluation policy environment semantics disagree while building "
+                "recipe.json: "
+                f"training={training_policy_environment_hash} "
+                f"evaluation={evaluation_policy_environment_hash}"
+            )
     stop_on_acceptance = bool(train_config.get("stop_on_acceptance"))
     for key in _OPERATIONAL_TRAIN_FIELDS:
         train_config.pop(key, None)
@@ -943,15 +996,7 @@ def policy_bundle_as_metadata(bundle: PolicyBundle) -> dict[str, Any]:
         environment.get("preprocessing"),
         label=f"{bundle.recipe_path}.recipe.environment.preprocessing",
     )
-    portable = recipe.get("eval") or recipe.get("playback")
-    portable = _required_mapping(
-        portable,
-        label=f"{bundle.recipe_path}.recipe portable contract",
-    )
-    env_config = _required_mapping(
-        portable.get("environment"),
-        label=f"{bundle.recipe_path}.recipe portable environment",
-    )
+    env_config = _training_playback_environment(recipe)
     env_id = _required_text(
         environment.get("env_id"),
         label=f"{bundle.recipe_path}.recipe.environment.env_id",
@@ -977,7 +1022,7 @@ def policy_bundle_as_metadata(bundle: PolicyBundle) -> dict[str, Any]:
         }
     )
     metadata["training_metadata"] = {
-        "env_config": deepcopy(dict(env_config)),
+        "env_config": deepcopy(env_config),
         "environment": deepcopy(dict(environment)),
         "environment_hash": environment_hash_value,
         "preprocessing": deepcopy(dict(preprocessing)),
@@ -1150,8 +1195,25 @@ def evaluation_contract(recipe_document: Mapping[str, Any]) -> dict[str, Any]:
     return deepcopy(dict(validated["recipe"]["eval"]))
 
 
-def playback_contract(recipe_document: Mapping[str, Any]) -> dict[str, Any]:
-    """Return evaluation playback defaults, falling back to the training contract."""
+def _training_playback_environment(recipe: Mapping[str, Any]) -> dict[str, Any]:
+    from rlab.env_metadata import sanitize_env_config_metadata
+    from rlab.train_config import env_config_allowed_keys
+
+    train_config = _required_mapping(
+        recipe.get("train_config"),
+        label="recipe.json training playback environment",
+    )
+    environment = {
+        key: deepcopy(value)
+        for key, value in train_config.items()
+        if key in env_config_allowed_keys()
+    }
+    return sanitize_env_config_metadata(environment)
+
+
+def critic_value_contract(recipe_document: Mapping[str, Any]) -> dict[str, Any]:
+    """Return the training-time inputs required to interpret critic diagnostics."""
+
     validated = preflight_document(
         recipe_document,
         source=RECIPE_FILENAME,
@@ -1159,19 +1221,215 @@ def playback_contract(recipe_document: Mapping[str, Any]) -> dict[str, Any]:
         handlers={RECIPE_FORMAT_VERSION: _validate_recipe_v1},
     )
     recipe = validated["recipe"]
-    if "eval" in recipe:
-        evaluation = dict(recipe["eval"])
-        return {
-            "environment": deepcopy(dict(evaluation["environment"])),
-            "seed": int(evaluation["seed"]),
-            "asset": deepcopy(evaluation.get("asset")),
+    environment = _training_playback_environment(recipe)
+    from rlab.env_identity import policy_environment_hash
+
+    derived_hash = policy_environment_hash(environment)
+    stored_value = recipe.get("value_contract")
+    stored = dict(stored_value) if isinstance(stored_value, Mapping) else {}
+    train_config = _required_mapping(
+        recipe.get("train_config"),
+        label="recipe.json critic training config",
+    )
+    backend_value = train_config.get("training_backend")
+    backend = backend_value if isinstance(backend_value, Mapping) else {}
+    backend_config_value = backend.get("config")
+    backend_config = backend_config_value if isinstance(backend_config_value, Mapping) else {}
+    gamma = backend_config.get("gamma")
+    discount = (
+        float(gamma)
+        if not isinstance(gamma, bool)
+        and isinstance(gamma, int | float)
+        and math.isfinite(float(gamma))
+        and 0.0 <= float(gamma) <= 1.0
+        else None
+    )
+    expected = {
+        "schema_version": 1,
+        "policy_environment_hash": derived_hash,
+        "reward_stream": "task",
+        "discount": discount,
+        "action_sampling": "stochastic",
+        "truncation_bootstrap": (
+            "terminal-value" if str(backend.get("id") or "").startswith("sb3.") else "unknown"
+        ),
+    }
+    if stored:
+        for key, value in expected.items():
+            if stored.get(key) != value:
+                raise PolicyDocumentError(
+                    f"recipe.json value_contract.{key} disagrees with the derived training contract"
+                )
+    return expected
+
+
+def _contract_difference_paths(
+    training: Any,
+    evaluation: Any,
+    *,
+    path: str = "environment",
+) -> list[str]:
+    if isinstance(training, Mapping) and isinstance(evaluation, Mapping):
+        paths: list[str] = []
+        for key in sorted(set(training) | set(evaluation), key=str):
+            nested_path = f"{path}.{key}"
+            if key not in training or key not in evaluation:
+                paths.append(nested_path)
+                continue
+            paths.extend(
+                _contract_difference_paths(
+                    training[key],
+                    evaluation[key],
+                    path=nested_path,
+                )
+            )
+        return paths
+    if training == evaluation:
+        return []
+    return [path]
+
+
+def playback_contract_audit(recipe_document: Mapping[str, Any]) -> dict[str, Any]:
+    """Audit persisted train/eval policy semantics and legacy override provenance."""
+
+    validated = preflight_document(
+        recipe_document,
+        source=RECIPE_FILENAME,
+        expected_type=RECIPE_DOCUMENT_TYPE,
+        handlers={RECIPE_FORMAT_VERSION: _validate_recipe_v1},
+    )
+    recipe = validated["recipe"]
+    training_environment = _training_playback_environment(recipe)
+    from rlab.env_identity import policy_environment_hash, policy_environment_identity
+    from rlab.env_metadata import sanitize_env_config_metadata
+
+    training_identity = policy_environment_identity(training_environment)
+    training_hash = policy_environment_hash(training_environment)
+    evaluation_value = recipe.get("eval")
+    evaluation_hash: str | None = None
+    mismatch_paths: list[str] = []
+    if isinstance(evaluation_value, Mapping):
+        evaluation_environment = sanitize_env_config_metadata(
+            dict(
+                _required_mapping(
+                    evaluation_value.get("environment"),
+                    label="recipe.json evaluation playback environment",
+                )
+            )
+        )
+        evaluation_identity = policy_environment_identity(evaluation_environment)
+        evaluation_hash = policy_environment_hash(evaluation_environment)
+        mismatch_paths = _contract_difference_paths(
+            training_identity,
+            evaluation_identity,
+        )
+    requested_value = recipe.get("recipe_overrides")
+    requested_overrides = (
+        [str(value) for value in requested_value]
+        if isinstance(requested_value, Sequence) and not isinstance(requested_value, str | bytes)
+        else []
+    )
+    effective_value = recipe.get("effective_recipe_overrides")
+    effective_overrides = (
+        [str(value) for value in effective_value]
+        if isinstance(effective_value, Sequence) and not isinstance(effective_value, str | bytes)
+        else []
+    )
+    policy_override_paths = sorted(
+        {
+            value.split("=", 1)[0].strip()
+            for value in requested_overrides
+            if value.split("=", 1)[0]
+            .strip()
+            .startswith(("train.environment.", "eval.environment."))
         }
-    return deepcopy(dict(recipe["playback"]))
+    )
+    return {
+        "schema_version": 1,
+        "training_policy_environment_hash": training_hash,
+        "evaluation_policy_environment_hash": evaluation_hash,
+        "evaluation_matches_training": (
+            None if evaluation_hash is None else evaluation_hash == training_hash
+        ),
+        "mismatch_paths": mismatch_paths,
+        "requested_policy_override_paths": policy_override_paths,
+        "effective_recipe_overrides": effective_overrides,
+        "legacy_override_provenance": bool(policy_override_paths and not effective_overrides),
+    }
+
+
+def playback_contract(
+    recipe_document: Mapping[str, Any],
+    *,
+    mode: str = "training",
+) -> dict[str, Any]:
+    """Return explicit training-faithful or published-evaluation playback settings."""
+
+    validated = preflight_document(
+        recipe_document,
+        source=RECIPE_FILENAME,
+        expected_type=RECIPE_DOCUMENT_TYPE,
+        handlers={RECIPE_FORMAT_VERSION: _validate_recipe_v1},
+    )
+    recipe = validated["recipe"]
+    provenance = validated["provenance"]
+    training_environment = _training_playback_environment(recipe)
+    from rlab.env_identity import policy_environment_hash
+    from rlab.env_metadata import sanitize_env_config_metadata
+
+    training_hash = policy_environment_hash(training_environment)
+    if mode == "training":
+        train_config = _required_mapping(
+            recipe.get("train_config"),
+            label="recipe.json training playback config",
+        )
+        seed_value = train_config.get("seed")
+        if not isinstance(seed_value, int) or isinstance(seed_value, bool):
+            portable = recipe.get("eval") or recipe.get("playback") or {}
+            seed_value = portable.get("seed") if isinstance(portable, Mapping) else None
+        if not isinstance(seed_value, int) or isinstance(seed_value, bool):
+            raise PolicyDocumentError("recipe.json training playback seed must be an integer")
+        return {
+            "mode": "training",
+            "environment": training_environment,
+            "seed": int(seed_value),
+            "asset": deepcopy(provenance.get("asset")),
+            "policy_environment_hash": training_hash,
+            "training_policy_environment_hash": training_hash,
+            "matches_training": True,
+        }
+    if mode != "evaluation":
+        raise PolicyDocumentError(f"unsupported playback contract mode: {mode!r}")
+    evaluation_value = recipe.get("eval")
+    if not isinstance(evaluation_value, Mapping):
+        raise PolicyDocumentError("training-only policy bundle has no evaluation contract")
+    evaluation_environment = sanitize_env_config_metadata(
+        dict(
+            _required_mapping(
+                evaluation_value.get("environment"),
+                label="recipe.json evaluation playback environment",
+            )
+        )
+    )
+    evaluation_hash = policy_environment_hash(evaluation_environment)
+    return {
+        "mode": "evaluation",
+        "environment": evaluation_environment,
+        "seed": int(evaluation_value["seed"]),
+        "asset": deepcopy(evaluation_value.get("asset")),
+        "policy_environment_hash": evaluation_hash,
+        "training_policy_environment_hash": training_hash,
+        "matches_training": evaluation_hash == training_hash,
+    }
 
 
 def evaluation_contract_sha256(recipe_document: Mapping[str, Any]) -> str:
     return canonical_json_sha256(evaluation_contract(recipe_document))
 
 
-def playback_contract_sha256(recipe_document: Mapping[str, Any]) -> str:
-    return canonical_json_sha256(playback_contract(recipe_document))
+def playback_contract_sha256(
+    recipe_document: Mapping[str, Any],
+    *,
+    mode: str = "training",
+) -> str:
+    return canonical_json_sha256(playback_contract(recipe_document, mode=mode))

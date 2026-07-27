@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from typing import Any
 
@@ -11,12 +11,17 @@ from rlab.json_utils import canonical_json_text
 from rlab.metric_names import metric_path_segment
 from rlab.provider_config import provider_env_id, provider_game, semantic_provider_args
 from rlab.preprocessing import preprocessing_contract
+from rlab.reward_transform import (
+    COMMON_REWARD_KEYS,
+    normalize_task_reward,
+    reward_transform_from_reward,
+)
 from rlab.rom_assets import manifest_from_train_config, portable_rom_asset_identity
 from rlab.task_kernels import default_task_document
 
 
-ENVIRONMENT_HASH_ALGORITHM = "rlab.environment.v2"
-ENVIRONMENT_SCHEMA_VERSION = 2
+ENVIRONMENT_HASH_ALGORITHM = "rlab.environment.v3"
+ENVIRONMENT_SCHEMA_VERSION = 3
 
 STATE_KEYS = ("state", "states", "state_probs")
 PREPROCESSING_KEYS = (
@@ -30,23 +35,25 @@ PREPROCESSING_KEYS = (
     "obs_crop_fill",
     "obs_resize_algorithm",
 )
-IDENTITY_REWARD_KEYS = frozenset({"reward_mode"})
-MARIO_REWARD_KEYS = frozenset(
-    {
-        "reward_mode",
-        "use_native_reward",
-        "clip_rewards",
-        "progress_reward_cap",
-        "progress_reward_scale",
-        "progress_reward_boost_start_x",
-        "progress_reward_boost_scale",
-        "terminal_reward",
-        "reward_scale",
-        "time_penalty",
-        "death_penalty",
-        "completion_reward",
-        "score_progress_clipped",
-    }
+IDENTITY_REWARD_KEYS = frozenset({"reward_mode"}) | COMMON_REWARD_KEYS
+MARIO_REWARD_KEYS = (
+    frozenset(
+        {
+            "reward_mode",
+            "use_native_reward",
+            "progress_reward_cap",
+            "progress_reward_scale",
+            "progress_reward_boost_start_x",
+            "progress_reward_boost_scale",
+            "terminal_reward",
+            "reward_scale",
+            "time_penalty",
+            "death_penalty",
+            "completion_reward",
+            "score_progress_clipped",
+        }
+    )
+    | COMMON_REWARD_KEYS
 )
 
 
@@ -130,7 +137,7 @@ def task_config_from_train_config(
     if isinstance(task, Mapping) and task:
         canonical = deepcopy(dict(task))
     validate_task_config(canonical)
-    return canonical
+    return normalize_task_reward(canonical)
 
 
 def validate_task_config(task: Mapping[str, Any], *, label: str = "task") -> None:
@@ -220,8 +227,7 @@ def validate_task_config(task: Mapping[str, Any], *, label: str = "task") -> Non
         if unsupported_events:
             raise ValueError(
                 f"{label} identity events support only operations "
-                "'decrease', 'increase', and 'equals_for': "
-                + ", ".join(unsupported_events)
+                "'decrease', 'increase', and 'equals_for': " + ", ".join(unsupported_events)
             )
     if task_id == "mario":
         expected_events = {
@@ -247,9 +253,7 @@ def validate_task_config(task: Mapping[str, Any], *, label: str = "task") -> Non
         if isinstance(game_complete, Mapping):
             when = game_complete.get("when")
             if not isinstance(when, Mapping) or when.get("signal") != "level":
-                raise ValueError(
-                    f"{label}.events.game_complete.when.signal must be 'level'"
-                )
+                raise ValueError(f"{label}.events.game_complete.when.signal must be 'level'")
             value = when.get("value")
             if (
                 not isinstance(value, list | tuple)
@@ -291,6 +295,7 @@ def validate_task_config(task: Mapping[str, Any], *, label: str = "task") -> Non
     extra_reward_keys = sorted(set(reward) - allowed_reward_keys)
     if extra_reward_keys:
         raise ValueError(f"{label}.reward has unexpected keys: {extra_reward_keys}")
+    reward_transform_from_reward(reward, label=f"{label}.reward")
     reward_mode = reward.get("reward_mode")
     if task_id == "identity" and reward_mode not in {None, "native"}:
         raise ValueError(f"{label}.reward.reward_mode must be 'native' for the identity task")
@@ -387,6 +392,28 @@ def environment_identity_from_train_config(
     return identity
 
 
+def policy_environment_identity(config: Mapping[str, Any]) -> dict[str, Any]:
+    """Return normalized policy-facing environment semantics."""
+
+    identity = environment_identity_from_train_config(config)
+    if identity.get("state") == "":
+        identity.pop("state", None)
+    for key in ("states", "state_probs"):
+        value = identity.get(key)
+        if isinstance(value, Sequence) and not isinstance(value, str | bytes) and not value:
+            identity.pop(key, None)
+    state_probs = identity.get("state_probs")
+    if isinstance(state_probs, Sequence) and not isinstance(state_probs, str | bytes):
+        identity["state_probs"] = [float(value) for value in state_probs]
+    return identity
+
+
+def policy_environment_hash(config: Mapping[str, Any]) -> str:
+    """Hash only the normalized policy-facing environment semantics."""
+
+    return environment_hash(policy_environment_identity(config))
+
+
 def train_config_from_source_environment(
     environment: Mapping[str, Any] | None,
 ) -> dict[str, Any]:
@@ -440,4 +467,15 @@ def attach_environment_identity(document: Mapping[str, Any]) -> dict[str, Any]:
     )
     materialized["environment"] = environment
     materialized["environment_hash"] = environment_hash(environment)
+    materialized["policy_environment_hash"] = policy_environment_hash(train_config)
+    evaluation = train_config.get("checkpoint_eval_environment")
+    if isinstance(evaluation, Mapping):
+        evaluation_hash = policy_environment_hash(evaluation)
+        materialized["evaluation_environment_hash"] = evaluation_hash
+        if evaluation_hash != materialized["policy_environment_hash"]:
+            raise ValueError(
+                "training and evaluation policy environment semantics disagree: "
+                f"training={materialized['policy_environment_hash']} "
+                f"evaluation={evaluation_hash}"
+            )
     return materialized

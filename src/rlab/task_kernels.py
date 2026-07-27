@@ -11,6 +11,8 @@ import gymnasium as gym
 import numpy as np
 from numba import njit
 
+from rlab.reward_transform import RewardTransform, reward_transform_from_reward
+
 if TYPE_CHECKING:
     from rlab.batch_runtime import ProviderDescriptor
 
@@ -27,7 +29,11 @@ def default_task_document(task_id: str) -> dict[str, Any]:
             "signals": {},
             "events": {},
             "termination": {"max_episode_steps": 4500},
-            "reward": {"reward_mode": "native"},
+            "reward": {
+                "reward_mode": "native",
+                "reward_scale": 1.0,
+                "reward_clip": False,
+            },
         }
     if task_id != "mario":
         raise ValueError(f"unknown task definition: {task_id!r}")
@@ -52,13 +58,13 @@ def default_task_document(task_id: str) -> dict[str, Any]:
         "reward": {
             "reward_mode": "baseline",
             "use_native_reward": False,
-            "clip_rewards": False,
             "progress_reward_cap": 30.0,
             "progress_reward_scale": 1.0,
             "progress_reward_boost_start_x": 0.0,
             "progress_reward_boost_scale": 0.0,
             "terminal_reward": 50.0,
-            "reward_scale": 10.0,
+            "reward_scale": 1.0,
+            "reward_clip": False,
             "time_penalty": 0.0,
             "death_penalty": 25.0,
             "completion_reward": 0.0,
@@ -142,10 +148,7 @@ def _compile_action_lookup(space: gym.Space, values: Sequence[Any]) -> Any:
 
 def _empty_batched_action_lookup(lookup: Any, num_envs: int) -> Any:
     if isinstance(lookup, Mapping):
-        return {
-            key: _empty_batched_action_lookup(value, num_envs)
-            for key, value in lookup.items()
-        }
+        return {key: _empty_batched_action_lookup(value, num_envs) for key, value in lookup.items()}
     if isinstance(lookup, tuple):
         return tuple(_empty_batched_action_lookup(value, num_envs) for value in lookup)
     return np.empty((num_envs, *lookup.shape[1:]), dtype=lookup.dtype)
@@ -344,13 +347,11 @@ def _mario_step_kernel(
     level_transition_target,
     reward_mode,
     use_native_reward,
-    clip_rewards,
     progress_reward_cap,
     progress_reward_scale,
     progress_reward_boost_start_x,
     progress_reward_boost_scale,
     terminal_reward,
-    reward_scale,
     time_penalty,
     death_penalty,
     completion_reward,
@@ -431,10 +432,10 @@ def _mario_step_kernel(
             and episode_steps[lane] - last_progress_step[lane] >= no_progress_timeout_steps
         )
 
-        terminated = (terminate_on_life_loss and lost_life) or (
-            terminate_on_level_change and completed_level
-        ) or (
-            terminate_on_game_complete and completed_game
+        terminated = (
+            (terminate_on_life_loss and lost_life)
+            or (terminate_on_level_change and completed_level)
+            or (terminate_on_game_complete and completed_game)
         )
         if stall_is_failure and is_stalled:
             terminated = True
@@ -488,26 +489,24 @@ def _mario_step_kernel(
                 raw = terminal_reward
             if lost_life:
                 raw = -terminal_reward
-            divisor = reward_scale if reward_scale else 1.0
             if completed:
-                completion_part = terminal_reward / divisor
+                completion_part = terminal_reward
             elif lost_life:
-                death_part = -terminal_reward / divisor
+                death_part = -terminal_reward
             else:
-                progress_part = capped_progress / divisor
+                progress_part = capped_progress
         elif reward_mode == 2:  # baseline
             raw = float(native_rewards[lane]) + float(current_score_delta) / 40.0
             if completed:
                 raw += terminal_reward
             elif done:
                 raw -= terminal_reward
-            divisor = reward_scale if reward_scale else 1.0
-            native_part = float(native_rewards[lane]) / divisor
-            score_part = (float(current_score_delta) / 40.0) / divisor
+            native_part = float(native_rewards[lane])
+            score_part = float(current_score_delta) / 40.0
             if completed:
-                completion_part = terminal_reward / divisor
+                completion_part = terminal_reward
             elif done:
-                death_part = -terminal_reward / divisor
+                death_part = -terminal_reward
         else:
             if use_native_reward:
                 native_part = float(native_rewards[lane])
@@ -535,13 +534,8 @@ def _mario_step_kernel(
                 death_part = -death_penalty
             raw = native_part + progress_part + score_part + completion_part + death_part
 
-        if reward_mode == 1 or reward_mode == 2:
-            shaped = raw / (reward_scale if reward_scale else 1.0)
-        else:
-            shaped = raw
+        shaped = raw
         shaped -= time_penalty
-        if clip_rewards:
-            shaped = 1.0 if shaped > 0 else -1.0 if shaped < 0 else 0.0
 
         rewards[lane] = shaped
         task_terminated[lane] = terminated
@@ -555,7 +549,7 @@ def _mario_step_kernel(
         completion[lane] = completed
         game_complete[lane] = completed_game
         stalled[lane] = is_stalled
-        raw_reward[lane] = raw
+        raw_reward[lane] = shaped
         progress_component[lane] = component_progress
         native_component[lane] = native_part
         progress_reward_component[lane] = progress_part
@@ -634,6 +628,104 @@ class BoundTaskKernel(Protocol):
     ) -> np.ndarray: ...
 
 
+class RewardTransformTaskKernel:
+    """Apply the provider-neutral final reward transform to any bound task."""
+
+    def __init__(
+        self,
+        kernel: BoundTaskKernel,
+        transform: RewardTransform,
+    ):
+        self.kernel = kernel
+        self.transform = transform
+        self.num_envs = int(kernel.num_envs)
+        self._raw_rewards = np.empty(self.num_envs, dtype=np.float32)
+        self._rewards = np.empty(self.num_envs, dtype=np.float32)
+        self._metrics: dict[str, np.ndarray] | None = None
+        self._task_step: TaskStep | None = None
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self.kernel, name)
+
+    def map_actions(self, actions: Any) -> Any:
+        return self.kernel.map_actions(actions)
+
+    def encode_observations(self, observations: Any) -> Any:
+        return self.kernel.encode_observations(observations)
+
+    def process(
+        self,
+        native_rewards: np.ndarray,
+        provider_terminated: np.ndarray,
+        provider_truncated: np.ndarray,
+        signals: Mapping[str, Any],
+    ) -> TaskStep:
+        task_step = self.kernel.process(
+            native_rewards,
+            provider_terminated,
+            provider_truncated,
+            signals,
+        )
+        if not self.transform.active:
+            return task_step
+
+        np.copyto(self._raw_rewards, np.asarray(task_step.rewards, dtype=np.float32))
+        np.divide(self._raw_rewards, self.transform.scale, out=self._rewards)
+        if self.transform.sign_clip:
+            np.sign(self._rewards, out=self._rewards)
+        elif self.transform.clip_bounds is not None:
+            np.clip(
+                self._rewards,
+                self.transform.clip_bounds[0],
+                self.transform.clip_bounds[1],
+                out=self._rewards,
+            )
+
+        if self._metrics is None:
+            self._metrics = dict(task_step.metrics)
+            self._metrics["raw_reward"] = self._raw_rewards
+            self._metrics["shaped_reward"] = self._rewards
+            self._task_step = TaskStep(
+                self._rewards,
+                task_step.terminated,
+                task_step.truncated,
+                task_step.outcomes,
+                task_step.event_bits,
+                self._metrics,
+                task_step.event_transitions,
+            )
+        assert self._task_step is not None
+        return self._task_step
+
+    def on_reset(
+        self,
+        reset_observations: Any,
+        reset_signals: Mapping[str, Any],
+        mask: np.ndarray,
+    ) -> Any:
+        return self.kernel.on_reset(reset_observations, reset_signals, mask)
+
+    def validate_snapshot_signal(self, semantic_name: str) -> None:
+        return self.kernel.validate_snapshot_signal(semantic_name)
+
+    def snapshot_signal_values(
+        self,
+        semantic_name: str,
+        signals: Mapping[str, Any],
+        *,
+        mask: np.ndarray,
+    ) -> np.ndarray:
+        return self.kernel.snapshot_signal_values(semantic_name, signals, mask=mask)
+
+
+def with_reward_transform(
+    kernel: BoundTaskKernel,
+    reward: Mapping[str, Any],
+) -> BoundTaskKernel:
+    transform = reward_transform_from_reward(reward)
+    return kernel if not transform.active else RewardTransformTaskKernel(kernel, transform)
+
+
 class SignalBindings:
     """Resolve semantic task signals to dense provider info columns once."""
 
@@ -669,9 +761,7 @@ class SignalBindings:
             }
         )
         if unavailable:
-            raise ValueError(
-                "task signals must be available on step: " + ", ".join(unavailable)
-            )
+            raise ValueError("task signals must be available on step: " + ", ".join(unavailable))
 
     def available_on_reset(self, semantic_name: str) -> bool:
         source = self.source(semantic_name)
@@ -755,12 +845,8 @@ class SignalBindings:
         source = self.source(semantic_name)
         names = (source,) if isinstance(source, str) else source
         if any(self._specs[name].shape for name in names):
-            raise ValueError(
-                f"semantic signal {semantic_name!r} must use scalar provider sources"
-            )
-        if require_reset and not all(
-            self._specs[name].available_on_reset for name in names
-        ):
+            raise ValueError(f"semantic signal {semantic_name!r} must use scalar provider sources")
+        if require_reset and not all(self._specs[name].available_on_reset for name in names):
             raise ValueError(
                 f"semantic signal {semantic_name!r} must be available on reset and step"
             )
@@ -827,13 +913,9 @@ class IdentityTaskDefinition:
                 value = rule.get("value")
                 steps = rule.get("steps")
                 if not isinstance(value, int | float) or isinstance(value, bool):
-                    raise ValueError(
-                        f"identity equals_for event {name!r} requires a numeric value"
-                    )
+                    raise ValueError(f"identity equals_for event {name!r} requires a numeric value")
                 if not isinstance(steps, int) or isinstance(steps, bool) or steps <= 0:
-                    raise ValueError(
-                        f"identity equals_for event {name!r} requires positive steps"
-                    )
+                    raise ValueError(f"identity equals_for event {name!r} requires positive steps")
             compiled_events.append(
                 IdentityEvent(
                     name=str(name),
@@ -1109,14 +1191,10 @@ class IdentityTaskKernel:
             require_reset=True,
         )
         if len(dtypes) != 1:
-            raise ValueError(
-                f"snapshot curriculum signal {semantic_name!r} must be scalar"
-            )
+            raise ValueError(f"snapshot curriculum signal {semantic_name!r} must be scalar")
         dtype = dtypes[0]
         if not np.issubdtype(dtype, np.number) or np.issubdtype(dtype, np.bool_):
-            raise ValueError(
-                f"snapshot curriculum signal {semantic_name!r} must be numeric"
-            )
+            raise ValueError(f"snapshot curriculum signal {semantic_name!r} must be numeric")
 
     def snapshot_signal_values(
         self,
@@ -1138,13 +1216,11 @@ class MarioTaskConfig:
     action_masks: np.ndarray | None = None
     reward_mode: str = "baseline"
     use_native_reward: bool = False
-    clip_rewards: bool = False
     progress_reward_cap: float = 30.0
     progress_reward_scale: float = 1.0
     progress_reward_boost_start_x: float = 0.0
     progress_reward_boost_scale: float = 0.0
     terminal_reward: float = 50.0
-    reward_scale: float = 10.0
     time_penalty: float = 0.0
     death_penalty: float = 25.0
     completion_reward: float = 0.0
@@ -1187,9 +1263,7 @@ class MarioTaskConfig:
         supported_events = {"life_loss", "level_change", "game_complete", "stalled"}
         unknown_events = sorted(set(events) - supported_events)
         if unknown_events:
-            raise ValueError(
-                "Mario task does not implement event(s): " + ", ".join(unknown_events)
-            )
+            raise ValueError("Mario task does not implement event(s): " + ", ".join(unknown_events))
         expected_events = {
             "life_loss": ("lives", "decrease"),
             "level_change": ("level", "change"),
@@ -1200,18 +1274,17 @@ class MarioTaskConfig:
             rule = events.get(event_name)
             if rule is None:
                 continue
-            if not isinstance(rule, Mapping) or (
-                rule.get("signal"), rule.get("operation")
-            ) != (expected_signal, expected_operation):
+            if not isinstance(rule, Mapping) or (rule.get("signal"), rule.get("operation")) != (
+                expected_signal,
+                expected_operation,
+            ):
                 raise ValueError(
                     f"Mario event {event_name!r} requires signal={expected_signal!r} "
                     f"and operation={expected_operation!r}"
                 )
         game_complete_rule = events.get("game_complete", {})
         game_complete_when = (
-            game_complete_rule.get("when", {})
-            if isinstance(game_complete_rule, Mapping)
-            else {}
+            game_complete_rule.get("when", {}) if isinstance(game_complete_rule, Mapping) else {}
         )
         raw_game_complete_level = (
             game_complete_when.get("value", (-1, -1))
@@ -1238,9 +1311,7 @@ class MarioTaskConfig:
             int(raw_game_complete_level[1]),
         )
         game_complete_mode = (
-            game_complete_rule.get("value", -1)
-            if isinstance(game_complete_rule, Mapping)
-            else -1
+            game_complete_rule.get("value", -1) if isinstance(game_complete_rule, Mapping) else -1
         )
         if not isinstance(game_complete_mode, int) or isinstance(game_complete_mode, bool):
             raise ValueError("Mario game_complete event value must be an integer")
@@ -1294,17 +1365,11 @@ class MarioTaskConfig:
             action_masks=action_masks,
             reward_mode=reward_mode,
             use_native_reward=reward.get("use_native_reward", False),
-            clip_rewards=reward_value("clip_rewards", False),
             progress_reward_cap=reward_value("progress_reward_cap", 30.0),
             progress_reward_scale=reward_value("progress_reward_scale", 1.0),
-            progress_reward_boost_start_x=reward_value(
-                "progress_reward_boost_start_x", 0.0
-            ),
-            progress_reward_boost_scale=reward_value(
-                "progress_reward_boost_scale", 0.0
-            ),
+            progress_reward_boost_start_x=reward_value("progress_reward_boost_start_x", 0.0),
+            progress_reward_boost_scale=reward_value("progress_reward_boost_scale", 0.0),
             terminal_reward=reward_value("terminal_reward", 50.0),
-            reward_scale=reward_value("reward_scale", 10.0),
             time_penalty=reward_value("time_penalty", 0.0),
             death_penalty=reward_value("death_penalty", 25.0),
             completion_reward=reward_value("completion_reward", 0.0),
@@ -1501,13 +1566,11 @@ class MarioTaskKernel:
         self._compiled_parameters = (
             self._reward_mode_code,
             config.use_native_reward,
-            config.clip_rewards,
             config.progress_reward_cap,
             config.progress_reward_scale,
             config.progress_reward_boost_start_x,
             config.progress_reward_boost_scale,
             config.terminal_reward,
-            config.reward_scale,
             config.time_penalty,
             config.death_penalty,
             config.completion_reward,
@@ -1722,16 +1785,12 @@ class MarioTaskKernel:
                     "snapshot curriculum signal 'x' must bind one value or a high/low pair"
                 )
         elif len(dtypes) != 1:
-            raise ValueError(
-                f"snapshot curriculum signal {semantic_name!r} must be scalar"
-            )
+            raise ValueError(f"snapshot curriculum signal {semantic_name!r} must be scalar")
         if any(
             not np.issubdtype(dtype, np.number) or np.issubdtype(dtype, np.bool_)
             for dtype in dtypes
         ):
-            raise ValueError(
-                f"snapshot curriculum signal {semantic_name!r} must be numeric"
-            )
+            raise ValueError(f"snapshot curriculum signal {semantic_name!r} must be numeric")
 
     def snapshot_signal_values(
         self,

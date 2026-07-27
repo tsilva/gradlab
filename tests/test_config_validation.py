@@ -16,7 +16,7 @@ from rlab.config_validation import (
     validate_experiment_tree,
 )
 from rlab.experiment_contracts import validate_goal_contract_document
-from rlab.env_registry import resolve_env_provider
+from rlab.env_registry import resolve_env_provider, validate_provider_constructor_args
 from rlab.env_providers import _stable_retro_packaged_data_path
 from rlab.main import COMMANDS
 from rlab.recipe_documents import compose_train_document, load_goal_contract
@@ -35,6 +35,49 @@ class ConfigValidationTests(unittest.TestCase):
     MARIO_SINGLE_RECIPES = MARIO_L11_GOAL.parent / "recipes"
     VIZDOOM_BASIC_GOAL = Path("experiments/goals/VizdoomBasic-v1/_goal.yaml")
     VIZDOOM_BASIC_RECIPE = VIZDOOM_BASIC_GOAL.parent / "recipes/ppo.yaml"
+
+    def test_provider_reward_transforms_are_rejected_in_favor_of_task_reward(self) -> None:
+        for key in (
+            "reward_clip",
+            "reward_clipping",
+            "normalize_reward",
+            "norm_reward",
+            "reward_normalization",
+        ):
+            with (
+                self.subTest(key=key),
+                self.assertRaisesRegex(
+                    ValueError,
+                    "task.reward.reward_scale",
+                ),
+            ):
+                validate_provider_constructor_args(
+                    "gymnasium",
+                    {key: True},
+                    label="train.environment.env_config.env_args",
+                )
+
+    def test_common_reward_override_is_mirrored_into_vizdoom_evaluation(self) -> None:
+        document = compose_train_document(
+            self.VIZDOOM_BASIC_GOAL,
+            self.VIZDOOM_BASIC_RECIPE,
+            recipe_overrides=(
+                "train.environment.task.reward.reward_scale=100",
+                "train.environment.task.reward.reward_clip=[-0.05,0.5]",
+            ),
+        )
+        expected = {
+            "reward_mode": "native",
+            "reward_scale": 100.0,
+            "reward_clip": [-0.05, 0.5],
+        }
+
+        self.assertEqual(document["train_config"]["task"]["reward"], expected)
+        self.assertEqual(
+            document["train_config"]["checkpoint_eval_environment"]["task"]["reward"],
+            expected,
+        )
+        self.assertNotIn("reward_clip", document["train_config"]["env_args"])
 
     def test_recipe_preset_allowlist_is_independent_of_current_directory(self) -> None:
         goal = self.MARIO_L11_GOAL.resolve()
@@ -55,6 +98,7 @@ class ConfigValidationTests(unittest.TestCase):
         from stable_retro import RetroVecEnv
         from supermariobrosnes_turbo import SuperMarioBrosNesTurboVecEnv
         from vizdoom_turbo import VizdoomTurboVecEnv
+        from rlab.reward_transform import PROVIDER_REWARD_TRANSFORM_KEYS
 
         constructors = {
             "ale-py": AtariVectorEnv,
@@ -78,13 +122,14 @@ class ConfigValidationTests(unittest.TestCase):
                 contract = resolve_env_provider(provider_id).constructor_contract
                 self.assertIsNotNone(contract)
                 covered_args = set(contract.canonical_args) | set(contract.explicit_env_args)
+                public_signature_args = signature_args - PROVIDER_REWARD_TRANSFORM_KEYS
                 if provider_id == "breakout-turbo-env":
                     # RLab's compatibility adapter accepts the shared Stable Retro
                     # contract even when an older installed Turbo release ignores
                     # adapter-only fields through **unsupported.
-                    self.assertLessEqual(signature_args, covered_args)
+                    self.assertLessEqual(public_signature_args, covered_args)
                 else:
-                    self.assertEqual(covered_args, signature_args)
+                    self.assertEqual(covered_args, public_signature_args)
 
     def test_breakout_goal_hotswaps_provider_without_changing_semantics(self) -> None:
         document = compose_train_document(
@@ -494,7 +539,6 @@ class ConfigValidationTests(unittest.TestCase):
                 "obs_layout": "chw",
                 "frame_stack": 4,
                 "noop_reset_max": 30,
-                "reward_clip": False,
                 "use_fire_reset": False,
             },
         )
@@ -503,7 +547,14 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertEqual(train_config["n_envs"], 128)
         self.assertNotIn("checkpoint_eval_n_envs", train_config)
         self.assertNotIn("checkpoint_eval_environment", train_config)
-        self.assertIs(train_config["env_args"]["reward_clip"], False)
+        self.assertEqual(
+            train_config["task"]["reward"],
+            {
+                "reward_mode": "native",
+                "reward_scale": 1.0,
+                "reward_clip": False,
+            },
+        )
         self.assertNotIn("env_threads", train_config)
         self.assertEqual(train_config["frame_skip"], 4)
         self.assertFalse(train_config["max_pool_frames"])
@@ -543,7 +594,7 @@ class ConfigValidationTests(unittest.TestCase):
             train_config["task"]["termination"],
             {"failure": ["serve_stall"], "max_episode_steps": 54000},
         )
-        self.assertNotIn("clip_rewards", train_config)
+        self.assertNotIn("reward_clip", train_config["env_args"])
         self.assertEqual(train_config["obs_crop"], [17, 0, 0, 0])
         self.assertEqual(train_config["obs_crop_mode"], "mask")
         self.assertEqual(train_config["obs_crop_fill"], 0)
@@ -602,7 +653,7 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertEqual(backend_config["learning_rate_final"], 2.5e-5)
         self.assertEqual(backend_config["learning_rate_schedule_timesteps"], 100_000_000)
         self.assertEqual(backend_config["target_kl"], 0.03)
-        self.assertIs(train_config["env_args"]["reward_clip"], False)
+        self.assertIs(train_config["task"]["reward"]["reward_clip"], False)
         self.assertNotIn("checkpoint_eval_environment", train_config)
 
     def test_mspacman_recipe_loads_with_breakout_base_config_and_hud_mask(self) -> None:
@@ -620,6 +671,7 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertEqual(train_config["game"], "MsPacman-Atari2600-v0")
         self.assertEqual(train_config["n_envs"], 16)
         self.assertEqual(train_config["env_args"]["num_threads"], 4)
+        self.assertEqual(train_config["task"]["reward"]["reward_clip"], [-1.0, 1.0])
         self.assertIs(train_config["env_args"]["use_fire_reset"], False)
         self.assertIs(
             train_config["checkpoint_eval_environment"]["env_args"]["use_fire_reset"],
@@ -632,7 +684,14 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertEqual(train_config["obs_crop_fill"], 0)
         self.assertEqual(train_config["task"]["action"], {"set": "native"})
         self.assertEqual(train_config["task"]["action"], breakout["train_config"]["task"]["action"])
-        self.assertEqual(train_config["task"]["reward"], breakout["train_config"]["task"]["reward"])
+        self.assertEqual(
+            {key: train_config["task"]["reward"][key] for key in ("reward_mode", "reward_scale")},
+            {
+                key: breakout["train_config"]["task"]["reward"][key]
+                for key in ("reward_mode", "reward_scale")
+            },
+        )
+        self.assertIs(breakout["train_config"]["task"]["reward"]["reward_clip"], False)
         for key in ("env_threads",):
             self.assertNotIn(key, train_config)
         self.assertEqual(train_config["frame_skip"], 4)
@@ -729,9 +788,7 @@ class ConfigValidationTests(unittest.TestCase):
             "threshold": 0.99,
         }
 
-        with self.assertRaisesRegex(
-            ValueError, "objective\\.success moved to train\\.early_stop"
-        ):
+        with self.assertRaisesRegex(ValueError, "objective\\.success moved to train\\.early_stop"):
             validate_goal_contract_document(document, path, Path(".").resolve())
 
     def test_goal_validator_rejects_environment_hash(self) -> None:
@@ -908,9 +965,7 @@ class ConfigValidationTests(unittest.TestCase):
         root = self.MARIO_L11_GOAL.parent.parent
         expected_stalled = {"signal": "x", "operation": "unchanged_for", "steps": 300}
         goal_paths = sorted(
-            path
-            for path in root.glob("*/_goal.yaml")
-            if path.parent.name != "EndToEnd"
+            path for path in root.glob("*/_goal.yaml") if path.parent.name != "EndToEnd"
         )
 
         self.assertEqual(len(goal_paths), 18)

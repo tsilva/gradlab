@@ -35,7 +35,12 @@ exact registry entry or a bounded template.
 - Interactive playback uses local descriptor keys such as `reward/shaped`, `policy/value`, and
   `action/executed` to configure live panels. They are typed projections of one streamed transition
   or its bounded in-browser history, are not emitted metrics, and must not be interpreted as aliases
-  for similarly named W&B registry entries.
+  for similarly named W&B registry entries. `reward/provider` is the provider output before the
+  task program and rlab-owned reward transform; `reward/shaped` is the final policy-facing reward
+  after task shaping, scaling, and clipping. Playback computes realized return-to-go and `V(s) -
+  G(s)` only for a terminal, stochastic, policy-driven trajectory whose policy environment,
+  reward stream, discount, action sampling, and boundary/bootstrap semantics match training.
+  Otherwise those critic diagnostics are explicitly unavailable rather than numerically compared.
 
 The active checkpoint protocol is `acceptance`; complete accepted evidence additionally emits the
 `full` metric family. Dimension IDs must be unique and match `[A-Za-z0-9_.-]+`; unsafe IDs are
@@ -189,16 +194,16 @@ exit alone is never scientific success.
 | `train/early_stop/{condition}/patience/elapsed_steps` | Policy steps elapsed in the condition's current patience interval. | steps | watched metric sample | history |
 | `train/early_stop/{condition}/patience/progress` | Condition patience progress capped at one; one means the condition would trigger. | fraction | watched metric sample | history |
 | `train/early_stop/{condition}/would_trigger` | Whether the configured condition would trigger at this sample, regardless of observe or stop action. | boolean | watched metric sample | history |
-| `train/reward/shaped/mean` | Distribution of shaped per-step reward. | scalar | rollout | history |
-| `train/reward/shaped/std` | Distribution of shaped per-step reward. | scalar | rollout | history |
-| `train/reward/shaped/min` | Distribution of shaped per-step reward. | scalar | rollout | history |
-| `train/reward/shaped/max` | Distribution of shaped per-step reward. | scalar | rollout | history |
-| `train/reward/shaped/nonzero_rate` | Distribution of shaped per-step reward. | scalar | rollout | history |
-| `train/reward/raw/mean` | Distribution of raw per-step reward when distinct from shaped reward. | scalar | rollout | history |
-| `train/reward/raw/std` | Distribution of raw per-step reward when distinct from shaped reward. | scalar | rollout | history |
-| `train/reward/component/{component}/mean` | Active reward-component attribution. | scalar | rollout | history |
-| `train/reward/component/{component}/nonzero_rate` | Active reward-component attribution. | scalar | rollout | history |
-| `train/reward/component/{component}/share` | Active reward-component attribution. | scalar | rollout | history |
+| `train/reward/shaped/mean` | Distribution of learner-facing per-step reward after rlab applies the task reward scale and then clipping. | scalar | rollout | history |
+| `train/reward/shaped/std` | Distribution of learner-facing per-step reward after rlab applies the task reward scale and then clipping. | scalar | rollout | history |
+| `train/reward/shaped/min` | Distribution of learner-facing per-step reward after rlab applies the task reward scale and then clipping. | scalar | rollout | history |
+| `train/reward/shaped/max` | Distribution of learner-facing per-step reward after rlab applies the task reward scale and then clipping. | scalar | rollout | history |
+| `train/reward/shaped/nonzero_rate` | Distribution of learner-facing per-step reward after rlab applies the task reward scale and then clipping. | scalar | rollout | history |
+| `train/reward/raw/mean` | Distribution of completed task reward immediately before rlab-owned scaling and clipping, emitted when distinct from shaped reward. For an identity task this is the untransformed provider reward. | scalar | rollout | history |
+| `train/reward/raw/std` | Distribution of completed task reward immediately before rlab-owned scaling and clipping, emitted when distinct from shaped reward. For an identity task this is the untransformed provider reward. | scalar | rollout | history |
+| `train/reward/component/{component}/mean` | Active reward-component attribution in pre-transform task-reward units. | scalar | rollout | history |
+| `train/reward/component/{component}/nonzero_rate` | Active reward-component attribution in pre-transform task-reward units. | scalar | rollout | history |
+| `train/reward/component/{component}/share` | Absolute contribution share computed from components in pre-transform task-reward units. | scalar | rollout | history |
 | `train/reward/signal/{signal}/mean` | Configured reward-source signal. | scalar | rollout | history |
 | `train/reward/signal/{signal}/max` | Configured reward-source signal. | scalar | rollout | history |
 | `train/reward/signal/{signal}/nonzero_rate` | Configured reward-source signal. | scalar | rollout | history |
@@ -237,10 +242,10 @@ exit alone is never scientific success.
 | `train/throughput/between_rollouts_seconds` | Wall time after rollout collection and before the next rollout, including optimizer updates, callbacks, and logging. | seconds | rollout | history |
 | `train/artifact/save/seconds` | Local model save duration. | seconds | artifact | history |
 | `train/artifact/upload/seconds` | Public R2 checkpoint publication duration. | seconds | artifact | history |
-| `eval/{protocol}/episode/return/mean` | Evaluation episode-return distribution. | return | evaluation | history |
-| `eval/{protocol}/episode/return/std` | Evaluation episode-return distribution. | return | evaluation | history |
-| `eval/{protocol}/episode/return/median` | Evaluation episode-return distribution. | return | evaluation | history |
-| `eval/full/episode/return/best` | Best full-evaluation episode return. | return | evaluation | history |
+| `eval/{protocol}/episode/return/mean` | Evaluation episode-return distribution accumulated from learner-facing rewards after rlab-owned scaling and clipping. | return | evaluation | history |
+| `eval/{protocol}/episode/return/std` | Evaluation episode-return distribution accumulated from learner-facing rewards after rlab-owned scaling and clipping. | return | evaluation | history |
+| `eval/{protocol}/episode/return/median` | Evaluation episode-return distribution accumulated from learner-facing rewards after rlab-owned scaling and clipping. | return | evaluation | history |
+| `eval/full/episode/return/best` | Best full-evaluation episode return accumulated after rlab-owned scaling and clipping. | return | evaluation | history |
 | `eval/{protocol}/episode/length/mean` | Mean evaluation episode length. | steps | evaluation | history |
 | `eval/{protocol}/episode/count` | Evaluation episodes represented. | episodes | evaluation | history |
 | `eval/{protocol}/outcome/success/from/{start}/rate` | Evaluation success rate from a start. | fraction | evaluation | history |

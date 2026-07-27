@@ -862,9 +862,7 @@ class MarioKernelTests(unittest.TestCase):
         self.assertTrue(episodes[0].metrics["game_complete"])
         self.assertEqual(episodes[0].metrics["completed_level_count"], 2)
         self.assertEqual(episodes[0].metrics["global_max_x_pos"], 100)
-        self.assertTrue(
-            any("game_complete" in record.events for record in final_events)
-        )
+        self.assertTrue(any("game_complete" in record.events for record in final_events))
 
     def test_reward_component_batches_avoid_step_info_materialization(self):
         provider, _kernel, runtime = self.make_runtime(
@@ -886,6 +884,7 @@ class MarioKernelTests(unittest.TestCase):
         np.testing.assert_allclose(metric_record.metrics["score_reward_component"], [1.0, 0.4])
         np.testing.assert_array_equal(metric_record.metrics["time_penalty_component"], [-0.5, -0.5])
         np.testing.assert_allclose(metric_record.metrics["shaped_reward"], [10.5, 3.9])
+        np.testing.assert_allclose(metric_record.metrics["raw_reward"], [10.5, 3.9])
 
     def test_score_step_0p01_penalty_is_subtracted_once_per_step(self):
         provider, _kernel, runtime = self.make_runtime(
@@ -932,24 +931,16 @@ class MarioKernelTests(unittest.TestCase):
         provider.queue_step(x=[4, 2])
         runtime.step(np.asarray([0, 0]))
         first = next(
-            record
-            for record in runtime.drain_records()
-            if isinstance(record, BatchMetricRecord)
+            record for record in runtime.drain_records() if isinstance(record, BatchMetricRecord)
         )
-        np.testing.assert_allclose(
-            first.metrics["progress_reward_component"], [1.0, 0.5]
-        )
+        np.testing.assert_allclose(first.metrics["progress_reward_component"], [1.0, 0.5])
 
         provider.queue_step(x=[7, 4])
         runtime.step(np.asarray([0, 0]))
         second = next(
-            record
-            for record in runtime.drain_records()
-            if isinstance(record, BatchMetricRecord)
+            record for record in runtime.drain_records() if isinstance(record, BatchMetricRecord)
         )
-        np.testing.assert_allclose(
-            second.metrics["progress_reward_component"], [20.75, 0.5]
-        )
+        np.testing.assert_allclose(second.metrics["progress_reward_component"], [20.75, 0.5])
 
     def test_canonical_task_softcodes_signal_bindings_and_stall_outcome(self):
         config = EnvConfig(
@@ -1117,9 +1108,7 @@ class RlabVecEnvTests(unittest.TestCase):
         np.testing.assert_array_equal(provider.reset_calls[-1]["mask"], [True, False])
         records = runtime.drain_records()
         record = next(record for record in records if isinstance(record, EpisodeRecord))
-        event_record = next(
-            record for record in records if isinstance(record, TaskEventRecord)
-        )
+        event_record = next(record for record in records if isinstance(record, TaskEventRecord))
         self.assertEqual(record.events, ("monster_killed",))
         self.assertEqual(record.outcome, Outcome.SUCCESS)
         self.assertEqual(event_record.transitions["monster_killed"], (0, 1))

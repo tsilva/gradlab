@@ -13,6 +13,7 @@ import {
   seriesForMetric,
 } from "../../src/rlab/web_player/panels/telemetry.js";
 import { cursorIndex } from "../../src/rlab/web_player/panels/telemetry-panel.js";
+import { lineCursorX } from "../../src/rlab/web_player/panels/shared.js";
 
 test("dynamic metric names round-trip without path ambiguity", () => {
   const name = "coins / bonus%";
@@ -84,4 +85,10 @@ test("the chart cursor remains on the newest live transition", () => {
     }),
     1,
   );
+});
+
+test("the final chart cursor stays inside the canvas clipping edge", () => {
+  const plot = { left: 20, right: 200 };
+  assert.equal(lineCursorX(plot, 0, 5), 21);
+  assert.equal(lineCursorX(plot, 4, 5), 199);
 });

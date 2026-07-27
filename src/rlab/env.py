@@ -30,7 +30,12 @@ from rlab.env_registry import (
 )
 from rlab.env_identity import task_config_from_train_config, validate_task_config
 from rlab.targets import target_for_game
-from rlab.task_kernels import IdentityTaskDefinition, MarioTaskConfig, MarioTaskDefinition
+from rlab.task_kernels import (
+    IdentityTaskDefinition,
+    MarioTaskConfig,
+    MarioTaskDefinition,
+    with_reward_transform,
+)
 from rlab.validation import normalize_obs_crop as validate_obs_crop
 from rlab.rom_runtime import RomRuntimeBinding
 
@@ -113,7 +118,14 @@ def resolve_env_config(config: EnvConfig) -> EnvConfig:
     config = replace(config, **updates) if updates else config
     if config.task:
         validate_task_config(config.task)
-        canonical_task = config.task
+        canonical_task = task_config_from_train_config(
+            {
+                "env_provider": config.env_provider,
+                "game": config.game,
+                "task": config.task,
+            },
+            task=config.task,
+        )
     else:
         canonical_task = task_config_from_train_config(
             {"env_provider": config.env_provider, "game": config.game}
@@ -360,7 +372,11 @@ def bind_native_provider(
 def _bound_task_kernel(config: EnvConfig, descriptor: ProviderDescriptor, n_envs: int):
     task_id = config.task.get("id")
     if task_id == "mario":
-        return MarioTaskDefinition(MarioTaskConfig.from_env_config(config)).bind(descriptor, n_envs)
+        kernel = MarioTaskDefinition(MarioTaskConfig.from_env_config(config)).bind(
+            descriptor,
+            n_envs,
+        )
+        return with_reward_transform(kernel, task_reward(config))
     if task_id != "identity":
         raise ValueError(f"unknown task kernel {task_id!r}")
     action_values = task_action_values(config)
@@ -380,7 +396,7 @@ def _bound_task_kernel(config: EnvConfig, descriptor: ProviderDescriptor, n_envs
         native_obs_crop(config) if config.env_provider == ALE_PY_PROVIDER.provider_id else None
     )
     source_shape = (210, 160) if observation_mask is not None else None
-    return IdentityTaskDefinition(
+    kernel = IdentityTaskDefinition(
         observation_mask=observation_mask,
         observation_mask_fill=config.obs_crop_fill,
         observation_source_shape=source_shape,
@@ -390,6 +406,7 @@ def _bound_task_kernel(config: EnvConfig, descriptor: ProviderDescriptor, n_envs
         events=config.task.get("events", {}),
         termination=task_termination(config),
     ).bind(descriptor, n_envs)
+    return with_reward_transform(kernel, task_reward(config))
 
 
 def make_vec_envs(

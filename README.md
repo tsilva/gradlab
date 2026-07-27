@@ -96,6 +96,12 @@ Mario additionally requires a lawful local ROM registered once with
 `rlab rom sync --game SuperMarioBros-Nes-v0`; local training verifies and binds
 that cache without sending the ROM anywhere.
 
+Reward transforms belong to the common task contract for every provider.
+`task.reward.reward_scale` is a positive divisor, followed by
+`task.reward.reward_clip`, which is `false`, `true` for `[-1, 1]`, or an
+explicit `[low, high]` pair. rlab disables provider-native reward transforms so
+the same ordered transform is used in training, evaluation, and playback.
+
 ## Launch and observe
 
 Keep non-sensitive operator metadata and Keychain references in the private

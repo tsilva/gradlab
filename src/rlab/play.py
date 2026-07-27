@@ -438,7 +438,7 @@ def resolved_play_launch_lines(
             f"action_set={configured_action_name(policy_config)} "
             f"reward_mode={task_reward(policy_config).get('reward_mode')} "
             f"reward_scale={task_reward(policy_config).get('reward_scale')} "
-            f"clip_rewards={task_reward(policy_config).get('clip_rewards')}",
+            f"reward_clip={task_reward(policy_config).get('reward_clip')}",
             "yellow",
         ),
         _summary_line(

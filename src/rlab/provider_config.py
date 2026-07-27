@@ -4,6 +4,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from rlab.env_registry import qualify_env_id, resolve_env_id
+from rlab.reward_transform import PROVIDER_REWARD_TRANSFORM_KEYS
 
 
 DEFAULT_TRAIN_N_ENVS = 8
@@ -64,5 +65,5 @@ def semantic_provider_args(config: Any) -> dict[str, Any]:
     return {
         key: value
         for key, value in provider_env_args(config).items()
-        if key not in NON_SEMANTIC_ENV_ARG_KEYS
+        if key not in NON_SEMANTIC_ENV_ARG_KEYS and key not in PROVIDER_REWARD_TRANSFORM_KEYS
     }
