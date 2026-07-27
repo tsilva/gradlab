@@ -301,6 +301,37 @@ def test_recipe_materializes_the_backend_config_executed_by_the_learner() -> Non
     assert training_backend_config(recipe_train_config)["device"] == "auto"
 
 
+def test_resume_approval_does_not_rebind_the_scientific_backend_config() -> None:
+    materialized = compose_train_document(
+        LEVEL1_3_GOAL,
+        LEVEL1_3_TRAIN_CLEAR_RECIPE,
+    )
+    train_config = validate_and_normalize_train_config(materialized["train_config"])
+    resumed = deepcopy(train_config)
+    resumed_backend = resumed["training_backend"]["config"]
+    resumed_backend.update(
+        {
+            "resume": "https://models.example/checkpoint/manifest.json",
+            "resume_approval_hash": "a" * 64,
+            "resume_manifest": [
+                {
+                    "path": "model.zip",
+                    "sha256": "b" * 64,
+                    "size_bytes": 123,
+                }
+            ],
+        }
+    )
+
+    assert training_backend_config_hash(resumed) == training_backend_config_hash(
+        train_config
+    )
+    resumed_backend["batch_size"] = int(resumed_backend["batch_size"]) // 2
+    assert training_backend_config_hash(resumed) != training_backend_config_hash(
+        train_config
+    )
+
+
 def test_recipe_materializes_the_environment_identity_executed_by_the_learner() -> None:
     document = level1_1_recipe_document()
     recipe = document["recipe"]
