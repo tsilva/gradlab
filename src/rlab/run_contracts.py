@@ -447,6 +447,7 @@ class TerminalReceipt:
     drain: Mapping[str, Any]
     completed_at: str
     early_stop: Mapping[str, Any] | None = None
+    state_archive: Mapping[str, Any] | None = None
     schema_version: int = SCHEMA_VERSION
 
     def validate(self) -> None:
@@ -469,6 +470,40 @@ class TerminalReceipt:
             raise ValueError("wandb_high_water_mark must be non-negative")
         if self.early_stop is not None:
             EarlyStopReceipt(**self.early_stop).validate()
+        if self.state_archive is not None:
+            if not isinstance(self.state_archive, Mapping):
+                raise ValueError("state_archive terminal evidence must be an object")
+            archive = self.state_archive
+            if archive.get("semantic_id") != "state-archive-publication-v1":
+                raise ValueError("state_archive terminal evidence semantic_id is unsupported")
+            if int(archive.get("schema_version", 0)) != 1:
+                raise ValueError("state_archive terminal evidence schema_version is unsupported")
+            if str(archive.get("run_id") or "") != self.run_id:
+                raise ValueError("state_archive terminal evidence run_id mismatch")
+            _require_attempt_id(archive.get("attempt_id"))
+            _require_sha256(
+                archive.get("generation_sha256"),
+                "state_archive generation_sha256",
+            )
+            _require_sha256(
+                archive.get("inventory_sha256"),
+                "state_archive inventory_sha256",
+            )
+            _require_text(
+                archive.get("generation_key"),
+                "state_archive generation_key",
+            )
+            if int(archive.get("step", -1)) < 0:
+                raise ValueError("state_archive terminal evidence step must be non-negative")
+            if int(archive.get("file_count", 0)) < 1:
+                raise ValueError("state_archive terminal evidence must contain files")
+            if int(archive.get("size_bytes", 0)) < 1:
+                raise ValueError("state_archive terminal evidence must contain bytes")
+            if self.state == "succeeded":
+                if archive.get("status") != "closed":
+                    raise ValueError("successful terminal state_archive must be closed")
+                if int(archive["step"]) != int(self.final_step):
+                    raise ValueError("successful terminal state_archive step must match final_step")
         _require_text(self.completed_at, "completed_at")
 
     def to_dict(self) -> dict[str, Any]:

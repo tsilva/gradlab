@@ -1090,6 +1090,41 @@ class BatchRuntime:
             summary["curriculum"] = self.archive_curriculum.artifact_summary()
         return summary
 
+    def state_archive_view(self, view_id: str) -> Mapping[str, Any] | None:
+        if self.state_archive is None:
+            raise RuntimeError("state archive is disabled")
+        return self.state_archive.view_document(view_id)
+
+    def write_state_archive_view(
+        self,
+        view_id: str,
+        document: Mapping[str, Any],
+        *,
+        referenced_entry_ids: Sequence[str],
+    ) -> Mapping[str, Any]:
+        if self.state_archive is None:
+            raise RuntimeError("state archive is disabled")
+        return self.state_archive.write_view(
+            view_id,
+            document,
+            referenced_entry_ids=referenced_entry_ids,
+        )
+
+    def seal_state_archive(
+        self,
+        *,
+        step: int | None = None,
+        status: str = "recoverable",
+        referenced_entry_ids: Sequence[str] | None = None,
+    ) -> Mapping[str, Any]:
+        if self.state_archive is None:
+            raise RuntimeError("state archive is disabled")
+        return self.state_archive.seal(
+            step=self._transition_count_total if step is None else int(step),
+            status=status,
+            referenced_entry_ids=referenced_entry_ids,
+        )
+
     def preflight_state_archive_round_trip(self, *, seed: int) -> dict[str, Any]:
         """Prove exact portable capture/restore through the runtime boundary."""
 
@@ -1612,6 +1647,11 @@ class BatchRuntime:
         self._closed = True
         if self.archive_curriculum is not None:
             self.archive_curriculum.close()
+        if self.state_archive is not None and not self.state_archive.is_closed:
+            self.state_archive.seal(
+                step=self._transition_count_total,
+                status="closed",
+            )
         if self.state_archive is not None:
             self.state_archive.close()
         self.provider.close()

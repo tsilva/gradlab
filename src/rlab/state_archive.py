@@ -19,9 +19,10 @@ from rlab.json_utils import canonical_json_bytes, json_safe
 
 STATE_ARCHIVE_SEMANTIC_ID = "state-archive-v1"
 SNAPSHOT_CODEC_API_VERSION = 1
-STATE_ARCHIVE_CURRICULUM_SEMANTIC_ID = "state_archive_curriculum_v1"
+STATE_ARCHIVE_CURRICULUM_SEMANTIC_ID = "archive-curriculum-v1"
 RESTORE_SEMANTICS = frozenset({"episode_start", "continuation"})
 _SHA256 = re.compile(r"[0-9a-f]{64}")
+_VIEW_ID = re.compile(r"[a-z0-9][a-z0-9-]{0,63}")
 
 
 def _require_sha256(value: str, *, label: str) -> str:
@@ -390,7 +391,7 @@ class StateArchive:
         self.compatibility_id = str(compatibility_id)
         self.codec = codec_registry.resolve(codec_id, provider_id=provider_id)
         self._entries: dict[str, StateArchiveEntry] = {}
-        self._views: dict[str, dict[str, str]] = {}
+        self._views: dict[str, dict[str, Any]] = {}
         self.entries_root.mkdir(parents=True, exist_ok=True)
         self.views_root.mkdir(parents=True, exist_ok=True)
         for path in sorted(self.entries_root.glob("*.json")):
@@ -398,6 +399,10 @@ class StateArchive:
             entry = StateArchiveEntry.from_dict(raw)
             self._validate_compatibility(entry)
             self._entries[entry.entry_id] = entry
+        for path in sorted(self.views_root.glob("*.json")):
+            raw = json.loads(path.read_text(encoding="utf-8"))
+            view_id = path.stem
+            self._views[view_id] = self._validate_view(view_id, raw)
 
     def _validate_compatibility(self, entry: StateArchiveEntry) -> None:
         snapshot = entry.provider_snapshot
@@ -411,6 +416,14 @@ class StateArchive:
     @property
     def entry_count(self) -> int:
         return len(self._entries)
+
+    @property
+    def is_closed(self) -> bool:
+        path = self.root / "closure.json"
+        if not path.is_file():
+            return False
+        value = json.loads(path.read_text(encoding="utf-8"))
+        return value.get("status") == "closed"
 
     def create_entry(
         self,
@@ -477,23 +490,74 @@ class StateArchive:
     def live_handle(self, entry_id: str) -> Any | None:
         return self.handles.get(self.entry(entry_id).provider_snapshot.ref)
 
-    def update_view(self, view_id: str, key: str, entry_id: str) -> None:
-        if not view_id or not key:
-            raise ValueError("archive view id and key must not be empty")
-        self.entry(entry_id)
-        view = self._views.setdefault(str(view_id), {})
-        view[str(key)] = str(entry_id)
-        atomic_write_json(
-            self.views_root / f"{view_id}.json",
-            {
-                "semantic_id": STATE_ARCHIVE_SEMANTIC_ID,
-                "view_id": str(view_id),
-                "entries": dict(sorted(view.items())),
-            },
-        )
+    @staticmethod
+    def _normalized_view_id(view_id: str) -> str:
+        normalized = str(view_id).strip()
+        if _VIEW_ID.fullmatch(normalized) is None:
+            raise ValueError(
+                "archive view_id must contain 1-64 lowercase letters, digits, or hyphens"
+            )
+        return normalized
 
-    def view(self, view_id: str) -> Mapping[str, str]:
-        return MappingProxyType(dict(self._views.get(str(view_id), {})))
+    def _validate_view(self, view_id: str, value: Mapping[str, Any]) -> dict[str, Any]:
+        normalized = self._normalized_view_id(view_id)
+        if value.get("semantic_id") != STATE_ARCHIVE_SEMANTIC_ID:
+            raise ValueError(f"archive view {normalized!r} has an unsupported semantic_id")
+        if int(value.get("schema_version", 0)) != 1:
+            raise ValueError(f"archive view {normalized!r} has an unsupported schema_version")
+        if value.get("view_id") != normalized:
+            raise ValueError(f"archive view {normalized!r} has a mismatched view_id")
+        document = value.get("document")
+        if not isinstance(document, Mapping):
+            raise ValueError(f"archive view {normalized!r} document must be an object")
+        referenced = value.get("referenced_entry_ids")
+        if (
+            isinstance(referenced, str | bytes)
+            or not isinstance(referenced, Sequence)
+            or [str(entry_id) for entry_id in referenced]
+            != sorted(set(str(entry_id) for entry_id in referenced))
+        ):
+            raise ValueError(
+                f"archive view {normalized!r} referenced_entry_ids must be sorted and unique"
+            )
+        for entry_id in referenced:
+            self.entry(str(entry_id))
+        document_sha256 = hashlib.sha256(canonical_json_bytes(document)).hexdigest()
+        if value.get("document_sha256") != document_sha256:
+            raise ValueError(f"archive view {normalized!r} document hash mismatch")
+        return dict(json_safe(value))
+
+    def write_view(
+        self,
+        view_id: str,
+        document: Mapping[str, Any],
+        *,
+        referenced_entry_ids: Sequence[str],
+    ) -> dict[str, Any]:
+        normalized = self._normalized_view_id(view_id)
+        references = sorted(set(str(entry_id) for entry_id in referenced_entry_ids))
+        for entry_id in references:
+            self.entry(entry_id)
+        safe_document = dict(json_safe(document))
+        view = {
+            "semantic_id": STATE_ARCHIVE_SEMANTIC_ID,
+            "schema_version": 1,
+            "view_id": normalized,
+            "document_sha256": hashlib.sha256(canonical_json_bytes(safe_document)).hexdigest(),
+            "referenced_entry_ids": references,
+            "document": safe_document,
+        }
+        validated = self._validate_view(normalized, view)
+        atomic_write_json(self.views_root / f"{normalized}.json", validated)
+        self._views[normalized] = validated
+        return dict(validated)
+
+    def view_document(self, view_id: str) -> Mapping[str, Any] | None:
+        normalized = self._normalized_view_id(view_id)
+        value = self._views.get(normalized)
+        if value is None:
+            return None
+        return MappingProxyType(dict(value["document"]))
 
     def summary(self) -> dict[str, Any]:
         blob_refs = {
@@ -510,7 +574,56 @@ class StateArchive:
             "entry_count": len(self._entries),
             "blob_count": len(blob_refs),
             "blob_bytes": sum(blob_refs.values()),
+            "view_ids": sorted(self._views),
         }
+
+    def seal(
+        self,
+        *,
+        step: int,
+        status: str,
+        referenced_entry_ids: Sequence[str] | None = None,
+    ) -> dict[str, Any]:
+        if int(step) < 0:
+            raise ValueError("state archive closure step must be non-negative")
+        if status not in {"recoverable", "closed"}:
+            raise ValueError("state archive closure status must be recoverable or closed")
+        retained = (
+            set(self._entries)
+            if referenced_entry_ids is None
+            else set(str(entry_id) for entry_id in referenced_entry_ids)
+        )
+        for entry_id in retained:
+            self.entry(entry_id)
+        retained_blobs = {
+            self.entry(entry_id).provider_snapshot.ref.blob_sha256 for entry_id in retained
+        }
+        paths = [
+            *(self.entries_root / f"{entry_id}.json" for entry_id in sorted(retained)),
+            *(self.blobs.path_for(blob_sha256) for blob_sha256 in sorted(retained_blobs)),
+            *(candidate for candidate in self.views_root.glob("*.json")),
+        ]
+        files: list[dict[str, Any]] = []
+        for path in sorted(paths):
+            payload = path.read_bytes()
+            files.append(
+                {
+                    "path": path.relative_to(self.root).as_posix(),
+                    "sha256": hashlib.sha256(payload).hexdigest(),
+                    "size_bytes": len(payload),
+                }
+            )
+        closure = {
+            "semantic_id": STATE_ARCHIVE_SEMANTIC_ID,
+            "schema_version": 1,
+            "status": status,
+            "step": int(step),
+            "archive": self.summary(),
+            "files": files,
+        }
+        closure["inventory_sha256"] = hashlib.sha256(canonical_json_bytes(files)).hexdigest()
+        atomic_write_json(self.root / "closure.json", closure)
+        return closure
 
     def close(self) -> None:
         self.handles.clear()

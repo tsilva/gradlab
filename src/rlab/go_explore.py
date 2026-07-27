@@ -15,6 +15,7 @@ from rlab.task_kernels import Outcome
 
 RECENT_CELL_VISIT_WINDOW = 10_000
 SUCCESS_GUIDED_RESTORE_PROBABILITY = 0.5
+GO_EXPLORE_STATE_SEMANTIC_ID = "go-explore-state-v1"
 
 
 @dataclass(frozen=True)
@@ -348,13 +349,13 @@ class GoExploreSearch:
         progress: float,
         completed: bool,
     ) -> None:
-        candidate = GoExploreCandidate(
-            runs=tuple(state.runs),
-            episode_return=state.episode_return,
-            progress=progress,
-            completed=completed,
-        )
         if completed:
+            candidate = GoExploreCandidate(
+                runs=tuple(state.runs),
+                episode_return=state.episode_return,
+                progress=progress,
+                completed=True,
+            )
             previous = self._best_success
             improved = previous is None or candidate.episode_return > previous.episode_return
             if improved:
@@ -375,15 +376,20 @@ class GoExploreSearch:
             return
         previous = self._best_incomplete
         if previous is None or (
-            candidate.progress,
-            candidate.episode_return,
-            -candidate.step_count,
+            progress,
+            state.episode_return,
+            -state.program_steps,
         ) > (
             previous.progress,
             previous.episode_return,
             -previous.step_count,
         ):
-            self._best_incomplete = candidate
+            self._best_incomplete = GoExploreCandidate(
+                runs=tuple(state.runs),
+                episode_return=state.episode_return,
+                progress=progress,
+                completed=False,
+            )
 
     def _lineage(self, state: _LaneState) -> tuple[Hashable, ...]:
         if not state.path_cell_keys:
@@ -581,6 +587,247 @@ class GoExploreSearch:
 
     def best_candidate(self) -> GoExploreCandidate | None:
         return self._best_success or self._best_incomplete
+
+    @staticmethod
+    def _key_document(key: Hashable | None) -> str | None:
+        if key is None:
+            return None
+        if not isinstance(key, bytes):
+            raise TypeError("durable Go-Explore state requires byte cell keys")
+        return key.hex()
+
+    @staticmethod
+    def _key_from_document(value: object) -> bytes | None:
+        if value is None:
+            return None
+        encoded = str(value)
+        try:
+            return bytes.fromhex(encoded)
+        except ValueError as exc:
+            raise ValueError("durable Go-Explore state contains an invalid cell key") from exc
+
+    @staticmethod
+    def _runs_document(runs: Sequence[ActionRun]) -> list[dict[str, int]]:
+        return [{"action": int(run.action), "duration": int(run.duration)} for run in runs]
+
+    @staticmethod
+    def _runs_from_document(value: object) -> tuple[ActionRun, ...]:
+        if isinstance(value, str | bytes) or not isinstance(value, Sequence):
+            raise ValueError("durable Go-Explore action runs must be a sequence")
+        return canonicalize_action_runs(
+            tuple(ActionRun(int(dict(row)["action"]), int(dict(row)["duration"])) for row in value)
+        )
+
+    @classmethod
+    def _candidate_document(
+        cls,
+        candidate: GoExploreCandidate | None,
+    ) -> dict[str, object] | None:
+        if candidate is None:
+            return None
+        return {
+            "runs": cls._runs_document(candidate.runs),
+            "episode_return": candidate.episode_return,
+            "progress": candidate.progress,
+            "completed": candidate.completed,
+        }
+
+    @classmethod
+    def _candidate_from_document(
+        cls,
+        value: object,
+    ) -> GoExploreCandidate | None:
+        if value is None:
+            return None
+        if not isinstance(value, Mapping):
+            raise ValueError("durable Go-Explore candidate must be an object")
+        return GoExploreCandidate(
+            runs=cls._runs_from_document(value["runs"]),
+            episode_return=float(value["episode_return"]),
+            progress=float(value["progress"]),
+            completed=bool(value["completed"]),
+        )
+
+    def state_document(self, lane_entry_ids: Sequence[str | None]) -> dict[str, object]:
+        if len(lane_entry_ids) != self.n_envs or any(not entry_id for entry_id in lane_entry_ids):
+            raise ValueError("Go-Explore recovery requires one archive entry per lane")
+        if self._pending or self._completion_events:
+            raise RuntimeError("Go-Explore recovery state must be written at a stable boundary")
+        cells = []
+        for cell in self._selection_cells:
+            cells.append(
+                {
+                    "key": self._key_document(cell.key),
+                    "entry_id": cell.entry_id,
+                    "runs": self._runs_document(cell.runs),
+                    "episode_return": cell.episode_return,
+                    "progress": cell.progress,
+                    "program_steps": cell.program_steps,
+                    "parent_key": self._key_document(cell.parent_key),
+                    "best_success_return": cell.best_success_return,
+                    "success_selections": cell.success_selections,
+                    "visits": cell.visits,
+                    "selections": cell.selections,
+                    "updates": cell.updates,
+                }
+            )
+        lanes = [
+            {
+                "runs": self._runs_document(state.runs),
+                "episode_return": state.episode_return,
+                "progress": state.progress,
+                "program_steps": state.program_steps,
+                "steps_since_restart": state.steps_since_restart,
+                "path_cell_keys": [self._key_document(key) for key in state.path_cell_keys],
+                "exploration_action": state.exploration_action,
+                "exploration_remaining": state.exploration_remaining,
+                "entry_id": str(lane_entry_ids[lane]),
+            }
+            for lane, state in enumerate(self._lanes)
+        ]
+        return {
+            "semantic_id": GO_EXPLORE_STATE_SEMANTIC_ID,
+            "schema_version": 1,
+            "configuration": {
+                "n_envs": self.n_envs,
+                "action_names": list(self.action_names),
+                "fallback_action": self.fallback_action,
+                "explore_steps": self.explore_steps,
+                "run_duration_mean": self.run_duration_mean,
+                "run_duration_max": self.run_duration_max,
+            },
+            "global_step": self.global_step,
+            "completed_episodes": self.completed_episodes,
+            "successful_episodes": self.successful_episodes,
+            "improvement_count": self.improvement_count,
+            "first_success_return": self.first_success_return,
+            "archive_selection_count": self._archive_selection_count,
+            "archive_visit_count": self._archive_visit_count,
+            "archive_update_count": self._archive_update_count,
+            "recent_batches": [list(item) for item in self._recent_batches],
+            "recent_visits": self._recent_visits,
+            "recent_new_cells": self._recent_new_cells,
+            "elite_success_keys": [self._key_document(key) for key in self._elite_success_keys],
+            "success_guided_selection_count": self._success_guided_selection_count,
+            "cells": cells,
+            "lanes": lanes,
+            "rng_states": [rng.bit_generator.state for rng in self._rngs],
+            "best_incomplete": self._candidate_document(self._best_incomplete),
+            "best_success": self._candidate_document(self._best_success),
+        }
+
+    def restore_state(self, value: Mapping[str, object]) -> tuple[str, ...]:
+        if value.get("semantic_id") != GO_EXPLORE_STATE_SEMANTIC_ID:
+            raise ValueError("durable Go-Explore state has an unsupported semantic_id")
+        if int(value.get("schema_version", 0)) != 1:
+            raise ValueError("durable Go-Explore state has an unsupported schema_version")
+        configuration = value.get("configuration")
+        if not isinstance(configuration, Mapping):
+            raise ValueError("durable Go-Explore state has no configuration")
+        expected_configuration = {
+            "n_envs": self.n_envs,
+            "action_names": list(self.action_names),
+            "fallback_action": self.fallback_action,
+            "explore_steps": self.explore_steps,
+            "run_duration_mean": self.run_duration_mean,
+            "run_duration_max": self.run_duration_max,
+        }
+        if dict(configuration) != expected_configuration:
+            raise ValueError("durable Go-Explore state configuration mismatch")
+        raw_cells = value.get("cells")
+        raw_lanes = value.get("lanes")
+        raw_rng_states = value.get("rng_states")
+        if (
+            isinstance(raw_cells, str | bytes)
+            or not isinstance(raw_cells, Sequence)
+            or isinstance(raw_lanes, str | bytes)
+            or not isinstance(raw_lanes, Sequence)
+            or len(raw_lanes) != self.n_envs
+            or isinstance(raw_rng_states, str | bytes)
+            or not isinstance(raw_rng_states, Sequence)
+            or len(raw_rng_states) != self.n_envs
+        ):
+            raise ValueError("durable Go-Explore state has invalid vector dimensions")
+        self._archive = {}
+        self._selection_cells = []
+        self._selection_weights = _SelectionWeightTree()
+        for raw_cell in raw_cells:
+            if not isinstance(raw_cell, Mapping):
+                raise ValueError("durable Go-Explore cell must be an object")
+            key = self._key_from_document(raw_cell["key"])
+            assert key is not None
+            if key in self._archive:
+                raise ValueError("durable Go-Explore state contains duplicate cells")
+            cell = GoExploreCell(
+                key=key,
+                entry_id=str(raw_cell["entry_id"]),
+                runs=self._runs_from_document(raw_cell["runs"]),
+                episode_return=float(raw_cell["episode_return"]),
+                progress=float(raw_cell["progress"]),
+                program_steps=int(raw_cell["program_steps"]),
+                parent_key=self._key_from_document(raw_cell.get("parent_key")),
+                best_success_return=(
+                    None
+                    if raw_cell.get("best_success_return") is None
+                    else float(raw_cell["best_success_return"])
+                ),
+                success_selections=int(raw_cell["success_selections"]),
+                visits=int(raw_cell["visits"]),
+                selections=int(raw_cell["selections"]),
+                updates=int(raw_cell["updates"]),
+            )
+            self._archive[key] = cell
+            self._register(cell)
+        self._lanes = []
+        lane_entry_ids: list[str] = []
+        for raw_lane in raw_lanes:
+            if not isinstance(raw_lane, Mapping):
+                raise ValueError("durable Go-Explore lane must be an object")
+            path_keys = [self._key_from_document(key) for key in raw_lane["path_cell_keys"]]
+            if any(key is None for key in path_keys):
+                raise ValueError("durable Go-Explore lane path contains a null key")
+            self._lanes.append(
+                _LaneState(
+                    runs=list(self._runs_from_document(raw_lane["runs"])),
+                    episode_return=float(raw_lane["episode_return"]),
+                    progress=float(raw_lane["progress"]),
+                    program_steps=int(raw_lane["program_steps"]),
+                    steps_since_restart=int(raw_lane["steps_since_restart"]),
+                    path_cell_keys=list(path_keys),
+                    exploration_action=int(raw_lane["exploration_action"]),
+                    exploration_remaining=int(raw_lane["exploration_remaining"]),
+                )
+            )
+            lane_entry_ids.append(str(raw_lane["entry_id"]))
+        for rng, raw_state in zip(self._rngs, raw_rng_states, strict=True):
+            if not isinstance(raw_state, Mapping):
+                raise ValueError("durable Go-Explore RNG state must be an object")
+            rng.bit_generator.state = dict(raw_state)
+        self.global_step = int(value["global_step"])
+        self.completed_episodes = int(value["completed_episodes"])
+        self.successful_episodes = int(value["successful_episodes"])
+        self.improvement_count = int(value["improvement_count"])
+        self.first_success_return = (
+            None
+            if value.get("first_success_return") is None
+            else float(value["first_success_return"])
+        )
+        self._archive_selection_count = int(value["archive_selection_count"])
+        self._archive_visit_count = int(value["archive_visit_count"])
+        self._archive_update_count = int(value["archive_update_count"])
+        self._recent_batches = deque((int(row[0]), int(row[1])) for row in value["recent_batches"])
+        self._recent_visits = int(value["recent_visits"])
+        self._recent_new_cells = int(value["recent_new_cells"])
+        elite = tuple(self._key_from_document(key) for key in value["elite_success_keys"])
+        if any(key is None or key not in self._archive for key in elite):
+            raise ValueError("durable Go-Explore success lineage references an unknown cell")
+        self._elite_success_keys = elite
+        self._success_guided_selection_count = int(value["success_guided_selection_count"])
+        self._pending = {}
+        self._completion_events = []
+        self._best_incomplete = self._candidate_from_document(value["best_incomplete"])
+        self._best_success = self._candidate_from_document(value["best_success"])
+        return tuple(lane_entry_ids)
 
     def policy(self) -> JerkPolicy:
         candidate = self.best_candidate()

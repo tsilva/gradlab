@@ -49,8 +49,10 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "run_duration_max": 32,
     "fallback_action": "noop",
     "log_interval_steps": 10_000,
+    "recovery_interval_steps": 250_000,
 }
 _CELL_KEY = struct.Struct("<BBBBHHBBB")
+_RECOVERY_VIEW_ID = "go-explore"
 _CELL_INFO_KEYS = (
     "levelHi",
     "levelLo",
@@ -79,7 +81,12 @@ def normalize_config(
     if unexpected:
         raise ValueError(f"{label} has unexpected fields: {unexpected}")
     normalized = {**DEFAULT_CONFIG, **dict(config)}
-    for key in ("explore_steps", "run_duration_max", "log_interval_steps"):
+    for key in (
+        "explore_steps",
+        "run_duration_max",
+        "log_interval_steps",
+        "recovery_interval_steps",
+    ):
         value = normalized[key]
         if not isinstance(value, int) or isinstance(value, bool) or value < 1:
             raise ValueError(f"{label}.{key} must be a positive integer")
@@ -161,7 +168,10 @@ def _save_policy(
 ) -> Path:
     installed = install_model_bundle(
         model_path,
-        save_checkpoint=lambda path: search.policy().save(path),
+        save_checkpoint=lambda path: search.policy().save(
+            path,
+            artifact_discriminator=f"{kind}:{step}",
+        ),
         args=context.args,
         config=context.environment,
         kind=kind,
@@ -181,6 +191,55 @@ def _save_policy(
         flush=True,
     )
     return installed
+
+
+def _persist_recovery(
+    search: GoExploreSearch,
+    runtime: Any,
+    context: BackendContext,
+    *,
+    status: str,
+) -> Mapping[str, Any]:
+    all_lanes = np.ones(search.n_envs, dtype=np.bool_)
+    lane_entries = runtime.capture_archive_entries(
+        all_lanes,
+        created_step=search.global_step,
+        metadata_by_lane={
+            lane: {
+                "algorithm": "go-explore",
+                "kind": "recovery-lane",
+                "global_step": search.global_step,
+            }
+            for lane in range(search.n_envs)
+        },
+    )
+    document = search.state_document(lane_entries)
+    references = {str(entry_id) for entry_id in lane_entries if entry_id is not None}
+    references.update(cell.entry_id for cell in search.archive.values())
+    view = runtime.write_state_archive_view(
+        _RECOVERY_VIEW_ID,
+        document,
+        referenced_entry_ids=sorted(references),
+    )
+    closure = runtime.seal_state_archive(
+        step=search.global_step,
+        status=status,
+        referenced_entry_ids=sorted(references),
+    )
+    closure_path = context.run_dir / "state-archive" / "closure.json"
+    pointer = {
+        "semantic_id": "state-archive-recovery-v1",
+        "schema_version": 1,
+        "status": status,
+        "step": search.global_step,
+        "view_id": _RECOVERY_VIEW_ID,
+        "view_sha256": str(view["document_sha256"]),
+        "closure_sha256": file_sha256(closure_path),
+        "inventory_sha256": str(closure["inventory_sha256"]),
+        "archive": runtime.state_archive_summary(),
+    }
+    atomic_write_json(context.run_dir / "state_archive_recovery.json", pointer)
+    return pointer
 
 
 def _metric_payload(
@@ -312,22 +371,49 @@ def run_go_explore(context: BackendContext) -> None:
             run_duration_max=args.run_duration_max,
         )
         runtime.reset(seed=args.seed)
-        all_lanes = np.ones(n_envs, dtype=np.bool_)
-        initial_entries = runtime.capture_archive_entries(
-            all_lanes,
-            metadata_by_lane={
-                lane: {"algorithm": "go-explore", "kind": "initial"} for lane in range(n_envs)
-            },
-        )
-        search.initialize(
-            _cell_keys(_reset_info_columns(runtime), n_envs),
-            initial_entries,
-        )
+        recovery = runtime.state_archive_view(_RECOVERY_VIEW_ID)
+        if recovery is None:
+            all_lanes = np.ones(n_envs, dtype=np.bool_)
+            initial_entries = runtime.capture_archive_entries(
+                all_lanes,
+                metadata_by_lane={
+                    lane: {"algorithm": "go-explore", "kind": "initial"} for lane in range(n_envs)
+                },
+            )
+            search.initialize(
+                _cell_keys(_reset_info_columns(runtime), n_envs),
+                initial_entries,
+            )
+            _persist_recovery(
+                search,
+                runtime,
+                context,
+                status="recoverable",
+            )
+        else:
+            lane_entries = search.restore_state(recovery)
+            runtime.restore_archive_entries(
+                np.ones(n_envs, dtype=np.bool_),
+                lane_entries,
+            )
+            print(
+                f"restored Go-Explore state archive at step={search.global_step} "
+                f"cells={search.archive_count}",
+                flush=True,
+            )
         context.mark_ready()
         started_at = time.perf_counter()
-        next_log = args.log_interval_steps
-        next_checkpoint = args.checkpoint_freq if args.checkpoint_freq > 0 else None
+        next_log = ((search.global_step // args.log_interval_steps) + 1) * args.log_interval_steps
+        next_recovery = (
+            (search.global_step // args.recovery_interval_steps) + 1
+        ) * args.recovery_interval_steps
+        next_checkpoint = (
+            ((search.global_step // args.checkpoint_freq) + 1) * args.checkpoint_freq
+            if args.checkpoint_freq > 0
+            else None
+        )
         saved_checkpoint_steps: set[int] = set()
+        last_persisted_step = search.global_step
         early_stop = (
             MetricEarlyStopStateMachine(args.early_stop, label="early_stop")
             if args.early_stop
@@ -353,10 +439,11 @@ def run_go_explore(context: BackendContext) -> None:
                 )
             )
             dones = np.logical_or(batch.terminated, batch.truncated)
+            cell_keys = _cell_keys(batch.transition_info, n_envs)
             observation = search.observe(
                 batch.rewards,
                 dones,
-                _cell_keys(batch.transition_info, n_envs),
+                cell_keys,
                 records_by_lane,
                 progresses=progresses,
             )
@@ -366,18 +453,26 @@ def run_go_explore(context: BackendContext) -> None:
                     metadata_by_lane={
                         int(lane): {
                             "algorithm": "go-explore",
-                            "cell_key": _cell_keys(
-                                batch.transition_info,
-                                n_envs,
-                            )[int(lane)].hex(),
+                            "cell_key": cell_keys[int(lane)].hex(),
                         }
                         for lane in np.flatnonzero(observation.archive_mask)
                     },
                 )
                 search.commit_archive(entries)
             completion_events = search.take_completion_events()
-            if any(event.improved for event in completion_events):
-                step = search.global_step
+            improved = any(event.improved for event in completion_events)
+            if np.any(observation.restart_mask):
+                entry_ids = search.restart(observation.restart_mask)
+                runtime.restore_archive_entries(observation.restart_mask, entry_ids)
+            step = search.global_step
+            if improved:
+                _persist_recovery(
+                    search,
+                    runtime,
+                    context,
+                    status="recoverable",
+                )
+                last_persisted_step = step
                 _save_policy(
                     search,
                     runtime,
@@ -388,10 +483,17 @@ def run_go_explore(context: BackendContext) -> None:
                     step=step,
                 )
                 saved_checkpoint_steps.add(step)
-            if np.any(observation.restart_mask):
-                entry_ids = search.restart(observation.restart_mask)
-                runtime.restore_archive_entries(observation.restart_mask, entry_ids)
-            step = search.global_step
+            if step >= next_recovery:
+                if last_persisted_step != step:
+                    _persist_recovery(
+                        search,
+                        runtime,
+                        context,
+                        status="recoverable",
+                    )
+                    last_persisted_step = step
+                while step >= next_recovery:
+                    next_recovery += args.recovery_interval_steps
             if step >= next_log:
                 early_stopped = _publish_metrics(
                     context,
@@ -402,6 +504,14 @@ def run_go_explore(context: BackendContext) -> None:
                 )
                 next_log += args.log_interval_steps
             while next_checkpoint is not None and step >= next_checkpoint:
+                if last_persisted_step != step:
+                    _persist_recovery(
+                        search,
+                        runtime,
+                        context,
+                        status="recoverable",
+                    )
+                    last_persisted_step = step
                 if step not in saved_checkpoint_steps:
                     _save_policy(
                         search,
@@ -441,14 +551,11 @@ def run_go_explore(context: BackendContext) -> None:
             kind="final",
             step=search.global_step,
         )
-        atomic_write_json(
-            context.run_dir / "state_archive_closure.json",
-            {
-                "schema_version": 1,
-                "status": "closed",
-                "step": search.global_step,
-                "archive": runtime.state_archive_summary(),
-            },
+        _persist_recovery(
+            search,
+            runtime,
+            context,
+            status="closed",
         )
     finally:
         runtime.close()

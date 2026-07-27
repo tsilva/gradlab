@@ -189,7 +189,10 @@ def _save_policy_bundle(
 ) -> Path:
     model_path = install_model_bundle(
         model_path,
-        save_checkpoint=lambda path: search.policy().save(path),
+        save_checkpoint=lambda path: search.policy().save(
+            path,
+            artifact_discriminator=f"{kind}:{step}",
+        ),
         args=context.args,
         config=context.environment,
         kind=kind,
@@ -247,8 +250,7 @@ def _publish_metrics(
             {
                 metric: MetricSample(value=float(payload[metric]), step=step)
                 for metric in {
-                    str(condition["metric"])
-                    for condition in early_stop.conditions.values()
+                    str(condition["metric"]) for condition in early_stop.conditions.values()
                 }
                 if metric in payload
             }
