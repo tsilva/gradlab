@@ -4,6 +4,7 @@ import re
 import struct
 import time
 from collections.abc import Mapping
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -15,6 +16,8 @@ from rlab.artifacts import install_model_bundle
 from rlab.batch_runtime import BatchMetricRecord, EpisodeRecord
 from rlab.early_stop import MetricEarlyStopStateMachine, MetricSample
 from rlab.env import make_training_batch_runtime, preflight_state_archive_provider
+from rlab.env_providers import MARIO_BASE_INFO_KEYS
+from rlab.env_registry import SUPERMARIOBROS_NES_TURBO_PROVIDER
 from rlab.file_utils import atomic_write_json, file_sha256
 from rlab.go_explore import GoExploreSearch
 from rlab.metric_names import (
@@ -67,6 +70,7 @@ _CELL_INFO_KEYS = (
     "player_power",
     "player_task",
 )
+GO_EXPLORE_PROVIDER_INFO_KEYS = frozenset(_CELL_INFO_KEYS) | MARIO_BASE_INFO_KEYS
 
 
 def normalize_config(
@@ -146,10 +150,50 @@ def _cell_keys(infos: Mapping[str, Any], n_envs: int) -> tuple[bytes, ...]:
 
 
 def _reset_info_columns(runtime: Any) -> dict[str, np.ndarray]:
-    return {
-        name: np.asarray([runtime.reset_infos[lane][name] for lane in range(runtime.num_envs)])
+    infos = {
+        name: np.asarray(
+            [
+                runtime.reset_infos[lane][name]
+                for lane in range(runtime.num_envs)
+                if name in runtime.reset_infos[lane]
+            ]
+        )
         for name in _CELL_INFO_KEYS
     }
+    return {
+        name: _column(infos, name, runtime.num_envs)
+        for name in _CELL_INFO_KEYS
+    }
+
+
+def _runtime_environment_config(config: Any) -> Any:
+    env_args = dict(config.env_args)
+    configured_filter = env_args.get("info_filter")
+    configured_keys: set[str] = set()
+    if isinstance(configured_filter, Mapping):
+        if str(configured_filter.get("mode", "all")) != "all":
+            raise ValueError("rlab.go-explore requires info_filter mode='all'")
+        keys = configured_filter.get("keys")
+        if keys is not None:
+            if isinstance(keys, str | bytes) or not isinstance(keys, list | tuple):
+                raise ValueError("rlab.go-explore info_filter.keys must be a sequence")
+            configured_keys.update(str(key) for key in keys)
+    elif str(configured_filter) != "all":
+        raise ValueError("rlab.go-explore requires info_filter='all'")
+    task = config.task if isinstance(config.task, Mapping) else {}
+    signals = task.get("signals")
+    if isinstance(signals, Mapping):
+        for source in signals.values():
+            configured_keys.update(
+                (str(source),)
+                if isinstance(source, str)
+                else (str(name) for name in source)
+            )
+    env_args["info_filter"] = {
+        "mode": "all",
+        "keys": tuple(sorted(GO_EXPLORE_PROVIDER_INFO_KEYS | configured_keys)),
+    }
+    return replace(config, env_args=env_args)
 
 
 def _checkpoint_prefix(game: str) -> str:
@@ -335,11 +379,12 @@ def _publish_metrics(
 def run_go_explore(context: BackendContext) -> None:
     args = context.args
     config = context.environment
+    runtime_config = _runtime_environment_config(config)
     n_envs = int(args.resolved_n_envs)
     if int(args.timesteps) % n_envs != 0:
         raise ValueError("Go-Explore timesteps must be divisible by n_envs")
     preflight = preflight_state_archive_provider(
-        config=config,
+        config=runtime_config,
         n_envs=n_envs,
         seed=args.seed,
         rom_binding=context.rom_binding,
@@ -351,7 +396,7 @@ def run_go_explore(context: BackendContext) -> None:
     write_canonical_json(preflight_path, preflight)
     args.state_archive_preflight_sha256 = file_sha256(preflight_path)
     runtime = make_training_batch_runtime(
-        config,
+        runtime_config,
         n_envs,
         args.seed,
         rom_binding=context.rom_binding,
@@ -568,6 +613,14 @@ class GoExploreBackend:
         backend_config: Mapping[str, Any],
     ) -> None:
         del backend_config
+        provider_id = str(common_config.get("env_provider") or "")
+        if provider_id != SUPERMARIOBROS_NES_TURBO_PROVIDER.provider_id:
+            raise ValueError(
+                "rlab.go-explore requires env_provider='supermariobrosnes-turbo'"
+            )
+        task = common_config.get("task")
+        if not isinstance(task, Mapping) or task.get("id") != "mario":
+            raise ValueError("rlab.go-explore requires task.id='mario'")
         archive = common_config.get("state_archive")
         if not isinstance(archive, Mapping):
             raise ValueError("rlab.go-explore requires state_archive")
@@ -598,6 +651,7 @@ def contract_payload(backend_id: str) -> dict[str, Any]:
         "schema_version": 1,
         "status": "available",
         "defaults": DEFAULT_CONFIG,
+        "provider_info_keys": sorted(GO_EXPLORE_PROVIDER_INFO_KEYS),
         "state_archive_priority_metrics": [],
     }
 

@@ -4,7 +4,12 @@ import unittest
 
 import numpy as np
 
+from rlab.env import EnvConfig
 from rlab.go_explore import GoExploreSearch
+from rlab.training.go_explore import (
+    GO_EXPLORE_PROVIDER_INFO_KEYS,
+    _runtime_environment_config,
+)
 
 
 class GoExploreSearchTests(unittest.TestCase):
@@ -41,6 +46,30 @@ class GoExploreSearchTests(unittest.TestCase):
         self.assertEqual(restored.restore_state(document), ("lane-a", "lane-b"))
         self.assertEqual(restored.state_document(("lane-a", "lane-b")), document)
         np.testing.assert_array_equal(restored.next_actions(), search.next_actions())
+
+    def test_runtime_environment_selects_route_and_task_provider_info(self) -> None:
+        config = EnvConfig(
+            env_provider="supermariobrosnes-turbo",
+            game="SuperMarioBros-Nes-v0",
+            env_args={"info_filter": "all"},
+            task={
+                "id": "mario",
+                "signals": {
+                    "x": ["xscrollHi", "xscrollLo"],
+                    "custom": "game_mode",
+                },
+            },
+        )
+
+        runtime_config = _runtime_environment_config(config)
+        info_filter = runtime_config.env_args["info_filter"]
+
+        self.assertEqual(info_filter["mode"], "all")
+        self.assertEqual(
+            set(info_filter["keys"]),
+            set(GO_EXPLORE_PROVIDER_INFO_KEYS) | {"game_mode"},
+        )
+        self.assertEqual(config.env_args["info_filter"], "all")
 
 
 if __name__ == "__main__":
