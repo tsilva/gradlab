@@ -44,6 +44,7 @@ CATALOG_INDEX_SCHEMA_VERSION = 1
 CATALOG_CACHE_SCHEMA_VERSION = 1
 CATALOG_INDEX_FILENAME = "_catalog.yaml"
 EVALUATION_CACHE_SECONDS = 10.0
+WANDB_CATALOG_PAGE_SIZE = 200
 LIVE_TRAINING_METRICS = (
     (
         RankCriterion(
@@ -189,6 +190,19 @@ class _CheckpointEvaluationData:
     evaluation_seed: int | None
 
 
+@dataclass(frozen=True)
+class _WandbCatalogRun:
+    run_id: str
+    name: str
+    state: str
+    config: Mapping[str, Any]
+    summary: Mapping[str, Any]
+    notes: str
+    created_at: str
+    updated_at: str
+    url: str
+
+
 def parse_wandb_location(value: object) -> WandbLocation | None:
     parsed = urlparse(str(value or "").strip())
     if parsed.scheme not in {"http", "https"} or parsed.netloc.casefold() not in WANDB_HOSTS:
@@ -248,6 +262,31 @@ def _safe_float(value: object) -> float | None:
         return None
     numeric = float(value)
     return numeric if numeric == numeric and abs(numeric) != float("inf") else None
+
+
+def _wandb_json_mapping(value: object, *, label: str) -> dict[str, Any]:
+    if value is None or value == "":
+        return {}
+    if isinstance(value, Mapping):
+        return dict(value)
+    if not isinstance(value, str | bytes | bytearray):
+        raise ValueError(f"W&B {label} must be a JSON mapping")
+    try:
+        decoded = json.loads(value)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError(f"W&B {label} is not valid JSON") from exc
+    if not isinstance(decoded, Mapping):
+        raise ValueError(f"W&B {label} must be a JSON mapping")
+    return dict(decoded)
+
+
+def _wandb_user_config(value: object) -> dict[str, Any]:
+    raw = _wandb_json_mapping(value, label="run config")
+    return {
+        str(key): item.get("value") if isinstance(item, Mapping) and "value" in item else item
+        for key, item in raw.items()
+        if key not in {"_wandb", "wandb_version"}
+    }
 
 
 def _first_summary_float(summary: Any, metrics: Iterable[str]) -> float | None:
@@ -422,6 +461,135 @@ class PlayCatalog:
 
             self._api = wandb.Api(timeout=15)
         return self._api
+
+    def _wandb_catalog_runs(
+        self,
+        *,
+        entity: str,
+        project: str,
+        filters: Mapping[str, Any] | None,
+    ) -> Iterator[_WandbCatalogRun]:
+        api = self._wandb_api()
+        client = getattr(api, "client", None)
+        if client is None:
+            # Test doubles and older W&B clients may not expose their GraphQL
+            # client. Eager loading is important here: lazy Run objects fetch
+            # config and summary individually when the catalog accesses them.
+            for run in api.runs(
+                f"{entity}/{project}",
+                filters=dict(filters) if filters else None,
+                order="-created_at",
+                per_page=WANDB_CATALOG_PAGE_SIZE,
+                lazy=False,
+            ):
+                yield _WandbCatalogRun(
+                    run_id=str(getattr(run, "id", "") or ""),
+                    name=str(getattr(run, "name", "") or ""),
+                    state=str(getattr(run, "state", "") or ""),
+                    config=dict(getattr(run, "config", {}) or {}),
+                    summary=getattr(run, "summary", {}) or {},
+                    notes=str(getattr(run, "notes", "") or ""),
+                    created_at=str(getattr(run, "created_at", "") or ""),
+                    updated_at=str(getattr(run, "updated_at", "") or ""),
+                    url=str(getattr(run, "url", "") or ""),
+                )
+            return
+
+        # The public Runs lazy fragment omits config and summary, causing one
+        # full-data request per run when the catalog builds its cards. The full
+        # fragment avoids that N+1 pattern but also downloads system metrics and
+        # history metadata that the catalog never uses. Query only the fields
+        # required by RunSummary while retaining server-side filtering.
+        from wandb.apis.public.runs import gql
+
+        query = gql(
+            """
+            query PlayCatalogRuns(
+                $project: String!,
+                $entity: String!,
+                $cursor: String,
+                $perPage: Int!,
+                $order: String,
+                $filters: JSONString
+            ) {
+                project(name: $project, entityName: $entity) {
+                    runs(
+                        filters: $filters,
+                        after: $cursor,
+                        first: $perPage,
+                        order: $order
+                    ) {
+                        edges {
+                            node {
+                                name
+                                displayName
+                                state
+                                config
+                                createdAt
+                                notes
+                                summaryMetrics
+                            }
+                        }
+                        pageInfo {
+                            endCursor
+                            hasNextPage
+                        }
+                    }
+                }
+            }
+            """
+        )
+        cursor: str | None = None
+        while True:
+            response = client.execute(
+                query,
+                variable_values={
+                    "project": project,
+                    "entity": entity,
+                    "cursor": cursor,
+                    "perPage": WANDB_CATALOG_PAGE_SIZE,
+                    "order": "-created_at",
+                    "filters": json.dumps(dict(filters or {}), separators=(",", ":")),
+                },
+            )
+            project_payload = response.get("project") if isinstance(response, Mapping) else None
+            runs_payload = (
+                project_payload.get("runs") if isinstance(project_payload, Mapping) else None
+            )
+            if not isinstance(runs_payload, Mapping):
+                raise ValueError(f"could not find W&B project {entity}/{project}")
+            edges = runs_payload.get("edges")
+            if not isinstance(edges, list):
+                raise ValueError("W&B run catalog response has no run edges")
+            for edge in edges:
+                node = edge.get("node") if isinstance(edge, Mapping) else None
+                if not isinstance(node, Mapping):
+                    raise ValueError("W&B run catalog response has an invalid run edge")
+                run_id = str(node.get("name") or "")
+                yield _WandbCatalogRun(
+                    run_id=run_id,
+                    name=str(node.get("displayName") or run_id),
+                    state=str(node.get("state") or ""),
+                    config=_wandb_user_config(node.get("config")),
+                    summary=_wandb_json_mapping(
+                        node.get("summaryMetrics"),
+                        label=f"run {run_id} summary",
+                    ),
+                    notes=str(node.get("notes") or ""),
+                    created_at=str(node.get("createdAt") or ""),
+                    updated_at="",
+                    url=(
+                        f"{str(getattr(client, 'app_url', 'https://wandb.ai/')).rstrip('/')}"
+                        f"/{entity}/{project}/runs/{run_id}"
+                    ),
+                )
+            page_info = runs_payload.get("pageInfo")
+            if not isinstance(page_info, Mapping) or not page_info.get("hasNextPage"):
+                return
+            next_cursor = str(page_info.get("endCursor") or "")
+            if not next_cursor or next_cursor == cursor:
+                raise ValueError("W&B run catalog pagination did not advance")
+            cursor = next_cursor
 
     def _stream(
         self,
@@ -910,28 +1078,22 @@ class PlayCatalog:
         )
 
         def values() -> Iterator[dict[str, Any]]:
-            filters = (
-                {"config.goal_slug": selected_goal_slug}
-                if selected_goal_slug
-                else None
-            )
-            api_runs = self._wandb_api().runs(
-                f"{entity}/{project}",
+            filters = {"config.goal_slug": selected_goal_slug} if selected_goal_slug else None
+            api_runs = self._wandb_catalog_runs(
+                entity=entity,
+                project=project,
                 filters=filters,
-                order="-created_at",
-                per_page=200,
-                lazy=True,
             )
             summaries: list[dict[str, Any]] = []
             for run in api_runs:
-                run_id = str(getattr(run, "id", "") or "")
+                run_id = run.run_id
                 if RUN_ID_PATTERN.fullmatch(run_id) is None:
                     continue
-                config = dict(getattr(run, "config", {}) or {})
+                config = dict(run.config)
                 goal_slug = str(config.get("goal_slug") or "")
                 if selected_goal_slug and goal_slug != selected_goal_slug:
                     continue
-                run_metrics = getattr(run, "summary", {}) or {}
+                run_metrics = run.summary
                 overrides = normalize_recipe_overrides(config.get("recipe_overrides"))
                 configured_variant_id = str(config.get("recipe_variant_id") or "").strip()
                 variant_id = configured_variant_id or (
@@ -947,22 +1109,18 @@ class PlayCatalog:
                     entity=entity,
                     project=project,
                     run_id=run_id,
-                    name=str(getattr(run, "name", "") or run_id),
-                    state=str(getattr(run, "state", "") or ""),
+                    name=run.name or run_id,
+                    state=run.state,
                     goal=goal_slug,
                     recipe=str(config.get("recipe_slug") or ""),
                     recipe_sha256=str(config.get("recipe_sha256") or ""),
                     recipe_overrides=overrides,
                     recipe_variant_id=variant_id,
-                    description=str(
-                        getattr(run, "notes", "")
-                        or config.get("run_description")
-                        or ""
-                    ).strip(),
+                    description=str(run.notes or config.get("run_description") or "").strip(),
                     seed=_safe_int(config.get("seed")),
-                    created_at=str(getattr(run, "created_at", "") or ""),
-                    updated_at=str(getattr(run, "updated_at", "") or ""),
-                    url=str(getattr(run, "url", "") or ""),
+                    created_at=run.created_at,
+                    updated_at=run.updated_at,
+                    url=run.url,
                     metrics={
                         criterion.metric: _first_summary_float(run_metrics, sources)
                         for criterion, sources in (*metric_specs, *fallback_metric_specs)
