@@ -299,9 +299,9 @@ class BreakoutTurboProviderTests(unittest.TestCase):
         values.update(updates)
         return EnvConfig(**values)
 
-    def test_runtime_meets_provider_minimum(self) -> None:
+    def test_runtime_matches_turbo_api_v1_release(self) -> None:
         installed = Version(importlib.metadata.version("breakout-turbo-env"))
-        self.assertGreaterEqual(installed, Version("0.4.1"))
+        self.assertEqual(installed, Version("0.5.1"))
 
     def test_constructs_and_preserves_native_manual_vector_contract(self) -> None:
         config = self.config()
@@ -516,10 +516,10 @@ class MarioNativeProviderTests(unittest.TestCase):
         values.update(updates)
         return EnvConfig(**values)
 
-    def test_runtime_minimum_contains_masked_reset_release(self) -> None:
+    def test_runtime_matches_turbo_api_v1_releases(self) -> None:
         installed = Version(importlib.metadata.version("supermariobrosnes-turbo"))
-        self.assertGreaterEqual(installed, Version("0.4.4"))
-        self.assertEqual(Version(retro.__version__), Version("1.0.1.post35"))
+        self.assertEqual(installed, Version("0.5.0"))
+        self.assertEqual(Version(retro.__version__), Version("1.0.1.post36"))
         env_type = super_mario_bros_nes_turbo_vec_env_type()
         self.assertIs(env_type.supports_live_snapshots, True)
         self.assertTrue(callable(getattr(env_type, "capture_snapshots", None)))
