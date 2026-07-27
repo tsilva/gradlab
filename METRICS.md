@@ -1,4 +1,4 @@
-# Metrics schema v7
+# Metrics schema v8
 
 This file is the human contract for rlab telemetry. The Python registry in
 `src/rlab/metric_names.py` is the executable source of truth. Every emitted metric must match an
@@ -17,7 +17,7 @@ exact registry entry or a bounded template.
 - Public model R2 contains immutable checkpoint closures and a mutable no-cache run index. Private
   eval R2 contains intents, results, and episode evidence. Private control R2 contains leases,
   journals, promotions, and terminal receipts.
-- W&B config contains run-defining dimensions: `metrics_schema_version: 7`, `training_backend_id`,
+- W&B config contains run-defining dimensions: `metrics_schema_version: 8`, `training_backend_id`,
   `training_backend_config_hash`, `algorithm_id`, goal,
   environment, starts, seed, frame skip, environment count, hyperparameters, eval protocol, and
   runtime versions.
@@ -64,7 +64,7 @@ X-axis. Each producer writes only its applicable scientific axis; durable delive
 `orchestration/event_seq`.
 
 Purged PostgreSQL/Fleet/W&B/R2 state has no compatibility guarantee. Newly materialized runs declare
-schema v7.
+schema v8.
 
 ## Research interpretation
 
@@ -176,14 +176,14 @@ exit alone is never scientific success.
 | `train/outcome/terminal/count` | Cumulative terminal episode records. | episodes | rollout | history |
 | `train/outcome/reason/{reason}/count` | Cumulative failed episodes containing a reason. | episodes | rollout | history |
 | `train/outcome/reason/{reason}/rate/window_100` | Failure-reason incidence over the latest 100 terminal episodes. | fraction | rollout | history |
-| `train/outcome/success/from/{start}/count` | Cumulative successful episodes from a start. | episodes | rollout | history |
-| `train/outcome/success/from/{start}/attempts` | Cumulative episode attempts from a start. | episodes | rollout | history |
-| `train/outcome/success/from/{start}/rate/window_100` | Success rate over the latest 100 attempts from a start. | fraction | rollout | history |
-| `train/outcome/success/current/rate/min` | Minimum cumulative success rate across observed starts. | fraction | rollout | history |
-| `train/outcome/success/current/rate/mean` | Mean cumulative success rate across observed starts. | fraction | rollout | history |
-| `train/outcome/success/window_100/rate/min` | Minimum window-100 success rate after every start has 100 attempts. | fraction | rollout | history |
-| `train/outcome/success/window_100/rate/mean` | Mean window-100 success rate after every start has 100 attempts. | fraction | rollout | history |
-| `train/outcome/success/start_coverage/rate` | Configured starts with an attempt divided by configured starts. | fraction | rollout | history |
+| `train/outcome/success/from/{start}/count` | Cumulative successful genuine target-origin episodes from a start; snapshot-origin episodes are excluded. | episodes | rollout | history |
+| `train/outcome/success/from/{start}/attempts` | Cumulative genuine target-origin episode attempts from a start; snapshot-origin episodes are excluded. | episodes | rollout | history |
+| `train/outcome/success/from/{start}/rate/window_100` | Success rate over the latest 100 genuine target-origin attempts from a start. | fraction | rollout | history |
+| `train/outcome/success/current/rate/min` | Minimum cumulative target-origin success rate across observed starts. | fraction | rollout | history |
+| `train/outcome/success/current/rate/mean` | Mean cumulative target-origin success rate across observed starts. | fraction | rollout | history |
+| `train/outcome/success/window_100/rate/min` | Minimum target-origin window-100 success rate after every start has 100 genuine target-origin attempts. | fraction | rollout | history |
+| `train/outcome/success/window_100/rate/mean` | Mean target-origin window-100 success rate after every start has 100 genuine target-origin attempts. | fraction | rollout | history |
+| `train/outcome/success/start_coverage/rate` | Configured starts with a genuine target-origin attempt divided by configured starts. | fraction | rollout | history |
 | `train/early_stop/{condition}/value` | Current finite value consumed by a configured metric early-stop condition. | scalar | watched metric sample | history |
 | `train/early_stop/{condition}/best` | Best value retained by a configured metric early-stop condition. | scalar | watched metric sample | history |
 | `train/early_stop/{condition}/patience/elapsed_steps` | Policy steps elapsed in the condition's current patience interval. | steps | watched metric sample | history |
