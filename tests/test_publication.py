@@ -302,12 +302,21 @@ def test_publication_source_requires_explicit_seed_commit_and_matching_step() ->
         publication_source_from_model_metadata(metadata, evaluation)
 
 
+def test_model_card_template_uses_canonical_cli_commands() -> None:
+    card = _render_current_model_card_fixture()
+
+    assert "uv run rlab rom import ~/roms" in card
+    assert "uv run rlab eval https://huggingface.co/" in card
+    assert "rlab import-roms" not in card
+    assert "rlab eval run" not in card
+
+
 def test_model_card_template_preserves_current_sb3_golden_output() -> None:
     card = _render_current_model_card_fixture()
 
     ModelCard(card).validate(repo_type="model")
     assert hashlib.sha256(card.encode()).hexdigest() == (
-        "4c16286ee86f548fd8f854212eef94a35a6bb1344d544fb6702a9321deda00fb"
+        "30cace3f30d9e4cc9bc5a18384993e0bba0349004cb4b596e1fd1db5a566b986"
     )
 
 
@@ -320,7 +329,7 @@ def test_model_card_template_preserves_current_jerk_golden_output() -> None:
 
     ModelCard(card).validate(repo_type="model")
     assert hashlib.sha256(card.encode()).hexdigest() == (
-        "73089a96695e580f4f14537f82ee17389c3e0ac7b1de1746da0a89e442c6a8a1"
+        "60e6d77339fe45a20b09c2e1b5f38953665382dde23a337d562b2e139b28d8e1"
     )
 
 

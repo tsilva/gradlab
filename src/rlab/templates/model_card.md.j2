@@ -40,9 +40,9 @@ metrics:
 Import the ROM, then play or evaluate the immutable checkpoint:
 
 ```bash
-uv run rlab import-roms ~/roms --game {{ game }}
+uv run rlab rom import ~/roms --game {{ game }}
 uv run rlab play {{ model_ref }}
-uv run rlab eval run {{ model_ref }}
+uv run rlab eval {{ model_ref }}
 ```
 
 ## Evaluation

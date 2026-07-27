@@ -10,13 +10,22 @@ from rlab.main import main
 
 
 class PublicCliHelpTests(unittest.TestCase):
-    def test_eval_without_a_subcommand_prints_help_and_returns_usage_error(self) -> None:
+    def test_bare_eval_prints_flat_help_and_returns_usage_error(self) -> None:
         stdout = io.StringIO()
         with contextlib.redirect_stdout(stdout):
             self.assertEqual(main(["eval"]), 2)
         self.assertTrue(stdout.getvalue().startswith("usage: rlab eval"))
+        self.assertIn("--episodes", stdout.getvalue())
 
-    def test_ordinary_help_does_not_import_optional_dataset_stack(self) -> None:
+    def test_root_help_advertises_only_canonical_rom_command(self) -> None:
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout):
+            self.assertEqual(main(["--help"]), 0)
+        help_text = stdout.getvalue()
+        self.assertIn("    rom ", help_text)
+        self.assertNotIn("import-roms", help_text)
+
+    def test_ordinary_help_does_not_import_optional_or_rom_import_stacks(self) -> None:
         script = """
 import sys
 from rlab.main import main
@@ -25,7 +34,12 @@ try:
 except SystemExit:
     pass
 for name in sorted(sys.modules):
-    if name == \"datasets\" or name == \"minari\" or name.startswith(\"rlab.dataset_\"):
+    if (
+        name == \"datasets\"
+        or name == \"minari\"
+        or name.startswith(\"rlab.dataset_\")
+        or name == \"stable_retro.scripts.import_path\"
+    ):
         print(name)
 """
         completed = subprocess.run(
@@ -38,7 +52,10 @@ for name in sorted(sys.modules):
         imported = [
             line
             for line in completed.stdout.splitlines()
-            if line == "datasets" or line == "minari" or line.startswith("rlab.dataset_")
+            if line == "datasets"
+            or line == "minari"
+            or line.startswith("rlab.dataset_")
+            or line == "stable_retro.scripts.import_path"
         ]
         self.assertEqual(imported, [])
 
@@ -48,8 +65,9 @@ for name in sorted(sys.modules):
             (("experiment", "launch", "--help"), "usage: rlab experiment launch"),
             (("experiment", "follow", "--help"), "usage: rlab experiment follow"),
             (("eval", "--help"), "usage: rlab eval"),
-            (("eval", "run", "--help"), "usage: rlab eval run"),
+            (("eval", "run", "--help"), "usage: rlab eval"),
             (("play", "--help"), "usage: rlab play"),
+            (("rom", "import", "--help"), "usage: rlab rom import"),
             (("import-roms", "--help"), "usage: rlab import-roms"),
             (("benchmark", "run", "--help"), "usage: rlab benchmark run"),
             (("validate", "--help"), "usage: rlab validate"),
@@ -80,7 +98,7 @@ for name in sorted(sys.modules):
         self.assertNotIn("defaults to latest", normalized_help)
 
     def test_eval_and_play_help_are_sb3_backend_neutral(self) -> None:
-        for command in (("eval", "run"), ("play",)):
+        for command in (("eval",), ("play",)):
             with self.subTest(command=command):
                 stdout = io.StringIO()
                 with contextlib.redirect_stdout(stdout), self.assertRaises(SystemExit) as raised:

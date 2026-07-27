@@ -109,7 +109,7 @@ def load_eval_model(
         return model, algorithm_id
 
 
-def build_parser(*, prog: str = "rlab eval run") -> argparse.ArgumentParser:
+def build_parser(*, prog: str = "rlab eval") -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog=prog,
         description="Evaluate an rlab policy artifact or scripted provider baseline",
@@ -163,6 +163,11 @@ def build_parser(*, prog: str = "rlab eval run") -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     argv_list = list(sys.argv[1:] if argv is None else argv)
+    if argv_list[:1] == ["run"]:
+        argv_list = argv_list[1:]
+    elif not argv_list:
+        parser.print_help()
+        return 2
     parser_defaults = vars(parser.parse_args([]))
     explicit_dests = explicit_arg_dests(parser, argv_list)
     args = parser.parse_args(argv_list)

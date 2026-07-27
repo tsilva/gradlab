@@ -9,7 +9,7 @@ import subprocess
 import sys
 import tempfile
 import time
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from dataclasses import replace
 from datetime import UTC, datetime
 from functools import partial
@@ -804,12 +804,32 @@ def _follow_fingerprint(value: Mapping[str, Any]) -> str:
     return json.dumps(json_safe(stable), sort_keys=True, separators=(",", ":"))
 
 
+def _poll_status(
+    root: Path,
+    run_id: str,
+    *,
+    timeout: float,
+    poll_seconds: float,
+) -> Iterator[tuple[dict[str, Any], bool]]:
+    deadline = time.monotonic() + timeout
+    while True:
+        value = _status(root, run_id)
+        timed_out = time.monotonic() >= deadline
+        yield value, timed_out
+        if timed_out:
+            return
+        time.sleep(poll_seconds)
+
+
 def cmd_follow(args: argparse.Namespace) -> int:
     root = repository_root()
-    deadline = time.monotonic() + float(args.timeout)
     previous = ""
-    while True:
-        value = _status(root, args.run_id)
+    for value, timed_out in _poll_status(
+        root,
+        args.run_id,
+        timeout=float(args.timeout),
+        poll_seconds=float(args.poll_seconds),
+    ):
         encoded = json.dumps(json_safe(value), sort_keys=True, separators=(",", ":"))
         fingerprint = _follow_fingerprint(value)
         if fingerprint != previous:
@@ -817,16 +837,19 @@ def cmd_follow(args: argparse.Namespace) -> int:
             previous = fingerprint
         if value["completed"]:
             return 0
-        if time.monotonic() >= deadline:
+        if timed_out:
             return 1
-        time.sleep(float(args.poll_seconds))
+    raise AssertionError("status poller ended without completion or timeout")
 
 
 def cmd_wait(args: argparse.Namespace) -> int:
     root = repository_root()
-    deadline = time.monotonic() + float(args.timeout)
-    while True:
-        value = _status(root, args.run_id)
+    for value, timed_out in _poll_status(
+        root,
+        args.run_id,
+        timeout=float(args.timeout),
+        poll_seconds=2.0,
+    ):
         reached = (
             value["completed"]
             if args.until == "terminal"
@@ -835,10 +858,10 @@ def cmd_wait(args: argparse.Namespace) -> int:
         if reached:
             print(json.dumps(json_safe(value), sort_keys=True))
             return 0
-        if time.monotonic() >= deadline:
+        if timed_out:
             print(json.dumps(json_safe(value), sort_keys=True))
             return 1
-        time.sleep(2.0)
+    raise AssertionError("status poller ended without completion or timeout")
 
 
 def cmd_cancel(args: argparse.Namespace) -> int:

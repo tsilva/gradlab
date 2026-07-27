@@ -42,16 +42,19 @@ rlab validate
 ```
 
 The project uses `uv`, a committed `uv.lock`, and a seven-day package-age gate.
-`stable-retro-turbo`, `supermariobrosnes-turbo`, and
-`breakout-turbo-env` have explicit forward-runtime exceptions recorded in
-`pyproject.toml` and `uv-tool.toml`.
+The exact Turbo runtime is `stable-retro-turbo==1.0.1.post36`,
+`supermariobrosnes-turbo==0.5.0`, `breakout-turbo-env==0.5.1`, and
+`vizdoom-turbo==1.3.0.post2`. Their explicit package-age exceptions are
+recorded in `pyproject.toml` and `uv-tool.toml`.
 
 The four Turbo providers must implement Turbo Vector API v1. rlab validates
-their immutable capability and signal declarations at construction time,
-requires canonical `state_catalog`/`state_indices` reset selection, consumes
-the declared action contract directly, and uses `render_lane()`,
-`get_images()`, and lane-zero `render()` without provider-specific fallbacks.
-Providers that do not advertise exactly v1 are rejected.
+their immutable capability and signal declarations, resolved action semantics,
+observation ownership and buffer depth, read-only active state indices, and
+per-lane rendering surface at construction time. It requires canonical
+`state_catalog`/`state_indices` reset selection, consumes the declared action
+contract directly, and uses `render_lane()`, `get_images()`, and lane-zero
+`render()` without provider-specific probing or fallbacks. Providers that do
+not advertise exactly v1 are rejected.
 
 Register a local ROM without uploading it to source control:
 
