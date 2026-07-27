@@ -540,9 +540,9 @@ def cmd_launch(args: argparse.Namespace) -> int:
         wandb=wandb,
         modal={
             "enabled": checkpoint_eval_backend == "modal",
-            "environment_name": modal_config.environment_name,
+            "environment_name": modal_config.deployment.environment_name,
             "app_name": modal_app,
-            "function_name": modal_config.function_name,
+            "function_name": modal_config.deployment.function_name,
             "deployment_source_sha": source_sha,
             "rom_asset_manifest": asset,
         },

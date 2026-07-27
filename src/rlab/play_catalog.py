@@ -14,7 +14,6 @@ from typing import Any, Literal
 from urllib.parse import unquote, urlparse
 
 from rlab.config_loader import load_mapping_document
-from rlab.config_validation import load_goal_contract
 from rlab.early_stop import EARLY_STOP_OPERATORS, normalize_metric_threshold_rules
 from rlab.metric_names import (
     EVAL_ACCEPTANCE_EPISODES_COMPLETED,
@@ -30,6 +29,7 @@ from rlab.metric_names import (
 from rlab.model_sources import DEFAULT_PUBLIC_MODELS_BASE_URL, _public_json
 from rlab.ranking import RankCriterion, parse_objective_rank
 from rlab.recipe_variants import normalize_recipe_overrides, recipe_variant_id
+from rlab.recipe_documents import load_goal_contract
 from rlab.run_contracts import CheckpointManifest, RUN_ID_PATTERN
 from rlab.wandb_utils import (
     load_wandb_env,

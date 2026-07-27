@@ -775,7 +775,7 @@ class RunSupervisor:
             selected_attempt = 0
             selected_prepared: Mapping[str, Any] | None = None
             selected_dispatch: Mapping[str, Any] | None = None
-            for attempt in range(1, int(self.modal_config.max_attempts) + 1):
+            for attempt in range(1, int(self.modal_config.protocol.max_attempts) + 1):
                 prepared = self.authority.eval_attempt(
                     run_id=self.manifest.run_id,
                     idempotency_key=key,
@@ -1092,7 +1092,7 @@ class RunSupervisor:
             episode_manifest_sha256=episode_manifest_sha,
             protocol="modal-acceptance-v3",
         )
-        timeout = int(self.modal_config.acceptance_timeout_seconds)
+        timeout = int(self.modal_config.timeouts.acceptance_seconds)
         created = _parse_timestamp(checkpoint.created_at)
         result_key = f"runs/{self.manifest.run_id}/evals/{key}/result.json"
         intent = EvalIntent(
@@ -1147,7 +1147,7 @@ class RunSupervisor:
             "expires_at": expires_at,
             "child_timeout_seconds": max(
                 1,
-                timeout - int(self.modal_config.child_margin_seconds),
+                timeout - int(self.modal_config.timeouts.child_margin_seconds),
             ),
             "model_get_url": str(checkpoint["public_url"]),
             "model_document_get_url": str(checkpoint["model_document_url"]),
@@ -1156,7 +1156,7 @@ class RunSupervisor:
             "result_uri": self.authority.evaluation.uri(result_key),
             "result_put_url": self.authority.evaluation.presign_put(
                 result_key,
-                expires_seconds=timeout + int(self.modal_config.expiry_margin_seconds),
+                expires_seconds=timeout + int(self.modal_config.timeouts.expiry_margin_seconds),
             ),
         }
         asset = self.manifest.modal.get("rom_asset_manifest")
@@ -1164,7 +1164,7 @@ class RunSupervisor:
             rom_key = self.authority.evaluation.key_from_uri(str(asset["object_uri"]))
             payload["rom_get_url"] = self.authority.evaluation.presign_get(
                 rom_key,
-                expires_seconds=timeout + int(self.modal_config.expiry_margin_seconds),
+                expires_seconds=timeout + int(self.modal_config.timeouts.expiry_margin_seconds),
             )
         return payload
 
@@ -1172,7 +1172,7 @@ class RunSupervisor:
         submitted = 0
         for row in self.store.evals(statuses=("pending",)):
             attempt = int(row["attempt"] or 0) + 1
-            if attempt > int(self.modal_config.max_attempts):
+            if attempt > int(self.modal_config.protocol.max_attempts):
                 self._mark_expired(row, error="eval exhausted two attempts")
                 continue
             prepared = self.authority.eval_attempt(
@@ -1440,7 +1440,7 @@ class RunSupervisor:
             expires_at = float(row.get("attempt_expires_at") or 0)
             if expires_at > wall_now:
                 continue
-            if int(row["attempt"] or 0) < int(self.modal_config.max_attempts):
+            if int(row["attempt"] or 0) < int(self.modal_config.protocol.max_attempts):
                 self.store.reset_expired_eval(
                     idempotency_key=str(row["idempotency_key"]),
                     error="attempt expired without a valid result",

@@ -65,6 +65,13 @@ def training_preprocessing_metadata(config: EnvConfig) -> dict[str, Any]:
     return preprocessing_contract(config)
 
 
+def runtime_versions_metadata() -> dict[str, str | None]:
+    return {
+        metadata_key: _package_version(package)
+        for metadata_key, package in RUNTIME_VERSION_PACKAGES.items()
+    }
+
+
 def training_metadata(
     config: EnvConfig,
     *,
@@ -83,13 +90,7 @@ def training_metadata(
         "environment_hash": environment_hash(environment),
         "preprocessing": preprocessing,
         "action": declared_action_contract(config),
-        "versions": {
-            "stable_retro_turbo": _package_version("stable-retro-turbo"),
-            "supermariobrosnes_turbo": _package_version("supermariobrosnes-turbo"),
-            "breakout_turbo_env": _package_version("breakout-turbo-env"),
-            "vizdoom_turbo": _package_version("vizdoom-turbo"),
-            "stable_baselines3": _package_version("stable-baselines3"),
-        },
+        "versions": runtime_versions_metadata(),
     }
 
 

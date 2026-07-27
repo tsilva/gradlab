@@ -10,17 +10,16 @@ from copy import deepcopy
 from pathlib import Path
 from unittest.mock import patch
 
-from rlab import config_validation
+from rlab import experiment_contracts
 from rlab.config_validation import (
-    load_goal_contract,
     main as validate_main,
     validate_experiment_tree,
-    validate_goal_contract_document,
 )
+from rlab.experiment_contracts import validate_goal_contract_document
 from rlab.env_registry import resolve_env_provider
 from rlab.env_providers import _stable_retro_packaged_data_path
 from rlab.main import COMMANDS
-from rlab.recipe_documents import compose_train_document
+from rlab.recipe_documents import compose_train_document, load_goal_contract
 from rlab.recipe_schema import validate_materialized_train_recipe
 
 
@@ -269,7 +268,7 @@ class ConfigValidationTests(unittest.TestCase):
         }
 
         with self.assertRaisesRegex(ValueError, "missing explicit.*constructor argument"):
-            config_validation._validate_explicit_goal_environment_args(
+            experiment_contracts._validate_explicit_goal_environment_args(
                 environment,
                 environment["env_config"],
                 label="goal.train.environment",
@@ -425,7 +424,7 @@ class ConfigValidationTests(unittest.TestCase):
 
     def test_goal_validator_rejects_deterministic_policy_eval(self) -> None:
         with self.assertRaisesRegex(ValueError, "eval.policy.stochastic must be true"):
-            config_validation._validate_goal_eval(
+            experiment_contracts._validate_goal_eval(
                 {"eval": {"episodes": 1, "policy": {"stochastic": False}}},
                 label="goal",
             )
@@ -653,7 +652,7 @@ class ConfigValidationTests(unittest.TestCase):
 
     def test_goal_validator_rejects_rank_forms_the_runtime_cannot_parse(self) -> None:
         with self.assertRaisesRegex(ValueError, "max\\(metric\\) or min\\(metric\\)"):
-            config_validation._validate_rank_order(
+            experiment_contracts._validate_rank_order(
                 [{"metric": "eval/full/episode/return/mean", "direction": "maximize"}],
                 label="objective.rank",
             )
@@ -694,7 +693,7 @@ class ConfigValidationTests(unittest.TestCase):
 
     def test_evaluated_goal_still_requires_eval_contract(self) -> None:
         with self.assertRaisesRegex(ValueError, "eval is required"):
-            config_validation._validate_goal_eval(
+            experiment_contracts._validate_goal_eval(
                 {"train": {"checkpoint_eval_backend": "modal"}},
                 label="goal",
             )
@@ -840,6 +839,15 @@ class ConfigValidationTests(unittest.TestCase):
             ["level_change"],
         )
         self.assertEqual(document["train"]["environment"]["task"]["id"], "mario")
+
+    def test_load_goal_contract_can_skip_semantic_validation_for_catalogues(self) -> None:
+        with patch(
+            "rlab.recipe_documents.validate_goal_contract_document",
+            side_effect=AssertionError("semantic validation should be skipped"),
+        ):
+            document = load_goal_contract(self.MARIO_L11_GOAL, validate=False)
+
+        self.assertEqual(document["goal_id"], "Level1-1")
 
     def test_level_1_2_resets_no_progress_attractor_and_caps_ppo_at_30m(self) -> None:
         recipe = self.MARIO_L12_GOAL.parent / "recipes/ppo.yaml"

@@ -17,7 +17,7 @@ from rlab.env_metadata import (
     assert_metadata_runtime_versions,
     env_config_from_config_dict,
     env_config_from_metadata,
-    training_metadata,
+    runtime_versions_metadata,
 )
 from rlab.file_utils import fsync_path
 from rlab.policy_bundle import (
@@ -27,8 +27,8 @@ from rlab.policy_bundle import (
     load_model_document,
     load_policy_bundle_from_checkpoint,
     load_recipe_document,
-    model_document_as_metadata,
     model_document_path,
+    policy_bundle_as_metadata,
     recipe_document_path,
     write_canonical_json,
 )
@@ -47,10 +47,7 @@ def build_model_provenance(
     checkpoint_step_value: int | None = None,
     snapshot_curriculum_session: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    training = training_metadata(
-        config,
-        rom_asset_manifest=getattr(args, "rom_asset_manifest", None),
-    )
+    del config
     provenance = {
         "kind": kind,
         "filename": model_path.name,
@@ -94,7 +91,7 @@ def build_model_provenance(
         ).strip(),
         "algorithm_id": str(getattr(args, "algorithm_id", "") or "").strip(),
         "model_class": str(getattr(args, "model_class", "") or "").strip(),
-        "training_metadata": training,
+        "training_metadata": {"versions": runtime_versions_metadata()},
     }
     preflight_sha256 = str(
         getattr(args, "snapshot_curriculum_preflight_sha256", "") or ""
@@ -229,7 +226,7 @@ def load_model_metadata(model_path: Path) -> dict[str, Any]:
             f"{model_path} is missing its current policy bundle beginning at "
             f"{versioned_path}"
         )
-    return model_document_as_metadata(bundle.model)
+    return policy_bundle_as_metadata(bundle)
 
 
 def playback_env_config(

@@ -1,5 +1,15 @@
 const FRAME_GAME = 1;
 
+export function gameFramePhase(snapshot) {
+  const role = snapshot?.transition?.after?.frame_role;
+  if (!snapshot?.transition) return "Initial observation";
+  if (role === "terminal_observation") return "Terminal observation";
+  if (role === "next_episode_initial_observation") {
+    return "Next episode initial observation";
+  }
+  return "After-action observation";
+}
+
 export function mount({ definition, services }) {
   const element = document.createElement("section");
   element.className = "panel game-panel";
@@ -10,6 +20,7 @@ export function mount({ definition, services }) {
         <canvas id="game-canvas" tabindex="0" aria-label="Live game frame. Focus it for human controls: arrows move, Z is B, X is A, Enter is Start, and Shift is Select."></canvas>
       </div>
       <div id="game-empty" class="game-empty empty-state">This environment has no RGB renderer.</div>
+      <div class="game-frame-phase" data-frame-phase>Initial observation</div>
       <div class="game-actions panel-actions">
         <button data-drag-handle class="icon-button icon-only panel-drag" type="button" aria-label="Move game panel" title="Move game panel"><svg class="icon" aria-hidden="true"><use href="/assets/tabler-icons.svg#ti-grip-vertical"></use></svg></button>
         <button data-fullscreen class="icon-button icon-only" type="button" aria-label="Fullscreen game" title="Fullscreen game"><svg class="icon" aria-hidden="true"><use href="/assets/tabler-icons.svg#ti-maximize"></use></svg></button>
@@ -80,6 +91,14 @@ export function mount({ definition, services }) {
 
   return {
     element,
+    render(snapshot) {
+      const phase = gameFramePhase(snapshot);
+      element.querySelector("[data-frame-phase]").textContent = phase;
+      canvas.setAttribute(
+        "aria-label",
+        `${phase}. Focus for human controls: arrows move, Z is B, X is A, Enter is Start, and Shift is Select.`,
+      );
+    },
     async renderFrame(kind, blob) {
       if (kind !== FRAME_GAME) return false;
       if (!blob) {

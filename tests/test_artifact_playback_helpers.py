@@ -82,12 +82,21 @@ def test_model_metadata_round_trips_playback_environment(tmp_path: Path) -> None
                 "training_backend_config_hash": training_backend_config_hash(
                     train_config
                 ),
-                "training_metadata": training_metadata(config),
+                "training_metadata": {
+                    **training_metadata(config),
+                    "preprocessing": {"legacy": True},
+                    "action": {"legacy": True},
+                },
             },
         ),
     )
 
-    assert load_model_metadata(model)["checkpoint_step"] == 250_000
+    metadata = load_model_metadata(model)
+    assert metadata["checkpoint_step"] == 250_000
+    assert metadata["training_metadata"]["preprocessing"] == recipe_document["recipe"][
+        "environment"
+    ]["preprocessing"]
+    assert metadata["training_metadata"]["action"] is None
     assert load_playback_env_config(model).game == "Bandit-v0"
 
 

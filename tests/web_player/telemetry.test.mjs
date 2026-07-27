@@ -12,6 +12,7 @@ import {
   metricOptions,
   seriesForMetric,
 } from "../../src/rlab/web_player/panels/telemetry.js";
+import { cursorIndex } from "../../src/rlab/web_player/panels/telemetry-panel.js";
 
 test("dynamic metric names round-trip without path ambiguity", () => {
   const name = "coins / bonus%";
@@ -72,4 +73,15 @@ test("numeric series preserve gaps and unit compatibility is explicit", () => {
   assert.ok(metricOptions(catalog, "histogram").some(
     (descriptor) => descriptor.key === "action/executed",
   ));
+});
+
+test("the chart cursor remains on the newest live transition", () => {
+  const history = [{ sequence: 4 }, { sequence: 5 }];
+  assert.equal(
+    cursorIndex(history, {
+      inspection: false,
+      selectedSequence: 5,
+    }),
+    1,
+  );
 });

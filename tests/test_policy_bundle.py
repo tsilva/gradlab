@@ -27,6 +27,7 @@ from rlab.policy_bundle import (
     load_policy_bundle,
     load_policy_bundle_from_checkpoint,
     load_recipe_document,
+    policy_bundle_as_metadata,
     validate_recipe_document,
     write_canonical_json,
 )
@@ -47,6 +48,10 @@ POST400_GOAL = Path("experiments/goals/Breakout-Atari2600-v0/post400-r400/_goal.
 POST400_RECIPE = POST400_GOAL.parent / "recipes/ppo-resume-129991680.yaml"
 BREAKOUT_GOAL = Path("experiments/goals/Breakout-Atari2600-v0/_goal.yaml")
 BREAKOUT_RECIPES = tuple(sorted((BREAKOUT_GOAL.parent / "recipes").glob("*.yaml")))
+BANDIT_GOAL = Path("experiments/goals/rlab__bandit/_goal.yaml")
+BANDIT_RECIPE = BANDIT_GOAL.parent / "recipes/ppo.yaml"
+VIZDOOM_GOAL = Path("experiments/goals/VizdoomBasic-v1/_goal.yaml")
+VIZDOOM_RECIPE = VIZDOOM_GOAL.parent / "recipes/ppo.yaml"
 
 
 def level1_1_recipe_document(*, seed: int = 7) -> dict:
@@ -178,6 +183,12 @@ def test_atomic_bundle_install_commits_only_a_complete_replayable_bundle(
     assert bundle is not None
     assert bundle.model["checkpoint"]["step"] == 100
     assert bundle.checkpoint_path.read_bytes() == b"checkpoint"
+    assert set(bundle.model["provenance"]["training_metadata"]) == {"versions"}
+    effective_metadata = policy_bundle_as_metadata(bundle)
+    assert effective_metadata["training_metadata"]["environment"] == recipe_document["recipe"][
+        "environment"
+    ]
+    assert effective_metadata["training_metadata"]["action"]["preset"] == "basic"
 
     # An exact producer replay is accepted, but the same destination can never
     # be rebound to different checkpoint bytes.
@@ -199,6 +210,97 @@ def test_atomic_bundle_install_commits_only_a_complete_replayable_bundle(
             checkpoint_step_value=100,
         )
     assert not list(model_path.parent.glob(".*.zip"))
+
+
+def test_legacy_model_environment_mismatch_still_fails_closed(tmp_path: Path) -> None:
+    model_path = tmp_path / "model_100_steps.zip"
+    model_path.write_bytes(b"checkpoint")
+    recipe_document = level1_1_recipe_document()
+    recipe_path = write_canonical_json(
+        model_path.with_suffix(".recipe.json"),
+        recipe_document,
+    )
+    train_config = recipe_document["recipe"]["train_config"]
+    config = resolve_env_config(env_config_from_mapping(train_config))
+    legacy_training = training_metadata(config)
+    legacy_training["environment"] = deepcopy(legacy_training["environment"])
+    legacy_training["environment"]["env_id"] = "rlab:Bandit-v0"
+    write_canonical_json(
+        model_path.with_suffix(".model.json"),
+        build_model_document(
+            model_path,
+            recipe_path,
+            {
+                "kind": "checkpoint",
+                "checkpoint_step": 100,
+                "algorithm_id": "ppo",
+                "model_class": "stable_baselines3.ppo.ppo.PPO",
+                "training_backend_id": train_config["training_backend"]["id"],
+                "training_backend_config_hash": training_backend_config_hash(train_config),
+                "training_metadata": legacy_training,
+            },
+        ),
+    )
+
+    with pytest.raises(PolicyDocumentError, match="training environment disagrees"):
+        load_policy_bundle_from_checkpoint(model_path)
+
+
+@pytest.mark.parametrize(
+    ("goal_path", "recipe_path", "expected_mode", "expected_preset"),
+    (
+        (BANDIT_GOAL, BANDIT_RECIPE, None, None),
+        (VIZDOOM_GOAL, VIZDOOM_RECIPE, "discrete", None),
+        (GOAL, RECIPE, "custom_discrete", "basic"),
+    ),
+)
+def test_bundle_metadata_reconstructs_provider_action_contract(
+    tmp_path: Path,
+    goal_path: Path,
+    recipe_path: Path,
+    expected_mode: str | None,
+    expected_preset: str | None,
+) -> None:
+    checkpoint_path = tmp_path / f"{goal_path.parent.name}.zip"
+    checkpoint_path.write_bytes(b"checkpoint")
+    recipe_document = build_recipe_document(
+        compose_train_document(goal_path, recipe_path),
+        repo_root=Path.cwd(),
+        source_commit="a" * 40,
+        run_description="Bundle metadata action-contract regression.",
+        seed=7,
+        runtime_image_ref=RUNTIME,
+    )
+    train_config = recipe_document["recipe"]["train_config"]
+    recipe_sidecar = write_canonical_json(
+        checkpoint_path.with_suffix(".recipe.json"),
+        recipe_document,
+    )
+    write_canonical_json(
+        checkpoint_path.with_suffix(".model.json"),
+        build_model_document(
+            checkpoint_path,
+            recipe_sidecar,
+            {
+                "kind": "checkpoint",
+                "checkpoint_step": 100,
+                "algorithm_id": "ppo",
+                "model_class": "stable_baselines3.ppo.ppo.PPO",
+                "training_backend_id": train_config["training_backend"]["id"],
+                "training_backend_config_hash": training_backend_config_hash(train_config),
+                "training_metadata": {"versions": {}},
+            },
+        ),
+    )
+
+    bundle = load_policy_bundle_from_checkpoint(checkpoint_path)
+    assert bundle is not None
+    action = policy_bundle_as_metadata(bundle)["training_metadata"]["action"]
+    if expected_mode is None:
+        assert action is None
+    else:
+        assert action["mode"] == expected_mode
+        assert action["preset"] == expected_preset
 
 
 def test_post400_acceptance_assigns_every_snapshot_to_a_fixed_lane() -> None:

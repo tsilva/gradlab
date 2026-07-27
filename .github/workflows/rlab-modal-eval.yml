@@ -111,14 +111,14 @@ jobs:
           if not required:
               config = load_modal_eval_config()
               app_name = modal_app_name(
-                  config.app_name_prefix,
+                  config.deployment.app_name_prefix,
                   os.environ["RLAB_EXPECTED_SOURCE_SHA"],
               )
               try:
                   modal.Function.from_name(
                       app_name,
-                      config.function_name,
-                      environment_name=config.environment_name,
+                      config.deployment.function_name,
+                      environment_name=config.deployment.environment_name,
                   ).hydrate()
               except modal.exception.NotFoundError:
                   required = True
@@ -143,13 +143,13 @@ jobs:
           runtime_image_ref = os.environ["RLAB_MODAL_EVAL_RUNTIME_IMAGE"]
           config = load_modal_eval_config()
           app_name = modal_app_name(
-              config.app_name_prefix,
+              config.deployment.app_name_prefix,
               os.environ["RLAB_EXPECTED_SOURCE_SHA"],
           )
           result = modal.Function.from_name(
               app_name,
               "startup_probe",
-              environment_name=config.environment_name,
+              environment_name=config.deployment.environment_name,
           ).remote()
           expected = {
               "app_name": app_name,

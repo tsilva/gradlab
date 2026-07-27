@@ -9,10 +9,10 @@ from rlab.checkpoint_acceptance import (
     acceptance_aggregates,
     aggregates_match,
     build_checkpoint_eval_contract,
+    checkpoint_eval_max_steps,
     manifest_index,
     validate_episode_rows,
 )
-from rlab.checkpoint_eval_config import checkpoint_eval_max_steps
 from rlab.modal_eval_protocol import (
     SEED_PROTOCOL,
     execution_key,

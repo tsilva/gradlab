@@ -57,6 +57,8 @@ class RuntimeRefsTests(unittest.TestCase):
             "status": "completed",
             "conclusion": "failure",
             "url": "https://example.test/run/11",
+            "displayTitle": "Publish immutable runtime",
+            "updatedAt": "2026-07-27T12:00:00Z",
         }
         with (
             mock.patch.object(runtime_refs, "_matching_runs", return_value=[run]),
@@ -70,6 +72,20 @@ class RuntimeRefsTests(unittest.TestCase):
 
         self.assertEqual(release.runtime_image_ref, RUNTIME_IMAGE_REF)
         self.assertEqual(release.workflow_run_id, "11")
+        self.assertEqual(release.commit_message, "Publish immutable runtime")
+        self.assertEqual(release.published_at, "2026-07-27T12:00:00Z")
+
+    def test_schema_five_rejects_obsolete_descriptive_fields(self) -> None:
+        for field in ("commit_message", "published_at", "created_at", "publishedAt"):
+            with self.subTest(field=field):
+                payload = image_payload()
+                payload[field] = "obsolete"
+                with self.assertRaisesRegex(ValueError, "unknown field"):
+                    runtime_refs.runtime_release_from_payload(
+                        payload,
+                        label="test image",
+                        expected_source_sha=SOURCE_SHA,
+                    )
 
     def test_active_workflow_is_reused_without_dispatch(self) -> None:
         active = {

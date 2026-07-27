@@ -29,7 +29,7 @@ from rlab.policy_bundle import (
     PolicyDocumentError,
     evaluation_contract,
     evaluation_contract_sha256,
-    model_document_as_metadata,
+    policy_bundle_as_metadata,
 )
 from rlab.env_registry import resolve_env_provider
 from rlab.rom_assets import rom_asset_manifest_for_game
@@ -447,7 +447,7 @@ def evaluate_policy_bundle(
             game=config.game,
         )
     assert_provider_runtime_available(config, rom_binding=rom_binding)
-    metadata = model_document_as_metadata(bundle.model)
+    metadata = policy_bundle_as_metadata(bundle)
     algorithm_id = resolve_policy_algorithm(metadata)
     if internal_execution_id:
         model = load_internal_policy_model(
