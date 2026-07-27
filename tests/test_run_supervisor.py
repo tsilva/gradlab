@@ -133,6 +133,8 @@ class RunSupervisorTests(unittest.TestCase):
                 "run_id": self.run_id,
                 "entity": "entity",
                 "project": "project",
+                "display_name": f"Level1-1__ppo__s123__{self.run_id[5:13]}",
+                "group": "cohort::SuperMarioBros-Nes-v0/Level1-1::ppo::base",
                 "url": f"https://wandb.ai/entity/project/runs/{self.run_id}",
             },
             modal={
@@ -610,6 +612,15 @@ class RunSupervisorTests(unittest.TestCase):
         self.assertEqual(supervisor.train_config["timesteps"], 50_000_000)
         self.assertEqual(supervisor.train_config["checkpoint_freq"], 250_000)
         self.assertEqual(supervisor.train_config["n_envs"], 16)
+        self.assertEqual(supervisor.train_config["run_name"], self.run_id)
+        self.assertEqual(
+            supervisor.train_config["wandb_display_name"],
+            f"Level1-1__ppo__s123__{self.run_id[5:13]}",
+        )
+        self.assertEqual(
+            supervisor.train_config["wandb_group"],
+            "cohort::SuperMarioBros-Nes-v0/Level1-1::ppo::base",
+        )
         self.assertEqual(supervisor.train_config["recipe_overrides"], [])
         self.assertEqual(supervisor.train_config["recipe_variant_id"], "base")
         self.assertIn("recipe_variant:base", supervisor.train_config["wandb_tags"])

@@ -120,6 +120,8 @@ WORKDIR /src
 COPY pyproject.toml ./
 COPY THIRD_PARTY_NOTICES.md ./
 COPY METRICS.md ./
+COPY experiments/goals ./experiments/goals
+COPY experiments/recipes ./experiments/recipes
 COPY src ./src
 
 RUN --mount=type=cache,target=/root/.cache/uv \

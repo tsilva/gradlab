@@ -84,12 +84,15 @@ def _start_wandb(args, *, run_dir: str, config):
     )
     wandb_config["environment"] = training["environment"]
     wandb_config["environment_hash"] = training["environment_hash"]
+    display_name = str(getattr(args, "wandb_display_name", None) or "").strip() or str(
+        args.run_name
+    )
     return configure_wandb_metrics(
         wandb.init(
             project=project,
             entity=entity,
             group=args.wandb_group,
-            name=args.run_name,
+            name=display_name,
             notes=args.run_description or None,
             tags=tags,
             config=wandb_config,
@@ -140,6 +143,11 @@ class WandbProjector:
             if isinstance(raw_tags, str)
             else [str(tag) for tag in raw_tags]
         )
+        display_name = (
+            str(train_config.get("wandb_display_name") or "").strip()
+            or str(train_config.get("run_name") or "").strip()
+            or None
+        )
         run = configure_wandb_metrics(
             wandb.init(
                 entity=entity,
@@ -147,7 +155,7 @@ class WandbProjector:
                 id=run_id,
                 resume="allow" if allow_create else "must",
                 mode=str(train_config.get("wandb_mode") or "online"),
-                name=str(train_config.get("run_name") or "") or None,
+                name=display_name,
                 group=str(train_config.get("wandb_group") or "") or None,
                 tags=tags,
                 config=dict(train_config) if allow_create else None,

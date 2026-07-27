@@ -108,6 +108,7 @@ def test_init_wandb_records_resolved_identity_and_submission_group() -> None:
         wandb_tags="goal_id:alepy__breakout,recipe_id:base",
         wandb_entity="entity",
         wandb_project=None,
+        wandb_display_name="breakout__base__s123__01234567",
         wandb_group="bx0123456789abcdef",
         run_name="bx0123456789abcdef-base-s123-20260714T120000Z",
         run_description="offline identity canary",
@@ -130,12 +131,90 @@ def test_init_wandb_records_resolved_identity_and_submission_group() -> None:
     assert captured["project"] == "Breakout-Atari2600-v0"
     assert captured["group"] == "bx0123456789abcdef"
     assert captured["id"] == "rlab-0123456789abcdef01234567"
-    assert captured["name"] == args.run_name
+    assert captured["name"] == args.wandb_display_name
     assert captured["config"]["wandb_project"] == "Breakout-Atari2600-v0"
     assert captured["config"]["game_family"] == "Atari2600-Breakout"
     assert captured["config"]["environment"]["env_id"] == "ale-py:breakout"
     assert "environment_hash" in captured["config"]
     assert "game_family:Atari2600-Breakout" in captured["tags"]
+
+
+def test_init_wandb_falls_back_to_run_name_for_legacy_config() -> None:
+    captured = {}
+
+    class FakeRun:
+        def define_metric(self, *_args, **_kwargs) -> None:
+            return None
+
+    args = argparse.Namespace(
+        wandb=True,
+        wandb_tags="",
+        wandb_entity="entity",
+        wandb_project=None,
+        wandb_group="legacy-group",
+        run_name="legacy-run-name",
+        run_description="legacy identity canary",
+        wandb_mode="offline",
+        wandb_run_id="rlab-0123456789abcdef01234567",
+    )
+    config = EnvConfig(env_provider="ale-py", game="breakout", state=None)
+
+    with (
+        tempfile.TemporaryDirectory() as tmp,
+        patch("rlab.wandb_publisher.load_wandb_env"),
+        patch.dict(
+            sys.modules,
+            {"wandb": SimpleNamespace(init=lambda **kwargs: captured.update(kwargs) or FakeRun())},
+        ),
+    ):
+        _start_wandb(args, run_dir=tmp, config=config)
+
+    assert captured["name"] == args.run_name
+    assert captured["group"] == "legacy-group"
+
+
+@pytest.mark.parametrize(
+    ("display_name", "expected_name"),
+    [
+        ("Level1-1__ppo__s7__01234567", "Level1-1__ppo__s7__01234567"),
+        (None, "rlab-0123456789abcdef0123456789abcdef"),
+    ],
+)
+def test_resume_wandb_prefers_display_name_with_legacy_fallback(
+    display_name: str | None,
+    expected_name: str,
+) -> None:
+    captured = {}
+
+    class FakeRun:
+        def define_metric(self, *_args, **_kwargs) -> None:
+            return None
+
+    train_config = {
+        "wandb_run_id": "rlab-0123456789abcdef0123456789abcdef",
+        "wandb_entity": "entity",
+        "wandb_project": "SuperMarioBros-Nes-v0",
+        "wandb_display_name": display_name,
+        "wandb_group": "cohort::SuperMarioBros-Nes-v0/Level1-1::ppo::base",
+        "wandb_mode": "offline",
+        "run_name": "rlab-0123456789abcdef0123456789abcdef",
+        "env_provider": "supermariobrosnes-turbo",
+        "game": "SuperMarioBros-Nes-v0",
+    }
+    fake_wandb = SimpleNamespace(
+        init=lambda **kwargs: captured.update(kwargs) or FakeRun(),
+        Settings=lambda **kwargs: kwargs,
+    )
+
+    with (
+        patch("rlab.wandb_publisher.load_wandb_env"),
+        patch.dict(sys.modules, {"wandb": fake_wandb}),
+    ):
+        WandbProjector.resume(train_config)
+
+    assert captured["name"] == expected_name
+    assert captured["id"] == train_config["wandb_run_id"]
+    assert captured["group"] == train_config["wandb_group"]
 
 
 def test_wandb_finish_has_a_hard_timeout() -> None:

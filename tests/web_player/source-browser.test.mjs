@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   activeRunMetricColumns,
   bestRunEfficiency,
+  checkpointPlaybackSeed,
   formatMetricValue,
   metricLabel,
   rankRunItems,
@@ -41,6 +42,13 @@ test("run metrics use compact labels and values", () => {
     "87.5%",
   );
   assert.equal(formatMetricValue(METRIC, null), "—");
+});
+
+test("checkpoint playback seed accepts catalog provenance and rejects invalid values", () => {
+  assert.equal(checkpointPlaybackSeed({ playback_seed: 42_000 }), 42_000);
+  assert.equal(checkpointPlaybackSeed({ playback_seed: 0 }), 0);
+  assert.equal(checkpointPlaybackSeed({ playback_seed: null }), null);
+  assert.equal(checkpointPlaybackSeed({ playback_seed: -1 }), null);
 });
 
 test("run metric sorting respects direction and keeps missing values last", () => {

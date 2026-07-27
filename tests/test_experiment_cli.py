@@ -23,6 +23,7 @@ from rlab.experiment_cli import (
     _stage_rom,
     _task_name,
     _task_request,
+    _wandb_identity,
     build_parser,
     cmd_launch,
     cmd_resume_submit,
@@ -32,6 +33,89 @@ from rlab.operator_credentials import OperatorConfigurationError
 from rlab.policy_bundle import build_recipe_document
 from rlab.recipe_documents import compose_train_document
 from rlab.run_contracts import RunManifest, new_attempt_id, new_run_id
+
+
+@pytest.mark.parametrize(
+    ("goal_slug", "expected_goal"),
+    [
+        ("SuperMarioBros-Nes-v0/Level1-1", "Level1-1"),
+        ("SuperMarioBros-Nes-v0/World1/Level1-1", "World1--Level1-1"),
+        ("SuperMarioBros-Nes-v0", "SuperMarioBros-Nes-v0"),
+        ("custom/Level1-1", "custom--Level1-1"),
+    ],
+)
+def test_wandb_identity_uses_project_relative_goal_display_names(
+    goal_slug: str,
+    expected_goal: str,
+) -> None:
+    run_id = "rlab-0123456789abcdef0123456789abcdef"
+    document = {
+        "train_config": {
+            "env_provider": "supermariobrosnes-turbo",
+            "game": "SuperMarioBros-Nes-v0",
+        }
+    }
+
+    with mock.patch("rlab.experiment_cli.wandb_entity_from_env", return_value="entity"):
+        identity = _wandb_identity(
+            document,
+            run_id,
+            goal_slug=goal_slug,
+            recipe_slug="ppo-b3",
+            recipe_variant="base",
+            seed=7,
+        )
+
+    assert identity["project"] == "SuperMarioBros-Nes-v0"
+    assert identity["display_name"] == f"{expected_goal}__ppo-b3__s7__01234567"
+    assert identity["group"] == f"cohort::{goal_slug}::ppo-b3::base"
+    assert identity["run_id"] == run_id
+    assert identity["url"].endswith(f"/runs/{run_id}")
+
+
+def test_wandb_identity_prefers_declared_campaign_group() -> None:
+    document = {
+        "campaign_id": "mario-b3-confirmation",
+        "train_config": {
+            "env_provider": "supermariobrosnes-turbo",
+            "game": "SuperMarioBros-Nes-v0",
+        },
+    }
+
+    with mock.patch("rlab.experiment_cli.wandb_entity_from_env", return_value="entity"):
+        identity = _wandb_identity(
+            document,
+            "rlab-fedcba9876543210fedcba9876543210",
+            goal_slug="SuperMarioBros-Nes-v0/Level1-1",
+            recipe_slug="ppo-b3",
+            recipe_variant="v-12345678",
+            seed=123,
+        )
+
+    assert identity["group"] == "campaign::mario-b3-confirmation"
+
+
+def test_wandb_identity_cohort_group_includes_override_variant() -> None:
+    document = {
+        "train_config": {
+            "env_provider": "supermariobrosnes-turbo",
+            "game": "SuperMarioBros-Nes-v0",
+        }
+    }
+
+    with mock.patch("rlab.experiment_cli.wandb_entity_from_env", return_value="entity"):
+        identity = _wandb_identity(
+            document,
+            "rlab-fedcba9876543210fedcba9876543210",
+            goal_slug="SuperMarioBros-Nes-v0/Level1-1",
+            recipe_slug="ppo-b3",
+            recipe_variant="v-12345678",
+            seed=123,
+        )
+
+    assert identity["group"] == (
+        "cohort::SuperMarioBros-Nes-v0/Level1-1::ppo-b3::v-12345678"
+    )
 
 
 def _manifest_only_run() -> RunManifest:

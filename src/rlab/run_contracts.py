@@ -158,6 +158,9 @@ class RunManifest:
         _require_text(self.wandb.get("entity"), "wandb.entity")
         _require_text(self.wandb.get("project"), "wandb.project")
         _require_text(self.wandb.get("url"), "wandb.url")
+        for field in ("display_name", "group"):
+            if field in self.wandb:
+                _require_text(self.wandb.get(field), f"wandb.{field}")
         modal_enabled = self.modal.get("enabled")
         if not isinstance(modal_enabled, bool):
             raise ValueError("modal.enabled must be a boolean")

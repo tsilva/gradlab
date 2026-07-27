@@ -841,6 +841,12 @@ TRAIN_CONFIG_FIELDS: tuple[TrainConfigField, ...] = (
     ),
     _field("wandb_project", default=None),
     _field("wandb_entity", default=None),
+    _field(
+        "wandb_display_name",
+        default=None,
+        cli_exposed=False,
+        help="Human-readable W&B display name separate from the immutable run identity.",
+    ),
     _field("wandb_group", default=None),
     _field("wandb_tags", default="", help="Comma-separated W&B tags"),
     _field(

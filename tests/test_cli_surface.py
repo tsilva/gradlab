@@ -44,6 +44,7 @@ for name in sorted(sys.modules):
 
     def test_delegated_help_uses_complete_public_command(self) -> None:
         cases = (
+            (("train", "--help"), "usage: rlab train"),
             (("experiment", "launch", "--help"), "usage: rlab experiment launch"),
             (("experiment", "follow", "--help"), "usage: rlab experiment follow"),
             (("eval", "--help"), "usage: rlab eval"),

@@ -58,6 +58,37 @@ run stages its exact ROM bytes and manifest to eval-private R2. ROMs, R2
 credentials, W&B credentials, and Modal credentials are never embedded in the
 image.
 
+## Train and play a recipe with uvx
+
+`uvx` can run a built-in recipe without cloning rlab. Select this distribution
+explicitly because the `rlab` project name on PyPI is owned by an unrelated
+package. Downstream repositories should replace `<immutable-rlab-ref>` with a
+release tag or full commit:
+
+```bash
+RLAB_SOURCE='git+https://github.com/tsilva/rlab.git@<immutable-rlab-ref>'
+
+uvx --from "$RLAB_SOURCE" rlab train Breakout-Atari2600-v0/ppo
+uvx --from "$RLAB_SOURCE" rlab play --recipe Breakout-Atari2600-v0/ppo
+
+uvx --from "$RLAB_SOURCE" rlab train SuperMarioBros-Nes-v0/Level1-1/ppo
+uvx --from "$RLAB_SOURCE" rlab play --recipe SuperMarioBros-Nes-v0/Level1-1/ppo
+
+uvx --from "$RLAB_SOURCE" rlab train VizdoomBasic-v1/ppo
+uvx --from "$RLAB_SOURCE" rlab play --recipe VizdoomBasic-v1/ppo
+```
+
+Training writes a unique run below `./runs`; recipe playback selects the newest
+completed matching model. Local training disables W&B and checkpoint evaluation
+by default, so it needs no orchestration credentials and cannot establish goal
+acceptance or checkpoint promotion. Use repeatable `--set KEY=VALUE` overrides,
+`--seed`, `--runs-dir`, or `--wandb` when needed. A recipe YAML in another
+repository also works when it lives at
+`experiments/goals/<goal>/recipes/<recipe>.yaml` beside its owning `_goal.yaml`.
+Mario additionally requires a lawful local ROM registered once with
+`rlab rom sync --game SuperMarioBros-Nes-v0`; local training verifies and binds
+that cache without sending the ROM anywhere.
+
 ## Launch and observe
 
 Keep non-sensitive operator metadata and Keychain references in the private
@@ -92,6 +123,12 @@ R2 mutation, then requires a clean, pushed source revision and waits for its
 verified immutable training image and source-specific Modal deployment. It
 returns the rlab run ID, attempt ID, dstack task, selected compute offer,
 source/image digest, W&B URL, and public run-index URL.
+
+W&B projects remain organized by canonical game family. New orchestrated runs
+keep their immutable `rlab-…` run ID while using a readable
+`<goal>__<recipe>__s<seed>__<short-run-id>` display name. Runs from a declared
+campaign share a campaign group; otherwise runs sharing a goal, recipe, and
+launch-time recipe variant share a cohort group.
 
 Compute policy:
 

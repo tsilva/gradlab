@@ -46,9 +46,11 @@ class TrainImageTests(unittest.TestCase):
 
         for source in force_includes:
             with self.subTest(source=source):
-                self.assertTrue(Path(source).is_file())
+                source_path = Path(source)
+                self.assertTrue(source_path.exists())
                 self.assertIn(source, RUNTIME_INPUT_PATHS)
-                self.assertIn(f"COPY {source} ./", app_package)
+                destination = "./" if source_path.is_file() else f"./{source}"
+                self.assertIn(f"COPY {source} {destination}", app_package)
 
     def test_modal_deploy_group_covers_config_runtime(self) -> None:
         project = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
@@ -277,7 +279,7 @@ class TrainImageTests(unittest.TestCase):
 
         # supermariobrosnes-turbo uses Textual for its runtime state tooling.
         self.assertIn("textual==", dependencies)
-        self.assertIn("vizdoom-turbo==0.1.3", dependencies)
+        self.assertIn("vizdoom-turbo==1.3.0.post1", dependencies)
         self.assertNotIn("wandb-workspaces==", train)
         self.assertIn("torch==2.12.0", gpu)
         train_lines = set(train.splitlines())

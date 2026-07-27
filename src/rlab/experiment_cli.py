@@ -40,6 +40,7 @@ from rlab.recipe_documents import (
     compose_train_document,
     prepare_checkpoint_eval_mode,
 )
+from rlab.recipe_variants import recipe_variant_id
 from rlab.rom_assets import (
     ROM_ASSET_IDENTITY_ALGORITHM,
     ROM_ASSET_PREFIX,
@@ -378,18 +379,38 @@ def _task_request(manifest: RunManifest, *, manifest_uri: str) -> TaskRequest:
     )
 
 
-def _wandb_identity(document: dict[str, Any], run_id: str) -> dict[str, Any]:
+def _wandb_identity(
+    document: dict[str, Any],
+    run_id: str,
+    *,
+    goal_slug: str,
+    recipe_slug: str,
+    recipe_variant: str,
+    seed: int,
+) -> dict[str, Any]:
     config = dict(document["train_config"])
     project, family = canonical_wandb_environment(
         config.get("env_provider"),
         config.get("game"),
+    )
+    relative_goal = (
+        goal_slug.removeprefix(f"{project}/") if goal_slug.startswith(f"{project}/") else goal_slug
+    )
+    display_goal = relative_goal.replace("/", "--")
+    display_name = f"{display_goal}__{recipe_slug}__s{int(seed)}__{run_id.removeprefix('rlab-')[:8]}"
+    campaign_id = str(document.get("campaign_id") or "").strip()
+    group = (
+        f"campaign::{campaign_id}"
+        if campaign_id
+        else f"cohort::{goal_slug}::{recipe_slug}::{recipe_variant}"
     )
     entity = wandb_entity_from_env()
     return {
         "run_id": run_id,
         "entity": entity,
         "project": project,
-        "group": run_id,
+        "display_name": display_name,
+        "group": group,
         "game_family": family,
         "url": (
             f"https://wandb.ai/{quote(entity, safe='')}/"
@@ -457,7 +478,21 @@ def cmd_launch(args: argparse.Namespace) -> int:
     run_id = new_run_id()
     attempt_id = new_attempt_id()
     dstack_task = _task_name(run_id, attempt_id, initial=True)
-    wandb = _wandb_identity(document, run_id)
+    goal_slug = goal_path.parent.relative_to(root / "experiments" / "goals").as_posix()
+    recipe_slug = recipe_path.stem
+    variant_id = recipe_variant_id(
+        recipe_slug=recipe_slug,
+        source_sha=source_sha,
+        recipe_overrides=recipe_overrides,
+    )
+    wandb = _wandb_identity(
+        document,
+        run_id,
+        goal_slug=goal_slug,
+        recipe_slug=recipe_slug,
+        recipe_variant=variant_id,
+        seed=int(args.seed),
+    )
     modal_app = str(release.modal_app_name or "").strip()
     if checkpoint_eval_backend == "modal" and not modal_app:
         raise RuntimeError(
@@ -483,11 +518,9 @@ def cmd_launch(args: argparse.Namespace) -> int:
         created_at=utc_now(),
         source_sha=source_sha,
         image_digest=release.runtime_image_ref,
-        goal_slug=goal_path.parent.relative_to(
-            root / "experiments" / "goals"
-        ).as_posix(),
+        goal_slug=goal_slug,
         goal_sha256=str(document["train_config"]["effective_goal_contract_sha256"]),
-        recipe_slug=recipe_path.stem,
+        recipe_slug=recipe_slug,
         recipe_sha256=canonical_json_sha256(portable_recipe),
         recipe_overrides=recipe_overrides,
         environment_sha256=str(document["environment_hash"]).removeprefix("sha256:"),

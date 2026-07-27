@@ -141,13 +141,12 @@ def test_web_playback_exposes_loaded_models_value_discount() -> None:
     assert runner.snapshot()["session"]["value_discount"] == 0.9
 
 
-def test_next_episode_dispatches_seed_sampling_and_driver_atomically() -> None:
+def test_next_episode_dispatches_sampling_and_driver_without_restarting() -> None:
     transition = argparse.Namespace(boundary=False, events=())
     session = argparse.Namespace(
         config={"game": "Game-v0"},
         episode=2,
         last_transition=None,
-        restart=Mock(),
         step=Mock(return_value=transition),
     )
     runner = WebPlaybackRunner(session, human_args(episodes=0), config_text="")
@@ -162,7 +161,6 @@ def test_next_episode_dispatches_seed_sampling_and_driver_atomically() -> None:
             "client",
             "next_episode",
             {
-                "seed": "42",
                 "sampling_mode": "deterministic",
                 "driver": "policy",
             },
@@ -170,7 +168,6 @@ def test_next_episode_dispatches_seed_sampling_and_driver_atomically() -> None:
         )
     )
 
-    session.restart.assert_called_once_with(42, reset_episode_index=False)
     assert runner.awaiting_next_episode is False
     assert runner.sampling_mode == "deterministic"
     assert runner.driver == "policy"
@@ -179,6 +176,85 @@ def test_next_episode_dispatches_seed_sampling_and_driver_atomically() -> None:
     runner._step_once()
 
     session.step.assert_called_once_with(deterministic=True)
+
+
+def test_reset_episode_uses_visible_seed_and_pauses_at_step_zero() -> None:
+    session = argparse.Namespace(
+        config={"game": "Game-v0"},
+        active_seed=42,
+        last_transition=argparse.Namespace(),
+        reset_episode=Mock(),
+    )
+    session.reset_episode.side_effect = lambda seed: (
+        setattr(session, "active_seed", seed),
+        setattr(session, "last_transition", None),
+    )
+    runner = WebPlaybackRunner(session, human_args(episodes=0), config_text="")
+    runner._publish = Mock()
+    runner.run_state = "playing"
+
+    runner._apply(
+        PlaybackCommand(
+            "reset",
+            "client",
+            "reset_episode",
+            {"seed": "77"},
+            None,
+        )
+    )
+
+    session.reset_episode.assert_called_once_with(77)
+    assert runner.awaiting_next_episode is False
+    assert runner.run_state == "paused"
+    assert runner._status_message == "episode reset · seed 77"
+
+
+def test_reset_episode_defaults_to_the_active_seed() -> None:
+    session = argparse.Namespace(
+        config={"game": "Game-v0"},
+        active_seed=42,
+        last_transition=None,
+        reset_episode=Mock(),
+    )
+    runner = WebPlaybackRunner(session, human_args(episodes=0), config_text="")
+    runner._publish = Mock()
+
+    runner._apply(PlaybackCommand("reset", "client", "reset_episode", {"seed": ""}, None))
+
+    session.reset_episode.assert_called_once_with(None)
+
+
+def test_reset_episode_cannot_bypass_episode_limit() -> None:
+    session = argparse.Namespace(
+        config={"game": "Game-v0"},
+        active_seed=42,
+        last_transition=None,
+        reset_episode=Mock(),
+    )
+    runner = WebPlaybackRunner(session, human_args(episodes=1), config_text="")
+    runner._publish = Mock()
+    runner.awaiting_next_episode = True
+    runner.boundaries = 1
+
+    runner._apply(PlaybackCommand("reset", "client", "reset_episode", {"seed": "42"}, None))
+
+    session.reset_episode.assert_not_called()
+    response = runner.responses.get_nowait().payload
+    assert response["ok"] is False
+    assert response["error"] == "episode limit reached (1)"
+
+
+def test_session_reset_starts_a_new_attempt_only_after_steps() -> None:
+    session = object.__new__(_PlaybackSession)
+    session.active_seed = 42
+    session.episode = 3
+    session.step_index = 12
+    session.restart = Mock()
+
+    session.reset_episode()
+
+    assert session.episode == 4
+    session.restart.assert_called_once_with(42, reset_episode_index=False)
 
 
 def test_play_does_not_mutate_active_episode_dispatch_settings() -> None:

@@ -24,6 +24,7 @@ def _eval_argv(argv: Sequence[str]) -> list[str] | None:
 
 
 COMMANDS: dict[str, tuple[str, str]] = {
+    "train": ("train a checked-in recipe locally", "rlab.local_train"),
     "experiment": ("launch and observe dstack training experiments", "rlab.experiment_cli"),
     "eval": ("run a direct local evaluation", "rlab.eval"),
     "play": ("browse and inspect W&B, public-run, local, or Hugging Face models", "rlab.play"),
@@ -49,8 +50,8 @@ def build_parser() -> argparse.ArgumentParser:
         prog="rlab",
         description="Unified command surface for rlab training, eval, playback, and ops.",
         epilog=(
-            "Research: experiment, eval, play, validate.  Environments: env, rom, import-roms, "
-            "benchmark.  Datasets: dataset.  Results: leaders, reports."
+            "Research: train, experiment, eval, play, validate.  Environments: env, rom, "
+            "import-roms, benchmark.  Datasets: dataset.  Results: leaders, reports."
         ),
     )
     subparsers = parser.add_subparsers(dest="command", metavar="<command>")

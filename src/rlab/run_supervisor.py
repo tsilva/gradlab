@@ -585,6 +585,9 @@ class RunSupervisor:
                 "wandb_run_id": str(self.manifest.wandb.get("run_id") or self.manifest.run_id),
                 "wandb_entity": str(self.manifest.wandb.get("entity") or ""),
                 "wandb_project": str(self.manifest.wandb.get("project") or ""),
+                "wandb_display_name": str(
+                    self.manifest.wandb.get("display_name") or self.manifest.run_id
+                ),
                 "wandb_group": str(self.manifest.wandb.get("group") or ""),
                 "wandb_tags": ",".join(
                     [

@@ -375,6 +375,11 @@ class PlaybackHost:
         value = str(source.get("value") or "").strip()
         if not value:
             raise ValueError("playback source is empty")
+        seed_value = source.get("seed")
+        if seed_value is not None and (
+            isinstance(seed_value, bool) or not isinstance(seed_value, int)
+        ):
+            raise ValueError("playback source seed must be an integer")
         return PlaySourceSpec(
             kind=kind,  # type: ignore[arg-type]
             value=value,
@@ -382,6 +387,7 @@ class PlaybackHost:
             project=str(source.get("project") or ""),
             run_id=str(source.get("run_id") or ""),
             checkpoint_id=str(source.get("checkpoint_id") or ""),
+            seed=seed_value,
         )
 
     def submit(self, command) -> None:
