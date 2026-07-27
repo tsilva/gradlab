@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -13,6 +14,7 @@ from rlab.run_contracts import checkpoint_id
 
 
 RUN_ID = "rlab-" + "a" * 32
+SECOND_RUN_ID = "rlab-" + "b" * 32
 
 
 class FakeApi:
@@ -32,6 +34,8 @@ class FakeApi:
         self.runs_filters.append(kwargs.get("filters"))
         assert path == "research/Mario"
         assert kwargs["order"] == "-created_at"
+        assert kwargs["per_page"] == 200
+        assert kwargs["lazy"] is False
         return [
             SimpleNamespace(
                 id="legacy-run",
@@ -73,7 +77,89 @@ class FakeApi:
 
     def run(self, path: str):
         assert path == f"research/Mario/{RUN_ID}"
-        return self.runs("research/Mario", order="-created_at", per_page=200, lazy=True)[1]
+        return self.runs("research/Mario", order="-created_at", per_page=200, lazy=False)[1]
+
+
+def wandb_catalog_node(
+    *,
+    run_id: str,
+    leader_step: int,
+    created_at: str,
+) -> dict[str, Any]:
+    return {
+        "name": run_id,
+        "displayName": f"Run {run_id[-1]}",
+        "state": "finished",
+        "config": json.dumps(
+            {
+                "goal_slug": {"value": "Mario/Level1-1"},
+                "recipe_slug": {"value": "ppo"},
+                "recipe_sha256": {"value": "f" * 64},
+                "run_description": {"value": f"description {run_id[-1]}"},
+                "seed": {"value": 3},
+                "_wandb": {"value": {"ignored": True}},
+            }
+        ),
+        "createdAt": created_at,
+        "notes": "",
+        "summaryMetrics": json.dumps(
+            {
+                "leader/checkpoint/step": leader_step,
+                "eval/full/episode/return/mean": 321.25,
+            }
+        ),
+    }
+
+
+class FakeCatalogGraphQLClient:
+    app_url = "https://wandb.example/"
+
+    def __init__(self) -> None:
+        self.calls: list[dict[str, Any]] = []
+
+    def execute(self, query: object, *, variable_values: dict[str, Any]):
+        del query
+        self.calls.append(variable_values)
+        cursor = variable_values["cursor"]
+        if cursor is None:
+            edges = [
+                {
+                    "node": wandb_catalog_node(
+                        run_id=RUN_ID,
+                        leader_step=1_500_000,
+                        created_at="2026-01-02T00:00:00Z",
+                    )
+                }
+            ]
+            page_info = {"endCursor": "page-2", "hasNextPage": True}
+        else:
+            assert cursor == "page-2"
+            edges = [
+                {
+                    "node": wandb_catalog_node(
+                        run_id=SECOND_RUN_ID,
+                        leader_step=1_000_000,
+                        created_at="2026-01-01T00:00:00Z",
+                    )
+                }
+            ]
+            page_info = {"endCursor": "done", "hasNextPage": False}
+        return {
+            "project": {
+                "runs": {
+                    "edges": edges,
+                    "pageInfo": page_info,
+                }
+            }
+        }
+
+
+class FakeCatalogGraphQLApi:
+    def __init__(self) -> None:
+        self.client = FakeCatalogGraphQLClient()
+
+    def runs(self, *args: object, **kwargs: object):
+        raise AssertionError(f"catalog must use the bounded GraphQL projection: {args=} {kwargs=}")
 
 
 def write_goal_catalog(repo_root: Path) -> None:
@@ -349,9 +435,7 @@ def test_catalog_uses_repository_projects_and_goals_before_querying_wandb(
     assert [item["run_id"] for item in runs.items] == [RUN_ID]
     assert runs.items[0]["recipe"] == "ppo"
     assert runs.items[0]["description"] == "accepted"
-    assert runs.items[0]["recipe_overrides"] == (
-        "train.backend.config.learning_rate=0.0002",
-    )
+    assert runs.items[0]["recipe_overrides"] == ("train.backend.config.learning_rate=0.0002",)
     assert runs.items[0]["recipe_variant_id"] == recipe_variant_id(
         recipe_slug="ppo",
         source_sha="c" * 40,
@@ -397,6 +481,36 @@ def test_catalog_uses_repository_projects_and_goals_before_querying_wandb(
     )
     assert [item["run_id"] for item in override_runs.items] == [RUN_ID]
     assert catalog.run_goal(entity="research", project="Mario", run_id=RUN_ID) == "Level1-1"
+
+
+def test_run_catalog_uses_one_bounded_projection_instead_of_lazy_run_hydration(
+    tmp_path: Path,
+) -> None:
+    write_goal_catalog(tmp_path)
+    catalog = PlayCatalog(repo_root=tmp_path)
+    api = FakeCatalogGraphQLApi()
+    catalog._api = api
+
+    page = catalog.runs(
+        entity="research",
+        project="Mario",
+        goal_id="Level1-1",
+    )
+
+    assert [item["run_id"] for item in page.items] == [SECOND_RUN_ID, RUN_ID]
+    assert page.items[0]["name"] == "Run b"
+    assert page.items[0]["description"] == "description b"
+    assert page.items[0]["recipe"] == "ppo"
+    assert page.items[0]["seed"] == 3
+    assert page.items[0]["metrics"]["leader/checkpoint/step"] == 1_000_000
+    assert page.items[0]["url"] == (f"https://wandb.example/research/Mario/runs/{SECOND_RUN_ID}")
+    assert [call["cursor"] for call in api.client.calls] == [None, "page-2"]
+    assert all(call["perPage"] == 200 for call in api.client.calls)
+    assert all(call["order"] == "-created_at" for call in api.client.calls)
+    assert all(
+        json.loads(call["filters"]) == {"config.goal_slug": "Mario/Level1-1"}
+        for call in api.client.calls
+    )
 
 
 def test_catalog_validates_and_orders_public_checkpoints(monkeypatch: pytest.MonkeyPatch) -> None:
