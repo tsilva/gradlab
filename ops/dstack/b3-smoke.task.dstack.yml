@@ -1,5 +1,5 @@
 type: task
-name: rlab-b3-smoke
+name: gradlab-b3-smoke
 image: nvidia/cuda@sha256:cfab6d524036220368d0665013dd79ddc8cd3516298dc12f031de62c8481f87e
 commands:
   - >-
@@ -23,5 +23,5 @@ retry:
     - interruption
   duration: 10m
 tags:
-  managed-by: rlab
+  managed-by: gradlab
   purpose: b3-smoke

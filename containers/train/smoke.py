@@ -24,12 +24,12 @@ def file_sha256(path: Path) -> str:
 
 
 def main() -> None:
-    root = Path(os.environ.get("RLAB_PROJECT_ROOT", "/root/rlab"))
-    print("rlab_container_smoke=ok")
+    root = Path(os.environ.get("GRADLAB_PROJECT_ROOT", "/root/gradlab"))
+    print("gradlab_container_smoke=ok")
     print(f"python={platform.python_version()}")
     print(f"platform={platform.platform()}")
     for package in (
-        "rlab",
+        "gradlab",
         "stable-retro-turbo",
         "vizdoom-turbo",
         "stable-baselines3",

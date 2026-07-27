@@ -6,40 +6,40 @@ from types import SimpleNamespace
 
 import pytest
 
-from rlab.artifacts import (
+from gradlab.artifacts import (
     checkpoint_step,
     load_model_metadata,
     load_playback_env_config,
     playback_env_config,
 )
-from rlab.env import EnvConfig, resolve_env_config
-from rlab.env_config import env_config_from_mapping
-from rlab.env_metadata import training_metadata
-from rlab.eval import build_parser as build_eval_parser
-from rlab.model_sources import (
+from gradlab.env import EnvConfig, resolve_env_config
+from gradlab.env_config import env_config_from_mapping
+from gradlab.env_metadata import training_metadata
+from gradlab.eval import build_parser as build_eval_parser
+from gradlab.model_sources import (
     is_huggingface_model_ref,
     model_source_ref,
     parse_huggingface_model_ref,
     positional_model_source_arg,
 )
-from rlab.play import (
+from gradlab.play import (
     _PlaybackSession,
     build_parser as build_play_parser,
     playback_should_end_episode,
     task_conditioning_change_message,
 )
-from rlab.play_termination import (
+from gradlab.play_termination import (
     configured_termination_ids,
     termination_condition_payload,
     with_enabled_termination_conditions,
 )
-from rlab.policy_bundle import (
+from gradlab.policy_bundle import (
     build_model_document,
     build_recipe_document,
     write_canonical_json,
 )
-from rlab.recipe_documents import compose_train_document
-from rlab.training_backend import training_backend_config_hash
+from gradlab.recipe_documents import compose_train_document
+from gradlab.training_backend import training_backend_config_hash
 
 
 def test_checkpoint_step_is_derived_from_learner_filename() -> None:
@@ -51,8 +51,8 @@ def test_model_metadata_round_trips_playback_environment(tmp_path: Path) -> None
     model = tmp_path / "model_250000_steps.zip"
     model.write_bytes(b"checkpoint")
     materialized = compose_train_document(
-        Path("experiments/goals/rlab__bandit/_goal.yaml"),
-        Path("experiments/goals/rlab__bandit/recipes/ppo.yaml"),
+        Path("experiments/goals/gradlab__bandit/_goal.yaml"),
+        Path("experiments/goals/gradlab__bandit/recipes/ppo.yaml"),
     )
     recipe_document = build_recipe_document(
         materialized,
@@ -102,7 +102,7 @@ def test_model_metadata_round_trips_playback_environment(tmp_path: Path) -> None
 
 def test_continuous_play_removes_task_owned_termination() -> None:
     config = EnvConfig(
-        env_provider="rlab",
+        env_provider="gradlab",
         game="Bandit-v0",
         task={
             "termination": {
@@ -124,7 +124,7 @@ def test_continuous_play_removes_task_owned_termination() -> None:
 
 def test_playback_termination_conditions_can_be_toggled_independently() -> None:
     config = EnvConfig(
-        env_provider="rlab",
+        env_provider="gradlab",
         game="Bandit-v0",
         task={
             "termination": {
@@ -161,7 +161,7 @@ def test_playback_termination_conditions_can_be_toggled_independently() -> None:
 
 def test_playback_termination_conditions_reject_unknown_ids() -> None:
     config = EnvConfig(
-        env_provider="rlab",
+        env_provider="gradlab",
         game="Bandit-v0",
         task={"termination": {"success": ["win"]}},
     )
@@ -188,7 +188,7 @@ def test_playback_session_rebuilds_environment_for_termination_change() -> None:
             self.closed = True
 
     base_config = EnvConfig(
-        env_provider="rlab",
+        env_provider="gradlab",
         game="Bandit-v0",
         task={
             "termination": {
@@ -234,7 +234,7 @@ def test_playback_session_rebuilds_environment_for_termination_change() -> None:
 
 def test_public_source_parsers_exclude_wandb_artifacts() -> None:
     manifest = (
-        "https://models.example/runs/rlab-"
+        "https://models.example/runs/gradlab-"
         + "a" * 32
         + "/checkpoints/250000-"
         + "b" * 64

@@ -6,12 +6,12 @@ from pathlib import Path
 
 import pytest
 
-from rlab.metric_store import MetricStore, metric_store_path
+from gradlab.metric_store import MetricStore, metric_store_path
 
 
 def test_metric_outbox_deduplicates_stable_events_and_tracks_latest() -> None:
     with tempfile.TemporaryDirectory() as temporary:
-        store = MetricStore(Path(temporary) / "rlab.sqlite")
+        store = MetricStore(Path(temporary) / "gradlab.sqlite")
         store.init()
         first = store.append_metrics(
             {"train/episode/return/shaped/mean": 1.0},
@@ -31,7 +31,7 @@ def test_metric_outbox_deduplicates_stable_events_and_tracks_latest() -> None:
 
 def test_frame_publish_failure_is_retryable_and_success_drains_outbox() -> None:
     with tempfile.TemporaryDirectory() as temporary:
-        store = MetricStore(Path(temporary) / "rlab.sqlite")
+        store = MetricStore(Path(temporary) / "gradlab.sqlite")
         store.init()
         store.append_metrics(
             {"train/episode/return/shaped/mean": 10},
@@ -50,7 +50,7 @@ def test_frame_publish_failure_is_retryable_and_success_drains_outbox() -> None:
 
 def test_interrupted_publish_claim_is_recovered() -> None:
     with tempfile.TemporaryDirectory() as temporary:
-        store = MetricStore(Path(temporary) / "rlab.sqlite")
+        store = MetricStore(Path(temporary) / "gradlab.sqlite")
         store.init()
         store.append_metrics(
             {"train/episode/return/shaped/mean": 1},
@@ -65,7 +65,7 @@ def test_interrupted_publish_claim_is_recovered() -> None:
 
 def test_recovery_manifest_is_secret_free_and_immutable() -> None:
     with tempfile.TemporaryDirectory() as temporary:
-        store = MetricStore(Path(temporary) / "rlab.sqlite")
+        store = MetricStore(Path(temporary) / "gradlab.sqlite")
         store.init()
         digest = store.register_recovery_manifest(
             {"version": "supervisor-sqlite-recovery-v1", "run_id": "run"}
@@ -143,7 +143,7 @@ def test_checkpoint_publication_status_is_local_delivery_state() -> None:
 
 def test_wal_accepts_concurrent_learner_writes() -> None:
     with tempfile.TemporaryDirectory() as temporary:
-        store = MetricStore(Path(temporary) / "rlab.sqlite", timeout=5)
+        store = MetricStore(Path(temporary) / "gradlab.sqlite", timeout=5)
         store.init()
         failures: list[BaseException] = []
 

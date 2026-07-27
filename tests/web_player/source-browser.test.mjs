@@ -12,7 +12,7 @@ import {
   sortRunItems,
   sourceRouteFromPath,
   sourceRoutePath,
-} from "../../src/rlab/web_player/sources/browser.js";
+} from "../../src/gradlab/web_player/sources/browser.js";
 
 const METRIC = "eval/full/episode/return/mean";
 

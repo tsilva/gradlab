@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from rlab.operator_credentials import (
+from gradlab.operator_credentials import (
     KeychainReference,
     OperatorConfigurationError,
     load_operator_environment,
@@ -35,18 +35,18 @@ active = true
     config_path = _write(
         tmp_path / "operator.toml",
         f"""
-schema_version = 1
+schema_version = 2
 
 [environment]
 DSTACK_SERVER_URL = "http://127.0.0.1:3000"
 WANDB_ENTITY = "example"
 
 [keychain.DSTACK_TOKEN]
-service = "rlab-dstack-admin"
+service = "gradlab-dstack-admin"
 account = "operator"
 
 [keychain.WANDB_API_KEY]
-service = "rlab-wandb"
+service = "gradlab-wandb"
 account = "api-key"
 
 [modal]
@@ -55,8 +55,8 @@ path = "{modal_path}"
         + "\n",
     )
     stored = {
-        KeychainReference("rlab-dstack-admin", "operator"): "dstack-token",
-        KeychainReference("rlab-wandb", "api-key"): "wandb-key",
+        KeychainReference("gradlab-dstack-admin", "operator"): "dstack-token",
+        KeychainReference("gradlab-wandb", "api-key"): "wandb-key",
     }
     environment: dict[str, str] = {}
 
@@ -84,10 +84,10 @@ def test_process_environment_wins_without_reading_keychain(tmp_path: Path) -> No
     config_path = _write(
         tmp_path / "operator.toml",
         """
-schema_version = 1
+schema_version = 2
 
 [keychain.WANDB_API_KEY]
-service = "rlab-wandb"
+service = "gradlab-wandb"
 account = "api-key"
 """.strip()
         + "\n",
@@ -109,7 +109,7 @@ def test_plaintext_protected_operator_value_is_rejected(tmp_path: Path) -> None:
     config_path = _write(
         tmp_path / "operator.toml",
         """
-schema_version = 1
+schema_version = 2
 
 [environment]
 WANDB_API_KEY = "plaintext-is-not-allowed"
@@ -143,7 +143,7 @@ active = true
     config_path = _write(
         tmp_path / "operator.toml",
         f"""
-schema_version = 1
+schema_version = 2
 
 [modal]
 path = "{modal_path}"
@@ -173,10 +173,10 @@ def test_missing_keychain_item_is_reported_without_a_value(tmp_path: Path) -> No
     config_path = _write(
         tmp_path / "operator.toml",
         """
-schema_version = 1
+schema_version = 2
 
 [keychain.WANDB_API_KEY]
-service = "rlab-wandb"
+service = "gradlab-wandb"
 account = "api-key"
 """.strip()
         + "\n",
@@ -199,18 +199,18 @@ def test_scoped_load_does_not_resolve_unrelated_keychain_or_modal(
     config_path = _write(
         tmp_path / "operator.toml",
         """
-schema_version = 1
+schema_version = 2
 
 [environment]
 WANDB_ENTITY = "research"
-RLAB_CONTROL_R2_URI = "s3://control"
+GRADLAB_CONTROL_R2_URI = "s3://control"
 
 [keychain.WANDB_API_KEY]
-service = "rlab-wandb"
+service = "gradlab-wandb"
 account = "api-key"
 
-[keychain.RLAB_CONTROL_R2_ACCESS_KEY_ID]
-service = "rlab-r2-control"
+[keychain.GRADLAB_CONTROL_R2_ACCESS_KEY_ID]
+service = "gradlab-r2-control"
 account = "access-key-id"
 
 [modal]
@@ -232,7 +232,7 @@ path = "/does/not/exist"
         "WANDB_API_KEY": "wandb-key",
         "WANDB_ENTITY": "research",
     }
-    assert calls == [KeychainReference("rlab-wandb", "api-key")]
+    assert calls == [KeychainReference("gradlab-wandb", "api-key")]
     assert report.loaded_sources == {
         "WANDB_API_KEY": "macos-keychain",
         "WANDB_ENTITY": "operator-config",

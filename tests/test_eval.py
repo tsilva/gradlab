@@ -7,10 +7,10 @@ from unittest.mock import MagicMock, patch
 
 import numpy as np
 
-from rlab.batch_runtime import EpisodeRecord
-from rlab.env import EnvConfig
-from rlab.eval import ScriptedPolicy, load_eval_model
-from rlab.eval_metrics import (
+from gradlab.batch_runtime import EpisodeRecord
+from gradlab.env import EnvConfig
+from gradlab.eval import ScriptedPolicy, load_eval_model
+from gradlab.eval_metrics import (
     eval_by_start_rows,
     episode_rank,
     episode_result_from_record,
@@ -19,20 +19,20 @@ from rlab.eval_metrics import (
     run_eval_episode,
     summarize_episode_results,
 )
-from rlab.callbacks import _DoneMetricsReducer
-from rlab.eval_runner import (
+from gradlab.callbacks import _DoneMetricsReducer
+from gradlab.eval_runner import (
     _acceptance_runtime_config,
     _eval_runtime_config,
     evaluate_model_episodes,
 )
-from rlab.metric_names import EVAL_FULL_DURATION_SECONDS, metric_path_segment
-from rlab.modal_eval_protocol import SEED_PROTOCOL
-from rlab.targets import target_for_game
-from rlab.task_kernels import Outcome
-from rlab.ranking import rank_score, require_objective_rank
-from rlab.task_kernels import default_task_document
-from rlab.video import PolicyObservationPreview
-from rlab.checkpoint_acceptance import build_checkpoint_eval_contract
+from gradlab.metric_names import EVAL_FULL_DURATION_SECONDS, metric_path_segment
+from gradlab.modal_eval_protocol import SEED_PROTOCOL
+from gradlab.targets import target_for_game
+from gradlab.task_kernels import Outcome
+from gradlab.ranking import rank_score, require_objective_rank
+from gradlab.task_kernels import default_task_document
+from gradlab.video import PolicyObservationPreview
+from gradlab.checkpoint_acceptance import build_checkpoint_eval_contract
 
 
 MARIO_RANK = [
@@ -99,7 +99,7 @@ class EvalPreviewEquivalenceTests(unittest.TestCase):
             task=default_task_document("mario"),
         )
         models = [FakeModel(), FakeModel()]
-        with patch("rlab.eval_runner.make_eval_vec_env", side_effect=[FakeVecEnv(), FakeVecEnv()]):
+        with patch("gradlab.eval_runner.make_eval_vec_env", side_effect=[FakeVecEnv(), FakeVecEnv()]):
             baseline, _ = evaluate_model_episodes(
                 model=models[0],
                 config=config,
@@ -181,9 +181,9 @@ class EvalMetricTests(unittest.TestCase):
             approved.__enter__.return_value.model_path = model_path
             approved.__exit__.return_value = None
             with (
-                patch("rlab.eval.stage_and_approve_model", return_value=approved),
-                patch("rlab.eval.load_model_metadata", return_value=metadata),
-                patch("rlab.eval.load_policy_model", return_value=loaded) as load_model,
+                patch("gradlab.eval.stage_and_approve_model", return_value=approved),
+                patch("gradlab.eval.load_model_metadata", return_value=metadata),
+                patch("gradlab.eval.load_policy_model", return_value=loaded) as load_model,
             ):
                 model, policy = load_eval_model(model_path, device="cpu")
 
@@ -851,8 +851,8 @@ class EvalMetricTests(unittest.TestCase):
             task=default_task_document("mario"),
         )
         with (
-            patch("rlab.eval_runner.make_eval_vec_env", return_value=FakeVecEnv()),
-            patch("rlab.eval_runner.time.perf_counter", side_effect=[10.0, 12.5]),
+            patch("gradlab.eval_runner.make_eval_vec_env", return_value=FakeVecEnv()),
+            patch("gradlab.eval_runner.time.perf_counter", side_effect=[10.0, 12.5]),
         ):
             metrics, video_path = evaluate_model_episodes(
                 model=FakeModel(),
@@ -947,7 +947,7 @@ class EvalMetricTests(unittest.TestCase):
             def close(self) -> None:
                 pass
 
-        with patch("rlab.eval_runner.make_eval_vec_env", return_value=FakeRecordVecEnv()):
+        with patch("gradlab.eval_runner.make_eval_vec_env", return_value=FakeRecordVecEnv()):
             metrics, video_path = evaluate_model_episodes(
                 model=FakeModel(),
                 config=EnvConfig(
@@ -1058,7 +1058,7 @@ class EvalMetricTests(unittest.TestCase):
             game="SuperMarioBros-Nes-v0",
             task=default_task_document("mario"),
         )
-        with patch("rlab.eval_runner.make_eval_vec_env", return_value=fake_env):
+        with patch("gradlab.eval_runner.make_eval_vec_env", return_value=fake_env):
             metrics, video_path = evaluate_model_episodes(
                 model=FakeModel(),
                 config=config,
@@ -1129,9 +1129,9 @@ class EvalMetricTests(unittest.TestCase):
             }
 
         with (
-            patch("rlab.eval_runner.make_eval_vec_env", return_value=FakeEnv()),
-            patch("rlab.eval_runner.run_eval_episode", side_effect=fake_run_eval_episode),
-            patch("rlab.eval_runner.tqdm", side_effect=fake_tqdm),
+            patch("gradlab.eval_runner.make_eval_vec_env", return_value=FakeEnv()),
+            patch("gradlab.eval_runner.run_eval_episode", side_effect=fake_run_eval_episode),
+            patch("gradlab.eval_runner.tqdm", side_effect=fake_tqdm),
         ):
             metrics, video_path = evaluate_model_episodes(
                 model=object(),
@@ -1203,14 +1203,14 @@ class EvalMetricTests(unittest.TestCase):
             "final_info": {},
         }
         video_env = FakeVideoEnv()
-        output = Path("/tmp/rlab-eval-video.mp4")
+        output = Path("/tmp/gradlab-eval-video.mp4")
         with (
             patch(
-                "rlab.eval_runner.make_eval_vec_env",
+                "gradlab.eval_runner.make_eval_vec_env",
                 side_effect=[FakePolicyEnv(), video_env],
             ) as make_env,
-            patch("rlab.eval_runner.run_eval_episode", return_value=result),
-            patch("rlab.eval_runner.write_video") as write_video,
+            patch("gradlab.eval_runner.run_eval_episode", return_value=result),
+            patch("gradlab.eval_runner.write_video") as write_video,
         ):
             metrics, video_path = evaluate_model_episodes(
                 model=object(),

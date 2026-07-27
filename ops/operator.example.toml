@@ -1,55 +1,55 @@
-schema_version = 1
+schema_version = 2
 
 # Non-sensitive operator metadata. Copy this file to:
-#   ~/.config/rlab/operator.toml
+#   ~/.config/gradlab/operator.toml
 [environment]
 DSTACK_SERVER_URL = "http://127.0.0.1:3000"
 WANDB_ENTITY = "<wandb-entity>"
-RLAB_CONTROL_R2_URI = "s3://<control-bucket>"
-RLAB_CONTROL_R2_ENDPOINT_URL = "https://<account-id>.r2.cloudflarestorage.com"
-RLAB_CONTROL_R2_REGION = "auto"
-RLAB_EVAL_R2_URI = "s3://<evaluation-bucket>"
-RLAB_EVAL_R2_ENDPOINT_URL = "https://<account-id>.r2.cloudflarestorage.com"
-RLAB_EVAL_R2_REGION = "auto"
-RLAB_MODELS_R2_URI = "s3://<models-bucket>"
-RLAB_MODELS_R2_ENDPOINT_URL = "https://<account-id>.r2.cloudflarestorage.com"
-RLAB_MODELS_R2_REGION = "auto"
-RLAB_MODELS_R2_PUBLIC_BASE_URL = "https://<public-bucket-id>.r2.dev"
+GRADLAB_CONTROL_R2_URI = "s3://<control-bucket>"
+GRADLAB_CONTROL_R2_ENDPOINT_URL = "https://<account-id>.r2.cloudflarestorage.com"
+GRADLAB_CONTROL_R2_REGION = "auto"
+GRADLAB_EVAL_R2_URI = "s3://<evaluation-bucket>"
+GRADLAB_EVAL_R2_ENDPOINT_URL = "https://<account-id>.r2.cloudflarestorage.com"
+GRADLAB_EVAL_R2_REGION = "auto"
+GRADLAB_MODELS_R2_URI = "s3://<models-bucket>"
+GRADLAB_MODELS_R2_ENDPOINT_URL = "https://<account-id>.r2.cloudflarestorage.com"
+GRADLAB_MODELS_R2_REGION = "auto"
+GRADLAB_MODELS_R2_PUBLIC_BASE_URL = "https://<public-bucket-id>.r2.dev"
 
 # Secret values stay in macOS Keychain. These entries contain references only.
 [keychain.DSTACK_TOKEN]
-service = "rlab-dstack-admin"
+service = "gradlab-dstack-admin"
 account = "<operator-account>"
 
 [keychain.WANDB_API_KEY]
-service = "rlab-wandb"
+service = "gradlab-wandb"
 account = "api-key"
 
-[keychain.RLAB_CONTROL_R2_ACCESS_KEY_ID]
-service = "rlab-r2-control"
+[keychain.GRADLAB_CONTROL_R2_ACCESS_KEY_ID]
+service = "gradlab-r2-control"
 account = "access-key-id"
 
-[keychain.RLAB_CONTROL_R2_SECRET_ACCESS_KEY]
-service = "rlab-r2-control"
+[keychain.GRADLAB_CONTROL_R2_SECRET_ACCESS_KEY]
+service = "gradlab-r2-control"
 account = "secret-access-key"
 
-[keychain.RLAB_EVAL_R2_ACCESS_KEY_ID]
-service = "rlab-r2-eval"
+[keychain.GRADLAB_EVAL_R2_ACCESS_KEY_ID]
+service = "gradlab-r2-eval"
 account = "access-key-id"
 
-[keychain.RLAB_EVAL_R2_SECRET_ACCESS_KEY]
-service = "rlab-r2-eval"
+[keychain.GRADLAB_EVAL_R2_SECRET_ACCESS_KEY]
+service = "gradlab-r2-eval"
 account = "secret-access-key"
 
-[keychain.RLAB_MODELS_R2_ACCESS_KEY_ID]
-service = "rlab-r2-models"
+[keychain.GRADLAB_MODELS_R2_ACCESS_KEY_ID]
+service = "gradlab-r2-models"
 account = "access-key-id"
 
-[keychain.RLAB_MODELS_R2_SECRET_ACCESS_KEY]
-service = "rlab-r2-models"
+[keychain.GRADLAB_MODELS_R2_SECRET_ACCESS_KEY]
+service = "gradlab-r2-models"
 account = "secret-access-key"
 
-# Modal remains the source of truth for its own token. rlab imports the active
+# Modal remains the source of truth for its own token. gradlab imports the active
 # profile in memory and requires this credential file to use mode 0600.
 [modal]
 path = "~/.modal.toml"

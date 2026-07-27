@@ -9,20 +9,20 @@ import gymnasium as gym
 import numpy as np
 import pytest
 
-from rlab.batch_runtime import EpisodeRecord
-from rlab.callbacks import MetricEarlyStopHelper
-from rlab.jerk import (
+from gradlab.batch_runtime import EpisodeRecord
+from gradlab.callbacks import MetricEarlyStopHelper
+from gradlab.jerk import (
     JERK_POLICY_MEMBER,
     ActionRun,
     JerkPolicy,
     JerkSearch,
     RetainedSequence,
 )
-from rlab.metric_names import TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_MEAN
-from rlab.policy_models import load_policy_model, resolve_policy_algorithm
-from rlab.task_kernels import Outcome
-from rlab.training import jerk as jerk_training
-from rlab.training_backend import GracefulStopFlag
+from gradlab.metric_names import TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_MEAN
+from gradlab.policy_models import load_policy_model, resolve_policy_algorithm
+from gradlab.task_kernels import Outcome
+from gradlab.training import jerk as jerk_training
+from gradlab.training_backend import GracefulStopFlag
 
 
 ACTIONS = ("noop", "right", "right_b", "right_a", "right_a_b", "a", "left")
@@ -285,7 +285,7 @@ def test_jerk_policy_rejects_removed_flat_action_sequence_schema(tmp_path) -> No
     payload = {
         "schema_version": 1,
         "algorithm_id": "jerk",
-        "model_class": "rlab.jerk.JerkPolicy",
+        "model_class": "gradlab.jerk.JerkPolicy",
         "action_names": list(ACTIONS),
         "action_sequence": [2, 2, 4],
         "fallback_action": 0,
@@ -305,13 +305,13 @@ def test_generic_policy_loader_dispatches_jerk(tmp_path) -> None:
         fallback_action=0,
     ).save(path)
     metadata = {
-        "training_backend_id": "rlab.jerk",
+        "training_backend_id": "gradlab.jerk",
         "algorithm_id": "jerk",
-        "model_class": "rlab.jerk.JerkPolicy",
+        "model_class": "gradlab.jerk.JerkPolicy",
     }
 
     assert resolve_policy_algorithm(metadata) == "jerk"
-    from rlab.trusted_inputs import ApprovedModelInput
+    from gradlab.trusted_inputs import ApprovedModelInput
 
     approved = ApprovedModelInput(
         staged=SimpleNamespace(model_path=path),
@@ -389,7 +389,7 @@ def _jerk_context(tmp_path, *, timesteps: int):
         "run_name": "test-jerk",
         "attempt_id": "attempt-0000000000000001",
         "training_backend": {
-            "id": "rlab.jerk",
+            "id": "gradlab.jerk",
             "config": {
                 "acceptance_mode": "first_training_success",
                 "fallback_action": "noop",

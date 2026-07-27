@@ -6,7 +6,7 @@ import subprocess
 import sys
 import unittest
 
-from rlab.main import main
+from gradlab.main import main
 
 
 class PublicCliHelpTests(unittest.TestCase):
@@ -14,7 +14,7 @@ class PublicCliHelpTests(unittest.TestCase):
         stdout = io.StringIO()
         with contextlib.redirect_stdout(stdout):
             self.assertEqual(main(["eval"]), 2)
-        self.assertTrue(stdout.getvalue().startswith("usage: rlab eval"))
+        self.assertTrue(stdout.getvalue().startswith("usage: gradlab eval"))
         self.assertIn("--episodes", stdout.getvalue())
 
     def test_root_help_advertises_only_canonical_rom_command(self) -> None:
@@ -28,7 +28,7 @@ class PublicCliHelpTests(unittest.TestCase):
     def test_ordinary_help_does_not_import_optional_or_rom_import_stacks(self) -> None:
         script = """
 import sys
-from rlab.main import main
+from gradlab.main import main
 try:
     main([\"--help\"])
 except SystemExit:
@@ -37,7 +37,7 @@ for name in sorted(sys.modules):
     if (
         name == \"datasets\"
         or name == \"minari\"
-        or name.startswith(\"rlab.dataset_\")
+        or name.startswith(\"gradlab.dataset_\")
         or name == \"stable_retro.scripts.import_path\"
     ):
         print(name)
@@ -54,29 +54,29 @@ for name in sorted(sys.modules):
             for line in completed.stdout.splitlines()
             if line == "datasets"
             or line == "minari"
-            or line.startswith("rlab.dataset_")
+            or line.startswith("gradlab.dataset_")
             or line == "stable_retro.scripts.import_path"
         ]
         self.assertEqual(imported, [])
 
     def test_delegated_help_uses_complete_public_command(self) -> None:
         cases = (
-            (("train", "--help"), "usage: rlab train"),
-            (("experiment", "launch", "--help"), "usage: rlab experiment launch"),
-            (("experiment", "follow", "--help"), "usage: rlab experiment follow"),
-            (("eval", "--help"), "usage: rlab eval"),
-            (("eval", "run", "--help"), "usage: rlab eval"),
-            (("play", "--help"), "usage: rlab play"),
-            (("rom", "import", "--help"), "usage: rlab rom import"),
-            (("import-roms", "--help"), "usage: rlab import-roms"),
-            (("benchmark", "run", "--help"), "usage: rlab benchmark run"),
-            (("validate", "--help"), "usage: rlab validate"),
-            (("env", "preflight", "--help"), "usage: rlab env preflight"),
-            (("dataset", "--help"), "usage: rlab dataset"),
-            (("dataset", "record", "--help"), "usage: rlab dataset record"),
-            (("dataset", "verify", "--help"), "usage: rlab dataset verify"),
-            (("leaders", "runs", "--help"), "usage: rlab leaders runs"),
-            (("reports", "plan", "--help"), "usage: rlab reports plan"),
+            (("train", "--help"), "usage: gradlab train"),
+            (("experiment", "launch", "--help"), "usage: gradlab experiment launch"),
+            (("experiment", "follow", "--help"), "usage: gradlab experiment follow"),
+            (("eval", "--help"), "usage: gradlab eval"),
+            (("eval", "run", "--help"), "usage: gradlab eval"),
+            (("play", "--help"), "usage: gradlab play"),
+            (("rom", "import", "--help"), "usage: gradlab rom import"),
+            (("import-roms", "--help"), "usage: gradlab import-roms"),
+            (("benchmark", "run", "--help"), "usage: gradlab benchmark run"),
+            (("validate", "--help"), "usage: gradlab validate"),
+            (("env", "preflight", "--help"), "usage: gradlab env preflight"),
+            (("dataset", "--help"), "usage: gradlab dataset"),
+            (("dataset", "record", "--help"), "usage: gradlab dataset record"),
+            (("dataset", "verify", "--help"), "usage: gradlab dataset verify"),
+            (("leaders", "runs", "--help"), "usage: gradlab leaders runs"),
+            (("reports", "plan", "--help"), "usage: gradlab reports plan"),
         )
         for argv, expected_usage in cases:
             with self.subTest(command=" ".join(argv)):
@@ -105,7 +105,7 @@ for name in sorted(sys.modules):
                     main([*command, "--help"])
                 self.assertEqual(raised.exception.code, 0)
                 help_text = stdout.getvalue()
-                self.assertIn("rlab", help_text)
+                self.assertIn("gradlab", help_text)
                 self.assertNotIn("SB3", help_text)
                 self.assertNotIn("PPO", help_text)
 

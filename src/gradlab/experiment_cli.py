@@ -1,0 +1,1471 @@
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import os
+import re
+import subprocess
+import sys
+import tempfile
+import time
+from collections.abc import Iterator, Mapping
+from dataclasses import replace
+from datetime import UTC, datetime
+from functools import partial
+from pathlib import Path
+from typing import Any
+from urllib.parse import quote
+
+from gradlab.dstack_backend import (
+    TERMINAL_DSTACK_STATUSES,
+    ComputeRequest,
+    DstackBackend,
+    TaskRequest,
+    DstackTask,
+)
+from gradlab.env_registry import resolve_env_provider
+from gradlab.file_utils import file_sha256
+from gradlab.json_utils import json_safe
+from gradlab.modal_eval_config import load_modal_eval_config
+from gradlab.operator_credentials import (
+    OperatorConfigurationError,
+    OperatorEnvironmentReport,
+    load_operator_environment,
+    reject_protected_dotenv,
+)
+from gradlab.r2_store import R2Bucket, RunStorageConfig
+from gradlab.policy_bundle import build_recipe_document, canonical_json_sha256
+from gradlab.recipe_documents import (
+    compose_train_document,
+    prepare_checkpoint_eval_mode,
+)
+from gradlab.recipe_variants import recipe_variant_id
+from gradlab.rom_assets import (
+    ROM_ASSET_IDENTITY_ALGORITHM,
+    ROM_ASSET_PREFIX,
+    ROM_ASSET_SCHEMA_VERSION,
+    discover_rom_path,
+    provider_rom_identity,
+    validate_rom_asset_manifest,
+)
+from gradlab.run_authority import RunAuthority
+from gradlab.run_contracts import (
+    RUN_ID_PATTERN,
+    RunManifest,
+    TerminalReceipt,
+    new_attempt_id,
+    new_run_id,
+    utc_now,
+)
+from gradlab.runtime_refs import (
+    DEFAULT_IMAGE_ARTIFACT,
+    DEFAULT_IMAGE_WORKFLOW,
+    DEFAULT_RUNTIME_READINESS_TIMEOUT_SECONDS,
+    clean_git_source_sha,
+    current_git_branch,
+    runtime_release_from_args,
+)
+from gradlab.wandb_utils import (
+    canonical_wandb_environment,
+    wandb_entity_from_env,
+)
+
+
+DEFAULT_MAX_DURATION_SECONDS = 48 * 60 * 60
+DEFAULT_ROM_MOUNT = "/var/lib/gradlab/rom-cache:/rom-cache"
+QUIESCENCE_SECONDS = 30.0
+COMMON_SECRET_ENV = (
+    "WANDB_API_KEY",
+    "WANDB_ENTITY",
+    "GRADLAB_CONTROL_R2_URI",
+    "GRADLAB_CONTROL_R2_ENDPOINT_URL",
+    "GRADLAB_CONTROL_R2_REGION",
+    "GRADLAB_CONTROL_R2_ACCESS_KEY_ID",
+    "GRADLAB_CONTROL_R2_SECRET_ACCESS_KEY",
+    "GRADLAB_EVAL_R2_URI",
+    "GRADLAB_EVAL_R2_ENDPOINT_URL",
+    "GRADLAB_EVAL_R2_REGION",
+    "GRADLAB_EVAL_R2_ACCESS_KEY_ID",
+    "GRADLAB_EVAL_R2_SECRET_ACCESS_KEY",
+    "GRADLAB_MODELS_R2_URI",
+    "GRADLAB_MODELS_R2_ENDPOINT_URL",
+    "GRADLAB_MODELS_R2_REGION",
+    "GRADLAB_MODELS_R2_ACCESS_KEY_ID",
+    "GRADLAB_MODELS_R2_SECRET_ACCESS_KEY",
+    "GRADLAB_MODELS_R2_PUBLIC_BASE_URL",
+)
+OPERATOR_DSTACK_ENV = (
+    "DSTACK_SERVER_URL",
+    "DSTACK_TOKEN",
+)
+OPERATOR_MODAL_ENV = (
+    "MODAL_TOKEN_ID",
+    "MODAL_TOKEN_SECRET",
+)
+
+
+def _git(root: Path, *arguments: str) -> str:
+    result = subprocess.run(
+        ["git", *arguments],
+        cwd=root,
+        check=False,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    if result.returncode:
+        raise RuntimeError(result.stderr.strip() or f"git {' '.join(arguments)} failed")
+    return result.stdout.strip()
+
+
+def repository_root() -> Path:
+    return Path(_git(Path.cwd(), "rev-parse", "--show-toplevel")).resolve()
+
+
+def _load_environment(root: Path) -> OperatorEnvironmentReport:
+    from gradlab.dotenv import load_env_file
+
+    dotenv_path = root / ".env"
+    reject_protected_dotenv(dotenv_path)
+    load_env_file(dotenv_path)
+    return load_operator_environment()
+
+
+def _tracked_committed_path(root: Path, path: Path, *, label: str) -> Path:
+    resolved = (root / path).resolve() if not path.is_absolute() else path.resolve()
+    try:
+        relative = resolved.relative_to(root)
+    except ValueError as exc:
+        raise ValueError(f"{label} must be inside the repository: {resolved}") from exc
+    if not resolved.is_file():
+        raise ValueError(f"{label} does not exist: {relative}")
+    tracked = subprocess.run(
+        ["git", "ls-files", "--error-unmatch", str(relative)],
+        cwd=root,
+        check=False,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    if tracked.returncode:
+        raise ValueError(f"{label} must be checked in: {relative}")
+    changed = subprocess.run(
+        ["git", "diff", "--quiet", "HEAD", "--", str(relative)],
+        cwd=root,
+        check=False,
+    )
+    if changed.returncode:
+        raise ValueError(f"{label} has uncommitted changes: {relative}")
+    return resolved
+
+
+def _parse_duration(value: str | int | float) -> float:
+    if isinstance(value, int | float):
+        result = float(value)
+    else:
+        match = re.fullmatch(r"\s*(\d+(?:\.\d+)?)\s*([smhd]?)\s*", value)
+        if match is None:
+            raise argparse.ArgumentTypeError(
+                "duration must look like 30s, 10m, 2h, or 1d"
+            )
+        scale = {"": 1, "s": 1, "m": 60, "h": 3600, "d": 86400}[match.group(2)]
+        result = float(match.group(1)) * scale
+    if result <= 0:
+        raise argparse.ArgumentTypeError("duration must be positive")
+    return result
+
+
+def _require_run_id(value: str) -> str:
+    text = str(value).strip()
+    if RUN_ID_PATTERN.fullmatch(text) is None:
+        raise argparse.ArgumentTypeError("run id must match gradlab-<32 lowercase hex>")
+    return text
+
+
+def _storage(root: Path) -> tuple[RunStorageConfig, RunAuthority]:
+    _load_environment(root)
+    try:
+        storage = RunStorageConfig.from_env()
+    except ValueError as exc:
+        raise OperatorConfigurationError(str(exc)) from exc
+    return storage, RunAuthority(storage)
+
+
+def _required_operator_environment(checkpoint_eval_backend: str) -> tuple[str, ...]:
+    return (
+        *OPERATOR_DSTACK_ENV,
+        *COMMON_SECRET_ENV,
+        *(OPERATOR_MODAL_ENV if str(checkpoint_eval_backend) == "modal" else ()),
+    )
+
+
+def _operator_preflight(
+    root: Path,
+    *,
+    checkpoint_eval_backend: str,
+) -> tuple[
+    RunStorageConfig,
+    RunAuthority,
+    DstackBackend,
+    dict[str, Any],
+]:
+    environment_report = _load_environment(root)
+    required = _required_operator_environment(checkpoint_eval_backend)
+    missing = [name for name in required if not str(os.environ.get(name) or "").strip()]
+    if missing:
+        raise OperatorConfigurationError(
+            "operator environment is incomplete; missing "
+            + ", ".join(sorted(missing))
+            + f". Configure {environment_report.config_path} from "
+            "ops/operator.example.toml or provide the values through the process environment"
+        )
+    truncated = [name for name in required if "…" in str(os.environ.get(name) or "")]
+    if truncated:
+        raise OperatorConfigurationError(
+            f"{sorted(truncated)[0]} is visibly truncated; use the exact "
+            "machine-readable value, not human-formatted command output"
+        )
+    try:
+        storage = RunStorageConfig.from_env()
+    except ValueError as exc:
+        raise OperatorConfigurationError(str(exc)) from exc
+    dstack_backend = DstackBackend()
+    try:
+        dstack_backend.preflight()
+    except (RuntimeError, ValueError) as exc:
+        raise OperatorConfigurationError(f"dstack preflight failed: {exc}") from exc
+    scopes = {
+        "control": storage.control,
+        "evaluation": storage.evaluation,
+        "models": storage.models,
+    }
+    for label, config in scopes.items():
+        try:
+            next(R2Bucket(config).iter_keys(""), None)
+        except Exception as exc:
+            raise OperatorConfigurationError(
+                f"{label} R2 read preflight failed ({type(exc).__name__}); "
+                f"verify the {label} endpoint, bucket, and credential pair"
+            ) from exc
+    sources = {
+        name: environment_report.source_for(name, os.environ)
+        for name in sorted(required)
+    }
+    report = {
+        "status": "ready",
+        "checkpoint_eval_backend": checkpoint_eval_backend,
+        "operator_config": {
+            "path": str(environment_report.config_path),
+            "present": environment_report.config_present,
+        },
+        "resolved_sources": sources,
+        "storage": {name: "readable" for name in scopes},
+        "dstack": {
+            "project": dstack_backend.project,
+            "server": "authenticated",
+        },
+        "wandb": {"entity": wandb_entity_from_env()},
+        "modal": {
+            "credentials": (
+                "resolved" if checkpoint_eval_backend == "modal" else "not-required"
+            )
+        },
+    }
+    return (
+        storage,
+        RunAuthority(storage),
+        dstack_backend,
+        report,
+    )
+
+
+def _stage_rom(
+    authority: RunAuthority,
+    *,
+    env_provider: str,
+    game: str,
+    rom_path: Path | None,
+) -> dict[str, Any] | None:
+    if not resolve_env_provider(env_provider).requires_external_rom_asset:
+        if rom_path is not None:
+            raise ValueError(
+                f"--rom-path is invalid for ROM-free provider {env_provider!r}"
+            )
+        return None
+    source = discover_rom_path(game, rom_path=rom_path)
+    digest = file_sha256(source)
+    key = f"{ROM_ASSET_PREFIX}/objects/sha256/{digest}/{source.name}"
+    manifest = validate_rom_asset_manifest(
+        {
+            "schema_version": ROM_ASSET_SCHEMA_VERSION,
+            "game": game,
+            "filename": source.name,
+            "size_bytes": source.stat().st_size,
+            "sha256": digest,
+            "object_uri": authority.evaluation.uri(key),
+            "provider_rom_identity": provider_rom_identity(source),
+            "provider_rom_identity_algorithm": ROM_ASSET_IDENTITY_ALGORITHM,
+        },
+        expected_game=game,
+    )
+    authority.evaluation.put_file(
+        key,
+        source,
+        sha256=digest,
+        content_type="application/octet-stream",
+    )
+    authority.evaluation.put_json(
+        f"{ROM_ASSET_PREFIX}/manifests/{game}/{digest}.json",
+        manifest,
+        create_only=True,
+    )
+    return manifest
+
+
+def _compute(args: argparse.Namespace) -> ComputeRequest:
+    request = ComputeRequest(
+        kind=args.compute,
+        target=args.target,
+        max_price=args.max_price,
+        max_cost_usd=args.max_cost_usd,
+        allow_on_demand=bool(args.allow_on_demand),
+        max_duration_seconds=int(args.max_duration),
+    )
+    request.validate()
+    return request
+
+
+def _task_name(run_id: str, attempt_id: str, *, initial: bool) -> str:
+    if initial:
+        return run_id
+    digest = hashlib.sha256(
+        f"dstack-attempt-v1:{run_id}:{attempt_id}".encode()
+    ).hexdigest()
+    return f"gradlab-{digest[:32]}"
+
+
+def _task_request(manifest: RunManifest, *, manifest_uri: str) -> TaskRequest:
+    compute = ComputeRequest(
+        **dict(manifest.compute.get("selected") or manifest.compute["request"])
+    )
+    local = compute.kind == "local"
+    return TaskRequest(
+        run_id=manifest.run_id,
+        task_name=str(manifest.compute["dstack_task"]),
+        image=manifest.image_digest,
+        manifest_uri=manifest_uri,
+        compute=compute,
+        plain_env=(
+            {"MODAL_ENVIRONMENT": str(manifest.modal["environment_name"])}
+            if bool(manifest.modal["enabled"])
+            else {}
+        ),
+        secret_env=(
+            *COMMON_SECRET_ENV,
+            *(
+                (
+                    "MODAL_TOKEN_ID",
+                    "MODAL_TOKEN_SECRET",
+                )
+                if bool(manifest.modal["enabled"])
+                else ()
+            ),
+        ),
+        rom_mount=(
+            DEFAULT_ROM_MOUNT
+            if local and isinstance(manifest.modal.get("rom_asset_manifest"), dict)
+            else None
+        ),
+    )
+
+
+def _wandb_identity(
+    document: dict[str, Any],
+    run_id: str,
+    *,
+    goal_slug: str,
+    recipe_slug: str,
+    recipe_variant: str,
+    seed: int,
+) -> dict[str, Any]:
+    config = dict(document["train_config"])
+    project, family = canonical_wandb_environment(
+        config.get("env_provider"),
+        config.get("game"),
+    )
+    relative_goal = (
+        goal_slug.removeprefix(f"{project}/") if goal_slug.startswith(f"{project}/") else goal_slug
+    )
+    display_goal = relative_goal.replace("/", "--")
+    display_name = f"{display_goal}__{recipe_slug}__s{int(seed)}__{run_id.removeprefix('gradlab-')[:8]}"
+    campaign_id = str(document.get("campaign_id") or "").strip()
+    group = (
+        f"campaign::{campaign_id}"
+        if campaign_id
+        else f"cohort::{goal_slug}::{recipe_slug}::{recipe_variant}"
+    )
+    entity = wandb_entity_from_env()
+    return {
+        "run_id": run_id,
+        "entity": entity,
+        "project": project,
+        "display_name": display_name,
+        "group": group,
+        "game_family": family,
+        "url": (
+            f"https://wandb.ai/{quote(entity, safe='')}/"
+            f"{quote(project, safe='')}/runs/{quote(run_id, safe='')}"
+        ),
+    }
+
+
+def _bind_launch_contract(
+    document: dict[str, Any],
+    *,
+    asset: dict[str, Any] | None,
+    checkpoint_eval_backend: str,
+) -> dict[str, Any]:
+    contract_document = dict(document)
+    contract_config = dict(contract_document["train_config"])
+    if asset is None:
+        contract_config.pop("rom_asset_manifest", None)
+    else:
+        contract_config["rom_asset_manifest"] = asset
+    contract_config["checkpoint_eval_backend"] = checkpoint_eval_backend
+    contract_document["train_config"] = contract_config
+    return contract_document
+
+
+def cmd_launch(args: argparse.Namespace) -> int:
+    root = repository_root()
+    source_sha = clean_git_source_sha(root)
+    branch = current_git_branch(root)
+    goal_path = _tracked_committed_path(root, args.goal_file, label="goal")
+    recipe_path = _tracked_committed_path(root, args.recipe_file, label="recipe")
+    recipe_overrides = tuple(str(value) for value in args.recipe_overrides)
+    requested_checkpoint_eval_backend = args.checkpoint_eval_backend
+    document = compose_train_document(
+        goal_path,
+        recipe_path,
+        recipe_overrides=recipe_overrides,
+        prepare_materialized=partial(
+            prepare_checkpoint_eval_mode,
+            checkpoint_eval_backend=requested_checkpoint_eval_backend,
+        ),
+    )
+    checkpoint_eval_backend = str(document["train_config"]["checkpoint_eval_backend"])
+    compute = _compute(args)
+    storage, authority, dstack_backend, _preflight_report = _operator_preflight(
+        root,
+        checkpoint_eval_backend=checkpoint_eval_backend,
+    )
+    selected_compute, selected_offer = dstack_backend.select_compute(compute)
+    release = runtime_release_from_args(
+        args,
+        repo_root=root,
+        checkpoint_eval_backend=checkpoint_eval_backend,
+        wait_for_modal=checkpoint_eval_backend == "modal",
+    )
+    if release.source_sha != source_sha:
+        raise RuntimeError("runtime release source does not match committed HEAD")
+    config = dict(document["train_config"])
+    asset = _stage_rom(
+        authority,
+        env_provider=str(config["env_provider"]),
+        game=str(config["game"]),
+        rom_path=args.rom_path,
+    )
+    run_id = new_run_id()
+    attempt_id = new_attempt_id()
+    dstack_task = _task_name(run_id, attempt_id, initial=True)
+    goal_slug = goal_path.parent.relative_to(root / "experiments" / "goals").as_posix()
+    recipe_slug = recipe_path.stem
+    variant_id = recipe_variant_id(
+        recipe_slug=recipe_slug,
+        source_sha=source_sha,
+        recipe_overrides=recipe_overrides,
+    )
+    wandb = _wandb_identity(
+        document,
+        run_id,
+        goal_slug=goal_slug,
+        recipe_slug=recipe_slug,
+        recipe_variant=variant_id,
+        seed=int(args.seed),
+    )
+    modal_app = str(release.modal_app_name or "").strip()
+    if checkpoint_eval_backend == "modal" and not modal_app:
+        raise RuntimeError(
+            "exact-source runtime has no immutable Modal deployment receipt"
+        )
+    modal_config = load_modal_eval_config(root / "experiments" / "modal_eval.yaml")
+    contract_document = _bind_launch_contract(
+        document,
+        asset=asset,
+        checkpoint_eval_backend=checkpoint_eval_backend,
+    )
+    portable_recipe = build_recipe_document(
+        contract_document,
+        repo_root=root,
+        source_commit=source_sha,
+        run_description=str(args.run_description),
+        seed=int(args.seed),
+        runtime_image_ref=release.runtime_image_ref,
+    )
+    manifest = RunManifest(
+        run_id=run_id,
+        attempt_id=attempt_id,
+        created_at=utc_now(),
+        source_sha=source_sha,
+        image_digest=release.runtime_image_ref,
+        goal_slug=goal_slug,
+        goal_sha256=str(document["train_config"]["effective_goal_contract_sha256"]),
+        recipe_slug=recipe_slug,
+        recipe_sha256=canonical_json_sha256(portable_recipe),
+        recipe_overrides=recipe_overrides,
+        environment_sha256=str(document["environment_hash"]).removeprefix("sha256:"),
+        seed=int(args.seed),
+        run_description=str(args.run_description),
+        compute={
+            "request": compute.as_manifest(),
+            "selected": selected_compute.as_manifest(),
+            "selected_offer": selected_offer,
+            "dstack_task": dstack_task,
+            "source_branch": branch,
+            "runtime_workflow_run_id": release.workflow_run_id,
+            "runtime_input_sha256": release.runtime_input_sha256,
+            "runtime_build_source_sha": release.runtime_build_source_sha,
+            "submission_key": str(args.submission_key or ""),
+        },
+        wandb=wandb,
+        modal={
+            "enabled": checkpoint_eval_backend == "modal",
+            "environment_name": modal_config.deployment.environment_name,
+            "app_name": modal_app,
+            "function_name": modal_config.deployment.function_name,
+            "deployment_source_sha": source_sha,
+            "rom_asset_manifest": asset,
+        },
+        storage=storage.manifest_locations(),
+    )
+    authority.create_manifest(manifest)
+    manifest_uri = authority.control.uri(f"runs/{run_id}/manifest.json")
+    task = dstack_backend.submit(_task_request(manifest, manifest_uri=manifest_uri))
+    output = {
+        "schema_version": 1,
+        "run_id": run_id,
+        "attempt_id": attempt_id,
+        "dstack": {"project": task.project, "task": task.name, "status": task.status},
+        "compute": {
+            "request": compute.as_manifest(),
+            "selected": selected_compute.as_manifest(),
+            "offer": selected_offer,
+        },
+        "source_sha": source_sha,
+        "image_digest": release.runtime_image_ref,
+        "runtime_input_sha256": release.runtime_input_sha256,
+        "runtime_build_source_sha": release.runtime_build_source_sha,
+        "goal_file": goal_path.relative_to(root).as_posix(),
+        "recipe_file": recipe_path.relative_to(root).as_posix(),
+        "goal_sha256": manifest.goal_sha256,
+        "recipe_sha256": manifest.recipe_sha256,
+        "recipe_overrides": list(recipe_overrides),
+        "seed": int(args.seed),
+        "run_description": str(args.run_description),
+        "submission_key": str(args.submission_key or ""),
+        "checkpoint_eval_backend": checkpoint_eval_backend,
+        "wandb_url": wandb["url"],
+        "public_run_index_url": authority.models.public_url(
+            f"runs/{run_id}/index.json"
+        ),
+    }
+    print(
+        json.dumps(json_safe(output), sort_keys=True)
+        if args.json
+        else (
+            f"run={run_id} task={task.name} compute={selected_compute.kind} "
+            f"image={release.runtime_image_ref} wandb={wandb['url']} "
+            f"index={output['public_run_index_url']}"
+        )
+    )
+    return 0
+
+
+def cmd_operator_preflight(args: argparse.Namespace) -> int:
+    root = repository_root()
+    _storage_config, _authority, _dstack_backend, report = _operator_preflight(
+        root,
+        checkpoint_eval_backend=str(args.checkpoint_eval_backend),
+    )
+    if args.json:
+        print(json.dumps(report, sort_keys=True))
+    else:
+        print(
+            "Operator preflight ready: "
+            f"dstack={report['dstack']['server']} "
+            f"R2={','.join(report['storage'])} "
+            f"Modal={report['modal']['credentials']}"
+        )
+    return 0
+
+
+def _latest_attempt(state: dict[str, Any]) -> dict[str, Any]:
+    attempts = list(state.get("attempts") or [])
+    if attempts:
+        return dict(attempts[-1])
+    manifest = state.get("manifest")
+    if isinstance(manifest, dict):
+        return dict(manifest)
+    raise KeyError(f"run not found: {state['run_id']}")
+
+
+def _latest_attempt_terminal(state: dict[str, Any]) -> dict[str, Any] | None:
+    attempt_id = str(_latest_attempt(state).get("attempt_id") or "")
+    terminals = [
+        dict(row)
+        for row in state.get("attempt_terminals") or []
+        if str(row.get("attempt_id") or "") == attempt_id
+    ]
+    return terminals[-1] if terminals else None
+
+
+def _record_pre_submit_failure(
+    authority: RunAuthority,
+    manifest: RunManifest,
+) -> None:
+    prefix = (
+        f"{authority.run_prefix(manifest.run_id)}/attempts/{manifest.attempt_id}"
+    )
+    keys = sorted(authority.control.iter_keys(prefix))
+    expected = [f"{prefix}/manifest.json"]
+    if keys != expected:
+        raise RuntimeError(
+            "not-found dstack task has attempt activity beyond its manifest"
+        )
+    authority.create_attempt_terminal(
+        TerminalReceipt(
+            run_id=manifest.run_id,
+            attempt_id=manifest.attempt_id,
+            state="resumable_failure",
+            acceptance_required=bool(manifest.modal["enabled"]),
+            stop_reason="pre_submit_failure",
+            final_step=0,
+            checkpoint_inventory=(),
+            eval_inventory=(),
+            wandb_high_water_mark=0,
+            drain={
+                "complete": False,
+                "phase": "pre-submit",
+                "metric_segment_high_water": 0,
+                "eval_terminal_count": 0,
+                "journal_archive": None,
+                "journal_expires_at": None,
+                "wandb_remote_high_water_mark": 0,
+                "publication_capacity_ratio": None,
+                "failure": "dstack task was not created",
+            },
+            completed_at=utc_now(),
+        )
+    )
+
+
+def _record_terminal_task_without_receipt(
+    authority: RunAuthority,
+    manifest: RunManifest,
+    task: DstackTask,
+) -> None:
+    if not task.terminal:
+        raise RuntimeError("cannot seal an orphan attempt while its dstack task is active")
+    authority.create_attempt_terminal(
+        TerminalReceipt(
+            run_id=manifest.run_id,
+            attempt_id=manifest.attempt_id,
+            state="resumable_failure",
+            acceptance_required=bool(manifest.modal["enabled"]),
+            stop_reason="supervisor_startup_failure",
+            final_step=0,
+            checkpoint_inventory=(),
+            eval_inventory=(),
+            wandb_high_water_mark=0,
+            drain={
+                "complete": False,
+                "phase": "startup/recovery",
+                "metric_segment_high_water": 0,
+                "eval_terminal_count": 0,
+                "journal_archive": None,
+                "journal_expires_at": None,
+                "wandb_remote_high_water_mark": 0,
+                "publication_capacity_ratio": None,
+                "failure": (
+                    "dstack task reached terminal status "
+                    f"{task.status!r} without an authoritative attempt receipt"
+                ),
+            },
+            completed_at=utc_now(),
+        )
+    )
+
+
+def _require_retryable_attempt_terminal(
+    attempt_terminal: Mapping[str, Any] | None,
+) -> None:
+    if attempt_terminal is None:
+        return
+    state = str(attempt_terminal.get("state") or "")
+    stop_reason = str(attempt_terminal.get("stop_reason") or "")
+    if state == "succeeded":
+        raise RuntimeError(
+            "a successfully drained training-only run must not be retried"
+        )
+    if state == "failed" and stop_reason.startswith("early_stop_failure:"):
+        raise RuntimeError(
+            "a designed early-stop failure is non-resumable; launch a new recipe/run"
+        )
+
+
+def _public_dstack_state(task: DstackTask) -> dict[str, Any]:
+    raw = dict(task.raw or {})
+    fleet = raw.get("fleet")
+    fleet_name = str(fleet.get("name") or "") if isinstance(fleet, Mapping) else ""
+    return {
+        "project": task.project,
+        "task": task.name,
+        "status": task.status,
+        "terminal": task.terminal,
+        "fleet": fleet_name or None,
+        "submitted_at": str(raw.get("submitted_at") or "") or None,
+        "termination_reason": str(raw.get("termination_reason") or "") or None,
+    }
+
+
+def _run_completed(
+    *,
+    semantic_terminal: Mapping[str, Any] | None,
+    attempt_terminal: Mapping[str, Any] | None,
+    dstack_terminal: bool,
+) -> bool:
+    if attempt_terminal is None or not dstack_terminal:
+        return False
+    canonical_terminal_expected = (
+        str(attempt_terminal.get("state") or "") == "succeeded"
+        and attempt_terminal.get("acceptance_required") is True
+    )
+    return semantic_terminal is not None or not canonical_terminal_expected
+
+
+def _status(root: Path, run_id: str) -> dict[str, Any]:
+    _storage_config, authority = _storage(root)
+    semantic = authority.semantic_state(run_id)
+    attempt = _latest_attempt(semantic)
+    task_name = str(attempt["compute"]["dstack_task"])
+    try:
+        dstack = DstackBackend().status(task_name)
+        dstack_value = _public_dstack_state(dstack)
+    except KeyError:
+        dstack_value = {
+            "project": DstackBackend().project,
+            "task": task_name,
+            "status": "not-found",
+            "terminal": False,
+        }
+    attempt_terminal = _latest_attempt_terminal(semantic)
+    return {
+        "schema_version": 1,
+        "run_id": run_id,
+        "attempt_id": attempt["attempt_id"],
+        "dstack": dstack_value,
+        "semantic": semantic,
+        "attempt_terminal": attempt_terminal,
+        "completed": _run_completed(
+            semantic_terminal=semantic.get("terminal"),
+            attempt_terminal=attempt_terminal,
+            dstack_terminal=bool(dstack_value["terminal"]),
+        ),
+        "scientific_success": semantic.get("terminal") is not None,
+    }
+
+
+def cmd_status(args: argparse.Namespace) -> int:
+    print(
+        json.dumps(
+            json_safe(_status(repository_root(), args.run_id)),
+            indent=None if args.json else 2,
+            sort_keys=True,
+        )
+    )
+    return 0
+
+
+def _follow_fingerprint(value: Mapping[str, Any]) -> str:
+    stable = dict(value)
+    semantic = dict(stable.get("semantic") or {})
+    semantic.pop("observed_at", None)
+    stable["semantic"] = semantic
+    return json.dumps(json_safe(stable), sort_keys=True, separators=(",", ":"))
+
+
+def _poll_status(
+    root: Path,
+    run_id: str,
+    *,
+    timeout: float,
+    poll_seconds: float,
+) -> Iterator[tuple[dict[str, Any], bool]]:
+    deadline = time.monotonic() + timeout
+    while True:
+        value = _status(root, run_id)
+        timed_out = time.monotonic() >= deadline
+        yield value, timed_out
+        if timed_out:
+            return
+        time.sleep(poll_seconds)
+
+
+def cmd_follow(args: argparse.Namespace) -> int:
+    root = repository_root()
+    previous = ""
+    for value, timed_out in _poll_status(
+        root,
+        args.run_id,
+        timeout=float(args.timeout),
+        poll_seconds=float(args.poll_seconds),
+    ):
+        encoded = json.dumps(json_safe(value), sort_keys=True, separators=(",", ":"))
+        fingerprint = _follow_fingerprint(value)
+        if fingerprint != previous:
+            print(encoded, flush=True)
+            previous = fingerprint
+        if value["completed"]:
+            return 0
+        if timed_out:
+            return 1
+    raise AssertionError("status poller ended without completion or timeout")
+
+
+def cmd_wait(args: argparse.Namespace) -> int:
+    root = repository_root()
+    for value, timed_out in _poll_status(
+        root,
+        args.run_id,
+        timeout=float(args.timeout),
+        poll_seconds=2.0,
+    ):
+        reached = (
+            value["completed"]
+            if args.until == "terminal"
+            else str(value["dstack"]["status"]).lower() in {"running", "pulling"}
+        )
+        if reached:
+            print(json.dumps(json_safe(value), sort_keys=True))
+            return 0
+        if timed_out:
+            print(json.dumps(json_safe(value), sort_keys=True))
+            return 1
+    raise AssertionError("status poller ended without completion or timeout")
+
+
+def cmd_cancel(args: argparse.Namespace) -> int:
+    root = repository_root()
+    _storage_config, authority = _storage(root)
+    state = authority.semantic_state(args.run_id)
+    attempt = _latest_attempt(state)
+    task_name = str(attempt["compute"]["dstack_task"])
+    DstackBackend().cancel(task_name, abort=bool(args.abort))
+    print(
+        json.dumps(
+            {
+                "run_id": args.run_id,
+                "attempt_id": attempt["attempt_id"],
+                "dstack_task": task_name,
+                "cancel_requested": True,
+                "abort": bool(args.abort),
+            },
+            sort_keys=True,
+        )
+    )
+    return 0
+
+
+def cmd_logs(args: argparse.Namespace) -> int:
+    root = repository_root()
+    _storage_config, authority = _storage(root)
+    attempt = _latest_attempt(authority.semantic_state(args.run_id))
+    text = DstackBackend().logs(
+        str(attempt["compute"]["dstack_task"]), since=args.since
+    )
+    lines = text.splitlines()
+    if args.tail > 0:
+        lines = lines[-args.tail :]
+    print("\n".join(lines))
+    return 0
+
+
+def _manifest_only_submission(
+    authority: RunAuthority,
+    run_id: str,
+) -> RunManifest:
+    state = authority.semantic_state(run_id)
+    manifest_document = state.get("manifest")
+    attempts = list(state.get("attempts") or [])
+    if not isinstance(manifest_document, dict) or len(attempts) != 1:
+        raise RuntimeError(
+            "resume-submit requires exactly one canonical and one attempt manifest"
+        )
+    if dict(attempts[0]) != manifest_document:
+        raise RuntimeError("canonical and attempt manifests do not match")
+    if any(
+        (
+            state.get("terminal") is not None,
+            state.get("promotion") is not None,
+            state.get("public_index") is not None,
+            bool(state.get("attempt_terminals")),
+            int(state.get("eval_intents") or 0) > 0,
+            int(state.get("eval_results") or 0) > 0,
+            int(state.get("verified_eval_results") or 0) > 0,
+        )
+    ):
+        raise RuntimeError("run has progressed beyond a manifest-only launch")
+    manifest = RunManifest(**manifest_document)
+    manifest.validate()
+    prefix = authority.run_prefix(run_id)
+    allowed_control_keys = {
+        f"{prefix}/manifest.json",
+        f"{prefix}/attempts/{manifest.attempt_id}/manifest.json",
+    }
+    unexpected_control_keys = sorted(
+        set(authority.control.iter_keys(prefix)) - allowed_control_keys
+    )
+    if unexpected_control_keys:
+        raise RuntimeError(
+            "run has control state beyond its manifests: "
+            + ", ".join(unexpected_control_keys)
+        )
+    if next(authority.evaluation.iter_keys(prefix), None) is not None:
+        raise RuntimeError("run has evaluation state and cannot resume submission")
+    if next(authority.models.iter_keys(prefix), None) is not None:
+        raise RuntimeError("run has public model state and cannot resume submission")
+    created_at = datetime.fromisoformat(
+        str(manifest.created_at).replace("Z", "+00:00")
+    ).astimezone(UTC)
+    quiet_for = (datetime.now(UTC) - created_at).total_seconds()
+    if quiet_for < QUIESCENCE_SECONDS:
+        raise RuntimeError(
+            "manifest-only launch has not reached the 30-second quiescence interval"
+        )
+    return manifest
+
+
+def cmd_resume_submit(args: argparse.Namespace) -> int:
+    root = repository_root()
+    storage, authority = _storage(root)
+    manifest = _manifest_only_submission(authority, args.run_id)
+    checkpoint_eval_backend = "modal" if bool(manifest.modal["enabled"]) else "none"
+    _storage_config, _authority, dstack_backend, _report = _operator_preflight(
+        root,
+        checkpoint_eval_backend=checkpoint_eval_backend,
+    )
+    task_name = str(manifest.compute["dstack_task"])
+    try:
+        existing = dstack_backend.status(task_name)
+    except KeyError:
+        existing = None
+    if existing is not None:
+        raise RuntimeError(
+            f"dstack task already exists with status {existing.status}: {task_name}"
+        )
+    manifest_uri = authority.control.uri(f"runs/{args.run_id}/manifest.json")
+    task = dstack_backend.submit(_task_request(manifest, manifest_uri=manifest_uri))
+    output = {
+        "schema_version": 1,
+        "run_id": manifest.run_id,
+        "attempt_id": manifest.attempt_id,
+        "dstack": {
+            "project": task.project,
+            "task": task.name,
+            "status": task.status,
+        },
+        "compute": {
+            "selected": dict(manifest.compute["selected"]),
+            "offer": manifest.compute.get("selected_offer"),
+        },
+        "source_sha": manifest.source_sha,
+        "image_digest": manifest.image_digest,
+        "runtime_input_sha256": manifest.compute["runtime_input_sha256"],
+        "runtime_build_source_sha": manifest.compute["runtime_build_source_sha"],
+        "wandb_url": manifest.wandb["url"],
+        "public_run_index_url": authority.models.public_url(
+            f"runs/{manifest.run_id}/index.json"
+        ),
+        "resumed_submission": True,
+    }
+    print(
+        json.dumps(json_safe(output), sort_keys=True)
+        if args.json
+        else (
+            f"run={manifest.run_id} task={task.name} "
+            f"compute={manifest.compute['selected']['kind']} "
+            f"image={manifest.image_digest} wandb={manifest.wandb['url']} "
+            f"index={output['public_run_index_url']}"
+        )
+    )
+    return 0
+
+
+def _lease_expiry(authority: RunAuthority, run_id: str) -> datetime | None:
+    value = authority.control.get_json_optional(f"runs/{run_id}/writer-lease.json")
+    if value is None:
+        return None
+    return datetime.fromisoformat(
+        str(value["expires_at"]).replace("Z", "+00:00")
+    ).astimezone(UTC)
+
+
+def cmd_retry(args: argparse.Namespace) -> int:
+    root = repository_root()
+    storage, authority = _storage(root)
+    state = authority.semantic_state(args.run_id)
+    if state.get("terminal") is not None:
+        raise RuntimeError("a scientifically successful run must not be retried")
+    previous = _latest_attempt(state)
+    previous_manifest = RunManifest(**previous)
+    previous_manifest.validate()
+    attempt_terminal = _latest_attempt_terminal(state)
+    dstack_backend = DstackBackend()
+    try:
+        previous_task = dstack_backend.status(
+            str(previous["compute"]["dstack_task"])
+        )
+    except KeyError:
+        previous_task = None
+    expiry = _lease_expiry(authority, args.run_id)
+    if expiry is not None and expiry > datetime.now(UTC):
+        raise RuntimeError(
+            f"the previous writer lease has not expired: {expiry.isoformat()}"
+        )
+    if previous_task is None and attempt_terminal is None:
+        created_at = datetime.fromisoformat(
+            str(previous_manifest.created_at).replace("Z", "+00:00")
+        ).astimezone(UTC)
+        if (datetime.now(UTC) - created_at).total_seconds() < QUIESCENCE_SECONDS:
+            raise RuntimeError(
+                "not-found attempt has not reached the 30-second quiescence interval"
+            )
+        _record_pre_submit_failure(authority, previous_manifest)
+        state = authority.semantic_state(args.run_id)
+        attempt_terminal = _latest_attempt_terminal(state)
+    if previous_task is None and (
+        attempt_terminal is None
+        or str(attempt_terminal.get("stop_reason") or "") != "pre_submit_failure"
+    ):
+        raise RuntimeError(
+            "the previous dstack task is not found without typed pre-submit evidence"
+        )
+    if previous_task is not None and previous_task.terminal and attempt_terminal is None:
+        _record_terminal_task_without_receipt(
+            authority,
+            previous_manifest,
+            previous_task,
+        )
+        state = authority.semantic_state(args.run_id)
+        attempt_terminal = _latest_attempt_terminal(state)
+    _require_retryable_attempt_terminal(attempt_terminal)
+    if previous_task is not None and (
+        previous_task.status.lower().replace("_", "-")
+        not in TERMINAL_DSTACK_STATUSES
+    ):
+        raise RuntimeError("the previous dstack attempt must be terminal before retry")
+    time.sleep(QUIESCENCE_SECONDS)
+    attempt_id = new_attempt_id()
+    task_name = _task_name(args.run_id, attempt_id, initial=False)
+    compute = dict(previous["compute"])
+    compute["dstack_task"] = task_name
+    selected_compute, selected_offer = dstack_backend.select_compute(
+        ComputeRequest(**dict(compute["request"]))
+    )
+    compute["selected"] = selected_compute.as_manifest()
+    compute["selected_offer"] = selected_offer
+    public_checkpoints = list(
+        (state.get("public_index") or {}).get("checkpoints") or []
+    )
+    learner_finished = any(
+        str(row.get("purpose") or "") == "final"
+        for row in public_checkpoints
+        if isinstance(row, dict)
+    )
+    if learner_finished or authority.has_accepted_eval(args.run_id):
+        compute["recovery_mode"] = "drain-only"
+    else:
+        compute["recovery_mode"] = "resume-training"
+    manifest = replace(
+        RunManifest(**previous),
+        attempt_id=attempt_id,
+        created_at=utc_now(),
+        compute=compute,
+    )
+    if bool(getattr(args, "repair_runtime", False)):
+        checkpoint_eval_backend = (
+            "modal" if bool(previous_manifest.modal["enabled"]) else "none"
+        )
+        source_sha = clean_git_source_sha(root)
+        branch = current_git_branch(root)
+        release = runtime_release_from_args(
+            args,
+            repo_root=root,
+            checkpoint_eval_backend=checkpoint_eval_backend,
+            wait_for_modal=checkpoint_eval_backend == "modal",
+        )
+        if release.source_sha != source_sha:
+            raise RuntimeError("repair runtime source does not match committed HEAD")
+        goal_path = root / "experiments" / "goals" / manifest.goal_slug / "_goal.yaml"
+        recipe_path = goal_path.parent / "recipes" / f"{manifest.recipe_slug}.yaml"
+        document = compose_train_document(
+            goal_path,
+            recipe_path,
+            recipe_overrides=manifest.recipe_overrides,
+            prepare_materialized=partial(
+                prepare_checkpoint_eval_mode,
+                checkpoint_eval_backend=checkpoint_eval_backend,
+            ),
+        )
+        if (
+            str(document["train_config"]["effective_goal_contract_sha256"])
+            != manifest.goal_sha256
+        ):
+            raise RuntimeError("repair runtime changed the effective goal contract")
+        if (
+            str(document["environment_hash"]).removeprefix("sha256:")
+            != manifest.environment_sha256
+        ):
+            raise RuntimeError("repair runtime changed the environment contract")
+        contract_document = _bind_launch_contract(
+            document,
+            asset=dict(manifest.modal["rom_asset_manifest"]),
+            checkpoint_eval_backend=checkpoint_eval_backend,
+        )
+        portable_recipe = build_recipe_document(
+            contract_document,
+            repo_root=root,
+            source_commit=source_sha,
+            run_description=manifest.run_description,
+            seed=manifest.seed,
+            runtime_image_ref=release.runtime_image_ref,
+        )
+        compute.update(
+            {
+                "source_branch": branch,
+                "runtime_workflow_run_id": release.workflow_run_id,
+                "runtime_input_sha256": release.runtime_input_sha256,
+                "runtime_build_source_sha": release.runtime_build_source_sha,
+            }
+        )
+        modal = {
+            **manifest.modal,
+            "app_name": str(release.modal_app_name or ""),
+            "deployment_source_sha": source_sha,
+        }
+        manifest = replace(
+            manifest,
+            source_sha=source_sha,
+            image_digest=release.runtime_image_ref,
+            recipe_sha256=canonical_json_sha256(portable_recipe),
+            compute=compute,
+            modal=modal,
+        )
+    manifest.validate()
+    manifest_key = f"runs/{args.run_id}/attempts/{attempt_id}/manifest.json"
+    manifest_uri = authority.control.uri(manifest_key)
+    task_request = _task_request(manifest, manifest_uri=manifest_uri)
+    task_request.validate()
+    authority.create_attempt_manifest(manifest)
+    try:
+        task = dstack_backend.submit(task_request)
+    except Exception:
+        try:
+            dstack_backend.status(task_name)
+        except KeyError:
+            _record_pre_submit_failure(authority, manifest)
+        raise
+    print(
+        json.dumps(
+            {
+                "run_id": args.run_id,
+                "attempt_id": attempt_id,
+                "retried_from_attempt_id": previous["attempt_id"],
+                "dstack_task": task.name,
+                "recovery_mode": compute.get("recovery_mode", "resume-training"),
+            },
+            sort_keys=True,
+        )
+    )
+    return 0
+
+
+def cmd_certify(args: argparse.Namespace) -> int:
+    from gradlab.lifecycle_certification import (
+        DEFAULT_SCENARIOS,
+        SCENARIOS,
+        preserve_failure_bundle,
+        replay_simulated_certification,
+        run_simulated_certification,
+    )
+
+    if args.list_scenarios:
+        for name in SCENARIOS:
+            print(name)
+        return 0
+    selected = tuple(args.scenario or DEFAULT_SCENARIOS)
+    if args.artifacts_dir is not None:
+        artifact_root = args.artifacts_dir.resolve()
+        if artifact_root.exists() and any(artifact_root.iterdir()):
+            raise ValueError(f"--artifacts-dir must be empty: {artifact_root}")
+        artifact_root.mkdir(parents=True, exist_ok=True)
+        if args.replay is not None:
+            report = replay_simulated_certification(
+                args.replay,
+                artifact_root=artifact_root,
+            )
+        else:
+            report = run_simulated_certification(
+                scenarios=selected,
+                artifact_root=artifact_root,
+            )
+        failure_bundle: Path | None = (
+            artifact_root if report["status"] == "failed" else None
+        )
+    else:
+        with tempfile.TemporaryDirectory(prefix="gradlab-tier1-cli-") as temporary:
+            artifact_root = Path(temporary)
+            if args.replay is not None:
+                report = replay_simulated_certification(
+                    args.replay,
+                    artifact_root=artifact_root,
+                )
+            else:
+                report = run_simulated_certification(
+                    scenarios=selected,
+                    artifact_root=artifact_root,
+                )
+            failure_bundle = None
+            if report["status"] == "failed":
+                destination = (
+                    Path("runs")
+                    / "certification"
+                    / f"failure-{str(report['report_sha256'])[:16]}"
+                ).resolve()
+                if destination.exists():
+                    failure_bundle = destination
+                else:
+                    failure_bundle = preserve_failure_bundle(
+                        artifact_root,
+                        destination,
+                    )
+    output = {
+        "report": report,
+        "failure_bundle": str(failure_bundle) if failure_bundle is not None else None,
+    }
+    if args.json:
+        print(json.dumps(output, sort_keys=True))
+    else:
+        print(
+            f"Tier 1 lifecycle certification: {report['status']} "
+            f"({len(report['scenarios'])} scenarios, "
+            f"report {report['report_sha256']})"
+        )
+        for scenario in report["scenarios"]:
+            print(f"  {scenario['status']}: {scenario['name']}")
+        if failure_bundle is not None:
+            print(f"Failure evidence and replay: {failure_bundle}")
+    return 0 if report["status"] == "passed" else 1
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="gradlab experiment",
+        description="Launch and observe dstack-backed training experiments.",
+        allow_abbrev=False,
+    )
+    commands = parser.add_subparsers(dest="command", required=True)
+
+    launch = commands.add_parser(
+        "launch",
+        help="Launch a checked-in goal and recipe with an exact-source runtime image.",
+        description=(
+            "Launch one checked-in goal and recipe through dstack. The command requires "
+            "a clean committed source revision and resolves its exact-source immutable "
+            "runtime image before scheduling compute; it never falls back to an older image."
+        ),
+    )
+    launch.add_argument("--goal-file", type=Path, required=True)
+    launch.add_argument("--recipe-file", type=Path, required=True)
+    launch.add_argument("--seed", type=int, required=True)
+    launch.add_argument("--run-description", required=True)
+    launch.add_argument(
+        "--set",
+        dest="recipe_overrides",
+        action="append",
+        default=[],
+        metavar="KEY=VALUE",
+        help="Hash-bound Hydra recipe override; repeat for independent keys.",
+    )
+    launch.add_argument(
+        "--checkpoint-eval-backend",
+        choices=("modal", "none"),
+        default=None,
+        help=(
+            "Override the recipe's checkpoint-evaluation mode. Modal establishes "
+            "acceptance; none publishes training-only evidence without promotion or "
+            "goal acceptance."
+        ),
+    )
+    launch.add_argument(
+        "--submission-key",
+        help="Optional research-wave identity recorded in launch output.",
+    )
+    launch.add_argument(
+        "--compute",
+        choices=("auto", "local", "spot", "on-demand"),
+        default="auto",
+    )
+    launch.add_argument("--target")
+    launch.add_argument("--max-price", type=float)
+    launch.add_argument("--max-cost-usd", type=float)
+    launch.add_argument("--allow-on-demand", action="store_true")
+    launch.add_argument(
+        "--max-duration",
+        type=_parse_duration,
+        default=DEFAULT_MAX_DURATION_SECONDS,
+    )
+    launch.add_argument("--rom-path", type=Path)
+    launch.add_argument("--runtime-image-ref-file", type=Path)
+    launch.add_argument("--image-workflow", default=DEFAULT_IMAGE_WORKFLOW)
+    launch.add_argument("--image-artifact", default=DEFAULT_IMAGE_ARTIFACT)
+    launch.add_argument("--image-branch")
+    launch.add_argument("--existing-runtime-only", action="store_true")
+    launch.add_argument(
+        "--runtime-readiness-timeout",
+        type=_parse_duration,
+        default=DEFAULT_RUNTIME_READINESS_TIMEOUT_SECONDS,
+    )
+    launch.add_argument("--json", action="store_true")
+    launch.set_defaults(func=cmd_launch)
+
+    operator_preflight = commands.add_parser(
+        "operator-preflight",
+        help="Validate local credentials and live service access before launch.",
+        description=(
+            "Resolve the private operator environment, authenticate dstack, and "
+            "read-check all three R2 scopes without launching or mutating a run."
+        ),
+    )
+    operator_preflight.add_argument(
+        "--checkpoint-eval-backend",
+        choices=("modal", "none"),
+        default="modal",
+    )
+    operator_preflight.add_argument("--json", action="store_true")
+    operator_preflight.set_defaults(func=cmd_operator_preflight)
+
+    status = commands.add_parser("status", help="Inspect dstack and R2 run state.")
+    status.add_argument("--run", dest="run_id", type=_require_run_id, required=True)
+    status.add_argument("--json", action="store_true")
+    status.set_defaults(func=cmd_status)
+
+    follow = commands.add_parser("follow", help="Stream changes in semantic run state.")
+    follow.add_argument("--run", dest="run_id", type=_require_run_id, required=True)
+    follow.add_argument("--poll-seconds", type=float, default=2.0)
+    follow.add_argument("--timeout", type=_parse_duration, default=12 * 60 * 60)
+    follow.set_defaults(func=cmd_follow)
+
+    wait = commands.add_parser("wait", help="Wait for one run state.")
+    wait.add_argument("--run", dest="run_id", type=_require_run_id, required=True)
+    wait.add_argument("--until", choices=("running", "terminal"), required=True)
+    wait.add_argument("--timeout", type=_parse_duration, default=12 * 60 * 60)
+    wait.set_defaults(func=cmd_wait)
+
+    cancel = commands.add_parser("cancel", help="Cancel the current dstack attempt.")
+    cancel.add_argument("--run", dest="run_id", type=_require_run_id, required=True)
+    cancel.add_argument("--abort", action="store_true")
+    cancel.set_defaults(func=cmd_cancel)
+
+    retry = commands.add_parser("retry", help="Retry a terminal failed attempt.")
+    retry.add_argument("--run", dest="run_id", type=_require_run_id, required=True)
+    retry.add_argument(
+        "--repair-runtime",
+        action="store_true",
+        help=(
+            "Use the exact-source runtime for committed HEAD while preserving the "
+            "logical run, goal, environment, seed, and recipe overrides."
+        ),
+    )
+    retry.set_defaults(func=cmd_retry)
+
+    resume_submit = commands.add_parser(
+        "resume-submit",
+        help="Submit an immutable manifest-only launch after a pre-submit failure.",
+        description=(
+            "Recover one launch whose immutable R2 manifest exists but whose dstack "
+            "task was never created. The command fails closed if any run activity "
+            "or task with the bound name exists."
+        ),
+    )
+    resume_submit.add_argument(
+        "--run",
+        dest="run_id",
+        type=_require_run_id,
+        required=True,
+    )
+    resume_submit.add_argument("--json", action="store_true")
+    resume_submit.set_defaults(func=cmd_resume_submit)
+
+    logs = commands.add_parser("logs", help="Read dstack logs for the current attempt.")
+    logs.add_argument("--run", dest="run_id", type=_require_run_id, required=True)
+    logs.add_argument("--tail", type=int, default=100)
+    logs.add_argument("--since")
+    logs.set_defaults(func=cmd_logs)
+
+    certify = commands.add_parser(
+        "certify",
+        help="Run the credential-free deterministic orchestration lifecycle gate.",
+    )
+    certify.add_argument(
+        "--tier",
+        choices=("simulated",),
+        default="simulated",
+    )
+    certify.add_argument(
+        "--scenario",
+        action="append",
+        help="Run one named scenario; repeat to select multiple scenarios.",
+    )
+    certify.add_argument(
+        "--list",
+        dest="list_scenarios",
+        action="store_true",
+        help="List deterministic Tier 1 scenarios and exit.",
+    )
+    certify.add_argument(
+        "--replay",
+        type=Path,
+        help="Replay the exact scenario set from a preserved replay.json.",
+    )
+    certify.add_argument(
+        "--artifacts-dir",
+        type=Path,
+        help="Keep raw buckets, SQLite ledgers, transcripts, report, and replay here.",
+    )
+    certify.add_argument("--json", action="store_true")
+    certify.set_defaults(func=cmd_certify)
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(sys.argv[1:] if argv is None else argv)
+    try:
+        return int(args.func(args))
+    except OperatorConfigurationError as exc:
+        print(f"gradlab experiment: operator configuration error: {exc}", file=sys.stderr)
+        return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

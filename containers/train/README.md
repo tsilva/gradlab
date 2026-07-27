@@ -1,4 +1,4 @@
-# rlab training container
+# gradlab training container
 
 This image is the complete v1 runtime for one dstack training task. It contains
 the learner and its in-container supervisor, but no ROMs, credentials,
@@ -17,7 +17,7 @@ The Dockerfile preserves three independently cacheable layers:
 
 1. CUDA, PyTorch, and Triton.
 2. The remaining frozen Python dependencies.
-3. The exact-source rlab application overlay.
+3. The exact-source gradlab application overlay.
 
 `uv.lock` is the dependency source of truth. The checked-in Linux lock
 projections must remain disjoint and reconstruct the complete training
@@ -34,15 +34,15 @@ Build and smoke locally:
 docker buildx build \
   --platform linux/amd64 \
   -f containers/train/Dockerfile \
-  -t rlab-train:local \
+  -t gradlab-train:local \
   --load \
   .
 
-docker run --rm rlab-train:local
+docker run --rm gradlab-train:local
 ```
 
 Published runs use only a verified immutable reference of the form
-`docker:ghcr.io/tsilva/rlab/rlab-train@sha256:<digest>`. The image workflow
+`docker:ghcr.io/tsilva/gradlab/gradlab-train@sha256:<digest>`. The image workflow
 records the exact source SHA, runtime input hash, dependency digests, and final
 digest. dstack submission refuses a dirty or unpublished source revision.
 
@@ -72,7 +72,7 @@ training task on one single-GPU host; it does not oversubscribe B3 with multiple
 learner containers.
 
 ```bash
-rlab experiment launch \
+gradlab experiment launch \
   --goal SuperMarioBros-Nes-v0/Level1-1 \
   --recipe ppo.yaml \
   --seed 123 \
@@ -80,10 +80,10 @@ rlab experiment launch \
   --compute local \
   --target b3
 
-rlab experiment status --run <rlab-run-id> --json
-rlab experiment follow --run <rlab-run-id>
-rlab experiment logs --run <rlab-run-id>
-rlab experiment cancel --run <rlab-run-id>
+gradlab experiment status --run <gradlab-run-id> --json
+gradlab experiment follow --run <gradlab-run-id>
+gradlab experiment logs --run <gradlab-run-id>
+gradlab experiment cancel --run <gradlab-run-id>
 ```
 
 dstack owns placement, process logs, interruption reporting, cancellation, and
@@ -91,5 +91,5 @@ resource release. R2 receipts—not task exit status—own scientific success,
 promotion, and resumable recovery.
 
 Host image cleanup is a separate root-owned timer. It queries dstack for
-active/queued immutable digests and removes only unused rlab-managed images,
+active/queued immutable digests and removes only unused gradlab-managed images,
 preserving active containers and demanded digests.

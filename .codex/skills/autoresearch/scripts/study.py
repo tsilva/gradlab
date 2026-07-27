@@ -22,15 +22,15 @@ from statistics import median
 from typing import Any, Iterator, Mapping
 from urllib.parse import urlparse
 
-from rlab.metric_names import (
+from gradlab.metric_names import (
     TRAIN_EPISODE_RETURN_SHAPED_MEAN,
     TRAIN_GLOBAL_STEP,
     TRAIN_OUTCOME_SUCCESS_WINDOW_100_RATE_MIN,
 )
-from rlab.provider_config import provider_num_envs
-from rlab.recipe_documents import compose_train_document
-from rlab.run_contracts import RUN_ID_PATTERN
-from rlab.training_backend import training_backend_id
+from gradlab.provider_config import provider_num_envs
+from gradlab.recipe_documents import compose_train_document
+from gradlab.run_contracts import RUN_ID_PATTERN
+from gradlab.training_backend import training_backend_id
 
 
 SCHEMA_VERSION = 3
@@ -887,7 +887,7 @@ def launch_command(
     seed: int,
 ) -> list[str]:
     command = [
-        "rlab",
+        "gradlab",
         "experiment",
         "launch",
         "--goal-file",
@@ -1307,7 +1307,7 @@ def fetch_training_evidence(
     mode: str = EVIDENCE_SUCCESS,
     return_tail_fraction: float = RETURN_TAIL_FRACTION,
 ) -> dict[str, Any]:
-    from rlab.wandb_utils import load_wandb_env
+    from gradlab.wandb_utils import load_wandb_env
 
     load_wandb_env()
     import wandb

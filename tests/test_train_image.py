@@ -173,7 +173,7 @@ class TrainImageTests(unittest.TestCase):
         self.assertIn("FROM scratch AS dependency-overlay", dockerfile)
         self.assertIn("FROM ${GPU_BASE} AS dependencies", dockerfile)
         self.assertIn("FROM scratch AS runtime-overlay", dockerfile)
-        self.assertIn("COPY METRICS.md /root/rlab/METRICS.md", dockerfile)
+        self.assertIn("COPY METRICS.md /root/gradlab/METRICS.md", dockerfile)
         self.assertIn("FROM ${RUNTIME_BASE} AS runtime", dockerfile)
         runtime = dockerfile.split("FROM ${RUNTIME_BASE} AS runtime", maxsplit=1)[1]
         instructions = [line.strip() for line in runtime.splitlines() if line and not line.startswith(" ")]
@@ -198,9 +198,9 @@ class TrainImageTests(unittest.TestCase):
         dependency_build = dockerfile.split(
             "FROM ${PYTHON_IMAGE} AS dependency-overlay-build", maxsplit=1
         )[1].split("FROM scratch AS dependency-overlay", maxsplit=1)[0]
-        self.assertIn("ENV UV_PROJECT_ENVIRONMENT=/opt/rlab-dependencies", dependency_build)
-        self.assertIn("rlab-gpu.pth", dependency_build)
-        self.assertNotIn("uv venv \"/root/rlab/.venv\"", dependency_build)
+        self.assertIn("ENV UV_PROJECT_ENVIRONMENT=/opt/gradlab-dependencies", dependency_build)
+        self.assertIn("gradlab-gpu.pth", dependency_build)
+        self.assertNotIn("uv venv \"/root/gradlab/.venv\"", dependency_build)
 
         dependency_overlay = dockerfile.split(
             "FROM scratch AS dependency-overlay", maxsplit=1
@@ -209,14 +209,14 @@ class TrainImageTests(unittest.TestCase):
         self.assertEqual(
             [line.strip() for line in dependency_overlay.splitlines() if line.startswith("COPY ")],
             [
-                "COPY --from=dependency-overlay-build /opt/rlab-dependencies "
-                "/opt/rlab-dependencies"
+                "COPY --from=dependency-overlay-build /opt/gradlab-dependencies "
+                "/opt/gradlab-dependencies"
             ],
         )
         self.assertIn("ARG BUILDKIT_SBOM_SCAN_STAGE=false", dependencies)
-        self.assertIn("ENV UV_PROJECT_ENVIRONMENT=/opt/rlab-dependencies", dependencies)
+        self.assertIn("ENV UV_PROJECT_ENVIRONMENT=/opt/gradlab-dependencies", dependencies)
         self.assertIn(
-            'ENV PATH="/opt/rlab-dependencies/bin:/root/rlab/.venv/bin:${PATH}"',
+            'ENV PATH="/opt/gradlab-dependencies/bin:/root/gradlab/.venv/bin:${PATH}"',
             dependencies,
         )
 
@@ -292,38 +292,38 @@ class TrainImageTests(unittest.TestCase):
             self.assertTrue(name in {"torch", "triton"} or name.startswith(("cuda-", "nvidia-")))
 
     def test_workflows_publish_only_immutable_layer_tags(self) -> None:
-        dependency = Path(".github/workflows/rlab-train-dependencies.yml").read_text(
+        dependency = Path(".github/workflows/gradlab-train-dependencies.yml").read_text(
             encoding="utf-8"
         )
-        runtime = Path(".github/workflows/rlab-train-image.yml").read_text(encoding="utf-8")
+        runtime = Path(".github/workflows/gradlab-train-image.yml").read_text(encoding="utf-8")
 
         self.assertIn("branches-ignore: [main]", dependency)
         self.assertNotIn("workflow_call:", dependency)
         self.assertEqual(dependency.count("runs-on: ubuntu-24.04"), 2)
         self.assertEqual(dependency.count("docker/setup-buildx-action@v3"), 1)
-        self.assertNotIn("uses: ./.github/workflows/rlab-train-dependencies.yml", runtime)
+        self.assertNotIn("uses: ./.github/workflows/gradlab-train-dependencies.yml", runtime)
         self.assertNotIn("needs: dependencies", runtime)
         self.assertIn("name: Build GPU foundation", runtime)
         self.assertIn("name: Build train dependencies", runtime)
         self.assertEqual(runtime.count("docker/setup-buildx-action@v3"), 1)
         self.assertIn("runtime-${{ steps.runtime_meta.outputs.runtime_input_sha256 }}", runtime)
-        self.assertIn('"schema_version": 5', runtime)
+        self.assertIn('"schema_version": 6', runtime)
         self.assertNotIn("buildcache", dependency + runtime)
         self.assertNotIn("cache-to:", dependency + runtime)
 
     def test_image_receipt_precedes_modal_readiness(self) -> None:
-        workflow = Path(".github/workflows/rlab-train-image.yml").read_text(encoding="utf-8")
-        modal = Path(".github/workflows/rlab-modal-eval.yml").read_text(encoding="utf-8")
+        workflow = Path(".github/workflows/gradlab-train-image.yml").read_text(encoding="utf-8")
+        modal = Path(".github/workflows/gradlab-modal-eval.yml").read_text(encoding="utf-8")
 
         build = workflow.split("  build:", maxsplit=1)[1].split(
             "  deploy-modal-evaluator:", maxsplit=1
         )[0]
-        self.assertIn("name: rlab-train-image", build)
-        self.assertIn('"schema_version": 5', build)
+        self.assertIn("name: gradlab-train-image", build)
+        self.assertIn('"schema_version": 6', build)
         self.assertIn('"gpu_plan_sha256"', build)
         self.assertIn("workflow_call:", modal)
-        self.assertIn("name: rlab-modal-eval-readiness", modal)
-        self.assertIn("group: rlab-modal-eval-${{ inputs.source_sha }}", modal)
+        self.assertIn("name: gradlab-modal-eval-readiness", modal)
+        self.assertIn("group: gradlab-modal-eval-${{ inputs.source_sha }}", modal)
         self.assertNotIn("group: ${{ github.workflow }}", modal)
 
 

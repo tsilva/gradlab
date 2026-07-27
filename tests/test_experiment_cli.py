@@ -8,8 +8,8 @@ from unittest import mock
 
 import pytest
 
-from rlab.dstack_backend import DstackTask
-from rlab.experiment_cli import (
+from gradlab.dstack_backend import DstackTask
+from gradlab.experiment_cli import (
     _bind_launch_contract,
     _compute,
     _follow_fingerprint,
@@ -32,10 +32,10 @@ from rlab.experiment_cli import (
     cmd_wait,
     main,
 )
-from rlab.operator_credentials import OperatorConfigurationError
-from rlab.policy_bundle import build_recipe_document
-from rlab.recipe_documents import compose_train_document
-from rlab.run_contracts import RunManifest, new_attempt_id, new_run_id
+from gradlab.operator_credentials import OperatorConfigurationError
+from gradlab.policy_bundle import build_recipe_document
+from gradlab.recipe_documents import compose_train_document
+from gradlab.run_contracts import RunManifest, new_attempt_id, new_run_id
 
 
 @pytest.mark.parametrize(
@@ -51,7 +51,7 @@ def test_wandb_identity_uses_project_relative_goal_display_names(
     goal_slug: str,
     expected_goal: str,
 ) -> None:
-    run_id = "rlab-0123456789abcdef0123456789abcdef"
+    run_id = "gradlab-0123456789abcdef0123456789abcdef"
     document = {
         "train_config": {
             "env_provider": "supermariobrosnes-turbo",
@@ -59,7 +59,7 @@ def test_wandb_identity_uses_project_relative_goal_display_names(
         }
     }
 
-    with mock.patch("rlab.experiment_cli.wandb_entity_from_env", return_value="entity"):
+    with mock.patch("gradlab.experiment_cli.wandb_entity_from_env", return_value="entity"):
         identity = _wandb_identity(
             document,
             run_id,
@@ -85,10 +85,10 @@ def test_wandb_identity_prefers_declared_campaign_group() -> None:
         },
     }
 
-    with mock.patch("rlab.experiment_cli.wandb_entity_from_env", return_value="entity"):
+    with mock.patch("gradlab.experiment_cli.wandb_entity_from_env", return_value="entity"):
         identity = _wandb_identity(
             document,
-            "rlab-fedcba9876543210fedcba9876543210",
+            "gradlab-fedcba9876543210fedcba9876543210",
             goal_slug="SuperMarioBros-Nes-v0/Level1-1",
             recipe_slug="ppo-b3",
             recipe_variant="v-12345678",
@@ -106,10 +106,10 @@ def test_wandb_identity_cohort_group_includes_override_variant() -> None:
         }
     }
 
-    with mock.patch("rlab.experiment_cli.wandb_entity_from_env", return_value="entity"):
+    with mock.patch("gradlab.experiment_cli.wandb_entity_from_env", return_value="entity"):
         identity = _wandb_identity(
             document,
-            "rlab-fedcba9876543210fedcba9876543210",
+            "gradlab-fedcba9876543210fedcba9876543210",
             goal_slug="SuperMarioBros-Nes-v0/Level1-1",
             recipe_slug="ppo-b3",
             recipe_variant="v-12345678",
@@ -155,7 +155,7 @@ def _manifest_only_run() -> RunManifest:
         .isoformat()
         .replace("+00:00", "Z"),
         source_sha=source_sha,
-        image_digest="docker:example/rlab@sha256:" + "c" * 64,
+        image_digest="docker:example/gradlab@sha256:" + "c" * 64,
         goal_slug="example/goal",
         goal_sha256="d" * 64,
         recipe_slug="ppo",
@@ -173,8 +173,8 @@ def _manifest_only_run() -> RunManifest:
         },
         modal={
             "enabled": True,
-            "environment_name": "rlab-eval",
-            "app_name": f"rlab-eval-v2-{source_sha[:12]}",
+            "environment_name": "gradlab-eval",
+            "app_name": f"gradlab-eval-v3-{source_sha[:12]}",
             "function_name": "evaluate_checkpoint",
             "deployment_source_sha": source_sha,
             "rom_asset_manifest": None,
@@ -277,22 +277,22 @@ def test_launch_operator_preflight_runs_before_runtime_readiness(
     )
 
     with (
-        mock.patch("rlab.experiment_cli.repository_root", return_value=tmp_path),
-        mock.patch("rlab.experiment_cli.clean_git_source_sha", return_value="a" * 40),
-        mock.patch("rlab.experiment_cli.current_git_branch", return_value="main"),
+        mock.patch("gradlab.experiment_cli.repository_root", return_value=tmp_path),
+        mock.patch("gradlab.experiment_cli.clean_git_source_sha", return_value="a" * 40),
+        mock.patch("gradlab.experiment_cli.current_git_branch", return_value="main"),
         mock.patch(
-            "rlab.experiment_cli._tracked_committed_path",
+            "gradlab.experiment_cli._tracked_committed_path",
             side_effect=[goal, recipe],
         ),
         mock.patch(
-            "rlab.experiment_cli.compose_train_document",
+            "gradlab.experiment_cli.compose_train_document",
             return_value={"train_config": {"checkpoint_eval_backend": "modal"}},
         ),
         mock.patch(
-            "rlab.experiment_cli._operator_preflight",
+            "gradlab.experiment_cli._operator_preflight",
             side_effect=OperatorConfigurationError("missing operator credentials"),
         ),
-        mock.patch("rlab.experiment_cli.runtime_release_from_args") as runtime_release,
+        mock.patch("gradlab.experiment_cli.runtime_release_from_args") as runtime_release,
     ):
         with pytest.raises(OperatorConfigurationError, match="missing operator"):
             cmd_launch(args)
@@ -305,7 +305,7 @@ def test_operator_configuration_error_is_concise_without_traceback(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    monkeypatch.setenv("RLAB_OPERATOR_CONFIG", str(tmp_path / "missing.toml"))
+    monkeypatch.setenv("GRADLAB_OPERATOR_CONFIG", str(tmp_path / "missing.toml"))
     for name in _required_operator_environment("none"):
         monkeypatch.delenv(name, raising=False)
 
@@ -330,7 +330,7 @@ def test_public_dstack_state_never_exposes_raw_task_environment() -> None:
                     "configuration": {
                         "env": {
                             "WANDB_API_KEY": "should-never-appear",
-                            "RLAB_CONTROL_R2_SECRET_ACCESS_KEY": "also-secret",
+                            "GRADLAB_CONTROL_R2_SECRET_ACCESS_KEY": "also-secret",
                         }
                     }
                 },
@@ -348,14 +348,14 @@ def test_public_dstack_state_never_exposes_raw_task_environment() -> None:
 def test_status_poller_observes_once_before_an_immediate_timeout(tmp_path: Path) -> None:
     value = {"completed": False}
     with (
-        mock.patch("rlab.experiment_cli._status", return_value=value) as status,
-        mock.patch("rlab.experiment_cli.time.monotonic", side_effect=[10.0, 10.0]),
-        mock.patch("rlab.experiment_cli.time.sleep") as sleep,
+        mock.patch("gradlab.experiment_cli._status", return_value=value) as status,
+        mock.patch("gradlab.experiment_cli.time.monotonic", side_effect=[10.0, 10.0]),
+        mock.patch("gradlab.experiment_cli.time.sleep") as sleep,
     ):
         assert list(
             _poll_status(
                 tmp_path,
-                "rlab-" + "0" * 32,
+                "gradlab-" + "0" * 32,
                 timeout=0.0,
                 poll_seconds=2.0,
             )
@@ -377,14 +377,14 @@ def test_observers_prefer_completion_over_simultaneous_timeout(
         "semantic": {},
     }
     args = SimpleNamespace(
-        run_id="rlab-" + "0" * 32,
+        run_id="gradlab-" + "0" * 32,
         timeout=0.0,
         poll_seconds=2.0,
         until="terminal",
     )
     with (
-        mock.patch("rlab.experiment_cli.repository_root", return_value=tmp_path),
-        mock.patch("rlab.experiment_cli._poll_status", return_value=iter([(value, True)])),
+        mock.patch("gradlab.experiment_cli.repository_root", return_value=tmp_path),
+        mock.patch("gradlab.experiment_cli._poll_status", return_value=iter([(value, True)])),
     ):
         assert command(args) == 0
 
@@ -393,7 +393,7 @@ def test_observers_prefer_completion_over_simultaneous_timeout(
 
 def test_follow_fingerprint_ignores_only_poll_observation_time() -> None:
     first = {
-        "run_id": "rlab-" + "a" * 32,
+        "run_id": "gradlab-" + "a" * 32,
         "semantic": {
             "observed_at": 1.0,
             "attempts": [{"attempt_id": "attempt-" + "b" * 16}],
@@ -507,7 +507,7 @@ def test_retry_task_name_preserves_run_and_changes_attempt() -> None:
 
     assert _task_name(run_id, attempt_id, initial=True) == run_id
     retry_name = _task_name(run_id, attempt_id, initial=False)
-    assert retry_name.startswith("rlab-")
+    assert retry_name.startswith("gradlab-")
     assert len(retry_name) == len(run_id)
     assert _task_name(run_id, attempt_id, initial=False) == retry_name
     assert _task_name(new_run_id(), attempt_id, initial=False) != retry_name
@@ -562,7 +562,7 @@ def test_pre_submit_failure_records_typed_attempt_evidence() -> None:
 def test_terminal_task_without_receipt_records_typed_startup_failure() -> None:
     manifest = _manifest_only_run()
     authority = mock.MagicMock()
-    task = DstackTask(project="main", name="rlab-retry", status="failed")
+    task = DstackTask(project="main", name="gradlab-retry", status="failed")
 
     _record_terminal_task_without_receipt(authority, manifest, task)
 
@@ -578,7 +578,7 @@ def test_terminal_task_without_receipt_records_typed_startup_failure() -> None:
 def test_active_task_without_receipt_cannot_be_sealed() -> None:
     manifest = _manifest_only_run()
     authority = mock.MagicMock()
-    task = DstackTask(project="main", name="rlab-retry", status="running")
+    task = DstackTask(project="main", name="gradlab-retry", status="running")
 
     with pytest.raises(RuntimeError, match="while its dstack task is active"):
         _record_terminal_task_without_receipt(authority, manifest, task)
@@ -629,13 +629,13 @@ def test_resume_submit_recovers_only_the_original_manifest(
     )
 
     with (
-        mock.patch("rlab.experiment_cli.repository_root", return_value=tmp_path),
+        mock.patch("gradlab.experiment_cli.repository_root", return_value=tmp_path),
         mock.patch(
-            "rlab.experiment_cli._storage",
+            "gradlab.experiment_cli._storage",
             return_value=(storage, authority),
         ),
         mock.patch(
-            "rlab.experiment_cli._operator_preflight",
+            "gradlab.experiment_cli._operator_preflight",
             return_value=(storage, authority, backend, {"status": "ready"}),
         ),
     ):
@@ -684,12 +684,12 @@ def test_resume_submit_rejects_any_post_manifest_run_state(
     )
 
     with (
-        mock.patch("rlab.experiment_cli.repository_root", return_value=tmp_path),
+        mock.patch("gradlab.experiment_cli.repository_root", return_value=tmp_path),
         mock.patch(
-            "rlab.experiment_cli._storage",
+            "gradlab.experiment_cli._storage",
             return_value=(SimpleNamespace(), authority),
         ),
-        mock.patch("rlab.experiment_cli._operator_preflight") as preflight,
+        mock.patch("gradlab.experiment_cli._operator_preflight") as preflight,
         pytest.raises(RuntimeError, match="control state beyond"),
     ):
         cmd_resume_submit(SimpleNamespace(run_id=manifest.run_id, json=True))
@@ -723,7 +723,7 @@ def test_launch_parser_supports_explicit_training_only_runs() -> None:
 def test_training_only_task_does_not_receive_modal_credentials() -> None:
     manifest = SimpleNamespace(
         run_id=new_run_id(),
-        image_digest="docker:example/rlab@sha256:" + "a" * 64,
+        image_digest="docker:example/gradlab@sha256:" + "a" * 64,
         compute={
             "selected": {
                 "kind": "local",
@@ -735,7 +735,7 @@ def test_training_only_task_does_not_receive_modal_credentials() -> None:
             },
             "dstack_task": "training-only",
         },
-        modal={"enabled": False, "environment_name": "rlab-eval"},
+        modal={"enabled": False, "environment_name": "gradlab-eval"},
     )
 
     task = _task_request(manifest, manifest_uri="s3://control/run/manifest.json")
@@ -750,7 +750,7 @@ def test_rom_free_provider_does_not_require_or_stage_an_asset() -> None:
     assert (
         _stage_rom(
             SimpleNamespace(),
-            env_provider="rlab",
+            env_provider="gradlab",
             game="Bandit-v0",
             rom_path=None,
         )
@@ -759,7 +759,7 @@ def test_rom_free_provider_does_not_require_or_stage_an_asset() -> None:
 
 
 def test_rom_free_launch_contract_omits_null_asset() -> None:
-    goal = Path("experiments/goals/rlab__bandit/_goal.yaml")
+    goal = Path("experiments/goals/gradlab__bandit/_goal.yaml")
     document = compose_train_document(goal, goal.parent / "recipes/ppo.yaml")
     contract = _bind_launch_contract(
         document,
@@ -774,5 +774,5 @@ def test_rom_free_launch_contract_omits_null_asset() -> None:
         source_commit="a" * 40,
         run_description="ROM-free launch contract regression",
         seed=123,
-        runtime_image_ref="docker:example/rlab@sha256:" + "b" * 64,
+        runtime_image_ref="docker:example/gradlab@sha256:" + "b" * 64,
     )

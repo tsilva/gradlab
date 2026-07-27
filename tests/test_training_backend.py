@@ -13,12 +13,12 @@ import gymnasium as gym
 import numpy as np
 import pytest
 
-from rlab.batch_runtime import BatchRuntime, ProviderDescriptor
-from rlab.runtime_contract import train_config_contract_payload, train_config_contract_sha256
-from rlab.task_kernels import IdentityTaskDefinition
-from rlab.train import main as train_main
-from rlab.train_config import load_materialized_train_config, validate_and_normalize_train_config
-from rlab.training_backend import BackendContext
+from gradlab.batch_runtime import BatchRuntime, ProviderDescriptor
+from gradlab.runtime_contract import train_config_contract_payload, train_config_contract_sha256
+from gradlab.task_kernels import IdentityTaskDefinition
+from gradlab.train import main as train_main
+from gradlab.train_config import load_materialized_train_config, validate_and_normalize_train_config
+from gradlab.training_backend import BackendContext
 
 
 def backend_config(backend_id: str = "sb3.ppo", **config) -> dict[str, object]:
@@ -31,8 +31,8 @@ def test_core_backend_contract_does_not_import_sb3() -> None:
             sys.executable,
             "-c",
             (
-                "import sys; import rlab.train, rlab.batch_runtime, "
-                "rlab.training_backend; from rlab.runtime_contract import "
+                "import sys; import gradlab.train, gradlab.batch_runtime, "
+                "gradlab.training_backend; from gradlab.runtime_contract import "
                 "train_config_contract_sha256; train_config_contract_sha256(); "
                 "assert 'stable_baselines3' not in sys.modules"
             ),
@@ -54,7 +54,7 @@ def test_learner_backend_context_is_wandb_blind() -> None:
 def test_direct_learner_entrypoint_is_guarded() -> None:
     with (
         mock.patch.dict("os.environ", {}, clear=True),
-        pytest.raises(RuntimeError, match="use `rlab experiment launch`"),
+        pytest.raises(RuntimeError, match="use `gradlab experiment launch`"),
     ):
         train_main([])
 
@@ -120,7 +120,7 @@ def test_jerk_backend_schema_is_strict_and_available() -> None:
     normalized = validate_and_normalize_train_config(
         {
             "timesteps": 100,
-            **backend_config("rlab.jerk", archive_replay_probability_initial=0.2),
+            **backend_config("gradlab.jerk", archive_replay_probability_initial=0.2),
         },
         required_keys=("training_backend",),
     )
@@ -133,30 +133,30 @@ def test_jerk_backend_schema_is_strict_and_available() -> None:
 
     with pytest.raises(ValueError, match="archive_replay_probability_initial must be in"):
         validate_and_normalize_train_config(
-            backend_config("rlab.jerk", archive_replay_probability_initial=1.1)
+            backend_config("gradlab.jerk", archive_replay_probability_initial=1.1)
         )
     with pytest.raises(ValueError, match="archive_replay_probability_initial must not exceed"):
         validate_and_normalize_train_config(
             backend_config(
-                "rlab.jerk",
+                "gradlab.jerk",
                 archive_replay_probability_initial=0.8,
                 archive_replay_probability_max=0.7,
             )
         )
     with pytest.raises(ValueError, match="max_prefix_shorten_steps must be a positive integer"):
-        validate_and_normalize_train_config(backend_config("rlab.jerk", max_prefix_shorten_steps=0))
+        validate_and_normalize_train_config(backend_config("gradlab.jerk", max_prefix_shorten_steps=0))
     with pytest.raises(ValueError, match="unexpected fields.*jump_probability"):
-        validate_and_normalize_train_config(backend_config("rlab.jerk", jump_probability=0.1))
+        validate_and_normalize_train_config(backend_config("gradlab.jerk", jump_probability=0.1))
     with pytest.raises(ValueError, match="requires checkpoint_eval_backend=none"):
         validate_and_normalize_train_config(
-            backend_config("rlab.jerk", acceptance_mode="first_training_success")
+            backend_config("gradlab.jerk", acceptance_mode="first_training_success")
         )
 
     accepted = validate_and_normalize_train_config(
         {
             "checkpoint_eval_backend": "none",
             "early_stop": None,
-            **backend_config("rlab.jerk", acceptance_mode="first_training_success"),
+            **backend_config("gradlab.jerk", acceptance_mode="first_training_success"),
         }
     )
     assert accepted["training_backend"]["config"]["acceptance_mode"] == ("first_training_success")
@@ -170,17 +170,17 @@ def test_unavailable_backend_fails_before_run_resources_are_created() -> None:
             json.dumps(
                 {
                     "game": "Bandit-v0",
-                    "env_provider": "rlab",
+                    "env_provider": "gradlab",
                     "runs_dir": str(root / "runs"),
                     "run_name": "must-not-exist",
                     "timesteps": 1,
-                    **backend_config("rlab.ppo"),
+                    **backend_config("gradlab.ppo"),
                 }
             ),
             encoding="utf-8",
         )
         with (
-            mock.patch.dict("os.environ", {"RLAB_INTERNAL_LEARNER": "1"}),
+            mock.patch.dict("os.environ", {"GRADLAB_INTERNAL_LEARNER": "1"}),
             pytest.raises(ValueError, match="unknown training backend"),
         ):
             train_main(["--train-config-json", str(config_path)])
@@ -203,7 +203,7 @@ def test_materialized_config_preserves_nested_backend_ownership() -> None:
 
 def test_backend_schemas_participate_in_runtime_contract_hash(monkeypatch) -> None:
     before = train_config_contract_sha256()
-    from rlab.training import sb3
+    from gradlab.training import sb3
 
     monkeypatch.setitem(sb3.PPO_DEFAULT_CONFIG, "test_contract_field", 1)
     after = train_config_contract_sha256()

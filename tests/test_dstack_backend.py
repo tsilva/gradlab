@@ -5,7 +5,7 @@ import subprocess
 import unittest
 from unittest import mock
 
-from rlab.dstack_backend import (
+from gradlab.dstack_backend import (
     DSTACK_VERSION,
     ComputeRequest,
     DstackBackend,
@@ -13,7 +13,7 @@ from rlab.dstack_backend import (
     render_fleet_config,
     render_task_config,
 )
-from rlab.run_contracts import new_run_id
+from gradlab.run_contracts import new_run_id
 
 
 class DstackBackendTests(unittest.TestCase):
@@ -34,22 +34,22 @@ class DstackBackendTests(unittest.TestCase):
         values = {
             "run_id": run_id,
             "task_name": run_id,
-            "image": "docker:registry.example/rlab@sha256:" + "a" * 64,
+            "image": "docker:registry.example/gradlab@sha256:" + "a" * 64,
             "manifest_uri": "s3://control/runs/manifest.json",
             "compute": self.compute(),
-            "plain_env": {"MODAL_ENVIRONMENT": "rlab-eval"},
+            "plain_env": {"MODAL_ENVIRONMENT": "gradlab-eval"},
             "secret_env": [
-                "RLAB_CONTROL_R2_ACCESS_KEY_ID",
-                "RLAB_CONTROL_R2_SECRET_ACCESS_KEY",
+                "GRADLAB_CONTROL_R2_ACCESS_KEY_ID",
+                "GRADLAB_CONTROL_R2_SECRET_ACCESS_KEY",
             ],
-            "rom_mount": "/srv/rlab/roms-ro:/roms",
+            "rom_mount": "/srv/gradlab/roms-ro:/roms",
         }
         values.update(overrides)
         return TaskRequest(**values)
 
     def test_local_config_reuses_one_b3_fleet_machine(self) -> None:
         config = render_task_config(self.task())
-        self.assertEqual(config["working_dir"], "/root/rlab")
+        self.assertEqual(config["working_dir"], "/root/gradlab")
         self.assertEqual(config["fleets"], ["b3"])
         self.assertEqual(config["creation_policy"], "reuse")
         self.assertEqual(config["resources"]["cpu"], "12..")
@@ -60,14 +60,14 @@ class DstackBackendTests(unittest.TestCase):
         self.assertNotIn("error", config["retry"]["on_events"])
         self.assertEqual(config["max_duration"], "1d")
         self.assertNotIn("max_price", config)
-        self.assertEqual(config["volumes"], ["/srv/rlab/roms-ro:/roms"])
-        self.assertIn("RLAB_ROM_CACHE_READ_ONLY=1", config["env"])
+        self.assertEqual(config["volumes"], ["/srv/gradlab/roms-ro:/roms"])
+        self.assertIn("GRADLAB_ROM_CACHE_READ_ONLY=1", config["env"])
         self.assertIn(
-            "RLAB_CONTROL_R2_ACCESS_KEY_ID=${{ secrets.RLAB_CONTROL_R2_ACCESS_KEY_ID }}",
+            "GRADLAB_CONTROL_R2_ACCESS_KEY_ID=${{ secrets.GRADLAB_CONTROL_R2_ACCESS_KEY_ID }}",
             config["env"],
         )
-        self.assertNotIn("RLAB_CONTROL_R2_ACCESS_KEY_ID", config["env"])
-        self.assertIn("MODAL_ENVIRONMENT=rlab-eval", config["env"])
+        self.assertNotIn("GRADLAB_CONTROL_R2_ACCESS_KEY_ID", config["env"])
+        self.assertIn("MODAL_ENVIRONMENT=gradlab-eval", config["env"])
 
     def test_task_rejects_inline_secret_values(self) -> None:
         with self.assertRaisesRegex(ValueError, "names only"):
@@ -200,9 +200,9 @@ class DstackBackendTests(unittest.TestCase):
         self.assertEqual(config["blocks"], 1)
         self.assertEqual(config["ssh_config"]["hosts"], ["host.docker.internal"])
 
-    @mock.patch("rlab.dstack_backend.urllib.request.urlopen")
-    @mock.patch("rlab.dstack_backend.shutil.which", return_value="/bin/dstack")
-    @mock.patch("rlab.dstack_backend.subprocess.run")
+    @mock.patch("gradlab.dstack_backend.urllib.request.urlopen")
+    @mock.patch("gradlab.dstack_backend.shutil.which", return_value="/bin/dstack")
+    @mock.patch("gradlab.dstack_backend.subprocess.run")
     def test_submit_checks_version_and_sends_yaml_on_stdin(
         self,
         run,
@@ -222,8 +222,8 @@ class DstackBackendTests(unittest.TestCase):
                 "PATH": "/bin",
                 "DSTACK_SERVER_URL": "http://127.0.0.1:3000",
                 "DSTACK_TOKEN": "secret",
-                "RLAB_CONTROL_R2_ACCESS_KEY_ID": "access-key",
-                "RLAB_CONTROL_R2_SECRET_ACCESS_KEY": "secret-key",
+                "GRADLAB_CONTROL_R2_ACCESS_KEY_ID": "access-key",
+                "GRADLAB_CONTROL_R2_SECRET_ACCESS_KEY": "secret-key",
             }
         )
         request = self.task()
@@ -233,8 +233,8 @@ class DstackBackendTests(unittest.TestCase):
         self.assertIn("on_events:", submitted.kwargs["input"])
         self.assertNotIn("DSTACK_TOKEN", submitted.kwargs["input"])
 
-    @mock.patch("rlab.dstack_backend.shutil.which", return_value="/bin/dstack")
-    @mock.patch("rlab.dstack_backend.subprocess.run")
+    @mock.patch("gradlab.dstack_backend.shutil.which", return_value="/bin/dstack")
+    @mock.patch("gradlab.dstack_backend.subprocess.run")
     def test_preflight_authenticates_to_the_live_server(self, run, _which) -> None:
         run.side_effect = [
             subprocess.CompletedProcess(["dstack", "-v"], 0, DSTACK_VERSION + "\n", ""),
@@ -255,9 +255,9 @@ class DstackBackendTests(unittest.TestCase):
             ["dstack", "ps", "--project", "main", "--all", "--json"],
         )
 
-    @mock.patch("rlab.dstack_backend.urllib.request.urlopen")
-    @mock.patch("rlab.dstack_backend.shutil.which", return_value="/bin/dstack")
-    @mock.patch("rlab.dstack_backend.subprocess.run")
+    @mock.patch("gradlab.dstack_backend.urllib.request.urlopen")
+    @mock.patch("gradlab.dstack_backend.shutil.which", return_value="/bin/dstack")
+    @mock.patch("gradlab.dstack_backend.subprocess.run")
     def test_sync_project_secrets_uses_authenticated_server_api(
         self,
         run,
@@ -292,7 +292,7 @@ class DstackBackendTests(unittest.TestCase):
         self.assertEqual(request.headers["Authorization"], "Bearer admin-token")
         self.assertEqual(request.headers["X-api-version"], DSTACK_VERSION)
 
-    @mock.patch("rlab.dstack_backend.subprocess.run")
+    @mock.patch("gradlab.dstack_backend.subprocess.run")
     def test_status_reads_json(self, run) -> None:
         run.return_value = subprocess.CompletedProcess(
             ["dstack", "ps"],

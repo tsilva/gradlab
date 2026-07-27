@@ -8,7 +8,7 @@ from unittest import mock
 
 import numpy as np
 
-from rlab.video import (
+from gradlab.video import (
     PolicyObservationPreview,
     policy_observation_mosaic,
     write_preview_video,
@@ -66,8 +66,8 @@ class PolicyObservationPreviewTests(unittest.TestCase):
                 return subprocess.CompletedProcess(command, 0, b"", b"")
 
             with (
-                mock.patch("rlab.video.shutil.which", return_value="/usr/bin/ffmpeg"),
-                mock.patch("rlab.video.subprocess.run", side_effect=fake_run),
+                mock.patch("gradlab.video.shutil.which", return_value="/usr/bin/ffmpeg"),
+                mock.patch("gradlab.video.subprocess.run", side_effect=fake_run),
             ):
                 metadata = write_preview_video(
                     [np.zeros((84, 168), dtype=np.uint8) for _ in range(15)],
@@ -94,8 +94,8 @@ class PolicyObservationPreviewTests(unittest.TestCase):
 
         with (
             tempfile.TemporaryDirectory() as temporary,
-            mock.patch("rlab.video.shutil.which", return_value="/usr/bin/ffmpeg"),
-            mock.patch("rlab.video.subprocess.Popen", return_value=process),
+            mock.patch("gradlab.video.shutil.which", return_value="/usr/bin/ffmpeg"),
+            mock.patch("gradlab.video.subprocess.Popen", return_value=process),
         ):
             write_video(frames, Path(temporary) / "out.mp4", fps=30, scale=1)
 

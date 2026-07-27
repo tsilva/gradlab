@@ -1,6 +1,6 @@
 ---
 name: autoresearch
-description: Tune one checked-in rlab SB3 PPO or A2C recipe from durable training completion signals without launching checkpoint evaluations. Use when the user points to a recipe and asks to tune, optimize, autoresearch, improve sample efficiency, maximize training return, find the best hyperparameters, or make training behavior stable across seeds. Runs a bounded fixed-rung B3 dstack search, confirms the winner on five untouched training seeds, and patches only the pointed leaf recipe.
+description: Tune one checked-in gradlab SB3 PPO or A2C recipe from durable training completion signals without launching checkpoint evaluations. Use when the user points to a recipe and asks to tune, optimize, autoresearch, improve sample efficiency, maximize training return, find the best hyperparameters, or make training behavior stable across seeds. Runs a bounded fixed-rung B3 dstack search, confirms the winner on five untouched training seeds, and patches only the pointed leaf recipe.
 ---
 
 # Autoresearch
@@ -127,7 +127,7 @@ image/input/build-source triplet; later waves must match it. No Modal credential
 runtime build, or deployment is allowed.
 
 Because B3 has one slot, launch returned seed commands as capacity becomes available. Start exactly
-one persistent `rlab experiment follow --run <id>` monitor per run under `$launch-experiment`.
+one persistent `gradlab experiment follow --run <id>` monitor per run under `$launch-experiment`.
 Stay attached through the attempt terminal, dstack release, and investigator result. Report W&B
 URLs immediately.
 

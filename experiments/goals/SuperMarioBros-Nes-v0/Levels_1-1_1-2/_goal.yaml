@@ -120,5 +120,5 @@ eval:
         success: [level_change]
         max_episode_steps: 4500
 release:
-  # Marker-only. rlab derives the repository identity and owns the release file contract.
+  # Marker-only. gradlab derives the repository identity and owns the release file contract.
   huggingface: {}

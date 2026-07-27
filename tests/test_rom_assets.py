@@ -9,9 +9,9 @@ from unittest.mock import patch
 
 import pytest
 
-from rlab.env_identity import environment_identity_from_train_config
-from rlab.main import main as cli_main
-from rlab.rom_assets import (
+from gradlab.env_identity import environment_identity_from_train_config
+from gradlab.main import main as cli_main
+from gradlab.rom_assets import (
     ROM_ASSET_IDENTITY_ALGORITHM,
     cache_path,
     discover_rom_path,
@@ -23,7 +23,7 @@ from rlab.rom_assets import (
     validate_rom_asset_manifest,
     verify_rom_file,
 )
-from rlab.rom_cli import (
+from gradlab.rom_cli import (
     ROM_IMPORT_DIR_ENV,
     RomImportPathError,
     build_parser,
@@ -108,9 +108,9 @@ def test_discovery_ignores_duplicate_bytes_but_rejects_distinct_matches(tmp_path
     }
 
     with (
-        patch("rlab.rom_assets._expected_provider_identities", return_value={"a" * 40}),
+        patch("gradlab.rom_assets._expected_provider_identities", return_value={"a" * 40}),
         patch(
-            "rlab.rom_assets.provider_rom_identity",
+            "gradlab.rom_assets.provider_rom_identity",
             side_effect=lambda path: identities[path.resolve()],
         ),
         pytest.raises(ValueError, match="multiple distinct ROM files"),
@@ -119,9 +119,9 @@ def test_discovery_ignores_duplicate_bytes_but_rejects_distinct_matches(tmp_path
 
     second.unlink()
     with (
-        patch("rlab.rom_assets._expected_provider_identities", return_value={"a" * 40}),
+        patch("gradlab.rom_assets._expected_provider_identities", return_value={"a" * 40}),
         patch(
-            "rlab.rom_assets.provider_rom_identity",
+            "gradlab.rom_assets.provider_rom_identity",
             side_effect=lambda path: identities[path.resolve()],
         ),
     ):
@@ -149,12 +149,12 @@ def test_sync_pins_local_identity_and_requires_explicit_replacement(
 ) -> None:
     first = _rom(tmp_path / "first.nes", b"one")
     second = _rom(tmp_path / "second.nes", b"two")
-    monkeypatch.setenv("RLAB_ROM_ASSET_STATE", str(tmp_path / "state.json"))
+    monkeypatch.setenv("GRADLAB_ROM_ASSET_STATE", str(tmp_path / "state.json"))
     cache = tmp_path / "cache"
 
     with (
-        patch("rlab.rom_assets.discover_rom_path", return_value=first),
-        patch("rlab.rom_assets.DEFAULT_LOCAL_ROM_CACHE", cache),
+        patch("gradlab.rom_assets.discover_rom_path", return_value=first),
+        patch("gradlab.rom_assets.DEFAULT_LOCAL_ROM_CACHE", cache),
     ):
         pinned = sync_rom_asset(
             GAME,
@@ -163,14 +163,14 @@ def test_sync_pins_local_identity_and_requires_explicit_replacement(
         assert rom_asset_manifest_for_game(GAME) == pinned
 
     with (
-        patch("rlab.rom_assets.discover_rom_path", return_value=second),
+        patch("gradlab.rom_assets.discover_rom_path", return_value=second),
         pytest.raises(ValueError, match="--replace"),
     ):
         sync_rom_asset(GAME, local_cache_root=cache)
 
     with (
-        patch("rlab.rom_assets.discover_rom_path", return_value=second),
-        patch("rlab.rom_assets.DEFAULT_LOCAL_ROM_CACHE", cache),
+        patch("gradlab.rom_assets.discover_rom_path", return_value=second),
+        patch("gradlab.rom_assets.DEFAULT_LOCAL_ROM_CACHE", cache),
     ):
         replaced = sync_rom_asset(
             GAME,
@@ -217,8 +217,8 @@ def test_status_exit_codes_and_default_scope(tmp_path: Path, capsys: pytest.Capt
     manifest = _manifest(_rom(tmp_path / "rom.nes", b"one"))
     args = Namespace(game=GAME, json=True)
     with (
-        patch("rlab.rom_cli.rom_asset_manifest_for_game", return_value=manifest),
-        patch("rlab.rom_cli._local_cache_status", return_value={"status": "hit"}) as local,
+        patch("gradlab.rom_cli.rom_asset_manifest_for_game", return_value=manifest),
+        patch("gradlab.rom_cli._local_cache_status", return_value={"status": "hit"}) as local,
     ):
         assert cmd_status(args) == 0
     payload = json.loads(capsys.readouterr().out)
@@ -271,7 +271,7 @@ def test_rom_import_uses_environment_without_loading_dotenv(
         observed_argv.append(list(sys.argv))
 
     with (
-        patch("rlab.rom_cli.load_env_file") as load_dotenv,
+        patch("gradlab.rom_cli.load_env_file") as load_dotenv,
         patch("stable_retro.scripts.import_path.main", side_effect=fake_import),
     ):
         assert rom_main(["import"]) == 0

@@ -4,9 +4,9 @@ import queue
 import time
 from types import SimpleNamespace
 
-from rlab.play_application import PlaybackHost
-from rlab.play_runtime import ActivePlayback, PlaySourceSpec, _implicit_playback_seed
-from rlab.play_web import PlaybackCommand
+from gradlab.play_application import PlaybackHost
+from gradlab.play_runtime import ActivePlayback, PlaySourceSpec, _implicit_playback_seed
+from gradlab.play_web import PlaybackCommand
 
 
 class FakeEncoder:
@@ -148,7 +148,7 @@ def test_playback_host_starts_without_a_source_then_activates_selection() -> Non
                     "level": "checkpoints",
                     "entity": "research",
                     "project": "Mario",
-                    "run_id": "rlab-" + "b" * 32,
+                    "run_id": "gradlab-" + "b" * 32,
                 },
             },
         )
@@ -176,7 +176,7 @@ def test_browse_sources_updates_the_shared_resource_route() -> None:
         "level": "checkpoints",
         "entity": "research",
         "project": "Mario",
-        "run_id": "rlab-" + "b" * 32,
+        "run_id": "gradlab-" + "b" * 32,
         "checkpoint_id": "",
     }
 

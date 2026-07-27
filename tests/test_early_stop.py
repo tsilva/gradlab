@@ -4,13 +4,13 @@ import copy
 
 import pytest
 
-from rlab.early_stop import (
+from gradlab.early_stop import (
     MetricEarlyStopStateMachine,
     MetricSample,
     normalize_metric_early_stop_config,
     validate_metric_early_stop_decision,
 )
-from rlab.metric_names import (
+from gradlab.metric_names import (
     TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_MEAN,
     TRAIN_OUTCOME_SUCCESS_WINDOW_100_RATE_MIN,
 )

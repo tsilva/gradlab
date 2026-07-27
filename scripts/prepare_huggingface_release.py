@@ -7,8 +7,8 @@ from collections.abc import Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 
-from rlab.config_validation import load_goal_contract
-from rlab.publication import (
+from gradlab.config_validation import load_goal_contract
+from gradlab.publication import (
     GITATTRIBUTES_TEXT,
     MIT_LICENSE_TEXT,
     build_model_repo_id,
@@ -22,7 +22,7 @@ from rlab.publication import (
     validate_release_bundle,
     verify_replay,
 )
-from rlab.policy_bundle import (
+from gradlab.policy_bundle import (
     build_model_document,
     evaluation_contract_sha256,
     load_recipe_document,
@@ -40,7 +40,7 @@ def _load_object(path: Path, *, label: str) -> dict:
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Build and validate one deterministic rlab Hugging Face release bundle."
+        description="Build and validate one deterministic gradlab Hugging Face release bundle."
     )
     parser.add_argument("--goal-file", type=Path, required=True)
     parser.add_argument("--model-metadata", type=Path, required=True)

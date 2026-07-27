@@ -1,0 +1,12 @@
+[Unit]
+Description=Expose the gradlab ROM cache as a read-only host mount
+Before=gradlab-dstack-server.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/gradlab-rom-cache-mount start
+ExecStop=/usr/local/sbin/gradlab-rom-cache-mount stop
+
+[Install]
+WantedBy=multi-user.target

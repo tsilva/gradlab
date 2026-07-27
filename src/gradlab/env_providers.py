@@ -1,0 +1,1040 @@
+from __future__ import annotations
+
+from collections.abc import Callable, Mapping
+from dataclasses import asdict, dataclass
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+import gymnasium as gym
+import stable_retro as retro
+
+from gymnasium.vector import AutoresetMode
+from stable_retro import RetroVecEnv as DEFAULT_RETRO_VEC_ENV
+
+from gradlab.bandit_env import BanditVectorEnv
+from gradlab.action_contract import (
+    declared_action_contract,
+    normalize_action_configuration,
+)
+from gradlab.batch_runtime import ProviderDescriptor, SignalSpec
+from gradlab.env_registry import (
+    ALE_PY_PROVIDER,
+    BREAKOUT_TURBO_ENV_PROVIDER,
+    GYMNASIUM_PROVIDER,
+    GRADLAB_PROVIDER,
+    STABLE_RETRO_TURBO_PROVIDER,
+    SUPERMARIOBROS_NES_TURBO_PROVIDER,
+    VIZDOOM_TURBO_PROVIDER,
+    is_stable_retro_atari_env,
+    resolve_env_provider,
+)
+from gradlab.reward_transform import PROVIDER_REWARD_TRANSFORM_KEYS
+from gradlab.turbo_api import validate_turbo_vector_env
+
+
+MARIO_BASE_INFO_KEYS = frozenset(
+    {
+        "x_pos",
+        "coins",
+        "levelHi",
+        "levelLo",
+        "lives",
+        "score",
+        "scrolling",
+        "time",
+        "xscrollHi",
+        "xscrollLo",
+    }
+)
+
+
+def _is_disabled_autoreset_mode(value: Any) -> bool:
+    name = getattr(value, "name", None)
+    if isinstance(name, str) and name == "DISABLED":
+        return True
+    raw_value = getattr(value, "value", value)
+    normalized = "".join(char for char in str(raw_value).lower() if char.isalnum())
+    return normalized == "disabled"
+
+
+def _declared_autoreset_mode(provider_id: str) -> AutoresetMode:
+    provider = resolve_env_provider(provider_id)
+    contract = provider.constructor_contract
+    if contract is None or "autoreset_mode" not in contract.required_values:
+        raise RuntimeError(f"provider {provider_id!r} has no declared constructor autoreset mode")
+    value = str(contract.required_values["autoreset_mode"]).strip().upper()
+    try:
+        return AutoresetMode[value]
+    except KeyError as exc:
+        raise RuntimeError(
+            f"provider {provider_id!r} declares unknown autoreset mode {value!r}"
+        ) from exc
+
+
+def _require_disabled_autoreset_mode(env: Any, provider_id: str):
+    mode = getattr(env, "autoreset_mode", None)
+    metadata = getattr(env, "metadata", None)
+    if mode is None and isinstance(metadata, Mapping):
+        mode = metadata.get("autoreset_mode")
+    if mode is None:
+        raise RuntimeError(
+            f"{provider_id} vector env does not advertise disabled autoreset; "
+            "install a provider release with autoreset_mode=DISABLED and masked reset",
+        )
+    if not _is_disabled_autoreset_mode(mode):
+        raise RuntimeError(
+            f"{provider_id} vector env must support disabled autoreset and masked reset; "
+            f"got autoreset_mode={mode!r}",
+        )
+    return env
+
+
+def _native_start_catalog(env: Any) -> tuple[str, ...]:
+    values = getattr(env, "state_catalog", ())
+    values = values() if callable(values) else values
+    return tuple(str(value) for value in values or ())
+
+
+class _StartInfoAdapter:
+    """Translate provider-generic start IDs to native catalog indices."""
+
+    def __init__(self, env: Any):
+        self.env = env
+
+    def __getattr__(self, name: str) -> Any:
+        if name == "env":
+            raise AttributeError(name)
+        return getattr(self.env, name)
+
+    def reset(self, *, seed=None, options=None):
+        native_options = dict(options or {})
+        start_ids = native_options.pop("start_ids", None)
+        catalog = tuple(str(value) for value in self.env.state_catalog)
+        mask = np.ones(self.env.num_envs, dtype=np.bool_)
+        if native_options.get("reset_mask") is not None:
+            mask = np.asarray(native_options["reset_mask"], dtype=np.bool_)
+        snapshots = native_options.get("snapshots")
+        if snapshots is None:
+            snapshot_mask = np.zeros(self.env.num_envs, dtype=np.bool_)
+        else:
+            snapshot_values = tuple(snapshots)
+            if len(snapshot_values) != self.env.num_envs:
+                raise ValueError(f"snapshots must contain {self.env.num_envs} lane values")
+            snapshot_mask = np.asarray(
+                [value is not None for value in snapshot_values],
+                dtype=np.bool_,
+            )
+            if np.any(snapshot_mask & ~mask):
+                raise ValueError("snapshot values may only select reset lanes")
+        if start_ids is not None:
+            start_ids = np.asarray(start_ids, dtype=object)
+            if start_ids.shape != (self.env.num_envs,):
+                raise ValueError(
+                    f"start_ids must have shape ({self.env.num_envs},), got {start_ids.shape}"
+                )
+            catalog_indices = {name: index for index, name in enumerate(catalog)}
+            state_indices = np.full(self.env.num_envs, -1, dtype=np.int32)
+            for lane, start_id in enumerate(start_ids):
+                if not bool(mask[lane]):
+                    continue
+                if start_id is None:
+                    if bool(snapshot_mask[lane]):
+                        continue
+                    raise ValueError(f"selected non-snapshot lane {lane} has no start id")
+                try:
+                    state_indices[lane] = catalog_indices[str(start_id)]
+                except KeyError as exc:
+                    raise ValueError(
+                        f"unknown provider start id {start_id!r}; expected one of {catalog}"
+                    ) from exc
+            native_options["state_indices"] = state_indices
+        observations, infos = self.env.reset(seed=seed, options=native_options)
+        if not isinstance(infos, Mapping):
+            raise TypeError("Turbo API v1 reset infos must be a columnar mapping")
+        state_indices = infos.get("state_index")
+        if state_indices is None:
+            raise ValueError("Turbo API v1 reset infos must contain state_index")
+        state_indices = np.asarray(state_indices, dtype=np.int32)
+        if state_indices.shape != (self.env.num_envs,):
+            raise ValueError("provider state_index must contain one value per lane")
+        active_starts = np.empty(self.env.num_envs, dtype=object)
+        for lane, state_index in enumerate(state_indices):
+            active_starts[lane] = (
+                catalog[int(state_index)] if 0 <= int(state_index) < len(catalog) else None
+            )
+        result = dict(infos)
+        result["start_id"] = active_starts
+        result["_start_id"] = mask.copy()
+        if "start_source" not in result or "_start_source" not in result:
+            raise ValueError("Turbo API v1 reset infos must contain start_source and _start_source")
+        return observations, result
+
+    def step(self, actions):
+        return self.env.step(actions)
+
+    def get_images(self):
+        return self.env.get_images()
+
+    def close(self):
+        return self.env.close()
+
+
+def super_mario_bros_nes_turbo_vec_env_type():
+    try:
+        from supermariobrosnes_turbo import SuperMarioBrosNesTurboVecEnv
+    except ImportError as exc:
+        raise ImportError(
+            "supermariobrosnes-turbo provider requires supermariobrosnes-turbo",
+        ) from exc
+    return SuperMarioBrosNesTurboVecEnv
+
+
+def ale_py_atari_vector_env_type():
+    try:
+        from ale_py.vector_env import AtariVectorEnv
+    except ImportError as exc:
+        raise ImportError(
+            "ale-py provider requires ale-py with native vector env support",
+        ) from exc
+    return AtariVectorEnv
+
+
+def breakout_turbo_vec_env_type():
+    try:
+        from breakout_turbo_env import BreakoutVecEnv
+    except ImportError as exc:
+        raise ImportError(
+            "breakout-turbo-env provider requires breakout-turbo-env",
+        ) from exc
+    return BreakoutVecEnv
+
+
+def vizdoom_turbo_vec_env_type():
+    try:
+        from vizdoom_turbo import VizdoomTurboVecEnv
+    except ImportError as exc:
+        raise ImportError(
+            "vizdoom-turbo provider requires vizdoom-turbo",
+        ) from exc
+    return VizdoomTurboVecEnv
+
+
+def _stable_retro_packaged_data_path(game: str, filename: str) -> Path:
+    path = Path(retro.__file__).resolve().parent / "data" / "stable" / game / filename
+    if not path.is_file():
+        raise FileNotFoundError(
+            f"stable-retro-turbo does not provide packaged data for {game}: {filename}"
+        )
+    return path
+
+
+def _reject_state_selection(config: Any) -> None:
+    if config.state or config.states or config.state_probs:
+        raise ValueError(
+            f"{config.env_provider} provider does not support state, states, or state_probs"
+        )
+
+
+def _passthrough_native_vec_kwargs(
+    config: Any,
+    native_kwargs: dict[str, Any],
+    *,
+    n_envs: int,
+    native_obs_crop: Callable[[Any], tuple[int, int, int, int] | None],
+    runtime_rom_path: str | None,
+) -> dict[str, Any]:
+    del native_obs_crop, runtime_rom_path
+    _reject_state_selection(config)
+    native_kwargs.setdefault("num_envs", n_envs)
+    return native_kwargs
+
+
+def _retro_provider_args(
+    config: Any,
+    native_kwargs: dict[str, Any],
+    *,
+    runtime_rom_path: str | None,
+    packaged_info: bool,
+) -> dict[str, Any]:
+    if runtime_rom_path:
+        native_kwargs["rom_path"] = runtime_rom_path
+    enum_args = {
+        "use_restricted_actions": ("Actions",),
+        "inttype": ("data", "Integrations"),
+        "obs_type": ("Observations",),
+    }
+    for key, attribute_path in enum_args.items():
+        value = native_kwargs.get(key)
+        if key == "use_restricted_actions":
+            declared_action = declared_action_contract(config)
+            if declared_action is not None and declared_action.get("table") is not None:
+                if isinstance(value, str):
+                    native_kwargs[key] = declared_action["table"]
+                continue
+        if not isinstance(value, str):
+            continue
+        enum_type: Any = retro
+        for attribute in attribute_path:
+            enum_type = getattr(enum_type, attribute)
+        try:
+            native_kwargs[key] = enum_type[value.strip().upper()]
+        except KeyError as exc:
+            choices = ", ".join(member.name.lower() for member in enum_type)
+            raise ValueError(f"env_args.{key} must be one of {choices}") from exc
+    if packaged_info and native_kwargs.get("info") == "data":
+        native_kwargs["info"] = str(_stable_retro_packaged_data_path(config.game, "data.json"))
+    return native_kwargs
+
+
+def _turbo_native_vec_kwargs(
+    config: Any,
+    native_kwargs: dict[str, Any],
+    *,
+    n_envs: int,
+    native_obs_crop: Callable[[Any], tuple[int, int, int, int] | None],
+    disable_atari_fire_reset: bool = False,
+) -> dict[str, Any]:
+    defaults = {
+        "num_envs": n_envs,
+        "render_mode": "rgb_array",
+        "obs_resize": (config.observation_size, config.observation_size),
+        "obs_crop": native_obs_crop(config),
+        "obs_crop_mode": config.obs_crop_mode,
+        "obs_crop_fill": config.obs_crop_fill,
+        "obs_grayscale": True,
+        "obs_resize_algorithm": config.obs_resize_algorithm,
+        "frame_skip": config.frame_skip,
+        "frame_stack": 4,
+        "maxpool_last_two": config.max_pool_frames,
+        "sticky_action_prob": config.sticky_action_prob,
+        "obs_copy": "safe_view",
+        "obs_layout": "chw",
+    }
+    if config.states:
+        defaults["state_catalog"] = tuple(dict.fromkeys(config.states))
+    else:
+        defaults["state"] = config.state or None
+    defaults.update(native_kwargs)
+    defaults["reward_clip"] = False
+    if disable_atari_fire_reset:
+        defaults.setdefault("use_fire_reset", False)
+    task = config.task if isinstance(getattr(config, "task", None), Mapping) else {}
+    if task.get("id") == "mario":
+        signals = task.get("signals", {})
+        required_info_keys = {"time"}
+        if isinstance(signals, Mapping):
+            for source in signals.values():
+                required_info_keys.update((source,) if isinstance(source, str) else source)
+        configured_filter = defaults.get("info_filter")
+        if configured_filter is None or str(configured_filter) == "all":
+            defaults["info_filter"] = {
+                "mode": "all",
+                "keys": tuple(
+                    sorted(str(key) for key in MARIO_BASE_INFO_KEYS | required_info_keys)
+                ),
+            }
+        elif isinstance(configured_filter, Mapping):
+            mode = str(configured_filter.get("mode", "all"))
+            keys = configured_filter.get("keys")
+            configured_keys = set(str(key) for key in keys) if keys is not None else set()
+            missing = required_info_keys - configured_keys if keys is not None else set()
+            if mode != "all" or missing:
+                raise ValueError(
+                    "Mario task signals require info_filter mode='all' and keys "
+                    f"{sorted(required_info_keys)}"
+                )
+            if keys is None:
+                defaults["info_filter"] = {
+                    "mode": "all",
+                    "keys": tuple(
+                        sorted(str(key) for key in MARIO_BASE_INFO_KEYS | required_info_keys)
+                    ),
+                }
+        elif str(configured_filter) != "all":
+            raise ValueError("Mario task signals require info_filter='all'")
+    return defaults
+
+
+def _stable_retro_native_vec_kwargs(
+    config: Any,
+    native_kwargs: dict[str, Any],
+    *,
+    n_envs: int,
+    native_obs_crop: Callable[[Any], tuple[int, int, int, int] | None],
+    runtime_rom_path: str | None,
+) -> dict[str, Any]:
+    native_kwargs = _retro_provider_args(
+        config,
+        native_kwargs,
+        runtime_rom_path=runtime_rom_path,
+        packaged_info=True,
+    )
+    return _turbo_native_vec_kwargs(
+        config,
+        native_kwargs,
+        n_envs=n_envs,
+        native_obs_crop=native_obs_crop,
+        disable_atari_fire_reset=is_stable_retro_atari_env(config.env_provider, config.game),
+    )
+
+
+def _super_mario_native_vec_kwargs(
+    config: Any,
+    native_kwargs: dict[str, Any],
+    *,
+    n_envs: int,
+    native_obs_crop: Callable[[Any], tuple[int, int, int, int] | None],
+    runtime_rom_path: str | None,
+) -> dict[str, Any]:
+    native_kwargs = _retro_provider_args(
+        config,
+        native_kwargs,
+        runtime_rom_path=runtime_rom_path,
+        packaged_info=False,
+    )
+    return _turbo_native_vec_kwargs(
+        config,
+        native_kwargs,
+        n_envs=n_envs,
+        native_obs_crop=native_obs_crop,
+    )
+
+
+def _vizdoom_native_vec_kwargs(
+    config: Any,
+    native_kwargs: dict[str, Any],
+    *,
+    n_envs: int,
+    native_obs_crop: Callable[[Any], tuple[int, int, int, int] | None],
+    runtime_rom_path: str | None,
+) -> dict[str, Any]:
+    del runtime_rom_path
+    return _turbo_native_vec_kwargs(
+        config,
+        native_kwargs,
+        n_envs=n_envs,
+        native_obs_crop=native_obs_crop,
+    )
+
+
+def _breakout_native_vec_kwargs(
+    config: Any,
+    native_kwargs: dict[str, Any],
+    *,
+    n_envs: int,
+    native_obs_crop: Callable[[Any], tuple[int, int, int, int] | None],
+    runtime_rom_path: str | None,
+) -> dict[str, Any]:
+    del runtime_rom_path
+    if config.max_pool_frames:
+        raise ValueError("breakout-turbo-env does not support max_pool_frames=true")
+    if config.sticky_action_prob != 0.0:
+        raise ValueError("breakout-turbo-env requires sticky_action_prob=0.0")
+    defaults = {
+        "num_envs": n_envs,
+        "render_mode": "rgb_array",
+        "obs_resize": (config.observation_size, config.observation_size),
+        "obs_crop": native_obs_crop(config),
+        "obs_crop_mode": config.obs_crop_mode,
+        "obs_crop_fill": config.obs_crop_fill,
+        "obs_grayscale": True,
+        "obs_resize_algorithm": config.obs_resize_algorithm,
+        "frame_skip": config.frame_skip,
+        "frame_stack": 4,
+        "maxpool_last_two": False,
+        "obs_copy": "safe_view",
+        "obs_layout": "chw",
+        "info_filter": "all",
+    }
+    defaults.update(native_kwargs)
+    defaults["reward_clip"] = False
+    return defaults
+
+
+def _ale_native_vec_kwargs(
+    config: Any,
+    native_kwargs: dict[str, Any],
+    *,
+    n_envs: int,
+    native_obs_crop: Callable[[Any], tuple[int, int, int, int] | None],
+    runtime_rom_path: str | None,
+) -> dict[str, Any]:
+    del runtime_rom_path
+    _reject_state_selection(config)
+    obs_crop = native_obs_crop(config)
+    if obs_crop is not None and config.obs_crop_mode != "mask":
+        raise ValueError("ale-py provider only supports obs_crop_mode='mask'")
+    defaults = {
+        "num_envs": n_envs,
+        "max_num_frames_per_episode": 108_000,
+        "repeat_action_probability": config.sticky_action_prob,
+        "img_height": config.observation_size,
+        "img_width": config.observation_size,
+        "grayscale": True,
+        "stack_num": 4,
+        "frameskip": config.frame_skip,
+        "maxpool": config.max_pool_frames,
+        "episodic_life": False,
+        "reward_clipping": False,
+    }
+    defaults.update(native_kwargs)
+    defaults["reward_clipping"] = False
+    return defaults
+
+
+def provider_native_vec_kwargs(
+    config: Any,
+    *,
+    n_envs: int,
+    native_obs_crop: Callable[[Any], tuple[int, int, int, int] | None],
+    state_weight_mapping: Callable[[Any], dict[str, float]],
+    runtime_rom_path: str | None = None,
+) -> dict[str, Any]:
+    """Compile provider mechanics without task events or termination rules."""
+    del state_weight_mapping
+    normalized_args, _normalized_task = normalize_action_configuration(
+        provider_id=config.env_provider,
+        game=config.game,
+        env_args=config.env_args,
+        task=getattr(config, "task", None),
+    )
+    native_kwargs = dict(normalized_args)
+    for key in PROVIDER_REWARD_TRANSFORM_KEYS:
+        native_kwargs.pop(key, None)
+    return provider_runtime_adapter(config.env_provider).build_native_kwargs(
+        config,
+        native_kwargs,
+        n_envs=n_envs,
+        native_obs_crop=native_obs_crop,
+        runtime_rom_path=runtime_rom_path,
+    )
+
+
+def provider_descriptor(
+    config: Any,
+    native_env: Any,
+    *,
+    state_weight_mapping: Callable[[Any], dict[str, float]],
+) -> ProviderDescriptor:
+    """Describe the provider-facing contract after native construction."""
+
+    provider = resolve_env_provider(config.env_provider)
+    contract_env = native_env
+    while isinstance(contract_env, _StartInfoAdapter):
+        contract_env = contract_env.env
+    contract_metadata = getattr(contract_env, "metadata", {})
+    turbo_contract = (
+        validate_turbo_vector_env(contract_env, provider.provider_id)
+        if isinstance(contract_metadata, Mapping)
+        and contract_metadata.get("turbo_api_version") is not None
+        else None
+    )
+    observation_space = getattr(
+        native_env,
+        "single_observation_space",
+        native_env.observation_space,
+    )
+    action_space = getattr(native_env, "single_action_space", native_env.action_space)
+    signal_schema: dict[str, SignalSpec] = {}
+    raw_signal_schema = getattr(native_env, "signal_schema", {})
+    if isinstance(raw_signal_schema, Mapping):
+        for name, raw_spec in raw_signal_schema.items():
+            if isinstance(raw_spec, Mapping):
+                dtype = raw_spec.get("dtype", np.float32)
+                shape = raw_spec.get("shape", ())
+                available_on_reset = bool(raw_spec.get("available_on_reset", True))
+                available_on_step = bool(raw_spec.get("available_on_step", True))
+            else:
+                dtype = getattr(raw_spec, "dtype", raw_spec)
+                shape = getattr(raw_spec, "shape", ())
+                available_on_reset = bool(getattr(raw_spec, "available_on_reset", True))
+                available_on_step = bool(getattr(raw_spec, "available_on_step", True))
+            signal_schema[str(name)] = (
+                raw_spec
+                if isinstance(raw_spec, SignalSpec)
+                else SignalSpec(
+                    name=str(name),
+                    dtype=dtype,
+                    shape=shape,
+                    available_on_reset=available_on_reset,
+                    available_on_step=available_on_step,
+                )
+            )
+
+    task = config.task if isinstance(getattr(config, "task", None), Mapping) else {}
+    configured_signals = task.get("signals", {}) if isinstance(task, Mapping) else {}
+    configured_source_names = (
+        {
+            str(name)
+            for source in configured_signals.values()
+            for name in ((source,) if isinstance(source, str) else source)
+        }
+        if isinstance(configured_signals, Mapping)
+        else set()
+    )
+    missing_source_names = configured_source_names - set(signal_schema)
+    if missing_source_names and turbo_contract is not None:
+        raise ValueError(
+            f"Turbo API v1 provider {provider.provider_id!r} does not declare "
+            f"task signal(s) {sorted(missing_source_names)}"
+        )
+    if missing_source_names:
+        reset_mask = np.ones(native_env.num_envs, dtype=np.bool_)
+        reset_options: dict[str, Any] = {"reset_mask": reset_mask}
+        start_catalog = _native_start_catalog(native_env)
+        if config.state and config.state in start_catalog:
+            reset_options["start_ids"] = np.asarray(
+                [config.state for _ in range(native_env.num_envs)],
+                dtype=object,
+            )
+        _observations, reset_infos = native_env.reset(
+            seed=[lane for lane in range(native_env.num_envs)],
+            options=reset_options,
+        )
+        if not isinstance(reset_infos, Mapping):
+            raise TypeError("native provider reset infos must be a columnar mapping")
+        for name, values in reset_infos.items():
+            if name not in missing_source_names:
+                continue
+            column = np.asarray(values)
+            if column.shape[:1] != (native_env.num_envs,):
+                continue
+            signal_schema[name] = SignalSpec(
+                name=name,
+                dtype=column.dtype,
+                shape=column.shape[1:],
+            )
+        missing_source_names -= set(signal_schema)
+        step = getattr(native_env, "step", None)
+        if missing_source_names and callable(step):
+            single_action_space = getattr(native_env, "single_action_space", None)
+            if single_action_space is None or not hasattr(single_action_space, "shape"):
+                raise ValueError("cannot probe provider step-only task signals")
+            action_shape = tuple(int(value) for value in single_action_space.shape)
+            action_dtype = getattr(single_action_space, "dtype", np.int64)
+            actions = np.zeros((native_env.num_envs, *action_shape), dtype=action_dtype)
+            try:
+                _step_obs, _rewards, _terminated, _truncated, step_infos = step(actions)
+                if not isinstance(step_infos, Mapping):
+                    raise TypeError("native provider step infos must be a columnar mapping")
+                for name, values in step_infos.items():
+                    if name not in missing_source_names:
+                        continue
+                    column = np.asarray(values)
+                    if column.shape[:1] != (native_env.num_envs,):
+                        continue
+                    signal_schema[name] = SignalSpec(
+                        name=name,
+                        dtype=column.dtype,
+                        shape=column.shape[1:],
+                        available_on_reset=False,
+                        available_on_step=True,
+                    )
+            finally:
+                native_env.reset(
+                    seed=[lane for lane in range(native_env.num_envs)],
+                    options=reset_options,
+                )
+
+    if task.get("id") == "mario":
+        if provider.provider_id not in {
+            STABLE_RETRO_TURBO_PROVIDER.provider_id,
+            SUPERMARIOBROS_NES_TURBO_PROVIDER.provider_id,
+        }:
+            raise ValueError(f"provider {provider.provider_id!r} does not implement the Mario task")
+
+    start_catalog = _native_start_catalog(native_env)
+    start_probabilities: tuple[float, ...] = ()
+    lane_start_ids: tuple[str, ...] = ()
+    if config.states and config.state_probs:
+        weights = state_weight_mapping(config)
+        start_probabilities = tuple(weights.get(name, 0.0) for name in start_catalog)
+    elif config.states:
+        lane_start_ids = tuple(config.states)
+    elif config.state and start_catalog:
+        lane_start_ids = tuple(config.state for _ in range(int(native_env.num_envs)))
+
+    metadata = getattr(native_env, "metadata", {})
+    render_modes = metadata.get("render_modes", ()) if isinstance(metadata, Mapping) else ()
+    declared_action = declared_action_contract(config)
+    action_mode = getattr(native_env, "action_mode", None)
+    action_preset = getattr(native_env, "action_preset", None)
+    action_table = getattr(native_env, "action_table", None)
+    action_meanings = getattr(native_env, "action_meanings", None)
+    action_table_hash = getattr(native_env, "action_table_hash", None)
+    if (
+        declared_action is not None
+        and declared_action["table_hash"] is not None
+        and hasattr(native_env, "action_table_hash")
+    ):
+        if action_table_hash != declared_action["table_hash"]:
+            raise ValueError(
+                f"provider {provider.provider_id!r} resolved action table hash "
+                f"{action_table_hash!r}; expected {declared_action['table_hash']!r}"
+            )
+        if action_preset is None:
+            action_preset = declared_action["preset"]
+    supports_live_snapshots = bool(
+        getattr(native_env, "supports_live_snapshots", False)
+        and callable(getattr(native_env, "capture_snapshots", None))
+    )
+    deterministic_snapshots = bool(
+        supports_live_snapshots and getattr(native_env, "live_snapshots_deterministic", False)
+    )
+    if turbo_contract is None:
+        ownership = "unsafe_view"
+        buffer_depth = 1
+        api_version = None
+        capabilities: Mapping[str, Any] = {}
+    else:
+        ownership = turbo_contract.observation_ownership
+        buffer_depth = turbo_contract.observation_buffer_depth
+        api_version = turbo_contract.api_version
+        capabilities = turbo_contract.capabilities
+    snapshot_codec_id = provider_runtime_adapter(provider.provider_id).snapshot_codec_id
+    snapshot_compatibility_id = None
+    if snapshot_codec_id is not None:
+        from gradlab.env_identity import (
+            environment_hash,
+            environment_identity_from_train_config,
+        )
+
+        snapshot_compatibility_id = environment_hash(
+            environment_identity_from_train_config(asdict(config))
+        )
+    return ProviderDescriptor(
+        provider_id=provider.provider_id,
+        native_observation_space=observation_space,
+        native_action_space=action_space,
+        signal_schema=signal_schema,
+        start_catalog=start_catalog,
+        start_probabilities=start_probabilities,
+        lane_start_ids=lane_start_ids,
+        render_support=tuple(str(mode) for mode in render_modes),
+        turbo_api_version=api_version,
+        capabilities=capabilities,
+        observation_ownership=ownership,
+        observation_buffer_depth=buffer_depth,
+        action_mode=str(action_mode) if action_mode is not None else None,
+        action_preset=str(action_preset) if action_preset is not None else None,
+        action_table=tuple(action_table) if action_table is not None else None,
+        action_meanings=(
+            tuple(str(value) for value in action_meanings) if action_meanings is not None else None
+        ),
+        action_table_hash=(str(action_table_hash) if action_table_hash is not None else None),
+        supports_live_snapshots=supports_live_snapshots,
+        live_snapshots_deterministic=deterministic_snapshots,
+        snapshot_codec_id=snapshot_codec_id,
+        snapshot_compatibility_id=snapshot_compatibility_id,
+    )
+
+
+def _registered_native_gymnasium_vec_env(config: Any, native_kwargs: Mapping[str, Any]):
+    provider = resolve_env_provider(config.env_provider)
+    kwargs = dict(native_kwargs)
+    num_envs = int(kwargs.pop("num_envs"))
+    spec = gym.spec(config.game)
+    if spec.vector_entry_point is None:
+        raise RuntimeError(
+            f"{provider.provider_id}:{config.game} has no native Gymnasium vector entry point; "
+            "sync and async synthesized vectorization are unsupported"
+        )
+    kwargs["autoreset_mode"] = AutoresetMode.DISABLED
+    env = gym.make_vec(
+        config.game,
+        num_envs=num_envs,
+        vectorization_mode="vector_entry_point",
+        **kwargs,
+    )
+    return _require_disabled_autoreset_mode(env, provider.provider_id)
+
+
+def _gradlab_make_vec_env(
+    config: Any,
+    *,
+    native_kwargs: Mapping[str, Any],
+    bandit_vec_env_type=BanditVectorEnv,
+):
+    _require_provider(config, GRADLAB_PROVIDER.provider_id)
+    kwargs = dict(native_kwargs)
+    kwargs["autoreset_mode"] = _declared_autoreset_mode(GRADLAB_PROVIDER.provider_id)
+    env = bandit_vec_env_type(config.game, **kwargs)
+    return _require_disabled_autoreset_mode(env, GRADLAB_PROVIDER.provider_id)
+
+
+def _require_provider(config: Any, expected_provider_id: str):
+    provider = resolve_env_provider(config.env_provider)
+    if provider.provider_id != expected_provider_id:
+        raise ValueError(
+            f"unsupported environment provider {provider.provider_id!r}; "
+            f"expected {expected_provider_id}",
+        )
+    return provider
+
+
+class _AleManualResetAdapter:
+    """Normalize ALE's compact masked-reset seeds to the gradlab provider contract."""
+
+    def __init__(self, env: Any):
+        self.env = env
+        self.autoreset_mode = AutoresetMode.DISABLED
+        self.metadata = dict(getattr(env, "metadata", {}))
+        self.metadata["autoreset_mode"] = AutoresetMode.DISABLED
+        self._pending_reset = np.zeros(env.num_envs, dtype=np.bool_)
+        self._observations: np.ndarray | None = None
+
+    def __getattr__(self, name: str) -> Any:
+        if name == "env":
+            raise AttributeError(name)
+        return getattr(self.env, name)
+
+    def reset(self, *, seed=None, options=None):
+        reset_options = dict(options or {})
+        mask = reset_options.get("reset_mask")
+        if mask is None:
+            mask = np.ones(self.env.num_envs, dtype=np.bool_)
+            reset_options["reset_mask"] = mask
+        mask = np.asarray(mask, dtype=np.bool_)
+        compact_seed = seed
+        if isinstance(seed, (list, tuple)):
+            compact_seed = np.asarray(
+                [-1 if seed[index] is None else int(seed[index]) for index in np.flatnonzero(mask)],
+                dtype=np.int64,
+            )
+        result = self.env.reset(seed=compact_seed, options=reset_options)
+        self._observations = np.asarray(result[0])
+        self._pending_reset[mask] = False
+        return result
+
+    def step(self, actions):
+        if np.any(self._pending_reset):
+            raise RuntimeError("ALE done lanes must be explicitly reset before the next step")
+        result = self.env.step(actions)
+        self._observations = np.asarray(result[0])
+        self._pending_reset |= np.asarray(result[2], dtype=np.bool_) | np.asarray(
+            result[3], dtype=np.bool_
+        )
+        return result
+
+    def get_images(self):
+        if self._observations is None:
+            return []
+        observations = self._observations
+        if observations.ndim == 4:
+            frames = observations[:, -1]
+        elif observations.ndim == 5 and observations.shape[-1] in (1, 3, 4):
+            frames = observations[:, -1]
+        else:
+            raise ValueError(
+                f"unsupported ALE observation shape for rendering: {observations.shape}"
+            )
+        if frames.ndim == 3:
+            frames = np.repeat(frames[..., None], 3, axis=-1)
+        elif frames.ndim == 4 and frames.shape[-1] == 1:
+            frames = np.repeat(frames, 3, axis=-1)
+        return [np.asarray(frame) for frame in frames]
+
+    def close(self):
+        return self.env.close()
+
+
+def _stable_retro_turbo_make_vec_env(
+    config: Any,
+    *,
+    native_kwargs: Mapping[str, Any],
+    retro_vec_env_type=DEFAULT_RETRO_VEC_ENV,
+):
+    _require_provider(config, STABLE_RETRO_TURBO_PROVIDER.provider_id)
+    env_type = retro_vec_env_type
+    kwargs = dict(native_kwargs)
+    env = env_type(config.game, **kwargs)
+    env = _require_disabled_autoreset_mode(env, STABLE_RETRO_TURBO_PROVIDER.provider_id)
+    if retro_vec_env_type is DEFAULT_RETRO_VEC_ENV:
+        validate_turbo_vector_env(env, STABLE_RETRO_TURBO_PROVIDER.provider_id)
+    return _StartInfoAdapter(env)
+
+
+def _super_mario_bros_nes_turbo_make_vec_env(
+    config: Any,
+    *,
+    native_kwargs: Mapping[str, Any],
+    super_mario_vec_env_type=super_mario_bros_nes_turbo_vec_env_type,
+):
+    _require_provider(config, SUPERMARIOBROS_NES_TURBO_PROVIDER.provider_id)
+    env_type = super_mario_vec_env_type()
+    kwargs = dict(native_kwargs)
+    env = env_type(
+        config.game,
+        **kwargs,
+    )
+    env = _require_disabled_autoreset_mode(env, SUPERMARIOBROS_NES_TURBO_PROVIDER.provider_id)
+    if super_mario_vec_env_type is super_mario_bros_nes_turbo_vec_env_type:
+        validate_turbo_vector_env(env, SUPERMARIOBROS_NES_TURBO_PROVIDER.provider_id)
+    return _StartInfoAdapter(env)
+
+
+def _ale_py_make_vec_env(
+    config: Any,
+    *,
+    native_kwargs: Mapping[str, Any],
+    ale_py_vec_env_type=ale_py_atari_vector_env_type,
+):
+    _require_provider(config, ALE_PY_PROVIDER.provider_id)
+    env_type = ale_py_vec_env_type()
+    kwargs = dict(native_kwargs)
+    kwargs["autoreset_mode"] = _declared_autoreset_mode(ALE_PY_PROVIDER.provider_id)
+    env = env_type(
+        config.game,
+        **kwargs,
+    )
+    return _AleManualResetAdapter(env)
+
+
+def _breakout_turbo_make_vec_env(
+    config: Any,
+    *,
+    native_kwargs: Mapping[str, Any],
+    breakout_vec_env_type=breakout_turbo_vec_env_type,
+):
+    _require_provider(config, BREAKOUT_TURBO_ENV_PROVIDER.provider_id)
+    env_type = breakout_vec_env_type()
+    kwargs = dict(native_kwargs)
+    env = env_type(config.game, state=config.state or "Start", **kwargs)
+    env = _require_disabled_autoreset_mode(env, BREAKOUT_TURBO_ENV_PROVIDER.provider_id)
+    if breakout_vec_env_type is breakout_turbo_vec_env_type:
+        validate_turbo_vector_env(env, BREAKOUT_TURBO_ENV_PROVIDER.provider_id)
+    return _StartInfoAdapter(env)
+
+
+def _vizdoom_turbo_make_vec_env(
+    config: Any,
+    *,
+    native_kwargs: Mapping[str, Any],
+    vizdoom_vec_env_type=vizdoom_turbo_vec_env_type,
+):
+    _require_provider(config, VIZDOOM_TURBO_PROVIDER.provider_id)
+    env_type = vizdoom_vec_env_type()
+    env = env_type(config.game, **dict(native_kwargs))
+    env = _require_disabled_autoreset_mode(env, VIZDOOM_TURBO_PROVIDER.provider_id)
+    if vizdoom_vec_env_type is vizdoom_turbo_vec_env_type:
+        validate_turbo_vector_env(env, VIZDOOM_TURBO_PROVIDER.provider_id)
+    return _StartInfoAdapter(env)
+
+
+@dataclass(frozen=True)
+class ProviderRuntimeAdapter:
+    provider_id: str
+    native_kwargs_builder: Callable[..., dict[str, Any]]
+    vec_env_factory: Callable[..., Any]
+    factory_override: str | None = None
+    snapshot_codec_id: str | None = None
+
+    def build_native_kwargs(
+        self,
+        config: Any,
+        native_kwargs: dict[str, Any],
+        *,
+        n_envs: int,
+        native_obs_crop: Callable[[Any], tuple[int, int, int, int] | None],
+        runtime_rom_path: str | None,
+    ) -> dict[str, Any]:
+        return self.native_kwargs_builder(
+            config,
+            native_kwargs,
+            n_envs=n_envs,
+            native_obs_crop=native_obs_crop,
+            runtime_rom_path=runtime_rom_path,
+        )
+
+    def make_vec_env(
+        self,
+        config: Any,
+        *,
+        native_kwargs: Mapping[str, Any],
+        factory_override: Any = None,
+    ):
+        kwargs: dict[str, Any] = {"native_kwargs": native_kwargs}
+        if self.factory_override is not None and factory_override is not None:
+            kwargs[self.factory_override] = factory_override
+        return self.vec_env_factory(config, **kwargs)
+
+
+PROVIDER_RUNTIME_ADAPTERS = {
+    GRADLAB_PROVIDER.provider_id: ProviderRuntimeAdapter(
+        GRADLAB_PROVIDER.provider_id,
+        _passthrough_native_vec_kwargs,
+        _gradlab_make_vec_env,
+    ),
+    STABLE_RETRO_TURBO_PROVIDER.provider_id: ProviderRuntimeAdapter(
+        STABLE_RETRO_TURBO_PROVIDER.provider_id,
+        _stable_retro_native_vec_kwargs,
+        _stable_retro_turbo_make_vec_env,
+        factory_override="retro_vec_env_type",
+    ),
+    SUPERMARIOBROS_NES_TURBO_PROVIDER.provider_id: ProviderRuntimeAdapter(
+        SUPERMARIOBROS_NES_TURBO_PROVIDER.provider_id,
+        _super_mario_native_vec_kwargs,
+        _super_mario_bros_nes_turbo_make_vec_env,
+        factory_override="super_mario_vec_env_type",
+        snapshot_codec_id="supermariobrosnes-turbo.portable-v1",
+    ),
+    ALE_PY_PROVIDER.provider_id: ProviderRuntimeAdapter(
+        ALE_PY_PROVIDER.provider_id,
+        _ale_native_vec_kwargs,
+        _ale_py_make_vec_env,
+        factory_override="ale_py_vec_env_type",
+    ),
+    BREAKOUT_TURBO_ENV_PROVIDER.provider_id: ProviderRuntimeAdapter(
+        BREAKOUT_TURBO_ENV_PROVIDER.provider_id,
+        _breakout_native_vec_kwargs,
+        _breakout_turbo_make_vec_env,
+        factory_override="breakout_vec_env_type",
+        snapshot_codec_id="breakout-turbo-env.state-v1",
+    ),
+    VIZDOOM_TURBO_PROVIDER.provider_id: ProviderRuntimeAdapter(
+        VIZDOOM_TURBO_PROVIDER.provider_id,
+        _vizdoom_native_vec_kwargs,
+        _vizdoom_turbo_make_vec_env,
+        factory_override="vizdoom_vec_env_type",
+    ),
+    GYMNASIUM_PROVIDER.provider_id: ProviderRuntimeAdapter(
+        GYMNASIUM_PROVIDER.provider_id,
+        _passthrough_native_vec_kwargs,
+        _registered_native_gymnasium_vec_env,
+    ),
+}
+
+
+def provider_runtime_adapter(provider_id: str) -> ProviderRuntimeAdapter:
+    provider = resolve_env_provider(provider_id)
+    try:
+        return PROVIDER_RUNTIME_ADAPTERS[provider.provider_id]
+    except KeyError as exc:
+        raise ValueError(f"unsupported environment provider {provider.provider_id!r}") from exc
+
+
+def make_provider_vec_env(
+    config: Any,
+    *,
+    native_kwargs: Mapping[str, Any],
+    retro_vec_env_type=DEFAULT_RETRO_VEC_ENV,
+    super_mario_vec_env_type=super_mario_bros_nes_turbo_vec_env_type,
+    ale_py_vec_env_type=ale_py_atari_vector_env_type,
+    breakout_vec_env_type=breakout_turbo_vec_env_type,
+    vizdoom_vec_env_type=vizdoom_turbo_vec_env_type,
+):
+    adapter = provider_runtime_adapter(config.env_provider)
+    overrides = {
+        "retro_vec_env_type": retro_vec_env_type,
+        "super_mario_vec_env_type": super_mario_vec_env_type,
+        "ale_py_vec_env_type": ale_py_vec_env_type,
+        "breakout_vec_env_type": breakout_vec_env_type,
+        "vizdoom_vec_env_type": vizdoom_vec_env_type,
+    }
+    override = overrides.get(adapter.factory_override) if adapter.factory_override else None
+    return adapter.make_vec_env(
+        config,
+        native_kwargs=native_kwargs,
+        factory_override=override,
+    )

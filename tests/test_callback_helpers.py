@@ -15,29 +15,29 @@ from stable_baselines3.common.logger import Logger
 from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.vec_env import DummyVecEnv
 
-from rlab.callbacks import (
+from gradlab.callbacks import (
     CallbackHelper,
     LedgerCheckpointHelper,
     MetricEarlyStopHelper,
     MetricStoreLoggerHelper,
     MetricStoreOutputFormat,
-    RlabCallback,
+    GradLabCallback,
     RolloutDiagnosticsHelper,
     RuntimeMetricsHelper,
     ArchiveCurriculumFeedbackHelper,
     ThroughputHelper,
     task_metric_source,
 )
-from rlab.env import EnvConfig, resolve_env_config
-from rlab.env_config import env_config_from_mapping
-from rlab.metric_store import MetricStore
-from rlab.metric_names import (
+from gradlab.env import EnvConfig, resolve_env_config
+from gradlab.env_config import env_config_from_mapping
+from gradlab.metric_store import MetricStore
+from gradlab.metric_names import (
     TRAIN_OUTCOME_SUCCESS_WINDOW_100_RATE_MIN,
     train_early_stop_metric,
 )
-from rlab.policy_bundle import build_recipe_document, write_canonical_json
-from rlab.recipe_documents import compose_train_document
-from rlab.training_backend import GracefulStopFlag, training_backend_config_hash
+from gradlab.policy_bundle import build_recipe_document, write_canonical_json
+from gradlab.recipe_documents import compose_train_document
+from gradlab.training_backend import GracefulStopFlag, training_backend_config_hash
 
 
 ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
@@ -117,7 +117,7 @@ class RuntimeMetricsHelperTests(unittest.TestCase):
         )
 
 
-class RlabCallbackTests(unittest.TestCase):
+class GradLabCallbackTests(unittest.TestCase):
     def test_drains_episode_records_once_for_done_and_completion_metrics(self) -> None:
         class Logger:
             def __init__(self) -> None:
@@ -162,7 +162,7 @@ class RlabCallbackTests(unittest.TestCase):
 
         env = RecordEnv()
         model = Model(env)
-        callback = RlabCallback(
+        callback = GradLabCallback(
             [
                 RuntimeMetricsHelper(
                     event_names=("level_change",),
@@ -206,7 +206,7 @@ class RlabCallbackTests(unittest.TestCase):
 
         env = SimpleNamespace(drain_records=lambda: [object()])
         model = SimpleNamespace(env=env, logger=SimpleNamespace())
-        callback = RlabCallback([StepHelper("first"), RecordHelper(), StepHelper("last")])
+        callback = GradLabCallback([StepHelper("first"), RecordHelper(), StepHelper("last")])
         callback.model = model  # type: ignore[assignment]
         callback.locals = {}
 
@@ -403,7 +403,7 @@ class MetricEarlyStopHelperTests(unittest.TestCase):
 
     def test_reads_a_fresh_metric_store_sample_at_rollout_boundary(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            store_path = Path(tmp) / "run" / "rlab.sqlite"
+            store_path = Path(tmp) / "run" / "gradlab.sqlite"
             decision_path = Path(tmp) / "run" / "early-stop.json"
             store = MetricStore(store_path)
             store.init()
@@ -445,7 +445,7 @@ class MetricEarlyStopHelperTests(unittest.TestCase):
 
     def test_metric_store_output_format_writes_complete_numeric_dump(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            store_path = Path(tmp) / "run" / "rlab.sqlite"
+            store_path = Path(tmp) / "run" / "gradlab.sqlite"
             output_format = MetricStoreOutputFormat(store_path)
             output_format.write(
                 {
@@ -484,7 +484,7 @@ class MetricEarlyStopHelperTests(unittest.TestCase):
 
     def test_metric_store_logger_helper_flushes_final_training_metrics(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            store_path = Path(tmp) / "run" / "rlab.sqlite"
+            store_path = Path(tmp) / "run" / "gradlab.sqlite"
             logger = Logger(folder=None, output_formats=[])
             model = SimpleNamespace(logger=logger)
             callback = MetricStoreLoggerHelper(store_path)
@@ -520,7 +520,7 @@ class MetricEarlyStopHelperTests(unittest.TestCase):
                 return np.zeros(1, dtype=np.float32), 2.0, True, False, {}
 
         with tempfile.TemporaryDirectory() as tmp:
-            store_path = Path(tmp) / "run" / "rlab.sqlite"
+            store_path = Path(tmp) / "run" / "gradlab.sqlite"
             env = DummyVecEnv([lambda: Monitor(OneStepEnv())])
             model = PPO(
                 "MlpPolicy",
@@ -531,7 +531,7 @@ class MetricEarlyStopHelperTests(unittest.TestCase):
                 seed=1,
                 verbose=0,
             )
-            callback = RlabCallback([MetricStoreLoggerHelper(store_path)])
+            callback = GradLabCallback([MetricStoreLoggerHelper(store_path)])
             try:
                 model.learn(total_timesteps=4, callback=callback)
             finally:
@@ -557,7 +557,7 @@ class LedgerCheckpointHelperTests(unittest.TestCase):
                 save_freq=1,
                 save_path=Path(tmp) / "checkpoints",
                 name_prefix="ppo_supermariobros-nes-v0",
-                metric_store_path=Path(tmp) / "rlab.sqlite",
+                metric_store_path=Path(tmp) / "gradlab.sqlite",
             )
             callback.n_calls = 1
             callback.num_timesteps = 500_000
@@ -578,11 +578,11 @@ class LedgerCheckpointHelperTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             run_dir = Path(tmp) / "run"
-            store_path = run_dir / "rlab.sqlite"
+            store_path = run_dir / "gradlab.sqlite"
             recipe_document = build_recipe_document(
                 compose_train_document(
-                    Path("experiments/goals/rlab__bandit/_goal.yaml"),
-                    Path("experiments/goals/rlab__bandit/recipes/ppo.yaml"),
+                    Path("experiments/goals/gradlab__bandit/_goal.yaml"),
+                    Path("experiments/goals/gradlab__bandit/recipes/ppo.yaml"),
                 ),
                 repo_root=Path.cwd(),
                 source_commit="a" * 40,
@@ -721,7 +721,7 @@ class ThroughputHelperTests(unittest.TestCase):
     def test_complete_frame_uses_the_completed_rollout_step(self) -> None:
         times = iter([0.0, 2.0, 5.0])
         with tempfile.TemporaryDirectory() as tmp:
-            store_path = Path(tmp) / "rlab.sqlite"
+            store_path = Path(tmp) / "gradlab.sqlite"
             callback = ThroughputHelper(
                 clock=lambda: next(times),
                 metric_store_path=store_path,
@@ -816,7 +816,7 @@ class RolloutDiagnosticsHelperTests(unittest.TestCase):
             action_space=gym.spaces.Discrete(2),
         )
         with tempfile.TemporaryDirectory() as tmp:
-            store_path = Path(tmp) / "rlab.sqlite"
+            store_path = Path(tmp) / "gradlab.sqlite"
             callback = RolloutDiagnosticsHelper(
                 metric_store_path=store_path,
                 wandb_enabled=True,

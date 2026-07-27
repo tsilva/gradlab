@@ -10,20 +10,20 @@ import pytest
 import torch
 from stable_baselines3 import A2C, PPO
 
-from rlab.bandit_env import BanditVectorEnv
-from rlab.artifacts import load_model_metadata
-from rlab.env import EnvConfig, make_vec_envs
-from rlab.env_registry import resolve_env_id, resolve_env_provider
-from rlab.metric_store import MetricStore
-from rlab.policy_bundle import build_recipe_document, write_canonical_json
-from rlab.recipe_documents import compose_train_document
-from rlab.recipe_schema import validate_materialized_train_recipe
-from rlab.sb3_models import load_sb3_model
-from rlab.train import main as train_main
+from gradlab.bandit_env import BanditVectorEnv
+from gradlab.artifacts import load_model_metadata
+from gradlab.env import EnvConfig, make_vec_envs
+from gradlab.env_registry import resolve_env_id, resolve_env_provider
+from gradlab.metric_store import MetricStore
+from gradlab.policy_bundle import build_recipe_document, write_canonical_json
+from gradlab.recipe_documents import compose_train_document
+from gradlab.recipe_schema import validate_materialized_train_recipe
+from gradlab.sb3_models import load_sb3_model
+from gradlab.train import main as train_main
 
 
-BANDIT_GOAL = Path("experiments/goals/rlab__bandit/_goal.yaml")
-BANDIT_RECIPE = Path("experiments/goals/rlab__bandit/recipes/ppo.yaml")
+BANDIT_GOAL = Path("experiments/goals/gradlab__bandit/_goal.yaml")
+BANDIT_RECIPE = Path("experiments/goals/gradlab__bandit/recipes/ppo.yaml")
 
 
 def _bandit_recipe_document():
@@ -39,7 +39,7 @@ def _write_versioned_recipe(tmp_path: Path, document: dict) -> Path:
             repo_root=Path.cwd(),
             source_commit="a" * 40,
             run_description="ROM-free backend boundary smoke.",
-            runtime_image_ref="docker:ghcr.io/tsilva/rlab-runtime@sha256:" + "b" * 64,
+            runtime_image_ref="docker:ghcr.io/tsilva/gradlab-runtime@sha256:" + "b" * 64,
         ),
     )
 
@@ -54,7 +54,7 @@ def _native_env(num_envs: int = 3) -> BanditVectorEnv:
 
 def _config() -> EnvConfig:
     return EnvConfig(
-        env_provider="rlab",
+        env_provider="gradlab",
         game="Bandit-v0",
         env_args={"autoreset_mode": "disabled"},
         task={
@@ -157,22 +157,22 @@ def test_bandit_rejects_invalid_actions(actions, error) -> None:
         env.step(actions)
 
 
-def test_rlab_provider_is_fixed_and_rejects_unknown_environment() -> None:
-    provider = resolve_env_provider("rlab")
+def test_gradlab_provider_is_fixed_and_rejects_unknown_environment() -> None:
+    provider = resolve_env_provider("gradlab")
     assert provider.env_ids == ("Bandit-v0",)
     assert provider.supports_states is False
     assert provider.constructor_contract is not None
     assert provider.constructor_contract.required_values == {"autoreset_mode": "disabled"}
-    assert resolve_env_id("rlab:Bandit-v0").provider_env_id == "Bandit-v0"
+    assert resolve_env_id("gradlab:Bandit-v0").provider_env_id == "Bandit-v0"
     assert "Bandit-v0" not in gym.registry
     with pytest.raises(ValueError, match="does not register environment"):
-        resolve_env_id("rlab:Unknown-v0")
+        resolve_env_id("gradlab:Unknown-v0")
 
     with pytest.raises(ValueError, match="does not support state"):
         make_vec_envs(replace(_config(), state="Start"), n_envs=1, seed=1)
 
 
-def test_rlab_facade_same_step_resets_bandit_lanes() -> None:
+def test_gradlab_facade_same_step_resets_bandit_lanes() -> None:
     env = make_vec_envs(_config(), n_envs=3, seed=7)
     try:
         observations = env.reset()
@@ -191,7 +191,7 @@ def test_rlab_facade_same_step_resets_bandit_lanes() -> None:
         env.close()
 
 
-def test_rlab_facade_applies_common_reward_scale_then_clip() -> None:
+def test_gradlab_facade_applies_common_reward_scale_then_clip() -> None:
     config = _config()
     reward = {
         **config.task["reward"],
@@ -216,7 +216,7 @@ def test_bandit_recipe_materializes_fixed_train_and_eval_contracts() -> None:
     validate_materialized_train_recipe(document)
 
     train_config = document["train_config"]
-    assert train_config["env_provider"] == "rlab"
+    assert train_config["env_provider"] == "gradlab"
     assert train_config["game"] == "Bandit-v0"
     assert train_config["n_envs"] == 8
     assert train_config["timesteps"] == 256
@@ -266,7 +266,7 @@ def test_bandit_runs_through_sb3_backend_and_records_backend_metadata(
     path = tmp_path / "train.json"
     path.write_text(json.dumps(config), encoding="utf-8")
 
-    monkeypatch.setenv("RLAB_INTERNAL_LEARNER", "1")
+    monkeypatch.setenv("GRADLAB_INTERNAL_LEARNER", "1")
     assert train_main(["--train-config-json", str(path)]) == 0
 
     run_dir = tmp_path / "backend-smoke"
@@ -312,7 +312,7 @@ def test_bandit_runs_through_a2c_backend_and_round_trips_checkpoint(
     path = tmp_path / "a2c-train.json"
     path.write_text(json.dumps(config), encoding="utf-8")
 
-    monkeypatch.setenv("RLAB_INTERNAL_LEARNER", "1")
+    monkeypatch.setenv("GRADLAB_INTERNAL_LEARNER", "1")
     assert train_main(["--train-config-json", str(path)]) == 0
 
     run_dir = tmp_path / "a2c-backend-smoke"
@@ -321,10 +321,10 @@ def test_bandit_runs_through_a2c_backend_and_round_trips_checkpoint(
     assert metadata["training_backend_id"] == "sb3.a2c"
     assert metadata["algorithm_id"] == "a2c"
     assert metadata["model_class"] == "stable_baselines3.a2c.a2c.A2C"
-    metric_store = MetricStore(run_dir / "rlab.sqlite")
+    metric_store = MetricStore(run_dir / "gradlab.sqlite")
     assert metric_store.latest_metric("train/algorithm/a2c/update/value_loss") is not None
     assert metric_store.latest_metric("train/algorithm/ppo/update/value_loss") is None
-    from rlab.trusted_inputs import approve_internal_model
+    from gradlab.trusted_inputs import approve_internal_model
 
     with approve_internal_model(model_path, execution_id="test-bandit") as approved:
         assert isinstance(load_sb3_model(approved, device="cpu"), A2C)

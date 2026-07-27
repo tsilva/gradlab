@@ -10,7 +10,7 @@ if __package__:
 else:
     from dockerfile_inputs import marked_dockerfile_bytes
 
-DEPENDENCY_KEY_SCHEMA = b"rlab-train-dependency-key-v4\0"
+DEPENDENCY_KEY_SCHEMA = b"gradlab-train-dependency-key-v5\0"
 
 
 def _normalized_digest(value: str) -> str:

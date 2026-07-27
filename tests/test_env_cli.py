@@ -13,11 +13,11 @@ import gymnasium as gym
 import numpy as np
 import pytest
 
-from rlab.batch_runtime import ProviderDescriptor
-from rlab.env import bind_native_provider, make_native_provider, resolve_mixed_state_config
-from rlab.env_cli import _finish_report, main as env_main
-from rlab.env_config import env_config_from_mapping
-from rlab.recipe_documents import compose_train_document
+from gradlab.batch_runtime import ProviderDescriptor
+from gradlab.env import bind_native_provider, make_native_provider, resolve_mixed_state_config
+from gradlab.env_cli import _finish_report, main as env_main
+from gradlab.env_config import env_config_from_mapping
+from gradlab.recipe_documents import compose_train_document
 
 
 MARIO_GOAL = Path("experiments/goals/SuperMarioBros-Nes-v0/Level1-1/_goal.yaml")
@@ -195,17 +195,17 @@ def _run_fake_check(
     }
     binding = SimpleNamespace(rom_path="/rom-cache/mario.nes", manifest=manifest)
     with (
-        patch("rlab.env.assert_provider_runtime_available", side_effect=runtime_error),
-        patch("rlab.rom_assets.rom_asset_manifest_for_game", return_value=manifest),
-        patch("rlab.rom_runtime.ensure_local_rom_binding", return_value=binding),
+        patch("gradlab.env.assert_provider_runtime_available", side_effect=runtime_error),
+        patch("gradlab.rom_assets.rom_asset_manifest_for_game", return_value=manifest),
+        patch("gradlab.rom_runtime.ensure_local_rom_binding", return_value=binding),
         patch(
-            "rlab.env.make_native_provider",
+            "gradlab.env.make_native_provider",
             side_effect=lambda *_args, **_kwargs: (
                 print("provider noise"),
                 (native, _descriptor(native)),
             )[1],
         ),
-        patch("rlab.env.bind_native_provider", side_effect=bind_provider),
+        patch("gradlab.env.bind_native_provider", side_effect=bind_provider),
         patch("importlib.metadata.distribution", **distribution_kwargs),
         patch("sys.stdout", stdout),
         patch("sys.stderr", stderr),
@@ -228,7 +228,7 @@ def _run_fake_check(
 def test_static_cli_does_not_import_runtime_provider_modules() -> None:
     command = """
 import json, sys
-from rlab.env_cli import main
+from gradlab.env_cli import main
 assert 'stable_retro' not in sys.modules
 assert 'supermariobrosnes_turbo' not in sys.modules
 assert 'breakout_turbo_env' not in sys.modules
@@ -252,7 +252,7 @@ assert 'vizdoom_turbo' not in sys.modules
         "ale-py",
         "breakout-turbo-env",
         "gymnasium",
-        "rlab",
+        "gradlab",
         "stable-retro-turbo",
         "supermariobrosnes-turbo",
         "vizdoom-turbo",
@@ -394,9 +394,9 @@ def test_native_construction_closes_provider_when_description_fails() -> None:
     native = FakeNativeProvider()
 
     with (
-        patch("rlab.env.provider_native_vec_kwargs", return_value={}),
-        patch("rlab.env.make_provider_vec_env", return_value=native),
-        patch("rlab.env._provider_descriptor", side_effect=ValueError("bad descriptor")),
+        patch("gradlab.env.provider_native_vec_kwargs", return_value={}),
+        patch("gradlab.env.make_provider_vec_env", return_value=native),
+        patch("gradlab.env._provider_descriptor", side_effect=ValueError("bad descriptor")),
         pytest.raises(ValueError, match="bad descriptor"),
     ):
         make_native_provider(
@@ -417,7 +417,7 @@ def test_task_binding_failure_closes_unowned_native_provider() -> None:
     native = FakeNativeProvider()
 
     with (
-        patch("rlab.env._bound_task_kernel", side_effect=ValueError("bad task")),
+        patch("gradlab.env._bound_task_kernel", side_effect=ValueError("bad task")),
         pytest.raises(ValueError, match="bad task"),
     ):
         bind_native_provider(

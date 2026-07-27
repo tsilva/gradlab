@@ -1,11 +1,11 @@
 ---
 name: certify-lifecycle
-description: Run and interpret rlab's credential-free deterministic Tier 1 orchestration lifecycle certification. Use when the user asks to certify, regression-test, validate, or debug fleet/dstack orchestration; verify checkpoint-to-Modal evaluation, W&B delivery, eval-driven early stopping, lease fencing, cancellation, or drain-only recovery; or replay a preserved lifecycle failure.
+description: Run and interpret gradlab's credential-free deterministic Tier 1 orchestration lifecycle certification. Use when the user asks to certify, regression-test, validate, or debug fleet/dstack orchestration; verify checkpoint-to-Modal evaluation, W&B delivery, eval-driven early stopping, lease fencing, cancellation, or drain-only recovery; or replay a preserved lifecycle failure.
 ---
 
 # Certify Lifecycle
 
-Use the checked-in `rlab experiment certify` gate. It executes the real
+Use the checked-in `gradlab experiment certify` gate. It executes the real
 supervisor authority, SQLite outbox/ledger, file-backed R2 protocol, checkpoint
 publication, evaluation dispatch/validation, sole-writer W&B projection, early
 stop, promotion, recovery, cancellation, and terminal-receipt logic against
@@ -17,7 +17,7 @@ Read `SPECS.md` before running or changing the gate.
 ## Run the complete Tier 1 gate
 
 ```bash
-rlab experiment certify --tier simulated --json
+gradlab experiment certify --tier simulated --json
 ```
 
 Do not substitute isolated unit tests for this command. A pass requires every
@@ -36,13 +36,13 @@ normally finish in under 60 seconds.
 List available scenarios:
 
 ```bash
-rlab experiment certify --list
+gradlab experiment certify --list
 ```
 
 Select one or more:
 
 ```bash
-rlab experiment certify \
+gradlab experiment certify \
   --scenario full-lifecycle \
   --scenario parallel-run-isolation \
   --json
@@ -57,7 +57,7 @@ Keep raw file-backed buckets, SQLite ledgers, supervisor transcript, simulated
 W&B events, report, and replay manifest:
 
 ```bash
-rlab experiment certify \
+gradlab experiment certify \
   --tier simulated \
   --artifacts-dir runs/certification/manual-check \
   --json
@@ -70,7 +70,7 @@ artifacts are temporary; failing artifacts are preserved under
 Replay the exact scenario set:
 
 ```bash
-rlab experiment certify \
+gradlab experiment certify \
   --replay <failure-bundle>/replay.json \
   --json
 ```

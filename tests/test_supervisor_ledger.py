@@ -4,13 +4,13 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from rlab.supervisor_ledger import SupervisorLedger
+from gradlab.supervisor_ledger import SupervisorLedger
 
 
 class SupervisorLedgerTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
-        self.path = Path(self.temporary.name) / "rlab.sqlite"
+        self.path = Path(self.temporary.name) / "gradlab.sqlite"
         self.ledger = SupervisorLedger(self.path)
         self.ledger.init()
 

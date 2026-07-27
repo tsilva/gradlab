@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from rlab.recipe_variants import (
+from gradlab.recipe_variants import (
     BASE_RECIPE_VARIANT_ID,
     normalize_recipe_overrides,
     recipe_variant_id,

@@ -7,14 +7,14 @@ from unittest import mock
 
 import pytest
 
-from rlab.local_train import LOCAL_ROM_CACHE_ENV, main
-from rlab.play import main as play_main
-from rlab.recipe_catalog import (
+from gradlab.local_train import LOCAL_ROM_CACHE_ENV, main
+from gradlab.play import main as play_main
+from gradlab.recipe_catalog import (
     LOCAL_RUN_RECEIPT,
     latest_local_recipe_model,
     resolve_recipe_source,
 )
-from rlab.train import INTERNAL_LEARNER_ENV
+from gradlab.train import INTERNAL_LEARNER_ENV
 
 
 def test_builtin_recipe_reference_resolves_goal_and_recipe() -> None:
@@ -53,11 +53,11 @@ def test_local_train_materializes_credential_free_playable_run(
         return 0
 
     monkeypatch.delenv(INTERNAL_LEARNER_ENV, raising=False)
-    with mock.patch("rlab.train.main", side_effect=fake_learner):
+    with mock.patch("gradlab.train.main", side_effect=fake_learner):
         assert (
             main(
                 [
-                    "rlab__bandit/ppo",
+                    "gradlab__bandit/ppo",
                     "--runs-dir",
                     str(tmp_path),
                     "--run-name",
@@ -84,7 +84,7 @@ def test_local_train_materializes_credential_free_playable_run(
     assert "Seed 123" in config["run_description"]
     assert "image_ref" not in recipe["provenance"]["runtime"]
     assert recipe["provenance"]["runtime"]["packages"]
-    assert recipe["provenance"]["source_distribution"]["name"].lower() == "rlab"
+    assert recipe["provenance"]["source_distribution"]["name"].lower() == "gradlab"
     assert receipt["status"] == "completed"
     assert receipt["model"] == "final_model.zip"
 
@@ -117,10 +117,10 @@ def test_local_mario_train_binds_registered_rom_cache(
     monkeypatch.setenv(LOCAL_ROM_CACHE_ENV, "restore-me")
     with (
         mock.patch(
-            "rlab.local_train.rom_asset_manifest_for_game",
+            "gradlab.local_train.rom_asset_manifest_for_game",
             return_value=manifest,
         ),
-        mock.patch("rlab.train.main", side_effect=fake_learner),
+        mock.patch("gradlab.train.main", side_effect=fake_learner),
     ):
         assert (
             main(
@@ -146,10 +146,10 @@ def test_local_mario_train_rejects_missing_rom_before_creating_run(
 ) -> None:
     with (
         mock.patch(
-            "rlab.local_train.rom_asset_manifest_for_game",
-            side_effect=ValueError("run: rlab rom sync"),
+            "gradlab.local_train.rom_asset_manifest_for_game",
+            side_effect=ValueError("run: gradlab rom sync"),
         ),
-        pytest.raises(ValueError, match="rlab rom sync"),
+        pytest.raises(ValueError, match="gradlab rom sync"),
     ):
         main(
             [
@@ -201,7 +201,7 @@ def test_play_recipe_selects_latest_local_model(tmp_path: Path) -> None:
         json.dumps(
             {
                 "status": "completed",
-                "goal_id": "rlab__bandit",
+                "goal_id": "gradlab__bandit",
                 "recipe_id": "ppo",
                 "model": "final_model.zip",
                 "completed_at": "2026-07-27T11:00:00Z",
@@ -211,14 +211,14 @@ def test_play_recipe_selects_latest_local_model(tmp_path: Path) -> None:
     )
 
     with mock.patch(
-        "rlab.play_web.run_web_player_application",
+        "gradlab.play_web.run_web_player_application",
         return_value=23,
     ) as run_application:
         assert (
             play_main(
                 [
                     "--recipe",
-                    "rlab__bandit/ppo",
+                    "gradlab__bandit/ppo",
                     "--runs-dir",
                     str(tmp_path),
                     "--no-open",

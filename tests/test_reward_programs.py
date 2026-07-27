@@ -5,9 +5,9 @@ from pathlib import Path
 
 import pytest
 
-from rlab.config_loader import load_mapping_document
-from rlab.recipe_documents import compose_train_document, load_goal_contract
-from rlab.reward_programs import validate_reward_shape_catalog
+from gradlab.config_loader import load_mapping_document
+from gradlab.recipe_documents import compose_train_document, load_goal_contract
+from gradlab.reward_programs import validate_reward_shape_catalog
 
 
 MARIO_GOAL = Path("experiments/goals/SuperMarioBros-Nes-v0/Level1-1/_goal.yaml")

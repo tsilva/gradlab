@@ -4,8 +4,8 @@ from types import SimpleNamespace
 
 import numpy as np
 
-from rlab.env import EnvConfig
-from rlab.play import (
+from gradlab.env import EnvConfig
+from gradlab.play import (
     optional_fast_env_frames,
     playback_model_observation,
     vector_env_frame,

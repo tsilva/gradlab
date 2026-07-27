@@ -5,7 +5,7 @@ from types import MappingProxyType, SimpleNamespace
 import numpy as np
 import pytest
 
-from rlab.turbo_api import CAPABILITY_KEYS, TURBO_API_VERSION, validate_turbo_vector_env
+from gradlab.turbo_api import CAPABILITY_KEYS, TURBO_API_VERSION, validate_turbo_vector_env
 
 
 def _contract_env():

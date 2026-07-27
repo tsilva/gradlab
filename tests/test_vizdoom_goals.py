@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from rlab.recipe_documents import compose_train_document
+from gradlab.recipe_documents import compose_train_document
 
 
 GOALS_ROOT = Path("experiments/goals")

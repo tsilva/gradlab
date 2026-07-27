@@ -5,16 +5,16 @@ from dataclasses import replace
 from types import SimpleNamespace
 from unittest import mock
 
-from rlab import runtime_refs
+from gradlab import runtime_refs
 
 
 SOURCE_SHA = "1" * 40
-RUNTIME_IMAGE_REF = "docker:ghcr.io/tsilva/rlab/rlab-train@sha256:" + "a" * 64
+RUNTIME_IMAGE_REF = "docker:ghcr.io/tsilva/gradlab/gradlab-train@sha256:" + "a" * 64
 
 
 def image_payload() -> dict:
     return {
-        "schema_version": 5,
+        "schema_version": 6,
         "runtime_image_ref": RUNTIME_IMAGE_REF,
         "digest": "sha256:" + "a" * 64,
         "source_sha": SOURCE_SHA,
@@ -29,11 +29,11 @@ def image_payload() -> dict:
         "uv_lock_sha256": "e" * 64,
         "base_images": {
             "gpu": (
-                "docker:ghcr.io/tsilva/rlab/rlab-train-gpu@sha256:"
+                "docker:ghcr.io/tsilva/gradlab/gradlab-train-gpu@sha256:"
                 + "9" * 64
             ),
             "dependencies": (
-                "docker:ghcr.io/tsilva/rlab/rlab-train-dependencies@sha256:"
+                "docker:ghcr.io/tsilva/gradlab/gradlab-train-dependencies@sha256:"
                 + "f" * 64
             ),
         },

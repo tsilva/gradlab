@@ -6,14 +6,14 @@ from pathlib import Path
 
 import wandb
 
-from rlab.metric_names import LEADER_CHECKPOINT_ARTIFACT_REF
-from rlab.metric_store import MetricStore
-from rlab.wandb_publisher import (
+from gradlab.metric_names import LEADER_CHECKPOINT_ARTIFACT_REF
+from gradlab.metric_store import MetricStore
+from gradlab.wandb_publisher import (
     _publish_frame,
     publish_pending_frames,
     publish_promotion_summary,
 )
-from rlab.wandb_utils import configure_wandb_metrics
+from gradlab.wandb_utils import configure_wandb_metrics
 
 
 class WandbOfflineMetricIntegrationTests(unittest.TestCase):
@@ -26,7 +26,7 @@ class WandbOfflineMetricIntegrationTests(unittest.TestCase):
                 self.calls.append((dict(payload), int(step)))
 
         with tempfile.TemporaryDirectory() as tmp:
-            store = MetricStore(Path(tmp) / "rlab.sqlite")
+            store = MetricStore(Path(tmp) / "gradlab.sqlite")
             store.init()
             store.append_metrics(
                 {"train/episode/return/shaped/mean": 5.0},
@@ -49,7 +49,7 @@ class WandbOfflineMetricIntegrationTests(unittest.TestCase):
         self,
     ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            store = MetricStore(Path(tmp) / "rlab.sqlite")
+            store = MetricStore(Path(tmp) / "gradlab.sqlite")
             store.init()
             store.append_metrics(
                 {
@@ -73,7 +73,7 @@ class WandbOfflineMetricIntegrationTests(unittest.TestCase):
             )
             run = configure_wandb_metrics(
                 wandb.init(
-                    project="rlab-metrics-schema-test",
+                    project="gradlab-metrics-schema-test",
                     dir=tmp,
                     mode="offline",
                     reinit="finish_previous",

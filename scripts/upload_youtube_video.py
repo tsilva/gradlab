@@ -390,8 +390,8 @@ def replace_description_link_block(existing: str, model_page: str) -> str:
         if not stripped:
             continue
         label, separator, _value = stripped.partition(":")
-        if not separator or label not in {"Model", "rlab"}:
-            raise ValueError("model page updates may contain only Model: and rlab: lines")
+        if not separator or label not in {"Model", "gradlab"}:
+            raise ValueError("model page updates may contain only Model: and gradlab: lines")
         replacements[label] = stripped
     if "Model" not in replacements:
         raise ValueError("model page update must contain a Model: line")
@@ -406,7 +406,7 @@ def replace_description_link_block(existing: str, model_page: str) -> str:
                 replaced.add(label)
             continue
         output.append(line)
-    missing = [replacements[label] for label in ("Model", "rlab") if label in replacements and label not in replaced]
+    missing = [replacements[label] for label in ("Model", "gradlab") if label in replacements and label not in replaced]
     if missing:
         if output and output[-1].strip():
             output.append("")

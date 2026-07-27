@@ -9,8 +9,8 @@ from typing import Any
 
 import numpy as np
 
-from rlab.action_contract import configured_action_values
-from rlab.env import (
+from gradlab.action_contract import configured_action_values
+from gradlab.env import (
     EnvConfig,
     make_provider_vec_env,
     make_training_vec_env,
@@ -18,7 +18,7 @@ from rlab.env import (
     resolve_env_config,
     state_weight_mapping,
 )
-from rlab.env_providers import provider_native_vec_kwargs
+from gradlab.env_providers import provider_native_vec_kwargs
 
 
 def benchmark_config(args: argparse.Namespace) -> EnvConfig:
@@ -222,7 +222,7 @@ def main() -> int:
             samples[mode].append(runners[mode]())
 
     result: dict[str, Any] = {
-        "benchmark_contract": "rlab.native-vector-runtime.v2",
+        "benchmark_contract": "gradlab.native-vector-runtime.v3",
         "environment_contract": {
             "schema_version": 2,
             "task_termination_boundary": "vector_step",

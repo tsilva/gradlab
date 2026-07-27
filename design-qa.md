@@ -112,8 +112,8 @@ final result: passed
 **Comparison target**
 
 - Source visual truth: `/var/folders/wz/x29jb7_x5rdc_5dcjr4qnhg00000gn/T/codex-clipboard-62cbebaa-13f5-49ae-8190-0bbc4c43ca2a.png`
-- Browser-rendered implementation: `/Users/tsilva/.codex/visualizations/2026/07/23/019f8f0d-dd60-79a3-9345-8650130dbcfd/rlab-select-chevron-after-matched.png`
-- Focused side-by-side comparison: `/Users/tsilva/.codex/visualizations/2026/07/23/019f8f0d-dd60-79a3-9345-8650130dbcfd/rlab-select-chevron-comparison.png`
+- Browser-rendered implementation: `/Users/tsilva/.codex/visualizations/2026/07/23/019f8f0d-dd60-79a3-9345-8650130dbcfd/gradlab-select-chevron-after-matched.png`
+- Focused side-by-side comparison: `/Users/tsilva/.codex/visualizations/2026/07/23/019f8f0d-dd60-79a3-9345-8650130dbcfd/gradlab-select-chevron-comparison.png`
 - Viewport: 1265 × 712 CSS px at 1× density.
 - Source pixels: 586 × 286. Implementation pixels: 1265 × 712; the Live Signals region was normalized to 586 × 286 for the focused comparison.
 - State: dark theme, paired Stats workspace, empty Live Signals history, signal dropdown showing “Choose a signal.”
@@ -236,9 +236,9 @@ final result: passed
 **Comparison target**
 
 - Source visual truth: `/var/folders/wz/x29jb7_x5rdc_5dcjr4qnhg00000gn/T/codex-clipboard-ae389e82-83a4-4fe3-a6c9-75c75def2608.png`
-- Browser-rendered implementation: `/Users/tsilva/repos/tsilva/rlab/runs/design-qa/project-list-no-trailing-space.png`
-- Normalized source: `/Users/tsilva/repos/tsilva/rlab/runs/design-qa/reference-normalized.png`
-- Full-view side-by-side comparison: `/Users/tsilva/repos/tsilva/rlab/runs/design-qa/reference-vs-implementation.png`
+- Browser-rendered implementation: `/Users/tsilva/repos/tsilva/gradlab/runs/design-qa/project-list-no-trailing-space.png`
+- Normalized source: `/Users/tsilva/repos/tsilva/gradlab/runs/design-qa/reference-normalized.png`
+- Full-view side-by-side comparison: `/Users/tsilva/repos/tsilva/gradlab/runs/design-qa/reference-vs-implementation.png`
 - Viewport: 1743 × 597 CSS px at 1× implementation density.
 - Source pixels: 3486 × 1194 at 2× density, normalized to 1743 × 597. Implementation pixels: 1743 × 597.
 - State: dark desktop player, synced project-selection screen with four projects. The implementation is the controller window, which adds the unrelated Controller status badge.
@@ -297,9 +297,9 @@ final result: passed
 **Comparison target**
 
 - Source visual truth: `/var/folders/wz/x29jb7_x5rdc_5dcjr4qnhg00000gn/T/codex-clipboard-d565d4a5-5c62-48a2-a06b-1fc731b1ce57.png`
-- Browser-rendered implementation: `/Users/tsilva/repos/tsilva/rlab/runs/design-qa/goal-description-below-title.png`
-- Normalized source: `/Users/tsilva/repos/tsilva/rlab/runs/design-qa/goal-description-reference-normalized.png`
-- Full-view side-by-side comparison: `/Users/tsilva/repos/tsilva/rlab/runs/design-qa/goal-description-reference-vs-implementation.png`
+- Browser-rendered implementation: `/Users/tsilva/repos/tsilva/gradlab/runs/design-qa/goal-description-below-title.png`
+- Normalized source: `/Users/tsilva/repos/tsilva/gradlab/runs/design-qa/goal-description-reference-normalized.png`
+- Full-view side-by-side comparison: `/Users/tsilva/repos/tsilva/gradlab/runs/design-qa/goal-description-reference-vs-implementation.png`
 - Viewport: 1758 × 521 CSS px at 1× implementation density.
 - Source pixels: 3516 × 1042 at 2× density, normalized to 1758 × 521. Implementation pixels: 1758 × 521.
 - State: dark desktop player on the Breakout goal-selection screen. The source has the third row hovered; the implementation capture is neutral, while the unchanged hover treatment was outside this layout correction.
@@ -359,9 +359,9 @@ final result: passed
 **Comparison target**
 
 - Source visual truth: `/var/folders/wz/x29jb7_x5rdc_5dcjr4qnhg00000gn/T/codex-clipboard-59e53989-2606-4b4e-b6e7-992b35da21d8.png`
-- Browser-rendered implementation: `/Users/tsilva/repos/tsilva/rlab/runs/design-qa/source-namespace-in-toolbar.png`
-- Normalized source: `/Users/tsilva/repos/tsilva/rlab/runs/design-qa/source-namespace-reference-normalized.png`
-- Full-view side-by-side comparison: `/Users/tsilva/repos/tsilva/rlab/runs/design-qa/source-namespace-reference-vs-implementation.png`
+- Browser-rendered implementation: `/Users/tsilva/repos/tsilva/gradlab/runs/design-qa/source-namespace-in-toolbar.png`
+- Normalized source: `/Users/tsilva/repos/tsilva/gradlab/runs/design-qa/source-namespace-reference-normalized.png`
+- Full-view side-by-side comparison: `/Users/tsilva/repos/tsilva/gradlab/runs/design-qa/source-namespace-reference-vs-implementation.png`
 - Viewport: 1966 × 582 CSS px at 1× implementation density.
 - Source pixels: 2106 × 582, normalized to 1966 × 582 for the comparison. Implementation pixels: 1966 × 582.
 - State: dark desktop player on the Breakout goal-selection screen. The source is a partial crop that excludes the destination toolbar; the written instruction establishes the toolbar as the target location.

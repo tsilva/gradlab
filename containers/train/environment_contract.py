@@ -13,8 +13,8 @@ from packaging.requirements import Requirement
 from packaging.utils import canonicalize_name
 
 
-GPU_ENVIRONMENT = Path("/root/rlab/.venv")
-DEPENDENCY_ENVIRONMENT = Path("/opt/rlab-dependencies")
+GPU_ENVIRONMENT = Path("/root/gradlab/.venv")
+DEPENDENCY_ENVIRONMENT = Path("/opt/gradlab-dependencies")
 PYTHON_VERSION = "python3.14"
 
 
@@ -133,7 +133,7 @@ def validate_distribution_contract(
 def _validate_runtime_layout() -> None:
     dependency_site = _site_packages(DEPENDENCY_ENVIRONMENT)
     gpu_site = _site_packages(GPU_ENVIRONMENT)
-    bridge = dependency_site / "rlab-gpu.pth"
+    bridge = dependency_site / "gradlab-gpu.pth"
     if bridge.read_text(encoding="utf-8").splitlines() != [str(gpu_site)]:
         raise ValueError(f"{bridge} must contain only {gpu_site}")
 
@@ -208,7 +208,7 @@ def main() -> None:
         gpu_lock=args.gpu_lock,
         dependency_lock=args.dependency_lock,
     )
-    print("rlab_train_environment_contract=ok")
+    print("gradlab_train_environment_contract=ok")
 
 
 if __name__ == "__main__":

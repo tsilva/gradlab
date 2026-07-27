@@ -7,9 +7,9 @@ import unittest
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from rlab.r2_store import BucketConfig, ConditionalWriteConflict, RunStorageConfig
-from rlab.run_authority import LeaseUnavailable, RunAuthority
-from rlab.run_contracts import (
+from gradlab.r2_store import BucketConfig, ConditionalWriteConflict, RunStorageConfig
+from gradlab.run_authority import LeaseUnavailable, RunAuthority
+from gradlab.run_contracts import (
     EvalIntent,
     PromotionReceipt,
     RunManifest,
@@ -20,7 +20,7 @@ from rlab.run_contracts import (
     new_run_id,
     utc_now,
 )
-from rlab.policy_bundle import model_document_path, recipe_document_path
+from gradlab.policy_bundle import model_document_path, recipe_document_path
 
 
 SHA = "a" * 64
@@ -49,7 +49,7 @@ class RunAuthorityTests(unittest.TestCase):
             attempt_id=attempt_id,
             created_at=utc_now(),
             source_sha="e" * 40,
-            image_digest="docker:registry.example/rlab@sha256:" + SHA,
+            image_digest="docker:registry.example/gradlab@sha256:" + SHA,
             goal_slug="SuperMarioBros-Nes-v0/Level1-1",
             goal_sha256=SHA,
             recipe_slug="ppo",
@@ -82,8 +82,8 @@ class RunAuthorityTests(unittest.TestCase):
             },
             modal={
                 "enabled": True,
-                "environment_name": "rlab-eval",
-                "app_name": "rlab-eval-v2-" + "e" * 12,
+                "environment_name": "gradlab-eval",
+                "app_name": "gradlab-eval-v3-" + "e" * 12,
                 "function_name": "evaluate_checkpoint",
                 "deployment_source_sha": "e" * 40,
                 "rom_asset_manifest": {"sha256": SHA},
@@ -92,7 +92,7 @@ class RunAuthorityTests(unittest.TestCase):
         )
 
     def test_identifiers_have_required_shapes(self) -> None:
-        self.assertRegex(new_run_id(), r"^rlab-[0-9a-f]{32}$")
+        self.assertRegex(new_run_id(), r"^gradlab-[0-9a-f]{32}$")
         self.assertRegex(new_attempt_id(), r"^attempt-[0-9a-f]{16}$")
         self.assertEqual(
             checkpoint_id(step=250_000, sha256=SHA), "checkpoint-250000-aaaaaaaaaaaaaaaa"

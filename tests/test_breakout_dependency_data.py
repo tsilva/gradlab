@@ -6,8 +6,8 @@ from pathlib import Path
 import stable_retro
 import yaml
 
-from rlab.env import EnvConfig
-from rlab.env_providers import (
+from gradlab.env import EnvConfig
+from gradlab.env_providers import (
     _stable_retro_packaged_data_path,
     provider_native_vec_kwargs,
 )
