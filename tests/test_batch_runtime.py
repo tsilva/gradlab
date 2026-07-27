@@ -899,6 +899,37 @@ class MarioKernelTests(unittest.TestCase):
         np.testing.assert_array_equal(metric_record.metrics["score_reward_component"], [0.0, 0.0])
         np.testing.assert_allclose(metric_record.metrics["shaped_reward"], [4.999, 1.999])
 
+    def test_additive_progress_boost_only_rewards_new_progress_above_threshold(self):
+        provider, _kernel, runtime = self.make_runtime(
+            reward_mode="additive",
+            use_native_reward=False,
+            progress_reward_scale=0.25,
+            progress_reward_boost_start_x=5.0,
+            progress_reward_boost_scale=10.0,
+        )
+        runtime.reset()
+        provider.queue_step(x=[4, 2])
+        runtime.step(np.asarray([0, 0]))
+        first = next(
+            record
+            for record in runtime.drain_records()
+            if isinstance(record, BatchMetricRecord)
+        )
+        np.testing.assert_allclose(
+            first.metrics["progress_reward_component"], [1.0, 0.5]
+        )
+
+        provider.queue_step(x=[7, 4])
+        runtime.step(np.asarray([0, 0]))
+        second = next(
+            record
+            for record in runtime.drain_records()
+            if isinstance(record, BatchMetricRecord)
+        )
+        np.testing.assert_allclose(
+            second.metrics["progress_reward_component"], [20.75, 0.5]
+        )
+
     def test_canonical_task_softcodes_signal_bindings_and_stall_outcome(self):
         config = EnvConfig(
             game="SuperMarioBros-Nes-v0",

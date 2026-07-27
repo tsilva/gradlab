@@ -94,7 +94,9 @@ schema v7.
   `between_rollouts_seconds` includes optimizer updates, callbacks, and logging, so it is deliberately
   not named optimization time.
 - Reward components are emitted only when active. Each component has mean, nonzero rate, and share;
-  raw reward appears only when it differs from shaped reward.
+  raw reward appears only when it differs from shaped reward. Mario's `progress` component includes
+  both its base new-progress reward and any configured additional new-progress reward above
+  `progress_reward_boost_start_x`.
 - Episode-return means are neither a best-episode metric nor the score of a currently visible lane:
   they reduce the latest 100 completed episodes across all applicable vector lanes. W&B chart
   smoothing, when enabled, is applied on top of that already-rolling value. Under the root Breakout
