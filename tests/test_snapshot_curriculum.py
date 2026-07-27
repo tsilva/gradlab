@@ -14,7 +14,7 @@ from rlab.snapshot_curriculum import (
     normalize_snapshot_curriculum_config,
     validate_snapshot_curriculum_runtime_contract,
 )
-from rlab.task_kernels import IdentityTaskDefinition
+from rlab.task_kernels import IdentityTaskDefinition, MarioTaskConfig, MarioTaskDefinition
 from rlab.training.sb3_vec_env import RlabVecEnv
 
 
@@ -22,10 +22,12 @@ def curriculum_config(
     *,
     n_envs: int = 3,
     restore_snapshots: bool = True,
+    signal: str = "score",
+    bucket_size: float = 50,
 ) -> dict[str, Any]:
     value = normalize_snapshot_curriculum_config(
         {
-            "cell": {"signal": "score", "bucket_size": 50},
+            "cell": {"signal": signal, "bucket_size": bucket_size},
             "snapshot_share": 0.2,
             "priority_metric": "value_error",
             "restore_snapshots": restore_snapshots,
@@ -234,6 +236,48 @@ class SnapshotCurriculumRuntimeTests(unittest.TestCase):
         self.assertEqual(provider.capture_masks[-1].tolist(), [True, False, False])
         self.assertEqual(provider.reset_calls[-1]["mask"].tolist(), [True, True, True])
         env.close()
+
+    def test_mario_logical_x_composes_provider_high_low_signals(self) -> None:
+        provider = SnapshotProvider()
+        descriptor = ProviderDescriptor(
+            provider_id="stable-retro-turbo",
+            native_observation_space=provider.single_observation_space,
+            native_action_space=provider.single_action_space,
+            signal_schema={
+                "xscrollHi": SignalSpec("xscrollHi", np.uint8),
+                "xscrollLo": SignalSpec("xscrollLo", np.uint8),
+                "score": SignalSpec("score", np.int64),
+                "lives": SignalSpec("lives", np.uint8),
+                "levelHi": SignalSpec("levelHi", np.uint8),
+                "levelLo": SignalSpec("levelLo", np.uint8),
+            },
+            start_catalog=("Start",),
+            supports_live_snapshots=True,
+            live_snapshots_deterministic=True,
+        )
+        kernel = MarioTaskDefinition(MarioTaskConfig()).bind(
+            descriptor,
+            provider.num_envs,
+        )
+        runtime = BatchRuntime(
+            provider,
+            descriptor,
+            kernel,
+            run_seed=17,
+            snapshot_curriculum=curriculum_config(signal="x", bucket_size=32),
+        )
+        mask = np.ones(provider.num_envs, dtype=np.bool_)
+
+        values = runtime._signal_values(
+            {
+                "xscrollHi": np.asarray([0, 1, 2], dtype=np.uint8),
+                "xscrollLo": np.asarray([255, 0, 1], dtype=np.uint8),
+            },
+            mask,
+            source="test",
+        )
+
+        np.testing.assert_array_equal(values, [255, 256, 513])
 
     def test_capture_only_archive_never_schedules_snapshot_restores(self) -> None:
         provider = SnapshotProvider()

@@ -623,6 +623,16 @@ class BoundTaskKernel(Protocol):
         mask: np.ndarray,
     ) -> None: ...
 
+    def validate_snapshot_signal(self, semantic_name: str) -> None: ...
+
+    def snapshot_signal_values(
+        self,
+        semantic_name: str,
+        signals: Mapping[str, Any],
+        *,
+        mask: np.ndarray,
+    ) -> np.ndarray: ...
+
 
 class SignalBindings:
     """Resolve semantic task signals to dense provider info columns once."""
@@ -735,6 +745,26 @@ class SignalBindings:
         if len(names) != 1 or self._specs[names[0]].shape:
             raise ValueError(f"semantic signal {semantic_name!r} must be scalar per lane")
         return self._specs[names[0]].dtype
+
+    def scalar_source_dtypes(
+        self,
+        semantic_name: str,
+        *,
+        require_reset: bool = False,
+    ) -> tuple[np.dtype, ...]:
+        source = self.source(semantic_name)
+        names = (source,) if isinstance(source, str) else source
+        if any(self._specs[name].shape for name in names):
+            raise ValueError(
+                f"semantic signal {semantic_name!r} must use scalar provider sources"
+            )
+        if require_reset and not all(
+            self._specs[name].available_on_reset for name in names
+        ):
+            raise ValueError(
+                f"semantic signal {semantic_name!r} must be available on reset and step"
+            )
+        return tuple(self._specs[name].dtype for name in names)
 
 
 @dataclass(frozen=True)
@@ -876,11 +906,7 @@ class IdentityTaskKernel:
         self._event_configs = tuple(events)
         self.event_names = tuple(event.name for event in self._event_configs)
         self.has_events = bool(self._event_configs)
-        self._signal_bindings = (
-            SignalBindings(descriptor, signals or {}, self.num_envs)
-            if self._event_configs
-            else None
-        )
+        self._signal_bindings = SignalBindings(descriptor, signals or {}, self.num_envs)
         self._event_consecutive_steps = tuple(
             np.zeros(self.num_envs, dtype=np.int64) for _event in self._event_configs
         )
@@ -992,7 +1018,7 @@ class IdentityTaskKernel:
             self._outcomes,
             self._events,
         )
-        if self._signal_bindings is not None:
+        if self._event_configs:
             for index, event in enumerate(self._event_configs):
                 values = self._signal_bindings.scalar(event.signal, signals)
                 if event.operation == "equals_for":
@@ -1054,7 +1080,7 @@ class IdentityTaskKernel:
     ) -> bool:
         del reset_observations
         mask = np.asarray(mask, dtype=bool)
-        if self._signal_bindings is not None:
+        if self._event_configs:
             for index, (event, consecutive_steps) in enumerate(
                 zip(
                     self._event_configs,
@@ -1076,6 +1102,30 @@ class IdentityTaskKernel:
                         self._event_previous_values[index][mask] = reset_values[mask]
                         self._event_previous_valid[index][mask] = True
         self._episode_steps[mask] = 0
+
+    def validate_snapshot_signal(self, semantic_name: str) -> None:
+        dtypes = self._signal_bindings.scalar_source_dtypes(
+            semantic_name,
+            require_reset=True,
+        )
+        if len(dtypes) != 1:
+            raise ValueError(
+                f"snapshot curriculum signal {semantic_name!r} must be scalar"
+            )
+        dtype = dtypes[0]
+        if not np.issubdtype(dtype, np.number) or np.issubdtype(dtype, np.bool_):
+            raise ValueError(
+                f"snapshot curriculum signal {semantic_name!r} must be numeric"
+            )
+
+    def snapshot_signal_values(
+        self,
+        semantic_name: str,
+        signals: Mapping[str, Any],
+        *,
+        mask: np.ndarray,
+    ) -> np.ndarray:
+        return self._signal_bindings.scalar(semantic_name, signals, mask=mask)
 
 
 @dataclass(frozen=True)
@@ -1660,6 +1710,39 @@ class MarioTaskKernel:
                 np.asarray(columns[1], dtype=np.int64),
             )
         raise ValueError("Mario level signal must bind a pair of values")
+
+    def validate_snapshot_signal(self, semantic_name: str) -> None:
+        dtypes = self.bindings.scalar_source_dtypes(
+            semantic_name,
+            require_reset=True,
+        )
+        if semantic_name == "x":
+            if len(dtypes) not in {1, 2}:
+                raise ValueError(
+                    "snapshot curriculum signal 'x' must bind one value or a high/low pair"
+                )
+        elif len(dtypes) != 1:
+            raise ValueError(
+                f"snapshot curriculum signal {semantic_name!r} must be scalar"
+            )
+        if any(
+            not np.issubdtype(dtype, np.number) or np.issubdtype(dtype, np.bool_)
+            for dtype in dtypes
+        ):
+            raise ValueError(
+                f"snapshot curriculum signal {semantic_name!r} must be numeric"
+            )
+
+    def snapshot_signal_values(
+        self,
+        semantic_name: str,
+        signals: Mapping[str, Any],
+        *,
+        mask: np.ndarray,
+    ) -> np.ndarray:
+        if semantic_name == "x":
+            return self._x_values(signals, mask=mask)
+        return self.bindings.scalar(semantic_name, signals, mask=mask)
 
     def process(
         self,

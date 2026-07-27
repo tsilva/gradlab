@@ -728,6 +728,7 @@ def provider_descriptor(
     snapshot_provider = provider.provider_id in {
         BREAKOUT_TURBO_ENV_PROVIDER.provider_id,
         STABLE_RETRO_TURBO_PROVIDER.provider_id,
+        SUPERMARIOBROS_NES_TURBO_PROVIDER.provider_id,
         VIZDOOM_TURBO_PROVIDER.provider_id,
     }
     snapshot_bank_configured = bool(
@@ -736,12 +737,18 @@ def provider_descriptor(
             config.env_args.get("snapshot_bank_uri") or config.env_args.get("snapshot_bank_sha256")
         )
     )
+    provider_declares_live_snapshots = bool(
+        provider.provider_id != SUPERMARIOBROS_NES_TURBO_PROVIDER.provider_id
+        or getattr(native_env, "supports_live_snapshots", False)
+    )
     supports_live_snapshots = bool(
         snapshot_provider
         and (
             provider.provider_id == VIZDOOM_TURBO_PROVIDER.provider_id
+            or provider.provider_id == SUPERMARIOBROS_NES_TURBO_PROVIDER.provider_id
             or config.game == "Breakout-Atari2600-v0"
         )
+        and provider_declares_live_snapshots
         and not snapshot_bank_configured
         and callable(getattr(native_env, "capture_snapshots", None))
     )
