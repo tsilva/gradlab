@@ -684,6 +684,16 @@ class RunSupervisor:
             flush=True,
         )
 
+    def _learner_log_tail(self, *, max_bytes: int = 12_000) -> str:
+        if max_bytes <= 0 or not self.learner_log_path.is_file():
+            return ""
+        with self.learner_log_path.open("rb") as source:
+            source.seek(0, os.SEEK_END)
+            size = source.tell()
+            source.seek(max(size - max_bytes, 0))
+            encoded = source.read(max_bytes)
+        return encoded.decode("utf-8", errors="replace").strip()
+
     def _recover_durable_state(self) -> None:
         prefix = f"runs/{self.manifest.run_id}"
         control_keys = list(self.authority.control.iter_keys(f"{prefix}/attempts"))
@@ -1925,6 +1935,17 @@ class RunSupervisor:
                 print(f"learner exited returncode={learner_returncode}", flush=True)
                 early_stop = self._resolve_early_stop_receipt()
                 if learner_returncode != 0:
+                    learner_log_tail = self._learner_log_tail()
+                    if learner_log_tail:
+                        print(
+                            f"learner log tail:\n{learner_log_tail}",
+                            flush=True,
+                        )
+                        receipt_tail = learner_log_tail[-3_000:]
+                        raise RuntimeError(
+                            f"learner exited with code {learner_returncode}; "
+                            f"learner log tail:\n{receipt_tail}"
+                        )
                     raise RuntimeError(f"learner exited with code {learner_returncode}")
             else:
                 early_stop = self._resolve_early_stop_receipt()
