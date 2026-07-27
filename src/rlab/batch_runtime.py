@@ -451,19 +451,7 @@ class BatchRuntime:
                 snapshot_curriculum,
                 n_envs=self.num_envs,
             )
-            signal_spec = descriptor.signal_schema.get(curriculum_config.signal)
-            if signal_spec is None:
-                raise ValueError(
-                    f"snapshot curriculum signal {curriculum_config.signal!r} is absent from "
-                    "the provider signal schema"
-                )
-            if signal_spec.shape != () or not (
-                signal_spec.available_on_reset and signal_spec.available_on_step
-            ):
-                raise ValueError(
-                    f"snapshot curriculum signal {curriculum_config.signal!r} must be scalar "
-                    "and available on reset and step"
-                )
+            kernel.validate_snapshot_signal(curriculum_config.signal)
             if not descriptor.supports_live_snapshots or not callable(
                 getattr(provider, "capture_snapshots", None)
             ):
@@ -709,21 +697,20 @@ class BatchRuntime:
         if curriculum is None:
             raise RuntimeError("snapshot curriculum is disabled")
         signal = curriculum.config.signal
-        if signal not in infos:
-            raise ValueError(f"provider {source} infos omit snapshot signal {signal!r}")
-        values = np.asarray(infos[signal])
+        try:
+            values = np.asarray(
+                self.kernel.snapshot_signal_values(signal, infos, mask=mask)
+            )
+        except (KeyError, ValueError) as exc:
+            raise ValueError(
+                f"provider {source} infos cannot resolve snapshot signal {signal!r}: {exc}"
+            ) from exc
         if values.shape != (self.num_envs,):
             raise ValueError(
-                f"provider {source} signal {signal!r} must have shape ({self.num_envs},), "
+                f"resolved {source} snapshot signal {signal!r} must have shape "
+                f"({self.num_envs},), "
                 f"got {values.shape}"
             )
-        presence = infos.get(f"_{signal}")
-        if presence is not None:
-            present = np.asarray(presence, dtype=np.bool_)
-            if present.shape != (self.num_envs,) or np.any(mask & ~present):
-                raise ValueError(
-                    f"provider {source} infos omit snapshot signal {signal!r} for selected lanes"
-                )
         return values
 
     def _set_curriculum_reset_baselines(

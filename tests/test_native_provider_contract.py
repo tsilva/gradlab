@@ -17,6 +17,7 @@ from rlab.env_providers import (
     make_provider_vec_env,
     provider_descriptor,
     provider_native_vec_kwargs,
+    super_mario_bros_nes_turbo_vec_env_type,
 )
 from rlab.task_kernels import MarioTaskConfig, MarioTaskDefinition
 from packaging.version import Version
@@ -507,6 +508,9 @@ class MarioNativeProviderTests(unittest.TestCase):
         installed = Version(importlib.metadata.version("supermariobrosnes-turbo"))
         self.assertGreaterEqual(installed, Version("0.4.4"))
         self.assertEqual(Version(retro.__version__), Version("1.0.1.post35"))
+        env_type = super_mario_bros_nes_turbo_vec_env_type()
+        self.assertIs(env_type.supports_live_snapshots, True)
+        self.assertTrue(callable(getattr(env_type, "capture_snapshots", None)))
 
     def test_readable_goal_enum_args_normalize_to_provider_enums(self) -> None:
         config = self.config(
@@ -709,6 +713,7 @@ class MarioNativeProviderTests(unittest.TestCase):
 
     def test_constructs_with_disabled_autoreset_and_describes_starts_and_signals(self) -> None:
         class FakeMarioVectorEnv:
+            supports_live_snapshots = True
             metadata = {
                 "autoreset_mode": gym.vector.AutoresetMode.DISABLED,
                 "render_modes": ("rgb_array",),
@@ -760,6 +765,9 @@ class MarioNativeProviderTests(unittest.TestCase):
             def active_state_indices(self):
                 return self._state_indices
 
+            def capture_snapshots(self, mask):
+                return tuple(object() if selected else None for selected in mask)
+
         config = self.config(env_args={"rom_path": None})
         kwargs = provider_native_vec_kwargs(
             config,
@@ -786,6 +794,8 @@ class MarioNativeProviderTests(unittest.TestCase):
         self.assertEqual(descriptor.lane_start_ids, ("Level1-1", "Level1-1"))
         self.assertEqual(descriptor.render_support, ("rgb_array",))
         self.assertEqual(descriptor.observation_buffer_depth, 2)
+        self.assertTrue(descriptor.supports_live_snapshots)
+        self.assertTrue(descriptor.live_snapshots_deterministic)
         self.assertEqual(descriptor.signal_schema["lives"].dtype, np.dtype(np.int64))
         _observations, reset_infos = env.reset(
             seed=[1, None],
