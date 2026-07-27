@@ -14,6 +14,7 @@ from rlab.experiment_cli import (
     _compute,
     _follow_fingerprint,
     _latest_attempt_terminal,
+    _poll_status,
     _public_dstack_state,
     _record_pre_submit_failure,
     _record_terminal_task_without_receipt,
@@ -25,8 +26,10 @@ from rlab.experiment_cli import (
     _task_request,
     _wandb_identity,
     build_parser,
+    cmd_follow,
     cmd_launch,
     cmd_resume_submit,
+    cmd_wait,
     main,
 )
 from rlab.operator_credentials import OperatorConfigurationError
@@ -340,6 +343,52 @@ def test_public_dstack_state_never_exposes_raw_task_environment() -> None:
     assert "raw" not in value
     assert "should-never-appear" not in encoded
     assert "also-secret" not in encoded
+
+
+def test_status_poller_observes_once_before_an_immediate_timeout(tmp_path: Path) -> None:
+    value = {"completed": False}
+    with (
+        mock.patch("rlab.experiment_cli._status", return_value=value) as status,
+        mock.patch("rlab.experiment_cli.time.monotonic", side_effect=[10.0, 10.0]),
+        mock.patch("rlab.experiment_cli.time.sleep") as sleep,
+    ):
+        assert list(
+            _poll_status(
+                tmp_path,
+                "rlab-" + "0" * 32,
+                timeout=0.0,
+                poll_seconds=2.0,
+            )
+        ) == [(value, True)]
+
+    status.assert_called_once()
+    sleep.assert_not_called()
+
+
+@pytest.mark.parametrize("command", (cmd_follow, cmd_wait))
+def test_observers_prefer_completion_over_simultaneous_timeout(
+    command,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    value = {
+        "completed": True,
+        "dstack": {"status": "done"},
+        "semantic": {},
+    }
+    args = SimpleNamespace(
+        run_id="rlab-" + "0" * 32,
+        timeout=0.0,
+        poll_seconds=2.0,
+        until="terminal",
+    )
+    with (
+        mock.patch("rlab.experiment_cli.repository_root", return_value=tmp_path),
+        mock.patch("rlab.experiment_cli._poll_status", return_value=iter([(value, True)])),
+    ):
+        assert command(args) == 0
+
+    assert json.loads(capsys.readouterr().out) == value
 
 
 def test_follow_fingerprint_ignores_only_poll_observation_time() -> None:

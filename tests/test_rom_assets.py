@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import sys
 from argparse import Namespace
 from pathlib import Path
 from unittest.mock import patch
@@ -9,6 +10,7 @@ from unittest.mock import patch
 import pytest
 
 from rlab.env_identity import environment_identity_from_train_config
+from rlab.main import main as cli_main
 from rlab.rom_assets import (
     ROM_ASSET_IDENTITY_ALGORITHM,
     cache_path,
@@ -21,7 +23,14 @@ from rlab.rom_assets import (
     validate_rom_asset_manifest,
     verify_rom_file,
 )
-from rlab.rom_cli import build_parser, cmd_status
+from rlab.rom_cli import (
+    ROM_IMPORT_DIR_ENV,
+    RomImportPathError,
+    build_parser,
+    cmd_status,
+    main as rom_main,
+    resolve_import_path,
+)
 
 
 GAME = "SuperMarioBros-Nes-v0"
@@ -221,3 +230,76 @@ def test_status_rejects_removed_remote_target() -> None:
     with pytest.raises(SystemExit) as exc:
         build_parser().parse_args(["status", "--target", "modal"])
     assert exc.value.code == 2
+
+
+def test_import_path_prefers_explicit_value_over_environment(tmp_path: Path) -> None:
+    explicit = tmp_path / "explicit"
+    configured = tmp_path / "configured"
+
+    assert resolve_import_path(
+        explicit,
+        environment={ROM_IMPORT_DIR_ENV: str(configured)},
+    ) == explicit
+
+
+def test_import_path_expands_home_for_argument_and_environment(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+
+    assert resolve_import_path("~/explicit", environment={}) == tmp_path / "explicit"
+    assert resolve_import_path(None, environment={ROM_IMPORT_DIR_ENV: "~/roms"}) == (
+        tmp_path / "roms"
+    )
+
+
+def test_import_path_requires_argument_or_environment() -> None:
+    with pytest.raises(RomImportPathError, match=ROM_IMPORT_DIR_ENV):
+        resolve_import_path(None, environment={})
+
+
+def test_rom_import_uses_environment_without_loading_dotenv(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setenv(ROM_IMPORT_DIR_ENV, str(tmp_path))
+    observed_argv: list[list[str]] = []
+
+    def fake_import() -> None:
+        observed_argv.append(list(sys.argv))
+
+    with (
+        patch("rlab.rom_cli.load_env_file") as load_dotenv,
+        patch("stable_retro.scripts.import_path.main", side_effect=fake_import),
+    ):
+        assert rom_main(["import"]) == 0
+
+    load_dotenv.assert_not_called()
+    assert observed_argv == [["stable_retro.import", str(tmp_path)]]
+    assert f"ROM import finished from {tmp_path}" in capsys.readouterr().out
+
+
+def test_rom_import_missing_path_is_a_usage_error(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.delenv(ROM_IMPORT_DIR_ENV, raising=False)
+
+    with pytest.raises(SystemExit) as exc:
+        rom_main(["import"])
+
+    assert exc.value.code == 2
+    assert ROM_IMPORT_DIR_ENV in capsys.readouterr().err
+
+
+def test_hidden_import_roms_route_executes_shared_import_handler(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    with patch("stable_retro.scripts.import_path.main") as stable_retro_import:
+        assert cli_main(["import-roms", str(tmp_path)]) == 0
+
+    stable_retro_import.assert_called_once_with()
+    assert f"ROM import finished from {tmp_path}" in capsys.readouterr().out
