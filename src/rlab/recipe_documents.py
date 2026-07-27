@@ -5,6 +5,7 @@ import hashlib
 import json
 import subprocess
 from collections.abc import Callable, Mapping, Sequence
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -30,7 +31,7 @@ from rlab.recipe_schema import (
     train_recipe_id,
     validate_materialized_train_recipe,
 )
-from rlab.reward_programs import select_goal_reward_shape
+from rlab.reward_programs import MARIO_REWARD_FIELD_SET, select_goal_reward_shape
 from rlab.train_config import train_config_keys_in_source_section, train_config_keys_owned_by
 
 
@@ -80,6 +81,7 @@ GOAL_OWNED_ENV_CONFIG_KEYS = train_config_keys_owned_by("goal_environment") | {
     "env_id",
 }
 GOAL_OWNED_OBJECTIVE_CONFIG_KEYS = train_config_keys_owned_by("goal_objective")
+REWARD_DEFINITION_OVERRIDE_PREFIX = "reward_shapes.definitions."
 
 
 def goal_contract_sha256(document: Mapping[str, Any]) -> str:
@@ -583,9 +585,17 @@ def compose_train_document(
         )
     recipe_composition = load_recipe_source_document(recipe_path)
     recipe_override_list = [str(item).strip() for item in recipe_overrides if str(item).strip()]
+    reward_definition_overrides = [
+        item
+        for item in recipe_override_list
+        if item.split("=", 1)[0].strip().startswith(REWARD_DEFINITION_OVERRIDE_PREFIX)
+    ]
+    source_overrides = [
+        item for item in recipe_override_list if item not in reward_definition_overrides
+    ]
     source_document = apply_dotlist_overrides(
         recipe_composition.document,
-        recipe_override_list,
+        source_overrides,
         label=f"recipe overrides for {recipe_path}",
     )
     selector_value = source_document.pop("reward_shape", None)
@@ -594,11 +604,43 @@ def compose_train_document(
         if not isinstance(selector_value, str) or not selector_value.strip():
             raise ValueError("reward_shape must be a non-empty string")
         selector = selector_value.strip()
+    if reward_definition_overrides:
+        catalog = goal_composition.document.get("reward_shapes")
+        if not isinstance(catalog, Mapping):
+            raise ValueError(
+                f"goal file {goal_path} does not define reward_shapes; "
+                "reward definition overrides are unsupported"
+            )
+        selected_key = selector or str(catalog.get("default") or "")
+        for item in reward_definition_overrides:
+            path = item.split("=", 1)[0].strip()
+            parts = path.split(".")
+            if len(parts) != 4 or parts[3] not in MARIO_REWARD_FIELD_SET:
+                raise ValueError(
+                    "reward definition overrides must target exactly "
+                    "reward_shapes.definitions.<selected-shape>.<reward-field>: "
+                    f"{path}"
+                )
+            if parts[2] != selected_key:
+                raise ValueError(
+                    "reward definition override targets an unselected shape; "
+                    f"selected={selected_key!r} override={path!r}"
+                )
+        goal_composition = ComposedDocument(
+            document=apply_dotlist_overrides(
+                goal_composition.document,
+                reward_definition_overrides,
+                label=f"reward definition overrides for {goal_path}",
+            ),
+            sources=goal_composition.sources,
+        )
     selected_reward = select_goal_reward_shape(
         goal_composition.document,
         selector,
         label=f"goal file {goal_path}",
     )
+    if selected_reward is not None and reward_definition_overrides:
+        selected_reward = replace(selected_reward, is_default=False)
     if selected_reward is not None:
         train_section = source_document.get("train")
         source_environment = (
@@ -617,7 +659,11 @@ def compose_train_document(
                 item
                 for item in recipe_override_list
                 if item.split("=", 1)[0].strip().startswith("train.environment.task.reward")
-                or item.split("=", 1)[0].strip().startswith("reward_shapes")
+                or item.split("=", 1)[0].strip().startswith("train.task.reward")
+                or (
+                    item.split("=", 1)[0].strip().startswith("reward_shapes")
+                    and item not in reward_definition_overrides
+                )
             ),
             None,
         )

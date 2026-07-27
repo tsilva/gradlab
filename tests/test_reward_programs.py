@@ -85,6 +85,62 @@ def test_catalog_selector_and_raw_reward_override_fail_closed() -> None:
             MARIO_RECIPE,
             recipe_overrides=("train.environment.task.reward.time_penalty=0.5",),
         )
+    with pytest.raises(ValueError, match="reject raw reward overrides"):
+        compose_train_document(
+            MARIO_GOAL,
+            MARIO_RECIPE,
+            recipe_overrides=("train.task.reward.time_penalty=0.5",),
+        )
+
+
+def test_selected_reward_definition_can_be_overridden_for_an_adhoc_run() -> None:
+    baseline = compose_train_document(MARIO_GOAL, MARIO_RECIPE)
+    overrides = (
+        "reward_shapes.definitions.speedrun-v1.progress_reward_scale=0.25",
+        "reward_shapes.definitions.speedrun-v1.death_penalty=100.0",
+        "reward_shapes.definitions.speedrun-v1.completion_reward=250.0",
+    )
+    document = compose_train_document(
+        MARIO_GOAL,
+        MARIO_RECIPE,
+        recipe_overrides=overrides,
+    )
+    config = document["train_config"]
+    expected = {
+        "progress_reward_scale": 0.25,
+        "death_penalty": 100.0,
+        "completion_reward": 250.0,
+    }
+
+    assert config["reward_shape"] == "speedrun-v1"
+    assert config["reward_shape_is_default"] is False
+    assert document["recipe_overrides"] == list(overrides)
+    for key, value in expected.items():
+        assert config["task"]["reward"][key] == value
+        assert config["checkpoint_eval_environment"]["task"]["reward"][key] == value
+    assert (
+        config["goal_contract_sha256"]
+        == baseline["train_config"]["goal_contract_sha256"]
+    )
+    assert (
+        config["effective_goal_contract_sha256"]
+        != baseline["train_config"]["effective_goal_contract_sha256"]
+    )
+    assert (
+        config["reward_shape_sha256"]
+        != baseline["train_config"]["reward_shape_sha256"]
+    )
+
+
+def test_reward_definition_override_must_target_selected_shape() -> None:
+    with pytest.raises(ValueError, match="unselected shape"):
+        compose_train_document(
+            MARIO_GOAL,
+            MARIO_RECIPE,
+            recipe_overrides=(
+                "reward_shapes.definitions.full-v1.death_penalty=100.0",
+            ),
+        )
 
 
 def test_non_catalog_goal_remains_compatible() -> None:
