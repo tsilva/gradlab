@@ -650,6 +650,17 @@ class ConfigValidationTests(unittest.TestCase):
             compose_train_document(self.BREAKOUT_GOAL, self.BREAKOUT_RECIPE)["train_config"],
         )
 
+    def test_go_explore_persists_only_the_best_jerk_artifact(self) -> None:
+        recipe = self.MARIO_L11_GOAL.parent / "recipes/go-explore-jerk-20m.yaml"
+        document = compose_train_document(self.MARIO_L11_GOAL, recipe)
+        train_config = document["train_config"]
+
+        self.assertEqual(train_config["state_archive"]["persistence"], "ephemeral")
+        self.assertEqual(
+            train_config["training_backend"]["config"]["compaction_interval_steps"],
+            250_000,
+        )
+
     def test_breakout_stable_updates_recipe_adds_late_update_guards(self) -> None:
         document = compose_train_document(
             self.BREAKOUT_GOAL,

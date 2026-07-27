@@ -4,8 +4,9 @@ reward_shape: speedrun-v1
 recipe_id: go-explore-jerk-20m
 description: >-
   Seed {{ seed }} runs route-aware Go-Explore trajectory discovery for {{ goal_id }}
-  over the durable state archive, exports the best open-loop JERK policy, and caps
-  search at 20 million transitions with checkpoint evaluation as acceptance authority.
+  over an ephemeral local state archive, persists only the best open-loop JERK
+  policy, and caps search at 20 million transitions with checkpoint evaluation
+  as acceptance authority.
 train:
   timesteps: 20000000
   early_stop:
@@ -22,7 +23,7 @@ train:
         action: stop
   state_archive:
     semantic_id: state-archive-v1
-    persistence: durable
+    persistence: ephemeral
     restore_semantics: continuation
     recorder:
       mode: backend

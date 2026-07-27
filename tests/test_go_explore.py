@@ -9,6 +9,7 @@ from rlab.go_explore import GoExploreSearch
 from rlab.training.go_explore import (
     GO_EXPLORE_PROVIDER_INFO_KEYS,
     _runtime_environment_config,
+    normalize_config,
 )
 
 
@@ -70,6 +71,21 @@ class GoExploreSearchTests(unittest.TestCase):
             set(GO_EXPLORE_PROVIDER_INFO_KEYS) | {"game_mode"},
         )
         self.assertEqual(config.env_args["info_filter"], "all")
+
+    def test_backend_uses_compaction_without_legacy_archive_recovery(self) -> None:
+        config = normalize_config(
+            "rlab.go-explore",
+            {"compaction_interval_steps": 500_000},
+            label="backend",
+        )
+
+        self.assertEqual(config["compaction_interval_steps"], 500_000)
+        with self.assertRaisesRegex(ValueError, "recovery_interval_steps"):
+            normalize_config(
+                "rlab.go-explore",
+                {"recovery_interval_steps": 500_000},
+                label="backend",
+            )
 
 
 if __name__ == "__main__":

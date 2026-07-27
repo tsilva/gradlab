@@ -688,7 +688,7 @@ class RunSupervisor:
         return encoded.decode("utf-8", errors="replace").strip()
 
     def _recover_durable_state(self) -> None:
-        if self.train_config.get("state_archive") is not None:
+        if self._durable_state_archive_enabled():
             restored = self.authority.restore_state_archive(
                 run_id=self.manifest.run_id,
                 destination=self.run_dir / "state-archive",
@@ -1602,8 +1602,12 @@ class RunSupervisor:
                 return False
         return True
 
+    def _durable_state_archive_enabled(self) -> bool:
+        archive = self.train_config.get("state_archive")
+        return isinstance(archive, Mapping) and archive.get("persistence") == "durable"
+
     def _publish_state_archive(self, *, require_closed: bool = False) -> int:
-        if self.train_config.get("state_archive") is None:
+        if not self._durable_state_archive_enabled():
             return 0
         archive_root = self.run_dir / "state-archive"
         closure_path = archive_root / "closure.json"

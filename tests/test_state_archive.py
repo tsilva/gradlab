@@ -18,15 +18,21 @@ from rlab.state_archive import (
     ArchiveCurriculumConfig,
     StateArchive,
     normalize_state_archive_config,
+    state_archive_artifact_summary,
     validate_state_archive_runtime_contract,
 )
 from rlab.task_kernels import IdentityTaskDefinition
 
 
-def archive_config(*, n_envs: int = 3, curriculum: bool = True) -> dict[str, Any]:
+def archive_config(
+    *,
+    n_envs: int = 3,
+    curriculum: bool = True,
+    persistence: str = "durable",
+) -> dict[str, Any]:
     value: dict[str, Any] = {
         "semantic_id": "state-archive-v1",
-        "persistence": "durable",
+        "persistence": persistence,
         "restore_semantics": "continuation",
         "recorder": (
             {
@@ -211,6 +217,10 @@ class StateArchiveTests(unittest.TestCase):
             supported_priority_metrics=(),
         )
 
+    def test_ephemeral_archive_rejects_curriculum(self) -> None:
+        with self.assertRaisesRegex(ValueError, "requires persistence='durable'"):
+            archive_config(persistence="ephemeral")
+
     def test_curriculum_uses_entry_ids_and_bounded_probabilities(self) -> None:
         config = ArchiveCurriculumConfig.from_mapping(archive_config(), n_envs=3)
         curriculum = ArchiveCurriculum(
@@ -277,12 +287,59 @@ class StateArchiveTests(unittest.TestCase):
                 provider_id="breakout-turbo-env",
                 codec_id="breakout-turbo-env.state-v1",
                 compatibility_id="test-environment-v1",
+                persistence="durable",
             )
             self.assertEqual(reopened.entry_count, 1)
             self.assertEqual(
                 reopened.view_document("test-view"),
                 {"step": 17, "entry_id": entry_id},
             )
+
+    def test_ephemeral_archive_compacts_and_is_not_an_artifact(self) -> None:
+        provider = PortableBreakoutProvider()
+        descriptor = ProviderDescriptor(
+            provider_id="breakout-turbo-env",
+            native_observation_space=provider.single_observation_space,
+            native_action_space=provider.single_action_space,
+            signal_schema={"score": SignalSpec("score", np.int64)},
+            start_catalog=("Start",),
+            supports_live_snapshots=True,
+            live_snapshots_deterministic=True,
+            snapshot_codec_id="breakout-turbo-env.state-v1",
+            snapshot_compatibility_id="test-environment-v1",
+        )
+        kernel = IdentityTaskDefinition(signals={"score": "score"}).bind(
+            descriptor, provider.num_envs
+        )
+        with tempfile.TemporaryDirectory() as parent:
+            root = Path(parent) / "ephemeral"
+            runtime = BatchRuntime(
+                provider,
+                descriptor,
+                kernel,
+                run_seed=17,
+                state_archive=archive_config(
+                    curriculum=False,
+                    persistence="ephemeral",
+                ),
+                state_archive_root=root,
+            )
+            runtime.reset(seed=17)
+            first = runtime.capture_archive_entries(np.ones(3, dtype=np.bool_))
+            runtime.step(np.ones(3, dtype=np.int64))
+            second = runtime.capture_archive_entries(np.ones(3, dtype=np.bool_))
+
+            compacted = runtime.retain_state_archive_entries(second)
+
+            self.assertEqual(compacted["retained_entries"], 3)
+            self.assertEqual(compacted["removed_entries"], 3)
+            self.assertIsNone(state_archive_artifact_summary(runtime))
+            self.assertEqual(runtime.state_archive_summary()["persistence"], "ephemeral")
+            for entry_id in first:
+                with self.assertRaises(KeyError):
+                    runtime.state_archive.entry(entry_id)
+            runtime.close()
+            self.assertFalse(root.exists())
 
 
 if __name__ == "__main__":
