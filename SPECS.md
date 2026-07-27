@@ -1,6 +1,6 @@
 ## PROJECT PURPOSE
 
-rlab is a reproducible reinforcement-learning workbench for game-agent researchers. It carries explicit research goals through validated training, trustworthy evaluation and ranking, playback, publication, and local or queued execution while keeping results traceable and comparable.
+GradLab is a reproducible reinforcement-learning workbench for game-agent researchers. It carries explicit research goals through validated training, trustworthy evaluation and ranking, playback, publication, and local or queued execution while keeping results traceable and comparable.
 
 ## PROJECT REQUIREMENTS
 
@@ -33,7 +33,7 @@ rlab is a reproducible reinforcement-learning workbench for game-agent researche
 
 - Supported environment providers must provide correct, isolated parallel execution with deterministic, nonduplicated episode streams. Resetting, completing, or forcing a boundary in one lane must not disturb any other lane.
 - Equivalent providers must preserve the same declared observations, actions, rewards, events, and episode semantics across training, evaluation, and playback. Switching providers must change only provider identity and remain traceable.
-- Rlab must own reward scaling and clipping uniformly across all environments; scaling is applied before clipping, and equivalent environment-provider reward transforms must be disabled and ignored.
+- GradLab must own reward scaling and clipping uniformly across all environments; scaling is applied before clipping, and equivalent environment-provider reward transforms must be disabled and ignored.
 - Provider-specific requirements must not leak into common workflows, and every supported environment must remain trainable, evaluable, and playable through those workflows.
 
 ### Training Results and Publication
