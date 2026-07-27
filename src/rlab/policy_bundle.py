@@ -620,6 +620,7 @@ def _validate_state_archive_summary(value: object, *, label: str) -> None:
             "entry_count",
             "blob_count",
             "blob_bytes",
+            "view_ids",
             "curriculum",
         }
     )
@@ -637,6 +638,15 @@ def _validate_state_archive_summary(value: object, *, label: str) -> None:
         item = summary.get(key)
         if not isinstance(item, int) or isinstance(item, bool) or item < 0:
             raise PolicyDocumentError(f"{label}.{key} must be a non-negative integer")
+    view_ids = summary.get("view_ids")
+    if (
+        not isinstance(view_ids, list)
+        or any(not isinstance(item, str) or not item for item in view_ids)
+        or view_ids != sorted(set(view_ids))
+    ):
+        raise PolicyDocumentError(
+            f"{label}.view_ids must be a sorted list of unique non-empty strings"
+        )
     curriculum = summary.get("curriculum")
     if curriculum is not None and not isinstance(curriculum, Mapping):
         raise PolicyDocumentError(f"{label}.curriculum must be an object")

@@ -572,6 +572,7 @@ def test_model_v2_records_durable_state_archive_summary(tmp_path: Path) -> None:
             "entry_count": 61,
             "blob_count": 17,
             "blob_bytes": 123456,
+            "view_ids": ["go-explore"],
         },
     }
     model = build_model_document(checkpoint, recipe_path, metadata)
