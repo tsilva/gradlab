@@ -66,7 +66,6 @@ train:
           obs_layout: chw
           frame_stack: 4
           noop_reset_max: 0
-          reward_clip: false
           info_filter: all
         # Emulator frame skip; fixes action repeat and observation cadence.
         frame_skip: 4

@@ -39,7 +39,6 @@ train:
           frame_stack: 4
           noop_reset_max: 0
           info_filter: all
-          reward_clip: true
           use_fire_reset: false
     preprocessing: &atari_mspacman_preprocessing
       frame_skip: 4
@@ -67,6 +66,8 @@ train:
         max_episode_steps: 54000
       reward:
         reward_mode: native
+        reward_scale: 1.0
+        reward_clip: true
 eval:
   episodes: 100
   environment:

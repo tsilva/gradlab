@@ -115,6 +115,16 @@ def wait_for_phase(host: PlaybackHost, phase: str) -> dict:
     raise AssertionError(f"host did not reach {phase}: {host.snapshot()}")
 
 
+def wait_for_epoch(host: PlaybackHost, epoch: int) -> dict:
+    deadline = time.monotonic() + 2.0
+    while time.monotonic() < deadline:
+        snapshot = host.snapshot()
+        if snapshot["app"]["phase"] == "active" and snapshot["session_epoch"] == epoch:
+            return snapshot
+        time.sleep(0.005)
+    raise AssertionError(f"host did not reach epoch {epoch}: {host.snapshot()}")
+
+
 def source_command(name: str, payload: dict) -> PlaybackCommand:
     return PlaybackCommand("command", "client", name, payload, None)
 
@@ -196,4 +206,29 @@ def test_playback_host_requires_the_exact_browser_approval_hash() -> None:
     wait_for_phase(host, "active")
 
     assert loader.activation_hashes == ["a" * 64]
+    host.stop()
+
+
+def test_contract_mode_switch_atomically_replaces_the_shared_session() -> None:
+    loader = FakeLoader()
+    source = PlaySourceSpec("local", "/tmp/model.zip")
+    host = PlaybackHost(loader, initial_source=source)
+    host.start()
+    wait_for_epoch(host, 1)
+    first_runner = loader.runners[0]
+
+    host.submit(source_command("set_contract_mode", {"mode": "evaluation"}))
+    snapshot = wait_for_epoch(host, 2)
+
+    assert snapshot["app"]["phase"] == "active"
+    assert loader.prepared_specs[-1].contract_mode == "evaluation"
+    assert loader.prepared_specs[-1].reward_clip_override is None
+    assert first_runner.stopped is True
+    assert loader.runners[-1].started is True
+
+    host.submit(source_command("set_contract_mode", {"mode": "counterfactual"}))
+    wait_for_epoch(host, 3)
+
+    assert loader.prepared_specs[-1].contract_mode == "counterfactual"
+    assert loader.prepared_specs[-1].reward_clip_override is False
     host.stop()

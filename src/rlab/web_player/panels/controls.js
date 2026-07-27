@@ -26,6 +26,16 @@ export function mount({ definition, services }) {
               <button data-command="set-fps" class="quiet icon-only" aria-label="Apply play FPS" title="Apply play FPS"><svg class="icon" aria-hidden="true"><use href="/assets/tabler-icons.svg#ti-check"></use></svg></button>
             </div>
             <p id="playback-fps-hint" class="control-hint">0 runs playback uncapped</p>
+            <div class="playback-contract" data-playback-contract>
+              <label for="playback-contract-mode">Environment contract</label>
+              <select id="playback-contract-mode" data-contract-mode aria-describedby="playback-contract-hint">
+                <option value="training">Training contract</option>
+                <option value="evaluation">Published evaluation</option>
+                <option value="counterfactual">Counterfactual · clipping off</option>
+              </select>
+              <button data-command="set-contract-mode" class="quiet icon-only" aria-label="Apply environment contract" title="Apply environment contract and start a new shared session"><svg class="icon" aria-hidden="true"><use href="/assets/tabler-icons.svg#ti-check"></use></svg></button>
+            </div>
+            <p id="playback-contract-hint" class="control-hint" data-contract-hint>Training-time policy semantics are the default.</p>
             <fieldset class="termination-settings" data-termination-settings>
               <legend>Episode termination</legend>
               <p class="control-hint" data-termination-source></p>
@@ -65,6 +75,9 @@ export function mount({ definition, services }) {
   const seed = element.querySelector("[data-seed]");
   const fps = element.querySelector("[data-fps]");
   const sampling = element.querySelector("[data-sampling]");
+  const contractMode = element.querySelector("[data-contract-mode]");
+  const contractSettings = element.querySelector("[data-playback-contract]");
+  const contractHint = element.querySelector("[data-contract-hint]");
   const playbackToggle = element.querySelector("[data-playback-toggle]");
   const playbackIcon = playbackToggle.querySelector("[data-playback-icon]");
   const resetEpisode = element.querySelector("[data-reset-episode]");
@@ -96,6 +109,9 @@ export function mount({ definition, services }) {
       driver: nextDriver,
     }),
     "set-fps": () => services.command("set_fps", { fps: Number(fps.value) }),
+    "set-contract-mode": () => services.command("set_contract_mode", {
+      mode: contractMode.value,
+    }),
     "apply-termination": () => services.command("set_termination_conditions", {
       enabled: [...terminationOptions.querySelectorAll("input:checked")]
         .map((input) => input.value),
@@ -133,6 +149,7 @@ export function mount({ definition, services }) {
       && !services.canReplayInspection()
     );
     const recording = (state.liveSnapshot?.mode || state.snapshot?.mode) === "recording";
+    contractMode.disabled = recording || !state.hasControl;
     const canChangeTermination = (
       !recording
       && state.hasControl
@@ -208,6 +225,36 @@ export function mount({ definition, services }) {
       });
       const recording = snapshot.mode === "recording";
       const dataset = snapshot.mode === "dataset";
+      const playbackContract = session.playback_contract || {};
+      const availableContractModes = Array.isArray(playbackContract.available_modes)
+        ? playbackContract.available_modes
+        : ["training"];
+      if (document.activeElement !== contractMode) {
+        contractMode.value = playbackContract.mode || "training";
+      }
+      [...contractMode.options].forEach((option) => {
+        option.disabled = !availableContractModes.includes(option.value);
+      });
+      contractSettings.hidden = recording || dataset;
+      const comparisonReasons = Array.isArray(session.critic_comparison?.reasons)
+        ? session.critic_comparison.reasons
+        : [];
+      const mismatchPaths = Array.isArray(playbackContract.mismatch_paths)
+        ? playbackContract.mismatch_paths
+        : [];
+      const contractMessages = [];
+      if (comparisonReasons.length) {
+        contractMessages.push(`Critic comparison unavailable: ${comparisonReasons.join("; ")}.`);
+      }
+      if (playbackContract.legacy_mismatch) {
+        contractMessages.push(
+          `Legacy warning: published evaluation semantics differ from training${
+            mismatchPaths.length ? ` at ${mismatchPaths.join(", ")}` : ""
+          }.`,
+        );
+      }
+      contractHint.textContent = contractMessages.join(" ")
+        || "Training-compatible critic comparison is available after a terminal episode.";
       const terminationConditions = Array.isArray(session.termination_conditions)
         ? session.termination_conditions
         : [];

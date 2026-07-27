@@ -243,6 +243,7 @@ def history_point_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
         "policy_action": decision.get("selected_action"),
         "executed_action": payload.get("executed_action"),
         "action_source": payload.get("action_source"),
+        "policy_sampled": decision.get("sampled"),
         "reward_provider": reward["provider"],
         "reward_shaped": reward["shaped"],
         "return": reward["return"],
@@ -252,6 +253,9 @@ def history_point_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
         "outcome": payload.get("outcome"),
         "events": payload["events"],
         "boundary": bool(payload.get("boundary")),
+        "terminated": bool(payload.get("terminated")),
+        "truncated": bool(payload.get("truncated")),
+        "boundary_reasons": list(payload.get("boundary_reasons") or []),
         "signals": payload["signals"],
         "components": reward["components"],
     }
@@ -270,23 +274,43 @@ def annotate_realized_returns(
     *,
     episode: int,
     discount: float | None,
+    comparison_reasons: Sequence[str] = (),
 ) -> None:
-    """Attach completed Monte Carlo value targets to one episode's history."""
+    """Attach one on-policy Monte Carlo diagnostic when its semantics are comparable."""
 
+    episode_points = [point for point in points if int(point.get("episode", -1)) == episode]
+    reasons = list(dict.fromkeys(str(reason) for reason in comparison_reasons if str(reason)))
     if discount is None:
+        reasons.append("training discount is unavailable")
+    if any(
+        point.get("action_source") is not None and point.get("action_source") != "policy"
+        for point in episode_points
+    ):
+        reasons.append("episode contains non-policy actions")
+    if any(
+        point.get("policy_sampled") is not None and point.get("policy_sampled") is not True
+        for point in episode_points
+    ):
+        reasons.append("episode contains non-stochastic policy actions")
+    if reasons:
+        for point in episode_points:
+            point["value_comparison_reasons"] = reasons
         return
     realized_return = 0.0
-    for point in reversed(points):
-        if int(point.get("episode", -1)) != episode:
-            continue
+    for point in reversed(episode_points):
         reward = point.get("reward_shaped")
         if isinstance(reward, bool) or not isinstance(reward, int | float | np.number):
+            for episode_point in episode_points:
+                episode_point["value_comparison_reasons"] = ["policy reward is unavailable"]
             return
         numeric_reward = float(reward)
         if not np.isfinite(numeric_reward):
+            for episode_point in episode_points:
+                episode_point["value_comparison_reasons"] = ["policy reward is non-finite"]
             return
         realized_return = numeric_reward + discount * realized_return
         point["realized_return"] = realized_return
+        point["value_comparison_reasons"] = []
         value = point.get("value")
         if (
             not isinstance(value, bool)
@@ -501,6 +525,8 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
         args: argparse.Namespace,
         *,
         config_text: str,
+        contract_details: Mapping[str, Any] | None = None,
+        value_contract: Mapping[str, Any] | None = None,
     ) -> None:
         self._init_protocol(thread_name="rlab-playback-runtime")
         self.session = session
@@ -522,6 +548,50 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
         self._status_message: str | None = None
         self.environment_id = _session_environment_id(session, args)
         self.value_discount = _value_discount_factor(getattr(session, "model", None))
+        self.contract_details = dict(contract_details or {})
+        self.value_contract = dict(value_contract) if isinstance(value_contract, Mapping) else None
+
+    def _critic_comparison_reasons(
+        self,
+        transition: _PlaybackTransition | None = None,
+    ) -> list[str]:
+        reasons = [
+            str(reason)
+            for reason in self.contract_details.get("comparison_reasons", [])
+            if str(reason)
+        ]
+        if self.value_contract is None:
+            reasons.append("checkpoint has no training value contract")
+        else:
+            expected_discount = self.value_contract.get("discount")
+            if (
+                self.value_discount is None
+                or isinstance(expected_discount, bool)
+                or not isinstance(expected_discount, int | float)
+                or not np.isclose(self.value_discount, float(expected_discount))
+            ):
+                reasons.append("loaded model discount differs from training")
+        if self.driver != "policy":
+            reasons.append("human-driven trajectories are not on-policy")
+        if self.sampling_mode != "stochastic":
+            reasons.append("deterministic trajectories are not sampled from the training policy")
+        active_config = getattr(self.session, "config", None)
+        base_config = getattr(self.session, "termination_base_config", active_config)
+        active_task = (
+            active_config.get("task")
+            if isinstance(active_config, Mapping)
+            else getattr(active_config, "task", None)
+        )
+        base_task = (
+            base_config.get("task")
+            if isinstance(base_config, Mapping)
+            else getattr(base_config, "task", None)
+        )
+        if active_task != base_task:
+            reasons.append("episode-boundary configuration differs from the active contract")
+        if transition is not None and transition.truncated:
+            reasons.append("truncated episodes require the training terminal-value bootstrap")
+        return list(dict.fromkeys(reasons))
 
     def update_input(self, labels: Sequence[str], *, focused: bool) -> None:
         with self._input_lock:
@@ -581,6 +651,12 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
                     "training",
                 ),
                 "termination_conditions": list(getattr(self.session, "termination_conditions", ())),
+                "playback_contract": dict(self.contract_details),
+                "critic_comparison": {
+                    "available": not self._critic_comparison_reasons(transition),
+                    "reasons": self._critic_comparison_reasons(transition),
+                    "discount": self.value_discount,
+                },
             },
             "transition": current,
             "history_point": current_history,
@@ -596,6 +672,7 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
                     self.history,
                     episode=transition.episode,
                     discount=self.value_discount,
+                    comparison_reasons=self._critic_comparison_reasons(transition),
                 )
         if transition is not None:
             game_frame = transition.after_frame

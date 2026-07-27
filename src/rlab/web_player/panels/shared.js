@@ -132,6 +132,12 @@ function formatAxisValue(value, step) {
   return rendered === "-0" ? "0" : rendered;
 }
 
+export function lineCursorX(plot, cursorIndex, pointCount) {
+  const rawX = plot.left
+    + (cursorIndex / Math.max(1, pointCount - 1)) * (plot.right - plot.left);
+  return Math.max(plot.left + 1, Math.min(plot.right - 1, rawX));
+}
+
 export function drawLines(canvas, series, { cursorIndex = null } = {}) {
   const { context, ratio, width, height } = resizeCanvas(canvas);
   context.setTransform(ratio, 0, 0, ratio, 0, 0);
@@ -192,8 +198,9 @@ export function drawLines(canvas, series, { cursorIndex = null } = {}) {
     && cursorIndex >= 0
     && cursorIndex < pointCount
   ) {
-    const x = plot.left
-      + (cursorIndex / Math.max(1, pointCount - 1)) * (plot.right - plot.left);
+    // Keep the dashed stroke inside the bitmap at both endpoints. A cursor at
+    // the final sample otherwise sits on the right clipping edge and vanishes.
+    const x = lineCursorX(plot, cursorIndex, pointCount);
     context.save();
     context.strokeStyle = "#f0c36a";
     context.lineWidth = 1.5;

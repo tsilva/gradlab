@@ -36,11 +36,14 @@ TRAIN_RECIPE_OPTIONAL_FIELDS = frozenset(
         "max_attempts",
         "metadata",
         "notes",
+        "policy_environment_hash",
         "recipe_overrides",
         "_composition",
         "environment",
         "environment_hash",
+        "evaluation_environment_hash",
         "eval",
+        "effective_recipe_overrides",
         "goal_id",
         "logging",
         "objective",
@@ -50,6 +53,8 @@ TRAIN_RECIPE_OPTIONAL_FIELDS = frozenset(
     }
 )
 TRAIN_RECIPE_ALLOWED_FIELDS = frozenset(TRAIN_RECIPE_REQUIRED_FIELDS) | TRAIN_RECIPE_OPTIONAL_FIELDS
+
+
 def _require_template(
     document: Mapping[str, Any],
     key: str,

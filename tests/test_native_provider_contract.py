@@ -135,6 +135,78 @@ class GenericNativeProviderTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "no native Gymnasium vector entry point"):
             make_provider_vec_env(config, native_kwargs={"num_envs": 2})
 
+    def test_bound_identity_task_applies_common_scale_then_clip(self) -> None:
+        env = RegisteredNativeVectorEnv(3, gym.vector.AutoresetMode.DISABLED)
+        config = EnvConfig(
+            env_provider="gymnasium",
+            game=self.env_id,
+            state="",
+            task={
+                "id": "identity",
+                "action": {"set": "native"},
+                "signals": {},
+                "events": {},
+                "termination": {},
+                "reward": {
+                    "reward_mode": "native",
+                    "reward_scale": 2.0,
+                    "reward_clip": [0.0, 0.4],
+                },
+            },
+        )
+        descriptor = provider_descriptor(
+            config,
+            env,
+            state_weight_mapping=lambda _config: {},
+        )
+        kernel = _bound_task_kernel(config, descriptor, 3)
+
+        step = kernel.process(
+            np.asarray([1.0, -2.0, 4.0], dtype=np.float32),
+            np.zeros(3, dtype=np.bool_),
+            np.zeros(3, dtype=np.bool_),
+            {},
+        )
+
+        np.testing.assert_allclose(step.rewards, [0.4, 0.0, 0.4])
+        np.testing.assert_allclose(step.metrics["raw_reward"], [1.0, -2.0, 4.0])
+        env.close()
+
+    def test_generic_provider_reward_transform_arguments_are_ignored(self) -> None:
+        config = EnvConfig(
+            env_provider="gymnasium",
+            game=self.env_id,
+            state="",
+            env_args={
+                "reward_clip": True,
+                "reward_clipping": True,
+                "normalize_reward": True,
+                "norm_reward": True,
+                "reward_normalization": True,
+            },
+            task={
+                "id": "identity",
+                "action": {"set": "native"},
+                "signals": {},
+                "events": {},
+                "termination": {},
+                "reward": {
+                    "reward_mode": "native",
+                    "reward_scale": 2.0,
+                    "reward_clip": False,
+                },
+            },
+        )
+
+        kwargs = provider_native_vec_kwargs(
+            config,
+            n_envs=3,
+            native_obs_crop=lambda _config: None,
+            state_weight_mapping=lambda _config: {},
+        )
+
+        self.assertEqual(kwargs, {"num_envs": 3})
+
     def test_descriptor_discovers_step_only_configured_signal(self) -> None:
         class StepSignalEnv(RegisteredNativeVectorEnv):
             def step(self, actions):
@@ -687,9 +759,7 @@ class MarioNativeProviderTests(unittest.TestCase):
                     "levelLo": np.zeros(self.num_envs, dtype=np.int64),
                     "state_index": self._state_indices.copy(),
                     "_state_index": mask.copy(),
-                    "start_source": np.full(
-                        self.num_envs, "environment", dtype=object
-                    ),
+                    "start_source": np.full(self.num_envs, "environment", dtype=object),
                     "_start_source": mask.copy(),
                 }
                 return np.zeros((self.num_envs, 4, 84, 84), dtype=np.uint8), infos
@@ -808,10 +878,7 @@ class MarioNativeProviderTests(unittest.TestCase):
             num_envs = 2
 
             def get_images(self):
-                return [
-                    np.full((3, 4, 3), lane, dtype=np.uint8)
-                    for lane in range(self.num_envs)
-                ]
+                return [np.full((3, 4, 3), lane, dtype=np.uint8) for lane in range(self.num_envs)]
 
         env = Env()
         frames = _StartInfoAdapter(env).get_images()
@@ -943,9 +1010,7 @@ class MarioNativeProviderTests(unittest.TestCase):
                 infos = {
                     "state_index": self.indices.copy(),
                     "_state_index": mask.copy(),
-                    "start_source": np.full(
-                        self.num_envs, "environment", dtype=object
-                    ),
+                    "start_source": np.full(self.num_envs, "environment", dtype=object),
                     "_start_source": mask.copy(),
                 }
                 return np.zeros((self.num_envs, 1), dtype=np.uint8), infos
@@ -1009,9 +1074,7 @@ class MarioNativeProviderTests(unittest.TestCase):
                 return self.observations.copy(), {
                     "state_index": self.indices.copy(),
                     "_state_index": mask.copy(),
-                    "start_source": np.full(
-                        self.num_envs, "environment", dtype=object
-                    ),
+                    "start_source": np.full(self.num_envs, "environment", dtype=object),
                     "_start_source": mask.copy(),
                 }
 
@@ -1042,14 +1105,18 @@ class MarioNativeProviderTests(unittest.TestCase):
             obs_crop=(17, 0, 0, 0),
             obs_crop_mode="mask",
             sticky_action_prob=0.25,
-            env_args={"info_filter": "all", "num_threads": 8, "reward_clip": True},
+            env_args={"info_filter": "all", "num_threads": 8},
             task={
                 "id": "identity",
                 "action": {"set": "native"},
                 "signals": {},
                 "events": {},
                 "termination": {"max_episode_steps": 54_000},
-                "reward": {"reward_mode": "native"},
+                "reward": {
+                    "reward_mode": "native",
+                    "reward_scale": 1.0,
+                    "reward_clip": True,
+                },
             },
         )
         kwargs = provider_native_vec_kwargs(
@@ -1075,6 +1142,7 @@ class MarioNativeProviderTests(unittest.TestCase):
         self.assertEqual(env.kwargs["obs_layout"], "chw")
         self.assertEqual(env.kwargs["obs_copy"], "safe_view")
         self.assertEqual(env.kwargs["sticky_action_prob"], 0.25)
+        self.assertIs(env.kwargs["reward_clip"], False)
         self.assertIs(env.kwargs["use_fire_reset"], False)
         self.assertNotIn("max_episode_steps", env.kwargs)
         env.reset(seed=123)

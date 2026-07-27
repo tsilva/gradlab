@@ -14,6 +14,8 @@ MARIO_GOAL = Path("experiments/goals/SuperMarioBros-Nes-v0/Level1-1/_goal.yaml")
 MARIO_RECIPE = MARIO_GOAL.parent / "recipes/ppo.yaml"
 BREAKOUT_GOAL = Path("experiments/goals/Breakout-Atari2600-v0/_goal.yaml")
 BREAKOUT_RECIPE = BREAKOUT_GOAL.parent / "recipes/ppo.yaml"
+VIZDOOM_GOAL = Path("experiments/goals/VizdoomBasic-v1/_goal.yaml")
+VIZDOOM_RECIPE = VIZDOOM_GOAL.parent / "recipes/ppo.yaml"
 
 
 def test_mario_reward_shape_defaults_and_cli_override_materialize_both_phases() -> None:
@@ -30,20 +32,15 @@ def test_mario_reward_shape_defaults_and_cli_override_materialize_both_phases() 
     assert default_config["reward_shape_is_default"] is True
     assert default_config["task"]["reward"]["reward_mode"] == "additive"
     assert default_config["task"]["reward"]["time_penalty"] == 0.001
-    assert (
-        default_config["checkpoint_eval_environment"]["task"]["reward"]["time_penalty"] == 0.001
-    )
+    assert default_config["checkpoint_eval_environment"]["task"]["reward"]["time_penalty"] == 0.001
     assert selected_config["reward_shape"] == "full-v1"
     assert selected_config["reward_shape_is_default"] is False
     assert selected_config["task"]["reward"]["reward_mode"] == "score"
     assert selected_config["task"]["reward"]["time_penalty"] == 0.001
     assert (
-        selected_config["checkpoint_eval_environment"]["task"]["reward"]["reward_mode"]
-        == "score"
+        selected_config["checkpoint_eval_environment"]["task"]["reward"]["reward_mode"] == "score"
     )
-    assert (
-        selected_config["checkpoint_eval_environment"]["task"]["reward"]["time_penalty"] == 0.001
-    )
+    assert selected_config["checkpoint_eval_environment"]["task"]["reward"]["time_penalty"] == 0.001
     assert default_config["reward_shape_sha256"] != selected_config["reward_shape_sha256"]
     assert default_config["goal_contract_sha256"] == selected_config["goal_contract_sha256"]
     assert (
@@ -92,6 +89,66 @@ def test_catalog_selector_and_raw_reward_override_fail_closed() -> None:
         )
 
 
+def test_policy_reward_override_is_mirrored_and_changes_the_effective_goal() -> None:
+    baseline = compose_train_document(VIZDOOM_GOAL, VIZDOOM_RECIPE)
+    requested = (
+        "train.environment.env_config.env_args.reward_clip=true",
+        "eval.environment.env_config.env_args.reward_clip=true",
+    )
+
+    document = compose_train_document(
+        VIZDOOM_GOAL,
+        VIZDOOM_RECIPE,
+        recipe_overrides=requested,
+    )
+    config = document["train_config"]
+
+    assert document["recipe_overrides"] == list(requested)
+    assert document["effective_recipe_overrides"] == [
+        "train.environment.task.reward.reward_clip=true",
+        "eval.environment.task.reward.reward_clip=true",
+    ]
+    assert "reward_clip" not in config["env_args"]
+    assert config["task"]["reward"]["reward_clip"] == [-1.0, 1.0]
+    assert "reward_clip" not in config["checkpoint_eval_environment"]["env_args"]
+    assert config["checkpoint_eval_environment"]["task"]["reward"]["reward_clip"] == [-1.0, 1.0]
+    assert document["policy_environment_hash"] == document["evaluation_environment_hash"]
+    assert (
+        config["effective_goal_contract_sha256"]
+        != baseline["train_config"]["effective_goal_contract_sha256"]
+    )
+
+
+def test_training_policy_override_mirrors_without_an_eval_duplicate() -> None:
+    document = compose_train_document(
+        VIZDOOM_GOAL,
+        VIZDOOM_RECIPE,
+        recipe_overrides=("train.environment.task.reward.reward_clip=true",),
+    )
+
+    config = document["train_config"]
+    assert config["task"]["reward"]["reward_clip"] == [-1.0, 1.0]
+    assert config["checkpoint_eval_environment"]["task"]["reward"]["reward_clip"] == [-1.0, 1.0]
+
+
+def test_eval_only_or_conflicting_policy_overrides_fail_closed() -> None:
+    with pytest.raises(ValueError, match="cannot define policy semantics independently"):
+        compose_train_document(
+            VIZDOOM_GOAL,
+            VIZDOOM_RECIPE,
+            recipe_overrides=("eval.environment.task.reward.reward_clip=true",),
+        )
+    with pytest.raises(ValueError, match="train/eval policy environment overrides disagree"):
+        compose_train_document(
+            VIZDOOM_GOAL,
+            VIZDOOM_RECIPE,
+            recipe_overrides=(
+                "train.environment.task.reward.reward_clip=true",
+                "eval.environment.task.reward.reward_clip=false",
+            ),
+        )
+
+
 def test_selected_reward_definition_can_be_overridden_for_an_adhoc_run() -> None:
     baseline = compose_train_document(MARIO_GOAL, MARIO_RECIPE)
     overrides = (
@@ -121,18 +178,12 @@ def test_selected_reward_definition_can_be_overridden_for_an_adhoc_run() -> None
     for key, value in expected.items():
         assert config["task"]["reward"][key] == value
         assert config["checkpoint_eval_environment"]["task"]["reward"][key] == value
-    assert (
-        config["goal_contract_sha256"]
-        == baseline["train_config"]["goal_contract_sha256"]
-    )
+    assert config["goal_contract_sha256"] == baseline["train_config"]["goal_contract_sha256"]
     assert (
         config["effective_goal_contract_sha256"]
         != baseline["train_config"]["effective_goal_contract_sha256"]
     )
-    assert (
-        config["reward_shape_sha256"]
-        != baseline["train_config"]["reward_shape_sha256"]
-    )
+    assert config["reward_shape_sha256"] != baseline["train_config"]["reward_shape_sha256"]
 
 
 def test_reward_definition_override_must_target_selected_shape() -> None:
@@ -140,9 +191,7 @@ def test_reward_definition_override_must_target_selected_shape() -> None:
         compose_train_document(
             MARIO_GOAL,
             MARIO_RECIPE,
-            recipe_overrides=(
-                "reward_shapes.definitions.full-v1.death_penalty=100.0",
-            ),
+            recipe_overrides=("reward_shapes.definitions.full-v1.death_penalty=100.0",),
         )
 
 
@@ -160,8 +209,8 @@ def test_non_catalog_goal_remains_compatible() -> None:
 def test_catalog_definitions_are_complete_strict_and_semantically_unique() -> None:
     goal = load_goal_contract(MARIO_GOAL)
     malformed = copy.deepcopy(goal)
-    malformed["reward_shapes"]["definitions"]["full-v1"]["clip_rewards"] = 1
-    with pytest.raises(ValueError, match="clip_rewards must be a boolean"):
+    malformed["reward_shapes"]["definitions"]["full-v1"]["reward_clip"] = [1.0]
+    with pytest.raises(ValueError, match="reward_clip must contain exactly"):
         validate_reward_shape_catalog(malformed)
 
     incomplete = copy.deepcopy(goal)

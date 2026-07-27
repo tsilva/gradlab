@@ -12,7 +12,7 @@ from rlab.env_metadata import sanitize_env_config_metadata
 
 
 class EnvironmentTaskConfigTests(unittest.TestCase):
-    def test_environment_identity_uses_v2_canonical_task(self) -> None:
+    def test_environment_identity_uses_v3_canonical_task(self) -> None:
         identity = environment_identity_from_train_config(
             {
                 "env_provider": "supermariobrosnes-turbo",
@@ -39,13 +39,20 @@ class EnvironmentTaskConfigTests(unittest.TestCase):
             }
         )
 
-        self.assertEqual(ENVIRONMENT_HASH_ALGORITHM, "rlab.environment.v2")
-        self.assertEqual(identity["schema_version"], 2)
+        self.assertEqual(ENVIRONMENT_HASH_ALGORITHM, "rlab.environment.v3")
+        self.assertEqual(identity["schema_version"], 3)
         self.assertEqual(identity["task"]["id"], "mario")
         self.assertEqual(identity["task"]["termination"]["failure"], ["life_loss"])
         self.assertEqual(identity["task"]["termination"]["success"], ["level_change"])
         self.assertTrue(environment_hash(identity).startswith("sha256:"))
-        self.assertNotIn("reward", identity)
+        self.assertEqual(
+            identity["task"]["reward"],
+            {
+                "reward_mode": "score",
+                "reward_scale": 1.0,
+                "reward_clip": False,
+            },
+        )
 
     def test_unknown_artifact_environment_metadata_is_rejected(self) -> None:
         with self.assertRaisesRegex(ValueError, "unexpected keys"):
@@ -56,6 +63,30 @@ class EnvironmentTaskConfigTests(unittest.TestCase):
                     "unknown_runtime_key": True,
                 }
             )
+
+    def test_legacy_artifact_provider_reward_clip_moves_to_task_contract(self) -> None:
+        cleaned = sanitize_env_config_metadata(
+            {
+                "env_provider": "vizdoom-turbo",
+                "game": "VizdoomBasic-v1",
+                "env_args": {
+                    "reward_clip": True,
+                    "num_threads": 4,
+                },
+                "task": {
+                    "id": "identity",
+                    "action": {"set": "native"},
+                    "signals": {},
+                    "events": {},
+                    "termination": {"max_episode_steps": 72},
+                    "reward": {"reward_mode": "native"},
+                },
+            }
+        )
+
+        self.assertEqual(cleaned["env_args"], {"num_threads": 4})
+        self.assertEqual(cleaned["task"]["reward"]["reward_scale"], 1.0)
+        self.assertEqual(cleaned["task"]["reward"]["reward_clip"], [-1.0, 1.0])
 
     def test_task_validation_rejects_unknown_termination_event(self) -> None:
         with self.assertRaisesRegex(ValueError, "references unknown events"):

@@ -44,6 +44,8 @@ train:
         max_episode_steps: 1
       reward:
         reward_mode: native
+        reward_scale: 1.0
+        reward_clip: false
 eval:
   episodes: 256
   acceptance:

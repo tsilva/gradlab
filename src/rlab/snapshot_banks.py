@@ -204,7 +204,6 @@ def validate_breakout_snapshot_environment(
         "obs_grayscale": True,
         "obs_layout": "chw",
         "sticky_action_prob": float(sticky_action_prob),
-        "reward_clip": False,
         "action_meanings": ["noop", "button", "right", "left"],
     }
     mismatches = {

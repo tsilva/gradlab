@@ -9,16 +9,17 @@ from numbers import Real
 from typing import Any
 
 from rlab.json_utils import canonical_json_sha256
+from rlab.reward_transform import normalize_reward_mapping
 
 
 REWARD_PROGRAM_KIND_MARIO_V1 = "mario-v1"
-MARIO_REWARD_KERNEL_REVISION = "mario-kernel-v2"
+MARIO_REWARD_KERNEL_REVISION = "mario-kernel-v3"
 REWARD_SHAPE_KEY_PATTERN = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$")
 
 MARIO_REWARD_FIELDS = (
     "reward_mode",
     "use_native_reward",
-    "clip_rewards",
+    "reward_clip",
     "progress_reward_cap",
     "progress_reward_scale",
     "progress_reward_boost_start_x",
@@ -32,8 +33,10 @@ MARIO_REWARD_FIELDS = (
 )
 MARIO_REWARD_FIELD_SET = frozenset(MARIO_REWARD_FIELDS)
 MARIO_REWARD_MODES = frozenset({"native", "bounded", "baseline", "score", "additive"})
-MARIO_BOOL_FIELDS = frozenset({"use_native_reward", "clip_rewards", "score_progress_clipped"})
-MARIO_NUMBER_FIELDS = frozenset(MARIO_REWARD_FIELD_SET - MARIO_BOOL_FIELDS - {"reward_mode"})
+MARIO_BOOL_FIELDS = frozenset({"use_native_reward", "score_progress_clipped"})
+MARIO_NUMBER_FIELDS = frozenset(
+    MARIO_REWARD_FIELD_SET - MARIO_BOOL_FIELDS - {"reward_mode", "reward_clip"}
+)
 
 # Mario signal arithmetic is currently int64-backed and reward outputs are float32.
 # Reserve headroom for several simultaneously active components before the output cast.
@@ -103,6 +106,17 @@ def normalize_mario_reward(
         if abs(number) > _MARIO_SAFE_COEFFICIENT_ABS_MAX:
             raise ValueError(f"{label}.{key} exceeds the Mario float32 reward safety bound")
         normalized[key] = _normalize_zero(number)
+    if "reward_clip" in value:
+        normalized["reward_clip"] = normalize_reward_mapping(
+            {
+                "reward_scale": normalized.get(
+                    "reward_scale",
+                    value.get("reward_scale", 1.0),
+                ),
+                "reward_clip": value["reward_clip"],
+            },
+            label=label,
+        )["reward_clip"]
     return {key: normalized[key] for key in MARIO_REWARD_FIELDS if key in normalized}
 
 
@@ -110,27 +124,24 @@ def _mario_compiled_semantics(reward: Mapping[str, Any]) -> dict[str, Any]:
     mode = str(reward["reward_mode"])
     semantics: dict[str, Any] = {
         "reward_mode": mode,
-        "clip_rewards": bool(reward["clip_rewards"]),
+        "reward_scale": float(reward["reward_scale"]),
+        "reward_clip": reward["reward_clip"],
         "time_penalty": float(reward["time_penalty"]),
     }
     if mode == "bounded":
         semantics.update(
             progress_reward_cap=float(reward["progress_reward_cap"]),
             terminal_reward=float(reward["terminal_reward"]),
-            reward_scale=float(reward["reward_scale"]) or 1.0,
         )
     elif mode == "baseline":
         semantics.update(
             terminal_reward=float(reward["terminal_reward"]),
-            reward_scale=float(reward["reward_scale"]) or 1.0,
         )
     elif mode in {"score", "additive"}:
         semantics.update(
             use_native_reward=bool(reward["use_native_reward"]),
             progress_reward_scale=float(reward["progress_reward_scale"]),
-            progress_reward_boost_start_x=float(
-                reward["progress_reward_boost_start_x"]
-            ),
+            progress_reward_boost_start_x=float(reward["progress_reward_boost_start_x"]),
             progress_reward_boost_scale=float(reward["progress_reward_boost_scale"]),
             completion_reward=float(reward["completion_reward"]),
             death_penalty=float(reward["death_penalty"]),
@@ -284,13 +295,11 @@ def _validate_mario_level_termination(
             raise ValueError(f"{label}.{phase} Mario level task must declare termination")
         if termination.get("failure") != expected_failure:
             raise ValueError(
-                f"{label}.{phase} Mario level task termination.failure must be "
-                f"{expected_failure!r}"
+                f"{label}.{phase} Mario level task termination.failure must be {expected_failure!r}"
             )
         if termination.get("success") != expected_success:
             raise ValueError(
-                f"{label}.{phase} Mario level task termination.success must be "
-                f"{expected_success!r}"
+                f"{label}.{phase} Mario level task termination.success must be {expected_success!r}"
             )
         stalled = events.get("stalled") if isinstance(events, Mapping) else None
         if stalled != expected_stalled:

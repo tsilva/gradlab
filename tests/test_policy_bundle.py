@@ -21,9 +21,11 @@ from rlab.policy_bundle import (
     build_model_document,
     build_recipe_document,
     canonical_json_bytes,
+    critic_value_contract,
     evaluation_contract,
     playback_contract_sha256,
     playback_contract,
+    playback_contract_audit,
     load_policy_bundle,
     load_policy_bundle_from_checkpoint,
     load_recipe_document,
@@ -40,9 +42,7 @@ from rlab.training_backend import training_backend_config, training_backend_conf
 GOAL = Path("experiments/goals/SuperMarioBros-Nes-v0/Level1-1/_goal.yaml")
 RECIPE = Path("experiments/goals/SuperMarioBros-Nes-v0/Level1-1/recipes/ppo.yaml")
 LEVEL1_3_GOAL = Path("experiments/goals/SuperMarioBros-Nes-v0/Level1-3/_goal.yaml")
-LEVEL1_3_TRAIN_CLEAR_RECIPE = (
-    LEVEL1_3_GOAL.parent / "recipes/ppo-train-clear-100.yaml"
-)
+LEVEL1_3_TRAIN_CLEAR_RECIPE = LEVEL1_3_GOAL.parent / "recipes/ppo-train-clear-100.yaml"
 RUNTIME = "docker:ghcr.io/tsilva/rlab/rlab-train@sha256:" + "b" * 64
 POST400_GOAL = Path("experiments/goals/Breakout-Atari2600-v0/post400-r400/_goal.yaml")
 POST400_RECIPE = POST400_GOAL.parent / "recipes/ppo-resume-129991680.yaml"
@@ -185,9 +185,10 @@ def test_atomic_bundle_install_commits_only_a_complete_replayable_bundle(
     assert bundle.checkpoint_path.read_bytes() == b"checkpoint"
     assert set(bundle.model["provenance"]["training_metadata"]) == {"versions"}
     effective_metadata = policy_bundle_as_metadata(bundle)
-    assert effective_metadata["training_metadata"]["environment"] == recipe_document["recipe"][
-        "environment"
-    ]
+    assert (
+        effective_metadata["training_metadata"]["environment"]
+        == recipe_document["recipe"]["environment"]
+    )
     assert effective_metadata["training_metadata"]["action"]["preset"] == "basic"
 
     # An exact producer replay is accepted, but the same destination can never
@@ -396,6 +397,44 @@ def test_level1_1_recipe_fixture_preserves_aligned_train_and_eval_contracts() ->
     assert eval_contract["episodes"] == 100
 
 
+def test_evaluated_bundle_defaults_to_training_contract_and_exposes_eval_explicitly() -> None:
+    materialized = compose_train_document(
+        VIZDOOM_GOAL,
+        VIZDOOM_RECIPE,
+        recipe_overrides=("train.environment.task.reward.reward_clip=true",),
+    )
+    document = build_recipe_document(
+        materialized,
+        repo_root=Path.cwd(),
+        source_commit="a" * 40,
+        run_description="training-faithful playback regression",
+        seed=7,
+        runtime_image_ref=RUNTIME,
+    )
+
+    training = playback_contract(document)
+    evaluation = playback_contract(document, mode="evaluation")
+    assert training["mode"] == "training"
+    assert training["environment"]["task"]["reward"]["reward_clip"] == [-1.0, 1.0]
+    assert evaluation["mode"] == "evaluation"
+    assert evaluation["matches_training"] is True
+    assert critic_value_contract(document)["discount"] == 0.99
+
+    legacy = deepcopy(document)
+    legacy["recipe"]["eval"]["environment"]["task"]["reward"]["reward_clip"] = False
+    legacy["recipe"].pop("effective_recipe_overrides", None)
+    assert playback_contract(legacy)["environment"]["task"]["reward"]["reward_clip"] == [
+        -1.0,
+        1.0,
+    ]
+    assert playback_contract(legacy, mode="evaluation")["matches_training"] is False
+    audit = playback_contract_audit(legacy)
+    assert audit["evaluation_matches_training"] is False
+    assert audit["mismatch_paths"] == ["environment.task.reward.reward_clip"]
+    assert audit["requested_policy_override_paths"] == ["train.environment.task.reward.reward_clip"]
+    assert audit["legacy_override_provenance"] is True
+
+
 def test_recipe_materializes_the_backend_config_executed_by_the_learner() -> None:
     materialized = compose_train_document(GOAL, RECIPE)
     document = build_recipe_document(
@@ -441,13 +480,9 @@ def test_resume_approval_does_not_rebind_the_scientific_backend_config() -> None
         }
     )
 
-    assert training_backend_config_hash(resumed) == training_backend_config_hash(
-        train_config
-    )
+    assert training_backend_config_hash(resumed) == training_backend_config_hash(train_config)
     resumed_backend["batch_size"] = int(resumed_backend["batch_size"]) // 2
-    assert training_backend_config_hash(resumed) != training_backend_config_hash(
-        train_config
-    )
+    assert training_backend_config_hash(resumed) != training_backend_config_hash(train_config)
 
 
 def test_recipe_materializes_the_environment_identity_executed_by_the_learner() -> None:

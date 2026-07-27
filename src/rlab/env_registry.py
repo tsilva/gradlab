@@ -6,12 +6,12 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Any
 
+from rlab.reward_transform import PROVIDER_REWARD_TRANSFORM_KEYS
+
 
 EXTERNAL_ROM_ASSET_NONE = "none"
 STABLE_RETRO_DIRECT_PATH_V1 = "stable_retro_direct_path_v1"
-EXTERNAL_ROM_ASSET_STRATEGIES = frozenset(
-    {EXTERNAL_ROM_ASSET_NONE, STABLE_RETRO_DIRECT_PATH_V1}
-)
+EXTERNAL_ROM_ASSET_STRATEGIES = frozenset({EXTERNAL_ROM_ASSET_NONE, STABLE_RETRO_DIRECT_PATH_V1})
 
 
 @dataclass(frozen=True)
@@ -22,16 +22,17 @@ class ProviderConstructorContract:
     optional_env_args: frozenset[str] = frozenset()
 
     def __post_init__(self) -> None:
-        overlap = (self.canonical_args & self.explicit_env_args) | (
-            self.canonical_args & self.optional_env_args
-        ) | (self.explicit_env_args & self.optional_env_args)
+        overlap = (
+            (self.canonical_args & self.explicit_env_args)
+            | (self.canonical_args & self.optional_env_args)
+            | (self.explicit_env_args & self.optional_env_args)
+        )
         if overlap:
             raise ValueError(f"provider constructor argument ownership overlaps: {sorted(overlap)}")
         unknown_required = set(self.required_values) - set(self.explicit_env_args)
         if unknown_required:
             raise ValueError(
-                "provider required values are not explicit env args: "
-                f"{sorted(unknown_required)}"
+                f"provider required values are not explicit env args: {sorted(unknown_required)}"
             )
         object.__setattr__(self, "required_values", MappingProxyType(dict(self.required_values)))
 
@@ -106,7 +107,6 @@ _TURBO_EXPLICIT_ENV_ARGS = frozenset(
         "players",
         "record",
         "render_mode",
-        "reward_clip",
         "rom_path",
         "scenario",
         "use_fire_reset",
@@ -226,7 +226,6 @@ ALE_PY_PROVIDER = EnvProvider(
                 "max_num_frames_per_episode",
                 "noop_max",
                 "num_threads",
-                "reward_clipping",
                 "stack_num",
                 "thread_affinity_offset",
                 "use_fire_reset",
@@ -274,82 +273,80 @@ ENV_PROVIDERS: dict[str, EnvProvider] = {
 # The env-id fallback flags preserve historical reads where old metadata omitted
 # or carried a stale provider. ALE's short ids historically inferred a family
 # but not a W&B project when the provider mapping did not match.
-CANONICAL_ENVIRONMENT_IDENTITIES: Mapping[
-    tuple[str, str], CanonicalEnvironmentIdentity
-] = MappingProxyType(
-    {
-        ("rlab", "Bandit-v0"): CanonicalEnvironmentIdentity("Bandit", "Bandit-v0"),
-        (
-            "supermariobrosnes-turbo",
-            "SuperMarioBros-Nes-v0",
-        ): CanonicalEnvironmentIdentity("NES-SuperMarioBros", "SuperMarioBros-Nes-v0"),
-        (
-            "stable-retro-turbo",
-            "SuperMarioBros-Nes-v0",
-        ): CanonicalEnvironmentIdentity("NES-SuperMarioBros", "SuperMarioBros-Nes-v0"),
-        (
-            "stable-retro-turbo",
-            "SuperMarioBros3-Nes-v0",
-        ): CanonicalEnvironmentIdentity("NES-SuperMarioBros3", "SuperMarioBros3-Nes-v0"),
-        (
-            "breakout-turbo-env",
-            "Breakout-Atari2600-v0",
-        ): CanonicalEnvironmentIdentity("Atari2600-Breakout", "Breakout-Atari2600-v0"),
-        ("ale-py", "breakout"): CanonicalEnvironmentIdentity(
-            "Atari2600-Breakout",
-            "Breakout-Atari2600-v0",
-            env_id_wandb_project_fallback=False,
-        ),
-        (
-            "stable-retro-turbo",
-            "Breakout-Atari2600-v0",
-        ): CanonicalEnvironmentIdentity("Atari2600-Breakout", "Breakout-Atari2600-v0"),
-        ("ale-py", "ms_pacman"): CanonicalEnvironmentIdentity(
-            "Atari2600-MsPacman",
-            "MsPacman-Atari2600-v0",
-            env_id_wandb_project_fallback=False,
-        ),
-        (
-            "stable-retro-turbo",
-            "MsPacman-Atari2600-v0",
-        ): CanonicalEnvironmentIdentity("Atari2600-MsPacman", "MsPacman-Atari2600-v0"),
-        ("vizdoom-turbo", "VizdoomBasic-v1"): CanonicalEnvironmentIdentity(
-            "Doom-ViZDoom-Basic", "VizdoomBasic-v1"
-        ),
-        ("vizdoom-turbo", "VizdoomDeadlyCorridor-v1"): CanonicalEnvironmentIdentity(
-            "Doom-ViZDoom-DeadlyCorridor", "VizdoomDeadlyCorridor-v1"
-        ),
-        ("vizdoom-turbo", "VizdoomDefendCenter-v1"): CanonicalEnvironmentIdentity(
-            "Doom-ViZDoom-DefendCenter", "VizdoomDefendCenter-v1"
-        ),
-        ("vizdoom-turbo", "VizdoomDefendLine-v1"): CanonicalEnvironmentIdentity(
-            "Doom-ViZDoom-DefendLine", "VizdoomDefendLine-v1"
-        ),
-        ("vizdoom-turbo", "VizdoomHealthGathering-v1"): CanonicalEnvironmentIdentity(
-            "Doom-ViZDoom-HealthGathering", "VizdoomHealthGathering-v1"
-        ),
-        (
-            "vizdoom-turbo",
-            "VizdoomHealthGatheringSupreme-v1",
-        ): CanonicalEnvironmentIdentity(
-            "Doom-ViZDoom-HealthGatheringSupreme",
-            "VizdoomHealthGatheringSupreme-v1",
-        ),
-        ("vizdoom-turbo", "VizdoomMyWayHome-v1"): CanonicalEnvironmentIdentity(
-            "Doom-ViZDoom-MyWayHome", "VizdoomMyWayHome-v1"
-        ),
-        ("vizdoom-turbo", "VizdoomPredictPosition-v1"): CanonicalEnvironmentIdentity(
-            "Doom-ViZDoom-PredictPosition", "VizdoomPredictPosition-v1"
-        ),
-        ("vizdoom-turbo", "VizdoomTakeCover-v1"): CanonicalEnvironmentIdentity(
-            "Doom-ViZDoom-TakeCover", "VizdoomTakeCover-v1"
-        ),
-    }
+CANONICAL_ENVIRONMENT_IDENTITIES: Mapping[tuple[str, str], CanonicalEnvironmentIdentity] = (
+    MappingProxyType(
+        {
+            ("rlab", "Bandit-v0"): CanonicalEnvironmentIdentity("Bandit", "Bandit-v0"),
+            (
+                "supermariobrosnes-turbo",
+                "SuperMarioBros-Nes-v0",
+            ): CanonicalEnvironmentIdentity("NES-SuperMarioBros", "SuperMarioBros-Nes-v0"),
+            (
+                "stable-retro-turbo",
+                "SuperMarioBros-Nes-v0",
+            ): CanonicalEnvironmentIdentity("NES-SuperMarioBros", "SuperMarioBros-Nes-v0"),
+            (
+                "stable-retro-turbo",
+                "SuperMarioBros3-Nes-v0",
+            ): CanonicalEnvironmentIdentity("NES-SuperMarioBros3", "SuperMarioBros3-Nes-v0"),
+            (
+                "breakout-turbo-env",
+                "Breakout-Atari2600-v0",
+            ): CanonicalEnvironmentIdentity("Atari2600-Breakout", "Breakout-Atari2600-v0"),
+            ("ale-py", "breakout"): CanonicalEnvironmentIdentity(
+                "Atari2600-Breakout",
+                "Breakout-Atari2600-v0",
+                env_id_wandb_project_fallback=False,
+            ),
+            (
+                "stable-retro-turbo",
+                "Breakout-Atari2600-v0",
+            ): CanonicalEnvironmentIdentity("Atari2600-Breakout", "Breakout-Atari2600-v0"),
+            ("ale-py", "ms_pacman"): CanonicalEnvironmentIdentity(
+                "Atari2600-MsPacman",
+                "MsPacman-Atari2600-v0",
+                env_id_wandb_project_fallback=False,
+            ),
+            (
+                "stable-retro-turbo",
+                "MsPacman-Atari2600-v0",
+            ): CanonicalEnvironmentIdentity("Atari2600-MsPacman", "MsPacman-Atari2600-v0"),
+            ("vizdoom-turbo", "VizdoomBasic-v1"): CanonicalEnvironmentIdentity(
+                "Doom-ViZDoom-Basic", "VizdoomBasic-v1"
+            ),
+            ("vizdoom-turbo", "VizdoomDeadlyCorridor-v1"): CanonicalEnvironmentIdentity(
+                "Doom-ViZDoom-DeadlyCorridor", "VizdoomDeadlyCorridor-v1"
+            ),
+            ("vizdoom-turbo", "VizdoomDefendCenter-v1"): CanonicalEnvironmentIdentity(
+                "Doom-ViZDoom-DefendCenter", "VizdoomDefendCenter-v1"
+            ),
+            ("vizdoom-turbo", "VizdoomDefendLine-v1"): CanonicalEnvironmentIdentity(
+                "Doom-ViZDoom-DefendLine", "VizdoomDefendLine-v1"
+            ),
+            ("vizdoom-turbo", "VizdoomHealthGathering-v1"): CanonicalEnvironmentIdentity(
+                "Doom-ViZDoom-HealthGathering", "VizdoomHealthGathering-v1"
+            ),
+            (
+                "vizdoom-turbo",
+                "VizdoomHealthGatheringSupreme-v1",
+            ): CanonicalEnvironmentIdentity(
+                "Doom-ViZDoom-HealthGatheringSupreme",
+                "VizdoomHealthGatheringSupreme-v1",
+            ),
+            ("vizdoom-turbo", "VizdoomMyWayHome-v1"): CanonicalEnvironmentIdentity(
+                "Doom-ViZDoom-MyWayHome", "VizdoomMyWayHome-v1"
+            ),
+            ("vizdoom-turbo", "VizdoomPredictPosition-v1"): CanonicalEnvironmentIdentity(
+                "Doom-ViZDoom-PredictPosition", "VizdoomPredictPosition-v1"
+            ),
+            ("vizdoom-turbo", "VizdoomTakeCover-v1"): CanonicalEnvironmentIdentity(
+                "Doom-ViZDoom-TakeCover", "VizdoomTakeCover-v1"
+            ),
+        }
+    )
 )
 
-STABLE_RETRO_ATARI_ENV_IDS = frozenset(
-    {"Breakout-Atari2600-v0", "MsPacman-Atari2600-v0"}
-)
+STABLE_RETRO_ATARI_ENV_IDS = frozenset({"Breakout-Atari2600-v0", "MsPacman-Atari2600-v0"})
 
 
 def _environment_identity(provider_id: object, env_id: object) -> tuple[str, str]:
@@ -425,9 +422,7 @@ def game_family_for_environment(
     if strict:
         provider, _environment = _environment_identity(provider_id, env_id)
         qualified = f"{provider}:{environment}" if provider else environment
-        raise ValueError(
-            f"environment {qualified!r} has no registered canonical game family"
-        )
+        raise ValueError(f"environment {qualified!r} has no registered canonical game family")
     return _fallback_game_family(environment, fallback=fallback)
 
 
@@ -489,6 +484,13 @@ def validate_provider_constructor_args(
     provider = resolve_env_provider(provider_id)
     if not isinstance(env_args, Mapping):
         raise ValueError(f"{label} must explicitly define provider arguments")
+    provider_reward_args = sorted(set(env_args) & PROVIDER_REWARD_TRANSFORM_KEYS)
+    if provider_reward_args:
+        raise ValueError(
+            f"{label} configures provider-side reward transform(s) "
+            f"{provider_reward_args}; use task.reward.reward_scale and "
+            "task.reward.reward_clip instead"
+        )
     contract = provider.constructor_contract
     if contract is None:
         return
@@ -499,9 +501,7 @@ def validate_provider_constructor_args(
             f"{label} missing explicit {provider.provider_id} constructor argument(s): "
             + ", ".join(missing_args)
         )
-    unexpected_args = sorted(
-        actual_args - contract.explicit_env_args - contract.optional_env_args
-    )
+    unexpected_args = sorted(actual_args - contract.explicit_env_args - contract.optional_env_args)
     if unexpected_args:
         raise ValueError(
             f"{label} has unexpected or canonically-owned {provider.provider_id} "

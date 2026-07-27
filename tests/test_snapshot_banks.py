@@ -134,7 +134,6 @@ def _runtime_config(archive: Path, archive_sha256: str) -> EnvConfig:
             "obs_layout": "chw",
             "frame_stack": 4,
             "noop_reset_max": 0,
-            "reward_clip": False,
             "use_fire_reset": False,
             "snapshot_bank_uri": archive.resolve().as_uri(),
             "snapshot_bank_sha256": archive_sha256,
@@ -145,7 +144,11 @@ def _runtime_config(archive: Path, archive_sha256: str) -> EnvConfig:
             "signals": {"ball_y": "ball_y"},
             "events": {},
             "termination": {"max_episode_steps": 54_000},
-            "reward": {"reward_mode": "native"},
+            "reward": {
+                "reward_mode": "native",
+                "reward_scale": 1.0,
+                "reward_clip": False,
+            },
         },
     )
 

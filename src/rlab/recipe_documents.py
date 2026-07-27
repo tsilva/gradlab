@@ -16,6 +16,7 @@ from rlab.config_loader import (
     TEMPLATE_VARS_KEY,
     apply_dotlist_overrides,
     deep_merge,
+    dotlist_to_mapping,
     load_composed_mapping,
     load_mapping_document,
     render_template_vars,
@@ -28,6 +29,7 @@ from rlab.env_identity import (
 )
 from rlab.experiment_contracts import validate_goal_contract_document
 from rlab.file_utils import file_sha256
+from rlab.provider_config import NON_SEMANTIC_ENV_ARG_KEYS
 from rlab.recipe_schema import (
     train_recipe_id,
     validate_materialized_train_recipe,
@@ -83,6 +85,21 @@ GOAL_OWNED_ENV_CONFIG_KEYS = train_config_keys_owned_by("goal_environment") | {
 }
 GOAL_OWNED_OBJECTIVE_CONFIG_KEYS = train_config_keys_owned_by("goal_objective")
 REWARD_DEFINITION_OVERRIDE_PREFIX = "reward_shapes.definitions."
+_POLICY_ENVIRONMENT_PREFIXES = {
+    "train": "train.environment.",
+    "eval": "eval.environment.",
+}
+_PHASE_EXECUTION_ENV_PATHS = frozenset(
+    {
+        "env_config.max_steps",
+        "env_config.n_envs",
+        "env_config.seed",
+    }
+)
+_LEGACY_PROVIDER_REWARD_PATHS = {
+    "env_config.env_args.reward_clip": "task.reward.reward_clip",
+    "env_config.env_args.reward_clipping": "task.reward.reward_clip",
+}
 
 
 def goal_contract_sha256(document: Mapping[str, Any]) -> str:
@@ -90,6 +107,110 @@ def goal_contract_sha256(document: Mapping[str, Any]) -> str:
 
     payload = json.dumps(document, sort_keys=True, separators=(",", ":"), default=str)
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _override_parts(value: str, *, label: str) -> tuple[str, str, Any]:
+    if "=" not in value:
+        raise ValueError(f"{label} must use path=value syntax: {value!r}")
+    path, raw_value = value.split("=", 1)
+    path = path.strip()
+    if not path:
+        raise ValueError(f"{label} path must be non-empty")
+    parsed = dotlist_to_mapping(
+        [f"value={raw_value}"],
+        label=label,
+    )
+    return path, raw_value, parsed["value"]
+
+
+def _phase_environment_override(path: str) -> tuple[str, str] | None:
+    for phase, prefix in _POLICY_ENVIRONMENT_PREFIXES.items():
+        if path.startswith(prefix):
+            relative = path.removeprefix(prefix)
+            if not relative:
+                raise ValueError(f"{path} must target a field below {prefix.removesuffix('.')}")
+            return phase, relative
+    return None
+
+
+def _is_execution_environment_path(relative: str) -> bool:
+    if relative in _PHASE_EXECUTION_ENV_PATHS:
+        return True
+    prefix = "env_config.env_args."
+    return relative.startswith(prefix) and relative.removeprefix(prefix) in (
+        NON_SEMANTIC_ENV_ARG_KEYS
+    )
+
+
+def _canonical_policy_environment_path(relative: str) -> str:
+    return _LEGACY_PROVIDER_REWARD_PATHS.get(relative, relative)
+
+
+def _partition_policy_environment_overrides(
+    overrides: Sequence[str],
+    *,
+    goal_document: Mapping[str, Any],
+    label: str,
+) -> tuple[list[str], list[str], list[str]]:
+    """Separate recipe-local overrides from one mirrored policy environment contract."""
+
+    source_overrides: list[str] = []
+    by_path: dict[str, dict[str, tuple[str, Any]]] = {}
+    for item in overrides:
+        path, raw_value, parsed_value = _override_parts(item, label=label)
+        phase_path = _phase_environment_override(path)
+        if phase_path is None:
+            source_overrides.append(item)
+            continue
+        phase, relative = phase_path
+        canonical = _canonical_policy_environment_path(relative)
+        if canonical == relative and _is_execution_environment_path(relative):
+            if phase == "eval":
+                raise ValueError(
+                    f"{path} is goal-owned evaluation execution configuration and cannot be "
+                    "changed by a recipe override"
+                )
+            source_overrides.append(item)
+            continue
+        existing = by_path.setdefault(canonical, {}).get(phase)
+        if existing is not None and existing[1] != parsed_value:
+            raise ValueError(
+                f"conflicting {phase} policy environment overrides for "
+                f"{canonical}: {existing[1]!r} != {parsed_value!r}"
+            )
+        by_path[canonical][phase] = (raw_value, parsed_value)
+
+    has_eval = isinstance(goal_document.get("eval"), Mapping)
+    goal_overrides: list[str] = []
+    effective_overrides: list[str] = []
+    catalog = goal_document.get("reward_shapes")
+    for relative, phases in sorted(by_path.items()):
+        training = phases.get("train")
+        evaluation = phases.get("eval")
+        if training is None:
+            raise ValueError(
+                f"eval.environment.{relative} cannot define policy semantics independently; "
+                f"set train.environment.{relative} and rlab will mirror it into evaluation"
+            )
+        if evaluation is not None and evaluation[1] != training[1]:
+            raise ValueError(
+                f"train/eval policy environment overrides disagree for {relative}: "
+                f"{training[1]!r} != {evaluation[1]!r}"
+            )
+        if isinstance(catalog, Mapping) and relative.startswith("task.reward."):
+            raise ValueError(
+                "catalog goals reject raw reward overrides; select or override a named "
+                f"reward_shape instead: train.environment.{relative}"
+            )
+        raw_value = training[0]
+        goal_overrides.append(f"train.environment.{relative}={raw_value}")
+        effective_overrides.append(f"train.environment.{relative}={raw_value}")
+        if has_eval:
+            goal_overrides.append(f"eval.environment.{relative}={raw_value}")
+            effective_overrides.append(f"eval.environment.{relative}={raw_value}")
+        elif evaluation is not None:
+            raise ValueError("training-only goals do not support eval.environment overrides")
+    return source_overrides, goal_overrides, effective_overrides
 
 
 def _contains_secret_key(value: Any, path: str = "") -> str | None:
@@ -589,9 +710,30 @@ def compose_train_document(
         for item in recipe_override_list
         if item.split("=", 1)[0].strip().startswith(REWARD_DEFINITION_OVERRIDE_PREFIX)
     ]
-    source_overrides = [
+    non_reward_definition_overrides = [
         item for item in recipe_override_list if item not in reward_definition_overrides
     ]
+    source_overrides, policy_goal_overrides, effective_environment_overrides = (
+        _partition_policy_environment_overrides(
+            non_reward_definition_overrides,
+            goal_document=goal_composition.document,
+            label=f"recipe overrides for {recipe_path}",
+        )
+    )
+    if policy_goal_overrides:
+        goal_composition = ComposedDocument(
+            document=apply_dotlist_overrides(
+                goal_composition.document,
+                policy_goal_overrides,
+                label=f"policy environment overrides for {goal_path}",
+            ),
+            sources=goal_composition.sources,
+        )
+        validate_goal_contract_document(
+            goal_composition.document,
+            goal_composition.sources[-1] if goal_composition.sources else goal_path,
+            Path(".").resolve(),
+        )
     source_document = apply_dotlist_overrides(
         recipe_composition.document,
         source_overrides,
@@ -713,6 +855,8 @@ def compose_train_document(
     document = attach_environment_identity(document)
     if recipe_override_list:
         document["recipe_overrides"] = recipe_override_list
+    if effective_environment_overrides:
+        document["effective_recipe_overrides"] = effective_environment_overrides
     if recipe_path.suffix.lower() in YAML_EXTENSIONS or len(sources) > 1:
         document["_composition"] = {
             "goal_root_path": str(goal_path.resolve()),

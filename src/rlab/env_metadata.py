@@ -13,6 +13,7 @@ from rlab.env_identity import (
     task_config_from_train_config,
 )
 from rlab.preprocessing import preprocessing_contract
+from rlab.reward_transform import migrate_legacy_artifact_reward_config
 from rlab.train_config import playback_env_arg_keys
 
 
@@ -140,6 +141,18 @@ def sanitize_env_config_metadata(config: dict[str, Any]) -> dict[str, Any]:
         if legacy_game is not None:
             cleaned.setdefault("game", legacy_game)
         cleaned["env_args"] = env_args
+    existing_task = cleaned.get("task")
+    raw_task = (
+        dict(existing_task)
+        if isinstance(existing_task, dict)
+        else task_config_from_train_config(cleaned)
+    )
+    migrated_args, migrated_task = migrate_legacy_artifact_reward_config(
+        cleaned.get("env_args"),
+        raw_task,
+    )
+    cleaned["env_args"] = migrated_args
+    cleaned["task"] = migrated_task
     normalized_args, normalized_task = normalize_action_configuration(
         provider_id=str(cleaned.get("env_provider") or "stable-retro-turbo"),
         game=str(cleaned.get("game") or ""),

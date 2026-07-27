@@ -191,6 +191,26 @@ def test_rlab_facade_same_step_resets_bandit_lanes() -> None:
         env.close()
 
 
+def test_rlab_facade_applies_common_reward_scale_then_clip() -> None:
+    config = _config()
+    reward = {
+        **config.task["reward"],
+        "reward_scale": 2.0,
+        "reward_clip": [0.0, 0.4],
+    }
+    env = make_vec_envs(
+        replace(config, task={**config.task, "reward": reward}),
+        n_envs=2,
+        seed=7,
+    )
+    try:
+        env.reset()
+        _observations, rewards, _dones, _infos = env.step(np.asarray([0, 1], dtype=np.int64))
+        np.testing.assert_allclose(rewards, [0.0, 0.4])
+    finally:
+        env.close()
+
+
 def test_bandit_recipe_materializes_fixed_train_and_eval_contracts() -> None:
     document = _bandit_recipe_document()
     validate_materialized_train_recipe(document)
