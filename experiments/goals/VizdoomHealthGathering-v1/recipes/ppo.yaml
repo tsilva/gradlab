@@ -1,0 +1,9 @@
+defaults:
+- ../../../recipes/_presets/atari-ppo@_global_
+- _self_
+recipe_id: ppo
+description: >-
+  Seed {{ seed }} trains PPO from pixels to gather health and survive 512 policy steps, with
+  stochastic 100-episode evaluation and checkpoint promotion at 95% survival.
+train:
+  timesteps: 10000000

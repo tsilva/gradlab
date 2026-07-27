@@ -100,7 +100,7 @@ class LedgerCheckpointHelper(CallbackHelper):
     def __init__(
         self,
         *,
-        args: Any,
+        train_config: Mapping[str, Any],
         config: EnvConfig,
         save_freq: int,
         save_path: str | Path,
@@ -109,7 +109,7 @@ class LedgerCheckpointHelper(CallbackHelper):
         eval_required: bool = True,
     ) -> None:
         super().__init__()
-        self.args = args
+        self.train_config = train_config
         self.config = config
         self.save_freq = save_freq
         self.save_path = Path(save_path)
@@ -124,7 +124,7 @@ class LedgerCheckpointHelper(CallbackHelper):
     def _on_step(self) -> bool:
         if self.save_freq <= 0 or self.n_calls % self.save_freq != 0:
             return True
-        training_cap = getattr(self.args, "timesteps", None)
+        training_cap = self.train_config.get("timesteps")
         if training_cap is not None and self.num_timesteps >= int(training_cap):
             # The learner writes the authoritative final checkpoint immediately
             # after learn() returns. Avoid an immutable periodic/final collision at
@@ -139,14 +139,14 @@ class LedgerCheckpointHelper(CallbackHelper):
         final_path = install_model_bundle(
             final_path,
             save_checkpoint=lambda path: self.model.save(str(path)),
-            args=self.args,
+            train_config=self.train_config,
             config=self.config,
             kind=kind,
             checkpoint_step_value=step,
             state_archive_summary=state_archive_artifact_summary(getattr(self.model, "env", None)),
         )
         checkpoint_id = self.metric_store.record_checkpoint(
-            run_name=str(getattr(self.args, "run_name", "")),
+            run_name=str(self.train_config.get("run_name") or ""),
             kind=kind,
             step=step,
             path=final_path,
@@ -157,7 +157,7 @@ class LedgerCheckpointHelper(CallbackHelper):
             {TRAIN_ARTIFACT_SAVE_SECONDS: time.perf_counter() - started},
             step=step,
             source=f"checkpoint-save:{kind}",
-            publish=bool(getattr(self.args, "wandb", True)),
+            publish=bool(self.train_config.get("wandb", True)),
         )
         print(
             f"checkpoint ready: id={checkpoint_id} step={step} path={final_path}",

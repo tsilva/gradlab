@@ -379,26 +379,32 @@ class _FakeMetricStore:
 
 
 def _jerk_context(tmp_path, *, timesteps: int):
-    args = SimpleNamespace(
-        resolved_n_envs=1,
-        seed=7,
-        timesteps=timesteps,
-        acceptance_mode="first_training_success",
-        fallback_action="noop",
-        archive_replay_probability_initial=0.25,
-        archive_replay_probability_max=0.9,
-        protected_prefix_steps=128,
-        max_prefix_shorten_steps=128,
-        retained_limit=8,
-        log_interval_steps=10,
-        checkpoint_freq=100,
-        early_stop=None,
-        checkpoint_eval_backend="none",
-        run_name="test-jerk",
-        attempt_id="attempt-0000000000000001",
-    )
+    train_config = {
+        "resolved_n_envs": 1,
+        "seed": 7,
+        "timesteps": timesteps,
+        "checkpoint_freq": 100,
+        "early_stop": None,
+        "checkpoint_eval_backend": "none",
+        "run_name": "test-jerk",
+        "attempt_id": "attempt-0000000000000001",
+        "training_backend": {
+            "id": "rlab.jerk",
+            "config": {
+                "acceptance_mode": "first_training_success",
+                "fallback_action": "noop",
+                "archive_replay_probability_initial": 0.25,
+                "archive_replay_probability_max": 0.9,
+                "protected_prefix_steps": 128,
+                "max_prefix_shorten_steps": 128,
+                "retained_limit": 8,
+                "log_interval_steps": 10,
+            },
+        },
+    }
     return SimpleNamespace(
-        args=args,
+        train_config=train_config,
+        backend_config=train_config["training_backend"]["config"],
         environment=SimpleNamespace(game="SuperMarioBros-Nes-v0", state="Level1-1", states=()),
         checkpoint_dir=tmp_path / "checkpoints",
         run_dir=tmp_path,
@@ -489,7 +495,10 @@ def test_sb3_and_jerk_early_stop_adapters_make_identical_decisions(tmp_path) -> 
             early_stop=jerk_machine,
         )
 
-    jerk_path = jerk_context.run_dir / f"early_stop_decision-{jerk_context.args.attempt_id}.json"
+    jerk_path = (
+        jerk_context.run_dir
+        / f"early_stop_decision-{jerk_context.train_config['attempt_id']}.json"
+    )
     assert json.loads(sb3_path.read_text(encoding="utf-8")) == json.loads(
         jerk_path.read_text(encoding="utf-8")
     )

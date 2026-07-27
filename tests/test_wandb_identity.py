@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import argparse
 import sys
 import tempfile
 import threading
@@ -103,18 +102,18 @@ def test_init_wandb_records_resolved_identity_and_submission_group() -> None:
         captured.update(kwargs)
         return FakeRun()
 
-    args = argparse.Namespace(
-        wandb=True,
-        wandb_tags="goal_id:alepy__breakout,recipe_id:base",
-        wandb_entity="entity",
-        wandb_project=None,
-        wandb_display_name="breakout__base__s123__01234567",
-        wandb_group="bx0123456789abcdef",
-        run_name="bx0123456789abcdef-base-s123-20260714T120000Z",
-        run_description="offline identity canary",
-        wandb_mode="offline",
-        wandb_run_id="rlab-0123456789abcdef01234567",
-    )
+    train_config = {
+        "wandb": True,
+        "wandb_tags": "goal_id:alepy__breakout,recipe_id:base",
+        "wandb_entity": "entity",
+        "wandb_project": None,
+        "wandb_display_name": "breakout__base__s123__01234567",
+        "wandb_group": "bx0123456789abcdef",
+        "run_name": "bx0123456789abcdef-base-s123-20260714T120000Z",
+        "run_description": "offline identity canary",
+        "wandb_mode": "offline",
+        "wandb_run_id": "rlab-0123456789abcdef01234567",
+    }
     config = EnvConfig(
         env_provider="ale-py",
         game="breakout",
@@ -126,12 +125,12 @@ def test_init_wandb_records_resolved_identity_and_submission_group() -> None:
         patch("rlab.wandb_publisher.load_wandb_env"),
         patch.dict(sys.modules, {"wandb": SimpleNamespace(init=fake_init)}),
     ):
-        _start_wandb(args, run_dir=tmp, config=config)
+        _start_wandb(train_config, run_dir=tmp, config=config)
 
     assert captured["project"] == "Breakout-Atari2600-v0"
     assert captured["group"] == "bx0123456789abcdef"
     assert captured["id"] == "rlab-0123456789abcdef01234567"
-    assert captured["name"] == args.wandb_display_name
+    assert captured["name"] == train_config["wandb_display_name"]
     assert captured["config"]["wandb_project"] == "Breakout-Atari2600-v0"
     assert captured["config"]["game_family"] == "Atari2600-Breakout"
     assert captured["config"]["environment"]["env_id"] == "ale-py:breakout"
@@ -146,17 +145,17 @@ def test_init_wandb_falls_back_to_run_name_for_legacy_config() -> None:
         def define_metric(self, *_args, **_kwargs) -> None:
             return None
 
-    args = argparse.Namespace(
-        wandb=True,
-        wandb_tags="",
-        wandb_entity="entity",
-        wandb_project=None,
-        wandb_group="legacy-group",
-        run_name="legacy-run-name",
-        run_description="legacy identity canary",
-        wandb_mode="offline",
-        wandb_run_id="rlab-0123456789abcdef01234567",
-    )
+    train_config = {
+        "wandb": True,
+        "wandb_tags": "",
+        "wandb_entity": "entity",
+        "wandb_project": None,
+        "wandb_group": "legacy-group",
+        "run_name": "legacy-run-name",
+        "run_description": "legacy identity canary",
+        "wandb_mode": "offline",
+        "wandb_run_id": "rlab-0123456789abcdef01234567",
+    }
     config = EnvConfig(env_provider="ale-py", game="breakout", state=None)
 
     with (
@@ -167,9 +166,9 @@ def test_init_wandb_falls_back_to_run_name_for_legacy_config() -> None:
             {"wandb": SimpleNamespace(init=lambda **kwargs: captured.update(kwargs) or FakeRun())},
         ),
     ):
-        _start_wandb(args, run_dir=tmp, config=config)
+        _start_wandb(train_config, run_dir=tmp, config=config)
 
-    assert captured["name"] == args.run_name
+    assert captured["name"] == train_config["run_name"]
     assert captured["group"] == "legacy-group"
 
 

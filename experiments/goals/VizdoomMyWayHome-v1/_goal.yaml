@@ -1,0 +1,42 @@
+defaults:
+- ../_vizdoom-common@_global_
+- _self_
+title: ViZDoom My Way Home visual navigation
+train:
+  environment:
+    env_config:
+      env_args:
+        game_variables: [ARMOR]
+        info_filter:
+          mode: all
+          keys: [armor, pending_reset]
+    task:
+      signals:
+        armor: armor
+        episode_done: pending_reset
+      events:
+        vest_reached: {signal: armor, operation: increase}
+        episode_ended: {signal: episode_done, operation: equals_for, value: 1, steps: 1}
+      termination:
+        success: [vest_reached]
+        timeout: [episode_ended]
+        max_episode_steps: 512
+eval:
+  environment:
+    env_config:
+      env_args:
+        game_variables: [ARMOR]
+        info_filter:
+          mode: all
+          keys: [armor, pending_reset]
+    task:
+      signals:
+        armor: armor
+        episode_done: pending_reset
+      events:
+        vest_reached: {signal: armor, operation: increase}
+        episode_ended: {signal: episode_done, operation: equals_for, value: 1, steps: 1}
+      termination:
+        success: [vest_reached]
+        timeout: [episode_ended]
+        max_episode_steps: 512

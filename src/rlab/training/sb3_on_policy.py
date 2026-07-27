@@ -204,12 +204,16 @@ def parse_net_arch(value: str) -> list[int]:
     return layers
 
 
-def policy_kwargs_from_args(args, *, optimizer_eps: float | None = None) -> dict[str, object]:
+def policy_kwargs_from_config(
+    backend_config: Mapping[str, Any],
+    *,
+    optimizer_eps: float | None = None,
+) -> dict[str, object]:
     policy_kwargs: dict[str, object] = {}
     if optimizer_eps is not None:
         policy_kwargs["optimizer_kwargs"] = {"eps": optimizer_eps}
-    pi_arch = parse_net_arch(args.policy_net_arch)
-    vf_arch = parse_net_arch(args.value_net_arch)
+    pi_arch = parse_net_arch(str(backend_config["policy_net_arch"]))
+    vf_arch = parse_net_arch(str(backend_config["value_net_arch"]))
     if pi_arch or vf_arch:
         policy_kwargs["net_arch"] = {"pi": pi_arch, "vf": vf_arch}
     return policy_kwargs
@@ -232,19 +236,19 @@ def save_model_bundle(
     model_path = install_model_bundle(
         model_path,
         save_checkpoint=lambda path: model.save(str(path)),
-        args=context.args,
+        train_config=context.train_config,
         config=context.environment,
         kind=kind,
         checkpoint_step_value=step,
         state_archive_summary=state_archive_artifact_summary(getattr(model, "env", None)),
     )
     checkpoint_id = context.metric_store.record_checkpoint(
-        run_name=str(context.args.run_name),
+        run_name=str(context.train_config["run_name"]),
         kind=kind,
         step=step,
         path=model_path,
         sha256=None,
-        eval_required=context.args.checkpoint_eval_backend != "none",
+        eval_required=context.train_config["checkpoint_eval_backend"] != "none",
     )
     print(f"{kind} model ready: id={checkpoint_id} step={step} path={model_path}", flush=True)
     return model_path
@@ -284,20 +288,21 @@ def run_sb3_on_policy(
         install_on_policy_safe_boundary_stop,
     )
 
-    args = context.args
+    common_config = context.train_config
+    backend_config = context.backend_config
     config = context.environment
-    n_envs = int(args.resolved_n_envs)
+    n_envs = int(common_config["resolved_n_envs"])
     preflight = preflight_state_archive_provider(
         config=config,
         n_envs=n_envs,
-        seed=args.seed,
+        seed=int(common_config["seed"]),
         rom_binding=getattr(context, "rom_binding", None),
-        state_archive=getattr(args, "state_archive", None),
+        state_archive=common_config.get("state_archive"),
     )
     if preflight is not None:
         preflight_path = context.run_dir / "state_archive_preflight.json"
         write_canonical_json(preflight_path, preflight)
-        args.state_archive_preflight_sha256 = file_sha256(preflight_path)
+        common_config["state_archive_preflight_sha256"] = file_sha256(preflight_path)
         print(
             "state archive provider preflight passed: "
             f"provider={preflight['provider_id']} codec={preflight['codec_id']} "
@@ -307,16 +312,16 @@ def run_sb3_on_policy(
     env = make_training_vec_env(
         config=config,
         n_envs=n_envs,
-        seed=args.seed,
+        seed=int(common_config["seed"]),
         rom_binding=getattr(context, "rom_binding", None),
-        state_archive=getattr(args, "state_archive", None),
+        state_archive=common_config.get("state_archive"),
         state_archive_root=context.run_dir / "state-archive",
     )
     try:
         store_path = metric_store_path(context.run_dir)
-        set_random_seed(args.seed)
+        set_random_seed(int(common_config["seed"]))
         validate_action_space(env.action_space, algorithm_id=algorithm_id)
-        device = resolve_sb3_device(args.device)
+        device = resolve_sb3_device(str(backend_config["device"]))
         print(f"Using torch device: {device}", flush=True)
         model = model_factory(context, env, config, device)
 
@@ -346,17 +351,18 @@ def run_sb3_on_policy(
                 ),
             ),
         ]
-        if getattr(args, "state_archive", None) is not None:
-            archive_config = getattr(args, "state_archive", None)
+        if common_config.get("state_archive") is not None:
+            archive_config = common_config.get("state_archive")
             if isinstance(archive_config, Mapping) and archive_config.get("curriculum") is not None:
                 components.append(ArchiveCurriculumFeedbackHelper())
-        if args.early_stop:
+        if common_config["early_stop"]:
             components.append(
                 MetricEarlyStopHelper(
                     decision_path=(
-                        context.run_dir / f"early_stop_decision-{str(args.attempt_id)}.json"
+                        context.run_dir
+                        / f"early_stop_decision-{str(common_config['attempt_id'])}.json"
                     ),
-                    config=args.early_stop,
+                    config=common_config["early_stop"],
                     stop_flag=context.stop_flag,
                     metric_store_path=store_path,
                 )
@@ -376,33 +382,36 @@ def run_sb3_on_policy(
                 ),
             ]
         )
-        checkpoint_save_freq = checkpoint_save_frequency(args.checkpoint_freq, n_envs)
+        checkpoint_save_freq = checkpoint_save_frequency(
+            int(common_config["checkpoint_freq"]),
+            n_envs,
+        )
         if checkpoint_save_freq is not None:
             components.append(
                 LedgerCheckpointHelper(
-                    args=args,
+                    train_config=common_config,
                     config=config,
                     save_freq=checkpoint_save_freq,
                     save_path=str(context.checkpoint_dir),
                     name_prefix=checkpoint_prefix(config.game, algorithm_id=algorithm_id),
                     metric_store_path=store_path,
-                    eval_required=args.checkpoint_eval_backend != "none",
+                    eval_required=common_config["checkpoint_eval_backend"] != "none",
                 )
             )
-        if args.ent_coef_final is not None:
+        if backend_config["ent_coef_final"] is not None:
             components.append(
                 EntropyCoefficientScheduleHelper(
-                    initial_value=args.ent_coef,
-                    final_value=args.ent_coef_final,
+                    initial_value=backend_config["ent_coef"],
+                    final_value=backend_config["ent_coef_final"],
                     schedule_timesteps=(
-                        args.ent_coef_schedule_timesteps
-                        if args.ent_coef_schedule_timesteps > 0
-                        else args.timesteps
+                        backend_config["ent_coef_schedule_timesteps"]
+                        if backend_config["ent_coef_schedule_timesteps"] > 0
+                        else common_config["timesteps"]
                     ),
                     algorithm_id=algorithm_id,
                 )
             )
-        if args.checkpoint_eval_backend == "none":
+        if common_config["checkpoint_eval_backend"] == "none":
             print(
                 "checkpoint evaluation disabled; this run cannot establish promotion or acceptance"
             )
@@ -412,11 +421,14 @@ def run_sb3_on_policy(
         context.mark_ready()
 
         final_model_path = context.run_dir / "final_model.zip"
-        if args.resume:
-            remaining_timesteps = max(0, int(args.timesteps) - int(model.num_timesteps))
+        if backend_config["resume"]:
+            remaining_timesteps = max(
+                0,
+                int(common_config["timesteps"]) - int(model.num_timesteps),
+            )
             print(
                 f"resuming learner at step={model.num_timesteps} "
-                f"remaining={remaining_timesteps} cap={args.timesteps}",
+                f"remaining={remaining_timesteps} cap={common_config['timesteps']}",
                 flush=True,
             )
             if remaining_timesteps:
@@ -427,7 +439,11 @@ def run_sb3_on_policy(
                     reset_num_timesteps=False,
                 )
         else:
-            model.learn(total_timesteps=args.timesteps, callback=callback, progress_bar=True)
+            model.learn(
+                total_timesteps=int(common_config["timesteps"]),
+                callback=callback,
+                progress_bar=True,
+            )
         save_model_bundle(
             model=model,
             context=context,

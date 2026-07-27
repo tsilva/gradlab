@@ -24,10 +24,16 @@ from rlab.policy_bundle import (
     playback_contract,
     playback_contract_audit,
 )
+from rlab.play_attribution import PolicyActionAttributor
+from rlab.play_session import (
+    _PlaybackSession,
+    resolved_play_launch_lines,
+)
 from rlab.play_termination import (
     configured_termination_ids,
     with_enabled_termination_conditions,
 )
+from rlab.play_web import WebPlaybackRunner
 from rlab.rom_assets import rom_asset_manifest_for_game
 from rlab.rom_runtime import ensure_local_rom_binding
 from rlab.seeds import validate_eval_seed, validate_playback_seed
@@ -372,12 +378,6 @@ class PlaybackLoader:
         approval_hash: str,
         progress: ProgressCallback,
     ) -> ActivePlayback:
-        from rlab.play import (
-            PolicyActionAttributor,
-            _PlaybackSession,
-            resolved_play_launch_lines,
-        )
-        from rlab.play_web import WebPlaybackRunner
         from rlab.policy_models import load_policy_model
 
         args = candidate.args

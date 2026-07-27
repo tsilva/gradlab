@@ -17,7 +17,7 @@ from rlab.batch_runtime import BatchRuntime, ProviderDescriptor
 from rlab.runtime_contract import train_config_contract_payload, train_config_contract_sha256
 from rlab.task_kernels import IdentityTaskDefinition
 from rlab.train import main as train_main
-from rlab.train_config import materialized_train_args, validate_and_normalize_train_config
+from rlab.train_config import load_materialized_train_config, validate_and_normalize_train_config
 from rlab.training_backend import BackendContext
 
 
@@ -187,18 +187,18 @@ def test_unavailable_backend_fails_before_run_resources_are_created() -> None:
         assert not (root / "runs" / "must-not-exist").exists()
 
 
-def test_materialized_args_are_a_temporary_flat_backend_view() -> None:
+def test_materialized_config_preserves_nested_backend_ownership() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         path = Path(tmp) / "train.json"
         path.write_text(
             json.dumps({"timesteps": 20, **backend_config(n_steps=7)}),
             encoding="utf-8",
         )
-        args = materialized_train_args(path)
-    assert args.timesteps == 20
-    assert args.n_steps == 7
-    assert args.training_backend_id == "sb3.ppo"
-    assert args.training_backend["config"]["n_steps"] == 7
+        config = load_materialized_train_config(path)
+    assert config["timesteps"] == 20
+    assert "n_steps" not in config
+    assert config["training_backend"]["id"] == "sb3.ppo"
+    assert config["training_backend"]["config"]["n_steps"] == 7
 
 
 def test_backend_schemas_participate_in_runtime_contract_hash(monkeypatch) -> None:

@@ -1,0 +1,93 @@
+defaults:
+- _self_
+goal_id: "{{ goal_id }}"
+tags:
+- "goal_id:{{ goal_id }}"
+- "recipe_id:{{ recipe_id }}"
+- "env_id:{{ env_id }}"
+title: ViZDoom {{ goal_id }} objective
+objective:
+  rank:
+  - max(eval/full/outcome/success/rate/min)
+  - max(eval/full/episode/return/mean)
+  - min(leader/checkpoint/step)
+train:
+  checkpoint_eval_backend: modal
+  checkpoint_freq: 250000
+  stop_on_acceptance: true
+  environment:
+    env_provider: &vizdoom_provider vizdoom-turbo
+    env_config:
+      <<: &vizdoom_env_config
+        game: "{{ goal_id }}"
+        state: default
+        n_envs: 32
+        env_args:
+          <<: &vizdoom_provider_args
+            scenario: scenario
+            info: data
+            use_restricted_actions: discrete
+            record: false
+            players: 1
+            inttype: stable
+            obs_type: image
+            render_mode: rgb_array
+            num_threads: 32
+            rom_path: null
+            obs_copy: safe_view
+            obs_grayscale: true
+            obs_layout: chw
+            frame_stack: 4
+            noop_reset_max: 0
+            info_filter:
+              mode: all
+              keys: []
+            use_fire_reset: false
+            state_dir: null
+            doom_map: null
+            doom_skill: null
+            game_args: null
+            game_variables: []
+            treat_episode_timeout_as_truncation: true
+            vizdoom_config: null
+    preprocessing: &vizdoom_preprocessing
+      frame_skip: 4
+      max_pool_frames: false
+      sticky_action_prob: 0.0
+      observation_size: 84
+      obs_crop: [0, 0, 0, 0]
+      obs_crop_mode: remove
+      obs_crop_fill: 0
+      obs_resize_algorithm: area
+    task: &vizdoom_task
+      id: identity
+      action:
+        set: native
+      signals: {}
+      events: {}
+      termination:
+        max_episode_steps: 512
+      reward:
+        reward_mode: native
+        reward_scale: 1.0
+        reward_clip: false
+eval:
+  episodes: 100
+  acceptance:
+  - metric: eval/full/outcome/success/rate/min
+    operator: '>='
+    threshold: 0.95
+  policy:
+    stochastic: true
+  environment:
+    env_provider: *vizdoom_provider
+    env_config:
+      <<: *vizdoom_env_config
+      n_envs: 16
+      env_args:
+        <<: *vizdoom_provider_args
+        num_threads: 16
+    preprocessing: *vizdoom_preprocessing
+    task: *vizdoom_task
+release:
+  huggingface: {}
