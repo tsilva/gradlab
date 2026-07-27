@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -107,8 +109,7 @@ class RunAuthority:
 
     def create_attempt_manifest(self, manifest: RunManifest) -> str:
         return self.control.put_json(
-            f"{self.run_prefix(manifest.run_id)}/attempts/"
-            f"{manifest.attempt_id}/manifest.json",
+            f"{self.run_prefix(manifest.run_id)}/attempts/{manifest.attempt_id}/manifest.json",
             manifest.to_dict(),
             create_only=True,
         )
@@ -129,10 +130,7 @@ class RunAuthority:
         current = self.control.get_json_optional(key)
         current_etag = str(self.control.head(key)["etag"]) if current is not None else None
         if current is not None and _parse_timestamp(str(current["expires_at"])) > instant:
-            if (
-                str(current["attempt_id"]) != attempt_id
-                or str(current["holder_id"]) != holder_id
-            ):
+            if str(current["attempt_id"]) != attempt_id or str(current["holder_id"]) != holder_id:
                 raise LeaseUnavailable(
                     f"writer lease is held by {current['attempt_id']}/{current['holder_id']}"
                 )
@@ -239,9 +237,7 @@ class RunAuthority:
         )
         archive_prefix = f"expiring-metric-journals/{run_id}/"
         archived_keys = sorted(
-            key
-            for key in self.control.iter_keys(archive_prefix)
-            if key.endswith(".jsonl")
+            key for key in self.control.iter_keys(archive_prefix) if key.endswith(".jsonl")
         )
         for source_key in active_keys:
             suffix = source_key.split(f"{active_prefix}/", 1)[1]
@@ -263,6 +259,178 @@ class RunAuthority:
             "segment_count": len(archived_keys),
             "keys": archived_keys,
         }
+
+    @staticmethod
+    def _archive_document_sha256(value: Mapping[str, Any]) -> str:
+        return hashlib.sha256(
+            json.dumps(
+                value,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+                allow_nan=False,
+            ).encode("utf-8")
+        ).hexdigest()
+
+    def state_archive_closure(self, *, run_id: str) -> dict[str, Any] | None:
+        return self.control.get_json_optional(
+            f"{self.run_prefix(run_id)}/state-archive/latest.json"
+        )
+
+    def publish_state_archive(
+        self,
+        *,
+        run_id: str,
+        attempt_id: str,
+        archive_root: Path,
+    ) -> dict[str, Any]:
+        closure_path = archive_root / "closure.json"
+        if not closure_path.is_file():
+            raise FileNotFoundError(f"state archive has no closure: {closure_path}")
+        closure = json.loads(closure_path.read_text(encoding="utf-8"))
+        if (
+            not isinstance(closure, Mapping)
+            or closure.get("semantic_id") != "state-archive-v1"
+            or int(closure.get("schema_version", 0)) != 1
+        ):
+            raise ValueError("state archive closure schema is unsupported")
+        raw_files = closure.get("files")
+        if isinstance(raw_files, str | bytes) or not isinstance(raw_files, Sequence):
+            raise ValueError("state archive closure files must be a sequence")
+        prior_objects: dict[str, str] = {}
+        prior = self.state_archive_closure(run_id=run_id)
+        if prior is not None:
+            prior_generation = self.control.get_json(str(prior["generation_key"]))
+            for raw_object in prior_generation.get("objects") or []:
+                if isinstance(raw_object, Mapping):
+                    prior_objects[str(raw_object["sha256"])] = str(raw_object["object_key"])
+        objects: list[dict[str, Any]] = []
+        seen_paths: set[str] = set()
+        for raw_file in raw_files:
+            if not isinstance(raw_file, Mapping):
+                raise ValueError("state archive closure file entry must be an object")
+            relative = Path(str(raw_file["path"]))
+            if (
+                relative.is_absolute()
+                or ".." in relative.parts
+                or relative.as_posix() in seen_paths
+            ):
+                raise ValueError("state archive closure contains an unsafe or duplicate path")
+            seen_paths.add(relative.as_posix())
+            source = archive_root / relative
+            payload = source.read_bytes()
+            digest = hashlib.sha256(payload).hexdigest()
+            if digest != str(raw_file["sha256"]) or len(payload) != int(raw_file["size_bytes"]):
+                raise ValueError(f"state archive file failed closure verification: {relative}")
+            object_key = prior_objects.get(digest) or (
+                f"{self.run_prefix(run_id)}/state-archive/objects/{digest[:2]}/{digest[2:]}"
+            )
+            if digest not in prior_objects:
+                self.control.put_bytes(
+                    object_key,
+                    payload,
+                    create_only=True,
+                    metadata={"sha256": digest},
+                )
+            objects.append(
+                {
+                    "path": relative.as_posix(),
+                    "sha256": digest,
+                    "size_bytes": len(payload),
+                    "object_key": object_key,
+                }
+            )
+        objects.sort(key=lambda row: str(row["path"]))
+        generation = {
+            "semantic_id": "state-archive-generation-v1",
+            "schema_version": 1,
+            "run_id": run_id,
+            "attempt_id": attempt_id,
+            "step": int(closure["step"]),
+            "status": str(closure["status"]),
+            "inventory_sha256": str(closure["inventory_sha256"]),
+            "archive": dict(closure["archive"]),
+            "closure": dict(closure),
+            "objects": objects,
+        }
+        generation_sha256 = self._archive_document_sha256(generation)
+        generation_key = (
+            f"{self.run_prefix(run_id)}/state-archive/generations/"
+            f"{int(closure['step']):020d}-{generation_sha256}.json"
+        )
+        self.control.put_json(generation_key, generation, create_only=True)
+        latest = {
+            "semantic_id": "state-archive-publication-v1",
+            "schema_version": 1,
+            "run_id": run_id,
+            "attempt_id": attempt_id,
+            "step": int(closure["step"]),
+            "status": str(closure["status"]),
+            "generation_key": generation_key,
+            "generation_sha256": generation_sha256,
+            "inventory_sha256": str(closure["inventory_sha256"]),
+            "file_count": len(objects),
+            "size_bytes": sum(int(row["size_bytes"]) for row in objects),
+            "archive": dict(closure["archive"]),
+        }
+        self.control.put_json(
+            f"{self.run_prefix(run_id)}/state-archive/latest.json",
+            latest,
+            create_only=False,
+        )
+        return latest
+
+    def restore_state_archive(
+        self,
+        *,
+        run_id: str,
+        destination: Path,
+    ) -> dict[str, Any] | None:
+        latest = self.state_archive_closure(run_id=run_id)
+        if latest is None:
+            return None
+        generation_key = str(latest["generation_key"])
+        generation = self.control.get_json(generation_key)
+        if self._archive_document_sha256(generation) != str(latest["generation_sha256"]):
+            raise ValueError("state archive generation hash mismatch")
+        objects = generation.get("objects")
+        if isinstance(objects, str | bytes) or not isinstance(objects, Sequence):
+            raise ValueError("state archive generation objects must be a sequence")
+        destination.mkdir(parents=True, exist_ok=True)
+        for raw_object in objects:
+            if not isinstance(raw_object, Mapping):
+                raise ValueError("state archive generation object must be a mapping")
+            relative = Path(str(raw_object["path"]))
+            if relative.is_absolute() or ".." in relative.parts:
+                raise ValueError("state archive generation contains an unsafe path")
+            payload = self.control.get_bytes(str(raw_object["object_key"]))
+            digest = hashlib.sha256(payload).hexdigest()
+            if digest != str(raw_object["sha256"]) or len(payload) != int(raw_object["size_bytes"]):
+                raise ValueError(f"state archive object failed verification: {relative}")
+            target = destination / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            temporary = target.with_name(f".{target.name}.{uuid.uuid4().hex}.tmp")
+            descriptor = os.open(
+                temporary,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                0o600,
+            )
+            try:
+                with os.fdopen(descriptor, "wb") as stream:
+                    stream.write(payload)
+                    stream.flush()
+                    os.fsync(stream.fileno())
+                os.replace(temporary, target)
+            except BaseException:
+                temporary.unlink(missing_ok=True)
+                raise
+        closure = generation.get("closure")
+        if not isinstance(closure, Mapping):
+            raise ValueError("state archive generation has no closure")
+        from rlab.file_utils import atomic_write_json
+
+        atomic_write_json(destination / "closure.json", dict(closure))
+        return dict(latest)
 
     def publish_checkpoint(
         self,
@@ -288,9 +456,7 @@ class RunAuthority:
         model_document_key = f"{public_prefix}/model.json"
         recipe_document_key = f"{public_prefix}/recipe.json"
         manifest_key = f"{public_prefix}/manifest.json"
-        sidecar_key = (
-            f"{self.run_prefix(run_id)}/checkpoints/{identifier}/recovery-sidecar.json"
-        )
+        sidecar_key = f"{self.run_prefix(run_id)}/checkpoints/{identifier}/recovery-sidecar.json"
         self.control.put_json(sidecar_key, recovery_sidecar, create_only=True)
         self.models.put_file(
             model_key,
@@ -328,9 +494,7 @@ class RunAuthority:
             goal_sha256=str(contract_hashes["goal_sha256"]),
             recipe_sha256=str(contract_hashes["recipe_sha256"]),
             environment_sha256=str(contract_hashes["environment_sha256"]),
-            evaluation_contract_sha256=str(
-                contract_hashes["evaluation_contract_sha256"]
-            ),
+            evaluation_contract_sha256=str(contract_hashes["evaluation_contract_sha256"]),
             recovery_sidecar_key=sidecar_key,
             created_at=str(created_at or self.clock.utc_now()),
         )
@@ -421,8 +585,7 @@ class RunAuthority:
         modal_call_id: str,
     ) -> str:
         return self.evaluation.put_json(
-            f"{self.run_prefix(run_id)}/evals/{idempotency_key}/"
-            f"dispatch-{int(attempt)}.json",
+            f"{self.run_prefix(run_id)}/evals/{idempotency_key}/dispatch-{int(attempt)}.json",
             {
                 "schema_version": 1,
                 "run_id": run_id,
@@ -442,10 +605,7 @@ class RunAuthority:
         attempt: int,
         expires_at: float,
     ) -> dict[str, Any]:
-        key = (
-            f"{self.run_prefix(run_id)}/evals/{idempotency_key}/"
-            f"attempt-{int(attempt)}.json"
-        )
+        key = f"{self.run_prefix(run_id)}/evals/{idempotency_key}/attempt-{int(attempt)}.json"
         document = {
             "schema_version": 1,
             "run_id": run_id,
@@ -464,8 +624,7 @@ class RunAuthority:
         attempt: int,
     ) -> dict[str, Any] | None:
         return self.evaluation.get_json_optional(
-            f"{self.run_prefix(run_id)}/evals/{idempotency_key}/"
-            f"attempt-{int(attempt)}.json"
+            f"{self.run_prefix(run_id)}/evals/{idempotency_key}/attempt-{int(attempt)}.json"
         )
 
     def eval_dispatch(
@@ -476,8 +635,7 @@ class RunAuthority:
         attempt: int,
     ) -> dict[str, Any] | None:
         return self.evaluation.get_json_optional(
-            f"{self.run_prefix(run_id)}/evals/{idempotency_key}/"
-            f"dispatch-{int(attempt)}.json"
+            f"{self.run_prefix(run_id)}/evals/{idempotency_key}/dispatch-{int(attempt)}.json"
         )
 
     def eval_result(
@@ -492,8 +650,7 @@ class RunAuthority:
 
     def put_verified_eval_result(self, result: EvalResult) -> str:
         return self.evaluation.put_json(
-            f"{self.run_prefix(result.run_id)}/evals/"
-            f"{result.idempotency_key}/verified-result.json",
+            f"{self.run_prefix(result.run_id)}/evals/{result.idempotency_key}/verified-result.json",
             result.to_dict(),
             create_only=True,
         )
@@ -518,10 +675,7 @@ class RunAuthority:
         )
 
     def create_early_stop(self, receipt: EarlyStopReceipt) -> str:
-        key = (
-            f"{self.run_prefix(receipt.run_id)}/attempts/"
-            f"{receipt.attempt_id}/early-stop.json"
-        )
+        key = f"{self.run_prefix(receipt.run_id)}/attempts/{receipt.attempt_id}/early-stop.json"
         document = receipt.to_dict()
         existing = self.control.get_json_optional(key)
         if existing is not None:
@@ -539,21 +693,15 @@ class RunAuthority:
         if receipt.state != "succeeded":
             raise ValueError("canonical terminal receipt is reserved for scientific success")
         if receipt.acceptance_required is not True:
-            raise ValueError(
-                "canonical terminal receipt requires acceptance-backed evaluation"
-            )
+            raise ValueError("canonical terminal receipt requires acceptance-backed evaluation")
         drain = dict(receipt.drain)
         if drain.get("complete") is not True:
             raise ValueError("successful terminal receipt requires a complete drain")
         if int(receipt.wandb_high_water_mark) <= 0:
             raise ValueError("successful terminal receipt requires W&B metric delivery")
-        if int(drain.get("metric_segment_high_water") or 0) != int(
-            receipt.wandb_high_water_mark
-        ):
+        if int(drain.get("metric_segment_high_water") or 0) != int(receipt.wandb_high_water_mark):
             raise ValueError("R2 and W&B delivery high-water marks do not match")
-        if int(drain.get("wandb_remote_high_water_mark") or 0) < int(
-            receipt.wandb_high_water_mark
-        ):
+        if int(drain.get("wandb_remote_high_water_mark") or 0) < int(receipt.wandb_high_water_mark):
             raise ValueError("W&B delivery is not remotely visible")
         capacity_ratio = drain.get("publication_capacity_ratio")
         if capacity_ratio is not None and float(capacity_ratio) < 2.0:
@@ -585,9 +733,7 @@ class RunAuthority:
         maximum_step = max(int(row.get("step") or 0) for row in checkpoints)
         if int(receipt.final_step) != maximum_step:
             raise ValueError("terminal final_step does not match checkpoint inventory")
-        accepted = [
-            row for row in evals if str(row.get("status") or "") == "accepted"
-        ]
+        accepted = [row for row in evals if str(row.get("status") or "") == "accepted"]
         if not accepted:
             raise ValueError("successful terminal receipt requires an accepted evaluation")
         selected = min(
@@ -602,8 +748,7 @@ class RunAuthority:
         )
         if (
             promotion is None
-            or str(promotion.get("checkpoint_id") or "")
-            != str(selected.get("checkpoint_id") or "")
+            or str(promotion.get("checkpoint_id") or "") != str(selected.get("checkpoint_id") or "")
             or int(promotion.get("checkpoint_step") or -1)
             != int(selected.get("checkpoint_step") or 0)
         ):
@@ -616,8 +761,7 @@ class RunAuthority:
 
     def create_attempt_terminal(self, receipt: TerminalReceipt) -> str:
         return self.control.put_json(
-            f"{self.run_prefix(receipt.run_id)}/attempts/"
-            f"{receipt.attempt_id}/terminal.json",
+            f"{self.run_prefix(receipt.run_id)}/attempts/{receipt.attempt_id}/terminal.json",
             receipt.to_dict(),
             create_only=True,
         )
@@ -640,14 +784,10 @@ class RunAuthority:
         eval_keys = list(self.evaluation.iter_keys(f"{prefix}/evals"))
         control_keys = list(self.control.iter_keys(f"{prefix}/attempts"))
         attempt_manifests = [
-            self.control.get_json(key)
-            for key in control_keys
-            if key.endswith("/manifest.json")
+            self.control.get_json(key) for key in control_keys if key.endswith("/manifest.json")
         ]
         attempt_terminals = [
-            self.control.get_json(key)
-            for key in control_keys
-            if key.endswith("/terminal.json")
+            self.control.get_json(key) for key in control_keys if key.endswith("/terminal.json")
         ]
         attempt_manifests.sort(key=lambda row: str(row.get("created_at") or ""))
         attempt_terminals.sort(key=lambda row: str(row.get("completed_at") or ""))

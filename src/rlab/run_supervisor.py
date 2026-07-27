@@ -257,6 +257,8 @@ class RunSupervisor:
         self.wandb_remote_high_water = 0
         self.wandb_remote_visible_lag_seconds = 0.0
         self.accepted_observed_at: float | None = None
+        self.state_archive_publication: dict[str, Any] | None = None
+        self.state_archive_closure_sha256 = ""
         self.recovery_mode = str(self.manifest.compute.get("recovery_mode") or "resume-training")
         if self.recovery_mode not in {"resume-training", "drain-only"}:
             raise ValueError(f"unsupported recovery mode: {self.recovery_mode}")
@@ -329,12 +331,8 @@ class RunSupervisor:
             early_stop_config,
             label="authoritative early-stop receipt",
         )
-        if existing.decision_sha256 != canonical_json_sha256(
-            validated_authoritative_decision
-        ):
-            raise ValueError(
-                "authoritative early-stop receipt decision hash does not match"
-            )
+        if existing.decision_sha256 != canonical_json_sha256(validated_authoritative_decision):
+            raise ValueError("authoritative early-stop receipt decision hash does not match")
         return existing
 
     def _prior_drain_early_stop_receipt(self) -> EarlyStopReceipt | None:
@@ -361,26 +359,17 @@ class RunSupervisor:
             None,
         )
         if current_index is None:
-            raise ValueError(
-                f"current attempt manifest is missing: {self.manifest.attempt_id}"
-            )
+            raise ValueError(f"current attempt manifest is missing: {self.manifest.attempt_id}")
         for row in reversed(manifests[:current_index]):
-            receipt = self._authoritative_early_stop_receipt(
-                attempt_id=str(row["attempt_id"])
-            )
+            receipt = self._authoritative_early_stop_receipt(attempt_id=str(row["attempt_id"]))
             if receipt is not None:
                 return receipt
         return None
 
     def _resolve_early_stop_receipt(self) -> EarlyStopReceipt | None:
-        existing = self._authoritative_early_stop_receipt(
-            attempt_id=self.manifest.attempt_id
-        )
+        existing = self._authoritative_early_stop_receipt(attempt_id=self.manifest.attempt_id)
 
-        decision_path = (
-            self.run_dir
-            / f"early_stop_decision-{self.manifest.attempt_id}.json"
-        )
+        decision_path = self.run_dir / f"early_stop_decision-{self.manifest.attempt_id}.json"
         if not decision_path.is_file():
             return existing or self._prior_drain_early_stop_receipt()
         raw = json.loads(decision_path.read_text(encoding="utf-8"))
@@ -404,9 +393,7 @@ class RunSupervisor:
             run_id=self.manifest.run_id,
             attempt_id=self.manifest.attempt_id,
             condition_id=str(decision["condition_id"]),
-            matched_condition_ids=tuple(
-                str(item) for item in decision["matched_condition_ids"]
-            ),
+            matched_condition_ids=tuple(str(item) for item in decision["matched_condition_ids"]),
             outcome=str(decision["outcome"]),  # type: ignore[arg-type]
             trigger=str(decision["trigger"]),  # type: ignore[arg-type]
             metric=str(decision["metric"]),
@@ -439,6 +426,9 @@ class RunSupervisor:
 
     def _configure_resume(self, config: dict[str, Any]) -> None:
         if self.recovery_mode != "resume-training":
+            return
+        backend = config.get("training_backend")
+        if isinstance(backend, Mapping) and backend.get("id") == "rlab.go-explore":
             return
         index = self.authority.models.get_json_optional(f"runs/{self.manifest.run_id}/index.json")
         checkpoints = [
@@ -698,6 +688,18 @@ class RunSupervisor:
         return encoded.decode("utf-8", errors="replace").strip()
 
     def _recover_durable_state(self) -> None:
+        if self.train_config.get("state_archive") is not None:
+            restored = self.authority.restore_state_archive(
+                run_id=self.manifest.run_id,
+                destination=self.run_dir / "state-archive",
+            )
+            if restored is not None:
+                self.state_archive_publication = restored
+                print(
+                    "restored durable state archive "
+                    f"step={int(restored['step'])} files={int(restored['file_count'])}",
+                    flush=True,
+                )
         prefix = f"runs/{self.manifest.run_id}"
         control_keys = list(self.authority.control.iter_keys(f"{prefix}/attempts"))
         expiring_journal_keys = list(
@@ -1600,6 +1602,39 @@ class RunSupervisor:
                 return False
         return True
 
+    def _publish_state_archive(self, *, require_closed: bool = False) -> int:
+        if self.train_config.get("state_archive") is None:
+            return 0
+        archive_root = self.run_dir / "state-archive"
+        closure_path = archive_root / "closure.json"
+        if not closure_path.is_file():
+            if require_closed:
+                raise RuntimeError("state archive is enabled but has no local closure")
+            return 0
+        closure_sha256 = file_sha256(closure_path)
+        if closure_sha256 == self.state_archive_closure_sha256:
+            publication = self.state_archive_publication
+            if require_closed and (publication is None or publication.get("status") != "closed"):
+                raise RuntimeError("state archive has no closed publication")
+            return 0
+        publication = self.authority.publish_state_archive(
+            run_id=self.manifest.run_id,
+            attempt_id=self.manifest.attempt_id,
+            archive_root=archive_root,
+        )
+        if require_closed and publication.get("status") != "closed":
+            raise RuntimeError("state archive final closure is not closed")
+        self.state_archive_publication = publication
+        self.state_archive_closure_sha256 = closure_sha256
+        self._emit(
+            "state_archive_published",
+            step=int(publication["step"]),
+            status=str(publication["status"]),
+            generation_sha256=str(publication["generation_sha256"]),
+            file_count=int(publication["file_count"]),
+        )
+        return 1
+
     def active_iteration(self, *, now: float | None = None) -> int:
         """Advance active supervision once without sleeping."""
 
@@ -1610,6 +1645,7 @@ class RunSupervisor:
             return 0
         activity += self._seal_metrics(instant)
         activity += self._publish_checkpoints()
+        activity += self._publish_state_archive()
         activity += self._submit_pending_evals()
         activity += self._poll_evals(instant)
         activity += self._publish_wandb()
@@ -1641,6 +1677,7 @@ class RunSupervisor:
             raise LeaseUnavailable("writer lease was lost while draining")
         activity += self._seal_metrics(instant, force=True)
         activity += self._publish_checkpoints()
+        activity += self._publish_state_archive()
         if self.cancel_requested:
             self._cancel_outstanding_evals()
         else:
@@ -1957,13 +1994,12 @@ class RunSupervisor:
             if self.cancel_requested:
                 self._cancel_outstanding_evals()
                 raise RuntimeError("run canceled")
+            self._publish_state_archive(require_closed=True)
             self._publish_checkpoints()
             self.store.set_state(
                 "checkpoint_set_frozen",
                 {
-                    "checkpoint_ledger_ids": [
-                        int(row["id"]) for row in self.store.checkpoints()
-                    ],
+                    "checkpoint_ledger_ids": [int(row["id"]) for row in self.store.checkpoints()],
                     "frozen_at": self.clock.utc_now(),
                 },
             )
@@ -1998,6 +2034,7 @@ class RunSupervisor:
                         self._wait_for_learner_exit_with_lease(10)
             if not self.lease_lost:
                 try:
+                    self._publish_state_archive()
                     self._drain()
                 except Exception as drain_exc:
                     print(f"failure drain incomplete: {drain_exc}", flush=True)
@@ -2028,10 +2065,7 @@ class RunSupervisor:
                     run_id=self.manifest.run_id
                 )
                 journal_expires_at = (
-                    (
-                        self.clock.utc_datetime()
-                        + timedelta(days=METRIC_JOURNAL_RETENTION_DAYS)
-                    )
+                    (self.clock.utc_datetime() + timedelta(days=METRIC_JOURNAL_RETENTION_DAYS))
                     .isoformat()
                     .replace("+00:00", "Z")
                 )
@@ -2073,6 +2107,7 @@ class RunSupervisor:
             },
             completed_at=self.clock.utc_now(),
             early_stop=(early_stop.to_dict() if early_stop is not None else None),
+            state_archive=self.state_archive_publication,
         )
         self.authority.create_attempt_terminal(receipt)
         self._emit(

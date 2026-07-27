@@ -263,6 +263,23 @@ def test_jerk_policy_round_trip_and_lane_resets(tmp_path) -> None:
     assert loaded.predict(obs, deterministic=False)[0].tolist() == [2, 4]
 
 
+def test_jerk_artifact_discriminator_prevents_same_step_role_collision(
+    tmp_path,
+) -> None:
+    policy = JerkPolicy(
+        action_names=ACTIONS,
+        action_runs=(ActionRun(2, 3),),
+        fallback_action=0,
+    )
+    checkpoint = tmp_path / "checkpoint.zip"
+    final = tmp_path / "final.zip"
+    policy.save(checkpoint, artifact_discriminator="checkpoint:100")
+    policy.save(final, artifact_discriminator="final:100")
+
+    assert checkpoint.read_bytes() != final.read_bytes()
+    assert JerkPolicy.load(checkpoint).action_runs == JerkPolicy.load(final).action_runs
+
+
 def test_jerk_policy_rejects_removed_flat_action_sequence_schema(tmp_path) -> None:
     path = tmp_path / "legacy-model.zip"
     payload = {

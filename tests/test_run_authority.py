@@ -94,7 +94,9 @@ class RunAuthorityTests(unittest.TestCase):
     def test_identifiers_have_required_shapes(self) -> None:
         self.assertRegex(new_run_id(), r"^rlab-[0-9a-f]{32}$")
         self.assertRegex(new_attempt_id(), r"^attempt-[0-9a-f]{16}$")
-        self.assertEqual(checkpoint_id(step=250_000, sha256=SHA), "checkpoint-250000-aaaaaaaaaaaaaaaa")
+        self.assertEqual(
+            checkpoint_id(step=250_000, sha256=SHA), "checkpoint-250000-aaaaaaaaaaaaaaaa"
+        )
 
     def test_manifest_is_create_only_and_idempotent(self) -> None:
         run_id = new_run_id()
@@ -116,9 +118,7 @@ class RunAuthorityTests(unittest.TestCase):
         overridden = RunManifest(
             **{
                 **manifest.to_dict(),
-                "recipe_overrides": [
-                    "train.backend.config.learning_rate=0.0002"
-                ],
+                "recipe_overrides": ["train.backend.config.learning_rate=0.0002"],
             }
         )
         overridden.validate()
@@ -126,9 +126,7 @@ class RunAuthorityTests(unittest.TestCase):
             overridden.to_dict()["recipe_overrides"],
             ["train.backend.config.learning_rate=0.0002"],
         )
-        invalid = RunManifest(
-            **{**manifest.to_dict(), "recipe_overrides": [""]}
-        )
+        invalid = RunManifest(**{**manifest.to_dict(), "recipe_overrides": [""]})
         with self.assertRaisesRegex(ValueError, "non-empty"):
             invalid.validate()
 
@@ -205,9 +203,7 @@ class RunAuthorityTests(unittest.TestCase):
         )
         destination_key = archived["keys"][0]
         self.assertEqual(
-            hashlib.sha256(
-                self.authority.control.get_bytes(destination_key)
-            ).hexdigest(),
+            hashlib.sha256(self.authority.control.get_bytes(destination_key)).hexdigest(),
             digest,
         )
         self.assertFalse(self.authority.control._file_path(source_key).exists())
@@ -276,6 +272,64 @@ class RunAuthorityTests(unittest.TestCase):
             first.checkpoint_id,
         )
 
+    def test_state_archive_generation_is_content_addressed_and_restorable(self) -> None:
+        run_id = new_run_id()
+        attempt_id = new_attempt_id()
+        archive_root = Path(self.temporary.name) / "local-archive"
+        source = archive_root / "blobs" / "ab" / "payload"
+        source.parent.mkdir(parents=True)
+        source.write_bytes(b"portable-provider-state")
+        digest = hashlib.sha256(source.read_bytes()).hexdigest()
+        files = [
+            {
+                "path": "blobs/ab/payload",
+                "sha256": digest,
+                "size_bytes": source.stat().st_size,
+            }
+        ]
+        inventory_sha256 = hashlib.sha256(
+            json.dumps(
+                files,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+        (archive_root / "closure.json").write_text(
+            json.dumps(
+                {
+                    "semantic_id": "state-archive-v1",
+                    "schema_version": 1,
+                    "status": "closed",
+                    "step": 64,
+                    "inventory_sha256": inventory_sha256,
+                    "archive": {
+                        "semantic_id": "state-archive-v1",
+                        "entry_count": 1,
+                        "blob_count": 1,
+                    },
+                    "files": files,
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        publication = self.authority.publish_state_archive(
+            run_id=run_id,
+            attempt_id=attempt_id,
+            archive_root=archive_root,
+        )
+        restored_root = Path(self.temporary.name) / "restored-archive"
+        restored = self.authority.restore_state_archive(
+            run_id=run_id,
+            destination=restored_root,
+        )
+        self.assertEqual(restored, publication)
+        self.assertEqual(
+            (restored_root / "blobs" / "ab" / "payload").read_bytes(),
+            source.read_bytes(),
+        )
+        self.assertRegex(publication["generation_sha256"], r"^[0-9a-f]{64}$")
+
     def test_eval_intent_is_deterministic_and_private(self) -> None:
         run_id = new_run_id()
         key = eval_idempotency_key(
@@ -303,9 +357,7 @@ class RunAuthorityTests(unittest.TestCase):
             expires_at="2026-07-24T12:00:00Z",
         )
         self.authority.put_eval_intent(intent)
-        stored = self.authority.evaluation.get_json(
-            f"runs/{run_id}/evals/{key}/intent.json"
-        )
+        stored = self.authority.evaluation.get_json(f"runs/{run_id}/evals/{key}/intent.json")
         self.assertEqual(stored["checkpoint_id"], intent.checkpoint_id)
         self.assertEqual(list(self.authority.models.iter_keys(f"runs/{run_id}/evals")), [])
 

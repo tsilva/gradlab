@@ -205,6 +205,16 @@ class StateArchiveTests(unittest.TestCase):
             assert summary is not None
             self.assertEqual(summary["persistence"], "durable")
             self.assertEqual(summary["entry_count"], 1)
+            entry_id = str(receipt["entry_id"])
+            view = runtime.write_state_archive_view(
+                "test-view",
+                {"step": 17, "entry_id": entry_id},
+                referenced_entry_ids=[entry_id],
+            )
+            self.assertEqual(view["referenced_entry_ids"], [entry_id])
+            closure = runtime.seal_state_archive(step=17)
+            self.assertEqual(closure["status"], "recoverable")
+            self.assertGreaterEqual(len(closure["files"]), 3)
             runtime.close()
             reopened = StateArchive(
                 Path(root),
@@ -213,6 +223,10 @@ class StateArchiveTests(unittest.TestCase):
                 compatibility_id="test-environment-v1",
             )
             self.assertEqual(reopened.entry_count, 1)
+            self.assertEqual(
+                reopened.view_document("test-view"),
+                {"step": 17, "entry_id": entry_id},
+            )
 
 
 if __name__ == "__main__":

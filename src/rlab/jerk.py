@@ -16,6 +16,7 @@ from rlab.task_kernels import Outcome
 
 JERK_POLICY_SCHEMA_VERSION = 2
 JERK_POLICY_MEMBER = "jerk_policy.json"
+JERK_ARTIFACT_IDENTITY_MEMBER = "artifact_identity.json"
 
 
 @dataclass(frozen=True, order=True)
@@ -454,7 +455,12 @@ class JerkPolicy:
             "fallback_action": self.fallback_action,
         }
 
-    def save(self, path: str | Path) -> None:
+    def save(
+        self,
+        path: str | Path,
+        *,
+        artifact_discriminator: str | None = None,
+    ) -> None:
         destination = Path(path)
         destination.parent.mkdir(parents=True, exist_ok=True)
         with zipfile.ZipFile(destination, mode="w", compression=zipfile.ZIP_DEFLATED) as archive:
@@ -462,6 +468,22 @@ class JerkPolicy:
                 JERK_POLICY_MEMBER,
                 json.dumps(self.payload(), sort_keys=True, separators=(",", ":")) + "\n",
             )
+            if artifact_discriminator is not None:
+                discriminator = str(artifact_discriminator).strip()
+                if not discriminator:
+                    raise ValueError("JERK artifact_discriminator must not be empty")
+                archive.writestr(
+                    JERK_ARTIFACT_IDENTITY_MEMBER,
+                    json.dumps(
+                        {
+                            "schema_version": 1,
+                            "artifact_discriminator": discriminator,
+                        },
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    )
+                    + "\n",
+                )
 
     @classmethod
     def load(cls, path: str | Path) -> "JerkPolicy":
