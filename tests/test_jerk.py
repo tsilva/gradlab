@@ -263,7 +263,7 @@ def test_jerk_policy_round_trip_and_lane_resets(tmp_path) -> None:
     assert loaded.predict(obs, deterministic=False)[0].tolist() == [2, 4]
 
 
-def test_jerk_policy_loads_legacy_flat_action_sequence(tmp_path) -> None:
+def test_jerk_policy_rejects_removed_flat_action_sequence_schema(tmp_path) -> None:
     path = tmp_path / "legacy-model.zip"
     payload = {
         "schema_version": 1,
@@ -276,10 +276,8 @@ def test_jerk_policy_loads_legacy_flat_action_sequence(tmp_path) -> None:
     with zipfile.ZipFile(path, mode="w") as archive:
         archive.writestr(JERK_POLICY_MEMBER, json.dumps(payload))
 
-    loaded = JerkPolicy.load(path)
-
-    assert loaded.action_runs == (ActionRun(2, 2), ActionRun(4, 1))
-    assert loaded.step_count == 3
+    with pytest.raises(ValueError, match="unsupported JERK policy schema"):
+        JerkPolicy.load(path)
 
 
 def test_generic_policy_loader_dispatches_jerk(tmp_path) -> None:
@@ -474,10 +472,7 @@ def test_sb3_and_jerk_early_stop_adapters_make_identical_decisions(tmp_path) -> 
             early_stop=jerk_machine,
         )
 
-    jerk_path = (
-        jerk_context.run_dir
-        / f"early_stop_decision-{jerk_context.args.attempt_id}.json"
-    )
+    jerk_path = jerk_context.run_dir / f"early_stop_decision-{jerk_context.args.attempt_id}.json"
     assert json.loads(sb3_path.read_text(encoding="utf-8")) == json.loads(
         jerk_path.read_text(encoding="utf-8")
     )

@@ -590,7 +590,7 @@ class MarioNativeProviderTests(unittest.TestCase):
 
     def test_runtime_matches_turbo_api_v1_releases(self) -> None:
         installed = Version(importlib.metadata.version("supermariobrosnes-turbo"))
-        self.assertEqual(installed, Version("0.5.0"))
+        self.assertEqual(installed, Version("0.6.0"))
         self.assertEqual(Version(retro.__version__), Version("1.0.1.post36"))
         env_type = super_mario_bros_nes_turbo_vec_env_type()
         self.assertIs(env_type.supports_live_snapshots, True)

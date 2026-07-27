@@ -45,7 +45,7 @@ def build_model_provenance(
     model_path: Path,
     kind: str,
     checkpoint_step_value: int | None = None,
-    snapshot_curriculum_session: Mapping[str, Any] | None = None,
+    state_archive_summary: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     del config
     provenance = {
@@ -64,9 +64,7 @@ def build_model_provenance(
         "goal_path": getattr(args, "goal_path", ""),
         "goal_sha256": getattr(args, "goal_sha256", ""),
         "goal_contract_sha256": getattr(args, "goal_contract_sha256", ""),
-        "effective_goal_contract_sha256": getattr(
-            args, "effective_goal_contract_sha256", ""
-        ),
+        "effective_goal_contract_sha256": getattr(args, "effective_goal_contract_sha256", ""),
         "reward_program_kind": getattr(args, "reward_program_kind", ""),
         "reward_program_revision": getattr(args, "reward_program_revision", ""),
         "reward_shape": getattr(args, "reward_shape", ""),
@@ -83,25 +81,20 @@ def build_model_provenance(
         "checkpoint_step": checkpoint_step(model_path)
         if checkpoint_step(model_path) is not None
         else checkpoint_step_value,
-        "training_backend_id": str(
-            getattr(args, "training_backend_id", "") or ""
-        ).strip(),
+        "training_backend_id": str(getattr(args, "training_backend_id", "") or "").strip(),
         "training_backend_config_hash": str(
             getattr(args, "training_backend_config_hash", "") or ""
         ).strip(),
         "algorithm_id": str(getattr(args, "algorithm_id", "") or "").strip(),
+        "search_algorithm_id": str(getattr(args, "search_algorithm_id", "") or "").strip(),
         "model_class": str(getattr(args, "model_class", "") or "").strip(),
         "training_metadata": {"versions": runtime_versions_metadata()},
     }
-    preflight_sha256 = str(
-        getattr(args, "snapshot_curriculum_preflight_sha256", "") or ""
-    ).strip()
+    preflight_sha256 = str(getattr(args, "state_archive_preflight_sha256", "") or "").strip()
     if preflight_sha256:
-        provenance["snapshot_curriculum_preflight_sha256"] = preflight_sha256
-    if snapshot_curriculum_session is not None:
-        provenance["snapshot_curriculum_session"] = deepcopy(
-            dict(snapshot_curriculum_session)
-        )
+        provenance["state_archive_preflight_sha256"] = preflight_sha256
+    if state_archive_summary is not None:
+        provenance["state_archive_summary"] = deepcopy(dict(state_archive_summary))
     return provenance
 
 
@@ -118,9 +111,7 @@ def write_policy_bundle_sidecars(
         if existing is None:
             raise ValueError(f"incomplete versioned policy sidecars for {model_path}")
         if recipe_source.read_bytes() != recipe_sidecar.read_bytes():
-            raise ValueError(
-                f"canonical recipe changed after checkpoint creation: {model_path}"
-            )
+            raise ValueError(f"canonical recipe changed after checkpoint creation: {model_path}")
         return model_sidecar, recipe_sidecar
     shutil.copyfile(recipe_source, recipe_sidecar)
     write_canonical_json(
@@ -139,22 +130,18 @@ def install_model_bundle(
     config: EnvConfig,
     kind: str,
     checkpoint_step_value: int | None,
-    snapshot_curriculum_session: Mapping[str, Any] | None = None,
+    state_archive_summary: Mapping[str, Any] | None = None,
 ) -> Path:
     """Atomically install checkpoint bytes and their reproducible policy sidecars."""
 
     model_path.parent.mkdir(parents=True, exist_ok=True)
-    staging_dir = Path(
-        tempfile.mkdtemp(prefix=".checkpoint-staging-", dir=model_path.parent)
-    )
+    staging_dir = Path(tempfile.mkdtemp(prefix=".checkpoint-staging-", dir=model_path.parent))
     staged_checkpoint = staging_dir / model_path.name
     staged_paths: list[Path] = [staged_checkpoint]
     try:
         save_checkpoint(staged_checkpoint)
         if not staged_checkpoint.is_file():
-            raise FileNotFoundError(
-                f"checkpoint saver did not create {staged_checkpoint}"
-            )
+            raise FileNotFoundError(f"checkpoint saver did not create {staged_checkpoint}")
         fsync_path(staged_checkpoint)
         provenance = build_model_provenance(
             args,
@@ -162,7 +149,7 @@ def install_model_bundle(
             model_path,
             kind,
             checkpoint_step_value=checkpoint_step_value,
-            snapshot_curriculum_session=snapshot_curriculum_session,
+            state_archive_summary=state_archive_summary,
         )
         recipe_source = Path(str(getattr(args, "recipe_json_path", "") or ""))
         if not recipe_source.is_file():
@@ -175,9 +162,7 @@ def install_model_bundle(
         staged_paths.extend((staged_model_document, staged_recipe))
         write_policy_bundle_sidecars(staged_checkpoint, recipe_source, provenance)
         if load_policy_bundle_from_checkpoint(staged_checkpoint) is None:
-            raise ValueError(
-                f"checkpoint bundle validation failed: {staged_checkpoint}"
-            )
+            raise ValueError(f"checkpoint bundle validation failed: {staged_checkpoint}")
         for staged in staged_paths:
             fsync_path(staged)
 
@@ -190,8 +175,7 @@ def install_model_bundle(
             mismatches = [
                 destination
                 for staged, destination in expected
-                if not destination.is_file()
-                or staged.read_bytes() != destination.read_bytes()
+                if not destination.is_file() or staged.read_bytes() != destination.read_bytes()
             ]
             if mismatches:
                 raise FileExistsError(
@@ -223,8 +207,7 @@ def load_model_metadata(model_path: Path) -> dict[str, Any]:
         if model_path.name == CHECKPOINT_FILENAME:
             versioned_path = model_path.with_name(MODEL_FILENAME)
         raise FileNotFoundError(
-            f"{model_path} is missing its current policy bundle beginning at "
-            f"{versioned_path}"
+            f"{model_path} is missing its current policy bundle beginning at {versioned_path}"
         )
     return policy_bundle_as_metadata(bundle)
 
@@ -261,9 +244,7 @@ def load_playback_env_config(
         )
     config = env_config_from_config_dict(saved_config)
     if config is None:
-        raise SystemExit(
-            f"{model_path} playback metadata does not contain an environment config"
-        )
+        raise SystemExit(f"{model_path} playback metadata does not contain an environment config")
     return playback_env_config(
         resolve_env_config(config),
         respect_task_termination=respect_task_termination,

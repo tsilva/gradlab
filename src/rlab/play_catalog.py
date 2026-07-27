@@ -910,8 +910,14 @@ class PlayCatalog:
         )
 
         def values() -> Iterator[dict[str, Any]]:
+            filters = (
+                {"config.goal_slug": selected_goal_slug}
+                if selected_goal_slug
+                else None
+            )
             api_runs = self._wandb_api().runs(
                 f"{entity}/{project}",
+                filters=filters,
                 order="-created_at",
                 per_page=200,
                 lazy=True,
@@ -1206,7 +1212,7 @@ class PlayCatalog:
             ):
                 continue
             rows.append(row)
-        rows.sort(key=lambda row: (row.promoted, row.step, row.sha256), reverse=True)
+        rows.sort(key=lambda row: (row.step, row.sha256), reverse=True)
         return tuple(row.to_dict() for row in rows)
 
 

@@ -191,7 +191,7 @@ BREAKOUT_TURBO_ENV_PROVIDER = EnvProvider(
         canonical_args=_TURBO_CANONICAL_ARGS,
         explicit_env_args=_TURBO_EXPLICIT_ENV_ARGS,
         required_values={},
-        optional_env_args=frozenset({"snapshot_bank_sha256", "snapshot_bank_uri"}),
+        optional_env_args=frozenset(),
     ),
 )
 

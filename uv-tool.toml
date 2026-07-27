@@ -7,5 +7,5 @@ constraint-dependencies = [
 [exclude-newer-package]
 breakout-turbo-env = "2026-07-27T12:49:02Z"
 stable-retro-turbo = "2026-07-27T12:17:53Z"
-supermariobrosnes-turbo = "2026-07-27T12:20:40Z"
+supermariobrosnes-turbo = "2026-07-27T15:52:00Z"
 vizdoom-turbo = "2026-07-27T12:19:03Z"

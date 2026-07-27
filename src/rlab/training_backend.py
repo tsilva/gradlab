@@ -146,11 +146,11 @@ def normalize_training_backend(
     )
     backend = module.backend_for_id(backend_id)
     backend.validate(common_config, normalized)
-    from rlab.snapshot_curriculum import validate_snapshot_curriculum_runtime_contract
+    from rlab.state_archive import validate_state_archive_runtime_contract
 
-    priority_resolver = getattr(module, "snapshot_curriculum_priority_metrics", None)
+    priority_resolver = getattr(module, "state_archive_priority_metrics", None)
     supported_priorities = priority_resolver(backend_id) if callable(priority_resolver) else ()
-    validate_snapshot_curriculum_runtime_contract(
+    validate_state_archive_runtime_contract(
         common_config,
         backend_id=backend_id,
         supported_priority_metrics=supported_priorities,

@@ -24,20 +24,20 @@ from rlab.metric_names import (
     canonical_training_scalars,
     TRAIN_ARTIFACT_SAVE_SECONDS,
     TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_MEAN,
-    TRAIN_SNAPSHOT_ADMISSION_ACCEPTED_COUNT,
-    TRAIN_SNAPSHOT_ADMISSION_CANDIDATE_COUNT,
-    TRAIN_SNAPSHOT_ARCHIVE_CELL_COUNT,
-    TRAIN_SNAPSHOT_ARCHIVE_EVICTED_COUNT,
-    TRAIN_SNAPSHOT_ARCHIVE_SNAPSHOT_COUNT,
-    TRAIN_SNAPSHOT_CAPTURE_CALL_COUNT,
-    TRAIN_SNAPSHOT_CAPTURE_SECONDS,
-    TRAIN_SNAPSHOT_FEEDBACK_TRAJECTORY_COUNT,
-    TRAIN_SNAPSHOT_RESET_EPISODE_COUNT,
-    TRAIN_SNAPSHOT_RESET_FORCED_BOUNDARY_COUNT,
-    TRAIN_SNAPSHOT_RESET_SECONDS,
-    TRAIN_SNAPSHOT_SAMPLING_EFFECTIVE_CELL_COUNT,
-    TRAIN_SNAPSHOT_SAMPLING_PROBABILITY_MAX,
-    TRAIN_SNAPSHOT_TRANSITION_SHARE,
+    TRAIN_ARCHIVE_ADMISSION_ACCEPTED_COUNT,
+    TRAIN_ARCHIVE_ADMISSION_CANDIDATE_COUNT,
+    TRAIN_ARCHIVE_CAPTURE_CALL_COUNT,
+    TRAIN_ARCHIVE_CAPTURE_SECONDS,
+    TRAIN_ARCHIVE_CURRICULUM_CELL_COUNT,
+    TRAIN_ARCHIVE_CURRICULUM_ENTRY_COUNT,
+    TRAIN_ARCHIVE_EVICTED_COUNT,
+    TRAIN_ARCHIVE_FEEDBACK_TRAJECTORY_COUNT,
+    TRAIN_ARCHIVE_RESTORE_EPISODE_COUNT,
+    TRAIN_ARCHIVE_RESTORE_FORCED_BOUNDARY_COUNT,
+    TRAIN_ARCHIVE_RESTORE_SECONDS,
+    TRAIN_ARCHIVE_SAMPLING_EFFECTIVE_CELL_COUNT,
+    TRAIN_ARCHIVE_SAMPLING_PROBABILITY_MAX,
+    TRAIN_ARCHIVE_TRANSITION_SHARE,
     TRAIN_OUTCOME_SUCCESS_CURRENT_RATE_MEAN,
     TRAIN_OUTCOME_SUCCESS_CURRENT_RATE_MIN,
     TRAIN_OUTCOME_SUCCESS_WINDOW_100_RATE_MEAN,
@@ -66,7 +66,7 @@ from rlab.metric_names import (
     validate_metric_payload,
 )
 from rlab.metric_store import MetricStore
-from rlab.snapshot_curriculum import snapshot_curriculum_artifact_summary
+from rlab.state_archive import state_archive_artifact_summary
 
 
 def task_metric_source(start_id: Any) -> Any:
@@ -143,9 +143,7 @@ class LedgerCheckpointHelper(CallbackHelper):
             config=self.config,
             kind=kind,
             checkpoint_step_value=step,
-            snapshot_curriculum_session=snapshot_curriculum_artifact_summary(
-                getattr(self.model, "env", None)
-            ),
+            state_archive_summary=state_archive_artifact_summary(getattr(self.model, "env", None)),
         )
         checkpoint_id = self.metric_store.record_checkpoint(
             run_name=str(getattr(self.args, "run_name", "")),
@@ -313,12 +311,7 @@ class MetricEarlyStopHelper(CallbackHelper):
         super().__init__()
         self.machine = MetricEarlyStopStateMachine(config, label="early_stop")
         self.watched_metrics = tuple(
-            sorted(
-                {
-                    str(condition["metric"])
-                    for condition in self.machine.conditions.values()
-                }
-            )
+            sorted({str(condition["metric"]) for condition in self.machine.conditions.values()})
         )
         self.decision_path = decision_path
         self.stop_flag = stop_flag
@@ -370,9 +363,7 @@ class MetricEarlyStopHelper(CallbackHelper):
         self.triggered = True
         self.stop_requested = True
         atomic_write_json(self.decision_path, update.stop_decision)
-        self.stop_flag.request(
-            f"early_stop:{str(update.stop_decision['condition_id'])}"
-        )
+        self.stop_flag.request(f"early_stop:{str(update.stop_decision['condition_id'])}")
         print(
             "early stop: "
             f"condition={update.stop_decision['condition_id']} "
@@ -626,24 +617,24 @@ class RolloutDiagnosticsHelper(CallbackHelper):
             )
 
 
-class SnapshotCurriculumFeedbackHelper(CallbackHelper):
-    """Attribute raw rollout GAE to true snapshot-origin episodes."""
+class ArchiveCurriculumFeedbackHelper(CallbackHelper):
+    """Attribute raw rollout GAE to true archive-origin episodes."""
 
     _METRIC_MAP = {
-        "archive_cell_count": TRAIN_SNAPSHOT_ARCHIVE_CELL_COUNT,
-        "archive_snapshot_count": TRAIN_SNAPSHOT_ARCHIVE_SNAPSHOT_COUNT,
-        "admission_candidate_count": TRAIN_SNAPSHOT_ADMISSION_CANDIDATE_COUNT,
-        "admission_accepted_count": TRAIN_SNAPSHOT_ADMISSION_ACCEPTED_COUNT,
-        "evicted_count": TRAIN_SNAPSHOT_ARCHIVE_EVICTED_COUNT,
-        "capture_call_count": TRAIN_SNAPSHOT_CAPTURE_CALL_COUNT,
-        "snapshot_reset_count": TRAIN_SNAPSHOT_RESET_EPISODE_COUNT,
-        "forced_boundary_count": TRAIN_SNAPSHOT_RESET_FORCED_BOUNDARY_COUNT,
-        "feedback_trajectory_count": TRAIN_SNAPSHOT_FEEDBACK_TRAJECTORY_COUNT,
-        "transition_share": TRAIN_SNAPSHOT_TRANSITION_SHARE,
-        "sampling_probability_max": TRAIN_SNAPSHOT_SAMPLING_PROBABILITY_MAX,
-        "sampling_effective_cell_count": TRAIN_SNAPSHOT_SAMPLING_EFFECTIVE_CELL_COUNT,
-        "capture_seconds": TRAIN_SNAPSHOT_CAPTURE_SECONDS,
-        "reset_seconds": TRAIN_SNAPSHOT_RESET_SECONDS,
+        "archive_cell_count": TRAIN_ARCHIVE_CURRICULUM_CELL_COUNT,
+        "archive_entry_count": TRAIN_ARCHIVE_CURRICULUM_ENTRY_COUNT,
+        "admission_candidate_count": TRAIN_ARCHIVE_ADMISSION_CANDIDATE_COUNT,
+        "admission_accepted_count": TRAIN_ARCHIVE_ADMISSION_ACCEPTED_COUNT,
+        "evicted_count": TRAIN_ARCHIVE_EVICTED_COUNT,
+        "capture_call_count": TRAIN_ARCHIVE_CAPTURE_CALL_COUNT,
+        "archive_reset_count": TRAIN_ARCHIVE_RESTORE_EPISODE_COUNT,
+        "forced_boundary_count": TRAIN_ARCHIVE_RESTORE_FORCED_BOUNDARY_COUNT,
+        "feedback_trajectory_count": TRAIN_ARCHIVE_FEEDBACK_TRAJECTORY_COUNT,
+        "transition_share": TRAIN_ARCHIVE_TRANSITION_SHARE,
+        "sampling_probability_max": TRAIN_ARCHIVE_SAMPLING_PROBABILITY_MAX,
+        "sampling_effective_cell_count": TRAIN_ARCHIVE_SAMPLING_EFFECTIVE_CELL_COUNT,
+        "capture_seconds": TRAIN_ARCHIVE_CAPTURE_SECONDS,
+        "reset_seconds": TRAIN_ARCHIVE_RESTORE_SECONDS,
     }
 
     def __init__(self) -> None:
@@ -663,7 +654,7 @@ class SnapshotCurriculumFeedbackHelper(CallbackHelper):
                 self._source = current
                 return current
             current = getattr(current, "venv", None) or getattr(current, "env", None)
-        raise RuntimeError("snapshot curriculum requires RlabVecEnv curriculum hooks")
+        raise RuntimeError("state archive requires RlabVecEnv curriculum hooks")
 
     def _on_rollout_start(self) -> None:
         self._steps = []
@@ -672,19 +663,17 @@ class SnapshotCurriculumFeedbackHelper(CallbackHelper):
     def _on_step(self) -> bool:
         step = self._find_source().take_curriculum_step()
         if step is None:
-            raise RuntimeError("snapshot curriculum step attribution is missing")
+            raise RuntimeError("state archive step attribution is missing")
         self._steps.append(step)
         return True
 
     def _on_rollout_end(self) -> None:
         rollout_buffer = getattr(self.model, "rollout_buffer", None)
         if rollout_buffer is None:
-            raise RuntimeError("snapshot curriculum requires an on-policy rollout buffer")
+            raise RuntimeError("state archive requires an on-policy rollout buffer")
         advantages = np.asarray(rollout_buffer.advantages, dtype=np.float64)
         if advantages.ndim != 2 or advantages.shape[0] != len(self._steps):
-            raise RuntimeError(
-                "snapshot curriculum attribution does not align with the rollout buffer"
-            )
+            raise RuntimeError("state archive attribution does not align with the rollout buffer")
         source = self._find_source()
         completed: list[tuple[tuple[int, int, int, str], float]] = []
         for step_index, step in enumerate(self._steps):
@@ -693,7 +682,7 @@ class SnapshotCurriculumFeedbackHelper(CallbackHelper):
             episode_indices = np.asarray(step.curriculum_episode_indices, dtype=np.int64)
             feedback_dones = np.asarray(step.curriculum_feedback_dones, dtype=np.bool_)
             if cell_ids.shape != (advantages.shape[1],):
-                raise RuntimeError("snapshot curriculum sidecar lane shape changed")
+                raise RuntimeError("state archive sidecar lane shape changed")
             for lane in range(advantages.shape[1]):
                 cell_id = cell_ids[lane]
                 if cell_id is None:
@@ -707,7 +696,7 @@ class SnapshotCurriculumFeedbackHelper(CallbackHelper):
                 fragment = self._fragments.setdefault(key, [0.0, 0])
                 value = float(abs(advantages[step_index, lane]))
                 if not math.isfinite(value):
-                    raise RuntimeError("snapshot curriculum received non-finite raw GAE")
+                    raise RuntimeError("state archive received non-finite raw GAE")
                 fragment[0] = float(fragment[0]) + value
                 fragment[1] = int(fragment[1]) + 1
                 if bool(feedback_dones[lane]):

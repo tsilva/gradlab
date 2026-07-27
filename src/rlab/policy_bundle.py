@@ -163,8 +163,9 @@ class _ModelProvenanceDocument(BoundaryModel):
     attempt_id: Any = None
     compute_target: Any = None
     dstack_task: Any = None
-    snapshot_curriculum_preflight_sha256: Any = None
-    snapshot_curriculum_session: Any = None
+    search_algorithm_id: Any = None
+    state_archive_preflight_sha256: Any = None
+    state_archive_summary: Any = None
 
 
 _MODEL_PROVENANCE_FIELDS = frozenset(_ModelProvenanceDocument.model_fields)
@@ -606,36 +607,39 @@ def validate_recipe_document(
     )
 
 
-def _validate_snapshot_curriculum_session(value: object, *, label: str) -> None:
-    session = _required_mapping(value, label=label)
+def _validate_state_archive_summary(value: object, *, label: str) -> None:
+    summary = _required_mapping(value, label=label)
     allowed = frozenset(
         {
             "semantic_id",
-            "generation",
+            "schema_version",
             "persistence",
-            "resume_behavior",
-            "archive_cell_count",
-            "archive_snapshot_count",
-            "completed_rollout",
+            "provider_id",
+            "codec_id",
+            "compatibility_id",
+            "entry_count",
+            "blob_count",
+            "blob_bytes",
+            "curriculum",
         }
     )
-    _reject_unknown(session, allowed, label=label)
-    if session.get("semantic_id") != "snapshot_curriculum_v1":
-        raise PolicyDocumentError(f"{label}.semantic_id must be 'snapshot_curriculum_v1'")
-    if session.get("persistence") != "session_local":
-        raise PolicyDocumentError(f"{label}.persistence must be 'session_local'")
-    if session.get("resume_behavior") != "cold_archive":
-        raise PolicyDocumentError(f"{label}.resume_behavior must be 'cold_archive'")
-    for key in (
-        "generation",
-        "archive_cell_count",
-        "archive_snapshot_count",
-        "completed_rollout",
-    ):
-        item = session.get(key)
-        minimum = 1 if key == "generation" else 0
-        if not isinstance(item, int) or isinstance(item, bool) or item < minimum:
-            raise PolicyDocumentError(f"{label}.{key} must be an integer >= {minimum}")
+    _reject_unknown(summary, allowed, label=label)
+    if summary.get("semantic_id") != "state-archive-v1":
+        raise PolicyDocumentError(f"{label}.semantic_id must be 'state-archive-v1'")
+    if summary.get("schema_version") != 1:
+        raise PolicyDocumentError(f"{label}.schema_version must be 1")
+    if summary.get("persistence") != "durable":
+        raise PolicyDocumentError(f"{label}.persistence must be 'durable'")
+    for key in ("provider_id", "codec_id", "compatibility_id"):
+        if not isinstance(summary.get(key), str) or not summary[key]:
+            raise PolicyDocumentError(f"{label}.{key} must be a non-empty string")
+    for key in ("entry_count", "blob_count", "blob_bytes"):
+        item = summary.get(key)
+        if not isinstance(item, int) or isinstance(item, bool) or item < 0:
+            raise PolicyDocumentError(f"{label}.{key} must be a non-negative integer")
+    curriculum = summary.get("curriculum")
+    if curriculum is not None and not isinstance(curriculum, Mapping):
+        raise PolicyDocumentError(f"{label}.curriculum must be an object")
 
 
 def _validate_model(
@@ -650,15 +654,15 @@ def _validate_model(
     )
     provenance = document["provenance"]
     assert isinstance(provenance, Mapping)
-    if "snapshot_curriculum_preflight_sha256" in provenance:
+    if "state_archive_preflight_sha256" in provenance:
         _required_sha256(
-            provenance["snapshot_curriculum_preflight_sha256"],
-            label=f"{source}.provenance.snapshot_curriculum_preflight_sha256",
+            provenance["state_archive_preflight_sha256"],
+            label=f"{source}.provenance.state_archive_preflight_sha256",
         )
-    if "snapshot_curriculum_session" in provenance:
-        _validate_snapshot_curriculum_session(
-            provenance["snapshot_curriculum_session"],
-            label=f"{source}.provenance.snapshot_curriculum_session",
+    if "state_archive_summary" in provenance:
+        _validate_state_archive_summary(
+            provenance["state_archive_summary"],
+            label=f"{source}.provenance.state_archive_summary",
         )
     _assert_portable(provenance, label=f"{source}.provenance")
     _assert_finite_json(document, label=source)

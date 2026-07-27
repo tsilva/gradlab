@@ -15,7 +15,6 @@ from rlab.task_kernels import Outcome
 
 
 JERK_POLICY_SCHEMA_VERSION = 2
-LEGACY_JERK_POLICY_SCHEMA_VERSION = 1
 JERK_POLICY_MEMBER = "jerk_policy.json"
 
 
@@ -469,20 +468,12 @@ class JerkPolicy:
         with zipfile.ZipFile(Path(path)) as archive:
             payload = json.loads(archive.read(JERK_POLICY_MEMBER))
         schema_version = int(payload.get("schema_version") or 0)
-        if schema_version not in {
-            LEGACY_JERK_POLICY_SCHEMA_VERSION,
-            JERK_POLICY_SCHEMA_VERSION,
-        }:
+        if schema_version != JERK_POLICY_SCHEMA_VERSION:
             raise ValueError("unsupported JERK policy schema version")
         if payload.get("algorithm_id") != "jerk":
             raise ValueError("JERK policy payload has the wrong algorithm id")
-        action_runs = (
-            action_runs_from_sequence(payload["action_sequence"])
-            if schema_version == LEGACY_JERK_POLICY_SCHEMA_VERSION
-            else tuple(ActionRun(*run) for run in payload["action_runs"])
-        )
         return cls(
             action_names=payload["action_names"],
-            action_runs=action_runs,
+            action_runs=tuple(ActionRun(*run) for run in payload["action_runs"]),
             fallback_action=payload["fallback_action"],
         )

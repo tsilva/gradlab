@@ -1722,13 +1722,10 @@ class PlaybackWebServer:
             },
         }
         app = payload.get("app")
-        route = app.get("route") if isinstance(app, Mapping) else None
         if (
             self._initial_project_catalog is not None
             and isinstance(app, Mapping)
             and app.get("phase") == "selecting"
-            and isinstance(route, Mapping)
-            and route.get("level", "projects") == "projects"
         ):
             payload["app"] = {
                 **app,

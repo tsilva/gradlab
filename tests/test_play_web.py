@@ -1212,6 +1212,23 @@ def test_initial_project_catalog_is_embedded_in_selection_snapshots() -> None:
     assert snapshot["app"]["catalog"]["entity"] == "research"
     assert snapshot["app"]["catalog"]["items"][0]["name"] == "Mario"
 
+    nested_snapshot = server._snapshot_for(
+        client,
+        {
+            "type": "snapshot",
+            "app": {
+                "phase": "selecting",
+                "route": {
+                    "level": "runs",
+                    "project": "Mario",
+                    "goal_id": "Level1-1",
+                },
+            },
+        },
+    )
+
+    assert nested_snapshot["app"]["catalog"]["entity"] == "research"
+
 
 def test_web_dashboard_assets_are_packaged_beside_server() -> None:
     root = Path(__file__).parents[1] / "src" / "rlab" / "web_player"

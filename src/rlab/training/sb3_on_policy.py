@@ -9,7 +9,7 @@ from typing import Any
 from gymnasium import spaces
 
 from rlab.artifacts import install_model_bundle
-from rlab.snapshot_curriculum import snapshot_curriculum_artifact_summary
+from rlab.state_archive import state_archive_artifact_summary
 from rlab.training_backend import BackendContext
 
 
@@ -51,7 +51,7 @@ class OnPolicyBackend:
         self._require_id(backend_id)
         return self
 
-    def snapshot_curriculum_priority_metrics(self, backend_id: str) -> tuple[str, ...]:
+    def state_archive_priority_metrics(self, backend_id: str) -> tuple[str, ...]:
         self._require_id(backend_id)
         return ("value_error",)
 
@@ -61,7 +61,7 @@ class OnPolicyBackend:
             "schema_version": 1,
             "status": "available",
             "defaults": self.defaults,
-            "snapshot_curriculum_priority_metrics": ["value_error"],
+            "state_archive_priority_metrics": ["value_error"],
         }
 
     def runtime_metadata(
@@ -70,12 +70,15 @@ class OnPolicyBackend:
         backend_config: Mapping[str, Any],
     ) -> Mapping[str, str]:
         self._require_id(backend_id)
-        model_class = self.model_class(backend_config) if callable(self.model_class) else self.model_class
+        model_class = (
+            self.model_class(backend_config) if callable(self.model_class) else self.model_class
+        )
         return {
             "training_backend_id": backend_id,
             "algorithm_id": self.algorithm_id,
             "model_class": model_class,
         }
+
 
 _INTEGER_FIELDS = (
     "learning_rate_schedule_timesteps",
@@ -240,9 +243,7 @@ def save_model_bundle(
         config=context.environment,
         kind=kind,
         checkpoint_step_value=step,
-        snapshot_curriculum_session=snapshot_curriculum_artifact_summary(
-            getattr(model, "env", None)
-        ),
+        state_archive_summary=state_archive_artifact_summary(getattr(model, "env", None)),
     )
     checkpoint_id = context.metric_store.record_checkpoint(
         run_name=str(context.args.run_name),
@@ -271,13 +272,13 @@ def run_sb3_on_policy(
         RlabCallback,
         RolloutDiagnosticsHelper,
         RuntimeMetricsHelper,
-        SnapshotCurriculumFeedbackHelper,
+        ArchiveCurriculumFeedbackHelper,
         ThroughputHelper,
     )
     from rlab.device import resolve_sb3_device
     from rlab.env import (
         make_training_vec_env,
-        preflight_snapshot_curriculum_provider,
+        preflight_state_archive_provider,
         task_termination,
     )
     from rlab.file_utils import file_sha256
@@ -293,20 +294,20 @@ def run_sb3_on_policy(
     args = context.args
     config = context.environment
     n_envs = int(args.resolved_n_envs)
-    preflight = preflight_snapshot_curriculum_provider(
+    preflight = preflight_state_archive_provider(
         config=config,
         n_envs=n_envs,
         seed=args.seed,
         rom_binding=getattr(context, "rom_binding", None),
-        snapshot_curriculum=getattr(args, "snapshot_curriculum", None),
+        state_archive=getattr(args, "state_archive", None),
     )
     if preflight is not None:
-        preflight_path = context.run_dir / "snapshot_curriculum_preflight.json"
+        preflight_path = context.run_dir / "state_archive_preflight.json"
         write_canonical_json(preflight_path, preflight)
-        args.snapshot_curriculum_preflight_sha256 = file_sha256(preflight_path)
+        args.state_archive_preflight_sha256 = file_sha256(preflight_path)
         print(
-            "snapshot curriculum provider preflight passed: "
-            f"provider={preflight['provider_id']} cell={preflight['cell_id']} "
+            "state archive provider preflight passed: "
+            f"provider={preflight['provider_id']} codec={preflight['codec_id']} "
             f"lanes={preflight['preflight_lanes']}",
             flush=True,
         )
@@ -315,7 +316,8 @@ def run_sb3_on_policy(
         n_envs=n_envs,
         seed=args.seed,
         rom_binding=getattr(context, "rom_binding", None),
-        snapshot_curriculum=getattr(args, "snapshot_curriculum", None),
+        state_archive=getattr(args, "state_archive", None),
+        state_archive_root=context.run_dir / "state-archive",
     )
     try:
         store_path = metric_store_path(context.run_dir)
@@ -351,14 +353,15 @@ def run_sb3_on_policy(
                 ),
             ),
         ]
-        if getattr(args, "snapshot_curriculum", None) is not None:
-            components.append(SnapshotCurriculumFeedbackHelper())
+        if getattr(args, "state_archive", None) is not None:
+            archive_config = getattr(args, "state_archive", None)
+            if isinstance(archive_config, Mapping) and archive_config.get("curriculum") is not None:
+                components.append(ArchiveCurriculumFeedbackHelper())
         if args.early_stop:
             components.append(
                 MetricEarlyStopHelper(
                     decision_path=(
-                        context.run_dir
-                        / f"early_stop_decision-{str(args.attempt_id)}.json"
+                        context.run_dir / f"early_stop_decision-{str(args.attempt_id)}.json"
                     ),
                     config=args.early_stop,
                     stop_flag=context.stop_flag,

@@ -3,18 +3,23 @@ from __future__ import annotations
 import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Protocol
 
 import gymnasium as gym
 import numpy as np
 from numba import njit
-from rlab.snapshot_curriculum import (
-    SnapshotCurriculum,
-    SnapshotCurriculumConfig,
-    SnapshotSelection,
+from rlab.state_archive import (
+    ArchiveCurriculum,
+    ArchiveCurriculumConfig,
+    ArchiveSelection,
+    RuntimeLaneState,
+    StateArchive,
+    normalize_state_archive_config,
 )
 from rlab.task_kernels import BoundTaskKernel, Outcome, event_names_from_bits
+
 
 @njit(cache=True, nogil=True)
 def _combine_step_outputs(
@@ -83,6 +88,8 @@ class ProviderDescriptor:
     action_table_hash: str | None = None
     supports_live_snapshots: bool = False
     live_snapshots_deterministic: bool = False
+    snapshot_codec_id: str | None = None
+    snapshot_compatibility_id: str | None = None
 
     def __post_init__(self) -> None:
         if not self.provider_id:
@@ -97,9 +104,7 @@ class ProviderDescriptor:
             "unsafe_view": 1,
         }[self.observation_ownership]
         if self.observation_buffer_depth != expected_depth:
-            raise ValueError(
-                "provider observation ownership/depth declaration is inconsistent"
-            )
+            raise ValueError("provider observation ownership/depth declaration is inconsistent")
         object.__setattr__(
             self,
             "capabilities",
@@ -137,6 +142,8 @@ class ProviderDescriptor:
         object.__setattr__(self, "start_probabilities", probabilities)
         object.__setattr__(self, "lane_start_ids", lane_start_ids)
         object.__setattr__(self, "render_support", tuple(self.render_support))
+        if bool(self.snapshot_codec_id) != bool(self.snapshot_compatibility_id):
+            raise ValueError("snapshot codec and compatibility ids must be declared together")
 
 
 class NativeVectorEnv(Protocol):
@@ -288,7 +295,7 @@ def _optional_lane_zero_frame(provider: Any) -> np.ndarray | None:
         if frame.ndim not in {2, 3}:
             return None
         return frame.copy()
-    except (AttributeError, IndexError, RuntimeError, TypeError, ValueError):
+    except AttributeError, IndexError, RuntimeError, TypeError, ValueError:
         return None
 
 
@@ -453,7 +460,8 @@ class BatchRuntime:
         run_seed: int = 0,
         global_lane_ids: Sequence[int] | None = None,
         capture_step_diagnostics: bool = False,
-        snapshot_curriculum: Mapping[str, Any] | None = None,
+        state_archive: Mapping[str, Any] | None = None,
+        state_archive_root: str | Path | None = None,
     ):
         self.provider = provider
         self.descriptor = descriptor
@@ -490,13 +498,39 @@ class BatchRuntime:
         ):
             raise ValueError("global_lane_ids must be unique non-negative integers")
         self.capture_step_diagnostics = bool(capture_step_diagnostics)
-        self.snapshot_curriculum: SnapshotCurriculum | None = None
-        if snapshot_curriculum is not None:
-            curriculum_config = SnapshotCurriculumConfig.from_mapping(
-                snapshot_curriculum,
-                n_envs=self.num_envs,
+        self.state_archive_config = normalize_state_archive_config(
+            state_archive,
+            n_envs=self.num_envs,
+        )
+        self.state_archive: StateArchive | None = None
+        self.archive_curriculum: ArchiveCurriculum | None = None
+        if self.state_archive_config is not None:
+            if state_archive_root is None:
+                raise ValueError("state_archive_root is required when state_archive is enabled")
+            if descriptor.snapshot_codec_id is None or descriptor.snapshot_compatibility_id is None:
+                raise ValueError(
+                    f"provider {descriptor.provider_id!r} has no portable snapshot codec"
+                )
+            self.state_archive = StateArchive(
+                state_archive_root,
+                provider_id=descriptor.provider_id,
+                codec_id=descriptor.snapshot_codec_id,
+                compatibility_id=descriptor.snapshot_compatibility_id,
             )
-            kernel.validate_snapshot_signal(curriculum_config.signal)
+            curriculum_document = self.state_archive_config["curriculum"]
+            if curriculum_document is not None:
+                curriculum_config = ArchiveCurriculumConfig.from_mapping(
+                    self.state_archive_config,
+                    n_envs=self.num_envs,
+                )
+                kernel.validate_archive_signal(curriculum_config.signal)
+                self.archive_curriculum = ArchiveCurriculum(
+                    curriculum_config,
+                    n_envs=self.num_envs,
+                    run_seed=self.run_seed,
+                    global_lane_ids=self.global_lane_ids,
+                )
+        if self.state_archive is not None:
             if not descriptor.supports_live_snapshots or not callable(
                 getattr(provider, "capture_snapshots", None)
             ):
@@ -508,12 +542,6 @@ class BatchRuntime:
                     f"provider {descriptor.provider_id!r} does not declare deterministic "
                     "live snapshot continuation"
                 )
-            self.snapshot_curriculum = SnapshotCurriculum(
-                curriculum_config,
-                n_envs=self.num_envs,
-                run_seed=self.run_seed,
-                global_lane_ids=self.global_lane_ids,
-            )
         self.reset_infos: list[dict[str, Any]] = [{} for _ in range(self.num_envs)]
         self._episode_returns = np.zeros(self.num_envs, dtype=np.float64)
         self._episode_lengths = np.zeros(self.num_envs, dtype=np.int64)
@@ -564,13 +592,14 @@ class BatchRuntime:
         self._observation_buffers: list[Any] = []
         self._final_observation_buffers: list[Any] = []
         self._current_observation_buffer = 0
-        self._reuse_provider_observations = (
-            descriptor.observation_ownership in {"owned", "safe_view"}
-            and bool(getattr(kernel, "observation_encoding_is_view", False))
-        )
+        self._reuse_provider_observations = descriptor.observation_ownership in {
+            "owned",
+            "safe_view",
+        } and bool(getattr(kernel, "observation_encoding_is_view", False))
         self._started_at = time.monotonic()
         self._native_step_seconds_total = 0.0
         self._native_step_calls_total = 0
+        self._transition_count_total = 0
         self._closed = False
 
     def request_resets(
@@ -691,7 +720,7 @@ class BatchRuntime:
         self.reset_infos = [info_columns.lane(lane) for lane in range(self.num_envs)]
         self._start_ids = self._actual_start_ids(infos, starts, mask)
         self._episode_seeds = list(normalized_seeds)
-        if self.snapshot_curriculum is not None:
+        if self.archive_curriculum is not None:
             self._set_curriculum_reset_baselines(infos, mask)
         return initial_observations
 
@@ -739,21 +768,19 @@ class BatchRuntime:
         *,
         source: str,
     ) -> np.ndarray:
-        curriculum = self.snapshot_curriculum
+        curriculum = self.archive_curriculum
         if curriculum is None:
-            raise RuntimeError("snapshot curriculum is disabled")
+            raise RuntimeError("archive curriculum is disabled")
         signal = curriculum.config.signal
         try:
-            values = np.asarray(
-                self.kernel.snapshot_signal_values(signal, infos, mask=mask)
-            )
+            values = np.asarray(self.kernel.archive_signal_values(signal, infos, mask=mask))
         except (KeyError, ValueError) as exc:
             raise ValueError(
-                f"provider {source} infos cannot resolve snapshot signal {signal!r}: {exc}"
+                f"provider {source} infos cannot resolve archive signal {signal!r}: {exc}"
             ) from exc
         if values.shape != (self.num_envs,):
             raise ValueError(
-                f"resolved {source} snapshot signal {signal!r} must have shape "
+                f"resolved {source} archive signal {signal!r} must have shape "
                 f"({self.num_envs},), "
                 f"got {values.shape}"
             )
@@ -764,9 +791,9 @@ class BatchRuntime:
         reset_infos: Mapping[str, Any],
         mask: np.ndarray,
         *,
-        selections: Mapping[int, SnapshotSelection] | None = None,
+        selections: Mapping[int, ArchiveSelection] | None = None,
     ) -> None:
-        curriculum = self.snapshot_curriculum
+        curriculum = self.archive_curriculum
         if curriculum is None:
             return
         values = self._signal_values(reset_infos, mask, source="reset")
@@ -777,7 +804,7 @@ class BatchRuntime:
             selection = selections.get(lane_index)
             if selection is not None and cell_id != selection.cell_id:
                 raise ValueError(
-                    f"snapshot lane {lane_index} restored cell {cell_id!r}; "
+                    f"archive lane {lane_index} restored cell {cell_id!r}; "
                     f"expected {selection.cell_id!r}"
                 )
             self._curriculum_previous_cells[lane_index] = cell_id
@@ -822,13 +849,180 @@ class BatchRuntime:
             raise ValueError(f"{name} must have shape ({num_envs},), got {result.shape}")
         return result
 
+    def _archive_mask(self, mask: np.ndarray) -> np.ndarray:
+        if not isinstance(mask, np.ndarray):
+            raise TypeError("state archive mask must be a NumPy array")
+        if mask.dtype != np.bool_ or mask.shape != (self.num_envs,):
+            raise ValueError(
+                f"state archive mask must have dtype bool and shape ({self.num_envs},)"
+            )
+        if not np.any(mask):
+            raise ValueError("state archive mask must select at least one lane")
+        return mask
+
+    def capture_archive_entries(
+        self,
+        mask: np.ndarray,
+        *,
+        restore_semantics: str | None = None,
+        metadata_by_lane: Mapping[int, Mapping[str, Any]] | None = None,
+        created_step: int | None = None,
+    ) -> tuple[str | None, ...]:
+        archive = self.state_archive
+        if archive is None or self.state_archive_config is None:
+            raise RuntimeError("state archive is disabled")
+        selected = self._archive_mask(mask)
+        if np.any(selected & self._pending_reset_mask):
+            lanes = np.flatnonzero(selected & self._pending_reset_mask).tolist()
+            raise ValueError(f"cannot archive lanes with pending resets: {lanes}")
+        semantics = (
+            str(restore_semantics)
+            if restore_semantics is not None
+            else str(self.state_archive_config["restore_semantics"])
+        )
+        started_at = time.perf_counter()
+        payloads, handles = archive.codec.capture(self.provider, selected)
+        if len(payloads) != self.num_envs or len(handles) != self.num_envs:
+            raise ValueError("snapshot codec capture must return one value per lane")
+        task_states = (
+            self.kernel.capture_lane_states(selected)
+            if semantics == "continuation"
+            else tuple(None for _ in range(self.num_envs))
+        )
+        result: list[str | None] = [None for _ in range(self.num_envs)]
+        for lane in np.flatnonzero(selected):
+            lane_index = int(lane)
+            payload = payloads[lane_index]
+            if payload is None:
+                raise ValueError(f"snapshot codec returned no payload for lane {lane_index}")
+            runtime_state = (
+                RuntimeLaneState(
+                    episode_index=int(self._episode_indices[lane_index]),
+                    episode_return=float(self._episode_returns[lane_index]),
+                    episode_length=int(self._episode_lengths[lane_index]),
+                    episode_seed=self._episode_seeds[lane_index],
+                    start_id=self._start_ids[lane_index],
+                    start_origin=str(self._start_origins[lane_index]),
+                )
+                if semantics == "continuation"
+                else None
+            )
+            entry = archive.create_entry(
+                payload=payload,
+                handle=handles[lane_index],
+                task_state=task_states[lane_index],
+                runtime_state=runtime_state,
+                restore_semantics=semantics,
+                created_step=(
+                    self._transition_count_total if created_step is None else int(created_step)
+                ),
+                metadata=(metadata_by_lane or {}).get(lane_index),
+            )
+            result[lane_index] = entry.entry_id
+        curriculum = self.archive_curriculum
+        if curriculum is not None:
+            curriculum.note_capture(time.perf_counter() - started_at)
+        return tuple(result)
+
+    def restore_archive_entries(
+        self,
+        mask: np.ndarray,
+        entry_ids: Sequence[str | None],
+    ) -> Any:
+        archive = self.state_archive
+        if archive is None:
+            raise RuntimeError("state archive is disabled")
+        selected = self._archive_mask(mask)
+        if len(entry_ids) != self.num_envs:
+            raise ValueError("archive restore requires one entry id per lane")
+        if np.any(selected & self._pending_reset_mask):
+            lanes = np.flatnonzero(selected & self._pending_reset_mask).tolist()
+            raise ValueError(f"cannot restore lanes with pending resets: {lanes}")
+        entries = [None for _ in range(self.num_envs)]
+        payloads: list[bytes | None] = [None for _ in range(self.num_envs)]
+        handles: list[Any | None] = [None for _ in range(self.num_envs)]
+        for lane in np.flatnonzero(selected):
+            lane_index = int(lane)
+            entry_id = entry_ids[lane_index]
+            if entry_id is None:
+                raise ValueError(f"archive restore lane {lane_index} has no entry id")
+            entry = archive.entry(entry_id)
+            entries[lane_index] = entry
+            payloads[lane_index] = archive.payload(entry_id)
+            handles[lane_index] = archive.live_handle(entry_id)
+        if any(handles[int(lane)] is None for lane in np.flatnonzero(selected)):
+            handles = list(archive.codec.restore(self.provider, payloads, selected))
+        starts = list(self._start_ids)
+        for lane in np.flatnonzero(selected):
+            starts[int(lane)] = None
+        started_at = time.perf_counter()
+        observations, infos = self.provider.reset(
+            seed=[None for _ in range(self.num_envs)],
+            options=self._reset_options(selected, starts, snapshots=handles),
+        )
+        reset_seconds = time.perf_counter() - started_at
+        if not isinstance(infos, Mapping):
+            raise TypeError("archive restore infos must be columnar")
+        self.kernel.on_reset(observations, infos, selected)
+        continuation_states = [None for _ in range(self.num_envs)]
+        for lane in np.flatnonzero(selected):
+            lane_index = int(lane)
+            entry = entries[lane_index]
+            assert entry is not None
+            if entry.restore_semantics == "continuation":
+                continuation_states[lane_index] = entry.task_state
+        continuation_mask = np.asarray(
+            [
+                bool(selected[lane])
+                and entries[lane] is not None
+                and entries[lane].restore_semantics == "continuation"
+                for lane in range(self.num_envs)
+            ],
+            dtype=np.bool_,
+        )
+        if np.any(continuation_mask):
+            self.kernel.restore_lane_states(continuation_states, continuation_mask)
+        encoded = self.kernel.encode_observations(observations)
+        _copy_tree_lanes(
+            self._observation_buffers[self._current_observation_buffer],
+            encoded,
+            selected,
+        )
+        info_columns = _InfoColumns(infos, self.num_envs)
+        for lane in np.flatnonzero(selected):
+            lane_index = int(lane)
+            entry = entries[lane_index]
+            assert entry is not None
+            self.reset_infos[lane_index] = info_columns.lane(lane_index)
+            if entry.restore_semantics == "continuation":
+                state = entry.runtime_state
+                assert state is not None
+                self._episode_indices[lane_index] = state.episode_index
+                self._episode_returns[lane_index] = state.episode_return
+                self._episode_lengths[lane_index] = state.episode_length
+                self._episode_seeds[lane_index] = state.episode_seed
+                self._start_ids[lane_index] = state.start_id
+                self._start_origins[lane_index] = state.start_origin
+            else:
+                self._episode_returns[lane_index] = 0.0
+                self._episode_lengths[lane_index] = 0
+                self._episode_seeds[lane_index] = None
+                self._start_ids[lane_index] = None
+                self._start_origins[lane_index] = "archive"
+        if self.archive_curriculum is not None:
+            self.archive_curriculum.note_reset(
+                int(np.count_nonzero(selected)),
+                reset_seconds,
+            )
+        return self._observation_buffers[self._current_observation_buffer]
+
     def _capture_curriculum_candidates(
         self,
         infos: Mapping[str, Any],
         dones: np.ndarray,
         pending_reset_mask: np.ndarray,
     ) -> None:
-        curriculum = self.snapshot_curriculum
+        curriculum = self.archive_curriculum
         if curriculum is None:
             return
         values = self._signal_values(
@@ -854,178 +1048,116 @@ class BatchRuntime:
         curriculum.note_candidates(candidate_count)
         if candidate_count == 0:
             return
-        capture = getattr(self.provider, "capture_snapshots", None)
-        if not callable(capture):
-            raise RuntimeError("snapshot-capable provider lost capture_snapshots")
-        started_at = time.perf_counter()
-        handles = tuple(capture(candidate_mask))
-        curriculum.note_capture(time.perf_counter() - started_at)
-        if len(handles) != self.num_envs:
-            raise ValueError(
-                f"provider returned {len(handles)} snapshot handles for {self.num_envs} lanes"
-            )
+        entry_ids = self.capture_archive_entries(
+            candidate_mask,
+            metadata_by_lane={
+                int(lane): {"cell_id": str(cells[int(lane)])}
+                for lane in np.flatnonzero(candidate_mask)
+            },
+        )
         for lane in np.flatnonzero(candidate_mask):
             lane_index = int(lane)
-            curriculum.admit(str(cells[lane_index]), handles[lane_index])
+            entry_id = entry_ids[lane_index]
+            assert entry_id is not None
+            curriculum.admit(str(cells[lane_index]), entry_id)
 
     def curriculum_begin_rollout(self) -> None:
-        if self.snapshot_curriculum is not None:
-            self.snapshot_curriculum.begin_rollout()
+        if self.archive_curriculum is not None:
+            self.archive_curriculum.begin_rollout()
 
     def curriculum_complete_rollout(self) -> dict[str, float]:
-        curriculum = self.snapshot_curriculum
+        curriculum = self.archive_curriculum
         if curriculum is None:
             return {}
         payload = curriculum.complete_rollout()
         if curriculum.schedule_activation():
             self.request_resets(
-                curriculum.snapshot_lane_mask,
-                reason="snapshot_curriculum_activation",
+                curriculum.archive_lane_mask,
+                reason="archive_curriculum_activation",
             )
         return payload
 
     def submit_curriculum_feedback(self, cell_id: str, value_error: float) -> None:
-        if self.snapshot_curriculum is None:
-            raise RuntimeError("snapshot curriculum is disabled")
-        self.snapshot_curriculum.submit_feedback(cell_id, value_error)
+        if self.archive_curriculum is None:
+            raise RuntimeError("archive curriculum is disabled")
+        self.archive_curriculum.submit_feedback(cell_id, value_error)
 
-    def snapshot_curriculum_summary(self) -> Mapping[str, Any] | None:
-        if self.snapshot_curriculum is None:
+    def state_archive_summary(self) -> Mapping[str, Any] | None:
+        if self.state_archive is None:
             return None
-        return self.snapshot_curriculum.artifact_summary()
+        summary = self.state_archive.summary()
+        if self.archive_curriculum is not None:
+            summary["curriculum"] = self.archive_curriculum.artifact_summary()
+        return summary
 
-    def preflight_snapshot_round_trip(self, *, seed: int) -> dict[str, Any]:
-        """Prove masked live capture/restore before the provider is used for training."""
+    def preflight_state_archive_round_trip(self, *, seed: int) -> dict[str, Any]:
+        """Prove exact portable capture/restore through the runtime boundary."""
 
-        curriculum = self.snapshot_curriculum
-        if curriculum is None:
-            raise RuntimeError("snapshot curriculum is disabled")
+        if self.state_archive is None:
+            raise RuntimeError("state archive is disabled")
         observations = self.reset(seed=seed)
         lane = 0
         before = _copy_tree_lane(observations, lane)
-        expected_cell = str(self._curriculum_previous_cells[lane])
         mask = np.zeros(self.num_envs, dtype=np.bool_)
         mask[lane] = True
-        capture = getattr(self.provider, "capture_snapshots", None)
-        if not callable(capture):
-            raise RuntimeError("snapshot-capable provider lost capture_snapshots")
-        handles = tuple(capture(mask))
-        if len(handles) != self.num_envs:
-            raise ValueError(
-                f"provider returned {len(handles)} snapshot handles for {self.num_envs} lanes"
-            )
-        if handles[lane] is None:
-            raise ValueError("provider returned no snapshot for the selected preflight lane")
-        if any(handles[index] is not None for index in range(1, self.num_envs)):
-            raise ValueError("provider captured snapshots for unselected preflight lanes")
-
+        entry_ids = self.capture_archive_entries(mask)
+        entry_id = entry_ids[lane]
+        assert entry_id is not None
         policy_actions = _deterministic_action_batch(self.action_space, self.num_envs)
-        native_actions = self.kernel.map_actions(policy_actions)
-        first_step = self.provider.step(native_actions)
-        first_observation = _copy_tree_lane(first_step[0], lane)
-        first_reward = float(np.asarray(first_step[1])[lane])
-        first_terminated = bool(np.asarray(first_step[2], dtype=np.bool_)[lane])
-        first_truncated = bool(np.asarray(first_step[3], dtype=np.bool_)[lane])
-        first_infos = first_step[4]
-        if not isinstance(first_infos, Mapping):
-            raise TypeError("snapshot preflight step infos must be columnar")
-        first_signal = float(
-            self._signal_values(first_infos, mask, source="snapshot preflight step")[lane]
-        )
-
-        snapshots: list[Any | None] = [None for _ in range(self.num_envs)]
-        snapshots[lane] = handles[lane]
-        starts = list(self._start_ids)
-        starts[lane] = None
-        reset_mask = np.ones(self.num_envs, dtype=np.bool_)
-        restore_seeds = [
-            None if index == lane else self._seed_for(index, 0) for index in range(self.num_envs)
-        ]
-        restored_raw, infos = self.provider.reset(
-            seed=restore_seeds,
-            options=self._reset_options(reset_mask, starts, snapshots=snapshots),
-        )
-        if not isinstance(infos, Mapping):
-            raise TypeError("snapshot preflight reset infos must be columnar")
-        self.kernel.on_reset(restored_raw, infos, mask)
-        restored = self.kernel.encode_observations(restored_raw)
+        first_step = self.step(policy_actions)
+        first_observation = _copy_tree_lane(first_step.observations, lane)
+        first_reward = float(first_step.rewards[lane])
+        first_terminated = bool(first_step.terminated[lane])
+        first_truncated = bool(first_step.truncated[lane])
+        restored = self.restore_archive_entries(mask, entry_ids)
         if not _tree_equal(before, _copy_tree_lane(restored, lane)):
-            raise ValueError("live snapshot round trip changed the policy observation")
-        values = self._signal_values(infos, mask, source="snapshot preflight reset")
-        restored_cell = curriculum.cell_id(values[lane])
-        if restored_cell != expected_cell:
-            raise ValueError(
-                f"live snapshot round trip changed cell {expected_cell!r} to {restored_cell!r}"
-            )
-        lane_info = _InfoColumns(infos, self.num_envs).lane(lane)
-        if lane_info.get("start_source") != "snapshot":
-            raise ValueError("snapshot preflight reset did not report start_source='snapshot'")
-        second_step = self.provider.step(native_actions)
-        second_infos = second_step[4]
-        if not isinstance(second_infos, Mapping):
-            raise TypeError("snapshot preflight continuation infos must be columnar")
-        second_signal = float(
-            self._signal_values(
-                second_infos,
-                mask,
-                source="snapshot preflight continuation step",
-            )[lane]
-        )
+            raise ValueError("state archive round trip changed the policy observation")
+        second_step = self.step(policy_actions)
         continuation_matches = (
-            _tree_equal(first_observation, _copy_tree_lane(second_step[0], lane))
-            and first_reward == float(np.asarray(second_step[1])[lane])
-            and first_terminated == bool(np.asarray(second_step[2], dtype=np.bool_)[lane])
-            and first_truncated == bool(np.asarray(second_step[3], dtype=np.bool_)[lane])
-            and first_signal == second_signal
+            _tree_equal(first_observation, _copy_tree_lane(second_step.observations, lane))
+            and first_reward == float(second_step.rewards[lane])
+            and first_terminated == bool(second_step.terminated[lane])
+            and first_truncated == bool(second_step.truncated[lane])
         )
         if not continuation_matches:
-            raise ValueError("live snapshot round trip changed deterministic one-step continuation")
+            raise ValueError("state archive round trip changed deterministic one-step continuation")
         return {
             "schema_version": 1,
-            "semantic_id": curriculum.config.semantic_id,
+            "semantic_id": self.state_archive.summary()["semantic_id"],
             "provider_id": self.descriptor.provider_id,
-            "signal": curriculum.config.signal,
-            "cell_id": restored_cell,
+            "codec_id": self.descriptor.snapshot_codec_id,
+            "entry_id": entry_id,
             "preflight_lanes": self.num_envs,
-            "restore_snapshots": True,
+            "restore_entries": True,
             "observation_exact": True,
             "one_step_continuation_exact": True,
             "masked_capture": True,
+            "portable_payload": True,
             "deterministic_continuation_declared": True,
         }
 
-    def preflight_snapshot_capture(self, *, seed: int) -> dict[str, Any]:
-        """Prove masked live capture without restoring a snapshot."""
+    def preflight_state_archive_capture(self, *, seed: int) -> dict[str, Any]:
+        """Prove masked portable capture without restoring an entry."""
 
-        curriculum = self.snapshot_curriculum
-        if curriculum is None:
-            raise RuntimeError("snapshot curriculum is disabled")
+        if self.state_archive is None:
+            raise RuntimeError("state archive is disabled")
         self.reset(seed=seed)
         lane = 0
-        expected_cell = str(self._curriculum_previous_cells[lane])
         mask = np.zeros(self.num_envs, dtype=np.bool_)
         mask[lane] = True
-        capture = getattr(self.provider, "capture_snapshots", None)
-        if not callable(capture):
-            raise RuntimeError("snapshot-capable provider lost capture_snapshots")
-        handles = tuple(capture(mask))
-        if len(handles) != self.num_envs:
-            raise ValueError(
-                f"provider returned {len(handles)} snapshot handles for {self.num_envs} lanes"
-            )
-        if handles[lane] is None:
-            raise ValueError("provider returned no snapshot for the selected preflight lane")
-        if any(handles[index] is not None for index in range(1, self.num_envs)):
-            raise ValueError("provider captured snapshots for unselected preflight lanes")
+        entry_ids = self.capture_archive_entries(mask)
+        entry_id = entry_ids[lane]
+        assert entry_id is not None
         return {
             "schema_version": 1,
-            "semantic_id": curriculum.config.semantic_id,
+            "semantic_id": self.state_archive.summary()["semantic_id"],
             "provider_id": self.descriptor.provider_id,
-            "signal": curriculum.config.signal,
-            "cell_id": expected_cell,
+            "codec_id": self.descriptor.snapshot_codec_id,
+            "entry_id": entry_id,
             "preflight_lanes": self.num_envs,
-            "restore_snapshots": False,
+            "restore_entries": False,
             "masked_capture": True,
+            "portable_payload": True,
             "deterministic_continuation_declared": True,
         }
 
@@ -1104,10 +1236,10 @@ class BatchRuntime:
         transition_episode_indices = self._episode_indices.copy()
         curriculum_feedback_dones = np.zeros(self.num_envs, dtype=np.bool_)
         control_boundaries = np.zeros(self.num_envs, dtype=np.bool_)
-        curriculum = self.snapshot_curriculum
+        curriculum = self.archive_curriculum
         if curriculum is not None:
             control_boundaries = forced_only_mask & np.asarray(
-                self._pending_reset_reasons == "snapshot_curriculum_activation",
+                self._pending_reset_reasons == "archive_curriculum_activation",
                 dtype=np.bool_,
             )
             self._capture_curriculum_candidates(infos, dones, self._pending_reset_mask)
@@ -1123,11 +1255,7 @@ class BatchRuntime:
         diagnostics = None
         if self.capture_step_diagnostics:
             lane = 0
-            terminal_frame = (
-                _optional_lane_zero_frame(self.provider)
-                if bool(dones[lane])
-                else None
-            )
+            terminal_frame = _optional_lane_zero_frame(self.provider) if bool(dones[lane]) else None
             outcome = Outcome(int(np.asarray(task_step.outcomes)[lane]))
             if (
                 outcome == Outcome.NEUTRAL
@@ -1260,27 +1388,44 @@ class BatchRuntime:
                 for lane in range(self.num_envs)
             ]
             snapshots: list[Any | None] | None = None
-            snapshot_selections: dict[int, SnapshotSelection] = {}
+            archive_selections: dict[int, ArchiveSelection] = {}
+            archive_entries: dict[int, Any] = {}
             if curriculum is not None:
-                snapshot_reset_mask = (
+                archive_reset_mask = (
                     dones
-                    & curriculum.snapshot_lane_mask
+                    & curriculum.archive_lane_mask
                     & bool(curriculum.activated or curriculum.activation_scheduled)
                 )
-                if np.any(snapshot_reset_mask):
+                if np.any(archive_reset_mask):
                     if curriculum.activation_scheduled:
                         curriculum.activate()
                     snapshots = [None for _ in range(self.num_envs)]
-                    for lane in np.flatnonzero(snapshot_reset_mask):
+                    payloads: list[bytes | None] = [None for _ in range(self.num_envs)]
+                    for lane in np.flatnonzero(archive_reset_mask):
                         lane_index = int(lane)
                         selection = curriculum.sample(
                             lane=lane_index,
                             episode_index=int(self._episode_indices[lane_index]),
                         )
-                        snapshot_selections[lane_index] = selection
-                        snapshots[lane_index] = selection.handle
+                        archive_selections[lane_index] = selection
+                        assert self.state_archive is not None
+                        entry = self.state_archive.entry(selection.entry_id)
+                        archive_entries[lane_index] = entry
+                        snapshots[lane_index] = self.state_archive.live_handle(selection.entry_id)
+                        payloads[lane_index] = self.state_archive.payload(selection.entry_id)
                         starts[lane_index] = None
                         seeds[lane_index] = None
+                    if any(
+                        snapshots[int(lane)] is None for lane in np.flatnonzero(archive_reset_mask)
+                    ):
+                        assert self.state_archive is not None
+                        snapshots = list(
+                            self.state_archive.codec.restore(
+                                self.provider,
+                                payloads,
+                                archive_reset_mask,
+                            )
+                        )
             reset_started_at = time.perf_counter()
             reset_observations, reset_infos = self.provider.reset(
                 seed=seeds,
@@ -1289,14 +1434,23 @@ class BatchRuntime:
             reset_seconds = time.perf_counter() - reset_started_at
             if not isinstance(reset_infos, Mapping):
                 raise TypeError("native provider reset infos must be a columnar mapping")
-            if curriculum is not None and snapshot_selections:
+            if curriculum is not None and archive_selections:
                 curriculum.note_reset(
-                    len(snapshot_selections),
+                    len(archive_selections),
                     reset_seconds,
                     forced_boundaries=int(np.count_nonzero(control_boundaries)),
                 )
             reset_info = reset_infos
             self.kernel.on_reset(reset_observations, reset_infos, dones)
+            if archive_entries:
+                task_states = [None for _ in range(self.num_envs)]
+                continuation_mask = np.zeros(self.num_envs, dtype=np.bool_)
+                for lane_index, entry in archive_entries.items():
+                    if entry.restore_semantics == "continuation":
+                        task_states[lane_index] = entry.task_state
+                        continuation_mask[lane_index] = True
+                if np.any(continuation_mask):
+                    self.kernel.restore_lane_states(task_states, continuation_mask)
             encoded_reset = self.kernel.encode_observations(reset_observations)
             _copy_tree_lanes(next_observations, encoded_reset, dones)
             reset_info_columns = _InfoColumns(reset_infos, self.num_envs)
@@ -1305,7 +1459,7 @@ class BatchRuntime:
                 self._set_curriculum_reset_baselines(
                     reset_infos,
                     dones,
-                    selections=snapshot_selections,
+                    selections=archive_selections,
                 )
             for lane in done_indices:
                 lane_index = int(lane)
@@ -1315,12 +1469,21 @@ class BatchRuntime:
                 self._episode_seeds[lane_index] = seeds[lane_index]
                 self._episode_returns[lane_index] = 0.0
                 self._episode_lengths[lane_index] = 0
-                selection = snapshot_selections.get(lane_index)
+                selection = archive_selections.get(lane_index)
                 if selection is None:
                     self._start_origins[lane_index] = "target"
                     self._curriculum_cell_ids[lane_index] = None
                     self._curriculum_generations[lane_index] = -1
                 else:
+                    entry = archive_entries[lane_index]
+                    if entry.restore_semantics == "continuation":
+                        runtime_state = entry.runtime_state
+                        assert runtime_state is not None
+                        self._episode_indices[lane_index] = runtime_state.episode_index
+                        self._episode_returns[lane_index] = runtime_state.episode_return
+                        self._episode_lengths[lane_index] = runtime_state.episode_length
+                        self._episode_seeds[lane_index] = runtime_state.episode_seed
+                        self._start_ids[lane_index] = runtime_state.start_id
                     self._start_origins[lane_index] = "curriculum"
                     self._curriculum_cell_ids[lane_index] = selection.cell_id
                     self._curriculum_generations[lane_index] = selection.generation
@@ -1341,6 +1504,7 @@ class BatchRuntime:
         batch_step.curriculum_episode_indices = transition_episode_indices
         batch_step.curriculum_feedback_dones = curriculum_feedback_dones
         batch_step.control_boundaries = control_boundaries
+        self._transition_count_total += self.num_envs
         return batch_step
 
     def _append_record(
@@ -1446,6 +1610,8 @@ class BatchRuntime:
         if self._closed:
             return
         self._closed = True
-        if self.snapshot_curriculum is not None:
-            self.snapshot_curriculum.close()
+        if self.archive_curriculum is not None:
+            self.archive_curriculum.close()
+        if self.state_archive is not None:
+            self.state_archive.close()
         self.provider.close()

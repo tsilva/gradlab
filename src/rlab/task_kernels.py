@@ -12,6 +12,7 @@ import numpy as np
 from numba import njit
 
 from rlab.reward_transform import RewardTransform, reward_transform_from_reward
+from rlab.state_archive import TaskLaneState
 
 if TYPE_CHECKING:
     from rlab.batch_runtime import ProviderDescriptor
@@ -617,15 +618,26 @@ class BoundTaskKernel(Protocol):
         mask: np.ndarray,
     ) -> None: ...
 
-    def validate_snapshot_signal(self, semantic_name: str) -> None: ...
+    def validate_archive_signal(self, semantic_name: str) -> None: ...
 
-    def snapshot_signal_values(
+    def archive_signal_values(
         self,
         semantic_name: str,
         signals: Mapping[str, Any],
         *,
         mask: np.ndarray,
     ) -> np.ndarray: ...
+
+    def capture_lane_states(
+        self,
+        mask: np.ndarray,
+    ) -> tuple[TaskLaneState | None, ...]: ...
+
+    def restore_lane_states(
+        self,
+        states: Sequence[TaskLaneState | None],
+        mask: np.ndarray,
+    ) -> None: ...
 
 
 class RewardTransformTaskKernel:
@@ -705,17 +717,30 @@ class RewardTransformTaskKernel:
     ) -> Any:
         return self.kernel.on_reset(reset_observations, reset_signals, mask)
 
-    def validate_snapshot_signal(self, semantic_name: str) -> None:
-        return self.kernel.validate_snapshot_signal(semantic_name)
+    def validate_archive_signal(self, semantic_name: str) -> None:
+        return self.kernel.validate_archive_signal(semantic_name)
 
-    def snapshot_signal_values(
+    def archive_signal_values(
         self,
         semantic_name: str,
         signals: Mapping[str, Any],
         *,
         mask: np.ndarray,
     ) -> np.ndarray:
-        return self.kernel.snapshot_signal_values(semantic_name, signals, mask=mask)
+        return self.kernel.archive_signal_values(semantic_name, signals, mask=mask)
+
+    def capture_lane_states(
+        self,
+        mask: np.ndarray,
+    ) -> tuple[TaskLaneState | None, ...]:
+        return self.kernel.capture_lane_states(mask)
+
+    def restore_lane_states(
+        self,
+        states: Sequence[TaskLaneState | None],
+        mask: np.ndarray,
+    ) -> None:
+        self.kernel.restore_lane_states(states, mask)
 
 
 def with_reward_transform(
@@ -1185,18 +1210,18 @@ class IdentityTaskKernel:
                         self._event_previous_valid[index][mask] = True
         self._episode_steps[mask] = 0
 
-    def validate_snapshot_signal(self, semantic_name: str) -> None:
+    def validate_archive_signal(self, semantic_name: str) -> None:
         dtypes = self._signal_bindings.scalar_source_dtypes(
             semantic_name,
             require_reset=True,
         )
         if len(dtypes) != 1:
-            raise ValueError(f"snapshot curriculum signal {semantic_name!r} must be scalar")
+            raise ValueError(f"archive signal {semantic_name!r} must be scalar")
         dtype = dtypes[0]
         if not np.issubdtype(dtype, np.number) or np.issubdtype(dtype, np.bool_):
-            raise ValueError(f"snapshot curriculum signal {semantic_name!r} must be numeric")
+            raise ValueError(f"archive signal {semantic_name!r} must be numeric")
 
-    def snapshot_signal_values(
+    def archive_signal_values(
         self,
         semantic_name: str,
         signals: Mapping[str, Any],
@@ -1204,6 +1229,67 @@ class IdentityTaskKernel:
         mask: np.ndarray,
     ) -> np.ndarray:
         return self._signal_bindings.scalar(semantic_name, signals, mask=mask)
+
+    def capture_lane_states(
+        self,
+        mask: np.ndarray,
+    ) -> tuple[TaskLaneState | None, ...]:
+        selected = np.asarray(mask, dtype=np.bool_)
+        if selected.shape != (self.num_envs,):
+            raise ValueError(f"archive mask must have shape ({self.num_envs},)")
+        states: list[TaskLaneState | None] = []
+        for lane in range(self.num_envs):
+            if not bool(selected[lane]):
+                states.append(None)
+                continue
+            states.append(
+                TaskLaneState(
+                    schema_id="rlab.identity-task-lane-v1",
+                    values={
+                        "episode_steps": int(self._episode_steps[lane]),
+                        "event_consecutive_steps": [
+                            int(values[lane]) for values in self._event_consecutive_steps
+                        ],
+                        "event_previous_values": [
+                            values[lane].item()
+                            if isinstance(values[lane], np.generic)
+                            else values[lane]
+                            for values in self._event_previous_values
+                        ],
+                        "event_previous_valid": [
+                            bool(values[lane]) for values in self._event_previous_valid
+                        ],
+                    },
+                )
+            )
+        return tuple(states)
+
+    def restore_lane_states(
+        self,
+        states: Sequence[TaskLaneState | None],
+        mask: np.ndarray,
+    ) -> None:
+        selected = np.asarray(mask, dtype=np.bool_)
+        if len(states) != self.num_envs or selected.shape != (self.num_envs,):
+            raise ValueError("archive task state restore must contain one value per lane")
+        for lane in np.flatnonzero(selected):
+            lane_index = int(lane)
+            state = states[lane_index]
+            if state is None or state.schema_id != "rlab.identity-task-lane-v1":
+                raise ValueError(f"archive lane {lane_index} has incompatible identity task state")
+            values = state.values
+            consecutive = list(values.get("event_consecutive_steps", ()))
+            previous = list(values.get("event_previous_values", ()))
+            valid = list(values.get("event_previous_valid", ()))
+            if not (len(consecutive) == len(previous) == len(valid) == len(self._event_configs)):
+                raise ValueError(
+                    f"archive lane {lane_index} identity event state does not match task"
+                )
+            self._episode_steps[lane_index] = int(values["episode_steps"])
+            for index in range(len(self._event_configs)):
+                self._event_consecutive_steps[index][lane_index] = int(consecutive[index])
+                self._event_previous_values[index][lane_index] = previous[index]
+                self._event_previous_valid[index][lane_index] = bool(valid[index])
 
 
 @dataclass(frozen=True)
@@ -1774,25 +1860,23 @@ class MarioTaskKernel:
             )
         raise ValueError("Mario level signal must bind a pair of values")
 
-    def validate_snapshot_signal(self, semantic_name: str) -> None:
+    def validate_archive_signal(self, semantic_name: str) -> None:
         dtypes = self.bindings.scalar_source_dtypes(
             semantic_name,
             require_reset=True,
         )
         if semantic_name == "x":
             if len(dtypes) not in {1, 2}:
-                raise ValueError(
-                    "snapshot curriculum signal 'x' must bind one value or a high/low pair"
-                )
+                raise ValueError("archive signal 'x' must bind one value or a high/low pair")
         elif len(dtypes) != 1:
-            raise ValueError(f"snapshot curriculum signal {semantic_name!r} must be scalar")
+            raise ValueError(f"archive signal {semantic_name!r} must be scalar")
         if any(
             not np.issubdtype(dtype, np.number) or np.issubdtype(dtype, np.bool_)
             for dtype in dtypes
         ):
-            raise ValueError(f"snapshot curriculum signal {semantic_name!r} must be numeric")
+            raise ValueError(f"archive signal {semantic_name!r} must be numeric")
 
-    def snapshot_signal_values(
+    def archive_signal_values(
         self,
         semantic_name: str,
         signals: Mapping[str, Any],
@@ -1802,6 +1886,79 @@ class MarioTaskKernel:
         if semantic_name == "x":
             return self._x_values(signals, mask=mask)
         return self.bindings.scalar(semantic_name, signals, mask=mask)
+
+    def capture_lane_states(
+        self,
+        mask: np.ndarray,
+    ) -> tuple[TaskLaneState | None, ...]:
+        selected = np.asarray(mask, dtype=np.bool_)
+        if selected.shape != (self.num_envs,):
+            raise ValueError(f"archive mask must have shape ({self.num_envs},)")
+        names = (
+            "x",
+            "max_x",
+            "level_max_x",
+            "completed_level_base",
+            "completed_level_count",
+            "global_x",
+            "max_global_x",
+            "score",
+            "lives",
+            "level_hi",
+            "level_lo",
+            "episode_steps",
+            "last_progress_step",
+        )
+        states: list[TaskLaneState | None] = []
+        for lane in range(self.num_envs):
+            if not bool(selected[lane]):
+                states.append(None)
+                continue
+            states.append(
+                TaskLaneState(
+                    schema_id="rlab.mario-task-lane-v1",
+                    values={
+                        name: int(array[lane])
+                        for name, array in zip(names, self._compiled_state, strict=True)
+                    },
+                )
+            )
+        return tuple(states)
+
+    def restore_lane_states(
+        self,
+        states: Sequence[TaskLaneState | None],
+        mask: np.ndarray,
+    ) -> None:
+        selected = np.asarray(mask, dtype=np.bool_)
+        if len(states) != self.num_envs or selected.shape != (self.num_envs,):
+            raise ValueError("archive task state restore must contain one value per lane")
+        names = (
+            "x",
+            "max_x",
+            "level_max_x",
+            "completed_level_base",
+            "completed_level_count",
+            "global_x",
+            "max_global_x",
+            "score",
+            "lives",
+            "level_hi",
+            "level_lo",
+            "episode_steps",
+            "last_progress_step",
+        )
+        for lane in np.flatnonzero(selected):
+            lane_index = int(lane)
+            state = states[lane_index]
+            if state is None or state.schema_id != "rlab.mario-task-lane-v1":
+                raise ValueError(f"archive lane {lane_index} has incompatible Mario task state")
+            if set(state.values) != set(names):
+                raise ValueError(
+                    f"archive lane {lane_index} Mario task state fields do not match task"
+                )
+            for name, array in zip(names, self._compiled_state, strict=True):
+                array[lane_index] = int(state.values[name])
 
     def process(
         self,

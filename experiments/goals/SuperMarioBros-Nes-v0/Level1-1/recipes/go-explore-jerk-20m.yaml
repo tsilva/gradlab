@@ -1,0 +1,40 @@
+defaults:
+- _self_
+reward_shape: speedrun-v1
+recipe_id: go-explore-jerk-20m
+description: >-
+  Seed {{ seed }} runs route-aware Go-Explore trajectory discovery for {{ goal_id }}
+  over the durable state archive, exports the best open-loop JERK policy, and caps
+  search at 20 million transitions with checkpoint evaluation as acceptance authority.
+train:
+  timesteps: 20000000
+  early_stop:
+    conditions:
+      progress_plateau:
+        metric: train/algorithm/go_explore/best/progress
+        trigger: no_improvement
+        direction: maximize
+        min_delta: 1.0
+        delta_mode: absolute
+        start_after_steps: 1000000
+        patience_steps: 1000000
+        outcome: failure
+        action: stop
+  state_archive:
+    semantic_id: state-archive-v1
+    persistence: durable
+    restore_semantics: continuation
+    recorder:
+      mode: backend
+    curriculum: null
+  backend:
+    id: rlab.go-explore
+    config:
+      explore_steps: 128
+      run_duration_mean: 4.0
+      run_duration_max: 32
+      fallback_action: noop
+      log_interval_steps: 10000
+logging:
+  wandb: true
+  wandb_mode: online

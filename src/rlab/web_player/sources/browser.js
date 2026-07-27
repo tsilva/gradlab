@@ -401,7 +401,17 @@ function routeSignature(route) {
 }
 
 export class SourceBrowser {
-  constructor(root, breadcrumbsRoot, { token, command, getState, showToast }) {
+  constructor(
+    root,
+    breadcrumbsRoot,
+    {
+      token,
+      command,
+      getState,
+      showToast,
+      catalogRequestTimeoutMs = 30_000,
+    },
+  ) {
     this.root = root;
     this.breadcrumbsRoot = breadcrumbsRoot;
     this.token = token;
@@ -428,6 +438,9 @@ export class SourceBrowser {
     this.lastAppRoute = "";
     this.loadedKey = "";
     this.requestSerial = 0;
+    this.requestController = null;
+    this.loadingKey = "";
+    this.catalogRequestTimeoutMs = catalogRequestTimeoutMs;
     this.searchTimer = null;
     this.pollTimer = null;
     this.autoSelectedRoute = "";
@@ -462,7 +475,12 @@ export class SourceBrowser {
     ) {
       const pending = {
         ...this.pendingLocationRoute,
-        entity: this.pendingLocationRoute.entity || appRoute.entity || "",
+        entity: (
+          this.pendingLocationRoute.entity
+          || appRoute.entity
+          || this.initialProjectCatalog?.entity
+          || ""
+        ),
       };
       this.pendingLocationRoute = null;
       this.lastAppRoute = routeSignature(appRoute);
@@ -503,8 +521,11 @@ export class SourceBrowser {
     clearTimeout(this.searchTimer);
     clearInterval(this.pollTimer);
     this.pollTimer = null;
+    this.requestController?.abort();
+    this.requestController = null;
     this.requestSerial += 1;
     this.loading = false;
+    this.loadingKey = "";
     this.breadcrumbsRoot.replaceChildren();
     this.breadcrumbsRoot.hidden = true;
   }
@@ -562,22 +583,32 @@ export class SourceBrowser {
 
   async ensureLoaded() {
     const key = this.routeKey();
-    if (this.loading || this.loadedKey === key) return;
+    if ((this.loading && this.loadingKey === key) || this.loadedKey === key) return;
     await this.load();
   }
 
   async load({ append = false, quiet = false } = {}) {
-    if (this.loading) return;
     const key = this.routeKey();
+    if (this.loading && this.loadingKey === key) return;
+    this.requestController?.abort();
+    const controller = new AbortController();
+    this.requestController = controller;
     const cursor = append ? this.nextCursor : null;
     const serial = ++this.requestSerial;
     this.loading = true;
+    this.loadingKey = key;
+    let timedOut = false;
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, this.catalogRequestTimeoutMs);
     if (!quiet) this.error = "";
     this.renderView();
     try {
       const response = await fetch(this.endpoint(cursor), {
         headers: { Authorization: `Bearer ${this.token}` },
         cache: "no-store",
+        signal: controller.signal,
       });
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(payload.error || `Catalog request failed (${response.status})`);
@@ -619,11 +650,16 @@ export class SourceBrowser {
       }
     } catch (error) {
       if (serial !== this.requestSerial || key !== this.routeKey()) return;
-      this.error = String(error?.message || error);
+      this.error = timedOut
+        ? "Catalog request timed out. Try Refresh."
+        : String(error?.message || error);
       if (quiet) this.showToast(this.error, true);
     } finally {
+      clearTimeout(timeout);
       if (serial === this.requestSerial) {
+        this.requestController = null;
         this.loading = false;
+        this.loadingKey = "";
         this.renderView();
         if (
           key !== this.routeKey()
@@ -1042,82 +1078,16 @@ export class SourceBrowser {
   }
 
   renderRunResults() {
-    const fragment = document.createDocumentFragment();
     const efficiency = this.runEfficiency();
-    if (efficiency) fragment.append(this.renderEfficiencySummary(efficiency));
-    fragment.append(this.renderTable(efficiency));
-    return fragment;
-  }
-
-  renderEfficiencySummary(efficiency) {
-    const { item, columns, evidence } = efficiency;
-    const summary = document.createElement("aside");
-    summary.className = `source-efficiency ${evidence}`;
-    summary.setAttribute(
-      "aria-label",
-      evidence === "evaluation"
-        ? "Most efficient evaluated recipe"
-        : "Leading training signal",
-    );
-
-    const identity = document.createElement("div");
-    identity.className = "source-efficiency-identity";
-    const eyebrow = document.createElement("span");
-    eyebrow.className = "eyebrow";
-    eyebrow.textContent = evidence === "evaluation"
-      ? "MOST EFFICIENT RECIPE"
-      : "LEADING TRAINING SIGNAL";
-    const recipe = document.createElement("div");
-    recipe.className = "source-efficiency-recipe";
-    const name = document.createElement("strong");
-    name.textContent = item.recipe || "Unnamed recipe";
-    recipe.append(name);
-    const variant = recipeVariantPresentation(item);
-    const variantLabel = document.createElement("code");
-    variantLabel.className = "recipe-variant";
-    variantLabel.textContent = variant.summary;
-    variantLabel.title = variant.detail;
-    recipe.append(variantLabel);
-    const revision = String(item.recipe_sha256 || "").trim();
-    if (revision) {
-      const hash = document.createElement("code");
-      hash.textContent = `@ ${revision.slice(0, 12)}`;
-      hash.title = `Recipe SHA-256: ${revision}`;
-      recipe.append(hash);
-    }
-    const badge = document.createElement("span");
-    badge.className = "source-evidence-badge";
-    badge.textContent = evidence === "evaluation" ? "GOAL EVAL" : "TRAINING";
-    recipe.append(badge);
-    const detail = document.createElement("p");
-    detail.textContent = evidence === "evaluation"
-      ? "Best run with complete evaluation evidence in the goal-defined ranking order."
-      : "No complete goal-ranked evaluation is available; training signals do not establish goal achievement.";
-    const run = document.createElement("small");
-    run.textContent = item.run_id;
-    identity.append(eyebrow, recipe, detail, run);
-
-    const metrics = document.createElement("dl");
-    metrics.className = "source-efficiency-metrics";
-    columns.forEach((column) => {
-      const metric = document.createElement("div");
-      const label = document.createElement("dt");
-      label.textContent = metricLabel(column.metric);
-      const value = document.createElement("dd");
-      value.textContent = formatMetricValue(
-        column.metric,
-        item.metrics?.[column.metric],
-      );
-      metric.append(label, value);
-      metrics.append(metric);
-    });
-    summary.append(identity, metrics);
-    return summary;
+    return this.renderTable(efficiency);
   }
 
   renderTable(efficiency = null) {
     const scroll = document.createElement("div");
     scroll.className = "source-table-scroll";
+    if (efficiency?.evidence === "training") {
+      scroll.classList.add("training-leader");
+    }
     const table = document.createElement("table");
     table.className = "source-table";
     const head = document.createElement("thead");

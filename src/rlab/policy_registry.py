@@ -15,11 +15,13 @@ RuntimePolicyAlgorithmId: TypeAlias = Literal["ppo", "a2c", "jerk"]
 Sb3AlgorithmId: TypeAlias = Literal["ppo", "a2c"]
 
 TRAINING_BACKEND_MODULES: dict[str, str] = {
+    "rlab.go-explore": "rlab.training.go_explore",
     "rlab.jerk": "rlab.training.jerk",
     "sb3.a2c": "rlab.training.sb3",
     "sb3.ppo": "rlab.training.sb3",
 }
 BACKEND_ALGORITHMS: dict[str, RuntimePolicyAlgorithmId] = {
+    "rlab.go-explore": "jerk",
     "rlab.jerk": "jerk",
     "sb3.a2c": "a2c",
     "sb3.ppo": "ppo",

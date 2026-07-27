@@ -52,12 +52,74 @@ test("checkpoint playback seed accepts catalog provenance and rejects invalid va
   assert.equal(checkpointPlaybackSeed({ playback_seed: -1 }), null);
 });
 
+test("direct project routes inherit the server catalog entity", async (context) => {
+  const originalLocation = globalThis.location;
+  const originalWindow = globalThis.window;
+  const originalFetch = globalThis.fetch;
+  const requests = [];
+  globalThis.location = {
+    pathname: "/projects/Mario",
+    search: "",
+    hash: "",
+  };
+  globalThis.window = { addEventListener() {} };
+  globalThis.fetch = async (url) => {
+    requests.push(url);
+    return {
+      ok: true,
+      json: async () => ({ items: [], next_cursor: null }),
+    };
+  };
+  context.after(() => {
+    if (originalLocation === undefined) delete globalThis.location;
+    else globalThis.location = originalLocation;
+    if (originalWindow === undefined) delete globalThis.window;
+    else globalThis.window = originalWindow;
+    if (originalFetch === undefined) delete globalThis.fetch;
+    else globalThis.fetch = originalFetch;
+  });
+
+  const commands = [];
+  const sourceBrowser = new SourceBrowser(
+    {},
+    { replaceChildren() {}, hidden: false },
+    {
+      token: "token",
+      command: (name, payload) => commands.push({ name, payload }),
+      getState: () => ({ hasControl: true }),
+      showToast() {},
+    },
+  );
+  sourceBrowser.renderView = () => {};
+  sourceBrowser.updatePolling = () => {};
+
+  sourceBrowser.render({
+    app: {
+      phase: "selecting",
+      route: { level: "projects" },
+      catalog: { entity: "research", items: [] },
+    },
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(
+    requests[0],
+    "/api/catalog/projects/research/Mario/goals?",
+  );
+  assert.equal(commands[0].name, "browse_sources");
+  assert.equal(commands[0].payload.route.entity, "research");
+});
+
 test("late catalog responses cannot populate a newer route", async (context) => {
   const originalLocation = globalThis.location;
   const originalFetch = globalThis.fetch;
   const requests = [];
   globalThis.location = { pathname: "/embedded-player", search: "", hash: "" };
-  globalThis.fetch = (url) => new Promise((resolve) => requests.push({ url, resolve }));
+  globalThis.fetch = (url, options) => new Promise((resolve, reject) => {
+    const request = { url, options, resolve, reject };
+    requests.push(request);
+    options.signal.addEventListener("abort", () => reject(new Error("aborted")));
+  });
   context.after(() => {
     if (originalLocation === undefined) delete globalThis.location;
     else globalThis.location = originalLocation;
@@ -90,6 +152,9 @@ test("late catalog responses cannot populate a newer route", async (context) => 
     run_id: "",
     checkpoint_id: "",
   });
+  assert.equal(requests.length, 2);
+  assert.equal(requests[0].options.signal.aborted, true);
+  assert.match(requests[1].url, /\/projects\/research\/Mario\/goals/);
   requests[0].resolve({
     ok: true,
     json: async () => ({
@@ -100,7 +165,6 @@ test("late catalog responses cannot populate a newer route", async (context) => 
   await projectsRequest;
 
   assert.equal(requests.length, 2);
-  assert.match(requests[1].url, /\/projects\/research\/Mario\/goals/);
   assert.deepEqual(sourceBrowser.items, []);
 
   requests[1].resolve({
@@ -121,6 +185,39 @@ test("late catalog responses cannot populate a newer route", async (context) => 
 
   assert.equal(sourceBrowser.items[0].goal_id, "Level1-1");
   assert.equal(sourceBrowser.items[0].recipe_count, 1);
+});
+
+test("stalled catalog requests time out with a recoverable error", async (context) => {
+  const originalLocation = globalThis.location;
+  const originalFetch = globalThis.fetch;
+  globalThis.location = { pathname: "/embedded-player", search: "", hash: "" };
+  globalThis.fetch = (_url, options) => new Promise((_resolve, reject) => {
+    options.signal.addEventListener("abort", () => reject(new Error("aborted")));
+  });
+  context.after(() => {
+    if (originalLocation === undefined) delete globalThis.location;
+    else globalThis.location = originalLocation;
+    if (originalFetch === undefined) delete globalThis.fetch;
+    else globalThis.fetch = originalFetch;
+  });
+
+  const sourceBrowser = new SourceBrowser(
+    {},
+    { replaceChildren() {}, hidden: false },
+    {
+      token: "token",
+      command() {},
+      getState: () => ({ hasControl: true }),
+      showToast() {},
+      catalogRequestTimeoutMs: 1,
+    },
+  );
+  sourceBrowser.renderView = () => {};
+
+  await sourceBrowser.load();
+
+  assert.equal(sourceBrowser.loading, false);
+  assert.equal(sourceBrowser.error, "Catalog request timed out. Try Refresh.");
 });
 
 test("run metric sorting respects direction and keeps missing values last", () => {
