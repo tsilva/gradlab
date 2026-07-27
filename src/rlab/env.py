@@ -496,18 +496,25 @@ def _state_archive_preflight_child(
             configured_n_envs,
         )
         with tempfile.TemporaryDirectory(prefix="rlab-state-archive-preflight-") as root:
-            runtime = make_training_batch_runtime(
-                config,
-                preflight_lanes,
-                seed,
-                rom_binding=rom_binding,
-                state_archive=state_archive,
-                state_archive_root=root,
-            )
-            if runtime.state_archive is None:
-                raise RuntimeError("state archive preflight runtime is disabled")
-            payload = runtime.preflight_state_archive_round_trip(seed=seed)
-            connection.send(("ok", payload))
+            try:
+                runtime = make_training_batch_runtime(
+                    config,
+                    preflight_lanes,
+                    seed,
+                    rom_binding=rom_binding,
+                    state_archive=state_archive,
+                    state_archive_root=root,
+                )
+                if runtime.state_archive is None:
+                    raise RuntimeError("state archive preflight runtime is disabled")
+                payload = runtime.preflight_state_archive_round_trip(seed=seed)
+                runtime.close()
+                runtime = None
+                connection.send(("ok", payload))
+            finally:
+                if runtime is not None:
+                    runtime.close()
+                    runtime = None
     except BaseException as exc:
         connection.send(
             (
