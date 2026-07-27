@@ -163,11 +163,12 @@ def load_materialized_train_config(path: Path) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise ValueError(f"train config file must contain a JSON object: {path}")
     defaults = {field.dest: _env_default(EnvConfig(), field) for field in TRAIN_CONFIG_FIELDS}
-    return validate_and_normalize_train_config(
-        {**defaults, **payload},
+    normalized = validate_and_normalize_train_config(
+        payload,
         label=f"train config file {path}",
         required_keys=("training_backend",),
     )
+    return {**defaults, **normalized}
 
 
 def train_config_field_for_key(key: str) -> TrainConfigField | None:

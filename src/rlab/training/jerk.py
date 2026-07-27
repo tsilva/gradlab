@@ -193,18 +193,18 @@ def _save_policy_bundle(
             path,
             artifact_discriminator=f"{kind}:{step}",
         ),
-        args=context.args,
+        train_config=context.train_config,
         config=context.environment,
         kind=kind,
         checkpoint_step_value=step,
     )
     checkpoint_id = context.metric_store.record_checkpoint(
-        run_name=str(context.args.run_name),
+        run_name=str(context.train_config["run_name"]),
         kind=kind,
         step=step,
         path=model_path,
         sha256=None,
-        eval_required=context.args.checkpoint_eval_backend != "none",
+        eval_required=context.train_config["checkpoint_eval_backend"] != "none",
     )
     print(f"{kind} JERK policy ready: id={checkpoint_id} step={step} path={model_path}")
     return model_path
@@ -287,7 +287,8 @@ def _publish_metrics(
     if update is None or update.stop_decision is None:
         return False
     atomic_write_json(
-        context.run_dir / f"early_stop_decision-{str(context.args.attempt_id)}.json",
+        context.run_dir
+        / f"early_stop_decision-{str(context.train_config['attempt_id'])}.json",
         update.stop_decision,
     )
     print(
@@ -303,38 +304,44 @@ def _publish_metrics(
 
 
 def run_jerk(context: BackendContext) -> None:
-    args = context.args
+    common_config = context.train_config
+    backend_config = context.backend_config
     config = context.environment
-    n_envs = int(args.resolved_n_envs)
+    n_envs = int(common_config["resolved_n_envs"])
     env = make_training_vec_env(
         config=config,
         n_envs=n_envs,
-        seed=args.seed,
+        seed=int(common_config["seed"]),
         rom_binding=getattr(context, "rom_binding", None),
     )
     try:
-        if int(args.timesteps) % n_envs != 0:
+        if int(common_config["timesteps"]) % n_envs != 0:
             raise ValueError("JERK timesteps must be divisible by the environment count")
         if not isinstance(env.action_space, spaces.Discrete):
             raise ValueError("JERK requires a discrete task action space")
         action_names = configured_action_meanings(config)
         search = JerkSearch(
             n_envs=n_envs,
-            seed=args.seed,
-            total_timesteps=args.timesteps,
+            seed=int(common_config["seed"]),
+            total_timesteps=int(common_config["timesteps"]),
             action_names=action_names,
-            fallback_action=args.fallback_action,
-            archive_replay_probability_initial=args.archive_replay_probability_initial,
-            archive_replay_probability_max=args.archive_replay_probability_max,
-            protected_prefix_steps=args.protected_prefix_steps,
-            max_prefix_shorten_steps=args.max_prefix_shorten_steps,
-            retained_limit=args.retained_limit,
+            fallback_action=str(backend_config["fallback_action"]),
+            archive_replay_probability_initial=backend_config[
+                "archive_replay_probability_initial"
+            ],
+            archive_replay_probability_max=backend_config[
+                "archive_replay_probability_max"
+            ],
+            protected_prefix_steps=int(backend_config["protected_prefix_steps"]),
+            max_prefix_shorten_steps=int(backend_config["max_prefix_shorten_steps"]),
+            retained_limit=int(backend_config["retained_limit"]),
         )
         env.reset()
         context.mark_ready()
         started_at = time.perf_counter()
-        next_log = args.log_interval_steps
-        next_checkpoint = args.checkpoint_freq if args.checkpoint_freq > 0 else None
+        next_log = int(backend_config["log_interval_steps"])
+        checkpoint_freq = int(common_config["checkpoint_freq"])
+        next_checkpoint = checkpoint_freq if checkpoint_freq > 0 else None
         episode_returns: list[float] = []
         target_episode_returns: list[float] = []
         episode_lengths: list[int] = []
@@ -349,15 +356,18 @@ def run_jerk(context: BackendContext) -> None:
         )
         fallback_start = configured_starts[0] if configured_starts else "default"
         outcome_metrics = _OutcomeMetrics(configured_starts=configured_starts)
-        acceptance_mode = str(args.acceptance_mode)
+        acceptance_mode = str(backend_config["acceptance_mode"])
         early_stop_machine = (
-            MetricEarlyStopStateMachine(args.early_stop, label="early_stop")
-            if args.early_stop
+            MetricEarlyStopStateMachine(common_config["early_stop"], label="early_stop")
+            if common_config["early_stop"]
             else None
         )
         accepted = False
         early_stopped = False
-        while search.global_step < args.timesteps and not context.stop_flag.requested:
+        while (
+            search.global_step < int(common_config["timesteps"])
+            and not context.stop_flag.requested
+        ):
             actions = search.next_actions()
             _observations, rewards, dones, _infos = env.step(actions)
             records = env.drain_records()
@@ -404,7 +414,7 @@ def run_jerk(context: BackendContext) -> None:
                     outcome_metrics=outcome_metrics,
                     early_stop=early_stop_machine,
                 )
-                next_log += args.log_interval_steps
+                next_log += int(backend_config["log_interval_steps"])
             while next_checkpoint is not None and step >= next_checkpoint:
                 checkpoint_path = context.checkpoint_dir / (
                     f"{_checkpoint_prefix(config.game)}_{step}_steps.zip"
@@ -416,7 +426,7 @@ def run_jerk(context: BackendContext) -> None:
                     kind="checkpoint",
                     step=step,
                 )
-                next_checkpoint += args.checkpoint_freq
+                next_checkpoint += checkpoint_freq
             if early_stopped:
                 break
 
@@ -432,7 +442,7 @@ def run_jerk(context: BackendContext) -> None:
             outcome_metrics=outcome_metrics,
             early_stop=None if accepted else early_stop_machine,
         )
-        if context.stop_flag.requested and args.checkpoint_freq > 0:
+        if context.stop_flag.requested and checkpoint_freq > 0:
             interrupted = context.checkpoint_dir / (
                 f"{_checkpoint_prefix(config.game)}_interrupted_{step}_steps.zip"
             )
@@ -460,10 +470,11 @@ def run_jerk(context: BackendContext) -> None:
             acceptance_mode == FIRST_TRAINING_SUCCESS_ACCEPTANCE
             and not accepted
             and not context.stop_flag.requested
-            and step >= args.timesteps
+            and step >= int(common_config["timesteps"])
         ):
             raise RuntimeError(
-                f"JERK exhausted {args.timesteps} transitions without a goal success event"
+                f"JERK exhausted {common_config['timesteps']} transitions "
+                "without a goal success event"
             )
     finally:
         env.close()

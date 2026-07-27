@@ -22,7 +22,7 @@ import numpy as np
 from aiohttp import WSMsgType, web
 from PIL import Image
 
-from rlab.play import _PlaybackSession, _PlaybackTransition, render_obs_stack
+from rlab.play_session import _PlaybackSession, _PlaybackTransition, render_obs_stack
 from rlab.play_debug import ANSI_PATTERN, PolicyDecision, model_input_lines
 from rlab.seeds import validate_playback_seed
 

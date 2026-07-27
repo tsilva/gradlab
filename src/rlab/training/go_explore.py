@@ -216,19 +216,19 @@ def _save_policy(
             path,
             artifact_discriminator=f"{kind}:{step}",
         ),
-        args=context.args,
+        train_config=context.train_config,
         config=context.environment,
         kind=kind,
         checkpoint_step_value=step,
         state_archive_summary=state_archive_artifact_summary(runtime),
     )
     checkpoint_id = context.metric_store.record_checkpoint(
-        run_name=str(context.args.run_name),
+        run_name=str(context.train_config["run_name"]),
         kind=kind,
         step=step,
         path=installed,
         sha256=None,
-        eval_required=context.args.checkpoint_eval_backend != "none",
+        eval_required=context.train_config["checkpoint_eval_backend"] != "none",
     )
     print(
         f"{kind} Go-Explore JERK policy ready: id={checkpoint_id} step={step} path={installed}",
@@ -316,7 +316,8 @@ def _publish_metrics(
     if update is None or update.stop_decision is None:
         return False
     atomic_write_json(
-        context.run_dir / f"early_stop_decision-{str(context.args.attempt_id)}.json",
+        context.run_dir
+        / f"early_stop_decision-{str(context.train_config['attempt_id'])}.json",
         update.stop_decision,
     )
     print(
@@ -328,30 +329,31 @@ def _publish_metrics(
 
 
 def run_go_explore(context: BackendContext) -> None:
-    args = context.args
+    common_config = context.train_config
+    backend_config = context.backend_config
     config = context.environment
     runtime_config = _runtime_environment_config(config)
-    n_envs = int(args.resolved_n_envs)
-    if int(args.timesteps) % n_envs != 0:
+    n_envs = int(common_config["resolved_n_envs"])
+    if int(common_config["timesteps"]) % n_envs != 0:
         raise ValueError("Go-Explore timesteps must be divisible by n_envs")
     preflight = preflight_state_archive_provider(
         config=runtime_config,
         n_envs=n_envs,
-        seed=args.seed,
+        seed=int(common_config["seed"]),
         rom_binding=context.rom_binding,
-        state_archive=args.state_archive,
+        state_archive=common_config["state_archive"],
     )
     if preflight is None:
         raise ValueError("Go-Explore requires state_archive")
     preflight_path = context.run_dir / "state_archive_preflight.json"
     write_canonical_json(preflight_path, preflight)
-    args.state_archive_preflight_sha256 = file_sha256(preflight_path)
+    common_config["state_archive_preflight_sha256"] = file_sha256(preflight_path)
     runtime = make_training_batch_runtime(
         runtime_config,
         n_envs,
-        args.seed,
+        int(common_config["seed"]),
         rom_binding=context.rom_binding,
-        state_archive=args.state_archive,
+        state_archive=common_config["state_archive"],
         state_archive_root=context.run_dir / "state-archive",
     )
     try:
@@ -359,14 +361,14 @@ def run_go_explore(context: BackendContext) -> None:
             raise ValueError("Go-Explore requires a discrete task action space")
         search = GoExploreSearch(
             n_envs=n_envs,
-            seed=args.seed,
+            seed=int(common_config["seed"]),
             action_names=configured_action_meanings(config),
-            fallback_action=args.fallback_action,
-            explore_steps=args.explore_steps,
-            run_duration_mean=args.run_duration_mean,
-            run_duration_max=args.run_duration_max,
+            fallback_action=str(backend_config["fallback_action"]),
+            explore_steps=int(backend_config["explore_steps"]),
+            run_duration_mean=float(backend_config["run_duration_mean"]),
+            run_duration_max=int(backend_config["run_duration_max"]),
         )
-        runtime.reset(seed=args.seed)
+        runtime.reset(seed=int(common_config["seed"]))
         all_lanes = np.ones(n_envs, dtype=np.bool_)
         initial_entries = runtime.capture_archive_entries(
             all_lanes,
@@ -381,23 +383,29 @@ def run_go_explore(context: BackendContext) -> None:
         )
         context.mark_ready()
         started_at = time.perf_counter()
-        next_log = ((search.global_step // args.log_interval_steps) + 1) * args.log_interval_steps
+        log_interval_steps = int(backend_config["log_interval_steps"])
+        compaction_interval_steps = int(backend_config["compaction_interval_steps"])
+        checkpoint_freq = int(common_config["checkpoint_freq"])
+        next_log = ((search.global_step // log_interval_steps) + 1) * log_interval_steps
         next_compaction = (
-            (search.global_step // args.compaction_interval_steps) + 1
-        ) * args.compaction_interval_steps
+            (search.global_step // compaction_interval_steps) + 1
+        ) * compaction_interval_steps
         next_checkpoint = (
-            ((search.global_step // args.checkpoint_freq) + 1) * args.checkpoint_freq
-            if args.checkpoint_freq > 0
+            ((search.global_step // checkpoint_freq) + 1) * checkpoint_freq
+            if checkpoint_freq > 0
             else None
         )
         saved_checkpoint_steps: set[int] = set()
         early_stop = (
-            MetricEarlyStopStateMachine(args.early_stop, label="early_stop")
-            if args.early_stop
+            MetricEarlyStopStateMachine(common_config["early_stop"], label="early_stop")
+            if common_config["early_stop"]
             else None
         )
         early_stopped = False
-        while search.global_step < args.timesteps and not context.stop_flag.requested:
+        while (
+            search.global_step < int(common_config["timesteps"])
+            and not context.stop_flag.requested
+        ):
             batch = runtime.step(search.next_actions())
             records = runtime.drain_records()
             records_by_lane = {
@@ -463,7 +471,7 @@ def run_go_explore(context: BackendContext) -> None:
                     f"removed={compacted['removed_entries']}",
                     flush=True,
                 )
-                next_compaction += args.compaction_interval_steps
+                next_compaction += compaction_interval_steps
             if step >= next_log:
                 early_stopped = _publish_metrics(
                     context,
@@ -472,7 +480,7 @@ def run_go_explore(context: BackendContext) -> None:
                     elapsed=time.perf_counter() - started_at,
                     early_stop=early_stop,
                 )
-                next_log += args.log_interval_steps
+                next_log += log_interval_steps
             while next_checkpoint is not None and step >= next_checkpoint:
                 if step not in saved_checkpoint_steps:
                     _save_policy(
@@ -485,7 +493,7 @@ def run_go_explore(context: BackendContext) -> None:
                         step=step,
                     )
                     saved_checkpoint_steps.add(step)
-                next_checkpoint += args.checkpoint_freq
+                next_checkpoint += checkpoint_freq
             if early_stopped:
                 break
         _publish_metrics(
@@ -495,7 +503,7 @@ def run_go_explore(context: BackendContext) -> None:
             elapsed=time.perf_counter() - started_at,
             early_stop=None,
         )
-        if context.stop_flag.requested and args.checkpoint_freq > 0:
+        if context.stop_flag.requested and checkpoint_freq > 0:
             _save_policy(
                 search,
                 runtime,

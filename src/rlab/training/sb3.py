@@ -6,7 +6,7 @@ from typing import Any
 from rlab.training.sb3_on_policy import (
     OnPolicyBackend,
     normalize_on_policy_config,
-    policy_kwargs_from_args,
+    policy_kwargs_from_config,
     policy_name_for_observation_space,
 )
 from rlab.training_backend import BackendContext
@@ -98,17 +98,18 @@ def _ppo_model_factory(context: BackendContext, env: Any, config: Any, device: s
     from rlab.schedules import apply_resume_hyperparameters, learning_rate_schedule
     from rlab.task_advantage import PerTaskAdvantagePPO, resolve_advantage_normalization_mode
 
-    args = context.args
-    advantage_normalization = resolve_advantage_normalization_mode(args)
+    common_config = context.train_config
+    backend_config = context.backend_config
+    advantage_normalization = resolve_advantage_normalization_mode(backend_config)
     if advantage_normalization == "per-task" and not task_conditioning(config).get("enabled"):
         raise ValueError("per-task advantage normalization requires task conditioning")
     sb3_normalize_advantage = advantage_normalization == "global"
-    if args.resume:
+    if backend_config["resume"]:
         model = load_pinned_remote_policy_model(
-            args.resume,
+            backend_config["resume"],
             download_root=context.run_dir / ".resume-source",
-            approval_hash=args.resume_approval_hash,
-            manifest=args.resume_manifest,
+            approval_hash=backend_config["resume_approval_hash"],
+            manifest=backend_config["resume_manifest"],
             metadata={"algorithm_id": "ppo"},
             env=env,
             tensorboard_log=str(context.run_dir),
@@ -116,7 +117,7 @@ def _ppo_model_factory(context: BackendContext, env: Any, config: Any, device: s
         )
         if advantage_normalization == "per-task":
             raise ValueError("per-task advantage normalization is not supported with resume")
-        apply_resume_hyperparameters(model, args)
+        apply_resume_hyperparameters(model, common_config, backend_config)
         model.normalize_advantage = sb3_normalize_advantage
         return model
 
@@ -126,19 +127,22 @@ def _ppo_model_factory(context: BackendContext, env: Any, config: Any, device: s
     return model_cls(
         policy_name_for_observation_space(env.observation_space),
         env,
-        learning_rate=learning_rate_schedule(args),
-        n_steps=args.n_steps,
-        batch_size=args.batch_size,
-        n_epochs=args.n_epochs,
-        gamma=args.gamma,
-        gae_lambda=args.gae_lambda,
-        ent_coef=args.ent_coef,
-        vf_coef=args.vf_coef,
-        clip_range=args.clip_range,
-        clip_range_vf=args.clip_range_vf,
+        learning_rate=learning_rate_schedule(common_config, backend_config),
+        n_steps=backend_config["n_steps"],
+        batch_size=backend_config["batch_size"],
+        n_epochs=backend_config["n_epochs"],
+        gamma=backend_config["gamma"],
+        gae_lambda=backend_config["gae_lambda"],
+        ent_coef=backend_config["ent_coef"],
+        vf_coef=backend_config["vf_coef"],
+        clip_range=backend_config["clip_range"],
+        clip_range_vf=backend_config["clip_range_vf"],
         normalize_advantage=sb3_normalize_advantage,
-        target_kl=args.target_kl,
-        policy_kwargs=policy_kwargs_from_args(args, optimizer_eps=args.adam_eps),
+        target_kl=backend_config["target_kl"],
+        policy_kwargs=policy_kwargs_from_config(
+            backend_config,
+            optimizer_eps=backend_config["adam_eps"],
+        ),
         tensorboard_log=str(context.run_dir),
         device=device,
         verbose=1,
@@ -150,19 +154,20 @@ def _a2c_model_factory(context: BackendContext, env: Any, config: Any, device: s
     from rlab.policy_models import load_pinned_remote_policy_model
     from rlab.schedules import apply_a2c_resume_hyperparameters, learning_rate_schedule
 
-    args = context.args
-    if args.resume:
+    common_config = context.train_config
+    backend_config = context.backend_config
+    if backend_config["resume"]:
         model = load_pinned_remote_policy_model(
-            args.resume,
+            backend_config["resume"],
             download_root=context.run_dir / ".resume-source",
-            approval_hash=args.resume_approval_hash,
-            manifest=args.resume_manifest,
+            approval_hash=backend_config["resume_approval_hash"],
+            manifest=backend_config["resume_manifest"],
             metadata={"algorithm_id": "a2c"},
             env=env,
             tensorboard_log=str(context.run_dir),
             device=device,
         )
-        apply_a2c_resume_hyperparameters(model, args)
+        apply_a2c_resume_hyperparameters(model, common_config, backend_config)
         return model
 
     from stable_baselines3 import A2C
@@ -170,17 +175,17 @@ def _a2c_model_factory(context: BackendContext, env: Any, config: Any, device: s
     return A2C(
         policy_name_for_observation_space(env.observation_space),
         env,
-        learning_rate=learning_rate_schedule(args),
-        n_steps=args.n_steps,
-        gamma=args.gamma,
-        gae_lambda=args.gae_lambda,
-        ent_coef=args.ent_coef,
-        vf_coef=args.vf_coef,
-        max_grad_norm=args.max_grad_norm,
-        rms_prop_eps=args.rms_prop_eps,
-        use_rms_prop=args.use_rms_prop,
-        normalize_advantage=args.normalize_advantage,
-        policy_kwargs=policy_kwargs_from_args(args),
+        learning_rate=learning_rate_schedule(common_config, backend_config),
+        n_steps=backend_config["n_steps"],
+        gamma=backend_config["gamma"],
+        gae_lambda=backend_config["gae_lambda"],
+        ent_coef=backend_config["ent_coef"],
+        vf_coef=backend_config["vf_coef"],
+        max_grad_norm=backend_config["max_grad_norm"],
+        rms_prop_eps=backend_config["rms_prop_eps"],
+        use_rms_prop=backend_config["use_rms_prop"],
+        normalize_advantage=backend_config["normalize_advantage"],
+        policy_kwargs=policy_kwargs_from_config(backend_config),
         tensorboard_log=str(context.run_dir),
         device=device,
         verbose=1,

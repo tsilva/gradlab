@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import argparse
 import json
 import re
 import tempfile
@@ -549,11 +548,11 @@ class LedgerCheckpointHelperTests(unittest.TestCase):
     def test_aligned_training_cap_is_reserved_for_the_final_checkpoint(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             callback = LedgerCheckpointHelper(
-                args=argparse.Namespace(
-                    run_name="run",
-                    run_description="",
-                    timesteps=500_000,
-                ),
+                train_config={
+                    "run_name": "run",
+                    "run_description": "",
+                    "timesteps": 500_000,
+                },
                 config=EnvConfig(game="SuperMarioBros-Nes-v0", state="Level1-1"),
                 save_freq=1,
                 save_path=Path(tmp) / "checkpoints",
@@ -593,19 +592,17 @@ class LedgerCheckpointHelperTests(unittest.TestCase):
             train_config = recipe_document["recipe"]["train_config"]
             recipe_path = write_canonical_json(run_dir / "recipe.json", recipe_document)
             callback = LedgerCheckpointHelper(
-                args=argparse.Namespace(
-                    **{
-                        **train_config,
-                        "run_name": "run",
-                        "run_description": "Exact SB3 checkpoint path regression.",
-                        "recipe_json_path": str(recipe_path),
-                        "source_sha": "a" * 40,
-                        "algorithm_id": "ppo",
-                        "model_class": "stable_baselines3.ppo.ppo.PPO",
-                        "training_backend_id": "sb3.ppo",
-                        "training_backend_config_hash": training_backend_config_hash(train_config),
-                    }
-                ),
+                train_config={
+                    **train_config,
+                    "run_name": "run",
+                    "run_description": "Exact SB3 checkpoint path regression.",
+                    "recipe_json_path": str(recipe_path),
+                    "source_sha": "a" * 40,
+                    "algorithm_id": "ppo",
+                    "model_class": "stable_baselines3.ppo.ppo.PPO",
+                    "training_backend_id": "sb3.ppo",
+                    "training_backend_config_hash": training_backend_config_hash(train_config),
+                },
                 config=resolve_env_config(env_config_from_mapping(train_config)),
                 save_freq=1,
                 save_path=run_dir / "checkpoints",

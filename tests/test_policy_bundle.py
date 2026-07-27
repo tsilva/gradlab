@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import argparse
 import json
 from copy import deepcopy
 from dataclasses import replace
@@ -152,25 +151,23 @@ def test_atomic_bundle_install_commits_only_a_complete_replayable_bundle(
     train_config = dict(recipe_document["recipe"]["train_config"])
     config = resolve_env_config(env_config_from_mapping(train_config))
     model_path = tmp_path / "checkpoints" / "model_100_steps.zip"
-    args = argparse.Namespace(
-        **{
-            **train_config,
-            "recipe_json_path": str(recipe_path),
-            "run_name": "atomic-bundle",
-            "run_description": "Atomic bundle regression.",
-            "runtime_image_ref": RUNTIME,
-            "source_sha": "a" * 40,
-            "algorithm_id": "ppo",
-            "model_class": "stable_baselines3.ppo.ppo.PPO",
-            "training_backend_id": "sb3.ppo",
-            "training_backend_config_hash": training_backend_config_hash(train_config),
-        }
-    )
+    runtime_config = {
+        **train_config,
+        "recipe_json_path": str(recipe_path),
+        "run_name": "atomic-bundle",
+        "run_description": "Atomic bundle regression.",
+        "runtime_image_ref": RUNTIME,
+        "source_sha": "a" * 40,
+        "algorithm_id": "ppo",
+        "model_class": "stable_baselines3.ppo.ppo.PPO",
+        "training_backend_id": "sb3.ppo",
+        "training_backend_config_hash": training_backend_config_hash(train_config),
+    }
 
     install_model_bundle(
         model_path,
         save_checkpoint=lambda path: path.write_bytes(b"checkpoint"),
-        args=args,
+        train_config=runtime_config,
         config=config,
         kind="checkpoint",
         checkpoint_step_value=100,
@@ -193,7 +190,7 @@ def test_atomic_bundle_install_commits_only_a_complete_replayable_bundle(
     install_model_bundle(
         model_path,
         save_checkpoint=lambda path: path.write_bytes(b"checkpoint"),
-        args=args,
+        train_config=runtime_config,
         config=config,
         kind="checkpoint",
         checkpoint_step_value=100,
@@ -202,7 +199,7 @@ def test_atomic_bundle_install_commits_only_a_complete_replayable_bundle(
         install_model_bundle(
             model_path,
             save_checkpoint=lambda path: path.write_bytes(b"different"),
-            args=args,
+            train_config=runtime_config,
             config=config,
             kind="checkpoint",
             checkpoint_step_value=100,

@@ -1,0 +1,9 @@
+defaults:
+- ../../../recipes/_presets/atari-ppo@_global_
+- _self_
+recipe_id: ppo
+description: >-
+  Seed {{ seed }} trains PPO from pixels to fight through Deadly Corridor and reach the armor vest,
+  with stochastic 100-episode evaluation and checkpoint promotion at 80% completion.
+train:
+  timesteps: 25000000

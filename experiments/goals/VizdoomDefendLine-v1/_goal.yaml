@@ -1,0 +1,55 @@
+defaults:
+- ../_vizdoom-common@_global_
+- _self_
+title: ViZDoom Defend the Line combat
+objective:
+  rank:
+  - max(eval/full/episode/return/mean)
+  - max(eval/full/episode/return/best)
+  - min(leader/checkpoint/step)
+train:
+  environment:
+    env_config:
+      env_args:
+        game_variables: [KILLCOUNT]
+        info_filter:
+          mode: all
+          keys: [killcount, player_dead, pending_reset]
+    task:
+      signals:
+        kills: killcount
+        player_dead: player_dead
+        episode_done: pending_reset
+      events:
+        monster_killed: {signal: kills, operation: increase}
+        player_died: {signal: player_dead, operation: equals_for, value: 1, steps: 1}
+        episode_ended: {signal: episode_done, operation: equals_for, value: 1, steps: 1}
+      termination:
+        failure: [player_died]
+        timeout: [episode_ended]
+        max_episode_steps: 512
+eval:
+  acceptance:
+  - metric: eval/full/episode/return/mean
+    operator: '>='
+    threshold: 5.0
+  environment:
+    env_config:
+      env_args:
+        game_variables: [KILLCOUNT]
+        info_filter:
+          mode: all
+          keys: [killcount, player_dead, pending_reset]
+    task:
+      signals:
+        kills: killcount
+        player_dead: player_dead
+        episode_done: pending_reset
+      events:
+        monster_killed: {signal: kills, operation: increase}
+        player_died: {signal: player_dead, operation: equals_for, value: 1, steps: 1}
+        episode_ended: {signal: episode_done, operation: equals_for, value: 1, steps: 1}
+      termination:
+        failure: [player_died]
+        timeout: [episode_ended]
+        max_episode_steps: 512

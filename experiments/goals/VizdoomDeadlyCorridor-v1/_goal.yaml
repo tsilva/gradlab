@@ -1,0 +1,60 @@
+defaults:
+- ../_vizdoom-common@_global_
+- _self_
+title: ViZDoom Deadly Corridor completion
+eval:
+  acceptance:
+  - metric: eval/full/outcome/success/rate/min
+    operator: '>='
+    threshold: 0.80
+  environment:
+    env_config:
+      env_args:
+        game_variables: [ARMOR]
+        info_filter:
+          mode: all
+          keys: [armor, player_dead, pending_reset]
+    task:
+      signals:
+        armor: armor
+        player_dead: player_dead
+        episode_done: pending_reset
+      events:
+        vest_reached: {signal: armor, operation: increase}
+        player_died: {signal: player_dead, operation: equals_for, value: 1, steps: 1}
+        episode_ended: {signal: episode_done, operation: equals_for, value: 1, steps: 1}
+      termination:
+        failure: [player_died]
+        success: [vest_reached]
+        timeout: [episode_ended]
+        max_episode_steps: 512
+      reward:
+        reward_mode: native
+        reward_scale: 100.0
+        reward_clip: false
+train:
+  environment:
+    env_config:
+      env_args:
+        game_variables: [ARMOR]
+        info_filter:
+          mode: all
+          keys: [armor, player_dead, pending_reset]
+    task:
+      signals:
+        armor: armor
+        player_dead: player_dead
+        episode_done: pending_reset
+      events:
+        vest_reached: {signal: armor, operation: increase}
+        player_died: {signal: player_dead, operation: equals_for, value: 1, steps: 1}
+        episode_ended: {signal: episode_done, operation: equals_for, value: 1, steps: 1}
+      termination:
+        failure: [player_died]
+        success: [vest_reached]
+        timeout: [episode_ended]
+        max_episode_steps: 512
+      reward:
+        reward_mode: native
+        reward_scale: 100.0
+        reward_clip: false

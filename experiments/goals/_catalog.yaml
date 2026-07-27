@@ -7,6 +7,22 @@ namespaces:
     title_template: Sample-efficient SuperMarioBros-NES {goal_id} completion
   VizdoomBasic-v1:
     project: VizdoomBasic-v1
+  VizdoomDeadlyCorridor-v1:
+    project: VizdoomDeadlyCorridor-v1
+  VizdoomDefendCenter-v1:
+    project: VizdoomDefendCenter-v1
+  VizdoomDefendLine-v1:
+    project: VizdoomDefendLine-v1
+  VizdoomHealthGathering-v1:
+    project: VizdoomHealthGathering-v1
+  VizdoomHealthGatheringSupreme-v1:
+    project: VizdoomHealthGatheringSupreme-v1
+  VizdoomMyWayHome-v1:
+    project: VizdoomMyWayHome-v1
+  VizdoomPredictPosition-v1:
+    project: VizdoomPredictPosition-v1
+  VizdoomTakeCover-v1:
+    project: VizdoomTakeCover-v1
   alepy__mspacman:
     project: MsPacman-Atari2600-v0
   rlab__bandit:

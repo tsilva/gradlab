@@ -9,10 +9,10 @@ from stable_baselines3 import PPO
 ADVANTAGE_NORMALIZATION_CHOICES = ("auto", "none", "global", "per-task")
 
 
-def resolve_advantage_normalization_mode(args: Any) -> str:
-    mode = getattr(args, "advantage_normalization", "auto")
+def resolve_advantage_normalization_mode(config: Mapping[str, Any]) -> str:
+    mode = config.get("advantage_normalization", "auto")
     if mode == "auto":
-        return "global" if getattr(args, "normalize_advantage", False) else "none"
+        return "global" if config.get("normalize_advantage", False) else "none"
     if mode not in ADVANTAGE_NORMALIZATION_CHOICES:
         raise ValueError(f"unknown advantage normalization mode: {mode!r}")
     return mode
