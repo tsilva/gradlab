@@ -181,8 +181,13 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertEqual(train_config["game"], "VizdoomBasic-v1")
         self.assertEqual(train_config["state"], "default")
         self.assertEqual(train_config["n_envs"], 32)
+        self.assertEqual(train_config["env_args"]["num_threads"], 32)
         self.assertEqual(train_config["env_args"]["use_restricted_actions"], "discrete")
         self.assertEqual(train_config["env_args"]["game_variables"], ["KILLCOUNT"])
+        self.assertEqual(
+            train_config["env_args"]["info_filter"],
+            {"mode": "all", "keys": ["killcount"]},
+        )
         self.assertEqual(
             train_config["task"]["events"]["monster_killed"],
             {"signal": "kills", "operation": "increase"},
@@ -192,6 +197,13 @@ class ConfigValidationTests(unittest.TestCase):
             {"success": ["monster_killed"], "max_episode_steps": 72},
         )
         self.assertEqual(document["goal"]["train"]["checkpoint_eval_backend"], "modal")
+        eval_config = document["goal"]["eval"]["environment"]["env_config"]
+        self.assertEqual(eval_config["n_envs"], 16)
+        self.assertEqual(eval_config["env_args"]["num_threads"], 16)
+        self.assertEqual(
+            eval_config["env_args"]["info_filter"],
+            {"mode": "all", "keys": ["killcount"]},
+        )
         self.assertEqual(
             document["goal"]["eval"]["acceptance"],
             [

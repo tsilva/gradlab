@@ -208,8 +208,17 @@ class GenericNativeProviderTests(unittest.TestCase):
                 self.seed = seed
                 self.options = dict(options or {})
                 state_indices = np.asarray(self.options["state_indices"], dtype=np.int32)
+                mask = np.asarray(self.options["reset_mask"], dtype=np.bool_)
+                snapshots = tuple(self.options["snapshots"])
+                snapshot_mask = np.asarray(
+                    [value is not None for value in snapshots], dtype=np.bool_
+                )
+                start_source = np.full(3, "environment", dtype=object)
+                start_source[snapshot_mask] = "snapshot"
                 return np.zeros((3, 1), dtype=np.uint8), {
                     "state_index": state_indices,
+                    "start_source": start_source,
+                    "_start_source": mask,
                 }
 
         native = MixedNative()
@@ -227,7 +236,10 @@ class GenericNativeProviderTests(unittest.TestCase):
 
         np.testing.assert_array_equal(native.options["state_indices"], [-1, 0, -1])
         self.assertEqual(native.seed, [None, 123, None])
-        self.assertEqual(infos["start_source"].tolist(), ["snapshot", "target", None])
+        self.assertEqual(
+            infos["start_source"].tolist(),
+            ["snapshot", "environment", "environment"],
+        )
         np.testing.assert_array_equal(infos["_start_source"], mask)
 
 
@@ -236,8 +248,8 @@ class BreakoutTurboProviderTests(unittest.TestCase):
     def config(**updates):
         values = {
             "env_provider": "breakout-turbo-env",
-            "game": "BreakoutTurbo-v0",
-            "state": "full",
+            "game": "Breakout-Atari2600-v0",
+            "state": "Start",
             "frame_skip": 4,
             "max_pool_frames": False,
             "sticky_action_prob": 0.0,
@@ -345,7 +357,7 @@ class BreakoutTurboProviderTests(unittest.TestCase):
                 seed=[3, None],
                 options={
                     "reset_mask": np.asarray([True, False], dtype=np.bool_),
-                    "start_ids": np.asarray(["full", None], dtype=object),
+                    "start_ids": np.asarray(["Start", None], dtype=object),
                 },
             )
             np.testing.assert_array_equal(reset_observations[1], observations[1])
@@ -451,7 +463,7 @@ class BreakoutTurboProviderTests(unittest.TestCase):
                 seed=[1, 2],
                 options={
                     "reset_mask": np.ones(2, dtype=np.bool_),
-                    "start_ids": np.asarray(["Start", "full"], dtype=object),
+                    "start_ids": np.asarray(["Start", "Start"], dtype=object),
                 },
             )
             for actions in (
@@ -560,7 +572,7 @@ class MarioNativeProviderTests(unittest.TestCase):
         self.assertIn("game_mode", kwargs["info_filter"]["keys"])
         self.assertIn("x_pos", kwargs["info_filter"]["keys"])
 
-    def test_stable_retro_named_action_preset_uses_rlab_discrete_adapter(self) -> None:
+    def test_stable_retro_named_action_preset_is_owned_by_the_provider(self) -> None:
         config = self.config(
             env_provider="stable-retro-turbo",
             env_args={
@@ -578,83 +590,25 @@ class MarioNativeProviderTests(unittest.TestCase):
             state_weight_mapping=lambda _config: {},
         )
 
-        self.assertIs(kwargs["use_restricted_actions"], retro.Actions.ALL)
+        self.assertEqual(
+            tuple(tuple(labels) for labels in kwargs["use_restricted_actions"]),
+            MARIO_ACTION_TABLES["basic"],
+        )
 
-    def test_stable_retro_breakout_uses_one_task_codec_for_named_and_inline_tables(
+    def test_stable_retro_breakout_receives_named_and_inline_tables_directly(
         self,
     ) -> None:
-        class ManualRetroVectorEnv:
-            metadata = {"autoreset_mode": gym.vector.AutoresetMode.DISABLED}
-
-            def __init__(self, game, *, num_envs, **kwargs):
-                self.game = game
-                self.num_envs = num_envs
-                self.kwargs = kwargs
-                self.autoreset_mode = gym.vector.AutoresetMode.DISABLED
-                self.state_catalog = ("Start",)
-                self.single_observation_space = gym.spaces.Box(
-                    0, 255, shape=(4, 84, 84), dtype=np.uint8
-                )
-                self.single_action_space = gym.spaces.MultiBinary(8)
-                self.observation_space = gym.vector.utils.batch_space(
-                    self.single_observation_space, num_envs
-                )
-                self.action_space = gym.vector.utils.batch_space(
-                    self.single_action_space, num_envs
-                )
-                self.last_actions = None
-
-            def reset(self, *, seed=None, options=None):
-                del seed
-                mask = np.asarray(options["reset_mask"], dtype=np.bool_)
-                state_indices = np.asarray(options["state_indices"], dtype=np.int32)
-                return np.zeros((self.num_envs, 4, 84, 84), dtype=np.uint8), {
-                    "state_index": state_indices,
-                    "_state_index": mask,
-                }
-
-            def step(self, actions):
-                self.last_actions = np.asarray(actions).copy()
-                return (
-                    np.zeros((self.num_envs, 4, 84, 84), dtype=np.uint8),
-                    np.zeros(self.num_envs, dtype=np.float32),
-                    np.zeros(self.num_envs, dtype=np.bool_),
-                    np.zeros(self.num_envs, dtype=np.bool_),
-                    {},
-                )
-
-            def close(self):
-                return None
-
-        for action_request, expected_actions, expected_hash in (
+        for action_request, expected_labels in (
             (
                 "simple",
-                np.asarray(
-                    [
-                        [0, 0, 0, 0, 0, 0, 0, 0],
-                        [1, 0, 0, 0, 0, 0, 0, 0],
-                        [0, 0, 0, 0, 0, 0, 0, 1],
-                        [0, 0, 0, 0, 0, 0, 1, 0],
-                    ],
-                    dtype=np.int8,
-                ),
-                "ae2fea9e05910b0db9ba3980c162573a8ad9ad562e077babfeb5f6144d94a091",
+                ((), ("BUTTON",), ("RIGHT",), ("LEFT",)),
             ),
             (
                 BREAKOUT_NO_NOOP_ACTIONS,
-                np.asarray(
-                    [
-                        [1, 0, 0, 0, 0, 0, 0, 0],
-                        [0, 0, 0, 0, 0, 0, 0, 1],
-                        [0, 0, 0, 0, 0, 0, 1, 0],
-                    ],
-                    dtype=np.int8,
-                ),
-                BREAKOUT_NO_NOOP_HASH,
+                (("BUTTON",), ("RIGHT",), ("LEFT",)),
             ),
         ):
             with self.subTest(action_request=action_request):
-                num_envs = len(expected_actions)
                 config = EnvConfig(
                     env_provider="stable-retro-turbo",
                     game="Breakout-Atari2600-v0",
@@ -675,45 +629,19 @@ class MarioNativeProviderTests(unittest.TestCase):
                 )
                 kwargs = provider_native_vec_kwargs(
                     config,
-                    n_envs=num_envs,
+                    n_envs=len(expected_labels),
                     native_obs_crop=lambda _config: None,
                     state_weight_mapping=lambda _config: {},
                 )
-                self.assertIs(kwargs["use_restricted_actions"], retro.Actions.ALL)
-
-                env = make_provider_vec_env(
-                    config,
-                    native_kwargs=kwargs,
-                    retro_vec_env_type=ManualRetroVectorEnv,
+                self.assertEqual(
+                    tuple(tuple(labels) for labels in kwargs["use_restricted_actions"]),
+                    expected_labels,
                 )
-                try:
-                    descriptor = provider_descriptor(
-                        config,
-                        env,
-                        state_weight_mapping=lambda _config: {},
-                    )
-                    kernel = _bound_task_kernel(config, descriptor, num_envs)
-                    self.assertEqual(
-                        kernel.action_space,
-                        gym.spaces.Discrete(len(expected_actions)),
-                    )
-                    self.assertIsInstance(
-                        descriptor.native_action_space,
-                        gym.spaces.MultiBinary,
-                    )
-                    self.assertEqual(descriptor.action_table_hash, expected_hash)
-
-                    policy_actions = np.arange(num_envs, dtype=np.int64)
-                    native_actions = kernel.map_actions(policy_actions)
-                    np.testing.assert_array_equal(native_actions, expected_actions)
-                    env.step(native_actions)
-                    np.testing.assert_array_equal(env.env.last_actions, expected_actions)
-                finally:
-                    env.close()
 
     def test_constructs_with_disabled_autoreset_and_describes_starts_and_signals(self) -> None:
         class FakeMarioVectorEnv:
             supports_live_snapshots = True
+            live_snapshots_deterministic = True
             metadata = {
                 "autoreset_mode": gym.vector.AutoresetMode.DISABLED,
                 "render_modes": ("rgb_array",),
@@ -759,6 +687,10 @@ class MarioNativeProviderTests(unittest.TestCase):
                     "levelLo": np.zeros(self.num_envs, dtype=np.int64),
                     "state_index": self._state_indices.copy(),
                     "_state_index": mask.copy(),
+                    "start_source": np.full(
+                        self.num_envs, "environment", dtype=object
+                    ),
+                    "_start_source": mask.copy(),
                 }
                 return np.zeros((self.num_envs, 4, 84, 84), dtype=np.uint8), infos
 
@@ -793,7 +725,7 @@ class MarioNativeProviderTests(unittest.TestCase):
         self.assertEqual(descriptor.start_catalog, ("Level1-1",))
         self.assertEqual(descriptor.lane_start_ids, ("Level1-1", "Level1-1"))
         self.assertEqual(descriptor.render_support, ("rgb_array",))
-        self.assertEqual(descriptor.observation_buffer_depth, 2)
+        self.assertEqual(descriptor.observation_buffer_depth, 1)
         self.assertTrue(descriptor.supports_live_snapshots)
         self.assertTrue(descriptor.live_snapshots_deterministic)
         self.assertEqual(descriptor.signal_schema["lives"].dtype, np.dtype(np.int64))
@@ -872,11 +804,16 @@ class MarioNativeProviderTests(unittest.TestCase):
             MarioTaskDefinition(MarioTaskConfig.from_env_config(config)).bind(descriptor, 2)
 
     def test_start_adapter_renders_every_native_lane(self) -> None:
-        class NativeScreens:
-            def get_screen(self, lane):
-                return np.full((3, 4, 3), lane, dtype=np.uint8)
+        class Env:
+            num_envs = 2
 
-        env = type("Env", (), {"num_envs": 2, "native": NativeScreens()})()
+            def get_images(self):
+                return [
+                    np.full((3, 4, 3), lane, dtype=np.uint8)
+                    for lane in range(self.num_envs)
+                ]
+
+        env = Env()
         frames = _StartInfoAdapter(env).get_images()
 
         self.assertEqual([frame.shape for frame in frames], [(3, 4, 3), (3, 4, 3)])
@@ -1006,6 +943,10 @@ class MarioNativeProviderTests(unittest.TestCase):
                 infos = {
                     "state_index": self.indices.copy(),
                     "_state_index": mask.copy(),
+                    "start_source": np.full(
+                        self.num_envs, "environment", dtype=object
+                    ),
+                    "_start_source": mask.copy(),
                 }
                 return np.zeros((self.num_envs, 1), dtype=np.uint8), infos
 
@@ -1040,6 +981,8 @@ class MarioNativeProviderTests(unittest.TestCase):
                 self.num_envs = num_envs
                 self.autoreset_mode = gym.vector.AutoresetMode.DISABLED
                 self.kwargs = kwargs
+                self.state_catalog = ("Start",)
+                self.indices = np.zeros(num_envs, dtype=np.int32)
                 self.reset_calls = 0
                 self.reset_masks = []
                 self.observations = np.zeros((num_envs, 4, 84, 84), dtype=np.uint8)
@@ -1062,7 +1005,20 @@ class MarioNativeProviderTests(unittest.TestCase):
                 )
                 self.reset_masks.append(mask.copy())
                 self.observations[mask] = 0
-                return self.observations.copy(), {}
+                self.indices[mask] = 0
+                return self.observations.copy(), {
+                    "state_index": self.indices.copy(),
+                    "_state_index": mask.copy(),
+                    "start_source": np.full(
+                        self.num_envs, "environment", dtype=object
+                    ),
+                    "_start_source": mask.copy(),
+                }
+
+            def active_state_indices(self):
+                values = self.indices.copy()
+                values.setflags(write=False)
+                return values
 
             def step(self, actions):
                 del actions
@@ -1145,12 +1101,14 @@ class MarioNativeProviderTests(unittest.TestCase):
         )
         kernel = _bound_task_kernel(config, descriptor, 16)
         self.assertIsNone(kernel._observation_mask)
-        self.assertEqual(descriptor.observation_buffer_depth, 2)
+        self.assertEqual(descriptor.observation_buffer_depth, 1)
         self.assertTrue(kernel.observation_encoding_is_view)
 
 
 class VizdoomTurboProviderTests(unittest.TestCase):
     class FakeVizdoomEnv:
+        supports_live_snapshots = True
+        live_snapshots_deterministic = True
         metadata = {
             "autoreset_mode": gym.vector.AutoresetMode.DISABLED,
             "render_modes": ["rgb_array"],
@@ -1226,7 +1184,7 @@ class VizdoomTurboProviderTests(unittest.TestCase):
         self.assertEqual(env.kwargs["state"], None)
         self.assertEqual(env.kwargs["use_restricted_actions"], "discrete")
         self.assertEqual(env.kwargs["game_variables"], ("HEALTH",))
-        self.assertEqual(descriptor.observation_buffer_depth, 2)
+        self.assertEqual(descriptor.observation_buffer_depth, 1)
         self.assertTrue(descriptor.supports_live_snapshots)
         self.assertTrue(descriptor.live_snapshots_deterministic)
         self.assertIn("health", descriptor.signal_schema)

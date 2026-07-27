@@ -174,7 +174,7 @@ class DoubleBufferedNativeVectorProvider(DeterministicNativeVectorProvider):
 def descriptor_for(
     provider: DeterministicNativeVectorProvider,
     *,
-    observation_buffer_depth: int = 1,
+    observation_buffer_depth: int | None = 1,
 ) -> ProviderDescriptor:
     return ProviderDescriptor(
         provider_id="fake-native",
@@ -194,6 +194,13 @@ def descriptor_for(
         },
         start_catalog=("Level1-1", "Level1-2"),
         render_support=("rgb_array",),
+        observation_ownership=(
+            "owned"
+            if observation_buffer_depth is None
+            else "safe_view"
+            if observation_buffer_depth == 2
+            else "unsafe_view"
+        ),
         observation_buffer_depth=observation_buffer_depth,
     )
 
@@ -238,7 +245,7 @@ class ProviderContractTests(unittest.TestCase):
                 native_action_space=provider.single_action_space,
                 autoreset_mode="same_step",
             )
-        with self.assertRaisesRegex(ValueError, "observation_buffer_depth must be positive"):
+        with self.assertRaisesRegex(ValueError, "ownership/depth declaration is inconsistent"):
             ProviderDescriptor(
                 provider_id="bad-buffer-depth",
                 native_observation_space=provider.single_observation_space,
