@@ -177,6 +177,18 @@ class RunSupervisorTests(unittest.TestCase):
         ):
             supervisor.validate_runtime()
 
+    def test_ephemeral_state_archive_is_not_recovered_or_published(self) -> None:
+        supervisor = self.supervisor()
+        supervisor.train_config = {
+            **supervisor.train_config,
+            "state_archive": {"persistence": "ephemeral"},
+        }
+
+        self.assertFalse(supervisor._durable_state_archive_enabled())
+        with patch.object(supervisor.authority, "publish_state_archive") as publish:
+            self.assertEqual(supervisor._publish_state_archive(), 0)
+        publish.assert_not_called()
+
     def test_startup_failure_creates_resumable_terminal_receipt(self) -> None:
         supervisor = self.supervisor()
         with patch.object(

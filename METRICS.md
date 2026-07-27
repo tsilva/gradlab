@@ -64,6 +64,11 @@ attribution. Frame skip remains run config. W&B uses three explicit axes:
 - `eval/checkpoint_step`: step of the checkpoint represented by an evaluation row.
 - `orchestration/event_seq`: durable supervisor delivery order.
 
+Each axis is configured with a W&B `max` summary reducer. W&B's public API may therefore expose
+its summary value as a reducer mapping such as `{"max": 5046272}` rather than as a bare number.
+Catalog and report consumers must unwrap the configured reducer value; a recipe's requested
+`timesteps` cap is not a substitute for the observed `train/global_step`.
+
 Asynchronous evaluations may arrive after later training rows without changing their scientific
 X-axis. Each producer writes only its applicable scientific axis; durable delivery order uses
 `orchestration/event_seq`.
@@ -224,7 +229,7 @@ exit alone is never scientific success.
 | `train/algorithm/jerk/archive/selected_prefix_return_mean` | Cumulative mean retained-prefix return selected for JERK archive replay. | return | rollout | history |
 | `train/algorithm/jerk/exploit/probability` | Probability that JERK starts an episode by sampling a retained archive sequence. | fraction | rollout | history |
 | `train/algorithm/go_explore/archive/cell_count` | Semantic cells currently retained by Go-Explore. | cells | interval | history |
-| `train/algorithm/go_explore/archive/entry_count` | Immutable state-archive entries created by the search. | entries | interval | history |
+| `train/algorithm/go_explore/archive/entry_count` | Immutable entries in the ephemeral working archive, including replacements not yet removed by periodic compaction. | entries | interval | history |
 | `train/algorithm/go_explore/archive/blob_count` | Distinct content-addressed provider-state blobs retained by the search. | blobs | interval | history |
 | `train/algorithm/go_explore/archive/blob_bytes` | Uncompressed bytes in distinct retained provider-state blobs. | bytes | interval | history |
 | `train/algorithm/go_explore/archive/selection_count` | Cumulative archived-cell selections for restoration. | selections | interval | history |

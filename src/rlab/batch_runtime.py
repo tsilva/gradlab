@@ -516,6 +516,7 @@ class BatchRuntime:
                 provider_id=descriptor.provider_id,
                 codec_id=descriptor.snapshot_codec_id,
                 compatibility_id=descriptor.snapshot_compatibility_id,
+                persistence=str(self.state_archive_config["persistence"]),
             )
             curriculum_document = self.state_archive_config["curriculum"]
             if curriculum_document is not None:
@@ -1110,6 +1111,14 @@ class BatchRuntime:
             referenced_entry_ids=referenced_entry_ids,
         )
 
+    def retain_state_archive_entries(
+        self,
+        entry_ids: Sequence[str],
+    ) -> Mapping[str, int]:
+        if self.state_archive is None:
+            raise RuntimeError("state archive is disabled")
+        return self.state_archive.retain_entries(entry_ids)
+
     def seal_state_archive(
         self,
         *,
@@ -1647,7 +1656,11 @@ class BatchRuntime:
         self._closed = True
         if self.archive_curriculum is not None:
             self.archive_curriculum.close()
-        if self.state_archive is not None and not self.state_archive.is_closed:
+        if (
+            self.state_archive is not None
+            and self.state_archive.persistence == "durable"
+            and not self.state_archive.is_closed
+        ):
             self.state_archive.seal(
                 step=self._transition_count_total,
                 status="closed",

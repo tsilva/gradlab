@@ -5,6 +5,7 @@ import json
 import math
 import os
 import re
+import shutil
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -21,6 +22,7 @@ STATE_ARCHIVE_SEMANTIC_ID = "state-archive-v1"
 SNAPSHOT_CODEC_API_VERSION = 1
 STATE_ARCHIVE_CURRICULUM_SEMANTIC_ID = "archive-curriculum-v1"
 RESTORE_SEMANTICS = frozenset({"episode_start", "continuation"})
+STATE_ARCHIVE_PERSISTENCE = frozenset({"durable", "ephemeral"})
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 _VIEW_ID = re.compile(r"[a-z0-9][a-z0-9-]{0,63}")
 
@@ -263,6 +265,14 @@ class ContentAddressedBlobStore:
             raise ValueError("state archive snapshot blob failed integrity verification")
         return payload
 
+    def discard(self, sha256: str) -> None:
+        path = self.path_for(sha256)
+        path.unlink(missing_ok=True)
+        try:
+            path.parent.rmdir()
+        except OSError:
+            pass
+
 
 class SessionHandleStore:
     """Optional live-handle cache keyed by immutable provider payload digest."""
@@ -276,6 +286,13 @@ class SessionHandleStore:
 
     def get(self, ref: SnapshotRef) -> Any | None:
         return self._handles.get(ref.blob_sha256)
+
+    def retain(self, blob_sha256s: set[str]) -> None:
+        self._handles = {
+            digest: handle
+            for digest, handle in self._handles.items()
+            if digest in blob_sha256s
+        }
 
     def clear(self) -> None:
         self._handles.clear()
@@ -379,6 +396,7 @@ class StateArchive:
         provider_id: str,
         codec_id: str,
         compatibility_id: str,
+        persistence: str,
         codec_registry: SnapshotCodecRegistry = SNAPSHOT_CODECS,
     ) -> None:
         self.root = Path(root)
@@ -389,6 +407,12 @@ class StateArchive:
         self.provider_id = str(provider_id)
         self.codec_id = str(codec_id)
         self.compatibility_id = str(compatibility_id)
+        self.persistence = str(persistence)
+        if self.persistence not in STATE_ARCHIVE_PERSISTENCE:
+            raise ValueError(
+                "state archive persistence must be one of "
+                f"{sorted(STATE_ARCHIVE_PERSISTENCE)}"
+            )
         self.codec = codec_registry.resolve(codec_id, provider_id=provider_id)
         self._entries: dict[str, StateArchiveEntry] = {}
         self._views: dict[str, dict[str, Any]] = {}
@@ -552,6 +576,44 @@ class StateArchive:
         self._views[normalized] = validated
         return dict(validated)
 
+    def retain_entries(self, entry_ids: Sequence[str]) -> dict[str, int]:
+        retained = set(str(entry_id) for entry_id in entry_ids)
+        for entry_id in retained:
+            self.entry(entry_id)
+        view_references = {
+            str(entry_id)
+            for view in self._views.values()
+            for entry_id in view["referenced_entry_ids"]
+        }
+        missing_view_references = sorted(view_references - retained)
+        if missing_view_references:
+            raise ValueError(
+                "cannot prune state archive entries referenced by a view: "
+                f"{missing_view_references[:8]}"
+            )
+        removed_entries = set(self._entries) - retained
+        retained_blobs = {
+            self._entries[entry_id].provider_snapshot.ref.blob_sha256
+            for entry_id in retained
+        }
+        removed_blobs = {
+            self._entries[entry_id].provider_snapshot.ref.blob_sha256
+            for entry_id in removed_entries
+        } - retained_blobs
+        for entry_id in removed_entries:
+            (self.entries_root / f"{entry_id}.json").unlink(missing_ok=True)
+            del self._entries[entry_id]
+        for blob_sha256 in removed_blobs:
+            self.blobs.discard(blob_sha256)
+        self.handles.retain(retained_blobs)
+        (self.root / "closure.json").unlink(missing_ok=True)
+        return {
+            "removed_entries": len(removed_entries),
+            "removed_blobs": len(removed_blobs),
+            "retained_entries": len(retained),
+            "retained_blobs": len(retained_blobs),
+        }
+
     def view_document(self, view_id: str) -> Mapping[str, Any] | None:
         normalized = self._normalized_view_id(view_id)
         value = self._views.get(normalized)
@@ -567,7 +629,7 @@ class StateArchive:
         return {
             "semantic_id": STATE_ARCHIVE_SEMANTIC_ID,
             "schema_version": 1,
-            "persistence": "durable",
+            "persistence": self.persistence,
             "provider_id": self.provider_id,
             "codec_id": self.codec_id,
             "compatibility_id": self.compatibility_id,
@@ -627,6 +689,8 @@ class StateArchive:
 
     def close(self) -> None:
         self.handles.clear()
+        if self.persistence == "ephemeral":
+            shutil.rmtree(self.root, ignore_errors=False)
 
 
 _CURRICULUM_DEFAULTS: dict[str, Any] = {
@@ -773,8 +837,11 @@ def normalize_state_archive_config(
     semantic_id = value.get("semantic_id", STATE_ARCHIVE_SEMANTIC_ID)
     if semantic_id != STATE_ARCHIVE_SEMANTIC_ID:
         raise ValueError(f"{label}.semantic_id must be {STATE_ARCHIVE_SEMANTIC_ID!r}")
-    if value.get("persistence", "durable") != "durable":
-        raise ValueError(f"{label}.persistence must be 'durable'")
+    persistence = str(value.get("persistence", "durable"))
+    if persistence not in STATE_ARCHIVE_PERSISTENCE:
+        raise ValueError(
+            f"{label}.persistence must be one of {sorted(STATE_ARCHIVE_PERSISTENCE)}"
+        )
     restore_semantics = str(value.get("restore_semantics", "continuation"))
     if restore_semantics not in RESTORE_SEMANTICS:
         raise ValueError(f"{label}.restore_semantics must be one of {sorted(RESTORE_SEMANTICS)}")
@@ -816,6 +883,8 @@ def normalize_state_archive_config(
     curriculum = value.get("curriculum")
     normalized_curriculum: dict[str, Any] | None = None
     if curriculum is not None:
+        if persistence != "durable":
+            raise ValueError(f"{label}.curriculum requires persistence='durable'")
         if mode != "cell_transition" or normalized_cell is None:
             raise ValueError(f"{label}.curriculum requires recorder.mode='cell_transition'")
         if not isinstance(curriculum, Mapping):
@@ -827,7 +896,7 @@ def normalize_state_archive_config(
         )
     return {
         "semantic_id": STATE_ARCHIVE_SEMANTIC_ID,
-        "persistence": "durable",
+        "persistence": persistence,
         "restore_semantics": restore_semantics,
         "recorder": {
             "mode": mode,
@@ -1333,6 +1402,8 @@ def state_archive_artifact_summary(source: Any) -> Mapping[str, Any] | None:
         summary = getattr(current, "state_archive_summary", None)
         if callable(summary):
             value = summary()
-            return dict(value) if value is not None else None
+            if value is None or value.get("persistence") != "durable":
+                return None
+            return dict(value)
         current = getattr(current, "venv", None) or getattr(current, "env", None)
     return None
