@@ -926,6 +926,8 @@ class _SuccessMetricsReducer:
     def consume(self, record: Any) -> dict[str, int | float]:
         if not hasattr(record, "episode_return"):
             return {}
+        if str(getattr(record, "start_origin", "target")) != "target":
+            return {}
         start_id = getattr(record, "start_id", None)
         if start_id is None:
             return {}

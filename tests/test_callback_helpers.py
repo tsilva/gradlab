@@ -249,6 +249,50 @@ class RuntimeMetricsCompletionTests(unittest.TestCase):
         self.assertEqual(logger.records["train/outcome/success/from/StartB/count"], 0)
         self.assertEqual(logger.records["train/outcome/success/start_coverage/rate"], 1.0)
 
+    def test_success_metrics_exclude_snapshot_origin_attempts(self) -> None:
+        logger = SimpleNamespace(records={})
+        logger.record = lambda key, value: logger.records.__setitem__(key, value)
+        callback = RuntimeMetricsHelper(
+            configured_starts=("Level1-3",),
+            track_success=True,
+        )
+        callback.model = SimpleNamespace(logger=logger)  # type: ignore[assignment]
+
+        callback._on_records(
+            [
+                SimpleNamespace(
+                    start_id="Level1-3",
+                    start_origin="curriculum",
+                    events=("level_change",),
+                    episode_return=1.0,
+                    outcome="success",
+                    truncated=False,
+                )
+                for _ in range(100)
+            ]
+            + [
+                SimpleNamespace(
+                    start_id="Level1-3",
+                    start_origin="target",
+                    events=("life_loss",),
+                    episode_return=0.0,
+                    outcome="failure",
+                    truncated=False,
+                )
+            ]
+        )
+        callback._on_rollout_end()
+
+        self.assertEqual(
+            logger.records["train/outcome/success/from/Level1-3/attempts"],
+            1,
+        )
+        self.assertEqual(
+            logger.records["train/outcome/success/from/Level1-3/count"],
+            0,
+        )
+        self.assertNotIn("train/outcome/success/window_100/rate/min", logger.records)
+
     def test_success_window_requires_every_configured_start_and_attempts_are_cumulative(
         self,
     ) -> None:

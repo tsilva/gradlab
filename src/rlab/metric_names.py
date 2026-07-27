@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 
-METRICS_SCHEMA_VERSION = 7
+METRICS_SCHEMA_VERSION = 8
 TRAIN_GLOBAL_STEP = "train/global_step"
 EVAL_CHECKPOINT_STEP = "eval/checkpoint_step"
 ORCHESTRATION_EVENT_SEQ = "orchestration/event_seq"
