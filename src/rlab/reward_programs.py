@@ -12,7 +12,7 @@ from rlab.json_utils import canonical_json_sha256
 
 
 REWARD_PROGRAM_KIND_MARIO_V1 = "mario-v1"
-MARIO_REWARD_KERNEL_REVISION = "mario-kernel-v1"
+MARIO_REWARD_KERNEL_REVISION = "mario-kernel-v2"
 REWARD_SHAPE_KEY_PATTERN = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$")
 
 MARIO_REWARD_FIELDS = (
@@ -21,6 +21,8 @@ MARIO_REWARD_FIELDS = (
     "clip_rewards",
     "progress_reward_cap",
     "progress_reward_scale",
+    "progress_reward_boost_start_x",
+    "progress_reward_boost_scale",
     "terminal_reward",
     "reward_scale",
     "time_penalty",
@@ -126,6 +128,10 @@ def _mario_compiled_semantics(reward: Mapping[str, Any]) -> dict[str, Any]:
         semantics.update(
             use_native_reward=bool(reward["use_native_reward"]),
             progress_reward_scale=float(reward["progress_reward_scale"]),
+            progress_reward_boost_start_x=float(
+                reward["progress_reward_boost_start_x"]
+            ),
+            progress_reward_boost_scale=float(reward["progress_reward_boost_scale"]),
             completion_reward=float(reward["completion_reward"]),
             death_penalty=float(reward["death_penalty"]),
         )

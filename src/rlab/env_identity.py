@@ -38,6 +38,8 @@ MARIO_REWARD_KEYS = frozenset(
         "clip_rewards",
         "progress_reward_cap",
         "progress_reward_scale",
+        "progress_reward_boost_start_x",
+        "progress_reward_boost_scale",
         "terminal_reward",
         "reward_scale",
         "time_penalty",

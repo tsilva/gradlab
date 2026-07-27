@@ -97,6 +97,8 @@ def test_selected_reward_definition_can_be_overridden_for_an_adhoc_run() -> None
     baseline = compose_train_document(MARIO_GOAL, MARIO_RECIPE)
     overrides = (
         "reward_shapes.definitions.speedrun-v1.progress_reward_scale=0.25",
+        "reward_shapes.definitions.speedrun-v1.progress_reward_boost_start_x=640.0",
+        "reward_shapes.definitions.speedrun-v1.progress_reward_boost_scale=10.0",
         "reward_shapes.definitions.speedrun-v1.death_penalty=100.0",
         "reward_shapes.definitions.speedrun-v1.completion_reward=250.0",
     )
@@ -108,6 +110,8 @@ def test_selected_reward_definition_can_be_overridden_for_an_adhoc_run() -> None
     config = document["train_config"]
     expected = {
         "progress_reward_scale": 0.25,
+        "progress_reward_boost_start_x": 640.0,
+        "progress_reward_boost_scale": 10.0,
         "death_penalty": 100.0,
         "completion_reward": 250.0,
     }

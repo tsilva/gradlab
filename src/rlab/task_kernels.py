@@ -55,6 +55,8 @@ def default_task_document(task_id: str) -> dict[str, Any]:
             "clip_rewards": False,
             "progress_reward_cap": 30.0,
             "progress_reward_scale": 1.0,
+            "progress_reward_boost_start_x": 0.0,
+            "progress_reward_boost_scale": 0.0,
             "terminal_reward": 50.0,
             "reward_scale": 10.0,
             "time_penalty": 0.0,
@@ -345,6 +347,8 @@ def _mario_step_kernel(
     clip_rewards,
     progress_reward_cap,
     progress_reward_scale,
+    progress_reward_boost_start_x,
+    progress_reward_boost_scale,
     terminal_reward,
     reward_scale,
     time_penalty,
@@ -409,7 +413,8 @@ def _mario_step_kernel(
             state_level_max_x[lane] = effective_x
         global_x = state_completed_base[lane] + effective_x
         global_max = state_completed_base[lane] + state_level_max_x[lane]
-        delta = global_max - state_max_global_x[lane]
+        previous_global_max = state_max_global_x[lane]
+        delta = global_max - previous_global_max
         if delta < 0:
             delta = 0
         if global_max > state_max_global_x[lane]:
@@ -511,7 +516,19 @@ def _mario_step_kernel(
                 score_part = 0.01 * float(current_score_delta)
             else:  # additive
                 component_progress = float(delta)
-            progress_part = progress_reward_scale * component_progress
+            previous_boost_progress = float(previous_global_max) - progress_reward_boost_start_x
+            if previous_boost_progress < 0.0:
+                previous_boost_progress = 0.0
+            current_boost_progress = float(global_max) - progress_reward_boost_start_x
+            if current_boost_progress < 0.0:
+                current_boost_progress = 0.0
+            boost_progress = current_boost_progress - previous_boost_progress
+            if boost_progress < 0.0:
+                boost_progress = 0.0
+            progress_part = (
+                progress_reward_scale * component_progress
+                + progress_reward_boost_scale * boost_progress
+            )
             if completed:
                 completion_part = completion_reward
             if lost_life:
@@ -1074,6 +1091,8 @@ class MarioTaskConfig:
     clip_rewards: bool = False
     progress_reward_cap: float = 30.0
     progress_reward_scale: float = 1.0
+    progress_reward_boost_start_x: float = 0.0
+    progress_reward_boost_scale: float = 0.0
     terminal_reward: float = 50.0
     reward_scale: float = 10.0
     time_penalty: float = 0.0
@@ -1228,6 +1247,12 @@ class MarioTaskConfig:
             clip_rewards=reward_value("clip_rewards", False),
             progress_reward_cap=reward_value("progress_reward_cap", 30.0),
             progress_reward_scale=reward_value("progress_reward_scale", 1.0),
+            progress_reward_boost_start_x=reward_value(
+                "progress_reward_boost_start_x", 0.0
+            ),
+            progress_reward_boost_scale=reward_value(
+                "progress_reward_boost_scale", 0.0
+            ),
             terminal_reward=reward_value("terminal_reward", 50.0),
             reward_scale=reward_value("reward_scale", 10.0),
             time_penalty=reward_value("time_penalty", 0.0),
@@ -1429,6 +1454,8 @@ class MarioTaskKernel:
             config.clip_rewards,
             config.progress_reward_cap,
             config.progress_reward_scale,
+            config.progress_reward_boost_start_x,
+            config.progress_reward_boost_scale,
             config.terminal_reward,
             config.reward_scale,
             config.time_penalty,
