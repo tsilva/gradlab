@@ -781,6 +781,7 @@ def test_transition_payload_keeps_before_decision_after_alignment() -> None:
     assert payload["before"]["task"] == "Level1-1"
     assert payload["decision"] is None
     assert payload["after"]["task"] == "Level1-1"
+    assert payload["after"]["frame_role"] == "after_action_observation"
     assert payload["signals"]["x_pos"] == 12.0
     assert payload["info"]["credential_token"] == "<redacted>"
 

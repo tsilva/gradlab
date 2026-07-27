@@ -16,7 +16,7 @@ if not runtime_image_ref:
     raise RuntimeError("RLAB_MODAL_EVAL_RUNTIME_IMAGE must be an immutable docker image ref")
 source_sha = os.environ.get("RLAB_EXPECTED_SOURCE_SHA", "").strip()
 registry_ref = runtime_image_ref.removeprefix("docker:")
-app_name = modal_app_name(config.app_name_prefix, source_sha)
+app_name = modal_app_name(config.deployment.app_name_prefix, source_sha)
 registry_secret_name = os.environ.get("RLAB_MODAL_REGISTRY_SECRET", "").strip()
 registry_secret = modal.Secret.from_name(registry_secret_name) if registry_secret_name else None
 image = modal.Image.from_registry(registry_ref, secret=registry_secret)
@@ -25,18 +25,18 @@ app = modal.App(app_name)
 
 
 @app.function(
-    name=config.function_name,
+    name=config.deployment.function_name,
     image=image,
-    cpu=config.cpu,
-    memory=config.memory_mib,
-    min_containers=config.min_containers,
-    buffer_containers=config.buffer_containers,
-    max_containers=config.max_containers,
-    scaledown_window=config.scaledown_window_seconds,
+    cpu=config.resources.cpu,
+    memory=config.resources.memory_mib,
+    min_containers=config.resources.min_containers,
+    buffer_containers=config.resources.buffer_containers,
+    max_containers=config.resources.max_containers,
+    scaledown_window=config.resources.scaledown_window_seconds,
     retries=0,
-    timeout=config.worker_timeout_seconds,
-    startup_timeout=config.startup_timeout_seconds,
-    single_use_containers=config.single_use_containers,
+    timeout=config.timeouts.worker_seconds,
+    startup_timeout=config.resources.startup_timeout_seconds,
+    single_use_containers=config.resources.single_use_containers,
     include_source=False,
     serialized=True,
 )
@@ -56,7 +56,7 @@ def evaluate_checkpoint(payload: dict) -> dict:
     max_containers=1,
     retries=0,
     timeout=30,
-    startup_timeout=config.startup_timeout_seconds,
+    startup_timeout=config.resources.startup_timeout_seconds,
     single_use_containers=True,
     include_source=False,
     serialized=True,

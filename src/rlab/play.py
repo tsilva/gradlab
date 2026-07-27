@@ -538,6 +538,7 @@ class _PlaybackTransition:
     truncated: bool
     completed: bool
     boundary: bool
+    after_frame_role: str = "after_action_observation"
 
     @property
     def events(self) -> tuple[str, ...]:
@@ -842,6 +843,23 @@ class _PlaybackSession:
         self.policy_obs = policy_obs
         self.current_frame = optional_vector_env_frame(self.env)
         self.frames = optional_fast_env_frames(policy_obs)
+        terminal_frame = (
+            diagnostics.terminal_frame
+            if boundary and diagnostics is not None
+            else None
+        )
+        after_frame = terminal_frame if terminal_frame is not None else self.current_frame
+        if boundary:
+            after_frame_role = (
+                "terminal_observation"
+                if terminal_frame is not None
+                else "next_episode_initial_observation"
+            )
+            after_policy_obs = info.get("terminal_observation", policy_obs)
+        else:
+            after_frame_role = "after_action_observation"
+            after_policy_obs = policy_obs
+        after_frames = optional_fast_env_frames(after_policy_obs)
         self.sequence += 1
         transition = _PlaybackTransition(
             sequence=self.sequence,
@@ -856,9 +874,9 @@ class _PlaybackSession:
             diagnostics=diagnostics,
             info=dict(info),
             before_frame=before_frame,
-            after_frame=None if self.current_frame is None else self.current_frame.copy(),
+            after_frame=None if after_frame is None else np.asarray(after_frame).copy(),
             before_frames=before_frames,
-            after_frames=self._frame_tuple(self.frames),
+            after_frames=self._frame_tuple(after_frames),
             attribution=None if heatmap is None else np.asarray(heatmap).copy(),
             pre_task=pre_task,
             next_task=next_task,
@@ -869,6 +887,7 @@ class _PlaybackSession:
             truncated=truncated,
             completed=completed,
             boundary=boundary,
+            after_frame_role=after_frame_role,
         )
         self.last_transition = transition
         if boundary:

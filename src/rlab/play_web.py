@@ -205,6 +205,7 @@ def transition_payload(transition: _PlaybackTransition) -> dict[str, Any]:
             "task": _json_value(transition.next_task),
             "game_frame": transition.after_frame is not None,
             "observation_frames": len(transition.after_frames),
+            "frame_role": transition.after_frame_role,
         },
         "reward": {
             "provider": provider_reward,

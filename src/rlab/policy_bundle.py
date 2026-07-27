@@ -918,6 +918,75 @@ def model_document_as_metadata(document: Mapping[str, Any]) -> dict[str, Any]:
     return metadata
 
 
+def policy_bundle_as_metadata(bundle: PolicyBundle) -> dict[str, Any]:
+    """Return model metadata with its environment contract derived from recipe.json."""
+
+    metadata = model_document_as_metadata(bundle.model)
+    legacy_training = metadata.get("training_metadata")
+    versions = (
+        deepcopy(legacy_training.get("versions"))
+        if isinstance(legacy_training, Mapping)
+        and isinstance(legacy_training.get("versions"), Mapping)
+        else {}
+    )
+    recipe = _required_mapping(
+        bundle.recipe.get("recipe"),
+        label=f"{bundle.recipe_path}.recipe",
+    )
+    environment = recipe.get("environment")
+    if not isinstance(environment, Mapping):
+        return metadata
+    environment_hash_value = recipe.get("environment_hash")
+    if not isinstance(environment_hash_value, str) or not environment_hash_value.strip():
+        return metadata
+    preprocessing = _required_mapping(
+        environment.get("preprocessing"),
+        label=f"{bundle.recipe_path}.recipe.environment.preprocessing",
+    )
+    portable = recipe.get("eval") or recipe.get("playback")
+    portable = _required_mapping(
+        portable,
+        label=f"{bundle.recipe_path}.recipe portable contract",
+    )
+    env_config = _required_mapping(
+        portable.get("environment"),
+        label=f"{bundle.recipe_path}.recipe portable environment",
+    )
+    env_id = _required_text(
+        environment.get("env_id"),
+        label=f"{bundle.recipe_path}.recipe.environment.env_id",
+    )
+    provider, separator, game = env_id.partition(":")
+    if not separator or not provider or not game:
+        raise PolicyDocumentError(
+            f"{bundle.recipe_path}.recipe.environment.env_id must be provider-qualified"
+        )
+    provider_args = environment.get("provider_args")
+    task = _required_mapping(
+        environment.get("task"),
+        label=f"{bundle.recipe_path}.recipe.environment.task",
+    )
+    from rlab.action_contract import declared_action_contract
+
+    action = declared_action_contract(
+        {
+            "env_provider": provider,
+            "game": game,
+            "env_args": provider_args if isinstance(provider_args, Mapping) else {},
+            "task": task,
+        }
+    )
+    metadata["training_metadata"] = {
+        "env_config": deepcopy(dict(env_config)),
+        "environment": deepcopy(dict(environment)),
+        "environment_hash": environment_hash_value,
+        "preprocessing": deepcopy(dict(preprocessing)),
+        "action": action,
+        "versions": versions,
+    }
+    return metadata
+
+
 def _validate_cross_document_contract(model: Mapping[str, Any], recipe: Mapping[str, Any]) -> None:
     checkpoint = model["checkpoint"]
     policy = model["policy"]
@@ -966,13 +1035,19 @@ def _validate_cross_document_contract(model: Mapping[str, Any], recipe: Mapping[
         raise PolicyDocumentError("model.json training environment disagrees with recipe.json")
     recipe_environment = recipe["recipe"].get("environment")
     recipe_environment_hash = recipe["recipe"].get("environment_hash")
-    if recipe_environment is not None and environment != recipe_environment:
+    if (
+        environment is not None
+        and recipe_environment is not None
+        and environment != recipe_environment
+    ):
         raise PolicyDocumentError(
             "model.json normalized training environment disagrees with recipe.json"
         )
+    model_environment_hash = training_metadata.get("environment_hash")
     if (
-        recipe_environment_hash is not None
-        and training_metadata.get("environment_hash") != recipe_environment_hash
+        model_environment_hash is not None
+        and recipe_environment_hash is not None
+        and model_environment_hash != recipe_environment_hash
     ):
         raise PolicyDocumentError("model.json training environment hash disagrees with recipe.json")
 

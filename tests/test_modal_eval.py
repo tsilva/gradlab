@@ -42,12 +42,21 @@ def _contract(model: Path) -> dict:
 def test_checked_in_modal_contract_is_cold_and_cost_bounded() -> None:
     config = load_modal_eval_config(ROOT / "experiments" / "modal_eval.yaml")
 
-    assert config.cpu == 8
-    assert config.memory_mib == 4096
-    assert config.min_containers == 0
-    assert config.buffer_containers == 0
-    assert config.max_containers == 10
-    assert config.max_attempts == 2
+    assert config.resources.cpu == 8
+    assert config.resources.memory_mib == 4096
+    assert config.resources.min_containers == 0
+    assert config.resources.buffer_containers == 0
+    assert config.resources.max_containers == 10
+    assert config.protocol.max_attempts == 2
+
+
+def test_modal_contract_rejects_retired_enabled_flag(tmp_path: Path) -> None:
+    source = ROOT / "experiments" / "modal_eval.yaml"
+    path = tmp_path / "modal_eval.yaml"
+    path.write_text(f"enabled: true\n{source.read_text(encoding='utf-8')}", encoding="utf-8")
+
+    with pytest.raises(ValueError, match=r"unknown field\(s\): enabled"):
+        load_modal_eval_config(path)
 
 
 def test_modal_app_name_is_immutable_per_source() -> None:

@@ -33,7 +33,7 @@ from rlab.policy_bundle import (
     PolicyDocumentError,
     evaluation_contract_sha256,
     load_policy_bundle,
-    model_document_as_metadata,
+    policy_bundle_as_metadata,
     preflight_document,
 )
 from rlab.policy_registry import ALGORITHM_MODEL_CLASSES
@@ -926,7 +926,7 @@ def validate_release_bundle(root: Path) -> dict[str, Any]:
         handlers={RELEASE_MANIFEST_VERSION: _validate_release_manifest_v1},
     )
     bundle = load_policy_bundle(root, source=str(root))
-    model_metadata = model_document_as_metadata(bundle.model)
+    model_metadata = policy_bundle_as_metadata(bundle)
     card_text = (root / "README.md").read_text(encoding="utf-8")
     _assert_no_absolute_paths(manifest)
     repository = _require_mapping(manifest.get("repository"), label="manifest repository")

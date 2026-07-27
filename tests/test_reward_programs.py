@@ -6,8 +6,7 @@ from pathlib import Path
 import pytest
 
 from rlab.config_loader import load_mapping_document
-from rlab.config_validation import load_goal_contract
-from rlab.recipe_documents import compose_train_document
+from rlab.recipe_documents import compose_train_document, load_goal_contract
 from rlab.reward_programs import validate_reward_shape_catalog
 
 

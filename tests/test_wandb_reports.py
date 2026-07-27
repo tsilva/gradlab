@@ -9,9 +9,12 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from rlab.config_validation import load_goal_contract
 from rlab.metric_names import validate_metric_name
-from rlab.recipe_documents import compose_train_document, goal_contract_sha256
+from rlab.recipe_documents import (
+    compose_train_document,
+    goal_contract_sha256,
+    load_goal_contract,
+)
 from rlab.wandb_reports import (
     GoalReportSpec,
     PortfolioReportSpec,

@@ -19,8 +19,7 @@ function selectedPoint(history, snapshot, view) {
     || null;
 }
 
-function cursorIndex(history, view) {
-  if (!view?.inspection) return null;
+export function cursorIndex(history, view) {
   const index = history.findIndex(
     (point) => Number(point.sequence) === Number(view.selectedSequence),
   );

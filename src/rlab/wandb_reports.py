@@ -56,7 +56,7 @@ from rlab.metric_names import (
     TRAIN_THROUGHPUT_ROLLOUT_OVERHEAD_SECONDS,
 )
 from rlab.ranking import RankCriterion, objective_rank_strings, require_objective_rank
-from rlab.recipe_documents import goal_contract_sha256, repo_git_commit
+from rlab.recipe_documents import goal_contract_sha256, load_goal_contract, repo_git_commit
 from rlab.reward_programs import select_goal_reward_shape
 from rlab.wandb_utils import (
     load_wandb_env,
@@ -273,8 +273,6 @@ def _format_goal_title(template: str, *, goal_id: str, goal_title: str) -> str:
 def compile_report_specs(
     repo_root: Path | str = Path("."), *, goal: str | None = None
 ) -> tuple[ReportSpec, ...]:
-    from rlab.config_validation import load_goal_contract
-
     repo_root = Path(repo_root).resolve()
     family_root = repo_root / "experiments" / "goals" / MARIO_FAMILY
     manifest_path = family_root / "_reports.yaml"

@@ -15,15 +15,6 @@ from rlab.snapshot_curriculum import (
 )
 from rlab.task_kernels import BoundTaskKernel, Outcome, event_names_from_bits
 
-
-def __getattr__(name: str) -> Any:
-    if name == "RlabVecEnv":
-        from rlab.training.sb3_vec_env import RlabVecEnv
-
-        return RlabVecEnv
-    raise AttributeError(name)
-
-
 @njit(cache=True, nogil=True)
 def _combine_step_outputs(
     provider_terminated,
@@ -233,6 +224,7 @@ class StepDiagnostics:
     terminated: bool
     truncated: bool
     next_episode_seed: int | None
+    terminal_frame: np.ndarray | None = None
 
 
 def _copy_tree(value: Any) -> Any:
@@ -245,6 +237,38 @@ def _copy_tree(value: Any) -> Any:
     if isinstance(value, list):
         return [_copy_tree(item) for item in value]
     return value
+
+
+def _optional_lane_zero_frame(provider: Any) -> np.ndarray | None:
+    """Copy lane zero's rendered frame without making diagnostics mandatory."""
+
+    get_images = getattr(provider, "get_images", None)
+    if not callable(get_images):
+        return None
+    try:
+        images = get_images()
+        if images is None:
+            return None
+        if isinstance(images, np.ndarray):
+            image = (
+                images[0]
+                if images.ndim >= 4 and images.shape[0] == int(provider.num_envs)
+                else images
+            )
+        elif isinstance(images, Sequence):
+            if not images:
+                return None
+            image = images[0] if len(images) == int(provider.num_envs) else images
+        elif int(provider.num_envs) == 1:
+            image = images
+        else:
+            return None
+        frame = np.asarray(image)
+        if frame.ndim not in {2, 3}:
+            return None
+        return frame.copy()
+    except (AttributeError, IndexError, RuntimeError, TypeError, ValueError):
+        return None
 
 
 def _empty_tree_like(value: Any) -> Any:
@@ -1077,6 +1101,11 @@ class BatchRuntime:
         diagnostics = None
         if self.capture_step_diagnostics:
             lane = 0
+            terminal_frame = (
+                _optional_lane_zero_frame(self.provider)
+                if bool(dones[lane])
+                else None
+            )
             outcome = Outcome(int(np.asarray(task_step.outcomes)[lane]))
             if (
                 outcome == Outcome.NEUTRAL
@@ -1122,6 +1151,7 @@ class BatchRuntime:
                 terminated=bool(terminated[lane]),
                 truncated=bool(truncated[lane]),
                 next_episode_seed=next_episode_seed,
+                terminal_frame=terminal_frame,
             )
 
         encoded_transition = self.kernel.encode_observations(observations)

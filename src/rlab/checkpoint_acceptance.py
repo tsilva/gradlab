@@ -8,7 +8,6 @@ from typing import Any
 
 import numpy as np
 
-from rlab.checkpoint_eval_config import checkpoint_eval_max_steps
 from rlab.early_stop import (
     evaluate_metric_threshold_rules,
     normalize_metric_threshold_rules,
@@ -24,6 +23,23 @@ ACCEPTANCE_PROTOCOL_VERSION = 1
 EPISODE_MANIFEST_VERSION = 1
 EVIDENCE_POLICY_VERSION = 1
 SEED_PROTOCOL = "vector-lane-v1"
+
+
+def checkpoint_eval_max_steps(config: Mapping[str, Any]) -> int:
+    explicit = int(config.get("post_train_eval_max_steps") or 0)
+    if explicit > 0:
+        return explicit
+    environment = config.get("checkpoint_eval_environment")
+    task = environment.get("task") if isinstance(environment, Mapping) else None
+    termination = task.get("termination") if isinstance(task, Mapping) else None
+    fallback = int(
+        termination.get("max_episode_steps")
+        if isinstance(termination, Mapping) and termination.get("max_episode_steps") is not None
+        else 0
+    )
+    if fallback > 0:
+        return fallback
+    raise ValueError("checkpoint eval max steps are not materialized")
 
 
 def portable_asset_from_train_config(

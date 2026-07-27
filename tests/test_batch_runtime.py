@@ -13,7 +13,6 @@ from rlab.batch_runtime import (
     BatchRuntime,
     EpisodeRecord,
     ProviderDescriptor,
-    RlabVecEnv,
     SignalSpec,
     TaskEventRecord,
 )
@@ -25,6 +24,7 @@ from rlab.task_kernels import (
     Outcome,
 )
 from rlab.training.sb3_on_policy import validate_action_space
+from rlab.training.sb3_vec_env import RlabVecEnv
 
 
 def done_flags(step) -> np.ndarray:
@@ -366,6 +366,11 @@ class BatchRuntimeTests(unittest.TestCase):
 
     def test_step_diagnostics_are_one_lane_owned_and_survive_same_step_reset(self):
         provider = DeterministicNativeVectorProvider(num_envs=1)
+        provider.get_images = lambda: np.full(  # type: ignore[attr-defined]
+            (1, 2, 2, 3),
+            int(provider._observations["image"][0, 0]),
+            dtype=np.uint8,
+        )
         descriptor = descriptor_for(provider)
         runtime = BatchRuntime(
             provider,
@@ -377,7 +382,12 @@ class BatchRuntimeTests(unittest.TestCase):
         env = RlabVecEnv(runtime)
         env.seed(123)
         env.reset()
-        provider.queue_step(x=[9], rewards=[2.5], terminated=[True])
+        provider.queue_step(
+            image=[[9, 9]],
+            x=[9],
+            rewards=[2.5],
+            terminated=[True],
+        )
 
         env.step(np.zeros((1, 3), dtype=np.int8))
         diagnostics = env.take_step_diagnostics()
@@ -388,6 +398,10 @@ class BatchRuntimeTests(unittest.TestCase):
         self.assertEqual(diagnostics.provider_reward, 2.5)
         self.assertTrue(diagnostics.terminated)
         self.assertIsInstance(diagnostics.next_episode_seed, int)
+        np.testing.assert_array_equal(
+            diagnostics.terminal_frame,
+            np.full((2, 2, 3), 9, dtype=np.uint8),
+        )
         self.assertEqual(provider._x[0], 0, "the provider has already reset its live buffer")
         self.assertIsNone(env.take_step_diagnostics())
 

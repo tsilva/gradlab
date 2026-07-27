@@ -26,6 +26,7 @@ from rlab.env_identity import (
     train_config_from_source_environment,
     validate_task_config,
 )
+from rlab.experiment_contracts import validate_goal_contract_document
 from rlab.file_utils import file_sha256
 from rlab.recipe_schema import (
     train_recipe_id,
@@ -576,8 +577,6 @@ def compose_train_document(
     )
     authored_goal_document = goal_composition.document
     if goal_composition.sources:
-        from rlab.config_validation import validate_goal_contract_document
-
         validate_goal_contract_document(
             goal_composition.document,
             goal_composition.sources[-1],
@@ -798,3 +797,30 @@ def recipe_tags(document: Mapping[str, Any]) -> list[str]:
 
 def load_goal_contract_document(path: Path, *, label: str | None = None) -> dict[str, Any]:
     return _load_rendered_goal_composition(path, label=label).document
+
+
+def load_goal_contract(
+    path: Path,
+    repo_root: Path | None = None,
+    *,
+    validate: bool = True,
+) -> dict[str, Any]:
+    """Return a composed goal contract, validating it by default."""
+
+    resolved_root = (repo_root or Path(".")).resolve()
+    resolved_path = path.resolve()
+    try:
+        display_path = resolved_path.relative_to(resolved_root)
+    except ValueError:
+        display_path = resolved_path
+    document = load_goal_contract_document(
+        resolved_path,
+        label=f"goal file {display_path}",
+    )
+    if validate:
+        validate_goal_contract_document(document, resolved_path, resolved_root)
+    return document
+
+
+def validate_goal_contract(path: Path, repo_root: Path | None = None) -> None:
+    load_goal_contract(path, repo_root)

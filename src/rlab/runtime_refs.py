@@ -14,7 +14,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
-from pydantic import Field, StringConstraints
+from pydantic import StringConstraints
 
 from rlab.boundary_schema import BoundaryModel, validate_boundary
 from rlab.runtime_contract import (
@@ -71,10 +71,6 @@ class _RuntimeReleasePayload(BoundaryModel):
     digest: str = ""
     image: str = ""
     workflow_run_attempt: str = ""
-    commit_message: str = ""
-    published_at: str = ""
-    created_at: str = ""
-    published_at_legacy: str = Field(default="", alias="publishedAt")
 
 
 class _ModalReadinessPayload(BoundaryModel):
@@ -194,10 +190,8 @@ def runtime_release_from_payload(
     return RuntimeImageInfo(
         runtime_image_ref=runtime_image_ref,
         source_sha=source_sha,
-        commit_message=receipt.commit_message,
-        published_at=(
-            receipt.published_at or receipt.created_at or receipt.published_at_legacy
-        ),
+        commit_message="",
+        published_at="",
         workflow_run_id=receipt.workflow_run_id,
         schema_version=schema_version,
         runtime_input_sha256=runtime_input_sha256,
