@@ -54,6 +54,10 @@ When changing dstack host behavior, preserve the root-owned runtime-image cleanu
 - Published model cards should include a preview video when the model has a visual or interactive behavior. For Stable Retro policies, record a representative completed episode and upload it with the model files as root `replay.mp4` so Hugging Face's reinforcement-learning widget can show the page preview; do not also embed the video in the README body unless the widget is unavailable.
 - For uploading, updating, or troubleshooting YouTube model-preview videos, use the project-level `$upload-youtube-video` skill in `.codex/skills/upload-youtube-video`. Encode future YouTube upload and description-rule changes in that skill first.
 
+## Package Releases
+
+When asked to build, cut, tag, publish, or verify a GradLab PyPI release, use the project-level `$build-release` skill in `.codex/skills/build-release`. Build and audit a local release candidate before publishing. Normal publication must use the tag-triggered trusted-publishing workflow; do not manually upload to PyPI.
+
 ## Dependencies
 
 Use `uv` for dependency resolution and keep `uv.lock` committed. Preserve Python supply-chain hardening in `pyproject.toml`.

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Build Release"
+  short_description: "Build and publish validated PyPI releases"
+  default_prompt: "Use $build-release to build and validate a GradLab PyPI release."
