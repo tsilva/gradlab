@@ -46,8 +46,21 @@ def _write_wandb_identity(run, run_dir: str) -> None:
             Path(run_dir, filename).write_text(f"{value}\n", encoding="utf-8")
 
 
-def _start_wandb(args, *, run_dir: str, config):
-    if not args.wandb:
+def _wandb_tags(value: Any) -> list[str]:
+    if isinstance(value, str):
+        return [tag.strip() for tag in value.split(",") if tag.strip()]
+    if isinstance(value, list | tuple):
+        return [str(tag).strip() for tag in value if str(tag).strip()]
+    return []
+
+
+def _start_wandb(
+    train_config: Mapping[str, Any],
+    *,
+    run_dir: str,
+    config: Any,
+):
+    if not train_config.get("wandb"):
         raise ValueError("supervised training requires W&B metric publication")
     load_wandb_env()
     wandb_dir = os.path.abspath(run_dir)
@@ -63,44 +76,48 @@ def _start_wandb(args, *, run_dir: str, config):
     import wandb
 
     entity, project = resolve_wandb_namespace(
-        getattr(args, "wandb_entity", None),
-        getattr(args, "wandb_project", None),
+        train_config.get("wandb_entity"),
+        train_config.get("wandb_project"),
         config.game,
         env_provider=config.env_provider,
     )
-    args.wandb_entity = entity
-    args.wandb_project = project
-    args.game_family = game_family_for_environment(config.env_provider, config.game)
-    tags = [tag.strip() for tag in str(args.wandb_tags).split(",") if tag.strip()]
-    family_tag = f"game_family:{args.game_family}"
+    game_family = game_family_for_environment(config.env_provider, config.game)
+    tags = _wandb_tags(train_config.get("wandb_tags"))
+    family_tag = f"game_family:{game_family}"
     if family_tag not in tags:
         tags.append(family_tag)
-    args.wandb_tags = ",".join(tags)
-    wandb_config: dict[str, Any] = {**vars(args), **env_config_metadata(config)}
+    wandb_config: dict[str, Any] = {
+        **train_config,
+        "wandb_entity": entity,
+        "wandb_project": project,
+        "game_family": game_family,
+        "wandb_tags": tags,
+        **env_config_metadata(config),
+    }
     wandb_config["metrics_schema_version"] = METRICS_SCHEMA_VERSION
     training = training_metadata(
         config,
-        rom_asset_manifest=getattr(args, "rom_asset_manifest", None),
+        rom_asset_manifest=train_config.get("rom_asset_manifest"),
     )
     wandb_config["environment"] = training["environment"]
     wandb_config["environment_hash"] = training["environment_hash"]
-    display_name = str(getattr(args, "wandb_display_name", None) or "").strip() or str(
-        args.run_name
+    display_name = str(train_config.get("wandb_display_name") or "").strip() or str(
+        train_config["run_name"]
     )
     return configure_wandb_metrics(
         wandb.init(
             project=project,
             entity=entity,
-            group=args.wandb_group,
+            group=train_config.get("wandb_group"),
             name=display_name,
-            notes=args.run_description or None,
+            notes=train_config.get("run_description") or None,
             tags=tags,
             config=wandb_config,
             dir=wandb_dir,
             sync_tensorboard=False,
             save_code=False,
-            mode=args.wandb_mode,
-            id=str(args.wandb_run_id),
+            mode=str(train_config["wandb_mode"]),
+            id=str(train_config["wandb_run_id"]),
             resume="allow",
         )
     )
@@ -114,8 +131,17 @@ class WandbProjector:
         self.run_dir = run_dir
 
     @classmethod
-    def start_live(cls, args, *, run_dir: str, config) -> WandbProjector:
-        return cls(_start_wandb(args, run_dir=run_dir, config=config), run_dir=run_dir)
+    def start_live(
+        cls,
+        train_config: Mapping[str, Any],
+        *,
+        run_dir: str,
+        config: Any,
+    ) -> WandbProjector:
+        return cls(
+            _start_wandb(train_config, run_dir=run_dir, config=config),
+            run_dir=run_dir,
+        )
 
     @classmethod
     def resume(

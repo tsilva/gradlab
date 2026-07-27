@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
@@ -229,118 +229,72 @@ def _stable_retro_packaged_data_path(game: str, filename: str) -> Path:
     return path
 
 
-def provider_native_vec_kwargs(
+def _reject_state_selection(config: Any) -> None:
+    if config.state or config.states or config.state_probs:
+        raise ValueError(
+            f"{config.env_provider} provider does not support state, states, or state_probs"
+        )
+
+
+def _passthrough_native_vec_kwargs(
     config: Any,
+    native_kwargs: dict[str, Any],
     *,
     n_envs: int,
     native_obs_crop: Callable[[Any], tuple[int, int, int, int] | None],
-    state_weight_mapping: Callable[[Any], dict[str, float]],
-    runtime_rom_path: str | None = None,
+    runtime_rom_path: str | None,
 ) -> dict[str, Any]:
-    """Compile provider mechanics without task events or termination rules."""
-    normalized_args, _normalized_task = normalize_action_configuration(
-        provider_id=config.env_provider,
-        game=config.game,
-        env_args=config.env_args,
-        task=getattr(config, "task", None),
-    )
-    native_kwargs = dict(normalized_args)
-    for key in PROVIDER_REWARD_TRANSFORM_KEYS:
-        native_kwargs.pop(key, None)
-    provider = resolve_env_provider(config.env_provider)
-    if provider.provider_id == RLAB_PROVIDER.provider_id:
-        if config.state or config.states or config.state_probs:
-            raise ValueError("rlab provider does not support state, states, or state_probs")
-        native_kwargs.setdefault("num_envs", n_envs)
-        return native_kwargs
-    if provider.provider_id in {
-        STABLE_RETRO_TURBO_PROVIDER.provider_id,
-        SUPERMARIOBROS_NES_TURBO_PROVIDER.provider_id,
-    }:
-        if runtime_rom_path:
-            native_kwargs["rom_path"] = runtime_rom_path
-        enum_args = {
-            "use_restricted_actions": ("Actions",),
-            "inttype": ("data", "Integrations"),
-            "obs_type": ("Observations",),
-        }
-        for key, attribute_path in enum_args.items():
-            value = native_kwargs.get(key)
-            if key == "use_restricted_actions":
-                declared_action = declared_action_contract(config)
-                if declared_action is not None and declared_action.get("table") is not None:
-                    if isinstance(value, str):
-                        native_kwargs[key] = declared_action["table"]
-                    continue
-            if not isinstance(value, str):
-                continue
-            enum_type: Any = retro
-            for attribute in attribute_path:
-                enum_type = getattr(enum_type, attribute)
-            try:
-                native_kwargs[key] = enum_type[value.strip().upper()]
-            except KeyError as exc:
-                choices = ", ".join(member.name.lower() for member in enum_type)
-                raise ValueError(f"env_args.{key} must be one of {choices}") from exc
-        if (
-            provider.provider_id == STABLE_RETRO_TURBO_PROVIDER.provider_id
-            and native_kwargs.get("info") == "data"
-        ):
-            native_kwargs["info"] = str(_stable_retro_packaged_data_path(config.game, "data.json"))
-    if provider.provider_id == GYMNASIUM_PROVIDER.provider_id:
-        if config.state or config.states or config.state_probs:
-            raise ValueError(
-                f"{provider.provider_id} provider does not support state, states, or state_probs"
-            )
-        native_kwargs.setdefault("num_envs", n_envs)
-        return native_kwargs
-    if provider.provider_id == BREAKOUT_TURBO_ENV_PROVIDER.provider_id:
-        if config.max_pool_frames:
-            raise ValueError("breakout-turbo-env does not support max_pool_frames=true")
-        if config.sticky_action_prob != 0.0:
-            raise ValueError("breakout-turbo-env requires sticky_action_prob=0.0")
-        defaults = {
-            "num_envs": n_envs,
-            "render_mode": "rgb_array",
-            "obs_resize": (config.observation_size, config.observation_size),
-            "obs_crop": native_obs_crop(config),
-            "obs_crop_mode": config.obs_crop_mode,
-            "obs_crop_fill": config.obs_crop_fill,
-            "obs_grayscale": True,
-            "obs_resize_algorithm": config.obs_resize_algorithm,
-            "frame_skip": config.frame_skip,
-            "frame_stack": 4,
-            "maxpool_last_two": False,
-            "obs_copy": "safe_view",
-            "obs_layout": "chw",
-            "info_filter": "all",
-        }
-        defaults.update(native_kwargs)
-        defaults["reward_clip"] = False
-        return defaults
-    if provider.provider_id == ALE_PY_PROVIDER.provider_id:
-        if config.state or config.states or config.state_probs:
-            raise ValueError("ale-py provider does not support state, states, or state_probs")
-        obs_crop = native_obs_crop(config)
-        if obs_crop is not None and config.obs_crop_mode != "mask":
-            raise ValueError("ale-py provider only supports obs_crop_mode='mask'")
-        defaults = {
-            "num_envs": n_envs,
-            "max_num_frames_per_episode": 108_000,
-            "repeat_action_probability": config.sticky_action_prob,
-            "img_height": config.observation_size,
-            "img_width": config.observation_size,
-            "grayscale": True,
-            "stack_num": 4,
-            "frameskip": config.frame_skip,
-            "maxpool": config.max_pool_frames,
-            "episodic_life": False,
-            "reward_clipping": False,
-        }
-        defaults.update(native_kwargs)
-        defaults["reward_clipping"] = False
-        return defaults
+    del native_obs_crop, runtime_rom_path
+    _reject_state_selection(config)
+    native_kwargs.setdefault("num_envs", n_envs)
+    return native_kwargs
 
+
+def _retro_provider_args(
+    config: Any,
+    native_kwargs: dict[str, Any],
+    *,
+    runtime_rom_path: str | None,
+    packaged_info: bool,
+) -> dict[str, Any]:
+    if runtime_rom_path:
+        native_kwargs["rom_path"] = runtime_rom_path
+    enum_args = {
+        "use_restricted_actions": ("Actions",),
+        "inttype": ("data", "Integrations"),
+        "obs_type": ("Observations",),
+    }
+    for key, attribute_path in enum_args.items():
+        value = native_kwargs.get(key)
+        if key == "use_restricted_actions":
+            declared_action = declared_action_contract(config)
+            if declared_action is not None and declared_action.get("table") is not None:
+                if isinstance(value, str):
+                    native_kwargs[key] = declared_action["table"]
+                continue
+        if not isinstance(value, str):
+            continue
+        enum_type: Any = retro
+        for attribute in attribute_path:
+            enum_type = getattr(enum_type, attribute)
+        try:
+            native_kwargs[key] = enum_type[value.strip().upper()]
+        except KeyError as exc:
+            choices = ", ".join(member.name.lower() for member in enum_type)
+            raise ValueError(f"env_args.{key} must be one of {choices}") from exc
+    if packaged_info and native_kwargs.get("info") == "data":
+        native_kwargs["info"] = str(_stable_retro_packaged_data_path(config.game, "data.json"))
+    return native_kwargs
+
+
+def _turbo_native_vec_kwargs(
+    config: Any,
+    native_kwargs: dict[str, Any],
+    *,
+    n_envs: int,
+    native_obs_crop: Callable[[Any], tuple[int, int, int, int] | None],
+    disable_atari_fire_reset: bool = False,
+) -> dict[str, Any]:
     defaults = {
         "num_envs": n_envs,
         "render_mode": "rgb_array",
@@ -363,7 +317,7 @@ def provider_native_vec_kwargs(
         defaults["state"] = config.state or None
     defaults.update(native_kwargs)
     defaults["reward_clip"] = False
-    if is_stable_retro_atari_env(config.env_provider, config.game):
+    if disable_atari_fire_reset:
         defaults.setdefault("use_fire_reset", False)
     task = config.task if isinstance(getattr(config, "task", None), Mapping) else {}
     if task.get("id") == "mario":
@@ -400,6 +354,161 @@ def provider_native_vec_kwargs(
         elif str(configured_filter) != "all":
             raise ValueError("Mario task signals require info_filter='all'")
     return defaults
+
+
+def _stable_retro_native_vec_kwargs(
+    config: Any,
+    native_kwargs: dict[str, Any],
+    *,
+    n_envs: int,
+    native_obs_crop: Callable[[Any], tuple[int, int, int, int] | None],
+    runtime_rom_path: str | None,
+) -> dict[str, Any]:
+    native_kwargs = _retro_provider_args(
+        config,
+        native_kwargs,
+        runtime_rom_path=runtime_rom_path,
+        packaged_info=True,
+    )
+    return _turbo_native_vec_kwargs(
+        config,
+        native_kwargs,
+        n_envs=n_envs,
+        native_obs_crop=native_obs_crop,
+        disable_atari_fire_reset=is_stable_retro_atari_env(config.env_provider, config.game),
+    )
+
+
+def _super_mario_native_vec_kwargs(
+    config: Any,
+    native_kwargs: dict[str, Any],
+    *,
+    n_envs: int,
+    native_obs_crop: Callable[[Any], tuple[int, int, int, int] | None],
+    runtime_rom_path: str | None,
+) -> dict[str, Any]:
+    native_kwargs = _retro_provider_args(
+        config,
+        native_kwargs,
+        runtime_rom_path=runtime_rom_path,
+        packaged_info=False,
+    )
+    return _turbo_native_vec_kwargs(
+        config,
+        native_kwargs,
+        n_envs=n_envs,
+        native_obs_crop=native_obs_crop,
+    )
+
+
+def _vizdoom_native_vec_kwargs(
+    config: Any,
+    native_kwargs: dict[str, Any],
+    *,
+    n_envs: int,
+    native_obs_crop: Callable[[Any], tuple[int, int, int, int] | None],
+    runtime_rom_path: str | None,
+) -> dict[str, Any]:
+    del runtime_rom_path
+    return _turbo_native_vec_kwargs(
+        config,
+        native_kwargs,
+        n_envs=n_envs,
+        native_obs_crop=native_obs_crop,
+    )
+
+
+def _breakout_native_vec_kwargs(
+    config: Any,
+    native_kwargs: dict[str, Any],
+    *,
+    n_envs: int,
+    native_obs_crop: Callable[[Any], tuple[int, int, int, int] | None],
+    runtime_rom_path: str | None,
+) -> dict[str, Any]:
+    del runtime_rom_path
+    if config.max_pool_frames:
+        raise ValueError("breakout-turbo-env does not support max_pool_frames=true")
+    if config.sticky_action_prob != 0.0:
+        raise ValueError("breakout-turbo-env requires sticky_action_prob=0.0")
+    defaults = {
+        "num_envs": n_envs,
+        "render_mode": "rgb_array",
+        "obs_resize": (config.observation_size, config.observation_size),
+        "obs_crop": native_obs_crop(config),
+        "obs_crop_mode": config.obs_crop_mode,
+        "obs_crop_fill": config.obs_crop_fill,
+        "obs_grayscale": True,
+        "obs_resize_algorithm": config.obs_resize_algorithm,
+        "frame_skip": config.frame_skip,
+        "frame_stack": 4,
+        "maxpool_last_two": False,
+        "obs_copy": "safe_view",
+        "obs_layout": "chw",
+        "info_filter": "all",
+    }
+    defaults.update(native_kwargs)
+    defaults["reward_clip"] = False
+    return defaults
+
+
+def _ale_native_vec_kwargs(
+    config: Any,
+    native_kwargs: dict[str, Any],
+    *,
+    n_envs: int,
+    native_obs_crop: Callable[[Any], tuple[int, int, int, int] | None],
+    runtime_rom_path: str | None,
+) -> dict[str, Any]:
+    del runtime_rom_path
+    _reject_state_selection(config)
+    obs_crop = native_obs_crop(config)
+    if obs_crop is not None and config.obs_crop_mode != "mask":
+        raise ValueError("ale-py provider only supports obs_crop_mode='mask'")
+    defaults = {
+        "num_envs": n_envs,
+        "max_num_frames_per_episode": 108_000,
+        "repeat_action_probability": config.sticky_action_prob,
+        "img_height": config.observation_size,
+        "img_width": config.observation_size,
+        "grayscale": True,
+        "stack_num": 4,
+        "frameskip": config.frame_skip,
+        "maxpool": config.max_pool_frames,
+        "episodic_life": False,
+        "reward_clipping": False,
+    }
+    defaults.update(native_kwargs)
+    defaults["reward_clipping"] = False
+    return defaults
+
+
+def provider_native_vec_kwargs(
+    config: Any,
+    *,
+    n_envs: int,
+    native_obs_crop: Callable[[Any], tuple[int, int, int, int] | None],
+    state_weight_mapping: Callable[[Any], dict[str, float]],
+    runtime_rom_path: str | None = None,
+) -> dict[str, Any]:
+    """Compile provider mechanics without task events or termination rules."""
+    del state_weight_mapping
+    normalized_args, _normalized_task = normalize_action_configuration(
+        provider_id=config.env_provider,
+        game=config.game,
+        env_args=config.env_args,
+        task=getattr(config, "task", None),
+    )
+    native_kwargs = dict(normalized_args)
+    for key in PROVIDER_REWARD_TRANSFORM_KEYS:
+        native_kwargs.pop(key, None)
+    return provider_runtime_adapter(config.env_provider).build_native_kwargs(
+        config,
+        native_kwargs,
+        n_envs=n_envs,
+        native_obs_crop=native_obs_crop,
+        runtime_rom_path=runtime_rom_path,
+    )
 
 
 def provider_descriptor(
@@ -583,10 +692,7 @@ def provider_descriptor(
         buffer_depth = turbo_contract.observation_buffer_depth
         api_version = turbo_contract.api_version
         capabilities = turbo_contract.capabilities
-    snapshot_codec_id = {
-        SUPERMARIOBROS_NES_TURBO_PROVIDER.provider_id: ("supermariobrosnes-turbo.portable-v1"),
-        BREAKOUT_TURBO_ENV_PROVIDER.provider_id: "breakout-turbo-env.state-v1",
-    }.get(provider.provider_id)
+    snapshot_codec_id = provider_runtime_adapter(provider.provider_id).snapshot_codec_id
     snapshot_compatibility_id = None
     if snapshot_codec_id is not None:
         from rlab.env_identity import (
@@ -816,6 +922,98 @@ def _vizdoom_turbo_make_vec_env(
     return _StartInfoAdapter(env)
 
 
+@dataclass(frozen=True)
+class ProviderRuntimeAdapter:
+    provider_id: str
+    native_kwargs_builder: Callable[..., dict[str, Any]]
+    vec_env_factory: Callable[..., Any]
+    factory_override: str | None = None
+    snapshot_codec_id: str | None = None
+
+    def build_native_kwargs(
+        self,
+        config: Any,
+        native_kwargs: dict[str, Any],
+        *,
+        n_envs: int,
+        native_obs_crop: Callable[[Any], tuple[int, int, int, int] | None],
+        runtime_rom_path: str | None,
+    ) -> dict[str, Any]:
+        return self.native_kwargs_builder(
+            config,
+            native_kwargs,
+            n_envs=n_envs,
+            native_obs_crop=native_obs_crop,
+            runtime_rom_path=runtime_rom_path,
+        )
+
+    def make_vec_env(
+        self,
+        config: Any,
+        *,
+        native_kwargs: Mapping[str, Any],
+        factory_override: Any = None,
+    ):
+        kwargs: dict[str, Any] = {"native_kwargs": native_kwargs}
+        if self.factory_override is not None and factory_override is not None:
+            kwargs[self.factory_override] = factory_override
+        return self.vec_env_factory(config, **kwargs)
+
+
+PROVIDER_RUNTIME_ADAPTERS = {
+    RLAB_PROVIDER.provider_id: ProviderRuntimeAdapter(
+        RLAB_PROVIDER.provider_id,
+        _passthrough_native_vec_kwargs,
+        _rlab_make_vec_env,
+    ),
+    STABLE_RETRO_TURBO_PROVIDER.provider_id: ProviderRuntimeAdapter(
+        STABLE_RETRO_TURBO_PROVIDER.provider_id,
+        _stable_retro_native_vec_kwargs,
+        _stable_retro_turbo_make_vec_env,
+        factory_override="retro_vec_env_type",
+    ),
+    SUPERMARIOBROS_NES_TURBO_PROVIDER.provider_id: ProviderRuntimeAdapter(
+        SUPERMARIOBROS_NES_TURBO_PROVIDER.provider_id,
+        _super_mario_native_vec_kwargs,
+        _super_mario_bros_nes_turbo_make_vec_env,
+        factory_override="super_mario_vec_env_type",
+        snapshot_codec_id="supermariobrosnes-turbo.portable-v1",
+    ),
+    ALE_PY_PROVIDER.provider_id: ProviderRuntimeAdapter(
+        ALE_PY_PROVIDER.provider_id,
+        _ale_native_vec_kwargs,
+        _ale_py_make_vec_env,
+        factory_override="ale_py_vec_env_type",
+    ),
+    BREAKOUT_TURBO_ENV_PROVIDER.provider_id: ProviderRuntimeAdapter(
+        BREAKOUT_TURBO_ENV_PROVIDER.provider_id,
+        _breakout_native_vec_kwargs,
+        _breakout_turbo_make_vec_env,
+        factory_override="breakout_vec_env_type",
+        snapshot_codec_id="breakout-turbo-env.state-v1",
+    ),
+    VIZDOOM_TURBO_PROVIDER.provider_id: ProviderRuntimeAdapter(
+        VIZDOOM_TURBO_PROVIDER.provider_id,
+        _vizdoom_native_vec_kwargs,
+        _vizdoom_turbo_make_vec_env,
+        factory_override="vizdoom_vec_env_type",
+    ),
+    GYMNASIUM_PROVIDER.provider_id: ProviderRuntimeAdapter(
+        GYMNASIUM_PROVIDER.provider_id,
+        _passthrough_native_vec_kwargs,
+        _registered_native_gymnasium_vec_env,
+    ),
+}
+
+
+def provider_runtime_adapter(provider_id: str) -> ProviderRuntimeAdapter:
+    provider = resolve_env_provider(provider_id)
+    try:
+        return PROVIDER_RUNTIME_ADAPTERS[provider.provider_id]
+    except KeyError as exc:
+        raise ValueError(f"unsupported environment provider {provider.provider_id!r}") from exc
+
+
 def make_provider_vec_env(
     config: Any,
     *,
@@ -826,39 +1024,17 @@ def make_provider_vec_env(
     breakout_vec_env_type=breakout_turbo_vec_env_type,
     vizdoom_vec_env_type=vizdoom_turbo_vec_env_type,
 ):
-    provider = resolve_env_provider(config.env_provider)
-    if provider.provider_id == RLAB_PROVIDER.provider_id:
-        return _rlab_make_vec_env(config, native_kwargs=native_kwargs)
-    if provider.provider_id == STABLE_RETRO_TURBO_PROVIDER.provider_id:
-        return _stable_retro_turbo_make_vec_env(
-            config,
-            native_kwargs=native_kwargs,
-            retro_vec_env_type=retro_vec_env_type,
-        )
-    if provider.provider_id == SUPERMARIOBROS_NES_TURBO_PROVIDER.provider_id:
-        return _super_mario_bros_nes_turbo_make_vec_env(
-            config,
-            native_kwargs=native_kwargs,
-            super_mario_vec_env_type=super_mario_vec_env_type,
-        )
-    if provider.provider_id == ALE_PY_PROVIDER.provider_id:
-        return _ale_py_make_vec_env(
-            config,
-            native_kwargs=native_kwargs,
-            ale_py_vec_env_type=ale_py_vec_env_type,
-        )
-    if provider.provider_id == BREAKOUT_TURBO_ENV_PROVIDER.provider_id:
-        return _breakout_turbo_make_vec_env(
-            config,
-            native_kwargs=native_kwargs,
-            breakout_vec_env_type=breakout_vec_env_type,
-        )
-    if provider.provider_id == VIZDOOM_TURBO_PROVIDER.provider_id:
-        return _vizdoom_turbo_make_vec_env(
-            config,
-            native_kwargs=native_kwargs,
-            vizdoom_vec_env_type=vizdoom_vec_env_type,
-        )
-    if provider.provider_id == GYMNASIUM_PROVIDER.provider_id:
-        return _registered_native_gymnasium_vec_env(config, native_kwargs)
-    raise ValueError(f"unsupported environment provider {provider.provider_id!r}")
+    adapter = provider_runtime_adapter(config.env_provider)
+    overrides = {
+        "retro_vec_env_type": retro_vec_env_type,
+        "super_mario_vec_env_type": super_mario_vec_env_type,
+        "ale_py_vec_env_type": ale_py_vec_env_type,
+        "breakout_vec_env_type": breakout_vec_env_type,
+        "vizdoom_vec_env_type": vizdoom_vec_env_type,
+    }
+    override = overrides.get(adapter.factory_override) if adapter.factory_override else None
+    return adapter.make_vec_env(
+        config,
+        native_kwargs=native_kwargs,
+        factory_override=override,
+    )

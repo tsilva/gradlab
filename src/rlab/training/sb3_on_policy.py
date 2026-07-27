@@ -32,11 +32,6 @@ class OnPolicyBackend:
     def algorithm_id(self) -> str:
         return self.backend_id.rsplit(".", 1)[-1]
 
-    def _require_id(self, backend_id: str) -> None:
-        if backend_id != self.backend_id:
-            name = f"SB3 {self.algorithm_id.upper()}"
-            raise ValueError(f"{name} backend module does not define {backend_id!r}")
-
     def validate(
         self,
         common_config: Mapping[str, Any],
@@ -47,16 +42,16 @@ class OnPolicyBackend:
     def run(self, context: BackendContext) -> None:
         run_sb3_on_policy(context, algorithm_id=self.algorithm_id, model_factory=self.model_factory)
 
-    def backend_for_id(self, backend_id: str) -> OnPolicyBackend:
-        self._require_id(backend_id)
-        return self
+    def acceptance_mode(self, backend_config: Mapping[str, Any]) -> str:
+        del backend_config
+        from rlab.training_backend import CHECKPOINT_EVAL_ACCEPTANCE
 
-    def state_archive_priority_metrics(self, backend_id: str) -> tuple[str, ...]:
-        self._require_id(backend_id)
+        return CHECKPOINT_EVAL_ACCEPTANCE
+
+    def state_archive_priority_metrics(self) -> tuple[str, ...]:
         return ("value_error",)
 
-    def contract_payload(self, backend_id: str) -> dict[str, Any]:
-        self._require_id(backend_id)
+    def contract_payload(self) -> dict[str, Any]:
         return {
             "schema_version": 1,
             "status": "available",
@@ -66,15 +61,13 @@ class OnPolicyBackend:
 
     def runtime_metadata(
         self,
-        backend_id: str,
         backend_config: Mapping[str, Any],
     ) -> Mapping[str, str]:
-        self._require_id(backend_id)
         model_class = (
             self.model_class(backend_config) if callable(self.model_class) else self.model_class
         )
         return {
-            "training_backend_id": backend_id,
+            "training_backend_id": self.backend_id,
             "algorithm_id": self.algorithm_id,
             "model_class": model_class,
         }

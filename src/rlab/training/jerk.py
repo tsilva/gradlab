@@ -470,6 +470,16 @@ def run_jerk(context: BackendContext) -> None:
 
 
 class JerkBackend:
+    backend_id = "rlab.jerk"
+
+    def normalize_config(
+        self,
+        config: Mapping[str, Any],
+        *,
+        label: str,
+    ) -> dict[str, Any]:
+        return normalize_config(self.backend_id, config, label=label)
+
     def validate(
         self,
         common_config: Mapping[str, Any],
@@ -488,43 +498,27 @@ class JerkBackend:
     def run(self, context: BackendContext) -> None:
         run_jerk(context)
 
+    def acceptance_mode(self, backend_config: Mapping[str, Any]) -> str:
+        return str(
+            self.normalize_config(
+                backend_config,
+                label="training_backend.config",
+            )["acceptance_mode"]
+        )
 
-_BACKEND = JerkBackend()
+    def contract_payload(self) -> dict[str, Any]:
+        return {"schema_version": 1, "status": "available", "defaults": DEFAULT_CONFIG}
 
+    def state_archive_priority_metrics(self) -> tuple[str, ...]:
+        return ()
 
-def acceptance_mode(backend_id: str, backend_config: Mapping[str, Any]) -> str:
-    if backend_id != "rlab.jerk":
-        raise ValueError(f"JERK backend module does not define {backend_id!r}")
-    return str(
-        normalize_config(
-            backend_id,
-            backend_config,
-            label="training_backend.config",
-        )["acceptance_mode"]
-    )
-
-
-def backend_for_id(backend_id: str) -> JerkBackend:
-    if backend_id != "rlab.jerk":
-        raise ValueError(f"JERK backend module does not define {backend_id!r}")
-    return _BACKEND
-
-
-def contract_payload(backend_id: str) -> dict[str, Any]:
-    if backend_id != "rlab.jerk":
-        raise ValueError(f"JERK backend module does not define {backend_id!r}")
-    return {"schema_version": 1, "status": "available", "defaults": DEFAULT_CONFIG}
+    def runtime_metadata(self, backend_config: Mapping[str, Any]) -> Mapping[str, str]:
+        del backend_config
+        return {
+            "training_backend_id": self.backend_id,
+            "algorithm_id": "jerk",
+            "model_class": "rlab.jerk.JerkPolicy",
+        }
 
 
-def runtime_metadata(
-    backend_id: str,
-    backend_config: Mapping[str, Any],
-) -> Mapping[str, str]:
-    del backend_config
-    if backend_id != "rlab.jerk":
-        raise ValueError(f"JERK backend module does not define {backend_id!r}")
-    return {
-        "training_backend_id": backend_id,
-        "algorithm_id": "jerk",
-        "model_class": "rlab.jerk.JerkPolicy",
-    }
+BACKENDS = {JerkBackend.backend_id: JerkBackend()}

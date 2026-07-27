@@ -8,7 +8,7 @@ import signal
 import sys
 import hashlib
 import json
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 os.environ.setdefault("MPLCONFIGDIR", os.path.abspath(".matplotlib"))
@@ -21,14 +21,12 @@ from rlab.env import (
     resolve_env_config,
     resolve_mixed_state_config,
 )
-from rlab.env_config import env_config_from_args
+from rlab.env_config import env_config_from_mapping
 from rlab.metric_store import MetricStore, metric_store_path
 from rlab.provider_config import provider_num_envs
 from rlab.policy_bundle import load_recipe_document
 from rlab.seeds import validate_training_seed
-from rlab.train_config import (
-    materialized_train_args,
-)
+from rlab.train_config import load_materialized_train_config
 from rlab.training_backend import (
     BackendContext,
     GracefulStopFlag,
@@ -59,23 +57,20 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def explicit_n_envs(args: argparse.Namespace) -> int | None:
-    explicit_fields = set(getattr(args, "_explicit_train_arg_dests", set())) | set(
-        getattr(args, "_train_config_json_fields", set())
-    )
-    return int(args.n_envs) if "n_envs" in explicit_fields else None
+def effective_n_envs(config: Mapping[str, object]) -> int:
+    return provider_num_envs(config, explicit_n_envs=config.get("n_envs"))
 
 
-def effective_n_envs(args: argparse.Namespace) -> int:
-    return provider_num_envs(args, explicit_n_envs=explicit_n_envs(args))
-
-
-def parse_train_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
+def parse_train_config(argv: Sequence[str] | None = None) -> dict[str, object]:
     parser = build_parser()
     parsed = parser.parse_args(list(sys.argv[1:] if argv is None else argv))
-    args = materialized_train_args(Path(parsed.train_config_json))
-    validate_training_seed(args.seed, label="--seed", seed_span=effective_n_envs(args))
-    return args
+    config = load_materialized_train_config(Path(parsed.train_config_json))
+    validate_training_seed(
+        config["seed"],
+        label="train_config.seed",
+        seed_span=effective_n_envs(config),
+    )
+    return config
 
 
 def signal_name(signum: int) -> str:
@@ -102,22 +97,20 @@ def main(argv: list[str] | None = None) -> int:
             "rlab.train is an internal learner entrypoint; use `rlab experiment launch` to launch "
             "a dstack training task"
         )
-    args = parse_train_args(argv)
-    recipe_json_path = Path(str(getattr(args, "recipe_json_path", "") or ""))
+    train_config = parse_train_config(argv)
+    recipe_json_path = Path(str(train_config.get("recipe_json_path") or ""))
     if not recipe_json_path.is_file():
         raise RuntimeError("training requires the canonical versioned recipe.json")
     load_recipe_document(recipe_json_path)
-    train_config = dict(args._materialized_train_config)
     backend_id = training_backend_id(train_config)
     backend_config = training_backend_config(train_config)
     backend = load_training_backend(backend_id)
     backend.validate(train_config, backend_config)
-    for key, value in training_backend_runtime_metadata(backend_id, backend_config).items():
-        setattr(args, key, value)
-    args.training_backend_config_hash = training_backend_config_hash(train_config)
+    train_config.update(training_backend_runtime_metadata(backend_id, backend_config))
+    train_config["training_backend_config_hash"] = training_backend_config_hash(train_config)
 
-    environment = resolve_env_config(env_config_from_args(args, include_states=True))
-    n_envs = effective_n_envs(args)
+    environment = resolve_env_config(env_config_from_mapping(train_config))
+    n_envs = effective_n_envs(train_config)
     environment = resolve_mixed_state_config(environment, n_envs=n_envs)
     manifest = manifest_from_train_config(train_config, expected_game=environment.game)
     rom_binding = (
@@ -129,9 +122,11 @@ def main(argv: list[str] | None = None) -> int:
         else None
     )
     assert_provider_runtime_available(environment, rom_binding=rom_binding)
-    args.resolved_n_envs = n_envs
+    train_config["resolved_n_envs"] = n_envs
 
-    run_dir = Path(default_run_dir(args.run_name, args.runs_dir))
+    run_dir = Path(
+        default_run_dir(str(train_config["run_name"]), str(train_config["runs_dir"]))
+    )
     checkpoint_dir = run_dir / "checkpoints"
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
     (run_dir / "learner_ready.json").unlink(missing_ok=True)
@@ -140,7 +135,7 @@ def main(argv: list[str] | None = None) -> int:
     store.register_recovery_manifest(
         {
             "version": "supervisor-sqlite-recovery-v1",
-            "run_name": str(args.run_name),
+            "run_name": str(train_config["run_name"]),
             "outbox": "sqlite-wal",
             "durable_delivery": "private-r2-segments",
             "configuration_sha256": hashlib.sha256(
@@ -151,15 +146,16 @@ def main(argv: list[str] | None = None) -> int:
                 str(run_dir.resolve()),
             ],
             "wandb_routing": {
-                "project": str(getattr(args, "wandb_project", "") or ""),
-                "run_id": str(getattr(args, "wandb_run_id", "") or ""),
+                "project": str(train_config.get("wandb_project") or ""),
+                "run_id": str(train_config.get("wandb_run_id") or ""),
             },
             "recovery_owner": "run-supervisor",
         }
     )
-    write_run_description(args, str(run_dir))
-    if args.run_description.strip():
-        print(f"run description: {args.run_description.strip()}", flush=True)
+    write_run_description(train_config, str(run_dir))
+    run_description = str(train_config.get("run_description") or "").strip()
+    if run_description:
+        print(f"run description: {run_description}", flush=True)
     else:
         print("warning: --run-description is empty", flush=True)
 
@@ -170,12 +166,11 @@ def main(argv: list[str] | None = None) -> int:
 
     context = BackendContext(
         train_config=train_config,
-        args=args,
         environment=environment,
         run_dir=run_dir,
         checkpoint_dir=checkpoint_dir,
         metric_store=store,
-        wandb_enabled=bool(args.wandb),
+        wandb_enabled=bool(train_config["wandb"]),
         stop_flag=stop_flag,
         rom_binding=rom_binding,
     )

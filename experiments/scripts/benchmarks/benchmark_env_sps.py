@@ -9,6 +9,7 @@ from typing import Any
 
 import numpy as np
 
+from rlab.action_contract import configured_action_values
 from rlab.env import (
     EnvConfig,
     make_provider_vec_env,
@@ -18,7 +19,6 @@ from rlab.env import (
     state_weight_mapping,
 )
 from rlab.env_providers import provider_native_vec_kwargs
-from rlab.targets import target_for_game
 
 
 def benchmark_config(args: argparse.Namespace) -> EnvConfig:
@@ -63,7 +63,7 @@ def benchmark_config(args: argparse.Namespace) -> EnvConfig:
 
 
 def action_batches(config: EnvConfig, *, envs: int, count: int, seed: int):
-    masks = np.asarray(target_for_game(config.game).action_masks_for_set("basic"), dtype=np.int8)
+    masks = np.asarray(configured_action_values(config), dtype=np.int8)
     rng = np.random.default_rng(seed)
     policy_actions = rng.integers(0, len(masks), size=(count, envs), dtype=np.int64)
     return policy_actions, masks[policy_actions]

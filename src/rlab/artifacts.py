@@ -40,7 +40,7 @@ def checkpoint_step(path: Path) -> int | None:
 
 
 def build_model_provenance(
-    args: argparse.Namespace,
+    train_config: Mapping[str, Any],
     config: EnvConfig,
     model_path: Path,
     kind: str,
@@ -51,46 +51,48 @@ def build_model_provenance(
     provenance = {
         "kind": kind,
         "filename": model_path.name,
-        "run_name": getattr(args, "run_name", ""),
-        "run_description": getattr(args, "run_description", ""),
-        "attempt_id": getattr(args, "attempt_id", ""),
-        "compute_target": getattr(args, "compute_target", ""),
-        "dstack_task": getattr(args, "dstack_task", ""),
-        "wandb_run_id": getattr(args, "wandb_run_id", ""),
-        "wandb_project": getattr(args, "wandb_project", ""),
-        "campaign_id": getattr(args, "campaign_id", ""),
-        "game_family": getattr(args, "game_family", ""),
-        "goal_slug": getattr(args, "goal_slug", ""),
-        "goal_path": getattr(args, "goal_path", ""),
-        "goal_sha256": getattr(args, "goal_sha256", ""),
-        "goal_contract_sha256": getattr(args, "goal_contract_sha256", ""),
-        "effective_goal_contract_sha256": getattr(args, "effective_goal_contract_sha256", ""),
-        "reward_program_kind": getattr(args, "reward_program_kind", ""),
-        "reward_program_revision": getattr(args, "reward_program_revision", ""),
-        "reward_shape": getattr(args, "reward_shape", ""),
-        "reward_shape_sha256": getattr(args, "reward_shape_sha256", ""),
-        "reward_shape_is_default": getattr(args, "reward_shape_is_default", False),
-        "recipe_slug": getattr(args, "recipe_slug", ""),
-        "recipe_path": getattr(args, "recipe_path", ""),
-        "recipe_sha256": getattr(args, "recipe_sha256", ""),
-        "runtime_image_ref": getattr(args, "runtime_image_ref", ""),
-        "seed": getattr(args, "seed", None),
+        "run_name": train_config.get("run_name", ""),
+        "run_description": train_config.get("run_description", ""),
+        "attempt_id": train_config.get("attempt_id", ""),
+        "compute_target": train_config.get("compute_target", ""),
+        "dstack_task": train_config.get("dstack_task", ""),
+        "wandb_run_id": train_config.get("wandb_run_id", ""),
+        "wandb_project": train_config.get("wandb_project", ""),
+        "campaign_id": train_config.get("campaign_id", ""),
+        "game_family": train_config.get("game_family", ""),
+        "goal_slug": train_config.get("goal_slug", ""),
+        "goal_path": train_config.get("goal_path", ""),
+        "goal_sha256": train_config.get("goal_sha256", ""),
+        "goal_contract_sha256": train_config.get("goal_contract_sha256", ""),
+        "effective_goal_contract_sha256": train_config.get(
+            "effective_goal_contract_sha256", ""
+        ),
+        "reward_program_kind": train_config.get("reward_program_kind", ""),
+        "reward_program_revision": train_config.get("reward_program_revision", ""),
+        "reward_shape": train_config.get("reward_shape", ""),
+        "reward_shape_sha256": train_config.get("reward_shape_sha256", ""),
+        "reward_shape_is_default": train_config.get("reward_shape_is_default", False),
+        "recipe_slug": train_config.get("recipe_slug", ""),
+        "recipe_path": train_config.get("recipe_path", ""),
+        "recipe_sha256": train_config.get("recipe_sha256", ""),
+        "runtime_image_ref": train_config.get("runtime_image_ref", ""),
+        "seed": train_config.get("seed"),
         "repo_git_commit": str(
-            getattr(args, "source_sha", "") or getattr(args, "repo_git_commit", "") or ""
+            train_config.get("source_sha") or train_config.get("repo_git_commit") or ""
         ).strip(),
         "checkpoint_step": checkpoint_step(model_path)
         if checkpoint_step(model_path) is not None
         else checkpoint_step_value,
-        "training_backend_id": str(getattr(args, "training_backend_id", "") or "").strip(),
+        "training_backend_id": str(train_config.get("training_backend_id") or "").strip(),
         "training_backend_config_hash": str(
-            getattr(args, "training_backend_config_hash", "") or ""
+            train_config.get("training_backend_config_hash") or ""
         ).strip(),
-        "algorithm_id": str(getattr(args, "algorithm_id", "") or "").strip(),
-        "search_algorithm_id": str(getattr(args, "search_algorithm_id", "") or "").strip(),
-        "model_class": str(getattr(args, "model_class", "") or "").strip(),
+        "algorithm_id": str(train_config.get("algorithm_id") or "").strip(),
+        "search_algorithm_id": str(train_config.get("search_algorithm_id") or "").strip(),
+        "model_class": str(train_config.get("model_class") or "").strip(),
         "training_metadata": {"versions": runtime_versions_metadata()},
     }
-    preflight_sha256 = str(getattr(args, "state_archive_preflight_sha256", "") or "").strip()
+    preflight_sha256 = str(train_config.get("state_archive_preflight_sha256") or "").strip()
     if preflight_sha256:
         provenance["state_archive_preflight_sha256"] = preflight_sha256
     if state_archive_summary is not None:
@@ -126,7 +128,7 @@ def install_model_bundle(
     model_path: Path,
     *,
     save_checkpoint: Callable[[Path], None],
-    args: argparse.Namespace,
+    train_config: Mapping[str, Any],
     config: EnvConfig,
     kind: str,
     checkpoint_step_value: int | None,
@@ -144,17 +146,17 @@ def install_model_bundle(
             raise FileNotFoundError(f"checkpoint saver did not create {staged_checkpoint}")
         fsync_path(staged_checkpoint)
         provenance = build_model_provenance(
-            args,
+            train_config,
             config,
             model_path,
             kind,
             checkpoint_step_value=checkpoint_step_value,
             state_archive_summary=state_archive_summary,
         )
-        recipe_source = Path(str(getattr(args, "recipe_json_path", "") or ""))
+        recipe_source = Path(str(train_config.get("recipe_json_path") or ""))
         if not recipe_source.is_file():
             raise FileNotFoundError(
-                "checkpoint creation requires args.recipe_json_path to name a "
+                "checkpoint creation requires train_config.recipe_json_path to name a "
                 f"canonical recipe document: {recipe_source}"
             )
         staged_model_document = model_document_path(staged_checkpoint)
@@ -272,8 +274,8 @@ def apply_config_defaults(
                 break
 
 
-def write_run_description(args: argparse.Namespace, run_dir: str) -> None:
-    description = args.run_description.strip()
+def write_run_description(train_config: Mapping[str, Any], run_dir: str) -> None:
+    description = str(train_config.get("run_description") or "").strip()
     Path(run_dir, "run_description.txt").write_text(
         f"{description}\n" if description else "",
         encoding="utf-8",

@@ -518,6 +518,16 @@ def run_go_explore(context: BackendContext) -> None:
 
 
 class GoExploreBackend:
+    backend_id = "rlab.go-explore"
+
+    def normalize_config(
+        self,
+        config: Mapping[str, Any],
+        *,
+        label: str,
+    ) -> dict[str, Any]:
+        return normalize_config(self.backend_id, config, label=label)
+
     def validate(
         self,
         common_config: Mapping[str, Any],
@@ -548,52 +558,32 @@ class GoExploreBackend:
     def run(self, context: BackendContext) -> None:
         run_go_explore(context)
 
+    def acceptance_mode(self, backend_config: Mapping[str, Any]) -> str:
+        del backend_config
+        return CHECKPOINT_EVAL_ACCEPTANCE
 
-_BACKEND = GoExploreBackend()
+    def contract_payload(self) -> dict[str, Any]:
+        return {
+            "schema_version": 1,
+            "status": "available",
+            "defaults": DEFAULT_CONFIG,
+            "provider_info_keys": sorted(GO_EXPLORE_PROVIDER_INFO_KEYS),
+            "search_archive_persistence": "ephemeral",
+            "persisted_artifact": "best-jerk-run",
+            "state_archive_priority_metrics": [],
+        }
 
+    def state_archive_priority_metrics(self) -> tuple[str, ...]:
+        return ()
 
-def backend_for_id(backend_id: str) -> GoExploreBackend:
-    if backend_id != "rlab.go-explore":
-        raise ValueError(f"Go-Explore backend does not define {backend_id!r}")
-    return _BACKEND
-
-
-def contract_payload(backend_id: str) -> dict[str, Any]:
-    backend_for_id(backend_id)
-    return {
-        "schema_version": 1,
-        "status": "available",
-        "defaults": DEFAULT_CONFIG,
-        "provider_info_keys": sorted(GO_EXPLORE_PROVIDER_INFO_KEYS),
-        "search_archive_persistence": "ephemeral",
-        "persisted_artifact": "best-jerk-run",
-        "state_archive_priority_metrics": [],
-    }
-
-
-def acceptance_mode(
-    backend_id: str,
-    backend_config: Mapping[str, Any],
-) -> str:
-    del backend_config
-    backend_for_id(backend_id)
-    return CHECKPOINT_EVAL_ACCEPTANCE
+    def runtime_metadata(self, backend_config: Mapping[str, Any]) -> Mapping[str, str]:
+        del backend_config
+        return {
+            "training_backend_id": self.backend_id,
+            "algorithm_id": "jerk",
+            "search_algorithm_id": "go-explore",
+            "model_class": "rlab.jerk.JerkPolicy",
+        }
 
 
-def state_archive_priority_metrics(backend_id: str) -> tuple[str, ...]:
-    backend_for_id(backend_id)
-    return ()
-
-
-def runtime_metadata(
-    backend_id: str,
-    backend_config: Mapping[str, Any],
-) -> Mapping[str, str]:
-    del backend_config
-    backend_for_id(backend_id)
-    return {
-        "training_backend_id": backend_id,
-        "algorithm_id": "jerk",
-        "search_algorithm_id": "go-explore",
-        "model_class": "rlab.jerk.JerkPolicy",
-    }
+BACKENDS = {GoExploreBackend.backend_id: GoExploreBackend()}

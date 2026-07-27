@@ -15,6 +15,7 @@ from huggingface_hub.utils import validate_repo_id
 from jinja2 import Environment, FileSystemLoader, StrictUndefined
 from pydantic import Field, StringConstraints
 
+from rlab.action_contract import configured_action_meanings
 from rlab.boundary_schema import BoundaryModel, validate_boundary
 from rlab.env_registry import game_family_for_environment
 from rlab.file_utils import file_sha256 as sha256_file
@@ -295,6 +296,7 @@ def policy_variant_from_contract(
     task: Mapping[str, Any],
     *,
     game: str,
+    provider: str = "stable-retro-turbo",
     action_contract: Mapping[str, Any] | None = None,
 ) -> str:
     height, width = _observation_shape(preprocessing)
@@ -324,7 +326,14 @@ def policy_variant_from_contract(
         if not isinstance(meanings, Sequence) or isinstance(meanings, str | bytes) or not meanings:
             raise ValueError("publication action contract meanings must be a non-empty list")
     else:
-        target_for_game(game).action_names_for_set(action_set)
+        configured_action_meanings(
+            {
+                "env_provider": provider,
+                "game": game,
+                "env_args": {},
+                "task": task,
+            }
+        )
     components.append(normalize_publication_component(action_set, label="publication action set"))
     return "-".join(components)
 
@@ -370,6 +379,7 @@ def publication_identity_from_model_metadata(
         preprocessing,
         task,
         game=game,
+        provider=provider,
         action_contract=action_contract,
     )
     reward_shape = str(model_metadata.get("reward_shape") or "").strip()
