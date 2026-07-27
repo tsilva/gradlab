@@ -227,6 +227,18 @@ class RunSupervisorTests(unittest.TestCase):
         self.assertEqual(receipt["drain"]["phase"], "startup/recovery")
         self.assertIn("recovery exploded", receipt["drain"]["failure"])
 
+    def test_learner_log_tail_is_bounded_and_preserves_latest_failure(self) -> None:
+        supervisor = self.supervisor()
+        supervisor.learner_log_path.parent.mkdir(parents=True, exist_ok=True)
+        supervisor.learner_log_path.write_bytes(
+            b"discarded-prefix\n" + b"x" * 128 + b"\nlatest learner traceback\n"
+        )
+
+        tail = supervisor._learner_log_tail(max_bytes=64)
+
+        self.assertNotIn("discarded-prefix", tail)
+        self.assertIn("latest learner traceback", tail)
+
     def test_training_only_contract_omits_null_eval_contract(self) -> None:
         config = {"checkpoint_eval_contract": None}
         contract = _bind_evaluation_contract(
