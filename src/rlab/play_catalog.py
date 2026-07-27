@@ -7,7 +7,7 @@ import os
 import re
 import threading
 import time
-from collections.abc import Callable, Iterable, Iterator, Mapping
+from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Literal
@@ -45,6 +45,7 @@ CATALOG_CACHE_SCHEMA_VERSION = 1
 CATALOG_INDEX_FILENAME = "_catalog.yaml"
 EVALUATION_CACHE_SECONDS = 10.0
 WANDB_CATALOG_PAGE_SIZE = 200
+RUN_CATALOG_CACHE_SECONDS = 60.0
 LIVE_TRAINING_METRICS = (
     (
         RankCriterion(
@@ -360,27 +361,6 @@ def _page_items(items: list[dict[str, Any]], cursor: str | None) -> CatalogPage:
     )
 
 
-class _CatalogStream:
-    def __init__(self, values: Iterable[dict[str, Any]]) -> None:
-        self.iterator: Iterator[dict[str, Any]] = iter(values)
-        self.items: list[dict[str, Any]] = []
-        self.exhausted = False
-
-    def page(self, offset: int, limit: int) -> CatalogPage:
-        target = offset + limit + 1
-        while len(self.items) < target and not self.exhausted:
-            try:
-                self.items.append(next(self.iterator))
-            except StopIteration:
-                self.exhausted = True
-        selected = tuple(self.items[offset : offset + limit])
-        has_more = len(self.items) > offset + limit or not self.exhausted
-        return CatalogPage(
-            items=selected,
-            next_cursor=_cursor_for(offset + limit) if has_more else None,
-        )
-
-
 class PlayCatalog:
     """Repository catalog, W&B run metadata, and public-checkpoint discovery."""
 
@@ -404,7 +384,11 @@ class PlayCatalog:
         self._api: Any | None = None
         self._lock = threading.Lock()
         self._cache_lock = threading.Lock()
-        self._streams: dict[tuple[str, ...], _CatalogStream] = {}
+        self._run_catalog_cache: dict[
+            str,
+            tuple[float, tuple[dict[str, Any], ...]],
+        ] = {}
+        self._run_catalog_refreshing: set[str] = set()
         self._repository_cache: (
             tuple[
                 tuple[tuple[str, int, int], ...],
@@ -590,17 +574,6 @@ class PlayCatalog:
             if not next_cursor or next_cursor == cursor:
                 raise ValueError("W&B run catalog pagination did not advance")
             cursor = next_cursor
-
-    def _stream(
-        self,
-        key: tuple[str, ...],
-        values: Callable[[], Iterable[dict[str, Any]]],
-    ) -> _CatalogStream:
-        stream = self._streams.get(key)
-        if stream is None:
-            stream = _CatalogStream(values())
-            self._streams[key] = stream
-        return stream
 
     def _catalog_fingerprint(
         self,
@@ -836,6 +809,185 @@ class PlayCatalog:
             except OSError:
                 temporary.unlink(missing_ok=True)
 
+    def _run_catalog_cache_key(
+        self,
+        *,
+        entity: str,
+        project: str,
+        goal_slug: str,
+        metric_specs: tuple[tuple[RankCriterion, tuple[str, ...]], ...],
+        fallback_metric_specs: tuple[tuple[RankCriterion, tuple[str, ...]], ...],
+    ) -> str:
+        identity = {
+            "entity": entity,
+            "project": project,
+            "goal_slug": goal_slug,
+            "metrics": [
+                {
+                    "metric": criterion.metric,
+                    "direction": criterion.direction,
+                    "sources": list(sources),
+                }
+                for criterion, sources in (*metric_specs, *fallback_metric_specs)
+            ],
+        }
+        return hashlib.sha256(
+            json.dumps(identity, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
+
+    def _read_persistent_run_catalog(
+        self,
+        *,
+        cache_key: str,
+        entity: str,
+        project: str,
+    ) -> tuple[float, tuple[dict[str, Any], ...]] | None:
+        if self.cache_path is None or not self.cache_path.is_file():
+            return None
+        try:
+            payload = json.loads(self.cache_path.read_text(encoding="utf-8"))
+            if (
+                not isinstance(payload, Mapping)
+                or payload.get("schema_version") != CATALOG_CACHE_SCHEMA_VERSION
+                or payload.get("repo_root") != str(self.repo_root)
+            ):
+                return None
+            catalogs = payload.get("run_catalogs")
+            entry = catalogs.get(cache_key) if isinstance(catalogs, Mapping) else None
+            if not isinstance(entry, Mapping):
+                return None
+            generated_at = _safe_float(entry.get("generated_at"))
+            raw_items = entry.get("items")
+            if generated_at is None or not isinstance(raw_items, list):
+                return None
+            items: list[dict[str, Any]] = []
+            for raw_item in raw_items:
+                if not isinstance(raw_item, Mapping):
+                    return None
+                run_id = str(raw_item.get("run_id") or "")
+                metrics = raw_item.get("metrics")
+                if (
+                    RUN_ID_PATTERN.fullmatch(run_id) is None
+                    or raw_item.get("entity") != entity
+                    or raw_item.get("project") != project
+                    or not isinstance(metrics, Mapping)
+                ):
+                    return None
+                items.append(
+                    RunSummary(
+                        entity=entity,
+                        project=project,
+                        run_id=run_id,
+                        name=str(raw_item.get("name") or run_id),
+                        state=str(raw_item.get("state") or ""),
+                        goal=str(raw_item.get("goal") or ""),
+                        recipe=str(raw_item.get("recipe") or ""),
+                        recipe_sha256=str(raw_item.get("recipe_sha256") or ""),
+                        recipe_overrides=tuple(
+                            str(value)
+                            for value in raw_item.get("recipe_overrides", ())
+                            if str(value).strip()
+                        ),
+                        recipe_variant_id=str(raw_item.get("recipe_variant_id") or ""),
+                        description=str(raw_item.get("description") or ""),
+                        seed=_safe_int(raw_item.get("seed")),
+                        created_at=str(raw_item.get("created_at") or ""),
+                        updated_at=str(raw_item.get("updated_at") or ""),
+                        url=str(raw_item.get("url") or ""),
+                        metrics=dict(metrics),
+                    ).to_dict()
+                )
+            return generated_at, tuple(items)
+        except OSError, TypeError, ValueError, json.JSONDecodeError:
+            return None
+
+    def _write_persistent_run_catalog(
+        self,
+        *,
+        cache_key: str,
+        generated_at: float,
+        items: tuple[dict[str, Any], ...],
+    ) -> None:
+        if self.cache_path is None:
+            return
+        with self._cache_lock:
+            payload: dict[str, Any] = {
+                "schema_version": CATALOG_CACHE_SCHEMA_VERSION,
+                "repo_root": str(self.repo_root),
+                "projects": {},
+                "run_catalogs": {},
+            }
+            if self.cache_path.is_file():
+                try:
+                    existing = json.loads(self.cache_path.read_text(encoding="utf-8"))
+                    if (
+                        isinstance(existing, dict)
+                        and existing.get("schema_version") == CATALOG_CACHE_SCHEMA_VERSION
+                        and existing.get("repo_root") == str(self.repo_root)
+                        and isinstance(existing.get("projects"), dict)
+                    ):
+                        payload = existing
+                except OSError, json.JSONDecodeError:
+                    pass
+            catalogs = payload.setdefault("run_catalogs", {})
+            if not isinstance(catalogs, dict):
+                catalogs = {}
+                payload["run_catalogs"] = catalogs
+            catalogs[cache_key] = {
+                "generated_at": generated_at,
+                "items": list(items),
+            }
+            temporary = self.cache_path.with_name(
+                f".{self.cache_path.name}.{os.getpid()}.{threading.get_ident()}.tmp"
+            )
+            try:
+                self.cache_path.parent.mkdir(parents=True, exist_ok=True)
+                temporary.write_text(
+                    json.dumps(payload, sort_keys=True, separators=(",", ":")),
+                    encoding="utf-8",
+                )
+                temporary.chmod(0o600)
+                temporary.replace(self.cache_path)
+            except OSError:
+                temporary.unlink(missing_ok=True)
+
+    def _cached_run_catalog(
+        self,
+        *,
+        cache_key: str,
+        entity: str,
+        project: str,
+    ) -> tuple[float, tuple[dict[str, Any], ...]] | None:
+        with self._cache_lock:
+            cached = self._run_catalog_cache.get(cache_key)
+        if cached is not None:
+            return cached
+        persisted = self._read_persistent_run_catalog(
+            cache_key=cache_key,
+            entity=entity,
+            project=project,
+        )
+        if persisted is not None:
+            with self._cache_lock:
+                self._run_catalog_cache[cache_key] = persisted
+        return persisted
+
+    def _store_run_catalog(
+        self,
+        *,
+        cache_key: str,
+        items: tuple[dict[str, Any], ...],
+    ) -> tuple[float, tuple[dict[str, Any], ...]]:
+        cached = (time.time(), items)
+        with self._cache_lock:
+            self._run_catalog_cache[cache_key] = cached
+        self._write_persistent_run_catalog(
+            cache_key=cache_key,
+            generated_at=cached[0],
+            items=items,
+        )
+        return cached
+
     def _compose_repository_goal(self, path: Path) -> _RepositoryGoal:
         document = load_goal_contract(path, self.repo_root, validate=False)
         train = document.get("train")
@@ -1050,6 +1202,127 @@ class PlayCatalog:
         page = self.projects(entity=entity)
         return {"entity": entity, **page.to_dict()}
 
+    def _load_run_catalog(
+        self,
+        *,
+        entity: str,
+        project: str,
+        selected_goal_slug: str,
+        metric_specs: tuple[tuple[RankCriterion, tuple[str, ...]], ...],
+        fallback_metric_specs: tuple[tuple[RankCriterion, tuple[str, ...]], ...],
+    ) -> tuple[dict[str, Any], ...]:
+        filters = {"config.goal_slug": selected_goal_slug} if selected_goal_slug else None
+        api_runs = self._wandb_catalog_runs(
+            entity=entity,
+            project=project,
+            filters=filters,
+        )
+        summaries: list[dict[str, Any]] = []
+        for run in api_runs:
+            run_id = run.run_id
+            if RUN_ID_PATTERN.fullmatch(run_id) is None:
+                continue
+            config = dict(run.config)
+            goal_slug = str(config.get("goal_slug") or "")
+            if selected_goal_slug and goal_slug != selected_goal_slug:
+                continue
+            run_metrics = run.summary
+            overrides = normalize_recipe_overrides(config.get("recipe_overrides"))
+            configured_variant_id = str(config.get("recipe_variant_id") or "").strip()
+            variant_id = configured_variant_id or (
+                recipe_variant_id(
+                    recipe_slug=config.get("recipe_slug"),
+                    source_sha=config.get("source_sha"),
+                    recipe_overrides=overrides,
+                )
+                if overrides
+                else ""
+            )
+            summaries.append(
+                RunSummary(
+                    entity=entity,
+                    project=project,
+                    run_id=run_id,
+                    name=run.name or run_id,
+                    state=run.state,
+                    goal=goal_slug,
+                    recipe=str(config.get("recipe_slug") or ""),
+                    recipe_sha256=str(config.get("recipe_sha256") or ""),
+                    recipe_overrides=overrides,
+                    recipe_variant_id=variant_id,
+                    description=str(run.notes or config.get("run_description") or "").strip(),
+                    seed=_safe_int(config.get("seed")),
+                    created_at=run.created_at,
+                    updated_at=run.updated_at,
+                    url=run.url,
+                    metrics={
+                        criterion.metric: _first_summary_float(run_metrics, sources)
+                        for criterion, sources in (*metric_specs, *fallback_metric_specs)
+                    },
+                ).to_dict()
+            )
+        _rank_run_summaries(
+            summaries,
+            primary=metric_specs,
+            fallback=fallback_metric_specs,
+        )
+        return tuple(summaries)
+
+    def _refresh_run_catalog(
+        self,
+        *,
+        cache_key: str,
+        entity: str,
+        project: str,
+        selected_goal_slug: str,
+        metric_specs: tuple[tuple[RankCriterion, tuple[str, ...]], ...],
+        fallback_metric_specs: tuple[tuple[RankCriterion, tuple[str, ...]], ...],
+    ) -> None:
+        try:
+            items = self._load_run_catalog(
+                entity=entity,
+                project=project,
+                selected_goal_slug=selected_goal_slug,
+                metric_specs=metric_specs,
+                fallback_metric_specs=fallback_metric_specs,
+            )
+            self._store_run_catalog(cache_key=cache_key, items=items)
+        except Exception:
+            # A stale local catalog is preferable to turning a transient W&B
+            # failure into a blocking playback-selection failure.
+            pass
+        finally:
+            with self._cache_lock:
+                self._run_catalog_refreshing.discard(cache_key)
+
+    def _schedule_run_catalog_refresh(
+        self,
+        *,
+        cache_key: str,
+        entity: str,
+        project: str,
+        selected_goal_slug: str,
+        metric_specs: tuple[tuple[RankCriterion, tuple[str, ...]], ...],
+        fallback_metric_specs: tuple[tuple[RankCriterion, tuple[str, ...]], ...],
+    ) -> None:
+        with self._cache_lock:
+            if cache_key in self._run_catalog_refreshing:
+                return
+            self._run_catalog_refreshing.add(cache_key)
+        threading.Thread(
+            target=self._refresh_run_catalog,
+            kwargs={
+                "cache_key": cache_key,
+                "entity": entity,
+                "project": project,
+                "selected_goal_slug": selected_goal_slug,
+                "metric_specs": metric_specs,
+                "fallback_metric_specs": fallback_metric_specs,
+            },
+            name=f"rlab-play-catalog-{cache_key[:12]}",
+            daemon=True,
+        ).start()
+
     def runs(
         self,
         *,
@@ -1076,85 +1349,55 @@ class PlayCatalog:
             {"metric": criterion.metric, "direction": criterion.direction}
             for criterion, _sources in fallback_metric_specs
         )
-
-        def values() -> Iterator[dict[str, Any]]:
-            filters = {"config.goal_slug": selected_goal_slug} if selected_goal_slug else None
-            api_runs = self._wandb_catalog_runs(
+        cache_key = self._run_catalog_cache_key(
+            entity=entity,
+            project=project,
+            goal_slug=selected_goal_slug,
+            metric_specs=metric_specs,
+            fallback_metric_specs=fallback_metric_specs,
+        )
+        cached = self._cached_run_catalog(
+            cache_key=cache_key,
+            entity=entity,
+            project=project,
+        )
+        if cached is None:
+            summaries = self._load_run_catalog(
                 entity=entity,
                 project=project,
-                filters=filters,
+                selected_goal_slug=selected_goal_slug,
+                metric_specs=metric_specs,
+                fallback_metric_specs=fallback_metric_specs,
             )
-            summaries: list[dict[str, Any]] = []
-            for run in api_runs:
-                run_id = run.run_id
-                if RUN_ID_PATTERN.fullmatch(run_id) is None:
-                    continue
-                config = dict(run.config)
-                goal_slug = str(config.get("goal_slug") or "")
-                if selected_goal_slug and goal_slug != selected_goal_slug:
-                    continue
-                run_metrics = run.summary
-                overrides = normalize_recipe_overrides(config.get("recipe_overrides"))
-                configured_variant_id = str(config.get("recipe_variant_id") or "").strip()
-                variant_id = configured_variant_id or (
-                    recipe_variant_id(
-                        recipe_slug=config.get("recipe_slug"),
-                        source_sha=config.get("source_sha"),
-                        recipe_overrides=overrides,
-                    )
-                    if overrides
-                    else ""
-                )
-                summary = RunSummary(
-                    entity=entity,
-                    project=project,
-                    run_id=run_id,
-                    name=run.name or run_id,
-                    state=run.state,
-                    goal=goal_slug,
-                    recipe=str(config.get("recipe_slug") or ""),
-                    recipe_sha256=str(config.get("recipe_sha256") or ""),
-                    recipe_overrides=overrides,
-                    recipe_variant_id=variant_id,
-                    description=str(run.notes or config.get("run_description") or "").strip(),
-                    seed=_safe_int(config.get("seed")),
-                    created_at=run.created_at,
-                    updated_at=run.updated_at,
-                    url=run.url,
-                    metrics={
-                        criterion.metric: _first_summary_float(run_metrics, sources)
-                        for criterion, sources in (*metric_specs, *fallback_metric_specs)
-                    },
-                )
-                if normalized and normalized not in _search_text(
-                    summary.run_id,
-                    summary.name,
-                    summary.state,
-                    summary.goal,
-                    summary.recipe,
-                    summary.recipe_sha256,
-                    summary.recipe_overrides,
-                    summary.recipe_variant_id,
-                    summary.description,
-                    summary.seed,
-                ):
-                    continue
-                summaries.append(summary.to_dict())
-            _rank_run_summaries(
-                summaries,
-                primary=metric_specs,
-                fallback=fallback_metric_specs,
+            cached = self._store_run_catalog(cache_key=cache_key, items=summaries)
+        elif time.time() - cached[0] >= RUN_CATALOG_CACHE_SECONDS:
+            self._schedule_run_catalog_refresh(
+                cache_key=cache_key,
+                entity=entity,
+                project=project,
+                selected_goal_slug=selected_goal_slug,
+                metric_specs=metric_specs,
+                fallback_metric_specs=fallback_metric_specs,
             )
-            yield from summaries
-
-        with self._lock:
-            stream_key = ("runs", entity, project, selected_goal, normalized)
-            if cursor is None:
-                stream = _CatalogStream(values())
-                self._streams[stream_key] = stream
-            else:
-                stream = self._stream(stream_key, values)
-            page = stream.page(_cursor_offset(cursor), CATALOG_PAGE_SIZE)
+        filtered = [
+            summary
+            for summary in cached[1]
+            if not normalized
+            or normalized
+            in _search_text(
+                summary.get("run_id"),
+                summary.get("name"),
+                summary.get("state"),
+                summary.get("goal"),
+                summary.get("recipe"),
+                summary.get("recipe_sha256"),
+                summary.get("recipe_overrides"),
+                summary.get("recipe_variant_id"),
+                summary.get("description"),
+                summary.get("seed"),
+            )
+        ]
+        page = _page_items(filtered, cursor)
         return CatalogPage(
             items=page.items,
             next_cursor=page.next_cursor,

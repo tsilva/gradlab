@@ -162,6 +162,24 @@ class FakeCatalogGraphQLApi:
         raise AssertionError(f"catalog must use the bounded GraphQL projection: {args=} {kwargs=}")
 
 
+class NoCallCatalogGraphQLClient:
+    app_url = "https://wandb.example/"
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def execute(self, query: object, *, variable_values: dict[str, Any]):
+        self.calls += 1
+        raise AssertionError(
+            f"fresh persistent catalog must avoid W&B: {query=} {variable_values=}"
+        )
+
+
+class NoCallCatalogGraphQLApi:
+    def __init__(self) -> None:
+        self.client = NoCallCatalogGraphQLClient()
+
+
 def write_goal_catalog(repo_root: Path) -> None:
     goal_root = repo_root / "experiments" / "goals" / "Mario" / "Level1-1"
     recipes = goal_root / "recipes"
@@ -511,6 +529,80 @@ def test_run_catalog_uses_one_bounded_projection_instead_of_lazy_run_hydration(
         json.loads(call["filters"]) == {"config.goal_slug": "Mario/Level1-1"}
         for call in api.client.calls
     )
+    searched = catalog.runs(
+        entity="research",
+        project="Mario",
+        goal_id="Level1-1",
+        query="description b",
+    )
+    assert [item["run_id"] for item in searched.items] == [SECOND_RUN_ID]
+    assert len(api.client.calls) == 2
+
+
+def test_run_catalog_persists_ranked_summaries_across_player_processes(
+    tmp_path: Path,
+) -> None:
+    write_goal_catalog(tmp_path)
+    cache_path = tmp_path / "cache" / "catalog.json"
+    first = PlayCatalog(repo_root=tmp_path, cache_path=cache_path)
+    first._api = FakeCatalogGraphQLApi()
+
+    initial = first.runs(
+        entity="research",
+        project="Mario",
+        goal_id="Level1-1",
+    )
+
+    second = PlayCatalog(repo_root=tmp_path, cache_path=cache_path)
+    no_call_api = NoCallCatalogGraphQLApi()
+    second._api = no_call_api
+    cached = second.runs(
+        entity="research",
+        project="Mario",
+        goal_id="Level1-1",
+    )
+
+    assert cached == initial
+    assert no_call_api.client.calls == 0
+
+
+def test_stale_run_catalog_is_served_before_background_refresh(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    write_goal_catalog(tmp_path)
+    cache_path = tmp_path / "cache" / "catalog.json"
+    first = PlayCatalog(repo_root=tmp_path, cache_path=cache_path)
+    first._api = FakeCatalogGraphQLApi()
+    initial = first.runs(
+        entity="research",
+        project="Mario",
+        goal_id="Level1-1",
+    )
+    cache_document = json.loads(cache_path.read_text(encoding="utf-8"))
+    for entry in cache_document["run_catalogs"].values():
+        entry["generated_at"] = 0
+    cache_path.write_text(json.dumps(cache_document), encoding="utf-8")
+
+    second = PlayCatalog(repo_root=tmp_path, cache_path=cache_path)
+    no_call_api = NoCallCatalogGraphQLApi()
+    second._api = no_call_api
+    scheduled: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        second,
+        "_schedule_run_catalog_refresh",
+        lambda **kwargs: scheduled.append(kwargs),
+    )
+
+    stale = second.runs(
+        entity="research",
+        project="Mario",
+        goal_id="Level1-1",
+    )
+
+    assert stale == initial
+    assert no_call_api.client.calls == 0
+    assert len(scheduled) == 1
 
 
 def test_catalog_validates_and_orders_public_checkpoints(monkeypatch: pytest.MonkeyPatch) -> None:
