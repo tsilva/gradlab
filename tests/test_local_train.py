@@ -58,9 +58,15 @@ def test_local_train_materializes_credential_free_playable_run(
 ) -> None:
     observed_internal_values: list[str | None] = []
 
-    def fake_learner(argv: list[str], *, compact_console: bool) -> int:
+    def fake_learner(
+        argv: list[str],
+        *,
+        compact_console: bool,
+        persist_intermediate_checkpoints: bool,
+    ) -> int:
         observed_internal_values.append(os.environ.get(INTERNAL_LEARNER_ENV))
         assert compact_console is True
+        assert persist_intermediate_checkpoints is False
         config_path = Path(argv[argv.index("--train-config-json") + 1])
         config = json.loads(config_path.read_text(encoding="utf-8"))
         run_dir = Path(config["runs_dir"]) / config["run_name"]
@@ -120,9 +126,15 @@ def test_local_mario_train_binds_registered_rom_cache(
     }
     observed_cache: list[str | None] = []
 
-    def fake_learner(argv: list[str], *, compact_console: bool) -> int:
+    def fake_learner(
+        argv: list[str],
+        *,
+        compact_console: bool,
+        persist_intermediate_checkpoints: bool,
+    ) -> int:
         observed_cache.append(os.environ.get(LOCAL_ROM_CACHE_ENV))
         assert compact_console is True
+        assert persist_intermediate_checkpoints is False
         config_path = Path(argv[argv.index("--train-config-json") + 1])
         config = json.loads(config_path.read_text(encoding="utf-8"))
         assert config["rom_asset_manifest"] == manifest
@@ -182,9 +194,11 @@ def test_local_mario_train_uses_direct_rom_without_registry_or_cache_mutation(
         *,
         runtime_rom_binding: RomRuntimeBinding,
         compact_console: bool,
+        persist_intermediate_checkpoints: bool,
     ) -> int:
         observed_bindings.append(runtime_rom_binding)
         assert compact_console is True
+        assert persist_intermediate_checkpoints is False
         config_path = Path(argv[argv.index("--train-config-json") + 1])
         config = json.loads(config_path.read_text(encoding="utf-8"))
         assert config["rom_asset_manifest"] == manifest

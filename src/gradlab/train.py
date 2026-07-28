@@ -89,7 +89,11 @@ def signal_name(signum: int) -> str:
         return f"signal-{signum}"
 
 
-def install_graceful_stop_handler(stop_flag: GracefulStopFlag) -> int | None:
+def install_graceful_stop_handler(
+    stop_flag: GracefulStopFlag,
+    *,
+    include_sigint: bool = False,
+) -> int | None:
     if GRACEFUL_STOP_SIGNAL is None:
         return None
 
@@ -97,6 +101,8 @@ def install_graceful_stop_handler(stop_flag: GracefulStopFlag) -> int | None:
         stop_flag.request(signal_name(signum))
 
     signal.signal(GRACEFUL_STOP_SIGNAL, handle_graceful_stop)
+    if include_sigint:
+        signal.signal(signal.SIGINT, handle_graceful_stop)
     return int(GRACEFUL_STOP_SIGNAL)
 
 
@@ -105,6 +111,7 @@ def main(
     *,
     runtime_rom_binding: RomRuntimeBinding | None = None,
     compact_console: bool = False,
+    persist_intermediate_checkpoints: bool = True,
 ) -> int:
     if os.environ.get(INTERNAL_LEARNER_ENV) != "1":
         raise RuntimeError(
@@ -184,9 +191,22 @@ def main(
         print("warning: --run-description is empty", flush=True)
 
     stop_flag = GracefulStopFlag()
-    graceful_stop_signal = install_graceful_stop_handler(stop_flag)
+    graceful_stop_signal = install_graceful_stop_handler(
+        stop_flag,
+        include_sigint=not persist_intermediate_checkpoints,
+    )
     if graceful_stop_signal is not None:
-        print(f"graceful stop signal: {signal_name(graceful_stop_signal)}", flush=True)
+        if not persist_intermediate_checkpoints:
+            print(
+                "graceful stop signals: "
+                f"{signal_name(graceful_stop_signal)}, {signal_name(int(signal.SIGINT))}",
+                flush=True,
+            )
+        else:
+            print(
+                f"graceful stop signal: {signal_name(graceful_stop_signal)}",
+                flush=True,
+            )
 
     context = BackendContext(
         train_config=train_config,
@@ -198,6 +218,7 @@ def main(
         stop_flag=stop_flag,
         rom_binding=rom_binding,
         compact_console=compact_console,
+        persist_intermediate_checkpoints=persist_intermediate_checkpoints,
     )
     backend.run(context)
     return 0

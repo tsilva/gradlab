@@ -759,6 +759,14 @@ class ConfigValidationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "unknown field.*hypotesis"):
             validate_goal_contract_document(document, path, Path(".").resolve())
 
+    def test_goal_validator_requires_explicit_evaluation_mode(self) -> None:
+        path = self.MARIO_L11_GOAL.resolve()
+        document = load_goal_contract(path)
+        document.pop("evaluation_mode")
+
+        with self.assertRaisesRegex(ValueError, "evaluation_mode must be one of"):
+            validate_goal_contract_document(document, path, Path(".").resolve())
+
     def test_training_only_goal_rejects_eval_owned_contract_fields(self) -> None:
         path = self.BREAKOUT_GOAL.resolve()
         base = load_goal_contract(path)

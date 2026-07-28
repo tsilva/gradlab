@@ -10,6 +10,7 @@ from typing import Any
 
 import numpy as np
 from gymnasium import spaces
+from tqdm.auto import tqdm
 
 from gradlab.action_contract import configured_action_meanings
 from gradlab.artifacts import install_model_bundle
@@ -322,6 +323,23 @@ def _publish_metrics(
     return True
 
 
+def _refresh_progress(progress: Any | None, search: GoExploreSearch) -> None:
+    if progress is None:
+        return
+    step = int(search.global_step)
+    if step > int(progress.n):
+        progress.update(step - int(progress.n))
+    candidate = search.best_candidate()
+    progress.set_postfix(
+        {
+            "best return": f"{candidate.episode_return:.3g}" if candidate else "0",
+            "best progress": f"{candidate.progress:.0f}" if candidate else "0",
+            "completed": "yes" if candidate and candidate.completed else "no",
+        },
+        refresh=True,
+    )
+
+
 def run_go_explore(context: BackendContext) -> None:
     common_config = context.train_config
     backend_config = context.backend_config
@@ -350,6 +368,7 @@ def run_go_explore(context: BackendContext) -> None:
         state_archive=common_config["state_archive"],
         state_archive_root=context.run_dir / "state-archive",
     )
+    progress: Any | None = None
     try:
         if not isinstance(runtime.action_space, spaces.Discrete):
             raise ValueError("Go-Explore requires a discrete task action space")
@@ -376,6 +395,18 @@ def run_go_explore(context: BackendContext) -> None:
         )
         context.mark_ready()
         started_at = time.perf_counter()
+        progress = (
+            tqdm(
+                total=int(common_config["timesteps"]),
+                initial=int(search.global_step),
+                desc="Go-Explore",
+                unit="transition",
+                unit_scale=True,
+                dynamic_ncols=True,
+            )
+            if context.compact_console
+            else None
+        )
         log_interval_steps = int(backend_config["log_interval_steps"])
         compaction_interval_steps = int(backend_config["compaction_interval_steps"])
         checkpoint_freq = int(common_config["checkpoint_freq"])
@@ -385,7 +416,7 @@ def run_go_explore(context: BackendContext) -> None:
         ) * compaction_interval_steps
         next_checkpoint = (
             ((search.global_step // checkpoint_freq) + 1) * checkpoint_freq
-            if checkpoint_freq > 0
+            if checkpoint_freq > 0 and context.persist_intermediate_checkpoints
             else None
         )
         saved_checkpoint_steps: set[int] = set()
@@ -442,7 +473,7 @@ def run_go_explore(context: BackendContext) -> None:
                 entry_ids = search.restart(observation.restart_mask)
                 runtime.restore_archive_entries(observation.restart_mask, entry_ids)
             step = search.global_step
-            if improved:
+            if improved and context.persist_intermediate_checkpoints:
                 _save_policy(
                     search,
                     runtime,
@@ -457,12 +488,13 @@ def run_go_explore(context: BackendContext) -> None:
                 compacted = runtime.retain_state_archive_entries(
                     tuple(cell.entry_id for cell in search.archive.values())
                 )
-                print(
-                    "compacted ephemeral Go-Explore archive "
-                    f"step={step} retained={compacted['retained_entries']} "
-                    f"removed={compacted['removed_entries']}",
-                    flush=True,
-                )
+                if not context.compact_console:
+                    print(
+                        "compacted ephemeral Go-Explore archive "
+                        f"step={step} retained={compacted['retained_entries']} "
+                        f"removed={compacted['removed_entries']}",
+                        flush=True,
+                    )
                 next_compaction += compaction_interval_steps
             if step >= next_log:
                 early_stopped = _publish_metrics(
@@ -472,6 +504,7 @@ def run_go_explore(context: BackendContext) -> None:
                     elapsed=time.perf_counter() - started_at,
                     early_stop=early_stop,
                 )
+                _refresh_progress(progress, search)
                 next_log += log_interval_steps
             while next_checkpoint is not None and step >= next_checkpoint:
                 if step not in saved_checkpoint_steps:
@@ -488,6 +521,10 @@ def run_go_explore(context: BackendContext) -> None:
                 next_checkpoint += checkpoint_freq
             if early_stopped:
                 break
+        _refresh_progress(progress, search)
+        if progress is not None:
+            progress.close()
+            progress = None
         _publish_metrics(
             context,
             search,
@@ -495,7 +532,11 @@ def run_go_explore(context: BackendContext) -> None:
             elapsed=time.perf_counter() - started_at,
             early_stop=None,
         )
-        if context.stop_flag.requested and checkpoint_freq > 0:
+        if (
+            context.stop_flag.requested
+            and context.persist_intermediate_checkpoints
+            and checkpoint_freq > 0
+        ):
             _save_policy(
                 search,
                 runtime,
@@ -510,10 +551,16 @@ def run_go_explore(context: BackendContext) -> None:
             runtime,
             context,
             model_path=context.run_dir / "final_model.zip",
-            kind="final",
+            kind=(
+                "interrupted"
+                if context.stop_flag.requested and not context.persist_intermediate_checkpoints
+                else "final"
+            ),
             step=search.global_step,
         )
     finally:
+        if progress is not None:
+            progress.close()
         runtime.close()
 
 
