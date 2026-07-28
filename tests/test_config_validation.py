@@ -482,6 +482,31 @@ class ConfigValidationTests(unittest.TestCase):
                         conditions["return_plateau"]["start_after_steps"],
                     )
 
+    def test_every_vizdoom_recipe_composes_the_shared_plateau_condition(self) -> None:
+        recipes = sorted(Path("experiments/goals").glob("Vizdoom*/recipes/*.yaml"))
+
+        self.assertEqual(len(recipes), 9)
+        for recipe_path in recipes:
+            with self.subTest(recipe=recipe_path):
+                goal_path = recipe_path.parent.parent / "_goal.yaml"
+                document = compose_train_document(goal_path, recipe_path)
+                train_config = document["train_config"]
+                plateau = train_config["early_stop"]["conditions"]["return_plateau"]
+                calibration_steps = train_config["timesteps"] // 4
+
+                self.assertEqual(
+                    plateau["metric"],
+                    "train/episode/return/shaped/from/target/mean",
+                )
+                self.assertEqual(plateau["trigger"], "no_improvement")
+                self.assertEqual(plateau["direction"], "maximize")
+                self.assertEqual(plateau["min_delta"], 0.01)
+                self.assertEqual(plateau["delta_mode"], "absolute")
+                self.assertEqual(plateau["start_after_steps"], calibration_steps)
+                self.assertEqual(plateau["patience_steps"], calibration_steps)
+                self.assertEqual(plateau["outcome"], "failure")
+                self.assertEqual(plateau["action"], "stop")
+
     def test_removed_provider_lifecycle_args_are_rejected(self) -> None:
         for provider_id in ("stable-retro-turbo", "supermariobrosnes-turbo"):
             contract = resolve_env_provider(provider_id).constructor_contract

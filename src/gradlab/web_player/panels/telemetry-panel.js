@@ -12,12 +12,20 @@ import {
   formatTelemetryValue,
   seriesForMetric,
 } from "./telemetry.js";
+import {
+  scalarActionIndex,
+  discreteActionLabels,
+  formatActionValue,
+} from "./action-contract.js";
 
-function selectedPoint(history, snapshot, view) {
+export function selectedPoint(history, snapshot, view) {
   const sequence = view?.selectedSequence ?? snapshot?.transition?.sequence;
-  return history.find((point) => Number(point.sequence) === Number(sequence))
-    || history.at(-1)
-    || null;
+  if (sequence !== null && sequence !== undefined) {
+    return history.find(
+      (point) => Number(point.sequence) === Number(sequence),
+    ) || null;
+  }
+  return history.at(-1) || null;
 }
 
 export function cursorIndex(history, view) {
@@ -27,14 +35,9 @@ export function cursorIndex(history, view) {
   return index < 0 ? null : index;
 }
 
-function actionLabel(value, snapshot) {
-  if (!Number.isInteger(value)) return String(value);
-  return snapshot?.session?.action_names?.[value] || `action ${value}`;
-}
-
 function renderedValue(value, descriptor, snapshot) {
   if (descriptor?.type === "categorical" && value !== null && value !== undefined) {
-    return actionLabel(value, snapshot);
+    return formatActionValue(value, snapshot);
   }
   return formatTelemetryValue(value, descriptor);
 }
@@ -109,9 +112,18 @@ function makeStatsBlock(block) {
         .filter(({ availability }) => availability.status === "unsupported")
         .map(({ descriptor }) => descriptor?.shortLabel)
         .filter(Boolean);
-      foot.textContent = unsupported.length
+      const actionComparison = snapshot?.session?.action_contract_comparison;
+      const actionContractMessage = block.metrics.some(
+        (key) => ["action/policy", "action/executed"].includes(key),
+      ) && actionComparison?.status === "legacy-unproven"
+        ? "Legacy checkpoint: training-time action equivalence is unproven."
+        : "";
+      const availabilityMessage = unsupported.length
         ? `Unsupported here: ${unsupported.join(", ")}.`
         : (block.foot || "");
+      foot.textContent = [availabilityMessage, actionContractMessage]
+        .filter(Boolean)
+        .join(" ");
       foot.hidden = !foot.textContent;
     },
   };
@@ -170,6 +182,18 @@ function histogramValues(descriptor, history) {
     .filter((value) => value !== null && value !== undefined);
 }
 
+export function distributionBlockVisible(status) {
+  return status !== "unsupported";
+}
+
+export function histogramSelectedLabel(names, highlightIndex) {
+  return Number.isInteger(highlightIndex)
+    && highlightIndex >= 0
+    && highlightIndex < names.length
+    ? names[highlightIndex]
+    : null;
+}
+
 function makeHistogramBlock(block) {
   const section = document.createElement("section");
   section.className = "telemetry-block telemetry-plot";
@@ -186,18 +210,23 @@ function makeHistogramBlock(block) {
     element: section,
     render({ snapshot, history, view }) {
       const values = histogramValues(descriptor, history);
-      const numeric = values.every((value) => Number.isInteger(value) && value >= 0);
+      const actionIndices = values.map(scalarActionIndex);
+      const numeric = actionIndices.every((value) => value !== null && value >= 0);
       const names = numeric
-        ? [...(snapshot?.session?.action_names || [])]
+        ? discreteActionLabels(snapshot)
         : [...new Set(values.map(String))].sort();
       if (numeric) {
-        const maximum = Math.max(-1, ...values);
-        while (names.length <= maximum) names.push(`action ${names.length}`);
+        const maximum = Math.max(-1, ...actionIndices);
+        while (names.length <= maximum) {
+          names.push(formatActionValue(names.length, snapshot));
+        }
       }
       if (!names.length) names.push("—");
       const counts = Array.from({ length: names.length }, () => 0);
-      values.forEach((value) => {
-        const index = numeric ? Number(value) : names.indexOf(String(value));
+      values.forEach((value, valueIndex) => {
+        const index = numeric
+          ? actionIndices[valueIndex]
+          : names.indexOf(String(value));
         if (index >= 0) counts[index] = (counts[index] || 0) + 1;
       });
       const point = view?.inspection
@@ -206,13 +235,18 @@ function makeHistogramBlock(block) {
       const selected = point && descriptor?.history ? descriptor.history(point) : null;
       const highlightIndex = selected === null || selected === undefined
         ? null
-        : (numeric ? Number(selected) : names.indexOf(String(selected)));
+        : (
+          numeric
+            ? scalarActionIndex(selected)
+            : names.indexOf(String(selected))
+        );
+      const selectedLabel = histogramSelectedLabel(names, highlightIndex);
       drawHistogram(canvas, counts, names, {
-        highlightIndex: highlightIndex >= 0 ? highlightIndex : null,
+        highlightIndex: selectedLabel === null ? null : highlightIndex,
       });
       caption.textContent = values.length
         ? `${values.length} values in the retained episode${
-          highlightIndex >= 0 ? ` · selected ${names[highlightIndex]}.` : "."
+          selectedLabel === null ? "." : ` · selected ${selectedLabel}.`
         }`
         : `No ${descriptor?.shortLabel.toLowerCase() || "metric"} values observed.`;
     },
@@ -227,14 +261,24 @@ function makeDistributionBlock(block) {
   const target = document.createElement("div");
   target.className = "action-probabilities empty-state";
   section.append(target);
-  appendFoot(
-    section,
-    block.foot || "Decision computed from the pre-action policy input.",
-  );
+  const foot = appendFoot(section, block.foot, { force: true });
   return {
     element: section,
     render({ snapshot }) {
       const availability = descriptorAvailability(descriptor, { snapshot });
+      const actionComparison = snapshot?.session?.action_contract_comparison;
+      const semantics = snapshot?.session?.action_contract?.policy?.semantics;
+      if (semantics?.status === "unavailable") {
+        foot.textContent = `Action semantics unavailable: ${
+          semantics.reason || "the provider did not declare them"
+        }.`;
+      } else if (actionComparison?.status === "legacy-unproven") {
+        foot.textContent = "Legacy checkpoint: action labels come from the current runtime and cannot be proven identical to training.";
+      } else {
+        foot.textContent = block.foot || "";
+      }
+      foot.hidden = !foot.textContent;
+      section.hidden = !distributionBlockVisible(availability.status);
       if (
         availability.status !== "available"
         && availability.status !== "not-yet-observed"
@@ -252,8 +296,8 @@ function makeDistributionBlock(block) {
         return;
       }
       if (Array.isArray(decision.q_values)) {
-        const names = snapshot?.session?.action_names || [];
         const values = decision.q_values.map(Number);
+        const names = discreteActionLabels(snapshot, values.length);
         const minimum = Math.min(...values);
         const maximum = Math.max(...values);
         const span = Math.max(maximum - minimum, Number.EPSILON);
@@ -264,7 +308,7 @@ function makeDistributionBlock(block) {
             index === decision.selected_action ? "selected" : ""
           }`;
           const label = document.createElement("span");
-          label.textContent = names[index] || `action ${index}`;
+          label.textContent = names[index] || formatActionValue(index, snapshot);
           const track = document.createElement("div");
           track.className = "probability-track";
           const fill = document.createElement("div");
@@ -282,14 +326,14 @@ function makeDistributionBlock(block) {
       if (!Array.isArray(decision.probabilities)) {
         target.className = "distribution-summary";
         target.textContent = [
-          `Executed ${JSON.stringify(snapshot?.transition?.executed_action)}`,
+          `Executed ${formatActionValue(snapshot?.transition?.executed_action, snapshot)}`,
           `mean ${JSON.stringify(decision.mean)}`,
           `std ${JSON.stringify(decision.stddev)}`,
         ].join(" · ");
         section.dataset.telemetryStatus = "available";
         return;
       }
-      const names = snapshot?.session?.action_names || [];
+      const names = discreteActionLabels(snapshot, decision.probabilities.length);
       target.className = "action-probabilities";
       target.replaceChildren(...decision.probabilities.map((probability, index) => {
         const row = document.createElement("div");
@@ -297,7 +341,7 @@ function makeDistributionBlock(block) {
           index === decision.selected_action ? "selected" : ""
         }`;
         const label = document.createElement("span");
-        label.textContent = names[index] || `action ${index}`;
+        label.textContent = names[index] || formatActionValue(index, snapshot);
         const track = document.createElement("div");
         track.className = "probability-track";
         const fill = document.createElement("div");

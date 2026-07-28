@@ -5,6 +5,10 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 from gradlab.metric_store import MetricStore
+from gradlab.run_contracts import (
+    EVAL_INVENTORY_SETTLED_STATUSES,
+    EVAL_RESULT_TERMINAL_STATUSES,
+)
 
 
 SCHEMA_SQL = """
@@ -364,7 +368,7 @@ class SupervisorLedger(MetricStore):
         status: str,
         result: Mapping[str, Any],
     ) -> None:
-        if status not in {"accepted", "rejected", "failed", "expired", "canceled"}:
+        if status not in EVAL_RESULT_TERMINAL_STATUSES:
             raise ValueError(f"invalid terminal eval status: {status}")
         now = self.clock.time()
         payload = json.dumps(dict(result), sort_keys=True, separators=(",", ":"), default=str)
@@ -390,6 +394,27 @@ class SupervisorLedger(MetricStore):
                     or json.loads(str(row["result_json"])) != dict(result)
                 ):
                     raise RuntimeError(f"eval terminal result conflicts: {idempotency_key}")
+
+    def mark_eval_deferred(self, *, idempotency_key: str, reason: str) -> None:
+        now = self.clock.time()
+        with self.connection() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE eval_dispatches
+                SET status = 'deferred', last_error = ?, updated_at = ?
+                WHERE idempotency_key = ?
+                  AND status = 'pending'
+                  AND attempt = 0
+                """,
+                (reason[:4000], now, idempotency_key),
+            )
+            if cursor.rowcount == 0:
+                row = connection.execute(
+                    "SELECT status FROM eval_dispatches WHERE idempotency_key = ?",
+                    (idempotency_key,),
+                ).fetchone()
+                if row is None or str(row["status"]) != "deferred":
+                    raise RuntimeError(f"eval cannot be deferred: {idempotency_key}")
 
     def mark_stop_requested(self, *, idempotency_key: str) -> float:
         now = self.clock.time()
@@ -420,12 +445,27 @@ class SupervisorLedger(MetricStore):
             ).fetchone()
         return int(row[0] if row else 0) == 0
 
+    def all_evals_settled(self) -> bool:
+        with self.connection() as connection:
+            placeholders = ", ".join("?" for _ in EVAL_INVENTORY_SETTLED_STATUSES)
+            row = connection.execute(
+                f"SELECT COUNT(*) FROM eval_dispatches WHERE status NOT IN ({placeholders})",
+                tuple(sorted(EVAL_INVENTORY_SETTLED_STATUSES)),
+            ).fetchone()
+        return int(row[0] if row else 0) == 0
+
     def terminal_eval_count(self) -> int:
         with self.connection() as connection:
+            placeholders = ", ".join("?" for _ in EVAL_RESULT_TERMINAL_STATUSES)
             row = connection.execute(
-                """
-                SELECT COUNT(*) FROM eval_dispatches
-                WHERE status IN ('accepted', 'rejected', 'failed', 'expired', 'canceled')
-                """
+                f"SELECT COUNT(*) FROM eval_dispatches WHERE status IN ({placeholders})",
+                tuple(sorted(EVAL_RESULT_TERMINAL_STATUSES)),
+            ).fetchone()
+        return int(row[0] if row else 0)
+
+    def deferred_eval_count(self) -> int:
+        with self.connection() as connection:
+            row = connection.execute(
+                "SELECT COUNT(*) FROM eval_dispatches WHERE status = 'deferred'"
             ).fetchone()
         return int(row[0] if row else 0)

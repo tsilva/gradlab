@@ -14,6 +14,14 @@ PolicyAlgorithmId: TypeAlias = Literal[
 ]
 RuntimePolicyAlgorithmId: TypeAlias = Literal["ppo", "a2c", "dqn", "action-program"]
 Sb3AlgorithmId: TypeAlias = Literal["ppo", "a2c", "dqn"]
+PolicyRuntimeFamily: TypeAlias = Literal["sb3", "action-program"]
+
+
+@dataclass(frozen=True)
+class PolicyAlgorithmSpec:
+    model_classes: tuple[str, ...]
+    runtime_family: PolicyRuntimeFamily | None
+    default_action_selection_mode: str
 
 
 @dataclass(frozen=True)
@@ -22,11 +30,36 @@ class TrainingBackendSpec:
     algorithm_id: RuntimePolicyAlgorithmId
 
 
-@dataclass(frozen=True)
-class BackendProvenanceSpec:
-    """Portable checkpoint provenance, independent of local launch support."""
-
-    algorithm_id: PolicyAlgorithmId
+POLICY_ALGORITHM_SPECS: dict[PolicyAlgorithmId, PolicyAlgorithmSpec] = {
+    "ppo": PolicyAlgorithmSpec(
+        (
+            "gradlab.task_advantage.PerTaskAdvantagePPO",
+            "stable_baselines3.ppo.ppo.PPO",
+        ),
+        "sb3",
+        "stochastic",
+    ),
+    "a2c": PolicyAlgorithmSpec(
+        ("stable_baselines3.a2c.a2c.A2C",),
+        "sb3",
+        "stochastic",
+    ),
+    "action-program": PolicyAlgorithmSpec(
+        ("gradlab.action_program.ActionProgramPolicy",),
+        "action-program",
+        "program",
+    ),
+    "dqn": PolicyAlgorithmSpec(
+        ("stable_baselines3.dqn.dqn.DQN",),
+        "sb3",
+        "epsilon_greedy",
+    ),
+    "recurrent-ppo": PolicyAlgorithmSpec(
+        ("sb3_contrib.ppo_recurrent.ppo_recurrent.RecurrentPPO",),
+        None,
+        "stochastic",
+    ),
+}
 
 
 TRAINING_BACKEND_SPECS: dict[str, TrainingBackendSpec] = {
@@ -35,51 +68,46 @@ TRAINING_BACKEND_SPECS: dict[str, TrainingBackendSpec] = {
     "sb3.a2c": TrainingBackendSpec("gradlab.training.sb3", "a2c"),
     "sb3.ppo": TrainingBackendSpec("gradlab.training.sb3", "ppo"),
 }
-BACKEND_PROVENANCE_SPECS: dict[str, BackendProvenanceSpec] = {
-    **{
-        backend_id: BackendProvenanceSpec(spec.algorithm_id)
-        for backend_id, spec in TRAINING_BACKEND_SPECS.items()
-    },
+BACKEND_PROVENANCE_ALGORITHMS: dict[str, PolicyAlgorithmId] = {
+    **{backend_id: spec.algorithm_id for backend_id, spec in TRAINING_BACKEND_SPECS.items()},
     # GradLab can validate, load, evaluate, and play archived SB3 DQN
     # checkpoints without claiming that DQN is a launchable training backend.
-    "sb3.dqn": BackendProvenanceSpec("dqn"),
+    "sb3.dqn": "dqn",
 }
 MODEL_CLASS_ALGORITHMS: dict[str, PolicyAlgorithmId] = {
-    "gradlab.action_program.ActionProgramPolicy": "action-program",
-    "gradlab.task_advantage.PerTaskAdvantagePPO": "ppo",
-    "sb3_contrib.ppo_recurrent.ppo_recurrent.RecurrentPPO": "recurrent-ppo",
-    "stable_baselines3.a2c.a2c.A2C": "a2c",
-    "stable_baselines3.dqn.dqn.DQN": "dqn",
-    "stable_baselines3.ppo.ppo.PPO": "ppo",
+    model_class: algorithm_id
+    for algorithm_id, spec in POLICY_ALGORITHM_SPECS.items()
+    for model_class in spec.model_classes
 }
 ALGORITHM_MODEL_CLASSES: dict[str, frozenset[str]] = {
-    algorithm_id: frozenset(
-        model_class
-        for model_class, registered_algorithm in MODEL_CLASS_ALGORITHMS.items()
-        if registered_algorithm == algorithm_id
-    )
-    for algorithm_id in frozenset(MODEL_CLASS_ALGORITHMS.values())
+    algorithm_id: frozenset(spec.model_classes)
+    for algorithm_id, spec in POLICY_ALGORITHM_SPECS.items()
 }
 
-RUNTIME_POLICY_ALGORITHMS = frozenset[PolicyAlgorithmId]({"ppo", "a2c", "dqn", "action-program"})
-SB3_ALGORITHMS = frozenset[PolicyAlgorithmId]({"ppo", "a2c", "dqn"})
+RUNTIME_POLICY_ALGORITHMS = frozenset[PolicyAlgorithmId](
+    algorithm_id
+    for algorithm_id, spec in POLICY_ALGORITHM_SPECS.items()
+    if spec.runtime_family is not None
+)
+SB3_ALGORITHMS = frozenset[PolicyAlgorithmId](
+    algorithm_id
+    for algorithm_id, spec in POLICY_ALGORITHM_SPECS.items()
+    if spec.runtime_family == "sb3"
+)
 
 
 def backend_provenance_algorithm(backend_id: str) -> PolicyAlgorithmId:
-    backend = BACKEND_PROVENANCE_SPECS.get(str(backend_id).strip())
-    if backend is None:
+    algorithm_id = BACKEND_PROVENANCE_ALGORITHMS.get(str(backend_id).strip())
+    if algorithm_id is None:
         raise ValueError(f"unsupported checkpoint training backend: {backend_id}")
-    return backend.algorithm_id
+    return algorithm_id
 
 
 def default_action_selection_mode(algorithm_id: PolicyAlgorithmId) -> str:
-    if algorithm_id in {"ppo", "a2c", "recurrent-ppo"}:
-        return "stochastic"
-    if algorithm_id == "dqn":
-        return "epsilon_greedy"
-    if algorithm_id == "action-program":
-        return "program"
-    raise ValueError(f"unsupported checkpoint algorithm: {algorithm_id}")
+    spec = POLICY_ALGORITHM_SPECS.get(algorithm_id)
+    if spec is None:
+        raise ValueError(f"unsupported checkpoint algorithm: {algorithm_id}")
+    return spec.default_action_selection_mode
 
 
 def resolve_policy_algorithm(
@@ -96,7 +124,7 @@ def resolve_policy_algorithm(
 
     algorithm_id = str(metadata.get("algorithm_id") or "").strip()
     if algorithm_id:
-        if algorithm_id not in ALGORITHM_MODEL_CLASSES:
+        if algorithm_id not in POLICY_ALGORITHM_SPECS:
             raise ValueError(f"unsupported checkpoint algorithm: {algorithm_id}")
         resolved.add(cast(PolicyAlgorithmId, algorithm_id))
 

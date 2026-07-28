@@ -9,7 +9,11 @@ from typing import Any
 from gymnasium import spaces
 
 from gradlab.artifacts import install_model_bundle
-from gradlab.action_contract import configured_action_meanings
+from gradlab.action_contract import (
+    action_contract_meanings,
+    configured_action_meanings,
+    runtime_action_contract,
+)
 from gradlab.batch_runtime import EpisodeRecord
 from gradlab.env import make_training_vec_env
 from gradlab.jerk import JerkSearch
@@ -114,6 +118,7 @@ def _save_policy_bundle(
     model_path: Path,
     kind: str,
     step: int,
+    env: Any,
     terminal: bool = False,
 ) -> Path | None:
     return context.session.checkpoints.save(
@@ -131,6 +136,7 @@ def _save_policy_bundle(
             config=context.environment,
             kind=artifact_kind,
             checkpoint_step_value=artifact_step,
+            action_contract=runtime_action_contract(env),
         ),
     )
 
@@ -175,7 +181,15 @@ def run_jerk(context: BackendContext) -> TrainingResult:
             raise ValueError("JERK timesteps must be divisible by the environment count")
         if not isinstance(env.action_space, spaces.Discrete):
             raise ValueError("JERK requires a discrete task action space")
-        action_names = configured_action_meanings(config)
+        runtime = getattr(env, "runtime", None)
+        contract = getattr(runtime, "action_contract", None)
+        action_names = (
+            action_contract_meanings(contract)
+            if isinstance(contract, Mapping)
+            else configured_action_meanings(config)
+        )
+        if not action_names:
+            raise ValueError("JERK requires declared semantic IDs for every discrete action")
         search = JerkSearch(
             n_envs=n_envs,
             seed=int(common_config["seed"]),
@@ -247,6 +261,7 @@ def run_jerk(context: BackendContext) -> TrainingResult:
                     model_path=accepted_path,
                     kind="checkpoint",
                     step=step,
+                    env=env,
                 )
                 context.session.event(
                     f"accepted JERK action program at first training success: step={step} "
@@ -274,6 +289,7 @@ def run_jerk(context: BackendContext) -> TrainingResult:
                         model_path=checkpoint_path,
                         kind="checkpoint",
                         step=step,
+                        env=env,
                     )
                 next_checkpoint += checkpoint_freq
             if early_stopped:
@@ -300,6 +316,7 @@ def run_jerk(context: BackendContext) -> TrainingResult:
                 / f"{_checkpoint_prefix(config.game)}_interrupted_{step}_steps.zip",
                 kind="interrupted",
                 step=step,
+                env=env,
             )
         terminal_kind = context.session.terminal_model_kind(reason)
         context.train_config["training_terminal"] = context.session.terminal_provenance(
@@ -313,6 +330,7 @@ def run_jerk(context: BackendContext) -> TrainingResult:
             model_path=final_path,
             kind=terminal_kind,
             step=step,
+            env=env,
             terminal=True,
         )
         context.session.event(

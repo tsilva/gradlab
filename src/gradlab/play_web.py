@@ -713,6 +713,14 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
                 "total_reward": self.session.total_reward,
                 "max_x_pos": self.session.max_x_pos,
                 "action_names": list(self.session.action_names),
+                "action_contract": _json_value(
+                    getattr(self.session, "action_contract", None)
+                ),
+                "action_contract_comparison": _json_value(
+                    getattr(self.session, "policy_provenance", {}).get(
+                        "action_contract"
+                    )
+                ),
                 "event_names": event_names,
                 "env_id": self.environment_id,
                 "sampling_mode": self.sampling_mode,
@@ -1022,6 +1030,7 @@ class DatasetPlaybackRunner(_PlaybackRunnerProtocol):
         args: argparse.Namespace,
         *,
         fps: float,
+        action_contract: Mapping[str, Any] | None = None,
     ) -> None:
         if len(rows) < 2:
             raise ValueError("dataset playback requires at least one transition")
@@ -1044,6 +1053,11 @@ class DatasetPlaybackRunner(_PlaybackRunnerProtocol):
         self.episode_id = str(first.get("episode_id") or "")
         self.seed = int(first.get("seed") or 0)
         self.sampling_mode = str(first.get("policy_mode") or "recorded")
+        self.action_contract = (
+            dict(action_contract)
+            if isinstance(action_contract, Mapping)
+            else None
+        )
         self._transition: dict[str, Any] | None = None
 
     def update_input(self, _labels: Sequence[str], *, focused: bool) -> None:
@@ -1079,6 +1093,7 @@ class DatasetPlaybackRunner(_PlaybackRunnerProtocol):
                 "total_reward": self.total_reward,
                 "max_x_pos": _max_x_pos(self._transition),
                 "action_names": [],
+                "action_contract": _json_value(self.action_contract),
                 "event_names": [],
                 "env_id": self.environment_id,
                 "sampling_mode": self.sampling_mode,
@@ -1419,6 +1434,9 @@ class HumanRecordingRunner(_PlaybackRunnerProtocol):
                     "total_reward": self.total_reward,
                     "max_x_pos": 0,
                     "action_names": [],
+                    "action_contract": _json_value(
+                        getattr(self.session, "action_contract", None)
+                    ),
                     "event_names": [],
                     "env_id": self.environment_id,
                     "sampling_mode": None,
@@ -2440,8 +2458,15 @@ def run_web_dataset_playback(
     args: argparse.Namespace,
     *,
     fps: float,
+    action_contract: Mapping[str, Any] | None = None,
 ) -> int:
-    runner = DatasetPlaybackRunner(frames, rows, args, fps=fps)
+    runner = DatasetPlaybackRunner(
+        frames,
+        rows,
+        args,
+        fps=fps,
+        action_contract=action_contract,
+    )
     args.dashboard_label = "Dataset dashboard"
     server = PlaybackWebServer(runner, args)
     try:

@@ -21,6 +21,12 @@ RUN_ID_PATTERN = re.compile(r"^gradlab-[0-9a-f]{32}$")
 ATTEMPT_ID_PATTERN = re.compile(r"^attempt-[0-9a-f]{16}$")
 canonical_json = canonical_json_bytes
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
+EVAL_RESULT_TERMINAL_STATUSES = frozenset(
+    {"accepted", "rejected", "failed", "expired", "canceled"}
+)
+EVAL_INVENTORY_SETTLED_STATUSES = frozenset(
+    {*EVAL_RESULT_TERMINAL_STATUSES, "deferred"}
+)
 
 
 def utc_now() -> str:
@@ -488,6 +494,12 @@ class TerminalReceipt:
             raise ValueError("final_step must be non-negative")
         if int(self.wandb_high_water_mark) < 0:
             raise ValueError("wandb_high_water_mark must be non-negative")
+        for row in self.eval_inventory:
+            if not isinstance(row, Mapping):
+                raise ValueError("eval inventory entries must be objects")
+            status = str(row.get("status") or "")
+            if status not in EVAL_INVENTORY_SETTLED_STATUSES:
+                raise ValueError(f"eval inventory contains unsettled status: {status}")
         if self.early_stop is not None:
             EarlyStopReceipt(**self.early_stop).validate()
         if self.state_archive is not None:

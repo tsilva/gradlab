@@ -264,7 +264,7 @@ def test_legacy_model_environment_mismatch_still_fails_closed(tmp_path: Path) ->
     ("goal_path", "recipe_path", "expected_mode", "expected_preset"),
     (
         (BANDIT_GOAL, BANDIT_RECIPE, None, None),
-        (VIZDOOM_GOAL, VIZDOOM_RECIPE, "discrete", None),
+        (VIZDOOM_GOAL, VIZDOOM_RECIPE, "custom_discrete", "minimal"),
         (GOAL, RECIPE, "custom_discrete", "basic"),
     ),
 )

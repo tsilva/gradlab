@@ -100,7 +100,11 @@ const STATIC_DESCRIPTORS = Object.freeze({
     phase: "pre-action",
     current: (snapshot) => {
       const decision = snapshot?.transition?.decision;
-      if (!decision) return snapshot?.driver || null;
+      if (!decision) {
+        return snapshot?.policy?.action_selection?.requested_mode
+          || snapshot?.session?.sampling_mode
+          || null;
+      }
       return decision.action_selection_mode || (
         decision.sampled ? "stochastic" : "deterministic"
       );

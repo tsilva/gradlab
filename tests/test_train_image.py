@@ -56,7 +56,7 @@ class TrainImageTests(unittest.TestCase):
         project = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
         dependencies = project["dependency-groups"]["modal-deploy"]
 
-        self.assertTrue(any(requirement.startswith("hydra-core") for requirement in dependencies))
+        self.assertTrue(any(requirement.startswith("omegaconf") for requirement in dependencies))
         self.assertTrue(any(requirement.startswith("jinja2") for requirement in dependencies))
         self.assertTrue(any(requirement.startswith("modal") for requirement in dependencies))
         self.assertTrue(any(requirement.startswith("pydantic") for requirement in dependencies))

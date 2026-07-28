@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass
+import hashlib
+import json
 from pathlib import Path
 from typing import Any
 
@@ -661,6 +663,43 @@ def provider_descriptor(
     action_table = getattr(native_env, "action_table", None)
     action_meanings = getattr(native_env, "action_meanings", None)
     action_table_hash = getattr(native_env, "action_table_hash", None)
+    action_buttons = getattr(contract_env, "buttons", ())
+    action_combos = getattr(contract_env, "button_combos", ())
+    if action_meanings is None:
+        get_action_meanings = getattr(contract_env, "get_action_meanings", None)
+        if callable(get_action_meanings):
+            try:
+                action_meanings = get_action_meanings()
+            except (AttributeError, RuntimeError, TypeError, ValueError):
+                action_meanings = None
+    if provider.provider_id == ALE_PY_PROVIDER.provider_id:
+        ale = getattr(contract_env, "ale", None)
+        get_action_set = getattr(ale, "get_action_set", None)
+        continuous = bool(getattr(contract_env, "continuous", False))
+        if continuous:
+            action_mode = "continuous"
+            action_preset = "polar-fire"
+            action_buttons = ("radius", "theta", "fire")
+        elif callable(get_action_set):
+            raw_actions = tuple(get_action_set())
+            action_meanings = tuple(
+                str(getattr(action, "name", action))
+                for action in raw_actions
+            )
+            action_table = action_meanings
+            action_mode = "discrete"
+            action_preset = (
+                "full"
+                if bool(getattr(config, "env_args", {}).get("full_action_space", False))
+                else "minimal"
+            )
+            action_table_hash = hashlib.sha256(
+                json.dumps(
+                    list(action_meanings),
+                    ensure_ascii=True,
+                    separators=(",", ":"),
+                ).encode("ascii")
+            ).hexdigest()
     if (
         declared_action is not None
         and declared_action["table_hash"] is not None
@@ -721,6 +760,14 @@ def provider_descriptor(
             tuple(str(value) for value in action_meanings) if action_meanings is not None else None
         ),
         action_table_hash=(str(action_table_hash) if action_table_hash is not None else None),
+        action_buttons=tuple(
+            str(value) if value is not None else None
+            for value in action_buttons
+        ),
+        action_combos=tuple(
+            tuple(int(value) for value in combo)
+            for combo in action_combos
+        ),
         supports_live_snapshots=supports_live_snapshots,
         live_snapshots_deterministic=deterministic_snapshots,
         snapshot_codec_id=snapshot_codec_id,

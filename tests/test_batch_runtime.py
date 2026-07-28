@@ -415,6 +415,50 @@ class BatchRuntimeTests(unittest.TestCase):
         )
         env.close()
 
+    def test_sb3_ppo_rollout_preserves_episode_starts_and_terminal_returns(self):
+        provider = DeterministicNativeVectorProvider(num_envs=1)
+        descriptor = descriptor_for(provider)
+        runtime = BatchRuntime(
+            provider,
+            descriptor,
+            IdentityTaskDefinition().bind(descriptor, provider.num_envs),
+            run_seed=17,
+        )
+        for reward, terminated in (
+            (0.0, False),
+            (1.0, True),
+            (0.0, False),
+            (1.0, True),
+        ):
+            provider.queue_step(rewards=[reward], terminated=[terminated])
+        env = GradLabVecEnv(runtime)
+        model = PPO(
+            "MultiInputPolicy",
+            env,
+            n_steps=4,
+            batch_size=4,
+            n_epochs=1,
+            gamma=1.0,
+            gae_lambda=1.0,
+            seed=17,
+            device="cpu",
+            verbose=0,
+        )
+
+        model.learn(total_timesteps=4)
+
+        np.testing.assert_array_equal(
+            model.rollout_buffer.episode_starts[:, 0],
+            [True, False, True, False],
+        )
+        np.testing.assert_allclose(
+            model.rollout_buffer.returns[:, 0],
+            [1.0, 1.0, 1.0, 1.0],
+            rtol=0.0,
+            atol=1e-6,
+        )
+        env.close()
+
     def test_step_diagnostics_are_one_lane_owned_and_survive_same_step_reset(self):
         provider = DeterministicNativeVectorProvider(num_envs=1)
         provider.get_images = lambda: np.full(  # type: ignore[attr-defined]
@@ -1061,6 +1105,34 @@ class MarioKernelTests(unittest.TestCase):
 
 
 class GradLabVecEnvTests(unittest.TestCase):
+    def test_sb3_facade_returns_owned_done_masks_across_steps(self):
+        provider = DeterministicNativeVectorProvider()
+        descriptor = descriptor_for(provider)
+        runtime = BatchRuntime(
+            provider,
+            descriptor,
+            IdentityTaskDefinition().bind(descriptor, provider.num_envs),
+            run_seed=11,
+        )
+        env = GradLabVecEnv(runtime)
+        env.reset()
+        provider.queue_step(terminated=[False, True])
+        provider.queue_step(terminated=[True, False])
+
+        _observations, _rewards, first_dones, _infos = env.step(
+            np.zeros((2, 3), dtype=np.int8)
+        )
+        _observations, _rewards, second_dones, _infos = env.step(
+            np.zeros((2, 3), dtype=np.int8)
+        )
+
+        np.testing.assert_array_equal(first_dones, [False, True])
+        np.testing.assert_array_equal(second_dones, [True, False])
+        self.assertFalse(np.shares_memory(first_dones, second_dones))
+        np.testing.assert_array_equal(provider.reset_calls[-2]["mask"], [False, True])
+        np.testing.assert_array_equal(provider.reset_calls[-1]["mask"], [True, False])
+        env.close()
+
     def test_sb3_facade_exposes_forced_reset_as_done_with_terminal_observation(self):
         provider = DeterministicNativeVectorProvider()
         descriptor = descriptor_for(provider)

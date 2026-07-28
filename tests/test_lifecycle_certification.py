@@ -68,11 +68,26 @@ def test_early_stop_scenario_covers_failure_success_tamper_and_promotion_race() 
 
     assert scenario["status"] == "passed"
     assert {
-        "failure-stop-is-designed-non-resumable-failure",
+        "plateau-is-scientific-failure-after-valid-rejection",
+        "plateau-with-incomplete-eval-evidence-is-resumable",
         "training-only-success-stop-succeeds",
         "evaluation-promotion-overrides-simultaneous-failure-stop",
         "early-stop-receipt-corruption-rejected",
     } <= invariants
+
+
+def test_eval_result_reconciliation_closes_admission_before_new_submit() -> None:
+    report = run_simulated_certification(scenarios=["eval-result-reconciliation"])
+    scenario = report["scenarios"][0]
+    invariants = {row["name"] for row in scenario["invariants"]}
+
+    assert scenario["status"] == "passed"
+    assert {
+        "durable-acceptance-reconciled-before-next-submit",
+        "deferred-intent-is-durable-terminal-inventory-evidence",
+    } <= invariants
+    assert scenario["evidence"]["submissions"] == 1
+    assert scenario["evidence"]["statuses"] == ["accepted", "deferred"]
 
 
 def test_report_keeps_raw_evidence_and_replays_scenario_set(tmp_path: Path) -> None:

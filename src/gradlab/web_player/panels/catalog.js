@@ -64,7 +64,7 @@ const SINGLE_LAYOUT = Object.freeze({
 const PAIRED_LAYOUT = Object.freeze({
   game: { x: 0, y: 0, w: 9, h: 15, visible: true, window: "main" },
   controls: { x: 9, y: 0, w: 3, h: 15, visible: true, window: "main" },
-  policy: { x: 0, y: 0, w: 4, h: 7, visible: true, window: "stats" },
+  policy: { x: 0, y: 0, w: 4, h: 8, visible: true, window: "stats" },
   reward: { x: 4, y: 0, w: 4, h: 8, visible: true, window: "stats" },
   actions: { x: 8, y: 0, w: 4, h: 8, visible: true, window: "stats" },
   value: { x: 0, y: 8, w: 4, h: 9, visible: true, window: "stats" },

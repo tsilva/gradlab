@@ -577,6 +577,37 @@ class LedgerCheckpointHelperTests(unittest.TestCase):
             self.assertTrue(callback._on_step())
             callback.save_checkpoint.assert_not_called()
 
+    def test_periodic_checkpoint_receives_wrapped_runtime_action_contract(self) -> None:
+        contract = {"schema_version": 1, "contract_hash": "sentinel"}
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            callback = LedgerCheckpointHelper(
+                train_config={"run_name": "run", "run_description": ""},
+                config=EnvConfig(game="SuperMarioBros-Nes-v0", state="Level1-1"),
+                save_freq=1,
+                save_path=root / "checkpoints",
+                name_prefix="ppo",
+                metric_store_path=root / "gradlab.sqlite",
+            )
+            callback.model = SimpleNamespace(  # type: ignore[assignment]
+                env=SimpleNamespace(
+                    venv=SimpleNamespace(
+                        runtime=SimpleNamespace(action_contract=contract),
+                    )
+                ),
+                save=mock.Mock(),
+            )
+            callback._init_callback()
+            installed = root / "checkpoints" / "ppo_100_steps.zip"
+
+            with mock.patch(
+                "gradlab.callbacks.install_model_bundle",
+                return_value=installed,
+            ) as install:
+                callback.save_checkpoint(100, kind="checkpoint")
+
+            self.assertIs(install.call_args.kwargs["action_contract"], contract)
+
     def test_checkpoint_save_uses_exact_sb3_zip_path_for_hidden_uuid_base(self) -> None:
         class FakeModel:
             def __init__(self) -> None:

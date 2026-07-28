@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from typing import Any
 
@@ -9,6 +10,7 @@ from gradlab.policy_registry import (
     MODEL_CLASS_ALGORITHMS,
     PolicyAlgorithmId,
     RUNTIME_POLICY_ALGORITHMS,
+    default_action_selection_mode as registered_default_action_selection_mode,
 )
 
 
@@ -46,7 +48,7 @@ POLICY_CAPABILITIES: dict[PolicyAlgorithmId, PolicyCapabilities] = {
     "ppo": PolicyCapabilities(
         algorithm_id="ppo",
         action_selection_modes=("stochastic", "deterministic"),
-        default_action_selection_mode="stochastic",
+        default_action_selection_mode=registered_default_action_selection_mode("ppo"),
         introspection=frozenset(
             {
                 ACTOR_DISTRIBUTION,
@@ -59,7 +61,7 @@ POLICY_CAPABILITIES: dict[PolicyAlgorithmId, PolicyCapabilities] = {
     "a2c": PolicyCapabilities(
         algorithm_id="a2c",
         action_selection_modes=("stochastic", "deterministic"),
-        default_action_selection_mode="stochastic",
+        default_action_selection_mode=registered_default_action_selection_mode("a2c"),
         introspection=frozenset(
             {
                 ACTOR_DISTRIBUTION,
@@ -72,13 +74,15 @@ POLICY_CAPABILITIES: dict[PolicyAlgorithmId, PolicyCapabilities] = {
     "dqn": PolicyCapabilities(
         algorithm_id="dqn",
         action_selection_modes=("epsilon_greedy", "greedy"),
-        default_action_selection_mode="epsilon_greedy",
+        default_action_selection_mode=registered_default_action_selection_mode("dqn"),
         introspection=frozenset({ACTION_VALUE}),
     ),
     "action-program": PolicyCapabilities(
         algorithm_id="action-program",
         action_selection_modes=("program",),
-        default_action_selection_mode="program",
+        default_action_selection_mode=registered_default_action_selection_mode(
+            "action-program"
+        ),
         introspection=frozenset({PROGRAM}),
     ),
 }
@@ -154,7 +158,14 @@ class PolicyRuntime:
             raise ValueError(f"unsupported runtime policy algorithm: {inferred}")
         self.capabilities = POLICY_CAPABILITIES[inferred]
 
-    def bind_action_space(self, action_space: Any) -> None:
+    def bind_action_space(
+        self,
+        action_space: Any,
+        action_contract: Mapping[str, Any] | None = None,
+    ) -> None:
+        bind_contract = getattr(self.model, "bind_action_contract", None)
+        if callable(bind_contract) and action_contract is not None:
+            bind_contract(action_contract)
         bind = getattr(self.model, "bind_action_space", None)
         if callable(bind):
             bind(action_space)
@@ -239,7 +250,14 @@ class PolicyRuntime:
         return self.decide(observation, action_selection_mode=mode)
 
 
-def bind_policy_action_space(model: Any, action_space: Any) -> None:
+def bind_policy_action_space(
+    model: Any,
+    action_space: Any,
+    action_contract: Mapping[str, Any] | None = None,
+) -> None:
+    bind_contract = getattr(model, "bind_action_contract", None)
+    if callable(bind_contract) and action_contract is not None:
+        bind_contract(action_contract)
     bind = getattr(model, "bind_action_space", None)
     if callable(bind):
         bind(action_space)

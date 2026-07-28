@@ -8,6 +8,7 @@ from typing import Any
 
 from gymnasium import spaces
 
+from gradlab.action_contract import runtime_action_contract
 from gradlab.artifacts import install_model_bundle
 from gradlab.state_archive import state_archive_artifact_summary
 from gradlab.training_backend import BackendContext
@@ -253,6 +254,7 @@ def save_model_bundle(
             kind=artifact_kind,
             checkpoint_step_value=saved_step,
             state_archive_summary=state_archive_artifact_summary(getattr(model, "env", None)),
+            action_contract=runtime_action_contract(getattr(model, "env", None)),
         ),
     )
 

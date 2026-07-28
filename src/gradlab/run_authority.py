@@ -20,6 +20,7 @@ from gradlab.r2_store import (
 from gradlab.run_contracts import (
     CheckpointManifest,
     EarlyStopReceipt,
+    EVAL_INVENTORY_SETTLED_STATUSES,
     EvalIntent,
     EvalResult,
     PromotionReceipt,
@@ -846,6 +847,16 @@ class RunAuthority:
             create_only=True,
         )
 
+    def eval_intent(
+        self,
+        *,
+        run_id: str,
+        idempotency_key: str,
+    ) -> dict[str, Any] | None:
+        return self.evaluation.get_json_optional(
+            f"{self.run_prefix(run_id)}/evals/{idempotency_key}/intent.json"
+        )
+
     def put_eval_dispatch(
         self,
         *,
@@ -993,11 +1004,20 @@ class RunAuthority:
         if (
             "" in checkpoint_ids
             or len(checkpoints) != len(checkpoint_ids)
-            or checkpoint_ids != eval_checkpoint_ids
         ):
-            raise ValueError("every checkpoint must have exactly one terminal eval inventory entry")
+            raise ValueError("checkpoint inventory contains missing or duplicate identities")
+        if (
+            "" in eval_checkpoint_ids
+            or not eval_checkpoint_ids.issubset(checkpoint_ids)
+        ):
+            raise ValueError("eval inventory references a checkpoint outside the run inventory")
         if len(evals) != len(eval_checkpoint_ids):
             raise ValueError("eval inventory contains duplicate checkpoint entries")
+        if any(
+            str(row.get("status") or "") not in EVAL_INVENTORY_SETTLED_STATUSES
+            for row in evals
+        ):
+            raise ValueError("eval inventory contains an unsettled evaluation")
         if not any(str(row.get("purpose") or "") == "final" for row in checkpoints):
             raise ValueError("successful terminal receipt requires a final checkpoint")
         maximum_step = max(int(row.get("step") or 0) for row in checkpoints)

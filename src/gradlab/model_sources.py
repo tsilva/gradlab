@@ -9,7 +9,7 @@ import urllib.request
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal, TypeAlias
 from urllib.parse import unquote, urlparse
 
 from gradlab.artifacts import apply_config_defaults, load_model_metadata
@@ -39,6 +39,7 @@ PUBLIC_CHECKPOINT_MANIFEST = re.compile(
 DEFAULT_PUBLIC_MODELS_BASE_URL = (
     "https://pub-fc35c0b186ce4aad8eea5e93d38c99db.r2.dev"
 )
+ModelSourceKind: TypeAlias = Literal["manifest", "huggingface", "local", "public_run"]
 
 
 def _safe_stem(value: str, fallback: str = "model") -> str:
@@ -419,6 +420,45 @@ def download_remote_model_source(
     return resolved
 
 
+def resolve_model_source(
+    kind: ModelSourceKind,
+    value: str,
+    *,
+    public_root: Path,
+    hf_root: Path,
+    revision: str | None = None,
+    public_base_url: str = DEFAULT_PUBLIC_MODELS_BASE_URL,
+) -> ResolvedModelSource:
+    text = str(value).strip()
+    if kind == "public_run":
+        return download_public_run_source(
+            text,
+            root=public_root,
+            public_base_url=public_base_url,
+        )
+    if kind == "manifest":
+        resolved = download_public_checkpoint_manifest_source(text, root=public_root)
+        resolved.artifact_ref = text
+        return resolved
+    if kind == "huggingface":
+        resolved = download_huggingface_model_source(
+            text,
+            root=hf_root,
+            revision=revision,
+        )
+        resolved.artifact_ref = text
+        return resolved
+    if kind != "local":
+        raise ValueError(f"unsupported model source kind: {kind}")
+    model_path = Path(text).expanduser()
+    if not model_path.is_file():
+        raise FileNotFoundError(f"local model checkpoint not found: {model_path}")
+    return ResolvedModelSource(
+        model_path=model_path,
+        bundle=load_policy_bundle_from_checkpoint(model_path),
+    )
+
+
 def resolve_single_model_source(
     args: argparse.Namespace,
     *,
@@ -426,7 +466,11 @@ def resolve_single_model_source(
 ) -> ResolvedModelSource:
     ref = resolved_ref if resolved_ref is not None else model_source_ref(args)
     if ref:
-        return _download_model_ref(
+        kind: ModelSourceKind = (
+            "manifest" if is_public_checkpoint_manifest_ref(ref) else "huggingface"
+        )
+        return resolve_model_source(
+            kind,
             ref,
             public_root=Path(
                 getattr(args, "public_model_root", "runs/public_models")
@@ -434,10 +478,11 @@ def resolve_single_model_source(
             hf_root=Path(getattr(args, "hf_model_root", "runs/hf_models")),
             revision=getattr(args, "hf_revision", None),
         )
-    model_path = Path(str(args.model))
-    return ResolvedModelSource(
-        model_path=model_path,
-        bundle=load_policy_bundle_from_checkpoint(model_path),
+    return resolve_model_source(
+        "local",
+        str(args.model),
+        public_root=Path(getattr(args, "public_model_root", "runs/public_models")),
+        hf_root=Path(getattr(args, "hf_model_root", "runs/hf_models")),
     )
 
 

@@ -11,7 +11,11 @@ from typing import Any
 import numpy as np
 from gymnasium import spaces
 
-from gradlab.action_contract import configured_action_meanings
+from gradlab.action_contract import (
+    action_contract_meanings,
+    configured_action_meanings,
+    runtime_action_contract,
+)
 from gradlab.artifacts import install_model_bundle
 from gradlab.batch_runtime import BatchMetricRecord, EpisodeRecord
 from gradlab.env import make_training_batch_runtime, preflight_state_archive_provider
@@ -221,6 +225,7 @@ def _save_policy(
             kind=artifact_kind,
             checkpoint_step_value=artifact_step,
             state_archive_summary=state_archive_artifact_summary(runtime),
+            action_contract=runtime_action_contract(runtime),
         ),
     )
 
@@ -287,10 +292,16 @@ def run_go_explore(context: BackendContext) -> TrainingResult:
     try:
         if not isinstance(runtime.action_space, spaces.Discrete):
             raise ValueError("Go-Explore requires a discrete task action space")
+        runtime_action_contract = getattr(runtime, "action_contract", None)
+        action_names = (
+            action_contract_meanings(runtime_action_contract)
+            if isinstance(runtime_action_contract, Mapping)
+            else configured_action_meanings(config)
+        )
         search = GoExploreSearch(
             n_envs=n_envs,
             seed=int(common_config["seed"]),
-            action_names=configured_action_meanings(config),
+            action_names=action_names,
             fallback_action=str(backend_config["fallback_action"]),
             explore_steps=int(backend_config["explore_steps"]),
             run_duration_mean=float(backend_config["run_duration_mean"]),

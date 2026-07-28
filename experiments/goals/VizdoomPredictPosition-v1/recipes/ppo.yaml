@@ -7,3 +7,8 @@ description: >-
   stochastic 100-episode evaluation and checkpoint promotion at 95% monster elimination.
 train:
   timesteps: 5000000
+  early_stop:
+    conditions:
+      return_plateau:
+        start_after_steps: 1250000
+        patience_steps: 1250000

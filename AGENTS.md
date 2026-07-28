@@ -38,8 +38,8 @@ When changing dstack host behavior, preserve the root-owned runtime-image cleanu
 - Training tasks are profileless and locked to exact-source immutable runtime-image digests. One task owns one single-GPU host in v1.
 - Logical run IDs are `gradlab-<32 lowercase hex>` and attempt IDs are `attempt-<16 lowercase hex>`. Retries preserve the run ID and create a new attempt ID. Do not introduce numeric database job IDs or batch IDs.
 - Route W&B projects by canonical game family and keep provider identity and `environment_hash` in config. The W&B run ID and group are the immutable gradlab run ID.
-- Acceptance evaluation is the only checkpoint-promotion workflow for orchestrated runs. Evaluate every ready periodic checkpoint and the natural final model against the immutable goal-owned episode manifest, fail fast on the first valid failed episode, and atomically promote the lowest-step accepted checkpoint. Modal never receives W&B or control-private credentials.
-- dstack task success is not scientific success. Require the private R2 terminal receipt proving complete eval/checkpoint inventories, promotion, W&B high-water delivery, and drain.
+- Acceptance evaluation is the only checkpoint-promotion workflow for orchestrated runs. Automatically evaluate ready checkpoints against the immutable goal-owned episode manifest until the first accepted result closes evaluation admission; allow already-submitted evaluations to finish without retries, leave later checkpoints unevaluated for future explicit user action, fail fast on the first valid failed episode, and atomically promote the lowest-step accepted checkpoint. Modal never receives W&B or control-private credentials.
+- dstack task success is not scientific success. Require the private R2 terminal receipt proving the complete checkpoint inventory, the terminal inventory of automatically submitted evaluations, promotion, W&B high-water delivery, and drain.
 
 ## Metrics
 

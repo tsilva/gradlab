@@ -13,8 +13,21 @@ import {
   metricOptions,
   seriesForMetric,
 } from "../../src/gradlab/web_player/panels/telemetry.js";
-import { cursorIndex } from "../../src/gradlab/web_player/panels/telemetry-panel.js";
-import { lineCursorX } from "../../src/gradlab/web_player/panels/shared.js";
+import {
+  cursorIndex,
+  distributionBlockVisible,
+  histogramSelectedLabel,
+  selectedPoint,
+} from "../../src/gradlab/web_player/panels/telemetry-panel.js";
+import {
+  displayedStep,
+  lineCursorX,
+} from "../../src/gradlab/web_player/panels/shared.js";
+import {
+  discreteActionLabels,
+  formatActionValue,
+  scalarActionIndex,
+} from "../../src/gradlab/web_player/panels/action-contract.js";
 
 test("dynamic metric names round-trip without path ambiguity", () => {
   const name = "coins / bonus%";
@@ -54,6 +67,12 @@ test("action descriptors distinguish policy-selected and executed action", () =>
   );
 });
 
+test("action history normalizes vector scalars and never renders undefined selection", () => {
+  assert.equal(scalarActionIndex([1]), 1);
+  assert.equal(histogramSelectedLabel(["noop", "move left"], null), null);
+  assert.equal(histogramSelectedLabel(["noop", "move left"], 1), "move left");
+});
+
 test("numeric series preserve gaps and unit compatibility is explicit", () => {
   const series = seriesForMetric("reward/shaped", [
     { reward_shaped: 1 },
@@ -88,10 +107,56 @@ test("the chart cursor remains on the newest live transition", () => {
   );
 });
 
+test("step zero does not borrow telemetry from a later transition", () => {
+  const history = [{ sequence: 1, policy_action: 3 }];
+  assert.equal(
+    selectedPoint(history, { transition: null }, { selectedSequence: 0 }),
+    null,
+  );
+  assert.equal(
+    selectedPoint(history, { transition: null }, {}),
+    history[0],
+  );
+});
+
+test("the initial observation reports the selected sampling mode", () => {
+  const snapshot = {
+    driver: "policy",
+    policy: {
+      action_selection: {
+        requested_mode: "stochastic",
+      },
+    },
+    session: {
+      sampling_mode: "stochastic",
+    },
+    transition: null,
+  };
+  assert.equal(
+    descriptorValue(descriptorFor("policy/mode"), { snapshot }),
+    "stochastic",
+  );
+});
+
 test("the final chart cursor stays inside the canvas clipping edge", () => {
   const plot = { left: 20, right: 200 };
   assert.equal(lineCursorX(plot, 0, 5), 21);
   assert.equal(lineCursorX(plot, 4, 5), 199);
+});
+
+test("the timeline shows the displayed transition step across a boundary", () => {
+  assert.equal(
+    displayedStep({ session: { step: 0 }, transition: null }),
+    0,
+  );
+  assert.equal(
+    displayedStep({ session: { step: 4 }, transition: { step: 4 } }),
+    4,
+  );
+  assert.equal(
+    displayedStep({ session: { step: 0 }, transition: { step: 116 } }),
+    116,
+  );
 });
 
 test("policy descriptors distinguish unsupported, pending, and incomparable data", () => {
@@ -150,5 +215,64 @@ test("policy descriptors distinguish unsupported, pending, and incomparable data
       { snapshot: incomparable },
     ).status,
     "contract-incomparable",
+  );
+});
+
+test("distribution blocks omit diagnostics unsupported by the active policy", () => {
+  assert.equal(distributionBlockVisible("unsupported"), false);
+  assert.equal(distributionBlockVisible("available"), true);
+  assert.equal(distributionBlockVisible("not-yet-observed"), true);
+  assert.equal(distributionBlockVisible("protocol-error"), true);
+});
+
+test("ViZDoom actions use the structured runtime contract in every telemetry view", () => {
+  const entries = ["noop", "move_left", "move_right", "attack"].map(
+    (semanticId, value) => ({
+      value,
+      semantic_id: semanticId,
+      label: semanticId.replaceAll("_", " "),
+    }),
+  );
+  const snapshot = {
+    session: {
+      action_contract: {
+        schema_version: 1,
+        policy: {
+          space: { type: "discrete", n: 4, start: 0 },
+          semantics: {
+            status: "available",
+            encoding: "explicit",
+            entries,
+          },
+        },
+      },
+    },
+  };
+
+  assert.equal(formatActionValue(1, snapshot), "move left");
+  assert.deepEqual(
+    discreteActionLabels(snapshot, 4),
+    ["noop", "move left", "move right", "attack"],
+  );
+});
+
+test("missing action semantics are explicit instead of fabricated labels", () => {
+  const snapshot = {
+    session: {
+      action_contract: {
+        policy: {
+          space: { type: "discrete", n: 2, start: 0 },
+          semantics: {
+            status: "unavailable",
+            reason: "provider did not declare meanings",
+          },
+        },
+      },
+    },
+  };
+
+  assert.equal(
+    formatActionValue(1, snapshot),
+    "raw action 1 · semantics unavailable: provider did not declare meanings",
   );
 });

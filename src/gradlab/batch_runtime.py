@@ -86,6 +86,8 @@ class ProviderDescriptor:
     action_table: tuple[Any, ...] | None = None
     action_meanings: tuple[str, ...] | None = None
     action_table_hash: str | None = None
+    action_buttons: tuple[str | None, ...] = ()
+    action_combos: tuple[tuple[int, ...], ...] = ()
     supports_live_snapshots: bool = False
     live_snapshots_deterministic: bool = False
     snapshot_codec_id: str | None = None
@@ -114,6 +116,12 @@ class ProviderDescriptor:
             object.__setattr__(self, "action_table", tuple(self.action_table))
         if self.action_meanings is not None:
             object.__setattr__(self, "action_meanings", tuple(self.action_meanings))
+        object.__setattr__(self, "action_buttons", tuple(self.action_buttons))
+        object.__setattr__(
+            self,
+            "action_combos",
+            tuple(tuple(int(value) for value in combo) for combo in self.action_combos),
+        )
         normalized: dict[str, SignalSpec] = {}
         for key, spec in self.signal_schema.items():
             if key != spec.name:
@@ -457,6 +465,7 @@ class BatchRuntime:
         descriptor: ProviderDescriptor,
         kernel: BoundTaskKernel,
         *,
+        action_contract: Mapping[str, Any] | None = None,
         run_seed: int = 0,
         global_lane_ids: Sequence[int] | None = None,
         capture_step_diagnostics: bool = False,
@@ -486,6 +495,11 @@ class BatchRuntime:
 
         self.observation_space = kernel.observation_space
         self.action_space = kernel.action_space
+        self.action_contract = (
+            None
+            if action_contract is None
+            else MappingProxyType(dict(action_contract))
+        )
         self.run_seed = int(run_seed)
         self.global_lane_ids = tuple(
             range(self.num_envs) if global_lane_ids is None else global_lane_ids

@@ -46,8 +46,13 @@ def build_model_provenance(
     kind: str,
     checkpoint_step_value: int | None = None,
     state_archive_summary: Mapping[str, Any] | None = None,
+    action_contract: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     del config
+    if action_contract is not None:
+        from gradlab.action_contract import validate_runtime_action_contract
+
+        validate_runtime_action_contract(action_contract)
     provenance = {
         "kind": kind,
         "filename": model_path.name,
@@ -90,7 +95,14 @@ def build_model_provenance(
         "model_class": str(train_config.get("model_class") or "").strip(),
         "training_execution": deepcopy(dict(train_config.get("training_execution") or {})),
         "training_terminal": deepcopy(dict(train_config.get("training_terminal") or {})),
-        "training_metadata": {"versions": runtime_versions_metadata()},
+        "training_metadata": {
+            "versions": runtime_versions_metadata(),
+            **(
+                {"action_contract": deepcopy(dict(action_contract))}
+                if action_contract is not None
+                else {}
+            ),
+        },
     }
     preflight_sha256 = str(train_config.get("state_archive_preflight_sha256") or "").strip()
     if preflight_sha256:
@@ -133,6 +145,7 @@ def install_model_bundle(
     kind: str,
     checkpoint_step_value: int | None,
     state_archive_summary: Mapping[str, Any] | None = None,
+    action_contract: Mapping[str, Any] | None = None,
 ) -> Path:
     """Atomically install checkpoint bytes and their reproducible policy sidecars."""
 
@@ -152,6 +165,7 @@ def install_model_bundle(
             kind,
             checkpoint_step_value=checkpoint_step_value,
             state_archive_summary=state_archive_summary,
+            action_contract=action_contract,
         )
         recipe_source = Path(str(train_config.get("recipe_json_path") or ""))
         if not recipe_source.is_file():

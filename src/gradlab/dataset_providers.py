@@ -12,7 +12,12 @@ from typing import Any
 import gymnasium as gym
 import numpy as np
 
-from gradlab.action_contract import declared_action_contract, provider_buttons
+from gradlab.action_contract import (
+    action_index_for_controls,
+    compile_runtime_action_contract,
+    declared_action_contract,
+    provider_buttons,
+)
 from gradlab.batch_runtime import ProviderDescriptor
 from gradlab.env import EnvConfig, make_native_provider, resolve_env_config
 from gradlab.env_config import env_config_from_mapping
@@ -220,10 +225,16 @@ class ProviderSession:
         )
         self._control_actions = _control_action_table(config)
         self._descriptor = descriptor
+        self.action_contract = compile_runtime_action_contract(
+            config,
+            descriptor,
+            descriptor.native_action_space,
+        )
         self.provenance = {
             "distribution": provider.distribution_name,
             "version": importlib.metadata.version(provider.distribution_name),
             "assets": json_value(assets),
+            "action_contract": json_value(self.action_contract),
         }
 
     def policy_observation(self, observation: Any) -> Any:
@@ -258,6 +269,10 @@ class ProviderSession:
     def action_from_labels(self, labels: Sequence[str]) -> Any:
         requested = {str(label).upper() for label in labels}
         if isinstance(self.env.action_space, gym.spaces.Discrete):
+            try:
+                return action_index_for_controls(self.action_contract, labels)
+            except ValueError:
+                pass
             if self._control_actions is not None:
                 for index, action_labels in enumerate(self._control_actions):
                     if set(action_labels) == requested:

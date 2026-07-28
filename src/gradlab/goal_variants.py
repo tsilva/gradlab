@@ -7,6 +7,7 @@ from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from typing import Any
 
+from gradlab.json_utils import canonical_json_bytes
 from gradlab.recipe_documents import goal_contract_sha256
 from gradlab.reward_programs import goal_for_contract_validation
 
@@ -19,16 +20,6 @@ SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 MAX_DIFF_ENTRIES = 24
 
 _PRESENTATION_ROOTS = frozenset({"defaults", "metadata", "notes", "tags", "title"})
-
-
-def _canonical_json(value: object) -> bytes:
-    return json.dumps(
-        value,
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=False,
-        allow_nan=False,
-    ).encode("utf-8")
 
 
 def goal_variant_id(
@@ -47,7 +38,7 @@ def goal_variant_id(
     for key in ("goal_contract_sha256", "effective_goal_contract_sha256"):
         if SHA256_PATTERN.fullmatch(identity[key]) is None:
             raise ValueError(f"goal variant {key} must be a lowercase SHA-256")
-    digest = hashlib.sha256(_canonical_json(identity)).hexdigest()
+    digest = hashlib.sha256(canonical_json_bytes(identity)).hexdigest()
     return f"goal-variant-{digest[:24]}"
 
 
@@ -59,7 +50,7 @@ def goal_variant_scope_key(*, entity: object, project: object, goal_slug: object
     }
     if not all(identity.values()):
         raise ValueError("goal variant scope requires entity, project, and goal_slug")
-    digest = hashlib.sha256(_canonical_json(identity)).hexdigest()
+    digest = hashlib.sha256(canonical_json_bytes(identity)).hexdigest()
     return f"goal-variants/v1/scopes/{digest}"
 
 
@@ -331,7 +322,7 @@ def validate_goal_variant_descriptor(value: Mapping[str, Any]) -> dict[str, Any]
 
 def goal_variant_projection(descriptor: Mapping[str, Any]) -> dict[str, Any]:
     validated = validate_goal_variant_descriptor(descriptor)
-    descriptor_sha = hashlib.sha256(_canonical_json(validated)).hexdigest()
+    descriptor_sha = hashlib.sha256(canonical_json_bytes(validated)).hexdigest()
     return {
         "goal_variant_id": validated["variant_id"],
         "goal_variant_label": validated["label"],

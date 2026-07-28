@@ -353,6 +353,15 @@ def _matching_source_allowlist_pattern(staged: StagedModelInput) -> str | None:
     )
 
 
+def verify_staged_model(staged: StagedModelInput) -> ApprovedModelInput:
+    verified = ApprovedModelInput(
+        staged=staged,
+        approval_hash=staged.manifest_hash,
+    )
+    verified.verify()
+    return verified
+
+
 def approve_staged_model(
     staged: StagedModelInput,
     *,
@@ -385,9 +394,7 @@ def approve_staged_model(
         answer = input("Run this exact model closure for this invocation? [y/N] ").strip().lower()
         if answer not in {"y", "yes"}:
             raise ModelApprovalError("external model execution was not approved")
-    approved = ApprovedModelInput(staged=staged, approval_hash=staged.manifest_hash)
-    approved.verify()
-    return approved
+    return verify_staged_model(staged)
 
 
 def stage_and_approve_model(

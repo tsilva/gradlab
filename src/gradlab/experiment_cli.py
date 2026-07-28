@@ -1114,7 +1114,7 @@ def cmd_retry(args: argparse.Namespace) -> int:
         for row in public_checkpoints
         if isinstance(row, dict)
     )
-    if learner_finished or authority.has_accepted_eval(args.run_id):
+    if learner_finished:
         compute["recovery_mode"] = "drain-only"
     else:
         compute["recovery_mode"] = "resume-training"
@@ -1325,7 +1325,7 @@ def build_parser() -> argparse.ArgumentParser:
         action="append",
         default=[],
         metavar="KEY=VALUE",
-        help="Hash-bound Hydra recipe override; repeat for independent keys.",
+        help="Hash-bound recipe override; repeat for independent keys.",
     )
     launch.add_argument(
         "--checkpoint-eval-backend",

@@ -62,39 +62,28 @@ class FakeRunner:
 
 
 class FakeCandidate:
-    def __init__(self, spec: PlaySourceSpec, *, approval_required: bool) -> None:
+    def __init__(self, spec: PlaySourceSpec) -> None:
         self.spec = spec
-        self.approval_required = approval_required
-        self.staged = SimpleNamespace(manifest_hash="a" * 64)
         self.cleaned = False
-
-    def approval_payload(self):
-        return {
-            "source": self.spec.value,
-            "manifest_hash": self.staged.manifest_hash,
-            "files": [],
-            "warning": "warning",
-        }
 
     def cleanup(self) -> None:
         self.cleaned = True
 
 
 class FakeLoader:
-    def __init__(self, *, approval_required: bool = False) -> None:
-        self.approval_required = approval_required
-        self.activation_hashes = []
+    def __init__(self) -> None:
+        self.activations = 0
         self.runners = []
         self.prepared_specs = []
 
     def prepare(self, spec, progress):
         progress("verifying", "Verifying fixture")
         self.prepared_specs.append(spec)
-        return FakeCandidate(spec, approval_required=self.approval_required)
+        return FakeCandidate(spec)
 
-    def activate(self, candidate, *, approval_hash: str, progress):
+    def activate(self, candidate, *, progress):
         progress("loading", "Loading fixture")
-        self.activation_hashes.append(approval_hash)
+        self.activations += 1
         runner = FakeRunner()
         self.runners.append(runner)
         return ActivePlayback(
@@ -188,24 +177,16 @@ def test_browse_sources_updates_the_shared_resource_route() -> None:
     host.stop()
 
 
-def test_playback_host_requires_the_exact_browser_approval_hash() -> None:
-    loader = FakeLoader(approval_required=True)
+def test_playback_host_activates_without_model_preapproval() -> None:
+    loader = FakeLoader()
     source = PlaySourceSpec("local", "/tmp/model.zip")
     host = PlaybackHost(loader, initial_source=source)
     host.start()
 
-    approval = wait_for_phase(host, "approval_required")["app"]["approval"]
-    assert approval["manifest_hash"] == "a" * 64
+    snapshot = wait_for_phase(host, "active")
 
-    host.submit(
-        source_command(
-            "approve_source",
-            {"manifest_hash": approval["manifest_hash"]},
-        )
-    )
-    wait_for_phase(host, "active")
-
-    assert loader.activation_hashes == ["a" * 64]
+    assert "approval" not in snapshot["app"]
+    assert loader.activations == 1
     host.stop()
 
 

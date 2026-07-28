@@ -120,7 +120,9 @@ class GradLabVecEnv(VecEnv):
                         "t": round(episode_elapsed, 6),
                     }
                 infos[lane_index] = info
-        return step.observations, step.rewards, self._dones, infos
+        # SB3 retains this array as the next transition's episode-start mask.
+        # Return a snapshot so the reusable scratch buffer cannot mutate it.
+        return step.observations, step.rewards, self._dones.copy(), infos
 
     def take_step_diagnostics(self) -> StepDiagnostics | None:
         diagnostics = self._step_diagnostics

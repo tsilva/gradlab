@@ -13,7 +13,7 @@ import numpy as np
 import stable_retro as retro
 
 from gradlab import env_providers as provider_runtime
-from gradlab.action_contract import configured_action_values
+from gradlab.action_contract import compile_runtime_action_contract
 from gradlab.batch_runtime import BatchRuntime, ProviderDescriptor
 from gradlab.env_providers import (
     DEFAULT_RETRO_VEC_ENV as RetroVecEnv,
@@ -128,7 +128,8 @@ def resolve_env_config(config: EnvConfig) -> EnvConfig:
         canonical_task = task_config_from_train_config(
             {"env_provider": config.env_provider, "game": config.game}
         )
-    return replace(config, task=canonical_task)
+    config = replace(config, task=canonical_task)
+    return config
 
 
 def _validate_state_names(game: str, states: tuple[str, ...]) -> None:
@@ -350,10 +351,18 @@ def bind_native_provider(
     runtime: BatchRuntime | None = None
     try:
         kernel = _bound_task_kernel(config, descriptor, n_envs)
+        action_values = task_action_values(config)
+        action_contract = compile_runtime_action_contract(
+            config,
+            descriptor,
+            kernel.action_space,
+            policy_action_values=action_values,
+        )
         runtime = BatchRuntime(
             native_env,
             descriptor,
             kernel,
+            action_contract=action_contract,
             run_seed=seed,
             global_lane_ids=global_lane_ids,
             capture_step_diagnostics=capture_step_diagnostics,
@@ -380,8 +389,6 @@ def _bound_task_kernel(config: EnvConfig, descriptor: ProviderDescriptor, n_envs
     if task_id != "identity":
         raise ValueError(f"unknown task kernel {task_id!r}")
     action_values = task_action_values(config)
-    if action_values is None and config.env_provider == STABLE_RETRO_TURBO_PROVIDER.provider_id:
-        action_values = configured_action_values(config)
     if task_action_set(config) != "native" and action_values is None:
         raise ValueError(
             "generic native-vector tasks require native actions or a discrete lookup codec"

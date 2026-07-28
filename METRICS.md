@@ -85,6 +85,12 @@ schema v10.
 
 ## Research interpretation
 
+- Playback `V(s)` is the critic's expectation of discounted future policy-facing return under the
+  checkpoint policy, while realized `G(s)` is one completed trajectory sample from that
+  distribution. Exact pointwise agreement on one episode is not expected; assess calibration and
+  residual bias across many contract-comparable trajectories without conditioning only on
+  successful outcomes. Learner explained variance uses its rollout value targets and is not the
+  same statistic as a single playback trajectory's `V(s) - G(s)`.
 - Mario ranks checkpoints only after acceptance: earliest `leader/checkpoint/step`, then highest
   `eval/full/episode/return/mean`. Breakout is training-only and ranks current-contract seeded recipe
   cohorts using `train/episode/return/shaped/from/target/mean`, which excludes archive-curriculum
@@ -136,7 +142,10 @@ schema v10.
   `train/early_stop/{condition}/*` projects that condition's local state for diagnosis and shadow
   calibration. It means only that the selected metric has not improved under the declared
   condition, not that the task is impossible or that a checkpoint is accepted. Private control-R2
-  receipts, never W&B diagnostics, are authoritative for an active early-stop outcome.
+  receipts, never W&B diagnostics, are authoritative for an active early-stop outcome. For an
+  evaluated run, the receipt is provisional until already-submitted evaluations settle: acceptance
+  overrides the plateau, complete valid rejections establish scientific non-acceptance, and
+  incomplete evaluation evidence remains resumable.
 
 ## Full-evaluation table
 
@@ -183,14 +192,16 @@ remote-visible W&B lag, checkpoint backlog, pending evals, scratch utilization, 
 stop latency, and post-learner idle-GPU tail. Publication capacity is healthy only when measured
 publish capacity is at least twice peak ingress.
 
-Unpublished W&B age warns at 45 seconds and is unhealthy at 60 seconds. Terminal W&B drain has a
-300-second deadline. If neither W&B nor private R2 can preserve pending metrics, or task scratch
-usage reaches 80%, the supervisor requests a safe learner stop and emits a resumable failure rather
-than discarding evidence.
+Unpublished W&B age warns at 45 seconds and is unhealthy at 60 seconds. Evaluation drain is governed
+by the declared per-attempt expiry windows. The 300-second terminal delivery deadline begins only
+after evaluations settle and covers checkpoint and local W&B delivery. If neither W&B nor private
+R2 can preserve pending metrics, or task scratch usage reaches 80%, the supervisor requests a safe
+learner stop and emits a resumable failure rather than discarding evidence.
 
-A logical run succeeds only when its private-R2 `TerminalReceipt` proves complete checkpoint and
-evaluation inventories, a promotion, the W&B high-water mark, and a complete drain. dstack process
-exit alone is never scientific success.
+A logical run succeeds only when its private-R2 `TerminalReceipt` proves the complete checkpoint
+inventory, the terminal inventory of automatically submitted evaluations, a promotion, the W&B
+high-water mark, and a complete drain. Checkpoints published after acceptance may remain
+unevaluated for future explicit user action. dstack process exit alone is never scientific success.
 
 ## Registry
 
@@ -329,7 +340,7 @@ exit alone is never scientific success.
 | `orchestration/outbox/wandb_remote_high_water` | Largest orchestration event sequence observed through the W&B API. | events | remote visibility probe | history |
 | `orchestration/outbox/wandb_remote_visible_lag_seconds` | Age of the newest local metric event not yet observed through the W&B API. | seconds | remote visibility probe | history |
 | `orchestration/checkpoint/backlog` | Ready local checkpoints not yet verified in public model R2. | checkpoints | supervisor sample | history |
-| `orchestration/eval/pending` | Persisted evaluation intents without a terminal verified result. | evaluations | supervisor sample | history |
+| `orchestration/eval/pending` | Persisted evaluation intents currently pending submission or awaiting a verified result; intents deferred after acceptance are excluded. | evaluations | supervisor sample | history |
 | `orchestration/eval/result_to_stop_seconds` | Time from observing an accepted eval result to signaling the learner. | seconds | accepted evaluation | history |
 | `orchestration/drain/idle_gpu_tail_seconds` | Time the training container retained its GPU after the learner exited. | seconds | terminal drain | history |
 | `orchestration/scratch/used_fraction` | Fraction of the task scratch filesystem currently used. | fraction | supervisor sample | history |

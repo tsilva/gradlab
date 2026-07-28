@@ -119,6 +119,38 @@ def validate_turbo_vector_env(env: Any, provider_id: str) -> TurboApiContract:
         raise ValueError(
             f"{provider_id} resolved action_mode {env.action_mode!r} is not declared"
         )
+    buttons = getattr(env, "buttons")
+    if not isinstance(buttons, tuple) or any(
+        value is not None and not isinstance(value, str) for value in buttons
+    ):
+        raise TypeError(f"{provider_id} buttons must be an immutable tuple of labels")
+    table = getattr(env, "action_table")
+    meanings = getattr(env, "action_meanings")
+    table_hash = getattr(env, "action_table_hash")
+    if table is not None and not isinstance(table, tuple):
+        raise TypeError(f"{provider_id} action_table must be an immutable tuple or None")
+    if meanings is not None and (
+        not isinstance(meanings, tuple)
+        or any(not isinstance(value, str) or not value for value in meanings)
+    ):
+        raise TypeError(
+            f"{provider_id} action_meanings must be an immutable tuple of labels or None"
+        )
+    if meanings is not None and table is not None and len(meanings) != len(table):
+        raise ValueError(f"{provider_id} action meanings and table lengths differ")
+    if str(env.action_mode) == "custom_discrete":
+        if not table or not meanings or not isinstance(table_hash, str) or not table_hash:
+            raise ValueError(
+                f"{provider_id} custom_discrete actions require table, meanings, and hash"
+            )
+        single_action_space = getattr(env, "single_action_space", None)
+        expected_count = getattr(single_action_space, "n", None)
+        if expected_count is not None and len(table) != int(expected_count):
+            raise ValueError(
+                f"{provider_id} custom_discrete table length does not match its action space"
+            )
+    elif table_hash is not None and not isinstance(table_hash, str):
+        raise TypeError(f"{provider_id} action_table_hash must be a string or None")
     if bool(capabilities["supports_live_snapshots"]) != bool(
         getattr(env, "supports_live_snapshots", False)
     ):

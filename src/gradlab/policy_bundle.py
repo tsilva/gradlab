@@ -487,7 +487,7 @@ def _validate_recipe_v1(
         backend = backend_value if isinstance(backend_value, Mapping) else {}
         backend_id = str(backend.get("id") or "").strip()
         from gradlab.policy_registry import (
-            BACKEND_PROVENANCE_SPECS,
+            BACKEND_PROVENANCE_ALGORITHMS,
             TRAINING_BACKEND_SPECS,
         )
 
@@ -496,7 +496,7 @@ def _validate_recipe_v1(
                 train_config,
                 label=f"{source}.recipe.train_config",
             )
-        elif backend_id in BACKEND_PROVENANCE_SPECS:
+        elif backend_id in BACKEND_PROVENANCE_ALGORITHMS:
             # Archived, non-launchable backends still get strict portable
             # field/environment validation without importing or inventing a
             # local learner implementation.
@@ -1124,6 +1124,21 @@ def policy_bundle_as_metadata(bundle: PolicyBundle) -> dict[str, Any]:
         and isinstance(legacy_training.get("versions"), Mapping)
         else {}
     )
+    saved_action_contract = (
+        deepcopy(legacy_training.get("action_contract"))
+        if isinstance(legacy_training, Mapping)
+        and isinstance(legacy_training.get("action_contract"), Mapping)
+        else None
+    )
+    if saved_action_contract is not None:
+        from gradlab.action_contract import validate_runtime_action_contract
+
+        try:
+            validate_runtime_action_contract(saved_action_contract)
+        except ValueError as exc:
+            raise PolicyDocumentError(
+                f"{bundle.model_path} has an invalid saved action contract: {exc}"
+            ) from exc
     recipe = _required_mapping(
         bundle.recipe.get("recipe"),
         label=f"{bundle.recipe_path}.recipe",
@@ -1170,6 +1185,16 @@ def policy_bundle_as_metadata(bundle: PolicyBundle) -> dict[str, Any]:
         "preprocessing": deepcopy(dict(preprocessing)),
         "action": action,
         "versions": versions,
+        **(
+            {
+                "action_contract": saved_action_contract,
+                "action_contract_status": "saved",
+            }
+            if saved_action_contract is not None
+            else {
+                "action_contract_status": "legacy-runtime-resolution-required",
+            }
+        ),
     }
     return metadata
 
