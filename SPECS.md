@@ -31,6 +31,7 @@ GradLab is a reproducible reinforcement-learning workbench for game-agent resear
 
 ### Environment Compatibility
 
+- A first-time user must be able to run a bundled local training demonstration from the published GradLab package in one uvx command with a local ROM path, without cloning or persistently installing GradLab, configuring credentials, or pre-registering the ROM.
 - Supported environment providers must provide correct, isolated parallel execution with deterministic, nonduplicated episode streams. Resetting, completing, or forcing a boundary in one lane must not disturb any other lane.
 - Equivalent providers must preserve the same declared observations, actions, rewards, events, and episode semantics across training, evaluation, and playback. Switching providers must change only provider identity and remain traceable.
 - GradLab must own reward scaling and clipping uniformly across all environments; scaling is applied before clipping, and equivalent environment-provider reward transforms must be disabled and ignored.

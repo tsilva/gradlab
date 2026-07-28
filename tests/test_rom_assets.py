@@ -14,6 +14,7 @@ from gradlab.main import main as cli_main
 from gradlab.rom_assets import (
     ROM_ASSET_IDENTITY_ALGORITHM,
     cache_path,
+    direct_rom_asset_manifest,
     discover_rom_path,
     ensure_rom_cache,
     manifest_from_train_config,
@@ -126,6 +127,62 @@ def test_discovery_ignores_duplicate_bytes_but_rejects_distinct_matches(tmp_path
         ),
     ):
         assert discover_rom_path(GAME, source_dir=tmp_path) == duplicate.resolve()
+
+
+def test_direct_manifest_verifies_rom_without_mutating_cache_or_state(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    rom = _rom(tmp_path / "mario.nes", b"one")
+    state = tmp_path / "state.json"
+    cache = tmp_path / "cache"
+    monkeypatch.setenv("GRADLAB_ROM_ASSET_STATE", str(state))
+    monkeypatch.setattr("gradlab.rom_assets.DEFAULT_LOCAL_ROM_CACHE", cache)
+
+    with (
+        patch(
+            "gradlab.rom_assets._expected_provider_identities",
+            return_value={"a" * 40},
+        ),
+        patch(
+            "gradlab.rom_assets.provider_rom_identity",
+            return_value="a" * 40,
+        ),
+    ):
+        manifest = direct_rom_asset_manifest(GAME, rom)
+
+    assert manifest["sha256"] == hashlib.sha256(rom.read_bytes()).hexdigest()
+    assert manifest["size_bytes"] == rom.stat().st_size
+    assert manifest["provider_rom_identity"] == "a" * 40
+    assert manifest["object_uri"] == rom.resolve().as_uri()
+    assert not state.exists()
+    assert not cache.exists()
+
+
+def test_direct_manifest_rejects_missing_incompatible_and_non_nes_roms(
+    tmp_path: Path,
+) -> None:
+    with pytest.raises(FileNotFoundError, match="ROM path does not exist"):
+        direct_rom_asset_manifest(GAME, tmp_path / "missing.nes")
+
+    archive = tmp_path / "mario.zip"
+    archive.write_bytes(b"not a raw ROM")
+    with pytest.raises(ValueError, match=r"raw \.nes"):
+        direct_rom_asset_manifest(GAME, archive)
+
+    rom = _rom(tmp_path / "wrong.nes", b"wrong")
+    with (
+        patch(
+            "gradlab.rom_assets._expected_provider_identities",
+            return_value={"a" * 40},
+        ),
+        patch(
+            "gradlab.rom_assets.provider_rom_identity",
+            return_value="b" * 40,
+        ),
+        pytest.raises(ValueError, match="provider identity"),
+    ):
+        direct_rom_asset_manifest(GAME, rom)
 
 
 def test_cache_repairs_corruption_from_local_source_and_then_reuses(

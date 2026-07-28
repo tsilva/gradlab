@@ -6,6 +6,7 @@ import json
 import os
 import platform
 import re
+import shlex
 import subprocess
 import sys
 from datetime import UTC, datetime
@@ -22,8 +23,10 @@ from gradlab.recipe_catalog import LOCAL_RUN_RECEIPT, recipe_identity, resolve_r
 from gradlab.recipe_documents import compose_train_document, prepare_checkpoint_eval_mode
 from gradlab.rom_assets import (
     DEFAULT_LOCAL_ROM_CACHE,
+    direct_rom_asset_manifest,
     rom_asset_manifest_for_game,
 )
+from gradlab.rom_runtime import RomRuntimeBinding, bind_rom_path
 from gradlab.seeds import DEFAULT_TRAIN_SEED
 from gradlab.train import INTERNAL_LEARNER_ENV
 
@@ -76,6 +79,16 @@ def build_parser() -> argparse.ArgumentParser:
         "--wandb",
         action="store_true",
         help="Preserve the recipe's W&B logging settings. Local training disables W&B by default.",
+    )
+    parser.add_argument(
+        "--rom",
+        "--rom-path",
+        dest="rom_path",
+        type=Path,
+        help=(
+            "Use a provider-compatible raw .nes ROM in place for this run without "
+            "registering or copying it."
+        ),
     )
     return parser
 
@@ -263,8 +276,18 @@ def main(argv: list[str] | None = None) -> int:
     )
     provider = resolve_env_provider(str(config["env_provider"]))
     uses_local_rom_cache = provider.requires_external_rom_asset
+    runtime_rom_binding: RomRuntimeBinding | None = None
+    if args.rom_path is not None and not uses_local_rom_cache:
+        raise ValueError(
+            f"--rom is not valid for ROM-free provider {provider.provider_id!r}"
+        )
     if uses_local_rom_cache:
-        config["rom_asset_manifest"] = rom_asset_manifest_for_game(str(config["game"]))
+        if args.rom_path is not None:
+            manifest = direct_rom_asset_manifest(str(config["game"]), args.rom_path)
+            runtime_rom_binding = bind_rom_path(manifest, args.rom_path.expanduser())
+            config["rom_asset_manifest"] = manifest
+        else:
+            config["rom_asset_manifest"] = rom_asset_manifest_for_game(str(config["game"]))
     document["train_config"] = config
     document["description"] = description
 
@@ -318,16 +341,21 @@ def main(argv: list[str] | None = None) -> int:
     previous_internal = os.environ.get(INTERNAL_LEARNER_ENV)
     previous_rom_cache = os.environ.get(LOCAL_ROM_CACHE_ENV)
     os.environ[INTERNAL_LEARNER_ENV] = "1"
-    if uses_local_rom_cache:
+    if uses_local_rom_cache and runtime_rom_binding is None:
         os.environ[LOCAL_ROM_CACHE_ENV] = str(DEFAULT_LOCAL_ROM_CACHE)
     try:
-        result = learner_main(["--train-config-json", str(config_path)])
+        learner_args = ["--train-config-json", str(config_path)]
+        result = (
+            learner_main(learner_args, runtime_rom_binding=runtime_rom_binding)
+            if runtime_rom_binding is not None
+            else learner_main(learner_args)
+        )
     finally:
         if previous_internal is None:
             os.environ.pop(INTERNAL_LEARNER_ENV, None)
         else:
             os.environ[INTERNAL_LEARNER_ENV] = previous_internal
-        if uses_local_rom_cache:
+        if uses_local_rom_cache and runtime_rom_binding is None:
             if previous_rom_cache is None:
                 os.environ.pop(LOCAL_ROM_CACHE_ENV, None)
             else:
@@ -345,11 +373,19 @@ def main(argv: list[str] | None = None) -> int:
     )
     _write_receipt(run_dir, receipt)
     print(f"trained model: {model_path}", flush=True)
-    print(
-        f"play it: gradlab play --recipe {source.reference!r} --runs-dir "
-        f"{str(args.runs_dir)!r}",
-        flush=True,
-    )
+    distribution = _source_distribution()
+    play_command = [
+        "uvx",
+        f"gradlab@{distribution['version']}",
+        "play",
+        "--recipe",
+        source.reference,
+        "--runs-dir",
+        str(args.runs_dir.expanduser().resolve()),
+    ]
+    if runtime_rom_binding is not None:
+        play_command.extend(("--rom", str(runtime_rom_binding.path)))
+    print(f"play it: {shlex.join(play_command)}", flush=True)
     return 0
 
 

@@ -1,0 +1,10 @@
+defaults:
+- ../../../../recipes/_presets/mario-single-ppo@_global_
+- _self_
+reward_shape: speedrun-v1
+recipe_id: turbo-demo
+description: >-
+  Seed {{ seed }} runs the public two-minute {{ goal_id }} PPO training demonstration
+  with live local metrics and a directly playable final model.
+train:
+  timesteps: 98304

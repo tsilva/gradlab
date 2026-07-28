@@ -74,13 +74,13 @@ image.
 version in downstream repositories when exact reproducibility matters:
 
 ```bash
-GRADLAB_VERSION='0.1.0'
+GRADLAB_VERSION='0.1.1'
 
 uvx --from "gradlab==$GRADLAB_VERSION" gradlab train Breakout-Atari2600-v0/ppo
 uvx --from "gradlab==$GRADLAB_VERSION" gradlab play --recipe Breakout-Atari2600-v0/ppo
 
-uvx --from "gradlab==$GRADLAB_VERSION" gradlab train SuperMarioBros-Nes-v0/Level1-1/ppo
-uvx --from "gradlab==$GRADLAB_VERSION" gradlab play --recipe SuperMarioBros-Nes-v0/Level1-1/ppo
+uvx "gradlab@$GRADLAB_VERSION" train SuperMarioBros-Nes-v0/Level1-1/turbo-demo \
+  --rom /absolute/path/to/SuperMarioBros.nes
 
 uvx --from "gradlab==$GRADLAB_VERSION" gradlab train VizdoomBasic-v1/ppo
 uvx --from "gradlab==$GRADLAB_VERSION" gradlab play --recipe VizdoomBasic-v1/ppo
@@ -93,9 +93,14 @@ acceptance or checkpoint promotion. Use repeatable `--set KEY=VALUE` overrides,
 `--seed`, `--runs-dir`, or `--wandb` when needed. A recipe YAML in another
 repository also works when it lives at
 `experiments/goals/<goal>/recipes/<recipe>.yaml` beside its owning `_goal.yaml`.
-Mario additionally requires a lawful local ROM registered once with
-`gradlab rom sync --game SuperMarioBros-Nes-v0`; local training verifies and binds
-that cache without sending the ROM anywhere.
+For Mario, `--rom` verifies and uses a lawful raw `.nes` file in place without
+copying it or modifying GradLab's ROM registry or cache. The completed run prints
+a version-pinned `uvx ... play` command using the same ROM. The demo targets
+macOS arm64 and Linux x86_64; its 98,304 training steps take about two minutes on
+the calibrated M1 Pro, while timing varies by hardware. A first invocation may
+also need time to download GradLab, Torch, and the environment wheels. The
+existing `gradlab rom sync` workflow remains available for queued staging and
+repeated registered-cache use.
 
 Reward transforms belong to the common task contract for every provider.
 `task.reward.reward_scale` is a positive divisor, followed by
