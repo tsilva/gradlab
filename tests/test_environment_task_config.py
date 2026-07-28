@@ -19,7 +19,7 @@ class EnvironmentTaskConfigTests(unittest.TestCase):
                 "game": "SuperMarioBros-Nes-v0",
                 "task": {
                     "id": "mario",
-                    "action": {"set": "basic"},
+                    "action": {"set": "native"},
                     "signals": {
                         "x": ["xscrollHi", "xscrollLo"],
                         "score": "score",
@@ -88,6 +88,30 @@ class EnvironmentTaskConfigTests(unittest.TestCase):
         self.assertEqual(cleaned["task"]["reward"]["reward_scale"], 1.0)
         self.assertEqual(cleaned["task"]["reward"]["reward_clip"], [-1.0, 1.0])
 
+    def test_legacy_artifact_preprocessing_and_action_move_to_current_contract(self) -> None:
+        cleaned = sanitize_env_config_metadata(
+            {
+                "env_provider": "supermariobrosnes-turbo",
+                "game": "SuperMarioBros-Nes-v0",
+                "observation_size": 96,
+                "hud_crop_top": 24,
+                "env_args": {"action_set": "right-jump"},
+                "task": {
+                    "id": "mario",
+                    "action": {"set": "right-jump"},
+                    "signals": {},
+                    "events": {},
+                    "termination": {},
+                    "reward": {"reward_mode": "native"},
+                },
+            }
+        )
+
+        self.assertEqual(cleaned["obs_resize"], (96, 96))
+        self.assertEqual(cleaned["obs_crop"], (24, 0, 0, 0))
+        self.assertEqual(cleaned["env_args"], {"use_restricted_actions": "right-jump"})
+        self.assertEqual(cleaned["task"]["action"], {"set": "native"})
+
     def test_task_validation_rejects_unknown_termination_event(self) -> None:
         with self.assertRaisesRegex(ValueError, "references unknown events"):
             validate_task_config(
@@ -115,7 +139,7 @@ class EnvironmentTaskConfigTests(unittest.TestCase):
 
         mario_task = {
             "id": "mario",
-            "action": {"set": "basic"},
+            "action": {"set": "native"},
             "signals": {},
             "events": {},
             "termination": {},
@@ -235,7 +259,7 @@ class EnvironmentTaskConfigTests(unittest.TestCase):
             validate_task_config(
                 {
                     "id": "mario",
-                    "action": {"set": "basic"},
+                    "action": {"set": "native"},
                     "signals": {"x": "x", "lives": "lives"},
                     "events": {
                         "life_loss": {"signal": "x", "operation": "decrease"},

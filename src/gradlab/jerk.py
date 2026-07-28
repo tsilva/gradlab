@@ -409,8 +409,10 @@ class JerkPolicy:
         self._run_remaining[mask] = 0
 
     def predict(self, observation: Any, deterministic: bool = False):
-        if deterministic:
-            raise ValueError("JERK participates in gradlab's stochastic sampling protocol")
+        # ``deterministic`` is an SB3 compatibility argument, not a semantic
+        # mode for this fixed program. Both values must preserve the declared
+        # JERK action sequence.
+        del deterministic
         count = self._batch_size(observation)
         self._ensure_lanes(count)
         actions = np.asarray(
@@ -419,31 +421,88 @@ class JerkPolicy:
         )
         return actions, None
 
-    def _decision(self, *, sampled: bool):
+    def _program_cursor(self, lane: int) -> dict[str, Any]:
+        index = int(self._run_indices[lane])
+        if index >= len(self.action_runs):
+            action = self.fallback_action
+            return {
+                "run_index": index,
+                "step_index": self.step_count,
+                "current_run_remaining": 0,
+                "remaining_steps": 0,
+                "fallback": True,
+                "action": action,
+                "action_name": self.action_names[action],
+            }
+        current = self.action_runs[index]
+        current_remaining = int(self._run_remaining[lane]) or current.duration
+        later_remaining = sum(run.duration for run in self.action_runs[index + 1 :])
+        remaining = current_remaining + later_remaining
+        return {
+            "run_index": index,
+            "step_index": self.step_count - remaining,
+            "current_run_remaining": current_remaining,
+            # Inclusive of the action selected for the current transition.
+            "remaining_steps": remaining,
+            "fallback": False,
+            "action": current.action,
+            "action_name": self.action_names[current.action],
+        }
+
+    def _decisions(self, observation: Any, *, advance: bool):
         from gradlab.play_debug import PolicyDecision
 
-        self._ensure_lanes(1)
-        action = self._next_action(0) if sampled else self._peek(0)
-        probabilities = np.zeros(len(self.action_names), dtype=np.float64)
-        probabilities[action] = 1.0
-        value = np.asarray(action, dtype=np.int64)
-        return PolicyDecision(
-            distribution_kind="categorical",
-            raw_action=value,
-            executed_action=value,
-            value=0.0,
-            log_probability=0.0,
-            entropy=0.0,
-            mode=value,
-            probabilities=probabilities,
-            sampled=sampled,
-        )
+        count = self._batch_size(observation)
+        self._ensure_lanes(count)
+        decisions = []
+        for lane in range(count):
+            program = self._program_cursor(lane)
+            action = self._next_action(lane) if advance else self._peek(lane)
+            value = np.asarray(action, dtype=np.int64)
+            decisions.append(
+                PolicyDecision(
+                    raw_action=value,
+                    executed_action=value,
+                    action_selection_mode="program",
+                    distribution_kind=None,
+                    mode=None,
+                    program=program,
+                    sampled=None,
+                )
+            )
+        return tuple(decisions)
 
-    def sample_policy_decision(self, _observation: Any):
-        return self._decision(sampled=True)
+    def policy_decisions(
+        self,
+        observation: Any,
+        *,
+        action_selection_mode: str = "program",
+    ):
+        if action_selection_mode != "program":
+            raise ValueError("JERK supports only program action selection")
+        return self._decisions(observation, advance=True)
 
-    def inspect_policy_decision(self, _observation: Any):
-        return self._decision(sampled=False)
+    def inspect_policy_decisions(
+        self,
+        observation: Any,
+        *,
+        action_selection_mode: str = "program",
+    ):
+        if action_selection_mode != "program":
+            raise ValueError("JERK supports only program action selection")
+        return self._decisions(observation, advance=False)
+
+    def sample_policy_decision(self, observation: Any):
+        return self.policy_decisions(
+            observation,
+            action_selection_mode="program",
+        )[0]
+
+    def inspect_policy_decision(self, observation: Any):
+        return self.inspect_policy_decisions(
+            observation,
+            action_selection_mode="program",
+        )[0]
 
     def payload(self) -> dict[str, Any]:
         return {

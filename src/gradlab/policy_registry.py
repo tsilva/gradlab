@@ -12,8 +12,8 @@ PolicyAlgorithmId: TypeAlias = Literal[
     "dqn",
     "recurrent-ppo",
 ]
-RuntimePolicyAlgorithmId: TypeAlias = Literal["ppo", "a2c", "jerk"]
-Sb3AlgorithmId: TypeAlias = Literal["ppo", "a2c"]
+RuntimePolicyAlgorithmId: TypeAlias = Literal["ppo", "a2c", "dqn", "jerk"]
+Sb3AlgorithmId: TypeAlias = Literal["ppo", "a2c", "dqn"]
 
 
 @dataclass(frozen=True)
@@ -22,11 +22,27 @@ class TrainingBackendSpec:
     algorithm_id: RuntimePolicyAlgorithmId
 
 
+@dataclass(frozen=True)
+class BackendProvenanceSpec:
+    """Portable checkpoint provenance, independent of local launch support."""
+
+    algorithm_id: PolicyAlgorithmId
+
+
 TRAINING_BACKEND_SPECS: dict[str, TrainingBackendSpec] = {
     "gradlab.go-explore": TrainingBackendSpec("gradlab.training.go_explore", "jerk"),
     "gradlab.jerk": TrainingBackendSpec("gradlab.training.jerk", "jerk"),
     "sb3.a2c": TrainingBackendSpec("gradlab.training.sb3", "a2c"),
     "sb3.ppo": TrainingBackendSpec("gradlab.training.sb3", "ppo"),
+}
+BACKEND_PROVENANCE_SPECS: dict[str, BackendProvenanceSpec] = {
+    **{
+        backend_id: BackendProvenanceSpec(spec.algorithm_id)
+        for backend_id, spec in TRAINING_BACKEND_SPECS.items()
+    },
+    # GradLab can validate, load, evaluate, and play archived SB3 DQN
+    # checkpoints without claiming that DQN is a launchable training backend.
+    "sb3.dqn": BackendProvenanceSpec("dqn"),
 }
 MODEL_CLASS_ALGORITHMS: dict[str, PolicyAlgorithmId] = {
     "gradlab.jerk.JerkPolicy": "jerk",
@@ -45,8 +61,25 @@ ALGORITHM_MODEL_CLASSES: dict[str, frozenset[str]] = {
     for algorithm_id in frozenset(MODEL_CLASS_ALGORITHMS.values())
 }
 
-RUNTIME_POLICY_ALGORITHMS = frozenset[PolicyAlgorithmId]({"ppo", "a2c", "jerk"})
-SB3_ALGORITHMS = frozenset[PolicyAlgorithmId]({"ppo", "a2c"})
+RUNTIME_POLICY_ALGORITHMS = frozenset[PolicyAlgorithmId]({"ppo", "a2c", "dqn", "jerk"})
+SB3_ALGORITHMS = frozenset[PolicyAlgorithmId]({"ppo", "a2c", "dqn"})
+
+
+def backend_provenance_algorithm(backend_id: str) -> PolicyAlgorithmId:
+    backend = BACKEND_PROVENANCE_SPECS.get(str(backend_id).strip())
+    if backend is None:
+        raise ValueError(f"unsupported checkpoint training backend: {backend_id}")
+    return backend.algorithm_id
+
+
+def default_action_selection_mode(algorithm_id: PolicyAlgorithmId) -> str:
+    if algorithm_id in {"ppo", "a2c", "recurrent-ppo"}:
+        return "stochastic"
+    if algorithm_id == "dqn":
+        return "epsilon_greedy"
+    if algorithm_id == "jerk":
+        return "program"
+    raise ValueError(f"unsupported checkpoint algorithm: {algorithm_id}")
 
 
 def resolve_policy_algorithm(
@@ -59,10 +92,7 @@ def resolve_policy_algorithm(
 
     backend_id = str(metadata.get("training_backend_id") or "").strip()
     if backend_id:
-        backend = TRAINING_BACKEND_SPECS.get(backend_id)
-        if backend is None:
-            raise ValueError(f"unsupported checkpoint training backend: {backend_id}")
-        resolved.add(backend.algorithm_id)
+        resolved.add(backend_provenance_algorithm(backend_id))
 
     algorithm_id = str(metadata.get("algorithm_id") or "").strip()
     if algorithm_id:

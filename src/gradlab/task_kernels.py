@@ -11,7 +11,6 @@ import gymnasium as gym
 import numpy as np
 from numba import njit
 
-from gradlab.action_contract import configured_action_values
 from gradlab.reward_transform import RewardTransform, reward_transform_from_reward
 from gradlab.state_archive import TaskLaneState
 
@@ -1331,8 +1330,6 @@ class MarioTaskConfig:
     @classmethod
     def from_env_config(cls, config: Any) -> MarioTaskConfig:
         task = config.task if isinstance(getattr(config, "task", None), Mapping) else {}
-        masks = configured_action_values(config) or ()
-        action_masks = np.stack(masks).astype(np.int8) if masks else None
         signals = task.get("signals", {}) if isinstance(task.get("signals"), Mapping) else {}
         termination = (
             task.get("termination", {}) if isinstance(task.get("termination"), Mapping) else {}
@@ -1440,7 +1437,7 @@ class MarioTaskConfig:
             lives=signal_value("lives", cls.lives),
             level=signal_value("level", cls.level),
             game_mode=game_mode_source if game_complete_rule else None,
-            action_masks=action_masks,
+            action_masks=None,
             reward_mode=reward_mode,
             use_native_reward=reward.get("use_native_reward", False),
             progress_reward_cap=reward_value("progress_reward_cap", 30.0),
@@ -1522,7 +1519,10 @@ class MarioTaskKernel:
             masks = np.asarray(config.action_masks)
             if masks.ndim < 2 or len(masks) == 0:
                 raise ValueError("Mario action_masks must be a non-empty action table")
-            self._action_masks = masks.copy()
+            self._action_masks = _compile_action_lookup(
+                descriptor.native_action_space,
+                masks,
+            )
             self._action_buffer = np.empty((self.num_envs, *masks.shape[1:]), dtype=masks.dtype)
             self.action_space = gym.spaces.Discrete(len(masks))
 

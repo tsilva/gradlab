@@ -23,7 +23,7 @@ from gradlab.env_providers import provider_native_vec_kwargs
 
 def benchmark_config(args: argparse.Namespace) -> EnvConfig:
     env_args = (
-        {"info_filter": "all"}
+        {"info_filter": "all", "use_restricted_actions": "basic"}
         if args.env_provider in {"stable-retro-turbo", "supermariobrosnes-turbo"}
         else {}
     )
@@ -36,14 +36,14 @@ def benchmark_config(args: argparse.Namespace) -> EnvConfig:
             frame_skip=4,
             max_pool_frames=False,
             sticky_action_prob=0.0,
-            observation_size=84,
+            obs_resize=(84, 84),
             obs_crop=(32, 0, 0, 0),
             obs_crop_mode="mask",
             obs_crop_fill=0,
             obs_resize_algorithm="area",
             task={
                 "id": "mario",
-                "action": {"set": "basic"},
+                "action": {"set": "native"},
                 "signals": {
                     "x": ["xscrollHi", "xscrollLo"],
                     "score": "score",

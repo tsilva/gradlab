@@ -74,7 +74,7 @@ train:
         # Random sticky action probability; 0 disables stochastic action repetition for this contract.
         sticky_action_prob: 0.0
         # Square resize target for native preprocessing.
-        observation_size: 84
+        obs_resize: [84, 84]
         # Crop the HUD from the top of the frame before resize as [top, right, bottom, left].
         obs_crop:
         - 32

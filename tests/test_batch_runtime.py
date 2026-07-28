@@ -946,9 +946,10 @@ class MarioKernelTests(unittest.TestCase):
         config = EnvConfig(
             game="SuperMarioBros-Nes-v0",
             state="Level1-1",
+            env_args={"use_restricted_actions": "right-jump"},
             task={
                 "id": "mario",
-                "action": {"set": "right-jump"},
+                "action": {"set": "native"},
                 "signals": {
                     "x": "custom_x",
                     "score": "custom_score",
@@ -976,7 +977,43 @@ class MarioKernelTests(unittest.TestCase):
         self.assertFalse(compiled.terminate_on_life_loss)
         self.assertFalse(compiled.terminate_on_level_change)
         self.assertEqual(compiled.progress_reward_scale, 3.0)
-        self.assertEqual(compiled.action_masks.shape[0], 4)
+        self.assertIsNone(compiled.action_masks)
+
+        provider = DeterministicNativeVectorProvider()
+        descriptor = ProviderDescriptor(
+            provider_id="provider-owned-actions",
+            native_observation_space=provider.single_observation_space,
+            native_action_space=provider.single_action_space,
+            signal_schema={
+                name: SignalSpec(name)
+                for name in ("custom_x", "custom_score", "custom_lives", "world", "stage")
+            },
+        )
+        kernel = MarioTaskDefinition(compiled).bind(descriptor, provider.num_envs)
+        actions = np.asarray([[1, 0, 1], [0, 1, 0]], dtype=np.int8)
+
+        self.assertIs(kernel.action_space, descriptor.native_action_space)
+        self.assertIs(kernel.map_actions(actions), actions)
+
+    def test_explicit_mario_action_codec_must_match_native_provider_space(self):
+        provider = DeterministicNativeVectorProvider()
+        descriptor = ProviderDescriptor(
+            provider_id="custom-discrete",
+            native_observation_space=provider.single_observation_space,
+            native_action_space=gym.spaces.Discrete(2),
+            signal_schema=descriptor_for(provider).signal_schema,
+        )
+
+        with self.assertRaisesRegex(ValueError, "outside native action space"):
+            MarioTaskDefinition(
+                MarioTaskConfig(
+                    x="x",
+                    score="score",
+                    lives="lives",
+                    level=("level_hi", "level_lo"),
+                    action_masks=np.asarray([[0, 0, 0], [1, 0, 1]], dtype=np.int8),
+                )
+            ).bind(descriptor, provider.num_envs)
 
 
 class GradLabVecEnvTests(unittest.TestCase):

@@ -29,7 +29,7 @@ from gradlab.metric_names import (
     EVAL_FULL_SUCCESS_RATE_MEAN,
     EVAL_FULL_SUCCESS_RATE_MIN,
 )
-from gradlab.targets import target_for_game
+from gradlab.env_registry import environment_spec
 from gradlab.policy_bundle import (
     PolicyDocumentError,
     evaluation_contract_sha256,
@@ -265,6 +265,7 @@ def _view_component(
     preprocessing: Mapping[str, Any],
     *,
     game: str,
+    provider: str,
 ) -> str:
     raw_crop = preprocessing.get("obs_crop")
     if raw_crop is None:
@@ -283,8 +284,8 @@ def _view_component(
     mode = str(preprocessing.get("obs_crop_mode") or "remove")
     if mode not in {"mask", "remove"}:
         raise ValueError(f"unsupported publication crop mode {mode!r}")
-    default_hud_top = int(target_for_game(game).default_hud_crop_top)
-    if default_hud_top > 0 and crop == (default_hud_top, 0, 0, 0):
+    default_crop = environment_spec(provider, game).default_obs_crop
+    if default_crop is not None and crop == default_crop:
         return "hudmask" if mode == "mask" else "hudcrop"
     prefix = "mask" if mode == "mask" else "crop"
     top, right, bottom, left = crop
@@ -305,7 +306,10 @@ def policy_variant_from_contract(
         raise ValueError("publication preprocessing.obs_grayscale must be boolean")
     color = "gray" if grayscale else "rgb"
     dimensions = str(height) if height == width else f"{height}x{width}"
-    components = [f"{color}{dimensions}", _view_component(preprocessing, game=game)]
+    components = [
+        f"{color}{dimensions}",
+        _view_component(preprocessing, game=game, provider=provider),
+    ]
 
     frame_stack = int(preprocessing.get("frame_stack") or 0)
     if frame_stack <= 0:
@@ -360,17 +364,26 @@ def publication_identity_from_model_metadata(
     )
     if action_contract is None:
         provider_args = environment.get("provider_args")
-        if isinstance(provider_args, Mapping):
-            from gradlab.action_contract import declared_action_contract
+        from gradlab.action_contract import (
+            declared_action_contract,
+            migrate_legacy_artifact_action_configuration,
+        )
 
-            action_contract = declared_action_contract(
-                {
-                    "env_provider": provider,
-                    "game": game,
-                    "env_args": provider_args,
-                    "task": task,
-                }
-            )
+        migrated_args, migrated_task = migrate_legacy_artifact_action_configuration(
+            provider_id=provider,
+            game=game,
+            env_args=provider_args if isinstance(provider_args, Mapping) else {},
+            task=task,
+        )
+        task = migrated_task
+        action_contract = declared_action_contract(
+            {
+                "env_provider": provider,
+                "game": game,
+                "env_args": migrated_args,
+                "task": task,
+            }
+        )
     algorithm = normalize_algorithm_id(model_metadata.get("algorithm_id"))
     validate_algorithm_model_class(algorithm, model_metadata.get("model_class"))
     game_family = normalize_publication_component(family, label="game family")

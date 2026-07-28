@@ -46,7 +46,7 @@ train:
       frame_skip: 4
       max_pool_frames: false
       sticky_action_prob: 0.0
-      observation_size: 84
+      obs_resize: [84, 84]
       # Mask the score band and separator while preserving the wall from source row 17.
       obs_crop: [17, 0, 0, 0]
       obs_crop_mode: mask

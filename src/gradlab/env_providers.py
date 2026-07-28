@@ -15,7 +15,6 @@ from stable_retro import RetroVecEnv as DEFAULT_RETRO_VEC_ENV
 from gradlab.bandit_env import BanditVectorEnv
 from gradlab.action_contract import (
     declared_action_contract,
-    normalize_action_configuration,
 )
 from gradlab.batch_runtime import ProviderDescriptor, SignalSpec
 from gradlab.env_registry import (
@@ -298,7 +297,7 @@ def _turbo_native_vec_kwargs(
     defaults = {
         "num_envs": n_envs,
         "render_mode": "rgb_array",
-        "obs_resize": (config.observation_size, config.observation_size),
+        "obs_resize": config.obs_resize,
         "obs_crop": native_obs_crop(config),
         "obs_crop_mode": config.obs_crop_mode,
         "obs_crop_fill": config.obs_crop_fill,
@@ -434,7 +433,7 @@ def _breakout_native_vec_kwargs(
     defaults = {
         "num_envs": n_envs,
         "render_mode": "rgb_array",
-        "obs_resize": (config.observation_size, config.observation_size),
+        "obs_resize": config.obs_resize,
         "obs_crop": native_obs_crop(config),
         "obs_crop_mode": config.obs_crop_mode,
         "obs_crop_fill": config.obs_crop_fill,
@@ -469,8 +468,8 @@ def _ale_native_vec_kwargs(
         "num_envs": n_envs,
         "max_num_frames_per_episode": 108_000,
         "repeat_action_probability": config.sticky_action_prob,
-        "img_height": config.observation_size,
-        "img_width": config.observation_size,
+        "img_height": config.obs_resize[0],
+        "img_width": config.obs_resize[1],
         "grayscale": True,
         "stack_num": 4,
         "frameskip": config.frame_skip,
@@ -493,13 +492,12 @@ def provider_native_vec_kwargs(
 ) -> dict[str, Any]:
     """Compile provider mechanics without task events or termination rules."""
     del state_weight_mapping
-    normalized_args, _normalized_task = normalize_action_configuration(
-        provider_id=config.env_provider,
-        game=config.game,
-        env_args=config.env_args,
-        task=getattr(config, "task", None),
-    )
-    native_kwargs = dict(normalized_args)
+    native_kwargs = dict(config.env_args)
+    if "action_set" in native_kwargs:
+        raise ValueError(
+            "env_args.action_set is artifact-only legacy metadata; "
+            "use env_args.use_restricted_actions"
+        )
     for key in PROVIDER_REWARD_TRANSFORM_KEYS:
         native_kwargs.pop(key, None)
     return provider_runtime_adapter(config.env_provider).build_native_kwargs(

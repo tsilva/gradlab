@@ -268,7 +268,7 @@ def test_preprocessing_contract_reads_provider_rgb_and_stack_arguments() -> None
     contract = preprocessing_contract(
         {
             "env_provider": "supermariobrosnes-turbo",
-            "observation_size": 96,
+            "obs_resize": [96, 96],
             "env_args": {"obs_grayscale": False, "frame_stack": 2},
         }
     )

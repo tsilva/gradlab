@@ -5,8 +5,16 @@ from dataclasses import asdict
 from collections.abc import Mapping
 from typing import Any
 
-from gradlab.env import EnvConfig, state_distribution_metadata, validate_obs_crop
-from gradlab.action_contract import declared_action_contract, normalize_action_configuration
+from gradlab.env import (
+    EnvConfig,
+    state_distribution_metadata,
+    validate_obs_crop,
+    validate_obs_resize,
+)
+from gradlab.action_contract import (
+    declared_action_contract,
+    migrate_legacy_artifact_action_configuration,
+)
 from gradlab.env_identity import (
     environment_hash,
     environment_identity_from_train_config,
@@ -133,6 +141,14 @@ def sanitize_env_config_metadata(config: dict[str, Any]) -> dict[str, Any]:
     cleaned = dict(config)
     if not cleaned:
         return {}
+    legacy_size = cleaned.pop("observation_size", None)
+    if "obs_resize" not in cleaned and legacy_size is not None:
+        cleaned["obs_resize"] = (int(legacy_size), int(legacy_size))
+    legacy_crop_top = cleaned.pop("hud_crop_top", None)
+    if "obs_crop" not in cleaned and legacy_crop_top is not None:
+        crop_top = int(legacy_crop_top)
+        if crop_top >= 0:
+            cleaned["obs_crop"] = (crop_top, 0, 0, 0)
     env_args = cleaned.get("env_args")
     if isinstance(env_args, dict):
         env_args = dict(env_args)
@@ -153,7 +169,7 @@ def sanitize_env_config_metadata(config: dict[str, Any]) -> dict[str, Any]:
     )
     cleaned["env_args"] = migrated_args
     cleaned["task"] = migrated_task
-    normalized_args, normalized_task = normalize_action_configuration(
+    normalized_args, normalized_task = migrate_legacy_artifact_action_configuration(
         provider_id=str(cleaned.get("env_provider") or "stable-retro-turbo"),
         game=str(cleaned.get("game") or ""),
         env_args=cleaned.get("env_args"),
@@ -189,7 +205,11 @@ def env_config_from_config_dict(
             config_values[field_name] = (
                 validate_obs_crop(config[field_name])
                 if field_name == "obs_crop"
-                else config[field_name]
+                else (
+                    validate_obs_resize(config[field_name])
+                    if field_name == "obs_resize"
+                    else config[field_name]
+                )
             )
             matched = True
 

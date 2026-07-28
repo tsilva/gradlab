@@ -37,25 +37,21 @@ from gradlab.model_sources import (
     positional_model_source_arg,
 )
 from gradlab.play_attribution import PolicyActionAttributor
-from gradlab.play_debug import (
-    PolicyDecision,
-    inspect_policy,
-    sample_policy_decision,
-)
+from gradlab.play_debug import PolicyDecision
 from gradlab.policy_observation import (
     model_observation,
     task_info_value_from_info,
     task_info_vars,
     task_state_names,
 )
-from gradlab.policy_runtime import reset_policy_state
+from gradlab.policy_runtime import PolicyRuntime, reset_policy_state
 from gradlab.play_termination import (
     configured_termination_ids,
     termination_condition_payload,
     with_enabled_termination_conditions,
 )
 from gradlab.seeds import DEFAULT_EVAL_SEED, EVAL_SEED_START
-from gradlab.targets import target_for_game
+from gradlab.env_registry import environment_spec
 
 
 ANSI_RESET = "\033[0m"
@@ -424,9 +420,9 @@ def resolved_play_launch_lines(
             "preprocessing",
             f"frame_skip={policy_config.frame_skip} max_pool={policy_config.max_pool_frames} "
             f"sticky={policy_config.sticky_action_prob} "
-            f"obs={policy_config.observation_size} crop={_format_sequence(policy_config.obs_crop)} "
+            f"obs={_format_sequence(policy_config.obs_resize)} "
+            f"crop={_format_sequence(policy_config.obs_crop)} "
             f"crop_mode={policy_config.obs_crop_mode} crop_fill={policy_config.obs_crop_fill} "
-            f"crop_top={policy_config.hud_crop_top} "
             f"resize={policy_config.obs_resize_algorithm}",
             "yellow",
         ),
@@ -553,11 +549,22 @@ class _PlaybackSession:
         attribution_mode: str,
         attribution_interval: int,
         attribution_opacity: float,
+        policy_runtime: PolicyRuntime | None = None,
+        policy_provenance: Mapping[str, object] | None = None,
         env_factory=None,
         termination_base_config=None,
         termination_source: str = "training",
     ):
         self.model = model
+        try:
+            self.policy_runtime: PolicyRuntime | None = policy_runtime or PolicyRuntime(model)
+            self._policy_runtime_error: Exception | None = None
+        except (TypeError, ValueError) as exc:
+            # Some non-executing test and human-control sessions intentionally
+            # carry no policy. The first requested policy action still fails
+            # before the environment is stepped.
+            self.policy_runtime = None
+            self._policy_runtime_error = exc
         self.env = env
         self.config = config
         self.initial_seed = initial_seed
@@ -565,6 +572,7 @@ class _PlaybackSession:
         self.attribution_mode = attribution_mode
         self.attribution_interval = attribution_interval
         self.attribution_opacity = attribution_opacity
+        self.policy_provenance = dict(policy_provenance or {})
         self.env_factory = env_factory
         self.termination_base_config = termination_base_config or config
         self.termination_source = termination_source
@@ -693,6 +701,7 @@ class _PlaybackSession:
         episode = 1 if reset_episode_index else self.episode
         seed = self.initial_seed if seed is None else seed
         torch.manual_seed(seed)
+        np.random.seed(seed)
         if bool(getattr(self.model, "use_sde", False)):
             self.model.policy.reset_noise()
         self.env.seed(seed)
@@ -718,12 +727,41 @@ class _PlaybackSession:
         active_seed = self.active_seed if seed is None else seed
         self.restart(active_seed, reset_episode_index=False)
 
-    def step(self, *, deterministic: bool = False) -> _PlaybackTransition:
-        decision = (
-            inspect_policy(self.model, self.model_obs)
-            if deterministic
-            else sample_policy_decision(self.model, self.model_obs)
+    @property
+    def policy_capabilities(self) -> dict[str, object]:
+        if self.policy_runtime is None:
+            return {
+                "algorithm_id": None,
+                "action_selection": {
+                    "supported_modes": [],
+                    "default_mode": None,
+                },
+                "introspection": [],
+            }
+        return self.policy_runtime.capabilities.payload(
+            attribution_available=self.attributor is not None,
         )
+
+    def step(
+        self,
+        *,
+        deterministic: bool = False,
+        action_selection_mode: str | None = None,
+    ) -> _PlaybackTransition:
+        if self.policy_runtime is None:
+            raise RuntimeError(f"policy runtime is unavailable: {self._policy_runtime_error}")
+        requested_mode = action_selection_mode
+        if requested_mode is None:
+            requested_mode = "deterministic" if deterministic else None
+        batch = self.policy_runtime.decide(
+            self.model_obs,
+            action_selection_mode=requested_mode,
+        )
+        if len(batch.decisions) != 1:
+            raise RuntimeError(
+                "interactive playback requires exactly one policy decision per step"
+            )
+        decision = batch.decisions[0]
         return self._advance(
             decision=decision,
             executed_action=decision.executed_action,
@@ -810,7 +848,10 @@ class _PlaybackSession:
         if completed_records:
             episode_result = episode_result_from_record(
                 completed_records[0],
-                semantics=target_for_game(self.config.game).eval_semantics,
+                semantics=environment_spec(
+                    self.config.env_provider,
+                    self.config.game,
+                ).eval_semantics,
                 terminal_info=info,
             )
             terminated = bool(episode_result["terminated"])
@@ -838,9 +879,7 @@ class _PlaybackSession:
         self.current_frame = optional_vector_env_frame(self.env)
         self.frames = optional_fast_env_frames(policy_obs)
         terminal_frame = (
-            diagnostics.terminal_frame
-            if boundary and diagnostics is not None
-            else None
+            diagnostics.terminal_frame if boundary and diagnostics is not None else None
         )
         after_frame = terminal_frame if terminal_frame is not None else self.current_frame
         if boundary:
@@ -895,4 +934,3 @@ class _PlaybackSession:
         else:
             self.step_index += 1
         return transition
-

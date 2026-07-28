@@ -3,8 +3,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-from gradlab.validation import normalize_obs_crop
-from gradlab.targets import target_for_game
+from gradlab.validation import normalize_obs_crop, normalize_obs_resize
 
 
 def _value(source: Mapping[str, Any] | Any, key: str, default: Any) -> Any:
@@ -46,24 +45,11 @@ def preprocessing_contract(
         if provider in {"", "stable-retro-turbo"}
         else f"{provider.replace('-', '_')}_native_vec_env"
     )
-    existing_resize = source.get("obs_resize") if isinstance(source, Mapping) else None
-    if isinstance(existing_resize, list | tuple) and len(existing_resize) == 2:
-        obs_resize = [int(existing_resize[0]), int(existing_resize[1])]
-    else:
-        observation_size = int(_value(source, "observation_size", 84))
-        obs_resize = [observation_size, observation_size]
+    obs_resize = normalize_obs_resize(_value(source, "obs_resize", (84, 84)))
     raw_crop = _value(source, "obs_crop", None)
-    if raw_crop is None:
-        hud_crop_top = int(_value(source, "hud_crop_top", 0))
-        if hud_crop_top < 0:
-            game = str(_value(source, "game", ""))
-            hud_crop_top = target_for_game(game).default_hud_crop_top
-        raw_crop = (hud_crop_top, 0, 0, 0) if hud_crop_top else None
     crop = normalize_obs_crop(raw_crop, label="environment.preprocessing.obs_crop")
     task_config = task or _value(source, "task", {})
-    conditioning = (
-        task_config.get("conditioning", {}) if isinstance(task_config, Mapping) else {}
-    )
+    conditioning = task_config.get("conditioning", {}) if isinstance(task_config, Mapping) else {}
     max_pool_frames = _value(
         source,
         "max_pool_frames",
@@ -71,7 +57,7 @@ def preprocessing_contract(
     )
     return {
         "pipeline": pipeline,
-        "obs_resize": obs_resize,
+        "obs_resize": list(obs_resize),
         "obs_crop": list(crop) if crop is not None else None,
         "obs_crop_mode": str(_value(source, "obs_crop_mode", "remove")),
         "obs_crop_fill": int(_value(source, "obs_crop_fill", 0)),

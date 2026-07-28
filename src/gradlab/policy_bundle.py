@@ -419,10 +419,36 @@ def _validate_recipe_v1(document: Mapping[str, Any], source: str) -> dict[str, A
         label=f"{source}.recipe.train_config",
     )
     try:
-        validate_and_normalize_train_config(
-            train_config,
-            label=f"{source}.recipe.train_config",
+        backend_value = train_config.get("training_backend")
+        backend = backend_value if isinstance(backend_value, Mapping) else {}
+        backend_id = str(backend.get("id") or "").strip()
+        from gradlab.policy_registry import (
+            BACKEND_PROVENANCE_SPECS,
+            TRAINING_BACKEND_SPECS,
         )
+
+        if backend_id in TRAINING_BACKEND_SPECS:
+            validate_and_normalize_train_config(
+                train_config,
+                label=f"{source}.recipe.train_config",
+            )
+        elif backend_id in BACKEND_PROVENANCE_SPECS:
+            # Archived, non-launchable backends still get strict portable
+            # field/environment validation without importing or inventing a
+            # local learner implementation.
+            validate_train_config_fields(
+                train_config,
+                label=f"{source}.recipe.train_config",
+                required_keys=("training_backend",),
+            )
+            backend_config = backend.get("config")
+            if not isinstance(backend_config, Mapping):
+                raise ValueError(
+                    f"{source}.recipe.train_config.training_backend.config "
+                    "must be an object"
+                )
+        else:
+            raise ValueError(f"unknown training backend {backend_id!r}")
         validate_goal_document_shape(goal, label=f"{source}.recipe.goal")
     except ValueError as exc:
         raise PolicyDocumentError(str(exc)) from exc
@@ -468,8 +494,26 @@ def _validate_recipe_v1(document: Mapping[str, Any], source: str) -> dict[str, A
     portable_seed = (evaluation or playback or {}).get("seed")
     if not isinstance(portable_seed, int) or isinstance(portable_seed, bool):
         raise PolicyDocumentError(f"{source} portable environment seed must be an integer")
-    if evaluation is not None and evaluation.get("action_sampling") != "stochastic":
-        raise PolicyDocumentError(f"{source}.recipe.eval.action_sampling must be 'stochastic'")
+    backend_value = train_config.get("training_backend")
+    backend = backend_value if isinstance(backend_value, Mapping) else {}
+    from gradlab.policy_registry import (
+        backend_provenance_algorithm,
+        default_action_selection_mode,
+    )
+
+    expected_action_sampling = default_action_selection_mode(
+        backend_provenance_algorithm(str(backend.get("id") or ""))
+    )
+    if evaluation is not None and evaluation.get("action_sampling") not in {
+        expected_action_sampling,
+        # Version-1 recipes used "stochastic" as a universal boolean-shaped
+        # marker. Readers canonically interpret it using backend provenance.
+        "stochastic",
+    }:
+        raise PolicyDocumentError(
+            f"{source}.recipe.eval.action_sampling must be "
+            f"{expected_action_sampling!r}"
+        )
     if evaluation is not None and evaluation.get("deterministic", False) is not False:
         raise PolicyDocumentError(f"{source}.recipe.eval.deterministic must be false")
     if evaluation is not None:
@@ -792,14 +836,24 @@ def build_recipe_document(
         else None
     )
     backend_id = str(backend.get("id") or "")
-    recipe["value_contract"] = {
-        "schema_version": 1,
-        "policy_environment_hash": training_policy_environment_hash,
-        "reward_stream": "task",
-        "discount": discount,
-        "action_sampling": "stochastic",
-        "truncation_bootstrap": ("terminal-value" if backend_id.startswith("sb3.") else "unknown"),
-    }
+    from gradlab.policy_registry import (
+        backend_provenance_algorithm,
+        default_action_selection_mode,
+    )
+
+    algorithm_id = backend_provenance_algorithm(backend_id)
+    action_sampling = default_action_selection_mode(algorithm_id)
+    if algorithm_id in {"ppo", "a2c"}:
+        recipe["value_contract"] = {
+            "schema_version": 1,
+            "policy_environment_hash": training_policy_environment_hash,
+            "reward_stream": "task",
+            "discount": discount,
+            "action_sampling": action_sampling,
+            "truncation_bootstrap": "terminal-value",
+        }
+    else:
+        recipe.pop("value_contract", None)
     from gradlab.checkpoint_acceptance import (
         CheckpointEvalContractCompiler,
         portable_asset_from_train_config,
@@ -1053,6 +1107,15 @@ def _validate_cross_document_contract(model: Mapping[str, Any], recipe: Mapping[
         raise PolicyDocumentError("model.json checkpoint and policy algorithm_id disagree")
     if checkpoint["model_class"] != policy["model_class"]:
         raise PolicyDocumentError("model.json checkpoint and policy model_class disagree")
+    from gradlab.policy_registry import ALGORITHM_MODEL_CLASSES, resolve_policy_algorithm
+
+    try:
+        resolve_policy_algorithm(
+            policy,
+            allowed=frozenset(ALGORITHM_MODEL_CLASSES),
+        )
+    except ValueError as exc:
+        raise PolicyDocumentError(str(exc)) from exc
     train_config = recipe["recipe"]["train_config"]
     for key in (
         "goal_contract_sha256",
@@ -1206,7 +1269,26 @@ def evaluation_contract(recipe_document: Mapping[str, Any]) -> dict[str, Any]:
     )
     if "eval" not in validated["recipe"]:
         raise PolicyDocumentError("training-only policy bundle has no evaluation contract")
-    return deepcopy(dict(validated["recipe"]["eval"]))
+    contract = deepcopy(dict(validated["recipe"]["eval"]))
+    train_config = _required_mapping(
+        validated["recipe"].get("train_config"),
+        label="recipe.json evaluation training config",
+    )
+    backend = _required_mapping(
+        train_config.get("training_backend"),
+        label="recipe.json evaluation training backend",
+    )
+    from gradlab.policy_registry import (
+        backend_provenance_algorithm,
+        default_action_selection_mode,
+    )
+
+    expected = default_action_selection_mode(
+        backend_provenance_algorithm(str(backend.get("id") or ""))
+    )
+    if contract.get("action_sampling") == "stochastic" and expected != "stochastic":
+        contract["action_sampling"] = expected
+    return contract
 
 
 def _training_playback_environment(recipe: Mapping[str, Any]) -> dict[str, Any]:
@@ -1225,7 +1307,7 @@ def _training_playback_environment(recipe: Mapping[str, Any]) -> dict[str, Any]:
     return sanitize_env_config_metadata(environment)
 
 
-def critic_value_contract(recipe_document: Mapping[str, Any]) -> dict[str, Any]:
+def critic_value_contract(recipe_document: Mapping[str, Any]) -> dict[str, Any] | None:
     """Return the training-time inputs required to interpret critic diagnostics."""
 
     validated = preflight_document(
@@ -1247,6 +1329,11 @@ def critic_value_contract(recipe_document: Mapping[str, Any]) -> dict[str, Any]:
     )
     backend_value = train_config.get("training_backend")
     backend = backend_value if isinstance(backend_value, Mapping) else {}
+    from gradlab.policy_registry import backend_provenance_algorithm
+
+    algorithm_id = backend_provenance_algorithm(str(backend.get("id") or ""))
+    if algorithm_id not in {"ppo", "a2c"}:
+        return None
     backend_config_value = backend.get("config")
     backend_config = backend_config_value if isinstance(backend_config_value, Mapping) else {}
     gamma = backend_config.get("gamma")

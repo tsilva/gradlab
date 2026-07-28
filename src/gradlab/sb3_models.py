@@ -37,6 +37,10 @@ def load_sb3_model(
         from stable_baselines3 import A2C
 
         model_class = A2C
+    elif algorithm_id == "dqn":
+        from stable_baselines3 import DQN
+
+        model_class = DQN
     else:
         from stable_baselines3 import PPO
 

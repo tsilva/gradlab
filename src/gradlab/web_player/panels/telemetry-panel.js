@@ -6,6 +6,7 @@ import {
 } from "./shared.js";
 import {
   descriptorCatalog,
+  descriptorAvailability,
   descriptorFor,
   descriptorValue,
   formatTelemetryValue,
@@ -56,8 +57,8 @@ function appendHeading(section, title) {
   section.append(heading);
 }
 
-function appendFoot(section, value) {
-  if (!value) return null;
+function appendFoot(section, value, { force = false } = {}) {
+  if (!value && !force) return null;
   const foot = document.createElement("p");
   foot.className = "panel-foot";
   foot.textContent = value;
@@ -72,22 +73,46 @@ function makeStatsBlock(block) {
   const target = document.createElement("div");
   target.className = "stat-grid";
   section.append(target);
-  appendFoot(section, block.foot);
+  const foot = appendFoot(section, block.foot, { force: true });
   return {
     element: section,
     render({ snapshot, history, view }) {
       const point = selectedPoint(history, snapshot, view);
-      setStats(target, block.metrics.map((key) => {
+      const rows = block.metrics.map((key) => {
         const descriptor = descriptorFor(key);
-        return [
+        const availability = descriptorAvailability(
+          descriptor,
+          { snapshot, point },
+        );
+        return {
+          availability,
+          descriptor,
+          row: [
           descriptor?.shortLabel || key,
-          renderedValue(
-            descriptorValue(descriptor, { snapshot, point }),
-            descriptor,
-            snapshot,
-          ),
-        ];
-      }));
+          availability.status === "available"
+            ? renderedValue(
+              descriptorValue(descriptor, { snapshot, point }),
+              descriptor,
+              snapshot,
+            )
+            : availability.message,
+          ],
+        };
+      });
+      setStats(
+        target,
+        rows
+          .filter(({ availability }) => availability.status !== "unsupported")
+          .map(({ row }) => row),
+      );
+      const unsupported = rows
+        .filter(({ availability }) => availability.status === "unsupported")
+        .map(({ descriptor }) => descriptor?.shortLabel)
+        .filter(Boolean);
+      foot.textContent = unsupported.length
+        ? `Unsupported here: ${unsupported.join(", ")}.`
+        : (block.foot || "");
+      foot.hidden = !foot.textContent;
     },
   };
 }
@@ -109,18 +134,23 @@ function makeLineBlock(block) {
   const legend = document.createElement("div");
   legend.className = "legend";
   section.append(canvas, legend);
-  const foot = appendFoot(section, block.foot);
+  const foot = appendFoot(section, block.foot, { force: true });
   setLegend(legend, descriptors);
   return {
     element: section,
     render({ snapshot, history, view }) {
-      if (foot && block.metrics.includes("policy/realized-return")) {
-        const reasons = snapshot?.session?.critic_comparison?.reasons || [];
-        foot.textContent = reasons.length
-          ? `Comparison unavailable: ${reasons.join("; ")}.`
-          : block.foot;
-        foot.classList.toggle("warning", reasons.length > 0);
+      const availabilities = descriptors.map((descriptor) => (
+        descriptorAvailability(descriptor, { snapshot })
+      ));
+      const unavailable = availabilities.find(
+        (availability) => availability.status !== "available"
+          && availability.status !== "not-yet-observed",
+      );
+      if (foot) {
+        foot.textContent = unavailable?.message || block.foot;
+        foot.classList.toggle("warning", Boolean(unavailable));
       }
+      section.dataset.telemetryStatus = unavailable?.status || "available";
       drawLines(
         canvas,
         descriptors.map((descriptor) => ({
@@ -204,10 +234,49 @@ function makeDistributionBlock(block) {
   return {
     element: section,
     render({ snapshot }) {
+      const availability = descriptorAvailability(descriptor, { snapshot });
+      if (
+        availability.status !== "available"
+        && availability.status !== "not-yet-observed"
+      ) {
+        target.className = `action-probabilities empty-state ${availability.status}`;
+        target.textContent = availability.message;
+        section.dataset.telemetryStatus = availability.status;
+        return;
+      }
       const decision = descriptorValue(descriptor, { snapshot });
       if (!decision) {
         target.className = "action-probabilities empty-state";
-        target.textContent = "No sampled policy decision for this transition.";
+        target.textContent = availability.message || "Not yet observed.";
+        section.dataset.telemetryStatus = "not-yet-observed";
+        return;
+      }
+      if (Array.isArray(decision.q_values)) {
+        const names = snapshot?.session?.action_names || [];
+        const values = decision.q_values.map(Number);
+        const minimum = Math.min(...values);
+        const maximum = Math.max(...values);
+        const span = Math.max(maximum - minimum, Number.EPSILON);
+        target.className = "action-probabilities action-values";
+        target.replaceChildren(...values.map((value, index) => {
+          const row = document.createElement("div");
+          row.className = `action-row ${
+            index === decision.selected_action ? "selected" : ""
+          }`;
+          const label = document.createElement("span");
+          label.textContent = names[index] || `action ${index}`;
+          const track = document.createElement("div");
+          track.className = "probability-track";
+          const fill = document.createElement("div");
+          fill.className = "probability-fill";
+          fill.style.width = `${Math.max(2, ((value - minimum) / span) * 100)}%`;
+          track.append(fill);
+          const amount = document.createElement("span");
+          amount.textContent = Number.isFinite(value) ? value.toFixed(4) : "—";
+          row.append(label, track, amount);
+          return row;
+        }));
+        section.dataset.telemetryStatus = "available";
         return;
       }
       if (!Array.isArray(decision.probabilities)) {
@@ -217,6 +286,7 @@ function makeDistributionBlock(block) {
           `mean ${JSON.stringify(decision.mean)}`,
           `std ${JSON.stringify(decision.stddev)}`,
         ].join(" · ");
+        section.dataset.telemetryStatus = "available";
         return;
       }
       const names = snapshot?.session?.action_names || [];
@@ -241,6 +311,7 @@ function makeDistributionBlock(block) {
         row.append(label, track, amount);
         return row;
       }));
+      section.dataset.telemetryStatus = "available";
     },
   };
 }

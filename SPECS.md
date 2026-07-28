@@ -19,7 +19,7 @@ GradLab is a reproducible reinforcement-learning workbench for game-agent resear
 - Except for an explicitly declared deterministic-search workflow, acceptance and promotion must use goal-defined checkpoint evaluation rather than training metrics or playback behavior.
 - A deterministic-search workflow may accept only a policy that produces the goal’s success event within its resource limit, and the accepted policy must be published and playable.
 - Recorded datasets and results from recording, playback, integrity verification, or reexecution must never establish goal acceptance or checkpoint promotion.
-- Policy evaluation and playback must default to stochastic action sampling. Playback may explicitly select deterministic sampling, but must visibly preserve that choice and never use deterministic results as evaluation or promotion evidence.
+- Policy evaluation and playback must default to stochastic action sampling when the checkpoint defines a stochastic action distribution; fixed or programmatic policies must preserve their declared action-selection semantics without fabricating stochasticity. Playback may explicitly select another supported action-selection mode, but must visibly preserve that choice and never use playback-only counterfactual results as evaluation or promotion evidence.
 
 ### Provenance and Security
 
@@ -51,6 +51,7 @@ GradLab is a reproducible reinforcement-learning workbench for game-agent resear
 - Bare playback must open a searchable repository-backed project-to-goal selection flow followed by W&B-backed run and public-checkpoint selection; project, goal, run, and checkpoint selections must have hierarchical resource routes with browser-history navigation; checkpoint lists must show available goal-required acceptance results without fabricating unavailable partial evidence; a less-specific CLI W&B reference must preselect its matching level, while an exact CLI checkpoint source may enter playback directly.
 - Run-selection views must visibly distinguish checked-in recipes from launch-time configuration overrides and make exact override values searchable without requiring a new checked-in recipe.
 - Interactive playback must provide independently arrangeable, synchronized views of game frames, policy inputs and decisions, transition facts, and bounded histories without inspection changing the trajectory or policy randomness.
+- Playback must declare policy introspection capabilities, present only semantically applicable actor, critic, action-value, program, attribution, and calibration diagnostics, and visibly distinguish unsupported, not-yet-observed, and contract-incomparable data without fabricating values.
 - Critic calibration diagnostics must compare value estimates with realized returns only when environment, reward, discount, action-sampling, and episode-boundary/bootstrap semantics match training; otherwise the comparison must be visibly unavailable.
 - Human control must preserve declared action semantics, fail safe when focus or control is lost, and keep all human-intervened results ineligible for acceptance or promotion.
 

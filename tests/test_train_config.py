@@ -104,6 +104,25 @@ class TrainConfigFieldSchemaTests(unittest.TestCase):
         self.assertEqual(eval_args.max_steps, 123)
         self.assertFalse(hasattr(eval_args, "max_episode_steps"))
 
+    def test_obs_resize_is_canonical_and_square_cli_alias_is_boundary_only(self) -> None:
+        parser = argparse.ArgumentParser()
+        add_env_config_args(
+            parser,
+            max_steps_default=987,
+            defaults=EnvConfig(),
+            parse_json_value=json.loads,
+            parse_obs_crop=lambda value: tuple(int(item) for item in value.split(",")),
+        )
+
+        self.assertEqual(parser.parse_args(["--obs-resize", "72,96"]).obs_resize, (72, 96))
+        self.assertEqual(parser.parse_args(["--observation-size", "72"]).obs_resize, (72, 72))
+        self.assertEqual(parser.parse_args(["--hud-crop-top", "24"]).obs_crop, (24, 0, 0, 0))
+        self.assertIsNone(parser.parse_args(["--hud-crop-top", "-1"]).obs_crop)
+        normalized = validate_and_normalize_train_config({"obs_resize": [72, 96]})
+        self.assertEqual(normalized["obs_resize"], (72, 96))
+        with self.assertRaisesRegex(ValueError, "both be zero or both be positive"):
+            validate_and_normalize_train_config({"obs_resize": [0, 96]})
+
     def test_task_resolves_to_train_config_field(self) -> None:
         field = train_config_field_for_key("task")
 

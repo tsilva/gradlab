@@ -5,6 +5,7 @@ import {
   compatibleMetricKeys,
   decodeDynamicSegment,
   descriptorCatalog,
+  descriptorAvailability,
   descriptorFor,
   descriptorValue,
   dynamicDescriptorKey,
@@ -91,4 +92,63 @@ test("the final chart cursor stays inside the canvas clipping edge", () => {
   const plot = { left: 20, right: 200 };
   assert.equal(lineCursorX(plot, 0, 5), 21);
   assert.equal(lineCursorX(plot, 4, 5), 199);
+});
+
+test("policy descriptors distinguish unsupported, pending, and incomparable data", () => {
+  const dqn = {
+    policy: {
+      algorithm_id: "dqn",
+      introspection: ["action_value"],
+    },
+    transition: {
+      decision: {
+        selected_q_value: 1.25,
+      },
+    },
+    session: { critic_comparison: { reasons: [] } },
+  };
+  assert.equal(
+    descriptorAvailability(descriptorFor("policy/value"), { snapshot: dqn }).status,
+    "unsupported",
+  );
+  assert.equal(
+    descriptorAvailability(
+      descriptorFor("policy/selected-q-value"),
+      { snapshot: dqn },
+    ).status,
+    "available",
+  );
+
+  const ppoStart = {
+    policy: {
+      algorithm_id: "ppo",
+      introspection: ["state_value"],
+    },
+    transition: null,
+    session: { critic_comparison: { reasons: [] } },
+  };
+  assert.equal(
+    descriptorAvailability(
+      descriptorFor("policy/value"),
+      { snapshot: ppoStart },
+    ).status,
+    "not-yet-observed",
+  );
+
+  const incomparable = {
+    ...ppoStart,
+    transition: { decision: { value: 2 } },
+    session: {
+      critic_comparison: {
+        reasons: ["active policy environment differs from training"],
+      },
+    },
+  };
+  assert.equal(
+    descriptorAvailability(
+      descriptorFor("policy/realized-return"),
+      { snapshot: incomparable },
+    ).status,
+    "contract-incomparable",
+  );
 });

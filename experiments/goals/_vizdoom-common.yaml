@@ -54,7 +54,7 @@ train:
       frame_skip: 4
       max_pool_frames: false
       sticky_action_prob: 0.0
-      observation_size: 84
+      obs_resize: [84, 84]
       obs_crop: [0, 0, 0, 0]
       obs_crop_mode: remove
       obs_crop_fill: 0

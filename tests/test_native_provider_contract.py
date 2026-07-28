@@ -325,7 +325,7 @@ class BreakoutTurboProviderTests(unittest.TestCase):
             "frame_skip": 4,
             "max_pool_frames": False,
             "sticky_action_prob": 0.0,
-            "observation_size": 84,
+            "obs_resize": (84, 84),
             "obs_crop": (0, 0, 0, 0),
             "obs_crop_mode": "remove",
             "obs_crop_fill": 0,
@@ -570,7 +570,7 @@ class MarioNativeProviderTests(unittest.TestCase):
             "state": "Level1-1",
             "task": {
                 "id": "mario",
-                "action": {"set": "basic"},
+                "action": {"set": "native"},
                 "signals": {
                     "x": ["xscrollHi", "xscrollLo"],
                     "score": "score",
@@ -599,7 +599,6 @@ class MarioNativeProviderTests(unittest.TestCase):
     def test_readable_goal_enum_args_normalize_to_provider_enums(self) -> None:
         config = self.config(
             env_args={
-                "action_set": None,
                 "use_restricted_actions": "basic",
                 "inttype": "stable",
                 "obs_type": "image",
@@ -648,7 +647,6 @@ class MarioNativeProviderTests(unittest.TestCase):
         config = self.config(
             env_provider="stable-retro-turbo",
             env_args={
-                "action_set": None,
                 "use_restricted_actions": "basic",
                 "inttype": "stable",
                 "obs_type": "image",

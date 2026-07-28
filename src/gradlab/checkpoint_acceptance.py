@@ -19,7 +19,7 @@ from gradlab.seeds import EVAL_SEED_START
 from gradlab.rom_assets import manifest_from_train_config, validate_rom_asset_manifest
 
 
-ACCEPTANCE_PROTOCOL_VERSION = 1
+ACCEPTANCE_PROTOCOL_VERSION = 2
 EPISODE_MANIFEST_VERSION = 1
 EVIDENCE_POLICY_VERSION = 1
 SEED_PROTOCOL = "vector-lane-v1"
@@ -99,6 +99,7 @@ class CheckpointEvalContractCompiler:
     max_steps: int
     seed: int
     seed_protocol: str
+    action_sampling: str
     acceptance: list[dict[str, Any]] | None
     asset: dict[str, Any] | None
 
@@ -147,6 +148,15 @@ class CheckpointEvalContractCompiler:
         seed_protocol = str(seed_config.get("checkpoint_eval_seed_protocol") or "")
         if seed_protocol != SEED_PROTOCOL:
             raise ValueError(f"unsupported checkpoint eval seed protocol: {seed_protocol!r}")
+        backend_value = train_config.get("training_backend")
+        backend = backend_value if isinstance(backend_value, Mapping) else {}
+        from gradlab.policy_registry import (
+            backend_provenance_algorithm,
+            default_action_selection_mode,
+        )
+
+        algorithm_id = backend_provenance_algorithm(str(backend.get("id") or ""))
+        action_sampling = default_action_selection_mode(algorithm_id)
 
         acceptance_value = train_config.get("checkpoint_eval_acceptance")
         acceptance: list[dict[str, Any]] | None = None
@@ -188,6 +198,7 @@ class CheckpointEvalContractCompiler:
             max_steps=checkpoint_eval_max_steps(train_config),
             seed=seed,
             seed_protocol=seed_protocol,
+            action_sampling=action_sampling,
             acceptance=acceptance,
             asset=asset,
         )
@@ -203,12 +214,13 @@ class CheckpointEvalContractCompiler:
                 max_steps=self.max_steps,
                 seed=self.seed,
                 seed_protocol=self.seed_protocol,
+                action_sampling=self.action_sampling,
                 acceptance=self.acceptance,
                 asset=self.asset,
             )
         return {
             "environment": deepcopy(self.environment),
-            "action_sampling": "stochastic",
+            "action_sampling": self.action_sampling,
             "episodes": self.episodes,
             "n_envs": self.n_envs,
             "max_steps": self.max_steps,
@@ -302,6 +314,7 @@ def build_checkpoint_eval_contract(
     seed_protocol: str,
     acceptance: Sequence[Mapping[str, Any]],
     asset: Mapping[str, Any] | None = None,
+    action_sampling: str = "stochastic",
 ) -> dict[str, Any]:
     if int(max_steps) < 1:
         raise ValueError("acceptance max_steps must be positive")
@@ -309,6 +322,9 @@ def build_checkpoint_eval_contract(
         raise ValueError("acceptance seed must be non-negative")
     if str(seed_protocol) != SEED_PROTOCOL:
         raise ValueError(f"unsupported checkpoint eval seed protocol: {seed_protocol!r}")
+    action_sampling = str(action_sampling).strip()
+    if action_sampling not in {"stochastic", "epsilon_greedy", "program"}:
+        raise ValueError(f"unsupported checkpoint eval action selection: {action_sampling!r}")
     rules = normalize_metric_threshold_rules(acceptance, label="goal.eval.acceptance")
     if not rules:
         raise ValueError("goal.eval.acceptance must contain at least one rule")
@@ -325,7 +341,7 @@ def build_checkpoint_eval_contract(
         "n_envs": int(n_envs),
         "max_steps": int(max_steps),
         "deterministic": False,
-        "action_sampling": "stochastic",
+        "action_sampling": action_sampling,
         "seed": int(seed),
         "seed_protocol": str(seed_protocol),
         "acceptance": rules,

@@ -53,7 +53,7 @@ export function mount({ definition, services }) {
             <input id="next-episode-seed" data-seed inputmode="numeric">
           </label>
           <div class="playback-sampling">
-            <label for="playback-sampling">Sampling</label>
+            <label for="playback-sampling">Action selection</label>
             <select id="playback-sampling" data-sampling aria-describedby="playback-sampling-hint">
               <option value="stochastic">Stochastic</option>
               <option value="deterministic">Deterministic</option>
@@ -63,7 +63,7 @@ export function mount({ definition, services }) {
             <button type="button" data-driver-option="policy" class="quiet button-with-icon driver-option" aria-pressed="true" aria-label="Use policy driver for next episode" title="Use policy driver for next episode"><svg class="icon" aria-hidden="true"><use href="/assets/tabler-icons.svg#ti-brain"></use></svg><span>Policy</span></button>
             <button type="button" data-driver-option="human" class="quiet button-with-icon driver-option" aria-pressed="false" aria-label="Use human driver for next episode" title="Use human driver for next episode"><svg class="icon" aria-hidden="true"><use href="/assets/tabler-icons.svg#ti-hand-grab"></use></svg><span>Human</span></button>
           </div>
-          <p id="playback-sampling-hint" class="control-hint">Applies to the next playback episode only · evaluation remains stochastic</p>
+          <p id="playback-sampling-hint" class="control-hint">Applies to the next playback episode only</p>
           <button data-command="reset-episode" data-reset-episode class="quiet button-with-icon control-wide" aria-label="Reset episode" title="Reset to the configured seed and pause"><svg class="icon" aria-hidden="true"><use href="/assets/tabler-icons.svg#ti-refresh"></use></svg><span>Reset episode</span></button>
           <button data-command="next-episode" data-next-episode class="primary button-with-icon control-wide" aria-label="Play next episode" title="Available after the current episode ends"><svg class="icon" aria-hidden="true"><use href="/assets/tabler-icons.svg#ti-player-play"></use></svg><span>Play next episode</span></button>
           <p data-next-episode-hint class="control-hint">Available after the current episode ends</p>
@@ -95,6 +95,13 @@ export function mount({ definition, services }) {
   const applyTermination = element.querySelector("[data-apply-termination]");
   let nextDriver = "policy";
   let wasAwaitingNextEpisode = false;
+  const selectionLabel = (mode) => ({
+    stochastic: "Stochastic",
+    deterministic: "Deterministic",
+    epsilon_greedy: "Epsilon-greedy",
+    greedy: "Greedy",
+    program: "Program",
+  })[mode] || String(mode).replaceAll("_", " ");
   const commands = {
     pause: () => services.pauseCurrentPlayback(),
     play: () => services.playFromCurrentPosition(),
@@ -173,7 +180,12 @@ export function mount({ definition, services }) {
     resetEpisode.disabled = !canResetEpisode;
     nextEpisode.disabled = !canPrepareNextEpisode;
     seed.disabled = !canResetEpisode;
-    sampling.disabled = !canPrepareNextEpisode;
+    const supportedModes = (
+      state.liveSnapshot?.policy?.action_selection?.supported_modes
+      || state.snapshot?.policy?.action_selection?.supported_modes
+      || []
+    );
+    sampling.disabled = !canPrepareNextEpisode || supportedModes.length <= 1;
     driverOptions.forEach((option) => {
       option.disabled = recording || !canPrepareNextEpisode;
     });
@@ -207,11 +219,29 @@ export function mount({ definition, services }) {
       if (view.inspection) snapshot = services.getState().liveSnapshot || snapshot;
       if (!snapshot) { updateControl(); return; }
       const session = snapshot.session || {};
+      const actionSelection = snapshot.policy?.action_selection || {};
+      const supportedModes = Array.isArray(actionSelection.supported_modes)
+        ? actionSelection.supported_modes
+        : ["stochastic", "deterministic"];
+      const selectionKey = JSON.stringify(supportedModes);
+      if (sampling.dataset.modes !== selectionKey) {
+        sampling.dataset.modes = selectionKey;
+        sampling.replaceChildren(...supportedModes.map((mode) => {
+          const option = document.createElement("option");
+          option.value = mode;
+          option.textContent = selectionLabel(mode);
+          return option;
+        }));
+      }
       if (document.activeElement !== fps) fps.value = Number(session.target_fps || 0);
       const awaitingNextEpisode = Boolean(session.awaiting_next_episode);
       if (!awaitingNextEpisode || !wasAwaitingNextEpisode) {
         if (document.activeElement !== seed) seed.value = text(session.seed, "");
-        sampling.value = session.sampling_mode || "stochastic";
+        sampling.value = actionSelection.requested_mode
+          || session.sampling_mode
+          || actionSelection.default_mode
+          || supportedModes[0]
+          || "";
         nextDriver = snapshot.driver || "policy";
       }
       wasAwaitingNextEpisode = awaitingNextEpisode;
@@ -283,6 +313,10 @@ export function mount({ definition, services }) {
       nextEpisodeHeading.textContent = recording ? "Driver" : "Episode";
       seedField.hidden = recording;
       playbackSampling.hidden = recording;
+      const samplingHint = element.querySelector("#playback-sampling-hint");
+      samplingHint.textContent = supportedModes.length === 1
+        ? `${selectionLabel(supportedModes[0])} is fixed by this checkpoint.`
+        : "Applies to the next playback episode only; departures are playback-only.";
       nextEpisode.hidden = recording;
       resetEpisode.hidden = recording;
       nextEpisodeHint.hidden = recording;

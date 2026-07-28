@@ -47,6 +47,7 @@ def build_execution_contract(
     recipe_sha256: str,
     recipe_format_version: int,
     evaluation_contract_sha256: str,
+    action_sampling: str = "stochastic",
 ) -> dict[str, Any]:
     """Build the hash-bound execution envelope used by one Modal attempt."""
 
@@ -64,6 +65,7 @@ def build_execution_contract(
         "n_envs": int(n_envs),
         "max_steps": int(max_steps),
         "deterministic": False,
+        "action_sampling": str(action_sampling),
         "seed": int(seed),
         "seed_protocol": seed_protocol,
         "recipe_sha256": _sha256(recipe_sha256, label="recipe hash"),

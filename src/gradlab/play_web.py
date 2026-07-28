@@ -27,7 +27,7 @@ from gradlab.play_debug import ANSI_PATTERN, PolicyDecision, model_input_lines
 from gradlab.seeds import validate_playback_seed
 
 
-PROTOCOL_VERSION = 3
+PROTOCOL_VERSION = 4
 HISTORY_LIMIT = 4096
 COMMAND_QUEUE_LIMIT = 64
 CLIENT_QUEUE_LIMIT = 64
@@ -126,6 +126,8 @@ def _decision_payload(decision: PolicyDecision | None) -> dict[str, Any] | None:
         return None
     return {
         "distribution": decision.distribution_kind,
+        "requested_action_selection_mode": decision.requested_action_selection_mode,
+        "action_selection_mode": decision.action_selection_mode,
         "raw_action": _json_value(decision.raw_action),
         "executed_action": _json_value(decision.executed_action),
         "value": decision.value,
@@ -136,6 +138,12 @@ def _decision_payload(decision: PolicyDecision | None) -> dict[str, Any] | None:
         "component_probabilities": _json_value(decision.component_probabilities),
         "mean": _json_value(decision.mean),
         "stddev": _json_value(decision.stddev),
+        "q_values": _json_value(decision.q_values),
+        "selected_q_value": decision.selected_q_value,
+        "selected_q_rank": decision.selected_q_rank,
+        "exploration_rate": decision.exploration_rate,
+        "exploratory": decision.exploratory,
+        "program": _json_value(decision.program),
         "sampled": decision.sampled,
         "selected_action": decision.selected_discrete_action,
         "selected_probability": decision.selected_probability,
@@ -248,8 +256,10 @@ def history_point_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
         "reward_shaped": reward["shaped"],
         "return": reward["return"],
         "value": decision.get("value"),
+        "selected_q_value": decision.get("selected_q_value"),
         "entropy": decision.get("entropy"),
         "log_probability": decision.get("log_probability"),
+        "action_selection_mode": decision.get("action_selection_mode"),
         "outcome": payload.get("outcome"),
         "events": payload["events"],
         "boundary": bool(payload.get("boundary")),
@@ -534,7 +544,41 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
         self.config_text = ANSI_PATTERN.sub("", config_text)
         self.run_state = "paused"
         self.driver = "policy"
-        self.sampling_mode = "stochastic"
+        capabilities_value = getattr(session, "policy_capabilities", {})
+        self.policy_capabilities = (
+            dict(capabilities_value) if isinstance(capabilities_value, Mapping) else {}
+        )
+        if not self.policy_capabilities:
+            self.policy_capabilities = {
+                "algorithm_id": None,
+                "action_selection": {
+                    "supported_modes": ["stochastic", "deterministic"],
+                    "default_mode": "stochastic",
+                },
+                "introspection": [
+                    "actor_distribution",
+                    "state_value",
+                    "selected_action_log_probability",
+                    "entropy",
+                ],
+            }
+        action_selection = self.policy_capabilities.get("action_selection")
+        action_selection = (
+            dict(action_selection) if isinstance(action_selection, Mapping) else {}
+        )
+        self.supported_action_selection_modes = tuple(
+            str(mode)
+            for mode in action_selection.get("supported_modes", ())
+            if str(mode)
+        )
+        if not self.supported_action_selection_modes:
+            self.supported_action_selection_modes = ("stochastic", "deterministic")
+        default_mode = str(action_selection.get("default_mode") or "")
+        self.sampling_mode = default_mode or (
+            self.supported_action_selection_modes[0]
+            if self.supported_action_selection_modes
+            else "stochastic"
+        )
         self.target_fps = max(0.0, float(args.fps))
         self.remaining_steps = 0
         self.continue_target: str | None = None
@@ -560,7 +604,10 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
             for reason in self.contract_details.get("comparison_reasons", [])
             if str(reason)
         ]
-        if self.value_contract is None:
+        introspection = set(self.policy_capabilities.get("introspection") or ())
+        if "state_value" not in introspection:
+            reasons.append("checkpoint does not expose a state-value critic")
+        elif self.value_contract is None:
             reasons.append("checkpoint has no training value contract")
         else:
             expected_discount = self.value_contract.get("discount")
@@ -573,8 +620,20 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
                 reasons.append("loaded model discount differs from training")
         if self.driver != "policy":
             reasons.append("human-driven trajectories are not on-policy")
-        if self.sampling_mode != "stochastic":
-            reasons.append("deterministic trajectories are not sampled from the training policy")
+        expected_selection = (
+            str(self.value_contract.get("action_sampling") or "stochastic")
+            if self.value_contract is not None
+            else ""
+        )
+        if expected_selection and self.sampling_mode != expected_selection:
+            reasons.append(
+                "deterministic trajectories are not sampled from the training policy"
+                if (
+                    expected_selection == "stochastic"
+                    and self.sampling_mode == "deterministic"
+                )
+                else "active action selection differs from the critic training contract"
+            )
         active_config = getattr(self.session, "config", None)
         base_config = getattr(self.session, "termination_base_config", active_config)
         active_task = (
@@ -626,6 +685,32 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
             "run_state": self.run_state,
             "driver": self.driver,
             "interactive": self.session.interactive,
+            "policy": {
+                **self.policy_capabilities,
+                "provenance": dict(
+                    getattr(self.session, "policy_provenance", {})
+                ),
+                "action_selection": {
+                    "supported_modes": list(self.supported_action_selection_modes),
+                    "default_mode": (
+                        (self.policy_capabilities.get("action_selection") or {}).get(
+                            "default_mode"
+                        )
+                        if isinstance(
+                            self.policy_capabilities.get("action_selection"),
+                            Mapping,
+                        )
+                        else None
+                    ),
+                    "requested_mode": self.sampling_mode,
+                    "effective_mode": (
+                        current.get("decision", {}).get("action_selection_mode")
+                        if isinstance(current, Mapping)
+                        and isinstance(current.get("decision"), Mapping)
+                        else self.sampling_mode
+                    ),
+                },
+            },
             "status_message": self._status_message,
             "session": {
                 "episode": self.session.episode,
@@ -784,8 +869,11 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
                 if not self._can_start_next_episode():
                     raise ValueError(f"episode limit reached ({self.boundaries})")
                 mode = str(command.payload.get("sampling_mode") or self.sampling_mode)
-                if mode not in {"stochastic", "deterministic"}:
-                    raise ValueError(f"unsupported sampling mode {mode!r}")
+                if mode not in self.supported_action_selection_modes:
+                    supported = ", ".join(self.supported_action_selection_modes) or "none"
+                    raise ValueError(
+                        f"unsupported action-selection mode {mode!r}; supported: {supported}"
+                    )
                 driver = str(command.payload.get("driver") or self.driver)
                 if driver not in {"policy", "human"}:
                     raise ValueError(f"unsupported driver {driver!r}")
@@ -873,7 +961,13 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
             transition = (
                 self.session.step_human(self._human_labels())
                 if self.driver == "human"
-                else self.session.step(deterministic=self.sampling_mode == "deterministic")
+                else (
+                    self.session.step(action_selection_mode=self.sampling_mode)
+                    if hasattr(self.session, "policy_runtime")
+                    else self.session.step(
+                        deterministic=self.sampling_mode == "deterministic"
+                    )
+                )
             )
         except Exception as exc:
             self._set_state("paused", message=str(exc))
@@ -984,6 +1078,7 @@ class DatasetPlaybackRunner(_PlaybackRunnerProtocol):
             "run_state": self.run_state,
             "driver": "recorded",
             "interactive": False,
+            "policy": None,
             "status_message": self._status_message,
             "session": {
                 "episode": 1,
@@ -1323,6 +1418,7 @@ class HumanRecordingRunner(_PlaybackRunnerProtocol):
                 "run_state": self.run_state,
                 "driver": "human",
                 "interactive": True,
+                "policy": None,
                 "status_message": self._status_message,
                 "session": {
                     "episode": 1,
