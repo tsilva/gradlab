@@ -267,6 +267,34 @@ def test_next_episode_dispatches_sampling_and_driver_without_restarting() -> Non
     session.step.assert_called_once_with(deterministic=True)
 
 
+def test_next_episode_applies_selected_termination_conditions() -> None:
+    session = argparse.Namespace(
+        config={"game": "Game-v0"},
+        episode=2,
+        last_transition=None,
+        set_termination_conditions=Mock(),
+    )
+    runner = WebPlaybackRunner(session, human_args(episodes=0), config_text="")
+    runner._publish = Mock()
+    runner.awaiting_next_episode = True
+
+    runner._apply(
+        PlaybackCommand(
+            "next",
+            "client",
+            "next_episode",
+            {
+                "enabled_termination_conditions": ["event:life_loss"],
+            },
+            None,
+        )
+    )
+
+    session.set_termination_conditions.assert_called_once_with(["event:life_loss"])
+    assert runner.awaiting_next_episode is False
+    assert runner.run_state == "playing"
+
+
 def test_reset_episode_uses_visible_seed_and_pauses_at_step_zero() -> None:
     session = argparse.Namespace(
         config={"game": "Game-v0"},
@@ -296,6 +324,36 @@ def test_reset_episode_uses_visible_seed_and_pauses_at_step_zero() -> None:
     assert runner.awaiting_next_episode is False
     assert runner.run_state == "paused"
     assert runner._status_message == "episode reset · seed 77"
+
+
+def test_reset_episode_applies_selected_termination_conditions() -> None:
+    session = argparse.Namespace(
+        config={"game": "Game-v0"},
+        active_seed=42,
+        last_transition=None,
+        reset_episode=Mock(),
+        set_termination_conditions=Mock(),
+    )
+    runner = WebPlaybackRunner(session, human_args(episodes=0), config_text="")
+    runner._publish = Mock()
+
+    runner._apply(
+        PlaybackCommand(
+            "reset",
+            "client",
+            "reset_episode",
+            {
+                "seed": "77",
+                "enabled_termination_conditions": ["event:life_loss"],
+            },
+            None,
+        )
+    )
+
+    session.reset_episode.assert_called_once_with(77)
+    session.set_termination_conditions.assert_called_once_with(["event:life_loss"])
+    assert runner.awaiting_next_episode is False
+    assert runner.run_state == "paused"
 
 
 def test_reset_episode_defaults_to_the_active_seed() -> None:

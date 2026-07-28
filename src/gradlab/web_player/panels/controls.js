@@ -40,8 +40,7 @@ export function mount({ definition, services }) {
           <legend>Episode termination</legend>
           <p class="control-hint" data-termination-source></p>
           <div class="termination-options" data-termination-options></div>
-          <button data-command="apply-termination" data-apply-termination class="quiet control-wide" type="button">Apply and reset episode</button>
-          <p class="control-hint">Changes are available before the first step or between episodes.</p>
+          <p class="control-hint">Selections apply with Reset episode or Play next episode.</p>
         </fieldset>
         <div class="next-episode-settings-body" data-next-episode-settings>
           <button data-command="reset-episode" data-reset-episode class="quiet button-with-icon control-wide" aria-label="Reset episode" title="Reset to the configured seed and pause"><svg class="icon" aria-hidden="true"><use href="/assets/tabler-icons.svg#ti-refresh"></use></svg><span>Reset episode</span></button>
@@ -67,8 +66,13 @@ export function mount({ definition, services }) {
   const terminationSettings = element.querySelector("[data-termination-settings]");
   const terminationOptions = element.querySelector("[data-termination-options]");
   const terminationSource = element.querySelector("[data-termination-source]");
-  const applyTermination = element.querySelector("[data-apply-termination]");
   let wasAwaitingNextEpisode = false;
+  const enabledTerminationConditions = () => {
+    const inputs = [...terminationOptions.querySelectorAll("input")];
+    return inputs.length
+      ? inputs.filter((input) => input.checked).map((input) => input.value)
+      : null;
+  };
   const selectionLabel = (mode) => ({
     stochastic: "Stochastic",
     deterministic: "Deterministic",
@@ -79,17 +83,15 @@ export function mount({ definition, services }) {
   const commands = {
     "reset-episode": () => services.command("reset_episode", {
       seed: seed.value,
+      enabled_termination_conditions: enabledTerminationConditions(),
     }),
     "next-episode": () => services.command("next_episode", {
       sampling_mode: sampling.value,
       driver: "policy",
+      enabled_termination_conditions: enabledTerminationConditions(),
     }),
     "set-contract-mode": () => services.command("set_contract_mode", {
       mode: contractMode.value,
-    }),
-    "apply-termination": () => services.command("set_termination_conditions", {
-      enabled: [...terminationOptions.querySelectorAll("input:checked")]
-        .map((input) => input.value),
     }),
   };
   element.querySelectorAll("[data-command]").forEach((button) => {
@@ -112,7 +114,6 @@ export function mount({ definition, services }) {
       && state.hasControl
       && (Number(session.step || 0) === 0 || Boolean(session.awaiting_next_episode))
     );
-    applyTermination.disabled = !canChangeTermination;
     terminationOptions.querySelectorAll("input").forEach((input) => {
       input.disabled = !canChangeTermination;
     });

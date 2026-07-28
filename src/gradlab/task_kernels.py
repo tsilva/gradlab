@@ -367,6 +367,7 @@ def _mario_step_kernel(
     terminate_on_level_change,
     terminate_on_game_complete,
     stall_is_failure,
+    truncate_on_stall,
     emit_life_loss,
     emit_level_change,
     emit_game_complete,
@@ -440,7 +441,7 @@ def _mario_step_kernel(
         )
         if stall_is_failure and is_stalled:
             terminated = True
-        truncated = (is_stalled and not stall_is_failure) or (
+        truncated = (is_stalled and truncate_on_stall) or (
             max_episode_steps > 0 and episode_steps[lane] >= max_episode_steps
         )
         if terminated:
@@ -1320,6 +1321,7 @@ class MarioTaskConfig:
     game_complete_mode: int = -1
     terminate_on_game_complete: bool = False
     stall_is_failure: bool = False
+    truncate_on_stall: bool = True
     task_conditioning: bool = False
     task_values: tuple[tuple[int | str, ...], ...] = ()
     emit_life_loss: bool = True
@@ -1415,6 +1417,7 @@ class MarioTaskConfig:
             task_values = tuple(parsed_values)
         failure_events = set(termination.get("failure", ()))
         success_events = set(termination.get("success", ()))
+        timeout_events = set(termination.get("timeout", ()))
         stalled_rule = events.get("stalled", {})
         stalled_steps = (
             int(stalled_rule.get("steps", 0)) if isinstance(stalled_rule, Mapping) else 0
@@ -1458,6 +1461,7 @@ class MarioTaskConfig:
             terminate_on_level_change="level_change" in success_events,
             terminate_on_game_complete="game_complete" in success_events,
             stall_is_failure="stalled" in failure_events,
+            truncate_on_stall="stalled" in timeout_events,
             task_conditioning=task_conditioning,
             task_values=task_values,
             emit_life_loss="life_loss" in events,
@@ -1663,6 +1667,7 @@ class MarioTaskKernel:
             config.terminate_on_level_change,
             config.terminate_on_game_complete,
             config.stall_is_failure,
+            config.truncate_on_stall,
             config.emit_life_loss,
             config.emit_level_change,
             config.emit_game_complete,

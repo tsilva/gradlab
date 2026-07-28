@@ -855,6 +855,14 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
         if self.awaiting_next_episode:
             raise ValueError("episode complete; choose Play next episode")
 
+    @staticmethod
+    def _validate_enabled_termination_conditions(enabled: object) -> list[str]:
+        if not isinstance(enabled, list) or any(
+            not isinstance(value, str) for value in enabled
+        ):
+            raise ValueError("enabled termination conditions must be a list of ids")
+        return enabled
+
     def _apply(self, command: PlaybackCommand) -> None:
         if (
             bool(command.payload.get("strict_revision", False))
@@ -905,6 +913,15 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
                 driver = str(command.payload.get("driver") or self.driver)
                 if driver not in {"policy", "human"}:
                     raise ValueError(f"unsupported driver {driver!r}")
+                enabled_termination_conditions = command.payload.get(
+                    "enabled_termination_conditions"
+                )
+                if enabled_termination_conditions is not None:
+                    self.session.set_termination_conditions(
+                        self._validate_enabled_termination_conditions(
+                            enabled_termination_conditions
+                        )
+                    )
                 self.session.last_transition = None
                 self.sampling_mode = mode
                 self.driver = driver
@@ -923,7 +940,18 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
                 if isinstance(seed_value, bool):
                     raise ValueError("seed must be an integer")
                 seed = None if seed_value in {None, ""} else validate_playback_seed(int(seed_value))
+                enabled_termination_conditions = command.payload.get(
+                    "enabled_termination_conditions"
+                )
+                if enabled_termination_conditions is not None:
+                    enabled_termination_conditions = (
+                        self._validate_enabled_termination_conditions(
+                            enabled_termination_conditions
+                        )
+                    )
                 self.session.reset_episode(seed)
+                if enabled_termination_conditions is not None:
+                    self.session.set_termination_conditions(enabled_termination_conditions)
                 self.clear_input()
                 self.awaiting_next_episode = False
                 self.remaining_steps = 0
@@ -945,11 +973,9 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
                         "termination conditions can change before the first step "
                         "or between episodes"
                     )
-                enabled = command.payload.get("enabled")
-                if not isinstance(enabled, list) or any(
-                    not isinstance(value, str) for value in enabled
-                ):
-                    raise ValueError("enabled termination conditions must be a list of ids")
+                enabled = self._validate_enabled_termination_conditions(
+                    command.payload.get("enabled")
+                )
                 was_awaiting_next_episode = self.awaiting_next_episode
                 self.session.set_termination_conditions(enabled)
                 self.session.last_transition = None
