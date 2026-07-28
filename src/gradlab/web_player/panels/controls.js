@@ -123,6 +123,7 @@ export function mount({ definition, services }) {
   });
   const updateControl = () => {
     const state = services.getState();
+    fps.disabled = !state.hasControl;
     element.querySelectorAll("button:not([data-panel-menu]):not([data-drag-handle]):not(.panel-resize)")
       .forEach((button) => { button.disabled = !state.hasControl; });
     const session = state.liveSnapshot?.session || state.snapshot?.session || {};
