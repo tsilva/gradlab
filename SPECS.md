@@ -40,6 +40,7 @@ GradLab is a reproducible reinforcement-learning workbench for game-agent resear
 
 ### Training Results and Publication
 
+- Every training backend must honor the common local and queued lifecycle contract for progress reporting, canonical outcome metrics, checkpoint policy, graceful stopping, and final artifact production; algorithm-specific telemetry may extend but not replace it.
 - Training must durably preserve authoritative, unambiguous metrics and checkpoints by default, keep scientific evidence separate from job state and diagnostics, and prevent observability systems from throttling training or determining scientific outcomes.
 - Training and evaluation metrics for one logical run must be available together, with one writer responsible for the metrics run so evaluation cannot race training.
 - Heavy checkpoints, evaluation evidence, replays, and recovery data must live in object storage rather than the metrics service.

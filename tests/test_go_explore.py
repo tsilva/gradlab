@@ -10,8 +10,14 @@ import numpy as np
 from gymnasium import spaces
 
 from gradlab.action_program import ActionProgramPolicy
+from gradlab.batch_runtime import EpisodeRecord
 from gradlab.env import EnvConfig
 from gradlab.go_explore import GoExploreSearch
+from gradlab.metric_names import (
+    TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_MEAN,
+    TRAIN_OUTCOME_SUCCESS_CURRENT_RATE_MEAN,
+)
+from gradlab.task_kernels import Outcome
 from gradlab.training.go_explore import (
     GO_EXPLORE_PROVIDER_INFO_KEYS,
     _runtime_environment_config,
@@ -19,6 +25,12 @@ from gradlab.training.go_explore import (
     run_go_explore,
 )
 from gradlab.training_backend import BackendContext, GracefulStopFlag
+from gradlab.training_lifecycle import (
+    TerminalReason,
+    TrainingLifecycleOptions,
+    TrainingSession,
+)
+from gradlab.training_metrics import EpisodeMetricsReducer
 
 
 class GoExploreSearchTests(unittest.TestCase):
@@ -101,33 +113,66 @@ class GoExploreSearchTests(unittest.TestCase):
     def test_local_run_saves_only_one_final_or_interrupted_model(self) -> None:
         for interrupted in (False, True):
             with self.subTest(interrupted=interrupted), tempfile.TemporaryDirectory() as tmp:
-                save_policy, progress = self._run_backend(
+                checkpoints, progress, result = self._run_backend(
                     Path(tmp),
                     persist_intermediate_checkpoints=False,
                     interrupted=interrupted,
+                    completion_event=False,
+                    stop_on_first_completion=False,
                 )
 
-                save_policy.assert_called_once()
-                call = save_policy.call_args
-                self.assertEqual(call.kwargs["model_path"], Path(tmp) / "final_model.zip")
+                self.assertEqual(len(checkpoints), 1)
+                self.assertEqual(checkpoints[0]["path"], Path(tmp) / "final_model.zip")
                 self.assertEqual(
-                    call.kwargs["kind"],
+                    checkpoints[0]["kind"],
                     "interrupted" if interrupted else "final",
                 )
+                self.assertEqual(
+                    result.reason,
+                    TerminalReason.INTERRUPTED if interrupted else TerminalReason.RESOURCE_LIMIT,
+                )
                 self.assertEqual(progress.n, 1 if interrupted else 2)
-                self.assertEqual(progress.postfix["completed"], "no")
+                self.assertNotIn(
+                    TRAIN_OUTCOME_SUCCESS_CURRENT_RATE_MEAN,
+                    progress.metrics,
+                )
 
     def test_queued_run_preserves_intermediate_checkpoints(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            save_policy, _progress = self._run_backend(
+            checkpoints, _progress, _result = self._run_backend(
                 Path(tmp),
                 persist_intermediate_checkpoints=True,
                 interrupted=False,
+                completion_event=True,
+                stop_on_first_completion=False,
             )
 
         self.assertEqual(
-            [call.kwargs["kind"] for call in save_policy.call_args_list],
-            ["checkpoint", "checkpoint", "final"],
+            [checkpoint["kind"] for checkpoint in checkpoints],
+            ["checkpoint", "final"],
+        )
+
+    def test_local_run_stops_on_first_completion_without_evaluation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            checkpoints, progress, result = self._run_backend(
+                Path(tmp),
+                persist_intermediate_checkpoints=False,
+                interrupted=False,
+                completion_event=True,
+                stop_on_first_completion=True,
+            )
+
+        self.assertEqual([checkpoint["kind"] for checkpoint in checkpoints], ["final"])
+        self.assertEqual(checkpoints[0]["step"], 1)
+        self.assertEqual(result.reason, TerminalReason.ALGORITHM_SUCCESS)
+        self.assertEqual(progress.n, 1)
+        self.assertEqual(
+            progress.metrics[TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_MEAN],
+            10.0,
+        )
+        self.assertEqual(
+            progress.metrics[TRAIN_OUTCOME_SUCCESS_CURRENT_RATE_MEAN],
+            1.0,
         )
 
     @staticmethod
@@ -136,11 +181,16 @@ class GoExploreSearchTests(unittest.TestCase):
         *,
         persist_intermediate_checkpoints: bool,
         interrupted: bool,
-    ) -> tuple[mock.Mock, SimpleNamespace]:
+        completion_event: bool,
+        stop_on_first_completion: bool,
+    ) -> tuple[list[dict], SimpleNamespace, object]:
         stop_flag = GracefulStopFlag()
 
         class FakeRuntime:
             action_space = spaces.Discrete(2)
+
+            def __init__(self) -> None:
+                self.steps = 0
 
             def reset(self, *, seed: int) -> None:
                 del seed
@@ -151,6 +201,7 @@ class GoExploreSearchTests(unittest.TestCase):
 
             def step(self, actions):
                 del actions
+                self.steps += 1
                 return SimpleNamespace(
                     rewards=np.asarray([0.0]),
                     terminated=np.asarray([False]),
@@ -162,7 +213,25 @@ class GoExploreSearchTests(unittest.TestCase):
                 )
 
             def drain_records(self):
+                if completion_event and self.steps == 1:
+                    return (
+                        EpisodeRecord(
+                            lane=0,
+                            episode_index=0,
+                            start_id="Level1-1",
+                            episode_return=10.0,
+                            episode_length=1,
+                            terminated=True,
+                            truncated=False,
+                            outcome=Outcome.SUCCESS,
+                            events=("level_change",),
+                            metrics={"level_complete": True},
+                        ),
+                    )
                 return ()
+
+            def state_archive_summary(self):
+                return {}
 
             def close(self) -> None:
                 pass
@@ -171,6 +240,16 @@ class GoExploreSearchTests(unittest.TestCase):
             def __init__(self) -> None:
                 self.global_step = 0
                 self.archive = {}
+                self.archive_count = 1
+                self.archive_selection_count = 0
+                self.archive_visit_count = 0
+                self.archive_update_count = 0
+                self.archive_recent_new_cell_rate = 0.0
+                self.archive_recent_visit_window = 0
+                self.archive_visits_per_cell = 0.0
+                self.success_guided_cell_count = 0
+                self.success_guided_selection_count = 0
+                self.improvement_count = 0
 
             def initialize(self, cell_keys, initial_entries) -> None:
                 del cell_keys, initial_entries
@@ -189,36 +268,80 @@ class GoExploreSearchTests(unittest.TestCase):
                 )
 
             def take_completion_events(self):
-                return (SimpleNamespace(improved=True),)
+                return (SimpleNamespace(improved=True),) if completion_event else ()
 
             def best_candidate(self):
                 return SimpleNamespace(
                     episode_return=10.0,
                     progress=20.0,
-                    completed=False,
+                    completed=completion_event,
+                    step_count=1,
+                    runs=(),
+                )
+
+            def policy(self):
+                return SimpleNamespace(
+                    save=lambda path, **_kwargs: Path(path).write_bytes(b"policy")
                 )
 
         class FakeProgress:
             def __init__(self) -> None:
                 self.n = 0
-                self.postfix = {}
+                self.metrics = {}
                 self.closed = False
 
-            def update(self, value: int) -> None:
-                self.n += value
+            def start(self, *, total: int, initial: int, description: str) -> None:
+                del total, description
+                self.n = initial
 
-            def set_postfix(self, values, *, refresh: bool) -> None:
-                del refresh
-                self.postfix = dict(values)
+            def update(self, *, step: int, metrics, final: bool = False) -> None:
+                del final
+                self.n = step
+                self.metrics = dict(metrics)
+
+            def event(self, message: str) -> None:
+                del message
 
             def close(self) -> None:
                 self.closed = True
 
+        class FakeMetricStore:
+            def __init__(self) -> None:
+                self.checkpoints: list[dict] = []
+                self.payloads: list[tuple[dict, dict]] = []
+
+            def record_checkpoint(self, **kwargs):
+                self.checkpoints.append(dict(kwargs))
+                return len(self.checkpoints)
+
+            def append_metrics(self, payload, **kwargs):
+                self.payloads.append((dict(payload), dict(kwargs)))
+
         runtime = FakeRuntime()
         search = FakeSearch()
         progress = FakeProgress()
+        metric_store = FakeMetricStore()
         checkpoint_dir = root / "checkpoints"
-        checkpoint_dir.mkdir()
+        session = TrainingSession(
+            run_dir=root,
+            backend_id="gradlab.go-explore",
+            metric_store=metric_store,
+            wandb_enabled=False,
+            stop_flag=stop_flag,
+            early_stop_config=None,
+            attempt_id="attempt-test",
+            reducer=EpisodeMetricsReducer(
+                configured_starts=("Level1-1",),
+                track_success=True,
+            ),
+            options=TrainingLifecycleOptions(
+                console_mode="silent",
+                persist_intermediate_checkpoints=persist_intermediate_checkpoints,
+                stop_on_first_completion=stop_on_first_completion,
+            ),
+            progress_sink=progress,
+        )
+        session.configure_checkpoints(run_name="run-test", eval_required=False)
         context = BackendContext(
             train_config={
                 "attempt_id": "attempt-test",
@@ -249,10 +372,12 @@ class GoExploreSearchTests(unittest.TestCase):
             wandb_enabled=False,
             stop_flag=stop_flag,
             rom_binding=None,
-            compact_console=True,
-            persist_intermediate_checkpoints=persist_intermediate_checkpoints,
+            session=session,
         )
-        save_policy = mock.Mock(return_value=root / "model.zip")
+
+        def install_test_bundle(path, *, save_checkpoint, **_kwargs):
+            save_checkpoint(path)
+            return path
 
         with (
             mock.patch(
@@ -284,24 +409,21 @@ class GoExploreSearchTests(unittest.TestCase):
                 return_value=(b"cell",),
             ),
             mock.patch(
-                "gradlab.training.go_explore._publish_metrics",
-                return_value=False,
-            ),
-            mock.patch(
-                "gradlab.training.go_explore._save_policy",
-                save_policy,
-            ),
-            mock.patch(
-                "gradlab.training.go_explore.tqdm",
-                return_value=progress,
+                "gradlab.training.go_explore.install_model_bundle",
+                side_effect=install_test_bundle,
             ),
         ):
-            run_go_explore(context)
+            result = run_go_explore(context)
+        session.finalize(result)
 
-        return save_policy, SimpleNamespace(
-            n=progress.n,
-            postfix=progress.postfix,
-            closed=progress.closed,
+        return (
+            metric_store.checkpoints,
+            SimpleNamespace(
+                n=progress.n,
+                metrics=progress.metrics,
+                closed=progress.closed,
+            ),
+            result,
         )
 
 

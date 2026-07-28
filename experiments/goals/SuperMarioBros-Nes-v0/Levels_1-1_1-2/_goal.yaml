@@ -1,8 +1,7 @@
 defaults:
+- ../_goal-family-common@_global_
 - ../_reward-shapes-common@_global_
 - _self_
-goal_id: "{{ goal_id }}"
-evaluation_mode: evaluated
 tags:
 - "goal_id:{{ goal_id }}"
 - "recipe_id:{{ recipe_id }}"
@@ -16,83 +15,16 @@ objective:
   states:
   - Level1-1
   - Level1-2
-  rank:
-  - min(leader/checkpoint/step)
-  - max(eval/full/episode/return/mean)
 train:
-  checkpoint_freq: 250000
-  early_stop:
-    conditions:
-      return_plateau:
-        metric: train/episode/return/shaped/from/target/mean
-        trigger: no_improvement
-        direction: maximize
-        min_delta: 0.01
-        delta_mode: relative
-        start_after_steps: 1000000
-        patience_steps: 1000000
-        outcome: failure
-        action: stop
   environment:
-    env_provider: &mario_env_provider supermariobrosnes-turbo
     env_config:
-      <<: &mario_env_config
-        game: SuperMarioBros-Nes-v0
-        n_envs: 16
-        env_args:
-          scenario: scenario
-          info: data
-          # The provider resolves this game-owned table from metadata.json.
-          use_restricted_actions: basic
-          record: false
-          players: 1
-          inttype: stable
-          obs_type: image
-          render_mode: rgb_array
-          num_threads: 16
-          rom_path: null
-          state_dir: null
-          obs_copy: safe_view
-          obs_grayscale: true
-          obs_layout: chw
-          frame_stack: 4
-          noop_reset_max: 0
-          info_filter: all
-        states:
-        - Level1-1
-        - Level1-2
-        state_probs:
-        - 0.5
-        - 0.5
-        frame_skip: 4
-        max_pool_frames: false
-        sticky_action_prob: 0.0
-        obs_resize: [84, 84]
-        obs_crop:
-        - 32
-        - 0
-        - 0
-        - 0
-        obs_crop_mode: mask
-        obs_crop_fill: 0
-        obs_resize_algorithm: area
-    task: &mario_task
-      id: mario
-      action:
-        set: native
-      signals:
-        x: [xscrollHi, xscrollLo]
-        score: score
-        lives: lives
-        level: [levelHi, levelLo]
-      events:
-        life_loss: {signal: lives, operation: decrease}
-        level_change: {signal: level, operation: change}
-        stalled: {signal: x, operation: unchanged_for, steps: 300}
-      termination:
-        failure: [life_loss, stalled]
-        success: [level_change]
-        max_episode_steps: 4500
+      states:
+      - Level1-1
+      - Level1-2
+      state_probs:
+      - 0.5
+      - 0.5
+    task:
       conditioning:
         enabled: true
         signal: level
@@ -100,23 +32,20 @@ train:
         - [0, 0]
         - [0, 1]
 eval:
-  episodes: 100
-  acceptance:
-  - metric: eval/full/outcome/success/rate/min
-    operator: '>='
-    threshold: 1.0
   environment:
-    env_provider: *mario_env_provider
     env_config:
-      <<: *mario_env_config
+      states:
+      - Level1-1
+      - Level1-2
+      state_probs:
+      - 0.5
+      - 0.5
       # Promotion eval remains vectorized; the lane count is part of its reproducible protocol.
       n_envs: 16
     task:
-      <<: *mario_task
-      termination:
-        failure: [life_loss, stalled]
-        success: [level_change]
-        max_episode_steps: 4500
-release:
-  # Marker-only. gradlab derives the repository identity and owns the release file contract.
-  huggingface: {}
+      conditioning:
+        enabled: true
+        signal: level
+        values:
+        - [0, 0]
+        - [0, 1]

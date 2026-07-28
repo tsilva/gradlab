@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import math
 import time
-from collections import deque
 from dataclasses import dataclass
 from numbers import Integral
 from pathlib import Path
@@ -18,12 +17,10 @@ from gradlab.early_stop import (
     MetricSample,
 )
 from gradlab.env import EnvConfig
-from gradlab.eval_metrics import episode_reason_names
 from gradlab.file_utils import atomic_write_json
 from gradlab.metric_names import (
     canonical_training_scalars,
     TRAIN_ARTIFACT_SAVE_SECONDS,
-    TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_MEAN,
     TRAIN_ARCHIVE_ADMISSION_ACCEPTED_COUNT,
     TRAIN_ARCHIVE_ADMISSION_CANDIDATE_COUNT,
     TRAIN_ARCHIVE_CAPTURE_CALL_COUNT,
@@ -38,12 +35,6 @@ from gradlab.metric_names import (
     TRAIN_ARCHIVE_SAMPLING_EFFECTIVE_CELL_COUNT,
     TRAIN_ARCHIVE_SAMPLING_PROBABILITY_MAX,
     TRAIN_ARCHIVE_TRANSITION_SHARE,
-    TRAIN_OUTCOME_SUCCESS_CURRENT_RATE_MEAN,
-    TRAIN_OUTCOME_SUCCESS_CURRENT_RATE_MIN,
-    TRAIN_OUTCOME_SUCCESS_WINDOW_100_RATE_MEAN,
-    TRAIN_OUTCOME_SUCCESS_WINDOW_100_RATE_MIN,
-    TRAIN_OUTCOME_SUCCESS_START_COVERAGE_RATE,
-    TRAIN_OUTCOME_TERMINAL_COUNT,
     TRAIN_REWARD_ROOT,
     TRAIN_THROUGHPUT_BETWEEN_ROLLOUTS_SECONDS,
     TRAIN_THROUGHPUT_ENV_STEP_FPS,
@@ -55,18 +46,14 @@ from gradlab.metric_names import (
     stat_metric,
     train_algorithm_metric,
     train_early_stop_metric,
-    train_outcome_reason_count_metric,
-    train_outcome_reason_window_rate_metric,
     train_reward_component_metric,
     train_reward_signal_metric,
-    metric_value_segment,
-    train_success_attempts_metric,
-    train_success_count_metric,
-    train_success_window_rate_metric,
     validate_metric_payload,
 )
 from gradlab.metric_store import MetricStore
 from gradlab.state_archive import state_archive_artifact_summary
+from gradlab.training_lifecycle import LoggerMetricFrameSink
+from gradlab.training_metrics import EpisodeMetricsReducer
 
 
 def task_metric_source(start_id: Any) -> Any:
@@ -107,6 +94,7 @@ class LedgerCheckpointHelper(CallbackHelper):
         name_prefix: str,
         metric_store_path: Path | str,
         eval_required: bool = True,
+        checkpoint_coordinator: Any | None = None,
     ) -> None:
         super().__init__()
         self.train_config = train_config
@@ -116,9 +104,11 @@ class LedgerCheckpointHelper(CallbackHelper):
         self.name_prefix = name_prefix
         self.metric_store = MetricStore(metric_store_path)
         self.eval_required = bool(eval_required)
+        self.checkpoint_coordinator = checkpoint_coordinator
 
     def _init_callback(self) -> None:
-        self.save_path.mkdir(parents=True, exist_ok=True)
+        if self.checkpoint_coordinator is None or self.checkpoint_coordinator.persist_intermediate:
+            self.save_path.mkdir(parents=True, exist_ok=True)
         self.metric_store.init()
 
     def _on_step(self) -> bool:
@@ -133,9 +123,26 @@ class LedgerCheckpointHelper(CallbackHelper):
         self.save_checkpoint(self.num_timesteps, kind="checkpoint")
         return True
 
-    def save_checkpoint(self, step: int, *, kind: str) -> Path:
-        started = time.perf_counter()
+    def save_checkpoint(self, step: int, *, kind: str) -> Path | None:
         final_path = self.save_path / f"{self.name_prefix}_{step}_steps.zip"
+        if self.checkpoint_coordinator is not None:
+            return self.checkpoint_coordinator.save(
+                kind=kind,
+                step=step,
+                model_path=final_path,
+                save_bundle=lambda path, artifact_kind, artifact_step: install_model_bundle(
+                    path,
+                    save_checkpoint=lambda destination: self.model.save(str(destination)),
+                    train_config=self.train_config,
+                    config=self.config,
+                    kind=artifact_kind,
+                    checkpoint_step_value=artifact_step,
+                    state_archive_summary=state_archive_artifact_summary(
+                        getattr(self.model, "env", None)
+                    ),
+                ),
+            )
+        started = time.perf_counter()
         final_path = install_model_bundle(
             final_path,
             save_checkpoint=lambda path: self.model.save(str(path)),
@@ -244,6 +251,14 @@ class ThroughputHelper(CallbackHelper):
 
     def _on_step(self) -> bool:
         return True
+
+    def _on_training_end(self) -> None:
+        if self.completed_rollout is not None:
+            self._publish_completed_iteration(
+                self.completed_rollout,
+                next_start_time=self.clock(),
+            )
+            self.completed_rollout = None
 
     def _native_step_seconds(self) -> float | None:
         start = self.native_step_stats_start
@@ -846,124 +861,18 @@ class _RewardStatsAccumulator:
 
 
 class _DoneMetricsReducer:
-    ep_window_size = 100
+    """Compatibility adapter backed by the shared canonical reducer."""
 
-    def __init__(
-        self,
-        event_names: Sequence[str] = (),
-    ) -> None:
-        self.event_names = tuple(str(name) for name in event_names)
-        self.done_count = 0
-        self.reason_counts: dict[str, int] = {reason: 0 for reason in self.event_names}
-        self.reason_windows: dict[str, deque[bool]] = {
-            reason: deque(maxlen=self.ep_window_size) for reason in self.event_names
-        }
+    def __init__(self, event_names: Sequence[str] = ()) -> None:
+        self.reducer = EpisodeMetricsReducer(
+            event_names=event_names,
+            track_success=False,
+        )
 
     def consume(self, record: Any) -> dict[str, int | float] | None:
         if not hasattr(record, "episode_return"):
             return None
-        outcome = getattr(record, "outcome", None)
-        outcome_name = str(getattr(outcome, "name", outcome)).lower()
-        reasons = (
-            set()
-            if outcome_name == "success"
-            else episode_reason_names(
-                getattr(record, "events", ()) or (),
-                terminated=bool(getattr(record, "terminated", False)),
-                truncated=bool(getattr(record, "truncated", False)),
-            )
-        )
-        return self.record_done(reasons)
-
-    def record_done(self, reasons: set[str] | Mapping[str, Any]) -> dict[str, int | float]:
-        active_reasons = {str(reason) for reason in reasons}
-        prior_episode_count = self.done_count
-        self.done_count += 1
-        for reason in active_reasons:
-            if reason not in self.reason_windows:
-                prior = min(prior_episode_count, self.ep_window_size - 1)
-                self.reason_windows[reason] = deque(
-                    [False] * prior,
-                    maxlen=self.ep_window_size,
-                )
-                self.reason_counts[reason] = 0
-            self.reason_counts[reason] = self.reason_counts.get(reason, 0) + 1
-        for reason, window in self.reason_windows.items():
-            window.append(reason in active_reasons)
-        return self.record_metrics()
-
-    def record_metrics(self) -> dict[str, int | float]:
-        payload: dict[str, int | float] = {
-            TRAIN_OUTCOME_TERMINAL_COUNT: self.done_count,
-        }
-        for reason, count in sorted(self.reason_counts.items()):
-            window = self.reason_windows[reason]
-            payload[train_outcome_reason_count_metric(reason)] = count
-            payload[train_outcome_reason_window_rate_metric(reason)] = sum(window) / len(window)
-        return payload
-
-
-class _SuccessMetricsReducer:
-    ep_window_size = 100
-
-    def __init__(self, *, configured_starts: Sequence[str] = ()) -> None:
-        self.configured_starts = tuple(dict.fromkeys(str(start) for start in configured_starts))
-        self.success_counts: dict[str, int] = {}
-        self.attempt_counts: dict[str, int] = {}
-        self.attempt_windows: dict[str, deque[bool]] = {}
-
-    def consume(self, record: Any) -> dict[str, int | float]:
-        if not hasattr(record, "episode_return"):
-            return {}
-        if str(getattr(record, "start_origin", "target")) != "target":
-            return {}
-        start_id = getattr(record, "start_id", None)
-        if start_id is None:
-            return {}
-        outcome = getattr(record, "outcome", None)
-        outcome_name = str(getattr(outcome, "name", outcome)).lower()
-        return self.record_attempt(
-            task_metric_source(start_id), completed=outcome_name == "success"
-        )
-
-    def record_attempt(self, source: Any, *, completed: bool) -> dict[str, int | float]:
-        source_key = metric_value_segment(source)
-        count_metric = train_success_count_metric(source_key)
-        attempts_metric = train_success_attempts_metric(source_key)
-        window_rate_metric = train_success_window_rate_metric(source_key)
-        window = self.attempt_windows.setdefault(source_key, deque(maxlen=self.ep_window_size))
-        window.append(completed)
-        self.attempt_counts[source_key] = self.attempt_counts.get(source_key, 0) + 1
-        if completed:
-            self.success_counts[source_key] = self.success_counts.get(source_key, 0) + 1
-
-        current_rates = {
-            start: self.success_counts.get(start, 0) / attempts
-            for start, attempts in self.attempt_counts.items()
-        }
-        expected_starts = self.configured_starts or tuple(self.attempt_counts)
-        coverage = sum(start in self.attempt_counts for start in expected_starts) / len(
-            expected_starts
-        )
-        payload: dict[str, int | float] = {
-            count_metric: self.success_counts.get(source_key, 0),
-            attempts_metric: self.attempt_counts[source_key],
-            TRAIN_OUTCOME_SUCCESS_CURRENT_RATE_MIN: min(current_rates.values()),
-            TRAIN_OUTCOME_SUCCESS_CURRENT_RATE_MEAN: float(np.mean(tuple(current_rates.values()))),
-            TRAIN_OUTCOME_SUCCESS_START_COVERAGE_RATE: coverage,
-        }
-        if len(window) >= self.ep_window_size:
-            payload[window_rate_metric] = sum(window) / len(window)
-        if expected_starts and all(
-            len(self.attempt_windows.get(start, ())) >= self.ep_window_size
-            for start in expected_starts
-        ):
-            rates = [
-                sum(self.attempt_windows[start]) / self.ep_window_size for start in expected_starts
-            ]
-            payload[TRAIN_OUTCOME_SUCCESS_WINDOW_100_RATE_MIN] = min(rates)
-            payload[TRAIN_OUTCOME_SUCCESS_WINDOW_100_RATE_MEAN] = float(np.mean(rates))
-        return payload
+        return self.reducer.consume((record,))
 
 
 class RuntimeMetricsHelper(CallbackHelper):
@@ -977,20 +886,27 @@ class RuntimeMetricsHelper(CallbackHelper):
         active_reward_signals: Sequence[str] = (),
         configured_starts: Sequence[str] = (),
         track_success: bool = False,
+        session: Any | None = None,
     ) -> None:
         super().__init__()
+        self.session = session
         self.reward_stats = _RewardStatsAccumulator(
             active_components=active_reward_components,
             active_signals=active_reward_signals,
         )
-        self.done_metrics = _DoneMetricsReducer(event_names=event_names)
-        self.success_metrics = (
-            _SuccessMetricsReducer(configured_starts=configured_starts) if track_success else None
+        self.episode_metrics = EpisodeMetricsReducer(
+            event_names=event_names,
+            configured_starts=configured_starts,
+            track_success=track_success,
         )
         self.pending_metrics: dict[str, int | float] = {}
-        self.target_returns: deque[float] = deque(maxlen=100)
+
+    def _on_training_start(self) -> None:
+        if self.session is not None:
+            self.session.set_metric_sink(LoggerMetricFrameSink(self.logger))
 
     def _on_records(self, records: Iterable[Any]) -> bool:
+        episode_records: list[Any] = []
         for record in records:
             if hasattr(record, "num_envs") and not hasattr(record, "lane"):
                 num_envs = int(record.num_envs)
@@ -1000,29 +916,27 @@ class RuntimeMetricsHelper(CallbackHelper):
                     reserve=num_envs * rollout_steps,
                 )
                 continue
-            if (
-                hasattr(record, "episode_return")
-                and str(getattr(record, "start_origin", "target")) == "target"
-            ):
-                self.target_returns.append(float(record.episode_return))
-                self.pending_metrics[TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_MEAN] = float(
-                    np.mean(self.target_returns)
-                )
-            done_payload = self.done_metrics.consume(record)
-            if done_payload:
-                self.pending_metrics.update(done_payload)
-            if self.success_metrics is not None:
-                self.pending_metrics.update(self.success_metrics.consume(record))
+            if hasattr(record, "episode_return"):
+                episode_records.append(record)
+        if self.session is not None:
+            self.session.advance(self.num_timesteps, episode_records)
+        else:
+            self.pending_metrics.update(self.episode_metrics.consume(episode_records))
         return True
 
     def _on_rollout_end(self) -> None:
-        payload = self.pending_metrics
-        payload.update(self.reward_stats.flush())
-        self.pending_metrics = {}
-        if not payload:
+        reward_payload = self.reward_stats.flush()
+        if self.session is not None:
+            current = getattr(self.logger, "name_to_value", {})
+            payload = dict(current) if isinstance(current, Mapping) else {}
+            payload.update(reward_payload)
+            self.session.report(step=self.num_timesteps, metrics=payload)
             return
-        for key, value in payload.items():
-            self.logger.record(key, value)
+        self.pending_metrics.update(reward_payload)
+        if self.pending_metrics:
+            for key, value in self.pending_metrics.items():
+                self.logger.record(key, value)
+        self.pending_metrics = {}
 
 
 class GradLabCallback(BaseCallback):

@@ -11,6 +11,7 @@ from gymnasium import spaces
 from gradlab.artifacts import install_model_bundle
 from gradlab.state_archive import state_archive_artifact_summary
 from gradlab.training_backend import BackendContext
+from gradlab.training_lifecycle import TerminalReason, TrainingResult
 
 
 ModelFactory = Callable[[BackendContext, Any, Any, str], Any]
@@ -39,8 +40,12 @@ class OnPolicyBackend:
     ) -> None:
         del common_config, backend_config
 
-    def run(self, context: BackendContext) -> None:
-        run_sb3_on_policy(context, algorithm_id=self.algorithm_id, model_factory=self.model_factory)
+    def run(self, context: BackendContext) -> TrainingResult:
+        return run_sb3_on_policy(
+            context,
+            algorithm_id=self.algorithm_id,
+            model_factory=self.model_factory,
+        )
 
     def acceptance_mode(self, backend_config: Mapping[str, Any]) -> str:
         del backend_config
@@ -232,26 +237,24 @@ def save_model_bundle(
     model_path: Path,
     kind: str,
     step: int | None,
-) -> Path:
-    model_path = install_model_bundle(
-        model_path,
-        save_checkpoint=lambda path: model.save(str(path)),
-        train_config=context.train_config,
-        config=context.environment,
+    terminal: bool = False,
+) -> Path | None:
+    artifact_step = int(step or 0)
+    return context.session.checkpoints.save(
         kind=kind,
-        checkpoint_step_value=step,
-        state_archive_summary=state_archive_artifact_summary(getattr(model, "env", None)),
+        step=artifact_step,
+        model_path=model_path,
+        terminal=terminal,
+        save_bundle=lambda path, artifact_kind, saved_step: install_model_bundle(
+            path,
+            save_checkpoint=lambda destination: model.save(str(destination)),
+            train_config=context.train_config,
+            config=context.environment,
+            kind=artifact_kind,
+            checkpoint_step_value=saved_step,
+            state_archive_summary=state_archive_artifact_summary(getattr(model, "env", None)),
+        ),
     )
-    checkpoint_id = context.metric_store.record_checkpoint(
-        run_name=str(context.train_config["run_name"]),
-        kind=kind,
-        step=step,
-        path=model_path,
-        sha256=None,
-        eval_required=context.train_config["checkpoint_eval_backend"] != "none",
-    )
-    print(f"{kind} model ready: id={checkpoint_id} step={step} path={model_path}", flush=True)
-    return model_path
 
 
 def run_sb3_on_policy(
@@ -259,13 +262,12 @@ def run_sb3_on_policy(
     *,
     algorithm_id: str,
     model_factory: ModelFactory,
-) -> None:
+) -> TrainingResult:
     from stable_baselines3.common.utils import set_random_seed
 
     from gradlab.callbacks import (
         LedgerCheckpointHelper,
         MetricStoreLoggerHelper,
-        MetricEarlyStopHelper,
         GradLabCallback,
         RolloutDiagnosticsHelper,
         RuntimeMetricsHelper,
@@ -324,6 +326,12 @@ def run_sb3_on_policy(
         device = resolve_sb3_device(str(backend_config["device"]))
         print(f"Using torch device: {device}", flush=True)
         model = model_factory(context, env, config, device)
+        rollout_quantum = n_envs * int(backend_config["n_steps"])
+        context.session.configure_budget(
+            requested_limit=int(common_config["timesteps"]),
+            step_quantum=rollout_quantum,
+            initial_step=int(model.num_timesteps),
+        )
 
         graceful_stop = GracefulStopHelper(
             context.stop_flag,
@@ -335,38 +343,13 @@ def run_sb3_on_policy(
         )
         components: list[Any] = [
             graceful_stop,
-            Sb3HumanOutputFormatHelper(compact=context.compact_console),
-            ThroughputHelper(
-                metric_store_path=store_path,
-                wandb_enabled=context.wandb_enabled,
-            ),
-            RuntimeMetricsHelper(
-                event_names=tuple(task_termination(config).get("failure", ())),
-                active_reward_components=active_reward_components(config.task),
-                active_reward_signals=active_reward_signals(config.task),
-                configured_starts=tuple(config.states or ((config.state,) if config.state else ())),
-                track_success=bool(
-                    isinstance(config.task.get("termination"), Mapping)
-                    and config.task["termination"].get("success")
-                ),
-            ),
+            Sb3HumanOutputFormatHelper(suppress=True),
+            ThroughputHelper(),
         ]
         if common_config.get("state_archive") is not None:
             archive_config = common_config.get("state_archive")
             if isinstance(archive_config, Mapping) and archive_config.get("curriculum") is not None:
                 components.append(ArchiveCurriculumFeedbackHelper())
-        if common_config["early_stop"]:
-            components.append(
-                MetricEarlyStopHelper(
-                    decision_path=(
-                        context.run_dir
-                        / f"early_stop_decision-{str(common_config['attempt_id'])}.json"
-                    ),
-                    config=common_config["early_stop"],
-                    stop_flag=context.stop_flag,
-                    metric_store_path=store_path,
-                )
-            )
         components.extend(
             [
                 RolloutDiagnosticsHelper(
@@ -374,6 +357,19 @@ def run_sb3_on_policy(
                     metric_store_path=store_path,
                     wandb_enabled=context.wandb_enabled,
                     histogram_interval=64,
+                ),
+                RuntimeMetricsHelper(
+                    event_names=tuple(task_termination(config).get("failure", ())),
+                    active_reward_components=active_reward_components(config.task),
+                    active_reward_signals=active_reward_signals(config.task),
+                    configured_starts=tuple(
+                        config.states or ((config.state,) if config.state else ())
+                    ),
+                    track_success=bool(
+                        isinstance(config.task.get("termination"), Mapping)
+                        and config.task["termination"].get("success")
+                    ),
+                    session=context.session,
                 ),
                 MetricStoreLoggerHelper(
                     store_path,
@@ -396,6 +392,7 @@ def run_sb3_on_policy(
                     name_prefix=checkpoint_prefix(config.game, algorithm_id=algorithm_id),
                     metric_store_path=store_path,
                     eval_required=common_config["checkpoint_eval_backend"] != "none",
+                    checkpoint_coordinator=context.session.checkpoints,
                 )
             )
         if backend_config["ent_coef_final"] is not None:
@@ -412,11 +409,13 @@ def run_sb3_on_policy(
                 )
             )
         if common_config["checkpoint_eval_backend"] == "none":
-            print(
+            context.session.event(
                 "checkpoint evaluation disabled; this run cannot establish promotion or acceptance"
             )
         else:
-            print("training-loop eval disabled; async checkpoint eval handles promotion metrics")
+            context.session.event(
+                "training-loop eval disabled; async checkpoint eval handles promotion metrics"
+            )
         callback = GradLabCallback(components)
         context.mark_ready()
 
@@ -435,22 +434,30 @@ def run_sb3_on_policy(
                 model.learn(
                     total_timesteps=remaining_timesteps,
                     callback=callback,
-                    progress_bar=True,
+                    progress_bar=False,
                     reset_num_timesteps=False,
                 )
         else:
             model.learn(
                 total_timesteps=int(common_config["timesteps"]),
                 callback=callback,
-                progress_bar=True,
+                progress_bar=False,
             )
+        reason = context.session.terminal_reason()
+        terminal_kind = "interrupted" if reason == TerminalReason.INTERRUPTED else "final"
         save_model_bundle(
             model=model,
             context=context,
             model_path=final_model_path,
-            kind="final",
+            kind=terminal_kind,
             step=model.num_timesteps,
+            terminal=True,
         )
-        print(f"saved {final_model_path}")
+        context.session.event(f"saved {final_model_path}")
+        return TrainingResult(
+            reason=reason,
+            step=int(model.num_timesteps),
+            model_kind=terminal_kind,
+        )
     finally:
         env.close()

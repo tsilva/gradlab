@@ -5,12 +5,12 @@ title: ViZDoom My Way Home visual navigation
 train:
   environment:
     env_config:
-      env_args:
+      env_args: &my_way_home_env_args
         game_variables: [ARMOR]
         info_filter:
           mode: all
           keys: [armor, pending_reset]
-    task:
+    task: &my_way_home_task
       signals:
         armor: armor
         episode_done: pending_reset
@@ -20,23 +20,8 @@ train:
       termination:
         success: [vest_reached]
         timeout: [episode_ended]
-        max_episode_steps: 512
 eval:
   environment:
     env_config:
-      env_args:
-        game_variables: [ARMOR]
-        info_filter:
-          mode: all
-          keys: [armor, pending_reset]
-    task:
-      signals:
-        armor: armor
-        episode_done: pending_reset
-      events:
-        vest_reached: {signal: armor, operation: increase}
-        episode_ended: {signal: episode_done, operation: equals_for, value: 1, steps: 1}
-      termination:
-        success: [vest_reached]
-        timeout: [episode_ended]
-        max_episode_steps: 512
+      env_args: *my_way_home_env_args
+    task: *my_way_home_task

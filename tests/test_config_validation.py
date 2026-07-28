@@ -465,7 +465,7 @@ class ConfigValidationTests(unittest.TestCase):
         mario_root = Path("experiments/goals/SuperMarioBros-Nes-v0")
         recipes = sorted(mario_root.glob("*/recipes/*.yaml"))
 
-        self.assertEqual(len(recipes), 26)
+        self.assertEqual(len(recipes), 25)
         for recipe_path in recipes:
             with self.subTest(recipe=recipe_path):
                 goal_path = recipe_path.parent.parent / "_goal.yaml"
@@ -506,7 +506,7 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertEqual(report.counts["json_files"], 0)
         self.assertGreaterEqual(report.counts["yaml_files"], 15)
         self.assertGreaterEqual(report.counts["goals"], 1)
-        self.assertEqual(report.counts["train_recipes"], 42)
+        self.assertEqual(report.counts["train_recipes"], 41)
         self.assertGreaterEqual(report.counts["env_configs"], 0)
         self.assertEqual(report.counts["benchmark_profiles"], 4)
 
@@ -995,7 +995,7 @@ class ConfigValidationTests(unittest.TestCase):
             path for path in root.glob("*/_goal.yaml") if path.parent.name != "EndToEnd"
         )
 
-        self.assertEqual(len(goal_paths), 18)
+        self.assertEqual(len(goal_paths), 17)
         for goal_path in goal_paths:
             document = load_goal_contract(goal_path)
             for phase in ("train", "eval"):

@@ -5,11 +5,11 @@ title: ViZDoom Take Cover survival
 train:
   environment:
     env_config:
-      env_args:
+      env_args: &take_cover_env_args
         info_filter:
           mode: all
           keys: [player_dead]
-    task:
+    task: &take_cover_task
       signals:
         player_dead: player_dead
       events:
@@ -18,29 +18,10 @@ train:
       termination:
         failure: [player_died]
         success: [survived]
-        max_episode_steps: 512
       reward:
-        reward_mode: native
         reward_scale: 100.0
-        reward_clip: false
 eval:
   environment:
     env_config:
-      env_args:
-        info_filter:
-          mode: all
-          keys: [player_dead]
-    task:
-      signals:
-        player_dead: player_dead
-      events:
-        player_died: {signal: player_dead, operation: equals_for, value: 1, steps: 1}
-        survived: {signal: player_dead, operation: equals_for, value: 0, steps: 512}
-      termination:
-        failure: [player_died]
-        success: [survived]
-        max_episode_steps: 512
-      reward:
-        reward_mode: native
-        reward_scale: 100.0
-        reward_clip: false
+      env_args: *take_cover_env_args
+    task: *take_cover_task
