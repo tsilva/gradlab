@@ -104,6 +104,7 @@ def main(
     argv: list[str] | None = None,
     *,
     runtime_rom_binding: RomRuntimeBinding | None = None,
+    compact_console: bool = False,
 ) -> int:
     if os.environ.get(INTERNAL_LEARNER_ENV) != "1":
         raise RuntimeError(
@@ -149,9 +150,7 @@ def main(
     assert_provider_runtime_available(environment, rom_binding=rom_binding)
     train_config["resolved_n_envs"] = n_envs
 
-    run_dir = Path(
-        default_run_dir(str(train_config["run_name"]), str(train_config["runs_dir"]))
-    )
+    run_dir = Path(default_run_dir(str(train_config["run_name"]), str(train_config["runs_dir"])))
     checkpoint_dir = run_dir / "checkpoints"
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
     (run_dir / "learner_ready.json").unlink(missing_ok=True)
@@ -198,6 +197,7 @@ def main(
         wandb_enabled=bool(train_config["wandb"]),
         stop_flag=stop_flag,
         rom_binding=rom_binding,
+        compact_console=compact_console,
     )
     backend.run(context)
     return 0

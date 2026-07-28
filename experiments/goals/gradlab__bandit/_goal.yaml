@@ -1,6 +1,7 @@
 defaults:
 - _self_
 goal_id: gradlab__bandit
+evaluation_mode: evaluated
 tags:
 - "goal_id:{{ goal_id }}"
 - "recipe_id:{{ recipe_id }}"
@@ -11,9 +12,7 @@ objective:
   - max(eval/full/episode/return/mean)
   - min(leader/checkpoint/step)
 train:
-  checkpoint_eval_backend: modal
   checkpoint_freq: 128
-  stop_on_acceptance: true
   environment:
     env_provider: &bandit_provider gradlab
     env_config:

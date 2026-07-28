@@ -425,11 +425,6 @@ def validate_and_normalize_train_config(
             normalized["obs_resize"],
             label=f"{label}.obs_resize",
         )
-    if normalized.get("post_train_eval_stochastic") is False:
-        raise ValueError(
-            f"{label}.post_train_eval_stochastic must be true; "
-            "all policy evaluation uses stochastic sampling"
-        )
     if normalized.get("early_stop") is not None:
         normalized["early_stop"] = normalize_metric_early_stop_config(
             normalized["early_stop"], label=f"{label}.early_stop"
@@ -464,7 +459,7 @@ def validate_and_normalize_train_config(
                 f"{label}.checkpoint_eval_acceptance is required when stop_on_acceptance is true"
             )
     if has_training_success_condition and (
-        normalized.get("checkpoint_eval_backend") in {"local", "modal"}
+        normalized.get("checkpoint_eval_backend") == "modal"
     ):
         raise ValueError(
             f"{label}.early_stop success conditions require "
@@ -725,19 +720,19 @@ TRAIN_CONFIG_FIELDS: tuple[TrainConfigField, ...] = (
         "stop_on_acceptance",
         kind="bool_optional",
         default=False,
-        source_section="goal_train",
+        source_section="runtime",
+        cli_exposed=False,
         help="Stop the learner when the first checkpoint proves goal.eval acceptance.",
     ),
     _field(
         "checkpoint_eval_backend",
         default="modal",
-        choices=("local", "modal", "none"),
+        choices=("modal", "none"),
         non_empty=True,
         source_section="train",
         help=(
-            "Checkpoint evaluation backend. Orchestrated runs default to Modal; "
-            "local is an explicit fallback; none creates a training-only run that cannot "
-            "establish promotion or acceptance."
+            "Checkpoint evaluation backend. Evaluated goals default to Modal; none creates "
+            "a training-only run that cannot establish promotion or acceptance."
         ),
     ),
     _field(
@@ -772,15 +767,6 @@ TRAIN_CONFIG_FIELDS: tuple[TrainConfigField, ...] = (
         owner="goal_objective",
         source_section="goal_train",
         help="Max steps per post-training eval episode; <=0 uses --max-episode-steps.",
-    ),
-    _field(
-        "post_train_eval_stochastic",
-        kind="bool_optional",
-        default=True,
-        owner="goal_objective",
-        source_section="goal_train",
-        help="Fixed true: post-training checkpoint eval uses stochastic policy sampling.",
-        cli_exposed=False,
     ),
     _field(
         "early_stop",
@@ -911,36 +897,6 @@ TRAIN_CONFIG_FIELDS: tuple[TrainConfigField, ...] = (
         default="",
         cli_exposed=False,
         help="Semantic hash of the selected, catalog-free effective goal contract.",
-    ),
-    _field(
-        "goal_variant_id",
-        default="",
-        cli_exposed=False,
-        help="Stable goal-scoped identity of the authored/effective goal-contract pair.",
-    ),
-    _field(
-        "goal_variant_label",
-        default="",
-        cli_exposed=False,
-        help="Human-readable goal name plus the normalized proven contract diff.",
-    ),
-    _field(
-        "goal_variant_source_relation",
-        default="",
-        cli_exposed=False,
-        help="Whether the effective goal matches or changes its source canonical contract.",
-    ),
-    _field(
-        "goal_variant_descriptor_sha256",
-        default="",
-        cli_exposed=False,
-        help="SHA-256 of the complete versioned goal-variant descriptor.",
-    ),
-    _field(
-        "goal_variant_diff_json",
-        default="",
-        cli_exposed=False,
-        help="Bounded normalized goal-contract diff used by catalog fallback.",
     ),
     _field(
         "reward_program_kind",

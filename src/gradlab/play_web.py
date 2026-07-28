@@ -1699,7 +1699,10 @@ class PlaybackWebServer:
             except Exception:
                 route["run_id"] = ""
                 route["checkpoint_id"] = ""
-        raise web.HTTPPermanentRedirect(location=source_browser_path(route))
+        location = source_browser_path(route)
+        if request.query_string:
+            location = f"{location}?{request.query_string}"
+        raise web.HTTPPermanentRedirect(location=location)
 
     async def asset(self, request: web.Request) -> web.FileResponse:
         relative = Path(request.match_info["path"])

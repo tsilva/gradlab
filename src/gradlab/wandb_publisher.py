@@ -59,6 +59,7 @@ def _start_wandb(
     *,
     run_dir: str,
     config: Any,
+    goal_variant: Mapping[str, Any] | None = None,
 ):
     if not train_config.get("wandb"):
         raise ValueError("supervised training requires W&B metric publication")
@@ -94,6 +95,10 @@ def _start_wandb(
         "wandb_tags": tags,
         **env_config_metadata(config),
     }
+    if goal_variant is not None:
+        from gradlab.goal_variants import goal_variant_projection
+
+        wandb_config.update(goal_variant_projection(goal_variant))
     wandb_config["metrics_schema_version"] = METRICS_SCHEMA_VERSION
     training = training_metadata(
         config,
@@ -137,9 +142,15 @@ class WandbProjector:
         *,
         run_dir: str,
         config: Any,
+        goal_variant: Mapping[str, Any] | None = None,
     ) -> WandbProjector:
         return cls(
-            _start_wandb(train_config, run_dir=run_dir, config=config),
+            _start_wandb(
+                train_config,
+                run_dir=run_dir,
+                config=config,
+                goal_variant=goal_variant,
+            ),
             run_dir=run_dir,
         )
 

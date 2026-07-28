@@ -5,17 +5,26 @@ from typing import Any
 
 
 GOAL_FIELDS = frozenset(
-    {"eval", "goal_id", "objective", "release", "reward_shapes", "tags", "title", "train"}
+    {
+        "eval",
+        "evaluation_mode",
+        "goal_id",
+        "objective",
+        "release",
+        "reward_shapes",
+        "tags",
+        "title",
+        "train",
+    }
 )
+GOAL_EVALUATION_MODES = frozenset({"evaluated", "training_only"})
 GOAL_OBJECTIVE_FIELDS = frozenset({"rank", "states"})
 GOAL_TRAIN_FIELDS = frozenset(
     {
-        "checkpoint_eval_backend",
         "checkpoint_freq",
         "early_stop",
         "environment",
         "policy",
-        "stop_on_acceptance",
     }
 )
 GOAL_EVAL_FIELDS = frozenset({"acceptance", "env_config", "environment", "episodes", "policy"})
@@ -34,10 +43,31 @@ def _reject_unknown_fields(
         raise ValueError(f"{label} has unknown field(s): {', '.join(unknown)}")
 
 
-def validate_goal_document_shape(document: Mapping[str, Any], *, label: str) -> None:
+def goal_evaluation_mode(
+    document: Mapping[str, Any],
+    *,
+    label: str,
+    allow_legacy: bool = False,
+) -> str:
+    value = document.get("evaluation_mode")
+    if value is None and allow_legacy:
+        return "evaluated" if "eval" in document else "training_only"
+    if not isinstance(value, str) or value not in GOAL_EVALUATION_MODES:
+        choices = ", ".join(sorted(GOAL_EVALUATION_MODES))
+        raise ValueError(f"{label}.evaluation_mode must be one of: {choices}")
+    return value
+
+
+def validate_goal_document_shape(
+    document: Mapping[str, Any],
+    *,
+    label: str,
+    allow_legacy: bool = False,
+) -> None:
     """Reject misspelled goal-owned fields without importing runtime orchestration."""
 
     _reject_unknown_fields(document, allowed=GOAL_FIELDS, label=label)
+    goal_evaluation_mode(document, label=label, allow_legacy=allow_legacy)
     _reject_unknown_fields(
         document.get("objective"),
         allowed=GOAL_OBJECTIVE_FIELDS,

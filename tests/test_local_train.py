@@ -30,13 +30,9 @@ def test_builtin_recipe_reference_resolves_goal_and_recipe() -> None:
 
 
 def test_local_recipe_path_infers_owning_goal() -> None:
-    source = resolve_recipe_source(
-        Path("experiments/goals/VizdoomBasic-v1/recipes/ppo.yaml")
-    )
+    source = resolve_recipe_source(Path("experiments/goals/VizdoomBasic-v1/recipes/ppo.yaml"))
 
-    assert source.goal_path == Path(
-        "experiments/goals/VizdoomBasic-v1/_goal.yaml"
-    ).resolve()
+    assert source.goal_path == Path("experiments/goals/VizdoomBasic-v1/_goal.yaml").resolve()
     assert source.repository_root == Path.cwd()
 
 
@@ -62,8 +58,9 @@ def test_local_train_materializes_credential_free_playable_run(
 ) -> None:
     observed_internal_values: list[str | None] = []
 
-    def fake_learner(argv: list[str]) -> int:
+    def fake_learner(argv: list[str], *, compact_console: bool) -> int:
         observed_internal_values.append(os.environ.get(INTERNAL_LEARNER_ENV))
+        assert compact_console is True
         config_path = Path(argv[argv.index("--train-config-json") + 1])
         config = json.loads(config_path.read_text(encoding="utf-8"))
         run_dir = Path(config["runs_dir"]) / config["run_name"]
@@ -123,8 +120,9 @@ def test_local_mario_train_binds_registered_rom_cache(
     }
     observed_cache: list[str | None] = []
 
-    def fake_learner(argv: list[str]) -> int:
+    def fake_learner(argv: list[str], *, compact_console: bool) -> int:
         observed_cache.append(os.environ.get(LOCAL_ROM_CACHE_ENV))
+        assert compact_console is True
         config_path = Path(argv[argv.index("--train-config-json") + 1])
         config = json.loads(config_path.read_text(encoding="utf-8"))
         assert config["rom_asset_manifest"] == manifest
@@ -183,8 +181,10 @@ def test_local_mario_train_uses_direct_rom_without_registry_or_cache_mutation(
         argv: list[str],
         *,
         runtime_rom_binding: RomRuntimeBinding,
+        compact_console: bool,
     ) -> int:
         observed_bindings.append(runtime_rom_binding)
+        assert compact_console is True
         config_path = Path(argv[argv.index("--train-config-json") + 1])
         config = json.loads(config_path.read_text(encoding="utf-8"))
         assert config["rom_asset_manifest"] == manifest
@@ -230,8 +230,9 @@ def test_local_mario_train_uses_direct_rom_without_registry_or_cache_mutation(
     )
     assert recipe["provenance"]["asset"]["sha256"] == manifest["sha256"]
     assert recipe["provenance"]["asset"]["size_bytes"] == manifest["size_bytes"]
-    assert recipe["provenance"]["asset"]["provider_rom_identity"] == (
-        manifest["provider_rom_identity"]
+    assert (
+        recipe["provenance"]["asset"]["provider_rom_identity"]
+        == (manifest["provider_rom_identity"])
     )
     assert str(rom.resolve()) not in json.dumps(recipe)
     output = capsys.readouterr().out

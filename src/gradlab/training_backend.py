@@ -33,6 +33,7 @@ class BackendContext:
     wandb_enabled: bool
     stop_flag: Any
     rom_binding: Any | None
+    compact_console: bool = False
 
     @property
     def backend_config(self) -> dict[str, Any]:

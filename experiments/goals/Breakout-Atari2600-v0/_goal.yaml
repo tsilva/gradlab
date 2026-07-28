@@ -1,6 +1,7 @@
 defaults:
 - _self_
 goal_id: Breakout-Atari2600-v0
+evaluation_mode: training_only
 tags:
 - "goal_id:{{ goal_id }}"
 - "recipe_id:{{ recipe_id }}"
@@ -11,8 +12,6 @@ objective:
   - max(train/episode/return/shaped/from/target/mean)
   - min(train/global_step)
 train:
-  checkpoint_eval_backend: none
-  stop_on_acceptance: false
   checkpoint_freq: 500000
   environment:
     # Breakout Turbo is the default ROM-free implementation. The complete contract is

@@ -16,7 +16,7 @@ from gradlab.env_registry import (
     resolve_env_id,
     validate_provider_constructor_args,
 )
-from gradlab.goal_schema import validate_goal_document_shape
+from gradlab.goal_schema import goal_evaluation_mode, validate_goal_document_shape
 from gradlab.reward_programs import goal_for_contract_validation, validate_reward_shape_catalog
 from gradlab.metric_names import metric_path_segment
 from gradlab.ranking import parse_objective_rank
@@ -289,17 +289,10 @@ def _goal_train_environment(
 def _validate_goal_eval(document: Mapping[str, Any], *, label: str) -> None:
     if "eval_spec" in document:
         raise ValueError(f"{label}.eval_spec moved to eval")
-    train = document.get("train")
-    train = train if isinstance(train, Mapping) else {}
-    if "eval" not in document:
-        if train.get("checkpoint_eval_backend") != "none":
-            raise ValueError(
-                f"{label}.eval is required unless train.checkpoint_eval_backend is none"
-            )
-        if train.get("stop_on_acceptance") is not False:
-            raise ValueError(
-                f"{label}.train.stop_on_acceptance must be false for a training-only goal"
-            )
+    evaluation_mode = goal_evaluation_mode(document, label=label)
+    if evaluation_mode == "training_only":
+        if "eval" in document:
+            raise ValueError(f"{label}.eval must be omitted for a training-only goal")
         if "release" in document:
             raise ValueError(f"{label}.release is unsupported for a training-only goal")
         objective = document.get("objective")
@@ -310,17 +303,16 @@ def _validate_goal_eval(document: Mapping[str, Any], *, label: str) -> None:
                 f"{label}.objective.rank for a training-only goal may use only training metrics"
             )
         return
+    if "eval" not in document:
+        raise ValueError(f"{label}.eval is required for an evaluated goal")
     eval_section = _require_mapping(
         _require_key(document, "eval", label=label),
         label=f"{label}.eval",
     )
-    if train.get("checkpoint_eval_backend") == "none":
-        raise ValueError(f"{label}.eval must be omitted when train.checkpoint_eval_backend is none")
     _require_int(eval_section, "episodes", label=f"{label}.eval", minimum=1)
-    acceptance_enabled = bool(train.get("stop_on_acceptance") is True)
-    if acceptance_enabled:
+    if "acceptance" in eval_section:
         normalize_metric_threshold_rules(
-            _require_key(eval_section, "acceptance", label=f"{label}.eval"),
+            eval_section["acceptance"],
             label=f"{label}.eval.acceptance",
         )
     if "eval_config" in eval_section:
@@ -505,20 +497,10 @@ def validate_goal_contract_document(
             f"{label}.train.policy is retired; use train.backend with an explicit id and config"
         )
     if "early_stop" in train:
-        early_stop = normalize_metric_early_stop_config(
+        normalize_metric_early_stop_config(
             train["early_stop"],
             label=f"{label}.train.early_stop",
         )
-        conditions = early_stop["conditions"]
-        if train.get("stop_on_acceptance") is True and any(
-            str(condition["outcome"]) == "success" for condition in conditions.values()
-        ):
-            raise ValueError(
-                f"{label}.train.early_stop success conditions are incompatible with "
-                "stop_on_acceptance; goal.eval.acceptance is the sole success authority"
-            )
-    if "stop_on_acceptance" in train:
-        _require_bool(train, "stop_on_acceptance", label=f"{label}.train")
     environment = _goal_train_environment(document, train, label=label)
     _validate_environment_identity({"environment": environment}, label=f"{label}.train")
     env_config = (

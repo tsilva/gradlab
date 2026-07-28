@@ -29,6 +29,7 @@ from gradlab.env_identity import (
 )
 from gradlab.experiment_contracts import validate_goal_contract_document
 from gradlab.file_utils import file_sha256
+from gradlab.goal_schema import goal_evaluation_mode
 from gradlab.provider_config import NON_SEMANTIC_ENV_ARG_KEYS
 from gradlab.recipe_schema import (
     train_recipe_id,
@@ -263,6 +264,16 @@ def _goal_train_defaults(document: Mapping[str, Any]) -> dict[str, Any]:
     if isinstance(train, Mapping):
         config = deep_merge(config, _train_config_from_train_section(train))
     config = deep_merge(config, _eval_train_defaults(document))
+    evaluation_mode = goal_evaluation_mode(document, label="goal")
+    config["checkpoint_eval_backend"] = (
+        "modal" if evaluation_mode == "evaluated" else "none"
+    )
+    eval_section = document.get("eval")
+    config["stop_on_acceptance"] = bool(
+        evaluation_mode == "evaluated"
+        and isinstance(eval_section, Mapping)
+        and "acceptance" in eval_section
+    )
     objective = document.get("objective")
     if isinstance(objective, Mapping) and isinstance(objective.get("rank"), Sequence):
         config["selection_rank"] = copy.deepcopy(objective["rank"])
@@ -562,9 +573,33 @@ def materialize_train_recipe_document(
         from gradlab.training_backend import accepts_first_training_success
 
         if accepts_first_training_success(train_config):
+            source_train = materialized.get("train")
+            explicit_backend = (
+                source_train.get("checkpoint_eval_backend")
+                if isinstance(source_train, Mapping)
+                else None
+            )
+            if explicit_backend not in {None, "none"}:
+                raise ValueError(
+                    "first-training-success backend requires "
+                    "train.checkpoint_eval_backend=none"
+                )
             train_config["checkpoint_eval_backend"] = "none"
+        evaluation_mode = goal_evaluation_mode(goal_document or {}, label="goal")
+        if (
+            evaluation_mode == "training_only"
+            and train_config.get("checkpoint_eval_backend") != "none"
+        ):
+            raise ValueError(
+                "training-only goal requires train.checkpoint_eval_backend=none"
+            )
         if train_config.get("checkpoint_eval_backend") == "none":
             train_config["stop_on_acceptance"] = False
+        else:
+            eval_section = (goal_document or {}).get("eval")
+            train_config["stop_on_acceptance"] = bool(
+                isinstance(eval_section, Mapping) and "acceptance" in eval_section
+            )
     if train_config:
         materialized["train_config"] = train_config
     return materialized
@@ -842,6 +877,24 @@ def compose_train_document(
     document["train_config"]["effective_goal_contract_sha256"] = goal_contract_sha256(
         goal_composition.document
     )
+    from gradlab.goal_variants import build_goal_variant_descriptor
+
+    goals_root = next(
+        (
+            parent
+            for parent in goal_path.resolve().parents
+            if parent.name == "goals" and parent.parent.name == "experiments"
+        ),
+        None,
+    )
+    if goals_root is None:
+        raise ValueError(f"goal {goal_path} is not under an experiments/goals tree")
+    document["goal_variant"] = build_goal_variant_descriptor(
+        goal_slug=goal_path.resolve().parent.relative_to(goals_root).as_posix(),
+        source_sha="",
+        authored_goal=authored_goal_document,
+        effective_goal=goal_composition.document,
+    )
     if selected_reward is not None:
         document["train_config"].update(
             {
@@ -891,9 +944,25 @@ def prepare_checkpoint_eval_mode(
     ).strip()
     if mode not in {"modal", "none"}:
         raise ValueError(f"unsupported checkpoint eval backend: {mode}")
+    goal = document.get("goal")
+    if not isinstance(goal, Mapping):
+        raise ValueError("materialized recipe goal must be an object")
+    evaluation_mode = goal_evaluation_mode(goal, label="recipe.goal")
+    if mode == "modal" and evaluation_mode != "evaluated":
+        raise ValueError("checkpoint_eval_backend=modal requires an evaluated goal")
+    from gradlab.training_backend import accepts_first_training_success
+
+    if mode == "modal" and accepts_first_training_success(config):
+        raise ValueError(
+            "first-training-success backend requires checkpoint_eval_backend=none"
+        )
     config["checkpoint_eval_backend"] = mode
-    if mode == "none":
-        config["stop_on_acceptance"] = False
+    eval_section = goal.get("eval")
+    config["stop_on_acceptance"] = bool(
+        mode == "modal"
+        and isinstance(eval_section, Mapping)
+        and "acceptance" in eval_section
+    )
     document["train_config"] = config
 
 

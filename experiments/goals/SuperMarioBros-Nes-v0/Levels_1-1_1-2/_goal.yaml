@@ -2,6 +2,7 @@ defaults:
 - ../_reward-shapes-common@_global_
 - _self_
 goal_id: "{{ goal_id }}"
+evaluation_mode: evaluated
 tags:
 - "goal_id:{{ goal_id }}"
 - "recipe_id:{{ recipe_id }}"
@@ -19,10 +20,7 @@ objective:
   - min(leader/checkpoint/step)
   - max(eval/full/episode/return/mean)
 train:
-  # Run checkpoint evaluation outside the training machine on Modal.
-  checkpoint_eval_backend: modal
   checkpoint_freq: 250000
-  stop_on_acceptance: true
   early_stop:
     conditions:
       return_plateau:
