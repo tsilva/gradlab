@@ -576,11 +576,25 @@ function updateControlState() {
 function renderWorkspaceStatus() {
   const live = state.liveSnapshot;
   const shown = state.snapshot || live;
-  const samplingMode = live?.session?.sampling_mode || "stochastic";
+  const actionSelection = live?.policy?.action_selection || {};
+  const samplingMode = actionSelection.effective_mode
+    || live?.session?.sampling_mode
+    || "stochastic";
+  const selectionLabel = ({
+    stochastic: "Stochastic",
+    deterministic: "Deterministic",
+    epsilon_greedy: "Epsilon-greedy",
+    greedy: "Greedy",
+    program: "Program",
+  })[samplingMode] || String(samplingMode).replaceAll("_", " ");
+  const counterfactualSelection = Boolean(
+    actionSelection.default_mode
+    && samplingMode !== actionSelection.default_mode,
+  );
   const samplingStatus = $("#sampling-status");
   samplingStatus.hidden = ["recording", "dataset"].includes(live?.mode);
-  samplingStatus.textContent = samplingMode === "deterministic" ? "Deterministic" : "Stochastic";
-  samplingStatus.className = `badge ${samplingMode === "deterministic" ? "warning" : "muted"}`;
+  samplingStatus.textContent = selectionLabel;
+  samplingStatus.className = `badge ${counterfactualSelection ? "warning" : "muted"}`;
   const timelineContext = [
     state.inspectionSequence === null ? null : "INSPECTING",
     `STEP ${text(shown?.session?.step)}`,

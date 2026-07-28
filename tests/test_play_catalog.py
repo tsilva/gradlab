@@ -206,6 +206,18 @@ def write_goal_catalog(repo_root: Path) -> None:
         encoding="utf-8",
     )
     (recipes / "ppo.yaml").write_text("defaults: [_self_]\n", encoding="utf-8")
+    (repo_root / "experiments" / "goals" / "_catalog.yaml").write_text(
+        "\n".join(
+            (
+                "schema_version: 1",
+                "namespaces:",
+                "  Mario:",
+                "    project: Mario",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
 
 
 def write_indexed_goal_catalog(repo_root: Path) -> None:
@@ -344,6 +356,15 @@ def test_catalog_default_entity_loads_operator_configuration_once(
     assert catalog.default_entity() == "research"
     assert catalog.default_entity() == "research"
     assert calls == 1
+
+
+def test_repository_catalog_requires_explicit_namespace_index(tmp_path: Path) -> None:
+    goal_root = tmp_path / "experiments" / "goals" / "Mario" / "Level1-1"
+    goal_root.mkdir(parents=True)
+    (goal_root / "_goal.yaml").write_text("goal_id: Level1-1\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="repository goal catalog does not exist"):
+        PlayCatalog(repo_root=tmp_path).projects(entity="research")
 
 
 def test_indexed_project_listing_does_not_parse_goal_contracts_and_scopes_goal_reads(

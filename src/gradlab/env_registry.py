@@ -38,11 +38,135 @@ class ProviderConstructorContract:
 
 
 @dataclass(frozen=True)
+class EvalProgressField:
+    info_key: str
+    result_key: str
+    rank: bool = False
+
+
+@dataclass(frozen=True)
+class EvalSemantics:
+    completion_reason: str | None = None
+    completion_info_keys: tuple[str, ...] = ()
+    completion_blocking_info_keys: tuple[str, ...] = ()
+    progress_fields: tuple[EvalProgressField, ...] = ()
+    death_flag_key: str | None = None
+    death_position_key: str | None = None
+    best_episode_rank: tuple[str, ...] = ("reward",)
+
+
+@dataclass(frozen=True)
+class EnvironmentSpec:
+    spec_id: str
+    game_family: str
+    wandb_project: str
+    task_id: str = "identity"
+    default_state: str = ""
+    default_obs_crop: tuple[int, int, int, int] | None = None
+    eval_semantics: EvalSemantics = EvalSemantics()
+
+
+@dataclass(frozen=True)
+class EnvRegistration:
+    spec_id: str
+    env_id_game_family_fallback: bool = True
+    env_id_wandb_project_fallback: bool = True
+
+
+MARIO_EVAL_SEMANTICS = EvalSemantics(
+    completion_reason="level_change",
+    completion_info_keys=("completion_event", "level_complete"),
+    completion_blocking_info_keys=("died", "life_loss"),
+    progress_fields=(
+        EvalProgressField("max_x_pos", "max_x_pos", rank=True),
+        EvalProgressField("level_max_x_pos", "max_level_x_pos"),
+    ),
+    death_flag_key="died",
+    death_position_key="death_x_pos",
+    best_episode_rank=("completion", "progress", "reward"),
+)
+
+ENVIRONMENT_SPECS: Mapping[str, EnvironmentSpec] = MappingProxyType(
+    {
+        "Bandit-v0": EnvironmentSpec("Bandit-v0", "Bandit", "Bandit-v0"),
+        "SuperMarioBros-Nes-v0": EnvironmentSpec(
+            "SuperMarioBros-Nes-v0",
+            "NES-SuperMarioBros",
+            "SuperMarioBros-Nes-v0",
+            task_id="mario",
+            default_state="Level1-1",
+            default_obs_crop=(32, 0, 0, 0),
+            eval_semantics=MARIO_EVAL_SEMANTICS,
+        ),
+        "SuperMarioBros3-Nes-v0": EnvironmentSpec(
+            "SuperMarioBros3-Nes-v0",
+            "NES-SuperMarioBros3",
+            "SuperMarioBros3-Nes-v0",
+            default_state="1Player.World1.Level1",
+        ),
+        "Breakout-Atari2600-v0": EnvironmentSpec(
+            "Breakout-Atari2600-v0",
+            "Atari2600-Breakout",
+            "Breakout-Atari2600-v0",
+        ),
+        "MsPacman-Atari2600-v0": EnvironmentSpec(
+            "MsPacman-Atari2600-v0",
+            "Atari2600-MsPacman",
+            "MsPacman-Atari2600-v0",
+        ),
+        "VizdoomBasic-v1": EnvironmentSpec(
+            "VizdoomBasic-v1", "Doom-ViZDoom-Basic", "VizdoomBasic-v1"
+        ),
+        "VizdoomDeadlyCorridor-v1": EnvironmentSpec(
+            "VizdoomDeadlyCorridor-v1",
+            "Doom-ViZDoom-DeadlyCorridor",
+            "VizdoomDeadlyCorridor-v1",
+        ),
+        "VizdoomDefendCenter-v1": EnvironmentSpec(
+            "VizdoomDefendCenter-v1",
+            "Doom-ViZDoom-DefendCenter",
+            "VizdoomDefendCenter-v1",
+        ),
+        "VizdoomDefendLine-v1": EnvironmentSpec(
+            "VizdoomDefendLine-v1",
+            "Doom-ViZDoom-DefendLine",
+            "VizdoomDefendLine-v1",
+        ),
+        "VizdoomHealthGathering-v1": EnvironmentSpec(
+            "VizdoomHealthGathering-v1",
+            "Doom-ViZDoom-HealthGathering",
+            "VizdoomHealthGathering-v1",
+        ),
+        "VizdoomHealthGatheringSupreme-v1": EnvironmentSpec(
+            "VizdoomHealthGatheringSupreme-v1",
+            "Doom-ViZDoom-HealthGatheringSupreme",
+            "VizdoomHealthGatheringSupreme-v1",
+        ),
+        "VizdoomMyWayHome-v1": EnvironmentSpec(
+            "VizdoomMyWayHome-v1",
+            "Doom-ViZDoom-MyWayHome",
+            "VizdoomMyWayHome-v1",
+        ),
+        "VizdoomPredictPosition-v1": EnvironmentSpec(
+            "VizdoomPredictPosition-v1",
+            "Doom-ViZDoom-PredictPosition",
+            "VizdoomPredictPosition-v1",
+        ),
+        "VizdoomTakeCover-v1": EnvironmentSpec(
+            "VizdoomTakeCover-v1",
+            "Doom-ViZDoom-TakeCover",
+            "VizdoomTakeCover-v1",
+        ),
+    }
+)
+
+
+@dataclass(frozen=True)
 class EnvProvider:
     provider_id: str
     import_name: str
     distribution_name: str
-    env_ids: tuple[str, ...]
+    environments: Mapping[str, EnvRegistration]
     supports_states: bool = True
     external_rom_asset_strategy: str = EXTERNAL_ROM_ASSET_NONE
     allows_unregistered_env_ids: bool = False
@@ -54,6 +178,20 @@ class EnvProvider:
             raise ValueError(
                 f"unsupported external ROM asset strategy: {self.external_rom_asset_strategy}"
             )
+        unknown_specs = {
+            registration.spec_id
+            for registration in self.environments.values()
+            if registration.spec_id not in ENVIRONMENT_SPECS
+        }
+        if unknown_specs:
+            raise ValueError(
+                f"provider references unknown environment specs: {sorted(unknown_specs)}"
+            )
+        object.__setattr__(self, "environments", MappingProxyType(dict(self.environments)))
+
+    @property
+    def env_ids(self) -> tuple[str, ...]:
+        return tuple(self.environments)
 
     @property
     def requires_external_rom_asset(self) -> bool:
@@ -66,14 +204,6 @@ class ResolvedEnvId:
     provider_id: str
     provider_env_id: str
     import_name: str
-
-
-@dataclass(frozen=True)
-class CanonicalEnvironmentIdentity:
-    game_family: str
-    wandb_project: str
-    env_id_game_family_fallback: bool = True
-    env_id_wandb_project_fallback: bool = True
 
 
 _TURBO_CANONICAL_ARGS = frozenset(
@@ -119,12 +249,15 @@ STABLE_RETRO_TURBO_PROVIDER = EnvProvider(
     provider_id="stable-retro-turbo",
     import_name="stable_retro",
     distribution_name="stable-retro-turbo",
-    env_ids=(
-        "SuperMarioBros-Nes-v0",
-        "SuperMarioBros3-Nes-v0",
-        "Breakout-Atari2600-v0",
-        "MsPacman-Atari2600-v0",
-    ),
+    environments={
+        spec_id: EnvRegistration(spec_id)
+        for spec_id in (
+            "SuperMarioBros-Nes-v0",
+            "SuperMarioBros3-Nes-v0",
+            "Breakout-Atari2600-v0",
+            "MsPacman-Atari2600-v0",
+        )
+    },
     external_rom_asset_strategy=STABLE_RETRO_DIRECT_PATH_V1,
     turbo_api_version=1,
     constructor_contract=ProviderConstructorContract(
@@ -138,7 +271,9 @@ SUPERMARIOBROS_NES_TURBO_PROVIDER = EnvProvider(
     provider_id="supermariobrosnes-turbo",
     import_name="supermariobrosnes_turbo",
     distribution_name="supermariobrosnes-turbo",
-    env_ids=("SuperMarioBros-Nes-v0",),
+    environments={
+        "SuperMarioBros-Nes-v0": EnvRegistration("SuperMarioBros-Nes-v0"),
+    },
     external_rom_asset_strategy=STABLE_RETRO_DIRECT_PATH_V1,
     turbo_api_version=1,
     constructor_contract=ProviderConstructorContract(
@@ -152,17 +287,20 @@ VIZDOOM_TURBO_PROVIDER = EnvProvider(
     provider_id="vizdoom-turbo",
     import_name="vizdoom_turbo",
     distribution_name="vizdoom-turbo",
-    env_ids=(
-        "VizdoomBasic-v1",
-        "VizdoomDeadlyCorridor-v1",
-        "VizdoomDefendCenter-v1",
-        "VizdoomDefendLine-v1",
-        "VizdoomHealthGathering-v1",
-        "VizdoomHealthGatheringSupreme-v1",
-        "VizdoomMyWayHome-v1",
-        "VizdoomPredictPosition-v1",
-        "VizdoomTakeCover-v1",
-    ),
+    environments={
+        spec_id: EnvRegistration(spec_id)
+        for spec_id in (
+            "VizdoomBasic-v1",
+            "VizdoomDeadlyCorridor-v1",
+            "VizdoomDefendCenter-v1",
+            "VizdoomDefendLine-v1",
+            "VizdoomHealthGathering-v1",
+            "VizdoomHealthGatheringSupreme-v1",
+            "VizdoomMyWayHome-v1",
+            "VizdoomPredictPosition-v1",
+            "VizdoomTakeCover-v1",
+        )
+    },
     allows_unregistered_env_ids=True,
     turbo_api_version=1,
     constructor_contract=ProviderConstructorContract(
@@ -185,7 +323,9 @@ BREAKOUT_TURBO_ENV_PROVIDER = EnvProvider(
     provider_id="breakout-turbo-env",
     import_name="breakout_turbo_env",
     distribution_name="breakout-turbo-env",
-    env_ids=("Breakout-Atari2600-v0",),
+    environments={
+        "Breakout-Atari2600-v0": EnvRegistration("Breakout-Atari2600-v0"),
+    },
     turbo_api_version=1,
     constructor_contract=ProviderConstructorContract(
         canonical_args=_TURBO_CANONICAL_ARGS,
@@ -199,7 +339,16 @@ ALE_PY_PROVIDER = EnvProvider(
     provider_id="ale-py",
     import_name="ale_py",
     distribution_name="ale-py",
-    env_ids=("breakout", "ms_pacman"),
+    environments={
+        "breakout": EnvRegistration(
+            "Breakout-Atari2600-v0",
+            env_id_wandb_project_fallback=False,
+        ),
+        "ms_pacman": EnvRegistration(
+            "MsPacman-Atari2600-v0",
+            env_id_wandb_project_fallback=False,
+        ),
+    },
     supports_states=False,
     constructor_contract=ProviderConstructorContract(
         canonical_args=frozenset(
@@ -239,7 +388,7 @@ GYMNASIUM_PROVIDER = EnvProvider(
     provider_id="gymnasium",
     import_name="gymnasium",
     distribution_name="gymnasium",
-    env_ids=(),
+    environments={},
     supports_states=False,
     allows_unregistered_env_ids=True,
 )
@@ -248,7 +397,7 @@ GRADLAB_PROVIDER = EnvProvider(
     provider_id="gradlab",
     import_name="gradlab",
     distribution_name="gradlab",
-    env_ids=("Bandit-v0",),
+    environments={"Bandit-v0": EnvRegistration("Bandit-v0")},
     supports_states=False,
     constructor_contract=ProviderConstructorContract(
         canonical_args=frozenset({"game", "num_envs"}),
@@ -267,85 +416,6 @@ ENV_PROVIDERS: dict[str, EnvProvider] = {
     GYMNASIUM_PROVIDER.provider_id: GYMNASIUM_PROVIDER,
 }
 
-# Provider-neutral public identity used by W&B metadata, project routing, and
-# published model identities. Publication must use this explicit registry;
-# provider-local environment ids are not parsed into public identity fields.
-# The env-id fallback flags preserve historical reads where old metadata omitted
-# or carried a stale provider. ALE's short ids historically inferred a family
-# but not a W&B project when the provider mapping did not match.
-CANONICAL_ENVIRONMENT_IDENTITIES: Mapping[tuple[str, str], CanonicalEnvironmentIdentity] = (
-    MappingProxyType(
-        {
-            ("gradlab", "Bandit-v0"): CanonicalEnvironmentIdentity("Bandit", "Bandit-v0"),
-            (
-                "supermariobrosnes-turbo",
-                "SuperMarioBros-Nes-v0",
-            ): CanonicalEnvironmentIdentity("NES-SuperMarioBros", "SuperMarioBros-Nes-v0"),
-            (
-                "stable-retro-turbo",
-                "SuperMarioBros-Nes-v0",
-            ): CanonicalEnvironmentIdentity("NES-SuperMarioBros", "SuperMarioBros-Nes-v0"),
-            (
-                "stable-retro-turbo",
-                "SuperMarioBros3-Nes-v0",
-            ): CanonicalEnvironmentIdentity("NES-SuperMarioBros3", "SuperMarioBros3-Nes-v0"),
-            (
-                "breakout-turbo-env",
-                "Breakout-Atari2600-v0",
-            ): CanonicalEnvironmentIdentity("Atari2600-Breakout", "Breakout-Atari2600-v0"),
-            ("ale-py", "breakout"): CanonicalEnvironmentIdentity(
-                "Atari2600-Breakout",
-                "Breakout-Atari2600-v0",
-                env_id_wandb_project_fallback=False,
-            ),
-            (
-                "stable-retro-turbo",
-                "Breakout-Atari2600-v0",
-            ): CanonicalEnvironmentIdentity("Atari2600-Breakout", "Breakout-Atari2600-v0"),
-            ("ale-py", "ms_pacman"): CanonicalEnvironmentIdentity(
-                "Atari2600-MsPacman",
-                "MsPacman-Atari2600-v0",
-                env_id_wandb_project_fallback=False,
-            ),
-            (
-                "stable-retro-turbo",
-                "MsPacman-Atari2600-v0",
-            ): CanonicalEnvironmentIdentity("Atari2600-MsPacman", "MsPacman-Atari2600-v0"),
-            ("vizdoom-turbo", "VizdoomBasic-v1"): CanonicalEnvironmentIdentity(
-                "Doom-ViZDoom-Basic", "VizdoomBasic-v1"
-            ),
-            ("vizdoom-turbo", "VizdoomDeadlyCorridor-v1"): CanonicalEnvironmentIdentity(
-                "Doom-ViZDoom-DeadlyCorridor", "VizdoomDeadlyCorridor-v1"
-            ),
-            ("vizdoom-turbo", "VizdoomDefendCenter-v1"): CanonicalEnvironmentIdentity(
-                "Doom-ViZDoom-DefendCenter", "VizdoomDefendCenter-v1"
-            ),
-            ("vizdoom-turbo", "VizdoomDefendLine-v1"): CanonicalEnvironmentIdentity(
-                "Doom-ViZDoom-DefendLine", "VizdoomDefendLine-v1"
-            ),
-            ("vizdoom-turbo", "VizdoomHealthGathering-v1"): CanonicalEnvironmentIdentity(
-                "Doom-ViZDoom-HealthGathering", "VizdoomHealthGathering-v1"
-            ),
-            (
-                "vizdoom-turbo",
-                "VizdoomHealthGatheringSupreme-v1",
-            ): CanonicalEnvironmentIdentity(
-                "Doom-ViZDoom-HealthGatheringSupreme",
-                "VizdoomHealthGatheringSupreme-v1",
-            ),
-            ("vizdoom-turbo", "VizdoomMyWayHome-v1"): CanonicalEnvironmentIdentity(
-                "Doom-ViZDoom-MyWayHome", "VizdoomMyWayHome-v1"
-            ),
-            ("vizdoom-turbo", "VizdoomPredictPosition-v1"): CanonicalEnvironmentIdentity(
-                "Doom-ViZDoom-PredictPosition", "VizdoomPredictPosition-v1"
-            ),
-            ("vizdoom-turbo", "VizdoomTakeCover-v1"): CanonicalEnvironmentIdentity(
-                "Doom-ViZDoom-TakeCover", "VizdoomTakeCover-v1"
-            ),
-        }
-    )
-)
-
 STABLE_RETRO_ATARI_ENV_IDS = frozenset({"Breakout-Atari2600-v0", "MsPacman-Atari2600-v0"})
 
 
@@ -361,11 +431,12 @@ def _canonical_identity_by_env_id(
     env_id: str,
     *,
     fallback_field: str,
-) -> CanonicalEnvironmentIdentity | None:
+) -> EnvironmentSpec | None:
     matches = {
-        identity
-        for (_provider, registered_env_id), identity in CANONICAL_ENVIRONMENT_IDENTITIES.items()
-        if registered_env_id == env_id and getattr(identity, fallback_field)
+        ENVIRONMENT_SPECS[registration.spec_id]
+        for provider in ENV_PROVIDERS.values()
+        if (registration := provider.environments.get(env_id)) is not None
+        and getattr(registration, fallback_field)
     }
     if len(matches) == 1:
         return matches.pop()
@@ -378,17 +449,37 @@ def _canonical_environment_identity(
     *,
     fallback_field: str,
     allow_env_id_fallback: bool = True,
-) -> tuple[str, CanonicalEnvironmentIdentity | None]:
+) -> tuple[str, EnvironmentSpec | None]:
     """Resolve a registered public identity while preserving historical reads."""
 
     provider, environment = _environment_identity(provider_id, env_id)
-    identity = CANONICAL_ENVIRONMENT_IDENTITIES.get((provider, environment))
+    registration = (
+        ENV_PROVIDERS[provider].environments.get(environment) if provider in ENV_PROVIDERS else None
+    )
+    identity = ENVIRONMENT_SPECS[registration.spec_id] if registration is not None else None
     if identity is None and allow_env_id_fallback:
         identity = _canonical_identity_by_env_id(
             environment,
             fallback_field=fallback_field,
         )
     return environment, identity
+
+
+def environment_spec(provider_id: object, env_id: object) -> EnvironmentSpec:
+    """Return the one registered environment contract or a generic runtime spec."""
+
+    environment, spec = _canonical_environment_identity(
+        provider_id,
+        env_id,
+        fallback_field="env_id_game_family_fallback",
+    )
+    if spec is not None:
+        return spec
+    return EnvironmentSpec(
+        spec_id=environment or "environment",
+        game_family=_fallback_game_family(environment, fallback="environment"),
+        wandb_project=environment or "environment",
+    )
 
 
 def _fallback_game_family(env_id: str, *, fallback: str) -> str:

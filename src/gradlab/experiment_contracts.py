@@ -47,8 +47,8 @@ GOAL_REQUIRED_ENV_CONFIG_KEYS = frozenset(
         "obs_crop",
         "obs_crop_fill",
         "obs_crop_mode",
+        "obs_resize",
         "obs_resize_algorithm",
-        "observation_size",
         "sticky_action_prob",
     }
 )
@@ -305,12 +305,9 @@ def _validate_goal_eval(document: Mapping[str, Any], *, label: str) -> None:
         objective = document.get("objective")
         rank = objective.get("rank") if isinstance(objective, Mapping) else None
         criteria = parse_objective_rank(rank)
-        if not criteria or any(
-            not criterion.metric.startswith("train/") for criterion in criteria
-        ):
+        if not criteria or any(not criterion.metric.startswith("train/") for criterion in criteria):
             raise ValueError(
-                f"{label}.objective.rank for a training-only goal may use only "
-                "training metrics"
+                f"{label}.objective.rank for a training-only goal may use only training metrics"
             )
         return
     eval_section = _require_mapping(
@@ -318,13 +315,9 @@ def _validate_goal_eval(document: Mapping[str, Any], *, label: str) -> None:
         label=f"{label}.eval",
     )
     if train.get("checkpoint_eval_backend") == "none":
-        raise ValueError(
-            f"{label}.eval must be omitted when train.checkpoint_eval_backend is none"
-        )
+        raise ValueError(f"{label}.eval must be omitted when train.checkpoint_eval_backend is none")
     _require_int(eval_section, "episodes", label=f"{label}.eval", minimum=1)
-    acceptance_enabled = bool(
-        train.get("stop_on_acceptance") is True
-    )
+    acceptance_enabled = bool(train.get("stop_on_acceptance") is True)
     if acceptance_enabled:
         normalize_metric_threshold_rules(
             _require_key(eval_section, "acceptance", label=f"{label}.eval"),
@@ -518,8 +511,7 @@ def validate_goal_contract_document(
         )
         conditions = early_stop["conditions"]
         if train.get("stop_on_acceptance") is True and any(
-            str(condition["outcome"]) == "success"
-            for condition in conditions.values()
+            str(condition["outcome"]) == "success" for condition in conditions.values()
         ):
             raise ValueError(
                 f"{label}.train.early_stop success conditions are incompatible with "
@@ -600,4 +592,3 @@ def validate_env_config_file(path: Path) -> None:
         _validate_env_config(document, label=label, require_game=True)
     if "state" in document or "states" in document:
         raise ValueError(f"{label} must not define state or states")
-

@@ -23,22 +23,28 @@ ANSI_PATTERN = re.compile(r"\x1b\[[0-9;]*m")
 
 @dataclass(frozen=True)
 class PolicyDecision:
-    distribution_kind: str
     raw_action: np.ndarray
     executed_action: np.ndarray
-    value: float
-    log_probability: float
-    entropy: float | None
-    mode: np.ndarray
+    action_selection_mode: str
+    requested_action_selection_mode: str | None = None
+    distribution_kind: str | None = None
+    value: float | None = None
+    log_probability: float | None = None
+    entropy: float | None = None
+    mode: np.ndarray | None = None
     probabilities: np.ndarray | None = None
     component_probabilities: tuple[np.ndarray, ...] = ()
     mean: np.ndarray | None = None
     stddev: np.ndarray | None = None
-    sampled: bool = True
+    q_values: np.ndarray | None = None
+    exploration_rate: float | None = None
+    exploratory: bool | None = None
+    program: Mapping[str, Any] | None = None
+    sampled: bool | None = None
 
     @property
     def selected_discrete_action(self) -> int | None:
-        if self.probabilities is None or self.raw_action.size != 1:
+        if self.raw_action.size != 1:
             return None
         return int(self.raw_action.reshape(-1)[0])
 
@@ -56,6 +62,20 @@ class PolicyDecision:
             return None
         return 1 + int(np.count_nonzero(self.probabilities > probability))
 
+    @property
+    def selected_q_value(self) -> float | None:
+        action = self.selected_discrete_action
+        if self.q_values is None or action is None or not 0 <= action < self.q_values.size:
+            return None
+        return float(self.q_values.reshape(-1)[action])
+
+    @property
+    def selected_q_rank(self) -> int | None:
+        value = self.selected_q_value
+        if self.q_values is None or value is None:
+            return None
+        return 1 + int(np.count_nonzero(self.q_values > value))
+
 
 def _as_numpy(value: torch.Tensor) -> np.ndarray:
     return value.detach().cpu().numpy()
@@ -71,7 +91,7 @@ def _postprocess_action(policy: Any, raw_action: np.ndarray) -> np.ndarray:
     return np.asarray(action)
 
 
-def _decision_from_distribution(
+def _decisions_from_distribution(
     policy: Any,
     distribution: Any,
     *,
@@ -79,75 +99,161 @@ def _decision_from_distribution(
     value_tensor: torch.Tensor,
     log_probability_tensor: torch.Tensor,
     sampled: bool,
-) -> PolicyDecision:
+    action_selection_mode: str,
+) -> tuple[PolicyDecision, ...]:
     entropy_tensor = distribution.entropy()
     mode_tensor = distribution.mode()
     raw_action = _as_numpy(raw_tensor).reshape((-1, *policy.action_space.shape))
     executed_action = _postprocess_action(policy, raw_action)
-    entropy = None if entropy_tensor is None else float(_as_numpy(entropy_tensor).reshape(-1)[0])
-    common = {
-        "raw_action": raw_action[0].copy(),
-        "executed_action": executed_action[0].copy(),
-        "value": float(_as_numpy(value_tensor).reshape(-1)[0]),
-        "log_probability": float(_as_numpy(log_probability_tensor).reshape(-1)[0]),
-        "entropy": entropy,
-        "mode": _as_numpy(mode_tensor)[0].copy(),
-        "sampled": sampled,
-    }
+    values = _as_numpy(value_tensor).reshape(-1)
+    log_probabilities = _as_numpy(log_probability_tensor).reshape(-1)
+    entropies = None if entropy_tensor is None else _as_numpy(entropy_tensor).reshape(-1)
+    modes = _as_numpy(mode_tensor).reshape((-1, *policy.action_space.shape))
+
+    distribution_kind: str
+    probabilities: np.ndarray | None = None
+    component_probabilities: tuple[np.ndarray, ...] = ()
+    mean: np.ndarray | None = None
+    stddev: np.ndarray | None = None
     if isinstance(distribution, CategoricalDistribution):
-        return PolicyDecision(
-            **common,
-            distribution_kind="categorical",
-            probabilities=_as_numpy(distribution.distribution.probs)[0].copy(),
+        distribution_kind = "categorical"
+        probabilities = _as_numpy(distribution.distribution.probs)
+    elif isinstance(distribution, MultiCategoricalDistribution):
+        distribution_kind = "multi_categorical"
+        component_probabilities = tuple(
+            _as_numpy(component.probs) for component in distribution.distribution
         )
-    if isinstance(distribution, MultiCategoricalDistribution):
-        return PolicyDecision(
-            **common,
-            distribution_kind="multi_categorical",
-            component_probabilities=tuple(
-                _as_numpy(component.probs)[0].copy() for component in distribution.distribution
-            ),
+    elif isinstance(distribution, BernoulliDistribution):
+        distribution_kind = "bernoulli"
+        component_probabilities = (_as_numpy(distribution.distribution.probs),)
+    elif isinstance(distribution, (DiagGaussianDistribution, StateDependentNoiseDistribution)):
+        distribution_kind = "gaussian"
+        mean = _as_numpy(distribution.distribution.mean)
+        stddev = _as_numpy(distribution.distribution.stddev)
+    else:
+        raise TypeError(f"unsupported actor-critic distribution {type(distribution).__name__}")
+
+    decisions: list[PolicyDecision] = []
+    for lane in range(raw_action.shape[0]):
+        decisions.append(
+            PolicyDecision(
+                raw_action=raw_action[lane].copy(),
+                executed_action=executed_action[lane].copy(),
+                action_selection_mode=action_selection_mode,
+                distribution_kind=distribution_kind,
+                value=float(values[lane]),
+                log_probability=float(log_probabilities[lane]),
+                entropy=None if entropies is None else float(entropies[lane]),
+                mode=modes[lane].copy(),
+                probabilities=(
+                    None if probabilities is None else probabilities[lane].copy()
+                ),
+                component_probabilities=tuple(
+                    component[lane].copy() for component in component_probabilities
+                ),
+                mean=None if mean is None else mean[lane].copy(),
+                stddev=None if stddev is None else stddev[lane].copy(),
+                sampled=sampled,
+            )
         )
-    if isinstance(distribution, BernoulliDistribution):
-        return PolicyDecision(
-            **common,
-            distribution_kind="bernoulli",
-            component_probabilities=(_as_numpy(distribution.distribution.probs)[0].copy(),),
-        )
-    if isinstance(distribution, (DiagGaussianDistribution, StateDependentNoiseDistribution)):
-        return PolicyDecision(
-            **common,
-            distribution_kind="gaussian",
-            mean=_as_numpy(distribution.distribution.mean)[0].copy(),
-            stddev=_as_numpy(distribution.distribution.stddev)[0].copy(),
-        )
-    raise TypeError(f"unsupported PPO distribution {type(distribution).__name__}")
+    return tuple(decisions)
 
 
-def sample_policy_decision(model: Any, model_obs: Any) -> PolicyDecision:
-    """Sample once from PPO and describe that same state without another sample."""
-
-    custom = getattr(model, "sample_policy_decision", None)
-    if callable(custom):
-        return custom(model_obs)
+def _actor_critic_policy_decisions(
+    model: Any,
+    model_obs: Any,
+    *,
+    deterministic: bool,
+) -> tuple[PolicyDecision, ...]:
+    """Run an SB3 actor-critic policy once and describe every lane."""
 
     policy = model.policy
     policy.set_training_mode(False)
     obs_tensor, _vectorized = policy.obs_to_tensor(model_obs)
     with torch.no_grad():
-        raw_tensor, value_tensor, log_probability_tensor = policy.forward(
-            obs_tensor,
-            deterministic=False,
-        )
-        distribution = policy.get_distribution(obs_tensor)
-    return _decision_from_distribution(
+        features = policy.extract_features(obs_tensor)
+        if policy.share_features_extractor:
+            latent_pi, latent_vf = policy.mlp_extractor(features)
+        else:
+            pi_features, vf_features = features
+            latent_pi = policy.mlp_extractor.forward_actor(pi_features)
+            latent_vf = policy.mlp_extractor.forward_critic(vf_features)
+        values = policy.value_net(latent_vf)
+        distribution = policy._get_action_dist_from_latent(latent_pi)
+        raw_tensor = distribution.get_actions(deterministic=deterministic)
+        log_probability_tensor = distribution.log_prob(raw_tensor)
+    return _decisions_from_distribution(
         policy,
         distribution,
         raw_tensor=raw_tensor,
-        value_tensor=value_tensor,
+        value_tensor=values,
         log_probability_tensor=log_probability_tensor,
-        sampled=True,
+        sampled=not deterministic,
+        action_selection_mode="deterministic" if deterministic else "stochastic",
     )
+
+
+def actor_critic_policy_decisions(
+    model: Any,
+    model_obs: Any,
+    *,
+    deterministic: bool,
+) -> tuple[PolicyDecision, ...]:
+    return _actor_critic_policy_decisions(
+        model,
+        model_obs,
+        deterministic=deterministic,
+    )
+
+
+def dqn_policy_decisions(
+    model: Any,
+    model_obs: Any,
+    *,
+    epsilon_greedy: bool,
+) -> tuple[PolicyDecision, ...]:
+    """Run the DQN Q-network once and preserve SB3's epsilon-greedy gate."""
+
+    policy = model.policy
+    policy.set_training_mode(False)
+    obs_tensor, _vectorized = policy.obs_to_tensor(model_obs)
+    with torch.no_grad():
+        q_values = _as_numpy(policy.q_net(obs_tensor))
+    greedy_actions = np.argmax(q_values, axis=1).astype(np.int64)
+    exploratory = bool(
+        epsilon_greedy and np.random.rand() < float(getattr(model, "exploration_rate", 0.0))
+    )
+    actions = (
+        np.asarray([model.action_space.sample() for _ in range(q_values.shape[0])], dtype=np.int64)
+        if exploratory
+        else greedy_actions
+    )
+    return tuple(
+        PolicyDecision(
+            raw_action=np.asarray(actions[lane], dtype=np.int64),
+            executed_action=np.asarray(actions[lane], dtype=np.int64),
+            action_selection_mode="epsilon_greedy" if epsilon_greedy else "greedy",
+            distribution_kind=None,
+            mode=np.asarray(greedy_actions[lane], dtype=np.int64),
+            q_values=q_values[lane].copy(),
+            exploration_rate=(
+                float(getattr(model, "exploration_rate", 0.0)) if epsilon_greedy else 0.0
+            ),
+            exploratory=exploratory,
+            sampled=None,
+        )
+        for lane in range(q_values.shape[0])
+    )
+
+
+def sample_policy_decision(model: Any, model_obs: Any) -> PolicyDecision:
+    """Sample once from an actor-critic policy and describe that same decision."""
+
+    custom = getattr(model, "sample_policy_decision", None)
+    if callable(custom):
+        return custom(model_obs)
+
+    return _actor_critic_policy_decisions(model, model_obs, deterministic=False)[0]
 
 
 def inspect_policy(model: Any, model_obs: Any) -> PolicyDecision:
@@ -157,22 +263,7 @@ def inspect_policy(model: Any, model_obs: Any) -> PolicyDecision:
     if callable(custom):
         return custom(model_obs)
 
-    policy = model.policy
-    policy.set_training_mode(False)
-    obs_tensor, _vectorized = policy.obs_to_tensor(model_obs)
-    with torch.no_grad():
-        distribution = policy.get_distribution(obs_tensor)
-        mode_tensor = distribution.mode()
-        value_tensor = policy.predict_values(obs_tensor)
-        log_probability_tensor = distribution.log_prob(mode_tensor)
-    return _decision_from_distribution(
-        policy,
-        distribution,
-        raw_tensor=mode_tensor,
-        value_tensor=value_tensor,
-        log_probability_tensor=log_probability_tensor,
-        sampled=False,
-    )
+    return _actor_critic_policy_decisions(model, model_obs, deterministic=True)[0]
 
 
 def _format_number(value: Any) -> str:

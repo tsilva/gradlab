@@ -73,7 +73,7 @@ def _config() -> EnvConfig:
         state="",
         frame_skip=1,
         max_pool_frames=False,
-        observation_size=0,
+        obs_resize=(0, 0),
         obs_crop=(0, 0, 0, 0),
     )
 

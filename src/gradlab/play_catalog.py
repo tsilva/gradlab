@@ -7,7 +7,7 @@ import os
 import re
 import threading
 import time
-from collections.abc import Iterable, Iterator, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Literal
@@ -389,13 +389,6 @@ class PlayCatalog:
             tuple[float, tuple[dict[str, Any], ...]],
         ] = {}
         self._run_catalog_refreshing: set[str] = set()
-        self._repository_cache: (
-            tuple[
-                tuple[tuple[str, int, int], ...],
-                tuple[_RepositoryGoal, ...],
-            ]
-            | None
-        ) = None
         self._repository_project_cache: dict[
             str,
             tuple[
@@ -591,10 +584,57 @@ class PlayCatalog:
             )
         return tuple(entries)
 
-    def _repository_namespaces(self) -> tuple[_RepositoryNamespace, ...] | None:
+    def _read_persistent_cache(self) -> dict[str, Any] | None:
+        if self.cache_path is None or not self.cache_path.is_file():
+            return None
+        try:
+            payload = json.loads(self.cache_path.read_text(encoding="utf-8"))
+        except OSError, json.JSONDecodeError:
+            return None
+        if (
+            not isinstance(payload, dict)
+            or payload.get("schema_version") != CATALOG_CACHE_SCHEMA_VERSION
+            or payload.get("repo_root") != str(self.repo_root)
+        ):
+            return None
+        for section in ("projects", "run_catalogs"):
+            value = payload.setdefault(section, {})
+            if not isinstance(value, dict):
+                return None
+        return payload
+
+    def _update_persistent_cache(
+        self,
+        update: Callable[[dict[str, Any]], None],
+    ) -> None:
+        if self.cache_path is None:
+            return
+        with self._cache_lock:
+            payload = self._read_persistent_cache() or {
+                "schema_version": CATALOG_CACHE_SCHEMA_VERSION,
+                "repo_root": str(self.repo_root),
+                "projects": {},
+                "run_catalogs": {},
+            }
+            update(payload)
+            temporary = self.cache_path.with_name(
+                f".{self.cache_path.name}.{os.getpid()}.{threading.get_ident()}.tmp"
+            )
+            try:
+                self.cache_path.parent.mkdir(parents=True, exist_ok=True)
+                temporary.write_text(
+                    json.dumps(payload, sort_keys=True, separators=(",", ":")),
+                    encoding="utf-8",
+                )
+                temporary.chmod(0o600)
+                temporary.replace(self.cache_path)
+            except OSError:
+                temporary.unlink(missing_ok=True)
+
+    def _repository_namespaces(self) -> tuple[_RepositoryNamespace, ...]:
         index_path = self.goals_root / CATALOG_INDEX_FILENAME
         if not index_path.is_file():
-            return None
+            raise ValueError(f"repository goal catalog does not exist: {index_path}")
         stat_result = index_path.stat()
         fingerprint = (stat_result.st_mtime_ns, stat_result.st_size)
         with self._cache_lock:
@@ -703,15 +743,9 @@ class PlayCatalog:
         project: str,
         fingerprint: tuple[tuple[str, int, int], ...],
     ) -> tuple[_RepositoryGoal, ...] | None:
-        if self.cache_path is None or not self.cache_path.is_file():
-            return None
         try:
-            payload = json.loads(self.cache_path.read_text(encoding="utf-8"))
-            if (
-                not isinstance(payload, Mapping)
-                or payload.get("schema_version") != CATALOG_CACHE_SCHEMA_VERSION
-                or payload.get("repo_root") != str(self.repo_root)
-            ):
+            payload = self._read_persistent_cache()
+            if payload is None:
                 return None
             projects = payload.get("projects")
             entry = projects.get(project) if isinstance(projects, Mapping) else None
@@ -750,7 +784,7 @@ class PlayCatalog:
                     return None
                 goals.append(goal)
             return tuple(goals)
-        except OSError, TypeError, ValueError, json.JSONDecodeError:
+        except TypeError, ValueError:
             return None
 
     def _write_persistent_project(
@@ -760,28 +794,8 @@ class PlayCatalog:
         fingerprint: tuple[tuple[str, int, int], ...],
         goals: tuple[_RepositoryGoal, ...],
     ) -> None:
-        if self.cache_path is None:
-            return
-        with self._cache_lock:
-            payload: dict[str, Any] = {
-                "schema_version": CATALOG_CACHE_SCHEMA_VERSION,
-                "repo_root": str(self.repo_root),
-                "projects": {},
-            }
-            if self.cache_path.is_file():
-                try:
-                    existing = json.loads(self.cache_path.read_text(encoding="utf-8"))
-                    if (
-                        isinstance(existing, dict)
-                        and existing.get("schema_version") == CATALOG_CACHE_SCHEMA_VERSION
-                        and existing.get("repo_root") == str(self.repo_root)
-                        and isinstance(existing.get("projects"), dict)
-                    ):
-                        payload = existing
-                except OSError, json.JSONDecodeError:
-                    pass
-            projects = payload["projects"]
-            projects[project] = {
+        def update(payload: dict[str, Any]) -> None:
+            payload["projects"][project] = {
                 "fingerprint": [list(item) for item in fingerprint],
                 "goals": [
                     {
@@ -795,19 +809,8 @@ class PlayCatalog:
                     for goal in goals
                 ],
             }
-            temporary = self.cache_path.with_name(
-                f".{self.cache_path.name}.{os.getpid()}.{threading.get_ident()}.tmp"
-            )
-            try:
-                self.cache_path.parent.mkdir(parents=True, exist_ok=True)
-                temporary.write_text(
-                    json.dumps(payload, sort_keys=True, separators=(",", ":")),
-                    encoding="utf-8",
-                )
-                temporary.chmod(0o600)
-                temporary.replace(self.cache_path)
-            except OSError:
-                temporary.unlink(missing_ok=True)
+
+        self._update_persistent_cache(update)
 
     def _run_catalog_cache_key(
         self,
@@ -842,15 +845,9 @@ class PlayCatalog:
         entity: str,
         project: str,
     ) -> tuple[float, tuple[dict[str, Any], ...]] | None:
-        if self.cache_path is None or not self.cache_path.is_file():
-            return None
         try:
-            payload = json.loads(self.cache_path.read_text(encoding="utf-8"))
-            if (
-                not isinstance(payload, Mapping)
-                or payload.get("schema_version") != CATALOG_CACHE_SCHEMA_VERSION
-                or payload.get("repo_root") != str(self.repo_root)
-            ):
+            payload = self._read_persistent_cache()
+            if payload is None:
                 return None
             catalogs = payload.get("run_catalogs")
             entry = catalogs.get(cache_key) if isinstance(catalogs, Mapping) else None
@@ -898,7 +895,7 @@ class PlayCatalog:
                     ).to_dict()
                 )
             return generated_at, tuple(items)
-        except OSError, TypeError, ValueError, json.JSONDecodeError:
+        except TypeError, ValueError:
             return None
 
     def _write_persistent_run_catalog(
@@ -908,48 +905,13 @@ class PlayCatalog:
         generated_at: float,
         items: tuple[dict[str, Any], ...],
     ) -> None:
-        if self.cache_path is None:
-            return
-        with self._cache_lock:
-            payload: dict[str, Any] = {
-                "schema_version": CATALOG_CACHE_SCHEMA_VERSION,
-                "repo_root": str(self.repo_root),
-                "projects": {},
-                "run_catalogs": {},
-            }
-            if self.cache_path.is_file():
-                try:
-                    existing = json.loads(self.cache_path.read_text(encoding="utf-8"))
-                    if (
-                        isinstance(existing, dict)
-                        and existing.get("schema_version") == CATALOG_CACHE_SCHEMA_VERSION
-                        and existing.get("repo_root") == str(self.repo_root)
-                        and isinstance(existing.get("projects"), dict)
-                    ):
-                        payload = existing
-                except OSError, json.JSONDecodeError:
-                    pass
-            catalogs = payload.setdefault("run_catalogs", {})
-            if not isinstance(catalogs, dict):
-                catalogs = {}
-                payload["run_catalogs"] = catalogs
-            catalogs[cache_key] = {
+        def update(payload: dict[str, Any]) -> None:
+            payload["run_catalogs"][cache_key] = {
                 "generated_at": generated_at,
                 "items": list(items),
             }
-            temporary = self.cache_path.with_name(
-                f".{self.cache_path.name}.{os.getpid()}.{threading.get_ident()}.tmp"
-            )
-            try:
-                self.cache_path.parent.mkdir(parents=True, exist_ok=True)
-                temporary.write_text(
-                    json.dumps(payload, sort_keys=True, separators=(",", ":")),
-                    encoding="utf-8",
-                )
-                temporary.chmod(0o600)
-                temporary.replace(self.cache_path)
-            except OSError:
-                temporary.unlink(missing_ok=True)
+
+        self._update_persistent_cache(update)
 
     def _cached_run_catalog(
         self,
@@ -1020,42 +982,6 @@ class PlayCatalog:
             ),
         )
 
-    def _legacy_repository_goals(self) -> tuple[_RepositoryGoal, ...]:
-        if not self.goals_root.is_dir():
-            raise ValueError(f"repository goals directory does not exist: {self.goals_root}")
-        paths = tuple(sorted(self.goals_root.rglob("_goal.yaml")))
-        catalog_sources = tuple(
-            sorted(
-                (
-                    *self.goals_root.rglob("*.yaml"),
-                    *self.goals_root.rglob("*.yml"),
-                )
-            )
-        )
-        fingerprint = tuple(
-            (
-                path.relative_to(self.repo_root).as_posix(),
-                path.stat().st_mtime_ns,
-                path.stat().st_size,
-            )
-            for path in catalog_sources
-        )
-        with self._lock:
-            cached = self._repository_cache
-            if cached is not None and cached[0] == fingerprint:
-                return cached[1]
-
-        goals: list[_RepositoryGoal] = []
-        for path in paths:
-            goals.append(self._compose_repository_goal(path))
-        identities = [(goal.project, goal.goal_id) for goal in goals]
-        if len(identities) != len(set(identities)):
-            raise ValueError("repository goals contain duplicate project/goal identities")
-        result = tuple(sorted(goals, key=lambda goal: (goal.project, goal.goal_id)))
-        with self._lock:
-            self._repository_cache = (fingerprint, result)
-        return result
-
     def _indexed_repository_goals(
         self,
         *,
@@ -1123,9 +1049,6 @@ class PlayCatalog:
         if not self.goals_root.is_dir():
             raise ValueError(f"repository goals directory does not exist: {self.goals_root}")
         namespaces = self._repository_namespaces()
-        if namespaces is None:
-            goals = self._legacy_repository_goals()
-            return tuple(goal for goal in goals if project is None or goal.project == project)
         projects = sorted({namespace.project for namespace in namespaces})
         selected_projects = [project] if project is not None else projects
         return tuple(
@@ -1139,12 +1062,7 @@ class PlayCatalog:
 
     def _repository_projects(self) -> dict[str, int]:
         namespaces = self._repository_namespaces()
-        if namespaces is None:
-            counts: dict[str, int] = {}
-            for goal in self._legacy_repository_goals():
-                counts[goal.project] = counts.get(goal.project, 0) + 1
-            return counts
-        counts = {}
+        counts: dict[str, int] = {}
         for namespace in namespaces:
             count = sum(1 for _ in (self.goals_root / namespace.directory).rglob("_goal.yaml"))
             counts[namespace.project] = counts.get(namespace.project, 0) + count

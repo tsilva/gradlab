@@ -379,6 +379,7 @@ class PlaybackLoader:
         progress: ProgressCallback,
     ) -> ActivePlayback:
         from gradlab.policy_models import load_policy_model
+        from gradlab.policy_runtime import PolicyRuntime
 
         args = candidate.args
         progress("loading", "Loading policy runtime")
@@ -391,10 +392,17 @@ class PlaybackLoader:
                 approved,
                 device=resolve_sb3_device(args.device),
             )
+        # Validate the executable policy contract before creating or stepping
+        # an environment. Optional telemetry can degrade later, but action
+        # execution and its declared selection modes cannot.
+        policy_runtime = PolicyRuntime(model)
 
         if args.attribution != "none":
-            if not hasattr(model, "policy"):
-                raise ValueError("policy attribution is unavailable for non-neural policies")
+            if policy_runtime.capabilities.algorithm_id not in {"ppo", "a2c"}:
+                raise ValueError(
+                    "selected-action log-probability attribution is unavailable for "
+                    f"{policy_runtime.capabilities.algorithm_id} policies"
+                )
             progress("loading", "Preparing policy attribution")
             attributor = PolicyActionAttributor(model)
         else:
@@ -416,6 +424,42 @@ class PlaybackLoader:
             from gradlab.policy_runtime import bind_policy_action_space
 
             bind_policy_action_space(model, policy_env.action_space)
+            policy_provenance: dict[str, Any] = {}
+            if candidate.source.bundle is not None:
+                model_document = candidate.source.bundle.model
+                policy_value = model_document.get("policy")
+                policy = policy_value if isinstance(policy_value, Mapping) else {}
+                provenance_value = model_document.get("provenance")
+                provenance = (
+                    provenance_value if isinstance(provenance_value, Mapping) else {}
+                )
+                policy_provenance = {
+                    "training_backend_id": str(policy.get("training_backend_id") or ""),
+                }
+                search_algorithm_id = str(
+                    provenance.get("search_algorithm_id") or ""
+                ).strip()
+                if search_algorithm_id:
+                    policy_provenance["search_algorithm_id"] = search_algorithm_id
+                summary_value = provenance.get("state_archive_summary")
+                if isinstance(summary_value, Mapping):
+                    safe_summary_fields = {
+                        "semantic_id",
+                        "schema_version",
+                        "persistence",
+                        "provider_id",
+                        "codec_id",
+                        "compatibility_id",
+                        "entry_count",
+                        "blob_count",
+                        "blob_bytes",
+                        "view_ids",
+                    }
+                    policy_provenance["state_archive_summary"] = {
+                        str(key): deepcopy(value)
+                        for key, value in summary_value.items()
+                        if key in safe_summary_fields
+                    }
             session = _PlaybackSession(
                 model=model,
                 env=policy_env,
@@ -425,6 +469,8 @@ class PlaybackLoader:
                 attribution_mode=args.attribution,
                 attribution_interval=args.attribution_interval,
                 attribution_opacity=args.attribution_opacity,
+                policy_runtime=policy_runtime,
+                policy_provenance=policy_provenance,
                 env_factory=make_policy_env,
                 termination_base_config=candidate.termination_base_config,
                 termination_source=candidate.termination_source,

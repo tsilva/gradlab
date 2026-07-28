@@ -259,7 +259,7 @@ def main(argv: list[str] | None = None) -> int:
             extra={
                 "model": args.model,
                 "policy": model_policy,
-                "hud_crop_top": args.hud_crop_top,
+                "obs_crop": args.obs_crop,
             },
         )
     else:
@@ -279,7 +279,7 @@ def main(argv: list[str] | None = None) -> int:
             extra={
                 "model": args.model,
                 "policy": args.policy,
-                "hud_crop_top": args.hud_crop_top,
+                "obs_crop": args.obs_crop,
             },
         )
     if args.summary_only:

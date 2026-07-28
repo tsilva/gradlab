@@ -44,7 +44,7 @@ train:
       frame_skip: 4
       max_pool_frames: true
       sticky_action_prob: 0.25
-      observation_size: 84
+      obs_resize: [84, 84]
       # ALE native 84x84 preprocessing leaves the bottom HUD in rows 69-83.
       # The raw-coordinate bottom mask below scales to 15 policy rows.
       obs_crop:

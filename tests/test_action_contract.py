@@ -7,8 +7,9 @@ from gradlab.action_contract import (
     configured_action_meanings,
     configured_action_name,
     declared_action_contract,
-    normalize_action_configuration,
+    migrate_legacy_artifact_action_configuration,
 )
+from gradlab.env import EnvConfig, resolve_env_config
 
 
 BREAKOUT_NO_NOOP_ACTIONS = [["BUTTON"], ["RIGHT"], ["LEFT"]]
@@ -16,7 +17,7 @@ BREAKOUT_NO_NOOP_HASH = "a1f69721fbf7ef8a00084b9426767b0bce61f39ee0880b932a954c7
 
 
 def test_legacy_mario_action_set_moves_to_provider_contract():
-    env_args, task = normalize_action_configuration(
+    env_args, task = migrate_legacy_artifact_action_configuration(
         provider_id="supermariobrosnes-turbo",
         game="SuperMarioBros-Nes-v0",
         env_args={"action_set": "basic", "use_restricted_actions": "all"},
@@ -28,7 +29,7 @@ def test_legacy_mario_action_set_moves_to_provider_contract():
 
 
 def test_legacy_task_action_set_moves_to_stable_retro_provider():
-    env_args, task = normalize_action_configuration(
+    env_args, task = migrate_legacy_artifact_action_configuration(
         provider_id="stable-retro-turbo",
         game="SuperMarioBros-Nes-v0",
         env_args={"use_restricted_actions": "all"},
@@ -41,11 +42,38 @@ def test_legacy_task_action_set_moves_to_stable_retro_provider():
 
 def test_conflicting_legacy_and_provider_action_contracts_fail():
     with pytest.raises(ValueError, match="conflicts"):
-        normalize_action_configuration(
+        migrate_legacy_artifact_action_configuration(
             provider_id="supermariobrosnes-turbo",
             game="SuperMarioBros-Nes-v0",
             env_args={"action_set": "basic", "use_restricted_actions": "right-jump"},
             task={"id": "mario", "action": {"set": "basic"}},
+        )
+
+
+def test_live_config_rejects_artifact_only_action_fields():
+    with pytest.raises(ValueError, match="artifact-only legacy metadata"):
+        resolve_env_config(
+            EnvConfig(
+                env_provider="supermariobrosnes-turbo",
+                game="SuperMarioBros-Nes-v0",
+                env_args={"action_set": "basic"},
+            )
+        )
+
+    with pytest.raises(ValueError, match="use env_args.use_restricted_actions"):
+        resolve_env_config(
+            EnvConfig(
+                env_provider="supermariobrosnes-turbo",
+                game="SuperMarioBros-Nes-v0",
+                task={
+                    "id": "mario",
+                    "action": {"set": "basic"},
+                    "signals": {},
+                    "events": {},
+                    "termination": {},
+                    "reward": {"reward_mode": "native"},
+                },
+            )
         )
 
 

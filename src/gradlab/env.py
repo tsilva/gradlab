@@ -13,7 +13,7 @@ import numpy as np
 import stable_retro as retro
 
 from gradlab import env_providers as provider_runtime
-from gradlab.action_contract import configured_action_values, normalize_action_configuration
+from gradlab.action_contract import configured_action_values
 from gradlab.batch_runtime import BatchRuntime, ProviderDescriptor
 from gradlab.env_providers import (
     DEFAULT_RETRO_VEC_ENV as RetroVecEnv,
@@ -30,14 +30,17 @@ from gradlab.env_registry import (
     resolve_env_provider,
 )
 from gradlab.env_identity import task_config_from_train_config, validate_task_config
-from gradlab.targets import target_for_game
+from gradlab.env_registry import environment_spec
 from gradlab.task_kernels import (
     IdentityTaskDefinition,
     MarioTaskConfig,
     MarioTaskDefinition,
     with_reward_transform,
 )
-from gradlab.validation import normalize_obs_crop as validate_obs_crop
+from gradlab.validation import (
+    normalize_obs_crop as validate_obs_crop,
+    normalize_obs_resize as validate_obs_resize,
+)
 from gradlab.rom_runtime import RomRuntimeBinding
 
 os.environ.setdefault("MPLCONFIGDIR", os.path.abspath(".matplotlib"))
@@ -59,8 +62,7 @@ class EnvConfig:
     frame_skip: int = 4
     max_pool_frames: bool = True
     sticky_action_prob: float = 0.0
-    observation_size: int = 84
-    hud_crop_top: int = -1
+    obs_resize: tuple[int, int] = (84, 84)
     obs_crop: tuple[int, int, int, int] | None = None
     obs_crop_mode: str = "remove"
     obs_crop_fill: int = 0
@@ -81,11 +83,7 @@ def validate_obs_crop_fill(value: int) -> int:
 
 def native_obs_crop(config: EnvConfig) -> tuple[int, int, int, int] | None:
     obs_crop = validate_obs_crop(config.obs_crop)
-    if obs_crop is not None:
-        return obs_crop if any(obs_crop) else None
-    if config.hud_crop_top > 0:
-        return (config.hud_crop_top, 0, 0, 0)
-    return None
+    return obs_crop if obs_crop is not None and any(obs_crop) else None
 
 
 def _validate_sticky_action_prob(value: float) -> float:
@@ -99,23 +97,22 @@ def resolve_env_config(config: EnvConfig) -> EnvConfig:
         config = replace(config, game=str(config.env_args["game"]))
     if not config.game:
         raise ValueError("game is required; pass --game or set RETRO_GAME")
-    normalized_args, normalized_task = normalize_action_configuration(
-        provider_id=config.env_provider,
-        game=config.game,
-        env_args=config.env_args,
-        task=config.task,
-    )
-    config = replace(config, env_args=normalized_args, task=normalized_task)
+    if "action_set" in config.env_args:
+        raise ValueError(
+            "env_args.action_set is artifact-only legacy metadata; "
+            "use env_args.use_restricted_actions"
+        )
     qualify_env_id(config.env_provider, config.game)
     _validate_sticky_action_prob(config.sticky_action_prob)
+    validate_obs_resize(config.obs_resize)
     validate_obs_crop_mode(config.obs_crop_mode)
     validate_obs_crop_fill(config.obs_crop_fill)
-    target = target_for_game(config.game)
+    spec = environment_spec(config.env_provider, config.game)
     updates: dict[str, Any] = {}
-    if not config.state and target.default_state:
-        updates["state"] = target.default_state
-    if config.obs_crop is None and config.hud_crop_top < 0:
-        updates["hud_crop_top"] = target.default_hud_crop_top
+    if not config.state and spec.default_state:
+        updates["state"] = spec.default_state
+    if config.obs_crop is None and spec.default_obs_crop is not None:
+        updates["obs_crop"] = spec.default_obs_crop
     config = replace(config, **updates) if updates else config
     if config.task:
         validate_task_config(config.task)

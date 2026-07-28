@@ -69,10 +69,14 @@ def require_schema_version(
         require_present=require_present,
     )
     if schema_version != expected:
-        raise ValueError(f"{label_path(label, 'schema_version')} must be {expected}, got {schema_version}")
+        raise ValueError(
+            f"{label_path(label, 'schema_version')} must be {expected}, got {schema_version}"
+        )
 
 
-def string_list(value: Any, *, label: str, allow_empty: bool = False, strip: bool = True) -> list[str]:
+def string_list(
+    value: Any, *, label: str, allow_empty: bool = False, strip: bool = True
+) -> list[str]:
     if not isinstance(value, Sequence) or isinstance(value, str | bytes):
         raise ValueError(f"{label} must be a list")
     if not value and not allow_empty:
@@ -113,3 +117,34 @@ def normalize_obs_crop(
             raise ValueError(f"{label}[{index}] must be a non-negative integer")
         result.append(item)
     return tuple(result)  # type: ignore[return-value]
+
+
+def normalize_obs_resize(
+    value: Any,
+    *,
+    label: str = "obs_resize",
+) -> tuple[int, int]:
+    raw = value
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            raise ValueError(f"{label} must be [height, width]")
+        raw = tuple(part.strip() for part in text.strip("[]").split(","))
+        if len(raw) == 1:
+            raw = (raw[0], raw[0])
+        try:
+            raw = tuple(int(part) for part in raw)
+        except ValueError as exc:
+            raise ValueError(f"{label} must be [height, width]") from exc
+    elif is_int(value):
+        raw = (value, value)
+    if not isinstance(raw, Sequence) or isinstance(raw, str | bytes) or len(raw) != 2:
+        raise ValueError(f"{label} must be [height, width]")
+    result: list[int] = []
+    for index, item in enumerate(raw):
+        if not is_int(item) or item < 0:
+            raise ValueError(f"{label}[{index}] must be a non-negative integer")
+        result.append(item)
+    if (result[0] == 0) != (result[1] == 0):
+        raise ValueError(f"{label} dimensions must both be zero or both be positive")
+    return result[0], result[1]

@@ -6,11 +6,25 @@ import pytest
 
 from gradlab.env_identity import environment_identity_from_train_config
 from gradlab.env_registry import (
+    environment_spec,
     env_supports_states,
     registered_env_ids,
     resolve_env_id,
     resolve_env_provider,
 )
+
+
+def test_environment_spec_owns_identity_defaults_task_and_eval_semantics() -> None:
+    stable = environment_spec("stable-retro-turbo", "SuperMarioBros-Nes-v0")
+    dedicated = environment_spec("supermariobrosnes-turbo", "SuperMarioBros-Nes-v0")
+
+    assert stable is dedicated
+    assert stable.game_family == "NES-SuperMarioBros"
+    assert stable.wandb_project == "SuperMarioBros-Nes-v0"
+    assert stable.task_id == "mario"
+    assert stable.default_state == "Level1-1"
+    assert stable.default_obs_crop == (32, 0, 0, 0)
+    assert stable.eval_semantics.completion_reason == "level_change"
 
 
 def test_resolves_registered_stable_retro_turbo_env_id() -> None:

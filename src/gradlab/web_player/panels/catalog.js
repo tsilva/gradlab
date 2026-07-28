@@ -89,19 +89,23 @@ export const BUILTIN_PANEL_PRESETS = Object.freeze({
   },
   policy: {
     type: "telemetry",
-    title: "Policy distribution",
+    title: "Policy decision",
     config: {
       blocks: [
         {
           kind: "stats",
           metrics: [
             "policy/mode",
+            "action/policy",
             "policy/value",
+            "policy/selected-q-value",
             "policy/entropy",
             "policy/log-probability",
+            "policy/program",
           ],
         },
         { kind: "distribution", metric: "policy/distribution" },
+        { kind: "distribution", metric: "policy/q-values" },
       ],
     },
   },

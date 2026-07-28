@@ -78,6 +78,25 @@ def test_wandb_display_name_is_not_part_of_portable_recipe() -> None:
     assert "wandb_display_name" not in document["recipe"]["train_config"]
 
 
+def test_archived_dqn_recipe_is_portably_valid_without_becoming_launchable() -> None:
+    document = level1_1_recipe_document()
+    document["recipe"]["train_config"]["training_backend"] = {
+        "id": "sb3.dqn",
+        "config": {
+            "gamma": 0.99,
+            "exploration_initial_eps": 1.0,
+            "exploration_final_eps": 0.05,
+        },
+    }
+    document["recipe"]["eval"]["action_sampling"] = "epsilon_greedy"
+    document["recipe"].pop("value_contract", None)
+
+    validated = validate_recipe_document(document)
+
+    assert evaluation_contract(validated)["action_sampling"] == "epsilon_greedy"
+    assert critic_value_contract(validated) is None
+
+
 @pytest.mark.parametrize("recipe_path", BREAKOUT_RECIPES)
 def test_breakout_bundle_is_playable_but_has_no_evaluation_contract(
     recipe_path: Path,

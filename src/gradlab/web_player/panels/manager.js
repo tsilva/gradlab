@@ -134,6 +134,7 @@ export class PanelManager {
 
   blockOptions(kind, selectedValues) {
     const catalog = this.contextCatalog();
+    const { snapshot } = this.getContext();
     if (kind === "namespace-explorer") {
       return [...catalog.values()]
         .filter((descriptor) => descriptor.namespace)
@@ -143,7 +144,7 @@ export class PanelManager {
           selectedValues.includes(descriptor.key),
         ));
     }
-    return metricOptions(catalog, kind).map((descriptor) => option(
+    return metricOptions(catalog, kind, snapshot, selectedValues).map((descriptor) => option(
       descriptor.key,
       descriptor.label,
       selectedValues.includes(descriptor.key),

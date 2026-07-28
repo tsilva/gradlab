@@ -11,13 +11,13 @@ from gradlab.env import EnvConfig
 from gradlab.metric_names import METRICS_SCHEMA_VERSION
 from gradlab.modal_eval_protocol import SEED_PROTOCOL
 from gradlab.seeds import DEFAULT_TRAIN_SEED, EVAL_SEED_START
-from gradlab.validation import normalize_obs_crop
+from gradlab.validation import normalize_obs_crop, normalize_obs_resize
 
 
 WANDB_MODE_CHOICES = ("online", "offline", "disabled")
 
 FieldKind = Literal["value", "store_true", "bool_optional"]
-TypeName = Literal["str", "int", "float", "json", "obs_crop"]
+TypeName = Literal["str", "int", "float", "json", "obs_crop", "obs_resize"]
 SerializeMode = Literal["str", "json", "csv", "rows", "skip_nonpositive_float"]
 SequenceItemKind = Literal["str", "number", "rows"]
 FieldOwner = Literal["runtime", "goal_environment", "goal_objective"]
@@ -28,6 +28,7 @@ SourceSection = Literal["runtime", "train", "goal_train"]
 class TrainConfigField:
     dest: str
     flag: str
+    aliases: tuple[str, ...] = ()
     kind: FieldKind = "value"
     type_name: TypeName = "str"
     default: Any = None
@@ -82,6 +83,8 @@ def _type_callable(
         return parse_json_value
     if field.type_name == "obs_crop":
         return parse_obs_crop
+    if field.type_name == "obs_resize":
+        return normalize_obs_resize
     return None
 
 
@@ -111,7 +114,24 @@ def _add_config_field_argument(
         )
         if type_callable is not None:
             kwargs["type"] = type_callable
-    parser.add_argument(field.flag, **kwargs)
+    parser.add_argument(field.flag, *field.aliases, **kwargs)
+
+
+def _legacy_hud_crop(value: str) -> tuple[int, int, int, int] | None:
+    crop_top = int(value)
+    if crop_top < -1:
+        raise argparse.ArgumentTypeError("must be -1 or a non-negative integer")
+    return None if crop_top == -1 else (crop_top, 0, 0, 0)
+
+
+def _add_legacy_preprocessing_aliases(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--hud-crop-top",
+        dest="obs_crop",
+        type=_legacy_hud_crop,
+        default=argparse.SUPPRESS,
+        help=argparse.SUPPRESS,
+    )
 
 
 def add_train_config_args(
@@ -133,6 +153,7 @@ def add_train_config_args(
             parse_json_value=parse_json_value,
             parse_obs_crop=parse_obs_crop,
         )
+    _add_legacy_preprocessing_aliases(parser)
 
 
 def add_env_config_args(
@@ -155,6 +176,7 @@ def add_env_config_args(
             parse_obs_crop=parse_obs_crop,
             dest=dest,
         )
+    _add_legacy_preprocessing_aliases(parser)
     parser.add_argument("--max-steps", type=int, default=max_steps_default)
 
 
@@ -352,6 +374,9 @@ def validate_train_config_value(
     if field.type_name == "obs_crop":
         _validate_obs_crop_value(key=key, label=label, value=value)
         return
+    if field.type_name == "obs_resize":
+        normalize_obs_resize(value, label=_label_path(label, key))
+        return
     if field.type_name == "json":
         return
     if not isinstance(value, str):
@@ -395,6 +420,11 @@ def validate_and_normalize_train_config(
 
     normalized = dict(train_config)
     validate_train_config_fields(normalized, label=label, required_keys=required_keys)
+    if "obs_resize" in normalized:
+        normalized["obs_resize"] = normalize_obs_resize(
+            normalized["obs_resize"],
+            label=f"{label}.obs_resize",
+        )
     if normalized.get("post_train_eval_stochastic") is False:
         raise ValueError(
             f"{label}.post_train_eval_stochastic must be true; "
@@ -555,7 +585,7 @@ TRAIN_CONFIG_FIELDS: tuple[TrainConfigField, ...] = (
         env_default="state",
         environment=True,
         non_empty=True,
-        help="Provider state. If omitted, registered targets may provide a default.",
+        help="Provider state. If omitted, the registered environment spec may provide a default.",
     ),
     _field(
         "states",
@@ -595,19 +625,16 @@ TRAIN_CONFIG_FIELDS: tuple[TrainConfigField, ...] = (
         help="Max-pool over the last two raw frames inside each frame-skip step.",
     ),
     _field(
-        "observation_size",
-        type_name="int",
-        env_default="observation_size",
+        "obs_resize",
+        aliases=("--observation-size",),
+        type_name="obs_resize",
+        env_default="obs_resize",
+        serialize="csv",
         environment=True,
-        validation_min=0,
-    ),
-    _field(
-        "hud_crop_top",
-        type_name="int",
-        env_default="hud_crop_top",
-        environment=True,
-        validation_min=-1,
-        help="Crop this many pixels from the top of raw frames before grayscale resize; -1 uses the target default.",
+        help=(
+            "Policy observation dimensions as height,width. "
+            "--observation-size remains a square-size CLI alias."
+        ),
     ),
     _field(
         "obs_crop",

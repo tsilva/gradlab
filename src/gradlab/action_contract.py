@@ -1,4 +1,4 @@
-"""Normalize legacy and provider-owned action configuration."""
+"""Resolve provider-owned actions and migrate historical artifact metadata."""
 
 from __future__ import annotations
 
@@ -65,14 +65,14 @@ def _set_native_task_action(task: dict[str, Any]) -> None:
         task["action"] = normalized
 
 
-def normalize_action_configuration(
+def migrate_legacy_artifact_action_configuration(
     *,
     provider_id: str,
     game: str,
     env_args: Mapping[str, Any] | None,
     task: Mapping[str, Any] | None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    """Translate historical gradlab action codecs to provider-owned action tables."""
+    """Translate historical artifact action codecs to provider-owned action tables."""
     normalized_args = deepcopy(dict(env_args or {}))
     normalized_task = deepcopy(dict(task or {}))
     legacy_action_set = normalized_args.pop("action_set", None)
@@ -172,13 +172,8 @@ def declared_action_contract(config: Any) -> dict[str, Any] | None:
         if isinstance(config, Mapping)
         else getattr(config, "env_args", {})
     )
-    task = config.get("task", {}) if isinstance(config, Mapping) else getattr(config, "task", {})
-    env_args, _task = normalize_action_configuration(
-        provider_id=provider_id,
-        game=game,
-        env_args=env_args if isinstance(env_args, Mapping) else {},
-        task=task if isinstance(task, Mapping) else {},
-    )
+    if not isinstance(env_args, Mapping):
+        env_args = {}
     request = env_args.get("use_restricted_actions")
     if request is None:
         return None
@@ -293,7 +288,9 @@ def configured_action_meanings(config: Any) -> tuple[str, ...]:
     action_set = configured_action_name(config)
     if action_set == "native":
         return ()
-    game = str(config.get("game", "") if isinstance(config, Mapping) else getattr(config, "game", ""))
+    game = str(
+        config.get("game", "") if isinstance(config, Mapping) else getattr(config, "game", "")
+    )
     raise ValueError(f"unknown action_set {action_set!r} for {game!r}")
 
 
@@ -336,5 +333,5 @@ __all__ = [
     "configured_action_name",
     "configured_action_values",
     "declared_action_contract",
-    "normalize_action_configuration",
+    "migrate_legacy_artifact_action_configuration",
 ]

@@ -6,7 +6,7 @@ import math
 from collections.abc import Mapping
 from typing import Any
 
-from gradlab.env import EnvConfig, validate_obs_crop
+from gradlab.env import EnvConfig, validate_obs_crop, validate_obs_resize
 from gradlab.train_config import env_config_arg_fields
 
 
@@ -102,6 +102,8 @@ def env_config_from_args(
             config_kwargs[key] = parse_state_probs(raw_value)
         elif field.dest == "obs_crop":
             config_kwargs[key] = parse_obs_crop(raw_value)
+        elif field.dest == "obs_resize":
+            config_kwargs[key] = validate_obs_resize(raw_value)
         else:
             config_kwargs[key] = raw_value
     return EnvConfig(**config_kwargs)
@@ -119,5 +121,7 @@ def env_config_from_mapping(config: Mapping[str, Any]) -> EnvConfig:
             value = parse_state_probs(value)
         elif field.dest == "obs_crop":
             value = parse_obs_crop(value)
+        elif field.dest == "obs_resize":
+            value = validate_obs_resize(value)
         config_kwargs[field.dest] = value
     return EnvConfig(**config_kwargs)

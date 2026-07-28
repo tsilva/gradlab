@@ -42,6 +42,7 @@ const STATIC_DESCRIPTORS = Object.freeze({
     digits: 4,
     current: (snapshot) => snapshot?.transition?.decision?.value,
     history: (point) => point?.value,
+    requires: ["state_value"],
   },
   "policy/realized-return": {
     label: "Realized return-to-go G(s)",
@@ -52,6 +53,8 @@ const STATIC_DESCRIPTORS = Object.freeze({
     color: "#f0c36a",
     digits: 3,
     history: (point) => point?.realized_return,
+    requires: ["state_value"],
+    comparable: true,
   },
   "policy/value-error": {
     label: "Value error V(s) − G(s)",
@@ -62,6 +65,8 @@ const STATIC_DESCRIPTORS = Object.freeze({
     color: "#f28f6b",
     digits: 3,
     history: (point) => point?.value_error,
+    requires: ["state_value"],
+    comparable: true,
   },
   "policy/entropy": {
     label: "Policy entropy",
@@ -73,6 +78,7 @@ const STATIC_DESCRIPTORS = Object.freeze({
     digits: 4,
     current: (snapshot) => snapshot?.transition?.decision?.entropy,
     history: (point) => point?.entropy,
+    requires: ["entropy"],
   },
   "policy/log-probability": {
     label: "Selected action log probability",
@@ -84,6 +90,7 @@ const STATIC_DESCRIPTORS = Object.freeze({
     digits: 4,
     current: (snapshot) => snapshot?.transition?.decision?.log_probability,
     history: (point) => point?.log_probability,
+    requires: ["selected_action_log_probability"],
   },
   "policy/mode": {
     label: "Policy sampling mode",
@@ -94,7 +101,9 @@ const STATIC_DESCRIPTORS = Object.freeze({
     current: (snapshot) => {
       const decision = snapshot?.transition?.decision;
       if (!decision) return snapshot?.driver || null;
-      return decision.sampled ? "Stochastic" : "Deterministic";
+      return decision.action_selection_mode || (
+        decision.sampled ? "stochastic" : "deterministic"
+      );
     },
   },
   "policy/distribution": {
@@ -104,6 +113,37 @@ const STATIC_DESCRIPTORS = Object.freeze({
     unit: "probability",
     phase: "pre-action",
     current: (snapshot) => snapshot?.transition?.decision || null,
+    requires: ["actor_distribution"],
+  },
+  "policy/q-values": {
+    label: "Action values Q(s,a)",
+    shortLabel: "Q(s,a)",
+    type: "distribution",
+    unit: "action-value",
+    phase: "pre-action",
+    current: (snapshot) => snapshot?.transition?.decision || null,
+    requires: ["action_value"],
+  },
+  "policy/selected-q-value": {
+    label: "Selected action value Q(s,a)",
+    shortLabel: "Selected Q",
+    type: "scalar",
+    unit: "action-value",
+    phase: "pre-action",
+    color: "#76a9ff",
+    digits: 4,
+    current: (snapshot) => snapshot?.transition?.decision?.selected_q_value,
+    history: (point) => point?.selected_q_value,
+    requires: ["action_value"],
+  },
+  "policy/program": {
+    label: "Program cursor",
+    shortLabel: "Program",
+    type: "text",
+    unit: "program",
+    phase: "pre-action",
+    current: (snapshot) => snapshot?.transition?.decision?.program,
+    requires: ["program"],
   },
   "action/policy": {
     label: "Policy-selected action",
@@ -217,6 +257,51 @@ export function descriptorValue(descriptor, { snapshot = null, point = null } = 
   return descriptor.current ? descriptor.current(snapshot) : null;
 }
 
+export function descriptorAvailability(
+  descriptor,
+  { snapshot = null, point = null } = {},
+) {
+  if (!descriptor) return { status: "protocol-error", message: "Unknown telemetry descriptor." };
+  const policy = snapshot?.policy;
+  const capabilities = new Set(policy?.introspection || []);
+  const missing = (descriptor.requires || []).filter((name) => !capabilities.has(name));
+  if (missing.length) {
+    return {
+      status: "unsupported",
+      message: `Unsupported by ${policy?.algorithm_id || "this source"}.`,
+    };
+  }
+  if (descriptor.comparable) {
+    const reasons = snapshot?.session?.critic_comparison?.reasons || [];
+    if (reasons.length) {
+      return {
+        status: "contract-incomparable",
+        message: `Contract-incomparable: ${reasons.join("; ")}.`,
+      };
+    }
+  }
+  const value = descriptorValue(descriptor, { snapshot, point });
+  if (value !== null && value !== undefined && value !== "") {
+    return { status: "available", message: "" };
+  }
+  if (!snapshot?.transition) {
+    return { status: "not-yet-observed", message: "Not yet observed." };
+  }
+  if (descriptor.key === "policy/entropy") {
+    return {
+      status: "disabled",
+      message: "Disabled for the active policy distribution.",
+    };
+  }
+  if (descriptor.requires?.length) {
+    return {
+      status: "protocol-error",
+      message: `Protocol error: ${descriptor.label} was declared but not supplied.`,
+    };
+  }
+  return { status: "not-yet-observed", message: "Not yet observed." };
+}
+
 export function formatTelemetryValue(value, descriptor = null) {
   if (value === null || value === undefined || value === "") return "—";
   if (typeof value === "number") {
@@ -245,9 +330,15 @@ export function compatibleMetricKeys(keys, catalog) {
   return new Set(descriptors.map((item) => item.unit)).size === 1;
 }
 
-export function metricOptions(catalog, kind) {
+export function metricOptions(catalog, kind, snapshot = null, selectedKeys = []) {
+  const selected = new Set(selectedKeys);
   return [...catalog.values()]
     .filter((descriptor) => {
+      if (
+        snapshot
+        && !selected.has(descriptor.key)
+        && descriptorAvailability(descriptor, { snapshot }).status === "unsupported"
+      ) return false;
       if (kind === "line") return descriptor.type === "scalar" && descriptor.history;
       if (kind === "stats") return ["scalar", "text", "categorical"].includes(descriptor.type);
       if (kind === "histogram") return descriptor.type === "categorical" && descriptor.history;

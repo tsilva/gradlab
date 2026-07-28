@@ -131,18 +131,21 @@ class PlaybackHost:
         }
 
     def snapshot(self) -> dict[str, Any]:
+        from gradlab.play_web import PROTOCOL_VERSION
+
         with self._lock:
             if self._active is not None and self._phase == "active":
                 snapshot = self._active.runner.snapshot()
             else:
                 snapshot = {
                     "type": "snapshot",
-                    "protocol": 2,
+                    "protocol": PROTOCOL_VERSION,
                     "revision": self._revision,
                     "sequence": 0,
                     "run_state": "paused",
                     "driver": "policy",
                     "interactive": False,
+                    "policy": None,
                     "status_message": self._message or self._error or None,
                     "session": {
                         "episode": 0,

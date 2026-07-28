@@ -325,7 +325,7 @@ class ConfigValidationTests(unittest.TestCase):
                 "frame_skip": 4,
                 "max_pool_frames": False,
                 "sticky_action_prob": 0.0,
-                "observation_size": 84,
+                "obs_resize": [84, 84],
                 "obs_crop": [32, 0, 0, 0],
                 "obs_crop_mode": "mask",
                 "obs_crop_fill": 0,
@@ -569,7 +569,7 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertEqual(train_config["frame_skip"], 4)
         self.assertFalse(train_config["max_pool_frames"])
         self.assertEqual(train_config["sticky_action_prob"], 0.0)
-        self.assertEqual(train_config["observation_size"], 84)
+        self.assertEqual(train_config["obs_resize"], [84, 84])
         self.assertNotIn("max_episode_steps", train_config)
         self.assertEqual(train_config["task"]["termination"]["max_episode_steps"], 54000)
         self.assertEqual(
@@ -719,7 +719,7 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertEqual(train_config["frame_skip"], 4)
         self.assertTrue(train_config["max_pool_frames"])
         self.assertEqual(train_config["sticky_action_prob"], 0.25)
-        self.assertEqual(train_config["observation_size"], 84)
+        self.assertEqual(train_config["obs_resize"], [84, 84])
         self.assertEqual(train_config["task"]["termination"]["max_episode_steps"], 54000)
         self.assertEqual(train_config["obs_resize_algorithm"], "area")
         self.assertEqual(
@@ -903,7 +903,7 @@ class ConfigValidationTests(unittest.TestCase):
                 self.assertEqual(config["game"], "SuperMarioBros-Nes-v0")
                 self.assertEqual(config["n_envs"], 16)
                 self.assertEqual(config["obs_crop"], [32, 0, 0, 0])
-                self.assertEqual(config["observation_size"], 84)
+                self.assertEqual(config["obs_resize"], [84, 84])
                 self.assertTrue({"env_provider", "env_threads", "reward_mode"}.isdisjoint(config))
                 self.assertEqual(task["events"]["stalled"], stalled_event)
         train_config = document["train"]["environment"]["env_config"]

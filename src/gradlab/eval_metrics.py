@@ -13,10 +13,13 @@ from gradlab.metric_names import (
     eval_success_rate_metric,
 )
 from gradlab.policy_runtime import reset_policy_state
-from gradlab.targets import EvalSemantics, target_for_game
+from gradlab.env_registry import EvalSemantics, environment_spec
 from gradlab.task_kernels import Outcome
 
-DEFAULT_EVAL_SEMANTICS = target_for_game("SuperMarioBros-Nes-v0").eval_semantics
+DEFAULT_EVAL_SEMANTICS = environment_spec(
+    "stable-retro-turbo",
+    "SuperMarioBros-Nes-v0",
+).eval_semantics
 
 
 def default_eval_semantics() -> EvalSemantics:
@@ -404,6 +407,8 @@ def run_eval_episode(
     default_start_state: str | None = None,
     semantics: EvalSemantics | None = None,
     observation_callback: Callable[[object], object] | None = None,
+    policy_runtime: Any | None = None,
+    action_selection_mode: str | None = None,
 ) -> dict[str, Any]:
     semantics = semantics or default_eval_semantics()
     reset_policy_state(model)
@@ -412,7 +417,13 @@ def run_eval_episode(
     actions: list[Any] = []
 
     for _step_idx in range(max_steps):
-        action, _ = model.predict(obs, deterministic=deterministic)
+        if policy_runtime is None:
+            action, _ = model.predict(obs, deterministic=deterministic)
+        else:
+            action = policy_runtime.decide(
+                obs,
+                action_selection_mode=action_selection_mode,
+            ).actions
         action_value = single_env_action(action)
         if capture_actions:
             actions.append(action_value)

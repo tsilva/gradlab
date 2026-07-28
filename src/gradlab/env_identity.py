@@ -5,8 +5,7 @@ from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from typing import Any
 
-from gradlab.action_contract import normalize_action_configuration
-from gradlab.env_registry import resolve_env_id
+from gradlab.env_registry import environment_spec, resolve_env_id
 from gradlab.json_utils import canonical_json_text
 from gradlab.metric_names import metric_path_segment
 from gradlab.provider_config import provider_env_id, provider_game, semantic_provider_args
@@ -28,8 +27,7 @@ PREPROCESSING_KEYS = (
     "frame_skip",
     "max_pool_frames",
     "sticky_action_prob",
-    "observation_size",
-    "hud_crop_top",
+    "obs_resize",
     "obs_crop",
     "obs_crop_mode",
     "obs_crop_fill",
@@ -107,16 +105,6 @@ def _setdefault_top_level(environment: dict[str, Any], values: Mapping[str, Any]
         environment.setdefault(key, value)
 
 
-def _task_id(provider_id: str, game: str) -> str:
-    if game == "SuperMarioBros-Nes-v0" and provider_id in {
-        "",
-        "stable-retro-turbo",
-        "supermariobrosnes-turbo",
-    }:
-        return "mario"
-    return "identity"
-
-
 def task_config_from_train_config(
     train_config: Mapping[str, Any],
     *,
@@ -128,7 +116,7 @@ def task_config_from_train_config(
         raise ValueError("train config has unexpected key 'provider'; use 'env_provider'")
     provider_id = str(train_config.get("env_provider") or "")
     game = str(provider_game(train_config) or train_config.get("game") or "")
-    inferred_id = _task_id(provider_id, game)
+    inferred_id = environment_spec(provider_id, game).task_id
     canonical = default_task_document(inferred_id)
 
     embedded_task = train_config.get("task")
@@ -158,6 +146,11 @@ def validate_task_config(task: Mapping[str, Any], *, label: str = "task") -> Non
     action_set = action.get("set")
     if not isinstance(action_set, str) or not action_set.strip():
         raise ValueError(f"{label}.action.set must be a non-empty string")
+    if task_id == "mario" and action_set != "native":
+        raise ValueError(
+            f"{label}.action.set must be 'native'; "
+            "use env_args.use_restricted_actions for provider-owned presets"
+        )
     extra_action_keys = sorted(set(action) - {"set", "codec"})
     if extra_action_keys:
         raise ValueError(f"{label}.action has unexpected keys: {extra_action_keys}")
@@ -344,17 +337,6 @@ def environment_identity_from_train_config(
     """
 
     normalized_train_config = deepcopy(dict(train_config))
-    provider_id = str(normalized_train_config.get("env_provider") or "stable-retro-turbo")
-    game = str(provider_game(normalized_train_config) or normalized_train_config.get("game") or "")
-    normalized_args, normalized_task = normalize_action_configuration(
-        provider_id=provider_id,
-        game=game,
-        env_args=normalized_train_config.get("env_args"),
-        task=normalized_train_config.get("task"),
-    )
-    normalized_train_config["env_args"] = normalized_args
-    if normalized_task:
-        normalized_train_config["task"] = normalized_task
 
     identity = deepcopy(dict(environment or {}))
     identity.pop("env_config", None)

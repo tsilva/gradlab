@@ -27,7 +27,7 @@ from gradlab.eval_runner import (
 )
 from gradlab.metric_names import EVAL_FULL_DURATION_SECONDS, metric_path_segment
 from gradlab.modal_eval_protocol import SEED_PROTOCOL
-from gradlab.targets import target_for_game
+from gradlab.env_registry import environment_spec
 from gradlab.task_kernels import Outcome
 from gradlab.ranking import rank_score, require_objective_rank
 from gradlab.task_kernels import default_task_document
@@ -39,6 +39,8 @@ MARIO_RANK = [
     "min(leader/checkpoint/step)",
     "max(eval/full/episode/return/mean)",
 ]
+
+
 def eval_checkpoint_score(
     metrics: dict[str, object],
     selection_rank: object,
@@ -99,7 +101,9 @@ class EvalPreviewEquivalenceTests(unittest.TestCase):
             task=default_task_document("mario"),
         )
         models = [FakeModel(), FakeModel()]
-        with patch("gradlab.eval_runner.make_eval_vec_env", side_effect=[FakeVecEnv(), FakeVecEnv()]):
+        with patch(
+            "gradlab.eval_runner.make_eval_vec_env", side_effect=[FakeVecEnv(), FakeVecEnv()]
+        ):
             baseline, _ = evaluate_model_episodes(
                 model=models[0],
                 config=config,
@@ -165,6 +169,7 @@ class EvalByStartTableTests(unittest.TestCase):
         self.assertEqual(indexed[("A", "life_loss")][8:], [1, 0.5])
         self.assertEqual(indexed[("B", "max_steps")][1:7], [1, 0, 0.0, 100.0, 0.0, 100.0])
 
+
 class EvalMetricTests(unittest.TestCase):
     def test_eval_model_identity_uses_a2c_checkpoint_metadata(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -207,7 +212,7 @@ class EvalMetricTests(unittest.TestCase):
         training = _DoneMetricsReducer().consume(record)
         result = episode_result_from_record(
             record,
-            semantics=target_for_game("breakout").eval_semantics,
+            semantics=environment_spec("gymnasium", "breakout").eval_semantics,
         )
 
         self.assertIn("train/outcome/reason/terminated/count", training)
@@ -389,7 +394,7 @@ class EvalMetricTests(unittest.TestCase):
                 },
             ],
             deterministic=False,
-            semantics=target_for_game("breakout").eval_semantics,
+            semantics=environment_spec("gymnasium", "breakout").eval_semantics,
         )
 
         self.assertEqual(summary["return_mean"], 7.0)
@@ -418,7 +423,7 @@ class EvalMetricTests(unittest.TestCase):
             deterministic=False,
             event_names=("goal_reached",),
             track_success=True,
-            semantics=target_for_game("breakout").eval_semantics,
+            semantics=environment_spec("gymnasium", "breakout").eval_semantics,
         )
 
         self.assertEqual(
@@ -444,7 +449,7 @@ class EvalMetricTests(unittest.TestCase):
             deterministic=False,
             event_names=("goal_reached",),
             track_success=True,
-            semantics=target_for_game("breakout").eval_semantics,
+            semantics=environment_spec("gymnasium", "breakout").eval_semantics,
         )
 
         self.assertEqual(summary["eval/full/outcome/success/from/Start/rate"], 1.0)
@@ -471,7 +476,7 @@ class EvalMetricTests(unittest.TestCase):
                 },
             ],
             deterministic=False,
-            semantics=target_for_game("breakout").eval_semantics,
+            semantics=environment_spec("gymnasium", "breakout").eval_semantics,
         )
 
         rank = [
@@ -505,7 +510,7 @@ class EvalMetricTests(unittest.TestCase):
                 },
             ],
             deterministic=False,
-            semantics=target_for_game("breakout").eval_semantics,
+            semantics=environment_spec("gymnasium", "breakout").eval_semantics,
         )
 
         self.assertNotIn("eval/full/outcome/reason/serve_stall/count", summary)
@@ -527,7 +532,7 @@ class EvalMetricTests(unittest.TestCase):
         runtime_config = _eval_runtime_config(
             config,
             max_steps=54000,
-            semantics=target_for_game("breakout").eval_semantics,
+            semantics=environment_spec("gymnasium", "breakout").eval_semantics,
         )
 
         self.assertEqual(runtime_config.task["termination"]["failure"], ["serve_stall"])
@@ -547,7 +552,7 @@ class EvalMetricTests(unittest.TestCase):
         runtime_config = _eval_runtime_config(
             config,
             max_steps=144000,
-            semantics=target_for_game(config.game).eval_semantics,
+            semantics=environment_spec(config.env_provider, config.game).eval_semantics,
         )
 
         self.assertEqual(runtime_config.task["termination"]["success"], ["game_complete"])

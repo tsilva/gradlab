@@ -42,8 +42,8 @@ from gradlab.policy_models import (
     load_internal_policy_model,
     resolve_policy_algorithm,
 )
-from gradlab.policy_runtime import bind_policy_action_space, reset_policy_state
-from gradlab.targets import EvalSemantics, target_for_game
+from gradlab.policy_runtime import PolicyRuntime, bind_policy_action_space, reset_policy_state
+from gradlab.env_registry import EvalSemantics, environment_spec
 from gradlab.video import PolicyObservationPreview, write_video
 
 
@@ -114,6 +114,8 @@ def _evaluate_model_episodes_vector(
     exact_task_contract: bool = False,
     acceptance_contract: dict[str, Any] | None = None,
     rom_binding: RomRuntimeBinding | None = None,
+    policy_runtime: PolicyRuntime | None = None,
+    action_selection_mode: str | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
     vec_config = _eval_runtime_config(
         config,
@@ -141,9 +143,16 @@ def _evaluate_model_episodes_vector(
         bind_policy_action_space(model, getattr(eval_env, "action_space", None))
         reset_policy_state(model)
         torch.manual_seed(seed)
+        np.random.seed(seed)
         obs = eval_env.reset()
         while len(episode_results) < episodes and not rejected:
-            action, _ = model.predict(obs, deterministic=deterministic)
+            if policy_runtime is None:
+                action, _ = model.predict(obs, deterministic=deterministic)
+            else:
+                action = policy_runtime.decide(
+                    obs,
+                    action_selection_mode=action_selection_mode,
+                ).actions
             obs, _step_rewards, dones, infos = eval_env.step(action)
             reset_policy_state(model, dones)
             if preview_capture is not None:
@@ -155,9 +164,7 @@ def _evaluate_model_episodes_vector(
                 lane = int(record.lane)
                 lane_ordinal = lane_episode_ordinals.get(lane, 0)
                 lane_episode_ordinals[lane] = lane_ordinal + 1
-                manifest_entry = (
-                    planned.get((lane, lane_ordinal)) if planned is not None else None
-                )
+                manifest_entry = planned.get((lane, lane_ordinal)) if planned is not None else None
                 if planned is not None and manifest_entry is None:
                     # A lane that completed its fixed quota remains alive while slower
                     # lanes finish, but its extra episodes are outside the manifest.
@@ -169,11 +176,7 @@ def _evaluate_model_episodes_vector(
                 )
                 result = {
                     "episode": len(episode_results) + 1,
-                    "seed": (
-                        int(manifest_entry["seed"])
-                        if manifest_entry is not None
-                        else seed
-                    ),
+                    "seed": (int(manifest_entry["seed"]) if manifest_entry is not None else seed),
                     "seed_protocol": SEED_PROTOCOL,
                     "seed_lane": lane,
                     "seed_episode_ordinal": lane_ordinal,
@@ -222,6 +225,7 @@ def evaluate_model_episodes(
     exact_task_contract: bool = False,
     acceptance_contract: dict[str, Any] | None = None,
     rom_binding: RomRuntimeBinding | None = None,
+    action_selection_mode: str | None = None,
 ) -> tuple[dict[str, Any], Path | None]:
     if deterministic:
         raise ValueError("deterministic policy evaluation is unsupported; use stochastic sampling")
@@ -235,9 +239,19 @@ def evaluate_model_episodes(
         raise ValueError("n_envs must be >= 1")
     if n_envs > 1 and capture_best_video:
         raise ValueError("capture_best_video requires n_envs=1")
-    semantics = target_for_game(config.game).eval_semantics
+    semantics = environment_spec(config.env_provider, config.game).eval_semantics
     planned = manifest_index(acceptance_contract) if acceptance_contract is not None else None
     rejected = False
+    try:
+        policy_runtime: PolicyRuntime | None = PolicyRuntime(model)
+    except (TypeError, ValueError):
+        # Scripted baselines intentionally retain the small ``predict`` adapter;
+        # every supported checkpoint algorithm uses PolicyRuntime.
+        policy_runtime = None
+    if policy_runtime is not None and action_selection_mode is None:
+        action_selection_mode = (
+            policy_runtime.capabilities.default_action_selection_mode
+        )
     with tqdm(
         total=episodes,
         desc=progress_description,
@@ -261,9 +275,7 @@ def evaluate_model_episodes(
             try:
                 bind_policy_action_space(model, getattr(eval_env, "action_space", None))
                 for episode_idx in range(episodes):
-                    manifest_entry = (
-                        planned.get((0, episode_idx)) if planned is not None else None
-                    )
+                    manifest_entry = planned.get((0, episode_idx)) if planned is not None else None
                     if planned is not None and manifest_entry is None:
                         raise ValueError("acceptance manifest is missing a single-lane episode")
                     episode_seed = (
@@ -272,6 +284,7 @@ def evaluate_model_episodes(
                         else seed + episode_idx
                     )
                     torch.manual_seed(episode_seed)
+                    np.random.seed(episode_seed)
                     result = run_eval_episode(
                         eval_env,
                         model,
@@ -284,6 +297,8 @@ def evaluate_model_episodes(
                         observation_callback=(
                             preview_capture.capture if preview_capture is not None else None
                         ),
+                        policy_runtime=policy_runtime,
+                        action_selection_mode=action_selection_mode,
                     )
                     actions = result.pop("actions")
                     result = {
@@ -331,6 +346,8 @@ def evaluate_model_episodes(
                 exact_task_contract=exact_task_contract,
                 acceptance_contract=acceptance_contract,
                 rom_binding=rom_binding,
+                policy_runtime=policy_runtime,
+                action_selection_mode=action_selection_mode,
             )
 
     if acceptance_contract is not None:
@@ -441,7 +458,10 @@ def evaluate_policy_bundle(
     asset = contract.get("asset")
     if rom_binding is None and isinstance(asset, Mapping):
         rom_binding = ensure_local_rom_binding(asset, game=config.game)
-    elif rom_binding is None and resolve_env_provider(config.env_provider).requires_external_rom_asset:
+    elif (
+        rom_binding is None
+        and resolve_env_provider(config.env_provider).requires_external_rom_asset
+    ):
         rom_binding = ensure_local_rom_binding(
             rom_asset_manifest_for_game(config.game),
             game=config.game,
@@ -490,6 +510,7 @@ def evaluate_policy_bundle(
                 seed_protocol=str(contract["seed_protocol"]),
                 acceptance=contract["acceptance"],
                 asset=contract.get("asset"),
+                action_sampling=str(contract["action_sampling"]),
             )
     exact_contract = not overrides
     evidence = {
@@ -528,6 +549,7 @@ def evaluate_policy_bundle(
         extra=evidence,
         preview_capture=preview_capture,
         rom_binding=rom_binding,
+        action_selection_mode=str(contract["action_sampling"]),
     )
     summary["evaluation_evidence"] = evidence
     summary["episode_seeds"] = [
@@ -574,13 +596,10 @@ def normalized_evaluation_request(
             raise PolicyDocumentError("environment semantic override must be an object")
         from gradlab.train_config import env_config_allowed_keys
 
-        unknown_environment = sorted(
-            set(environment_overrides) - env_config_allowed_keys()
-        )
+        unknown_environment = sorted(set(environment_overrides) - env_config_allowed_keys())
         if unknown_environment:
             raise PolicyDocumentError(
-                "unknown environment semantic override(s): "
-                + ", ".join(unknown_environment)
+                "unknown environment semantic override(s): " + ", ".join(unknown_environment)
             )
         environment.update(environment_overrides)
     manifest_contract = contract
@@ -588,8 +607,7 @@ def normalized_evaluation_request(
         requested_episodes != int(contract["episodes"])
         or requested_n_envs != int(contract["n_envs"])
         or seed != int(contract["seed"])
-        or int(overrides.get("max_steps", contract["max_steps"]))
-        != int(contract["max_steps"])
+        or int(overrides.get("max_steps", contract["max_steps"])) != int(contract["max_steps"])
         or environment != contract["environment"]
     ):
         from gradlab.checkpoint_acceptance import build_checkpoint_eval_contract
@@ -603,6 +621,7 @@ def normalized_evaluation_request(
             seed_protocol=str(contract["seed_protocol"]),
             acceptance=contract["acceptance"],
             asset=contract.get("asset"),
+            action_sampling=str(contract["action_sampling"]),
         )
     return {
         "checkpoint_sha256": bundle.checkpoint_sha256,
@@ -629,10 +648,7 @@ def normalized_evaluation_request(
             else (
                 [seed + episode for episode in range(requested_episodes)]
                 if requested_n_envs == 1
-                else [
-                    {"lane": lane, "base_seed": seed}
-                    for lane in range(requested_n_envs)
-                ]
+                else [{"lane": lane, "base_seed": seed} for lane in range(requested_n_envs)]
             )
         ),
     }

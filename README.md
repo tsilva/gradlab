@@ -44,7 +44,7 @@ gradlab validate
 The project uses `uv`, a committed `uv.lock`, and a seven-day package-age gate.
 The exact Turbo runtime is `stable-retro-turbo==1.0.1.post36`,
 `supermariobrosnes-turbo==0.6.0`, `breakout-turbo-env==0.5.1`, and
-`vizdoom-turbo==1.3.0.post2`. Their explicit package-age exceptions are
+`vizdoom-turbo==1.3.0.post8`. Their explicit package-age exceptions are
 recorded in `pyproject.toml` and `uv-tool.toml`.
 
 The four Turbo providers must implement Turbo Vector API v1. gradlab validates
@@ -216,10 +216,11 @@ their own built-in panel so history graphs never force the summary panel to
 scroll. Workspace v4 intentionally starts clean instead of migrating older
 saved layouts.
 
-The checked-in goal catalog supplies projects and goals. W&B supplies run
-metadata and available goal-required acceptance results only after a goal is
-selected. Playback downloads model bytes from the public checkpoint store;
-videos, episode evidence, ROMs, and recovery journals remain in R2.
+The required `experiments/goals/_catalog.yaml` namespace index supplies
+projects and goals. W&B supplies run metadata and available goal-required
+acceptance results only after a goal is selected. Playback downloads model
+bytes from the public checkpoint store; videos, episode evidence, ROMs, and
+recovery journals remain in R2.
 
 ## Evaluation and early stop
 
