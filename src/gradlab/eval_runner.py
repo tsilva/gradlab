@@ -30,7 +30,6 @@ from gradlab.policy_bundle import (
     PolicyDocumentError,
     evaluation_contract,
     evaluation_contract_sha256,
-    policy_bundle_as_metadata,
 )
 from gradlab.env_registry import resolve_env_provider
 from gradlab.rom_assets import rom_asset_manifest_for_game
@@ -499,27 +498,31 @@ def evaluate_policy_bundle(
             game=config.game,
         )
     assert_provider_runtime_available(config, rom_binding=rom_binding)
-    metadata = policy_bundle_as_metadata(bundle)
-    training_metadata = metadata.get("training_metadata")
+    provenance = bundle.model.get("provenance")
+    training_metadata = (
+        provenance.get("training_metadata")
+        if isinstance(provenance, Mapping)
+        else None
+    )
     expected_action_contract = (
         training_metadata.get("action_contract")
         if isinstance(training_metadata, Mapping)
         and isinstance(training_metadata.get("action_contract"), Mapping)
         else None
     )
-    algorithm_id = resolve_policy_algorithm(metadata)
+    algorithm_id = resolve_policy_algorithm(bundle.model["policy"])
     if internal_execution_id:
         model = load_internal_policy_model(
             bundle.checkpoint_path,
             execution_id=internal_execution_id,
             device=device,
-            metadata=metadata,
+            algorithm_id=algorithm_id,
         )
     else:
         model = load_external_policy_model(
             bundle.checkpoint_path,
             device=device,
-            metadata=metadata,
+            algorithm_id=algorithm_id,
             source_identity=bundle.source,
             approval_hash=approval_hash,
         )

@@ -175,10 +175,13 @@ class EvalMetricTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp_dir:
             model_path = Path(tmp_dir) / "model.zip"
             model_path.write_bytes(b"model")
-            metadata = {
-                "training_backend_id": "sb3.a2c",
-                "algorithm_id": "a2c",
-                "model_class": "stable_baselines3.a2c.a2c.A2C",
+            bundle = MagicMock()
+            bundle.model = {
+                "policy": {
+                    "training_backend_id": "sb3.a2c",
+                    "algorithm_id": "a2c",
+                    "model_class": "stable_baselines3.a2c.a2c.A2C",
+                }
             }
 
             loaded = object()
@@ -187,14 +190,17 @@ class EvalMetricTests(unittest.TestCase):
             approved.__exit__.return_value = None
             with (
                 patch("gradlab.eval.stage_and_approve_model", return_value=approved),
-                patch("gradlab.eval.load_model_metadata", return_value=metadata),
+                patch(
+                    "gradlab.eval.load_policy_bundle_from_checkpoint",
+                    return_value=bundle,
+                ),
                 patch("gradlab.eval.load_policy_model", return_value=loaded) as load_model,
             ):
                 model, policy = load_eval_model(model_path, device="cpu")
 
             self.assertIs(model, loaded)
             self.assertEqual(policy, "a2c")
-            self.assertEqual(load_model.call_args.kwargs["metadata"]["algorithm_id"], "a2c")
+            self.assertEqual(load_model.call_args.kwargs["algorithm_id"], "a2c")
 
     def test_training_and_eval_share_terminal_reason_suffixes(self) -> None:
         record = EpisodeRecord(

@@ -8,13 +8,11 @@ import pytest
 
 from gradlab.artifacts import (
     checkpoint_step,
-    load_model_metadata,
-    load_playback_env_config,
     playback_env_config,
 )
 from gradlab.env import EnvConfig, resolve_env_config
 from gradlab.env_config import env_config_from_mapping
-from gradlab.env_metadata import training_metadata
+from gradlab.env_metadata import env_config_from_config_dict, training_metadata
 from gradlab.eval import build_parser as build_eval_parser
 from gradlab.model_sources import (
     ResolvedModelSource,
@@ -38,6 +36,8 @@ from gradlab.play_termination import (
 from gradlab.policy_bundle import (
     build_model_document,
     build_recipe_document,
+    load_policy_bundle_from_checkpoint,
+    playback_contract,
     write_canonical_json,
 )
 from gradlab.recipe_documents import compose_train_document
@@ -93,13 +93,16 @@ def test_model_metadata_round_trips_playback_environment(tmp_path: Path) -> None
         ),
     )
 
-    metadata = load_model_metadata(model)
-    assert metadata["checkpoint_step"] == 250_000
-    assert metadata["training_metadata"]["preprocessing"] == recipe_document["recipe"][
-        "environment"
-    ]["preprocessing"]
-    assert metadata["training_metadata"]["action"] is None
-    assert load_playback_env_config(model).game == "Bandit-v0"
+    bundle = load_policy_bundle_from_checkpoint(model)
+    assert bundle is not None
+    assert bundle.model["checkpoint"]["step"] == 250_000
+    assert bundle.recipe["recipe"]["environment"]["preprocessing"] == recipe_document[
+        "recipe"
+    ]["environment"]["preprocessing"]
+    saved_config = playback_contract(bundle.recipe, mode="training")["environment"]
+    playback_config = env_config_from_config_dict(saved_config)
+    assert playback_config is not None
+    assert playback_config.game == "Bandit-v0"
 
 
 def test_continuous_play_removes_task_owned_termination() -> None:
@@ -280,7 +283,8 @@ def test_model_source_resolution_has_one_kind_aware_owner(
         + "b" * 64
         + "/manifest.json"
     )
-    expected = ResolvedModelSource(tmp_path / "resolved.zip")
+    bundle = SimpleNamespace()
+    expected = ResolvedModelSource(tmp_path / "resolved.zip", bundle=bundle)
     monkeypatch.setattr(
         "gradlab.model_sources.download_public_checkpoint_manifest_source",
         lambda ref, *, root: expected,
@@ -298,6 +302,10 @@ def test_model_source_resolution_has_one_kind_aware_owner(
 
     local = tmp_path / "local.zip"
     local.write_bytes(b"checkpoint")
+    monkeypatch.setattr(
+        "gradlab.model_sources.load_policy_bundle_from_checkpoint",
+        lambda path: bundle,
+    )
     resolved = resolve_model_source(
         "local",
         str(local),

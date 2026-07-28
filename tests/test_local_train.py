@@ -9,7 +9,10 @@ import pytest
 
 from gradlab.local_train import LOCAL_ROM_CACHE_ENV, _play_uvx_launcher, main
 from gradlab.play import main as play_main
-from gradlab.play_runtime import resolve_playback_rom_binding
+from gradlab.play_runtime import (
+    resolve_playback_rom_binding,
+    resolve_shared_playback_rom_binding,
+)
 from gradlab.recipe_catalog import (
     LOCAL_RUN_RECEIPT,
     latest_local_recipe_model,
@@ -562,6 +565,24 @@ def test_playback_direct_rom_rejects_model_mismatch_and_rom_free_provider(
             asset=None,
             rom_path=rom,
         )
+
+
+def test_shared_player_ignores_rom_option_for_rom_free_checkpoint(tmp_path: Path) -> None:
+    rom = tmp_path / "mario.nes"
+    rom.write_bytes(b"rom")
+
+    with mock.patch(
+        "gradlab.play_runtime.direct_rom_asset_manifest",
+        side_effect=AssertionError("ROM-free playback inspected the shared ROM"),
+    ):
+        resolved = resolve_shared_playback_rom_binding(
+            env_provider="vizdoom-turbo",
+            game="VizdoomDeadlyCorridor-v1",
+            asset=None,
+            rom_path=rom,
+        )
+
+    assert resolved is None
 
 
 def test_playback_without_direct_rom_preserves_registered_asset_fallback() -> None:

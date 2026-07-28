@@ -31,10 +31,10 @@ from gradlab.metric_names import (
 )
 from gradlab.env_registry import environment_spec
 from gradlab.policy_bundle import (
+    PolicyBundle,
     PolicyDocumentError,
     evaluation_contract_sha256,
     load_policy_bundle,
-    policy_bundle_as_metadata,
     preflight_document,
 )
 from gradlab.policy_registry import ALGORITHM_MODEL_CLASSES
@@ -441,6 +441,82 @@ def publication_identity_from_model_metadata(
     )
 
 
+def publication_identity_from_policy_bundle(
+    goal_id: object,
+    bundle: PolicyBundle,
+) -> PublicationIdentity:
+    recipe = _require_mapping(bundle.recipe.get("recipe"), label="recipe.json recipe")
+    environment = _require_mapping(
+        recipe.get("environment"), label="recipe.json recipe.environment"
+    )
+    provider, game = _provider_and_environment(environment.get("env_id"))
+    family = game_family_for_environment(provider, game, strict=True)
+    preprocessing = _require_mapping(
+        environment.get("preprocessing"),
+        label="recipe.json recipe.environment.preprocessing",
+    )
+    task = _require_mapping(
+        environment.get("task"), label="recipe.json recipe.environment.task"
+    )
+    policy = _require_mapping(bundle.model.get("policy"), label="model.json policy")
+    provenance = _require_mapping(
+        bundle.model.get("provenance"), label="model.json provenance"
+    )
+    training_metadata = provenance.get("training_metadata")
+    action_contract = (
+        training_metadata.get("action_contract")
+        if isinstance(training_metadata, Mapping)
+        and isinstance(training_metadata.get("action_contract"), Mapping)
+        else None
+    )
+    if action_contract is None:
+        from gradlab.action_contract import declared_action_contract
+
+        provider_args = environment.get("provider_args")
+        action_contract = declared_action_contract(
+            {
+                "env_provider": provider,
+                "game": game,
+                "env_args": (
+                    dict(provider_args) if isinstance(provider_args, Mapping) else {}
+                ),
+                "task": dict(task),
+            }
+        )
+    algorithm = normalize_algorithm_id(policy.get("algorithm_id"))
+    validate_algorithm_model_class(algorithm, policy.get("model_class"))
+    game_family = normalize_publication_component(family, label="game family")
+    goal_component = normalize_publication_component(goal_id, label="goal id")
+    policy_variant = policy_variant_from_contract(
+        preprocessing,
+        task,
+        game=game,
+        provider=provider,
+        action_contract=action_contract,
+    )
+    reward_shape = str(provenance.get("reward_shape") or "").strip()
+    reward_shape_sha256 = str(provenance.get("reward_shape_sha256") or "").strip()
+    if reward_shape and not bool(provenance.get("reward_shape_is_default", False)):
+        raw_shape_component = normalize_publication_component(
+            reward_shape, label="reward shape"
+        ).lower()
+        digest = reward_shape_sha256.removeprefix("sha256:")
+        if not re.fullmatch(r"[0-9a-f]{64}", digest):
+            raise ValueError("non-default publication reward_shape_sha256 must be a SHA-256")
+        policy_budget = 96 - (len(game_family) + len(goal_component) + len(algorithm) + 3)
+        shape_budget = policy_budget - len(policy_variant) - len("-shape--") - 8
+        if shape_budget < 1:
+            raise ValueError("publication identity leaves no room for reward-shape provenance")
+        shape_component = raw_shape_component[:shape_budget].rstrip("-")
+        policy_variant = f"{policy_variant}-shape-{shape_component}-{digest[:8]}"
+    return PublicationIdentity(
+        game_family=game_family,
+        goal=goal_component,
+        policy_variant=policy_variant,
+        algorithm=algorithm,
+    )
+
+
 def build_model_repo_id(identity: PublicationIdentity) -> str:
     for field, value in asdict(identity).items():
         normalized = normalize_publication_component(value, label=field)
@@ -667,6 +743,70 @@ def publication_source_from_model_metadata(
     }
 
 
+def publication_source_from_policy_bundle(
+    bundle: PolicyBundle,
+    evaluation: PublicationEvaluation,
+) -> dict[str, Any]:
+    provenance = _require_mapping(
+        bundle.model.get("provenance"), label="model.json provenance"
+    )
+    checkpoint = _require_mapping(
+        bundle.model.get("checkpoint"), label="model.json checkpoint"
+    )
+    seed = _required_int(provenance.get("seed"), label="model.json provenance.seed")
+    commit = _required_text(
+        provenance.get("repo_git_commit"),
+        label="model.json provenance.repo_git_commit",
+    ).lower()
+    if not re.fullmatch(r"[0-9a-f]{40}", commit):
+        raise ValueError("model.json provenance.repo_git_commit must be a full Git SHA")
+    checkpoint_step = _required_int(
+        checkpoint.get("step"), label="model.json checkpoint.step"
+    )
+    if checkpoint_step != evaluation.checkpoint_step:
+        raise ValueError("model.json checkpoint.step disagrees with evaluation")
+    return {
+        "repository": "https://github.com/tsilva/gradlab",
+        "commit": commit,
+        "run_id": _required_text(
+            provenance.get("wandb_run_id"),
+            label="model.json provenance.wandb_run_id",
+        ),
+        "run_name": _required_text(
+            provenance.get("run_name"), label="model.json provenance.run_name"
+        ),
+        "wandb_project": _required_text(
+            provenance.get("wandb_project"),
+            label="model.json provenance.wandb_project",
+        ),
+        "recipe": _required_text(
+            provenance.get("recipe_slug"), label="model.json provenance.recipe_slug"
+        ),
+        "seed": seed,
+        "checkpoint_step": checkpoint_step,
+        "checkpoint_artifact": evaluation.checkpoint_artifact,
+    }
+
+
+def publication_model_contract(bundle: PolicyBundle) -> dict[str, Any]:
+    policy = _require_mapping(bundle.model.get("policy"), label="model.json policy")
+    recipe = _require_mapping(bundle.recipe.get("recipe"), label="recipe.json recipe")
+    environment = _require_mapping(
+        recipe.get("environment"), label="recipe.json recipe.environment"
+    )
+    task = _require_mapping(
+        environment.get("task"), label="recipe.json recipe.environment.task"
+    )
+    return {
+        "algorithm_id": policy.get("algorithm_id"),
+        "model_class": policy.get("model_class"),
+        "qualified_env_id": environment.get("env_id"),
+        "environment_hash": recipe.get("environment_hash"),
+        "preprocessing": environment.get("preprocessing"),
+        "action": task.get("action"),
+    }
+
+
 def _markdown_value(value: object) -> str:
     return str(value).replace("|", "\\|").replace("\n", " ")
 
@@ -689,7 +829,7 @@ def _render_model_card_template(context: Mapping[str, Any]) -> str:
 
 def render_model_card(
     manifest: Mapping[str, Any],
-    model_metadata: Mapping[str, Any],
+    model_provenance: Mapping[str, Any],
 ) -> str:
     repository = _require_mapping(manifest.get("repository"), label="manifest repository")
     release = _require_mapping(manifest.get("release"), label="manifest release")
@@ -757,8 +897,8 @@ def render_model_card(
     is_action_program = algorithm == "action-program"
     producer = (
         _required_text(
-            model_metadata.get("search_algorithm_id"),
-            label="model metadata search_algorithm_id",
+            model_provenance.get("search_algorithm_id"),
+            label="model provenance search_algorithm_id",
         )
         if is_action_program
         else ""
@@ -830,10 +970,10 @@ def render_model_card(
 def validate_model_card(
     card_text: str,
     manifest: Mapping[str, Any],
-    model_metadata: Mapping[str, Any],
+    model_provenance: Mapping[str, Any],
 ) -> None:
     ModelCard(card_text).validate(repo_type="model")
-    expected = render_model_card(manifest, model_metadata)
+    expected = render_model_card(manifest, model_provenance)
     if card_text != expected:
         raise ValueError("README.md does not match the generated model card")
 
@@ -989,31 +1129,15 @@ def validate_release_bundle(root: Path) -> dict[str, Any]:
         handlers={RELEASE_MANIFEST_VERSION: _validate_release_manifest_v1},
     )
     bundle = load_policy_bundle(root, source=str(root))
-    model_metadata = policy_bundle_as_metadata(bundle)
     card_text = (root / "README.md").read_text(encoding="utf-8")
     _assert_no_absolute_paths(manifest)
     repository = _require_mapping(manifest.get("repository"), label="manifest repository")
-    identity = publication_identity_from_model_metadata(repository.get("goal"), model_metadata)
+    identity = publication_identity_from_policy_bundle(repository.get("goal"), bundle)
     if repository.get("repo_id") != build_model_repo_id(identity):
         raise ValueError("release manifest repository id does not match model metadata")
     if int(manifest.get("repo_naming_schema") or 0) != REPO_NAMING_SCHEMA_VERSION:
         raise ValueError("release manifest has an unsupported repository naming schema")
-    training = _require_mapping(
-        model_metadata.get("training_metadata"), label="model metadata training_metadata"
-    )
-    environment = _require_mapping(
-        training.get("environment"), label="model metadata training environment"
-    )
-    expected_model = {
-        "algorithm_id": model_metadata["algorithm_id"],
-        "model_class": model_metadata["model_class"],
-        "qualified_env_id": environment.get("env_id"),
-        "environment_hash": training.get("environment_hash"),
-        "preprocessing": training.get("preprocessing"),
-        "action": _require_mapping(
-            environment.get("task"), label="model metadata environment task"
-        ).get("action"),
-    }
+    expected_model = publication_model_contract(bundle)
     if manifest.get("model") != expected_model:
         raise ValueError("release manifest model contract does not match model.json")
     expected_records = release_artifact_records(root)
@@ -1031,5 +1155,8 @@ def validate_release_bundle(root: Path) -> dict[str, Any]:
             raise ValueError(f"release evaluation {key} does not match the policy bundle")
     if evidence.get("exact_contract") is not True:
         raise ValueError("release evaluation evidence is not exact-contract")
-    validate_model_card(card_text, manifest, model_metadata)
+    provenance = _require_mapping(
+        bundle.model.get("provenance"), label="model.json provenance"
+    )
+    validate_model_card(card_text, manifest, provenance)
     return manifest

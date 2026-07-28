@@ -17,7 +17,6 @@ from typing import Any
 import numpy as np
 
 from gradlab import __version__
-from gradlab.artifacts import load_model_metadata
 from gradlab.file_utils import atomic_write_json, fsync_path, fsync_tree
 from gradlab.dataset_contract import (
     COLLECTOR_ARTIFACT_DIR,
@@ -56,7 +55,7 @@ from gradlab.model_sources import (
     is_public_checkpoint_manifest_ref,
 )
 from gradlab.policy_models import load_policy_model
-from gradlab.policy_bundle import load_recipe_document
+from gradlab.policy_bundle import load_policy_bundle_from_checkpoint, load_recipe_document
 from gradlab.policy_models import resolve_policy_algorithm
 from gradlab.trusted_inputs import ApprovedModelInput, stage_and_approve_model
 
@@ -636,11 +635,19 @@ def _record_session(
     deterministic = _resolve_deterministic(args, approved)
     model = None
     if approved is not None:
-        metadata = load_model_metadata(approved.model_path)
-        algorithm_id = resolve_policy_algorithm(metadata)
+        bundle = load_policy_bundle_from_checkpoint(approved.model_path)
+        if bundle is None:
+            raise FileNotFoundError(
+                f"{approved.model_path} is missing its current model.json and recipe.json"
+            )
+        algorithm_id = resolve_policy_algorithm(bundle.model["policy"])
         if algorithm_id != "ppo":
             raise ValueError(f"--agent ppo requires a PPO checkpoint, got {algorithm_id}")
-        model = load_policy_model(approved, device="auto", metadata=metadata)
+        model = load_policy_model(
+            approved,
+            device="auto",
+            algorithm_id=algorithm_id,
+        )
     session = create_provider_session(args.provider, args.env_id, args.env_config)
     if args.fps is not None:
         session.fps = float(args.fps)

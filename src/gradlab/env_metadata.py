@@ -3,7 +3,7 @@ from __future__ import annotations
 import importlib.metadata
 from dataclasses import asdict
 from collections.abc import Mapping
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from gradlab.env import (
     EnvConfig,
@@ -23,6 +23,9 @@ from gradlab.env_identity import (
 from gradlab.preprocessing import preprocessing_contract
 from gradlab.reward_transform import migrate_legacy_artifact_reward_config
 from gradlab.train_config import playback_env_arg_keys
+
+if TYPE_CHECKING:
+    from gradlab.policy_bundle import PolicyBundle
 
 
 PLAYBACK_ENV_ARG_KEYS = playback_env_arg_keys()
@@ -103,11 +106,16 @@ def training_metadata(
     }
 
 
-def assert_metadata_runtime_versions(metadata: dict[str, Any]) -> None:
-    """Fail closed when an artifact's recorded runtime differs from playback."""
-    training = metadata.get("training_metadata")
-    versions = training.get("versions") if isinstance(training, dict) else None
-    if not isinstance(versions, dict):
+def assert_bundle_runtime_versions(bundle: PolicyBundle) -> None:
+    """Fail closed when a policy bundle's recorded runtime differs from playback."""
+    provenance = bundle.model.get("provenance")
+    training = (
+        provenance.get("training_metadata")
+        if isinstance(provenance, Mapping)
+        else None
+    )
+    versions = training.get("versions") if isinstance(training, Mapping) else None
+    if not isinstance(versions, Mapping):
         return
     mismatches: list[str] = []
     for metadata_key, package in RUNTIME_VERSION_PACKAGES.items():
@@ -124,17 +132,6 @@ def assert_metadata_runtime_versions(metadata: dict[str, Any]) -> None:
             + ". Sync the checked-in environment with `uv sync --frozen` or reinstall the "
             "gradlab uv tool before playback."
         )
-
-
-def env_config_from_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
-    """Read canonical v3 metadata while retaining v2/top-level playback compatibility."""
-    training = metadata.get("training_metadata")
-    if isinstance(training, dict):
-        env_config = training.get("env_config", {})
-        if isinstance(env_config, dict) and env_config:
-            return sanitize_env_config_metadata(env_config)
-    env_config = metadata.get("env_config", {})
-    return sanitize_env_config_metadata(env_config) if isinstance(env_config, dict) else {}
 
 
 def sanitize_env_config_metadata(config: dict[str, Any]) -> dict[str, Any]:

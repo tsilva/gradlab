@@ -13,7 +13,6 @@ os.makedirs(os.environ["MPLCONFIGDIR"], exist_ok=True)
 
 import numpy as np
 
-from gradlab.artifacts import load_model_metadata
 from gradlab.action_contract import action_contract_meanings
 from gradlab.cli_args import explicit_arg_dests, parse_json_value
 from gradlab.device import resolve_sb3_device
@@ -31,6 +30,7 @@ from gradlab.model_sources import (
     resolve_single_model_source,
 )
 from gradlab.policy_models import load_policy_model, resolve_policy_algorithm
+from gradlab.policy_bundle import load_policy_bundle_from_checkpoint
 from gradlab.rom_assets import rom_asset_manifest_for_game
 from gradlab.rom_runtime import ensure_local_rom_binding
 from gradlab.seeds import DEFAULT_EVAL_SEED, validate_eval_seed
@@ -106,9 +106,17 @@ def load_eval_model(
         model_path,
         source_identity=source_identity or str(model_path),
     ) as approved:
-        metadata = load_model_metadata(approved.model_path)
-        algorithm_id = resolve_policy_algorithm(metadata)
-        model = load_policy_model(approved, device=device, metadata=metadata)
+        bundle = load_policy_bundle_from_checkpoint(approved.model_path)
+        if bundle is None:
+            raise FileNotFoundError(
+                f"{model_path} is missing its current model.json and recipe.json"
+            )
+        algorithm_id = resolve_policy_algorithm(bundle.model["policy"])
+        model = load_policy_model(
+            approved,
+            device=device,
+            algorithm_id=algorithm_id,
+        )
         return model, algorithm_id
 
 
