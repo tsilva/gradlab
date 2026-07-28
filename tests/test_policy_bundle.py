@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 import pytest
 
+from gradlab.action_contract import declared_action_contract
 from gradlab.artifacts import install_model_bundle
 from gradlab.env import resolve_env_config
 from gradlab.env_config import env_config_from_mapping
@@ -27,7 +28,6 @@ from gradlab.policy_bundle import (
     load_policy_bundle,
     load_policy_bundle_from_checkpoint,
     load_recipe_document,
-    policy_bundle_as_metadata,
     validate_recipe_document,
     write_canonical_json,
 )
@@ -197,12 +197,9 @@ def test_atomic_bundle_install_commits_only_a_complete_replayable_bundle(
     assert bundle.model["checkpoint"]["step"] == 100
     assert bundle.checkpoint_path.read_bytes() == b"checkpoint"
     assert set(bundle.model["provenance"]["training_metadata"]) == {"versions"}
-    effective_metadata = policy_bundle_as_metadata(bundle)
-    assert (
-        effective_metadata["training_metadata"]["environment"]
-        == recipe_document["recipe"]["environment"]
-    )
-    assert effective_metadata["training_metadata"]["action"]["preset"] == "basic"
+    assert bundle.recipe["recipe"]["environment"] == recipe_document["recipe"]["environment"]
+    action = declared_action_contract(playback_contract(bundle.recipe)["environment"])
+    assert action["preset"] == "basic"
 
     # An exact producer replay is accepted, but the same destination can never
     # be rebound to different checkpoint bytes.
@@ -309,7 +306,7 @@ def test_bundle_metadata_reconstructs_provider_action_contract(
 
     bundle = load_policy_bundle_from_checkpoint(checkpoint_path)
     assert bundle is not None
-    action = policy_bundle_as_metadata(bundle)["training_metadata"]["action"]
+    action = declared_action_contract(playback_contract(bundle.recipe)["environment"])
     if expected_mode is None:
         assert action is None
     else:

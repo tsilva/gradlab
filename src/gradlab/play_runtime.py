@@ -8,7 +8,6 @@ from pathlib import Path
 from typing import Any, Literal
 
 from gradlab.action_contract import assert_action_contract_compatible
-from gradlab.artifacts import load_playback_env_config
 from gradlab.device import resolve_sb3_device
 from gradlab.env import assert_provider_runtime_available, make_eval_vec_env, resolve_env_config
 from gradlab.env_metadata import env_config_from_config_dict, env_config_metadata
@@ -114,6 +113,24 @@ def resolve_playback_rom_binding(
             rom_asset_manifest_for_game(game),
             game=game,
         )
+    )
+
+
+def resolve_shared_playback_rom_binding(
+    *,
+    env_provider: str,
+    game: str,
+    asset: Mapping[str, Any] | None,
+    rom_path: Path | None,
+) -> RomRuntimeBinding | None:
+    """Apply a shared player's ROM option only to ROM-backed providers."""
+    provider = resolve_env_provider(env_provider)
+    compatible_rom_path = rom_path if provider.requires_external_rom_asset else None
+    return resolve_playback_rom_binding(
+        env_provider=provider.provider_id,
+        game=game,
+        asset=asset,
+        rom_path=compatible_rom_path,
     )
 
 
@@ -290,15 +307,6 @@ class PlaybackLoader:
                     recipe,
                     evaluation_result_seed=spec.seed,
                 )
-        else:
-            if spec.contract_mode != "training" or spec.reward_clip_override is not None:
-                raise ValueError(
-                    "contract selection requires a versioned policy bundle with recipe.json"
-                )
-            artifact_config = load_playback_env_config(
-                source.model_path,
-                respect_task_termination=True,
-            )
         if args.env_provider:
             artifact_config = resolve_env_config(
                 replace(artifact_config, env_provider=str(args.env_provider))
@@ -327,7 +335,7 @@ class PlaybackLoader:
         progress("verifying", "Checking environment provider")
         asset_value = contract.get("asset") if contract is not None else None
         asset = asset_value if isinstance(asset_value, Mapping) else None
-        rom_binding = resolve_playback_rom_binding(
+        rom_binding = resolve_shared_playback_rom_binding(
             env_provider=artifact_config.env_provider,
             game=artifact_config.game,
             asset=asset,
@@ -360,15 +368,17 @@ class PlaybackLoader:
         *,
         progress: ProgressCallback,
     ) -> ActivePlayback:
-        from gradlab.policy_models import load_policy_model
+        from gradlab.policy_models import load_policy_model, resolve_policy_algorithm
         from gradlab.policy_runtime import PolicyRuntime
 
         args = candidate.args
         progress("loading", "Loading policy runtime")
+        algorithm_id = resolve_policy_algorithm(candidate.source.bundle.model["policy"])
         with verify_staged_model(candidate.staged) as verified:
             model = load_policy_model(
                 verified,
                 device=resolve_sb3_device(args.device),
+                algorithm_id=algorithm_id,
             )
         # Validate the executable policy contract before creating or stepping
         # an environment. Optional telemetry can degrade later, but action

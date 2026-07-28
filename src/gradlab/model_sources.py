@@ -12,10 +12,9 @@ from pathlib import Path
 from typing import Any, Literal, TypeAlias
 from urllib.parse import unquote, urlparse
 
-from gradlab.artifacts import apply_config_defaults, load_model_metadata
+from gradlab.artifacts import apply_config_defaults
 from gradlab.env_metadata import (
-    assert_metadata_runtime_versions,
-    env_config_from_metadata,
+    assert_bundle_runtime_versions,
 )
 from gradlab.file_utils import file_sha256
 from gradlab.policy_bundle import (
@@ -25,6 +24,7 @@ from gradlab.policy_bundle import (
     PolicyBundle,
     load_policy_bundle,
     load_policy_bundle_from_checkpoint,
+    playback_contract,
 )
 from gradlab.r2_store import public_object_request
 from gradlab.run_contracts import RUN_ID_PATTERN
@@ -50,11 +50,11 @@ def _safe_stem(value: str, fallback: str = "model") -> str:
 @dataclass
 class ResolvedModelSource:
     model_path: Path
+    bundle: PolicyBundle
     artifact_ref: str | None = None
     artifact_name: str | None = None
     checkpoint_step: int | None = None
     run_config: dict[str, Any] = field(default_factory=dict)
-    bundle: PolicyBundle | None = None
 
 
 def is_huggingface_model_ref(value: str) -> bool:
@@ -453,9 +453,15 @@ def resolve_model_source(
     model_path = Path(text).expanduser()
     if not model_path.is_file():
         raise FileNotFoundError(f"local model checkpoint not found: {model_path}")
+    bundle = load_policy_bundle_from_checkpoint(model_path)
+    if bundle is None:
+        raise FileNotFoundError(
+            f"{model_path} is missing its current policy bundle beginning at "
+            f"{model_path.with_name(MODEL_FILENAME)}"
+        )
     return ResolvedModelSource(
         model_path=model_path,
-        bundle=load_policy_bundle_from_checkpoint(model_path),
+        bundle=bundle,
     )
 
 
@@ -498,15 +504,16 @@ def apply_model_source_defaults(
     print_loaded_metadata: bool = False,
 ) -> bool:
     del parser, infer_artifact_config, metadata_kind
-    metadata = load_model_metadata(source.model_path)
-    assert_metadata_runtime_versions(metadata)
-    saved_config = env_config_from_metadata(metadata)
+    assert_bundle_runtime_versions(source.bundle)
+    saved_config = playback_contract(source.bundle.recipe, mode="training")[
+        "environment"
+    ]
     if not saved_config:
         return False
     apply_config_defaults(args, saved_config, parser_defaults, explicit_dests)
     if print_loaded_metadata:
         print(
-            f"loaded playback metadata: {source.bundle.model_path if source.bundle else source.model_path.with_suffix('.model.json')}",
+            f"loaded playback metadata: {source.bundle.model_path}",
             file=sys.stderr,
         )
     return True

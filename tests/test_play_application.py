@@ -1,11 +1,20 @@
 from __future__ import annotations
 
+from contextlib import nullcontext
 import queue
 import time
 from types import SimpleNamespace
+from unittest.mock import MagicMock
+
+import pytest
 
 from gradlab.play_application import PlaybackHost
-from gradlab.play_runtime import ActivePlayback, PlaySourceSpec, _implicit_playback_seed
+from gradlab.play_runtime import (
+    ActivePlayback,
+    PlaybackLoader,
+    PlaySourceSpec,
+    _implicit_playback_seed,
+)
 from gradlab.play_web import PlaybackCommand
 
 
@@ -157,6 +166,51 @@ def test_implicit_playback_seed_prefers_evaluation_result_then_training() -> Non
 
     assert _implicit_playback_seed(recipe, evaluation_result_seed=42_000) == 42_000
     assert _implicit_playback_seed(recipe, evaluation_result_seed=None) == 7
+
+
+def test_playback_loader_passes_bundle_algorithm_to_model_loader(monkeypatch) -> None:
+    class ActivationComplete(Exception):
+        pass
+
+    verified = object()
+    model_loader = MagicMock(return_value=object())
+    candidate = SimpleNamespace(
+        args=SimpleNamespace(device="cpu"),
+        source=SimpleNamespace(
+            bundle=SimpleNamespace(
+                model={
+                    "policy": {
+                        "training_backend_id": "sb3.ppo",
+                        "algorithm_id": "ppo",
+                        "model_class": "stable_baselines3.ppo.ppo.PPO",
+                    }
+                }
+            )
+        ),
+        staged=object(),
+    )
+    monkeypatch.setattr(
+        "gradlab.play_runtime.verify_staged_model",
+        lambda _staged: nullcontext(verified),
+    )
+    monkeypatch.setattr("gradlab.play_runtime.resolve_sb3_device", lambda _device: "cpu")
+    monkeypatch.setattr("gradlab.policy_models.load_policy_model", model_loader)
+    monkeypatch.setattr(
+        "gradlab.policy_runtime.PolicyRuntime",
+        MagicMock(side_effect=ActivationComplete),
+    )
+
+    with pytest.raises(ActivationComplete):
+        PlaybackLoader.__new__(PlaybackLoader).activate(
+            candidate,
+            progress=lambda _phase, _detail: None,
+        )
+
+    model_loader.assert_called_once_with(
+        verified,
+        device="cpu",
+        algorithm_id="ppo",
+    )
 
 
 def test_browse_sources_updates_the_shared_resource_route() -> None:

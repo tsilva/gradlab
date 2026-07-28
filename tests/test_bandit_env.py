@@ -11,11 +11,14 @@ import torch
 from stable_baselines3 import A2C, PPO
 
 from gradlab.bandit_env import BanditVectorEnv
-from gradlab.artifacts import load_model_metadata
 from gradlab.env import EnvConfig, make_vec_envs
 from gradlab.env_registry import resolve_env_id, resolve_env_provider
 from gradlab.metric_store import MetricStore
-from gradlab.policy_bundle import build_recipe_document, write_canonical_json
+from gradlab.policy_bundle import (
+    build_recipe_document,
+    load_policy_bundle_from_checkpoint,
+    write_canonical_json,
+)
 from gradlab.recipe_documents import compose_train_document
 from gradlab.recipe_schema import validate_materialized_train_recipe
 from gradlab.sb3_models import load_sb3_model
@@ -284,11 +287,12 @@ def test_bandit_local_demo_runs_to_cap_without_a_declared_success_signal(
     run_dir = tmp_path / "backend-smoke"
     assert (run_dir / "learner_ready.json").is_file()
     assert (run_dir / "final_model.zip").is_file()
-    metadata = load_model_metadata(run_dir / "final_model.zip")
-    assert metadata["training_backend_id"] == "sb3.ppo"
-    assert len(metadata["training_backend_config_hash"]) == 64
-    assert metadata["training_execution"]["mode"] == "local-demo"
-    assert metadata["training_terminal"] == {
+    bundle = load_policy_bundle_from_checkpoint(run_dir / "final_model.zip")
+    assert bundle is not None
+    assert bundle.model["policy"]["training_backend_id"] == "sb3.ppo"
+    assert len(bundle.model["policy"]["training_backend_config_hash"]) == 64
+    assert bundle.model["provenance"]["training_execution"]["mode"] == "local-demo"
+    assert bundle.model["provenance"]["training_terminal"] == {
         "terminal_reason": "resource_exhaustion",
         "first_completion_step": None,
         "final_step": 64,
@@ -355,18 +359,19 @@ def test_bandit_runs_through_a2c_backend_and_round_trips_checkpoint(
 
     run_dir = tmp_path / "a2c-backend-smoke"
     model_path = run_dir / "final_model.zip"
-    metadata = load_model_metadata(model_path)
-    assert metadata["training_backend_id"] == "sb3.a2c"
-    assert metadata["algorithm_id"] == "a2c"
-    assert metadata["model_class"] == "stable_baselines3.a2c.a2c.A2C"
-    assert metadata["training_execution"]["mode"] == "supervised"
+    bundle = load_policy_bundle_from_checkpoint(model_path)
+    assert bundle is not None
+    assert bundle.model["policy"]["training_backend_id"] == "sb3.a2c"
+    assert bundle.model["policy"]["algorithm_id"] == "a2c"
+    assert bundle.model["policy"]["model_class"] == "stable_baselines3.a2c.a2c.A2C"
+    assert bundle.model["provenance"]["training_execution"]["mode"] == "supervised"
     metric_store = MetricStore(run_dir / "gradlab.sqlite")
     assert metric_store.latest_metric("train/algorithm/a2c/update/value_loss") is not None
     assert metric_store.latest_metric("train/algorithm/ppo/update/value_loss") is None
     from gradlab.trusted_inputs import approve_internal_model
 
     with approve_internal_model(model_path, execution_id="test-bandit") as approved:
-        assert isinstance(load_sb3_model(approved, device="cpu"), A2C)
+        assert isinstance(load_sb3_model(approved, device="cpu", algorithm_id="a2c"), A2C)
 
 
 @pytest.mark.parametrize("seed", [1, 2, 3])

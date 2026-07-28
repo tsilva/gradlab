@@ -176,7 +176,13 @@ def test_pinned_remote_worker_reverifies_queued_manifest_before_load() -> None:
         with (
             patch(
                 "gradlab.model_sources.download_remote_model_source",
-                return_value=SimpleNamespace(model_path=checkpoint, artifact_name=source),
+                return_value=SimpleNamespace(
+                    model_path=checkpoint,
+                    artifact_name=source,
+                    bundle=SimpleNamespace(
+                        model={"policy": {"algorithm_id": "ppo"}}
+                    ),
+                ),
             ),
             patch("gradlab.policy_models.load_policy_model", return_value=sentinel) as loader,
         ):
@@ -186,6 +192,7 @@ def test_pinned_remote_worker_reverifies_queued_manifest_before_load() -> None:
                 approval_hash=approval_hash,
                 manifest=manifest,
                 device="cpu",
+                expected_algorithm_id="ppo",
             )
 
         assert loaded is sentinel

@@ -4,7 +4,6 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-from gradlab.artifacts import load_model_metadata
 from gradlab.policy_registry import (
     RUNTIME_POLICY_ALGORITHMS,
     RuntimePolicyAlgorithmId,
@@ -33,14 +32,12 @@ def load_policy_model(
     device: str,
     env: Any | None = None,
     tensorboard_log: str | None = None,
-    metadata: Mapping[str, Any] | None = None,
+    algorithm_id: PolicyAlgorithmId,
 ):
     if not isinstance(model_input, ApprovedModelInput):
         raise TypeError("load_policy_model requires an ApprovedModelInput")
     model_input.verify()
     path = model_input.model_path
-    resolved_metadata = load_model_metadata(path) if metadata is None else dict(metadata)
-    algorithm_id = resolve_policy_algorithm(resolved_metadata)
     if algorithm_id == "action-program":
         from gradlab.action_program import ActionProgramPolicy
 
@@ -52,7 +49,7 @@ def load_policy_model(
         device=device,
         env=env,
         tensorboard_log=tensorboard_log,
-        metadata=resolved_metadata,
+        algorithm_id=algorithm_id,
     )
 
 
@@ -62,7 +59,7 @@ def load_external_policy_model(
     device: str,
     env: Any | None = None,
     tensorboard_log: str | None = None,
-    metadata: Mapping[str, Any] | None = None,
+    algorithm_id: PolicyAlgorithmId,
     source_identity: str | None = None,
     approval_hash: str | None = None,
 ):
@@ -76,7 +73,7 @@ def load_external_policy_model(
             device=device,
             env=env,
             tensorboard_log=tensorboard_log,
-            metadata=metadata,
+            algorithm_id=algorithm_id,
         )
 
 
@@ -87,7 +84,7 @@ def load_internal_policy_model(
     device: str,
     env: Any | None = None,
     tensorboard_log: str | None = None,
-    metadata: Mapping[str, Any] | None = None,
+    algorithm_id: PolicyAlgorithmId,
 ):
     with approve_internal_model(model_path, execution_id=execution_id) as approved:
         return load_policy_model(
@@ -95,7 +92,7 @@ def load_internal_policy_model(
             device=device,
             env=env,
             tensorboard_log=tensorboard_log,
-            metadata=metadata,
+            algorithm_id=algorithm_id,
         )
 
 
@@ -108,12 +105,18 @@ def load_pinned_remote_policy_model(
     device: str,
     env: Any | None = None,
     tensorboard_log: str | None = None,
-    metadata: Mapping[str, Any] | None = None,
+    expected_algorithm_id: PolicyAlgorithmId,
 ):
     from gradlab.model_sources import download_remote_model_source
     from gradlab.trusted_inputs import approve_staged_model, stage_model_input
 
     resolved = download_remote_model_source(source, root=download_root, require_pinned=True)
+    algorithm_id = resolve_policy_algorithm(resolved.bundle.model["policy"])
+    if algorithm_id != expected_algorithm_id:
+        raise ValueError(
+            "pinned remote model algorithm does not match the queued job: "
+            f"expected {expected_algorithm_id}, got {algorithm_id}"
+        )
     staged = stage_model_input(resolved.model_path, source_identity=source)
     try:
         expected_manifest = list(manifest) if isinstance(manifest, list | tuple) else None
@@ -130,7 +133,7 @@ def load_pinned_remote_policy_model(
                 device=device,
                 env=env,
                 tensorboard_log=tensorboard_log,
-                metadata=metadata,
+                algorithm_id=algorithm_id,
             )
     except Exception:
         staged.cleanup()

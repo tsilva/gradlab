@@ -11,24 +11,18 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
-from gradlab.env import EnvConfig, resolve_env_config
+from gradlab.env import EnvConfig
 from gradlab.env_metadata import (
     PLAYBACK_ENV_ARG_KEYS,
-    assert_metadata_runtime_versions,
-    env_config_from_config_dict,
-    env_config_from_metadata,
     runtime_versions_metadata,
 )
 from gradlab.file_utils import fsync_path
 from gradlab.policy_bundle import (
-    CHECKPOINT_FILENAME,
-    MODEL_FILENAME,
     build_model_document,
     load_model_document,
     load_policy_bundle_from_checkpoint,
     load_recipe_document,
     model_document_path,
-    policy_bundle_as_metadata,
     recipe_document_path,
     write_canonical_json,
 )
@@ -216,18 +210,6 @@ def install_model_bundle(
         shutil.rmtree(staging_dir, ignore_errors=True)
 
 
-def load_model_metadata(model_path: Path) -> dict[str, Any]:
-    bundle = load_policy_bundle_from_checkpoint(model_path)
-    if bundle is None:
-        versioned_path = model_document_path(model_path)
-        if model_path.name == CHECKPOINT_FILENAME:
-            versioned_path = model_path.with_name(MODEL_FILENAME)
-        raise FileNotFoundError(
-            f"{model_path} is missing its current policy bundle beginning at {versioned_path}"
-        )
-    return policy_bundle_as_metadata(bundle)
-
-
 def playback_env_config(
     config: EnvConfig,
     *,
@@ -243,28 +225,6 @@ def playback_env_config(
     events.pop("stalled", None)
     task["events"] = events
     return replace(config, task=task)
-
-
-def load_playback_env_config(
-    model_path: Path,
-    *,
-    respect_task_termination: bool = True,
-) -> EnvConfig:
-    metadata = load_model_metadata(model_path)
-    assert_metadata_runtime_versions(metadata)
-    saved_config = env_config_from_metadata(metadata)
-    if not saved_config:
-        raise SystemExit(
-            f"{model_path} is missing playback metadata. Recreate or re-upload the "
-            "checkpoint with current model metadata before using gradlab play."
-        )
-    config = env_config_from_config_dict(saved_config)
-    if config is None:
-        raise SystemExit(f"{model_path} playback metadata does not contain an environment config")
-    return playback_env_config(
-        resolve_env_config(config),
-        respect_task_termination=respect_task_termination,
-    )
 
 
 def apply_config_defaults(

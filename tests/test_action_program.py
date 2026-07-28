@@ -143,7 +143,11 @@ def test_generic_policy_loader_dispatches_action_program(tmp_path) -> None:
         approval_hash="unit-test",
     )
     with mock.patch.object(approved, "verify"):
-        loaded = load_policy_model(approved, device="cpu", metadata=metadata)
+        loaded = load_policy_model(
+            approved,
+            device="cpu",
+            algorithm_id="action-program",
+        )
     assert isinstance(loaded, ActionProgramPolicy)
 
 

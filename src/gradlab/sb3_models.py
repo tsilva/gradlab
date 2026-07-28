@@ -3,7 +3,6 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any, cast
 
-from gradlab.artifacts import load_model_metadata
 from gradlab.policy_registry import (
     SB3_ALGORITHMS,
     Sb3AlgorithmId,
@@ -25,14 +24,12 @@ def load_sb3_model(
     device: str,
     env: Any | None = None,
     tensorboard_log: str | None = None,
-    metadata: Mapping[str, Any] | None = None,
+    algorithm_id: Sb3AlgorithmId,
 ):
     if not isinstance(model_input, ApprovedModelInput):
         raise TypeError("load_sb3_model requires an ApprovedModelInput")
     model_input.verify()
     path = model_input.model_path
-    resolved_metadata = load_model_metadata(path) if metadata is None else dict(metadata)
-    algorithm_id = resolve_sb3_algorithm(resolved_metadata)
     if algorithm_id == "a2c":
         from stable_baselines3 import A2C
 

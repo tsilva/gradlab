@@ -20,6 +20,7 @@ from gradlab.policy_bundle import (
     evaluation_contract,
     evaluation_contract_sha256,
     load_policy_bundle,
+    load_policy_bundle_from_checkpoint,
 )
 from gradlab.video import PolicyObservationPreview, write_preview_video
 from gradlab.rom_assets import cache_path, validate_rom_asset_manifest, verify_rom_file
@@ -161,11 +162,19 @@ def run_child(input_path: Path, output_path: Path) -> int:
         if config is None:
             raise ValueError("remote eval environment contract is invalid")
         model_path = Path(request["model_path"])
+        bundle = load_policy_bundle_from_checkpoint(model_path)
+        if bundle is None:
+            raise FileNotFoundError(
+                f"{model_path} is missing its current model.json and recipe.json"
+            )
+        from gradlab.policy_models import resolve_policy_algorithm
+
+        algorithm_id = resolve_policy_algorithm(bundle.model["policy"])
         model = load_internal_policy_model(
             model_path,
             execution_id=f"modal-eval:{request.get('execution_id', 'unknown')}",
             device="cpu",
-            metadata=request.get("model_metadata"),
+            algorithm_id=algorithm_id,
         )
         metrics, _video = evaluate_model_episodes(
             model=model,
