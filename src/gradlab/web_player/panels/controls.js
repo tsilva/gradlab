@@ -23,9 +23,8 @@ export function mount({ definition, services }) {
             <div class="playback-fps">
               <label for="playback-fps">Play FPS</label>
               <input id="playback-fps" data-fps type="number" min="0" step="1" value="0" inputmode="decimal" aria-describedby="playback-fps-hint">
-              <button data-command="set-fps" class="quiet icon-only" aria-label="Apply play FPS" title="Apply play FPS"><svg class="icon" aria-hidden="true"><use href="/assets/tabler-icons.svg#ti-check"></use></svg></button>
             </div>
-            <p id="playback-fps-hint" class="control-hint">0 runs playback uncapped</p>
+            <p id="playback-fps-hint" class="control-hint">0 runs playback uncapped · changes apply immediately</p>
             <div class="playback-contract" data-playback-contract>
               <label for="playback-contract-mode">Environment contract</label>
               <select id="playback-contract-mode" data-contract-mode aria-describedby="playback-contract-hint">
@@ -107,7 +106,6 @@ export function mount({ definition, services }) {
       sampling_mode: sampling.value,
       driver: "policy",
     }),
-    "set-fps": () => services.command("set_fps", { fps: Number(fps.value) }),
     "set-contract-mode": () => services.command("set_contract_mode", {
       mode: contractMode.value,
     }),
@@ -119,10 +117,9 @@ export function mount({ definition, services }) {
   element.querySelectorAll("[data-command]").forEach((button) => {
     button.addEventListener("click", () => commands[button.dataset.command]());
   });
-  fps.addEventListener("keydown", (event) => {
-    if (event.key !== "Enter") return;
-    event.preventDefault();
-    commands["set-fps"]();
+  fps.addEventListener("input", () => {
+    if (!fps.validity.valid || fps.value.trim() === "") return;
+    services.command("set_fps", { fps: Number(fps.value) });
   });
   const updateControl = () => {
     const state = services.getState();
@@ -308,8 +305,8 @@ export function mount({ definition, services }) {
         : "Reset the current episode to the configured seed and pause";
       fps.min = recording ? "1" : "0";
       element.querySelector("#playback-fps-hint").textContent = recording
-        ? "Recording FPS must be at least 1"
-        : "0 runs playback uncapped";
+        ? "Recording FPS must be at least 1 · changes apply immediately"
+        : "0 runs playback uncapped · changes apply immediately";
       ["step", "step-ten", "continue-event"].forEach((name) => {
         element.querySelector(`[data-command="${name}"]`).hidden = recording;
       });

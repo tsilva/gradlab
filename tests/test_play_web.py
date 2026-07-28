@@ -14,6 +14,7 @@ from PIL import Image
 from gradlab.dataset_cli import build_parser as build_dataset_parser
 from gradlab.play import _PlaybackSession, _PlaybackTransition
 from gradlab.play_catalog import CatalogPage
+from gradlab.play_debug import PolicyDecision
 from gradlab.play_web import (
     FRAME_CODEC_PNG,
     FRAME_GAME,
@@ -26,6 +27,7 @@ from gradlab.play_web import (
     PlaybackCommand,
     PlaybackWebServer,
     WebPlaybackRunner,
+    _decision_payload,
     _session_environment_id,
     annotate_realized_returns,
     history_point_payload,
@@ -62,6 +64,24 @@ def test_playback_environment_title_uses_configured_env_id() -> None:
     )
 
     assert _session_environment_id(session, human_args()) == "BreakoutTurbo-v0"
+
+
+def test_action_program_decision_payload_omits_probability_diagnostics() -> None:
+    decision = PolicyDecision(
+        raw_action=np.asarray([1], dtype=np.int64),
+        executed_action=np.asarray([1], dtype=np.int64),
+        action_selection_mode="program",
+        program={"run_index": 0, "step_index": 0, "action": 1},
+    )
+
+    payload = _decision_payload(decision)
+
+    assert payload is not None
+    assert payload["selected_action"] == 1
+    assert payload["probabilities"] is None
+    assert payload["selected_probability"] is None
+    assert payload["selected_rank"] is None
+    assert payload["program"] == {"run_index": 0, "step_index": 0, "action": 1}
 
 
 def test_web_playback_retains_step_zero_snapshot_and_frame() -> None:
@@ -1349,6 +1369,7 @@ def test_web_dashboard_assets_are_packaged_beside_server() -> None:
         root / "vendor" / "gridstack" / "gridstack.min.css",
         root / "sources" / "browser.js",
         panel_root / "catalog.js",
+        panel_root / "layout-sizing.js",
         panel_root / "manager.js",
         panel_root / "runtime.js",
         panel_root / "shared.js",
@@ -1409,6 +1430,9 @@ def test_web_dashboard_assets_are_packaged_beside_server() -> None:
     assert 'data-driver-option="human"' not in controls
     assert 'data-driver-option="policy"' not in controls
     assert 'driver: "policy"' in controls
+    assert 'data-command="set-fps"' not in controls
+    assert 'fps.addEventListener("input"' in controls
+    assert 'services.command("set_fps", { fps: Number(fps.value) })' in controls
     assert "WORKSPACE_VERSION = 4" in workspace
     assert "createTelemetryInstance" in workspace
     assert "value.version !== WORKSPACE_VERSION" in workspace
@@ -1425,6 +1449,9 @@ def test_web_dashboard_assets_are_packaged_beside_server() -> None:
     assert '"action/policy"' in telemetry
     assert '"action/executed"' in telemetry
     assert "dynamicDescriptorKey" in telemetry
+    assert "function hideGoExploreValuePanel(snapshot)" in script
+    assert 'search_algorithm_id !== "go-explore"' in script
+    assert "hideGoExploreValuePanel(snapshot)" in script
 
     assert '"gradlab.player.workspace.v4.paired"' in script
     assert '"gradlab.player.workspace.v4.single"' in script
@@ -1434,7 +1461,10 @@ def test_web_dashboard_assets_are_packaged_beside_server() -> None:
     assert "historyFromTransition" not in script
     assert "window.GridStack.init" in script
     assert "column: 12" in script
-    assert "cellHeight: 32" in script
+    assert "viewportGridCellHeight" in script
+    assert "cellHeight: DEFAULT_GRID_CELL_HEIGHT" in script
+    assert "min-height: 0;" in styles
+    assert "var(--grid-row)" not in styles
     assert 'gridStack.on("dragstop"' in script
     assert 'gridStack.on("resizestop"' in script
     assert "panel-drag-target" not in script

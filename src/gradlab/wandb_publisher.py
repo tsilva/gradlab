@@ -27,6 +27,7 @@ from gradlab.metric_names import (
 )
 from gradlab.metric_store import MetricStore
 from gradlab.wandb_utils import (
+    configure_wandb_metric_axes,
     configure_wandb_metrics,
     game_family_for_environment,
     load_wandb_env,
@@ -260,6 +261,7 @@ def _publish_frame(run, row: Mapping[str, Any]) -> None:
         # succeeded but the local acknowledgement was interrupted, replaying the
         # same sequence is rejected by W&B as an already-committed step instead
         # of appending a second scientific point.
+        configure_wandb_metric_axes(run, payload)
         run.log(payload, step=event_seq)
         return
 
@@ -274,6 +276,7 @@ def _publish_frame(run, row: Mapping[str, Any]) -> None:
         for name, values in payload.get("histograms", {}).items():
             converted[str(name)] = wandb.Histogram(values)
         validate_metric_payload(converted)
+        configure_wandb_metric_axes(run, converted)
         run.log(converted, step=event_seq)
         return
 
@@ -283,30 +286,29 @@ def _publish_frame(run, row: Mapping[str, Any]) -> None:
         rows = payload.get("rows")
         if not isinstance(rows, list):
             raise ValueError("eval_by_start frame must contain rows")
-        run.log(
-            {
-                "eval/checkpoint_step": step,
-                "orchestration/event_seq": event_seq,
-                "orchestration/event_id": event_id,
-                EVAL_FULL_BY_START: wandb.Table(
-                    columns=[
-                        "checkpoint_step",
-                        "start_id",
-                        "episodes",
-                        "success_count",
-                        "success_rate",
-                        "return_mean",
-                        "return_std",
-                        "return_median",
-                        "reason",
-                        "reason_count",
-                        "reason_rate",
-                    ],
-                    data=[[step, *list(result)] for result in rows],
-                ),
-            },
-            step=event_seq,
-        )
+        converted = {
+            "eval/checkpoint_step": step,
+            "orchestration/event_seq": event_seq,
+            "orchestration/event_id": event_id,
+            EVAL_FULL_BY_START: wandb.Table(
+                columns=[
+                    "checkpoint_step",
+                    "start_id",
+                    "episodes",
+                    "success_count",
+                    "success_rate",
+                    "return_mean",
+                    "return_std",
+                    "return_median",
+                    "reason",
+                    "reason_count",
+                    "reason_rate",
+                ],
+                data=[[step, *list(result)] for result in rows],
+            ),
+        }
+        configure_wandb_metric_axes(run, converted)
+        run.log(converted, step=event_seq)
         return
 
     raise ValueError(f"unsupported supervisor telemetry frame kind: {kind}")

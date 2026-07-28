@@ -11,6 +11,7 @@ import subprocess
 import sys
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
+from urllib.parse import unquote, urlparse
 
 from gradlab.config_loader import RECIPE_TEMPLATE_VALUES, render_template_vars
 from gradlab.env_registry import resolve_env_provider
@@ -168,17 +169,38 @@ def _source_distribution() -> dict[str, str]:
     }
 
 
-def _installed_source_commit() -> str | None:
+def _distribution_direct_url() -> dict:
     try:
-        direct_url_text = importlib.metadata.distribution("gradlab").read_text("direct_url.json")
-        direct_url = json.loads(direct_url_text or "{}")
+        text = importlib.metadata.distribution("gradlab").read_text("direct_url.json")
+        document = json.loads(text or "{}")
     except (
         importlib.metadata.PackageNotFoundError,
         json.JSONDecodeError,
         OSError,
         TypeError,
     ):
-        return None
+        return {}
+    return dict(document) if isinstance(document, dict) else {}
+
+
+def _play_uvx_launcher() -> list[str]:
+    distribution = _source_distribution()
+    direct_url = _distribution_direct_url()
+    parsed = urlparse(str(direct_url.get("url") or ""))
+    if parsed.scheme == "file":
+        source_path = Path(unquote(parsed.path))
+        if source_path.is_dir():
+            launcher = ["uvx", "--from", str(source_path)]
+            dir_info = direct_url.get("dir_info")
+            if isinstance(dir_info, dict) and dir_info.get("editable") is True:
+                launcher.extend(("--with-editable", str(source_path)))
+            launcher.extend(("--refresh-package", "gradlab", "gradlab"))
+            return launcher
+    return ["uvx", f"gradlab@{distribution['version']}"]
+
+
+def _installed_source_commit() -> str | None:
+    direct_url = _distribution_direct_url()
     vcs_info = direct_url.get("vcs_info") if isinstance(direct_url, dict) else None
     value = (
         str(vcs_info.get("commit_id") or "").strip().lower() if isinstance(vcs_info, dict) else ""
@@ -469,11 +491,9 @@ def main(argv: list[str] | None = None) -> int:
     )
     _write_receipt(run_dir, receipt)
     print(f"trained model: {model_path}", flush=True)
-    distribution = _source_distribution()
     if terminal_status == "interrupted":
         play_command = [
-            "uvx",
-            f"gradlab@{distribution['version']}",
+            *_play_uvx_launcher(),
             "play",
             "--model",
             str(model_path),
@@ -483,8 +503,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"play interrupted model: {shlex.join(play_command)}", flush=True)
         return 130
     play_command = [
-        "uvx",
-        f"gradlab@{distribution['version']}",
+        *_play_uvx_launcher(),
         "play",
         "--recipe",
         source.reference,

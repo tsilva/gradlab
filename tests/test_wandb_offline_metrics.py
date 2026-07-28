@@ -46,15 +46,25 @@ class WandbOfflineMetricIntegrationTests(unittest.TestCase):
         class FakeRun:
             def __init__(self) -> None:
                 self.calls: list[tuple[dict, int]] = []
+                self.metric_calls: list[
+                    tuple[tuple[object, ...], dict[str, object]]
+                ] = []
 
             def log(self, payload, *, step):
                 self.calls.append((dict(payload), int(step)))
+
+            def define_metric(self, *args, **kwargs) -> None:
+                self.metric_calls.append((args, kwargs))
 
         with tempfile.TemporaryDirectory() as tmp:
             store = MetricStore(Path(tmp) / "gradlab.sqlite")
             store.init()
             store.append_metrics(
-                {"train/episode/return/shaped/from/target/mean": 5.0},
+                {
+                    "train/episode/return/shaped/from/target/mean": 5.0,
+                    "train/early_stop/return_plateau/patience/progress": 0.25,
+                    "train/early_stop/return_plateau/would_trigger": 0.0,
+                },
                 step=400_000,
                 source="train:rollout",
             )
@@ -77,6 +87,20 @@ class WandbOfflineMetricIntegrationTests(unittest.TestCase):
             {payload["train/global_step"] for payload, _step in run.calls},
             {400_000},
         )
+        for metric_name in (
+            "train/episode/return/shaped/from/target/mean",
+            "train/early_stop/return_plateau/patience/progress",
+            "train/early_stop/return_plateau/would_trigger",
+        ):
+            definition = (
+                (metric_name,),
+                {"step_metric": "train/global_step"},
+            )
+            self.assertIn(definition, run.metric_calls)
+            self.assertEqual(
+                run.metric_calls.count(definition),
+                1,
+            )
 
     def test_supervisor_publishes_eval_metrics_table_and_promotion_without_artifacts(
         self,

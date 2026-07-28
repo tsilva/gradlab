@@ -108,10 +108,12 @@ function makeStatsBlock(block) {
           .filter(({ availability }) => availability.status !== "unsupported")
           .map(({ row }) => row),
       );
-      const unsupported = rows
-        .filter(({ availability }) => availability.status === "unsupported")
-        .map(({ descriptor }) => descriptor?.shortLabel)
-        .filter(Boolean);
+      const unsupported = unsupportedStatLabelsVisible(snapshot)
+        ? rows
+          .filter(({ availability }) => availability.status === "unsupported")
+          .map(({ descriptor }) => descriptor?.shortLabel)
+          .filter(Boolean)
+        : [];
       const actionComparison = snapshot?.session?.action_contract_comparison;
       const actionContractMessage = block.metrics.some(
         (key) => ["action/policy", "action/executed"].includes(key),
@@ -129,14 +131,14 @@ function makeStatsBlock(block) {
   };
 }
 
+export function unsupportedStatLabelsVisible(snapshot) {
+  return snapshot?.policy?.provenance?.search_algorithm_id !== "go-explore";
+}
+
 function makeLineBlock(block) {
   const section = document.createElement("section");
   section.className = "telemetry-block telemetry-plot";
   const descriptors = block.metrics.map(descriptorFor).filter(Boolean);
-  appendHeading(
-    section,
-    block.title || descriptors.map((item) => item.shortLabel).join(" · ") || "History",
-  );
   const canvas = document.createElement("canvas");
   canvas.className = "chart telemetry-chart";
   canvas.setAttribute(
@@ -291,7 +293,7 @@ function makeDistributionBlock(block) {
       const decision = descriptorValue(descriptor, { snapshot });
       if (!decision) {
         target.className = "action-probabilities empty-state";
-        target.textContent = availability.message || "Not yet observed.";
+        target.textContent = availability.message || "N/A";
         section.dataset.telemetryStatus = "not-yet-observed";
         return;
       }

@@ -18,10 +18,12 @@ import {
   distributionBlockVisible,
   histogramSelectedLabel,
   selectedPoint,
+  unsupportedStatLabelsVisible,
 } from "../../src/gradlab/web_player/panels/telemetry-panel.js";
 import {
   displayedStep,
   lineCursorX,
+  timelineLabel,
 } from "../../src/gradlab/web_player/panels/shared.js";
 import {
   discreteActionLabels,
@@ -157,6 +159,14 @@ test("the timeline shows the displayed transition step across a boundary", () =>
     displayedStep({ session: { step: 0 }, transition: { step: 116 } }),
     116,
   );
+  assert.equal(
+    timelineLabel({
+      sequence: 763,
+      session: { step: 1228 },
+      transition: { step: 763 },
+    }),
+    "STEP 763",
+  );
 });
 
 test("policy descriptors distinguish unsupported, pending, and incomparable data", () => {
@@ -192,13 +202,12 @@ test("policy descriptors distinguish unsupported, pending, and incomparable data
     transition: null,
     session: { critic_comparison: { reasons: [] } },
   };
-  assert.equal(
-    descriptorAvailability(
-      descriptorFor("policy/value"),
-      { snapshot: ppoStart },
-    ).status,
-    "not-yet-observed",
+  const pending = descriptorAvailability(
+    descriptorFor("policy/value"),
+    { snapshot: ppoStart },
   );
+  assert.equal(pending.status, "not-yet-observed");
+  assert.equal(pending.message, "N/A");
 
   const incomparable = {
     ...ppoStart,
@@ -223,6 +232,21 @@ test("distribution blocks omit diagnostics unsupported by the active policy", ()
   assert.equal(distributionBlockVisible("available"), true);
   assert.equal(distributionBlockVisible("not-yet-observed"), true);
   assert.equal(distributionBlockVisible("protocol-error"), true);
+});
+
+test("Go-Explore stats omit unsupported critic and probability labels", () => {
+  assert.equal(unsupportedStatLabelsVisible({
+    policy: {
+      algorithm_id: "action-program",
+      provenance: { search_algorithm_id: "go-explore" },
+    },
+  }), false);
+  assert.equal(unsupportedStatLabelsVisible({
+    policy: {
+      algorithm_id: "dqn",
+      provenance: {},
+    },
+  }), true);
 });
 
 test("ViZDoom actions use the structured runtime contract in every telemetry view", () => {
