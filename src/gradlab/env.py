@@ -7,7 +7,7 @@ import time
 import traceback
 from copy import deepcopy
 from dataclasses import dataclass, field, replace
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 
 import numpy as np
 import stable_retro as retro
@@ -454,6 +454,55 @@ def make_training_batch_runtime(
     state_archive_root: str | os.PathLike[str] | None = None,
 ) -> BatchRuntime:
     os.environ.setdefault("STABLE_RETRO_DISABLE_AUDIO", "1")
+    if state_archive is not None:
+        from gradlab.state_archive import normalize_state_archive_config
+
+        normalized_archive = normalize_state_archive_config(
+            state_archive,
+            n_envs=n_envs,
+        )
+        assert normalized_archive is not None
+        cell = normalized_archive["recorder"].get("cell")
+        sources = {
+            str(dimension["source"])
+            for dimension in (cell or {}).get("dimensions", ())
+            if isinstance(dimension, Mapping) and "source" in dimension
+        }
+        if sources:
+            env_args = dict(config.env_args)
+            configured_filter = env_args.get("info_filter")
+            configured_keys: set[str] = set()
+            if isinstance(configured_filter, Mapping):
+                if str(configured_filter.get("mode", "all")) != "all":
+                    raise ValueError(
+                        "state archive cell sources require info_filter mode='all'"
+                    )
+                keys = configured_filter.get("keys")
+                if keys is not None:
+                    if isinstance(keys, str | bytes) or not isinstance(
+                        keys,
+                        Sequence,
+                    ):
+                        raise ValueError("info_filter.keys must be a sequence")
+                    configured_keys.update(str(key) for key in keys)
+            elif configured_filter is not None and str(configured_filter) != "all":
+                raise ValueError("state archive cell sources require info_filter='all'")
+            task = config.task if isinstance(config.task, Mapping) else {}
+            signals = task.get("signals")
+            if isinstance(signals, Mapping):
+                for source in signals.values():
+                    configured_keys.update(
+                        (str(source),)
+                        if isinstance(source, str)
+                        else (str(name) for name in source)
+                    )
+            if task.get("id") == "mario":
+                configured_keys.add("time")
+            env_args["info_filter"] = {
+                "mode": "all",
+                "keys": tuple(sorted(configured_keys | sources)),
+            }
+            config = replace(config, env_args=env_args)
     config = resolve_mixed_state_config(config, n_envs=n_envs)
     native_env, descriptor = make_native_provider(config, n_envs, rom_binding=rom_binding)
     return bind_native_provider(

@@ -76,6 +76,65 @@ test("active checkpoint breadcrumbs retain the full source hierarchy", () => {
   assert.equal(items.at(-1).route, null);
 });
 
+test("environment breadcrumb remains clickable for a partial active checkpoint route", () => {
+  const items = sourceBreadcrumbItems({
+    level: "environments",
+    checkpoint_id: "checkpoint-10002432-b285ff3b",
+  });
+
+  assert.deepEqual(items[0], {
+    label: "Environments",
+    current: false,
+    route: {
+      level: "environments",
+      project: "",
+      goal_id: "",
+      goal_variant_id: "",
+      run_id: "",
+      checkpoint_id: "",
+    },
+  });
+  assert.deepEqual(items[1], {
+    label: "checkpoint-10002432-b285ff3b",
+    current: true,
+    route: null,
+  });
+});
+
+test("all active checkpoint ancestors remain clickable with stale route levels", () => {
+  const routes = [
+    {
+      level: "goals",
+      project: "ViZDoom",
+      checkpoint_id: "checkpoint-a",
+    },
+    {
+      level: "goal_variants",
+      project: "ViZDoom",
+      goal_id: "DefendTheLine-v1",
+      checkpoint_id: "checkpoint-b",
+    },
+    {
+      level: "runs",
+      project: "ViZDoom",
+      goal_id: "DefendTheLine-v1",
+      goal_variant_id: "goal-variant-a27a8239",
+      checkpoint_id: "checkpoint-c",
+    },
+  ];
+
+  for (const route of routes) {
+    const items = sourceBreadcrumbItems(route);
+    assert.deepEqual(
+      items.map(({ label, current }) => ({ label, current })),
+      [
+        ...items.slice(0, -1).map(({ label }) => ({ label, current: false })),
+        { label: route.checkpoint_id, current: true },
+      ],
+    );
+  }
+});
+
 test("active breadcrumb rendering hides routes without a selected checkpoint", () => {
   const browser = Object.create(SourceBrowser.prototype);
   browser.breadcrumbsRoot = {

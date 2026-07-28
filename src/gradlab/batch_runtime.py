@@ -11,6 +11,8 @@ import gymnasium as gym
 import numpy as np
 from numba import njit
 from gradlab.state_archive import (
+    ArchiveCellConfig,
+    ArchiveCellDetector,
     ArchiveCurriculum,
     ArchiveCurriculumConfig,
     ArchiveSelection,
@@ -517,6 +519,7 @@ class BatchRuntime:
             n_envs=self.num_envs,
         )
         self.state_archive: StateArchive | None = None
+        self.archive_cell_detector: ArchiveCellDetector | None = None
         self.archive_curriculum: ArchiveCurriculum | None = None
         if self.state_archive_config is not None:
             if state_archive_root is None:
@@ -532,13 +535,45 @@ class BatchRuntime:
                 compatibility_id=descriptor.snapshot_compatibility_id,
                 persistence=str(self.state_archive_config["persistence"]),
             )
+            cell_document = self.state_archive_config["recorder"].get("cell")
+            if isinstance(cell_document, Mapping):
+                cell_config = ArchiveCellConfig.from_mapping(
+                    cell_document,
+                    label="state_archive.recorder.cell",
+                )
+                for signal in cell_config.signals:
+                    kernel.validate_archive_signal(signal)
+                for source in cell_config.sources:
+                    try:
+                        spec = descriptor.signal_schema[source]
+                    except KeyError as exc:
+                        raise ValueError(
+                            f"provider {descriptor.provider_id!r} does not expose "
+                            f"archive cell source {source!r}"
+                        ) from exc
+                    if spec.shape:
+                        raise ValueError(
+                            f"archive cell source {source!r} must be scalar"
+                        )
+                    if not spec.available_on_reset or not spec.available_on_step:
+                        raise ValueError(
+                            f"archive cell source {source!r} must be available "
+                            "on reset and step"
+                        )
+                    if not (
+                        np.issubdtype(spec.dtype, np.number)
+                        or np.issubdtype(spec.dtype, np.bool_)
+                    ):
+                        raise ValueError(
+                            f"archive cell source {source!r} must be numeric"
+                        )
+                self.archive_cell_detector = ArchiveCellDetector(cell_config)
             curriculum_document = self.state_archive_config["curriculum"]
             if curriculum_document is not None:
                 curriculum_config = ArchiveCurriculumConfig.from_mapping(
                     self.state_archive_config,
                     n_envs=self.num_envs,
                 )
-                kernel.validate_archive_signal(curriculum_config.signal)
                 self.archive_curriculum = ArchiveCurriculum(
                     curriculum_config,
                     n_envs=self.num_envs,
@@ -776,19 +811,25 @@ class BatchRuntime:
             options["snapshots"] = snapshot_values
         return options
 
-    def _signal_values(
+    def archive_signal_values(
         self,
+        signal: str,
         infos: Mapping[str, Any],
-        mask: np.ndarray,
         *,
+        mask: np.ndarray | None = None,
         source: str,
     ) -> np.ndarray:
-        curriculum = self.archive_curriculum
-        if curriculum is None:
-            raise RuntimeError("archive curriculum is disabled")
-        signal = curriculum.config.signal
+        selected = (
+            np.ones(self.num_envs, dtype=np.bool_)
+            if mask is None
+            else np.asarray(mask, dtype=np.bool_)
+        )
+        if selected.shape != (self.num_envs,):
+            raise ValueError(f"archive signal mask must have shape ({self.num_envs},)")
         try:
-            values = np.asarray(self.kernel.archive_signal_values(signal, infos, mask=mask))
+            values = np.asarray(
+                self.kernel.archive_signal_values(signal, infos, mask=selected)
+            )
         except (KeyError, ValueError) as exc:
             raise ValueError(
                 f"provider {source} infos cannot resolve archive signal {signal!r}: {exc}"
@@ -801,6 +842,68 @@ class BatchRuntime:
             )
         return values
 
+    def validate_archive_signal(self, signal: str) -> None:
+        self.kernel.validate_archive_signal(signal)
+
+    def state_archive_cell_keys(
+        self,
+        infos: Mapping[str, Any],
+        *,
+        mask: np.ndarray | None = None,
+        source: str,
+    ) -> tuple[bytes, ...]:
+        detector = self.archive_cell_detector
+        if detector is None:
+            raise RuntimeError("state archive cell detector is disabled")
+        selected = (
+            np.ones(self.num_envs, dtype=np.bool_)
+            if mask is None
+            else np.asarray(mask, dtype=np.bool_)
+        )
+        values: dict[tuple[str, str], np.ndarray] = {}
+        for dimension in detector.config.dimensions:
+            selector_kind, selector_name = dimension.selector
+            if selector_kind == "signal":
+                values[dimension.selector] = self.archive_signal_values(
+                    selector_name,
+                    infos,
+                    mask=selected,
+                    source=source,
+                )
+                continue
+            if selector_name not in infos:
+                raise ValueError(
+                    f"provider {source} infos cannot resolve archive cell "
+                    f"source {selector_name!r}"
+                )
+            raw_values = np.asarray(infos[selector_name])
+            if raw_values.shape != (self.num_envs,):
+                raise ValueError(
+                    f"archive cell source {selector_name!r} must have shape "
+                    f"({self.num_envs},), got {raw_values.shape}"
+                )
+            presence = infos.get(f"_{selector_name}")
+            if presence is not None:
+                present = np.asarray(presence, dtype=np.bool_)
+                if present.shape != (self.num_envs,) or np.any(selected & ~present):
+                    raise ValueError(
+                        f"archive cell source {selector_name!r} is absent "
+                        "for active lanes"
+                    )
+            values[dimension.selector] = raw_values
+        return detector.keys(values, n_envs=self.num_envs)
+
+    def state_archive_reset_cell_keys(self) -> tuple[bytes, ...]:
+        if any(not info for info in self.reset_infos):
+            raise RuntimeError("state archive reset cell keys require an initialized runtime")
+        keys = set().union(*(info.keys() for info in self.reset_infos))
+        infos = {
+            key: np.asarray([info.get(key) for info in self.reset_infos])
+            for key in keys
+            if not key.startswith("_")
+        }
+        return self.state_archive_cell_keys(infos, source="reset")
+
     def _set_curriculum_reset_baselines(
         self,
         reset_infos: Mapping[str, Any],
@@ -811,11 +914,18 @@ class BatchRuntime:
         curriculum = self.archive_curriculum
         if curriculum is None:
             return
-        values = self._signal_values(reset_infos, mask, source="reset")
+        detector = self.archive_cell_detector
+        if detector is None:
+            raise RuntimeError("archive curriculum has no cell detector")
+        cell_keys = self.state_archive_cell_keys(
+            reset_infos,
+            mask=mask,
+            source="reset",
+        )
         selections = selections or {}
         for lane in np.flatnonzero(mask):
             lane_index = int(lane)
-            cell_id = curriculum.cell_id(values[lane_index])
+            cell_id = cell_keys[lane_index].decode("ascii")
             selection = selections.get(lane_index)
             if selection is not None and cell_id != selection.cell_id:
                 raise ValueError(
@@ -1040,15 +1150,14 @@ class BatchRuntime:
         curriculum = self.archive_curriculum
         if curriculum is None:
             return
-        values = self._signal_values(
+        cell_keys = self.state_archive_cell_keys(
             infos,
-            np.ones(self.num_envs, dtype=np.bool_),
             source="step",
         )
         cells = np.empty(self.num_envs, dtype=object)
         candidate_mask = np.zeros(self.num_envs, dtype=np.bool_)
         for lane in range(self.num_envs):
-            cell_id = curriculum.cell_id(values[lane])
+            cell_id = cell_keys[lane].decode("ascii")
             cells[lane] = cell_id
             previous = self._curriculum_previous_cells[lane]
             if (

@@ -1,10 +1,8 @@
 from __future__ import annotations
 
 import re
-import struct
 import time
 from collections.abc import Mapping
-from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -17,10 +15,8 @@ from gradlab.action_contract import (
     runtime_action_contract,
 )
 from gradlab.artifacts import install_model_bundle
-from gradlab.batch_runtime import BatchMetricRecord, EpisodeRecord
+from gradlab.batch_runtime import EpisodeRecord
 from gradlab.env import make_training_batch_runtime, preflight_state_archive_provider
-from gradlab.env_providers import MARIO_BASE_INFO_KEYS
-from gradlab.env_registry import SUPERMARIOBROS_NES_TURBO_PROVIDER
 from gradlab.file_utils import file_sha256
 from gradlab.go_explore import GoExploreSearch
 from gradlab.metric_names import (
@@ -58,22 +54,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "log_interval_steps": 10_000,
     "compaction_interval_steps": 250_000,
 }
-_CELL_KEY = struct.Struct("<BBBBHHBBB")
-_CELL_INFO_KEYS = (
-    "levelHi",
-    "levelLo",
-    "area_id",
-    "area_pointer",
-    "x_pos",
-    "y_pos",
-    "loop_command_active",
-    "loop_correct_count",
-    "loop_pass_count",
-    "player_motion",
-    "player_power",
-    "player_task",
-)
-GO_EXPLORE_PROVIDER_INFO_KEYS = frozenset(_CELL_INFO_KEYS) | MARIO_BASE_INFO_KEYS
+_CONFIG_KEYS = frozenset({*DEFAULT_CONFIG, "progress_signal"})
 
 
 def normalize_config(
@@ -84,7 +65,7 @@ def normalize_config(
 ) -> dict[str, Any]:
     if backend_id != "gradlab.go-explore":
         raise ValueError(f"Go-Explore backend does not define {backend_id!r}")
-    unexpected = sorted(set(config) - set(DEFAULT_CONFIG))
+    unexpected = sorted(set(config) - _CONFIG_KEYS)
     if unexpected:
         raise ValueError(f"{label} has unexpected fields: {unexpected}")
     normalized = {**DEFAULT_CONFIG, **dict(config)}
@@ -109,89 +90,11 @@ def normalize_config(
     fallback = normalized["fallback_action"]
     if not isinstance(fallback, str) or not fallback.strip():
         raise ValueError(f"{label}.fallback_action must be a non-empty string")
+    progress_signal = str(config.get("progress_signal") or "").strip()
+    if not progress_signal:
+        raise ValueError(f"{label}.progress_signal must be a non-empty string")
+    normalized["progress_signal"] = progress_signal
     return normalized
-
-
-def _column(infos: Mapping[str, Any], name: str, n_envs: int) -> np.ndarray:
-    if name not in infos:
-        raise ValueError(f"Go-Explore requires provider info {name!r}")
-    values = np.asarray(infos[name])
-    if values.shape != (n_envs,):
-        raise ValueError(f"Go-Explore provider info {name!r} must be lane-aligned")
-    presence = infos.get(f"_{name}")
-    if presence is not None and not np.all(np.asarray(presence, dtype=np.bool_)):
-        raise ValueError(f"Go-Explore provider info {name!r} is missing on some lanes")
-    return values
-
-
-def _cell_keys(infos: Mapping[str, Any], n_envs: int) -> tuple[bytes, ...]:
-    values = {name: _column(infos, name, n_envs) for name in _CELL_INFO_KEYS}
-    keys: list[bytes] = []
-    for lane in range(n_envs):
-        correct = min(max(int(values["loop_correct_count"][lane]), 0), 7)
-        passed = min(max(int(values["loop_pass_count"][lane]), 0), 7)
-        route_phase = (
-            int(int(values["player_task"][lane]) != 8)
-            | (int(bool(values["loop_command_active"][lane])) << 1)
-            | (correct << 2)
-            | (passed << 5)
-        )
-        keys.append(
-            _CELL_KEY.pack(
-                int(values["levelHi"][lane]) & 0xFF,
-                int(values["levelLo"][lane]) & 0xFF,
-                int(values["area_id"][lane]) & 0xFF,
-                int(values["area_pointer"][lane]) & 0xFF,
-                (int(values["x_pos"][lane]) // 8) & 0xFFFF,
-                (int(values["y_pos"][lane]) // 16) & 0xFFFF,
-                route_phase,
-                int(int(values["player_motion"][lane]) == 0),
-                int(values["player_power"][lane]) & 0xFF,
-            )
-        )
-    return tuple(keys)
-
-
-def _reset_info_columns(runtime: Any) -> dict[str, np.ndarray]:
-    infos = {
-        name: np.asarray(
-            [
-                runtime.reset_infos[lane][name]
-                for lane in range(runtime.num_envs)
-                if name in runtime.reset_infos[lane]
-            ]
-        )
-        for name in _CELL_INFO_KEYS
-    }
-    return {name: _column(infos, name, runtime.num_envs) for name in _CELL_INFO_KEYS}
-
-
-def _runtime_environment_config(config: Any) -> Any:
-    env_args = dict(config.env_args)
-    configured_filter = env_args.get("info_filter")
-    configured_keys: set[str] = set()
-    if isinstance(configured_filter, Mapping):
-        if str(configured_filter.get("mode", "all")) != "all":
-            raise ValueError("gradlab.go-explore requires info_filter mode='all'")
-        keys = configured_filter.get("keys")
-        if keys is not None:
-            if isinstance(keys, str | bytes) or not isinstance(keys, list | tuple):
-                raise ValueError("gradlab.go-explore info_filter.keys must be a sequence")
-            configured_keys.update(str(key) for key in keys)
-    elif str(configured_filter) != "all":
-        raise ValueError("gradlab.go-explore requires info_filter='all'")
-    task = config.task if isinstance(config.task, Mapping) else {}
-    signals = task.get("signals")
-    if isinstance(signals, Mapping):
-        for source in signals.values():
-            configured_keys.update(
-                (str(source),) if isinstance(source, str) else (str(name) for name in source)
-            )
-    env_args["info_filter"] = {
-        "mode": "all",
-        "keys": tuple(sorted(GO_EXPLORE_PROVIDER_INFO_KEYS | configured_keys)),
-    }
-    return replace(config, env_args=env_args)
 
 
 def _checkpoint_prefix(game: str) -> str:
@@ -265,12 +168,11 @@ def run_go_explore(context: BackendContext) -> TrainingResult:
     common_config = context.train_config
     backend_config = context.backend_config
     config = context.environment
-    runtime_config = _runtime_environment_config(config)
     n_envs = int(common_config["resolved_n_envs"])
     if int(common_config["timesteps"]) % n_envs != 0:
         raise ValueError("Go-Explore timesteps must be divisible by n_envs")
     preflight = preflight_state_archive_provider(
-        config=runtime_config,
+        config=config,
         n_envs=n_envs,
         seed=int(common_config["seed"]),
         rom_binding=context.rom_binding,
@@ -282,7 +184,7 @@ def run_go_explore(context: BackendContext) -> TrainingResult:
     write_canonical_json(preflight_path, preflight)
     common_config["state_archive_preflight_sha256"] = file_sha256(preflight_path)
     runtime = make_training_batch_runtime(
-        runtime_config,
+        config,
         n_envs,
         int(common_config["seed"]),
         rom_binding=context.rom_binding,
@@ -290,6 +192,7 @@ def run_go_explore(context: BackendContext) -> TrainingResult:
         state_archive_root=context.run_dir / "state-archive",
     )
     try:
+        runtime.validate_archive_signal(str(backend_config["progress_signal"]))
         if not isinstance(runtime.action_space, spaces.Discrete):
             raise ValueError("Go-Explore requires a discrete task action space")
         runtime_action_contract = getattr(runtime, "action_contract", None)
@@ -316,7 +219,7 @@ def run_go_explore(context: BackendContext) -> TrainingResult:
             },
         )
         search.initialize(
-            _cell_keys(_reset_info_columns(runtime), n_envs),
+            runtime.state_archive_reset_cell_keys(),
             initial_entries,
         )
         budget = context.session.configure_budget(
@@ -346,20 +249,16 @@ def run_go_explore(context: BackendContext) -> TrainingResult:
             records_by_lane = {
                 int(record.lane): record for record in records if isinstance(record, EpisodeRecord)
             }
-            metric_record = next(
-                (record for record in records if isinstance(record, BatchMetricRecord)),
-                None,
-            )
-            progresses = (
-                np.asarray(metric_record.metrics["global_max_x_pos"], dtype=np.float64)
-                if metric_record is not None and "global_max_x_pos" in metric_record.metrics
-                else (
-                    _column(batch.transition_info, "xscrollHi", n_envs).astype(np.float64) * 256
-                    + _column(batch.transition_info, "xscrollLo", n_envs)
-                )
+            progresses = runtime.archive_signal_values(
+                str(backend_config["progress_signal"]),
+                batch.transition_info,
+                source="step",
             )
             dones = np.logical_or(batch.terminated, batch.truncated)
-            cell_keys = _cell_keys(batch.transition_info, n_envs)
+            cell_keys = runtime.state_archive_cell_keys(
+                batch.transition_info,
+                source="step",
+            )
             observation = search.observe(
                 batch.rewards,
                 dones,
@@ -373,7 +272,7 @@ def run_go_explore(context: BackendContext) -> TrainingResult:
                     metadata_by_lane={
                         int(lane): {
                             "algorithm": "go-explore",
-                            "cell_key": cell_keys[int(lane)].hex(),
+                            "cell_id": cell_keys[int(lane)].decode("ascii"),
                         }
                         for lane in np.flatnonzero(observation.archive_mask)
                     },
@@ -443,7 +342,7 @@ def run_go_explore(context: BackendContext) -> TrainingResult:
                 break
         if stopped_on_completion:
             context.session.event(
-                f"level completed; stopping Go-Explore at step={search.global_step}"
+                f"task completed; stopping Go-Explore at step={search.global_step}"
             )
         context.session.report(
             step=search.global_step,
@@ -504,13 +403,13 @@ class GoExploreBackend:
         common_config: Mapping[str, Any],
         backend_config: Mapping[str, Any],
     ) -> None:
-        del backend_config
-        provider_id = str(common_config.get("env_provider") or "")
-        if provider_id != SUPERMARIOBROS_NES_TURBO_PROVIDER.provider_id:
-            raise ValueError("gradlab.go-explore requires env_provider='supermariobrosnes-turbo'")
         task = common_config.get("task")
-        if not isinstance(task, Mapping) or task.get("id") != "mario":
-            raise ValueError("gradlab.go-explore requires task.id='mario'")
+        signals = task.get("signals") if isinstance(task, Mapping) else None
+        progress_signal = str(backend_config.get("progress_signal") or "")
+        if not isinstance(signals, Mapping) or progress_signal not in signals:
+            raise ValueError(
+                "gradlab.go-explore progress_signal must name a declared task signal"
+            )
         archive = common_config.get("state_archive")
         if not isinstance(archive, Mapping):
             raise ValueError("gradlab.go-explore requires state_archive")
@@ -521,6 +420,8 @@ class GoExploreBackend:
         recorder = archive.get("recorder")
         if not isinstance(recorder, Mapping) or recorder.get("mode") != "backend":
             raise ValueError("gradlab.go-explore requires state_archive.recorder.mode='backend'")
+        if not isinstance(recorder.get("cell"), Mapping):
+            raise ValueError("gradlab.go-explore requires state_archive.recorder.cell")
         if archive.get("curriculum") is not None:
             raise ValueError("gradlab.go-explore owns selection; curriculum must be null")
 
@@ -536,7 +437,7 @@ class GoExploreBackend:
             "schema_version": 1,
             "status": "available",
             "defaults": DEFAULT_CONFIG,
-            "provider_info_keys": sorted(GO_EXPLORE_PROVIDER_INFO_KEYS),
+            "required_config": ["progress_signal"],
             "search_archive_persistence": "ephemeral",
             "persisted_artifact": "best-action-program",
             "state_archive_priority_metrics": [],

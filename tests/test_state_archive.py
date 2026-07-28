@@ -14,6 +14,8 @@ import numpy as np
 from gradlab.batch_runtime import BatchRuntime, ProviderDescriptor, SignalSpec
 from gradlab.env import _state_archive_preflight_child
 from gradlab.state_archive import (
+    ArchiveCellConfig,
+    ArchiveCellDetector,
     ArchiveCurriculum,
     ArchiveCurriculumConfig,
     StateArchive,
@@ -37,7 +39,11 @@ def archive_config(
         "recorder": (
             {
                 "mode": "cell_transition",
-                "cell": {"signal": "score", "bucket_size": 50},
+                "cell": {
+                    "dimensions": [
+                        {"signal": "score", "bucket_size": 50},
+                    ]
+                },
             }
             if curriculum
             else {"mode": "backend"}
@@ -215,6 +221,45 @@ class StateArchiveTests(unittest.TestCase):
             common,
             backend_id="gradlab.go-explore",
             supported_priority_metrics=(),
+        )
+
+    def test_shared_cell_detector_supports_buckets_clamps_and_categories(self) -> None:
+        detector = ArchiveCellDetector(
+            ArchiveCellConfig.from_mapping(
+                {
+                    "dimensions": [
+                        {"source": "x", "bucket_size": 8},
+                        {"signal": "route", "bucket_size": 1, "clamp": [0, 7]},
+                        {"source": "grounded", "equals": 0},
+                    ]
+                },
+                label="cell",
+            )
+        )
+
+        keys = detector.keys(
+            {
+                ("source", "x"): np.asarray([15, 16]),
+                ("signal", "route"): np.asarray([9, -2]),
+                ("source", "grounded"): np.asarray([0, 3]),
+            },
+            n_envs=2,
+        )
+
+        self.assertEqual(keys, (b"[1,7,1]", b"[2,0,0]"))
+
+        legacy = ArchiveCellDetector(
+            ArchiveCellConfig.from_mapping(
+                {"signal": "score", "bucket_size": 50},
+                label="cell",
+            )
+        )
+        self.assertEqual(
+            legacy.keys(
+                {("signal", "score"): np.asarray([49, 50])},
+                n_envs=2,
+            ),
+            (b"score:0", b"score:1"),
         )
 
     def test_ephemeral_archive_rejects_curriculum(self) -> None:
