@@ -891,6 +891,51 @@ class MarioKernelTests(unittest.TestCase):
         self.assertTrue(all(record.outcome == Outcome.TIMEOUT for record in records))
         self.assertTrue(all("stalled" in record.events for record in records))
 
+    def test_unconfigured_stall_is_observed_without_ending_the_episode(self):
+        config = EnvConfig(
+            game="SuperMarioBros-Nes-v0",
+            state="Level1-1",
+            task={
+                "id": "mario",
+                "action": {"set": "native"},
+                "signals": {
+                    "x": "x",
+                    "score": "score",
+                    "lives": "lives",
+                    "level": ["level_hi", "level_lo"],
+                },
+                "events": {
+                    "stalled": {
+                        "signal": "x",
+                        "operation": "unchanged_for",
+                        "steps": 2,
+                    }
+                },
+                "termination": {"failure": [], "success": [], "timeout": []},
+            },
+        )
+        provider = DeterministicNativeVectorProvider()
+        descriptor = descriptor_for(provider)
+        compiled = MarioTaskConfig.from_env_config(config)
+        kernel = MarioTaskDefinition(compiled).bind(descriptor, provider.num_envs)
+        runtime = BatchRuntime(provider, descriptor, kernel, run_seed=5)
+        runtime.reset()
+
+        provider.queue_step(x=[0, 0])
+        first = runtime.step(np.zeros((2, 3), dtype=np.int8))
+        provider.queue_step(x=[0, 0])
+        second = runtime.step(np.zeros((2, 3), dtype=np.int8))
+
+        self.assertFalse(compiled.stall_is_failure)
+        self.assertFalse(compiled.truncate_on_stall)
+        self.assertFalse(np.any(done_flags(first)))
+        self.assertFalse(np.any(done_flags(second)))
+        records = [
+            record for record in runtime.drain_records() if isinstance(record, TaskEventRecord)
+        ]
+        self.assertTrue(records)
+        self.assertTrue(all("stalled" in record.events for record in records))
+
     def test_progress_coordinate_continues_across_level_changes(self):
         provider, _kernel, runtime = self.make_runtime(
             terminate_on_level_change=False,

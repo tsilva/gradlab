@@ -64,6 +64,23 @@ test("playback setting values use the same compact text size", () => {
   );
 });
 
+test("episode termination selections apply through the existing episode actions", () => {
+  assert.equal(source.includes("Apply and reset episode"), false);
+  assert.equal(source.includes('data-command="apply-termination"'), false);
+  assert.match(
+    source,
+    /"reset-episode":[\s\S]*enabled_termination_conditions: enabledTerminationConditions\(\)/,
+  );
+  assert.match(
+    source,
+    /"next-episode":[\s\S]*enabled_termination_conditions: enabledTerminationConditions\(\)/,
+  );
+  assert.match(
+    source,
+    /Selections apply with Reset episode or Play next episode\./,
+  );
+});
+
 test("control groups have no playback or episode separators", () => {
   assert.equal(styles.includes(".playback-settings"), false);
   assert.equal(styles.includes(".next-episode-settings {"), false);
