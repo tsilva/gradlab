@@ -75,8 +75,8 @@ POLICY_CAPABILITIES: dict[PolicyAlgorithmId, PolicyCapabilities] = {
         default_action_selection_mode="epsilon_greedy",
         introspection=frozenset({ACTION_VALUE}),
     ),
-    "jerk": PolicyCapabilities(
-        algorithm_id="jerk",
+    "action-program": PolicyCapabilities(
+        algorithm_id="action-program",
         action_selection_modes=("program",),
         default_action_selection_mode="program",
         introspection=frozenset({PROGRAM}),
@@ -102,7 +102,7 @@ def infer_policy_algorithm(model: Any) -> PolicyAlgorithmId:
     if algorithm in RUNTIME_POLICY_ALGORITHMS:
         return algorithm
     if callable(getattr(model, "policy_decisions", None)):
-        return "jerk"
+        return "action-program"
     policy = getattr(model, "policy", None)
     if policy is not None and hasattr(policy, "q_net"):
         return "dqn"
@@ -121,7 +121,10 @@ def normalize_action_selection_mode(
     effective = requested
     # Explicit compatibility interpretation for protocol-v3 and legacy recipe
     # readers, which represented all policy execution as a stochastic boolean.
-    if capabilities.algorithm_id == "jerk" and requested in {"stochastic", "deterministic"}:
+    if capabilities.algorithm_id == "action-program" and requested in {
+        "stochastic",
+        "deterministic",
+    }:
         effective = "program"
     elif capabilities.algorithm_id == "dqn" and requested == "stochastic":
         effective = "epsilon_greedy"
@@ -212,9 +215,7 @@ class PolicyRuntime:
             )
             for decision in decisions
         )
-        actions = np.asarray(
-            [np.asarray(decision.executed_action) for decision in decisions]
-        )
+        actions = np.asarray([np.asarray(decision.executed_action) for decision in decisions])
         if all(np.asarray(decision.executed_action).ndim == 0 for decision in decisions):
             actions = actions.reshape(-1)
         return PolicyBatchDecision(
@@ -229,10 +230,10 @@ class PolicyRuntime:
             "ppo": "deterministic",
             "a2c": "deterministic",
             "dqn": "greedy",
-            "jerk": "program",
+            "action-program": "program",
         }[self.capabilities.algorithm_id]
         custom = getattr(self.model, "inspect_policy_decisions", None)
-        if self.capabilities.algorithm_id == "jerk" and callable(custom):
+        if self.capabilities.algorithm_id == "action-program" and callable(custom):
             decisions = tuple(custom(observation, action_selection_mode=mode))
             return PolicyBatchDecision(mode, mode, np.asarray([]), decisions)
         return self.decide(observation, action_selection_mode=mode)

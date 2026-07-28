@@ -45,12 +45,23 @@ def _render_current_model_card_fixture(
     *,
     algorithm: str = "ppo",
     model_class: str = "stable_baselines3.ppo.ppo.PPO",
+    search_algorithm: str | None = None,
     youtube_url: str | None = "https://www.youtube.com/watch?v=example",
 ) -> str:
-    raw_metadata = model_metadata(algorithm=algorithm, model_class=model_class)
+    raw_metadata = model_metadata(
+        algorithm=algorithm,
+        model_class=model_class,
+        search_algorithm=search_algorithm,
+    )
     identity = publication_identity_from_model_metadata("Level1-1", raw_metadata)
     metadata = publication_model_metadata(raw_metadata, identity)
-    evaluation = normalize_publication_evaluation(evaluation_payload())
+    raw_evaluation = evaluation_payload()
+    if algorithm == "action-program":
+        raw_evaluation["action_sampling"] = "program"
+    evaluation = normalize_publication_evaluation(
+        raw_evaluation,
+        algorithm_id=algorithm,
+    )
     source = publication_source_from_model_metadata(metadata, evaluation)
     manifest = build_release_manifest(
         identity,
@@ -78,13 +89,14 @@ def model_metadata(
     action_set: str = "basic",
     algorithm: str = "ppo",
     model_class: str = "stable_baselines3.ppo.ppo.PPO",
+    search_algorithm: str | None = None,
 ) -> dict:
     if crop is None and game == "SuperMarioBros-Nes-v0":
         crop = [32, 0, 0, 0]
-    return {
+    metadata = {
         "algorithm_id": algorithm,
         "model_class": model_class,
-        "training_backend_id": "sb3.ppo",
+        "training_backend_id": ("gradlab.jerk" if algorithm == "action-program" else "sb3.ppo"),
         "training_backend_config_hash": "c" * 64,
         "seed": 7,
         "repo_git_commit": "a" * 40,
@@ -109,6 +121,9 @@ def model_metadata(
             },
         },
     }
+    if search_algorithm:
+        metadata["search_algorithm_id"] = search_algorithm
+    return metadata
 
 
 def evaluation_payload() -> dict:
@@ -222,7 +237,7 @@ def test_policy_variant_accepts_another_registered_action_set() -> None:
         ("ppo", "stable_baselines3.ppo.ppo.PPO"),
         ("a2c", "stable_baselines3.a2c.a2c.A2C"),
         ("dqn", "stable_baselines3.dqn.dqn.DQN"),
-        ("jerk", "gradlab.jerk.JerkPolicy"),
+        ("action-program", "gradlab.action_program.ActionProgramPolicy"),
         ("recurrent-ppo", "sb3_contrib.ppo_recurrent.ppo_recurrent.RecurrentPPO"),
     ],
 )
@@ -320,16 +335,19 @@ def test_model_card_template_preserves_current_sb3_golden_output() -> None:
     )
 
 
-def test_model_card_template_preserves_current_jerk_golden_output() -> None:
+def test_model_card_template_preserves_current_action_program_golden_output() -> None:
     card = _render_current_model_card_fixture(
-        algorithm="jerk",
-        model_class="gradlab.jerk.JerkPolicy",
+        algorithm="action-program",
+        model_class="gradlab.action_program.ActionProgramPolicy",
+        search_algorithm="jerk",
         youtube_url=None,
     )
 
     ModelCard(card).validate(repo_type="model")
+    assert "| Producer | `jerk` |" in card
+    assert "_action-program/resolve/v1/model.zip" in card
     assert hashlib.sha256(card.encode()).hexdigest() == (
-        "c853057fc6f53fda21c2cc5a06aa8a6fe3d285288301fb7a7e41585ccc4b820e"
+        "b9325aa74ab72711dc920b28d0a754fcd9742cc8cbd3242db4bbc2eac1b15862"
     )
 
 

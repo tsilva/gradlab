@@ -160,10 +160,7 @@ def _reset_info_columns(runtime: Any) -> dict[str, np.ndarray]:
         )
         for name in _CELL_INFO_KEYS
     }
-    return {
-        name: _column(infos, name, runtime.num_envs)
-        for name in _CELL_INFO_KEYS
-    }
+    return {name: _column(infos, name, runtime.num_envs) for name in _CELL_INFO_KEYS}
 
 
 def _runtime_environment_config(config: Any) -> Any:
@@ -185,9 +182,7 @@ def _runtime_environment_config(config: Any) -> Any:
     if isinstance(signals, Mapping):
         for source in signals.values():
             configured_keys.update(
-                (str(source),)
-                if isinstance(source, str)
-                else (str(name) for name in source)
+                (str(source),) if isinstance(source, str) else (str(name) for name in source)
             )
     env_args["info_filter"] = {
         "mode": "all",
@@ -198,7 +193,7 @@ def _runtime_environment_config(config: Any) -> Any:
 
 def _checkpoint_prefix(game: str) -> str:
     slug = re.sub(r"[^A-Za-z0-9_.-]+", "_", game).strip("_").lower()
-    return f"go_explore_jerk_{slug or 'retro'}"
+    return f"go_explore_{slug or 'retro'}"
 
 
 def _save_policy(
@@ -231,7 +226,7 @@ def _save_policy(
         eval_required=context.train_config["checkpoint_eval_backend"] != "none",
     )
     print(
-        f"{kind} Go-Explore JERK policy ready: id={checkpoint_id} step={step} path={installed}",
+        f"{kind} Go-Explore action program ready: id={checkpoint_id} step={step} path={installed}",
         flush=True,
     )
     return installed
@@ -316,8 +311,7 @@ def _publish_metrics(
     if update is None or update.stop_decision is None:
         return False
     atomic_write_json(
-        context.run_dir
-        / f"early_stop_decision-{str(context.train_config['attempt_id'])}.json",
+        context.run_dir / f"early_stop_decision-{str(context.train_config['attempt_id'])}.json",
         update.stop_decision,
     )
     print(
@@ -373,8 +367,7 @@ def run_go_explore(context: BackendContext) -> None:
         initial_entries = runtime.capture_archive_entries(
             all_lanes,
             metadata_by_lane={
-                lane: {"algorithm": "go-explore", "kind": "initial"}
-                for lane in range(n_envs)
+                lane: {"algorithm": "go-explore", "kind": "initial"} for lane in range(n_envs)
             },
         )
         search.initialize(
@@ -403,8 +396,7 @@ def run_go_explore(context: BackendContext) -> None:
         )
         early_stopped = False
         while (
-            search.global_step < int(common_config["timesteps"])
-            and not context.stop_flag.requested
+            search.global_step < int(common_config["timesteps"]) and not context.stop_flag.requested
         ):
             batch = runtime.step(search.next_actions())
             records = runtime.drain_records()
@@ -544,9 +536,7 @@ class GoExploreBackend:
         del backend_config
         provider_id = str(common_config.get("env_provider") or "")
         if provider_id != SUPERMARIOBROS_NES_TURBO_PROVIDER.provider_id:
-            raise ValueError(
-                "gradlab.go-explore requires env_provider='supermariobrosnes-turbo'"
-            )
+            raise ValueError("gradlab.go-explore requires env_provider='supermariobrosnes-turbo'")
         task = common_config.get("task")
         if not isinstance(task, Mapping) or task.get("id") != "mario":
             raise ValueError("gradlab.go-explore requires task.id='mario'")
@@ -577,7 +567,7 @@ class GoExploreBackend:
             "defaults": DEFAULT_CONFIG,
             "provider_info_keys": sorted(GO_EXPLORE_PROVIDER_INFO_KEYS),
             "search_archive_persistence": "ephemeral",
-            "persisted_artifact": "best-jerk-run",
+            "persisted_artifact": "best-action-program",
             "state_archive_priority_metrics": [],
         }
 
@@ -588,9 +578,9 @@ class GoExploreBackend:
         del backend_config
         return {
             "training_backend_id": self.backend_id,
-            "algorithm_id": "jerk",
+            "algorithm_id": "action-program",
             "search_algorithm_id": "go-explore",
-            "model_class": "gradlab.jerk.JerkPolicy",
+            "model_class": "gradlab.action_program.ActionProgramPolicy",
         }
 
 

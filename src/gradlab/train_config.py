@@ -913,6 +913,36 @@ TRAIN_CONFIG_FIELDS: tuple[TrainConfigField, ...] = (
         help="Semantic hash of the selected, catalog-free effective goal contract.",
     ),
     _field(
+        "goal_variant_id",
+        default="",
+        cli_exposed=False,
+        help="Stable goal-scoped identity of the authored/effective goal-contract pair.",
+    ),
+    _field(
+        "goal_variant_label",
+        default="",
+        cli_exposed=False,
+        help="Human-readable goal name plus the normalized proven contract diff.",
+    ),
+    _field(
+        "goal_variant_source_relation",
+        default="",
+        cli_exposed=False,
+        help="Whether the effective goal matches or changes its source canonical contract.",
+    ),
+    _field(
+        "goal_variant_descriptor_sha256",
+        default="",
+        cli_exposed=False,
+        help="SHA-256 of the complete versioned goal-variant descriptor.",
+    ),
+    _field(
+        "goal_variant_diff_json",
+        default="",
+        cli_exposed=False,
+        help="Bounded normalized goal-contract diff used by catalog fallback.",
+    ),
+    _field(
         "reward_program_kind",
         default="",
         cli_exposed=False,

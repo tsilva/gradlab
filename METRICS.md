@@ -28,6 +28,13 @@ exact registry entry or a bounded template.
   `reward_program_revision`, `reward_shape`, `reward_shape_sha256`, and
   `reward_shape_is_default`. Reward-derived returns are comparable only when the selected reward
   semantic identity and effective goal contract match; the readable key alone is not sufficient.
+- `goal_variant_id` is the goal-scoped digest of `goal_slug`, `goal_contract_sha256`, and
+  `effective_goal_contract_sha256`; it groups only runs with the same authored and fully
+  materialized effective goal contracts. `goal_variant_label`, `goal_variant_source_relation`,
+  `goal_variant_descriptor_sha256`, and the bounded `goal_variant_diff_json` are catalog/search
+  projections, not scientific authority. The immutable run manifest and `recipe.json` retain the
+  complete descriptor, while the rebuildable private-control-R2 per-goal index serves the player
+  without scanning runs, objects, or artifacts.
 - `leader/checkpoint/*` contains diagnostic projections of the selected checkpoint. The
   create-only private-R2 `PromotionReceipt` is the authoritative selection.
 - Heavy model bytes, videos, replays, episode rows, diagnostics, and recovery payloads never go to
@@ -242,8 +249,8 @@ exit alone is never scientific success.
 | `train/algorithm/go_explore/success_guided/selection_count` | Cumulative selections made by success-lineage guidance. | selections | interval | history |
 | `train/algorithm/go_explore/best/progress` | Greatest task progress reached by the best retained trajectory. | progress | interval | history |
 | `train/algorithm/go_explore/best/return` | Shaped return of the best retained trajectory. | return | interval | history |
-| `train/algorithm/go_explore/best/program_steps` | Environment steps in the best retained JERK program. | steps | interval | history |
-| `train/algorithm/go_explore/best/program_runs` | Canonical action runs in the best retained JERK program. | runs | interval | history |
+| `train/algorithm/go_explore/best/program_steps` | Environment steps in the best retained action program. | steps | interval | history |
+| `train/algorithm/go_explore/best/program_runs` | Canonical action runs in the best retained action program. | runs | interval | history |
 | `train/algorithm/go_explore/best/completed` | Whether the best retained trajectory completed the task. | boolean | interval | history |
 | `train/algorithm/go_explore/best/improvement_count` | Successful-trajectory improvements after the first completion. | improvements | interval | history |
 | `train/algorithm/{algorithm}/value/explained_variance` | Actor-critic value-function explained variance. | scalar | rollout | history |

@@ -206,7 +206,7 @@ def _save_policy_bundle(
         sha256=None,
         eval_required=context.train_config["checkpoint_eval_backend"] != "none",
     )
-    print(f"{kind} JERK policy ready: id={checkpoint_id} step={step} path={model_path}")
+    print(f"{kind} JERK action program ready: id={checkpoint_id} step={step} path={model_path}")
     return model_path
 
 
@@ -287,8 +287,7 @@ def _publish_metrics(
     if update is None or update.stop_decision is None:
         return False
     atomic_write_json(
-        context.run_dir
-        / f"early_stop_decision-{str(context.train_config['attempt_id'])}.json",
+        context.run_dir / f"early_stop_decision-{str(context.train_config['attempt_id'])}.json",
         update.stop_decision,
     )
     print(
@@ -326,12 +325,8 @@ def run_jerk(context: BackendContext) -> None:
             total_timesteps=int(common_config["timesteps"]),
             action_names=action_names,
             fallback_action=str(backend_config["fallback_action"]),
-            archive_replay_probability_initial=backend_config[
-                "archive_replay_probability_initial"
-            ],
-            archive_replay_probability_max=backend_config[
-                "archive_replay_probability_max"
-            ],
+            archive_replay_probability_initial=backend_config["archive_replay_probability_initial"],
+            archive_replay_probability_max=backend_config["archive_replay_probability_max"],
             protected_prefix_steps=int(backend_config["protected_prefix_steps"]),
             max_prefix_shorten_steps=int(backend_config["max_prefix_shorten_steps"]),
             retained_limit=int(backend_config["retained_limit"]),
@@ -365,8 +360,7 @@ def run_jerk(context: BackendContext) -> None:
         accepted = False
         early_stopped = False
         while (
-            search.global_step < int(common_config["timesteps"])
-            and not context.stop_flag.requested
+            search.global_step < int(common_config["timesteps"]) and not context.stop_flag.requested
         ):
             actions = search.next_actions()
             _observations, rewards, dones, _infos = env.step(actions)
@@ -398,7 +392,7 @@ def run_jerk(context: BackendContext) -> None:
                     step=step,
                 )
                 print(
-                    f"accepted JERK policy at first training success: step={step} "
+                    f"accepted JERK action program at first training success: step={step} "
                     f"start={success_records[0].start_id or fallback_start}"
                 )
                 break
@@ -527,8 +521,9 @@ class JerkBackend:
         del backend_config
         return {
             "training_backend_id": self.backend_id,
-            "algorithm_id": "jerk",
-            "model_class": "gradlab.jerk.JerkPolicy",
+            "algorithm_id": "action-program",
+            "search_algorithm_id": "jerk",
+            "model_class": "gradlab.action_program.ActionProgramPolicy",
         }
 
 

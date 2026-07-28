@@ -54,7 +54,7 @@ class PlaybackHost:
         self._message = ""
         self._error = ""
         self._approval: dict[str, Any] | None = None
-        self._route = dict(initial_route or {"level": "projects"})
+        self._route = dict(initial_route or {"level": "environments"})
         self._last_source = initial_source
         self._session_change = 0
 
@@ -461,7 +461,7 @@ class PlaybackHost:
                     if isinstance(route, Mapping):
                         self._route = dict(route)
                     elif self._active is None:
-                        self._route = {"level": "projects"}
+                        self._route = {"level": "environments"}
                     self._phase = "selecting"
                     self._message = ""
                     self._error = ""

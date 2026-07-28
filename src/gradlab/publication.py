@@ -537,11 +537,16 @@ def normalize_publication_evaluation(
     evaluation: Mapping[str, Any],
     *,
     allow_deterministic: bool = False,
+    algorithm_id: str | None = None,
 ) -> PublicationEvaluation:
     action_sampling = str(evaluation.get("action_sampling") or "").strip().lower()
     if allow_deterministic and not action_sampling and evaluation.get("deterministic") is True:
         action_sampling = "deterministic"
-    allowed_sampling = {"stochastic", "deterministic"} if allow_deterministic else {"stochastic"}
+    allowed_sampling = (
+        {"program"}
+        if algorithm_id == "action-program"
+        else ({"stochastic", "deterministic"} if allow_deterministic else {"stochastic"})
+    )
     if action_sampling not in allowed_sampling:
         expected = " or ".join(sorted(allowed_sampling))
         raise ValueError(f"release evaluation action_sampling must be {expected}")
@@ -726,18 +731,27 @@ def render_model_card(
         for row in by_start
     )
     status = ""
-    is_jerk = algorithm == "jerk"
-    library_name = "gradlab" if is_jerk else "stable-baselines3"
-    library_tag = "gradlab-policy" if is_jerk else "stable-baselines3"
+    is_action_program = algorithm == "action-program"
+    producer = (
+        _required_text(
+            model_metadata.get("search_algorithm_id"),
+            label="model metadata search_algorithm_id",
+        )
+        if is_action_program
+        else ""
+    )
+    library_name = "gradlab" if is_action_program else "stable-baselines3"
+    library_tag = "gradlab-policy" if is_action_program else "stable-baselines3"
     policy_description = (
-        f"gradlab JERK open-loop policy for `{game}` `{goal}`, trained and evaluated with"
-        if is_jerk
+        f"GradLab open-loop action program for `{game}` `{goal}`, produced by "
+        f"`{producer}` and trained and evaluated with"
+        if is_action_program
         else f"Stable-Baselines3 {algorithm.upper()} policy for `{game}` `{goal}`, "
         "trained and evaluated with"
     )
     model_file_description = (
-        "Portable gradlab JERK action-run policy"
-        if is_jerk
+        "Portable GradLab open-loop action program"
+        if is_action_program
         else "Stable-Baselines3 policy checkpoint"
     )
     run_name = _required_text(source.get("run_name"), label="manifest source.run_name")
@@ -748,6 +762,7 @@ def render_model_card(
             "library_tag": library_tag,
             "algorithm": algorithm,
             "algorithm_upper": algorithm.upper(),
+            "producer": producer,
             "provider": provider,
             "game": game,
             "goal": goal,
@@ -889,6 +904,8 @@ def build_release_manifest(
     expected_identity = publication_identity_from_model_metadata(identity.goal, model_metadata)
     if expected_identity != identity:
         raise ValueError("release identity does not match model metadata")
+    if identity.algorithm == "action-program" and evaluation.get("action_sampling") != "program":
+        raise ValueError("action-program releases require program action sampling")
     training = _require_mapping(model_metadata.get("training_metadata"), label="training_metadata")
     environment = _require_mapping(training.get("environment"), label="training environment")
     manifest: dict[str, Any] = {

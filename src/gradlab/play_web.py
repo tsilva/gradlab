@@ -48,14 +48,18 @@ def source_browser_path(route: Mapping[str, Any] | None) -> str:
     route = route or {}
     project = str(route.get("project") or "").strip()
     goal_id = str(route.get("goal_id") or "").strip()
+    goal_variant_id = str(route.get("goal_variant_id") or "").strip()
     run_id = str(route.get("run_id") or "").strip()
     checkpoint_id = str(route.get("checkpoint_id") or "").strip()
     if not project:
         return "/"
-    path = f"/projects/{quote(project, safe='')}"
+    path = f"/environments/{quote(project, safe='')}"
     if not goal_id:
         return path
     path += f"/goals/{quote(goal_id, safe='')}"
+    if not goal_variant_id:
+        return path
+    path += f"/variants/{quote(goal_variant_id, safe='')}"
     if not run_id:
         return path
     path += f"/runs/{quote(run_id, safe='')}"
@@ -563,13 +567,9 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
                 ],
             }
         action_selection = self.policy_capabilities.get("action_selection")
-        action_selection = (
-            dict(action_selection) if isinstance(action_selection, Mapping) else {}
-        )
+        action_selection = dict(action_selection) if isinstance(action_selection, Mapping) else {}
         self.supported_action_selection_modes = tuple(
-            str(mode)
-            for mode in action_selection.get("supported_modes", ())
-            if str(mode)
+            str(mode) for mode in action_selection.get("supported_modes", ()) if str(mode)
         )
         if not self.supported_action_selection_modes:
             self.supported_action_selection_modes = ("stochastic", "deterministic")
@@ -628,10 +628,7 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
         if expected_selection and self.sampling_mode != expected_selection:
             reasons.append(
                 "deterministic trajectories are not sampled from the training policy"
-                if (
-                    expected_selection == "stochastic"
-                    and self.sampling_mode == "deterministic"
-                )
+                if (expected_selection == "stochastic" and self.sampling_mode == "deterministic")
                 else "active action selection differs from the critic training contract"
             )
         active_config = getattr(self.session, "config", None)
@@ -687,15 +684,11 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
             "interactive": self.session.interactive,
             "policy": {
                 **self.policy_capabilities,
-                "provenance": dict(
-                    getattr(self.session, "policy_provenance", {})
-                ),
+                "provenance": dict(getattr(self.session, "policy_provenance", {})),
                 "action_selection": {
                     "supported_modes": list(self.supported_action_selection_modes),
                     "default_mode": (
-                        (self.policy_capabilities.get("action_selection") or {}).get(
-                            "default_mode"
-                        )
+                        (self.policy_capabilities.get("action_selection") or {}).get("default_mode")
                         if isinstance(
                             self.policy_capabilities.get("action_selection"),
                             Mapping,
@@ -964,9 +957,7 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
                 else (
                     self.session.step(action_selection_mode=self.sampling_mode)
                     if hasattr(self.session, "policy_runtime")
-                    else self.session.step(
-                        deterministic=self.sampling_mode == "deterministic"
-                    )
+                    else self.session.step(deterministic=self.sampling_mode == "deterministic")
                 )
             )
         except Exception as exc:
@@ -1684,6 +1675,32 @@ class PlaybackWebServer:
     async def page(self, _request: web.Request) -> web.FileResponse:
         return web.FileResponse(self.asset_root / "index.html")
 
+    async def legacy_source_page(self, request: web.Request) -> web.StreamResponse:
+        route: dict[str, Any] = {
+            "project": request.match_info.get("project_id", ""),
+            "goal_id": request.match_info.get("goal_id", ""),
+            "run_id": request.match_info.get("run_id", ""),
+            "checkpoint_id": request.match_info.get("checkpoint_id", ""),
+        }
+        if route["run_id"] and self.catalog is not None:
+            try:
+                entity = self._catalog_entity or await asyncio.to_thread(
+                    self.catalog.default_entity,
+                    getattr(self.args, "wandb_entity", None),
+                )
+                goal_id, variant_id = await asyncio.to_thread(
+                    self.catalog.run_goal_variant,
+                    entity=entity,
+                    project=route["project"],
+                    run_id=route["run_id"],
+                )
+                route["goal_id"] = goal_id
+                route["goal_variant_id"] = variant_id
+            except Exception:
+                route["run_id"] = ""
+                route["checkpoint_id"] = ""
+        raise web.HTTPPermanentRedirect(location=source_browser_path(route))
+
     async def asset(self, request: web.Request) -> web.FileResponse:
         relative = Path(request.match_info["path"])
         root = self.asset_root.resolve()
@@ -1734,14 +1751,40 @@ class PlaybackWebServer:
             return web.json_response({"error": str(exc)}, status=502)
         return web.json_response({"entity": entity, **page.to_dict()})
 
+    async def catalog_environments(self, request: web.Request) -> web.Response:
+        self._authorize_api(request)
+        if self.catalog is None:
+            raise web.HTTPNotFound()
+        from gradlab.play_catalog import normalize_search_query
+
+        try:
+            requested_entity = str(
+                request.query.get("entity") or getattr(self.args, "wandb_entity", None) or ""
+            ).strip()
+            entity = requested_entity or self._catalog_entity
+            if not entity:
+                entity = await asyncio.to_thread(self.catalog.default_entity)
+                self._catalog_entity = entity
+            page = await asyncio.to_thread(
+                self.catalog.environments,
+                entity=entity,
+                query=normalize_search_query(request.query.get("q")),
+                cursor=request.query.get("cursor"),
+            )
+        except Exception as exc:
+            return web.json_response({"error": str(exc)}, status=502)
+        return web.json_response({"entity": entity, **page.to_dict()})
+
     async def _prepare_initial_catalog(self) -> None:
         if self.catalog is None:
             return
-        initial_projects = getattr(self.catalog, "initial_projects", None)
-        if not callable(initial_projects):
+        initial_environments = getattr(self.catalog, "initial_environments", None)
+        if not callable(initial_environments):
+            initial_environments = getattr(self.catalog, "initial_projects", None)
+        if not callable(initial_environments):
             return
         payload = await asyncio.to_thread(
-            initial_projects,
+            initial_environments,
             getattr(self.args, "wandb_entity", None),
         )
         if not isinstance(payload, Mapping):
@@ -1761,6 +1804,26 @@ class PlaybackWebServer:
                 entity=request.match_info["entity"],
                 project=request.match_info["project"],
                 goal_id=request.match_info.get("goal_id", ""),
+                goal_variant_id=request.match_info.get("goal_variant_id", ""),
+                query=normalize_search_query(request.query.get("q")),
+                cursor=request.query.get("cursor"),
+            )
+        except Exception as exc:
+            return web.json_response({"error": str(exc)}, status=502)
+        return web.json_response(page.to_dict())
+
+    async def catalog_goal_variants(self, request: web.Request) -> web.Response:
+        self._authorize_api(request)
+        if self.catalog is None:
+            raise web.HTTPNotFound()
+        from gradlab.play_catalog import normalize_search_query
+
+        try:
+            page = await asyncio.to_thread(
+                self.catalog.goal_variants,
+                entity=request.match_info["entity"],
+                project=request.match_info["project"],
+                goal_id=request.match_info["goal_id"],
                 query=normalize_search_query(request.query.get("q")),
                 cursor=request.query.get("cursor"),
             )
@@ -1799,6 +1862,7 @@ class PlaybackWebServer:
                 query=normalize_search_query(request.query.get("q")),
                 entity=request.query.get("entity", ""),
                 project=request.query.get("project", ""),
+                goal_variant_id=request.query.get("goal_variant_id", ""),
             )
         except Exception as exc:
             return web.json_response({"error": str(exc)}, status=502)
@@ -2223,24 +2287,64 @@ class PlaybackWebServer:
         app.add_routes(
             [
                 web.get("/", self.page),
-                web.get("/projects/{project_id}", self.page),
-                web.get("/projects/{project_id}/goals/{goal_id}", self.page),
+                web.get("/environments/{project_id}", self.page),
+                web.get("/environments/{project_id}/goals/{goal_id}", self.page),
+                web.get(
+                    ("/environments/{project_id}/goals/{goal_id}/variants/{goal_variant_id}"),
+                    self.page,
+                ),
+                web.get(
+                    (
+                        "/environments/{project_id}/goals/{goal_id}"
+                        "/variants/{goal_variant_id}/runs/{run_id}"
+                    ),
+                    self.page,
+                ),
+                web.get(
+                    (
+                        "/environments/{project_id}/goals/{goal_id}"
+                        "/variants/{goal_variant_id}/runs/{run_id}"
+                        "/checkpoints/{checkpoint_id}"
+                    ),
+                    self.page,
+                ),
+                web.get("/projects/{project_id}", self.legacy_source_page),
+                web.get(
+                    "/projects/{project_id}/goals/{goal_id}",
+                    self.legacy_source_page,
+                ),
                 web.get(
                     "/projects/{project_id}/goals/{goal_id}/runs/{run_id}",
-                    self.page,
+                    self.legacy_source_page,
                 ),
                 web.get(
                     (
                         "/projects/{project_id}/goals/{goal_id}/runs/{run_id}"
                         "/checkpoints/{checkpoint_id}"
                     ),
-                    self.page,
+                    self.legacy_source_page,
                 ),
                 web.get("/panel/{panel}", self.page),
                 web.get("/workspace/{window}", self.page),
                 web.get("/sources/{path:.*}", self.page),
                 web.get("/assets/{path:.*}", self.asset),
                 web.get("/api/catalog/projects", self.catalog_projects),
+                web.get("/api/catalog/environments", self.catalog_environments),
+                web.get(
+                    "/api/catalog/environments/{entity}/{project}/goals",
+                    self.catalog_goals,
+                ),
+                web.get(
+                    ("/api/catalog/environments/{entity}/{project}/goals/{goal_id}/variants"),
+                    self.catalog_goal_variants,
+                ),
+                web.get(
+                    (
+                        "/api/catalog/environments/{entity}/{project}/goals/{goal_id}"
+                        "/variants/{goal_variant_id}/runs"
+                    ),
+                    self.catalog_runs,
+                ),
                 web.get(
                     "/api/catalog/projects/{entity}/{project}/goals",
                     self.catalog_goals,

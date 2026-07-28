@@ -8,7 +8,7 @@ import pytest
 from stable_baselines3 import DQN
 from stable_baselines3.common.policies import ActorCriticPolicy
 
-from gradlab.jerk import ActionRun, JerkPolicy
+from gradlab.action_program import ActionProgramPolicy, ActionRun
 from gradlab.policy_runtime import PolicyRuntime, normalize_action_selection_mode
 
 
@@ -108,8 +108,8 @@ def test_dqn_epsilon_greedy_records_requested_and_effective_mode() -> None:
     model.get_env().close()
 
 
-def test_jerk_runtime_exposes_program_cursor_without_fabricated_distribution() -> None:
-    model = JerkPolicy(
+def test_action_program_runtime_exposes_cursor_without_fabricated_distribution() -> None:
+    model = ActionProgramPolicy(
         action_names=("noop", "right"),
         action_runs=(ActionRun(1, 2),),
         fallback_action=0,
@@ -143,9 +143,9 @@ def test_jerk_runtime_exposes_program_cursor_without_fabricated_distribution() -
     assert first.sampled is None
 
 
-def test_jerk_legacy_boolean_modes_have_an_explicit_program_interpretation() -> None:
+def test_action_program_legacy_boolean_modes_have_explicit_program_interpretation() -> None:
     capabilities = PolicyRuntime(
-        JerkPolicy(
+        ActionProgramPolicy(
             action_names=("noop",),
             action_runs=(),
             fallback_action=0,

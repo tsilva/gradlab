@@ -69,6 +69,7 @@ class _PlaybackDocument(BoundaryModel):
 
 class _RecipeValueDocument(BoundaryModel):
     goal: dict[str, Any]
+    goal_variant: Any = None
     recipe_id: NonEmptyText
     description: NonEmptyText
     train: dict[str, Any]
@@ -93,6 +94,19 @@ class _RecipeValueDocument(BoundaryModel):
             raise ValueError("must define eval or playback")
         if self.eval is not None and self.playback is not None:
             raise ValueError("cannot define both eval and playback")
+        if self.goal_variant is not None:
+            if not isinstance(self.goal_variant, Mapping):
+                raise ValueError("goal_variant must be a mapping")
+            from gradlab.goal_variants import validate_goal_variant_descriptor
+
+            descriptor = validate_goal_variant_descriptor(self.goal_variant)
+            if (
+                descriptor["goal_contract_sha256"] != self.train_config.get("goal_contract_sha256")
+                or descriptor["effective_goal_contract_sha256"]
+                != self.train_config.get("effective_goal_contract_sha256")
+                or descriptor["variant_id"] != self.train_config.get("goal_variant_id")
+            ):
+                raise ValueError("goal_variant disagrees with train_config")
         return self
 
 
@@ -149,6 +163,10 @@ class _ModelProvenanceDocument(BoundaryModel):
     goal_sha256: Any = None
     goal_contract_sha256: Any = None
     effective_goal_contract_sha256: Any = None
+    goal_variant_id: Any = None
+    goal_variant_label: Any = None
+    goal_variant_source_relation: Any = None
+    goal_variant_descriptor_sha256: Any = None
     reward_program_kind: Any = None
     reward_program_revision: Any = None
     reward_shape: Any = None
@@ -444,8 +462,7 @@ def _validate_recipe_v1(document: Mapping[str, Any], source: str) -> dict[str, A
             backend_config = backend.get("config")
             if not isinstance(backend_config, Mapping):
                 raise ValueError(
-                    f"{source}.recipe.train_config.training_backend.config "
-                    "must be an object"
+                    f"{source}.recipe.train_config.training_backend.config must be an object"
                 )
         else:
             raise ValueError(f"unknown training backend {backend_id!r}")
@@ -511,8 +528,7 @@ def _validate_recipe_v1(document: Mapping[str, Any], source: str) -> dict[str, A
         "stochastic",
     }:
         raise PolicyDocumentError(
-            f"{source}.recipe.eval.action_sampling must be "
-            f"{expected_action_sampling!r}"
+            f"{source}.recipe.eval.action_sampling must be {expected_action_sampling!r}"
         )
     if evaluation is not None and evaluation.get("deterministic", False) is not False:
         raise PolicyDocumentError(f"{source}.recipe.eval.deterministic must be false")
@@ -1120,6 +1136,10 @@ def _validate_cross_document_contract(model: Mapping[str, Any], recipe: Mapping[
     for key in (
         "goal_contract_sha256",
         "effective_goal_contract_sha256",
+        "goal_variant_id",
+        "goal_variant_label",
+        "goal_variant_source_relation",
+        "goal_variant_descriptor_sha256",
         "reward_program_kind",
         "reward_program_revision",
         "reward_shape",

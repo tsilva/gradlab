@@ -45,6 +45,7 @@ TRAIN_RECIPE_OPTIONAL_FIELDS = frozenset(
         "eval",
         "effective_recipe_overrides",
         "goal_id",
+        "goal_variant",
         "logging",
         "objective",
         "release",

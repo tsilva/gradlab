@@ -9,7 +9,13 @@ import pytest
 
 from gradlab.play import build_parser as build_play_parser
 from gradlab.play_catalog import PlayCatalog, parse_wandb_location
+from gradlab.goal_variants import (
+    build_goal_variant_descriptor,
+    goal_variant_scope_key,
+)
+from gradlab.recipe_documents import load_goal_contract
 from gradlab.recipe_variants import recipe_variant_id
+from gradlab.reward_programs import goal_for_contract_validation
 from gradlab.run_contracts import checkpoint_id
 
 
@@ -336,6 +342,68 @@ def test_catalog_default_entity_does_not_initialize_wandb(
     )
 
     assert catalog.default_entity() == "research"
+
+
+def test_goal_variants_use_one_private_index_read_without_wandb(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    write_goal_catalog(tmp_path)
+    goal_path = tmp_path / "experiments" / "goals" / "Mario" / "Level1-1" / "_goal.yaml"
+    authored = load_goal_contract(goal_path, tmp_path, validate=False)
+    descriptor = build_goal_variant_descriptor(
+        goal_slug="Mario/Level1-1",
+        source_sha="a" * 40,
+        authored_goal=authored,
+        effective_goal=goal_for_contract_validation(
+            authored,
+            label="test goal",
+        ),
+    )
+    scope = goal_variant_scope_key(
+        entity="research",
+        project="Mario",
+        goal_slug="Mario/Level1-1",
+    )
+
+    class OneReadControlBucket:
+        calls: list[str] = []
+
+        def get_json_optional(self, key: str):
+            self.calls.append(key)
+            assert key == f"{scope}/index.json"
+            return {
+                "schema_version": 1,
+                "scope": {
+                    "entity": "research",
+                    "project": "Mario",
+                    "goal_slug": "Mario/Level1-1",
+                },
+                "variants": [
+                    {
+                        **descriptor,
+                        "descriptor_key": (f"{scope}/descriptors/{descriptor['variant_id']}.json"),
+                        "first_run_id": RUN_ID,
+                    }
+                ],
+            }
+
+    bucket = OneReadControlBucket()
+    catalog = PlayCatalog(repo_root=tmp_path, control_bucket=bucket)
+    monkeypatch.setattr(
+        catalog,
+        "_wandb_api",
+        lambda: (_ for _ in ()).throw(AssertionError("private variant index must avoid W&B")),
+    )
+
+    page = catalog.goal_variants(
+        entity="research",
+        project="Mario",
+        goal_id="Level1-1",
+    )
+
+    assert [item["variant_id"] for item in page.items] == [descriptor["variant_id"]]
+    assert bucket.calls == [f"{scope}/index.json"]
 
 
 def test_catalog_default_entity_loads_operator_configuration_once(

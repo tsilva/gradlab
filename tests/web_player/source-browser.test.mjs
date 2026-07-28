@@ -16,20 +16,22 @@ import {
 
 const METRIC = "eval/full/episode/return/mean";
 
-test("playback home is the root project route", () => {
+test("playback home is the root environment route", () => {
   assert.deepEqual(sourceRouteFromPath("/"), {
-    level: "projects",
+    level: "environments",
     entity: "",
     project: "",
     goal_id: "",
+    goal_variant_id: "",
     run_id: "",
     checkpoint_id: "",
   });
   assert.equal(sourceRoutePath({
-    level: "projects",
+    level: "environments",
     entity: "research",
     project: "",
     goal_id: "",
+    goal_variant_id: "",
     run_id: "",
     checkpoint_id: "",
   }), "/");
@@ -52,7 +54,7 @@ test("checkpoint playback seed accepts catalog provenance and rejects invalid va
   assert.equal(checkpointPlaybackSeed({ playback_seed: -1 }), null);
 });
 
-test("direct project routes inherit the server catalog entity", async (context) => {
+test("legacy project routes inherit the entity and use canonical environment APIs", async (context) => {
   const originalLocation = globalThis.location;
   const originalWindow = globalThis.window;
   const originalFetch = globalThis.fetch;
@@ -96,7 +98,7 @@ test("direct project routes inherit the server catalog entity", async (context) 
   sourceBrowser.render({
     app: {
       phase: "selecting",
-      route: { level: "projects" },
+      route: { level: "environments" },
       catalog: { entity: "research", items: [] },
     },
   });
@@ -104,7 +106,7 @@ test("direct project routes inherit the server catalog entity", async (context) 
 
   assert.equal(
     requests[0],
-    "/api/catalog/projects/research/Mario/goals?",
+    "/api/catalog/environments/research/Mario/goals?",
   );
   assert.equal(commands[0].name, "browse_sources");
   assert.equal(commands[0].payload.route.entity, "research");
@@ -141,20 +143,21 @@ test("late catalog responses cannot populate a newer route", async (context) => 
   sourceBrowser.updatePolling = () => {};
   sourceBrowser.route.entity = "research";
 
-  const projectsRequest = sourceBrowser.load();
+  const environmentsRequest = sourceBrowser.load();
   assert.equal(requests.length, 1);
-  assert.match(requests[0].url, /^\/api\/catalog\/projects/);
+  assert.match(requests[0].url, /^\/api\/catalog\/environments/);
 
   sourceBrowser.applyRoute({
     level: "goals",
     project: "Mario",
     goal_id: "",
+    goal_variant_id: "",
     run_id: "",
     checkpoint_id: "",
   });
   assert.equal(requests.length, 2);
   assert.equal(requests[0].options.signal.aborted, true);
-  assert.match(requests[1].url, /\/projects\/research\/Mario\/goals/);
+  assert.match(requests[1].url, /\/environments\/research\/Mario\/goals/);
   requests[0].resolve({
     ok: true,
     json: async () => ({
@@ -162,7 +165,7 @@ test("late catalog responses cannot populate a newer route", async (context) => 
       next_cursor: null,
     }),
   });
-  await projectsRequest;
+  await environmentsRequest;
 
   assert.equal(requests.length, 2);
   assert.deepEqual(sourceBrowser.items, []);
@@ -185,6 +188,26 @@ test("late catalog responses cannot populate a newer route", async (context) => 
 
   assert.equal(sourceBrowser.items[0].goal_id, "Level1-1");
   assert.equal(sourceBrowser.items[0].recipe_count, 1);
+});
+
+test("goal variants are a first-class canonical route between goals and runs", () => {
+  const variant = "goal-variant-0123456789abcdef01234567";
+  const run = `gradlab-${"a".repeat(32)}`;
+  const checkpoint = `checkpoint-12-${"b".repeat(16)}`;
+  const path = (
+    `/environments/Mario/goals/Level1-1/variants/${variant}`
+    + `/runs/${run}/checkpoints/${checkpoint}`
+  );
+  assert.deepEqual(sourceRouteFromPath(path), {
+    level: "runs",
+    entity: "",
+    project: "Mario",
+    goal_id: "Level1-1",
+    goal_variant_id: variant,
+    run_id: run,
+    checkpoint_id: checkpoint,
+  });
+  assert.equal(sourceRoutePath(sourceRouteFromPath(path)), path);
 });
 
 test("stalled catalog requests time out with a recoverable error", async (context) => {

@@ -25,7 +25,8 @@ metrics:
 | Task | Complete `{{ game }}` `{{ goal }}` |
 | Provider | `{{ provider }}` |
 | Algorithm | `{{ algorithm }}` |
-| Checkpoint | Step `{{ checkpoint_step }}` |
+{% if producer %}| Producer | `{{ producer }}` |
+{% endif %}| Checkpoint | Step `{{ checkpoint_step }}` |
 | Evaluation | `{{ action_sampling }}` full evaluation, `{{ episodes }}` episodes |
 | Success | minimum `{{ success_min }}`, mean `{{ success_mean }}` |
 | Mean return | `{{ return_mean }}` |

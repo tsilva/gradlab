@@ -533,31 +533,34 @@ def test_run_web_playback_requests_paired_browser_windows() -> None:
 def test_source_browser_paths_are_hierarchical_and_url_encoded() -> None:
     run_id = "gradlab-" + "a" * 32
     checkpoint_id = "checkpoint-250000-" + "b" * 16
+    variant_id = "goal-variant-" + "c" * 24
 
     assert source_browser_path(None) == "/"
-    assert source_browser_path({"project": "Mario Bros"}) == "/projects/Mario%20Bros"
+    assert source_browser_path({"project": "Mario Bros"}) == "/environments/Mario%20Bros"
     assert (
         source_browser_path({"project": "Mario Bros", "goal_id": "Level 1-1"})
-        == "/projects/Mario%20Bros/goals/Level%201-1"
-    )
-    assert (
-        source_browser_path(
-            {
-                "project": "Mario Bros",
-                "goal_id": "Level 1-1",
-                "run_id": run_id,
-            }
-        )
-        == f"/projects/Mario%20Bros/goals/Level%201-1/runs/{run_id}"
+        == "/environments/Mario%20Bros/goals/Level%201-1"
     )
     assert source_browser_path(
         {
             "project": "Mario Bros",
             "goal_id": "Level 1-1",
+            "goal_variant_id": variant_id,
+            "run_id": run_id,
+        }
+    ) == (f"/environments/Mario%20Bros/goals/Level%201-1/variants/{variant_id}/runs/{run_id}")
+    assert source_browser_path(
+        {
+            "project": "Mario Bros",
+            "goal_id": "Level 1-1",
+            "goal_variant_id": variant_id,
             "run_id": run_id,
             "checkpoint_id": checkpoint_id,
         }
-    ) == (f"/projects/Mario%20Bros/goals/Level%201-1/runs/{run_id}/checkpoints/{checkpoint_id}")
+    ) == (
+        f"/environments/Mario%20Bros/goals/Level%201-1/variants/{variant_id}"
+        f"/runs/{run_id}/checkpoints/{checkpoint_id}"
+    )
 
 
 def test_paired_playback_server_opens_play_and_stats_windows() -> None:
@@ -1070,6 +1073,8 @@ def test_catalog_http_api_requires_the_fragment_session_token() -> None:
                 next_cursor=None,
             )
 
+        environments = projects
+
         @staticmethod
         def goals(*, entity, project, query, cursor):
             assert (entity, project, query, cursor) == (
@@ -1094,13 +1099,86 @@ def test_catalog_http_api_requires_the_fragment_session_token() -> None:
             )
 
         @staticmethod
-        def checkpoints(*, run_id, query, entity, project):
+        def goal_variants(*, entity, project, goal_id, query, cursor):
+            assert (entity, project, goal_id, query, cursor) == (
+                "research",
+                "Mario",
+                "Level1-1",
+                "",
+                None,
+            )
+            return CatalogPage(
+                items=(
+                    {
+                        "entity": entity,
+                        "project": project,
+                        "goal_id": goal_id,
+                        "goal_slug": "Mario/Level1-1",
+                        "variant_id": "goal-variant-" + "c" * 24,
+                        "label": "Mario Level 1-1 completion",
+                        "status": "current",
+                        "source_relation": "canonical",
+                        "goal_contract_sha256": "d" * 64,
+                        "effective_goal_contract_sha256": "e" * 64,
+                        "diff": [],
+                    },
+                ),
+                next_cursor=None,
+            )
+
+        @staticmethod
+        def runs(
+            *,
+            entity,
+            project,
+            goal_id,
+            goal_variant_id,
+            query,
+            cursor,
+        ):
+            assert (
+                entity,
+                project,
+                goal_id,
+                goal_variant_id,
+                query,
+                cursor,
+            ) == (
+                "research",
+                "Mario",
+                "Level1-1",
+                "goal-variant-" + "c" * 24,
+                "",
+                None,
+            )
+            return CatalogPage(
+                items=(
+                    {
+                        "run_id": "gradlab-" + "a" * 32,
+                        "goal_variant_id": goal_variant_id,
+                    },
+                ),
+                next_cursor=None,
+            )
+
+        @staticmethod
+        def run_goal_variant(*, entity, project, run_id):
+            assert (entity, project, run_id) == (
+                "research",
+                "Mario",
+                "gradlab-" + "a" * 32,
+            )
+            return "Level1-1", "goal-variant-" + "c" * 24
+
+        @staticmethod
+        def checkpoints(*, run_id, query, entity, project, goal_variant_id):
             assert (
                 run_id,
                 query,
                 entity,
                 project,
-            ) == ("gradlab-" + "a" * 32, "", "research", "Mario")
+                goal_variant_id,
+            ) == ("gradlab-" + "a" * 32, "", "research", "Mario", "")
             return (
                 {
                     "run_id": run_id,
@@ -1128,17 +1206,35 @@ def test_catalog_http_api_requires_the_fragment_session_token() -> None:
                 denied = await client.get(f"{server.origin}/api/catalog/projects?q=mario")
                 assert denied.status == 401
                 accepted = await client.get(
-                    f"{server.origin}/api/catalog/projects?q=mario",
+                    f"{server.origin}/api/catalog/environments?q=mario",
                     headers={"Authorization": f"Bearer {server.token}"},
                 )
                 assert accepted.status == 200
                 assert (await accepted.json())["items"][0]["name"] == "Mario"
                 goals = await client.get(
-                    f"{server.origin}/api/catalog/projects/research/Mario/goals",
+                    f"{server.origin}/api/catalog/environments/research/Mario/goals",
                     headers={"Authorization": f"Bearer {server.token}"},
                 )
                 assert goals.status == 200
                 assert (await goals.json())["items"][0]["goal_id"] == "Level1-1"
+                variants = await client.get(
+                    (
+                        f"{server.origin}/api/catalog/environments/research/Mario"
+                        "/goals/Level1-1/variants"
+                    ),
+                    headers={"Authorization": f"Bearer {server.token}"},
+                )
+                assert variants.status == 200
+                variant_id = (await variants.json())["items"][0]["variant_id"]
+                runs = await client.get(
+                    (
+                        f"{server.origin}/api/catalog/environments/research/Mario"
+                        f"/goals/Level1-1/variants/{variant_id}/runs"
+                    ),
+                    headers={"Authorization": f"Bearer {server.token}"},
+                )
+                assert runs.status == 200
+                assert (await runs.json())["items"][0]["goal_variant_id"] == variant_id
                 checkpoints = await client.get(
                     (
                         f"{server.origin}/api/catalog/runs/gradlab-{'a' * 32}/checkpoints"
@@ -1150,6 +1246,9 @@ def test_catalog_http_api_requires_the_fragment_session_token() -> None:
                 assert (await checkpoints.json())["items"][0]["evaluation"]["pass"] is True
                 for route in (
                     "/",
+                    "/environments/Mario",
+                    "/environments/Mario/goals/Level1-1",
+                    (f"/environments/Mario/goals/Level1-1/variants/goal-variant-{'c' * 24}"),
                     "/projects/Mario",
                     "/projects/Mario/goals/Level1-1",
                     f"/projects/Mario/goals/Level1-1/runs/gradlab-{'a' * 32}",

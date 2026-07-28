@@ -8,11 +8,11 @@ from typing import Any, Literal, TypeAlias, cast
 PolicyAlgorithmId: TypeAlias = Literal[
     "ppo",
     "a2c",
-    "jerk",
+    "action-program",
     "dqn",
     "recurrent-ppo",
 ]
-RuntimePolicyAlgorithmId: TypeAlias = Literal["ppo", "a2c", "dqn", "jerk"]
+RuntimePolicyAlgorithmId: TypeAlias = Literal["ppo", "a2c", "dqn", "action-program"]
 Sb3AlgorithmId: TypeAlias = Literal["ppo", "a2c", "dqn"]
 
 
@@ -30,8 +30,8 @@ class BackendProvenanceSpec:
 
 
 TRAINING_BACKEND_SPECS: dict[str, TrainingBackendSpec] = {
-    "gradlab.go-explore": TrainingBackendSpec("gradlab.training.go_explore", "jerk"),
-    "gradlab.jerk": TrainingBackendSpec("gradlab.training.jerk", "jerk"),
+    "gradlab.go-explore": TrainingBackendSpec("gradlab.training.go_explore", "action-program"),
+    "gradlab.jerk": TrainingBackendSpec("gradlab.training.jerk", "action-program"),
     "sb3.a2c": TrainingBackendSpec("gradlab.training.sb3", "a2c"),
     "sb3.ppo": TrainingBackendSpec("gradlab.training.sb3", "ppo"),
 }
@@ -45,7 +45,7 @@ BACKEND_PROVENANCE_SPECS: dict[str, BackendProvenanceSpec] = {
     "sb3.dqn": BackendProvenanceSpec("dqn"),
 }
 MODEL_CLASS_ALGORITHMS: dict[str, PolicyAlgorithmId] = {
-    "gradlab.jerk.JerkPolicy": "jerk",
+    "gradlab.action_program.ActionProgramPolicy": "action-program",
     "gradlab.task_advantage.PerTaskAdvantagePPO": "ppo",
     "sb3_contrib.ppo_recurrent.ppo_recurrent.RecurrentPPO": "recurrent-ppo",
     "stable_baselines3.a2c.a2c.A2C": "a2c",
@@ -61,7 +61,7 @@ ALGORITHM_MODEL_CLASSES: dict[str, frozenset[str]] = {
     for algorithm_id in frozenset(MODEL_CLASS_ALGORITHMS.values())
 }
 
-RUNTIME_POLICY_ALGORITHMS = frozenset[PolicyAlgorithmId]({"ppo", "a2c", "dqn", "jerk"})
+RUNTIME_POLICY_ALGORITHMS = frozenset[PolicyAlgorithmId]({"ppo", "a2c", "dqn", "action-program"})
 SB3_ALGORITHMS = frozenset[PolicyAlgorithmId]({"ppo", "a2c", "dqn"})
 
 
@@ -77,7 +77,7 @@ def default_action_selection_mode(algorithm_id: PolicyAlgorithmId) -> str:
         return "stochastic"
     if algorithm_id == "dqn":
         return "epsilon_greedy"
-    if algorithm_id == "jerk":
+    if algorithm_id == "action-program":
         return "program"
     raise ValueError(f"unsupported checkpoint algorithm: {algorithm_id}")
 

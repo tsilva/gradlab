@@ -15,6 +15,14 @@ from urllib.parse import unquote, urlparse
 
 from gradlab.config_loader import load_mapping_document
 from gradlab.early_stop import EARLY_STOP_OPERATORS, normalize_metric_threshold_rules
+from gradlab.goal_variants import (
+    GOAL_VARIANT_INDEX_SCHEMA_VERSION,
+    build_goal_variant_descriptor,
+    goal_variant_id as compute_goal_variant_id,
+    goal_variant_scope_key,
+    unknown_goal_variant_id,
+    validate_goal_variant_descriptor,
+)
 from gradlab.metric_names import (
     EVAL_ACCEPTANCE_EPISODES_COMPLETED,
     EVAL_ACCEPTANCE_EPISODES_PLANNED,
@@ -27,9 +35,11 @@ from gradlab.metric_names import (
     TRAIN_OUTCOME_SUCCESS_WINDOW_100_RATE_MIN,
 )
 from gradlab.model_sources import DEFAULT_PUBLIC_MODELS_BASE_URL, _public_json
+from gradlab.r2_store import BucketConfig, R2Bucket
 from gradlab.ranking import RankCriterion, parse_objective_rank
 from gradlab.recipe_variants import normalize_recipe_overrides, recipe_variant_id
 from gradlab.recipe_documents import load_goal_contract
+from gradlab.reward_programs import goal_for_contract_validation
 from gradlab.run_contracts import CheckpointManifest, RUN_ID_PATTERN
 from gradlab.wandb_utils import (
     load_wandb_env,
@@ -41,11 +51,12 @@ from gradlab.wandb_utils import (
 WANDB_HOSTS = {"wandb.ai", "www.wandb.ai"}
 CATALOG_PAGE_SIZE = 50
 CATALOG_INDEX_SCHEMA_VERSION = 1
-CATALOG_CACHE_SCHEMA_VERSION = 1
+CATALOG_CACHE_SCHEMA_VERSION = 2
 CATALOG_INDEX_FILENAME = "_catalog.yaml"
 EVALUATION_CACHE_SECONDS = 10.0
 WANDB_CATALOG_PAGE_SIZE = 200
 RUN_CATALOG_CACHE_SECONDS = 60.0
+GOAL_VARIANT_CACHE_SECONDS = 60.0
 LIVE_TRAINING_METRICS = (
     (
         RankCriterion(
@@ -110,6 +121,9 @@ class ProjectSummary:
         return asdict(self)
 
 
+EnvironmentSummary = ProjectSummary
+
+
 @dataclass(frozen=True)
 class GoalSummary:
     entity: str
@@ -119,6 +133,26 @@ class GoalSummary:
     title: str
     recipe_count: int
     goal_path: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class GoalVariantSummary:
+    entity: str
+    project: str
+    goal_id: str
+    goal_slug: str
+    variant_id: str
+    label: str
+    goal_contract_sha256: str
+    effective_goal_contract_sha256: str
+    source_sha: str
+    source_relation: str
+    status: str
+    diff: tuple[Mapping[str, Any], ...]
+    diff_truncated: bool
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -136,6 +170,10 @@ class RunSummary:
     recipe_sha256: str
     recipe_overrides: tuple[str, ...]
     recipe_variant_id: str
+    goal_contract_sha256: str
+    effective_goal_contract_sha256: str
+    goal_variant_id: str
+    goal_variant_label: str
     description: str
     seed: int | None
     created_at: str
@@ -370,6 +408,7 @@ class PlayCatalog:
         public_models_base_url: str = DEFAULT_PUBLIC_MODELS_BASE_URL,
         repo_root: Path | str | None = None,
         cache_path: Path | str | None = None,
+        control_bucket: R2Bucket | Any | None = None,
     ) -> None:
         self.public_models_base_url = str(public_models_base_url).rstrip("/")
         self.repo_root = (
@@ -381,6 +420,15 @@ class PlayCatalog:
         self.cache_path = (
             Path(cache_path).expanduser().resolve() if cache_path is not None else None
         )
+        self.control_bucket = control_bucket
+        if (
+            self.control_bucket is None
+            and str(os.environ.get("GRADLAB_CONTROL_R2_URI") or "").strip()
+        ):
+            try:
+                self.control_bucket = R2Bucket(BucketConfig.from_env("GRADLAB_CONTROL_R2"))
+            except ValueError:
+                self.control_bucket = None
         self._api: Any | None = None
         self._lock = threading.Lock()
         self._cache_lock = threading.Lock()
@@ -389,6 +437,11 @@ class PlayCatalog:
             tuple[float, tuple[dict[str, Any], ...]],
         ] = {}
         self._run_catalog_refreshing: set[str] = set()
+        self._goal_variant_cache: dict[
+            str,
+            tuple[float, tuple[dict[str, Any], ...]],
+        ] = {}
+        self._goal_variant_refreshing: set[str] = set()
         self._repository_project_cache: dict[
             str,
             tuple[
@@ -597,7 +650,7 @@ class PlayCatalog:
             or payload.get("repo_root") != str(self.repo_root)
         ):
             return None
-        for section in ("projects", "run_catalogs"):
+        for section in ("projects", "run_catalogs", "goal_variants"):
             value = payload.setdefault(section, {})
             if not isinstance(value, dict):
                 return None
@@ -615,6 +668,7 @@ class PlayCatalog:
                 "repo_root": str(self.repo_root),
                 "projects": {},
                 "run_catalogs": {},
+                "goal_variants": {},
             }
             update(payload)
             temporary = self.cache_path.with_name(
@@ -818,6 +872,9 @@ class PlayCatalog:
         entity: str,
         project: str,
         goal_slug: str,
+        goal_variant_id: str = "",
+        goal_contract_sha256: str = "",
+        effective_goal_contract_sha256: str = "",
         metric_specs: tuple[tuple[RankCriterion, tuple[str, ...]], ...],
         fallback_metric_specs: tuple[tuple[RankCriterion, tuple[str, ...]], ...],
     ) -> str:
@@ -825,6 +882,9 @@ class PlayCatalog:
             "entity": entity,
             "project": project,
             "goal_slug": goal_slug,
+            "goal_variant_id": goal_variant_id,
+            "goal_contract_sha256": goal_contract_sha256,
+            "effective_goal_contract_sha256": effective_goal_contract_sha256,
             "metrics": [
                 {
                     "metric": criterion.metric,
@@ -886,6 +946,12 @@ class PlayCatalog:
                             if str(value).strip()
                         ),
                         recipe_variant_id=str(raw_item.get("recipe_variant_id") or ""),
+                        goal_contract_sha256=str(raw_item.get("goal_contract_sha256") or ""),
+                        effective_goal_contract_sha256=str(
+                            raw_item.get("effective_goal_contract_sha256") or ""
+                        ),
+                        goal_variant_id=str(raw_item.get("goal_variant_id") or ""),
+                        goal_variant_label=str(raw_item.get("goal_variant_label") or ""),
                         description=str(raw_item.get("description") or ""),
                         seed=_safe_int(raw_item.get("seed")),
                         created_at=str(raw_item.get("created_at") or ""),
@@ -1095,6 +1161,371 @@ class PlayCatalog:
                 return detailed
         raise ValueError(f"repository has no goal {project}/{goal_id}")
 
+    @staticmethod
+    def _variant_cache_key(*, entity: str, project: str, goal_slug: str) -> str:
+        return hashlib.sha256(
+            json.dumps(
+                {
+                    "entity": entity,
+                    "project": project,
+                    "goal_slug": goal_slug,
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+
+    def _read_persistent_goal_variants(
+        self,
+        *,
+        cache_key: str,
+        entity: str,
+        project: str,
+        goal_slug: str,
+    ) -> tuple[float, tuple[dict[str, Any], ...]] | None:
+        payload = self._read_persistent_cache()
+        entries = payload.get("goal_variants") if payload is not None else None
+        entry = entries.get(cache_key) if isinstance(entries, Mapping) else None
+        if not isinstance(entry, Mapping):
+            return None
+        generated_at = _safe_float(entry.get("generated_at"))
+        raw_items = entry.get("items")
+        if generated_at is None or not isinstance(raw_items, list):
+            return None
+        items: list[dict[str, Any]] = []
+        for raw in raw_items:
+            if (
+                not isinstance(raw, Mapping)
+                or raw.get("entity") != entity
+                or raw.get("project") != project
+                or raw.get("goal_slug") != goal_slug
+                or not str(raw.get("variant_id") or "").strip()
+            ):
+                return None
+            items.append(dict(raw))
+        return generated_at, tuple(items)
+
+    def _store_goal_variants(
+        self,
+        *,
+        cache_key: str,
+        items: tuple[dict[str, Any], ...],
+    ) -> tuple[float, tuple[dict[str, Any], ...]]:
+        cached = (time.time(), items)
+        with self._cache_lock:
+            self._goal_variant_cache[cache_key] = cached
+
+        def update(payload: dict[str, Any]) -> None:
+            payload["goal_variants"][cache_key] = {
+                "generated_at": cached[0],
+                "items": list(items),
+            }
+
+        self._update_persistent_cache(update)
+        return cached
+
+    def _cached_goal_variants(
+        self,
+        *,
+        cache_key: str,
+        entity: str,
+        project: str,
+        goal_slug: str,
+    ) -> tuple[float, tuple[dict[str, Any], ...]] | None:
+        with self._cache_lock:
+            cached = self._goal_variant_cache.get(cache_key)
+        if cached is None:
+            cached = self._read_persistent_goal_variants(
+                cache_key=cache_key,
+                entity=entity,
+                project=project,
+                goal_slug=goal_slug,
+            )
+            if cached is not None:
+                with self._cache_lock:
+                    self._goal_variant_cache[cache_key] = cached
+        return cached
+
+    def _current_goal_variant(
+        self,
+        repository_goal: _RepositoryGoal,
+    ) -> dict[str, Any]:
+        authored = load_goal_contract(
+            self.repo_root / repository_goal.goal_path,
+            self.repo_root,
+            validate=False,
+        )
+        descriptor = build_goal_variant_descriptor(
+            goal_slug=repository_goal.goal_slug,
+            source_sha="",
+            authored_goal=authored,
+            effective_goal=goal_for_contract_validation(
+                authored,
+                label=f"repository goal {repository_goal.goal_slug}",
+            ),
+        )
+        return descriptor
+
+    def _variant_summary(
+        self,
+        *,
+        descriptor: Mapping[str, Any],
+        entity: str,
+        project: str,
+        repository_goal: _RepositoryGoal,
+        current: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        validated = validate_goal_variant_descriptor(descriptor)
+        authored_current = validated["goal_contract_sha256"] == current["goal_contract_sha256"]
+        effective_current = (
+            validated["effective_goal_contract_sha256"] == current["effective_goal_contract_sha256"]
+        )
+        status = (
+            "current"
+            if authored_current and effective_current
+            else "current changed"
+            if authored_current
+            else "historical"
+        )
+        return GoalVariantSummary(
+            entity=entity,
+            project=project,
+            goal_id=repository_goal.goal_id,
+            goal_slug=repository_goal.goal_slug,
+            variant_id=str(validated["variant_id"]),
+            label=str(validated["label"]),
+            goal_contract_sha256=str(validated["goal_contract_sha256"]),
+            effective_goal_contract_sha256=str(validated["effective_goal_contract_sha256"]),
+            source_sha=str(validated["source_sha"]),
+            source_relation=str(validated["source_relation"]),
+            status=status,
+            diff=tuple(dict(item) for item in validated["diff"]),
+            diff_truncated=bool(validated["diff_truncated"]),
+        ).to_dict()
+
+    def _control_goal_variants(
+        self,
+        *,
+        entity: str,
+        project: str,
+        repository_goal: _RepositoryGoal,
+        current: Mapping[str, Any],
+    ) -> tuple[dict[str, Any], ...] | None:
+        if self.control_bucket is None:
+            return None
+        scope_key = goal_variant_scope_key(
+            entity=entity,
+            project=project,
+            goal_slug=repository_goal.goal_slug,
+        )
+        document = self.control_bucket.get_json_optional(f"{scope_key}/index.json")
+        if document is None:
+            return ()
+        if int(document.get("schema_version") or 0) != GOAL_VARIANT_INDEX_SCHEMA_VERSION:
+            raise ValueError("unsupported goal variant index schema")
+        if document.get("scope") != {
+            "entity": entity,
+            "project": project,
+            "goal_slug": repository_goal.goal_slug,
+        }:
+            raise ValueError("goal variant index scope mismatch")
+        raw_variants = document.get("variants")
+        if not isinstance(raw_variants, list):
+            raise ValueError("goal variant index variants must be a list")
+        items = []
+        for raw in raw_variants:
+            if not isinstance(raw, Mapping):
+                raise ValueError("goal variant index contains an invalid entry")
+            descriptor = {
+                key: value
+                for key, value in raw.items()
+                if key not in {"descriptor_key", "first_run_id"}
+            }
+            items.append(
+                self._variant_summary(
+                    descriptor=descriptor,
+                    entity=entity,
+                    project=project,
+                    repository_goal=repository_goal,
+                    current=current,
+                )
+            )
+        return tuple(items)
+
+    def _wandb_goal_variants(
+        self,
+        *,
+        entity: str,
+        project: str,
+        repository_goal: _RepositoryGoal,
+        current: Mapping[str, Any],
+    ) -> tuple[dict[str, Any], ...]:
+        variants: dict[str, dict[str, Any]] = {}
+        found_unknown = False
+        for run in self._wandb_catalog_runs(
+            entity=entity,
+            project=project,
+            filters={"config.goal_slug": repository_goal.goal_slug},
+        ):
+            config = dict(run.config)
+            if str(config.get("goal_slug") or "") != repository_goal.goal_slug:
+                continue
+            authored_hash = str(config.get("goal_contract_sha256") or "").lower()
+            effective_hash = str(config.get("effective_goal_contract_sha256") or "").lower()
+            if (
+                re.fullmatch(r"[0-9a-f]{64}", authored_hash) is None
+                or re.fullmatch(r"[0-9a-f]{64}", effective_hash) is None
+            ):
+                found_unknown = True
+                continue
+            identifier = compute_goal_variant_id(
+                goal_slug=repository_goal.goal_slug,
+                goal_contract_sha256_value=authored_hash,
+                effective_goal_contract_sha256=effective_hash,
+            )
+            configured = str(config.get("goal_variant_id") or "").strip()
+            if configured and configured != identifier:
+                continue
+            diff: list[Mapping[str, Any]] = []
+            raw_diff = config.get("goal_variant_diff_json")
+            if isinstance(raw_diff, str) and raw_diff:
+                try:
+                    parsed = json.loads(raw_diff)
+                    if isinstance(parsed, list):
+                        diff = [dict(item) for item in parsed if isinstance(item, Mapping)]
+                except json.JSONDecodeError:
+                    pass
+            authored_current = authored_hash == current["goal_contract_sha256"]
+            effective_current = effective_hash == current["effective_goal_contract_sha256"]
+            status = (
+                "current"
+                if authored_current and effective_current
+                else "current changed"
+                if authored_current
+                else "historical"
+            )
+            variants[identifier] = GoalVariantSummary(
+                entity=entity,
+                project=project,
+                goal_id=repository_goal.goal_id,
+                goal_slug=repository_goal.goal_slug,
+                variant_id=identifier,
+                label=str(
+                    config.get("goal_variant_label")
+                    or f"{repository_goal.title} · historical contract {effective_hash[:12]}"
+                ),
+                goal_contract_sha256=authored_hash,
+                effective_goal_contract_sha256=effective_hash,
+                source_sha=str(config.get("source_sha") or ""),
+                source_relation=str(config.get("goal_variant_source_relation") or "changed"),
+                status=status,
+                diff=tuple(diff),
+                diff_truncated=False,
+            ).to_dict()
+        if found_unknown:
+            identifier = unknown_goal_variant_id(goal_slug=repository_goal.goal_slug)
+            variants[identifier] = GoalVariantSummary(
+                entity=entity,
+                project=project,
+                goal_id=repository_goal.goal_id,
+                goal_slug=repository_goal.goal_slug,
+                variant_id=identifier,
+                label=f"{repository_goal.title} · historical contract unknown",
+                goal_contract_sha256="",
+                effective_goal_contract_sha256="",
+                source_sha="",
+                source_relation="unknown",
+                status="unknown",
+                diff=(),
+                diff_truncated=False,
+            ).to_dict()
+        return tuple(variants.values())
+
+    def _load_goal_variants(
+        self,
+        *,
+        entity: str,
+        project: str,
+        repository_goal: _RepositoryGoal,
+    ) -> tuple[dict[str, Any], ...]:
+        current = self._current_goal_variant(repository_goal)
+        try:
+            from_control = self._control_goal_variants(
+                entity=entity,
+                project=project,
+                repository_goal=repository_goal,
+                current=current,
+            )
+        except ValueError:
+            raise
+        except Exception:
+            from_control = None
+        items = (
+            from_control
+            if from_control is not None
+            else self._wandb_goal_variants(
+                entity=entity,
+                project=project,
+                repository_goal=repository_goal,
+                current=current,
+            )
+        )
+        return tuple(
+            sorted(
+                items,
+                key=lambda item: (
+                    item.get("status") not in {"current", "current changed"},
+                    str(item.get("label") or "").casefold(),
+                    str(item.get("variant_id") or ""),
+                ),
+            )
+        )
+
+    def _refresh_goal_variants(
+        self,
+        *,
+        cache_key: str,
+        entity: str,
+        project: str,
+        repository_goal: _RepositoryGoal,
+    ) -> None:
+        try:
+            items = self._load_goal_variants(
+                entity=entity,
+                project=project,
+                repository_goal=repository_goal,
+            )
+            self._store_goal_variants(cache_key=cache_key, items=items)
+        except Exception:
+            pass
+        finally:
+            with self._cache_lock:
+                self._goal_variant_refreshing.discard(cache_key)
+
+    def _schedule_goal_variant_refresh(
+        self,
+        *,
+        cache_key: str,
+        entity: str,
+        project: str,
+        repository_goal: _RepositoryGoal,
+    ) -> None:
+        with self._cache_lock:
+            if cache_key in self._goal_variant_refreshing:
+                return
+            self._goal_variant_refreshing.add(cache_key)
+        threading.Thread(
+            target=self._refresh_goal_variants,
+            kwargs={
+                "cache_key": cache_key,
+                "entity": entity,
+                "project": project,
+                "repository_goal": repository_goal,
+            },
+            name=f"gradlab-goal-variants-{cache_key[:12]}",
+            daemon=True,
+        ).start()
+
     def projects(
         self,
         *,
@@ -1115,9 +1546,23 @@ class PlayCatalog:
         ]
         return _page_items(items, cursor)
 
+    def environments(
+        self,
+        *,
+        entity: str,
+        query: str = "",
+        cursor: str | None = None,
+    ) -> CatalogPage:
+        return self.projects(entity=entity, query=query, cursor=cursor)
+
     def initial_projects(self, explicit_entity: object = None) -> dict[str, Any]:
         entity = self.default_entity(explicit_entity)
         page = self.projects(entity=entity)
+        return {"entity": entity, **page.to_dict()}
+
+    def initial_environments(self, explicit_entity: object = None) -> dict[str, Any]:
+        entity = self.default_entity(explicit_entity)
+        page = self.environments(entity=entity)
         return {"entity": entity, **page.to_dict()}
 
     def _load_run_catalog(
@@ -1126,10 +1571,19 @@ class PlayCatalog:
         entity: str,
         project: str,
         selected_goal_slug: str,
+        selected_goal_variant_id: str,
+        selected_goal_contract_sha256: str,
+        selected_effective_goal_contract_sha256: str,
         metric_specs: tuple[tuple[RankCriterion, tuple[str, ...]], ...],
         fallback_metric_specs: tuple[tuple[RankCriterion, tuple[str, ...]], ...],
     ) -> tuple[dict[str, Any], ...]:
-        filters = {"config.goal_slug": selected_goal_slug} if selected_goal_slug else None
+        filters = {"config.goal_slug": selected_goal_slug} if selected_goal_slug else {}
+        if selected_goal_contract_sha256:
+            filters["config.goal_contract_sha256"] = selected_goal_contract_sha256
+        if selected_effective_goal_contract_sha256:
+            filters["config.effective_goal_contract_sha256"] = (
+                selected_effective_goal_contract_sha256
+            )
         api_runs = self._wandb_catalog_runs(
             entity=entity,
             project=project,
@@ -1143,6 +1597,28 @@ class PlayCatalog:
             config = dict(run.config)
             goal_slug = str(config.get("goal_slug") or "")
             if selected_goal_slug and goal_slug != selected_goal_slug:
+                continue
+            authored_goal_hash = str(config.get("goal_contract_sha256") or "").lower()
+            effective_goal_hash = str(config.get("effective_goal_contract_sha256") or "").lower()
+            run_goal_variant_id = (
+                compute_goal_variant_id(
+                    goal_slug=goal_slug,
+                    goal_contract_sha256_value=authored_goal_hash,
+                    effective_goal_contract_sha256=effective_goal_hash,
+                )
+                if (
+                    goal_slug
+                    and re.fullmatch(r"[0-9a-f]{64}", authored_goal_hash)
+                    and re.fullmatch(r"[0-9a-f]{64}", effective_goal_hash)
+                )
+                else unknown_goal_variant_id(goal_slug=goal_slug)
+                if goal_slug
+                else ""
+            )
+            configured_goal_variant_id = str(config.get("goal_variant_id") or "").strip()
+            if configured_goal_variant_id and configured_goal_variant_id != run_goal_variant_id:
+                continue
+            if selected_goal_variant_id and run_goal_variant_id != selected_goal_variant_id:
                 continue
             run_metrics = run.summary
             overrides = normalize_recipe_overrides(config.get("recipe_overrides"))
@@ -1168,6 +1644,10 @@ class PlayCatalog:
                     recipe_sha256=str(config.get("recipe_sha256") or ""),
                     recipe_overrides=overrides,
                     recipe_variant_id=variant_id,
+                    goal_contract_sha256=authored_goal_hash,
+                    effective_goal_contract_sha256=effective_goal_hash,
+                    goal_variant_id=run_goal_variant_id,
+                    goal_variant_label=str(config.get("goal_variant_label") or ""),
                     description=str(run.notes or config.get("run_description") or "").strip(),
                     seed=_safe_int(config.get("seed")),
                     created_at=run.created_at,
@@ -1193,6 +1673,9 @@ class PlayCatalog:
         entity: str,
         project: str,
         selected_goal_slug: str,
+        selected_goal_variant_id: str,
+        selected_goal_contract_sha256: str,
+        selected_effective_goal_contract_sha256: str,
         metric_specs: tuple[tuple[RankCriterion, tuple[str, ...]], ...],
         fallback_metric_specs: tuple[tuple[RankCriterion, tuple[str, ...]], ...],
     ) -> None:
@@ -1201,6 +1684,9 @@ class PlayCatalog:
                 entity=entity,
                 project=project,
                 selected_goal_slug=selected_goal_slug,
+                selected_goal_variant_id=selected_goal_variant_id,
+                selected_goal_contract_sha256=selected_goal_contract_sha256,
+                selected_effective_goal_contract_sha256=(selected_effective_goal_contract_sha256),
                 metric_specs=metric_specs,
                 fallback_metric_specs=fallback_metric_specs,
             )
@@ -1220,6 +1706,9 @@ class PlayCatalog:
         entity: str,
         project: str,
         selected_goal_slug: str,
+        selected_goal_variant_id: str,
+        selected_goal_contract_sha256: str,
+        selected_effective_goal_contract_sha256: str,
         metric_specs: tuple[tuple[RankCriterion, tuple[str, ...]], ...],
         fallback_metric_specs: tuple[tuple[RankCriterion, tuple[str, ...]], ...],
     ) -> None:
@@ -1234,6 +1723,11 @@ class PlayCatalog:
                 "entity": entity,
                 "project": project,
                 "selected_goal_slug": selected_goal_slug,
+                "selected_goal_variant_id": selected_goal_variant_id,
+                "selected_goal_contract_sha256": selected_goal_contract_sha256,
+                "selected_effective_goal_contract_sha256": (
+                    selected_effective_goal_contract_sha256
+                ),
                 "metric_specs": metric_specs,
                 "fallback_metric_specs": fallback_metric_specs,
             },
@@ -1247,6 +1741,7 @@ class PlayCatalog:
         entity: str,
         project: str,
         goal_id: str = "",
+        goal_variant_id: str = "",
         query: str = "",
         cursor: str | None = None,
     ) -> CatalogPage:
@@ -1256,6 +1751,34 @@ class PlayCatalog:
             self._repository_goal(project=project, goal_id=selected_goal) if selected_goal else None
         )
         selected_goal_slug = repository_goal.goal_slug if repository_goal else ""
+        selected_goal_variant = str(goal_variant_id or "").strip()
+        selected_variant_summary: Mapping[str, Any] | None = None
+        if repository_goal is not None and selected_goal_variant:
+            variant_page = self.goal_variants(
+                entity=entity,
+                project=project,
+                goal_id=repository_goal.goal_id,
+            )
+            selected_variant_summary = next(
+                (
+                    item
+                    for item in variant_page.items
+                    if item.get("variant_id") == selected_goal_variant
+                ),
+                None,
+            )
+            if selected_variant_summary is None:
+                raise ValueError(f"repository goal has no variant {selected_goal_variant}")
+        selected_authored_hash = (
+            str(selected_variant_summary.get("goal_contract_sha256") or "")
+            if selected_variant_summary is not None
+            else ""
+        )
+        selected_effective_hash = (
+            str(selected_variant_summary.get("effective_goal_contract_sha256") or "")
+            if selected_variant_summary is not None
+            else ""
+        )
         rank = (repository_goal.rank or ()) if repository_goal else ()
         metric_specs = _run_metric_specs(rank) if repository_goal else ()
         fallback_metric_specs = _run_fallback_metric_specs(rank) if repository_goal else ()
@@ -1271,6 +1794,9 @@ class PlayCatalog:
             entity=entity,
             project=project,
             goal_slug=selected_goal_slug,
+            goal_variant_id=selected_goal_variant,
+            goal_contract_sha256=selected_authored_hash,
+            effective_goal_contract_sha256=selected_effective_hash,
             metric_specs=metric_specs,
             fallback_metric_specs=fallback_metric_specs,
         )
@@ -1284,6 +1810,9 @@ class PlayCatalog:
                 entity=entity,
                 project=project,
                 selected_goal_slug=selected_goal_slug,
+                selected_goal_variant_id=selected_goal_variant,
+                selected_goal_contract_sha256=selected_authored_hash,
+                selected_effective_goal_contract_sha256=selected_effective_hash,
                 metric_specs=metric_specs,
                 fallback_metric_specs=fallback_metric_specs,
             )
@@ -1294,6 +1823,9 @@ class PlayCatalog:
                 entity=entity,
                 project=project,
                 selected_goal_slug=selected_goal_slug,
+                selected_goal_variant_id=selected_goal_variant,
+                selected_goal_contract_sha256=selected_authored_hash,
+                selected_effective_goal_contract_sha256=selected_effective_hash,
                 metric_specs=metric_specs,
                 fallback_metric_specs=fallback_metric_specs,
             )
@@ -1311,6 +1843,10 @@ class PlayCatalog:
                 summary.get("recipe_sha256"),
                 summary.get("recipe_overrides"),
                 summary.get("recipe_variant_id"),
+                summary.get("goal_contract_sha256"),
+                summary.get("effective_goal_contract_sha256"),
+                summary.get("goal_variant_id"),
+                summary.get("goal_variant_label"),
                 summary.get("description"),
                 summary.get("seed"),
             )
@@ -1356,7 +1892,74 @@ class PlayCatalog:
         ]
         return _page_items(items, cursor)
 
+    def goal_variants(
+        self,
+        *,
+        entity: str,
+        project: str,
+        goal_id: str,
+        query: str = "",
+        cursor: str | None = None,
+    ) -> CatalogPage:
+        repository_goal = self._repository_goal(project=project, goal_id=goal_id)
+        cache_key = self._variant_cache_key(
+            entity=entity,
+            project=project,
+            goal_slug=repository_goal.goal_slug,
+        )
+        cached = self._cached_goal_variants(
+            cache_key=cache_key,
+            entity=entity,
+            project=project,
+            goal_slug=repository_goal.goal_slug,
+        )
+        if cached is None:
+            items = self._load_goal_variants(
+                entity=entity,
+                project=project,
+                repository_goal=repository_goal,
+            )
+            cached = self._store_goal_variants(cache_key=cache_key, items=items)
+        elif time.time() - cached[0] >= GOAL_VARIANT_CACHE_SECONDS:
+            self._schedule_goal_variant_refresh(
+                cache_key=cache_key,
+                entity=entity,
+                project=project,
+                repository_goal=repository_goal,
+            )
+        normalized = str(query or "").strip().casefold()
+        filtered = [
+            item
+            for item in cached[1]
+            if not normalized
+            or normalized
+            in _search_text(
+                item.get("label"),
+                item.get("variant_id"),
+                item.get("status"),
+                item.get("source_relation"),
+                item.get("diff"),
+                item.get("goal_contract_sha256"),
+                item.get("effective_goal_contract_sha256"),
+            )
+        ]
+        return _page_items(filtered, cursor)
+
     def run_goal(self, *, entity: str, project: str, run_id: str) -> str:
+        goal_id, _variant_id = self.run_goal_variant(
+            entity=entity,
+            project=project,
+            run_id=run_id,
+        )
+        return goal_id
+
+    def run_goal_variant(
+        self,
+        *,
+        entity: str,
+        project: str,
+        run_id: str,
+    ) -> tuple[str, str]:
         if RUN_ID_PATTERN.fullmatch(run_id) is None:
             raise ValueError("run id must match gradlab-<32 lowercase hex>")
         run = self._wandb_api().run(f"{entity}/{project}/{run_id}")
@@ -1364,7 +1967,21 @@ class PlayCatalog:
         goal_slug = str(config.get("goal_slug") or "").strip()
         for goal in self._repository_goals(project=project):
             if goal.goal_slug == goal_slug:
-                return goal.goal_id
+                authored_hash = str(config.get("goal_contract_sha256") or "").lower()
+                effective_hash = str(config.get("effective_goal_contract_sha256") or "").lower()
+                variant_id = (
+                    compute_goal_variant_id(
+                        goal_slug=goal_slug,
+                        goal_contract_sha256_value=authored_hash,
+                        effective_goal_contract_sha256=effective_hash,
+                    )
+                    if (
+                        re.fullmatch(r"[0-9a-f]{64}", authored_hash)
+                        and re.fullmatch(r"[0-9a-f]{64}", effective_hash)
+                    )
+                    else unknown_goal_variant_id(goal_slug=goal_slug)
+                )
+                return goal.goal_id, variant_id
         if not goal_slug:
             raise ValueError("W&B run has no goal identity")
         raise ValueError(f"W&B run goal is not declared in the repository: {goal_slug}")
@@ -1466,6 +2083,7 @@ class PlayCatalog:
         query: str = "",
         entity: str = "",
         project: str = "",
+        goal_variant_id: str = "",
     ) -> tuple[dict[str, Any], ...]:
         if RUN_ID_PATTERN.fullmatch(run_id) is None:
             raise ValueError("run id must match gradlab-<32 lowercase hex>")
@@ -1480,6 +2098,31 @@ class PlayCatalog:
             str(promotion.get("checkpoint_id") or "") if isinstance(promotion, Mapping) else ""
         )
         normalized = str(query or "").strip().casefold()
+        expected_effective_goal_hash = ""
+        selected_variant = str(goal_variant_id or "").strip()
+        if selected_variant:
+            if not str(entity or "").strip() or not str(project or "").strip():
+                raise ValueError("goal variant checkpoint validation requires entity and project")
+            run = self._wandb_api().run(f"{entity}/{project}/{run_id}")
+            config = dict(getattr(run, "config", {}) or {})
+            goal_slug = str(config.get("goal_slug") or "").strip()
+            authored_hash = str(config.get("goal_contract_sha256") or "").lower()
+            expected_effective_goal_hash = str(
+                config.get("effective_goal_contract_sha256") or ""
+            ).lower()
+            if (
+                re.fullmatch(r"[0-9a-f]{64}", authored_hash) is None
+                or re.fullmatch(r"[0-9a-f]{64}", expected_effective_goal_hash) is None
+            ):
+                observed_variant = unknown_goal_variant_id(goal_slug=goal_slug) if goal_slug else ""
+            else:
+                observed_variant = compute_goal_variant_id(
+                    goal_slug=goal_slug,
+                    goal_contract_sha256_value=authored_hash,
+                    effective_goal_contract_sha256=expected_effective_goal_hash,
+                )
+            if observed_variant != selected_variant:
+                raise ValueError("run does not belong to the selected goal variant")
         evaluation_data = self._checkpoint_evaluations(
             entity=entity,
             project=project,
@@ -1493,6 +2136,13 @@ class PlayCatalog:
             manifest.validate()
             if manifest.run_id != run_id:
                 raise ValueError("checkpoint does not belong to the selected run")
+            if (
+                expected_effective_goal_hash
+                and manifest.goal_sha256 != expected_effective_goal_hash
+            ):
+                raise ValueError(
+                    "checkpoint effective goal contract does not match its run variant"
+                )
             evaluation = evaluation_data.evaluations.get(manifest.step)
             playback_seed = (
                 evaluation_data.evaluation_seed
@@ -1548,7 +2198,9 @@ __all__ = [
     "CATALOG_PAGE_SIZE",
     "CatalogPage",
     "CheckpointSummary",
+    "EnvironmentSummary",
     "GoalSummary",
+    "GoalVariantSummary",
     "PlayCatalog",
     "ProjectSummary",
     "RunSummary",

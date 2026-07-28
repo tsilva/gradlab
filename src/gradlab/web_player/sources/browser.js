@@ -314,15 +314,17 @@ export function sourceRouteFromPath(pathname = location.pathname) {
   const parts = String(pathname || "").split("/").filter(Boolean);
   if (!parts.length) {
     return {
-      level: "projects",
+      level: "environments",
       entity: "",
       project: "",
       goal_id: "",
+      goal_variant_id: "",
       run_id: "",
       checkpoint_id: "",
     };
   }
-  if (parts[0] !== "projects" || !parts[1]) return null;
+  if (!["environments", "projects"].includes(parts[0]) || !parts[1]) return null;
+  const legacy = parts[0] === "projects";
   const project = decodePathPart(parts[1]);
   if (!project) return null;
   if (parts.length === 2) {
@@ -331,6 +333,7 @@ export function sourceRouteFromPath(pathname = location.pathname) {
       entity: "",
       project,
       goal_id: "",
+      goal_variant_id: "",
       run_id: "",
       checkpoint_id: "",
     };
@@ -340,35 +343,53 @@ export function sourceRouteFromPath(pathname = location.pathname) {
   if (!goal_id) return null;
   if (parts.length === 4) {
     return {
-      level: "runs",
+      level: "goal_variants",
       entity: "",
       project,
       goal_id,
+      goal_variant_id: "",
       run_id: "",
       checkpoint_id: "",
     };
   }
-  if (parts[4] !== "runs" || !parts[5]) return null;
-  const run_id = decodePathPart(parts[5]);
-  if (!run_id) return null;
+  if (legacy) return null;
+  if (parts[4] !== "variants" || !parts[5]) return null;
+  const goal_variant_id = decodePathPart(parts[5]);
+  if (!goal_variant_id) return null;
   if (parts.length === 6) {
     return {
-      level: "checkpoints",
+      level: "runs",
       entity: "",
       project,
       goal_id,
+      goal_variant_id,
+      run_id: "",
+      checkpoint_id: "",
+    };
+  }
+  if (parts[6] !== "runs" || !parts[7]) return null;
+  const run_id = decodePathPart(parts[7]);
+  if (!run_id) return null;
+  if (parts.length === 8) {
+    return {
+      level: "runs",
+      entity: "",
+      project,
+      goal_id,
+      goal_variant_id,
       run_id,
       checkpoint_id: "",
     };
   }
-  if (parts.length !== 8 || parts[6] !== "checkpoints" || !parts[7]) return null;
-  const checkpoint_id = decodePathPart(parts[7]);
+  if (parts.length !== 10 || parts[8] !== "checkpoints" || !parts[9]) return null;
+  const checkpoint_id = decodePathPart(parts[9]);
   if (!checkpoint_id) return null;
   return {
-    level: "checkpoints",
+    level: "runs",
     entity: "",
     project,
     goal_id,
+    goal_variant_id,
     run_id,
     checkpoint_id,
   };
@@ -377,12 +398,15 @@ export function sourceRouteFromPath(pathname = location.pathname) {
 export function sourceRoutePath(route) {
   const project = String(route?.project || "").trim();
   const goalId = String(route?.goal_id || "").trim();
+  const goalVariantId = String(route?.goal_variant_id || "").trim();
   const runId = String(route?.run_id || "").trim();
   const checkpointId = String(route?.checkpoint_id || "").trim();
   if (!project) return "/";
-  let path = `/projects/${encodeURIComponent(project)}`;
+  let path = `/environments/${encodeURIComponent(project)}`;
   if (!goalId) return path;
   path += `/goals/${encodeURIComponent(goalId)}`;
+  if (!goalVariantId) return path;
+  path += `/variants/${encodeURIComponent(goalVariantId)}`;
   if (!runId) return path;
   path += `/runs/${encodeURIComponent(runId)}`;
   if (!checkpointId) return path;
@@ -391,10 +415,11 @@ export function sourceRoutePath(route) {
 
 function routeSignature(route) {
   return JSON.stringify({
-    level: route?.level || "projects",
+    level: route?.level || "environments",
     entity: route?.entity || "",
     project: route?.project || "",
     goal_id: route?.goal_id || "",
+    goal_variant_id: route?.goal_variant_id || "",
     run_id: route?.run_id || "",
     checkpoint_id: route?.checkpoint_id || "",
   });
@@ -419,10 +444,11 @@ export class SourceBrowser {
     this.getState = getState;
     this.showToast = showToast;
     this.route = {
-      level: "projects",
+      level: "environments",
       entity: "",
       project: "",
       goal_id: "",
+      goal_variant_id: "",
       run_id: "",
       checkpoint_id: "",
     };
@@ -447,6 +473,7 @@ export class SourceBrowser {
     this.initialProjectCatalog = null;
     this.historyEnabled = (
       location.pathname === "/"
+      || location.pathname.startsWith("/environments/")
       || location.pathname.startsWith("/projects/")
     );
     this.pendingLocationRoute = this.historyEnabled
@@ -493,10 +520,11 @@ export class SourceBrowser {
     if (signature !== this.lastAppRoute) {
       this.lastAppRoute = signature;
       this.route = {
-        level: appRoute.level || "projects",
+        level: appRoute.level || "environments",
         entity: appRoute.entity || "",
         project: appRoute.project || "",
         goal_id: appRoute.goal_id || "",
+        goal_variant_id: appRoute.goal_variant_id || "",
         run_id: appRoute.run_id || "",
         checkpoint_id: appRoute.checkpoint_id || "",
       };
@@ -542,7 +570,7 @@ export class SourceBrowser {
     const catalog = this.initialProjectCatalog;
     if (
       !catalog
-      || this.route.level !== "projects"
+      || this.route.level !== "environments"
       || this.query.trim()
       || this.loadedKey
     ) {
@@ -567,18 +595,24 @@ export class SourceBrowser {
     if (this.query.trim()) query.set("q", this.query.trim());
     if (cursor) query.set("cursor", cursor);
     if (this.route.level === "goals") {
-      return `/api/catalog/projects/${encodeURIComponent(this.route.entity)}/${encodeURIComponent(this.route.project)}/goals?${query}`;
+      return `/api/catalog/environments/${encodeURIComponent(this.route.entity)}/${encodeURIComponent(this.route.project)}/goals?${query}`;
     }
-    if (this.route.level === "runs") {
-      return `/api/catalog/projects/${encodeURIComponent(this.route.entity)}/${encodeURIComponent(this.route.project)}/goals/${encodeURIComponent(this.route.goal_id)}/runs?${query}`;
+    if (this.route.level === "goal_variants") {
+      return `/api/catalog/environments/${encodeURIComponent(this.route.entity)}/${encodeURIComponent(this.route.project)}/goals/${encodeURIComponent(this.route.goal_id)}/variants?${query}`;
     }
-    if (this.route.level === "checkpoints") {
+    if (this.route.level === "runs" && this.route.run_id) {
       if (this.route.entity) query.set("entity", this.route.entity);
       if (this.route.project) query.set("project", this.route.project);
+      if (this.route.goal_variant_id) {
+        query.set("goal_variant_id", this.route.goal_variant_id);
+      }
       return `/api/catalog/runs/${encodeURIComponent(this.route.run_id)}/checkpoints?${query}`;
     }
+    if (this.route.level === "runs") {
+      return `/api/catalog/environments/${encodeURIComponent(this.route.entity)}/${encodeURIComponent(this.route.project)}/goals/${encodeURIComponent(this.route.goal_id)}/variants/${encodeURIComponent(this.route.goal_variant_id)}/runs?${query}`;
+    }
     if (this.route.entity) query.set("entity", this.route.entity);
-    return `/api/catalog/projects?${query}`;
+    return `/api/catalog/environments?${query}`;
   }
 
   async ensureLoaded() {
@@ -613,7 +647,7 @@ export class SourceBrowser {
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(payload.error || `Catalog request failed (${response.status})`);
       if (serial !== this.requestSerial || key !== this.routeKey()) return;
-      if (this.route.level === "projects" && payload.entity && !this.route.entity) {
+      if (this.route.level === "environments" && payload.entity && !this.route.entity) {
         this.route.entity = payload.entity;
       }
       const received = Array.isArray(payload.items) ? payload.items : [];
@@ -673,7 +707,11 @@ export class SourceBrowser {
   }
 
   updatePolling() {
-    const shouldPoll = this.app.phase === "selecting" && this.route.level === "checkpoints";
+    const shouldPoll = (
+      this.app.phase === "selecting"
+      && this.route.level === "runs"
+      && Boolean(this.route.run_id)
+    );
     if (shouldPoll && this.pollTimer === null) {
       this.pollTimer = window.setInterval(() => {
         this.loadedKey = "";
@@ -721,12 +759,13 @@ export class SourceBrowser {
   browseCurrentSource() {
     const route = this.app.route || this.route;
     const next = route.run_id
-      ? { ...route, level: "checkpoints", checkpoint_id: "" }
+      ? { ...route, level: "runs", checkpoint_id: "" }
       : {
-          level: "projects",
+          level: "environments",
           entity: route.entity || "",
           project: "",
           goal_id: "",
+          goal_variant_id: "",
           run_id: "",
           checkpoint_id: "",
         };
@@ -735,10 +774,11 @@ export class SourceBrowser {
 
   goHome() {
     this.navigate({
-      level: "projects",
+      level: "environments",
       entity: this.route.entity || this.app.route?.entity || "",
       project: "",
       goal_id: "",
+      goal_variant_id: "",
       run_id: "",
       checkpoint_id: "",
     });
@@ -747,7 +787,7 @@ export class SourceBrowser {
   selectCheckpoint(item, { historyMode = "push" } = {}) {
     const route = {
       ...this.route,
-      level: "checkpoints",
+      level: "runs",
       checkpoint_id: item.checkpoint_id,
     };
     this.route = route;
@@ -767,20 +807,29 @@ export class SourceBrowser {
   }
 
   back() {
-    if (this.route.level === "checkpoints") {
+    if (this.route.level === "runs" && this.route.run_id) {
       this.navigate({ level: "runs", run_id: "", checkpoint_id: "" });
     } else if (this.route.level === "runs") {
       this.navigate({
+        level: "goal_variants",
+        goal_variant_id: "",
+        run_id: "",
+        checkpoint_id: "",
+      });
+    } else if (this.route.level === "goal_variants") {
+      this.navigate({
         level: "goals",
         goal_id: "",
+        goal_variant_id: "",
         run_id: "",
         checkpoint_id: "",
       });
     } else if (this.route.level === "goals") {
       this.navigate({
-        level: "projects",
+        level: "environments",
         project: "",
         goal_id: "",
+        goal_variant_id: "",
         run_id: "",
         checkpoint_id: "",
       });
@@ -878,30 +927,35 @@ export class SourceBrowser {
     if (this.app.phase === "approval_required") return "Approve executable model";
     if (this.app.phase === "error") return "Could not open checkpoint";
     if (["resolving", "verifying", "loading"].includes(this.app.phase)) return "Opening checkpoint";
-    if (this.route.level === "checkpoints") return "Choose a checkpoint";
+    if (this.route.level === "runs" && this.route.run_id) {
+      return "Runs · choose a checkpoint";
+    }
     if (this.route.level === "runs") return "Choose a run";
+    if (this.route.level === "goal_variants") return "Choose a goal variant";
     if (this.route.level === "goals") return "Choose a goal";
-    return "Choose a project";
+    return "Choose an environment";
   }
 
   renderBreadcrumbs(nav) {
     nav.replaceChildren();
-    const projects = button("Projects", { quiet: true });
-    projects.disabled = this.route.level === "projects";
-    projects.addEventListener("click", () => this.navigate({
-      level: "projects",
+    const environments = button("Environments", { quiet: true });
+    environments.disabled = this.route.level === "environments";
+    environments.addEventListener("click", () => this.navigate({
+      level: "environments",
       project: "",
       goal_id: "",
+      goal_variant_id: "",
       run_id: "",
       checkpoint_id: "",
     }));
-    nav.append(projects);
+    nav.append(environments);
     if (this.route.project) {
       const project = button(this.route.project, { quiet: true });
       project.disabled = this.route.level === "goals";
       project.addEventListener("click", () => this.navigate({
         level: "goals",
         goal_id: "",
+        goal_variant_id: "",
         run_id: "",
         checkpoint_id: "",
       }));
@@ -909,13 +963,24 @@ export class SourceBrowser {
     }
     if (this.route.goal_id) {
       const goal = button(this.route.goal_id, { quiet: true });
-      goal.disabled = this.route.level === "runs";
+      goal.disabled = this.route.level === "goal_variants";
       goal.addEventListener("click", () => this.navigate({
-        level: "runs",
+        level: "goal_variants",
+        goal_variant_id: "",
         run_id: "",
         checkpoint_id: "",
       }));
       nav.append(goal);
+    }
+    if (this.route.goal_variant_id) {
+      const variant = button(this.route.goal_variant_id, { quiet: true });
+      variant.disabled = this.route.level === "runs" && !this.route.run_id;
+      variant.addEventListener("click", () => this.navigate({
+        level: "runs",
+        run_id: "",
+        checkpoint_id: "",
+      }));
+      nav.append(variant);
     }
     if (this.route.run_id) {
       const run = button(this.route.run_id, { quiet: true });
@@ -933,11 +998,13 @@ export class SourceBrowser {
     input.type = "search";
     input.value = this.query;
     input.autocomplete = "off";
-    input.placeholder = this.route.level === "projects"
-      ? "Search projects"
+    input.placeholder = this.route.level === "environments"
+      ? "Search environments"
       : this.route.level === "goals"
         ? "Search goals"
-        : this.route.level === "runs"
+        : this.route.level === "goal_variants"
+          ? "Search goal variant, diff, status, or contract hash"
+          : this.route.level === "runs" && !this.route.run_id
           ? "Search run, description, recipe, variant, override, or seed"
           : "Search checkpoint, step, hash, purpose, or evaluation";
     input.setAttribute("aria-label", input.placeholder);
@@ -971,11 +1038,11 @@ export class SourceBrowser {
       const empty = document.createElement("div");
       empty.className = "source-empty";
       const heading = document.createElement("strong");
-      heading.textContent = this.route.level === "checkpoints"
+      heading.textContent = this.route.level === "runs" && this.route.run_id
         ? "No public checkpoints yet"
         : "No matching results";
       const detail = document.createElement("p");
-      detail.textContent = this.route.level === "checkpoints"
+      detail.textContent = this.route.level === "runs" && this.route.run_id
         ? "This run has not published a playable checkpoint to public model storage."
         : "Try a broader search.";
       empty.append(heading, detail);
@@ -983,10 +1050,12 @@ export class SourceBrowser {
       return body;
     }
     body.append(
-      this.route.level === "projects"
+      this.route.level === "environments"
         ? this.renderProjects()
         : this.route.level === "goals"
           ? this.renderGoals()
+          : this.route.level === "goal_variants"
+            ? this.renderGoalVariants()
           : this.route.level === "runs"
             ? this.renderRunResults()
             : this.renderTable(),
@@ -1020,6 +1089,7 @@ export class SourceBrowser {
         entity: project.entity || this.route.entity,
         project: project.name,
         goal_id: "",
+        goal_variant_id: "",
         run_id: "",
         checkpoint_id: "",
       }));
@@ -1051,8 +1121,54 @@ export class SourceBrowser {
       }
       row.append(identity);
       row.addEventListener("click", () => this.navigate({
-        level: "runs",
+        level: "goal_variants",
         goal_id: goal.goal_id,
+        goal_variant_id: "",
+        run_id: "",
+        checkpoint_id: "",
+      }));
+      list.append(row);
+    });
+    return list;
+  }
+
+  renderGoalVariants() {
+    const list = document.createElement("div");
+    list.className = "goal-list goal-variant-list";
+    this.items.forEach((variant) => {
+      const row = document.createElement("button");
+      row.type = "button";
+      row.className = "goal-row goal-variant-row";
+      row.disabled = !this.hasControl();
+      const identity = document.createElement("div");
+      const name = document.createElement("strong");
+      name.textContent = variant.label || variant.variant_id;
+      identity.append(name);
+      const meta = document.createElement("span");
+      meta.textContent = [
+        variant.status || "historical",
+        variant.source_relation || "",
+        String(variant.effective_goal_contract_sha256 || "").slice(0, 12),
+      ].filter(Boolean).join(" · ");
+      identity.append(meta);
+      const diff = Array.isArray(variant.diff) ? variant.diff : [];
+      if (diff.length) {
+        const detail = document.createElement("small");
+        detail.textContent = diff.slice(0, 3).map((entry) => {
+          const before = entry.before === null || entry.before === undefined
+            ? "unset"
+            : String(entry.before);
+          const after = entry.after === null || entry.after === undefined
+            ? "unset"
+            : String(entry.after);
+          return `${entry.path}: ${before} → ${after}`;
+        }).join(" · ");
+        identity.append(detail);
+      }
+      row.append(identity);
+      row.addEventListener("click", () => this.navigate({
+        level: "runs",
+        goal_variant_id: variant.variant_id,
         run_id: "",
         checkpoint_id: "",
       }));
@@ -1078,6 +1194,7 @@ export class SourceBrowser {
   }
 
   renderRunResults() {
+    if (this.route.run_id) return this.renderTable();
     const efficiency = this.runEfficiency();
     return this.renderTable(efficiency);
   }
@@ -1092,8 +1209,9 @@ export class SourceBrowser {
     table.className = "source-table";
     const head = document.createElement("thead");
     const headerRow = document.createElement("tr");
-    const runMetricColumns = this.activeRunMetricColumns();
-    const columns = this.route.level === "runs"
+    const showingRuns = this.route.level === "runs" && !this.route.run_id;
+    const runMetricColumns = showingRuns ? this.activeRunMetricColumns() : [];
+    const columns = showingRuns
       ? [
           { label: "Run" },
           { label: "Recipe / variant" },
@@ -1155,7 +1273,7 @@ export class SourceBrowser {
     });
     head.append(headerRow);
     const body = document.createElement("tbody");
-    const items = this.route.level === "runs"
+    const items = showingRuns
       ? this.sort.metric
         ? sortRunItems(this.items, this.sort)
         : rankRunItems(this.items, runMetricColumns)
@@ -1163,14 +1281,14 @@ export class SourceBrowser {
     items.forEach((item) => {
       const row = document.createElement("tr");
       const isEfficiencyLeader = (
-        this.route.level === "runs"
+        showingRuns
         && efficiency?.item?.run_id === item.run_id
       );
       if (isEfficiencyLeader) row.classList.add("efficiency-leader");
       row.tabIndex = this.hasControl() ? 0 : -1;
       row.setAttribute("role", "button");
       row.setAttribute("aria-disabled", String(!this.hasControl()));
-      const values = this.route.level === "runs"
+      const values = showingRuns
         ? [
             [item.description || item.name || item.run_id, item.run_id, "run-cell"],
             [
@@ -1253,9 +1371,9 @@ export class SourceBrowser {
       });
       const activate = () => {
         if (!this.hasControl()) return;
-        if (this.route.level === "runs") {
+        if (showingRuns) {
           this.navigate({
-            level: "checkpoints",
+            level: "runs",
             run_id: item.run_id,
             checkpoint_id: "",
           });
