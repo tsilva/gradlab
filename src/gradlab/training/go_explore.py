@@ -10,16 +10,14 @@ from typing import Any
 
 import numpy as np
 from gymnasium import spaces
-from tqdm.auto import tqdm
 
 from gradlab.action_contract import configured_action_meanings
 from gradlab.artifacts import install_model_bundle
 from gradlab.batch_runtime import BatchMetricRecord, EpisodeRecord
-from gradlab.early_stop import MetricEarlyStopStateMachine, MetricSample
 from gradlab.env import make_training_batch_runtime, preflight_state_archive_provider
 from gradlab.env_providers import MARIO_BASE_INFO_KEYS
 from gradlab.env_registry import SUPERMARIOBROS_NES_TURBO_PROVIDER
-from gradlab.file_utils import atomic_write_json, file_sha256
+from gradlab.file_utils import file_sha256
 from gradlab.go_explore import GoExploreSearch
 from gradlab.metric_names import (
     TRAIN_GO_EXPLORE_ARCHIVE_BLOB_BYTES,
@@ -41,11 +39,11 @@ from gradlab.metric_names import (
     TRAIN_GO_EXPLORE_SUCCESS_GUIDED_CELL_COUNT,
     TRAIN_GO_EXPLORE_SUCCESS_GUIDED_SELECTION_COUNT,
     TRAIN_THROUGHPUT_LOOP_FPS,
-    train_early_stop_metric,
 )
 from gradlab.policy_bundle import write_canonical_json
 from gradlab.state_archive import state_archive_artifact_summary
 from gradlab.training_backend import BackendContext, CHECKPOINT_EVAL_ACCEPTANCE
+from gradlab.training_lifecycle import TerminalReason, TrainingResult
 
 
 DEFAULT_CONFIG: dict[str, Any] = {
@@ -205,32 +203,26 @@ def _save_policy(
     model_path: Path,
     kind: str,
     step: int,
-) -> Path:
-    installed = install_model_bundle(
-        model_path,
-        save_checkpoint=lambda path: search.policy().save(
-            path,
-            artifact_discriminator=f"{kind}:{step}",
-        ),
-        train_config=context.train_config,
-        config=context.environment,
-        kind=kind,
-        checkpoint_step_value=step,
-        state_archive_summary=state_archive_artifact_summary(runtime),
-    )
-    checkpoint_id = context.metric_store.record_checkpoint(
-        run_name=str(context.train_config["run_name"]),
+    terminal: bool = False,
+) -> Path | None:
+    return context.session.checkpoints.save(
         kind=kind,
         step=step,
-        path=installed,
-        sha256=None,
-        eval_required=context.train_config["checkpoint_eval_backend"] != "none",
+        model_path=model_path,
+        terminal=terminal,
+        save_bundle=lambda path, artifact_kind, artifact_step: install_model_bundle(
+            path,
+            save_checkpoint=lambda destination: search.policy().save(
+                destination,
+                artifact_discriminator=f"{artifact_kind}:{artifact_step}",
+            ),
+            train_config=context.train_config,
+            config=context.environment,
+            kind=artifact_kind,
+            checkpoint_step_value=artifact_step,
+            state_archive_summary=state_archive_artifact_summary(runtime),
+        ),
     )
-    print(
-        f"{kind} Go-Explore action program ready: id={checkpoint_id} step={step} path={installed}",
-        flush=True,
-    )
-    return installed
 
 
 def _metric_payload(
@@ -264,83 +256,7 @@ def _metric_payload(
     }
 
 
-def _publish_metrics(
-    context: BackendContext,
-    search: GoExploreSearch,
-    runtime: Any,
-    *,
-    elapsed: float,
-    early_stop: MetricEarlyStopStateMachine | None,
-) -> bool:
-    payload = _metric_payload(search, runtime, elapsed=elapsed)
-    update = (
-        early_stop.update(
-            {
-                metric: MetricSample(value=float(payload[metric]), step=search.global_step)
-                for metric in {
-                    str(condition["metric"]) for condition in early_stop.conditions.values()
-                }
-                if metric in payload
-            }
-        )
-        if early_stop is not None
-        else None
-    )
-    if update is not None:
-        for condition_id, observation in update.observations.items():
-            payload.update(
-                {
-                    train_early_stop_metric(condition_id, "value"): observation.value,
-                    train_early_stop_metric(condition_id, "best"): observation.best_value,
-                    train_early_stop_metric(
-                        condition_id, "patience/elapsed_steps"
-                    ): observation.elapsed_steps,
-                    train_early_stop_metric(
-                        condition_id, "patience/progress"
-                    ): observation.patience_progress,
-                    train_early_stop_metric(condition_id, "would_trigger"): float(
-                        observation.would_trigger
-                    ),
-                }
-            )
-    context.metric_store.append_metrics(
-        payload,
-        step=search.global_step,
-        source="train",
-        publish=context.wandb_enabled,
-    )
-    if update is None or update.stop_decision is None:
-        return False
-    atomic_write_json(
-        context.run_dir / f"early_stop_decision-{str(context.train_config['attempt_id'])}.json",
-        update.stop_decision,
-    )
-    print(
-        f"early stop: condition={update.stop_decision['condition_id']} "
-        f"step={update.stop_decision['metric_step']}",
-        flush=True,
-    )
-    return True
-
-
-def _refresh_progress(progress: Any | None, search: GoExploreSearch) -> None:
-    if progress is None:
-        return
-    step = int(search.global_step)
-    if step > int(progress.n):
-        progress.update(step - int(progress.n))
-    candidate = search.best_candidate()
-    progress.set_postfix(
-        {
-            "best return": f"{candidate.episode_return:.3g}" if candidate else "0",
-            "best progress": f"{candidate.progress:.0f}" if candidate else "0",
-            "completed": "yes" if candidate and candidate.completed else "no",
-        },
-        refresh=True,
-    )
-
-
-def run_go_explore(context: BackendContext) -> None:
+def run_go_explore(context: BackendContext) -> TrainingResult:
     common_config = context.train_config
     backend_config = context.backend_config
     config = context.environment
@@ -368,7 +284,6 @@ def run_go_explore(context: BackendContext) -> None:
         state_archive=common_config["state_archive"],
         state_archive_root=context.run_dir / "state-archive",
     )
-    progress: Any | None = None
     try:
         if not isinstance(runtime.action_space, spaces.Discrete):
             raise ValueError("Go-Explore requires a discrete task action space")
@@ -393,20 +308,12 @@ def run_go_explore(context: BackendContext) -> None:
             _cell_keys(_reset_info_columns(runtime), n_envs),
             initial_entries,
         )
+        budget = context.session.configure_budget(
+            requested_limit=int(common_config["timesteps"]),
+            step_quantum=n_envs,
+        )
         context.mark_ready()
         started_at = time.perf_counter()
-        progress = (
-            tqdm(
-                total=int(common_config["timesteps"]),
-                initial=int(search.global_step),
-                desc="Go-Explore",
-                unit="transition",
-                unit_scale=True,
-                dynamic_ncols=True,
-            )
-            if context.compact_console
-            else None
-        )
         log_interval_steps = int(backend_config["log_interval_steps"])
         compaction_interval_steps = int(backend_config["compaction_interval_steps"])
         checkpoint_freq = int(common_config["checkpoint_freq"])
@@ -416,19 +323,13 @@ def run_go_explore(context: BackendContext) -> None:
         ) * compaction_interval_steps
         next_checkpoint = (
             ((search.global_step // checkpoint_freq) + 1) * checkpoint_freq
-            if checkpoint_freq > 0 and context.persist_intermediate_checkpoints
+            if checkpoint_freq > 0
             else None
         )
         saved_checkpoint_steps: set[int] = set()
-        early_stop = (
-            MetricEarlyStopStateMachine(common_config["early_stop"], label="early_stop")
-            if common_config["early_stop"]
-            else None
-        )
         early_stopped = False
-        while (
-            search.global_step < int(common_config["timesteps"]) and not context.stop_flag.requested
-        ):
+        stopped_on_completion = False
+        while search.global_step < budget.execution_total and not context.stop_flag.requested:
             batch = runtime.step(search.next_actions())
             records = runtime.drain_records()
             records_by_lane = {
@@ -469,11 +370,18 @@ def run_go_explore(context: BackendContext) -> None:
                 search.commit_archive(entries)
             completion_events = search.take_completion_events()
             improved = any(event.improved for event in completion_events)
-            if np.any(observation.restart_mask):
+            stop_for_completion = (
+                bool(completion_events) and context.session.should_stop_on_first_completion()
+            )
+            if np.any(observation.restart_mask) and not stop_for_completion:
                 entry_ids = search.restart(observation.restart_mask)
                 runtime.restore_archive_entries(observation.restart_mask, entry_ids)
             step = search.global_step
-            if improved and context.persist_intermediate_checkpoints:
+            context.session.advance(step, records)
+            if stop_for_completion:
+                stopped_on_completion = True
+                break
+            if improved and step < budget.execution_total:
                 _save_policy(
                     search,
                     runtime,
@@ -488,26 +396,24 @@ def run_go_explore(context: BackendContext) -> None:
                 compacted = runtime.retain_state_archive_entries(
                     tuple(cell.entry_id for cell in search.archive.values())
                 )
-                if not context.compact_console:
-                    print(
-                        "compacted ephemeral Go-Explore archive "
-                        f"step={step} retained={compacted['retained_entries']} "
-                        f"removed={compacted['removed_entries']}",
-                        flush=True,
-                    )
+                context.session.event(
+                    "compacted ephemeral Go-Explore archive "
+                    f"step={step} retained={compacted['retained_entries']} "
+                    f"removed={compacted['removed_entries']}"
+                )
                 next_compaction += compaction_interval_steps
             if step >= next_log:
-                early_stopped = _publish_metrics(
-                    context,
-                    search,
-                    runtime,
-                    elapsed=time.perf_counter() - started_at,
-                    early_stop=early_stop,
+                early_stopped = context.session.report(
+                    step=step,
+                    metrics=_metric_payload(
+                        search,
+                        runtime,
+                        elapsed=time.perf_counter() - started_at,
+                    ),
                 )
-                _refresh_progress(progress, search)
                 next_log += log_interval_steps
             while next_checkpoint is not None and step >= next_checkpoint:
-                if step not in saved_checkpoint_steps:
+                if step < budget.execution_total and step not in saved_checkpoint_steps:
                     _save_policy(
                         search,
                         runtime,
@@ -521,46 +427,40 @@ def run_go_explore(context: BackendContext) -> None:
                 next_checkpoint += checkpoint_freq
             if early_stopped:
                 break
-        _refresh_progress(progress, search)
-        if progress is not None:
-            progress.close()
-            progress = None
-        _publish_metrics(
-            context,
-            search,
-            runtime,
-            elapsed=time.perf_counter() - started_at,
-            early_stop=None,
-        )
-        if (
-            context.stop_flag.requested
-            and context.persist_intermediate_checkpoints
-            and checkpoint_freq > 0
-        ):
-            _save_policy(
+        if stopped_on_completion:
+            context.session.event(
+                f"level completed; stopping Go-Explore at step={search.global_step}"
+            )
+        context.session.report(
+            step=search.global_step,
+            metrics=_metric_payload(
                 search,
                 runtime,
-                context,
-                model_path=context.checkpoint_dir
-                / f"{_checkpoint_prefix(config.game)}_interrupted_{search.global_step}_steps.zip",
-                kind="interrupted",
-                step=search.global_step,
-            )
+                elapsed=time.perf_counter() - started_at,
+            ),
+        )
+        default_reason = (
+            TerminalReason.ALGORITHM_SUCCESS
+            if stopped_on_completion
+            else TerminalReason.RESOURCE_LIMIT
+        )
+        reason = context.session.terminal_reason(default_reason)
+        terminal_kind = "interrupted" if reason == TerminalReason.INTERRUPTED else "final"
         _save_policy(
             search,
             runtime,
             context,
             model_path=context.run_dir / "final_model.zip",
-            kind=(
-                "interrupted"
-                if context.stop_flag.requested and not context.persist_intermediate_checkpoints
-                else "final"
-            ),
+            kind=terminal_kind,
             step=search.global_step,
+            terminal=True,
+        )
+        return TrainingResult(
+            reason=reason,
+            step=search.global_step,
+            model_kind=terminal_kind,
         )
     finally:
-        if progress is not None:
-            progress.close()
         runtime.close()
 
 
@@ -600,8 +500,8 @@ class GoExploreBackend:
         if archive.get("curriculum") is not None:
             raise ValueError("gradlab.go-explore owns selection; curriculum must be null")
 
-    def run(self, context: BackendContext) -> None:
-        run_go_explore(context)
+    def run(self, context: BackendContext) -> TrainingResult:
+        return run_go_explore(context)
 
     def acceptance_mode(self, backend_config: Mapping[str, Any]) -> str:
         del backend_config

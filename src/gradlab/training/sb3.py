@@ -145,7 +145,7 @@ def _ppo_model_factory(context: BackendContext, env: Any, config: Any, device: s
         ),
         tensorboard_log=str(context.run_dir),
         device=device,
-        verbose=1,
+        verbose=0,
     )
 
 
@@ -188,7 +188,7 @@ def _a2c_model_factory(context: BackendContext, env: Any, config: Any, device: s
         policy_kwargs=policy_kwargs_from_config(backend_config),
         tensorboard_log=str(context.run_dir),
         device=device,
-        verbose=1,
+        verbose=0,
     )
 
 

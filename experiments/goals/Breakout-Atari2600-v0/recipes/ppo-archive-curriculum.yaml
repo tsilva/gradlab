@@ -1,5 +1,5 @@
 defaults:
-- ../../../recipes/_presets/atari-ppo@_global_
+- ../../../recipes/_presets/breakout-high-throughput-ppo@_global_
 - _self_
 recipe_id: ppo-archive-curriculum
 description: >-
@@ -7,7 +7,6 @@ description: >-
   approximately 20 percent of lanes for a bounded live-state curriculum keyed by 50-point score
   stages and prioritized by value error plus staleness.
 train:
-  timesteps: 500000000
   state_archive:
     semantic_id: state-archive-v1
     persistence: durable
@@ -21,11 +20,3 @@ train:
       archive_share: 0.20
       priority_metric: value_error
       restore_entries: true
-  backend:
-    config:
-      n_steps: 64
-      learning_rate: 2.5e-4
-      learning_rate_final: 5.0e-5
-      learning_rate_schedule_timesteps: 40001536
-      ent_coef_final: 0.002
-      ent_coef_schedule_timesteps: 40001536

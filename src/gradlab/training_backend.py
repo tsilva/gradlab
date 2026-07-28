@@ -3,14 +3,13 @@ from __future__ import annotations
 import hashlib
 import importlib
 import json
-import os
-import time
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol, cast
 
 from gradlab.policy_registry import TRAINING_BACKEND_SPECS
+from gradlab.training_lifecycle import TrainingResult
 
 
 class GracefulStopFlag:
@@ -33,29 +32,14 @@ class BackendContext:
     wandb_enabled: bool
     stop_flag: Any
     rom_binding: Any | None
-    compact_console: bool = False
-    persist_intermediate_checkpoints: bool = True
+    session: Any
 
     @property
     def backend_config(self) -> dict[str, Any]:
         return training_backend_config(self.train_config)
 
     def mark_ready(self) -> Path:
-        path = self.run_dir / "learner_ready.json"
-        path.write_text(
-            json.dumps(
-                {
-                    "schema_version": 1,
-                    "pid": os.getpid(),
-                    "ready_at_unix": time.time(),
-                    "training_backend_id": training_backend_id(self.train_config),
-                },
-                sort_keys=True,
-            )
-            + "\n",
-            encoding="utf-8",
-        )
-        return path
+        return self.session.mark_ready()
 
 
 class TrainingBackend(Protocol):
@@ -74,7 +58,7 @@ class TrainingBackend(Protocol):
         backend_config: Mapping[str, Any],
     ) -> None: ...
 
-    def run(self, context: BackendContext) -> None: ...
+    def run(self, context: BackendContext) -> TrainingResult: ...
 
     def acceptance_mode(self, backend_config: Mapping[str, Any]) -> str: ...
 

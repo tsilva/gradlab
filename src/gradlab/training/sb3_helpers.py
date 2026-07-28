@@ -53,6 +53,7 @@ def configure_sb3_human_output(
     *,
     max_length: int = SB3_HUMAN_OUTPUT_MAX_LENGTH,
     compact: bool = False,
+    suppress: bool = False,
 ) -> None:
     logger = getattr(model, "_logger", None)
     logger_attr = getattr(type(model), "logger", None)
@@ -61,6 +62,13 @@ def configure_sb3_human_output(
     if logger is None:
         return
     output_formats = getattr(logger, "output_formats", ())
+    if suppress:
+        output_formats[:] = [
+            output_format
+            for output_format in output_formats
+            if not isinstance(output_format, HumanOutputFormat)
+        ]
+        return
     for index, output_format in enumerate(output_formats):
         if isinstance(output_format, HumanOutputFormat):
             if compact and not isinstance(output_format, CompactTrainingOutputFormat):
@@ -84,16 +92,19 @@ class Sb3HumanOutputFormatHelper(CallbackHelper):
         *,
         max_length: int = SB3_HUMAN_OUTPUT_MAX_LENGTH,
         compact: bool = False,
+        suppress: bool = False,
     ) -> None:
         super().__init__()
         self.max_length = max_length
         self.compact = compact
+        self.suppress = suppress
 
     def _on_training_start(self) -> None:
         configure_sb3_human_output(
             self.model,
             max_length=self.max_length,
             compact=self.compact,
+            suppress=self.suppress,
         )
 
     def _on_step(self) -> bool:

@@ -1,131 +1,18 @@
 defaults:
+- _goal-family-common@_global_
 - _self_
-# Goal id is rendered from the goal directory name.
-goal_id: "{{ goal_id }}"
-evaluation_mode: evaluated
 # SuperMario single-state goals intentionally map the source state from goal identity.
 template_vars:
   state: "{{ goal_id }}"
-# Default W&B tags for orchestrated recipes under this goal tree.
-tags:
-- "goal_id:{{ goal_id }}"
-- "recipe_id:{{ recipe_id }}"
-- "env_id:{{ env_id }}"
-# Human-readable title; helps reports and operators identify the goal quickly.
-title: Sample-efficient SuperMarioBros-NES {{ goal_id }} completion
-# Objective defines candidate comparison order.
-objective:
-  # Ordered ranking signals; compare each metric in sequence until a candidate wins.
-  rank:
-  - min(leader/checkpoint/step)
-  - max(eval/full/episode/return/mean)
-# Training contract for this goal.
+
 train:
-  # Shared checkpoint cadence for Mario training jobs.
-  checkpoint_freq: 250000
-  # Calibrated training failure detector; stops sustained task-aligned return plateaus.
-  early_stop:
-    conditions:
-      return_plateau:
-        metric: train/episode/return/shaped/from/target/mean
-        trigger: no_improvement
-        direction: maximize
-        min_delta: 0.01
-        delta_mode: relative
-        start_after_steps: 1000000
-        patience_steps: 1000000
-        outcome: failure
-        action: stop
   environment:
-    # SuperMarioBros-NES Turbo supplies SuperMarioBrosNesTurboVecEnv.
-    env_provider: &mario_env_provider supermariobrosnes-turbo
     env_config:
-      <<: &mario_env_config
-        # Stable Retro-compatible game id passed to SuperMarioBrosNesTurboVecEnv.
-        game: SuperMarioBros-Nes-v0
-        n_envs: 16
-        # Every provider-native constructor option is explicit; do not inherit package defaults.
-        env_args:
-          scenario: scenario
-          info: data
-          # The provider resolves this game-owned table from metadata.json.
-          use_restricted_actions: basic
-          record: false
-          players: 1
-          inttype: stable
-          obs_type: image
-          render_mode: rgb_array
-          num_threads: 16
-          rom_path: null
-          state_dir: null
-          obs_copy: safe_view
-          obs_grayscale: true
-          obs_layout: chw
-          frame_stack: 4
-          noop_reset_max: 0
-          info_filter: all
-        # Emulator frame skip; fixes action repeat and observation cadence.
-        frame_skip: 4
-        # Whether to max-pool adjacent frames; false matches the current native-vector Mario contract.
-        max_pool_frames: false
-        # Random sticky action probability; 0 disables stochastic action repetition for this contract.
-        sticky_action_prob: 0.0
-        # Square resize target for native preprocessing.
-        obs_resize: [84, 84]
-        # Crop the HUD from the top of the frame before resize as [top, right, bottom, left].
-        obs_crop:
-        - 32
-        - 0
-        - 0
-        - 0
-        # Keep full source geometry and hide the HUD region before resize.
-        obs_crop_mode: mask
-        obs_crop_fill: 0
-        # Resize kernel; area downsampling is the expected image resizer for this contract.
-        obs_resize_algorithm: area
       # Stable Retro state id; single-state Mario goals use the goal id as the source state.
       state: "{{ state }}"
-    task: &mario_task
-      id: mario
-      action:
-        set: native
-      signals:
-        x: [xscrollHi, xscrollLo]
-        score: score
-        lives: lives
-        level: [levelHi, levelLo]
-      events:
-        life_loss: {signal: lives, operation: decrease}
-        level_change: {signal: level, operation: change}
-        stalled: {signal: x, operation: unchanged_for, steps: 300}
-      termination:
-        failure: [life_loss, stalled]
-        success: [level_change]
-        max_episode_steps: 4500
-# Goal-owned checkpoint eval protocol.
+
 eval:
-  episodes: 100
-  acceptance:
-  - metric: eval/full/outcome/success/rate/min
-    operator: '>='
-    threshold: 1.0
   environment:
-    # SuperMarioBros-NES Turbo supplies SuperMarioBrosNesTurboVecEnv.
-    env_provider: *mario_env_provider
     env_config:
-      <<: *mario_env_config
       # Eval must name the same start explicitly; it cannot inherit a provider default.
       state: "{{ state }}"
-      # Acceptance remains vectorized; the lane count is part of its reproducible protocol.
-      n_envs: 16
-    task:
-      <<: *mario_task
-      # Evaluation preserves the training episode boundary contract.
-      termination:
-        failure: [life_loss, stalled]
-        success: [level_change]
-        max_episode_steps: 4500
-# Goal-level release target; winner identity is resolved from `gradlab leaders checkpoints`.
-release:
-  # Marker-only. gradlab derives the repository identity and owns the release file contract.
-  huggingface: {}

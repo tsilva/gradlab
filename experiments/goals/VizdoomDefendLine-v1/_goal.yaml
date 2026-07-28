@@ -10,12 +10,12 @@ objective:
 train:
   environment:
     env_config:
-      env_args:
+      env_args: &defend_line_env_args
         game_variables: [KILLCOUNT]
         info_filter:
           mode: all
           keys: [killcount, player_dead, pending_reset]
-    task:
+    task: &defend_line_task
       signals:
         kills: killcount
         player_dead: player_dead
@@ -27,7 +27,6 @@ train:
       termination:
         failure: [player_died]
         timeout: [episode_ended]
-        max_episode_steps: 512
 eval:
   acceptance:
   - metric: eval/full/episode/return/mean
@@ -35,21 +34,5 @@ eval:
     threshold: 5.0
   environment:
     env_config:
-      env_args:
-        game_variables: [KILLCOUNT]
-        info_filter:
-          mode: all
-          keys: [killcount, player_dead, pending_reset]
-    task:
-      signals:
-        kills: killcount
-        player_dead: player_dead
-        episode_done: pending_reset
-      events:
-        monster_killed: {signal: kills, operation: increase}
-        player_died: {signal: player_dead, operation: equals_for, value: 1, steps: 1}
-        episode_ended: {signal: episode_done, operation: equals_for, value: 1, steps: 1}
-      termination:
-        failure: [player_died]
-        timeout: [episode_ended]
-        max_episode_steps: 512
+      env_args: *defend_line_env_args
+    task: *defend_line_task

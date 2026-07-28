@@ -5,12 +5,12 @@ title: ViZDoom projectile interception
 train:
   environment:
     env_config:
-      env_args:
+      env_args: &predict_position_env_args
         game_variables: [KILLCOUNT]
         info_filter:
           mode: all
           keys: [killcount, pending_reset]
-    task:
+    task: &predict_position_task
       signals:
         kills: killcount
         episode_done: pending_reset
@@ -24,19 +24,5 @@ train:
 eval:
   environment:
     env_config:
-      env_args:
-        game_variables: [KILLCOUNT]
-        info_filter:
-          mode: all
-          keys: [killcount, pending_reset]
-    task:
-      signals:
-        kills: killcount
-        episode_done: pending_reset
-      events:
-        monster_killed: {signal: kills, operation: increase}
-        episode_ended: {signal: episode_done, operation: equals_for, value: 1, steps: 1}
-      termination:
-        success: [monster_killed]
-        timeout: [episode_ended]
-        max_episode_steps: 70
+      env_args: *predict_position_env_args
+    task: *predict_position_task

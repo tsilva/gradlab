@@ -34,6 +34,7 @@ from gradlab.rom_assets import (
 from gradlab.rom_runtime import RomRuntimeBinding, bind_rom_path
 from gradlab.seeds import DEFAULT_TRAIN_SEED
 from gradlab.train import INTERNAL_LEARNER_ENV
+from gradlab.training_lifecycle import TRAINING_RESULT_FILENAME
 
 
 LOCAL_ROM_CACHE_ENV = "GRADLAB_ROM_CACHE_DIR"
@@ -353,21 +354,36 @@ def main(argv: list[str] | None = None) -> int:
     if uses_local_rom_cache and runtime_rom_binding is None:
         os.environ[LOCAL_ROM_CACHE_ENV] = str(DEFAULT_LOCAL_ROM_CACHE)
     try:
-        learner_args = ["--train-config-json", str(config_path)]
-        result = (
-            learner_main(
-                learner_args,
-                runtime_rom_binding=runtime_rom_binding,
-                compact_console=True,
-                persist_intermediate_checkpoints=False,
+        try:
+            learner_args = ["--train-config-json", str(config_path)]
+            result = (
+                learner_main(
+                    learner_args,
+                    runtime_rom_binding=runtime_rom_binding,
+                    compact_console=True,
+                    persist_intermediate_checkpoints=False,
+                    stop_on_first_completion=True,
+                )
+                if runtime_rom_binding is not None
+                else learner_main(
+                    learner_args,
+                    compact_console=True,
+                    persist_intermediate_checkpoints=False,
+                    stop_on_first_completion=True,
+                )
             )
-            if runtime_rom_binding is not None
-            else learner_main(
-                learner_args,
-                compact_console=True,
-                persist_intermediate_checkpoints=False,
+        except BaseException as exc:
+            receipt.update(
+                {
+                    "status": "failed",
+                    "failed_at": _utc_now(),
+                    "terminal_reason": "failed",
+                    "error_type": type(exc).__name__,
+                    "error": str(exc),
+                }
             )
-        )
+            _write_receipt(run_dir, receipt)
+            raise
     finally:
         if previous_internal is None:
             os.environ.pop(INTERNAL_LEARNER_ENV, None)
@@ -380,18 +396,72 @@ def main(argv: list[str] | None = None) -> int:
                 os.environ[LOCAL_ROM_CACHE_ENV] = previous_rom_cache
 
     model_path = run_dir / "final_model.zip"
-    if result != 0 or not model_path.is_file():
-        raise RuntimeError(f"local training did not produce {model_path}")
+    result_path = run_dir / TRAINING_RESULT_FILENAME
+    if result != 0 or not model_path.is_file() or not result_path.is_file():
+        receipt.update(
+            {
+                "status": "failed",
+                "failed_at": _utc_now(),
+                "terminal_reason": "failed",
+                "error": f"local training did not produce its terminal contract at {run_dir}",
+            }
+        )
+        _write_receipt(run_dir, receipt)
+        raise RuntimeError(f"local training did not produce {model_path} and {result_path}")
+    try:
+        training_result = json.loads(result_path.read_text(encoding="utf-8"))
+        terminal_status = str(training_result.get("status") or "")
+        terminal_reason = str(training_result["terminal_reason"])
+        terminal_step = int(training_result["step"])
+        terminal_model_kind = str(training_result["model_kind"])
+    except (OSError, UnicodeError, json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
+        receipt.update(
+            {
+                "status": "failed",
+                "failed_at": _utc_now(),
+                "terminal_reason": "failed",
+                "error_type": type(exc).__name__,
+                "error": "learner produced an invalid terminal result",
+            }
+        )
+        _write_receipt(run_dir, receipt)
+        raise RuntimeError("local learner produced an invalid terminal result") from exc
+    if terminal_status not in {"completed", "interrupted"}:
+        receipt.update(
+            {
+                "status": "failed",
+                "failed_at": _utc_now(),
+                "terminal_reason": str(training_result.get("terminal_reason") or "failed"),
+                "error": "learner reported a non-playable terminal result",
+            }
+        )
+        _write_receipt(run_dir, receipt)
+        raise RuntimeError("local learner reported a non-playable terminal result")
     receipt.update(
         {
-            "status": "completed",
-            "completed_at": _utc_now(),
+            "status": terminal_status,
+            f"{terminal_status}_at": _utc_now(),
+            "terminal_reason": terminal_reason,
+            "step": terminal_step,
+            "model_kind": terminal_model_kind,
             "model": model_path.name,
         }
     )
     _write_receipt(run_dir, receipt)
     print(f"trained model: {model_path}", flush=True)
     distribution = _source_distribution()
+    if terminal_status == "interrupted":
+        play_command = [
+            "uvx",
+            f"gradlab@{distribution['version']}",
+            "play",
+            "--model",
+            str(model_path),
+        ]
+        if runtime_rom_binding is not None:
+            play_command.extend(("--rom", str(runtime_rom_binding.path)))
+        print(f"play interrupted model: {shlex.join(play_command)}", flush=True)
+        return 130
     play_command = [
         "uvx",
         f"gradlab@{distribution['version']}",

@@ -1,18 +1,8 @@
 defaults:
-- ../../../recipes/_presets/atari-ppo@_global_
+- ../../../recipes/_presets/breakout-high-throughput-ppo@_global_
 - _self_
 recipe_id: ppo
 description: >-
   Seed {{ seed }} trains the default high-throughput Atari PPO policy for {{ goal_id }} with 128
   environments, 64-step rollouts, and joint learning-rate and entropy decay under the explicit
   goal-owned environment, start-state, reward, termination, and training contract.
-train:
-  timesteps: 500000000
-  backend:
-    config:
-      n_steps: 64
-      learning_rate: 2.5e-4
-      learning_rate_final: 5.0e-5
-      learning_rate_schedule_timesteps: 40001536
-      ent_coef_final: 0.002
-      ent_coef_schedule_timesteps: 40001536

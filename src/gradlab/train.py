@@ -20,6 +20,7 @@ from gradlab.env import (
     default_run_dir,
     resolve_env_config,
     resolve_mixed_state_config,
+    task_termination,
 )
 from gradlab.env_config import env_config_from_mapping
 from gradlab.metric_store import MetricStore, metric_store_path
@@ -36,6 +37,12 @@ from gradlab.training_backend import (
     training_backend_id,
     training_backend_runtime_metadata,
 )
+from gradlab.training_lifecycle import (
+    TrainingLifecycleOptions,
+    TrainingResult,
+    TrainingSession,
+)
+from gradlab.training_metrics import EpisodeMetricsReducer
 from gradlab.rom_assets import (
     manifest_from_train_config,
     portable_rom_asset_identity,
@@ -112,6 +119,7 @@ def main(
     runtime_rom_binding: RomRuntimeBinding | None = None,
     compact_console: bool = False,
     persist_intermediate_checkpoints: bool = True,
+    stop_on_first_completion: bool = False,
 ) -> int:
     if os.environ.get(INTERNAL_LEARNER_ENV) != "1":
         raise RuntimeError(
@@ -159,7 +167,9 @@ def main(
 
     run_dir = Path(default_run_dir(str(train_config["run_name"]), str(train_config["runs_dir"])))
     checkpoint_dir = run_dir / "checkpoints"
-    checkpoint_dir.mkdir(parents=True, exist_ok=True)
+    run_dir.mkdir(parents=True, exist_ok=True)
+    if persist_intermediate_checkpoints:
+        checkpoint_dir.mkdir(parents=True, exist_ok=True)
     (run_dir / "learner_ready.json").unlink(missing_ok=True)
     store = MetricStore(metric_store_path(run_dir))
     store.init()
@@ -217,10 +227,43 @@ def main(
         wandb_enabled=bool(train_config["wandb"]),
         stop_flag=stop_flag,
         rom_binding=rom_binding,
-        compact_console=compact_console,
-        persist_intermediate_checkpoints=persist_intermediate_checkpoints,
+        session=TrainingSession(
+            run_dir=run_dir,
+            backend_id=backend_id,
+            metric_store=store,
+            wandb_enabled=bool(train_config["wandb"]),
+            stop_flag=stop_flag,
+            early_stop_config=train_config.get("early_stop"),
+            attempt_id=str(train_config["attempt_id"]),
+            reducer=EpisodeMetricsReducer(
+                event_names=tuple(task_termination(environment).get("failure", ())),
+                configured_starts=tuple(
+                    environment.states or ((environment.state,) if environment.state else ())
+                ),
+                track_success=bool(
+                    isinstance(environment.task.get("termination"), Mapping)
+                    and environment.task["termination"].get("success")
+                ),
+            ),
+            options=TrainingLifecycleOptions(
+                console_mode="auto" if compact_console else "plain",
+                persist_intermediate_checkpoints=persist_intermediate_checkpoints,
+                stop_on_first_completion=stop_on_first_completion,
+            ),
+        ),
     )
-    backend.run(context)
+    context.session.configure_checkpoints(
+        run_name=str(train_config["run_name"]),
+        eval_required=train_config["checkpoint_eval_backend"] != "none",
+    )
+    try:
+        result = backend.run(context)
+        if not isinstance(result, TrainingResult):
+            raise RuntimeError(f"training backend {backend_id!r} did not return a TrainingResult")
+        context.session.finalize(result)
+    except BaseException as exc:
+        context.session.fail(exc)
+        raise
     return 0
 
 

@@ -19,6 +19,12 @@ from gradlab.metric_names import TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_MEAN
 from gradlab.task_kernels import Outcome
 from gradlab.training import jerk as jerk_training
 from gradlab.training_backend import GracefulStopFlag
+from gradlab.training_lifecycle import (
+    SilentProgressSink,
+    TrainingLifecycleOptions,
+    TrainingSession,
+)
+from gradlab.training_metrics import EpisodeMetricsReducer
 
 
 ACTIONS = ("noop", "right", "right_b", "right_a", "right_a_b", "a", "left")
@@ -282,13 +288,14 @@ class _FakeMetricStore:
         return len(self.checkpoints)
 
 
-def _jerk_context(tmp_path, *, timesteps: int):
+def _jerk_context(tmp_path, *, timesteps: int, early_stop=None):
+    tmp_path.mkdir(parents=True, exist_ok=True)
     train_config = {
         "resolved_n_envs": 1,
         "seed": 7,
         "timesteps": timesteps,
         "checkpoint_freq": 100,
-        "early_stop": None,
+        "early_stop": early_stop,
         "checkpoint_eval_backend": "none",
         "run_name": "test-jerk",
         "attempt_id": "attempt-0000000000000001",
@@ -306,16 +313,35 @@ def _jerk_context(tmp_path, *, timesteps: int):
             },
         },
     }
+    metric_store = _FakeMetricStore()
+    stop_flag = GracefulStopFlag()
+    session = TrainingSession(
+        run_dir=tmp_path,
+        backend_id="gradlab.jerk",
+        metric_store=metric_store,
+        wandb_enabled=False,
+        stop_flag=stop_flag,
+        early_stop_config=early_stop,
+        attempt_id=train_config["attempt_id"],
+        reducer=EpisodeMetricsReducer(
+            configured_starts=("Level1-1",),
+            track_success=True,
+        ),
+        options=TrainingLifecycleOptions(console_mode="silent"),
+        progress_sink=SilentProgressSink(),
+    )
+    session.configure_checkpoints(run_name="test-jerk", eval_required=False)
     return SimpleNamespace(
         train_config=train_config,
         backend_config=train_config["training_backend"]["config"],
         environment=SimpleNamespace(game="SuperMarioBros-Nes-v0", state="Level1-1", states=()),
         checkpoint_dir=tmp_path / "checkpoints",
         run_dir=tmp_path,
-        metric_store=_FakeMetricStore(),
+        metric_store=metric_store,
         wandb_enabled=False,
-        stop_flag=SimpleNamespace(requested=False),
-        mark_ready=lambda: None,
+        stop_flag=stop_flag,
+        session=session,
+        mark_ready=session.mark_ready,
     )
 
 
@@ -342,7 +368,8 @@ def test_first_training_success_saves_playable_checkpoint_and_stops(tmp_path) ->
             side_effect=_install_test_bundle,
         ),
     ):
-        jerk_training.run_jerk(context)
+        result = jerk_training.run_jerk(context)
+    context.session.finalize(result)
 
     assert env.steps == 1
     assert env.closed is True
@@ -354,7 +381,11 @@ def test_first_training_success_saves_playable_checkpoint_and_stops(tmp_path) ->
         ActionProgramPolicy.load(checkpoint_path),
         ActionProgramPolicy,
     )
-    final_metrics = context.metric_store.payloads[-1][0]
+    final_metrics = next(
+        payload
+        for payload, _metadata in context.metric_store.payloads
+        if "train/outcome/success/from/Level1-1/count" in payload
+    )
     assert final_metrics["train/outcome/success/from/Level1-1/count"] == 1
 
 
@@ -386,20 +417,12 @@ def test_sb3_and_jerk_early_stop_adapters_make_identical_decisions(tmp_path) -> 
         sb3_logger.records[TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_MEAN] = 100.0
         sb3_helper._on_rollout_end()
 
-    jerk_context = _jerk_context(tmp_path / "jerk", timesteps=10)
-    jerk_machine = jerk_training.MetricEarlyStopStateMachine(config)
-    outcome_metrics = jerk_training._OutcomeMetrics(configured_starts=("Level1-1",))
+    jerk_context = _jerk_context(tmp_path / "jerk", timesteps=10, early_stop=config)
+    jerk_context.session.configure_budget(requested_limit=10, step_quantum=1)
     for step in (0, 10):
-        jerk_training._publish_metrics(
-            jerk_context,
-            _search(),
+        jerk_context.session.report(
             step=step,
-            elapsed=1.0,
-            returns=[100.0],
-            target_returns=[100.0],
-            lengths=[1],
-            outcome_metrics=outcome_metrics,
-            early_stop=jerk_machine,
+            metrics={TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_MEAN: 100.0},
         )
 
     jerk_path = (

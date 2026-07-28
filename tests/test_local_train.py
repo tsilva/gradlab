@@ -16,7 +16,32 @@ from gradlab.recipe_catalog import (
     resolve_recipe_source,
 )
 from gradlab.train import INTERNAL_LEARNER_ENV
+from gradlab.training_lifecycle import TRAINING_RESULT_FILENAME
 from gradlab.rom_runtime import RomRuntimeBinding
+
+
+def _write_training_result(
+    run_dir: Path,
+    *,
+    status: str = "completed",
+    terminal_reason: str = "resource_limit",
+    model_kind: str = "final",
+    step: int = 64,
+) -> None:
+    (run_dir / TRAINING_RESULT_FILENAME).write_text(
+        json.dumps(
+            {
+                "document_type": "gradlab.training-result",
+                "format_version": 1,
+                "status": status,
+                "terminal_reason": terminal_reason,
+                "step": step,
+                "model_kind": model_kind,
+                "model": "final_model.zip",
+            }
+        ),
+        encoding="utf-8",
+    )
 
 
 def test_builtin_recipe_reference_resolves_goal_and_recipe() -> None:
@@ -63,14 +88,17 @@ def test_local_train_materializes_credential_free_playable_run(
         *,
         compact_console: bool,
         persist_intermediate_checkpoints: bool,
+        stop_on_first_completion: bool,
     ) -> int:
         observed_internal_values.append(os.environ.get(INTERNAL_LEARNER_ENV))
         assert compact_console is True
         assert persist_intermediate_checkpoints is False
+        assert stop_on_first_completion is True
         config_path = Path(argv[argv.index("--train-config-json") + 1])
         config = json.loads(config_path.read_text(encoding="utf-8"))
         run_dir = Path(config["runs_dir"]) / config["run_name"]
         (run_dir / "final_model.zip").write_bytes(b"model")
+        _write_training_result(run_dir)
         return 0
 
     monkeypatch.delenv(INTERNAL_LEARNER_ENV, raising=False)
@@ -110,6 +138,81 @@ def test_local_train_materializes_credential_free_playable_run(
     assert receipt["model"] == "final_model.zip"
 
 
+def test_local_interruption_writes_terminal_receipt_and_is_not_auto_selected(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    def fake_learner(argv: list[str], **_kwargs) -> int:
+        config_path = Path(argv[argv.index("--train-config-json") + 1])
+        config = json.loads(config_path.read_text(encoding="utf-8"))
+        run_dir = Path(config["runs_dir"]) / config["run_name"]
+        (run_dir / "final_model.zip").write_bytes(b"interrupted-model")
+        _write_training_result(
+            run_dir,
+            status="interrupted",
+            terminal_reason="interrupted",
+            model_kind="interrupted",
+            step=32,
+        )
+        return 0
+
+    with mock.patch("gradlab.train.main", side_effect=fake_learner):
+        assert (
+            main(
+                [
+                    "gradlab__bandit/ppo",
+                    "--runs-dir",
+                    str(tmp_path),
+                    "--run-name",
+                    "interrupted",
+                    "--set",
+                    "train.timesteps=64",
+                ]
+            )
+            == 130
+        )
+
+    receipt = json.loads((tmp_path / "interrupted" / LOCAL_RUN_RECEIPT).read_text(encoding="utf-8"))
+    assert receipt["status"] == "interrupted"
+    assert receipt["terminal_reason"] == "interrupted"
+    assert receipt["model"] == "final_model.zip"
+    with pytest.raises(FileNotFoundError, match="no completed local model"):
+        latest_local_recipe_model(
+            tmp_path,
+            goal_id="gradlab__bandit",
+            recipe_id="ppo",
+        )
+    assert "play interrupted model:" in capsys.readouterr().out
+
+
+def test_local_failure_replaces_running_receipt(
+    tmp_path: Path,
+) -> None:
+    with (
+        mock.patch(
+            "gradlab.train.main",
+            side_effect=RuntimeError("learner exploded"),
+        ),
+        pytest.raises(RuntimeError, match="learner exploded"),
+    ):
+        main(
+            [
+                "gradlab__bandit/ppo",
+                "--runs-dir",
+                str(tmp_path),
+                "--run-name",
+                "failed",
+                "--set",
+                "train.timesteps=64",
+            ]
+        )
+
+    receipt = json.loads((tmp_path / "failed" / LOCAL_RUN_RECEIPT).read_text(encoding="utf-8"))
+    assert receipt["status"] == "failed"
+    assert receipt["terminal_reason"] == "failed"
+    assert receipt["error_type"] == "RuntimeError"
+
+
 def test_local_mario_train_binds_registered_rom_cache(
     tmp_path: Path,
     monkeypatch,
@@ -131,15 +234,18 @@ def test_local_mario_train_binds_registered_rom_cache(
         *,
         compact_console: bool,
         persist_intermediate_checkpoints: bool,
+        stop_on_first_completion: bool,
     ) -> int:
         observed_cache.append(os.environ.get(LOCAL_ROM_CACHE_ENV))
         assert compact_console is True
         assert persist_intermediate_checkpoints is False
+        assert stop_on_first_completion is True
         config_path = Path(argv[argv.index("--train-config-json") + 1])
         config = json.loads(config_path.read_text(encoding="utf-8"))
         assert config["rom_asset_manifest"] == manifest
         run_dir = Path(config["runs_dir"]) / config["run_name"]
         (run_dir / "final_model.zip").write_bytes(b"model")
+        _write_training_result(run_dir)
         return 0
 
     monkeypatch.setenv(LOCAL_ROM_CACHE_ENV, "restore-me")
@@ -195,15 +301,18 @@ def test_local_mario_train_uses_direct_rom_without_registry_or_cache_mutation(
         runtime_rom_binding: RomRuntimeBinding,
         compact_console: bool,
         persist_intermediate_checkpoints: bool,
+        stop_on_first_completion: bool,
     ) -> int:
         observed_bindings.append(runtime_rom_binding)
         assert compact_console is True
         assert persist_intermediate_checkpoints is False
+        assert stop_on_first_completion is True
         config_path = Path(argv[argv.index("--train-config-json") + 1])
         config = json.loads(config_path.read_text(encoding="utf-8"))
         assert config["rom_asset_manifest"] == manifest
         run_dir = Path(config["runs_dir"]) / config["run_name"]
         (run_dir / "final_model.zip").write_bytes(b"model")
+        _write_training_result(run_dir)
         return 0
 
     monkeypatch.setenv(LOCAL_ROM_CACHE_ENV, "unchanged")
