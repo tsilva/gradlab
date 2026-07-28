@@ -51,18 +51,20 @@ test("default workspace is a v4 collection of typed panel instances", () => {
   });
 });
 
-test("paired workspace keeps independent graph panels in one stats row", () => {
+test("paired workspace gives every panel in a logical row the same height", () => {
   const workspace = createDefaultWorkspace({ paired: true });
-  assert.deepEqual(
-    ["value", "step-reward", "episode-return"].map((id) => (
-      workspace.panels[id].placement
-    )),
-    [
-      { x: 0, y: 8, w: 4, h: 9, visible: true, window: "stats" },
-      { x: 4, y: 8, w: 4, h: 9, visible: true, window: "stats" },
-      { x: 8, y: 8, w: 4, h: 9, visible: true, window: "stats" },
-    ],
-  );
+  const rows = [
+    ["game", "controls"],
+    ["policy", "reward", "actions"],
+    ["value", "step-reward", "episode-return"],
+    ["observation", "signals", "events"],
+  ];
+  rows.forEach((ids) => {
+    const placements = ids.map((id) => workspace.panels[id].placement);
+    assert.equal(new Set(placements.map(({ y }) => y)).size, 1, `${ids} y`);
+    assert.equal(new Set(placements.map(({ h }) => h)).size, 1, `${ids} h`);
+    assert.equal(new Set(placements.map(({ window }) => window)).size, 1, `${ids} window`);
+  });
 });
 
 test("legacy workspace data is deliberately replaced instead of migrated", () => {

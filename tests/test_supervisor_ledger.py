@@ -87,6 +87,39 @@ class SupervisorLedgerTests(unittest.TestCase):
         self.assertEqual(row["result"], result)
         self.assertIsInstance(self.ledger.mark_stop_requested(idempotency_key="a" * 64), float)
 
+    def test_deferred_eval_settles_closed_admission_drain(self) -> None:
+        for index in (1, 2):
+            self.ledger.ensure_eval(
+                checkpoint_ledger_id=index,
+                intent={
+                    "idempotency_key": str(index) * 64,
+                    "checkpoint_id": f"checkpoint-{index}-" + str(index) * 16,
+                    "checkpoint_step": index,
+                },
+            )
+        self.ledger.mark_eval_submitted(
+            idempotency_key="1" * 64,
+            attempt=1,
+            modal_call_id="fc-one",
+            attempt_expires_at=1_000.0,
+        )
+
+        self.assertFalse(self.ledger.all_evals_settled())
+        self.ledger.mark_eval_terminal(
+            idempotency_key="1" * 64,
+            status="rejected",
+            result={"status": "rejected"},
+        )
+
+        self.assertFalse(self.ledger.all_evals_settled())
+        self.assertFalse(self.ledger.all_evals_terminal())
+        self.ledger.mark_eval_deferred(
+            idempotency_key="2" * 64,
+            reason="automatic admission closed",
+        )
+        self.assertTrue(self.ledger.all_evals_settled())
+        self.assertEqual(self.ledger.deferred_eval_count(), 1)
+
     def test_state_round_trips_json(self) -> None:
         self.ledger.set_state("freeze", {"checkpoint_ids": ["one"]})
         self.assertEqual(self.ledger.state("freeze"), {"checkpoint_ids": ["one"]})

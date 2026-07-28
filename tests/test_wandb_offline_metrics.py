@@ -17,6 +17,31 @@ from gradlab.wandb_utils import configure_wandb_metrics
 
 
 class WandbOfflineMetricIntegrationTests(unittest.TestCase):
+    def test_configures_scientific_axes_without_overlapping_catchall(self) -> None:
+        class FakeRun:
+            def __init__(self) -> None:
+                self.calls: list[tuple[tuple[object, ...], dict[str, object]]] = []
+
+            def define_metric(self, *args, **kwargs) -> None:
+                self.calls.append((args, kwargs))
+
+        run = FakeRun()
+
+        self.assertIs(configure_wandb_metrics(run), run)
+        self.assertIn(
+            (("train/*",), {"step_metric": "train/global_step"}),
+            run.calls,
+        )
+        self.assertIn(
+            (("eval/*",), {"step_metric": "eval/checkpoint_step"}),
+            run.calls,
+        )
+        self.assertIn(
+            (("orchestration/*",), {"step_metric": "orchestration/event_seq"}),
+            run.calls,
+        )
+        self.assertNotIn("*", {str(args[0]) for args, _kwargs in run.calls})
+
     def test_replayed_outbox_event_reuses_the_same_wandb_step(self) -> None:
         class FakeRun:
             def __init__(self) -> None:
@@ -29,8 +54,8 @@ class WandbOfflineMetricIntegrationTests(unittest.TestCase):
             store = MetricStore(Path(tmp) / "gradlab.sqlite")
             store.init()
             store.append_metrics(
-                {"train/episode/return/shaped/mean": 5.0},
-                step=100,
+                {"train/episode/return/shaped/from/target/mean": 5.0},
+                step=400_000,
                 source="train:rollout",
             )
             row = store.pending_metric_frames(limit=1)[0]
@@ -43,6 +68,14 @@ class WandbOfflineMetricIntegrationTests(unittest.TestCase):
         self.assertEqual(
             {payload["orchestration/event_id"] for payload, _step in run.calls},
             {row["event_id"]},
+        )
+        self.assertEqual(
+            {payload["orchestration/event_seq"] for payload, _step in run.calls},
+            {row["id"]},
+        )
+        self.assertEqual(
+            {payload["train/global_step"] for payload, _step in run.calls},
+            {400_000},
         )
 
     def test_supervisor_publishes_eval_metrics_table_and_promotion_without_artifacts(

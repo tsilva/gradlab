@@ -4,6 +4,10 @@ export function text(value, fallback = "—") {
   return value === null || value === undefined || value === "" ? fallback : String(value);
 }
 
+export function displayedStep(snapshot) {
+  return snapshot?.transition?.step ?? snapshot?.session?.step;
+}
+
 export function number(value, digits = 3) {
   return Number.isFinite(Number(value)) ? Number(value).toFixed(digits) : "—";
 }

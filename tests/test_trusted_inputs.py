@@ -16,6 +16,7 @@ from gradlab.trusted_inputs import (
     SOURCE_ALLOWLIST_ENV,
     approve_staged_model,
     stage_model_input,
+    verify_staged_model,
 )
 from gradlab.policy_models import load_pinned_remote_policy_model
 
@@ -142,6 +143,15 @@ def test_changed_staged_bytes_fail_before_loader() -> None:
         with pytest.raises(ModelApprovalError, match="changed"):
             approved.verify()
         approved.cleanup()
+
+
+def test_staged_model_integrity_can_be_verified_without_preapproval() -> None:
+    with tempfile.TemporaryDirectory() as temporary:
+        staged = stage_model_input(_checkpoint(Path(temporary)))
+        with patch.dict(os.environ, {}, clear=True):
+            verified = verify_staged_model(staged)
+        verified.verify()
+        verified.cleanup()
 
 
 def test_source_symlink_is_rejected() -> None:

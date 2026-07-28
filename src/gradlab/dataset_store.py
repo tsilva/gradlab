@@ -679,6 +679,21 @@ def _environment_fps(validation: TreeValidation, rows: Sequence[Mapping[str, Any
     return float(document["fps"])
 
 
+def _environment_action_contract(
+    validation: TreeValidation,
+    rows: Sequence[Mapping[str, Any]],
+) -> Mapping[str, Any] | None:
+    contract_id = str(rows[0]["environment_contract_id"])
+    document = _read_json(validation.path / "environments" / contract_id / "environment.json")
+    provenance = document.get("provenance")
+    action_contract = (
+        provenance.get("action_contract")
+        if isinstance(provenance, Mapping)
+        else None
+    )
+    return action_contract if isinstance(action_contract, Mapping) else None
+
+
 def list_command(args: Any) -> int:
     root = dataset_root(args.root)
     if args.reference:
@@ -765,6 +780,7 @@ def play_command(args: Any) -> int:
             rows,
             args,
             fps=fps,
+            action_contract=_environment_action_contract(loaded.validation, rows),
         )
 
 

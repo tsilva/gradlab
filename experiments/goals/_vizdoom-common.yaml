@@ -14,6 +14,19 @@ objective:
   - min(leader/checkpoint/step)
 train:
   checkpoint_freq: 250000
+  # Family-wide training failure detector; recipes calibrate timing to their budgets.
+  early_stop:
+    conditions:
+      return_plateau:
+        metric: train/episode/return/shaped/from/target/mean
+        trigger: no_improvement
+        direction: maximize
+        min_delta: 0.01
+        delta_mode: absolute
+        start_after_steps: 500000
+        patience_steps: 500000
+        outcome: failure
+        action: stop
   environment:
     env_provider: &vizdoom_provider vizdoom-turbo
     env_config:

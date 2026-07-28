@@ -965,7 +965,7 @@ TRAIN_CONFIG_FIELDS: tuple[TrainConfigField, ...] = (
         type_name="json",
         default=(),
         serialize="json",
-        help="Hydra/OmegaConf dotlist overrides applied to the checked-in recipe.",
+        help="OmegaConf dotlist overrides applied to the checked-in recipe.",
     ),
     _field(
         "recipe_variant_id",

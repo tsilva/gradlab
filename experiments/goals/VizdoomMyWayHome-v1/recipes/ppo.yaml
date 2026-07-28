@@ -7,3 +7,8 @@ description: >-
   with stochastic 100-episode evaluation and checkpoint promotion at 95% completion.
 train:
   timesteps: 10000000
+  early_stop:
+    conditions:
+      return_plateau:
+        start_after_steps: 2500000
+        patience_steps: 2500000

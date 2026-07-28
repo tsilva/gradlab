@@ -465,13 +465,18 @@ class RunAuthorityTests(unittest.TestCase):
             state="succeeded",
             acceptance_required=True,
             stop_reason="eval_acceptance",
-            final_step=250_000,
+            final_step=260_000,
             checkpoint_inventory=[
                 {
                     "checkpoint_id": checkpoint,
                     "step": 250_000,
+                    "purpose": "periodic",
+                },
+                {
+                    "checkpoint_id": "checkpoint-260000-" + "d" * 16,
+                    "step": 260_000,
                     "purpose": "final",
-                }
+                },
             ],
             eval_inventory=[
                 {

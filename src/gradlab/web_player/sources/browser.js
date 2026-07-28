@@ -890,7 +890,6 @@ export class SourceBrowser {
     }
 
     const showsCatalog = ![
-      "approval_required",
       "error",
       "resolving",
       "verifying",
@@ -904,9 +903,7 @@ export class SourceBrowser {
       this.breadcrumbsRoot.hidden = true;
     }
 
-    if (this.app.phase === "approval_required") {
-      shell.append(this.renderApproval());
-    } else if (this.app.phase === "error") {
+    if (this.app.phase === "error") {
       shell.append(this.renderFailure());
     } else if (["resolving", "verifying", "loading"].includes(this.app.phase)) {
       shell.append(this.renderProgress());
@@ -924,7 +921,6 @@ export class SourceBrowser {
   }
 
   heading() {
-    if (this.app.phase === "approval_required") return "Approve executable model";
     if (this.app.phase === "error") return "Could not open checkpoint";
     if (["resolving", "verifying", "loading"].includes(this.app.phase)) return "Opening checkpoint";
     if (this.route.level === "runs" && this.route.run_id) {
@@ -1444,48 +1440,4 @@ export class SourceBrowser {
     return wrap;
   }
 
-  renderApproval() {
-    const approval = this.app.approval || {};
-    const wrap = document.createElement("div");
-    wrap.className = "approval-card";
-    const warning = document.createElement("p");
-    warning.className = "approval-warning";
-    warning.textContent = approval.warning || "This model contains executable Python content.";
-    const source = document.createElement("dl");
-    source.className = "approval-summary";
-    [["Source", approval.source], ["Manifest", approval.manifest_hash]].forEach(([label, value]) => {
-      const term = document.createElement("dt");
-      term.textContent = label;
-      const detail = document.createElement("dd");
-      detail.textContent = value || "—";
-      source.append(term, detail);
-    });
-    const files = document.createElement("div");
-    files.className = "approval-files";
-    (approval.files || []).forEach((file) => {
-      const row = document.createElement("div");
-      const path = document.createElement("span");
-      path.textContent = file.path;
-      const digest = document.createElement("code");
-      digest.textContent = file.sha256;
-      row.append(path, digest);
-      files.append(row);
-    });
-    const actions = document.createElement("div");
-    actions.className = "source-actions";
-    const approve = button("Approve exact closure", { iconName: "shield-check", primary: true });
-    approve.disabled = !this.hasControl();
-    approve.addEventListener("click", () => this.command("approve_source", {
-      manifest_hash: approval.manifest_hash,
-    }));
-    const cancel = button(
-      this.app.has_active_runner ? "Back to current run" : "Cancel",
-      { iconName: "x", quiet: true },
-    );
-    cancel.disabled = !this.hasControl();
-    cancel.addEventListener("click", () => this.command("cancel_source"));
-    actions.append(approve, cancel);
-    wrap.append(warning, source, files, actions);
-    return wrap;
-  }
 }

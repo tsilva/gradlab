@@ -7,7 +7,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from hydra import compose, initialize_config_dir
 from jinja2 import StrictUndefined, TemplateError, meta
 from jinja2.sandbox import SandboxedEnvironment
 from omegaconf import OmegaConf
@@ -445,25 +444,6 @@ def _plain_dict(value: Any) -> dict[str, Any]:
     return dict(payload)
 
 
-def _default_entry_to_path(entry: Any) -> str | None:
-    if isinstance(entry, str):
-        if entry == "_self_" or entry.startswith("override ") or entry.startswith("optional "):
-            return None
-        return entry.split("@", 1)[0]
-    if isinstance(entry, Mapping) and len(entry) == 1:
-        key, value = next(iter(entry.items()))
-        if key is None or key == "_self_":
-            return None
-        key = str(key)
-        if key.startswith("override ") or key.startswith("optional "):
-            return None
-        if value in (None, "null"):
-            return None
-        if isinstance(value, str):
-            return f"{key.split('@', 1)[0]}/{value.split('@', 1)[0]}"
-    return None
-
-
 def _resolve_default_path(default_path: str, *, base_dir: Path, config_root: Path) -> Path:
     is_absolute_default = default_path.startswith("/")
     path = default_path.lstrip("/")
@@ -476,51 +456,80 @@ def _resolve_default_path(default_path: str, *, base_dir: Path, config_root: Pat
     return candidate.resolve()
 
 
-def _collect_hydra_sources(
+def _parse_default_reference(entry: Any) -> tuple[str, str]:
+    if not isinstance(entry, str):
+        raise ValueError(f"config default must be a string: {entry!r}")
+    default_path, separator, package = entry.strip().partition("@")
+    if not separator or not default_path or not package:
+        raise ValueError(f"config default must declare an explicit path@package: {entry!r}")
+    return default_path, package
+
+
+def _package_document(document: Mapping[str, Any], package: str) -> dict[str, Any]:
+    if package == "_global_":
+        return dict(document)
+    parts = package.split(".")
+    if any(not part for part in parts):
+        raise ValueError(f"invalid config package: {package!r}")
+    result: dict[str, Any] = dict(document)
+    for part in reversed(parts):
+        result = {part: result}
+    return result
+
+
+def _compose_mapping_document(
     path: Path,
     *,
     config_root: Path,
     stack: tuple[Path, ...] = (),
-) -> tuple[Path, ...]:
+) -> ComposedDocument:
     resolved_path = path.resolve()
     if resolved_path in stack:
         chain = " -> ".join(str(item) for item in (*stack, resolved_path))
-        raise ValueError(f"cyclic Hydra defaults chain: {chain}")
-
+        raise ValueError(f"cyclic config defaults chain: {chain}")
     document = load_mapping_document(resolved_path, label=str(path))
+    defaults = document.pop("defaults", ["_self_"])
+    if not isinstance(defaults, Sequence) or isinstance(defaults, str | bytes):
+        raise ValueError(f"{path}.defaults must be a sequence")
+    entries = list(defaults)
+    if entries.count("_self_") != 1:
+        raise ValueError(f"{path}.defaults must contain exactly one _self_ entry")
+
+    composed: dict[str, Any] = {}
     sources: list[Path] = []
-    for entry in document.get("defaults", []) or []:
-        default_path = _default_entry_to_path(entry)
-        if default_path is None:
+    for entry in entries:
+        if entry == "_self_":
+            composed = deep_merge(composed, document)
+            sources.append(resolved_path)
             continue
+        default_path, package = _parse_default_reference(entry)
         source = _resolve_default_path(
             default_path,
             base_dir=resolved_path.parent,
             config_root=config_root,
         )
-        if source.is_file():
-            sources.extend(
-                _collect_hydra_sources(
-                    source,
-                    config_root=config_root,
-                    stack=(*stack, resolved_path),
-                )
-            )
-
-    sources.append(resolved_path)
-    return tuple(sources)
+        if not source.is_file():
+            raise FileNotFoundError(f"config default not found: {source}")
+        child = _compose_mapping_document(
+            source,
+            config_root=config_root,
+            stack=(*stack, resolved_path),
+        )
+        composed = deep_merge(
+            composed,
+            _package_document(child.document, package),
+        )
+        sources.extend(child.sources)
+    return ComposedDocument(document=composed, sources=tuple(sources))
 
 
 def load_composed_mapping(
     path: Path,
     *,
-    stack: tuple[Path, ...] = (),
     cycle_label: str = "config",
     overrides: Sequence[str] = (),
 ) -> ComposedDocument:
     resolved_path = path.resolve()
-    if stack:
-        raise ValueError("load_composed_mapping no longer accepts recursive stack callers")
     if resolved_path.suffix.lower() not in YAML_EXTENSIONS:
         document = load_mapping_document(resolved_path, label=str(path))
         return ComposedDocument(
@@ -532,14 +541,15 @@ def load_composed_mapping(
             sources=(resolved_path,),
         )
     try:
-        sources = _collect_hydra_sources(resolved_path, config_root=resolved_path.parent)
-        with initialize_config_dir(version_base=None, config_dir=str(resolved_path.parent)):
-            cfg = compose(config_name=resolved_path.stem)
+        composed = _compose_mapping_document(
+            resolved_path,
+            config_root=resolved_path.parent,
+        )
     except Exception as exc:
         raise ValueError(f"failed to compose {cycle_label} config {path}: {exc}") from exc
     document = apply_dotlist_overrides(
-        _plain_dict(cfg),
+        composed.document,
         overrides,
         label=f"{cycle_label} overrides for {path}",
     )
-    return ComposedDocument(document=document, sources=sources)
+    return ComposedDocument(document=document, sources=composed.sources)

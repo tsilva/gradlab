@@ -9,7 +9,7 @@ from typing import Any
 
 import numpy as np
 
-from gradlab.action_contract import configured_action_values
+from gradlab.action_contract import declared_action_contract
 from gradlab.env import (
     EnvConfig,
     make_provider_vec_env,
@@ -63,10 +63,14 @@ def benchmark_config(args: argparse.Namespace) -> EnvConfig:
 
 
 def action_batches(config: EnvConfig, *, envs: int, count: int, seed: int):
-    masks = np.asarray(configured_action_values(config), dtype=np.int8)
+    contract = declared_action_contract(config)
+    meanings = contract.get("meanings") if isinstance(contract, dict) else None
+    if not isinstance(meanings, list) or not meanings:
+        raise ValueError("benchmark requires an explicit provider-owned discrete action table")
     rng = np.random.default_rng(seed)
-    policy_actions = rng.integers(0, len(masks), size=(count, envs), dtype=np.int64)
-    return policy_actions, masks[policy_actions]
+    policy_actions = rng.integers(0, len(meanings), size=(count, envs), dtype=np.int64)
+    # Both benchmark lanes now consume the same provider-owned policy indices.
+    return policy_actions, policy_actions.copy()
 
 
 def reset_seeds(seed: int, envs: int, episode_indices: np.ndarray) -> list[int]:

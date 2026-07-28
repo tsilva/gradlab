@@ -125,6 +125,10 @@ WANDB_REMOTE_PROBE_SECONDS = 30.0
 WANDB_DRAIN_REMOTE_PROBE_SECONDS = 2.0
 
 
+class IncompleteEvaluationEvidence(RuntimeError):
+    """Evaluation did not produce enough valid evidence for scientific rejection."""
+
+
 def _parse_timestamp(value: str) -> datetime:
     return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(UTC)
 
@@ -180,6 +184,8 @@ def _terminal_outcome(
 ) -> tuple[str, str]:
     if cancel_requested:
         return "canceled", "canceled"
+    if isinstance(failure, IncompleteEvaluationEvidence):
+        return "resumable_failure", "evaluation_evidence_incomplete"
     if failure is not None:
         return "resumable_failure", "supervisor_failure"
     if evaluation_required and promotion is not None:
@@ -262,6 +268,8 @@ class RunSupervisor:
         self.wandb_remote_high_water = 0
         self.wandb_remote_visible_lag_seconds = 0.0
         self.accepted_observed_at: float | None = None
+        self.eval_admission_closed = False
+        self.recovered_early_stop: EarlyStopReceipt | None = None
         self.state_archive_publication: dict[str, Any] | None = None
         self.state_archive_closure_sha256 = ""
         self.recovery_mode = str(self.manifest.compute.get("recovery_mode") or "resume-training")
@@ -340,9 +348,7 @@ class RunSupervisor:
             raise ValueError("authoritative early-stop receipt decision hash does not match")
         return existing
 
-    def _prior_drain_early_stop_receipt(self) -> EarlyStopReceipt | None:
-        if self.recovery_mode != "drain-only":
-            return None
+    def _prior_early_stop_receipt(self) -> EarlyStopReceipt | None:
         prefix = f"runs/{self.manifest.run_id}/attempts"
         manifests = [
             self.authority.control.get_json(key)
@@ -376,7 +382,7 @@ class RunSupervisor:
 
         decision_path = self.run_dir / f"early_stop_decision-{self.manifest.attempt_id}.json"
         if not decision_path.is_file():
-            return existing or self._prior_drain_early_stop_receipt()
+            return existing or self.recovered_early_stop or self._prior_early_stop_receipt()
         raw = json.loads(decision_path.read_text(encoding="utf-8"))
         early_stop_config = self.train_config.get("early_stop")
         if early_stop_config is None:
@@ -430,8 +436,6 @@ class RunSupervisor:
         return f"{model_url.removesuffix('/model.zip')}/manifest.json"
 
     def _configure_resume(self, config: dict[str, Any]) -> None:
-        if self.recovery_mode != "resume-training":
-            return
         backend = config.get("training_backend")
         if isinstance(backend, Mapping) and backend.get("id") == "gradlab.go-explore":
             return
@@ -440,6 +444,10 @@ class RunSupervisor:
             dict(row) for row in (index or {}).get("checkpoints") or [] if isinstance(row, Mapping)
         ]
         if not checkpoints:
+            return
+        if self.recovery_mode == "drain-only" and any(
+            str(row.get("purpose") or "") == "final" for row in checkpoints
+        ):
             return
         checkpoint = max(
             checkpoints,
@@ -786,6 +794,18 @@ class RunSupervisor:
             dict(row) for row in (index or {}).get("checkpoints") or [] if isinstance(row, Mapping)
         ]
         checkpoints.sort(key=lambda row: (int(row["step"]), str(row["sha256"])))
+        if self.evaluation_required and self.authority.has_accepted_eval(self.manifest.run_id):
+            self.eval_admission_closed = True
+            self.stop_reason = "eval_acceptance"
+            self.store.set_state(
+                "automatic_eval_admission",
+                {
+                    "closed": True,
+                    "reason": "eval_acceptance",
+                    "recovered": True,
+                    "closed_at": self.clock.utc_now(),
+                },
+            )
         for position, document in enumerate(checkpoints, start=1):
             checkpoint = CheckpointManifest(**document)
             checkpoint.validate()
@@ -795,7 +815,14 @@ class RunSupervisor:
                 manifest=checkpoint.to_dict(),
             )
             if self.evaluation_required:
-                self._ensure_eval(ledger_id, checkpoint)
+                if self.eval_admission_closed:
+                    self._ensure_eval(
+                        ledger_id,
+                        checkpoint,
+                        create_if_missing=False,
+                    )
+                else:
+                    self._ensure_eval(ledger_id, checkpoint)
 
         for initial in self.store.evals(statuses=("pending",)):
             key = str(initial["idempotency_key"])
@@ -882,6 +909,35 @@ class RunSupervisor:
         if self.learner is not None and self.learner.poll() is None:
             self.runtime.request_learner_stop(self.learner)
             print(f"learner stop requested: reason={reason}", flush=True)
+
+    def _request_finalize_only_stop(self, reason: str) -> None:
+        if self.learner is None or self.learner.poll() is not None:
+            return
+        self.runtime.request_learner_stop(self.learner)
+        self._emit("learner_finalize_only_requested", reason=reason)
+        print(f"learner finalize-only stop requested: reason={reason}", flush=True)
+
+    def _close_eval_admission(self, result: EvalResult) -> None:
+        if self.eval_admission_closed:
+            return
+        self.eval_admission_closed = True
+        closed_at = self.clock.utc_now()
+        self.store.set_state(
+            "automatic_eval_admission",
+            {
+                "closed": True,
+                "reason": "eval_acceptance",
+                "checkpoint_id": result.checkpoint_id,
+                "idempotency_key": result.idempotency_key,
+                "closed_at": closed_at,
+            },
+        )
+        self._emit(
+            "automatic_eval_admission_closed",
+            checkpoint_id=result.checkpoint_id,
+            idempotency_key=result.idempotency_key,
+            reason="eval_acceptance",
+        )
 
     def _reconcile_verified_eval_result(
         self,
@@ -1075,7 +1131,7 @@ class RunSupervisor:
                 checkpoint_step=manifest.step,
                 public_url=manifest.public_url,
             )
-            if bool(checkpoint["eval_required"]):
+            if bool(checkpoint["eval_required"]) and not self.eval_admission_closed:
                 self._ensure_eval(ledger_id, manifest)
             print(
                 f"checkpoint published id={manifest.checkpoint_id} "
@@ -1109,7 +1165,9 @@ class RunSupervisor:
         self,
         checkpoint_ledger_id: int,
         checkpoint: CheckpointManifest,
-    ) -> None:
+        *,
+        create_if_missing: bool = True,
+    ) -> bool:
         contract = self._execution_contract(checkpoint)
         episode_manifest_sha = document_sha256(contract["manifest"])
         key = eval_idempotency_key(
@@ -1139,7 +1197,16 @@ class RunSupervisor:
             created_at=created.isoformat().replace("+00:00", "Z"),
             expires_at=(created + timedelta(seconds=timeout)).isoformat().replace("+00:00", "Z"),
         )
-        self.authority.put_eval_intent(intent)
+        existing = self.authority.eval_intent(
+            run_id=self.manifest.run_id,
+            idempotency_key=key,
+        )
+        if existing is None:
+            if not create_if_missing:
+                return False
+            self.authority.put_eval_intent(intent)
+        elif existing != intent.to_dict():
+            raise ValueError(f"evaluation intent conflicts with checkpoint {checkpoint.checkpoint_id}")
         self.store.ensure_eval(
             checkpoint_ledger_id=checkpoint_ledger_id,
             intent={
@@ -1148,12 +1215,14 @@ class RunSupervisor:
                 "checkpoint": checkpoint.to_dict(),
             },
         )
-        self._emit(
-            "eval_intent_persisted",
-            checkpoint_id=checkpoint.checkpoint_id,
-            checkpoint_step=checkpoint.step,
-            idempotency_key=key,
-        )
+        if existing is None:
+            self._emit(
+                "eval_intent_persisted",
+                checkpoint_id=checkpoint.checkpoint_id,
+                checkpoint_step=checkpoint.step,
+                idempotency_key=key,
+            )
+        return True
 
     def _eval_payload(
         self,
@@ -1196,6 +1265,8 @@ class RunSupervisor:
         return payload
 
     def _submit_pending_evals(self) -> int:
+        if self.eval_admission_closed:
+            return 0
         submitted = 0
         for row in self.store.evals(statuses=("pending",)):
             attempt = int(row["attempt"] or 0) + 1
@@ -1278,6 +1349,56 @@ class RunSupervisor:
             submitted += 1
         return submitted
 
+    def _settle_closed_eval_admission(self) -> int:
+        if not self.eval_admission_closed:
+            return 0
+        settled = 0
+        for row in self.store.evals(statuses=("pending",)):
+            attempt = int(row.get("attempt") or 0)
+            if attempt > 0:
+                if self._observe_result(row):
+                    settled += 1
+                    continue
+                self._mark_expired(
+                    row,
+                    error=(
+                        "prior eval attempt expired without a valid result; "
+                        "automatic retry was suppressed after acceptance"
+                    ),
+                )
+            else:
+                self.store.mark_eval_deferred(
+                    idempotency_key=str(row["idempotency_key"]),
+                    reason="automatic evaluation admission closed after acceptance",
+                )
+                self._emit(
+                    "eval_deferred",
+                    checkpoint_id=str(row["checkpoint_id"]),
+                    idempotency_key=str(row["idempotency_key"]),
+                    reason="automatic_eval_admission_closed",
+                )
+            settled += 1
+        return settled
+
+    def _reconcile_evals_before_submission(self) -> int:
+        reconciled = 0
+        candidates = [
+            *(
+                row
+                for row in self.store.evals(statuses=("pending",))
+                if int(row.get("attempt") or 0) > 0
+            ),
+            *self.store.evals(statuses=("submitted",)),
+        ]
+        for row in candidates:
+            current = self.store.eval(str(row["idempotency_key"]))
+            if current is None or str(current["status"]) not in {"pending", "submitted"}:
+                continue
+            if self._observe_result(current):
+                reconciled += 1
+        reconciled += self._settle_closed_eval_admission()
+        return reconciled
+
     def _verified_result(
         self,
         row: Mapping[str, Any],
@@ -1322,7 +1443,7 @@ class RunSupervisor:
             run_id=self.manifest.run_id,
             checkpoint_id=str(row["checkpoint_id"]),
             idempotency_key=str(row["idempotency_key"]),
-            modal_call_id=str(row["modal_call_id"] or ""),
+            modal_call_id=str(row["modal_call_id"] or "not-recorded"),
             status=status,  # type: ignore[arg-type]
             episode_results=episodes,
             aggregates=aggregates,
@@ -1405,6 +1526,7 @@ class RunSupervisor:
         if result.status == "accepted":
             observed = self.clock.time()
             self.accepted_observed_at = self.accepted_observed_at or observed
+            self._close_eval_admission(result)
             self._request_learner_stop("eval_acceptance")
             signal_sent = self.clock.time()
             requested = self.store.mark_stop_requested(idempotency_key=result.idempotency_key)
@@ -1444,8 +1566,8 @@ class RunSupervisor:
             result=result.to_dict(),
         )
 
-    def _poll_evals(self, now: float) -> int:
-        if now - self.last_eval_poll < EVAL_POLL_SECONDS:
+    def _poll_evals(self, now: float, *, force: bool = False) -> int:
+        if not force and now - self.last_eval_poll < EVAL_POLL_SECONDS:
             return 0
         self.last_eval_poll = now
         wall_now = self.clock.time()
@@ -1467,7 +1589,10 @@ class RunSupervisor:
             expires_at = float(row.get("attempt_expires_at") or 0)
             if expires_at > wall_now:
                 continue
-            if int(row["attempt"] or 0) < int(self.modal_config.protocol.max_attempts):
+            if (
+                not self.eval_admission_closed
+                and int(row["attempt"] or 0) < int(self.modal_config.protocol.max_attempts)
+            ):
                 self.store.reset_expired_eval(
                     idempotency_key=str(row["idempotency_key"]),
                     error="attempt expired without a valid result",
@@ -1475,9 +1600,14 @@ class RunSupervisor:
             else:
                 self._mark_expired(
                     row,
-                    error="eval expired twice without a valid result",
+                    error=(
+                        "eval expired after automatic admission closed"
+                        if self.eval_admission_closed
+                        else "eval expired twice without a valid result"
+                    ),
                 )
                 completed += 1
+        completed += self._settle_closed_eval_admission()
         return completed
 
     def _scratch_guard(self) -> None:
@@ -1627,6 +1757,12 @@ class RunSupervisor:
                 return False
         return True
 
+    def _has_public_final_checkpoint(self) -> bool:
+        return any(
+            str(row.get("purpose") or "") == "final"
+            for row in self.store.checkpoint_publications()
+        )
+
     def _durable_state_archive_enabled(self) -> bool:
         archive = self.train_config.get("state_archive")
         return isinstance(archive, Mapping) and archive.get("persistence") == "durable"
@@ -1675,6 +1811,7 @@ class RunSupervisor:
         activity += self._seal_metrics(instant)
         activity += self._publish_checkpoints()
         activity += self._publish_state_archive()
+        activity += self._reconcile_evals_before_submission()
         activity += self._submit_pending_evals()
         activity += self._poll_evals(instant)
         activity += self._publish_wandb()
@@ -1710,22 +1847,28 @@ class RunSupervisor:
         if self.cancel_requested:
             self._cancel_outstanding_evals()
         else:
+            activity += self._reconcile_evals_before_submission()
             activity += self._submit_pending_evals()
-        activity += self._poll_evals(instant)
+        activity += self._poll_evals(instant, force=True)
         activity += self._publish_wandb()
         pending_frames = self.store.metric_outbox_stats()["frames"]
         converged = (
             self._all_ready_checkpoints_published()
-            and self.store.all_evals_terminal()
+            and self.store.all_evals_settled()
             and pending_frames == 0
         )
         return activity, converged
 
     def _drain(self) -> None:
-        deadline = self.clock.monotonic() + WANDB_DRAIN_TIMEOUT_SECONDS
+        delivery_deadline: float | None = None
         while True:
             now = self.clock.monotonic()
             activity, converged = self.drain_iteration(now=now)
+            if self.store.all_evals_settled():
+                if delivery_deadline is None:
+                    delivery_deadline = now + WANDB_DRAIN_TIMEOUT_SECONDS
+            else:
+                delivery_deadline = None
             if converged:
                 if (
                     self.peak_ingress_rate > 0.0
@@ -1735,10 +1878,10 @@ class RunSupervisor:
                         "measured W&B publication capacity is below twice peak metric ingress"
                     )
                 return
-            if now >= deadline:
+            if delivery_deadline is not None and now >= delivery_deadline:
                 raise TimeoutError(
-                    "terminal drain exceeded 300 seconds before checkpoints, "
-                    "evals, and local W&B delivery converged"
+                    "post-evaluation delivery drain exceeded 300 seconds before "
+                    "checkpoints and local W&B delivery converged"
                 )
             if activity == 0:
                 self.clock.sleep(0.5)
@@ -1779,6 +1922,36 @@ class RunSupervisor:
             checkpoint_step=receipt.checkpoint_step,
         )
         return receipt
+
+    def _validate_no_acceptance_evidence(self) -> None:
+        if not self.evaluation_required or self.store.evals(statuses=("accepted",)):
+            return
+        checkpoints = {
+            str(row["checkpoint_id"]) for row in self.store.checkpoint_publications()
+        }
+        evals = {
+            str(row["checkpoint_id"]): row
+            for row in self.store.evals()
+        }
+        missing = sorted(checkpoints - set(evals))
+        invalid = sorted(
+            (
+                str(row["checkpoint_id"]),
+                str(row["status"]),
+            )
+            for row in evals.values()
+            if str(row["status"]) != "rejected"
+        )
+        if not checkpoints or missing or invalid:
+            facts = {
+                "checkpoint_count": len(checkpoints),
+                "missing_checkpoint_ids": missing,
+                "non_rejection_statuses": invalid,
+            }
+            raise IncompleteEvaluationEvidence(
+                "scientific non-acceptance requires one valid rejected evaluation "
+                f"for every published checkpoint: {facts}"
+            )
 
     def _publish_promotion(self, receipt: PromotionReceipt) -> None:
         selected = self.store.eval(receipt.eval_idempotency_key)
@@ -1865,7 +2038,9 @@ class RunSupervisor:
     def _terminal_inventory(self) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
         checkpoints = self.store.checkpoint_publications()
         evals = []
-        for row in self.store.evals():
+        for row in self.store.evals(
+            statuses=("accepted", "rejected", "failed", "expired", "canceled", "deferred")
+        ):
             result = dict(row.get("result") or {})
             evals.append(
                 {
@@ -1874,8 +2049,14 @@ class RunSupervisor:
                     "idempotency_key": str(row["idempotency_key"]),
                     "status": str(row["status"]),
                     "modal_call_id": str(row.get("modal_call_id") or ""),
+                    "attempt": int(row.get("attempt") or 0),
                     "episode_count": len(result.get("episode_results") or []),
                     "result_sha256": document_sha256(result) if result else None,
+                    "reason": (
+                        str(row.get("last_error") or "")
+                        if str(row["status"]) == "deferred"
+                        else None
+                    ),
                 }
             )
         return checkpoints, evals
@@ -1953,11 +2134,39 @@ class RunSupervisor:
             self.store.init()
             self.store.reset_interrupted_metric_frames()
             self._recover_durable_state()
+            self.recovered_early_stop = (
+                self._authoritative_early_stop_receipt(
+                    attempt_id=self.manifest.attempt_id
+                )
+                or self._prior_early_stop_receipt()
+            )
             self._start_wandb()
-            if self.recovery_mode == "drain-only":
-                print("drain-only recovery: learner will not restart", flush=True)
+            provisional_stop = self.eval_admission_closed or self.recovered_early_stop is not None
+            final_checkpoint_published = self._has_public_final_checkpoint()
+            if self.recovery_mode == "drain-only" and not (
+                final_checkpoint_published or provisional_stop
+            ):
+                raise RuntimeError(
+                    "drain-only recovery requires a published final checkpoint "
+                    "or a durable provisional stop"
+                )
+            if final_checkpoint_published and (
+                self.recovery_mode == "drain-only" or provisional_stop
+            ):
+                reason = (
+                    "drain-only recovery"
+                    if self.recovery_mode == "drain-only"
+                    else "provisional-stop recovery"
+                )
+                print(f"{reason}: learner will not restart", flush=True)
             else:
                 self._start_learner()
+                if provisional_stop:
+                    self._request_finalize_only_stop(
+                        "eval_acceptance"
+                        if self.eval_admission_closed
+                        else "provisional_training_early_stop"
+                    )
         except BaseException as failure:
             projector = self.projector
             self.projector = None
@@ -1978,7 +2187,7 @@ class RunSupervisor:
                 phase="startup/recovery",
             )
         learner_exited_at: float | None = (
-            self.clock.time() if self.recovery_mode == "drain-only" else None
+            self.clock.time() if self.learner is None else None
         )
 
         def cancel(_signum, _frame) -> None:
@@ -2052,8 +2261,12 @@ class RunSupervisor:
                 promotion = self._create_promotion()
                 if promotion is not None:
                     self._publish_promotion(promotion)
+                else:
+                    self._validate_no_acceptance_evidence()
         except BaseException as exc:
             failure = exc
+            if isinstance(exc, IncompleteEvaluationEvidence):
+                self.stop_reason = "evaluation_evidence_incomplete"
             self._request_learner_stop("supervisor_failure")
             if self.learner is not None and self.learner.poll() is None:
                 if not self._wait_for_learner_exit_with_lease(120):
@@ -2124,6 +2337,7 @@ class RunSupervisor:
                 "complete": failure is None,
                 "metric_segment_high_water": self.store.metric_segment_high_water(),
                 "eval_terminal_count": self.store.terminal_eval_count(),
+                "eval_deferred_count": self.store.deferred_eval_count(),
                 "journal_archive": journal_archive,
                 "journal_expires_at": journal_expires_at,
                 "wandb_remote_high_water_mark": self.wandb_remote_high_water,

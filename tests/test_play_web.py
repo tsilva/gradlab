@@ -1367,6 +1367,7 @@ def test_web_dashboard_assets_are_packaged_beside_server() -> None:
     script = (root / "app.js").read_text(encoding="utf-8")
     source_browser = (root / "sources" / "browser.js").read_text(encoding="utf-8")
     catalog = (panel_root / "catalog.js").read_text(encoding="utf-8")
+    controls = (panel_root / "controls.js").read_text(encoding="utf-8")
     manager = (panel_root / "manager.js").read_text(encoding="utf-8")
     runtime = (panel_root / "runtime.js").read_text(encoding="utf-8")
     telemetry = (panel_root / "telemetry.js").read_text(encoding="utf-8")
@@ -1387,6 +1388,9 @@ def test_web_dashboard_assets_are_packaged_beside_server() -> None:
     assert ".then((browser) => browser.goHome())" in script
     assert '$("#page-title").hidden = state.sourceMode' in script
     assert '$("#page-title").textContent = "Select checkpoint"' not in script
+    assert "approval_required" not in source_browser
+    assert "approve_source" not in source_browser
+    assert "Approve executable model" not in source_browser
     assert 'id="panel-add"' in markup
     assert 'id="panel-edit"' in markup
     assert 'id="panel-duplicate"' in markup
@@ -1402,6 +1406,9 @@ def test_web_dashboard_assets_are_packaged_beside_server() -> None:
     assert '"reward/shaped"' in catalog
     assert '"action/executed"' in catalog
     assert '"namespace-explorer"' in catalog
+    assert 'data-driver-option="human"' not in controls
+    assert 'data-driver-option="policy"' not in controls
+    assert 'driver: "policy"' in controls
     assert "WORKSPACE_VERSION = 4" in workspace
     assert "createTelemetryInstance" in workspace
     assert "value.version !== WORKSPACE_VERSION" in workspace

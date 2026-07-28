@@ -17,10 +17,12 @@ from gradlab.env_config import env_config_from_mapping
 from gradlab.env_metadata import training_metadata
 from gradlab.eval import build_parser as build_eval_parser
 from gradlab.model_sources import (
+    ResolvedModelSource,
     is_huggingface_model_ref,
     model_source_ref,
     parse_huggingface_model_ref,
     positional_model_source_arg,
+    resolve_model_source,
 )
 from gradlab.play import (
     _PlaybackSession,
@@ -265,6 +267,45 @@ def test_huggingface_refs_parse_and_resolve_from_cli_namespace() -> None:
         model=None,
     )
     assert model_source_ref(args) == "hf://owner/repo"
+
+
+def test_model_source_resolution_has_one_kind_aware_owner(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    manifest_ref = (
+        "https://models.example/runs/gradlab-"
+        + "a" * 32
+        + "/checkpoints/1-"
+        + "b" * 64
+        + "/manifest.json"
+    )
+    expected = ResolvedModelSource(tmp_path / "resolved.zip")
+    monkeypatch.setattr(
+        "gradlab.model_sources.download_public_checkpoint_manifest_source",
+        lambda ref, *, root: expected,
+    )
+
+    resolved = resolve_model_source(
+        "manifest",
+        manifest_ref,
+        public_root=tmp_path / "public",
+        hf_root=tmp_path / "hf",
+    )
+
+    assert resolved is expected
+    assert resolved.artifact_ref == manifest_ref
+
+    local = tmp_path / "local.zip"
+    local.write_bytes(b"checkpoint")
+    resolved = resolve_model_source(
+        "local",
+        str(local),
+        public_root=tmp_path / "public",
+        hf_root=tmp_path / "hf",
+    )
+    assert resolved.model_path == local
+    assert resolved.artifact_ref is None
 
 
 def test_playback_only_ends_on_environment_done() -> None:

@@ -8,7 +8,7 @@ import {
 } from "./panels/catalog.js";
 import { PanelManager } from "./panels/manager.js";
 import { PanelRuntime } from "./panels/runtime.js";
-import { text } from "./panels/shared.js";
+import { displayedStep, text } from "./panels/shared.js";
 import {
   bumpWorkspaceRevision,
   compareWorkspaceRevisions,
@@ -597,7 +597,7 @@ function renderWorkspaceStatus() {
   samplingStatus.className = `badge ${counterfactualSelection ? "warning" : "muted"}`;
   const timelineContext = [
     state.inspectionSequence === null ? null : "INSPECTING",
-    `STEP ${text(shown?.session?.step)}`,
+    `STEP ${text(displayedStep(shown))}`,
     `SEQ ${text(shown?.sequence)}`,
     state.inspectionSequence === null ? null : `LIVE ${text(live?.sequence)}`,
   ];
@@ -610,7 +610,10 @@ function renderSnapshot() {
   configureMode(snapshot.mode || "playback");
   updateControlState();
   renderWorkspaceStatus();
-  const actionNamesKey = JSON.stringify(session.action_names || []);
+  const actionNamesKey = JSON.stringify([
+    session.action_contract || null,
+    session.action_names || [],
+  ]);
   if (actionNamesKey !== state.actionNamesKey) {
     state.actionNamesKey = actionNamesKey;
     renderHistory();

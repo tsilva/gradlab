@@ -7,20 +7,19 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Literal
 
+from gradlab.action_contract import assert_action_contract_compatible
 from gradlab.artifacts import load_playback_env_config
 from gradlab.device import resolve_sb3_device
 from gradlab.env import assert_provider_runtime_available, make_eval_vec_env, resolve_env_config
 from gradlab.env_metadata import env_config_from_config_dict, env_config_metadata
 from gradlab.env_registry import resolve_env_provider
 from gradlab.model_sources import (
+    ModelSourceKind,
     ResolvedModelSource,
-    download_huggingface_model_source,
-    download_public_checkpoint_manifest_source,
-    download_public_run_source,
+    resolve_model_source,
 )
 from gradlab.policy_bundle import (
     critic_value_contract,
-    load_policy_bundle_from_checkpoint,
     playback_contract,
     playback_contract_audit,
 )
@@ -43,21 +42,19 @@ from gradlab.rom_assets import (
 from gradlab.rom_runtime import RomRuntimeBinding, bind_rom_path, ensure_local_rom_binding
 from gradlab.seeds import validate_eval_seed, validate_playback_seed
 from gradlab.trusted_inputs import (
-    ModelApprovalError,
     StagedModelInput,
-    approve_staged_model,
     stage_model_input,
+    verify_staged_model,
 )
 
 
 ProgressCallback = Callable[[str, str], None]
-SourceKind = Literal["manifest", "huggingface", "local", "public_run"]
 PlaybackContractMode = Literal["training", "evaluation", "counterfactual"]
 
 
 @dataclass(frozen=True)
 class PlaySourceSpec:
-    kind: SourceKind
+    kind: ModelSourceKind
     value: str
     entity: str = ""
     project: str = ""
@@ -150,22 +147,10 @@ class PlaybackCandidate:
     staged: StagedModelInput
     source_identity: str
     artifact_ref: str | None
-    approval_required: bool
     termination_base_config: Any
     termination_source: str
     contract_details: dict[str, Any] = field(default_factory=dict)
     value_contract: dict[str, Any] | None = None
-
-    def approval_payload(self) -> dict[str, Any]:
-        return {
-            "source": self.source_identity,
-            "manifest_hash": self.staged.manifest_hash,
-            "files": [entry.as_dict() for entry in self.staged.manifest],
-            "warning": (
-                "External Python model content can execute arbitrary code with your current "
-                "operating-system authority, including access to ambient credentials."
-            ),
-        }
 
     def cleanup(self) -> None:
         self.staged.cleanup()
@@ -204,48 +189,6 @@ class PlaybackLoader:
         self.argv = list(argv)
         self.explicit_seed = bool(explicit_seed)
 
-    def _resolve_source(
-        self,
-        spec: PlaySourceSpec,
-        args: argparse.Namespace,
-    ) -> tuple[ResolvedModelSource, str | None]:
-        if spec.kind == "public_run":
-            return (
-                download_public_run_source(
-                    spec.value,
-                    root=Path(args.public_model_root),
-                    public_base_url=str(args.public_models_base_url),
-                ),
-                None,
-            )
-        if spec.kind == "manifest":
-            return (
-                download_public_checkpoint_manifest_source(
-                    spec.value,
-                    root=Path(args.public_model_root),
-                ),
-                spec.value,
-            )
-        if spec.kind == "huggingface":
-            return (
-                download_huggingface_model_source(
-                    spec.value,
-                    root=Path(args.hf_model_root),
-                    revision=getattr(args, "hf_revision", None),
-                ),
-                spec.value,
-            )
-        model_path = Path(spec.value).expanduser()
-        if not model_path.is_file():
-            raise FileNotFoundError(f"local model checkpoint not found: {model_path}")
-        return (
-            ResolvedModelSource(
-                model_path=model_path,
-                bundle=load_policy_bundle_from_checkpoint(model_path),
-            ),
-            None,
-        )
-
     def prepare(
         self,
         spec: PlaySourceSpec,
@@ -253,7 +196,15 @@ class PlaybackLoader:
     ) -> PlaybackCandidate:
         args = deepcopy(self.base_args)
         progress("resolving", "Resolving model source")
-        source, artifact_ref = self._resolve_source(spec, args)
+        source = resolve_model_source(
+            spec.kind,
+            spec.value,
+            public_root=Path(args.public_model_root),
+            hf_root=Path(args.hf_model_root),
+            revision=getattr(args, "hf_revision", None),
+            public_base_url=str(args.public_models_base_url),
+        )
+        artifact_ref = source.artifact_ref
         args.model = str(source.model_path)
 
         progress("verifying", "Validating playback contract")
@@ -387,14 +338,6 @@ class PlaybackLoader:
         progress("verifying", "Hashing executable model closure")
         source_identity = str(source.artifact_name or artifact_ref or source.model_path)
         staged = stage_model_input(source.model_path, source_identity=source_identity)
-        approval_required = False
-        try:
-            approve_staged_model(staged, interactive=False)
-        except ModelApprovalError as exc:
-            if "external model approval is required" not in str(exc):
-                staged.cleanup()
-                raise
-            approval_required = True
         return PlaybackCandidate(
             spec=spec,
             args=args,
@@ -405,7 +348,6 @@ class PlaybackLoader:
             staged=staged,
             source_identity=source_identity,
             artifact_ref=artifact_ref,
-            approval_required=approval_required,
             termination_base_config=termination_base_config,
             termination_source=termination_source,
             contract_details=contract_details,
@@ -416,7 +358,6 @@ class PlaybackLoader:
         self,
         candidate: PlaybackCandidate,
         *,
-        approval_hash: str,
         progress: ProgressCallback,
     ) -> ActivePlayback:
         from gradlab.policy_models import load_policy_model
@@ -424,13 +365,9 @@ class PlaybackLoader:
 
         args = candidate.args
         progress("loading", "Loading policy runtime")
-        with approve_staged_model(
-            candidate.staged,
-            expected_hash=approval_hash,
-            interactive=False,
-        ) as approved:
+        with verify_staged_model(candidate.staged) as verified:
             model = load_policy_model(
-                approved,
+                verified,
                 device=resolve_sb3_device(args.device),
             )
         # Validate the executable policy contract before creating or stepping
@@ -464,8 +401,36 @@ class PlaybackLoader:
         try:
             from gradlab.policy_runtime import bind_policy_action_space
 
-            bind_policy_action_space(model, policy_env.action_space)
-            policy_provenance: dict[str, Any] = {}
+            runtime_action_contract = getattr(
+                getattr(policy_env, "runtime", None),
+                "action_contract",
+                None,
+            )
+            saved_action_contract = None
+            if candidate.source.bundle is not None:
+                provenance = candidate.source.bundle.model.get("provenance")
+                training_metadata = (
+                    provenance.get("training_metadata")
+                    if isinstance(provenance, Mapping)
+                    else None
+                )
+                if isinstance(training_metadata, Mapping) and isinstance(
+                    training_metadata.get("action_contract"),
+                    Mapping,
+                ):
+                    saved_action_contract = training_metadata["action_contract"]
+            action_compatibility = assert_action_contract_compatible(
+                saved_action_contract,
+                runtime_action_contract,
+            )
+            bind_policy_action_space(
+                model,
+                policy_env.action_space,
+                runtime_action_contract,
+            )
+            policy_provenance: dict[str, Any] = {
+                "action_contract": action_compatibility,
+            }
             if candidate.source.bundle is not None:
                 model_document = candidate.source.bundle.model
                 policy_value = model_document.get("policy")

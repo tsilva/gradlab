@@ -14,7 +14,7 @@ os.makedirs(os.environ["MPLCONFIGDIR"], exist_ok=True)
 import numpy as np
 
 from gradlab.artifacts import load_model_metadata
-from gradlab.action_contract import configured_action_meanings
+from gradlab.action_contract import action_contract_meanings
 from gradlab.cli_args import explicit_arg_dests, parse_json_value
 from gradlab.device import resolve_sb3_device
 from gradlab.env import (
@@ -77,6 +77,9 @@ class ScriptedPolicy:
 
     def bind_action_space(self, action_space) -> None:
         self.action_space = action_space
+
+    def bind_action_contract(self, action_contract) -> None:
+        self.action_names = action_contract_meanings(action_contract)
 
     def reset_episode(self) -> None:
         self.step_idx = 0
@@ -263,8 +266,7 @@ def main(argv: list[str] | None = None) -> int:
             },
         )
     else:
-        action_names = configured_action_meanings(config)
-        policy = ScriptedPolicy(args.policy, action_names)
+        policy = ScriptedPolicy(args.policy, ())
         summary, _ = evaluate_model_episodes(
             model=policy,
             config=config,

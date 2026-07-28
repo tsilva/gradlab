@@ -10,6 +10,7 @@ import numpy as np
 import torch
 from tqdm.auto import tqdm
 
+from gradlab.action_contract import assert_action_contract_compatible
 from gradlab.env import EnvConfig, make_eval_vec_env, task_termination, with_task_termination
 from gradlab.env import assert_provider_runtime_available, resolve_env_config
 from gradlab.env_metadata import env_config_from_config_dict
@@ -116,6 +117,7 @@ def _evaluate_model_episodes_vector(
     rom_binding: RomRuntimeBinding | None = None,
     policy_runtime: PolicyRuntime | None = None,
     action_selection_mode: str | None = None,
+    expected_action_contract: Mapping[str, Any] | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
     vec_config = _eval_runtime_config(
         config,
@@ -140,7 +142,21 @@ def _evaluate_model_episodes_vector(
     planned = manifest_index(acceptance_contract) if acceptance_contract is not None else None
     rejected = False
     try:
-        bind_policy_action_space(model, getattr(eval_env, "action_space", None))
+        runtime_action_contract = getattr(
+            getattr(eval_env, "runtime", None),
+            "action_contract",
+            None,
+        )
+        if expected_action_contract is not None or runtime_action_contract is not None:
+            assert_action_contract_compatible(
+                expected_action_contract,
+                runtime_action_contract,
+            )
+        bind_policy_action_space(
+            model,
+            getattr(eval_env, "action_space", None),
+            getattr(getattr(eval_env, "runtime", None), "action_contract", None),
+        )
         reset_policy_state(model)
         torch.manual_seed(seed)
         np.random.seed(seed)
@@ -226,6 +242,7 @@ def evaluate_model_episodes(
     acceptance_contract: dict[str, Any] | None = None,
     rom_binding: RomRuntimeBinding | None = None,
     action_selection_mode: str | None = None,
+    expected_action_contract: Mapping[str, Any] | None = None,
 ) -> tuple[dict[str, Any], Path | None]:
     if deterministic:
         raise ValueError("deterministic policy evaluation is unsupported; use stochastic sampling")
@@ -273,7 +290,21 @@ def evaluate_model_episodes(
                 rom_binding=rom_binding,
             )
             try:
-                bind_policy_action_space(model, getattr(eval_env, "action_space", None))
+                runtime_action_contract = getattr(
+                    getattr(eval_env, "runtime", None),
+                    "action_contract",
+                    None,
+                )
+                if expected_action_contract is not None or runtime_action_contract is not None:
+                    assert_action_contract_compatible(
+                        expected_action_contract,
+                        runtime_action_contract,
+                    )
+                bind_policy_action_space(
+                    model,
+                    getattr(eval_env, "action_space", None),
+                    getattr(getattr(eval_env, "runtime", None), "action_contract", None),
+                )
                 for episode_idx in range(episodes):
                     manifest_entry = planned.get((0, episode_idx)) if planned is not None else None
                     if planned is not None and manifest_entry is None:
@@ -348,6 +379,7 @@ def evaluate_model_episodes(
                 rom_binding=rom_binding,
                 policy_runtime=policy_runtime,
                 action_selection_mode=action_selection_mode,
+                expected_action_contract=expected_action_contract,
             )
 
     if acceptance_contract is not None:
@@ -468,6 +500,13 @@ def evaluate_policy_bundle(
         )
     assert_provider_runtime_available(config, rom_binding=rom_binding)
     metadata = policy_bundle_as_metadata(bundle)
+    training_metadata = metadata.get("training_metadata")
+    expected_action_contract = (
+        training_metadata.get("action_contract")
+        if isinstance(training_metadata, Mapping)
+        and isinstance(training_metadata.get("action_contract"), Mapping)
+        else None
+    )
     algorithm_id = resolve_policy_algorithm(metadata)
     if internal_execution_id:
         model = load_internal_policy_model(
@@ -550,6 +589,7 @@ def evaluate_policy_bundle(
         preview_capture=preview_capture,
         rom_binding=rom_binding,
         action_selection_mode=str(contract["action_sampling"]),
+        expected_action_contract=expected_action_contract,
     )
     summary["evaluation_evidence"] = evidence
     summary["episode_seeds"] = [

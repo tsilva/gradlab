@@ -30,6 +30,7 @@ from gradlab.run_contracts import (
     utc_now,
 )
 from gradlab.run_supervisor import (
+    IncompleteEvaluationEvidence,
     RunSupervisor,
     _bind_evaluation_contract,
     _summary_scalar,
@@ -338,6 +339,18 @@ class RunSupervisorTests(unittest.TestCase):
         self.assertEqual(state, "resumable_failure")
         self.assertEqual(stop_reason, "supervisor_failure")
 
+    def test_incomplete_eval_evidence_has_typed_resumable_outcome(self) -> None:
+        state, stop_reason = _terminal_outcome(
+            cancel_requested=False,
+            failure=IncompleteEvaluationEvidence("eval infrastructure failed"),
+            evaluation_required=True,
+            promotion=None,
+            early_stop=self._early_stop_receipt(),
+        )
+
+        self.assertEqual(state, "resumable_failure")
+        self.assertEqual(stop_reason, "evaluation_evidence_incomplete")
+
     def _early_stop_receipt(self, *, outcome: str = "failure") -> EarlyStopReceipt:
         return EarlyStopReceipt(
             run_id=self.run_id,
@@ -524,7 +537,7 @@ class RunSupervisorTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "does not match"):
             supervisor._resolve_early_stop_receipt()
 
-    def test_drain_only_recovery_preserves_prior_early_stop_outcome(self) -> None:
+    def test_resume_recovery_preserves_prior_provisional_early_stop(self) -> None:
         original = self.supervisor()
         config = {
             "conditions": {
@@ -570,7 +583,7 @@ class RunSupervisorTests(unittest.TestCase):
             self.manifest,
             attempt_id=new_attempt_id(),
             created_at="9999-01-01T00:00:00Z",
-            compute={**self.manifest.compute, "recovery_mode": "drain-only"},
+            compute={**self.manifest.compute, "recovery_mode": "resume-training"},
         )
         self.authority.create_attempt_manifest(retry_manifest)
         retry = RunSupervisor(
@@ -764,6 +777,7 @@ class RunSupervisorTests(unittest.TestCase):
 
     def test_accepted_eval_requests_stop_before_metric_projection(self) -> None:
         supervisor = self.supervisor()
+        supervisor.store.init()
         result = EvalResult(
             run_id=self.run_id,
             checkpoint_id="checkpoint-4500000-" + "e" * 16,
@@ -807,6 +821,11 @@ class RunSupervisorTests(unittest.TestCase):
             self.assertTrue(supervisor._observe_result(row))
 
         self.assertEqual(events, ["stop", "metrics"])
+        self.assertTrue(supervisor.eval_admission_closed)
+        self.assertEqual(
+            supervisor.store.state("automatic_eval_admission")["checkpoint_id"],
+            result.checkpoint_id,
+        )
 
     def test_ambiguous_modal_spawn_is_not_immediately_repeated(self) -> None:
         supervisor = self.supervisor()
@@ -845,6 +864,172 @@ class RunSupervisorTests(unittest.TestCase):
         with patch.object(supervisor.clock, "time", return_value=1001):
             self.assertEqual(supervisor._poll_evals(10.0), 0)
         self.assertEqual(supervisor.store.evals()[0]["status"], "pending")
+
+    def test_closed_eval_admission_drains_without_new_submissions_or_retries(self) -> None:
+        supervisor = self.supervisor()
+        with patch("gradlab.run_supervisor.verify_rom_file"):
+            supervisor.materialize()
+        supervisor.store.init()
+        checkpoint = CheckpointManifest(
+            run_id=self.run_id,
+            checkpoint_id="checkpoint-250000-" + "e" * 16,
+            step=250_000,
+            purpose="periodic",
+            sha256="e" * 64,
+            size_bytes=10,
+            public_url="https://models.example/model.zip",
+            model_document_url="https://models.example/model.json",
+            model_document_sha256="f" * 64,
+            recipe_document_url="https://models.example/recipe.json",
+            recipe_document_sha256="1" * 64,
+            goal_sha256=self.manifest.goal_sha256,
+            recipe_sha256=self.manifest.recipe_sha256,
+            environment_sha256=self.manifest.environment_sha256,
+            evaluation_contract_sha256=evaluation_contract_sha256(supervisor.recipe_document),
+            recovery_sidecar_key="recovery.json",
+            created_at=utc_now(),
+        )
+        supervisor._ensure_eval(1, checkpoint)
+        self.assertEqual(supervisor._submit_pending_evals(), 0)
+        self.assertEqual(supervisor.store.evals()[0]["status"], "submitted")
+
+        later = replace(
+            checkpoint,
+            checkpoint_id="checkpoint-500000-" + "d" * 16,
+            step=500_000,
+            sha256="d" * 64,
+        )
+        supervisor._ensure_eval(2, later)
+        supervisor.eval_admission_closed = True
+
+        self.assertEqual(supervisor._submit_pending_evals(), 0)
+        self.assertEqual(
+            [row["status"] for row in supervisor.store.evals()],
+            ["submitted", "pending"],
+        )
+        with supervisor.store.connection() as connection:
+            connection.execute(
+                "UPDATE eval_dispatches SET attempt_expires_at = 1000 "
+                "WHERE status = 'submitted'"
+            )
+        with patch.object(supervisor.clock, "time", return_value=1001):
+            self.assertEqual(supervisor._poll_evals(10.0), 2)
+        rows = supervisor.store.evals()
+        self.assertEqual([row["status"] for row in rows], ["expired", "deferred"])
+        self.assertEqual(rows[0]["attempt"], 1)
+        _checkpoints, evals = supervisor._terminal_inventory()
+        self.assertEqual([row["status"] for row in evals], ["expired", "deferred"])
+        self.assertIsNone(evals[1]["result_sha256"])
+
+    def test_durable_result_is_reconciled_before_pending_eval_submission(self) -> None:
+        supervisor = self.supervisor()
+        supervisor.store.init()
+        supervisor.store.ensure_eval(
+            checkpoint_ledger_id=1,
+            intent={
+                "idempotency_key": "1" * 64,
+                "checkpoint_id": "checkpoint-1-" + "1" * 16,
+                "checkpoint_step": 1,
+            },
+        )
+        supervisor.store.mark_eval_submitted(
+            idempotency_key="1" * 64,
+            attempt=1,
+            modal_call_id="fc-one",
+            attempt_expires_at=1_000.0,
+        )
+        supervisor.store.ensure_eval(
+            checkpoint_ledger_id=2,
+            intent={
+                "idempotency_key": "2" * 64,
+                "checkpoint_id": "checkpoint-2-" + "2" * 16,
+                "checkpoint_step": 2,
+            },
+        )
+
+        def observe(row):
+            if str(row["idempotency_key"]) != "1" * 64:
+                return False
+            supervisor.store.mark_eval_terminal(
+                idempotency_key="1" * 64,
+                status="accepted",
+                result={"status": "accepted"},
+            )
+            supervisor.eval_admission_closed = True
+            return True
+
+        with patch.object(supervisor, "_observe_result", side_effect=observe):
+            self.assertEqual(supervisor._reconcile_evals_before_submission(), 2)
+        self.assertEqual(supervisor._submit_pending_evals(), 0)
+        self.assertEqual(
+            [row["status"] for row in supervisor.store.evals()],
+            ["accepted", "deferred"],
+        )
+
+    def test_plateau_requires_valid_rejection_for_every_checkpoint(self) -> None:
+        supervisor = self.supervisor()
+        supervisor.store.init()
+        for index, status in ((1, "rejected"), (2, "expired")):
+            checkpoint_id = f"checkpoint-{index}-" + str(index) * 16
+            supervisor.store.record_checkpoint_publication(
+                checkpoint_ledger_id=index,
+                manifest={
+                    "checkpoint_id": checkpoint_id,
+                    "step": index,
+                    "purpose": "final" if index == 2 else "periodic",
+                },
+            )
+            key = str(index) * 64
+            supervisor.store.ensure_eval(
+                checkpoint_ledger_id=index,
+                intent={
+                    "idempotency_key": key,
+                    "checkpoint_id": checkpoint_id,
+                    "checkpoint_step": index,
+                },
+            )
+            supervisor.store.mark_eval_terminal(
+                idempotency_key=key,
+                status=status,
+                result={"status": status},
+            )
+
+        with self.assertRaisesRegex(
+            IncompleteEvaluationEvidence,
+            "valid rejected evaluation",
+        ):
+            supervisor._validate_no_acceptance_evidence()
+
+        with supervisor.store.connection() as connection:
+            connection.execute(
+                "UPDATE eval_dispatches SET status = 'rejected', "
+                "result_json = '{\"status\":\"rejected\"}' "
+                "WHERE idempotency_key = ?",
+                ("2" * 64,),
+            )
+        supervisor._validate_no_acceptance_evidence()
+
+    def test_evaluation_wait_does_not_consume_delivery_drain_timeout(self) -> None:
+        supervisor = self.supervisor()
+        supervisor.store.init()
+        with (
+            patch.object(
+                supervisor,
+                "drain_iteration",
+                side_effect=[(1, False), (0, True)],
+            ),
+            patch.object(
+                supervisor.store,
+                "all_evals_settled",
+                side_effect=[False, True],
+            ),
+            patch.object(
+                supervisor.clock,
+                "monotonic",
+                side_effect=[0.0, 400.0],
+            ),
+        ):
+            supervisor._drain()
 
     def test_training_only_checkpoint_recovery_does_not_create_evals(self) -> None:
         supervisor = self.supervisor()

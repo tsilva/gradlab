@@ -1,68 +1,81 @@
 ## PROJECT PURPOSE
 
-GradLab is a reproducible reinforcement-learning workbench for game-agent researchers. It carries explicit research goals through validated training, trustworthy evaluation and ranking, playback, publication, and local or queued execution while keeping results traceable and comparable.
+GradLab is a reproducible reinforcement-learning workbench that carries game-agent research goals through training, evaluation, comparison, playback, publication, and local or queued execution with traceable, comparable results.
 
 ## PROJECT REQUIREMENTS
 
 ### Goals and Run Contracts
 
-- Each research goal must declare whether it is evaluated or training-only. Evaluated goals must define their environment, success criteria, ranking, evaluation, and release rules. Training-only goals must remain ineligible for goal acceptance, goal completion, checkpoint promotion, or release.
-- Every launchable training configuration must belong to one goal, declare a finite resource limit and meaningful description, and resolve every choice needed for execution.
-- Invalid or internally inconsistent goals, run configurations, benchmarks, capacity rules, or execution settings must be rejected before execution or external mutation.
-- A run must resolve one complete declared observation, action, reward, discount, event, start-state, and episode-boundary contract and preserve its policy-facing semantics across training, evaluation, and evidence-bearing playback.
-- Mario Level1-1 must provide a full reward system with game-score progress and a speedrun reward system without it; both must include a per-step deduction negligible relative to forward-progress reward.
-- Every launchable Mario recipe must configure an unsuccessful early-stop condition for sustained lack of improvement in a task-aligned training metric; that condition must not establish goal acceptance or checkpoint promotion.
-- Training-only curricula or phase-specific behavior must be explicitly declared, and evidence produced outside the finalized evaluation contract must not establish acceptance or promotion.
+- Every research goal must declare whether it is evaluated or training-only.
+- Evaluated goals must define their environment, success criteria, ranking, evaluation, and release rules.
+- Training-only goals must remain ineligible for acceptance, completion, checkpoint promotion, or release.
+- Every launchable training configuration must belong to one goal, declare a finite resource limit and meaningful description, and resolve all execution choices.
+- Mario and ViZDoom recipes must configure an unsuccessful early-stop condition for sustained lack of improvement in a task-aligned training metric by default; an explicit launch-time override may disable it for a bounded run, and neither the condition nor its absence may establish goal acceptance or checkpoint promotion.
+- Invalid or inconsistent goals, run configurations, benchmarks, capacity rules, and execution settings must be rejected before execution or external mutation.
+- Each run must declare one complete observation, action, reward, discount, event, start-state, and episode-boundary contract and preserve its policy-facing semantics.
+- Training-only curricula and phase-specific behavior must be declared, and evidence outside the final evaluation contract must not establish acceptance or promotion.
 
 ### Evaluation and Evidence
 
-- Except for an explicitly declared deterministic-search workflow, acceptance and promotion must use goal-defined checkpoint evaluation rather than training metrics or playback behavior.
-- A deterministic-search workflow may accept only a policy that produces the goal’s success event within its resource limit, and the accepted policy must be published and playable.
-- Recorded datasets and results from recording, playback, integrity verification, or reexecution must never establish goal acceptance or checkpoint promotion.
-- Policy evaluation and playback must default to stochastic action sampling when the checkpoint defines a stochastic action distribution; fixed or programmatic policies must preserve their declared action-selection semantics without fabricating stochasticity. Playback may explicitly select another supported action-selection mode, but must visibly preserve that choice and never use playback-only counterfactual results as evaluation or promotion evidence.
+- Acceptance and promotion must use goal-defined checkpoint evaluation except in an explicitly declared deterministic-search workflow.
+- Deterministic search may accept only a policy that produces the goal’s success event within its resource limit; the accepted policy must be published and playable.
+- Recording, playback, integrity verification, reexecution, and their datasets or results must not establish acceptance or promotion.
+- Evaluation and playback must preserve declared action-selection semantics by default; playback counterfactuals must be visible and ineligible for evaluation or promotion evidence.
 
 ### Provenance and Security
 
-- Every run, cohort, campaign, result, and artifact must have a stable identity and enough provenance to reconstruct its goal, configuration, overrides, seed, source, runtime, environment, execution target, and launch context.
-- Programmatic policy artifact identities must describe their execution semantics independently of the algorithm that produced them, while preserving producer provenance.
-- References produced by the active workflow must remain readable; no compatibility is required for purged legacy W&B or R2 data or retired PostgreSQL and Fleet state and identifiers.
-- Generated outputs and secrets must remain outside tracked source, and normal operation must not expose credentials.
-- Externally supplied executable models must not run until their complete content is integrity-checked and the user has trusted their source or approved that invocation after an explicit authority-and-credential warning.
+- Every run, cohort, campaign, result, and artifact must have a stable identity and provenance covering its goal, configuration, overrides, seed, source, runtime, environment, target, and launch context.
+- Programmatic policy identities must describe execution semantics independently of their producing algorithm while preserving producer provenance.
+- Active references must remain readable; purged legacy W&B or R2 data and retired PostgreSQL or Fleet state require no compatibility.
+- Generated outputs and secrets must remain untracked, and normal operation must not expose credentials.
+- Externally supplied executable models must be integrity-checked in full before execution; playback must not require model pre-approval.
 - Installation must be reproducible, supply-chain hardened, resistant to known-bad releases, and compatible with supported workflows.
 
 ### Environment Compatibility
 
-- A first-time user must be able to run a bundled local training demonstration from the published GradLab package in one uvx command with a local ROM path, without cloning or persistently installing GradLab, configuring credentials, or pre-registering the ROM.
-- Supported environment providers must provide correct, isolated parallel execution with deterministic, nonduplicated episode streams. Resetting, completing, or forcing a boundary in one lane must not disturb any other lane.
-- Equivalent providers must preserve the same declared observations, actions, rewards, events, and episode semantics across training, evaluation, and playback. Switching providers must change only provider identity and remain traceable.
-- GradLab must own reward scaling and clipping uniformly across all environments; scaling is applied before clipping, and equivalent environment-provider reward transforms must be disabled and ignored.
-- Provider-specific requirements must not leak into common workflows, and every supported environment must remain trainable, evaluable, and playable through those workflows.
+- A first-time user must be able to run a bundled local demonstration from the published package in one uvx command, without cloning, persistent installation, credentials, or preregistration of environment-specific inputs.
+- Supported providers must offer isolated parallel execution with deterministic, nonduplicated episode streams and no cross-lane reset or boundary effects.
+- Equivalent providers must preserve declared observation, action, reward, event, and episode semantics; switching providers may change only traceable provider identity.
+- GradLab must apply reward scaling before clipping and disable equivalent provider-side transforms.
+- Provider-specific requirements must not leak into common workflows, and every supported environment must remain trainable, evaluable, and playable through them.
 
 ### Training Results and Publication
 
-- Every training backend must honor the common local and queued lifecycle contract for progress reporting, canonical outcome metrics, checkpoint policy, graceful stopping, and final artifact production; algorithm-specific telemetry may extend but not replace it.
-- Training must durably preserve authoritative, unambiguous metrics and checkpoints by default, keep scientific evidence separate from job state and diagnostics, and prevent observability systems from throttling training or determining scientific outcomes.
-- Training and evaluation metrics for one logical run must be available together, with one writer responsible for the metrics run so evaluation cannot race training.
-- Heavy checkpoints, evaluation evidence, replays, and recovery data must live in object storage rather than the metrics service.
-- Evaluation must run independently on separately scheduled compute, and a goal-valid acceptance result must stop training at the next safe learner boundary.
-- For queued runs with publication enabled, every ready periodic and final checkpoint must be published independently of evaluation and remain downloadable and playable without private infrastructure credentials.
-- Published policies must include the policy artifact, portable provenance and reproducibility metadata, verified evaluation evidence, and a representative browser-safe replay for visual behavior.
+- Every backend must honor the common local and queued lifecycle for progress, outcome metrics, checkpointing, graceful stopping, and final artifacts.
+- Algorithm-specific telemetry may extend but not replace the common lifecycle.
+- Training must preserve authoritative metrics and checkpoints by default, separately from job state and diagnostics.
+- Observability must neither throttle training nor determine scientific outcomes.
+- One writer must keep a logical run’s training and evaluation metrics together without races.
+- Checkpoints, evaluation evidence, replays, and recovery data must reside in object storage rather than the metrics service.
+- Evaluation must run on separately scheduled compute.
+- Valid acceptance must stop training at the next safe learner boundary, close new automatic evaluation admission, allow submitted evaluations to finish, and preserve unevaluated checkpoints.
+- Publication-enabled queued runs must publish every ready periodic and final checkpoint independently of evaluation.
+- Published checkpoints must remain downloadable and playable without private infrastructure credentials.
+- Published policies must include the artifact, portable provenance, reproducibility metadata, verified evaluation evidence, and a representative browser-safe replay.
 
 ### Playback and Human Control
 
-- Playback must support local and remote artifacts, default to the checkpoint’s training-time policy-facing semantics, make evaluation-contract reproduction and counterfactual departures explicit, keep concurrent viewers on one trajectory, and refresh mutable references when their content changes.
-- Bare playback must present a fast, searchable Environment → Goal → automatically derived Goal Variant → Runs flow, with public checkpoints selected within a run; goal variants must be identified by their authored and fully materialized effective goal contracts, labeled with the goal name plus a normalized proven diff from the source-revision canonical contract, and served from a precomputed rebuildable catalog without synchronous run, object, or artifact scans; environment, goal, goal-variant, run, and checkpoint selections must have hierarchical resource routes with browser-history navigation; checkpoint lists must show available goal-required acceptance results without fabricating unavailable partial evidence; a less-specific CLI W&B reference must preselect its matching level, while an exact CLI checkpoint source may enter playback directly.
-- Run-selection views must visibly distinguish checked-in recipes from launch-time configuration overrides and make exact override values searchable without requiring a new checked-in recipe.
-- Interactive playback must provide independently arrangeable, synchronized views of game frames, policy inputs and decisions, transition facts, and bounded histories without inspection changing the trajectory or policy randomness.
-- Playback must declare policy introspection capabilities, present only semantically applicable actor, critic, action-value, program, attribution, and calibration diagnostics, and visibly distinguish unsupported, not-yet-observed, and contract-incomparable data without fabricating values.
-- Critic calibration diagnostics must compare value estimates with realized returns only when environment, reward, discount, action-sampling, and episode-boundary/bootstrap semantics match training; otherwise the comparison must be visibly unavailable.
-- Human control must preserve declared action semantics, fail safe when focus or control is lost, and keep all human-intervened results ineligible for acceptance or promotion.
+- Playback must support local and remote artifacts, default to training-time policy semantics, and distinguish evaluation reproduction from counterfactual departures.
+- Concurrent viewers must share one trajectory, and mutable references must refresh when their content changes.
+- Bare playback must provide a fast, searchable Environment → Goal → derived Goal Variant → Run → public Checkpoint flow with hierarchical browser-history routes.
+- Goal variants must derive from fully materialized contracts and be labeled by the goal plus a normalized, proven difference from its canonical contract.
+- Playback discovery must use a rebuildable precomputed catalog, avoid synchronous storage scans, display only available acceptance evidence, and progressively resolve CLI references.
+- Run selection must distinguish checked-in recipes from searchable launch-time overrides without requiring new recipes.
+- Interactive playback must provide independently arranged, synchronized views of frames, policy inputs and decisions, transition facts, and bounded histories.
+- Inspection must not alter the trajectory or policy randomness.
+- Playback must expose only semantically applicable actor, critic, action-value, program, attribution, and calibration diagnostics.
+- Unsupported, unobserved, and contract-incomparable diagnostics must remain visibly distinct without fabricated values.
+- Critic calibration may compare values with realized returns only when environment, reward, discount, action sampling, and episode-boundary semantics match training.
+- Human control must preserve declared action semantics and fail safely when focus or control is lost.
+- Human-intervened results must remain ineligible for acceptance or promotion.
 
 ### Queued Operation and Benchmarks
 
-- Queued execution must be explicit, fail closed, isolated, and reproducible. Attempts must preserve exact provenance and durable results across interruption and retries, report only evidence-backed states, and clean unused resources without affecting active work.
-- Each v1 training run must execute in one container while compute placement supports local machines and cost-bounded cloud capacity without provider-specific research code.
-- The orchestration stack must minimize independently operated services and must not require a project-owned relational database.
-- The orchestration lifecycle must provide a credential-free deterministic certification gate with replayable failure evidence for authority, delivery, evaluation-driven stopping, recovery, cancellation, and terminal-state correctness.
-- The clean-slate orchestration refactor is accepted only after a B3 Mario Level1-1 run reports its training and evaluation metrics, durably publishes every checkpoint, completes the goal-owned 100-episode acceptance evaluation, and early-stops because all 100 episodes succeed.
-- Benchmark claims must be reproducible and compare equivalent environments, semantics, workloads, concurrency, and host-load conditions.
+- Queued execution must be fail-closed, isolated, and reproducible.
+- Retries must preserve exact provenance and durable results.
+- Reported states must be evidence-backed, and cleanup must not affect active work.
+- Each v1 training run must execute in one container.
+- Compute placement must support local machines and cost-bounded cloud capacity without provider-specific research code.
+- The orchestration stack must minimize independently operated services and require no project-owned relational database.
+- Orchestration must provide a credential-free deterministic certification gate with replayable evidence for authority, delivery, evaluation-driven stopping, recovery, cancellation, and terminal correctness.
+- Benchmark claims must compare equivalent environments, semantics, workloads, concurrency, and host-load conditions reproducibly.

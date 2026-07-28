@@ -15,7 +15,7 @@ from huggingface_hub.utils import validate_repo_id
 from jinja2 import Environment, FileSystemLoader, StrictUndefined
 from pydantic import Field, StringConstraints
 
-from gradlab.action_contract import configured_action_meanings
+from gradlab.action_contract import action_contract_meanings, configured_action_meanings
 from gradlab.boundary_schema import BoundaryModel, validate_boundary
 from gradlab.env_registry import game_family_for_environment
 from gradlab.file_utils import file_sha256 as sha256_file
@@ -324,7 +324,26 @@ def policy_variant_from_contract(
 
     action = _require_mapping(task.get("action"), label="publication task.action")
     action_set = str(action.get("set") or "").strip()
-    if isinstance(action_contract, Mapping) and action_contract.get("preset"):
+    if (
+        isinstance(action_contract, Mapping)
+        and action_contract.get("schema_version") is not None
+    ):
+        provider_contract = _require_mapping(
+            action_contract.get("provider"),
+            label="publication runtime action contract provider",
+        )
+        action_set = str(
+            provider_contract.get("preset")
+            or provider_contract.get("mode")
+            or action_set
+        ).strip()
+        meanings = action_contract_meanings(action_contract)
+        if not meanings:
+            raise ValueError(
+                "publication runtime action contract requires semantic IDs "
+                "for every discrete action"
+            )
+    elif isinstance(action_contract, Mapping) and action_contract.get("preset"):
         action_set = str(action_contract["preset"]).strip()
         meanings = action_contract.get("meanings")
         if not isinstance(meanings, Sequence) or isinstance(meanings, str | bytes) or not meanings:
@@ -360,7 +379,11 @@ def publication_identity_from_model_metadata(
     )
     task = _require_mapping(environment.get("task"), label="model metadata environment.task")
     action_contract = (
-        training.get("action") if isinstance(training.get("action"), Mapping) else None
+        training.get("action_contract")
+        if isinstance(training.get("action_contract"), Mapping)
+        else training.get("action")
+        if isinstance(training.get("action"), Mapping)
+        else None
     )
     if action_contract is None:
         provider_args = environment.get("provider_args")

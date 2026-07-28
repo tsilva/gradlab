@@ -24,7 +24,6 @@ class PlaybackHost:
     """Stable web-server facade for zero or one replaceable playback runner."""
 
     SOURCE_COMMANDS = {
-        "approve_source",
         "browse_sources",
         "cancel_source",
         "retry_source",
@@ -53,7 +52,6 @@ class PlaybackHost:
         self._phase = "selecting"
         self._message = ""
         self._error = ""
-        self._approval: dict[str, Any] | None = None
         self._route = dict(initial_route or {"level": "environments"})
         self._last_source = initial_source
         self._session_change = 0
@@ -125,7 +123,6 @@ class PlaybackHost:
             "message": self._message,
             "error": self._error,
             "route": dict(self._route),
-            "approval": self._approval,
             "has_active_runner": self._active is not None,
             "source": self._last_source.to_dict() if self._last_source is not None else None,
         }
@@ -237,13 +234,11 @@ class PlaybackHost:
         *,
         message: str = "",
         error: str = "",
-        approval: dict[str, Any] | None = None,
     ) -> None:
         with self._lock:
             self._phase = phase
             self._message = message
             self._error = error
-            self._approval = approval
             self._revision += 1
 
     def _progress(self, generation: int, phase: str, message: str) -> None:
@@ -256,13 +251,11 @@ class PlaybackHost:
         self,
         generation: int,
         candidate: PlaybackCandidate,
-        approval_hash: str,
     ) -> None:
         previous: ActivePlayback | None = None
         try:
             active = self.loader.activate(
                 candidate,
-                approval_hash=approval_hash,
                 progress=lambda phase, message: self._progress(generation, phase, message),
             )
             with self._lock:
@@ -280,7 +273,6 @@ class PlaybackHost:
                 self._phase = "active"
                 self._message = ""
                 self._error = ""
-                self._approval = None
                 self._revision += 1
                 self._session_change += 1
             if previous is not None:
@@ -312,14 +304,7 @@ class PlaybackHost:
                     candidate.cleanup()
                     return
                 self._candidate = candidate
-            if candidate.approval_required:
-                self._set_state(
-                    "approval_required",
-                    message="Review this exact executable model closure",
-                    approval=candidate.approval_payload(),
-                )
-                return
-            self._activate_candidate(generation, candidate, candidate.staged.manifest_hash)
+            self._activate_candidate(generation, candidate)
         except Exception as exc:
             if candidate is not None:
                 candidate.cleanup()
@@ -340,7 +325,6 @@ class PlaybackHost:
             self._phase = "resolving"
             self._message = "Resolving model source"
             self._error = ""
-            self._approval = None
             self._revision += 1
             worker = threading.Thread(
                 target=self._prepare_worker,
@@ -435,26 +419,6 @@ class PlaybackHost:
                         reward_clip_override=reward_clip_override,
                     )
                 )
-            elif command.name == "approve_source":
-                approval_hash = str(command.payload.get("manifest_hash") or "").strip()
-                with self._lock:
-                    candidate = self._candidate
-                    generation = self._generation
-                if candidate is None or self._phase != "approval_required":
-                    raise ValueError("no model closure is awaiting approval")
-                worker = threading.Thread(
-                    target=self._activate_candidate,
-                    args=(generation, candidate, approval_hash),
-                    name="gradlab-playback-activator",
-                    daemon=True,
-                )
-                with self._lock:
-                    self._worker = worker
-                    self._phase = "loading"
-                    self._message = "Loading approved model"
-                    self._approval = None
-                    self._revision += 1
-                worker.start()
             elif command.name == "browse_sources":
                 with self._lock:
                     route = command.payload.get("route")
@@ -465,7 +429,6 @@ class PlaybackHost:
                     self._phase = "selecting"
                     self._message = ""
                     self._error = ""
-                    self._approval = None
                     self._revision += 1
                 self.clear_input()
                 with self._lock:
@@ -484,7 +447,6 @@ class PlaybackHost:
                     self._phase = "active" if self._active is not None else "selecting"
                     self._message = ""
                     self._error = ""
-                    self._approval = None
                     self._revision += 1
                 if candidate is not None:
                     candidate.cleanup()

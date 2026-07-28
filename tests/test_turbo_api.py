@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from types import MappingProxyType, SimpleNamespace
 
+import gymnasium as gym
 import numpy as np
 import pytest
 
@@ -52,6 +53,7 @@ def _contract_env():
         action_table=(0, 1),
         action_meanings=("NOOP", "FIRE"),
         action_table_hash="sha256",
+        single_action_space=gym.spaces.Discrete(2),
         state_catalog=("Start",),
         active_state_indices=lambda: active,
         capabilities=MappingProxyType(capabilities),
@@ -84,3 +86,10 @@ def test_rejects_mutable_contract_declarations() -> None:
     with pytest.raises(TypeError, match="capabilities must be immutable"):
         validate_turbo_vector_env(env, "test-turbo")
 
+
+def test_rejects_action_table_cardinality_that_disagrees_with_the_space() -> None:
+    env = _contract_env()
+    env.single_action_space = gym.spaces.Discrete(3)
+
+    with pytest.raises(ValueError, match="table length"):
+        validate_turbo_vector_env(env, "test-turbo")

@@ -10,6 +10,7 @@ from typing import Any
 import gymnasium as gym
 import numpy as np
 
+from gradlab.action_contract import action_contract_meanings
 
 ACTION_PROGRAM_SCHEMA_VERSION = 1
 ACTION_PROGRAM_MEMBER = "action_program.json"
@@ -137,6 +138,17 @@ class ActionProgramPolicy:
                 "action-program action table does not match the playback environment action space"
             )
         self.action_space = action_space
+
+    def bind_action_contract(self, action_contract: Mapping[str, Any]) -> None:
+        runtime_names = action_contract_meanings(action_contract)
+        if not runtime_names:
+            raise ValueError(
+                "action-program playback requires semantic IDs for every runtime action"
+            )
+        if runtime_names != self.action_names:
+            raise ValueError(
+                "action-program semantic action table does not match the playback environment"
+            )
 
     def reset_episode(self) -> None:
         self._run_indices.fill(0)

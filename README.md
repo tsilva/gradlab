@@ -25,12 +25,13 @@ One supervisor inside the training container is the only W&B process. The
 learner performs no network I/O: it emits local metric and checkpoint events
 and responds to a cooperative stop signal. The supervisor uploads and verifies
 checkpoints, dispatches Modal evaluations, observes accepted results, signals
-the learner at a safe boundary, and drains all frozen work before the task can
-succeed.
+the learner at a safe boundary, closes automatic evaluation admission, and
+drains every evaluation submitted before acceptance before the task can succeed.
 
 dstack exit status alone never establishes scientific success. The
-authoritative terminal receipt must prove complete checkpoint/evaluation
-inventories, promotion, W&B delivery, and drain.
+authoritative terminal receipt must prove the complete checkpoint inventory,
+the terminal inventory of automatically submitted evaluations, promotion,
+W&B delivery, and drain.
 
 ## Install
 
@@ -170,8 +171,10 @@ gradlab experiment retry --run <gradlab-run-id>
 
 Retry preserves the logical run ID and creates a new attempt ID. It requires a
 terminal prior dstack attempt, an expired writer lease, and a 30-second
-quiescence interval. A run whose learner already finished resumes in
-drain-only mode and cannot retrain.
+quiescence interval. A run with a published final checkpoint resumes in
+drain-only mode and cannot retrain. If acceptance or a training plateau was
+already recorded but the final checkpoint was not published, recovery resumes
+the latest checkpoint only long enough to request a safe finalization boundary.
 
 For a short B3 integration smoke, use the checked-in
 `experiments/goals/SuperMarioBros-Nes-v0/Level1-1/recipes/dstack-smoke.yaml`
@@ -244,17 +247,32 @@ videos, episode evidence, ROMs, and recovery journals remain in R2.
 
 ## Evaluation and early stop
 
-Every ready periodic checkpoint and the natural final checkpoint is evaluated
-against the immutable goal-owned episode manifest. Modal validates the
-checkpoint, goal, recipe, environment, protocol, and episode-manifest hashes.
-Acceptance fails fast on the first valid failed episode and requires all 100
-episodes to pass.
+Ready periodic checkpoints are evaluated against the immutable goal-owned
+episode manifest until an accepted result closes automatic evaluation
+admission. Modal validates the checkpoint, goal, recipe, environment, protocol,
+and episode-manifest hashes. Acceptance fails fast on the first valid failed
+episode and requires all 100 episodes to pass.
 
 The supervisor polls results every two seconds. An accepted result requests
 learner stop within ten seconds; the learner stops cooperatively at a safe
-on-policy boundary and saves a final checkpoint. The ready set is then frozen,
-every member reaches a terminal eval state, and the lowest-step accepted
-checkpoint is promoted exactly once.
+on-policy boundary and saves a final checkpoint. Evaluations submitted before
+acceptance finish without retries, while later periodic and final checkpoints
+remain published but unevaluated for future explicit user action. The
+lowest-step accepted checkpoint is then promoted exactly once.
+
+Before submitting any newly ready evaluation, the supervisor reconciles
+durable results for existing attempts. This prevents a result that finished
+concurrently with a training plateau or final checkpoint from being missed.
+An intent that never crossed the submission boundary is recorded as deferred
+after acceptance; it is not sent to Modal.
+
+For an evaluated goal, a training plateau is provisional until evaluation
+drain settles. Acceptance wins even if the learner reached the plateau first.
+Without acceptance, the plateau becomes a scientific failure only when every
+published checkpoint has a valid rejected evaluation. Failed, expired, or
+otherwise incomplete evaluation evidence produces a resumable attempt instead.
+Evaluation attempts retain their own expiry windows; the 300-second terminal
+delivery deadline starts only after evaluations have settled.
 
 ## Goals, recipes, metrics, and reports
 
@@ -298,9 +316,9 @@ gradlab dataset play mario-level1-1 --episode 1
 gradlab dataset upload mario-level1-1 <owner/repository>
 ```
 
-External SB3 checkpoints are Python-executable content. gradlab stages and hashes
-the complete model closure and requires approval before deserialization unless
-the exact source matches `GRADLAB_MODEL_SOURCE_ALLOWLIST`.
+External SB3 checkpoints are Python-executable content. gradlab stages, hashes,
+and re-verifies the complete model closure before deserialization. Playback
+performs these integrity checks automatically without a model pre-approval step.
 
 Published model releases use Hugging Face model cards and include a
 representative `replay.mp4` when the policy has visual behavior. Generated

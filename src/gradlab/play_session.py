@@ -15,7 +15,12 @@ os.makedirs(os.environ["MPLCONFIGDIR"], exist_ok=True)
 
 import numpy as np
 import torch
-from gradlab.action_contract import configured_action_meanings, configured_action_name
+from gradlab.action_contract import (
+    action_contract_meanings,
+    action_index_for_controls,
+    configured_action_meanings,
+    configured_action_name,
+)
 from gradlab.batch_runtime import StepDiagnostics
 from gradlab.env import (
     info_value_from_state_name,
@@ -589,10 +594,9 @@ class _PlaybackSession:
         self.info_vars = task_info_vars(config)
         self.conditioning_enabled = bool(task_conditioning(config).get("enabled"))
         self.configured_task_states = task_state_names(config) if self.conditioning_enabled else ()
-        try:
-            self.action_names = configured_action_meanings(config)
-        except ValueError:
-            self.action_names = ()
+        self.action_contract: Mapping[str, object] | None = None
+        self._refresh_action_contract()
+
         self.policy_obs = None
         self.current_frame: np.ndarray | None = None
         self.frames: deque[np.ndarray] | None = None
@@ -606,6 +610,19 @@ class _PlaybackSession:
         self.max_x_pos = 0
         self.interactive = False
         self.last_transition: _PlaybackTransition | None = None
+
+    def _refresh_action_contract(self) -> None:
+        runtime = getattr(self.env, "runtime", None)
+        contract = getattr(runtime, "action_contract", None)
+        if isinstance(contract, Mapping):
+            self.action_contract = contract
+            self.action_names = action_contract_meanings(contract)
+            return
+        self.action_contract = None
+        try:
+            self.action_names = configured_action_meanings(self.config)
+        except ValueError:
+            self.action_names = ()
 
     @property
     def termination_conditions(self) -> list[dict[str, object]]:
@@ -633,9 +650,14 @@ class _PlaybackSession:
         try:
             from gradlab.policy_runtime import bind_policy_action_space
 
-            bind_policy_action_space(self.model, next_env.action_space)
+            bind_policy_action_space(
+                self.model,
+                next_env.action_space,
+                getattr(getattr(next_env, "runtime", None), "action_contract", None),
+            )
             self.env = next_env
             self.config = next_config
+            self._refresh_action_contract()
             self.restart(seed, reset_episode_index=False)
         except Exception:
             self.env = previous_env
@@ -779,6 +801,8 @@ class _PlaybackSession:
         )
 
     def manual_action(self, labels: set[str] | tuple[str, ...] | list[str]) -> int:
+        if isinstance(getattr(self, "action_contract", None), Mapping):
+            return action_index_for_controls(self.action_contract, labels)
         requested = {str(label).strip().casefold() for label in labels if str(label).strip()}
         for index, meaning in enumerate(self.action_names):
             normalized = str(meaning).strip().casefold()

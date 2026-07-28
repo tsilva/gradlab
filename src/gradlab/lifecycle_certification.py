@@ -49,6 +49,7 @@ from gradlab.run_contracts import (
     TerminalReceipt,
 )
 from gradlab.run_supervisor import (
+    IncompleteEvaluationEvidence,
     METRIC_JOURNAL_RETENTION_DAYS,
     RunSupervisor,
     _terminal_outcome,
@@ -71,6 +72,7 @@ DEFAULT_SCENARIOS = (
     "wandb-retry-deduplication",
     "wandb-visibility-gating",
     "checkpoint-upload-retry",
+    "eval-result-reconciliation",
     "modal-ambiguous-submit",
     "cancellation-terminalization",
     "scratch-preservation-stop",
@@ -670,12 +672,25 @@ class LifecycleVerifier:
             )
 
         eval_rows = supervisor.store.evals()
+        checkpoint_ids = {str(row["checkpoint_id"]) for row in checkpoint_rows}
+        eval_checkpoint_ids = {str(row["checkpoint_id"]) for row in eval_rows}
+        unevaluated = [
+            row for row in checkpoint_rows if str(row["checkpoint_id"]) not in eval_checkpoint_ids
+        ]
         check(
-            "checkpoint-eval-bijection",
-            {row["checkpoint_id"] for row in checkpoint_rows}
-            == {row["checkpoint_id"] for row in eval_rows}
-            and len(checkpoint_rows) == len(eval_rows),
-            {"checkpoints": len(checkpoint_rows), "evals": len(eval_rows)},
+            "post-acceptance-checkpoints-remain-unevaluated",
+            eval_checkpoint_ids < checkpoint_ids
+            and all(
+                int(row["step"]) > max(int(eval_row["checkpoint_step"]) for eval_row in eval_rows)
+                for row in unevaluated
+            )
+            and any(str(row["purpose"]) == "periodic" for row in unevaluated)
+            and any(str(row["purpose"]) == "final" for row in unevaluated),
+            {
+                "checkpoints": len(checkpoint_rows),
+                "evals": len(eval_rows),
+                "unevaluated": [str(row["checkpoint_id"]) for row in unevaluated],
+            },
         )
         check(
             "all-evals-terminal",
@@ -863,6 +878,14 @@ def _scenario_full_lifecycle(root: Path) -> dict[str, Any]:
     fixture.clock.advance(5)
     supervisor.active_iteration()
     first_eval = supervisor.store.evals()[0]
+    fixture.record_checkpoint(prepared, step=255_000, kind="checkpoint")
+    fixture.clock.advance(5)
+    supervisor.active_iteration()
+    recorder.require(
+        "second-eval-launched-before-acceptance",
+        len(supervisor.store.evals(statuses=("submitted",))) == 2,
+        evidence={"submitted": len(supervisor.store.evals(statuses=("submitted",)))},
+    )
     _write_raw_result(prepared, accepted=True)
     fixture.clock.advance(2)
     supervisor.active_iteration()
@@ -872,16 +895,24 @@ def _scenario_full_lifecycle(root: Path) -> dict[str, Any]:
         evidence={"stop_reason": supervisor.stop_reason},
     )
 
+    fixture.record_checkpoint(prepared, step=258_000, kind="checkpoint")
     fixture.record_checkpoint(prepared, step=260_000, kind="final")
     fixture.clock.advance(5)
     supervisor.active_iteration()
-    pending = supervisor.store.evals(statuses=("submitted",))
-    final_position = next(
-        index
-        for index, row in enumerate(pending)
-        if int(row["checkpoint_step"]) == 260_000
+    recorder.require(
+        "post-acceptance-checkpoints-published-without-automatic-eval",
+        len(supervisor.store.checkpoint_publications()) == 4
+        and len(supervisor.store.evals()) == 2
+        and all(
+            int(row["checkpoint_step"]) not in {258_000, 260_000}
+            for row in supervisor.store.evals()
+        ),
+        evidence={
+            "checkpoints": len(supervisor.store.checkpoint_publications()),
+            "evals": len(supervisor.store.evals()),
+        },
     )
-    _write_raw_result(prepared, accepted=False, position=final_position)
+    _write_raw_result(prepared, accepted=False)
     fixture.clock.advance(2)
     supervisor.active_iteration()
     receipt = _finalize_success(prepared)
@@ -895,7 +926,7 @@ def _scenario_full_lifecycle(root: Path) -> dict[str, Any]:
         evidence={"episodes": 100},
     )
     recorder.require(
-        "final-rejection-does-not-displace-earlier-acceptance",
+        "already-submitted-rejection-does-not-displace-earlier-acceptance",
         prepared.supervisor.store.evals()[-1]["status"] == "rejected"
         and receipt.state == "succeeded",
         evidence={
@@ -1162,6 +1193,57 @@ def _scenario_checkpoint_upload_retry(root: Path) -> dict[str, Any]:
     }
 
 
+def _scenario_eval_result_reconciliation(root: Path) -> dict[str, Any]:
+    recorder = ScenarioRecorder("eval-result-reconciliation", [])
+    fixture = CertificationFixture(root)
+    prepared = fixture.prepare(run_number=39)
+    supervisor = prepared.supervisor
+    fixture.record_checkpoint(prepared, step=390, kind="checkpoint")
+    fixture.clock.advance(5)
+    supervisor.active_iteration()
+    recorder.require(
+        "first-eval-submitted",
+        len(prepared.backend.submissions) == 1,
+        evidence={"submissions": len(prepared.backend.submissions)},
+    )
+
+    fixture.record_checkpoint(prepared, step=395, kind="final")
+    _write_raw_result(prepared, accepted=True)
+    fixture.clock.advance(5)
+    supervisor.active_iteration()
+    statuses = [str(row["status"]) for row in supervisor.store.evals()]
+    recorder.require(
+        "durable-acceptance-reconciled-before-next-submit",
+        len(prepared.backend.submissions) == 1
+        and statuses == ["accepted", "deferred"]
+        and supervisor.eval_admission_closed
+        and supervisor.store.all_evals_settled(),
+        evidence={
+            "submissions": len(prepared.backend.submissions),
+            "statuses": statuses,
+            "admission_closed": supervisor.eval_admission_closed,
+        },
+    )
+    checkpoints, evals = supervisor._terminal_inventory()
+    recorder.require(
+        "deferred-intent-is-durable-terminal-inventory-evidence",
+        len(checkpoints) == 2
+        and [str(row["status"]) for row in evals] == ["accepted", "deferred"]
+        and evals[1]["result_sha256"] is None,
+        evidence={
+            "checkpoint_count": len(checkpoints),
+            "eval_inventory": evals,
+        },
+    )
+    return {
+        "invariants": recorder.invariants,
+        "evidence": {
+            "submissions": len(prepared.backend.submissions),
+            "statuses": statuses,
+        },
+    }
+
+
 def _scenario_modal_ambiguous_submit(root: Path) -> dict[str, Any]:
     recorder = ScenarioRecorder("modal-ambiguous-submit", [])
     fixture = CertificationFixture(root)
@@ -1419,8 +1501,8 @@ def _scenario_verifier_tamper_detection(root: Path) -> dict[str, Any]:
 def _scenario_early_stop_outcomes(root: Path) -> dict[str, Any]:
     recorder = ScenarioRecorder("early-stop-outcomes", [])
     fixture = CertificationFixture(root)
-    manifest = fixture.manifest(run_number=76)
-    fixture.authority.create_manifest(manifest)
+    prepared = fixture.prepare(run_number=76)
+    manifest = prepared.supervisor.manifest
     config = {
         "conditions": {
             "return_plateau": {
@@ -1460,6 +1542,13 @@ def _scenario_early_stop_outcomes(root: Path) -> dict[str, Any]:
         recorded_at=fixture.clock.utc_now(),
     )
     fixture.authority.create_early_stop(failure_receipt)
+    fixture.record_checkpoint(prepared, step=10, kind="final")
+    fixture.clock.advance(5)
+    prepared.supervisor.active_iteration()
+    _write_raw_result(prepared, accepted=False)
+    fixture.clock.advance(2)
+    prepared.supervisor.active_iteration()
+    prepared.supervisor._validate_no_acceptance_evidence()
     state, reason = _terminal_outcome(
         cancel_requested=False,
         failure=None,
@@ -1468,9 +1557,49 @@ def _scenario_early_stop_outcomes(root: Path) -> dict[str, Any]:
         early_stop=failure_receipt,
     )
     recorder.require(
-        "failure-stop-is-designed-non-resumable-failure",
+        "plateau-is-scientific-failure-after-valid-rejection",
         state == "failed" and reason == "early_stop_failure:return_plateau",
-        evidence={"state": state, "reason": reason},
+        evidence={
+            "state": state,
+            "reason": reason,
+            "eval_statuses": [
+                row["status"] for row in prepared.supervisor.store.evals()
+            ],
+        },
+    )
+
+    incomplete = fixture.prepare(run_number=77)
+    fixture.record_checkpoint(incomplete, step=10, kind="final")
+    fixture.clock.advance(5)
+    incomplete.supervisor.active_iteration()
+    incomplete.supervisor._mark_expired(
+        incomplete.supervisor.store.evals(statuses=("submitted",))[0],
+        error="simulated evaluation infrastructure failure",
+    )
+    incomplete_failure: BaseException | None = None
+    try:
+        incomplete.supervisor._validate_no_acceptance_evidence()
+    except IncompleteEvaluationEvidence as exc:
+        incomplete_failure = exc
+    incomplete_state, incomplete_reason = _terminal_outcome(
+        cancel_requested=False,
+        failure=incomplete_failure,
+        evaluation_required=True,
+        promotion=None,
+        early_stop=failure_receipt,
+    )
+    recorder.require(
+        "plateau-with-incomplete-eval-evidence-is-resumable",
+        isinstance(incomplete_failure, IncompleteEvaluationEvidence)
+        and incomplete_state == "resumable_failure"
+        and incomplete_reason == "evaluation_evidence_incomplete",
+        evidence={
+            "state": incomplete_state,
+            "reason": incomplete_reason,
+            "eval_statuses": [
+                row["status"] for row in incomplete.supervisor.store.evals()
+            ],
+        },
     )
 
     success_receipt = EarlyStopReceipt(
@@ -1566,6 +1695,7 @@ SCENARIOS: dict[str, Callable[[Path], dict[str, Any]]] = {
     "wandb-retry-deduplication": _scenario_wandb_retry_deduplication,
     "wandb-visibility-gating": _scenario_wandb_visibility_gating,
     "checkpoint-upload-retry": _scenario_checkpoint_upload_retry,
+    "eval-result-reconciliation": _scenario_eval_result_reconciliation,
     "modal-ambiguous-submit": _scenario_modal_ambiguous_submit,
     "cancellation-terminalization": _scenario_cancellation_terminalization,
     "scratch-preservation-stop": _scenario_scratch_preservation_stop,

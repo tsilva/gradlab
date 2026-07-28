@@ -13,7 +13,6 @@ export function mount({ definition }) {
         <div id="observation-empty" data-empty class="empty-state">No image stack is available.</div>
       </div>
       <pre id="model-input" data-input class="compact-pre">No policy input yet.</pre>
-      <p class="panel-foot">Pre-action observation and policy input.</p>
     `,
   });
   const canvas = element.querySelector("[data-canvas]");

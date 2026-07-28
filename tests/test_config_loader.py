@@ -121,7 +121,7 @@ items:
                 encoding="utf-8",
             )
 
-            with self.assertRaisesRegex(ValueError, "cyclic Hydra defaults chain"):
+            with self.assertRaisesRegex(ValueError, "cyclic config defaults chain"):
                 load_composed_mapping(first, cycle_label="test")
 
     def test_load_composed_mapping_composes_fragment_into_package(self) -> None:
@@ -164,6 +164,19 @@ train:
             },
         )
         self.assertEqual(composed.sources, (fragment.resolve(), goal.resolve()))
+
+    def test_load_composed_mapping_requires_explicit_packages(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "base.yaml").write_text("value: base\n", encoding="utf-8")
+            child = root / "child.yaml"
+            child.write_text(
+                "defaults:\n- base\n- _self_\nvalue: child\n",
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(ValueError, "explicit path@package"):
+                load_composed_mapping(child, cycle_label="test")
 
 
 if __name__ == "__main__":

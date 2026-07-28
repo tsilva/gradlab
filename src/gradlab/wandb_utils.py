@@ -122,5 +122,4 @@ def configure_wandb_metrics(run):
             step_metric="train/global_step",
             summary="last",
         )
-        run.define_metric("*", step_metric="orchestration/event_seq")
     return run

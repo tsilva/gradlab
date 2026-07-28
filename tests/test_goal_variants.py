@@ -73,6 +73,17 @@ def test_goal_variant_identity_uses_authored_and_effective_contracts() -> None:
     assert "sticky_probability" in projection["goal_variant_diff_json"]
 
 
+def test_goal_variant_identity_preserves_canonical_json_hash_bytes() -> None:
+    assert (
+        goal_variant_id(
+            goal_slug="SuperMarioBros-Nes-v0/Level1-1",
+            goal_contract_sha256_value="1" * 64,
+            effective_goal_contract_sha256="2" * 64,
+        )
+        == "goal-variant-a4af1a829454a35e02f38c72"
+    )
+
+
 def test_presentation_only_changes_do_not_fabricate_a_goal_diff() -> None:
     authored = goal_document()
     effective = deepcopy(authored)

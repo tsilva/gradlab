@@ -11,6 +11,7 @@ import numpy as np
 from stable_baselines3.common.callbacks import BaseCallback
 from stable_baselines3.common.logger import KVWriter
 
+from gradlab.action_contract import runtime_action_contract
 from gradlab.artifacts import install_model_bundle
 from gradlab.early_stop import (
     MetricEarlyStopStateMachine,
@@ -140,6 +141,9 @@ class LedgerCheckpointHelper(CallbackHelper):
                     state_archive_summary=state_archive_artifact_summary(
                         getattr(self.model, "env", None)
                     ),
+                    action_contract=runtime_action_contract(
+                        getattr(self.model, "env", None)
+                    ),
                 ),
             )
         started = time.perf_counter()
@@ -151,6 +155,7 @@ class LedgerCheckpointHelper(CallbackHelper):
             kind=kind,
             checkpoint_step_value=step,
             state_archive_summary=state_archive_artifact_summary(getattr(self.model, "env", None)),
+            action_contract=runtime_action_contract(getattr(self.model, "env", None)),
         )
         checkpoint_id = self.metric_store.record_checkpoint(
             run_name=str(self.train_config.get("run_name") or ""),

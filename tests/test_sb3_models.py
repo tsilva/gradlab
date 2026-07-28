@@ -3,6 +3,14 @@ from __future__ import annotations
 import pytest
 
 from gradlab.policy_models import resolve_policy_algorithm
+from gradlab.policy_registry import (
+    ALGORITHM_MODEL_CLASSES,
+    MODEL_CLASS_ALGORITHMS,
+    POLICY_ALGORITHM_SPECS,
+    RUNTIME_POLICY_ALGORITHMS,
+    SB3_ALGORITHMS,
+    default_action_selection_mode,
+)
 from gradlab.sb3_models import resolve_sb3_algorithm
 from gradlab.training_backend import load_training_backend
 
@@ -51,3 +59,17 @@ def test_dqn_is_portable_runtime_provenance_but_not_a_launchable_backend() -> No
     assert resolve_sb3_algorithm(metadata) == "dqn"
     with pytest.raises(ValueError, match="unknown training backend"):
         load_training_backend("sb3.dqn")
+
+
+def test_algorithm_registry_views_are_derived_from_authoritative_specs() -> None:
+    for algorithm_id, spec in POLICY_ALGORITHM_SPECS.items():
+        assert ALGORITHM_MODEL_CLASSES[algorithm_id] == frozenset(spec.model_classes)
+        assert all(
+            MODEL_CLASS_ALGORITHMS[model_class] == algorithm_id
+            for model_class in spec.model_classes
+        )
+        assert (algorithm_id in RUNTIME_POLICY_ALGORITHMS) is (
+            spec.runtime_family is not None
+        )
+        assert (algorithm_id in SB3_ALGORITHMS) is (spec.runtime_family == "sb3")
+        assert default_action_selection_mode(algorithm_id) == (spec.default_action_selection_mode)
