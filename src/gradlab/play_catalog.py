@@ -17,6 +17,7 @@ from gradlab.config_loader import load_mapping_document
 from gradlab.early_stop import EARLY_STOP_OPERATORS, normalize_metric_threshold_rules
 from gradlab.goal_variants import (
     GOAL_VARIANT_INDEX_SCHEMA_VERSION,
+    GOAL_VARIANT_RUN_INDEX_SCHEMA_VERSION,
     build_goal_variant_descriptor,
     goal_variant_id as compute_goal_variant_id,
     goal_variant_scope_key,
@@ -1579,6 +1580,20 @@ class PlayCatalog:
         metric_specs: tuple[tuple[RankCriterion, tuple[str, ...]], ...],
         fallback_metric_specs: tuple[tuple[RankCriterion, tuple[str, ...]], ...],
     ) -> tuple[dict[str, Any], ...]:
+        control_summaries = self._control_run_catalog(
+            entity=entity,
+            project=project,
+            selected_goal_slug=selected_goal_slug,
+            selected_goal_variant_id=selected_goal_variant_id,
+            selected_goal_contract_sha256=selected_goal_contract_sha256,
+            selected_effective_goal_contract_sha256=(
+                selected_effective_goal_contract_sha256
+            ),
+            metric_specs=metric_specs,
+            fallback_metric_specs=fallback_metric_specs,
+        )
+        if control_summaries is not None:
+            return control_summaries
         filters = {"config.goal_slug": selected_goal_slug} if selected_goal_slug else {}
         if selected_goal_contract_sha256:
             filters["config.goal_contract_sha256"] = selected_goal_contract_sha256
@@ -1661,6 +1676,135 @@ class PlayCatalog:
                     },
                 ).to_dict()
             )
+        _rank_run_summaries(
+            summaries,
+            primary=metric_specs,
+            fallback=fallback_metric_specs,
+        )
+        return tuple(summaries)
+
+    def _control_run_catalog(
+        self,
+        *,
+        entity: str,
+        project: str,
+        selected_goal_slug: str,
+        selected_goal_variant_id: str,
+        selected_goal_contract_sha256: str,
+        selected_effective_goal_contract_sha256: str,
+        metric_specs: tuple[tuple[RankCriterion, tuple[str, ...]], ...],
+        fallback_metric_specs: tuple[tuple[RankCriterion, tuple[str, ...]], ...],
+    ) -> tuple[dict[str, Any], ...] | None:
+        if self.control_bucket is None or not selected_goal_slug:
+            return None
+        scope_key = goal_variant_scope_key(
+            entity=entity,
+            project=project,
+            goal_slug=selected_goal_slug,
+        )
+        variant_index = self.control_bucket.get_json_optional(f"{scope_key}/index.json")
+        if variant_index is None:
+            return ()
+        if int(variant_index.get("schema_version") or 0) != GOAL_VARIANT_INDEX_SCHEMA_VERSION:
+            raise ValueError("unsupported goal variant index schema")
+        if variant_index.get("scope") != {
+            "entity": entity,
+            "project": project,
+            "goal_slug": selected_goal_slug,
+        }:
+            raise ValueError("goal variant index scope mismatch")
+        raw_variants = variant_index.get("variants")
+        if not isinstance(raw_variants, list):
+            raise ValueError("goal variant index variants must be a list")
+        variant_ids = [
+            str(item.get("variant_id") or "")
+            for item in raw_variants
+            if isinstance(item, Mapping)
+            and (
+                not selected_goal_variant_id
+                or item.get("variant_id") == selected_goal_variant_id
+            )
+        ]
+        if any(not value for value in variant_ids):
+            raise ValueError("goal variant index contains an invalid entry")
+
+        summaries: list[dict[str, Any]] = []
+        for variant_id in variant_ids:
+            document = self.control_bucket.get_json_optional(
+                f"{scope_key}/runs/{variant_id}.json"
+            )
+            if document is None:
+                continue
+            if (
+                int(document.get("schema_version") or 0)
+                != GOAL_VARIANT_RUN_INDEX_SCHEMA_VERSION
+            ):
+                raise ValueError("unsupported goal variant run index schema")
+            if document.get("scope") != {
+                "entity": entity,
+                "project": project,
+                "goal_slug": selected_goal_slug,
+                "variant_id": variant_id,
+            }:
+                raise ValueError("goal variant run index scope mismatch")
+            raw_runs = document.get("runs")
+            if not isinstance(raw_runs, list):
+                raise ValueError("goal variant run index runs must be a list")
+            for raw in raw_runs:
+                if not isinstance(raw, Mapping):
+                    raise ValueError("goal variant run index contains an invalid entry")
+                run_id = str(raw.get("run_id") or "")
+                metrics = raw.get("metrics")
+                authored_hash = str(raw.get("goal_contract_sha256") or "")
+                effective_hash = str(raw.get("effective_goal_contract_sha256") or "")
+                if (
+                    RUN_ID_PATTERN.fullmatch(run_id) is None
+                    or raw.get("goal_slug") != selected_goal_slug
+                    or raw.get("goal_variant_id") != variant_id
+                    or not isinstance(metrics, Mapping)
+                ):
+                    raise ValueError("goal variant run index contains an invalid run")
+                if (
+                    selected_goal_contract_sha256
+                    and authored_hash != selected_goal_contract_sha256
+                ):
+                    continue
+                if (
+                    selected_effective_goal_contract_sha256
+                    and effective_hash != selected_effective_goal_contract_sha256
+                ):
+                    continue
+                summaries.append(
+                    RunSummary(
+                        entity=entity,
+                        project=project,
+                        run_id=run_id,
+                        name=str(raw.get("name") or run_id),
+                        state=str(raw.get("state") or ""),
+                        goal=selected_goal_slug,
+                        recipe=str(raw.get("recipe_slug") or ""),
+                        recipe_sha256=str(raw.get("recipe_sha256") or ""),
+                        recipe_overrides=tuple(
+                            str(value)
+                            for value in raw.get("recipe_overrides", ())
+                            if str(value).strip()
+                        ),
+                        recipe_variant_id=str(raw.get("recipe_variant_id") or ""),
+                        goal_contract_sha256=authored_hash,
+                        effective_goal_contract_sha256=effective_hash,
+                        goal_variant_id=variant_id,
+                        goal_variant_label=str(raw.get("goal_variant_label") or ""),
+                        description=str(raw.get("description") or ""),
+                        seed=_safe_int(raw.get("seed")),
+                        created_at=str(raw.get("created_at") or ""),
+                        updated_at=str(raw.get("updated_at") or ""),
+                        url=str(raw.get("url") or ""),
+                        metrics={
+                            str(name): _safe_float(value)
+                            for name, value in metrics.items()
+                        },
+                    ).to_dict()
+                )
         _rank_run_summaries(
             summaries,
             primary=metric_specs,
@@ -1964,6 +2108,27 @@ class PlayCatalog:
     ) -> tuple[str, str]:
         if RUN_ID_PATTERN.fullmatch(run_id) is None:
             raise ValueError("run id must match gradlab-<32 lowercase hex>")
+        if self.control_bucket is not None:
+            manifest = self.control_bucket.get_json_optional(f"runs/{run_id}/manifest.json")
+            if manifest is not None:
+                wandb = manifest.get("wandb")
+                descriptor = manifest.get("goal_variant")
+                if (
+                    not isinstance(wandb, Mapping)
+                    or str(wandb.get("entity") or "") != entity
+                    or str(wandb.get("project") or "") != project
+                ):
+                    raise ValueError("run manifest W&B scope mismatch")
+                if not isinstance(descriptor, Mapping):
+                    raise ValueError("run manifest has no goal variant descriptor")
+                validated = validate_goal_variant_descriptor(descriptor)
+                goal_slug = str(validated["goal_slug"])
+                for goal in self._repository_goals(project=project):
+                    if goal.goal_slug == goal_slug:
+                        return goal.goal_id, str(validated["variant_id"])
+                raise ValueError(
+                    f"run manifest goal is not declared in the repository: {goal_slug}"
+                )
         run = self._wandb_api().run(f"{entity}/{project}/{run_id}")
         config = dict(getattr(run, "config", {}) or {})
         goal_slug = str(config.get("goal_slug") or "").strip()

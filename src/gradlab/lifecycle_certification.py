@@ -24,6 +24,7 @@ from gradlab.early_stop import (
     validate_metric_early_stop_decision,
 )
 from gradlab.eval_backend import EvalHandle, EvalPoll
+from gradlab.goal_variants import build_goal_variant_descriptor
 from gradlab.modal_eval_protocol import execution_key
 from gradlab.policy_bundle import (
     build_recipe_document,
@@ -39,7 +40,7 @@ from gradlab.r2_store import (
     ConditionalWriteConflict,
     RunStorageConfig,
 )
-from gradlab.recipe_documents import compose_train_document
+from gradlab.recipe_documents import compose_train_document, load_goal_contract
 from gradlab.run_authority import LEASE_TTL_SECONDS, LeaseUnavailable, RunAuthority
 from gradlab.run_contracts import (
     EarlyStopReceipt,
@@ -341,6 +342,12 @@ class CertificationFixture:
         config["rom_asset_manifest"] = self.asset
         config["checkpoint_eval_backend"] = "modal"
         contract_document["train_config"] = config
+        contract_document["goal_variant"] = build_goal_variant_descriptor(
+            goal_slug="SuperMarioBros-Nes-v0/Level1-1",
+            source_sha=SOURCE_SHA,
+            authored_goal=load_goal_contract(GOAL_PATH, Path.cwd()),
+            effective_goal=dict(document["goal"]),
+        )
         self.composed = contract_document
         self.recipe_document = build_recipe_document(
             contract_document,
@@ -420,6 +427,7 @@ class CertificationFixture:
                 "rom_asset_manifest": self.asset,
             },
             storage=self.storage.manifest_locations(),
+            goal_variant=self.composed["goal_variant"],
         )
 
     def prepare(

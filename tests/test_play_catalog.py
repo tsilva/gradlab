@@ -406,6 +406,104 @@ def test_goal_variants_use_one_private_index_read_without_wandb(
     assert bucket.calls == [f"{scope}/index.json"]
 
 
+def test_run_catalog_uses_lifecycle_owned_variant_index_without_wandb(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    write_goal_catalog(tmp_path)
+    goal_path = tmp_path / "experiments" / "goals" / "Mario" / "Level1-1" / "_goal.yaml"
+    authored = load_goal_contract(goal_path, tmp_path, validate=False)
+    descriptor = build_goal_variant_descriptor(
+        goal_slug="Mario/Level1-1",
+        source_sha="a" * 40,
+        authored_goal=authored,
+        effective_goal=goal_for_contract_validation(authored, label="test goal"),
+    )
+    scope = goal_variant_scope_key(
+        entity="research",
+        project="Mario",
+        goal_slug="Mario/Level1-1",
+    )
+
+    class IndexedControlBucket:
+        calls: list[str] = []
+
+        def get_json_optional(self, key: str):
+            self.calls.append(key)
+            if key == f"{scope}/index.json":
+                return {
+                    "schema_version": 1,
+                    "scope": {
+                        "entity": "research",
+                        "project": "Mario",
+                        "goal_slug": "Mario/Level1-1",
+                    },
+                    "variants": [{**descriptor, "first_run_id": RUN_ID}],
+                }
+            assert key == f"{scope}/runs/{descriptor['variant_id']}.json"
+            return {
+                "schema_version": 1,
+                "scope": {
+                    "entity": "research",
+                    "project": "Mario",
+                    "goal_slug": "Mario/Level1-1",
+                    "variant_id": descriptor["variant_id"],
+                },
+                "runs": [
+                    {
+                        "run_id": RUN_ID,
+                        "attempt_id": "attempt-" + "b" * 16,
+                        "name": "Indexed run",
+                        "state": "succeeded",
+                        "goal_slug": "Mario/Level1-1",
+                        "recipe_slug": "ppo",
+                        "recipe_sha256": "f" * 64,
+                        "recipe_overrides": [],
+                        "recipe_variant_id": "base",
+                        "goal_contract_sha256": descriptor["goal_contract_sha256"],
+                        "effective_goal_contract_sha256": descriptor[
+                            "effective_goal_contract_sha256"
+                        ],
+                        "goal_variant_id": descriptor["variant_id"],
+                        "goal_variant_label": descriptor["label"],
+                        "description": "lifecycle projection",
+                        "seed": 3,
+                        "created_at": "2026-01-02T00:00:00Z",
+                        "updated_at": "2026-01-03T00:00:00Z",
+                        "url": f"https://wandb.ai/research/Mario/runs/{RUN_ID}",
+                        "metrics": {
+                            "leader/checkpoint/step": 1_500_000,
+                            "eval/full/episode/return/mean": 321.25,
+                        },
+                    }
+                ],
+            }
+
+    bucket = IndexedControlBucket()
+    catalog = PlayCatalog(repo_root=tmp_path, control_bucket=bucket)
+    monkeypatch.setattr(
+        catalog,
+        "_wandb_api",
+        lambda: (_ for _ in ()).throw(
+            AssertionError("lifecycle-owned run index must avoid W&B")
+        ),
+    )
+
+    page = catalog.runs(
+        entity="research",
+        project="Mario",
+        goal_id="Level1-1",
+    )
+
+    assert [item["run_id"] for item in page.items] == [RUN_ID]
+    assert page.items[0]["description"] == "lifecycle projection"
+    assert page.items[0]["metrics"]["leader/checkpoint/step"] == 1_500_000.0
+    assert bucket.calls == [
+        f"{scope}/index.json",
+        f"{scope}/runs/{descriptor['variant_id']}.json",
+    ]
+
+
 def test_catalog_default_entity_loads_operator_configuration_once(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

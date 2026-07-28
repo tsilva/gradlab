@@ -30,9 +30,11 @@ from gradlab.run_contracts import (
 from gradlab.policy_bundle import model_document_path, recipe_document_path
 from gradlab.goal_variants import (
     GOAL_VARIANT_INDEX_SCHEMA_VERSION,
+    GOAL_VARIANT_RUN_INDEX_SCHEMA_VERSION,
     goal_variant_scope_key,
     validate_goal_variant_descriptor,
 )
+from gradlab.recipe_variants import recipe_variant_id
 
 
 LEASE_TTL_SECONDS = 60
@@ -110,6 +112,7 @@ class RunAuthority:
             create_only=True,
         )
         self.create_attempt_manifest(manifest)
+        self.register_goal_variant_best_effort(manifest)
         return etag
 
     def create_attempt_manifest(self, manifest: RunManifest) -> str:
@@ -198,10 +201,154 @@ class RunAuthority:
                     create_only=current is None,
                     if_match=current_etag,
                 )
+                self._upsert_goal_variant_run(manifest, state="running")
                 return document
             except ConditionalWriteConflict:
                 continue
         raise ConditionalWriteConflict("goal variant index changed during every CAS attempt")
+
+    def _upsert_goal_variant_run(
+        self,
+        manifest: RunManifest,
+        *,
+        state: str,
+        updated_at: str | None = None,
+        metrics: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        if manifest.goal_variant is None:
+            raise ValueError("run manifest has no goal variant descriptor")
+        descriptor = validate_goal_variant_descriptor(manifest.goal_variant)
+        entity = str(manifest.wandb.get("entity") or "").strip()
+        project = str(manifest.wandb.get("project") or "").strip()
+        scope_key = goal_variant_scope_key(
+            entity=entity,
+            project=project,
+            goal_slug=manifest.goal_slug,
+        )
+        variant_id = str(descriptor["variant_id"])
+        index_key = f"{scope_key}/runs/{variant_id}.json"
+        for _attempt in range(8):
+            current = self.control.get_json_optional(index_key)
+            current_etag = (
+                str(self.control.head(index_key)["etag"]) if current is not None else None
+            )
+            if current is None:
+                entries: list[dict[str, Any]] = []
+            else:
+                if (
+                    int(current.get("schema_version") or 0)
+                    != GOAL_VARIANT_RUN_INDEX_SCHEMA_VERSION
+                ):
+                    raise ValueError("unsupported goal variant run index schema")
+                if current.get("scope") != {
+                    "entity": entity,
+                    "project": project,
+                    "goal_slug": manifest.goal_slug,
+                    "variant_id": variant_id,
+                }:
+                    raise ValueError("goal variant run index scope mismatch")
+                raw_entries = current.get("runs")
+                if not isinstance(raw_entries, list):
+                    raise ValueError("goal variant run index runs must be a list")
+                entries = [dict(item) for item in raw_entries if isinstance(item, Mapping)]
+                if len(entries) != len(raw_entries):
+                    raise ValueError("goal variant run index contains an invalid entry")
+
+            by_id = {str(item.get("run_id") or ""): item for item in entries}
+            existing = by_id.get(manifest.run_id)
+            normalized_metrics = {
+                str(name): float(value)
+                for name, value in dict(metrics or {}).items()
+                if not isinstance(value, bool) and isinstance(value, int | float)
+            }
+            by_id[manifest.run_id] = {
+                "run_id": manifest.run_id,
+                "attempt_id": manifest.attempt_id,
+                "name": str(manifest.wandb.get("display_name") or manifest.run_id),
+                "state": str(state),
+                "goal_slug": manifest.goal_slug,
+                "recipe_slug": manifest.recipe_slug,
+                "recipe_sha256": manifest.recipe_sha256,
+                "recipe_overrides": list(manifest.recipe_overrides),
+                "recipe_variant_id": recipe_variant_id(
+                    recipe_slug=manifest.recipe_slug,
+                    source_sha=manifest.source_sha,
+                    recipe_overrides=manifest.recipe_overrides,
+                ),
+                "goal_contract_sha256": str(descriptor["goal_contract_sha256"]),
+                "effective_goal_contract_sha256": str(
+                    descriptor["effective_goal_contract_sha256"]
+                ),
+                "goal_variant_id": variant_id,
+                "goal_variant_label": str(descriptor["label"]),
+                "description": manifest.run_description,
+                "seed": manifest.seed,
+                "created_at": (
+                    str(existing.get("created_at") or manifest.created_at)
+                    if existing
+                    else manifest.created_at
+                ),
+                "updated_at": str(updated_at or manifest.created_at),
+                "url": str(manifest.wandb.get("url") or ""),
+                "metrics": (
+                    normalized_metrics
+                    if metrics is not None
+                    else dict(existing.get("metrics") or {})
+                    if existing
+                    else {}
+                ),
+            }
+            document = {
+                "schema_version": GOAL_VARIANT_RUN_INDEX_SCHEMA_VERSION,
+                "scope": {
+                    "entity": entity,
+                    "project": project,
+                    "goal_slug": manifest.goal_slug,
+                    "variant_id": variant_id,
+                },
+                "runs": sorted(
+                    by_id.values(),
+                    key=lambda item: (
+                        str(item.get("created_at") or ""),
+                        str(item.get("run_id") or ""),
+                    ),
+                    reverse=True,
+                ),
+            }
+            try:
+                self.control.put_json(
+                    index_key,
+                    document,
+                    create_only=current is None,
+                    if_match=current_etag,
+                )
+                return document
+            except ConditionalWriteConflict:
+                continue
+        raise ConditionalWriteConflict(
+            "goal variant run index changed during every CAS attempt"
+        )
+
+    def update_goal_variant_run_best_effort(
+        self,
+        manifest: RunManifest,
+        *,
+        state: str,
+        updated_at: str | None = None,
+        metrics: Mapping[str, Any] | None = None,
+    ) -> bool:
+        if manifest.goal_variant is None:
+            return False
+        try:
+            self._upsert_goal_variant_run(
+                manifest,
+                state=state,
+                updated_at=updated_at,
+                metrics=metrics,
+            )
+        except Exception:
+            return False
+        return True
 
     def record_goal_variant_registration(
         self,
@@ -876,17 +1023,47 @@ class RunAuthority:
             != int(selected.get("checkpoint_step") or 0)
         ):
             raise ValueError("promotion is not the lowest-step accepted checkpoint")
-        return self.control.put_json(
+        etag = self.control.put_json(
             f"{self.run_prefix(receipt.run_id)}/terminal.json",
             receipt.to_dict(),
             create_only=True,
         )
+        self._update_run_index_from_terminal(receipt, metrics=None)
+        return etag
 
-    def create_attempt_terminal(self, receipt: TerminalReceipt) -> str:
-        return self.control.put_json(
+    def create_attempt_terminal(
+        self,
+        receipt: TerminalReceipt,
+        *,
+        metrics: Mapping[str, Any] | None = None,
+    ) -> str:
+        etag = self.control.put_json(
             f"{self.run_prefix(receipt.run_id)}/attempts/{receipt.attempt_id}/terminal.json",
             receipt.to_dict(),
             create_only=True,
+        )
+        self._update_run_index_from_terminal(receipt, metrics=metrics)
+        return etag
+
+    def _update_run_index_from_terminal(
+        self,
+        receipt: TerminalReceipt,
+        *,
+        metrics: Mapping[str, Any] | None,
+    ) -> None:
+        document = self.manifest(receipt.run_id)
+        if document is None:
+            return
+        try:
+            manifest = RunManifest(**document)
+            manifest.validate()
+        except (TypeError, ValueError):
+            return
+        self.update_goal_variant_run_best_effort(
+            manifest,
+            state=receipt.state,
+            updated_at=receipt.completed_at,
+            metrics=metrics,
         )
 
     def has_accepted_eval(self, run_id: str) -> bool:

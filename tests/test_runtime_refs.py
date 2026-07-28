@@ -249,7 +249,7 @@ class RuntimeRefsTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "push the commit"):
                 runtime_refs.require_remote_source(SOURCE_SHA, branch="main")
 
-    def test_only_modal_backend_waits_for_modal_readiness(self) -> None:
+    def test_modal_readiness_wait_is_one_explicit_decision(self) -> None:
         args = SimpleNamespace(
             image_workflow=runtime_refs.DEFAULT_IMAGE_WORKFLOW,
             image_branch="main",
@@ -271,9 +271,9 @@ class RuntimeRefsTests(unittest.TestCase):
                 return_value=release,
             ) as modal_wait,
         ):
-            runtime_refs.runtime_release_from_args(args, checkpoint_eval_backend="local")
-            runtime_refs.runtime_release_from_args(args, checkpoint_eval_backend="none")
-            runtime_refs.runtime_release_from_args(args, checkpoint_eval_backend="modal")
+            runtime_refs.runtime_release_from_args(args, wait_for_modal=False)
+            runtime_refs.runtime_release_from_args(args, wait_for_modal=False)
+            runtime_refs.runtime_release_from_args(args, wait_for_modal=True)
 
         modal_wait.assert_called_once()
 
@@ -296,7 +296,7 @@ class RuntimeRefsTests(unittest.TestCase):
                 side_effect=AssertionError("branch lookup is unnecessary"),
             ),
         ):
-            actual = runtime_refs.runtime_release_from_args(args, checkpoint_eval_backend="local")
+            actual = runtime_refs.runtime_release_from_args(args, wait_for_modal=False)
 
         self.assertEqual(actual, release)
 
@@ -319,7 +319,7 @@ class RuntimeRefsTests(unittest.TestCase):
             ) as existing,
             mock.patch.object(runtime_refs, "wait_for_runtime_release") as wait,
         ):
-            actual = runtime_refs.runtime_release_from_args(args, checkpoint_eval_backend="local")
+            actual = runtime_refs.runtime_release_from_args(args, wait_for_modal=False)
 
         self.assertEqual(actual, release)
         existing.assert_called_once_with(
@@ -355,7 +355,7 @@ class RuntimeRefsTests(unittest.TestCase):
                         expected_runtime_input_sha256=None,
                         expected_runtime_build_source_sha=None,
                     ),
-                    checkpoint_eval_backend="local",
+                    wait_for_modal=False,
                 )
             with self.assertRaisesRegex(RuntimeError, "pinned research runtime"):
                 runtime_refs.runtime_release_from_args(
@@ -365,7 +365,7 @@ class RuntimeRefsTests(unittest.TestCase):
                         expected_runtime_input_sha256="c" * 64,
                         expected_runtime_build_source_sha="2" * 40,
                     ),
-                    checkpoint_eval_backend="local",
+                    wait_for_modal=False,
                 )
             actual = runtime_refs.runtime_release_from_args(
                 SimpleNamespace(
@@ -374,7 +374,7 @@ class RuntimeRefsTests(unittest.TestCase):
                     expected_runtime_input_sha256="b" * 64,
                     expected_runtime_build_source_sha="2" * 40,
                 ),
-                checkpoint_eval_backend="local",
+                wait_for_modal=False,
             )
 
         self.assertEqual(actual, release)
