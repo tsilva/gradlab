@@ -138,7 +138,6 @@ export const BUILTIN_PANEL_PRESETS = Object.freeze({
           kind: "line",
           title: "Value estimate vs realized return-to-go",
           metrics: ["policy/value", "policy/realized-return"],
-          foot: "For a comparable stochastic policy trajectory, selected-step residual is V(s) − G(s): positive overestimates, negative underestimates. This single-trajectory diagnostic is not the critic training loss.",
         },
       ],
     },

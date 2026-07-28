@@ -8,6 +8,10 @@ export function displayedStep(snapshot) {
   return snapshot?.transition?.step ?? snapshot?.session?.step;
 }
 
+export function timelineLabel(snapshot) {
+  return `STEP ${text(displayedStep(snapshot))}`;
+}
+
 export function number(value, digits = 3) {
   return Number.isFinite(Number(value)) ? Number(value).toFixed(digits) : "—";
 }

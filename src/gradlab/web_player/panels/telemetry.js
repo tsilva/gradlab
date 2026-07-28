@@ -289,7 +289,7 @@ export function descriptorAvailability(
     return { status: "available", message: "" };
   }
   if (!snapshot?.transition) {
-    return { status: "not-yet-observed", message: "Not yet observed." };
+    return { status: "not-yet-observed", message: "N/A" };
   }
   if (descriptor.key === "policy/entropy") {
     return {
@@ -303,7 +303,7 @@ export function descriptorAvailability(
       message: `Protocol error: ${descriptor.label} was declared but not supplied.`,
     };
   }
-  return { status: "not-yet-observed", message: "Not yet observed." };
+  return { status: "not-yet-observed", message: "N/A" };
 }
 
 export function formatTelemetryValue(value, descriptor = null) {

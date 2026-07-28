@@ -7,7 +7,7 @@ from unittest import mock
 
 import pytest
 
-from gradlab.local_train import LOCAL_ROM_CACHE_ENV, main
+from gradlab.local_train import LOCAL_ROM_CACHE_ENV, _play_uvx_launcher, main
 from gradlab.play import main as play_main
 from gradlab.play_runtime import resolve_playback_rom_binding
 from gradlab.recipe_catalog import (
@@ -86,6 +86,50 @@ def test_turbo_demo_uses_the_standard_mario_ppo_contract() -> None:
     assert backend["config"]["batch_size"] == 512
     assert config["early_stop"]["conditions"]["return_plateau"]["outcome"] == "failure"
     assert config["reward_shape"] == "speedrun-v1"
+
+
+def test_play_launcher_reuses_editable_local_uvx_source(tmp_path: Path) -> None:
+    with (
+        mock.patch(
+            "gradlab.local_train._distribution_direct_url",
+            return_value={
+                "url": tmp_path.resolve().as_uri(),
+                "dir_info": {"editable": True},
+            },
+        ),
+        mock.patch(
+            "gradlab.local_train._source_distribution",
+            return_value={"name": "gradlab", "version": "9.8.7"},
+        ),
+    ):
+        launcher = _play_uvx_launcher()
+
+    assert launcher == [
+        "uvx",
+        "--from",
+        str(tmp_path.resolve()),
+        "--with-editable",
+        str(tmp_path.resolve()),
+        "--refresh-package",
+        "gradlab",
+        "gradlab",
+    ]
+
+
+def test_play_launcher_pins_published_distribution() -> None:
+    with (
+        mock.patch(
+            "gradlab.local_train._distribution_direct_url",
+            return_value={},
+        ),
+        mock.patch(
+            "gradlab.local_train._source_distribution",
+            return_value={"name": "gradlab", "version": "9.8.7"},
+        ),
+    ):
+        launcher = _play_uvx_launcher()
+
+    assert launcher == ["uvx", "gradlab@9.8.7"]
 
 
 def test_local_train_materializes_credential_free_playable_run(
@@ -364,7 +408,8 @@ def test_local_mario_train_uses_direct_rom_without_registry_or_cache_mutation(
     )
     assert str(rom.resolve()) not in json.dumps(recipe)
     output = capsys.readouterr().out
-    assert "uvx gradlab@" in output
+    assert f"uvx --from {Path.cwd()} --with-editable {Path.cwd()}" in output
+    assert "--refresh-package gradlab gradlab play" in output
     assert f"--rom {rom.resolve()}" in output
 
 

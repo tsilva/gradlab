@@ -75,6 +75,9 @@ Each axis is configured with a W&B `max` summary reducer. W&B's public API may t
 its summary value as a reducer mapping such as `{"max": 5046272}` rather than as a bare number.
 Catalog and report consumers must unwrap the configured reducer value; a recipe's requested
 `timesteps` cap is not a substitute for the observed `train/global_step`.
+Before its first history row is logged, every concrete metric is explicitly bound to its applicable
+scientific axis. W&B's internal `Step` is delivery order only and must not become the default X-axis
+for scientific charts.
 
 Asynchronous evaluations may arrive after later training rows without changing their scientific
 X-axis. Each producer writes only its applicable scientific axis; durable delivery order uses

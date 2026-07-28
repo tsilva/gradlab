@@ -137,6 +137,8 @@ def test_action_program_runtime_exposes_cursor_without_fabricated_distribution()
     assert fallback.program["remaining_steps"] == 0
     assert first.distribution_kind is None
     assert first.probabilities is None
+    assert first.selected_probability is None
+    assert first.selected_rank is None
     assert first.value is None
     assert first.entropy is None
     assert first.log_probability is None

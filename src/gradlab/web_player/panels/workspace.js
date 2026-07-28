@@ -6,6 +6,8 @@ import {
 
 export const WORKSPACE_VERSION = 4;
 export const CUSTOM_PANEL_ID = /^panel-[0-9a-f]{8}-[0-9a-f-]{27}$/;
+const RETIRED_VALUE_RESIDUAL_FOOT =
+  "For a comparable stochastic policy trajectory, selected-step residual is V(s) − G(s): positive overestimates, negative underestimates. This single-trajectory diagnostic is not the critic training loss.";
 const BLOCK_KINDS = new Set([
   "stats",
   "line",
@@ -40,7 +42,9 @@ function normalizeBlock(value) {
   if (!value || typeof value !== "object" || !BLOCK_KINDS.has(value.kind)) return null;
   const block = { kind: value.kind };
   if (value.title) block.title = cleanTitle(value.title, "");
-  if (value.foot) block.foot = String(value.foot).slice(0, 320);
+  if (value.foot && value.foot !== RETIRED_VALUE_RESIDUAL_FOOT) {
+    block.foot = String(value.foot).slice(0, 320);
+  }
   if (value.kind === "stats" || value.kind === "line") {
     const metrics = [...new Set(
       (Array.isArray(value.metrics) ? value.metrics : [])

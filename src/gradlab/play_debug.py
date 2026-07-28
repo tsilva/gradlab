@@ -51,14 +51,18 @@ class PolicyDecision:
     @property
     def selected_probability(self) -> float | None:
         action = self.selected_discrete_action
-        if action is None:
+        if (
+            self.probabilities is None
+            or action is None
+            or not 0 <= action < self.probabilities.size
+        ):
             return None
-        return float(self.probabilities[action])
+        return float(self.probabilities.reshape(-1)[action])
 
     @property
     def selected_rank(self) -> int | None:
         probability = self.selected_probability
-        if probability is None:
+        if self.probabilities is None or probability is None:
             return None
         return 1 + int(np.count_nonzero(self.probabilities > probability))
 
@@ -145,9 +149,7 @@ def _decisions_from_distribution(
                 log_probability=float(log_probabilities[lane]),
                 entropy=None if entropies is None else float(entropies[lane]),
                 mode=modes[lane].copy(),
-                probabilities=(
-                    None if probabilities is None else probabilities[lane].copy()
-                ),
+                probabilities=(None if probabilities is None else probabilities[lane].copy()),
                 component_probabilities=tuple(
                     component[lane].copy() for component in component_probabilities
                 ),

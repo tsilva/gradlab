@@ -79,6 +79,21 @@ test("legacy workspace data is deliberately replaced instead of migrated", () =>
   assert.equal(workspace.revision.writer, "test");
 });
 
+test("retired value residual copy is removed from saved workspaces", () => {
+  const workspace = createDefaultWorkspace();
+  workspace.panels.value.config.blocks[0].foot =
+    "For a comparable stochastic policy trajectory, selected-step residual is V(s) − G(s): positive overestimates, negative underestimates. This single-trajectory diagnostic is not the critic training loss.";
+  workspace.panels["episode-return"].config.blocks[0].foot = "Keep this note.";
+
+  const normalized = normalizeWorkspace(workspace);
+
+  assert.equal(normalized.panels.value.config.blocks[0].foot, undefined);
+  assert.equal(
+    normalized.panels["episode-return"].config.blocks[0].foot,
+    "Keep this note.",
+  );
+});
+
 test("valid custom telemetry instances survive normalization", () => {
   const workspace = createDefaultWorkspace();
   workspace.panels[CUSTOM_ID] = createTelemetryInstance({

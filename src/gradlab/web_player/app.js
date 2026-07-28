@@ -8,7 +8,11 @@ import {
 } from "./panels/catalog.js";
 import { PanelManager } from "./panels/manager.js";
 import { PanelRuntime } from "./panels/runtime.js";
-import { displayedStep, text } from "./panels/shared.js";
+import {
+  DEFAULT_GRID_CELL_HEIGHT,
+  viewportGridCellHeight,
+} from "./panels/layout-sizing.js";
+import { text, timelineLabel } from "./panels/shared.js";
 import {
   bumpWorkspaceRevision,
   compareWorkspaceRevisions,
@@ -78,6 +82,7 @@ let panelRuntime = null;
 let sourceBrowser = null;
 let sourceBrowserPromise = null;
 let gridStack = null;
+let gridCellHeight = DEFAULT_GRID_CELL_HEIGHT;
 let syncingGrid = false;
 let panelManager = null;
 
@@ -434,6 +439,15 @@ function prepareRetainedEpisode(snapshot) {
   state.retainedEpisode = episode;
 }
 
+function hideGoExploreValuePanel(snapshot) {
+  if (snapshot?.policy?.provenance?.search_algorithm_id !== "go-explore") return false;
+  const panel = state.layout?.panels?.value;
+  if (!panel?.builtin || !panel.placement.visible) return false;
+  panel.placement.visible = false;
+  persistLayout();
+  return true;
+}
+
 function applySnapshot(snapshot) {
   state.pendingSnapshot = null;
   const previousEnvironmentId = state.liveSnapshot?.session?.env_id;
@@ -445,6 +459,7 @@ function applySnapshot(snapshot) {
     && previousEpisode !== nextEpisode
   );
   state.liveSnapshot = snapshot;
+  if (hideGoExploreValuePanel(snapshot)) void applyLayout();
   if (snapshot.run_state === "paused") state.inspectionPauseCommandId = null;
   if (snapshot.session?.env_id !== previousEnvironmentId) updateLayoutTitle();
   if (state.inspectionSequence !== null && episodeChanged) {
@@ -595,13 +610,7 @@ function renderWorkspaceStatus() {
   samplingStatus.hidden = ["recording", "dataset"].includes(live?.mode);
   samplingStatus.textContent = selectionLabel;
   samplingStatus.className = `badge ${counterfactualSelection ? "warning" : "muted"}`;
-  const timelineContext = [
-    state.inspectionSequence === null ? null : "INSPECTING",
-    `STEP ${text(displayedStep(shown))}`,
-    `SEQ ${text(shown?.sequence)}`,
-    state.inspectionSequence === null ? null : `LIVE ${text(live?.sequence)}`,
-  ];
-  $("#timeline-label").textContent = timelineContext.filter(Boolean).join(" · ");
+  $("#timeline-label").textContent = timelineLabel(shown);
 }
 
 function renderSnapshot() {
@@ -841,6 +850,21 @@ function gridWidgetFor(name, placement = state.layout.panels[name]?.placement) {
   };
 }
 
+function fitGridToViewport() {
+  if (!gridStack || state.windowId !== "main") return;
+  const dashboard = $("#dashboard");
+  const timeline = $("#timeline");
+  const nextCellHeight = viewportGridCellHeight({
+    viewportHeight: window.innerHeight,
+    dashboardTop: dashboard.getBoundingClientRect().top,
+    timelineHeight: timeline.hidden ? 0 : timeline.getBoundingClientRect().height,
+    rows: maxPanelRow(),
+  });
+  if (nextCellHeight === gridCellHeight) return;
+  gridCellHeight = nextCellHeight;
+  gridStack.cellHeight(gridCellHeight);
+}
+
 function syncGridNodes(nodes = null) {
   const current = nodes || $$(".grid-stack-item")
     .map((item) => item.gridstackNode)
@@ -890,6 +914,7 @@ async function applyLayout() {
     gridStack.batchUpdate(false);
     syncingGrid = false;
   }
+  fitGridToViewport();
   syncGridNodes();
   if (state.snapshot) {
     panelRuntime.renderSnapshot(state.snapshot, panelView());
@@ -1006,7 +1031,7 @@ function bindPanelElement(panel, name) {
 function bindPanelLayout() {
   gridStack = window.GridStack.init({
     animate: false,
-    cellHeight: 32,
+    cellHeight: DEFAULT_GRID_CELL_HEIGHT,
     column: 12,
     draggable: { handle: ".panel-drag", scroll: true },
     float: false,
@@ -1465,7 +1490,10 @@ panelRuntime = new PanelRuntime({
   },
 });
 
-window.addEventListener("resize", () => panelRuntime.resize());
+window.addEventListener("resize", () => {
+  fitGridToViewport();
+  panelRuntime.resize();
+});
 initWorkspace();
 updateControlState();
 connect();
