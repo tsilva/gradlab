@@ -2136,7 +2136,10 @@ class RunSupervisor:
             early_stop=(early_stop.to_dict() if early_stop is not None else None),
             state_archive=self.state_archive_publication,
         )
-        self.authority.create_attempt_terminal(receipt)
+        self.authority.create_attempt_terminal(
+            receipt,
+            metrics=self.store.latest_metrics(),
+        )
         self._emit(
             "attempt_terminal_created",
             state=receipt.state,

@@ -90,6 +90,7 @@ class RunAuthorityTests(unittest.TestCase):
                 "rom_asset_manifest": {"sha256": SHA},
             },
             storage=self.storage.manifest_locations(),
+            schema_version=3,
         )
 
     def test_identifiers_have_required_shapes(self) -> None:
@@ -155,6 +156,7 @@ class RunAuthorityTests(unittest.TestCase):
             }
         )
 
+        self.authority.create_manifest(manifest)
         first = self.authority.register_goal_variant(manifest)
         second = self.authority.register_goal_variant(manifest)
 
@@ -170,6 +172,32 @@ class RunAuthorityTests(unittest.TestCase):
             index["variants"][0]["variant_id"],
             descriptor["variant_id"],
         )
+        run_index_key = f"{scope}/runs/{descriptor['variant_id']}.json"
+        run_index = self.authority.control.get_json(run_index_key)
+        self.assertEqual(run_index["runs"][0]["run_id"], manifest.run_id)
+        self.assertEqual(run_index["runs"][0]["state"], "running")
+        self.assertEqual(run_index["runs"][0]["recipe_variant_id"], "base")
+
+        receipt = TerminalReceipt(
+            run_id=manifest.run_id,
+            attempt_id=manifest.attempt_id,
+            state="failed",
+            acceptance_required=True,
+            stop_reason="training_cap_without_acceptance",
+            final_step=100,
+            checkpoint_inventory=[],
+            eval_inventory=[],
+            wandb_high_water_mark=1,
+            drain={"complete": True},
+            completed_at=utc_now(),
+        )
+        self.authority.create_attempt_terminal(
+            receipt,
+            metrics={"train/global_step": 100.0},
+        )
+        updated = self.authority.control.get_json(run_index_key)["runs"][0]
+        self.assertEqual(updated["state"], "failed")
+        self.assertEqual(updated["metrics"], {"train/global_step": 100.0})
 
     def test_lease_takeover_requires_expiry_and_old_etag_cannot_renew(self) -> None:
         run_id = new_run_id()

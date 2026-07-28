@@ -393,6 +393,13 @@ class MetricStore(SqliteStore):
             ).fetchone()
         return None if row is None else float(row["value"])
 
+    def latest_metrics(self) -> dict[str, float]:
+        with self.connection() as connection:
+            rows = connection.execute(
+                "SELECT name, value FROM metric_latest ORDER BY name"
+            ).fetchall()
+        return {str(row["name"]): float(row["value"]) for row in rows}
+
     def latest_metric_sample(self, name: str) -> tuple[float, int] | None:
         with self.connection() as connection:
             row = connection.execute(

@@ -9,6 +9,7 @@ from unittest.mock import MagicMock, patch
 from gradlab.early_stop import MetricEarlyStopStateMachine, MetricSample
 from gradlab.eval_backend import EvalHandle, EvalPoll
 from gradlab.file_utils import atomic_write_json
+from gradlab.goal_variants import build_goal_variant_descriptor
 from gradlab.metric_names import TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_MEAN
 from gradlab.policy_bundle import (
     build_recipe_document,
@@ -16,7 +17,7 @@ from gradlab.policy_bundle import (
     evaluation_contract_sha256,
 )
 from gradlab.r2_store import BucketConfig, RunStorageConfig
-from gradlab.recipe_documents import compose_train_document
+from gradlab.recipe_documents import compose_train_document, load_goal_contract
 from gradlab.run_authority import RunAuthority
 from gradlab.run_contracts import (
     CheckpointManifest,
@@ -85,6 +86,12 @@ class RunSupervisorTests(unittest.TestCase):
         contract_config["rom_asset_manifest"] = self.asset
         contract_config["checkpoint_eval_backend"] = "modal"
         contract_document["train_config"] = contract_config
+        contract_document["goal_variant"] = build_goal_variant_descriptor(
+            goal_slug="SuperMarioBros-Nes-v0/Level1-1",
+            source_sha=SOURCE_SHA,
+            authored_goal=load_goal_contract(GOAL, Path.cwd()),
+            effective_goal=dict(document["goal"]),
+        )
         portable_recipe = build_recipe_document(
             contract_document,
             repo_root=Path.cwd(),
@@ -146,6 +153,7 @@ class RunSupervisorTests(unittest.TestCase):
                 "rom_asset_manifest": self.asset,
             },
             storage=self.storage.manifest_locations(),
+            goal_variant=contract_document["goal_variant"],
         )
         self.authority.create_manifest(self.manifest)
 
@@ -661,6 +669,12 @@ class RunSupervisorTests(unittest.TestCase):
         contract_config["rom_asset_manifest"] = self.asset
         contract_config["checkpoint_eval_backend"] = "modal"
         contract_document["train_config"] = contract_config
+        contract_document["goal_variant"] = build_goal_variant_descriptor(
+            goal_slug="SuperMarioBros-Nes-v0/Level1-1",
+            source_sha=SOURCE_SHA,
+            authored_goal=load_goal_contract(GOAL, Path.cwd()),
+            effective_goal=dict(document["goal"]),
+        )
         portable_recipe = build_recipe_document(
             contract_document,
             repo_root=Path.cwd(),

@@ -251,7 +251,7 @@ class ConfigValidationTests(unittest.TestCase):
             train_config["checkpoint_eval_environment"]["task"]["reward"],
             expected_reward,
         )
-        self.assertEqual(document["goal"]["train"]["checkpoint_eval_backend"], "modal")
+        self.assertEqual(document["goal"]["evaluation_mode"], "evaluated")
         eval_config = document["goal"]["eval"]["environment"]["env_config"]
         self.assertEqual(eval_config["n_envs"], 16)
         self.assertEqual(eval_config["env_args"]["num_threads"], 16)
@@ -492,7 +492,10 @@ class ConfigValidationTests(unittest.TestCase):
     def test_goal_validator_rejects_deterministic_policy_eval(self) -> None:
         with self.assertRaisesRegex(ValueError, "eval.policy.stochastic must be true"):
             experiment_contracts._validate_goal_eval(
-                {"eval": {"episodes": 1, "policy": {"stochastic": False}}},
+                {
+                    "evaluation_mode": "evaluated",
+                    "eval": {"episodes": 1, "policy": {"stochastic": False}},
+                },
                 label="goal",
             )
 
@@ -738,8 +741,6 @@ class ConfigValidationTests(unittest.TestCase):
                 "threshold": 0.99,
             }
         ]
-        document["train"]["stop_on_acceptance"] = False
-
         with self.assertRaisesRegex(ValueError, "must be an object"):
             validate_goal_contract_document(document, path, Path(".").resolve())
 
@@ -768,10 +769,6 @@ class ConfigValidationTests(unittest.TestCase):
         eval_rank["objective"]["rank"] = ["max(eval/full/episode/return/mean)"]
         invalid_documents.append((eval_rank, "may use only training metrics"))
 
-        acceptance_stop = deepcopy(base)
-        acceptance_stop["train"]["stop_on_acceptance"] = True
-        invalid_documents.append((acceptance_stop, "stop_on_acceptance must be false"))
-
         eval_config = deepcopy(base)
         eval_config["eval"] = deepcopy(mario_eval)
         invalid_documents.append((eval_config, "eval must be omitted"))
@@ -787,7 +784,7 @@ class ConfigValidationTests(unittest.TestCase):
     def test_evaluated_goal_still_requires_eval_contract(self) -> None:
         with self.assertRaisesRegex(ValueError, "eval is required"):
             experiment_contracts._validate_goal_eval(
-                {"train": {"checkpoint_eval_backend": "modal"}},
+                {"evaluation_mode": "evaluated"},
                 label="goal",
             )
 
@@ -871,7 +868,7 @@ class ConfigValidationTests(unittest.TestCase):
             for field in fields:
                 with self.subTest(field=field):
                     self.assertNotIn(field, mapping)
-        self.assertTrue(document["train"]["stop_on_acceptance"])
+        self.assertEqual(document["evaluation_mode"], "evaluated")
         self.assertEqual(
             document["train"]["early_stop"]["conditions"]["return_plateau"]["action"],
             "stop",

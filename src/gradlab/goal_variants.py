@@ -13,6 +13,7 @@ from gradlab.reward_programs import goal_for_contract_validation
 
 GOAL_VARIANT_SCHEMA_VERSION = 1
 GOAL_VARIANT_INDEX_SCHEMA_VERSION = 1
+GOAL_VARIANT_RUN_INDEX_SCHEMA_VERSION = 1
 GOAL_VARIANT_ID_PATTERN = re.compile(r"^goal-variant-[0-9a-f]{24}$")
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 MAX_DIFF_ENTRIES = 24
@@ -356,6 +357,7 @@ def unknown_goal_variant_id(*, goal_slug: object) -> str:
 __all__ = [
     "GOAL_VARIANT_ID_PATTERN",
     "GOAL_VARIANT_INDEX_SCHEMA_VERSION",
+    "GOAL_VARIANT_RUN_INDEX_SCHEMA_VERSION",
     "GOAL_VARIANT_SCHEMA_VERSION",
     "build_goal_variant_descriptor",
     "goal_variant_id",

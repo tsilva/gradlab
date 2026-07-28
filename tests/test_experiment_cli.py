@@ -185,6 +185,7 @@ def _manifest_only_run() -> RunManifest:
             "models": "s3://models-public",
             "public_models_base_url": "https://models.example",
         },
+        schema_version=3,
     )
     manifest.validate()
     return manifest

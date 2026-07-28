@@ -549,7 +549,6 @@ def cmd_launch(args: argparse.Namespace) -> int:
         goal_variant=goal_variant,
     )
     authority.create_manifest(manifest)
-    authority.register_goal_variant_best_effort(manifest)
     manifest_uri = authority.control.uri(f"runs/{run_id}/manifest.json")
     task = dstack_backend.submit(_task_request(manifest, manifest_uri=manifest_uri))
     output = {
