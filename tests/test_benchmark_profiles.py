@@ -250,7 +250,10 @@ required_metrics: [train/throughput/not_real]
         candidate = json.loads(commands[1].stdin or "{}")
         baseline = json.loads(commands[0].stdin or "{}")
         self.assertNotIn("state_archive", baseline)
-        self.assertEqual(candidate["state_archive"]["recorder"]["cell"]["signal"], "score")
+        self.assertEqual(
+            candidate["state_archive"]["recorder"]["cell"]["dimensions"],
+            [{"signal": "score", "bucket_size": 50.0}],
+        )
         self.assertEqual(candidate["state_archive"]["curriculum"]["priority_metric"], "value_error")
         self.assertTrue(candidate["state_archive"]["curriculum"]["restore_entries"])
         self.assertEqual(candidate["state_archive"]["curriculum"]["resolved_archive_lanes"], 3)

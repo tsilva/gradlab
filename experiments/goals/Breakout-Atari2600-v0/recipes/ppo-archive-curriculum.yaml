@@ -14,8 +14,8 @@ train:
     recorder:
       mode: cell_transition
       cell:
-        signal: score
-        bucket_size: 50
+        dimensions:
+        - {signal: score, bucket_size: 50}
     curriculum:
       archive_share: 0.20
       priority_metric: value_error

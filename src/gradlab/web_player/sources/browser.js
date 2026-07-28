@@ -426,9 +426,10 @@ function routeSignature(route) {
 }
 
 export function sourceBreadcrumbItems(route) {
+  const hasActiveCheckpoint = Boolean(route?.checkpoint_id);
   const items = [{
     label: "Environments",
-    current: route?.level === "environments",
+    current: route?.level === "environments" && !hasActiveCheckpoint,
     route: {
       level: "environments",
       project: "",
@@ -441,7 +442,7 @@ export function sourceBreadcrumbItems(route) {
   if (route?.project) {
     items.push({
       label: route.project,
-      current: route.level === "goals",
+      current: route.level === "goals" && !hasActiveCheckpoint,
       route: {
         level: "goals",
         goal_id: "",
@@ -454,7 +455,7 @@ export function sourceBreadcrumbItems(route) {
   if (route?.goal_id) {
     items.push({
       label: route.goal_id,
-      current: route.level === "goal_variants",
+      current: route.level === "goal_variants" && !hasActiveCheckpoint,
       route: {
         level: "goal_variants",
         goal_variant_id: "",
@@ -466,7 +467,7 @@ export function sourceBreadcrumbItems(route) {
   if (route?.goal_variant_id) {
     items.push({
       label: route.goal_variant_id,
-      current: route.level === "runs" && !route.run_id,
+      current: route.level === "runs" && !route.run_id && !hasActiveCheckpoint,
       route: {
         level: "runs",
         run_id: "",

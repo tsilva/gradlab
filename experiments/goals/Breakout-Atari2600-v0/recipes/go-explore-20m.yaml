@@ -1,0 +1,39 @@
+defaults:
+- _self_
+recipe_id: go-explore-20m
+description: >-
+  Seed {{ seed }} runs Go-Explore trajectory discovery for {{ goal_id }} with
+  YAML-defined Breakout frontier cells, an ephemeral local state archive, and
+  a 20 million-transition search limit.
+train:
+  timesteps: 20000000
+  state_archive:
+    semantic_id: state-archive-v1
+    persistence: ephemeral
+    restore_semantics: continuation
+    recorder:
+      mode: backend
+      cell:
+        dimensions:
+        - {source: walls_cleared, bucket_size: 1}
+        - {source: bricks_remaining, bucket_size: 1}
+        - {source: ball_x, bucket_size: 8}
+        - {signal: ball_y, bucket_size: 8}
+        - {source: paddle_x, bucket_size: 8}
+        - {source: ball_vx, bucket_size: 1}
+        - {source: ball_vy, bucket_size: 1}
+        - {source: lives, bucket_size: 1}
+    curriculum: null
+  backend:
+    id: gradlab.go-explore
+    config:
+      explore_steps: 128
+      run_duration_mean: 4.0
+      run_duration_max: 32
+      fallback_action: noop
+      progress_signal: score
+      log_interval_steps: 10000
+      compaction_interval_steps: 250000
+logging:
+  wandb: true
+  wandb_mode: online

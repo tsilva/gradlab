@@ -320,15 +320,10 @@ class GoExploreSearch:
         return actions
 
     @staticmethod
-    def _record_facts(record: object | None) -> tuple[bool, float]:
+    def _record_completed(record: object | None) -> bool:
         if record is None:
-            return False, 0.0
-        metrics = getattr(record, "metrics", {}) or {}
-        completed = getattr(record, "outcome", Outcome.NEUTRAL) == Outcome.SUCCESS or bool(
-            metrics.get("level_complete", False)
-        )
-        progress = float(metrics.get("max_x_pos", metrics.get("global_max_x_pos", 0.0)) or 0.0)
-        return completed, progress
+            return False
+        return getattr(record, "outcome", Outcome.NEUTRAL) == Outcome.SUCCESS
 
     @staticmethod
     def _better(
@@ -456,8 +451,8 @@ class GoExploreSearch:
         for lane, state in enumerate(self._lanes):
             state.episode_return += float(rewards_array[lane])
             state.progress = max(state.progress, float(progress_array[lane]))
-            completed, record_progress = self._record_facts(records_by_lane.get(lane))
-            progress = max(state.progress, record_progress)
+            completed = self._record_completed(records_by_lane.get(lane))
+            progress = state.progress
             self._consider_best(state, progress=progress, completed=completed)
             if dones_array[lane]:
                 self.completed_episodes += 1

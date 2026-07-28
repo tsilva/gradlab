@@ -27,6 +27,20 @@ train:
     restore_semantics: continuation
     recorder:
       mode: backend
+      cell:
+        dimensions:
+        - {source: levelHi, bucket_size: 1}
+        - {source: levelLo, bucket_size: 1}
+        - {source: area_id, bucket_size: 1}
+        - {source: area_pointer, bucket_size: 1}
+        - {source: x_pos, bucket_size: 8}
+        - {source: y_pos, bucket_size: 16}
+        - {source: player_task, equals: 8}
+        - {source: loop_command_active, bucket_size: 1}
+        - {source: loop_correct_count, bucket_size: 1, clamp: [0, 7]}
+        - {source: loop_pass_count, bucket_size: 1, clamp: [0, 7]}
+        - {source: player_motion, equals: 0}
+        - {source: player_power, bucket_size: 1}
     curriculum: null
   backend:
     id: gradlab.go-explore
@@ -35,6 +49,7 @@ train:
       run_duration_mean: 4.0
       run_duration_max: 32
       fallback_action: noop
+      progress_signal: x
       log_interval_steps: 10000
       compaction_interval_steps: 250000
 logging:

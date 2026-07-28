@@ -533,7 +533,7 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertEqual(report.counts["json_files"], 0)
         self.assertGreaterEqual(report.counts["yaml_files"], 15)
         self.assertGreaterEqual(report.counts["goals"], 1)
-        self.assertEqual(report.counts["train_recipes"], 41)
+        self.assertEqual(report.counts["train_recipes"], 42)
         self.assertGreaterEqual(report.counts["env_configs"], 0)
         self.assertEqual(report.counts["benchmark_profiles"], 4)
 
@@ -670,7 +670,11 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertEqual(archive["persistence"], "durable")
         self.assertEqual(
             archive["recorder"]["cell"],
-            {"signal": "score", "bucket_size": 50.0},
+            {
+                "dimensions": [
+                    {"signal": "score", "bucket_size": 50.0},
+                ]
+            },
         )
         self.assertEqual(archive["curriculum"]["archive_share"], 0.2)
         self.assertEqual(archive["curriculum"]["priority_metric"], "value_error")
@@ -689,6 +693,26 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertEqual(
             train_config["training_backend"]["config"]["compaction_interval_steps"],
             250_000,
+        )
+        self.assertEqual(
+            train_config["state_archive"]["recorder"]["cell"]["dimensions"][4],
+            {"source": "x_pos", "bucket_size": 8.0},
+        )
+
+    def test_breakout_go_explore_uses_shared_yaml_cell_detector(self) -> None:
+        recipe = self.BREAKOUT_GOAL.parent / "recipes/go-explore-20m.yaml"
+        document = compose_train_document(self.BREAKOUT_GOAL, recipe)
+        train_config = document["train_config"]
+
+        self.assertEqual(train_config["env_provider"], "breakout-turbo-env")
+        self.assertEqual(train_config["training_backend"]["id"], "gradlab.go-explore")
+        self.assertEqual(
+            train_config["training_backend"]["config"]["progress_signal"],
+            "score",
+        )
+        self.assertEqual(
+            train_config["state_archive"]["recorder"]["cell"]["dimensions"][2],
+            {"source": "ball_x", "bucket_size": 8.0},
         )
 
     def test_breakout_stable_updates_recipe_adds_late_update_guards(self) -> None:

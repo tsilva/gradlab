@@ -712,7 +712,266 @@ _CURRICULUM_KEYS = frozenset(
         *_CURRICULUM_DEFAULTS,
     }
 )
-_CELL_KEYS = frozenset({"signal", "bucket_size"})
+_CELL_KEYS = frozenset({"signal", "bucket_size", "dimensions"})
+_CELL_DIMENSION_KEYS = frozenset(
+    {"signal", "source", "bucket_size", "clamp", "equals"}
+)
+
+
+def _finite_number(value: Any, *, label: str) -> float:
+    if (
+        not isinstance(value, int | float | np.number)
+        or isinstance(value, bool | np.bool_)
+        or not math.isfinite(float(value))
+    ):
+        raise ValueError(f"{label} must be a finite number")
+    return float(value)
+
+
+def normalize_archive_cell_config(
+    value: Any,
+    *,
+    label: str,
+) -> dict[str, Any]:
+    """Normalize the shared YAML-defined archive cell detector."""
+
+    if not isinstance(value, Mapping):
+        raise ValueError(f"{label} must be an object")
+    unexpected = sorted(set(value) - _CELL_KEYS)
+    if unexpected:
+        raise ValueError(f"{label} has unexpected fields: {unexpected}")
+    dimensions = value.get("dimensions")
+    legacy_fields = set(value) & {"signal", "bucket_size"}
+    if dimensions is not None and legacy_fields:
+        raise ValueError(
+            f"{label} must use either dimensions or signal/bucket_size, not both"
+        )
+    if dimensions is None:
+        signal = str(value.get("signal") or "").strip()
+        if not signal:
+            raise ValueError(f"{label}.signal must be a non-empty string")
+        dimensions = (
+            {
+                "signal": signal,
+                "bucket_size": value.get("bucket_size"),
+            },
+        )
+    if (
+        isinstance(dimensions, str | bytes)
+        or not isinstance(dimensions, Sequence)
+        or not dimensions
+    ):
+        raise ValueError(f"{label}.dimensions must be a non-empty sequence")
+    if len(dimensions) > 32:
+        raise ValueError(f"{label}.dimensions must contain at most 32 entries")
+
+    normalized_dimensions: list[dict[str, Any]] = []
+    seen_selectors: set[tuple[str, str]] = set()
+    for index, raw_dimension in enumerate(dimensions):
+        dimension_label = f"{label}.dimensions[{index}]"
+        if not isinstance(raw_dimension, Mapping):
+            raise ValueError(f"{dimension_label} must be an object")
+        unexpected_dimension = sorted(set(raw_dimension) - _CELL_DIMENSION_KEYS)
+        if unexpected_dimension:
+            raise ValueError(
+                f"{dimension_label} has unexpected fields: {unexpected_dimension}"
+            )
+        selector_fields = set(raw_dimension) & {"signal", "source"}
+        if len(selector_fields) != 1:
+            raise ValueError(
+                f"{dimension_label} must define exactly one of signal or source"
+            )
+        selector_kind = next(iter(selector_fields))
+        selector_name = str(raw_dimension.get(selector_kind) or "").strip()
+        if not selector_name:
+            raise ValueError(
+                f"{dimension_label}.{selector_kind} must be a non-empty string"
+            )
+        selector = (selector_kind, selector_name)
+        if selector in seen_selectors:
+            raise ValueError(
+                f"{label}.dimensions contains duplicate "
+                f"{selector_kind} {selector_name!r}"
+            )
+        seen_selectors.add(selector)
+
+        has_equals = "equals" in raw_dimension
+        has_bucket = "bucket_size" in raw_dimension
+        has_clamp = "clamp" in raw_dimension
+        if has_equals and (has_bucket or has_clamp):
+            raise ValueError(
+                f"{dimension_label}.equals cannot be combined with bucket_size or clamp"
+            )
+        normalized_dimension: dict[str, Any] = {selector_kind: selector_name}
+        if has_equals:
+            normalized_dimension["equals"] = _finite_number(
+                raw_dimension["equals"],
+                label=f"{dimension_label}.equals",
+            )
+        else:
+            bucket_size = _finite_number(
+                raw_dimension.get("bucket_size"),
+                label=f"{dimension_label}.bucket_size",
+            )
+            if bucket_size <= 0.0:
+                raise ValueError(f"{dimension_label}.bucket_size must be positive")
+            normalized_dimension["bucket_size"] = bucket_size
+            if has_clamp:
+                clamp = raw_dimension["clamp"]
+                if (
+                    isinstance(clamp, str | bytes)
+                    or not isinstance(clamp, Sequence)
+                    or len(clamp) != 2
+                ):
+                    raise ValueError(f"{dimension_label}.clamp must be [minimum, maximum]")
+                minimum = _finite_number(
+                    clamp[0],
+                    label=f"{dimension_label}.clamp[0]",
+                )
+                maximum = _finite_number(
+                    clamp[1],
+                    label=f"{dimension_label}.clamp[1]",
+                )
+                if minimum > maximum:
+                    raise ValueError(
+                        f"{dimension_label}.clamp minimum must not exceed maximum"
+                    )
+                normalized_dimension["clamp"] = [minimum, maximum]
+        normalized_dimensions.append(normalized_dimension)
+    return {"dimensions": normalized_dimensions}
+
+
+@dataclass(frozen=True)
+class ArchiveCellDimension:
+    signal: str | None = None
+    source: str | None = None
+    bucket_size: float | None = None
+    clamp: tuple[float, float] | None = None
+    equals: float | None = None
+
+    @property
+    def selector(self) -> tuple[str, str]:
+        if self.signal is not None:
+            return ("signal", self.signal)
+        assert self.source is not None
+        return ("source", self.source)
+
+    def bucket(self, value: Any) -> int:
+        kind, name = self.selector
+        label = f"archive cell {kind} {name!r}"
+        if isinstance(value, str | bytes):
+            raise ValueError(f"{label} must be numeric")
+        try:
+            numeric = float(value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"{label} must be numeric") from exc
+        if not math.isfinite(numeric):
+            raise ValueError(f"{label} must be finite")
+        if self.equals is not None:
+            return int(numeric == self.equals)
+        if self.clamp is not None:
+            numeric = min(max(numeric, self.clamp[0]), self.clamp[1])
+        assert self.bucket_size is not None
+        quotient = math.floor(numeric / self.bucket_size)
+        if quotient < np.iinfo(np.int64).min or quotient > np.iinfo(np.int64).max:
+            raise ValueError("state archive cell index exceeds signed int64")
+        return int(quotient)
+
+
+@dataclass(frozen=True)
+class ArchiveCellConfig:
+    dimensions: tuple[ArchiveCellDimension, ...]
+
+    @classmethod
+    def from_mapping(cls, value: Mapping[str, Any], *, label: str) -> "ArchiveCellConfig":
+        normalized = normalize_archive_cell_config(value, label=label)
+        return cls(
+            dimensions=tuple(
+                ArchiveCellDimension(
+                    signal=(
+                        str(dimension["signal"]) if "signal" in dimension else None
+                    ),
+                    source=(
+                        str(dimension["source"]) if "source" in dimension else None
+                    ),
+                    bucket_size=(
+                        float(dimension["bucket_size"])
+                        if "bucket_size" in dimension
+                        else None
+                    ),
+                    clamp=(
+                        (
+                            float(dimension["clamp"][0]),
+                            float(dimension["clamp"][1]),
+                        )
+                        if "clamp" in dimension
+                        else None
+                    ),
+                    equals=(
+                        float(dimension["equals"]) if "equals" in dimension else None
+                    ),
+                )
+                for dimension in normalized["dimensions"]
+            )
+        )
+
+    @property
+    def signals(self) -> tuple[str, ...]:
+        return tuple(
+            dimension.signal
+            for dimension in self.dimensions
+            if dimension.signal is not None
+        )
+
+    @property
+    def sources(self) -> tuple[str, ...]:
+        return tuple(
+            dimension.source
+            for dimension in self.dimensions
+            if dimension.source is not None
+        )
+
+
+class ArchiveCellDetector:
+    """Encode semantic signals or provider sources into deterministic cell keys."""
+
+    def __init__(self, config: ArchiveCellConfig):
+        self.config = config
+
+    def keys(
+        self,
+        values_by_selector: Mapping[tuple[str, str], Any],
+        *,
+        n_envs: int,
+    ) -> tuple[bytes, ...]:
+        rows: list[list[int]] = [[] for _ in range(n_envs)]
+        for dimension in self.config.dimensions:
+            selector = dimension.selector
+            kind, name = selector
+            if selector not in values_by_selector:
+                raise ValueError(
+                    f"archive cell {kind} {name!r} was not resolved"
+                )
+            values = np.asarray(values_by_selector[selector])
+            if values.shape != (n_envs,):
+                raise ValueError(
+                    f"archive cell {kind} {name!r} must have shape "
+                    f"({n_envs},), got {values.shape}"
+                )
+            for lane in range(n_envs):
+                rows[lane].append(dimension.bucket(values[lane]))
+        if len(self.config.dimensions) == 1:
+            dimension = self.config.dimensions[0]
+            if (
+                dimension.signal is not None
+                and dimension.clamp is None
+                and dimension.equals is None
+            ):
+                return tuple(
+                    f"{dimension.signal}:{row[0]}".encode("ascii")
+                    for row in rows
+                )
+        return tuple(canonical_json_bytes(row) for row in rows)
 
 
 def archive_lane_count(archive_share: float, n_envs: int) -> int:
@@ -735,23 +994,10 @@ def normalize_archive_curriculum_config(
     semantic_id = value.get("semantic_id")
     if semantic_id is not None and semantic_id != STATE_ARCHIVE_CURRICULUM_SEMANTIC_ID:
         raise ValueError(f"{label}.semantic_id must be {STATE_ARCHIVE_CURRICULUM_SEMANTIC_ID!r}")
-    cell = value.get("cell")
-    if not isinstance(cell, Mapping):
-        raise ValueError(f"{label}.cell must be an object")
-    unexpected_cell = sorted(set(cell) - _CELL_KEYS)
-    if unexpected_cell:
-        raise ValueError(f"{label}.cell has unexpected fields: {unexpected_cell}")
-    signal = str(cell.get("signal") or "").strip()
-    if not signal:
-        raise ValueError(f"{label}.cell.signal must be a non-empty string")
-    bucket_size = cell.get("bucket_size")
-    if (
-        not isinstance(bucket_size, int | float)
-        or isinstance(bucket_size, bool)
-        or not math.isfinite(float(bucket_size))
-        or float(bucket_size) <= 0.0
-    ):
-        raise ValueError(f"{label}.cell.bucket_size must be a positive finite number")
+    cell = normalize_archive_cell_config(
+        value.get("cell"),
+        label=f"{label}.cell",
+    )
     archive_share = value.get("archive_share")
     if (
         not isinstance(archive_share, int | float)
@@ -765,7 +1011,7 @@ def normalize_archive_curriculum_config(
         raise ValueError(f"{label}.priority_metric must be a non-empty string")
     normalized = {
         "semantic_id": STATE_ARCHIVE_CURRICULUM_SEMANTIC_ID,
-        "cell": {"signal": signal, "bucket_size": float(bucket_size)},
+        "cell": cell,
         "archive_share": float(archive_share),
         "priority_metric": priority_metric,
         **_CURRICULUM_DEFAULTS,
@@ -856,29 +1102,13 @@ def normalize_state_archive_config(
         raise ValueError(f"{label}.recorder.mode must be one of {sorted(_RECORDER_MODES)}")
     cell = recorder.get("cell")
     normalized_cell: dict[str, Any] | None = None
-    if mode == "cell_transition":
-        if not isinstance(cell, Mapping):
-            raise ValueError(f"{label}.recorder.cell must be an object")
-        unexpected_cell = sorted(set(cell) - _CELL_KEYS)
-        if unexpected_cell:
-            raise ValueError(f"{label}.recorder.cell has unexpected fields: {unexpected_cell}")
-        signal = str(cell.get("signal") or "").strip()
-        bucket_size = cell.get("bucket_size")
-        if not signal:
-            raise ValueError(f"{label}.recorder.cell.signal must be a non-empty string")
-        if (
-            not isinstance(bucket_size, int | float)
-            or isinstance(bucket_size, bool)
-            or not math.isfinite(float(bucket_size))
-            or float(bucket_size) <= 0.0
-        ):
-            raise ValueError(f"{label}.recorder.cell.bucket_size must be a positive finite number")
-        normalized_cell = {
-            "signal": signal,
-            "bucket_size": float(bucket_size),
-        }
-    elif cell is not None:
-        raise ValueError(f"{label}.recorder.cell is only valid for cell_transition")
+    if cell is not None:
+        normalized_cell = normalize_archive_cell_config(
+            cell,
+            label=f"{label}.recorder.cell",
+        )
+    if mode == "cell_transition" and normalized_cell is None:
+        raise ValueError(f"{label}.recorder.cell is required for cell_transition")
 
     curriculum = value.get("curriculum")
     normalized_curriculum: dict[str, Any] | None = None
@@ -918,6 +1148,22 @@ def validate_state_archive_runtime_contract(
     n_envs = int(common_config.get("n_envs", 0))
     normalized = normalize_state_archive_config(value, n_envs=n_envs)
     assert normalized is not None
+    cell = normalized["recorder"].get("cell")
+    if isinstance(cell, Mapping):
+        task = common_config.get("task")
+        signals = task.get("signals") if isinstance(task, Mapping) else None
+        declared = set(signals) if isinstance(signals, Mapping) else set()
+        required = {
+            str(dimension["signal"])
+            for dimension in cell.get("dimensions", ())
+            if isinstance(dimension, Mapping) and "signal" in dimension
+        }
+        missing = sorted(required - declared)
+        if missing:
+            raise ValueError(
+                "state_archive cell requires declared task signal(s): "
+                + ", ".join(missing)
+            )
     curriculum = normalized["curriculum"]
     if curriculum is None:
         return
@@ -927,17 +1173,10 @@ def validate_state_archive_runtime_contract(
             f"training backend {backend_id!r} does not provide archive priority "
             f"{curriculum['priority_metric']!r}; supported priorities: {sorted(supported)}"
         )
-    task = common_config.get("task")
-    signals = task.get("signals") if isinstance(task, Mapping) else None
-    signal = str(normalized["recorder"]["cell"]["signal"])
-    if not isinstance(signals, Mapping) or signal not in signals:
-        raise ValueError(f"state_archive requires task.signals.{signal} to be declared")
 
 
 @dataclass(frozen=True)
 class ArchiveCurriculumConfig:
-    signal: str
-    bucket_size: float
     archive_share: float
     priority_metric: str
     restore_entries: bool
@@ -958,8 +1197,6 @@ class ArchiveCurriculumConfig:
         if normalized is None:
             raise ValueError("state_archive.curriculum must be configured")
         return cls(
-            signal=str(normalized["cell"]["signal"]),
-            bucket_size=float(normalized["cell"]["bucket_size"]),
             archive_share=float(normalized["archive_share"]),
             priority_metric=str(normalized["priority_metric"]),
             restore_entries=bool(normalized["restore_entries"]),
@@ -1042,21 +1279,6 @@ class ArchiveCurriculum:
     @property
     def ready(self) -> bool:
         return self.entry_count > 0
-
-    def cell_id(self, value: Any) -> str:
-        if isinstance(value, bool) or not isinstance(value, int | float | np.number):
-            raise ValueError(
-                f"state archive curriculum signal {self.config.signal!r} must be numeric"
-            )
-        numeric = float(value)
-        if not math.isfinite(numeric):
-            raise ValueError(
-                f"state archive curriculum signal {self.config.signal!r} must be finite"
-            )
-        quotient = math.floor(numeric / self.config.bucket_size)
-        if quotient < np.iinfo(np.int64).min or quotient > np.iinfo(np.int64).max:
-            raise ValueError("state archive curriculum cell index exceeds signed int64")
-        return f"{self.config.signal}:{quotient}"
 
     def begin_rollout(self) -> None:
         self._metrics = {

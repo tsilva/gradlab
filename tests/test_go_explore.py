@@ -11,19 +11,13 @@ from gymnasium import spaces
 
 from gradlab.action_program import ActionProgramPolicy
 from gradlab.batch_runtime import EpisodeRecord
-from gradlab.env import EnvConfig
 from gradlab.go_explore import GoExploreSearch
 from gradlab.metric_names import (
     TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_MEAN,
     TRAIN_OUTCOME_SUCCESS_CURRENT_RATE_MEAN,
 )
 from gradlab.task_kernels import Outcome
-from gradlab.training.go_explore import (
-    GO_EXPLORE_PROVIDER_INFO_KEYS,
-    _runtime_environment_config,
-    normalize_config,
-    run_go_explore,
-)
+from gradlab.training.go_explore import GoExploreBackend, normalize_config, run_go_explore
 from gradlab.training_backend import BackendContext, GracefulStopFlag
 from gradlab.training_lifecycle import (
     TerminalReason,
@@ -69,34 +63,37 @@ class GoExploreSearchTests(unittest.TestCase):
         self.assertEqual(restored.state_document(("lane-a", "lane-b")), document)
         np.testing.assert_array_equal(restored.next_actions(), search.next_actions())
 
-    def test_runtime_environment_selects_route_and_task_provider_info(self) -> None:
-        config = EnvConfig(
-            env_provider="supermariobrosnes-turbo",
-            game="SuperMarioBros-Nes-v0",
-            env_args={"info_filter": "all"},
-            task={
-                "id": "mario",
-                "signals": {
-                    "x": ["xscrollHi", "xscrollLo"],
-                    "custom": "game_mode",
+    def test_backend_accepts_provider_neutral_declared_cells_and_progress(self) -> None:
+        backend_config = normalize_config(
+            "gradlab.go-explore",
+            {"progress_signal": "score"},
+            label="backend",
+        )
+        GoExploreBackend().validate(
+            {
+                "env_provider": "breakout-turbo-env",
+                "task": {"id": "identity", "signals": {"score": "score"}},
+                "state_archive": {
+                    "persistence": "ephemeral",
+                    "restore_semantics": "continuation",
+                    "recorder": {
+                        "mode": "backend",
+                        "cell": {
+                            "dimensions": [
+                                {"signal": "score", "bucket_size": 1.0},
+                            ]
+                        },
+                    },
+                    "curriculum": None,
                 },
             },
+            backend_config,
         )
-
-        runtime_config = _runtime_environment_config(config)
-        info_filter = runtime_config.env_args["info_filter"]
-
-        self.assertEqual(info_filter["mode"], "all")
-        self.assertEqual(
-            set(info_filter["keys"]),
-            set(GO_EXPLORE_PROVIDER_INFO_KEYS) | {"game_mode"},
-        )
-        self.assertEqual(config.env_args["info_filter"], "all")
 
     def test_backend_uses_compaction_without_legacy_archive_recovery(self) -> None:
         config = normalize_config(
             "gradlab.go-explore",
-            {"compaction_interval_steps": 500_000},
+            {"compaction_interval_steps": 500_000, "progress_signal": "x"},
             label="backend",
         )
 
@@ -104,7 +101,7 @@ class GoExploreSearchTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "recovery_interval_steps"):
             normalize_config(
                 "gradlab.go-explore",
-                {"recovery_interval_steps": 500_000},
+                {"recovery_interval_steps": 500_000, "progress_signal": "x"},
                 label="backend",
             )
 
@@ -217,6 +214,20 @@ class GoExploreSearchTests(unittest.TestCase):
 
             def reset(self, *, seed: int) -> None:
                 del seed
+
+            def validate_archive_signal(self, signal):
+                del signal
+
+            def state_archive_reset_cell_keys(self):
+                return (b"[0]",)
+
+            def state_archive_cell_keys(self, infos, *, source):
+                del infos, source
+                return (b"[1]",)
+
+            def archive_signal_values(self, signal, infos, *, source):
+                del signal, infos, source
+                return np.asarray([20.0])
 
             def capture_archive_entries(self, mask, *, metadata_by_lane):
                 del mask, metadata_by_lane
@@ -381,6 +392,7 @@ class GoExploreSearchTests(unittest.TestCase):
                         "explore_steps": 1,
                         "fallback_action": "noop",
                         "log_interval_steps": 100,
+                        "progress_signal": "x",
                         "run_duration_max": 1,
                         "run_duration_mean": 1.0,
                     },
@@ -402,10 +414,6 @@ class GoExploreSearchTests(unittest.TestCase):
 
         with (
             mock.patch(
-                "gradlab.training.go_explore._runtime_environment_config",
-                return_value=context.environment,
-            ),
-            mock.patch(
                 "gradlab.training.go_explore.preflight_state_archive_provider",
                 return_value={"status": "passed"},
             ),
@@ -420,14 +428,6 @@ class GoExploreSearchTests(unittest.TestCase):
             mock.patch(
                 "gradlab.training.go_explore.configured_action_meanings",
                 return_value=("noop", "right"),
-            ),
-            mock.patch(
-                "gradlab.training.go_explore._reset_info_columns",
-                return_value={},
-            ),
-            mock.patch(
-                "gradlab.training.go_explore._cell_keys",
-                return_value=(b"cell",),
             ),
             mock.patch(
                 "gradlab.training.go_explore.install_model_bundle",

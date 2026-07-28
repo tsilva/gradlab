@@ -1521,7 +1521,10 @@ def test_web_dashboard_assets_are_packaged_beside_server() -> None:
     assert '$("#source-breadcrumbs")' in script
     assert '$("#player-home").addEventListener("click"' in script
     assert ".then((browser) => browser.goHome())" in script
-    assert '$("#page-title").hidden = state.sourceMode' in script
+    assert (
+        '$("#page-title").hidden = Boolean(state.sourceMode || activeCheckpointRoute);'
+        in script
+    )
     assert '$("#page-title").textContent = "Select checkpoint"' not in script
     assert "approval_required" not in source_browser
     assert "approve_source" not in source_browser

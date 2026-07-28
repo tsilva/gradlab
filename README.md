@@ -87,6 +87,12 @@ uvx --from "gradlab==$GRADLAB_VERSION" gradlab train VizdoomBasic-v1/ppo
 uvx --from "gradlab==$GRADLAB_VERSION" gradlab play --recipe VizdoomBasic-v1/ppo
 ```
 
+From a source checkout, the YAML-defined Breakout Go-Explore search runs locally with:
+
+```bash
+uv run gradlab train Breakout-Atari2600-v0/go-explore-20m
+```
+
 Training writes a unique run below `./runs`; recipe playback selects the newest
 completed matching model. Local training disables W&B and checkpoint evaluation
 by default, so it needs no orchestration credentials and cannot establish goal
