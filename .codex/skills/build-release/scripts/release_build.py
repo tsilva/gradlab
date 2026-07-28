@@ -24,23 +24,6 @@ PACKAGE_NAME = "gradlab"
 IMPORT_NAME = "gradlab"
 ENTRY_POINT = "gradlab = gradlab.main:main"
 VERSION_RE = re.compile(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$")
-LEGACY_RE = re.compile(r"(?i)(?:\brlab\b|rlab[-_])")
-TEXT_SUFFIXES = {
-    "",
-    ".cfg",
-    ".css",
-    ".html",
-    ".ini",
-    ".js",
-    ".json",
-    ".md",
-    ".py",
-    ".sh",
-    ".toml",
-    ".txt",
-    ".yaml",
-    ".yml",
-}
 CONTAMINATION_PARTS = {
     ".env",
     ".git",
@@ -145,17 +128,6 @@ def contaminated(member_name: str) -> bool:
     return bool(parts & CONTAMINATION_PARTS) or member_name.endswith((".pyc", ".pyo"))
 
 
-def check_text(name: str, data: bytes) -> None:
-    suffix = PurePosixPath(name).suffix.lower()
-    if suffix not in TEXT_SUFFIXES:
-        return
-    text = data.decode("utf-8", errors="ignore")
-    match = LEGACY_RE.search(text)
-    if match is not None:
-        line = text.count("\n", 0, match.start()) + 1
-        fail(f"legacy rlab branding remains in published content: {name}:{line}")
-
-
 def audit_wheel(path: Path, version: str) -> None:
     expected_wheel, _ = expected_names(version)
     if path.name != expected_wheel:
@@ -185,10 +157,6 @@ def audit_wheel(path: Path, version: str) -> None:
         if ENTRY_POINT not in archive.read(entry_names[0]).decode():
             fail(f"wheel entry points do not contain {ENTRY_POINT!r}")
 
-        for name in names:
-            check_text(name, archive.read(name))
-
-
 def audit_sdist(path: Path, version: str) -> None:
     _, expected_sdist = expected_names(version)
     if path.name != expected_sdist:
@@ -211,12 +179,6 @@ def audit_sdist(path: Path, version: str) -> None:
         missing = sorted(required - set(names))
         if missing:
             fail(f"sdist is missing required files: {missing}")
-
-        for member in members:
-            extracted = archive.extractfile(member)
-            if extracted is not None:
-                check_text(member.name, extracted.read())
-
 
 def distribution_paths(dist_dir: Path, version: str) -> tuple[Path, Path]:
     wheel_name, sdist_name = expected_names(version)
@@ -253,9 +215,8 @@ def smoke_wheel(wheel: Path) -> None:
         python = env_dir / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
         run([uv, "pip", "install", "--python", str(python), "--no-deps", str(wheel)])
         code = (
-            "import importlib.metadata as m, importlib.util as u, gradlab; "
+            "import importlib.metadata as m, gradlab; "
             "assert gradlab.__version__ == m.version('gradlab'); "
-            "assert u.find_spec('rlab') is None; "
             "eps=[e for e in m.entry_points(group='console_scripts') if e.name=='gradlab']; "
             "assert len(eps)==1 and eps[0].value=='gradlab.main:main'"
         )

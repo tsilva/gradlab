@@ -18,6 +18,7 @@ GradLab is a reproducible reinforcement-learning workbench that carries game-age
 ### Evaluation and Evidence
 
 - Acceptance and promotion must use goal-defined checkpoint evaluation except in an explicitly declared deterministic-search workflow.
+- ViZDoom Basic, Deadly Corridor, and Defend the Line checkpoint evaluations must run all 100 episodes without outcome-based early termination and determine acceptance only from the complete 100-episode mean return.
 - Deterministic search may accept only a policy that produces the goal’s success event within its resource limit; the accepted policy must be published and playable.
 - Recording, playback, integrity verification, reexecution, and their datasets or results must not establish acceptance or promotion.
 - Evaluation and playback must preserve declared action-selection semantics by default; playback counterfactuals must be visible and ineligible for evaluation or promotion evidence.

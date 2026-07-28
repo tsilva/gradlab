@@ -7,7 +7,9 @@ import pytest
 
 from gradlab.batch_runtime import EpisodeRecord
 from gradlab.metric_names import (
+    TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_MAX,
     TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_MEAN,
+    TRAIN_EPISODE_RETURN_SHAPED_MAX,
     TRAIN_EPISODE_RETURN_SHAPED_MEAN,
     TRAIN_OUTCOME_SUCCESS_CURRENT_RATE_MEAN,
     TRAIN_OUTCOME_SUCCESS_START_COVERAGE_RATE,
@@ -306,7 +308,9 @@ def test_episode_metrics_are_identical_across_target_and_archive_consumers() -> 
     )
 
     assert payload[TRAIN_EPISODE_RETURN_SHAPED_MEAN] == 14.0
+    assert payload[TRAIN_EPISODE_RETURN_SHAPED_MAX] == 30.0
     assert payload[TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_MEAN] == 6.0
+    assert payload[TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_MAX] == 10.0
     assert payload[TRAIN_OUTCOME_TERMINAL_COUNT] == 3
     assert payload[train_outcome_reason_count_metric("life_loss")] == 1
     assert payload[train_success_attempts_metric("StartA")] == 1
@@ -314,6 +318,22 @@ def test_episode_metrics_are_identical_across_target_and_archive_consumers() -> 
     assert payload[train_success_attempts_metric("StartB")] == 1
     assert payload[TRAIN_OUTCOME_SUCCESS_CURRENT_RATE_MEAN] == 0.5
     assert payload[TRAIN_OUTCOME_SUCCESS_START_COVERAGE_RATE] == 1.0
+
+
+def test_episode_return_max_uses_the_same_rolling_window_as_the_mean() -> None:
+    reducer = EpisodeMetricsReducer(track_success=False)
+    reducer.consume(
+        (_episode(start="StartA", episode_return=50.0, outcome=Outcome.FAILURE),)
+    )
+    payload = reducer.consume(
+        _episode(start="StartA", episode_return=0.0, outcome=Outcome.FAILURE)
+        for _ in range(100)
+    )
+
+    assert payload[TRAIN_EPISODE_RETURN_SHAPED_MEAN] == 0.0
+    assert payload[TRAIN_EPISODE_RETURN_SHAPED_MAX] == 0.0
+    assert payload[TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_MEAN] == 0.0
+    assert payload[TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_MAX] == 0.0
 
 
 @pytest.mark.parametrize(

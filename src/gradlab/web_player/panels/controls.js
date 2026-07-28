@@ -8,62 +8,47 @@ export function mount({ definition, services }) {
     className: "control-panel transport",
     headerClass: "control-panel-header",
     body: `
-      <p data-session-summary class="session-summary" aria-live="polite">Waiting for session…</p>
-      <section class="control-section" aria-labelledby="playback-controls-heading">
-        <h3 id="playback-controls-heading" class="control-label">Playback</h3>
-        <div class="control-grid transport-grid">
-          <button data-command="play" data-playback-toggle data-requires-active-episode class="primary icon-only" aria-label="Play" title="Play current episode"><svg class="icon" aria-hidden="true"><use data-playback-icon href="/assets/tabler-icons.svg#ti-player-play"></use></svg></button>
-          <button data-command="step" data-requires-active-episode class="icon-only" aria-label="Step once" title="Step once"><svg class="icon" aria-hidden="true"><use href="/assets/tabler-icons.svg#ti-player-skip-forward"></use></svg></button>
-          <button data-command="step-ten" data-requires-active-episode class="icon-only" aria-label="Step 10 times" title="Step 10 times"><svg class="icon" aria-hidden="true"><use href="/assets/tabler-icons.svg#ti-player-track-next"></use></svg></button>
-          <button data-command="continue-event" data-requires-active-episode class="icon-only" aria-label="Continue to next event" title="Continue to next event"><svg class="icon" aria-hidden="true"><use href="/assets/tabler-icons.svg#ti-activity-heartbeat"></use></svg></button>
+      <div class="control-components">
+        <div class="playback-field playback-fps">
+          <label for="playback-fps">Play FPS</label>
+          <input id="playback-fps" data-fps type="number" min="0" step="1" value="0" inputmode="decimal" aria-describedby="playback-fps-hint">
         </div>
-        <details class="playback-settings">
-          <summary>Playback settings</summary>
-          <div class="playback-settings-body">
-            <div class="playback-fps">
-              <label for="playback-fps">Play FPS</label>
-              <input id="playback-fps" data-fps type="number" min="0" step="1" value="0" inputmode="decimal" aria-describedby="playback-fps-hint">
-            </div>
-            <p id="playback-fps-hint" class="control-hint">0 runs playback uncapped · changes apply immediately</p>
-            <div class="playback-contract" data-playback-contract>
-              <label for="playback-contract-mode">Environment contract</label>
-              <select id="playback-contract-mode" data-contract-mode aria-describedby="playback-contract-hint">
-                <option value="training">Training contract</option>
-                <option value="evaluation">Published evaluation</option>
-                <option value="counterfactual">Counterfactual · clipping off</option>
-              </select>
-              <button data-command="set-contract-mode" class="quiet icon-only" aria-label="Apply environment contract" title="Apply environment contract and start a new shared session"><svg class="icon" aria-hidden="true"><use href="/assets/tabler-icons.svg#ti-check"></use></svg></button>
-            </div>
-            <p id="playback-contract-hint" class="control-hint" data-contract-hint>Training-time policy semantics are the default.</p>
-            <fieldset class="termination-settings" data-termination-settings>
-              <legend>Episode termination</legend>
-              <p class="control-hint" data-termination-source></p>
-              <div class="termination-options" data-termination-options></div>
-              <button data-command="apply-termination" data-apply-termination class="quiet control-wide" type="button">Apply and reset episode</button>
-              <p class="control-hint">Changes are available before the first step or between episodes.</p>
-            </fieldset>
-          </div>
-        </details>
-      </section>
-      <section class="control-section next-episode-settings" aria-labelledby="next-episode-heading">
-        <h3 id="next-episode-heading" class="control-label">Episode</h3>
-        <div class="next-episode-settings-body">
-          <label class="next-episode-seed" for="next-episode-seed">Seed
-            <input id="next-episode-seed" data-seed inputmode="numeric">
-          </label>
-          <div class="playback-sampling">
-            <label for="playback-sampling">Action selection</label>
-            <select id="playback-sampling" data-sampling aria-describedby="playback-sampling-hint">
-              <option value="stochastic">Stochastic</option>
-              <option value="deterministic">Deterministic</option>
-            </select>
-          </div>
-          <p id="playback-sampling-hint" class="control-hint">Applies to the next playback episode only</p>
+        <p id="playback-fps-hint" class="control-hint">0 runs playback uncapped · changes apply immediately</p>
+        <div class="playback-field next-episode-seed">
+          <label for="next-episode-seed">Seed</label>
+          <input id="next-episode-seed" data-seed inputmode="numeric">
+        </div>
+        <div class="playback-field playback-sampling">
+          <label for="playback-sampling">Action selection</label>
+          <select id="playback-sampling" data-sampling aria-describedby="playback-sampling-hint">
+            <option value="stochastic">Stochastic</option>
+            <option value="deterministic">Deterministic</option>
+          </select>
+        </div>
+        <p id="playback-sampling-hint" class="control-hint" hidden></p>
+        <div class="playback-field playback-contract" data-playback-contract>
+          <label for="playback-contract-mode">Environment contract</label>
+          <select id="playback-contract-mode" data-contract-mode aria-describedby="playback-contract-hint">
+            <option value="training">Training contract</option>
+            <option value="evaluation">Published evaluation</option>
+            <option value="counterfactual">Counterfactual · clipping off</option>
+          </select>
+          <button data-command="set-contract-mode" class="quiet icon-only" aria-label="Apply environment contract" title="Apply environment contract and start a new shared session"><svg class="icon" aria-hidden="true"><use href="/assets/tabler-icons.svg#ti-check"></use></svg></button>
+        </div>
+        <p id="playback-contract-hint" class="control-hint" data-contract-hint>Training-time policy semantics are the default.</p>
+        <fieldset class="termination-settings" data-termination-settings>
+          <legend>Episode termination</legend>
+          <p class="control-hint" data-termination-source></p>
+          <div class="termination-options" data-termination-options></div>
+          <button data-command="apply-termination" data-apply-termination class="quiet control-wide" type="button">Apply and reset episode</button>
+          <p class="control-hint">Changes are available before the first step or between episodes.</p>
+        </fieldset>
+        <div class="next-episode-settings-body" data-next-episode-settings>
           <button data-command="reset-episode" data-reset-episode class="quiet button-with-icon control-wide" aria-label="Reset episode" title="Reset to the configured seed and pause"><svg class="icon" aria-hidden="true"><use href="/assets/tabler-icons.svg#ti-refresh"></use></svg><span>Reset episode</span></button>
           <button data-command="next-episode" data-next-episode class="primary button-with-icon control-wide" aria-label="Play next episode" title="Available after the current episode ends"><svg class="icon" aria-hidden="true"><use href="/assets/tabler-icons.svg#ti-player-play"></use></svg><span>Play next episode</span></button>
           <p data-next-episode-hint class="control-hint">Available after the current episode ends</p>
         </div>
-      </section>
+      </div>
     `,
   });
 
@@ -73,11 +58,9 @@ export function mount({ definition, services }) {
   const contractMode = element.querySelector("[data-contract-mode]");
   const contractSettings = element.querySelector("[data-playback-contract]");
   const contractHint = element.querySelector("[data-contract-hint]");
-  const playbackToggle = element.querySelector("[data-playback-toggle]");
-  const playbackIcon = playbackToggle.querySelector("[data-playback-icon]");
   const resetEpisode = element.querySelector("[data-reset-episode]");
   const nextEpisode = element.querySelector("[data-next-episode]");
-  const nextEpisodeSettings = element.querySelector(".next-episode-settings");
+  const nextEpisodeSettings = element.querySelector("[data-next-episode-settings]");
   const nextEpisodeHint = element.querySelector("[data-next-episode-hint]");
   const seedField = element.querySelector(".next-episode-seed");
   const playbackSampling = element.querySelector(".playback-sampling");
@@ -94,11 +77,6 @@ export function mount({ definition, services }) {
     program: "Program",
   })[mode] || String(mode).replaceAll("_", " ");
   const commands = {
-    pause: () => services.pauseCurrentPlayback(),
-    play: () => services.playFromCurrentPosition(),
-    step: () => services.command("step", { count: 1 }),
-    "step-ten": () => services.command("step", { count: 10 }),
-    "continue-event": () => services.command("continue", { target: "any" }),
     "reset-episode": () => services.command("reset_episode", {
       seed: seed.value,
     }),
@@ -127,15 +105,6 @@ export function mount({ definition, services }) {
     element.querySelectorAll("button:not([data-panel-menu]):not([data-drag-handle]):not(.panel-resize)")
       .forEach((button) => { button.disabled = !state.hasControl; });
     const session = state.liveSnapshot?.session || state.snapshot?.session || {};
-    element.querySelectorAll("[data-requires-active-episode]")
-      .forEach((button) => {
-        button.disabled = !state.hasControl || Boolean(session.awaiting_next_episode);
-      });
-    playbackToggle.disabled = !state.hasControl || (
-      Boolean(session.awaiting_next_episode)
-      && !state.replayingInspection
-      && !services.canReplayInspection()
-    );
     const recording = (state.liveSnapshot?.mode || state.snapshot?.mode) === "recording";
     contractMode.disabled = recording || !state.hasControl;
     const canChangeTermination = (
@@ -167,27 +136,6 @@ export function mount({ definition, services }) {
       || []
     );
     sampling.disabled = !canPrepareNextEpisode || supportedModes.length <= 1;
-    nextEpisodeSettings.classList.toggle(
-      "available",
-      canPrepareNextEpisode || canResetEpisode,
-    );
-  };
-
-  const renderPlaybackToggle = (runState) => {
-    const running = services.getState().replayingInspection
-      || ["playing", "stepping", "continuing"].includes(runState);
-    const command = running ? "pause" : "play";
-    playbackToggle.title = running
-      ? "Pause after the current transition"
-      : (services.canReplayInspection()
-        ? "Replay from the selected step"
-        : "Play current episode");
-    if (playbackToggle.dataset.command === command) return;
-    const label = running ? "Pause" : "Play";
-    playbackToggle.dataset.command = command;
-    playbackToggle.classList.toggle("primary", !running);
-    playbackToggle.setAttribute("aria-label", label);
-    playbackIcon.setAttribute("href", `/assets/tabler-icons.svg#ti-player-${command}`);
   };
 
   return {
@@ -222,8 +170,6 @@ export function mount({ definition, services }) {
           || "";
       }
       wasAwaitingNextEpisode = awaitingNextEpisode;
-      element.querySelector("[data-session-summary]").textContent = `${snapshot.run_state.toUpperCase()} · ${snapshot.driver.toUpperCase()}`;
-      renderPlaybackToggle(snapshot.run_state);
       const recording = snapshot.mode === "recording";
       const dataset = snapshot.mode === "dataset";
       const playbackContract = session.playback_contract || {};
@@ -280,25 +226,24 @@ export function mount({ definition, services }) {
         }));
       }
       nextEpisodeSettings.hidden = recording || dataset;
-      seedField.hidden = recording;
-      playbackSampling.hidden = recording;
+      seedField.hidden = recording || dataset;
+      playbackSampling.hidden = recording || dataset;
       const samplingHint = element.querySelector("#playback-sampling-hint");
+      samplingHint.hidden = recording || dataset || supportedModes.length !== 1;
       samplingHint.textContent = supportedModes.length === 1
         ? `${selectionLabel(supportedModes[0])} is fixed by this checkpoint.`
-        : "Applies to the next playback episode only; departures are playback-only.";
+        : "";
       nextEpisode.hidden = recording;
       resetEpisode.hidden = recording;
-      nextEpisodeHint.hidden = recording;
+      nextEpisodeHint.hidden = recording || session.can_start_next_episode;
       nextEpisode.title = session.can_start_next_episode
         ? "Start the prepared next episode"
         : (session.awaiting_next_episode
           ? "The configured episode limit has been reached"
           : "Available after the current episode ends");
-      nextEpisodeHint.textContent = session.can_start_next_episode
-        ? "Starts the prepared policy episode"
-        : (session.awaiting_next_episode
-          ? "The configured episode limit has been reached"
-          : "Available after the current episode ends");
+      nextEpisodeHint.textContent = session.awaiting_next_episode
+        ? "The configured episode limit has been reached"
+        : "Available after the current episode ends";
       resetEpisode.title = session.awaiting_next_episode
         ? (session.can_start_next_episode
           ? "Reset the prepared next episode to the configured seed and pause"
@@ -308,9 +253,6 @@ export function mount({ definition, services }) {
       element.querySelector("#playback-fps-hint").textContent = recording
         ? "Recording FPS must be at least 1 · changes apply immediately"
         : "0 runs playback uncapped · changes apply immediately";
-      ["step", "step-ten", "continue-event"].forEach((name) => {
-        element.querySelector(`[data-command="${name}"]`).hidden = recording;
-      });
       updateControl();
     },
   };

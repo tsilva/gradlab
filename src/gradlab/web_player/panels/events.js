@@ -1,6 +1,6 @@
 import { createPanel } from "./shared.js";
 
-export function mount({ definition }) {
+export function mount({ definition, services }) {
   const element = createPanel({
     id: definition.id,
     label: definition.label,
@@ -43,12 +43,22 @@ export function mount({ definition }) {
           point.boundary ? "boundary" : "",
           isSelected ? "selected" : "",
         ].filter(Boolean).join(" ");
+        const jump = document.createElement("button");
+        jump.type = "button";
+        jump.className = "event-jump";
         const label = document.createElement("div");
         label.textContent = point.events?.length ? point.events.join(" · ") : "episode boundary";
         const meta = document.createElement("div");
         meta.className = "event-meta";
         meta.textContent = `seq ${point.sequence} · ep ${point.episode} · step ${point.step}`;
-        item.append(label, meta);
+        jump.setAttribute(
+          "aria-label",
+          `Inspect ${label.textContent} at episode ${point.episode}, step ${point.step}`,
+        );
+        if (isSelected) jump.setAttribute("aria-current", "step");
+        jump.addEventListener("click", () => services.inspectSequence(point.sequence));
+        jump.append(label, meta);
+        item.append(jump);
         return item;
       }));
     },

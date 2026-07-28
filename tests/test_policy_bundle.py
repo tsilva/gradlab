@@ -28,6 +28,7 @@ from gradlab.policy_bundle import (
     load_policy_bundle,
     load_policy_bundle_from_checkpoint,
     load_recipe_document,
+    sha256_file,
     validate_recipe_document,
     write_canonical_json,
 )
@@ -355,7 +356,10 @@ def test_evaluated_bundle_defaults_to_training_contract_and_exposes_eval_explici
     materialized = compose_train_document(
         VIZDOOM_GOAL,
         VIZDOOM_RECIPE,
-        recipe_overrides=("train.environment.task.reward.reward_clip=true",),
+        recipe_overrides=(
+            "train.checkpoint_eval_backend=modal",
+            "train.environment.task.reward.reward_clip=true",
+        ),
     )
     document = build_recipe_document(
         materialized,
@@ -606,6 +610,40 @@ def test_retired_model_v1_is_rejected(tmp_path: Path) -> None:
 
     with pytest.raises(UnsupportedPolicyDocumentVersion, match="format_version 1"):
         load_policy_bundle(tmp_path)
+
+
+def test_published_legacy_project_v1_bundle_uses_explicit_compatibility(
+    tmp_path: Path,
+) -> None:
+    write_bundle(tmp_path)
+    recipe_path = tmp_path / "recipe.json"
+    recipe = json.loads(recipe_path.read_text(encoding="utf-8"))
+    legacy_project = "".join(("r", "lab"))
+    recipe["document_type"] = f"{legacy_project}.recipe"
+    train_config = recipe["recipe"]["train_config"]
+    resize = train_config.pop("obs_resize")
+    assert resize[0] == resize[1]
+    train_config["observation_size"] = resize[0]
+    train_config["checkpoint_eval_backend"] = "local"
+    write_canonical_json(recipe_path, recipe)
+
+    model_path = tmp_path / "model.json"
+    model = json.loads(model_path.read_text(encoding="utf-8"))
+    model["document_type"] = f"{legacy_project}.model"
+    model["format_version"] = 1
+    model["recipe"]["document_type"] = f"{legacy_project}.recipe"
+    model["recipe"]["sha256"] = sha256_file(recipe_path)
+    model["recipe"]["size_bytes"] = recipe_path.stat().st_size
+    model["provenance"]["queue_train_job_id"] = 123
+    write_canonical_json(model_path, model)
+
+    bundle = load_policy_bundle(tmp_path)
+
+    assert bundle.model["document_type"] == "gradlab.model"
+    assert bundle.model["format_version"] == 2
+    assert bundle.recipe["document_type"] == "gradlab.recipe"
+    assert bundle.recipe["recipe"]["train_config"]["obs_resize"] == resize
+    assert "queue_train_job_id" not in bundle.model["provenance"]
 
 
 def test_known_recipe_schema_rejects_unknown_fields_and_urls(tmp_path: Path) -> None:

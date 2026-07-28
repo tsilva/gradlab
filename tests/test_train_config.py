@@ -175,23 +175,23 @@ class TrainConfigFieldSchemaTests(unittest.TestCase):
         )
 
         self.assertEqual(parser.parse_args([]).checkpoint_eval_backend, "modal")
-        self.assertEqual(parser.parse_args([]).metrics_schema_version, 10)
+        self.assertEqual(parser.parse_args([]).metrics_schema_version, 11)
         self.assertEqual(
             parser.parse_args(["--checkpoint-eval-backend", "none"]).checkpoint_eval_backend,
             "none",
         )
 
-    def test_metrics_schema_version_accepts_only_active_v10(self) -> None:
+    def test_metrics_schema_version_accepts_only_active_v11(self) -> None:
         self.assertEqual(
-            validate_and_normalize_train_config({"metrics_schema_version": 10})[
+            validate_and_normalize_train_config({"metrics_schema_version": 11})[
                 "metrics_schema_version"
             ],
-            10,
+            11,
         )
-        with self.assertRaisesRegex(ValueError, "must be >= 10"):
-            validate_and_normalize_train_config({"metrics_schema_version": 9})
-        with self.assertRaisesRegex(ValueError, "must be <= 10"):
-            validate_and_normalize_train_config({"metrics_schema_version": 11})
+        with self.assertRaisesRegex(ValueError, "must be >= 11"):
+            validate_and_normalize_train_config({"metrics_schema_version": 10})
+        with self.assertRaisesRegex(ValueError, "must be <= 11"):
+            validate_and_normalize_train_config({"metrics_schema_version": 12})
 
     def test_no_eval_config_rejects_eval_metric_stop_behavior(self) -> None:
         with self.assertRaisesRegex(ValueError, "must use a train/\\* metric"):

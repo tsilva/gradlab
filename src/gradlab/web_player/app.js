@@ -12,7 +12,7 @@ import {
   DEFAULT_GRID_CELL_HEIGHT,
   viewportGridCellHeight,
 } from "./panels/layout-sizing.js";
-import { text, timelineLabel } from "./panels/shared.js";
+import { setSvgUseHref, text, timelineLabel } from "./panels/shared.js";
 import {
   bumpWorkspaceRevision,
   compareWorkspaceRevisions,
@@ -176,15 +176,32 @@ async function ensureSourceBrowser() {
 
 function setSourceMode(active, snapshot = null) {
   state.sourceMode = Boolean(active);
+  const activeCheckpointRoute = (
+    !state.sourceMode
+    && snapshot?.app?.route?.checkpoint_id
+  );
   document.body.classList.toggle("source-selection", state.sourceMode);
   $("#source-browser").hidden = !state.sourceMode;
-  $("#page-title").hidden = state.sourceMode;
+  $("#page-title").hidden = Boolean(state.sourceMode || activeCheckpointRoute);
   $("#change-source").hidden = (
     state.sourceMode
     || !(snapshot?.app?.has_active_runner || state.liveSnapshot?.app?.has_active_runner)
   );
   if (!state.sourceMode) {
-    sourceBrowser?.stop();
+    const expected = snapshot;
+    if (activeCheckpointRoute) {
+      if (sourceBrowser) {
+        sourceBrowser.renderActiveBreadcrumbs(expected);
+      } else {
+        void ensureSourceBrowser().then((browser) => {
+          if (!state.sourceMode && state.applicationSnapshot === expected) {
+            browser.renderActiveBreadcrumbs(expected);
+          }
+        }).catch((error) => showToast(`Source breadcrumbs failed: ${error.message || error}`, true));
+      }
+    } else {
+      sourceBrowser?.stop();
+    }
     if (!state.workspaceReady) {
       state.workspaceReady = true;
       void applyLayout();
@@ -259,7 +276,6 @@ function handleMessage(message) {
     if (epoch !== state.sessionEpoch) resetSession(epoch);
     state.applicationSnapshot = message;
     state.hasControl = Boolean(message.control?.has_control);
-    updateControlState();
     if (message.app && message.app.phase !== "active") {
       state.liveSnapshot = message;
       state.snapshot = message;
@@ -583,36 +599,44 @@ function pauseCurrentPlayback() {
   command("pause");
 }
 
+function playbackIsRunning() {
+  return state.replayingInspection
+    || ["playing", "stepping", "continuing"].includes(
+      state.liveSnapshot?.run_state,
+    );
+}
+
+function updateTimelinePlaybackControl() {
+  const playbackToggle = $("#timeline-playback-toggle");
+  const playbackIcon = $("#timeline-playback-icon");
+  if (!playbackToggle || !playbackIcon) return;
+  const session = state.liveSnapshot?.session || state.snapshot?.session || {};
+  const running = playbackIsRunning();
+  const command = running ? "pause" : "play";
+  playbackToggle.disabled = !state.hasControl || (
+    Boolean(session.awaiting_next_episode)
+    && !state.replayingInspection
+    && !canReplayInspection()
+  );
+  playbackToggle.title = running
+    ? "Pause after the current transition"
+    : (canReplayInspection()
+      ? "Replay from the selected step"
+      : "Play current episode");
+  playbackToggle.classList.toggle("primary", !running);
+  playbackToggle.setAttribute("aria-label", running ? "Pause" : "Play");
+  setSvgUseHref(playbackIcon, `/assets/tabler-icons.svg#ti-player-${command}`);
+}
+
 function updateControlState() {
-  const control = $("#control-status");
-  control.textContent = state.hasControl ? "Controller" : "Observer";
-  control.className = `badge ${state.hasControl ? "" : "muted"}`.trim();
+  updateTimelinePlaybackControl();
   panelRuntime?.invoke("controls", "updateControl");
 }
 
 function renderWorkspaceStatus() {
-  const live = state.liveSnapshot;
-  const shown = state.snapshot || live;
-  const actionSelection = live?.policy?.action_selection || {};
-  const samplingMode = actionSelection.effective_mode
-    || live?.session?.sampling_mode
-    || "stochastic";
-  const selectionLabel = ({
-    stochastic: "Stochastic",
-    deterministic: "Deterministic",
-    epsilon_greedy: "Epsilon-greedy",
-    greedy: "Greedy",
-    program: "Program",
-  })[samplingMode] || String(samplingMode).replaceAll("_", " ");
-  const counterfactualSelection = Boolean(
-    actionSelection.default_mode
-    && samplingMode !== actionSelection.default_mode,
+  $("#timeline-label").textContent = timelineLabel(
+    state.snapshot || state.liveSnapshot,
   );
-  const samplingStatus = $("#sampling-status");
-  samplingStatus.hidden = ["recording", "dataset"].includes(live?.mode);
-  samplingStatus.textContent = selectionLabel;
-  samplingStatus.className = `badge ${counterfactualSelection ? "warning" : "muted"}`;
-  $("#timeline-label").textContent = timelineLabel(shown);
 }
 
 function renderSnapshot() {
@@ -1398,6 +1422,10 @@ function bindWorkspaceSync() {
 
 function bindTimeline() {
   const scrubber = $("#timeline-scrubber");
+  $("#timeline-playback-toggle").addEventListener("click", () => {
+    if (playbackIsRunning()) pauseCurrentPlayback();
+    else playFromCurrentPosition();
+  });
   const selectIndex = (index) => {
     stopInspectionReplay({ render: false });
     const sequence = state.timelineSequences[index];
@@ -1423,11 +1451,7 @@ function bindTimeline() {
     }
     if (event.code !== "Space" || event.repeat) return;
     event.preventDefault();
-    const running = state.replayingInspection
-      || ["playing", "stepping", "continuing"].includes(
-        state.liveSnapshot?.run_state,
-      );
-    if (running) pauseCurrentPlayback();
+    if (playbackIsRunning()) pauseCurrentPlayback();
     else playFromCurrentPosition();
   });
 }
@@ -1467,9 +1491,7 @@ panelRuntime = new PanelRuntime({
     getState: () => state,
     send,
     command,
-    canReplayInspection,
-    playFromCurrentPosition,
-    pauseCurrentPlayback,
+    inspectSequence,
     showToast,
     updatePanelConfig: (name, config) => {
       const panel = state.layout.panels[name];

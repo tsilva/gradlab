@@ -304,6 +304,21 @@ def _safe_float(value: object) -> float | None:
     return numeric if numeric == numeric and abs(numeric) != float("inf") else None
 
 
+def _safe_summary_float(value: object) -> float | None:
+    numeric = _safe_float(value)
+    if numeric is not None:
+        return numeric
+    getter = getattr(value, "get", None)
+    if not callable(getter):
+        return None
+    reduced = tuple(
+        numeric
+        for reducer in ("last", "max", "min", "mean", "best")
+        if (numeric := _safe_float(getter(reducer))) is not None
+    )
+    return reduced[0] if len(reduced) == 1 else None
+
+
 def _wandb_json_mapping(value: object, *, label: str) -> dict[str, Any]:
     if value is None or value == "":
         return {}
@@ -331,7 +346,7 @@ def _wandb_user_config(value: object) -> dict[str, Any]:
 
 def _first_summary_float(summary: Any, metrics: Iterable[str]) -> float | None:
     for metric in metrics:
-        value = _safe_float(summary.get(metric))
+        value = _safe_summary_float(summary.get(metric))
         if value is not None:
             return value
     return None

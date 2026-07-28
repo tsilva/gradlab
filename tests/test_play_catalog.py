@@ -25,6 +25,14 @@ RUN_ID = "gradlab-" + "a" * 32
 SECOND_RUN_ID = "gradlab-" + "b" * 32
 
 
+class FakeSummarySubDict:
+    def __init__(self, values: dict[str, object]) -> None:
+        self.values = values
+
+    def get(self, key: str) -> object:
+        return self.values.get(key)
+
+
 class FakeApi:
     default_entity = "research"
 
@@ -74,7 +82,7 @@ class FakeApi:
                     "eval/full/episode/return/mean": 321.25,
                     "train/outcome/success/window_100/rate/min": 0.75,
                     "train/episode/return/shaped/from/target/mean": 123.5,
-                    "train/global_step": 2_000_000,
+                    "train/global_step": FakeSummarySubDict({"max": 2_000_000}),
                 },
                 notes="accepted",
                 created_at="2026-01-02T00:00:00Z",

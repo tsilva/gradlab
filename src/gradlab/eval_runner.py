@@ -23,7 +23,11 @@ from gradlab.eval_metrics import (
 )
 from gradlab.metric_names import EVAL_FULL_DURATION_SECONDS
 from gradlab.modal_eval_protocol import SEED_PROTOCOL
-from gradlab.checkpoint_acceptance import acceptance_aggregates, manifest_index
+from gradlab.checkpoint_acceptance import (
+    acceptance_aggregates,
+    evaluate_acceptance,
+    manifest_index,
+)
 from gradlab.eval_metrics import episode_is_complete
 from gradlab.policy_bundle import (
     PolicyBundle,
@@ -118,6 +122,11 @@ def _evaluate_model_episodes_vector(
     action_selection_mode: str | None = None,
     expected_action_contract: Mapping[str, Any] | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
+    fail_fast = bool(
+        acceptance_contract is not None
+        and acceptance_contract.get("evidence_policy", {}).get("fail_fast")
+        == "first_failed_episode"
+    )
     vec_config = _eval_runtime_config(
         config,
         max_steps=max_steps,
@@ -209,7 +218,7 @@ def _evaluate_model_episodes_vector(
                     best_episode_result, semantics
                 ):
                     best_episode_result = result
-                if acceptance_contract is not None and not episode_is_complete(result):
+                if fail_fast and not episode_is_complete(result):
                     rejected = True
                     break
                 if len(episode_results) >= episodes:
@@ -257,17 +266,20 @@ def evaluate_model_episodes(
         raise ValueError("capture_best_video requires n_envs=1")
     semantics = environment_spec(config.env_provider, config.game).eval_semantics
     planned = manifest_index(acceptance_contract) if acceptance_contract is not None else None
+    fail_fast = bool(
+        acceptance_contract is not None
+        and acceptance_contract.get("evidence_policy", {}).get("fail_fast")
+        == "first_failed_episode"
+    )
     rejected = False
     try:
         policy_runtime: PolicyRuntime | None = PolicyRuntime(model)
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         # Scripted baselines intentionally retain the small ``predict`` adapter;
         # every supported checkpoint algorithm uses PolicyRuntime.
         policy_runtime = None
     if policy_runtime is not None and action_selection_mode is None:
-        action_selection_mode = (
-            policy_runtime.capabilities.default_action_selection_mode
-        )
+        action_selection_mode = policy_runtime.capabilities.default_action_selection_mode
     with tqdm(
         total=episodes,
         desc=progress_description,
@@ -356,7 +368,7 @@ def evaluate_model_episodes(
                         best_episode_result = result
                         best_episode_actions = actions
                         best_episode_seed = episode_seed
-                    if acceptance_contract is not None and not episode_is_complete(result):
+                    if fail_fast and not episode_is_complete(result):
                         rejected = True
                         break
             finally:
@@ -386,7 +398,7 @@ def evaluate_model_episodes(
             episode_results,
             contract=acceptance_contract,
         )
-        rejected = rejected or int(aggregates["failure_count"]) > 0
+        rejected = rejected or (fail_fast and int(aggregates["failure_count"]) > 0)
         if rejected:
             return (
                 {
@@ -445,11 +457,13 @@ def evaluate_model_episodes(
 
     metrics[EVAL_FULL_DURATION_SECONDS] = time.perf_counter() - started_at
     if acceptance_contract is not None:
-        metrics["acceptance_verdict"] = "accepted"
-        metrics["acceptance_aggregates"] = acceptance_aggregates(
-            episode_results,
+        aggregates = acceptance_aggregates(episode_results, contract=acceptance_contract)
+        accepted, _observed = evaluate_acceptance(
+            aggregates,
             contract=acceptance_contract,
         )
+        metrics["acceptance_verdict"] = "accepted" if accepted else "rejected"
+        metrics["acceptance_aggregates"] = aggregates
     return metrics, written_video
 
 
@@ -500,9 +514,7 @@ def evaluate_policy_bundle(
     assert_provider_runtime_available(config, rom_binding=rom_binding)
     provenance = bundle.model.get("provenance")
     training_metadata = (
-        provenance.get("training_metadata")
-        if isinstance(provenance, Mapping)
-        else None
+        provenance.get("training_metadata") if isinstance(provenance, Mapping) else None
     )
     expected_action_contract = (
         training_metadata.get("action_contract")

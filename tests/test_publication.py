@@ -13,11 +13,13 @@ from jinja2 import UndefinedError
 
 from gradlab.preprocessing import preprocessing_contract
 from gradlab.policy_bundle import (
+    PolicyBundle,
     PolicyDocumentError,
     UnsupportedPolicyDocumentVersion,
     build_model_document,
     build_recipe_document,
     evaluation_contract_sha256,
+    load_policy_bundle,
     sha256_file,
     write_canonical_json,
 )
@@ -32,9 +34,8 @@ from gradlab.publication import (
     build_model_repo_id,
     build_release_manifest,
     normalize_publication_evaluation,
-    publication_identity_from_model_metadata,
-    publication_model_metadata,
-    publication_source_from_model_metadata,
+    publication_identity_from_policy_bundle,
+    publication_source_from_policy_bundle,
     release_artifact_records,
     render_model_card,
     validate_release_bundle,
@@ -53,8 +54,8 @@ def _render_current_model_card_fixture(
         model_class=model_class,
         search_algorithm=search_algorithm,
     )
-    identity = publication_identity_from_model_metadata("Level1-1", raw_metadata)
-    metadata = publication_model_metadata(raw_metadata, identity)
+    bundle = policy_bundle_from_metadata(raw_metadata)
+    identity = publication_identity_from_policy_bundle("Level1-1", bundle)
     raw_evaluation = evaluation_payload()
     if algorithm == "action-program":
         raw_evaluation["action_sampling"] = "program"
@@ -62,10 +63,10 @@ def _render_current_model_card_fixture(
         raw_evaluation,
         algorithm_id=algorithm,
     )
-    source = publication_source_from_model_metadata(metadata, evaluation)
+    source = publication_source_from_policy_bundle(bundle, evaluation)
     manifest = build_release_manifest(
         identity,
-        metadata,
+        bundle,
         release_version="v1",
         published_at="2026-07-14T12:00:00Z",
         source=source,
@@ -73,7 +74,7 @@ def _render_current_model_card_fixture(
         artifacts={},
         youtube_url=youtube_url,
     )
-    return render_model_card(manifest, metadata)
+    return render_model_card(manifest, bundle)
 
 
 def model_metadata(
@@ -126,6 +127,43 @@ def model_metadata(
     return metadata
 
 
+def policy_bundle_from_metadata(metadata: dict) -> PolicyBundle:
+    value = deepcopy(metadata)
+    training = deepcopy(value.pop("training_metadata"))
+    environment = deepcopy(training["environment"])
+    environment["preprocessing"] = deepcopy(training["preprocessing"])
+    policy_keys = {
+        "algorithm_id",
+        "model_class",
+        "training_backend_id",
+        "training_backend_config_hash",
+    }
+    policy = {key: value.pop(key) for key in policy_keys}
+    checkpoint_step = value.pop("checkpoint_step")
+    persisted_training = {
+        key: deepcopy(training[key]) for key in ("action_contract", "versions") if key in training
+    }
+    if persisted_training:
+        value["training_metadata"] = persisted_training
+    return PolicyBundle(
+        checkpoint_path=Path("model.zip"),
+        model_path=Path("model.json"),
+        recipe_path=Path("recipe.json"),
+        model={
+            "policy": policy,
+            "provenance": value,
+            "checkpoint": {"step": checkpoint_step},
+        },
+        recipe={
+            "recipe": {
+                "environment": environment,
+                "environment_hash": training["environment_hash"],
+            }
+        },
+        source="test",
+    )
+
+
 def evaluation_payload() -> dict:
     return {
         "action_sampling": "stochastic",
@@ -157,9 +195,12 @@ def evaluation_payload() -> dict:
 
 
 def test_mario_publication_identity_is_exact_and_provider_neutral() -> None:
-    native = publication_identity_from_model_metadata("Level1-1", model_metadata())
-    retro = publication_identity_from_model_metadata(
-        "Level1-1", model_metadata(provider="stable-retro-turbo")
+    native = publication_identity_from_policy_bundle(
+        "Level1-1", policy_bundle_from_metadata(model_metadata())
+    )
+    retro = publication_identity_from_policy_bundle(
+        "Level1-1",
+        policy_bundle_from_metadata(model_metadata(provider="stable-retro-turbo")),
     )
 
     assert native == retro
@@ -181,7 +222,9 @@ def test_non_default_reward_shape_gets_a_bounded_repository_suffix() -> None:
         reward_shape_sha256="sha256:" + "a" * 64,
         reward_shape_is_default=False,
     )
-    identity = publication_identity_from_model_metadata("Level1-1", metadata)
+    identity = publication_identity_from_policy_bundle(
+        "Level1-1", policy_bundle_from_metadata(metadata)
+    )
 
     assert identity.policy_variant.endswith("shape-score-step-0p01-v1-aaaaaaaa")
     assert len(identity.repo_name) <= 96
@@ -203,7 +246,9 @@ def test_non_default_reward_shape_gets_a_bounded_repository_suffix() -> None:
 )
 def test_registered_game_families(provider: str, game: str, family: str) -> None:
     metadata = model_metadata(provider=provider, game=game, crop=[0, 0, 0, 0], action_set="native")
-    identity = publication_identity_from_model_metadata("Goal1", metadata)
+    identity = publication_identity_from_policy_bundle(
+        "Goal1", policy_bundle_from_metadata(metadata)
+    )
     assert identity.game_family == family
 
 
@@ -218,15 +263,18 @@ def test_policy_variant_records_rgb_shape_crop_stack_layout_and_action() -> None
         action_set="native",
     )
 
-    identity = publication_identity_from_model_metadata("Levels_1-1_1-2", metadata)
+    identity = publication_identity_from_policy_bundle(
+        "Levels_1-1_1-2", policy_bundle_from_metadata(metadata)
+    )
 
     assert identity.goal == "Levels-1-1-1-2"
     assert identity.policy_variant == "rgb84x96-crop-t8-r1-b2-l3-stack2-taskdict-native"
 
 
 def test_policy_variant_accepts_another_registered_action_set() -> None:
-    identity = publication_identity_from_model_metadata(
-        "Level1-1", model_metadata(action_set="right-jump")
+    identity = publication_identity_from_policy_bundle(
+        "Level1-1",
+        policy_bundle_from_metadata(model_metadata(action_set="right-jump")),
     )
     assert identity.policy_variant.endswith("-right-jump")
 
@@ -242,28 +290,40 @@ def test_policy_variant_accepts_another_registered_action_set() -> None:
     ],
 )
 def test_supported_algorithms_are_the_last_axis(algorithm: str, model_class: str) -> None:
-    identity = publication_identity_from_model_metadata(
-        "Level1-1", model_metadata(algorithm=algorithm, model_class=model_class)
+    identity = publication_identity_from_policy_bundle(
+        "Level1-1",
+        policy_bundle_from_metadata(model_metadata(algorithm=algorithm, model_class=model_class)),
     )
     assert build_model_repo_id(identity).endswith(f"_{algorithm}")
 
 
 def test_publication_rejects_unknown_family_and_algorithm_mismatch() -> None:
     with pytest.raises(ValueError, match="no registered canonical game family"):
-        publication_identity_from_model_metadata(
-            "Goal1", model_metadata(provider="gymnasium", game="CustomVector-v0", crop=[])
+        publication_identity_from_policy_bundle(
+            "Goal1",
+            policy_bundle_from_metadata(
+                model_metadata(provider="gymnasium", game="CustomVector-v0", crop=[])
+            ),
         )
     with pytest.raises(ValueError, match="incompatible"):
-        publication_identity_from_model_metadata(
-            "Level1-1", model_metadata(algorithm="a2c", model_class="stable_baselines3.ppo.ppo.PPO")
+        publication_identity_from_policy_bundle(
+            "Level1-1",
+            policy_bundle_from_metadata(
+                model_metadata(
+                    algorithm="a2c",
+                    model_class="stable_baselines3.ppo.ppo.PPO",
+                )
+            ),
         )
     with pytest.raises(ValueError, match="no registered canonical game family"):
-        publication_identity_from_model_metadata(
-            "Level1-1", model_metadata(provider="unregistered-mario-provider")
+        publication_identity_from_policy_bundle(
+            "Level1-1",
+            policy_bundle_from_metadata(model_metadata(provider="unregistered-mario-provider")),
         )
     with pytest.raises(ValueError, match="unknown action_set"):
-        publication_identity_from_model_metadata(
-            "Level1-1", model_metadata(action_set="unregistered-actions")
+        publication_identity_from_policy_bundle(
+            "Level1-1",
+            policy_bundle_from_metadata(model_metadata(action_set="unregistered-actions")),
         )
 
 
@@ -309,12 +369,12 @@ def test_publication_source_requires_explicit_seed_commit_and_matching_step() ->
     metadata = model_metadata()
     metadata["repo_git_commit"] = ""
     with pytest.raises(ValueError, match="repo_git_commit"):
-        publication_source_from_model_metadata(metadata, evaluation)
+        publication_source_from_policy_bundle(policy_bundle_from_metadata(metadata), evaluation)
 
     metadata = model_metadata()
     metadata["checkpoint_step"] = 1
     with pytest.raises(ValueError, match="checkpoint_step disagrees"):
-        publication_source_from_model_metadata(metadata, evaluation)
+        publication_source_from_policy_bundle(policy_bundle_from_metadata(metadata), evaluation)
 
 
 def test_model_card_template_uses_canonical_cli_commands() -> None:
@@ -359,11 +419,8 @@ def test_model_card_template_rejects_missing_context() -> None:
 def test_release_bundle_has_exact_files_hashes_and_portable_identity() -> None:
     with tempfile.TemporaryDirectory() as temporary:
         root = Path(temporary)
-        raw_metadata = model_metadata()
-        identity = publication_identity_from_model_metadata("Level1-1", raw_metadata)
-        metadata = publication_model_metadata(raw_metadata, identity)
+        metadata = model_metadata()
         evaluation = normalize_publication_evaluation(evaluation_payload())
-        source = publication_source_from_model_metadata(metadata, evaluation)
         contents = {
             ".gitattributes": GITATTRIBUTES_TEXT,
             "LICENSE": MIT_LICENSE_TEXT,
@@ -400,6 +457,9 @@ def test_release_bundle_has_exact_files_hashes_and_portable_identity() -> None:
             root / "model.json",
             build_model_document(root / "model.zip", root / "recipe.json", metadata),
         )
+        bundle = load_policy_bundle(root, source=str(root))
+        identity = publication_identity_from_policy_bundle("Level1-1", bundle)
+        source = publication_source_from_policy_bundle(bundle, evaluation)
         evaluation_value = evaluation.as_manifest_value()
         evaluation_value.update(
             checkpoint_sha256=sha256_file(root / "model.zip"),
@@ -410,7 +470,7 @@ def test_release_bundle_has_exact_files_hashes_and_portable_identity() -> None:
         )
         provisional = build_release_manifest(
             identity,
-            metadata,
+            bundle,
             release_version="v1",
             published_at="2026-07-14T12:00:00Z",
             source=source,
@@ -418,11 +478,14 @@ def test_release_bundle_has_exact_files_hashes_and_portable_identity() -> None:
             artifacts={},
             youtube_url="https://www.youtube.com/watch?v=example",
         )
-        (root / "README.md").write_text(render_model_card(provisional, metadata), encoding="utf-8")
+        (root / "README.md").write_text(
+            render_model_card(provisional, bundle),
+            encoding="utf-8",
+        )
         records = release_artifact_records(root)
         manifest = build_release_manifest(
             identity,
-            metadata,
+            bundle,
             release_version="v1",
             published_at="2026-07-14T12:00:00Z",
             source=source,

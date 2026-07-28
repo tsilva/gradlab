@@ -8,6 +8,7 @@ export const WORKSPACE_VERSION = 4;
 export const CUSTOM_PANEL_ID = /^panel-[0-9a-f]{8}-[0-9a-f-]{27}$/;
 const RETIRED_VALUE_RESIDUAL_FOOT =
   "For a comparable stochastic policy trajectory, selected-step residual is V(s) − G(s): positive overestimates, negative underestimates. This single-trajectory diagnostic is not the critic training loss.";
+const COMPACT_CHART_PANEL_IDS = ["value", "step-reward", "episode-return"];
 const BLOCK_KINDS = new Set([
   "stats",
   "line",
@@ -118,6 +119,40 @@ function normalizePanel(id, value, fallback) {
   };
 }
 
+function compactLegacyChartRow(panels, fallbackPanels) {
+  const defaults = COMPACT_CHART_PANEL_IDS.map(
+    (id) => fallbackPanels[id]?.placement,
+  );
+  const placements = COMPACT_CHART_PANEL_IDS.map(
+    (id) => panels[id]?.placement,
+  );
+  if (defaults.some((placement) => !placement)) return;
+  const legacy = placements.every((placement, index) => (
+    placement
+    && placement.x === defaults[index].x
+    && placement.y === defaults[index].y
+    && placement.w === defaults[index].w
+    && placement.h === 9
+    && placement.window === defaults[index].window
+  ));
+  if (!legacy) return;
+  const rowTop = defaults[0].y;
+  const rowWindow = defaults[0].window;
+  const legacyBottom = rowTop + 9;
+  COMPACT_CHART_PANEL_IDS.forEach((id, index) => {
+    panels[id].placement.h = defaults[index].h;
+  });
+  Object.entries(panels).forEach(([id, panel]) => {
+    if (
+      !COMPACT_CHART_PANEL_IDS.includes(id)
+      && panel.placement.window === rowWindow
+      && panel.placement.y >= legacyBottom
+    ) {
+      panel.placement.y -= 2;
+    }
+  });
+}
+
 export function createDefaultWorkspace({ paired = false, writer = "" } = {}) {
   return {
     version: WORKSPACE_VERSION,
@@ -141,6 +176,7 @@ export function normalizeWorkspace(value, { paired = false, writer = "" } = {}) 
     const normalized = normalizePanel(id, panel, null);
     if (normalized) panels[id] = normalized;
   });
+  compactLegacyChartRow(panels, fallback.panels);
   return {
     version: WORKSPACE_VERSION,
     revision: {

@@ -69,6 +69,28 @@ function appendFoot(section, value, { force = false } = {}) {
   return foot;
 }
 
+export function statsBlockFoot(block, snapshot) {
+  const actionComparison = snapshot?.session?.action_contract_comparison;
+  const actionContractMessage = block.metrics.some(
+    (key) => ["action/policy", "action/executed"].includes(key),
+  ) && actionComparison?.status === "legacy-unproven"
+    ? "Legacy checkpoint: training-time action equivalence is unproven."
+    : "";
+  return [block.foot || "", actionContractMessage]
+    .filter(Boolean)
+    .join(" ");
+}
+
+export function lineBlockFootPresentation(block, unavailable) {
+  const visibleUnavailable = unavailable?.status === "protocol-error"
+    ? null
+    : unavailable;
+  return {
+    text: visibleUnavailable?.message || block.foot || "",
+    warning: Boolean(visibleUnavailable),
+  };
+}
+
 function makeStatsBlock(block) {
   const section = document.createElement("section");
   section.className = "telemetry-block telemetry-stats";
@@ -108,31 +130,10 @@ function makeStatsBlock(block) {
           .filter(({ availability }) => availability.status !== "unsupported")
           .map(({ row }) => row),
       );
-      const unsupported = unsupportedStatLabelsVisible(snapshot)
-        ? rows
-          .filter(({ availability }) => availability.status === "unsupported")
-          .map(({ descriptor }) => descriptor?.shortLabel)
-          .filter(Boolean)
-        : [];
-      const actionComparison = snapshot?.session?.action_contract_comparison;
-      const actionContractMessage = block.metrics.some(
-        (key) => ["action/policy", "action/executed"].includes(key),
-      ) && actionComparison?.status === "legacy-unproven"
-        ? "Legacy checkpoint: training-time action equivalence is unproven."
-        : "";
-      const availabilityMessage = unsupported.length
-        ? `Unsupported here: ${unsupported.join(", ")}.`
-        : (block.foot || "");
-      foot.textContent = [availabilityMessage, actionContractMessage]
-        .filter(Boolean)
-        .join(" ");
+      foot.textContent = statsBlockFoot(block, snapshot);
       foot.hidden = !foot.textContent;
     },
   };
-}
-
-export function unsupportedStatLabelsVisible(snapshot) {
-  return snapshot?.policy?.provenance?.search_algorithm_id !== "go-explore";
 }
 
 function makeLineBlock(block) {
@@ -161,8 +162,10 @@ function makeLineBlock(block) {
           && availability.status !== "not-yet-observed",
       );
       if (foot) {
-        foot.textContent = unavailable?.message || block.foot;
-        foot.classList.toggle("warning", Boolean(unavailable));
+        const presentation = lineBlockFootPresentation(block, unavailable);
+        foot.textContent = presentation.text;
+        foot.hidden = !foot.textContent;
+        foot.classList.toggle("warning", presentation.warning);
       }
       section.dataset.telemetryStatus = unavailable?.status || "available";
       drawLines(
@@ -186,6 +189,11 @@ function histogramValues(descriptor, history) {
 
 export function distributionBlockVisible(status) {
   return status !== "unsupported";
+}
+
+export function distributionBlockTitle(block, descriptor) {
+  if (block.metric === "policy/distribution" && !block.title) return "";
+  return block.title || descriptor?.label || "Distribution";
 }
 
 export function histogramSelectedLabel(names, highlightIndex) {
@@ -259,7 +267,8 @@ function makeDistributionBlock(block) {
   const section = document.createElement("section");
   section.className = "telemetry-block telemetry-distribution";
   const descriptor = descriptorFor(block.metric);
-  appendHeading(section, block.title || descriptor?.label || "Distribution");
+  const title = distributionBlockTitle(block, descriptor);
+  if (title) appendHeading(section, title);
   const target = document.createElement("div");
   target.className = "action-probabilities empty-state";
   section.append(target);

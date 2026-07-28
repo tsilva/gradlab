@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 import {
@@ -10,11 +11,21 @@ import {
   rankRunItems,
   SourceBrowser,
   sortRunItems,
+  sourceBreadcrumbItems,
   sourceRouteFromPath,
   sourceRoutePath,
 } from "../../src/gradlab/web_player/sources/browser.js";
 
 const METRIC = "eval/full/episode/return/mean";
+
+test("active-run status icon is available in the shared icon sprite", async () => {
+  const sprite = await readFile(
+    new URL("../../src/gradlab/web_player/tabler-icons.svg", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(sprite, /id="ti-activity-heartbeat"/);
+});
 
 test("playback home is the root environment route", () => {
   assert.deepEqual(sourceRouteFromPath("/"), {
@@ -35,6 +46,91 @@ test("playback home is the root environment route", () => {
     run_id: "",
     checkpoint_id: "",
   }), "/");
+});
+
+test("active checkpoint breadcrumbs retain the full source hierarchy", () => {
+  const items = sourceBreadcrumbItems({
+    level: "runs",
+    project: "ViZDoom",
+    goal_id: "DefendTheLine-v1",
+    goal_variant_id: "goal-variant-a27a8239",
+    run_id: "gradlab-c22f7c7a",
+    checkpoint_id: "checkpoint-10002432-b285ff3b",
+  });
+
+  assert.deepEqual(
+    items.map(({ label, current }) => ({ label, current })),
+    [
+      { label: "Environments", current: false },
+      { label: "ViZDoom", current: false },
+      { label: "DefendTheLine-v1", current: false },
+      { label: "goal-variant-a27a8239", current: false },
+      { label: "gradlab-c22f7c7a", current: false },
+      { label: "checkpoint-10002432-b285ff3b", current: true },
+    ],
+  );
+  assert.deepEqual(items.at(-2).route, {
+    level: "runs",
+    checkpoint_id: "",
+  });
+  assert.equal(items.at(-1).route, null);
+});
+
+test("active breadcrumb rendering hides routes without a selected checkpoint", () => {
+  const browser = Object.create(SourceBrowser.prototype);
+  browser.breadcrumbsRoot = {
+    hidden: false,
+    replaceChildrenCalled: 0,
+    replaceChildren() {
+      this.replaceChildrenCalled += 1;
+    },
+  };
+  browser.stop = () => {};
+  browser.renderBreadcrumbs = () => {
+    throw new Error("breadcrumbs should not render without a checkpoint");
+  };
+
+  browser.renderActiveBreadcrumbs({
+    app: {
+      phase: "active",
+      route: { level: "runs", run_id: "gradlab-c22f7c7a", checkpoint_id: "" },
+    },
+  });
+
+  assert.equal(browser.breadcrumbsRoot.hidden, true);
+  assert.equal(browser.breadcrumbsRoot.replaceChildrenCalled, 1);
+});
+
+test("unchanged active checkpoint routes do not rebuild breadcrumbs", () => {
+  const browser = Object.create(SourceBrowser.prototype);
+  browser.activeBreadcrumbRoute = "";
+  browser.breadcrumbsRoot = {
+    hidden: true,
+    replaceChildren() {},
+  };
+  browser.stop = () => {};
+  let renders = 0;
+  browser.renderBreadcrumbs = () => {
+    renders += 1;
+  };
+  const snapshot = {
+    app: {
+      phase: "active",
+      route: {
+        level: "runs",
+        project: "ViZDoom",
+        goal_id: "DefendTheLine-v1",
+        goal_variant_id: "goal-variant-a27a8239",
+        run_id: "gradlab-c22f7c7a",
+        checkpoint_id: "checkpoint-10002432-b285ff3b",
+      },
+    },
+  };
+
+  browser.renderActiveBreadcrumbs(snapshot);
+  browser.renderActiveBreadcrumbs(snapshot);
+
+  assert.equal(renders, 1);
 });
 
 test("run metrics use compact labels and values", () => {

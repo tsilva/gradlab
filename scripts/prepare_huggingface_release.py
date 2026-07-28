@@ -4,6 +4,7 @@ import argparse
 import json
 import shutil
 from collections.abc import Mapping
+from copy import deepcopy
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -14,17 +15,19 @@ from gradlab.publication import (
     build_model_repo_id,
     build_release_manifest,
     normalize_publication_evaluation,
-    publication_identity_from_model_metadata,
-    publication_model_metadata,
-    publication_source_from_model_metadata,
+    publication_identity_from_policy_bundle,
+    publication_source_from_policy_bundle,
     release_artifact_records,
     render_model_card,
     validate_release_bundle,
     verify_replay,
 )
 from gradlab.policy_bundle import (
+    PolicyBundle,
     build_model_document,
     evaluation_contract_sha256,
+    load_model_document,
+    load_policy_bundle,
     load_recipe_document,
     sha256_file,
     write_canonical_json,
@@ -59,11 +62,25 @@ def _parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     goal = load_goal_contract(args.goal_file)
-    metadata = _load_object(args.model_metadata, label="model metadata")
-    identity = publication_identity_from_model_metadata(goal.get("goal_id"), metadata)
-    repo_id = build_model_repo_id(identity)
-    summary = {"repo_id": repo_id, **identity.__dict__}
+    source_model = load_model_document(args.model_metadata)
     if args.identity_only:
+        if args.recipe is None:
+            raise ValueError("--identity-only requires --recipe with the current model.json")
+        recipe_document = load_recipe_document(args.recipe)
+        bundle = PolicyBundle(
+            checkpoint_path=(
+                args.model
+                if args.model is not None
+                else args.model_metadata.parent / source_model["checkpoint"]["filename"]
+            ),
+            model_path=args.model_metadata,
+            recipe_path=args.recipe,
+            model=source_model,
+            recipe=recipe_document,
+            source=str(args.model_metadata),
+        )
+        identity = publication_identity_from_policy_bundle(goal.get("goal_id"), bundle)
+        summary = {"repo_id": build_model_repo_id(identity), **identity.__dict__}
         print(json.dumps(summary, indent=2, sort_keys=True))
         return 0
 
@@ -99,11 +116,6 @@ def main(argv: list[str] | None = None) -> int:
 
     verify_replay(args.replay)
     evaluation_document = _load_object(args.evaluation_json, label="evaluation")
-    evaluation = normalize_publication_evaluation(
-        evaluation_document,
-        algorithm_id=str(metadata.get("algorithm_id") or ""),
-    )
-    source = publication_source_from_model_metadata(metadata, evaluation)
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
     shutil.copy2(args.model, args.output_dir / "model.zip")
@@ -112,15 +124,27 @@ def main(argv: list[str] | None = None) -> int:
     shutil.copy2(args.replay, args.output_dir / "replay.mp4")
     (args.output_dir / ".gitattributes").write_text(GITATTRIBUTES_TEXT, encoding="utf-8")
     (args.output_dir / "LICENSE").write_text(MIT_LICENSE_TEXT, encoding="utf-8")
-    publication_metadata = publication_model_metadata(metadata, identity)
+    metadata = deepcopy(dict(source_model["provenance"]))
+    metadata.update(source_model["policy"])
+    metadata["checkpoint_step"] = source_model["checkpoint"].get("step")
+    metadata["kind"] = source_model["checkpoint"].get("kind")
     write_canonical_json(
         args.output_dir / "model.json",
         build_model_document(
             args.output_dir / "model.zip",
             args.output_dir / "recipe.json",
-            publication_metadata,
+            metadata,
         ),
     )
+    bundle = load_policy_bundle(args.output_dir, source=str(args.output_dir))
+    identity = publication_identity_from_policy_bundle(goal.get("goal_id"), bundle)
+    repo_id = build_model_repo_id(identity)
+    summary = {"repo_id": repo_id, **identity.__dict__}
+    evaluation = normalize_publication_evaluation(
+        evaluation_document,
+        algorithm_id=str(bundle.model["policy"].get("algorithm_id") or ""),
+    )
+    source = publication_source_from_policy_bundle(bundle, evaluation)
     evidence = evaluation_document.get("evaluation_evidence")
     if not isinstance(evidence, Mapping):
         raise ValueError("release evaluation is missing evaluation_evidence")
@@ -142,7 +166,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     provisional_manifest = build_release_manifest(
         identity,
-        publication_metadata,
+        bundle,
         release_version=args.release_version,
         published_at=published_at,
         source=source,
@@ -151,12 +175,12 @@ def main(argv: list[str] | None = None) -> int:
         youtube_url=args.youtube_url,
     )
     (args.output_dir / "README.md").write_text(
-        render_model_card(provisional_manifest, publication_metadata), encoding="utf-8"
+        render_model_card(provisional_manifest, bundle), encoding="utf-8"
     )
     artifact_records = release_artifact_records(args.output_dir)
     manifest = build_release_manifest(
         identity,
-        publication_metadata,
+        bundle,
         release_version=args.release_version,
         published_at=published_at,
         source=source,

@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 
-METRICS_SCHEMA_VERSION = 10
+METRICS_SCHEMA_VERSION = 11
 TRAIN_GLOBAL_STEP = "train/global_step"
 EVAL_CHECKPOINT_STEP = "eval/checkpoint_step"
 ORCHESTRATION_EVENT_SEQ = "orchestration/event_seq"
@@ -32,7 +32,9 @@ ORCHESTRATION_IDLE_GPU_TAIL_SECONDS = "orchestration/drain/idle_gpu_tail_seconds
 ORCHESTRATION_SCRATCH_USED_FRACTION = "orchestration/scratch/used_fraction"
 
 TRAIN_EPISODE_RETURN_SHAPED_MEAN = "train/episode/return/shaped/mean"
+TRAIN_EPISODE_RETURN_SHAPED_MAX = "train/episode/return/shaped/max"
 TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_MEAN = "train/episode/return/shaped/from/target/mean"
+TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_MAX = "train/episode/return/shaped/from/target/max"
 TRAIN_EPISODE_LENGTH_MEAN = "train/episode/length/mean"
 
 TRAIN_ARCHIVE_CURRICULUM_ROOT = "train/curriculum/archive"

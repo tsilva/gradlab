@@ -4,6 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>gradlab player</title>
+    <link rel="icon" href="/assets/favicon.svg" type="image/svg+xml">
     <link rel="stylesheet" href="/assets/vendor/gridstack/gridstack.min.css">
     <link rel="stylesheet" href="/assets/styles.css">
     <script src="/assets/vendor/gridstack/gridstack-all.js"></script>
@@ -23,8 +24,6 @@
         <button id="panels-toggle" class="quiet icon-only" type="button" aria-label="Panels" title="Panels" aria-controls="panel-shelf" aria-expanded="false"><svg class="icon" aria-hidden="true"><use href="/assets/tabler-icons.svg#ti-layout-grid"></use></svg></button>
         <button id="new-window" class="quiet icon-only" type="button" aria-label="Open synchronized window" title="Open synchronized window"><svg class="icon" aria-hidden="true"><use href="/assets/tabler-icons.svg#ti-external-link"></use></svg></button>
         <span id="connection-status" class="sync-status warning" aria-live="polite">Connecting</span>
-        <span id="sampling-status" class="badge muted" hidden>Stochastic</span>
-        <span id="control-status" class="badge muted">Observer</span>
       </div>
     </header>
 
@@ -64,8 +63,11 @@
         <strong id="timeline-label">STEP —</strong>
       </div>
       <div class="timeline-track">
-        <input id="timeline-scrubber" type="range" min="0" max="0" step="1" value="0" aria-label="Inspect a retained transition one step at a time" title="Left/Right: move one step · Space: play or pause">
-        <div id="timeline-markers" class="timeline-markers" aria-hidden="true"></div>
+        <button id="timeline-playback-toggle" class="primary icon-only" type="button" aria-label="Play" title="Play current episode"><svg class="icon" aria-hidden="true"><use id="timeline-playback-icon" href="/assets/tabler-icons.svg#ti-player-play"></use></svg></button>
+        <div class="timeline-scrubber-track">
+          <input id="timeline-scrubber" type="range" min="0" max="0" step="1" value="0" aria-label="Inspect a retained transition one step at a time" title="Left/Right: move one step · Space: play or pause">
+          <div id="timeline-markers" class="timeline-markers" aria-hidden="true"></div>
+        </div>
       </div>
     </section>
 

@@ -221,6 +221,8 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertEqual(document["goal"]["goal_id"], "VizdoomBasic-v1")
         self.assertEqual(document["recipe_id"], "ppo")
         self.assertEqual(train_config["timesteps"], 2_000_000)
+        self.assertEqual(train_config["checkpoint_eval_backend"], "none")
+        self.assertFalse(train_config["stop_on_acceptance"])
         self.assertEqual(train_config["training_backend"]["id"], "sb3.ppo")
         self.assertEqual(train_config["env_provider"], "vizdoom-turbo")
         self.assertEqual(train_config["game"], "VizdoomBasic-v1")
@@ -263,7 +265,7 @@ class ConfigValidationTests(unittest.TestCase):
             document["goal"]["eval"]["acceptance"],
             [
                 {
-                    "metric": "eval/full/outcome/success/rate/min",
+                    "metric": "eval/full/episode/return/mean",
                     "operator": ">=",
                     "threshold": 0.95,
                 }

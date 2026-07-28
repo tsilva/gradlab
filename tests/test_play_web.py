@@ -992,6 +992,9 @@ def test_loopback_server_requires_exact_origin_and_fragment_token() -> None:
                 assert icon_response.status == 200
                 assert "image/svg+xml" in icon_response.headers["Content-Type"]
                 assert 'id="ti-player-play"' in await icon_response.text()
+                favicon_response = await client.get(f"{server.origin}/assets/favicon.svg")
+                assert favicon_response.status == 200
+                assert "image/svg+xml" in favicon_response.headers["Content-Type"]
                 panel_response = await client.get(f"{server.origin}/assets/panels/catalog.js")
                 assert panel_response.status == 200
                 assert "javascript" in panel_response.headers["Content-Type"]
@@ -1413,6 +1416,7 @@ def test_web_dashboard_assets_are_packaged_beside_server() -> None:
     panel_root = root / "panels"
     expected_assets = (
         root / "index.html",
+        root / "favicon.svg",
         root / "styles.css",
         root / "tabler-icons.svg",
         root / "tabler-chevron-down.svg",
@@ -1447,6 +1451,7 @@ def test_web_dashboard_assets_are_packaged_beside_server() -> None:
     workspace = (panel_root / "workspace.js").read_text(encoding="utf-8")
     icons = (root / "tabler-icons.svg").read_text(encoding="utf-8")
 
+    assert '<link rel="icon" href="/assets/favicon.svg" type="image/svg+xml">' in markup
     assert '<main id="dashboard" class="dashboard grid-stack"></main>' in markup
     assert 'href="/assets/vendor/gridstack/gridstack.min.css"' in markup
     assert 'src="/assets/vendor/gridstack/gridstack-all.js"' in markup

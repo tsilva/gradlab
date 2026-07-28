@@ -14,7 +14,11 @@ from gradlab.early_stop import (
 )
 from gradlab.eval_metrics import episode_is_complete, episode_start_state
 from gradlab.env_registry import resolve_env_provider
-from gradlab.metric_names import EVAL_FULL_SUCCESS_RATE_MEAN, EVAL_FULL_SUCCESS_RATE_MIN
+from gradlab.metric_names import (
+    EVAL_FULL_EPISODE_RETURN_MEAN,
+    EVAL_FULL_SUCCESS_RATE_MEAN,
+    EVAL_FULL_SUCCESS_RATE_MIN,
+)
 from gradlab.seeds import EVAL_SEED_START
 from gradlab.rom_assets import manifest_from_train_config, validate_rom_asset_manifest
 
@@ -66,11 +70,7 @@ def portable_asset_from_train_config(
         asset_value,
         expected_game=game,
     )
-    return {
-        key: value
-        for key, value in asset.items()
-        if key not in {"object_uri", "local_path"}
-    }
+    return {key: value for key, value in asset.items() if key not in {"object_uri", "local_path"}}
 
 
 def _required_int(
@@ -334,6 +334,16 @@ def build_checkpoint_eval_contract(
         seed=seed,
         environment=environment,
     )
+    fail_fast = (
+        "first_failed_episode"
+        if all(
+            str(rule["metric"]) in {EVAL_FULL_SUCCESS_RATE_MIN, EVAL_FULL_SUCCESS_RATE_MEAN}
+            and str(rule["operator"]) == ">="
+            and float(rule["threshold"]) >= 1.0
+            for rule in rules
+        )
+        else "disabled"
+    )
     return {
         "protocol_version": ACCEPTANCE_PROTOCOL_VERSION,
         "environment": dict(environment),
@@ -348,7 +358,7 @@ def build_checkpoint_eval_contract(
         "manifest": manifest,
         "evidence_policy": {
             "version": EVIDENCE_POLICY_VERSION,
-            "fail_fast": "first_failed_episode",
+            "fail_fast": fail_fast,
             "complete_metrics_prefix": "eval/full",
             "partial_rejection_metrics": False,
             "aggregate_validation": "supervisor-recomputed-v1",
@@ -382,9 +392,7 @@ def manifest_index(contract: Mapping[str, Any]) -> dict[tuple[int, int], dict[st
     if not isinstance(quotas, list) or len(quotas) != int(contract["n_envs"]):
         raise ValueError("acceptance episode manifest lane quotas are invalid")
     expected_keys = {
-        (lane, ordinal)
-        for lane, quota in enumerate(quotas)
-        for ordinal in range(int(quota))
+        (lane, ordinal) for lane, quota in enumerate(quotas) for ordinal in range(int(quota))
     }
     if set(index) != expected_keys or sum(int(value) for value in quotas) != int(
         contract["episodes"]
@@ -415,9 +423,15 @@ def acceptance_aggregates(
         "failure_count": failures,
         "success_rate_by_start": rates,
     }
-    if len(rows) == int(contract["episodes"]) and rates:
-        result[EVAL_FULL_SUCCESS_RATE_MIN] = min(rates.values())
-        result[EVAL_FULL_SUCCESS_RATE_MEAN] = sum(rates.values()) / len(rates)
+    if len(rows) == int(contract["episodes"]):
+        if rates:
+            result[EVAL_FULL_SUCCESS_RATE_MIN] = min(rates.values())
+            result[EVAL_FULL_SUCCESS_RATE_MEAN] = sum(rates.values()) / len(rates)
+        returns = [float(row["return"]) for row in rows if row.get("return") is not None]
+        if len(returns) == len(rows) and returns:
+            if not all(math.isfinite(value) for value in returns):
+                raise ValueError("acceptance episode returns must be finite")
+            result[EVAL_FULL_EPISODE_RETURN_MEAN] = sum(returns) / len(returns)
     return result
 
 
@@ -449,6 +463,12 @@ def validate_episode_rows(
     verdict: str,
 ) -> list[dict[str, Any]]:
     planned = manifest_index(contract)
+    evidence_policy = contract.get("evidence_policy")
+    if not isinstance(evidence_policy, Mapping):
+        raise ValueError("acceptance contract evidence policy is invalid")
+    fail_fast = str(evidence_policy.get("fail_fast") or "")
+    if fail_fast not in {"first_failed_episode", "disabled"}:
+        raise ValueError(f"unsupported acceptance fail-fast policy: {fail_fast!r}")
     rows = [dict(row) for row in episode_rows]
     seen: set[tuple[int, int]] = set()
     failure_seen = False
@@ -471,16 +491,22 @@ def validate_episode_rows(
             raise ValueError("acceptance evidence contains an undeclared start state")
         if not episode_is_complete(row):
             failure_seen = True
-            if verdict == "rejected" and row is not rows[-1]:
+            if (
+                fail_fast == "first_failed_episode"
+                and verdict == "rejected"
+                and row is not rows[-1]
+            ):
                 raise ValueError("fail-fast rejection contains episodes after its first failure")
-    if verdict == "accepted":
+    if verdict not in {"accepted", "rejected"}:
+        raise ValueError("acceptance verdict must be accepted or rejected")
+    if fail_fast == "disabled":
+        if set(planned) != seen:
+            raise ValueError("exhaustive evidence must contain every planned episode")
+    elif verdict == "accepted":
         if set(planned) != seen or failure_seen:
             raise ValueError("accepted evidence must contain every planned successful episode")
-    elif verdict == "rejected":
-        if not rows or not failure_seen:
-            raise ValueError("rejected evidence must contain a valid failed planned episode")
-    else:
-        raise ValueError("acceptance verdict must be accepted or rejected")
+    elif not rows or not failure_seen:
+        raise ValueError("rejected evidence must contain a valid failed planned episode")
     return rows
 
 

@@ -425,6 +425,75 @@ function routeSignature(route) {
   });
 }
 
+export function sourceBreadcrumbItems(route) {
+  const items = [{
+    label: "Environments",
+    current: route?.level === "environments",
+    route: {
+      level: "environments",
+      project: "",
+      goal_id: "",
+      goal_variant_id: "",
+      run_id: "",
+      checkpoint_id: "",
+    },
+  }];
+  if (route?.project) {
+    items.push({
+      label: route.project,
+      current: route.level === "goals",
+      route: {
+        level: "goals",
+        goal_id: "",
+        goal_variant_id: "",
+        run_id: "",
+        checkpoint_id: "",
+      },
+    });
+  }
+  if (route?.goal_id) {
+    items.push({
+      label: route.goal_id,
+      current: route.level === "goal_variants",
+      route: {
+        level: "goal_variants",
+        goal_variant_id: "",
+        run_id: "",
+        checkpoint_id: "",
+      },
+    });
+  }
+  if (route?.goal_variant_id) {
+    items.push({
+      label: route.goal_variant_id,
+      current: route.level === "runs" && !route.run_id,
+      route: {
+        level: "runs",
+        run_id: "",
+        checkpoint_id: "",
+      },
+    });
+  }
+  if (route?.run_id) {
+    items.push({
+      label: route.run_id,
+      current: !route.checkpoint_id,
+      route: {
+        level: "runs",
+        checkpoint_id: "",
+      },
+    });
+  }
+  if (route?.checkpoint_id) {
+    items.push({
+      label: route.checkpoint_id,
+      current: true,
+      route: null,
+    });
+  }
+  return items;
+}
+
 export class SourceBrowser {
   constructor(
     root,
@@ -470,6 +539,7 @@ export class SourceBrowser {
     this.searchTimer = null;
     this.pollTimer = null;
     this.autoSelectedRoute = "";
+    this.activeBreadcrumbRoute = "";
     this.initialProjectCatalog = null;
     this.historyEnabled = (
       location.pathname === "/"
@@ -545,7 +615,7 @@ export class SourceBrowser {
     this.updatePolling();
   }
 
-  stop() {
+  stop({ preserveBreadcrumbs = false } = {}) {
     clearTimeout(this.searchTimer);
     clearInterval(this.pollTimer);
     this.pollTimer = null;
@@ -554,8 +624,44 @@ export class SourceBrowser {
     this.requestSerial += 1;
     this.loading = false;
     this.loadingKey = "";
-    this.breadcrumbsRoot.replaceChildren();
-    this.breadcrumbsRoot.hidden = true;
+    if (!preserveBreadcrumbs) {
+      this.activeBreadcrumbRoute = "";
+      this.breadcrumbsRoot.replaceChildren();
+      this.breadcrumbsRoot.hidden = true;
+    }
+  }
+
+  renderActiveBreadcrumbs(snapshot) {
+    const app = snapshot?.app || {};
+    const route = app.route || {};
+    const signature = routeSignature(route);
+    if (
+      route.checkpoint_id
+      && signature === this.activeBreadcrumbRoute
+      && !this.breadcrumbsRoot.hidden
+    ) {
+      return;
+    }
+    this.stop({ preserveBreadcrumbs: true });
+    this.app = app;
+    if (!route.checkpoint_id) {
+      this.activeBreadcrumbRoute = "";
+      this.breadcrumbsRoot.replaceChildren();
+      this.breadcrumbsRoot.hidden = true;
+      return;
+    }
+    this.route = {
+      level: route.level || "runs",
+      entity: route.entity || "",
+      project: route.project || "",
+      goal_id: route.goal_id || "",
+      goal_variant_id: route.goal_variant_id || "",
+      run_id: route.run_id || "",
+      checkpoint_id: route.checkpoint_id || "",
+    };
+    this.activeBreadcrumbRoute = signature;
+    this.renderBreadcrumbs(this.breadcrumbsRoot);
+    this.breadcrumbsRoot.hidden = false;
   }
 
   hasControl() {
@@ -934,55 +1040,14 @@ export class SourceBrowser {
 
   renderBreadcrumbs(nav) {
     nav.replaceChildren();
-    const environments = button("Environments", { quiet: true });
-    environments.disabled = this.route.level === "environments";
-    environments.addEventListener("click", () => this.navigate({
-      level: "environments",
-      project: "",
-      goal_id: "",
-      goal_variant_id: "",
-      run_id: "",
-      checkpoint_id: "",
-    }));
-    nav.append(environments);
-    if (this.route.project) {
-      const project = button(this.route.project, { quiet: true });
-      project.disabled = this.route.level === "goals";
-      project.addEventListener("click", () => this.navigate({
-        level: "goals",
-        goal_id: "",
-        goal_variant_id: "",
-        run_id: "",
-        checkpoint_id: "",
-      }));
-      nav.append(project);
-    }
-    if (this.route.goal_id) {
-      const goal = button(this.route.goal_id, { quiet: true });
-      goal.disabled = this.route.level === "goal_variants";
-      goal.addEventListener("click", () => this.navigate({
-        level: "goal_variants",
-        goal_variant_id: "",
-        run_id: "",
-        checkpoint_id: "",
-      }));
-      nav.append(goal);
-    }
-    if (this.route.goal_variant_id) {
-      const variant = button(this.route.goal_variant_id, { quiet: true });
-      variant.disabled = this.route.level === "runs" && !this.route.run_id;
-      variant.addEventListener("click", () => this.navigate({
-        level: "runs",
-        run_id: "",
-        checkpoint_id: "",
-      }));
-      nav.append(variant);
-    }
-    if (this.route.run_id) {
-      const run = button(this.route.run_id, { quiet: true });
-      run.disabled = true;
-      nav.append(run);
-    }
+    sourceBreadcrumbItems(this.route).forEach((item) => {
+      const crumb = button(item.label, { quiet: true });
+      crumb.disabled = item.current;
+      if (item.route) {
+        crumb.addEventListener("click", () => this.navigate(item.route));
+      }
+      nav.append(crumb);
+    });
     return nav;
   }
 
