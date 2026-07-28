@@ -104,7 +104,6 @@ class _RecipeValueDocument(BoundaryModel):
                 descriptor["goal_contract_sha256"] != self.train_config.get("goal_contract_sha256")
                 or descriptor["effective_goal_contract_sha256"]
                 != self.train_config.get("effective_goal_contract_sha256")
-                or descriptor["variant_id"] != self.train_config.get("goal_variant_id")
             ):
                 raise ValueError("goal_variant disagrees with train_config")
         return self
@@ -402,7 +401,52 @@ def load_json_object(path: Path) -> dict[str, Any]:
     return dict(_required_mapping(value, label=str(path)))
 
 
-def _validate_recipe_v1(document: Mapping[str, Any], source: str) -> dict[str, Any]:
+_LEGACY_RECIPE_TRAIN_CONFIG_FIELDS = frozenset(
+    {
+        "goal_variant_descriptor_sha256",
+        "goal_variant_diff_json",
+        "goal_variant_id",
+        "goal_variant_label",
+        "goal_variant_source_relation",
+    }
+)
+
+
+def _legacy_recipe_document(
+    document: Mapping[str, Any],
+    *,
+    source: str,
+) -> dict[str, Any]:
+    normalized = deepcopy(dict(document))
+    recipe = normalized.get("recipe")
+    if not isinstance(recipe, dict):
+        return normalized
+    goal = recipe.get("goal")
+    if isinstance(goal, dict) and "evaluation_mode" not in goal:
+        goal["evaluation_mode"] = "evaluated" if "eval" in goal else "training_only"
+    train_config = recipe.get("train_config")
+    if not isinstance(train_config, dict):
+        return normalized
+    if "post_train_eval_stochastic" in train_config:
+        if train_config["post_train_eval_stochastic"] is not True:
+            raise PolicyDocumentError(
+                f"{source}.recipe.train_config.post_train_eval_stochastic "
+                "must be true in a legacy recipe"
+            )
+        train_config.pop("post_train_eval_stochastic")
+    for key in _LEGACY_RECIPE_TRAIN_CONFIG_FIELDS:
+        train_config.pop(key, None)
+    return normalized
+
+
+def _validate_recipe_v1(
+    document: Mapping[str, Any],
+    source: str,
+    *,
+    allow_legacy: bool = False,
+) -> dict[str, Any]:
+    if allow_legacy:
+        document = _legacy_recipe_document(document, source=source)
     validate_boundary(
         _RecipeDocument,
         document,
@@ -466,9 +510,15 @@ def _validate_recipe_v1(document: Mapping[str, Any], source: str) -> dict[str, A
                 )
         else:
             raise ValueError(f"unknown training backend {backend_id!r}")
-        validate_goal_document_shape(goal, label=f"{source}.recipe.goal")
+        validate_goal_document_shape(
+            goal,
+            label=f"{source}.recipe.goal",
+            allow_legacy=allow_legacy,
+        )
     except ValueError as exc:
         raise PolicyDocumentError(str(exc)) from exc
+    if not allow_legacy and recipe.get("goal_variant") is None:
+        raise PolicyDocumentError(f"{source}.recipe.goal_variant is required")
     training_only = str(train_config.get("checkpoint_eval_backend") or "") == "none"
     if training_only and evaluation is not None:
         raise PolicyDocumentError(f"{source}.recipe training-only contract cannot define eval")
@@ -652,7 +702,13 @@ def load_recipe_document(path: Path) -> dict[str, Any]:
         value,
         source=str(path),
         expected_type=RECIPE_DOCUMENT_TYPE,
-        handlers={RECIPE_FORMAT_VERSION: _validate_recipe_v1},
+        handlers={
+            RECIPE_FORMAT_VERSION: lambda document, source: _validate_recipe_v1(
+                document,
+                source,
+                allow_legacy=True,
+            )
+        },
     )
 
 
@@ -1136,10 +1192,6 @@ def _validate_cross_document_contract(model: Mapping[str, Any], recipe: Mapping[
     for key in (
         "goal_contract_sha256",
         "effective_goal_contract_sha256",
-        "goal_variant_id",
-        "goal_variant_label",
-        "goal_variant_source_relation",
-        "goal_variant_descriptor_sha256",
         "reward_program_kind",
         "reward_program_revision",
         "reward_shape",

@@ -689,7 +689,6 @@ def runtime_release_from_args(
     args: Any,
     *,
     repo_root: Path | str = ".",
-    checkpoint_eval_backend: str | None = None,
     wait_for_modal: bool = True,
 ) -> RuntimeImageInfo:
     source_sha = clean_git_source_sha(repo_root)
@@ -755,7 +754,7 @@ def runtime_release_from_args(
             for key, values in sorted(mismatches.items())
         )
         raise RuntimeError(f"resolved runtime does not match the pinned research runtime; {detail}")
-    if wait_for_modal and str(checkpoint_eval_backend or "") == "modal":
+    if wait_for_modal:
         remaining = max(timeout - (time.monotonic() - readiness_started), 0.0)
         release = wait_for_modal_readiness(
             release,

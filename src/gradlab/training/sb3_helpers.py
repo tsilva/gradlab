@@ -9,13 +9,50 @@ from stable_baselines3.common.logger import HumanOutputFormat
 
 from gradlab.callbacks import CallbackHelper
 from gradlab.file_utils import atomic_write_json
+from gradlab.metric_names import (
+    TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_MEAN,
+    TRAIN_OUTCOME_SUCCESS_CURRENT_RATE_MEAN,
+)
 
 
 SB3_HUMAN_OUTPUT_MAX_LENGTH = 512
+SB3_ROLLOUT_MEAN_RETURN = "rollout/ep_rew_mean"
 
 
-def disable_sb3_human_output_truncation(
-    model, *, max_length: int = SB3_HUMAN_OUTPUT_MAX_LENGTH
+class CompactTrainingOutputFormat(HumanOutputFormat):
+    """Render only the two outcome signals useful during local training."""
+
+    def write(
+        self,
+        key_values: dict[str, Any],
+        key_excluded: dict[str, tuple[str, ...]],
+        step: int = 0,
+    ) -> None:
+        del key_excluded
+        output: dict[str, Any] = {}
+        mean_return = key_values.get(TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_MEAN)
+        if mean_return is None:
+            mean_return = key_values.get(SB3_ROLLOUT_MEAN_RETURN)
+        if mean_return is not None:
+            output["mean return"] = float(mean_return)
+
+        completion_rate = key_values.get(TRAIN_OUTCOME_SUCCESS_CURRENT_RATE_MEAN)
+        if completion_rate is not None:
+            output["completion rate"] = f"{100.0 * float(completion_rate):.2f}%"
+
+        if output:
+            super().write(
+                output,
+                {key: () for key in output},
+                step=step,
+            )
+
+
+def configure_sb3_human_output(
+    model,
+    *,
+    max_length: int = SB3_HUMAN_OUTPUT_MAX_LENGTH,
+    compact: bool = False,
 ) -> None:
     logger = getattr(model, "_logger", None)
     logger_attr = getattr(type(model), "logger", None)
@@ -23,18 +60,41 @@ def disable_sb3_human_output_truncation(
         logger = getattr(model, "logger", None)
     if logger is None:
         return
-    for output_format in getattr(logger, "output_formats", ()):
+    output_formats = getattr(logger, "output_formats", ())
+    for index, output_format in enumerate(output_formats):
         if isinstance(output_format, HumanOutputFormat):
-            output_format.max_length = max_length
+            if compact and not isinstance(output_format, CompactTrainingOutputFormat):
+                output_formats[index] = CompactTrainingOutputFormat(
+                    output_format.file,
+                    max_length=max_length,
+                )
+            else:
+                output_format.max_length = max_length
+
+
+def disable_sb3_human_output_truncation(
+    model, *, max_length: int = SB3_HUMAN_OUTPUT_MAX_LENGTH
+) -> None:
+    configure_sb3_human_output(model, max_length=max_length)
 
 
 class Sb3HumanOutputFormatHelper(CallbackHelper):
-    def __init__(self, *, max_length: int = SB3_HUMAN_OUTPUT_MAX_LENGTH) -> None:
+    def __init__(
+        self,
+        *,
+        max_length: int = SB3_HUMAN_OUTPUT_MAX_LENGTH,
+        compact: bool = False,
+    ) -> None:
         super().__init__()
         self.max_length = max_length
+        self.compact = compact
 
     def _on_training_start(self) -> None:
-        disable_sb3_human_output_truncation(self.model, max_length=self.max_length)
+        configure_sb3_human_output(
+            self.model,
+            max_length=self.max_length,
+            compact=self.compact,
+        )
 
     def _on_step(self) -> bool:
         return True
@@ -93,9 +153,7 @@ def _stop_aware_model_class(original_class: type) -> type:
     ) -> bool:
         graceful_stop = model._gradlab_graceful_stop
         if graceful_stop.stop_flag.requested:
-            graceful_stop.acknowledge_safe_boundary(
-                num_timesteps=int(model.num_timesteps)
-            )
+            graceful_stop.acknowledge_safe_boundary(num_timesteps=int(model.num_timesteps))
             return False
         return bool(
             original_class.collect_rollouts(

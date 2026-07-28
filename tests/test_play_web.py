@@ -1244,6 +1244,14 @@ def test_catalog_http_api_requires_the_fragment_session_token() -> None:
                 )
                 assert checkpoints.status == 200
                 assert (await checkpoints.json())["items"][0]["evaluation"]["pass"] is True
+                legacy = await client.get(
+                    (f"{server.origin}/projects/Mario/goals/Level1-1?workspace=paired"),
+                    allow_redirects=False,
+                )
+                assert legacy.status == 308
+                assert legacy.headers["Location"] == (
+                    "/environments/Mario/goals/Level1-1?workspace=paired"
+                )
                 for route in (
                     "/",
                     "/environments/Mario",

@@ -22,7 +22,6 @@ from gradlab.eval_backend import EvalBackend, EvalHandle
 from gradlab.file_utils import file_sha256
 from gradlab.goal_variants import (
     build_goal_variant_descriptor,
-    goal_variant_projection,
     validate_goal_variant_descriptor,
 )
 from gradlab.metric_names import (
@@ -518,10 +517,6 @@ class RunSupervisor:
             if goal_variant != validate_goal_variant_descriptor(self.manifest.goal_variant):
                 raise RuntimeError("materialized goal variant does not match the run manifest")
             materialized["goal_variant"] = goal_variant
-            materialized["train_config"] = {
-                **dict(materialized["train_config"]),
-                **goal_variant_projection(goal_variant),
-            }
             self.authority.register_goal_variant_best_effort(self.manifest)
 
         config = dict(materialized["train_config"])
@@ -646,6 +641,7 @@ class RunSupervisor:
                 train_config,
                 run_dir=str(self.run_dir),
                 config=config,
+                goal_variant=self.manifest.goal_variant,
             )
             run = self.projector.run
             receipt = {

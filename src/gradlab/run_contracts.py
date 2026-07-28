@@ -15,7 +15,8 @@ from gradlab.json_utils import (
 
 
 SCHEMA_VERSION = 2
-RUN_MANIFEST_SCHEMA_VERSION = 3
+LEGACY_RUN_MANIFEST_SCHEMA_VERSION = 3
+RUN_MANIFEST_SCHEMA_VERSION = 4
 RUN_ID_PATTERN = re.compile(r"^gradlab-[0-9a-f]{32}$")
 ATTEMPT_ID_PATTERN = re.compile(r"^attempt-[0-9a-f]{16}$")
 canonical_json = canonical_json_bytes
@@ -115,8 +116,17 @@ class RunManifest:
         if isinstance(self.seed, bool) or int(self.seed) < 0:
             raise ValueError("seed must be a non-negative integer")
         _require_text(self.run_description, "run_description")
-        if int(self.schema_version) not in {SCHEMA_VERSION, RUN_MANIFEST_SCHEMA_VERSION}:
+        if int(self.schema_version) not in {
+            SCHEMA_VERSION,
+            LEGACY_RUN_MANIFEST_SCHEMA_VERSION,
+            RUN_MANIFEST_SCHEMA_VERSION,
+        }:
             raise ValueError(f"unsupported run manifest schema: {self.schema_version}")
+        if (
+            int(self.schema_version) == RUN_MANIFEST_SCHEMA_VERSION
+            and self.goal_variant is None
+        ):
+            raise ValueError("run manifest v4 requires goal_variant")
         if self.goal_variant is not None:
             from gradlab.goal_variants import validate_goal_variant_descriptor
 

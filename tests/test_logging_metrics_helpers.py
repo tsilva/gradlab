@@ -9,6 +9,7 @@ from pathlib import Path
 
 import gradlab.metric_names as metric_names
 from gradlab.training.sb3_helpers import (
+    CompactTrainingOutputFormat,
     Sb3HumanOutputFormatHelper,
     disable_sb3_human_output_truncation,
 )
@@ -71,6 +72,79 @@ class Sb3LoggerTests(unittest.TestCase):
         callback._on_training_start()
 
         self.assertEqual(output_format.max_length, 256)
+
+    def test_compact_local_output_shows_only_mean_return_and_completion_rate(
+        self,
+    ) -> None:
+        output = io.StringIO()
+        output_format = CompactTrainingOutputFormat(output)
+
+        output_format.write(
+            {
+                "rollout/ep_rew_mean": 99.0,
+                "train/episode/return/shaped/from/target/mean": 357.25,
+                "train/outcome/success/current/rate/mean": 0.125,
+                "train/algorithm/ppo/update/value_loss": 42.0,
+                "time/fps": 1_344,
+            },
+            {},
+        )
+
+        rendered = strip_ansi(output.getvalue())
+        self.assertIn("mean return", rendered)
+        self.assertIn("357", rendered)
+        self.assertIn("completion rate", rendered)
+        self.assertIn("12.50%", rendered)
+        self.assertNotIn("value_loss", rendered)
+        self.assertNotIn("fps", rendered)
+        self.assertNotIn("99", rendered)
+
+    def test_compact_callback_replaces_only_the_human_writer(self) -> None:
+        from stable_baselines3.common.logger import HumanOutputFormat, KVWriter, Logger
+
+        human_output = io.StringIO()
+        human_format = HumanOutputFormat(human_output)
+
+        class CompleteMetricWriter(KVWriter):
+            def __init__(self) -> None:
+                self.received: dict[str, object] = {}
+
+            def write(self, key_values, key_excluded, step=0) -> None:
+                del key_excluded, step
+                self.received = dict(key_values)
+
+            def close(self) -> None:
+                pass
+
+        complete_format = CompleteMetricWriter()
+        logger = Logger(folder=None, output_formats=[human_format, complete_format])
+
+        class FakeModel:
+            _logger = logger
+
+        callback = Sb3HumanOutputFormatHelper(compact=True)
+        callback.model = FakeModel()
+        callback._on_training_start()
+
+        self.assertIsInstance(
+            logger.output_formats[0],
+            CompactTrainingOutputFormat,
+        )
+        self.assertIs(logger.output_formats[1], complete_format)
+
+        logger.record("train/episode/return/shaped/from/target/mean", 10.0)
+        logger.record("train/outcome/success/current/rate/mean", 0.5)
+        logger.record("train/algorithm/ppo/update/value_loss", 42.0)
+        logger.dump(step=8_192)
+
+        self.assertEqual(
+            complete_format.received["train/algorithm/ppo/update/value_loss"],
+            42.0,
+        )
+        rendered = strip_ansi(human_output.getvalue())
+        self.assertIn("mean return", rendered)
+        self.assertIn("completion rate", rendered)
+        self.assertNotIn("value_loss", rendered)
 
 
 class MetricsDocumentationTests(unittest.TestCase):
@@ -156,12 +230,10 @@ class MetricsDocumentationTests(unittest.TestCase):
         names = set()
         for protocol in metric_names.EVAL_PROTOCOLS:
             names.update(
-                metric_names.eval_success_from_rate_metric(protocol, start)
-                for start in starts
+                metric_names.eval_success_from_rate_metric(protocol, start) for start in starts
             )
             names.update(
-                metric_names.eval_reason_rate_metric(protocol, reason)
-                for reason in reasons
+                metric_names.eval_reason_rate_metric(protocol, reason) for reason in reasons
             )
             names.update(
                 {

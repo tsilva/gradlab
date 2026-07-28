@@ -335,7 +335,7 @@ def run_sb3_on_policy(
         )
         components: list[Any] = [
             graceful_stop,
-            Sb3HumanOutputFormatHelper(),
+            Sb3HumanOutputFormatHelper(compact=context.compact_console),
             ThroughputHelper(
                 metric_store_path=store_path,
                 wandb_enabled=context.wandb_enabled,

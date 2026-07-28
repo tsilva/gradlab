@@ -14,13 +14,18 @@ from pathlib import Path, PurePosixPath
 
 from gradlab.config_loader import RECIPE_TEMPLATE_VALUES, render_template_vars
 from gradlab.env_registry import resolve_env_provider
+from gradlab.goal_variants import build_goal_variant_descriptor
 from gradlab.policy_bundle import (
     build_recipe_document,
     canonical_json_sha256,
     write_canonical_json,
 )
 from gradlab.recipe_catalog import LOCAL_RUN_RECEIPT, recipe_identity, resolve_recipe_source
-from gradlab.recipe_documents import compose_train_document, prepare_checkpoint_eval_mode
+from gradlab.recipe_documents import (
+    compose_train_document,
+    load_goal_contract,
+    prepare_checkpoint_eval_mode,
+)
 from gradlab.rom_assets import (
     DEFAULT_LOCAL_ROM_CACHE,
     direct_rom_asset_manifest,
@@ -45,8 +50,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "recipe",
         help=(
-            "Built-in <goal-path>/<recipe> reference or a recipe YAML under an "
-            "experiments tree."
+            "Built-in <goal-path>/<recipe> reference or a recipe YAML under an experiments tree."
         ),
     )
     parser.add_argument("--seed", type=int, default=DEFAULT_TRAIN_SEED)
@@ -135,7 +139,7 @@ def _git_commit(root: Path) -> str | None:
             capture_output=True,
             text=True,
         )
-    except (OSError, subprocess.CalledProcessError):
+    except OSError, subprocess.CalledProcessError:
         return None
     value = completed.stdout.strip().lower()
     return value if re.fullmatch(r"[0-9a-f]{40}", value) else None
@@ -172,9 +176,7 @@ def _installed_source_commit() -> str | None:
         return None
     vcs_info = direct_url.get("vcs_info") if isinstance(direct_url, dict) else None
     value = (
-        str(vcs_info.get("commit_id") or "").strip().lower()
-        if isinstance(vcs_info, dict)
-        else ""
+        str(vcs_info.get("commit_id") or "").strip().lower() if isinstance(vcs_info, dict) else ""
     )
     return value if re.fullmatch(r"[0-9a-f]{40}", value) else None
 
@@ -252,6 +254,16 @@ def main(argv: list[str] | None = None) -> int:
     run_dir = _safe_run_dir(args.runs_dir, run_name)
 
     source_commit = _git_commit(source.repository_root) or _installed_source_commit()
+    goals_root = source.repository_root / "experiments" / "goals"
+    document["goal_variant"] = build_goal_variant_descriptor(
+        goal_slug=source.goal_path.parent.relative_to(goals_root).as_posix(),
+        source_sha=source_commit or "",
+        authored_goal=load_goal_contract(
+            source.goal_path,
+            source.repository_root,
+        ),
+        effective_goal=dict(document["goal"]),
+    )
     config = dict(document["train_config"])
     config.update(
         {
@@ -278,9 +290,7 @@ def main(argv: list[str] | None = None) -> int:
     uses_local_rom_cache = provider.requires_external_rom_asset
     runtime_rom_binding: RomRuntimeBinding | None = None
     if args.rom_path is not None and not uses_local_rom_cache:
-        raise ValueError(
-            f"--rom is not valid for ROM-free provider {provider.provider_id!r}"
-        )
+        raise ValueError(f"--rom is not valid for ROM-free provider {provider.provider_id!r}")
     if uses_local_rom_cache:
         if args.rom_path is not None:
             manifest = direct_rom_asset_manifest(str(config["game"]), args.rom_path)
@@ -327,8 +337,7 @@ def main(argv: list[str] | None = None) -> int:
     }
     _write_receipt(run_dir, receipt)
     print(
-        f"local training-only run: recipe={source.reference} seed={args.seed} "
-        f"output={run_dir}",
+        f"local training-only run: recipe={source.reference} seed={args.seed} output={run_dir}",
         flush=True,
     )
     print(
@@ -346,9 +355,13 @@ def main(argv: list[str] | None = None) -> int:
     try:
         learner_args = ["--train-config-json", str(config_path)]
         result = (
-            learner_main(learner_args, runtime_rom_binding=runtime_rom_binding)
+            learner_main(
+                learner_args,
+                runtime_rom_binding=runtime_rom_binding,
+                compact_console=True,
+            )
             if runtime_rom_binding is not None
-            else learner_main(learner_args)
+            else learner_main(learner_args, compact_console=True)
         )
     finally:
         if previous_internal is None:

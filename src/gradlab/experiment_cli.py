@@ -28,7 +28,6 @@ from gradlab.env_registry import resolve_env_provider
 from gradlab.file_utils import file_sha256
 from gradlab.goal_variants import (
     build_goal_variant_descriptor,
-    goal_variant_projection,
 )
 from gradlab.json_utils import json_safe
 from gradlab.modal_eval_config import load_modal_eval_config
@@ -459,7 +458,6 @@ def cmd_launch(args: argparse.Namespace) -> int:
     release = runtime_release_from_args(
         args,
         repo_root=root,
-        checkpoint_eval_backend=checkpoint_eval_backend,
         wait_for_modal=checkpoint_eval_backend == "modal",
     )
     if release.source_sha != source_sha:
@@ -483,10 +481,6 @@ def cmd_launch(args: argparse.Namespace) -> int:
         effective_goal=dict(document["goal"]),
     )
     document["goal_variant"] = goal_variant
-    document["train_config"] = {
-        **dict(document["train_config"]),
-        **goal_variant_projection(goal_variant),
-    }
     variant_id = recipe_variant_id(
         recipe_slug=recipe_slug,
         source_sha=source_sha,
@@ -1138,7 +1132,6 @@ def cmd_retry(args: argparse.Namespace) -> int:
         release = runtime_release_from_args(
             args,
             repo_root=root,
-            checkpoint_eval_backend=checkpoint_eval_backend,
             wait_for_modal=checkpoint_eval_backend == "modal",
         )
         if release.source_sha != source_sha:
@@ -1167,10 +1160,6 @@ def cmd_retry(args: argparse.Namespace) -> int:
                 effective_goal=dict(document["goal"]),
             )
             document["goal_variant"] = repaired_goal_variant
-            document["train_config"] = {
-                **dict(document["train_config"]),
-                **goal_variant_projection(repaired_goal_variant),
-            }
         contract_document = _bind_launch_contract(
             document,
             asset=dict(manifest.modal["rom_asset_manifest"]),

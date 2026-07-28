@@ -1367,6 +1367,8 @@ class PlayCatalog:
             project=project,
             filters={"config.goal_slug": repository_goal.goal_slug},
         ):
+            if RUN_ID_PATTERN.fullmatch(run.run_id) is None:
+                continue
             config = dict(run.config)
             if str(config.get("goal_slug") or "") != repository_goal.goal_slug:
                 continue

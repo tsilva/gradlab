@@ -61,8 +61,14 @@ class SupervisorRuntime:
         *,
         run_dir: str,
         config: Any,
+        goal_variant: Mapping[str, Any] | None = None,
     ) -> WandbProjector:
-        return WandbProjector.start_live(train_config, run_dir=run_dir, config=config)
+        return WandbProjector.start_live(
+            train_config,
+            run_dir=run_dir,
+            config=config,
+            goal_variant=goal_variant,
+        )
 
     def resume_wandb(
         self,
