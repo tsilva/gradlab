@@ -4,6 +4,7 @@ import unittest
 
 import numpy as np
 
+from gradlab.action_program import ActionProgramPolicy
 from gradlab.env import EnvConfig
 from gradlab.go_explore import GoExploreSearch
 from gradlab.training.go_explore import (
@@ -86,6 +87,9 @@ class GoExploreSearchTests(unittest.TestCase):
                 {"recovery_interval_steps": 500_000},
                 label="backend",
             )
+
+    def test_search_exports_a_neutral_action_program(self) -> None:
+        self.assertIsInstance(self.search().policy(), ActionProgramPolicy)
 
 
 if __name__ == "__main__":

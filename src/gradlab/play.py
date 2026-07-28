@@ -57,9 +57,7 @@ def main(argv: list[str] | None = None) -> int:
         )
     )
     if selected_sources > 1:
-        parser.error(
-            "pass exactly one of --run, --recipe, a positional remote source, or --model"
-        )
+        parser.error("pass exactly one of --run, --recipe, a positional remote source, or --model")
     if args.recipe:
         recipe_source = resolve_recipe_source(args.recipe)
         materialized_recipe = compose_train_document(
@@ -86,7 +84,7 @@ def main(argv: list[str] | None = None) -> int:
         cache_path=PlayCatalog.default_cache_path(repo_root),
     )
     initial_route: dict[str, object] = {
-        "level": "projects",
+        "level": "environments",
         "entity": str(args.wandb_entity or ""),
     }
     initial_source: PlaySourceSpec | None = None
@@ -97,20 +95,21 @@ def main(argv: list[str] | None = None) -> int:
     elif args.artifact_ref:
         wandb_location = parse_wandb_location(args.artifact_ref)
         if wandb_location is not None:
-            goal_id = (
-                catalog.run_goal(
+            goal_id, goal_variant_id = (
+                catalog.run_goal_variant(
                     entity=wandb_location.entity,
                     project=wandb_location.project,
                     run_id=wandb_location.run_id,
                 )
                 if wandb_location.run_id
-                else ""
+                else ("", "")
             )
             initial_route = {
-                "level": "checkpoints" if wandb_location.run_id else "goals",
+                "level": "runs" if wandb_location.run_id else "goals",
                 "entity": wandb_location.entity,
                 "project": wandb_location.project,
                 "goal_id": goal_id,
+                "goal_variant_id": goal_variant_id,
                 "run_id": wandb_location.run_id or "",
             }
             args.wandb_entity = wandb_location.entity

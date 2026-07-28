@@ -99,7 +99,10 @@ def main(argv: list[str] | None = None) -> int:
 
     verify_replay(args.replay)
     evaluation_document = _load_object(args.evaluation_json, label="evaluation")
-    evaluation = normalize_publication_evaluation(evaluation_document)
+    evaluation = normalize_publication_evaluation(
+        evaluation_document,
+        algorithm_id=str(metadata.get("algorithm_id") or ""),
+    )
     source = publication_source_from_model_metadata(metadata, evaluation)
 
     args.output_dir.mkdir(parents=True, exist_ok=True)

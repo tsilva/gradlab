@@ -20,6 +20,11 @@ from gradlab.env_config import env_config_from_mapping
 from gradlab.eval_metrics import eval_by_start_rows
 from gradlab.eval_backend import EvalBackend, EvalHandle
 from gradlab.file_utils import file_sha256
+from gradlab.goal_variants import (
+    build_goal_variant_descriptor,
+    goal_variant_projection,
+    validate_goal_variant_descriptor,
+)
 from gradlab.metric_names import (
     EVAL_ACCEPTANCE_DURATION_SECONDS,
     EVAL_ACCEPTANCE_EPISODES_COMPLETED,
@@ -63,6 +68,7 @@ from gradlab.policy_bundle import (
 from gradlab.r2_store import ConditionalWriteConflict, RunStorageConfig
 from gradlab.recipe_documents import (
     compose_train_document,
+    load_goal_contract,
     prepare_checkpoint_eval_mode,
     recipe_tags,
 )
@@ -501,6 +507,22 @@ class RunSupervisor:
         ).removeprefix("sha256:")
         if materialized_environment_hash != self.manifest.environment_sha256:
             raise RuntimeError("materialized environment hash does not match the run manifest")
+        goal_variant = None
+        if self.manifest.goal_variant is not None:
+            goal_variant = build_goal_variant_descriptor(
+                goal_slug=self.manifest.goal_slug,
+                source_sha=self.manifest.source_sha,
+                authored_goal=load_goal_contract(goal_path, self.repo_root),
+                effective_goal=dict(materialized["goal"]),
+            )
+            if goal_variant != validate_goal_variant_descriptor(self.manifest.goal_variant):
+                raise RuntimeError("materialized goal variant does not match the run manifest")
+            materialized["goal_variant"] = goal_variant
+            materialized["train_config"] = {
+                **dict(materialized["train_config"]),
+                **goal_variant_projection(goal_variant),
+            }
+            self.authority.register_goal_variant_best_effort(self.manifest)
 
         config = dict(materialized["train_config"])
         asset = self.manifest.modal.get("rom_asset_manifest")
@@ -585,6 +607,11 @@ class RunSupervisor:
                         f"gradlab_run_id:{self.manifest.run_id}",
                         f"attempt_id:{self.manifest.attempt_id}",
                         f"recipe_variant:{variant_id}",
+                        *(
+                            [f"goal_variant:{goal_variant['variant_id']}"]
+                            if goal_variant is not None
+                            else []
+                        ),
                         "orchestrator:dstack",
                     ]
                 ),

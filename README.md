@@ -44,7 +44,7 @@ gradlab validate
 The project uses `uv`, a committed `uv.lock`, and a seven-day package-age gate.
 The exact Turbo runtime is `stable-retro-turbo==1.0.1.post36`,
 `supermariobrosnes-turbo==0.6.0`, `breakout-turbo-env==0.5.1`, and
-`vizdoom-turbo==1.3.0.post8`. Their explicit package-age exceptions are
+`vizdoom-turbo==1.3.0.post10`. Their explicit package-age exceptions are
 recorded in `pyproject.toml` and `uv-tool.toml`.
 
 The four Turbo providers must implement Turbo Vector API v1. gradlab validates
@@ -191,9 +191,10 @@ runs/<run-id>/index.json
 
 The public index is mutable through ETag compare-and-swap and served with
 `Cache-Control: no-store`; checkpoint objects are immutable and cacheable.
-Start the web player without a source to browse repository-declared projects
-and goals, then their W&B runs and public checkpoints. A W&B project or run URL
-preselects that level; an exact source still opens directly:
+Start the web player without a source to browse repository-declared
+environments and goals, automatically indexed goal-contract variants, then
+their W&B runs and public checkpoints. A W&B project or run URL preselects that
+level; an exact source still opens directly:
 
 ```bash
 gradlab play
@@ -204,12 +205,14 @@ gradlab play --model <local-checkpoint>
 gradlab play hf://<owner>/<repository>
 ```
 
-The player uses shareable hierarchical routes: `/` lists projects,
-`/projects/<project-id>` lists goals,
-`/projects/<project-id>/goals/<goal-id>` lists runs, and the nested
-`/runs/<run-id>/checkpoints/<checkpoint-id>` route identifies a checkpoint.
-Checkpoint rows show goal-required acceptance results from W&B when available.
-Browser Back and Forward navigation follow the same resource hierarchy.
+The player uses shareable hierarchical routes: `/` lists environments,
+`/environments/<environment-id>` lists goals,
+`/environments/<environment-id>/goals/<goal-id>` lists goal variants, and the
+nested `/variants/<goal-variant-id>/runs/<run-id>/checkpoints/<checkpoint-id>`
+route identifies a checkpoint inside the selected run. Legacy `/projects/...`
+links redirect into this hierarchy. Checkpoint rows show goal-required
+acceptance results from W&B when available. Browser Back and Forward navigation
+follow the same resource hierarchy.
 
 The playback dashboard is a GridStack workspace. Policy, reward, action, signal,
 and reward-component views are instances of one configurable telemetry panel:
@@ -221,11 +224,23 @@ their own built-in panel so history graphs never force the summary panel to
 scroll. Workspace v4 intentionally starts clean instead of migrating older
 saved layouts.
 
+Policy diagnostics are capability-driven. PPO and A2C expose their actor
+distribution and state-value critic; DQN exposes Q-values and its
+epsilon-greedy/greedy selection modes; action programs expose their fixed
+program cursor and fallback behavior. Go-Explore checkpoints retain safe search
+and archive summary provenance while playing the resulting action program. Unsupported
+diagnostics remain visibly unavailable instead of being replaced with
+synthetic probabilities, entropy, log-probabilities, or values.
+
 The required `experiments/goals/_catalog.yaml` namespace index supplies
-projects and goals. W&B supplies run metadata and available goal-required
-acceptance results only after a goal is selected. Playback downloads model
-bytes from the public checkpoint store; videos, episode evidence, ROMs, and
-recovery journals remain in R2.
+environments and goals. Launch and supervisor paths register each versioned
+goal-variant descriptor in a rebuildable private-control-R2 per-goal index, so
+the variant panel needs one bounded object read rather than a run or artifact
+scan; `gradlab experiment catalog-repair` rebuilds those indexes from immutable
+new-format run manifests. W&B is the compatibility fallback and supplies run
+metadata and available goal-required acceptance results only after a variant is
+selected. Playback downloads model bytes from the public checkpoint store;
+videos, episode evidence, ROMs, and recovery journals remain in R2.
 
 ## Evaluation and early stop
 

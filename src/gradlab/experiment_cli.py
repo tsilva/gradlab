@@ -26,6 +26,10 @@ from gradlab.dstack_backend import (
 )
 from gradlab.env_registry import resolve_env_provider
 from gradlab.file_utils import file_sha256
+from gradlab.goal_variants import (
+    build_goal_variant_descriptor,
+    goal_variant_projection,
+)
 from gradlab.json_utils import json_safe
 from gradlab.modal_eval_config import load_modal_eval_config
 from gradlab.operator_credentials import (
@@ -38,6 +42,7 @@ from gradlab.r2_store import R2Bucket, RunStorageConfig
 from gradlab.policy_bundle import build_recipe_document, canonical_json_sha256
 from gradlab.recipe_documents import (
     compose_train_document,
+    load_goal_contract,
     prepare_checkpoint_eval_mode,
 )
 from gradlab.recipe_variants import recipe_variant_id
@@ -165,9 +170,7 @@ def _parse_duration(value: str | int | float) -> float:
     else:
         match = re.fullmatch(r"\s*(\d+(?:\.\d+)?)\s*([smhd]?)\s*", value)
         if match is None:
-            raise argparse.ArgumentTypeError(
-                "duration must look like 30s, 10m, 2h, or 1d"
-            )
+            raise argparse.ArgumentTypeError("duration must look like 30s, 10m, 2h, or 1d")
         scale = {"": 1, "s": 1, "m": 60, "h": 3600, "d": 86400}[match.group(2)]
         result = float(match.group(1)) * scale
     if result <= 0:
@@ -247,10 +250,7 @@ def _operator_preflight(
                 f"{label} R2 read preflight failed ({type(exc).__name__}); "
                 f"verify the {label} endpoint, bucket, and credential pair"
             ) from exc
-    sources = {
-        name: environment_report.source_for(name, os.environ)
-        for name in sorted(required)
-    }
+    sources = {name: environment_report.source_for(name, os.environ) for name in sorted(required)}
     report = {
         "status": "ready",
         "checkpoint_eval_backend": checkpoint_eval_backend,
@@ -266,9 +266,7 @@ def _operator_preflight(
         },
         "wandb": {"entity": wandb_entity_from_env()},
         "modal": {
-            "credentials": (
-                "resolved" if checkpoint_eval_backend == "modal" else "not-required"
-            )
+            "credentials": ("resolved" if checkpoint_eval_backend == "modal" else "not-required")
         },
     }
     return (
@@ -288,9 +286,7 @@ def _stage_rom(
 ) -> dict[str, Any] | None:
     if not resolve_env_provider(env_provider).requires_external_rom_asset:
         if rom_path is not None:
-            raise ValueError(
-                f"--rom-path is invalid for ROM-free provider {env_provider!r}"
-            )
+            raise ValueError(f"--rom-path is invalid for ROM-free provider {env_provider!r}")
         return None
     source = discover_rom_path(game, rom_path=rom_path)
     digest = file_sha256(source)
@@ -338,9 +334,7 @@ def _compute(args: argparse.Namespace) -> ComputeRequest:
 def _task_name(run_id: str, attempt_id: str, *, initial: bool) -> str:
     if initial:
         return run_id
-    digest = hashlib.sha256(
-        f"dstack-attempt-v1:{run_id}:{attempt_id}".encode()
-    ).hexdigest()
+    digest = hashlib.sha256(f"dstack-attempt-v1:{run_id}:{attempt_id}".encode()).hexdigest()
     return f"gradlab-{digest[:32]}"
 
 
@@ -397,7 +391,9 @@ def _wandb_identity(
         goal_slug.removeprefix(f"{project}/") if goal_slug.startswith(f"{project}/") else goal_slug
     )
     display_goal = relative_goal.replace("/", "--")
-    display_name = f"{display_goal}__{recipe_slug}__s{int(seed)}__{run_id.removeprefix('gradlab-')[:8]}"
+    display_name = (
+        f"{display_goal}__{recipe_slug}__s{int(seed)}__{run_id.removeprefix('gradlab-')[:8]}"
+    )
     campaign_id = str(document.get("campaign_id") or "").strip()
     group = (
         f"campaign::{campaign_id}"
@@ -480,6 +476,17 @@ def cmd_launch(args: argparse.Namespace) -> int:
     dstack_task = _task_name(run_id, attempt_id, initial=True)
     goal_slug = goal_path.parent.relative_to(root / "experiments" / "goals").as_posix()
     recipe_slug = recipe_path.stem
+    goal_variant = build_goal_variant_descriptor(
+        goal_slug=goal_slug,
+        source_sha=source_sha,
+        authored_goal=load_goal_contract(goal_path, root),
+        effective_goal=dict(document["goal"]),
+    )
+    document["goal_variant"] = goal_variant
+    document["train_config"] = {
+        **dict(document["train_config"]),
+        **goal_variant_projection(goal_variant),
+    }
     variant_id = recipe_variant_id(
         recipe_slug=recipe_slug,
         source_sha=source_sha,
@@ -495,9 +502,7 @@ def cmd_launch(args: argparse.Namespace) -> int:
     )
     modal_app = str(release.modal_app_name or "").strip()
     if checkpoint_eval_backend == "modal" and not modal_app:
-        raise RuntimeError(
-            "exact-source runtime has no immutable Modal deployment receipt"
-        )
+        raise RuntimeError("exact-source runtime has no immutable Modal deployment receipt")
     modal_config = load_modal_eval_config(root / "experiments" / "modal_eval.yaml")
     contract_document = _bind_launch_contract(
         document,
@@ -547,8 +552,10 @@ def cmd_launch(args: argparse.Namespace) -> int:
             "rom_asset_manifest": asset,
         },
         storage=storage.manifest_locations(),
+        goal_variant=goal_variant,
     )
     authority.create_manifest(manifest)
+    authority.register_goal_variant_best_effort(manifest)
     manifest_uri = authority.control.uri(f"runs/{run_id}/manifest.json")
     task = dstack_backend.submit(_task_request(manifest, manifest_uri=manifest_uri))
     output = {
@@ -568,6 +575,8 @@ def cmd_launch(args: argparse.Namespace) -> int:
         "goal_file": goal_path.relative_to(root).as_posix(),
         "recipe_file": recipe_path.relative_to(root).as_posix(),
         "goal_sha256": manifest.goal_sha256,
+        "goal_variant_id": goal_variant["variant_id"],
+        "goal_variant_label": goal_variant["label"],
         "recipe_sha256": manifest.recipe_sha256,
         "recipe_overrides": list(recipe_overrides),
         "seed": int(args.seed),
@@ -575,9 +584,7 @@ def cmd_launch(args: argparse.Namespace) -> int:
         "submission_key": str(args.submission_key or ""),
         "checkpoint_eval_backend": checkpoint_eval_backend,
         "wandb_url": wandb["url"],
-        "public_run_index_url": authority.models.public_url(
-            f"runs/{run_id}/index.json"
-        ),
+        "public_run_index_url": authority.models.public_url(f"runs/{run_id}/index.json"),
     }
     print(
         json.dumps(json_safe(output), sort_keys=True)
@@ -609,6 +616,54 @@ def cmd_operator_preflight(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_catalog_repair(args: argparse.Namespace) -> int:
+    root = repository_root()
+    _load_environment(root)
+    storage = RunStorageConfig.from_env()
+    authority = RunAuthority(storage)
+    discovered = 0
+    registered = 0
+    skipped_legacy = 0
+    failed: list[dict[str, str]] = []
+    for key in sorted(authority.control.iter_keys("runs/")):
+        if not re.fullmatch(r"runs/gradlab-[0-9a-f]{32}/manifest\.json", key):
+            continue
+        discovered += 1
+        try:
+            manifest = RunManifest(**authority.control.get_json(key))
+            manifest.validate()
+            if manifest.goal_variant is None:
+                skipped_legacy += 1
+                continue
+            authority.register_goal_variant(manifest)
+            authority.record_goal_variant_registration(manifest)
+            registered += 1
+        except Exception as exc:
+            failed.append(
+                {
+                    "key": key,
+                    "error_type": type(exc).__name__,
+                    "error": str(exc),
+                }
+            )
+    report = {
+        "schema_version": 1,
+        "discovered": discovered,
+        "registered": registered,
+        "skipped_legacy": skipped_legacy,
+        "failed": failed,
+    }
+    if args.json:
+        print(json.dumps(report, sort_keys=True))
+    else:
+        print(
+            "Goal-variant catalog repair: "
+            f"{registered} registered, {skipped_legacy} legacy skipped, "
+            f"{len(failed)} failed"
+        )
+    return 1 if failed else 0
+
+
 def _latest_attempt(state: dict[str, Any]) -> dict[str, Any]:
     attempts = list(state.get("attempts") or [])
     if attempts:
@@ -633,15 +688,11 @@ def _record_pre_submit_failure(
     authority: RunAuthority,
     manifest: RunManifest,
 ) -> None:
-    prefix = (
-        f"{authority.run_prefix(manifest.run_id)}/attempts/{manifest.attempt_id}"
-    )
+    prefix = f"{authority.run_prefix(manifest.run_id)}/attempts/{manifest.attempt_id}"
     keys = sorted(authority.control.iter_keys(prefix))
     expected = [f"{prefix}/manifest.json"]
     if keys != expected:
-        raise RuntimeError(
-            "not-found dstack task has attempt activity beyond its manifest"
-        )
+        raise RuntimeError("not-found dstack task has attempt activity beyond its manifest")
     authority.create_attempt_terminal(
         TerminalReceipt(
             run_id=manifest.run_id,
@@ -714,9 +765,7 @@ def _require_retryable_attempt_terminal(
     state = str(attempt_terminal.get("state") or "")
     stop_reason = str(attempt_terminal.get("stop_reason") or "")
     if state == "succeeded":
-        raise RuntimeError(
-            "a successfully drained training-only run must not be retried"
-        )
+        raise RuntimeError("a successfully drained training-only run must not be retried")
     if state == "failed" and stop_reason.startswith("early_stop_failure:"):
         raise RuntimeError(
             "a designed early-stop failure is non-resumable; launch a new recipe/run"
@@ -890,9 +939,7 @@ def cmd_logs(args: argparse.Namespace) -> int:
     root = repository_root()
     _storage_config, authority = _storage(root)
     attempt = _latest_attempt(authority.semantic_state(args.run_id))
-    text = DstackBackend().logs(
-        str(attempt["compute"]["dstack_task"]), since=args.since
-    )
+    text = DstackBackend().logs(str(attempt["compute"]["dstack_task"]), since=args.since)
     lines = text.splitlines()
     if args.tail > 0:
         lines = lines[-args.tail :]
@@ -908,9 +955,7 @@ def _manifest_only_submission(
     manifest_document = state.get("manifest")
     attempts = list(state.get("attempts") or [])
     if not isinstance(manifest_document, dict) or len(attempts) != 1:
-        raise RuntimeError(
-            "resume-submit requires exactly one canonical and one attempt manifest"
-        )
+        raise RuntimeError("resume-submit requires exactly one canonical and one attempt manifest")
     if dict(attempts[0]) != manifest_document:
         raise RuntimeError("canonical and attempt manifests do not match")
     if any(
@@ -937,21 +982,18 @@ def _manifest_only_submission(
     )
     if unexpected_control_keys:
         raise RuntimeError(
-            "run has control state beyond its manifests: "
-            + ", ".join(unexpected_control_keys)
+            "run has control state beyond its manifests: " + ", ".join(unexpected_control_keys)
         )
     if next(authority.evaluation.iter_keys(prefix), None) is not None:
         raise RuntimeError("run has evaluation state and cannot resume submission")
     if next(authority.models.iter_keys(prefix), None) is not None:
         raise RuntimeError("run has public model state and cannot resume submission")
-    created_at = datetime.fromisoformat(
-        str(manifest.created_at).replace("Z", "+00:00")
-    ).astimezone(UTC)
+    created_at = datetime.fromisoformat(str(manifest.created_at).replace("Z", "+00:00")).astimezone(
+        UTC
+    )
     quiet_for = (datetime.now(UTC) - created_at).total_seconds()
     if quiet_for < QUIESCENCE_SECONDS:
-        raise RuntimeError(
-            "manifest-only launch has not reached the 30-second quiescence interval"
-        )
+        raise RuntimeError("manifest-only launch has not reached the 30-second quiescence interval")
     return manifest
 
 
@@ -970,9 +1012,7 @@ def cmd_resume_submit(args: argparse.Namespace) -> int:
     except KeyError:
         existing = None
     if existing is not None:
-        raise RuntimeError(
-            f"dstack task already exists with status {existing.status}: {task_name}"
-        )
+        raise RuntimeError(f"dstack task already exists with status {existing.status}: {task_name}")
     manifest_uri = authority.control.uri(f"runs/{args.run_id}/manifest.json")
     task = dstack_backend.submit(_task_request(manifest, manifest_uri=manifest_uri))
     output = {
@@ -993,9 +1033,7 @@ def cmd_resume_submit(args: argparse.Namespace) -> int:
         "runtime_input_sha256": manifest.compute["runtime_input_sha256"],
         "runtime_build_source_sha": manifest.compute["runtime_build_source_sha"],
         "wandb_url": manifest.wandb["url"],
-        "public_run_index_url": authority.models.public_url(
-            f"runs/{manifest.run_id}/index.json"
-        ),
+        "public_run_index_url": authority.models.public_url(f"runs/{manifest.run_id}/index.json"),
         "resumed_submission": True,
     }
     print(
@@ -1015,9 +1053,7 @@ def _lease_expiry(authority: RunAuthority, run_id: str) -> datetime | None:
     value = authority.control.get_json_optional(f"runs/{run_id}/writer-lease.json")
     if value is None:
         return None
-    return datetime.fromisoformat(
-        str(value["expires_at"]).replace("Z", "+00:00")
-    ).astimezone(UTC)
+    return datetime.fromisoformat(str(value["expires_at"]).replace("Z", "+00:00")).astimezone(UTC)
 
 
 def cmd_retry(args: argparse.Namespace) -> int:
@@ -1032,16 +1068,12 @@ def cmd_retry(args: argparse.Namespace) -> int:
     attempt_terminal = _latest_attempt_terminal(state)
     dstack_backend = DstackBackend()
     try:
-        previous_task = dstack_backend.status(
-            str(previous["compute"]["dstack_task"])
-        )
+        previous_task = dstack_backend.status(str(previous["compute"]["dstack_task"]))
     except KeyError:
         previous_task = None
     expiry = _lease_expiry(authority, args.run_id)
     if expiry is not None and expiry > datetime.now(UTC):
-        raise RuntimeError(
-            f"the previous writer lease has not expired: {expiry.isoformat()}"
-        )
+        raise RuntimeError(f"the previous writer lease has not expired: {expiry.isoformat()}")
     if previous_task is None and attempt_terminal is None:
         created_at = datetime.fromisoformat(
             str(previous_manifest.created_at).replace("Z", "+00:00")
@@ -1070,8 +1102,7 @@ def cmd_retry(args: argparse.Namespace) -> int:
         attempt_terminal = _latest_attempt_terminal(state)
     _require_retryable_attempt_terminal(attempt_terminal)
     if previous_task is not None and (
-        previous_task.status.lower().replace("_", "-")
-        not in TERMINAL_DSTACK_STATUSES
+        previous_task.status.lower().replace("_", "-") not in TERMINAL_DSTACK_STATUSES
     ):
         raise RuntimeError("the previous dstack attempt must be terminal before retry")
     time.sleep(QUIESCENCE_SECONDS)
@@ -1084,9 +1115,7 @@ def cmd_retry(args: argparse.Namespace) -> int:
     )
     compute["selected"] = selected_compute.as_manifest()
     compute["selected_offer"] = selected_offer
-    public_checkpoints = list(
-        (state.get("public_index") or {}).get("checkpoints") or []
-    )
+    public_checkpoints = list((state.get("public_index") or {}).get("checkpoints") or [])
     learner_finished = any(
         str(row.get("purpose") or "") == "final"
         for row in public_checkpoints
@@ -1103,9 +1132,7 @@ def cmd_retry(args: argparse.Namespace) -> int:
         compute=compute,
     )
     if bool(getattr(args, "repair_runtime", False)):
-        checkpoint_eval_backend = (
-            "modal" if bool(previous_manifest.modal["enabled"]) else "none"
-        )
+        checkpoint_eval_backend = "modal" if bool(previous_manifest.modal["enabled"]) else "none"
         source_sha = clean_git_source_sha(root)
         branch = current_git_branch(root)
         release = runtime_release_from_args(
@@ -1127,16 +1154,23 @@ def cmd_retry(args: argparse.Namespace) -> int:
                 checkpoint_eval_backend=checkpoint_eval_backend,
             ),
         )
-        if (
-            str(document["train_config"]["effective_goal_contract_sha256"])
-            != manifest.goal_sha256
-        ):
+        if str(document["train_config"]["effective_goal_contract_sha256"]) != manifest.goal_sha256:
             raise RuntimeError("repair runtime changed the effective goal contract")
-        if (
-            str(document["environment_hash"]).removeprefix("sha256:")
-            != manifest.environment_sha256
-        ):
+        if str(document["environment_hash"]).removeprefix("sha256:") != manifest.environment_sha256:
             raise RuntimeError("repair runtime changed the environment contract")
+        repaired_goal_variant = None
+        if manifest.goal_variant is not None:
+            repaired_goal_variant = build_goal_variant_descriptor(
+                goal_slug=manifest.goal_slug,
+                source_sha=source_sha,
+                authored_goal=load_goal_contract(goal_path, root),
+                effective_goal=dict(document["goal"]),
+            )
+            document["goal_variant"] = repaired_goal_variant
+            document["train_config"] = {
+                **dict(document["train_config"]),
+                **goal_variant_projection(repaired_goal_variant),
+            }
         contract_document = _bind_launch_contract(
             document,
             asset=dict(manifest.modal["rom_asset_manifest"]),
@@ -1170,6 +1204,7 @@ def cmd_retry(args: argparse.Namespace) -> int:
             recipe_sha256=canonical_json_sha256(portable_recipe),
             compute=compute,
             modal=modal,
+            goal_variant=repaired_goal_variant,
         )
     manifest.validate()
     manifest_key = f"runs/{args.run_id}/attempts/{attempt_id}/manifest.json"
@@ -1177,6 +1212,7 @@ def cmd_retry(args: argparse.Namespace) -> int:
     task_request = _task_request(manifest, manifest_uri=manifest_uri)
     task_request.validate()
     authority.create_attempt_manifest(manifest)
+    authority.register_goal_variant_best_effort(manifest)
     try:
         task = dstack_backend.submit(task_request)
     except Exception:
@@ -1229,9 +1265,7 @@ def cmd_certify(args: argparse.Namespace) -> int:
                 scenarios=selected,
                 artifact_root=artifact_root,
             )
-        failure_bundle: Path | None = (
-            artifact_root if report["status"] == "failed" else None
-        )
+        failure_bundle: Path | None = artifact_root if report["status"] == "failed" else None
     else:
         with tempfile.TemporaryDirectory(prefix="gradlab-tier1-cli-") as temporary:
             artifact_root = Path(temporary)
@@ -1248,9 +1282,7 @@ def cmd_certify(args: argparse.Namespace) -> int:
             failure_bundle = None
             if report["status"] == "failed":
                 destination = (
-                    Path("runs")
-                    / "certification"
-                    / f"failure-{str(report['report_sha256'])[:16]}"
+                    Path("runs") / "certification" / f"failure-{str(report['report_sha256'])[:16]}"
                 ).resolve()
                 if destination.exists():
                     failure_bundle = destination
@@ -1364,6 +1396,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     operator_preflight.add_argument("--json", action="store_true")
     operator_preflight.set_defaults(func=cmd_operator_preflight)
+
+    catalog_repair = commands.add_parser(
+        "catalog-repair",
+        help="Rebuild private goal-variant indexes from immutable run manifests.",
+    )
+    catalog_repair.add_argument("--json", action="store_true")
+    catalog_repair.set_defaults(func=cmd_catalog_repair)
 
     status = commands.add_parser("status", help="Inspect dstack and R2 run state.")
     status.add_argument("--run", dest="run_id", type=_require_run_id, required=True)

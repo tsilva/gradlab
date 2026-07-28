@@ -41,10 +41,10 @@ def load_policy_model(
     path = model_input.model_path
     resolved_metadata = load_model_metadata(path) if metadata is None else dict(metadata)
     algorithm_id = resolve_policy_algorithm(resolved_metadata)
-    if algorithm_id == "jerk":
-        from gradlab.jerk import JerkPolicy
+    if algorithm_id == "action-program":
+        from gradlab.action_program import ActionProgramPolicy
 
-        return JerkPolicy.load(path)
+        return ActionProgramPolicy.load(path)
     from gradlab.sb3_models import load_sb3_model
 
     return load_sb3_model(

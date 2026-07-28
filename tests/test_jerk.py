@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import zipfile
 from types import SimpleNamespace
 from unittest import mock
 
@@ -11,15 +10,12 @@ import pytest
 
 from gradlab.batch_runtime import EpisodeRecord
 from gradlab.callbacks import MetricEarlyStopHelper
+from gradlab.action_program import ActionProgramPolicy
 from gradlab.jerk import (
-    JERK_POLICY_MEMBER,
-    ActionRun,
-    JerkPolicy,
     JerkSearch,
     RetainedSequence,
 )
 from gradlab.metric_names import TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_MEAN
-from gradlab.policy_models import load_policy_model, resolve_policy_algorithm
 from gradlab.task_kernels import Outcome
 from gradlab.training import jerk as jerk_training
 from gradlab.training_backend import GracefulStopFlag
@@ -230,98 +226,6 @@ def test_jerk_preserves_root_exploration_floor() -> None:
     assert search.archive_replay_probability == 0.9
 
 
-def test_jerk_policy_round_trip_and_lane_resets(tmp_path) -> None:
-    path = tmp_path / "model.zip"
-    policy = JerkPolicy(
-        action_names=ACTIONS,
-        action_runs=(
-            ActionRun(2, 2),
-            ActionRun(2, 1),
-            ActionRun(4, 2),
-        ),
-        fallback_action=0,
-    )
-    policy.save(path)
-    loaded = JerkPolicy.load(path)
-    loaded.bind_action_space(gym.spaces.Discrete(len(ACTIONS)))
-
-    assert loaded.action_runs == (ActionRun(2, 3), ActionRun(4, 2))
-    assert loaded.run_count == 2
-    assert loaded.step_count == 5
-    with zipfile.ZipFile(path) as archive:
-        payload = json.loads(archive.read(JERK_POLICY_MEMBER))
-    assert payload["schema_version"] == 2
-    assert payload["action_runs"] == [[2, 3], [4, 2]]
-    assert "action_sequence" not in payload
-
-    obs = np.zeros((2, 1), dtype=np.float32)
-    assert loaded.predict(obs, deterministic=False)[0].tolist() == [2, 2]
-    assert loaded.predict(obs, deterministic=False)[0].tolist() == [2, 2]
-    assert loaded.predict(obs, deterministic=False)[0].tolist() == [2, 2]
-    assert loaded.predict(obs, deterministic=False)[0].tolist() == [4, 4]
-    loaded.reset_lanes([True, False])
-    assert loaded.predict(obs, deterministic=False)[0].tolist() == [2, 4]
-
-
-def test_jerk_artifact_discriminator_prevents_same_step_role_collision(
-    tmp_path,
-) -> None:
-    policy = JerkPolicy(
-        action_names=ACTIONS,
-        action_runs=(ActionRun(2, 3),),
-        fallback_action=0,
-    )
-    checkpoint = tmp_path / "checkpoint.zip"
-    final = tmp_path / "final.zip"
-    policy.save(checkpoint, artifact_discriminator="checkpoint:100")
-    policy.save(final, artifact_discriminator="final:100")
-
-    assert checkpoint.read_bytes() != final.read_bytes()
-    assert JerkPolicy.load(checkpoint).action_runs == JerkPolicy.load(final).action_runs
-
-
-def test_jerk_policy_rejects_removed_flat_action_sequence_schema(tmp_path) -> None:
-    path = tmp_path / "legacy-model.zip"
-    payload = {
-        "schema_version": 1,
-        "algorithm_id": "jerk",
-        "model_class": "gradlab.jerk.JerkPolicy",
-        "action_names": list(ACTIONS),
-        "action_sequence": [2, 2, 4],
-        "fallback_action": 0,
-    }
-    with zipfile.ZipFile(path, mode="w") as archive:
-        archive.writestr(JERK_POLICY_MEMBER, json.dumps(payload))
-
-    with pytest.raises(ValueError, match="unsupported JERK policy schema"):
-        JerkPolicy.load(path)
-
-
-def test_generic_policy_loader_dispatches_jerk(tmp_path) -> None:
-    path = tmp_path / "model.zip"
-    JerkPolicy(
-        action_names=ACTIONS,
-        action_runs=(ActionRun(2, 1),),
-        fallback_action=0,
-    ).save(path)
-    metadata = {
-        "training_backend_id": "gradlab.jerk",
-        "algorithm_id": "jerk",
-        "model_class": "gradlab.jerk.JerkPolicy",
-    }
-
-    assert resolve_policy_algorithm(metadata) == "jerk"
-    from gradlab.trusted_inputs import ApprovedModelInput
-
-    approved = ApprovedModelInput(
-        staged=SimpleNamespace(model_path=path),
-        approval_hash="unit-test",
-    )
-    with mock.patch.object(approved, "verify"):
-        loaded = load_policy_model(approved, device="cpu", metadata=metadata)
-    assert isinstance(loaded, JerkPolicy)
-
-
 class _FakeJerkEnv:
     def __init__(self, *, success: bool) -> None:
         self.action_space = gym.spaces.Discrete(len(ACTIONS))
@@ -446,7 +350,10 @@ def test_first_training_success_saves_playable_checkpoint_and_stops(tmp_path) ->
         (checkpoint["kind"], checkpoint["step"]) for checkpoint in context.metric_store.checkpoints
     ] == [("checkpoint", 1), ("final", 1)]
     checkpoint_path = context.metric_store.checkpoints[0]["path"]
-    assert isinstance(JerkPolicy.load(checkpoint_path), JerkPolicy)
+    assert isinstance(
+        ActionProgramPolicy.load(checkpoint_path),
+        ActionProgramPolicy,
+    )
     final_metrics = context.metric_store.payloads[-1][0]
     assert final_metrics["train/outcome/success/from/Level1-1/count"] == 1
 
@@ -496,8 +403,7 @@ def test_sb3_and_jerk_early_stop_adapters_make_identical_decisions(tmp_path) -> 
         )
 
     jerk_path = (
-        jerk_context.run_dir
-        / f"early_stop_decision-{jerk_context.train_config['attempt_id']}.json"
+        jerk_context.run_dir / f"early_stop_decision-{jerk_context.train_config['attempt_id']}.json"
     )
     assert json.loads(sb3_path.read_text(encoding="utf-8")) == json.loads(
         jerk_path.read_text(encoding="utf-8")

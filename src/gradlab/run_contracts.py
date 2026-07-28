@@ -15,6 +15,7 @@ from gradlab.json_utils import (
 
 
 SCHEMA_VERSION = 2
+RUN_MANIFEST_SCHEMA_VERSION = 3
 RUN_ID_PATTERN = re.compile(r"^gradlab-[0-9a-f]{32}$")
 ATTEMPT_ID_PATTERN = re.compile(r"^attempt-[0-9a-f]{16}$")
 canonical_json = canonical_json_bytes
@@ -87,7 +88,8 @@ class RunManifest:
     wandb: Mapping[str, Any]
     modal: Mapping[str, Any]
     storage: Mapping[str, Any]
-    schema_version: int = SCHEMA_VERSION
+    goal_variant: Mapping[str, Any] | None = None
+    schema_version: int = RUN_MANIFEST_SCHEMA_VERSION
 
     def validate(self) -> None:
         _require_run_id(self.run_id)
@@ -113,8 +115,16 @@ class RunManifest:
         if isinstance(self.seed, bool) or int(self.seed) < 0:
             raise ValueError("seed must be a non-negative integer")
         _require_text(self.run_description, "run_description")
-        if int(self.schema_version) != SCHEMA_VERSION:
+        if int(self.schema_version) not in {SCHEMA_VERSION, RUN_MANIFEST_SCHEMA_VERSION}:
             raise ValueError(f"unsupported run manifest schema: {self.schema_version}")
+        if self.goal_variant is not None:
+            from gradlab.goal_variants import validate_goal_variant_descriptor
+
+            descriptor = validate_goal_variant_descriptor(self.goal_variant)
+            if descriptor["goal_slug"] != self.goal_slug:
+                raise ValueError("goal_variant.goal_slug must equal goal_slug")
+            if descriptor["effective_goal_contract_sha256"] != self.goal_sha256:
+                raise ValueError("goal_variant effective contract hash must equal goal_sha256")
         for label, value in (
             ("compute", self.compute),
             ("wandb", self.wandb),

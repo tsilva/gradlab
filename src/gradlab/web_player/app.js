@@ -187,7 +187,7 @@ function setSourceMode(active, snapshot = null) {
     updateLayoutTitle();
     return;
   }
-  document.title = "Select checkpoint · gradlab player";
+  document.title = "Select playback source · gradlab player";
   const expected = snapshot;
   void ensureSourceBrowser().then((browser) => {
     if (state.sourceMode && state.applicationSnapshot === expected) browser.render(expected);

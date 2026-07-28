@@ -28,6 +28,11 @@ from gradlab.run_contracts import (
     checkpoint_id,
 )
 from gradlab.policy_bundle import model_document_path, recipe_document_path
+from gradlab.goal_variants import (
+    GOAL_VARIANT_INDEX_SCHEMA_VERSION,
+    goal_variant_scope_key,
+    validate_goal_variant_descriptor,
+)
 
 
 LEASE_TTL_SECONDS = 60
@@ -116,6 +121,124 @@ class RunAuthority:
 
     def manifest(self, run_id: str) -> dict[str, Any] | None:
         return self.control.get_json_optional(f"{self.run_prefix(run_id)}/manifest.json")
+
+    def register_goal_variant(self, manifest: RunManifest) -> dict[str, Any]:
+        if manifest.goal_variant is None:
+            raise ValueError("run manifest has no goal variant descriptor")
+        descriptor = validate_goal_variant_descriptor(manifest.goal_variant)
+        entity = str(manifest.wandb.get("entity") or "").strip()
+        project = str(manifest.wandb.get("project") or "").strip()
+        scope_key = goal_variant_scope_key(
+            entity=entity,
+            project=project,
+            goal_slug=manifest.goal_slug,
+        )
+        descriptor_key = f"{scope_key}/descriptors/{descriptor['variant_id']}.json"
+        try:
+            self.control.put_json(descriptor_key, descriptor, create_only=True)
+        except ConditionalWriteConflict:
+            if self.control.get_json(descriptor_key) != descriptor:
+                raise ValueError("immutable goal variant descriptor conflicts with storage")
+
+        index_key = f"{scope_key}/index.json"
+        for _attempt in range(8):
+            current = self.control.get_json_optional(index_key)
+            current_etag = (
+                str(self.control.head(index_key)["etag"]) if current is not None else None
+            )
+            if current is None:
+                entries: list[dict[str, Any]] = []
+            else:
+                if int(current.get("schema_version") or 0) != GOAL_VARIANT_INDEX_SCHEMA_VERSION:
+                    raise ValueError("unsupported goal variant index schema")
+                identity = current.get("scope")
+                if not isinstance(identity, Mapping) or dict(identity) != {
+                    "entity": entity,
+                    "project": project,
+                    "goal_slug": manifest.goal_slug,
+                }:
+                    raise ValueError("goal variant index scope mismatch")
+                raw_entries = current.get("variants")
+                if not isinstance(raw_entries, list):
+                    raise ValueError("goal variant index variants must be a list")
+                entries = [dict(item) for item in raw_entries if isinstance(item, Mapping)]
+                if len(entries) != len(raw_entries):
+                    raise ValueError("goal variant index contains an invalid entry")
+
+            by_id = {str(item.get("variant_id") or ""): item for item in entries}
+            existing = by_id.get(str(descriptor["variant_id"]))
+            by_id[str(descriptor["variant_id"])] = {
+                **descriptor,
+                "descriptor_key": descriptor_key,
+                "first_run_id": (
+                    str(existing.get("first_run_id") or manifest.run_id)
+                    if existing
+                    else manifest.run_id
+                ),
+            }
+            document = {
+                "schema_version": GOAL_VARIANT_INDEX_SCHEMA_VERSION,
+                "scope": {
+                    "entity": entity,
+                    "project": project,
+                    "goal_slug": manifest.goal_slug,
+                },
+                "variants": sorted(
+                    by_id.values(),
+                    key=lambda item: (
+                        str(item.get("label") or "").casefold(),
+                        str(item.get("variant_id") or ""),
+                    ),
+                ),
+            }
+            try:
+                self.control.put_json(
+                    index_key,
+                    document,
+                    create_only=current is None,
+                    if_match=current_etag,
+                )
+                return document
+            except ConditionalWriteConflict:
+                continue
+        raise ConditionalWriteConflict("goal variant index changed during every CAS attempt")
+
+    def record_goal_variant_registration(
+        self,
+        manifest: RunManifest,
+        *,
+        error: BaseException | None = None,
+    ) -> None:
+        self.control.put_json(
+            f"{self.run_prefix(manifest.run_id)}/goal-variant-registration.json",
+            {
+                "schema_version": 1,
+                "run_id": manifest.run_id,
+                "variant_id": (
+                    str(manifest.goal_variant.get("variant_id") or "")
+                    if isinstance(manifest.goal_variant, Mapping)
+                    else ""
+                ),
+                "status": "pending_repair" if error is not None else "registered",
+                "error_type": type(error).__name__ if error is not None else "",
+                "updated_at": self.clock.utc_now(),
+            },
+            create_only=False,
+        )
+
+    def register_goal_variant_best_effort(self, manifest: RunManifest) -> bool:
+        if manifest.goal_variant is None:
+            return False
+        try:
+            self.register_goal_variant(manifest)
+        except Exception as exc:
+            try:
+                self.record_goal_variant_registration(manifest, error=exc)
+            except Exception:
+                pass
+            return False
+        self.record_goal_variant_registration(manifest)
+        return True
 
     def acquire_lease(
         self,

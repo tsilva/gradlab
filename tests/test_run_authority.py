@@ -8,6 +8,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from gradlab.r2_store import BucketConfig, ConditionalWriteConflict, RunStorageConfig
+from gradlab.goal_variants import build_goal_variant_descriptor, goal_variant_scope_key
 from gradlab.run_authority import LeaseUnavailable, RunAuthority
 from gradlab.run_contracts import (
     EvalIntent,
@@ -129,6 +130,46 @@ class RunAuthorityTests(unittest.TestCase):
         invalid = RunManifest(**{**manifest.to_dict(), "recipe_overrides": [""]})
         with self.assertRaisesRegex(ValueError, "non-empty"):
             invalid.validate()
+
+    def test_goal_variant_registration_is_idempotent_and_goal_scoped(self) -> None:
+        authored = {
+            "goal_id": "Level1-1",
+            "title": "Mario Level1-1",
+            "train": {"environment": {"task": {"sticky": 0}}},
+            "eval": {"environment": {"task": {"sticky": 0}}},
+        }
+        effective = json.loads(json.dumps(authored))
+        effective["train"]["environment"]["task"]["sticky"] = 0.25
+        descriptor = build_goal_variant_descriptor(
+            goal_slug="SuperMarioBros-Nes-v0/Level1-1",
+            source_sha="e" * 40,
+            authored_goal=authored,
+            effective_goal=effective,
+        )
+        base = self.manifest(new_run_id(), new_attempt_id())
+        manifest = RunManifest(
+            **{
+                **base.to_dict(),
+                "goal_sha256": descriptor["effective_goal_contract_sha256"],
+                "goal_variant": descriptor,
+            }
+        )
+
+        first = self.authority.register_goal_variant(manifest)
+        second = self.authority.register_goal_variant(manifest)
+
+        self.assertEqual(first, second)
+        scope = goal_variant_scope_key(
+            entity="tsilva",
+            project="super-mario-bros",
+            goal_slug=manifest.goal_slug,
+        )
+        index = self.authority.control.get_json(f"{scope}/index.json")
+        self.assertEqual(len(index["variants"]), 1)
+        self.assertEqual(
+            index["variants"][0]["variant_id"],
+            descriptor["variant_id"],
+        )
 
     def test_lease_takeover_requires_expiry_and_old_etag_cannot_renew(self) -> None:
         run_id = new_run_id()

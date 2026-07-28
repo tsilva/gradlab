@@ -18,7 +18,7 @@ from gradlab.runtime_contract import train_config_contract_payload, train_config
 from gradlab.task_kernels import IdentityTaskDefinition
 from gradlab.train import main as train_main
 from gradlab.train_config import load_materialized_train_config, validate_and_normalize_train_config
-from gradlab.training_backend import BackendContext
+from gradlab.training_backend import BackendContext, training_backend_runtime_metadata
 
 
 def backend_config(backend_id: str = "sb3.ppo", **config) -> dict[str, object]:
@@ -144,7 +144,9 @@ def test_jerk_backend_schema_is_strict_and_available() -> None:
             )
         )
     with pytest.raises(ValueError, match="max_prefix_shorten_steps must be a positive integer"):
-        validate_and_normalize_train_config(backend_config("gradlab.jerk", max_prefix_shorten_steps=0))
+        validate_and_normalize_train_config(
+            backend_config("gradlab.jerk", max_prefix_shorten_steps=0)
+        )
     with pytest.raises(ValueError, match="unexpected fields.*jump_probability"):
         validate_and_normalize_train_config(backend_config("gradlab.jerk", jump_probability=0.1))
     with pytest.raises(ValueError, match="requires checkpoint_eval_backend=none"):
@@ -160,6 +162,27 @@ def test_jerk_backend_schema_is_strict_and_available() -> None:
         }
     )
     assert accepted["training_backend"]["config"]["acceptance_mode"] == ("first_training_success")
+
+
+@pytest.mark.parametrize(
+    ("backend_id", "search_algorithm_id"),
+    [
+        ("gradlab.jerk", "jerk"),
+        ("gradlab.go-explore", "go-explore"),
+    ],
+)
+def test_trajectory_search_backends_export_neutral_policy_metadata(
+    backend_id: str,
+    search_algorithm_id: str,
+) -> None:
+    metadata = training_backend_runtime_metadata(backend_id, {})
+
+    assert metadata == {
+        "training_backend_id": backend_id,
+        "algorithm_id": "action-program",
+        "search_algorithm_id": search_algorithm_id,
+        "model_class": "gradlab.action_program.ActionProgramPolicy",
+    }
 
 
 def test_unavailable_backend_fails_before_run_resources_are_created() -> None:

@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from gradlab.jerk import ActionRun, JerkPolicy, canonicalize_action_runs
+from gradlab.action_program import ActionProgramPolicy, ActionRun, canonicalize_action_runs
 from gradlab.task_kernels import Outcome
 
 
@@ -829,9 +829,9 @@ class GoExploreSearch:
         self._best_success = self._candidate_from_document(value["best_success"])
         return tuple(lane_entry_ids)
 
-    def policy(self) -> JerkPolicy:
+    def policy(self) -> ActionProgramPolicy:
         candidate = self.best_candidate()
-        return JerkPolicy(
+        return ActionProgramPolicy(
             action_names=self.action_names,
             action_runs=() if candidate is None else candidate.runs,
             fallback_action=self.fallback_action,
