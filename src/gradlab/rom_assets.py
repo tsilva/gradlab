@@ -330,6 +330,26 @@ def discover_rom_path(
     return next(iter(matches.values()))[0]
 
 
+def direct_rom_asset_manifest(game: str, rom_path: Path) -> dict[str, Any]:
+    """Build a verified runtime manifest without registering or copying the ROM."""
+
+    requested = rom_path.expanduser()
+    if requested.suffix.lower() != ".nes":
+        raise ValueError("--rom must point to a raw .nes file")
+    source = discover_rom_path(game, rom_path=requested)
+    manifest = {
+        "schema_version": ROM_ASSET_SCHEMA_VERSION,
+        "game": _safe_game(game),
+        "filename": source.name,
+        "size_bytes": source.stat().st_size,
+        "sha256": file_sha256(source),
+        "object_uri": source.resolve().as_uri(),
+        "provider_rom_identity": provider_rom_identity(source),
+        "provider_rom_identity_algorithm": ROM_ASSET_IDENTITY_ALGORITHM,
+    }
+    return validate_rom_asset_manifest(manifest, expected_game=game)
+
+
 def _cache_manifest_locally(manifest: Mapping[str, Any]) -> None:
     state = load_rom_asset_state()
     state["schema_version"] = ROM_ASSET_STATE_SCHEMA_VERSION

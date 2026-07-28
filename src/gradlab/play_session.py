@@ -235,6 +235,16 @@ def add_play_source_args(parser: argparse.ArgumentParser) -> None:
         help="Local run root searched by --recipe; defaults to ./runs.",
     )
     parser.add_argument(
+        "--rom",
+        "--rom-path",
+        dest="rom_path",
+        type=Path,
+        help=(
+            "Use a provider-compatible raw .nes ROM in place for playback without "
+            "registering or copying it."
+        ),
+    )
+    parser.add_argument(
         "--run",
         help=(
             "Immutable gradlab run ID. Resolves its public promoted checkpoint without "

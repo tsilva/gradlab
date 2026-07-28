@@ -36,8 +36,17 @@ from gradlab.training_backend import (
     training_backend_id,
     training_backend_runtime_metadata,
 )
-from gradlab.rom_assets import manifest_from_train_config
-from gradlab.rom_runtime import bind_cached_rom, runtime_cache_root
+from gradlab.rom_assets import (
+    manifest_from_train_config,
+    portable_rom_asset_identity,
+    validate_rom_asset_manifest,
+)
+from gradlab.rom_runtime import (
+    RomRuntimeBinding,
+    bind_cached_rom,
+    bind_rom_path,
+    runtime_cache_root,
+)
 
 
 GRACEFUL_STOP_SIGNAL = getattr(signal, "SIGUSR1", None)
@@ -91,7 +100,11 @@ def install_graceful_stop_handler(stop_flag: GracefulStopFlag) -> int | None:
     return int(GRACEFUL_STOP_SIGNAL)
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(
+    argv: list[str] | None = None,
+    *,
+    runtime_rom_binding: RomRuntimeBinding | None = None,
+) -> int:
     if os.environ.get(INTERNAL_LEARNER_ENV) != "1":
         raise RuntimeError(
             "gradlab.train is an internal learner entrypoint; use `gradlab experiment launch` to launch "
@@ -113,14 +126,26 @@ def main(argv: list[str] | None = None) -> int:
     n_envs = effective_n_envs(train_config)
     environment = resolve_mixed_state_config(environment, n_envs=n_envs)
     manifest = manifest_from_train_config(train_config, expected_game=environment.game)
-    rom_binding = (
-        bind_cached_rom(
-            manifest,
-            cache_root=runtime_cache_root(container_default=True),
+    if runtime_rom_binding is not None:
+        if manifest is None:
+            raise ValueError("runtime ROM binding requires a ROM asset manifest")
+        bound_manifest = validate_rom_asset_manifest(
+            runtime_rom_binding.manifest,
+            expected_game=environment.game,
+            require_object_uri=False,
         )
-        if manifest is not None
-        else None
-    )
+        if portable_rom_asset_identity(bound_manifest) != portable_rom_asset_identity(manifest):
+            raise ValueError("runtime ROM binding does not match the training ROM asset")
+        rom_binding = bind_rom_path(manifest, runtime_rom_binding.path)
+    else:
+        rom_binding = (
+            bind_cached_rom(
+                manifest,
+                cache_root=runtime_cache_root(container_default=True),
+            )
+            if manifest is not None
+            else None
+        )
     assert_provider_runtime_available(environment, rom_binding=rom_binding)
     train_config["resolved_n_envs"] = n_envs
 

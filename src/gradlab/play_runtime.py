@@ -34,8 +34,13 @@ from gradlab.play_termination import (
     with_enabled_termination_conditions,
 )
 from gradlab.play_web import WebPlaybackRunner
-from gradlab.rom_assets import rom_asset_manifest_for_game
-from gradlab.rom_runtime import ensure_local_rom_binding
+from gradlab.rom_assets import (
+    direct_rom_asset_manifest,
+    portable_rom_asset_identity,
+    rom_asset_manifest_for_game,
+    validate_rom_asset_manifest,
+)
+from gradlab.rom_runtime import RomRuntimeBinding, bind_rom_path, ensure_local_rom_binding
 from gradlab.seeds import validate_eval_seed, validate_playback_seed
 from gradlab.trusted_inputs import (
     ModelApprovalError,
@@ -74,6 +79,45 @@ class PlaySourceSpec:
             "contract_mode": self.contract_mode,
             "reward_clip_override": self.reward_clip_override,
         }
+
+
+def resolve_playback_rom_binding(
+    *,
+    env_provider: str,
+    game: str,
+    asset: Mapping[str, Any] | None,
+    rom_path: Path | None,
+) -> RomRuntimeBinding | None:
+    provider = resolve_env_provider(env_provider)
+    if rom_path is not None:
+        if not provider.requires_external_rom_asset:
+            raise ValueError(
+                f"--rom is not valid for ROM-free provider {provider.provider_id!r}"
+            )
+        direct_manifest = direct_rom_asset_manifest(game, rom_path)
+        binding_manifest = direct_manifest
+        if asset is not None:
+            expected = validate_rom_asset_manifest(
+                asset,
+                expected_game=game,
+                require_object_uri=False,
+            )
+            if portable_rom_asset_identity(expected) != portable_rom_asset_identity(
+                direct_manifest
+            ):
+                raise ValueError("--rom does not match the ROM identity recorded by the model")
+            binding_manifest = expected
+        return bind_rom_path(binding_manifest, rom_path.expanduser())
+    if not provider.requires_external_rom_asset:
+        return None
+    return (
+        ensure_local_rom_binding(asset, game=game)
+        if asset is not None
+        else ensure_local_rom_binding(
+            rom_asset_manifest_for_game(game),
+            game=game,
+        )
+    )
 
 
 def _implicit_playback_seed(
@@ -330,17 +374,14 @@ class PlaybackLoader:
         display_config = artifact_config
 
         progress("verifying", "Checking environment provider")
-        rom_binding = None
-        if resolve_env_provider(artifact_config.env_provider).requires_external_rom_asset:
-            asset = contract.get("asset") if contract is not None else None
-            rom_binding = (
-                ensure_local_rom_binding(asset, game=artifact_config.game)
-                if isinstance(asset, Mapping)
-                else ensure_local_rom_binding(
-                    rom_asset_manifest_for_game(artifact_config.game),
-                    game=artifact_config.game,
-                )
-            )
+        asset_value = contract.get("asset") if contract is not None else None
+        asset = asset_value if isinstance(asset_value, Mapping) else None
+        rom_binding = resolve_playback_rom_binding(
+            env_provider=artifact_config.env_provider,
+            game=artifact_config.game,
+            asset=asset,
+            rom_path=getattr(args, "rom_path", None),
+        )
         assert_provider_runtime_available(artifact_config, rom_binding=rom_binding)
 
         progress("verifying", "Hashing executable model closure")

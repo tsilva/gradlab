@@ -7,6 +7,7 @@ from unittest.mock import patch
 
 import gymnasium as gym
 import numpy as np
+from stable_baselines3 import PPO
 
 from gradlab.batch_runtime import (
     BatchMetricRecord,
@@ -169,6 +170,20 @@ class DoubleBufferedNativeVectorProvider(DeterministicNativeVectorProvider):
     def step(self, actions: Any):
         self._rotate_observations()
         return super().step(actions)
+
+
+class StrictDiscreteNativeVectorProvider(DeterministicNativeVectorProvider):
+    def __init__(self, num_envs: int = 2):
+        super().__init__(num_envs)
+        self.single_action_space = gym.spaces.Discrete(9)
+
+    def step(self, actions: Any):
+        action_batch = np.asarray(actions)
+        if action_batch.shape != (self.num_envs,):
+            raise ValueError(
+                f"actions must have shape ({self.num_envs},), got {action_batch.shape}"
+            )
+        return super().step(action_batch)
 
 
 def descriptor_for(
@@ -370,6 +385,35 @@ class BatchRuntimeTests(unittest.TestCase):
             side_effect=AssertionError("hot path consulted provider registry"),
         ):
             runtime.step(np.zeros((runtime.num_envs, 3), dtype=np.int8))
+
+    def test_sb3_ppo_passes_native_discrete_action_batches(self):
+        provider = StrictDiscreteNativeVectorProvider(num_envs=2)
+        descriptor = descriptor_for(provider)
+        runtime = BatchRuntime(
+            provider,
+            descriptor,
+            IdentityTaskDefinition().bind(descriptor, provider.num_envs),
+            run_seed=17,
+        )
+        env = GradLabVecEnv(runtime)
+        model = PPO(
+            "MultiInputPolicy",
+            env,
+            n_steps=2,
+            batch_size=4,
+            n_epochs=1,
+            seed=17,
+            device="cpu",
+            verbose=0,
+        )
+
+        model.learn(total_timesteps=4)
+
+        self.assertTrue(provider.step_actions)
+        self.assertTrue(
+            all(actions.shape == (provider.num_envs,) for actions in provider.step_actions)
+        )
+        env.close()
 
     def test_step_diagnostics_are_one_lane_owned_and_survive_same_step_reset(self):
         provider = DeterministicNativeVectorProvider(num_envs=1)
