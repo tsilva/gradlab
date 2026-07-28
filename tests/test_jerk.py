@@ -21,7 +21,8 @@ from gradlab.training import jerk as jerk_training
 from gradlab.training_backend import GracefulStopFlag
 from gradlab.training_lifecycle import (
     SilentProgressSink,
-    TrainingLifecycleOptions,
+    TrainingExecutionMode,
+    TrainingExecutionPolicy,
     TrainingSession,
 )
 from gradlab.training_metrics import EpisodeMetricsReducer
@@ -288,7 +289,13 @@ class _FakeMetricStore:
         return len(self.checkpoints)
 
 
-def _jerk_context(tmp_path, *, timesteps: int, early_stop=None):
+def _jerk_context(
+    tmp_path,
+    *,
+    timesteps: int,
+    early_stop=None,
+    execution_mode: TrainingExecutionMode = TrainingExecutionMode.SUPERVISED,
+):
     tmp_path.mkdir(parents=True, exist_ok=True)
     train_config = {
         "resolved_n_envs": 1,
@@ -327,7 +334,8 @@ def _jerk_context(tmp_path, *, timesteps: int, early_stop=None):
             configured_starts=("Level1-1",),
             track_success=True,
         ),
-        options=TrainingLifecycleOptions(console_mode="silent"),
+        execution_policy=TrainingExecutionPolicy.for_mode(execution_mode),
+        completion_signal_available=True,
         progress_sink=SilentProgressSink(),
     )
     session.configure_checkpoints(run_name="test-jerk", eval_required=False)
@@ -372,6 +380,7 @@ def test_first_training_success_saves_playable_checkpoint_and_stops(tmp_path) ->
     context.session.finalize(result)
 
     assert env.steps == 1
+    assert result.terminal_reason.value == "deterministic_training_acceptance"
     assert env.closed is True
     assert [
         (checkpoint["kind"], checkpoint["step"]) for checkpoint in context.metric_store.checkpoints
@@ -387,6 +396,38 @@ def test_first_training_success_saves_playable_checkpoint_and_stops(tmp_path) ->
         if "train/outcome/success/from/Level1-1/count" in payload
     )
     assert final_metrics["train/outcome/success/from/Level1-1/count"] == 1
+
+
+def test_local_jerk_success_stops_without_scientific_acceptance_checkpoint(tmp_path) -> None:
+    env = _FakeJerkEnv(success=True)
+    context = _jerk_context(
+        tmp_path,
+        timesteps=10,
+        execution_mode=TrainingExecutionMode.LOCAL_DEMO,
+    )
+
+    with (
+        mock.patch.object(jerk_training, "make_training_vec_env", return_value=env),
+        mock.patch.object(
+            jerk_training,
+            "configured_action_meanings",
+            return_value=ACTIONS,
+        ),
+        mock.patch.object(
+            jerk_training,
+            "install_model_bundle",
+            side_effect=_install_test_bundle,
+        ),
+    ):
+        result = jerk_training.run_jerk(context)
+
+    assert result.terminal_reason.value == "first_completion"
+    assert result.first_completion_step == 1
+    assert result.final_step == 1
+    assert [(row["kind"], row["step"]) for row in context.metric_store.checkpoints] == [
+        ("final", 1)
+    ]
+    assert not context.checkpoint_dir.exists()
 
 
 def test_sb3_and_jerk_early_stop_adapters_make_identical_decisions(tmp_path) -> None:
@@ -458,3 +499,32 @@ def test_first_training_success_budget_exhaustion_is_unsuccessful(tmp_path) -> N
     assert [
         (checkpoint["kind"], checkpoint["step"]) for checkpoint in context.metric_store.checkpoints
     ] == [("final", 2)]
+
+
+def test_local_jerk_budget_exhaustion_still_produces_a_playable_final(tmp_path) -> None:
+    env = _FakeJerkEnv(success=False)
+    context = _jerk_context(
+        tmp_path,
+        timesteps=2,
+        execution_mode=TrainingExecutionMode.LOCAL_DEMO,
+    )
+
+    with (
+        mock.patch.object(jerk_training, "make_training_vec_env", return_value=env),
+        mock.patch.object(
+            jerk_training,
+            "configured_action_meanings",
+            return_value=ACTIONS,
+        ),
+        mock.patch.object(
+            jerk_training,
+            "install_model_bundle",
+            side_effect=_install_test_bundle,
+        ),
+    ):
+        result = jerk_training.run_jerk(context)
+
+    assert result.terminal_reason.value == "resource_exhaustion"
+    assert [(row["kind"], row["step"]) for row in context.metric_store.checkpoints] == [
+        ("final", 2)
+    ]

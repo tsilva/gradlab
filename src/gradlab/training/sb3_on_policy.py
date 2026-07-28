@@ -11,7 +11,7 @@ from gymnasium import spaces
 from gradlab.artifacts import install_model_bundle
 from gradlab.state_archive import state_archive_artifact_summary
 from gradlab.training_backend import BackendContext
-from gradlab.training_lifecycle import TerminalReason, TrainingResult
+from gradlab.training_lifecycle import TrainingExecutionMode, TrainingResult
 
 
 ModelFactory = Callable[[BackendContext, Any, Any, str], Any]
@@ -343,7 +343,9 @@ def run_sb3_on_policy(
         )
         components: list[Any] = [
             graceful_stop,
-            Sb3HumanOutputFormatHelper(suppress=True),
+            Sb3HumanOutputFormatHelper(
+                suppress=(context.session.execution_policy.mode == TrainingExecutionMode.LOCAL_DEMO)
+            ),
             ThroughputHelper(),
         ]
         if common_config.get("state_archive") is not None:
@@ -444,7 +446,25 @@ def run_sb3_on_policy(
                 progress_bar=False,
             )
         reason = context.session.terminal_reason()
-        terminal_kind = "interrupted" if reason == TerminalReason.INTERRUPTED else "final"
+        if (
+            context.session.should_persist_interrupted_checkpoint(reason)
+            and int(common_config["checkpoint_freq"]) > 0
+        ):
+            step = int(model.num_timesteps)
+            save_model_bundle(
+                model=model,
+                context=context,
+                model_path=context.checkpoint_dir
+                / f"{checkpoint_prefix(config.game, algorithm_id=algorithm_id)}"
+                f"_interrupted_{step}_steps.zip",
+                kind="interrupted",
+                step=step,
+            )
+        terminal_kind = context.session.terminal_model_kind(reason)
+        context.train_config["training_terminal"] = context.session.terminal_provenance(
+            terminal_reason=reason,
+            final_step=int(model.num_timesteps),
+        )
         save_model_bundle(
             model=model,
             context=context,
@@ -454,9 +474,9 @@ def run_sb3_on_policy(
             terminal=True,
         )
         context.session.event(f"saved {final_model_path}")
-        return TrainingResult(
-            reason=reason,
-            step=int(model.num_timesteps),
+        return context.session.result(
+            terminal_reason=reason,
+            final_step=int(model.num_timesteps),
             model_kind=terminal_kind,
         )
     finally:

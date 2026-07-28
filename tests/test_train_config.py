@@ -26,7 +26,12 @@ class TrainConfigFieldSchemaTests(unittest.TestCase):
         parser = build_train_parser()
         options = {option for action in parser._actions for option in action.option_strings}
 
-        self.assertEqual(options, {"-h", "--help", "--train-config-json"})
+        self.assertEqual(
+            options,
+            {"-h", "--help", "--train-config-json", "--execution-mode"},
+        )
+        with self.assertRaises(SystemExit):
+            parser.parse_args(["--train-config-json", "train.json"])
         with self.assertRaises(SystemExit):
             parser.parse_args(["--training-backend", '{"id":"sb3.ppo"}'])
 
@@ -50,7 +55,14 @@ class TrainConfigFieldSchemaTests(unittest.TestCase):
             )
 
             with self.assertRaisesRegex(ValueError, "timesteps must be an integer"):
-                parse_train_config(["--train-config-json", str(path)])
+                parse_train_config(
+                    [
+                        "--train-config-json",
+                        str(path),
+                        "--execution-mode",
+                        "supervised",
+                    ]
+                )
 
     def test_materialized_config_loader_matches_cli_json_defaults(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -67,7 +79,14 @@ class TrainConfigFieldSchemaTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            cli_config = parse_train_config(["--train-config-json", str(path)])
+            cli_config = parse_train_config(
+                [
+                    "--train-config-json",
+                    str(path),
+                    "--execution-mode",
+                    "supervised",
+                ]
+            )
             worker_config = load_materialized_train_config(path)
 
         for key in ("game", "seed", "wandb_tags", "frame_skip", "checkpoint_eval_n_envs"):

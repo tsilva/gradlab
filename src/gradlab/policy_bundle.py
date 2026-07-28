@@ -100,10 +100,10 @@ class _RecipeValueDocument(BoundaryModel):
             from gradlab.goal_variants import validate_goal_variant_descriptor
 
             descriptor = validate_goal_variant_descriptor(self.goal_variant)
-            if (
-                descriptor["goal_contract_sha256"] != self.train_config.get("goal_contract_sha256")
-                or descriptor["effective_goal_contract_sha256"]
-                != self.train_config.get("effective_goal_contract_sha256")
+            if descriptor["goal_contract_sha256"] != self.train_config.get(
+                "goal_contract_sha256"
+            ) or descriptor["effective_goal_contract_sha256"] != self.train_config.get(
+                "effective_goal_contract_sha256"
             ):
                 raise ValueError("goal_variant disagrees with train_config")
         return self
@@ -181,6 +181,8 @@ class _ModelProvenanceDocument(BoundaryModel):
     compute_target: Any = None
     dstack_task: Any = None
     search_algorithm_id: Any = None
+    training_execution: Any = None
+    training_terminal: Any = None
     state_archive_preflight_sha256: Any = None
     state_archive_summary: Any = None
 

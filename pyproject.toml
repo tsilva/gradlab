@@ -11,8 +11,8 @@ dependencies = [
     "supermariobrosnes-turbo==0.6.0; sys_platform == 'linux' and platform_machine == 'x86_64'",
     "breakout-turbo-env==0.5.1; sys_platform == 'darwin' and platform_machine == 'arm64'",
     "breakout-turbo-env==0.5.1; sys_platform == 'linux' and platform_machine == 'x86_64'",
-    "vizdoom-turbo==1.3.0.post11; sys_platform == 'darwin' and platform_machine == 'arm64'",
-    "vizdoom-turbo==1.3.0.post11; sys_platform == 'linux' and platform_machine == 'x86_64'",
+    "vizdoom-turbo==1.3.0.post12; sys_platform == 'darwin' and platform_machine == 'arm64'",
+    "vizdoom-turbo==1.3.0.post12; sys_platform == 'linux' and platform_machine == 'x86_64'",
     "stable-baselines3>=2.3,<3",
     "ale-py>=0.12,<0.13",
     "opencv-python>=4.13,<5",
@@ -90,7 +90,7 @@ constraint-dependencies = [
 breakout-turbo-env = "2026-07-27T12:49:02Z"
 stable-retro-turbo = "2026-07-27T12:17:53Z"
 supermariobrosnes-turbo = "2026-07-27T15:52:00Z"
-vizdoom-turbo = "2026-07-28T10:58:56Z"
+vizdoom-turbo = "2026-07-28T12:41:03Z"
 
 [tool.ruff]
 line-length = 100
@@ -120,7 +120,7 @@ train-runtime = [
     "stable-retro-turbo==1.0.1.post36; sys_platform == 'linux' and platform_machine == 'x86_64'",
     "supermariobrosnes-turbo==0.6.0; sys_platform == 'linux' and platform_machine == 'x86_64'",
     "breakout-turbo-env==0.5.1; sys_platform == 'linux' and platform_machine == 'x86_64'",
-    "vizdoom-turbo==1.3.0.post11; sys_platform == 'linux' and platform_machine == 'x86_64'",
+    "vizdoom-turbo==1.3.0.post12; sys_platform == 'linux' and platform_machine == 'x86_64'",
     "stable-baselines3>=2.3,<3",
     "ale-py>=0.12,<0.13",
     "opencv-python>=4.13,<5",

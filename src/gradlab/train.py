@@ -38,7 +38,8 @@ from gradlab.training_backend import (
     training_backend_runtime_metadata,
 )
 from gradlab.training_lifecycle import (
-    TrainingLifecycleOptions,
+    TrainingExecutionMode,
+    TrainingExecutionPolicy,
     TrainingResult,
     TrainingSession,
 )
@@ -70,6 +71,12 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
         help="Authoritative materialized train configuration JSON.",
     )
+    parser.add_argument(
+        "--execution-mode",
+        choices=tuple(mode.value for mode in TrainingExecutionMode),
+        required=True,
+        help="Required internal learner lifecycle policy.",
+    )
     return parser
 
 
@@ -77,7 +84,9 @@ def effective_n_envs(config: Mapping[str, object]) -> int:
     return provider_num_envs(config, explicit_n_envs=config.get("n_envs"))
 
 
-def parse_train_config(argv: Sequence[str] | None = None) -> dict[str, object]:
+def parse_train_invocation(
+    argv: Sequence[str] | None = None,
+) -> tuple[dict[str, object], TrainingExecutionMode]:
     parser = build_parser()
     parsed = parser.parse_args(list(sys.argv[1:] if argv is None else argv))
     config = load_materialized_train_config(Path(parsed.train_config_json))
@@ -86,6 +95,11 @@ def parse_train_config(argv: Sequence[str] | None = None) -> dict[str, object]:
         label="train_config.seed",
         seed_span=effective_n_envs(config),
     )
+    return config, TrainingExecutionMode(parsed.execution_mode)
+
+
+def parse_train_config(argv: Sequence[str] | None = None) -> dict[str, object]:
+    config, _execution_mode = parse_train_invocation(argv)
     return config
 
 
@@ -117,16 +131,14 @@ def main(
     argv: list[str] | None = None,
     *,
     runtime_rom_binding: RomRuntimeBinding | None = None,
-    compact_console: bool = False,
-    persist_intermediate_checkpoints: bool = True,
-    stop_on_first_completion: bool = False,
 ) -> int:
     if os.environ.get(INTERNAL_LEARNER_ENV) != "1":
         raise RuntimeError(
             "gradlab.train is an internal learner entrypoint; use `gradlab experiment launch` to launch "
             "a dstack training task"
         )
-    train_config = parse_train_config(argv)
+    train_config, execution_mode = parse_train_invocation(argv)
+    execution_policy = TrainingExecutionPolicy.for_mode(execution_mode)
     recipe_json_path = Path(str(train_config.get("recipe_json_path") or ""))
     if not recipe_json_path.is_file():
         raise RuntimeError("training requires the canonical versioned recipe.json")
@@ -137,6 +149,7 @@ def main(
     backend.validate(train_config, backend_config)
     train_config.update(training_backend_runtime_metadata(backend_id, backend_config))
     train_config["training_backend_config_hash"] = training_backend_config_hash(train_config)
+    train_config["training_execution"] = execution_policy.to_document()
 
     environment = resolve_env_config(env_config_from_mapping(train_config))
     n_envs = effective_n_envs(train_config)
@@ -168,7 +181,7 @@ def main(
     run_dir = Path(default_run_dir(str(train_config["run_name"]), str(train_config["runs_dir"])))
     checkpoint_dir = run_dir / "checkpoints"
     run_dir.mkdir(parents=True, exist_ok=True)
-    if persist_intermediate_checkpoints:
+    if execution_policy.persist_intermediate_checkpoints:
         checkpoint_dir.mkdir(parents=True, exist_ok=True)
     (run_dir / "learner_ready.json").unlink(missing_ok=True)
     store = MetricStore(metric_store_path(run_dir))
@@ -203,10 +216,10 @@ def main(
     stop_flag = GracefulStopFlag()
     graceful_stop_signal = install_graceful_stop_handler(
         stop_flag,
-        include_sigint=not persist_intermediate_checkpoints,
+        include_sigint=execution_policy.handle_sigint,
     )
     if graceful_stop_signal is not None:
-        if not persist_intermediate_checkpoints:
+        if execution_policy.handle_sigint:
             print(
                 "graceful stop signals: "
                 f"{signal_name(graceful_stop_signal)}, {signal_name(int(signal.SIGINT))}",
@@ -245,21 +258,38 @@ def main(
                     and environment.task["termination"].get("success")
                 ),
             ),
-            options=TrainingLifecycleOptions(
-                console_mode="auto" if compact_console else "plain",
-                persist_intermediate_checkpoints=persist_intermediate_checkpoints,
-                stop_on_first_completion=stop_on_first_completion,
-            ),
+            execution_policy=execution_policy,
+            completion_signal_available=bool(task_termination(environment).get("success")),
         ),
     )
     context.session.configure_checkpoints(
         run_name=str(train_config["run_name"]),
         eval_required=train_config["checkpoint_eval_backend"] != "none",
     )
+    if (
+        execution_mode == TrainingExecutionMode.LOCAL_DEMO
+        and not context.session.completion_signal_available
+    ):
+        context.session.event(
+            "no declared success signal; local training will continue until its configured "
+            "budget or early-stop condition"
+        )
     try:
         result = backend.run(context)
         if not isinstance(result, TrainingResult):
             raise RuntimeError(f"training backend {backend_id!r} did not return a TrainingResult")
+        terminal_model_path = run_dir / result.model_path
+        if result.model_path != "final_model.zip" or not terminal_model_path.is_file():
+            raise RuntimeError(
+                f"training backend {backend_id!r} did not produce the terminal model "
+                f"{run_dir / 'final_model.zip'}"
+            )
+        if (
+            execution_mode == TrainingExecutionMode.LOCAL_DEMO
+            and checkpoint_dir.is_dir()
+            and any(checkpoint_dir.iterdir())
+        ):
+            raise RuntimeError("local-demo training produced an intermediate checkpoint")
         context.session.finalize(result)
     except BaseException as exc:
         context.session.fail(exc)

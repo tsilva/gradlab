@@ -88,6 +88,8 @@ def build_model_provenance(
         "algorithm_id": str(train_config.get("algorithm_id") or "").strip(),
         "search_algorithm_id": str(train_config.get("search_algorithm_id") or "").strip(),
         "model_class": str(train_config.get("model_class") or "").strip(),
+        "training_execution": deepcopy(dict(train_config.get("training_execution") or {})),
+        "training_terminal": deepcopy(dict(train_config.get("training_terminal") or {})),
         "training_metadata": {"versions": runtime_versions_metadata()},
     }
     preflight_sha256 = str(train_config.get("state_archive_preflight_sha256") or "").strip()

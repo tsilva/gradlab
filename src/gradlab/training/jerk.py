@@ -26,7 +26,7 @@ from gradlab.training_backend import (
     FIRST_TRAINING_SUCCESS_ACCEPTANCE,
     BackendContext,
 )
-from gradlab.training_lifecycle import TerminalReason, TrainingResult
+from gradlab.training_lifecycle import TerminalReason, TrainingExecutionMode, TrainingResult
 from gradlab.training_metrics import episode_succeeded
 
 
@@ -220,11 +220,22 @@ def run_jerk(context: BackendContext) -> TrainingResult:
             for record in records:
                 if isinstance(record, EpisodeRecord):
                     records_by_lane[int(record.lane)] = record
-                    if _is_success(record):
+                    if str(getattr(record, "start_origin", "target")) == "target" and _is_success(
+                        record
+                    ):
                         success_records.append(record)
             search.observe(rewards, dones, records_by_lane)
             step = search.global_step
             context.session.advance(step, records)
+            stop_for_completion = context.session.observe_completion(
+                step=step,
+                qualified=bool(success_records),
+            )
+            if stop_for_completion:
+                context.session.event(f"level completed; stopping JERK at step={step}")
+                break
+            if context.stop_flag.requested:
+                break
             if acceptance_mode == FIRST_TRAINING_SUCCESS_ACCEPTANCE and success_records:
                 accepted = True
                 accepted_path = context.checkpoint_dir / (
@@ -278,10 +289,23 @@ def run_jerk(context: BackendContext) -> TrainingResult:
             ),
         )
         default_reason = (
-            TerminalReason.ALGORITHM_SUCCESS if accepted else TerminalReason.RESOURCE_LIMIT
+            TerminalReason.TRAINING_ACCEPTANCE if accepted else TerminalReason.RESOURCE_EXHAUSTION
         )
         reason = context.session.terminal_reason(default_reason)
-        terminal_kind = "interrupted" if reason == TerminalReason.INTERRUPTED else "final"
+        if context.session.should_persist_interrupted_checkpoint(reason) and checkpoint_freq > 0:
+            _save_policy_bundle(
+                search=search,
+                context=context,
+                model_path=context.checkpoint_dir
+                / f"{_checkpoint_prefix(config.game)}_interrupted_{step}_steps.zip",
+                kind="interrupted",
+                step=step,
+            )
+        terminal_kind = context.session.terminal_model_kind(reason)
+        context.train_config["training_terminal"] = context.session.terminal_provenance(
+            terminal_reason=reason,
+            final_step=step,
+        )
         final_path = context.run_dir / "final_model.zip"
         _save_policy_bundle(
             search=search,
@@ -297,7 +321,8 @@ def run_jerk(context: BackendContext) -> TrainingResult:
             f"early_stopped={early_stopped}"
         )
         if (
-            acceptance_mode == FIRST_TRAINING_SUCCESS_ACCEPTANCE
+            context.session.execution_policy.mode == TrainingExecutionMode.SUPERVISED
+            and acceptance_mode == FIRST_TRAINING_SUCCESS_ACCEPTANCE
             and not accepted
             and not context.stop_flag.requested
             and step >= int(common_config["timesteps"])
@@ -306,9 +331,9 @@ def run_jerk(context: BackendContext) -> TrainingResult:
                 f"JERK exhausted {common_config['timesteps']} transitions "
                 "without a goal success event"
             )
-        return TrainingResult(
-            reason=reason,
-            step=step,
+        return context.session.result(
+            terminal_reason=reason,
+            final_step=step,
             model_kind=terminal_kind,
         )
     finally:
