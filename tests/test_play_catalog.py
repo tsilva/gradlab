@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -12,6 +13,7 @@ from gradlab.play_catalog import PlayCatalog, parse_wandb_location
 from gradlab.goal_variants import (
     build_goal_variant_descriptor,
     goal_variant_scope_key,
+    unknown_goal_variant_id,
 )
 from gradlab.recipe_documents import load_goal_contract
 from gradlab.recipe_variants import recipe_variant_id
@@ -724,6 +726,32 @@ def test_run_catalog_uses_one_bounded_projection_instead_of_lazy_run_hydration(
     )
     assert [item["run_id"] for item in searched.items] == [SECOND_RUN_ID]
     assert len(api.client.calls) == 2
+
+
+def test_run_route_remains_resolvable_when_variant_listing_refreshes(
+    tmp_path: Path,
+) -> None:
+    write_goal_catalog(tmp_path)
+    catalog = PlayCatalog(repo_root=tmp_path)
+    api = FakeApi()
+    catalog._api = api
+    variant_id = unknown_goal_variant_id(goal_slug="Mario/Level1-1")
+    variant_cache_key = catalog._variant_cache_key(
+        entity="research",
+        project="Mario",
+        goal_slug="Mario/Level1-1",
+    )
+    catalog._goal_variant_cache[variant_cache_key] = (time.time(), ())
+
+    page = catalog.runs(
+        entity="research",
+        project="Mario",
+        goal_id="Level1-1",
+        goal_variant_id=variant_id,
+    )
+
+    assert [item["run_id"] for item in page.items] == [RUN_ID]
+    assert page.items[0]["goal_variant_id"] == variant_id
 
 
 def test_run_catalog_persists_ranked_summaries_across_player_processes(

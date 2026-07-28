@@ -34,6 +34,7 @@ class BackendContext:
     stop_flag: Any
     rom_binding: Any | None
     compact_console: bool = False
+    persist_intermediate_checkpoints: bool = True
 
     @property
     def backend_config(self) -> dict[str, Any]:

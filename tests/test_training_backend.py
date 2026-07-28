@@ -49,6 +49,7 @@ def test_learner_backend_context_is_wandb_blind() -> None:
     assert "wandb_run" not in names
     assert "external_wandb_publisher" not in names
     assert "wandb_enabled" in names
+    assert "persist_intermediate_checkpoints" in names
 
 
 def test_direct_learner_entrypoint_is_guarded() -> None:

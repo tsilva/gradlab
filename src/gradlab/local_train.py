@@ -359,9 +359,14 @@ def main(argv: list[str] | None = None) -> int:
                 learner_args,
                 runtime_rom_binding=runtime_rom_binding,
                 compact_console=True,
+                persist_intermediate_checkpoints=False,
             )
             if runtime_rom_binding is not None
-            else learner_main(learner_args, compact_console=True)
+            else learner_main(
+                learner_args,
+                compact_console=True,
+                persist_intermediate_checkpoints=False,
+            )
         )
     finally:
         if previous_internal is None:

@@ -625,6 +625,43 @@ def test_known_recipe_schema_rejects_unknown_fields_and_urls(tmp_path: Path) -> 
         load_recipe_document(tmp_path / "recipe.json")
 
 
+def test_recipe_loader_normalizes_retired_goal_and_train_projections(tmp_path: Path) -> None:
+    strict = level1_1_recipe_document()
+    strict["recipe"]["goal"].pop("evaluation_mode")
+    with pytest.raises(PolicyDocumentError, match="evaluation_mode"):
+        validate_recipe_document(strict)
+
+    legacy = level1_1_recipe_document()
+    legacy["recipe"]["goal"].pop("evaluation_mode")
+    train_config = legacy["recipe"]["train_config"]
+    train_config.update(
+        {
+            "post_train_eval_stochastic": True,
+            "goal_variant_id": "goal-variant-legacy",
+            "goal_variant_label": "legacy",
+            "goal_variant_source_relation": "changed",
+            "goal_variant_descriptor_sha256": "d" * 64,
+            "goal_variant_diff_json": "[]",
+        }
+    )
+    path = write_canonical_json(tmp_path / "recipe.json", legacy)
+
+    loaded = load_recipe_document(path)
+
+    assert loaded["recipe"]["goal"]["evaluation_mode"] == "evaluated"
+    assert "post_train_eval_stochastic" not in loaded["recipe"]["train_config"]
+    assert "goal_variant_id" not in loaded["recipe"]["train_config"]
+
+
+def test_recipe_loader_rejects_noncanonical_legacy_stochastic_eval(tmp_path: Path) -> None:
+    legacy = level1_1_recipe_document()
+    legacy["recipe"]["train_config"]["post_train_eval_stochastic"] = False
+    path = write_canonical_json(tmp_path / "recipe.json", legacy)
+
+    with pytest.raises(PolicyDocumentError, match="must be true in a legacy recipe"):
+        load_recipe_document(path)
+
+
 def test_bundle_rejects_checkpoint_and_recipe_hash_mismatches(tmp_path: Path) -> None:
     write_bundle(tmp_path)
     (tmp_path / "model.zip").write_bytes(b"changed")

@@ -295,21 +295,30 @@ class TrainImageTests(unittest.TestCase):
         dependency = Path(".github/workflows/gradlab-train-dependencies.yml").read_text(
             encoding="utf-8"
         )
+        foundations = Path(".github/workflows/gradlab-train-foundations.yml").read_text(
+            encoding="utf-8"
+        )
         runtime = Path(".github/workflows/gradlab-train-image.yml").read_text(encoding="utf-8")
 
         self.assertIn("branches-ignore: [main]", dependency)
-        self.assertNotIn("workflow_call:", dependency)
-        self.assertEqual(dependency.count("runs-on: ubuntu-24.04"), 2)
-        self.assertEqual(dependency.count("docker/setup-buildx-action@v3"), 1)
-        self.assertNotIn("uses: ./.github/workflows/gradlab-train-dependencies.yml", runtime)
-        self.assertNotIn("needs: dependencies", runtime)
-        self.assertIn("name: Build GPU foundation", runtime)
-        self.assertIn("name: Build train dependencies", runtime)
+        self.assertIn(
+            "uses: ./.github/workflows/gradlab-train-foundations.yml",
+            dependency,
+        )
+        self.assertIn("workflow_call:", foundations)
+        self.assertEqual(foundations.count("runs-on: ubuntu-24.04"), 1)
+        self.assertEqual(foundations.count("docker/setup-buildx-action@v3"), 1)
+        self.assertIn("name: Build GPU foundation", foundations)
+        self.assertIn("name: Build train dependencies", foundations)
+        self.assertIn("uses: ./.github/workflows/gradlab-train-foundations.yml", runtime)
+        self.assertIn("needs: foundations", runtime)
+        self.assertNotIn("name: Build GPU foundation", runtime)
+        self.assertNotIn("name: Build train dependencies", runtime)
         self.assertEqual(runtime.count("docker/setup-buildx-action@v3"), 1)
         self.assertIn("runtime-${{ steps.runtime_meta.outputs.runtime_input_sha256 }}", runtime)
         self.assertIn('"schema_version": 6', runtime)
-        self.assertNotIn("buildcache", dependency + runtime)
-        self.assertNotIn("cache-to:", dependency + runtime)
+        self.assertNotIn("buildcache", dependency + foundations + runtime)
+        self.assertNotIn("cache-to:", dependency + foundations + runtime)
 
     def test_image_receipt_precedes_modal_readiness(self) -> None:
         workflow = Path(".github/workflows/gradlab-train-image.yml").read_text(encoding="utf-8")

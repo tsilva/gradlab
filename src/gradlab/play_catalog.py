@@ -874,8 +874,6 @@ class PlayCatalog:
         project: str,
         goal_slug: str,
         goal_variant_id: str = "",
-        goal_contract_sha256: str = "",
-        effective_goal_contract_sha256: str = "",
         metric_specs: tuple[tuple[RankCriterion, tuple[str, ...]], ...],
         fallback_metric_specs: tuple[tuple[RankCriterion, tuple[str, ...]], ...],
     ) -> str:
@@ -884,8 +882,6 @@ class PlayCatalog:
             "project": project,
             "goal_slug": goal_slug,
             "goal_variant_id": goal_variant_id,
-            "goal_contract_sha256": goal_contract_sha256,
-            "effective_goal_contract_sha256": effective_goal_contract_sha256,
             "metrics": [
                 {
                     "metric": criterion.metric,
@@ -1575,8 +1571,6 @@ class PlayCatalog:
         project: str,
         selected_goal_slug: str,
         selected_goal_variant_id: str,
-        selected_goal_contract_sha256: str,
-        selected_effective_goal_contract_sha256: str,
         metric_specs: tuple[tuple[RankCriterion, tuple[str, ...]], ...],
         fallback_metric_specs: tuple[tuple[RankCriterion, tuple[str, ...]], ...],
     ) -> tuple[dict[str, Any], ...]:
@@ -1585,22 +1579,12 @@ class PlayCatalog:
             project=project,
             selected_goal_slug=selected_goal_slug,
             selected_goal_variant_id=selected_goal_variant_id,
-            selected_goal_contract_sha256=selected_goal_contract_sha256,
-            selected_effective_goal_contract_sha256=(
-                selected_effective_goal_contract_sha256
-            ),
             metric_specs=metric_specs,
             fallback_metric_specs=fallback_metric_specs,
         )
         if control_summaries is not None:
             return control_summaries
         filters = {"config.goal_slug": selected_goal_slug} if selected_goal_slug else {}
-        if selected_goal_contract_sha256:
-            filters["config.goal_contract_sha256"] = selected_goal_contract_sha256
-        if selected_effective_goal_contract_sha256:
-            filters["config.effective_goal_contract_sha256"] = (
-                selected_effective_goal_contract_sha256
-            )
         api_runs = self._wandb_catalog_runs(
             entity=entity,
             project=project,
@@ -1690,8 +1674,6 @@ class PlayCatalog:
         project: str,
         selected_goal_slug: str,
         selected_goal_variant_id: str,
-        selected_goal_contract_sha256: str,
-        selected_effective_goal_contract_sha256: str,
         metric_specs: tuple[tuple[RankCriterion, tuple[str, ...]], ...],
         fallback_metric_specs: tuple[tuple[RankCriterion, tuple[str, ...]], ...],
     ) -> tuple[dict[str, Any], ...] | None:
@@ -1764,16 +1746,6 @@ class PlayCatalog:
                     or not isinstance(metrics, Mapping)
                 ):
                     raise ValueError("goal variant run index contains an invalid run")
-                if (
-                    selected_goal_contract_sha256
-                    and authored_hash != selected_goal_contract_sha256
-                ):
-                    continue
-                if (
-                    selected_effective_goal_contract_sha256
-                    and effective_hash != selected_effective_goal_contract_sha256
-                ):
-                    continue
                 summaries.append(
                     RunSummary(
                         entity=entity,
@@ -1820,8 +1792,6 @@ class PlayCatalog:
         project: str,
         selected_goal_slug: str,
         selected_goal_variant_id: str,
-        selected_goal_contract_sha256: str,
-        selected_effective_goal_contract_sha256: str,
         metric_specs: tuple[tuple[RankCriterion, tuple[str, ...]], ...],
         fallback_metric_specs: tuple[tuple[RankCriterion, tuple[str, ...]], ...],
     ) -> None:
@@ -1831,8 +1801,6 @@ class PlayCatalog:
                 project=project,
                 selected_goal_slug=selected_goal_slug,
                 selected_goal_variant_id=selected_goal_variant_id,
-                selected_goal_contract_sha256=selected_goal_contract_sha256,
-                selected_effective_goal_contract_sha256=(selected_effective_goal_contract_sha256),
                 metric_specs=metric_specs,
                 fallback_metric_specs=fallback_metric_specs,
             )
@@ -1853,8 +1821,6 @@ class PlayCatalog:
         project: str,
         selected_goal_slug: str,
         selected_goal_variant_id: str,
-        selected_goal_contract_sha256: str,
-        selected_effective_goal_contract_sha256: str,
         metric_specs: tuple[tuple[RankCriterion, tuple[str, ...]], ...],
         fallback_metric_specs: tuple[tuple[RankCriterion, tuple[str, ...]], ...],
     ) -> None:
@@ -1870,10 +1836,6 @@ class PlayCatalog:
                 "project": project,
                 "selected_goal_slug": selected_goal_slug,
                 "selected_goal_variant_id": selected_goal_variant_id,
-                "selected_goal_contract_sha256": selected_goal_contract_sha256,
-                "selected_effective_goal_contract_sha256": (
-                    selected_effective_goal_contract_sha256
-                ),
                 "metric_specs": metric_specs,
                 "fallback_metric_specs": fallback_metric_specs,
             },
@@ -1898,33 +1860,11 @@ class PlayCatalog:
         )
         selected_goal_slug = repository_goal.goal_slug if repository_goal else ""
         selected_goal_variant = str(goal_variant_id or "").strip()
-        selected_variant_summary: Mapping[str, Any] | None = None
-        if repository_goal is not None and selected_goal_variant:
-            variant_page = self.goal_variants(
-                entity=entity,
-                project=project,
-                goal_id=repository_goal.goal_id,
-            )
-            selected_variant_summary = next(
-                (
-                    item
-                    for item in variant_page.items
-                    if item.get("variant_id") == selected_goal_variant
-                ),
-                None,
-            )
-            if selected_variant_summary is None:
-                raise ValueError(f"repository goal has no variant {selected_goal_variant}")
-        selected_authored_hash = (
-            str(selected_variant_summary.get("goal_contract_sha256") or "")
-            if selected_variant_summary is not None
-            else ""
-        )
-        selected_effective_hash = (
-            str(selected_variant_summary.get("effective_goal_contract_sha256") or "")
-            if selected_variant_summary is not None
-            else ""
-        )
+        if selected_goal_variant and re.fullmatch(
+            r"goal-variant-(?:[0-9a-f]{24}|unknown-[0-9a-f]{16})",
+            selected_goal_variant,
+        ) is None:
+            raise ValueError("invalid goal variant id")
         rank = (repository_goal.rank or ()) if repository_goal else ()
         metric_specs = _run_metric_specs(rank) if repository_goal else ()
         fallback_metric_specs = _run_fallback_metric_specs(rank) if repository_goal else ()
@@ -1941,8 +1881,6 @@ class PlayCatalog:
             project=project,
             goal_slug=selected_goal_slug,
             goal_variant_id=selected_goal_variant,
-            goal_contract_sha256=selected_authored_hash,
-            effective_goal_contract_sha256=selected_effective_hash,
             metric_specs=metric_specs,
             fallback_metric_specs=fallback_metric_specs,
         )
@@ -1957,8 +1895,6 @@ class PlayCatalog:
                 project=project,
                 selected_goal_slug=selected_goal_slug,
                 selected_goal_variant_id=selected_goal_variant,
-                selected_goal_contract_sha256=selected_authored_hash,
-                selected_effective_goal_contract_sha256=selected_effective_hash,
                 metric_specs=metric_specs,
                 fallback_metric_specs=fallback_metric_specs,
             )
@@ -1970,8 +1906,6 @@ class PlayCatalog:
                 project=project,
                 selected_goal_slug=selected_goal_slug,
                 selected_goal_variant_id=selected_goal_variant,
-                selected_goal_contract_sha256=selected_authored_hash,
-                selected_effective_goal_contract_sha256=selected_effective_hash,
                 metric_specs=metric_specs,
                 fallback_metric_specs=fallback_metric_specs,
             )
