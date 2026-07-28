@@ -689,6 +689,8 @@ class RunSupervisor:
             "gradlab.train",
             "--train-config-json",
             str(self.config_path),
+            "--execution-mode",
+            "supervised",
         ]
         self.learner = self.runtime.start_learner(
             command,

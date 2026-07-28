@@ -21,54 +21,104 @@ from gradlab.metric_names import (
     train_early_stop_metric,
     validate_metric_payload,
 )
-from gradlab.training_metrics import EpisodeMetricsReducer
+from gradlab.training_metrics import EpisodeMetricsReducer, episode_succeeded
 
 
 TRAINING_RESULT_FILENAME = "training-result.json"
 
 
 class TerminalReason(StrEnum):
-    RESOURCE_LIMIT = "resource_limit"
+    FIRST_COMPLETION = "first_completion"
+    TRAINING_ACCEPTANCE = "deterministic_training_acceptance"
+    RESOURCE_EXHAUSTION = "resource_exhaustion"
     EARLY_STOP_FAILURE = "early_stop_failure"
     EARLY_STOP_SUCCESS = "early_stop_success"
-    ALGORITHM_SUCCESS = "algorithm_success"
-    EXTERNAL_ACCEPTANCE = "external_acceptance"
-    INTERRUPTED = "interrupted"
+    LOCAL_INTERRUPTION = "local_interruption"
+    EXTERNAL_SIGNAL = "external_signal"
     FAILED = "failed"
 
 
 @dataclass(frozen=True)
 class TrainingResult:
-    reason: TerminalReason
-    step: int
+    terminal_reason: TerminalReason
+    execution_mode: TrainingExecutionMode
+    execution_policy: Mapping[str, Any]
+    first_completion_step: int | None
+    final_step: int
+    requested_limit: int
+    execution_limit: int
     model_kind: str
     model_path: str = "final_model.zip"
 
     @property
     def status(self) -> str:
-        return "interrupted" if self.reason == TerminalReason.INTERRUPTED else "completed"
+        return (
+            "interrupted"
+            if self.terminal_reason
+            in {TerminalReason.LOCAL_INTERRUPTION, TerminalReason.EXTERNAL_SIGNAL}
+            else "completed"
+        )
 
     def to_document(self) -> dict[str, Any]:
         return {
             "document_type": "gradlab.training-result",
-            "format_version": 1,
+            "format_version": 2,
             "status": self.status,
-            "terminal_reason": self.reason.value,
-            "step": int(self.step),
+            "terminal_reason": self.terminal_reason.value,
+            "execution_mode": self.execution_mode.value,
+            "execution_policy": dict(self.execution_policy),
+            "first_completion_step": self.first_completion_step,
+            "final_step": int(self.final_step),
+            "requested_limit": int(self.requested_limit),
+            "execution_limit": int(self.execution_limit),
             "model_kind": self.model_kind,
             "model": self.model_path,
         }
 
 
-@dataclass(frozen=True)
-class TrainingLifecycleOptions:
-    console_mode: str = "plain"
-    persist_intermediate_checkpoints: bool = True
-    stop_on_first_completion: bool = False
+class TrainingExecutionMode(StrEnum):
+    LOCAL_DEMO = "local-demo"
+    SUPERVISED = "supervised"
 
-    def __post_init__(self) -> None:
-        if self.console_mode not in {"auto", "interactive", "plain", "silent"}:
-            raise ValueError("console_mode must be auto, interactive, plain, or silent")
+
+@dataclass(frozen=True)
+class TrainingExecutionPolicy:
+    mode: TrainingExecutionMode
+    console_mode: str
+    persist_intermediate_checkpoints: bool
+    stop_on_first_completion: bool
+    handle_sigint: bool
+
+    @classmethod
+    def for_mode(
+        cls,
+        mode: TrainingExecutionMode | str,
+    ) -> TrainingExecutionPolicy:
+        resolved = TrainingExecutionMode(mode)
+        if resolved == TrainingExecutionMode.LOCAL_DEMO:
+            return cls(
+                mode=resolved,
+                console_mode="auto",
+                persist_intermediate_checkpoints=False,
+                stop_on_first_completion=True,
+                handle_sigint=True,
+            )
+        return cls(
+            mode=resolved,
+            console_mode="plain",
+            persist_intermediate_checkpoints=True,
+            stop_on_first_completion=False,
+            handle_sigint=False,
+        )
+
+    def to_document(self) -> dict[str, Any]:
+        return {
+            "mode": self.mode.value,
+            "console_mode": self.console_mode,
+            "persist_intermediate_checkpoints": self.persist_intermediate_checkpoints,
+            "stop_on_first_completion": self.stop_on_first_completion,
+            "handle_sigint": self.handle_sigint,
+        }
 
 
 @dataclass(frozen=True)
@@ -423,15 +473,17 @@ class TrainingSession:
         early_stop_config: Any,
         attempt_id: str,
         reducer: EpisodeMetricsReducer,
-        options: TrainingLifecycleOptions,
+        execution_policy: TrainingExecutionPolicy,
+        completion_signal_available: bool,
         progress_sink: ProgressSink | None = None,
     ) -> None:
         self.run_dir = run_dir
         self.backend_id = backend_id
         self.stop_flag = stop_flag
         self.reducer = reducer
-        self.options = options
-        self.progress = progress_sink or progress_sink_for_mode(options.console_mode)
+        self.execution_policy = execution_policy
+        self.completion_signal_available = bool(completion_signal_available)
+        self.progress = progress_sink or progress_sink_for_mode(execution_policy.console_mode)
         self.metric_sink: MetricFrameSink = DirectMetricFrameSink(
             metric_store,
             publish=wandb_enabled,
@@ -447,11 +499,12 @@ class TrainingSession:
             run_name="",
             eval_required=False,
             publish=wandb_enabled,
-            persist_intermediate=options.persist_intermediate_checkpoints,
+            persist_intermediate=execution_policy.persist_intermediate_checkpoints,
             event=self.event,
         )
         self.budget: TrainingBudget | None = None
         self.current_step = 0
+        self.first_completion_step: int | None = None
         self.last_report_step: int | None = None
         self.last_report_payload: dict[str, int | float] = {}
         self.ready = False
@@ -555,15 +608,49 @@ class TrainingSession:
     def event(self, message: str) -> None:
         self.progress.event(message)
 
-    def should_stop_on_first_completion(self) -> bool:
-        return self.options.stop_on_first_completion
+    def telemetry_event(self, message: str) -> None:
+        if self.execution_policy.mode == TrainingExecutionMode.SUPERVISED:
+            self.progress.event(message)
+
+    def observe_completion(
+        self,
+        *,
+        step: int,
+        qualified: bool,
+    ) -> bool:
+        if not qualified or not self.completion_signal_available:
+            return False
+        if self.first_completion_step is None:
+            self.first_completion_step = int(step)
+            self.event(f"first target completion observed at step={int(step)}")
+        if self.execution_policy.stop_on_first_completion:
+            self.stop_flag.request(f"first_completion:{self.first_completion_step}")
+            return True
+        return False
+
+    def observe_episode_completions(
+        self,
+        *,
+        step: int,
+        records: Iterable[Any],
+    ) -> bool:
+        qualified = any(
+            hasattr(record, "episode_return")
+            and str(getattr(record, "start_origin", "target")) == "target"
+            and episode_succeeded(record)
+            for record in records
+        )
+        return self.observe_completion(step=step, qualified=qualified)
 
     def terminal_reason(
         self,
-        default: TerminalReason = TerminalReason.RESOURCE_LIMIT,
+        default: TerminalReason = TerminalReason.RESOURCE_EXHAUSTION,
     ) -> TerminalReason:
-        if self.stop_flag.requested and str(self.stop_flag.reason).startswith("acceptance"):
-            return TerminalReason.EXTERNAL_ACCEPTANCE
+        if (
+            self.execution_policy.stop_on_first_completion
+            and self.first_completion_step is not None
+        ):
+            return TerminalReason.FIRST_COMPLETION
         decision = self.stop_controller.decision
         if decision is not None:
             return (
@@ -572,14 +659,86 @@ class TrainingSession:
                 else TerminalReason.EARLY_STOP_FAILURE
             )
         if self.stop_flag.requested:
-            return TerminalReason.INTERRUPTED
+            if self.execution_policy.mode == TrainingExecutionMode.SUPERVISED:
+                return TerminalReason.EXTERNAL_SIGNAL
+            return TerminalReason.LOCAL_INTERRUPTION
         return default
+
+    def terminal_model_kind(self, terminal_reason: TerminalReason) -> str:
+        return "interrupted" if terminal_reason == TerminalReason.LOCAL_INTERRUPTION else "final"
+
+    def should_persist_interrupted_checkpoint(
+        self,
+        terminal_reason: TerminalReason,
+    ) -> bool:
+        return (
+            self.execution_policy.mode == TrainingExecutionMode.SUPERVISED
+            and terminal_reason == TerminalReason.EXTERNAL_SIGNAL
+        )
+
+    def result(
+        self,
+        *,
+        terminal_reason: TerminalReason,
+        final_step: int,
+        model_kind: str,
+        model_path: str = "final_model.zip",
+    ) -> TrainingResult:
+        if self.budget is None:
+            raise RuntimeError("training budget must be configured before producing a result")
+        return TrainingResult(
+            terminal_reason=terminal_reason,
+            execution_mode=self.execution_policy.mode,
+            execution_policy=self.execution_policy.to_document(),
+            first_completion_step=self.first_completion_step,
+            final_step=int(final_step),
+            requested_limit=self.budget.requested_limit,
+            execution_limit=self.budget.execution_total,
+            model_kind=model_kind,
+            model_path=model_path,
+        )
+
+    def terminal_provenance(
+        self,
+        *,
+        terminal_reason: TerminalReason,
+        final_step: int,
+    ) -> dict[str, Any]:
+        if self.budget is None:
+            raise RuntimeError(
+                "training budget must be configured before producing terminal provenance"
+            )
+        return {
+            "terminal_reason": terminal_reason.value,
+            "first_completion_step": self.first_completion_step,
+            "final_step": int(final_step),
+            "requested_limit": self.budget.requested_limit,
+            "execution_limit": self.budget.execution_total,
+        }
 
     def finalize(self, result: TrainingResult) -> None:
         if self.closed:
             raise RuntimeError("training session is already finalized")
+        if self.budget is None:
+            raise RuntimeError("training budget must be configured before finalizing")
+        if result.execution_mode != self.execution_policy.mode:
+            raise RuntimeError("training result execution mode disagrees with the session")
+        if dict(result.execution_policy) != self.execution_policy.to_document():
+            raise RuntimeError("training result execution policy disagrees with the session")
+        if (
+            result.requested_limit != self.budget.requested_limit
+            or result.execution_limit != self.budget.execution_total
+        ):
+            raise RuntimeError("training result budget disagrees with the session")
+        if result.first_completion_step != self.first_completion_step:
+            raise RuntimeError("training result completion step disagrees with the session")
+        if result.final_step != self.current_step:
+            raise RuntimeError(
+                f"training result final step {result.final_step} disagrees with "
+                f"observed step {self.current_step}"
+            )
         self.progress.update(
-            step=int(result.step),
+            step=int(result.final_step),
             metrics=self.last_report_payload or self.reducer.snapshot(),
             final=True,
         )
@@ -595,12 +754,22 @@ class TrainingSession:
             self.run_dir / TRAINING_RESULT_FILENAME,
             {
                 "document_type": "gradlab.training-result",
-                "format_version": 1,
+                "format_version": 2,
                 "status": "failed",
                 "terminal_reason": TerminalReason.FAILED.value,
-                "step": int(self.current_step),
+                "execution_mode": self.execution_policy.mode.value,
+                "execution_policy": self.execution_policy.to_document(),
+                "first_completion_step": self.first_completion_step,
+                "final_step": int(self.current_step),
+                "requested_limit": (
+                    None if self.budget is None else int(self.budget.requested_limit)
+                ),
+                "execution_limit": (
+                    None if self.budget is None else int(self.budget.execution_total)
+                ),
                 "error_type": type(exc).__name__,
                 "error": str(exc),
+                "model_kind": None,
                 "model": None,
             },
         )

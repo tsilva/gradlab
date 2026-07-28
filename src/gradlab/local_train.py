@@ -34,7 +34,11 @@ from gradlab.rom_assets import (
 from gradlab.rom_runtime import RomRuntimeBinding, bind_rom_path
 from gradlab.seeds import DEFAULT_TRAIN_SEED
 from gradlab.train import INTERNAL_LEARNER_ENV
-from gradlab.training_lifecycle import TRAINING_RESULT_FILENAME
+from gradlab.training_lifecycle import (
+    TRAINING_RESULT_FILENAME,
+    TrainingExecutionMode,
+    TrainingExecutionPolicy,
+)
 
 
 LOCAL_ROM_CACHE_ENV = "GRADLAB_ROM_CACHE_DIR"
@@ -328,6 +332,9 @@ def main(argv: list[str] | None = None) -> int:
         "document_type": "gradlab.local-run",
         "format_version": 1,
         "status": "running",
+        "training_execution": TrainingExecutionPolicy.for_mode(
+            TrainingExecutionMode.LOCAL_DEMO
+        ).to_document(),
         "recipe_ref": source.reference,
         "goal_id": goal_id,
         "recipe_id": recipe_id,
@@ -355,22 +362,15 @@ def main(argv: list[str] | None = None) -> int:
         os.environ[LOCAL_ROM_CACHE_ENV] = str(DEFAULT_LOCAL_ROM_CACHE)
     try:
         try:
-            learner_args = ["--train-config-json", str(config_path)]
-            result = (
-                learner_main(
-                    learner_args,
-                    runtime_rom_binding=runtime_rom_binding,
-                    compact_console=True,
-                    persist_intermediate_checkpoints=False,
-                    stop_on_first_completion=True,
-                )
-                if runtime_rom_binding is not None
-                else learner_main(
-                    learner_args,
-                    compact_console=True,
-                    persist_intermediate_checkpoints=False,
-                    stop_on_first_completion=True,
-                )
+            learner_args = [
+                "--train-config-json",
+                str(config_path),
+                "--execution-mode",
+                TrainingExecutionMode.LOCAL_DEMO.value,
+            ]
+            result = learner_main(
+                learner_args,
+                runtime_rom_binding=runtime_rom_binding,
             )
         except BaseException as exc:
             receipt.update(
@@ -412,7 +412,13 @@ def main(argv: list[str] | None = None) -> int:
         training_result = json.loads(result_path.read_text(encoding="utf-8"))
         terminal_status = str(training_result.get("status") or "")
         terminal_reason = str(training_result["terminal_reason"])
-        terminal_step = int(training_result["step"])
+        terminal_execution_mode = str(training_result["execution_mode"])
+        first_completion_step = training_result.get("first_completion_step")
+        if first_completion_step is not None:
+            first_completion_step = int(first_completion_step)
+        final_step = int(training_result["final_step"])
+        requested_limit = int(training_result["requested_limit"])
+        execution_limit = int(training_result["execution_limit"])
         terminal_model_kind = str(training_result["model_kind"])
     except (OSError, UnicodeError, json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
         receipt.update(
@@ -426,6 +432,17 @@ def main(argv: list[str] | None = None) -> int:
         )
         _write_receipt(run_dir, receipt)
         raise RuntimeError("local learner produced an invalid terminal result") from exc
+    if terminal_execution_mode != TrainingExecutionMode.LOCAL_DEMO.value:
+        receipt.update(
+            {
+                "status": "failed",
+                "failed_at": _utc_now(),
+                "terminal_reason": "failed",
+                "error": "learner reported the wrong execution mode",
+            }
+        )
+        _write_receipt(run_dir, receipt)
+        raise RuntimeError("local learner reported the wrong execution mode")
     if terminal_status not in {"completed", "interrupted"}:
         receipt.update(
             {
@@ -442,7 +459,10 @@ def main(argv: list[str] | None = None) -> int:
             "status": terminal_status,
             f"{terminal_status}_at": _utc_now(),
             "terminal_reason": terminal_reason,
-            "step": terminal_step,
+            "first_completion_step": first_completion_step,
+            "final_step": final_step,
+            "requested_limit": requested_limit,
+            "execution_limit": execution_limit,
             "model_kind": terminal_model_kind,
             "model": model_path.name,
         }

@@ -235,8 +235,10 @@ def test_bandit_recipe_materializes_fixed_train_and_eval_contracts() -> None:
     assert train_config["training_backend"]["id"] == "sb3.ppo"
 
 
-def test_bandit_runs_through_sb3_backend_and_records_backend_metadata(
-    tmp_path: Path, monkeypatch
+def test_bandit_local_demo_runs_to_cap_without_a_declared_success_signal(
+    tmp_path: Path,
+    monkeypatch,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     document = _bandit_recipe_document()
     recipe_path = tmp_path / "recipe.json"
@@ -267,7 +269,17 @@ def test_bandit_runs_through_sb3_backend_and_records_backend_metadata(
     path.write_text(json.dumps(config), encoding="utf-8")
 
     monkeypatch.setenv("GRADLAB_INTERNAL_LEARNER", "1")
-    assert train_main(["--train-config-json", str(path)]) == 0
+    assert (
+        train_main(
+            [
+                "--train-config-json",
+                str(path),
+                "--execution-mode",
+                "local-demo",
+            ]
+        )
+        == 0
+    )
 
     run_dir = tmp_path / "backend-smoke"
     assert (run_dir / "learner_ready.json").is_file()
@@ -275,6 +287,22 @@ def test_bandit_runs_through_sb3_backend_and_records_backend_metadata(
     metadata = load_model_metadata(run_dir / "final_model.zip")
     assert metadata["training_backend_id"] == "sb3.ppo"
     assert len(metadata["training_backend_config_hash"]) == 64
+    assert metadata["training_execution"]["mode"] == "local-demo"
+    assert metadata["training_terminal"] == {
+        "terminal_reason": "resource_exhaustion",
+        "first_completion_step": None,
+        "final_step": 64,
+        "requested_limit": 64,
+        "execution_limit": 64,
+    }
+    result = json.loads((run_dir / "training-result.json").read_text(encoding="utf-8"))
+    assert result["execution_mode"] == "local-demo"
+    assert result["requested_limit"] == 64
+    assert result["execution_limit"] == 64
+    assert not (run_dir / "checkpoints").exists()
+    output = capsys.readouterr().out
+    assert "no declared success signal" in output
+    assert "| rollout/" not in output
 
 
 def test_bandit_runs_through_a2c_backend_and_round_trips_checkpoint(
@@ -313,7 +341,17 @@ def test_bandit_runs_through_a2c_backend_and_round_trips_checkpoint(
     path.write_text(json.dumps(config), encoding="utf-8")
 
     monkeypatch.setenv("GRADLAB_INTERNAL_LEARNER", "1")
-    assert train_main(["--train-config-json", str(path)]) == 0
+    assert (
+        train_main(
+            [
+                "--train-config-json",
+                str(path),
+                "--execution-mode",
+                "supervised",
+            ]
+        )
+        == 0
+    )
 
     run_dir = tmp_path / "a2c-backend-smoke"
     model_path = run_dir / "final_model.zip"
@@ -321,6 +359,7 @@ def test_bandit_runs_through_a2c_backend_and_round_trips_checkpoint(
     assert metadata["training_backend_id"] == "sb3.a2c"
     assert metadata["algorithm_id"] == "a2c"
     assert metadata["model_class"] == "stable_baselines3.a2c.a2c.A2C"
+    assert metadata["training_execution"]["mode"] == "supervised"
     metric_store = MetricStore(run_dir / "gradlab.sqlite")
     assert metric_store.latest_metric("train/algorithm/a2c/update/value_loss") is not None
     assert metric_store.latest_metric("train/algorithm/ppo/update/value_loss") is None

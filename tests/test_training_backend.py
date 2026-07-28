@@ -209,7 +209,14 @@ def test_unavailable_backend_fails_before_run_resources_are_created() -> None:
             mock.patch.dict("os.environ", {"GRADLAB_INTERNAL_LEARNER": "1"}),
             pytest.raises(ValueError, match="unknown training backend"),
         ):
-            train_main(["--train-config-json", str(config_path)])
+            train_main(
+                [
+                    "--train-config-json",
+                    str(config_path),
+                    "--execution-mode",
+                    "supervised",
+                ]
+            )
         assert not (root / "runs" / "must-not-exist").exists()
 
 

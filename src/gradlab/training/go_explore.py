@@ -370,8 +370,9 @@ def run_go_explore(context: BackendContext) -> TrainingResult:
                 search.commit_archive(entries)
             completion_events = search.take_completion_events()
             improved = any(event.improved for event in completion_events)
-            stop_for_completion = (
-                bool(completion_events) and context.session.should_stop_on_first_completion()
+            stop_for_completion = context.session.observe_completion(
+                step=search.global_step,
+                qualified=bool(completion_events),
             )
             if np.any(observation.restart_mask) and not stop_for_completion:
                 entry_ids = search.restart(observation.restart_mask)
@@ -380,6 +381,8 @@ def run_go_explore(context: BackendContext) -> TrainingResult:
             context.session.advance(step, records)
             if stop_for_completion:
                 stopped_on_completion = True
+                break
+            if context.stop_flag.requested:
                 break
             if improved and step < budget.execution_total:
                 _save_policy(
@@ -396,7 +399,7 @@ def run_go_explore(context: BackendContext) -> TrainingResult:
                 compacted = runtime.retain_state_archive_entries(
                     tuple(cell.entry_id for cell in search.archive.values())
                 )
-                context.session.event(
+                context.session.telemetry_event(
                     "compacted ephemeral Go-Explore archive "
                     f"step={step} retained={compacted['retained_entries']} "
                     f"removed={compacted['removed_entries']}"
@@ -439,13 +442,23 @@ def run_go_explore(context: BackendContext) -> TrainingResult:
                 elapsed=time.perf_counter() - started_at,
             ),
         )
-        default_reason = (
-            TerminalReason.ALGORITHM_SUCCESS
-            if stopped_on_completion
-            else TerminalReason.RESOURCE_LIMIT
+        reason = context.session.terminal_reason(TerminalReason.RESOURCE_EXHAUSTION)
+        if context.session.should_persist_interrupted_checkpoint(reason) and checkpoint_freq > 0:
+            _save_policy(
+                search,
+                runtime,
+                context,
+                model_path=context.checkpoint_dir
+                / f"{_checkpoint_prefix(config.game)}_interrupted_"
+                f"{search.global_step}_steps.zip",
+                kind="interrupted",
+                step=search.global_step,
+            )
+        terminal_kind = context.session.terminal_model_kind(reason)
+        context.train_config["training_terminal"] = context.session.terminal_provenance(
+            terminal_reason=reason,
+            final_step=search.global_step,
         )
-        reason = context.session.terminal_reason(default_reason)
-        terminal_kind = "interrupted" if reason == TerminalReason.INTERRUPTED else "final"
         _save_policy(
             search,
             runtime,
@@ -455,9 +468,9 @@ def run_go_explore(context: BackendContext) -> TrainingResult:
             step=search.global_step,
             terminal=True,
         )
-        return TrainingResult(
-            reason=reason,
-            step=search.global_step,
+        return context.session.result(
+            terminal_reason=reason,
+            final_step=search.global_step,
             model_kind=terminal_kind,
         )
     finally:

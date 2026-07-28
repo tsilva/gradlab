@@ -27,7 +27,8 @@ from gradlab.training.go_explore import (
 from gradlab.training_backend import BackendContext, GracefulStopFlag
 from gradlab.training_lifecycle import (
     TerminalReason,
-    TrainingLifecycleOptions,
+    TrainingExecutionMode,
+    TrainingExecutionPolicy,
     TrainingSession,
 )
 from gradlab.training_metrics import EpisodeMetricsReducer
@@ -115,21 +116,25 @@ class GoExploreSearchTests(unittest.TestCase):
             with self.subTest(interrupted=interrupted), tempfile.TemporaryDirectory() as tmp:
                 checkpoints, progress, result = self._run_backend(
                     Path(tmp),
-                    persist_intermediate_checkpoints=False,
+                    execution_mode=TrainingExecutionMode.LOCAL_DEMO,
                     interrupted=interrupted,
                     completion_event=False,
-                    stop_on_first_completion=False,
                 )
 
                 self.assertEqual(len(checkpoints), 1)
                 self.assertEqual(checkpoints[0]["path"], Path(tmp) / "final_model.zip")
+                self.assertFalse((Path(tmp) / "checkpoints").exists())
                 self.assertEqual(
                     checkpoints[0]["kind"],
                     "interrupted" if interrupted else "final",
                 )
                 self.assertEqual(
-                    result.reason,
-                    TerminalReason.INTERRUPTED if interrupted else TerminalReason.RESOURCE_LIMIT,
+                    result.terminal_reason,
+                    (
+                        TerminalReason.LOCAL_INTERRUPTION
+                        if interrupted
+                        else TerminalReason.RESOURCE_EXHAUSTION
+                    ),
                 )
                 self.assertEqual(progress.n, 1 if interrupted else 2)
                 self.assertNotIn(
@@ -139,32 +144,51 @@ class GoExploreSearchTests(unittest.TestCase):
 
     def test_queued_run_preserves_intermediate_checkpoints(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            checkpoints, _progress, _result = self._run_backend(
+            checkpoints, _progress, result = self._run_backend(
                 Path(tmp),
-                persist_intermediate_checkpoints=True,
+                execution_mode=TrainingExecutionMode.SUPERVISED,
                 interrupted=False,
                 completion_event=True,
-                stop_on_first_completion=False,
             )
 
         self.assertEqual(
             [checkpoint["kind"] for checkpoint in checkpoints],
             ["checkpoint", "final"],
         )
+        self.assertEqual(result.first_completion_step, 1)
+        self.assertEqual(result.final_step, 2)
+        self.assertEqual(result.terminal_reason, TerminalReason.RESOURCE_EXHAUSTION)
+
+    def test_supervised_interruption_preserves_interrupted_and_final_models(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            checkpoints, _progress, result = self._run_backend(
+                Path(tmp),
+                execution_mode=TrainingExecutionMode.SUPERVISED,
+                interrupted=True,
+                completion_event=False,
+            )
+
+        self.assertEqual(
+            [checkpoint["kind"] for checkpoint in checkpoints],
+            ["interrupted", "final"],
+        )
+        self.assertEqual(result.terminal_reason, TerminalReason.EXTERNAL_SIGNAL)
+        self.assertEqual(result.model_kind, "final")
 
     def test_local_run_stops_on_first_completion_without_evaluation(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             checkpoints, progress, result = self._run_backend(
                 Path(tmp),
-                persist_intermediate_checkpoints=False,
+                execution_mode=TrainingExecutionMode.LOCAL_DEMO,
                 interrupted=False,
                 completion_event=True,
-                stop_on_first_completion=True,
             )
 
         self.assertEqual([checkpoint["kind"] for checkpoint in checkpoints], ["final"])
         self.assertEqual(checkpoints[0]["step"], 1)
-        self.assertEqual(result.reason, TerminalReason.ALGORITHM_SUCCESS)
+        self.assertEqual(result.terminal_reason, TerminalReason.FIRST_COMPLETION)
+        self.assertEqual(result.first_completion_step, 1)
+        self.assertEqual(result.final_step, 1)
         self.assertEqual(progress.n, 1)
         self.assertEqual(
             progress.metrics[TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_MEAN],
@@ -179,10 +203,9 @@ class GoExploreSearchTests(unittest.TestCase):
     def _run_backend(
         root: Path,
         *,
-        persist_intermediate_checkpoints: bool,
+        execution_mode: TrainingExecutionMode,
         interrupted: bool,
         completion_event: bool,
-        stop_on_first_completion: bool,
     ) -> tuple[list[dict], SimpleNamespace, object]:
         stop_flag = GracefulStopFlag()
 
@@ -322,6 +345,7 @@ class GoExploreSearchTests(unittest.TestCase):
         progress = FakeProgress()
         metric_store = FakeMetricStore()
         checkpoint_dir = root / "checkpoints"
+        policy = TrainingExecutionPolicy.for_mode(execution_mode)
         session = TrainingSession(
             run_dir=root,
             backend_id="gradlab.go-explore",
@@ -334,11 +358,8 @@ class GoExploreSearchTests(unittest.TestCase):
                 configured_starts=("Level1-1",),
                 track_success=True,
             ),
-            options=TrainingLifecycleOptions(
-                console_mode="silent",
-                persist_intermediate_checkpoints=persist_intermediate_checkpoints,
-                stop_on_first_completion=stop_on_first_completion,
-            ),
+            execution_policy=policy,
+            completion_signal_available=True,
             progress_sink=progress,
         )
         session.configure_checkpoints(run_name="run-test", eval_required=False)

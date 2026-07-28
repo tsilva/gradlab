@@ -24,8 +24,8 @@ from gradlab.training_lifecycle import (
     PlainProgressSink,
     TerminalReason,
     TrainingBudget,
-    TrainingLifecycleOptions,
-    TrainingResult,
+    TrainingExecutionMode,
+    TrainingExecutionPolicy,
     TrainingSession,
 )
 from gradlab.training_metrics import EpisodeMetricsReducer
@@ -102,6 +102,159 @@ def test_training_budget_exposes_requested_and_safe_execution_totals() -> None:
     assert budget.requested_limit == 50_000_000
     assert budget.execution_total == 50_003_968
     assert budget.step_quantum == 8_192
+
+
+def test_execution_modes_resolve_to_fixed_lifecycle_policies() -> None:
+    local = TrainingExecutionPolicy.for_mode(TrainingExecutionMode.LOCAL_DEMO)
+    supervised = TrainingExecutionPolicy.for_mode(TrainingExecutionMode.SUPERVISED)
+
+    assert local.to_document() == {
+        "mode": "local-demo",
+        "console_mode": "auto",
+        "persist_intermediate_checkpoints": False,
+        "stop_on_first_completion": True,
+        "handle_sigint": True,
+    }
+    assert supervised.to_document() == {
+        "mode": "supervised",
+        "console_mode": "plain",
+        "persist_intermediate_checkpoints": True,
+        "stop_on_first_completion": False,
+        "handle_sigint": False,
+    }
+
+
+def _session(
+    tmp_path: Path,
+    *,
+    mode: TrainingExecutionMode,
+    completion_signal_available: bool = True,
+) -> tuple[TrainingSession, GracefulStopFlag]:
+    suffix = "with-signal" if completion_signal_available else "without-signal"
+    run_dir = tmp_path / f"{mode.value}-{suffix}"
+    run_dir.mkdir(parents=True)
+    stop_flag = GracefulStopFlag()
+    session = TrainingSession(
+        run_dir=run_dir,
+        backend_id="sb3.ppo",
+        metric_store=FakeMetricStore(),
+        wandb_enabled=False,
+        stop_flag=stop_flag,
+        early_stop_config=None,
+        attempt_id="attempt-test",
+        reducer=EpisodeMetricsReducer(
+            configured_starts=("StartA",),
+            track_success=completion_signal_available,
+        ),
+        execution_policy=TrainingExecutionPolicy.for_mode(mode),
+        completion_signal_available=completion_signal_available,
+        progress_sink=MemoryProgressSink(),
+    )
+    session.configure_budget(requested_limit=10, step_quantum=4)
+    return session, stop_flag
+
+
+def test_local_completion_records_observation_and_safe_boundary_steps(tmp_path: Path) -> None:
+    session, stop_flag = _session(tmp_path, mode=TrainingExecutionMode.LOCAL_DEMO)
+    success = _episode(start="StartA", episode_return=10.0, outcome=Outcome.SUCCESS)
+
+    session.advance(2, (success,))
+    assert session.observe_episode_completions(step=2, records=(success,)) is True
+    assert stop_flag.reason == "first_completion:2"
+
+    # PPO/A2C finish the current rollout and update before returning.
+    session.advance(4)
+    result = session.result(
+        terminal_reason=session.terminal_reason(),
+        final_step=4,
+        model_kind="final",
+    )
+    assert result.terminal_reason == TerminalReason.FIRST_COMPLETION
+    assert result.first_completion_step == 2
+    assert result.final_step == 4
+
+
+def test_archive_success_and_missing_success_signals_do_not_stop_local_training(
+    tmp_path: Path,
+) -> None:
+    archive_session, archive_flag = _session(
+        tmp_path,
+        mode=TrainingExecutionMode.LOCAL_DEMO,
+    )
+    archive_success = _episode(
+        start="StartA",
+        episode_return=10.0,
+        outcome=Outcome.SUCCESS,
+        origin="archive",
+    )
+    assert archive_session.observe_episode_completions(step=2, records=(archive_success,)) is False
+    assert archive_flag.requested is False
+
+    no_signal_session, no_signal_flag = _session(
+        tmp_path,
+        mode=TrainingExecutionMode.LOCAL_DEMO,
+        completion_signal_available=False,
+    )
+    assert (
+        no_signal_session.observe_episode_completions(
+            step=2,
+            records=(
+                _episode(
+                    start="StartA",
+                    episode_return=10.0,
+                    outcome=Outcome.SUCCESS,
+                ),
+            ),
+        )
+        is False
+    )
+    assert no_signal_flag.requested is False
+    assert no_signal_session.terminal_reason() == TerminalReason.RESOURCE_EXHAUSTION
+
+
+def test_supervised_completion_continues_and_signal_reason_is_not_acceptance(
+    tmp_path: Path,
+) -> None:
+    session, stop_flag = _session(tmp_path, mode=TrainingExecutionMode.SUPERVISED)
+    success = _episode(start="StartA", episode_return=10.0, outcome=Outcome.SUCCESS)
+
+    assert session.observe_episode_completions(step=2, records=(success,)) is False
+    assert session.first_completion_step == 2
+    assert stop_flag.requested is False
+    stop_flag.request("SIGUSR1")
+    assert session.terminal_reason() == TerminalReason.EXTERNAL_SIGNAL
+    assert session.terminal_model_kind(TerminalReason.EXTERNAL_SIGNAL) == "final"
+    assert session.should_persist_interrupted_checkpoint(TerminalReason.EXTERNAL_SIGNAL) is True
+
+
+def test_completion_has_priority_over_early_stop_at_the_same_boundary(tmp_path: Path) -> None:
+    session, _stop_flag = _session(tmp_path, mode=TrainingExecutionMode.LOCAL_DEMO)
+    session.stop_controller.decision = {"outcome": "failure"}
+
+    session.observe_completion(step=4, qualified=True)
+
+    assert session.terminal_reason() == TerminalReason.FIRST_COMPLETION
+    assert session.terminal_model_kind(TerminalReason.LOCAL_INTERRUPTION) == "interrupted"
+
+
+def test_failed_session_closes_progress_and_writes_precise_result(tmp_path: Path) -> None:
+    session, _stop_flag = _session(tmp_path, mode=TrainingExecutionMode.LOCAL_DEMO)
+    session.advance(4)
+
+    session.fail(RuntimeError("learner exploded"))
+
+    assert isinstance(session.progress, MemoryProgressSink)
+    assert session.progress.closed is True
+    document = json.loads(
+        (tmp_path / "local-demo-with-signal" / TRAINING_RESULT_FILENAME).read_text(encoding="utf-8")
+    )
+    assert document["status"] == "failed"
+    assert document["terminal_reason"] == "failed"
+    assert document["execution_mode"] == "local-demo"
+    assert document["final_step"] == 4
+    assert document["requested_limit"] == 10
+    assert document["execution_limit"] == 12
+    assert document["model"] is None
 
 
 def test_plain_progress_is_bounded_and_uses_only_canonical_outcomes(
@@ -187,7 +340,8 @@ def test_shared_session_enforces_backend_conformance(
             configured_starts=("StartA",),
             track_success=True,
         ),
-        options=TrainingLifecycleOptions(console_mode="silent"),
+        execution_policy=TrainingExecutionPolicy.for_mode(TrainingExecutionMode.SUPERVISED),
+        completion_signal_available=True,
         progress_sink=progress,
     )
     session.configure_checkpoints(run_name="run-test", eval_required=False)
@@ -212,16 +366,19 @@ def test_shared_session_enforces_backend_conformance(
         session.advance(13)
 
     session.finalize(
-        TrainingResult(
-            reason=TerminalReason.RESOURCE_LIMIT,
-            step=4,
+        session.result(
+            terminal_reason=TerminalReason.RESOURCE_EXHAUSTION,
+            final_step=4,
             model_kind="final",
         )
     )
     assert progress.closed is True
     result = json.loads((run_dir / TRAINING_RESULT_FILENAME).read_text(encoding="utf-8"))
     assert result["status"] == "completed"
-    assert result["terminal_reason"] == "resource_limit"
+    assert result["terminal_reason"] == "resource_exhaustion"
+    assert result["execution_mode"] == "supervised"
+    assert result["requested_limit"] == 10
+    assert result["execution_limit"] == 12
 
 
 @pytest.mark.parametrize("persist_intermediate", (False, True))

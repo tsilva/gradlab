@@ -24,7 +24,7 @@ def _write_training_result(
     run_dir: Path,
     *,
     status: str = "completed",
-    terminal_reason: str = "resource_limit",
+    terminal_reason: str = "resource_exhaustion",
     model_kind: str = "final",
     step: int = 64,
 ) -> None:
@@ -32,10 +32,21 @@ def _write_training_result(
         json.dumps(
             {
                 "document_type": "gradlab.training-result",
-                "format_version": 1,
+                "format_version": 2,
                 "status": status,
                 "terminal_reason": terminal_reason,
-                "step": step,
+                "execution_mode": "local-demo",
+                "execution_policy": {
+                    "mode": "local-demo",
+                    "console_mode": "auto",
+                    "persist_intermediate_checkpoints": False,
+                    "stop_on_first_completion": True,
+                    "handle_sigint": True,
+                },
+                "first_completion_step": None,
+                "final_step": step,
+                "requested_limit": 64,
+                "execution_limit": 64,
                 "model_kind": model_kind,
                 "model": "final_model.zip",
             }
@@ -86,14 +97,11 @@ def test_local_train_materializes_credential_free_playable_run(
     def fake_learner(
         argv: list[str],
         *,
-        compact_console: bool,
-        persist_intermediate_checkpoints: bool,
-        stop_on_first_completion: bool,
+        runtime_rom_binding=None,
     ) -> int:
+        assert runtime_rom_binding is None
         observed_internal_values.append(os.environ.get(INTERNAL_LEARNER_ENV))
-        assert compact_console is True
-        assert persist_intermediate_checkpoints is False
-        assert stop_on_first_completion is True
+        assert argv[argv.index("--execution-mode") + 1] == "local-demo"
         config_path = Path(argv[argv.index("--train-config-json") + 1])
         config = json.loads(config_path.read_text(encoding="utf-8"))
         run_dir = Path(config["runs_dir"]) / config["run_name"]
@@ -136,6 +144,11 @@ def test_local_train_materializes_credential_free_playable_run(
     assert recipe["provenance"]["source_distribution"]["name"].lower() == "gradlab"
     assert receipt["status"] == "completed"
     assert receipt["model"] == "final_model.zip"
+    assert receipt["training_execution"]["mode"] == "local-demo"
+    assert receipt["final_step"] == 64
+    assert receipt["requested_limit"] == 64
+    assert receipt["execution_limit"] == 64
+    assert "training_execution" not in recipe["recipe"]["train_config"]
 
 
 def test_local_interruption_writes_terminal_receipt_and_is_not_auto_selected(
@@ -150,7 +163,7 @@ def test_local_interruption_writes_terminal_receipt_and_is_not_auto_selected(
         _write_training_result(
             run_dir,
             status="interrupted",
-            terminal_reason="interrupted",
+            terminal_reason="local_interruption",
             model_kind="interrupted",
             step=32,
         )
@@ -174,7 +187,7 @@ def test_local_interruption_writes_terminal_receipt_and_is_not_auto_selected(
 
     receipt = json.loads((tmp_path / "interrupted" / LOCAL_RUN_RECEIPT).read_text(encoding="utf-8"))
     assert receipt["status"] == "interrupted"
-    assert receipt["terminal_reason"] == "interrupted"
+    assert receipt["terminal_reason"] == "local_interruption"
     assert receipt["model"] == "final_model.zip"
     with pytest.raises(FileNotFoundError, match="no completed local model"):
         latest_local_recipe_model(
@@ -232,14 +245,11 @@ def test_local_mario_train_binds_registered_rom_cache(
     def fake_learner(
         argv: list[str],
         *,
-        compact_console: bool,
-        persist_intermediate_checkpoints: bool,
-        stop_on_first_completion: bool,
+        runtime_rom_binding=None,
     ) -> int:
+        assert runtime_rom_binding is None
         observed_cache.append(os.environ.get(LOCAL_ROM_CACHE_ENV))
-        assert compact_console is True
-        assert persist_intermediate_checkpoints is False
-        assert stop_on_first_completion is True
+        assert argv[argv.index("--execution-mode") + 1] == "local-demo"
         config_path = Path(argv[argv.index("--train-config-json") + 1])
         config = json.loads(config_path.read_text(encoding="utf-8"))
         assert config["rom_asset_manifest"] == manifest
@@ -299,14 +309,9 @@ def test_local_mario_train_uses_direct_rom_without_registry_or_cache_mutation(
         argv: list[str],
         *,
         runtime_rom_binding: RomRuntimeBinding,
-        compact_console: bool,
-        persist_intermediate_checkpoints: bool,
-        stop_on_first_completion: bool,
     ) -> int:
         observed_bindings.append(runtime_rom_binding)
-        assert compact_console is True
-        assert persist_intermediate_checkpoints is False
-        assert stop_on_first_completion is True
+        assert argv[argv.index("--execution-mode") + 1] == "local-demo"
         config_path = Path(argv[argv.index("--train-config-json") + 1])
         config = json.loads(config_path.read_text(encoding="utf-8"))
         assert config["rom_asset_manifest"] == manifest

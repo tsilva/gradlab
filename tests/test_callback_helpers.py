@@ -200,18 +200,29 @@ class GradLabCallbackTests(unittest.TestCase):
                 return True
 
         class RecordHelper(CallbackHelper):
+            def __init__(self, name: str) -> None:
+                super().__init__()
+                self.name = name
+
             def _on_records(self, records) -> bool:
-                calls.append(f"records:{len(records)}")
+                calls.append(f"{self.name}:{len(records)}")
                 return True
 
-        env = SimpleNamespace(drain_records=lambda: [object()])
+        env = SimpleNamespace(drain_records=lambda: (value for value in (object(),)))
         model = SimpleNamespace(env=env, logger=SimpleNamespace())
-        callback = GradLabCallback([StepHelper("first"), RecordHelper(), StepHelper("last")])
+        callback = GradLabCallback(
+            [
+                StepHelper("first"),
+                RecordHelper("records-a"),
+                RecordHelper("records-b"),
+                StepHelper("last"),
+            ]
+        )
         callback.model = model  # type: ignore[assignment]
         callback.locals = {}
 
         self.assertTrue(callback._on_step())
-        self.assertEqual(calls, ["first", "records:1", "last"])
+        self.assertEqual(calls, ["first", "records-a:1", "records-b:1", "last"])
 
 
 class RuntimeMetricsCompletionTests(unittest.TestCase):

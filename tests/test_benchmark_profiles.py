@@ -224,7 +224,10 @@ required_metrics: [train/throughput/not_real]
         self.assertIn("recipe_file", profile.payload)
         self.assertNotIn("train_config", profile.payload)
         command = build_benchmark_commands(profile)[0]
-        self.assertEqual(command.argv[-2:], ("--train-config-json", "/dev/stdin"))
+        self.assertEqual(
+            command.argv[-4:],
+            ("--train-config-json", "/dev/stdin", "--execution-mode", "supervised"),
+        )
         self.assertIsNotNone(command.stdin)
         train_config = json.loads(command.stdin)
         self.assertEqual(train_config["training_backend"]["id"], "sb3.ppo")

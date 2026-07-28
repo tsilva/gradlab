@@ -261,6 +261,18 @@ class RunSupervisorTests(unittest.TestCase):
         self.assertNotIn("discarded-prefix", tail)
         self.assertIn("latest learner traceback", tail)
 
+    def test_supervisor_starts_learner_with_explicit_execution_mode(self) -> None:
+        supervisor = self.supervisor()
+        with patch.object(
+            supervisor.runtime,
+            "start_learner",
+            return_value=object(),
+        ) as start:
+            supervisor._start_learner()
+
+        command = start.call_args.args[0]
+        self.assertEqual(command[-2:], ["--execution-mode", "supervised"])
+
     def test_training_only_contract_omits_null_eval_contract(self) -> None:
         config = {"checkpoint_eval_contract": None}
         contract = _bind_evaluation_contract(
@@ -452,10 +464,7 @@ class RunSupervisorTests(unittest.TestCase):
         )
         self.assertIsNotNone(update.stop_decision)
         supervisor.train_config = {"early_stop": machine.config}
-        decision_path = (
-            supervisor.run_dir
-            / f"early_stop_decision-{self.manifest.attempt_id}.json"
-        )
+        decision_path = supervisor.run_dir / f"early_stop_decision-{self.manifest.attempt_id}.json"
         atomic_write_json(decision_path, update.stop_decision or {})
 
         receipt = supervisor._resolve_early_stop_receipt()
@@ -472,10 +481,7 @@ class RunSupervisorTests(unittest.TestCase):
         tampered = dict(stored)
         tampered["outcome"] = "success"
         self.authority.control.put_json(
-            (
-                f"runs/{self.run_id}/attempts/"
-                f"{self.manifest.attempt_id}/early-stop.json"
-            ),
+            (f"runs/{self.run_id}/attempts/{self.manifest.attempt_id}/early-stop.json"),
             tampered,
             create_only=False,
         )
@@ -511,8 +517,7 @@ class RunSupervisorTests(unittest.TestCase):
         decision["outcome"] = "failure"
         supervisor.train_config = {"early_stop": machine.config}
         atomic_write_json(
-            supervisor.run_dir
-            / f"early_stop_decision-{self.manifest.attempt_id}.json",
+            supervisor.run_dir / f"early_stop_decision-{self.manifest.attempt_id}.json",
             decision,
         )
 
@@ -555,8 +560,7 @@ class RunSupervisorTests(unittest.TestCase):
         )
         original.train_config = {"early_stop": machine.config}
         atomic_write_json(
-            original.run_dir
-            / f"early_stop_decision-{self.manifest.attempt_id}.json",
+            original.run_dir / f"early_stop_decision-{self.manifest.attempt_id}.json",
             update.stop_decision or {},
         )
         originating_receipt = original._resolve_early_stop_receipt()

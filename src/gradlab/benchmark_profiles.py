@@ -358,7 +358,15 @@ def _train_loop_commands(profile: Mapping[str, Any]) -> list[BenchmarkCommand]:
     return [
         _command(
             "train",
-            [sys.executable, "-m", "gradlab.train", "--train-config-json", "/dev/stdin"],
+            [
+                sys.executable,
+                "-m",
+                "gradlab.train",
+                "--train-config-json",
+                "/dev/stdin",
+                "--execution-mode",
+                "supervised",
+            ],
             env={"GRADLAB_INTERNAL_LEARNER": "1"},
             stdin=json.dumps(config, sort_keys=True),
         )
@@ -384,7 +392,15 @@ def _train_loop_comparison_commands(profile: Mapping[str, Any]) -> list[Benchmar
             commands.append(
                 _command(
                     label,
-                    [sys.executable, "-m", "gradlab.train", "--train-config-json", "/dev/stdin"],
+                    [
+                        sys.executable,
+                        "-m",
+                        "gradlab.train",
+                        "--train-config-json",
+                        "/dev/stdin",
+                        "--execution-mode",
+                        "supervised",
+                    ],
                     env={"GRADLAB_INTERNAL_LEARNER": "1"},
                     stdin=json.dumps(config, sort_keys=True),
                 )

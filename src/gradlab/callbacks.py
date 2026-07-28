@@ -920,6 +920,10 @@ class RuntimeMetricsHelper(CallbackHelper):
                 episode_records.append(record)
         if self.session is not None:
             self.session.advance(self.num_timesteps, episode_records)
+            self.session.observe_episode_completions(
+                step=self.num_timesteps,
+                records=episode_records,
+            )
         else:
             self.pending_metrics.update(self.episode_metrics.consume(episode_records))
         return True
@@ -937,6 +941,13 @@ class RuntimeMetricsHelper(CallbackHelper):
             for key, value in self.pending_metrics.items():
                 self.logger.record(key, value)
         self.pending_metrics = {}
+
+    def _on_training_end(self) -> None:
+        if self.session is None:
+            return
+        current = getattr(self.logger, "name_to_value", {})
+        payload = dict(current) if isinstance(current, Mapping) else {}
+        self.session.report(step=self.num_timesteps, metrics=payload)
 
 
 class GradLabCallback(BaseCallback):
@@ -992,7 +1003,7 @@ class GradLabCallback(BaseCallback):
                     source = self._find_record_source()
                     if source is None:
                         raise RuntimeError("GradLabCallback requires GradLabVecEnv.drain_records()")
-                    records = source.drain_records()
+                    records = tuple(source.drain_records())
                 result = method(records)
             else:
                 result = method()

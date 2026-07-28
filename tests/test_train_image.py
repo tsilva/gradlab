@@ -279,7 +279,7 @@ class TrainImageTests(unittest.TestCase):
 
         # supermariobrosnes-turbo uses Textual for its runtime state tooling.
         self.assertIn("textual==", dependencies)
-        self.assertIn("vizdoom-turbo==1.3.0.post11", dependencies)
+        self.assertIn("vizdoom-turbo==1.3.0.post12", dependencies)
         self.assertNotIn("wandb-workspaces==", train)
         self.assertIn("torch==2.12.0", gpu)
         train_lines = set(train.splitlines())
