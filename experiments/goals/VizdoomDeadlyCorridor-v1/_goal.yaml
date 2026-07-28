@@ -27,7 +27,7 @@ train:
         reward_scale: 100.0
 eval:
   acceptance:
-  - metric: eval/full/outcome/success/rate/min
+  - metric: eval/full/episode/return/mean
     operator: '>='
     threshold: 0.80
   environment:

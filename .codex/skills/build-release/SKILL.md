@@ -39,16 +39,15 @@ pushing a release tag publishes externally.
    Preserve failed artifacts and exact error output for diagnosis.
 
 The helper requires matching project/import/lock versions, an unused PyPI version,
-clean artifact names and metadata, no legacy `rlab` branding in published content,
-`twine check`, and a dependency-free wheel smoke test.
+clean artifact names and metadata, `twine check`, and a dependency-free wheel
+smoke test.
 
 ## Publish from a tag
 
 Only publish source that has already passed a local candidate build.
 
 1. Require a clean worktree and a branch synchronized with its upstream.
-2. Confirm the GitHub repository is the intended GradLab repository, not the old
-   `rlab` remote.
+2. Confirm the GitHub repository is the intended GradLab repository.
 3. Confirm `pyproject.toml`, `src/gradlab/__init__.py`, and the root package entry
    in `uv.lock` all equal `X.Y.Z`.
 4. Confirm `https://pypi.org/pypi/gradlab/json` has no files for `X.Y.Z`.

@@ -15,12 +15,7 @@ const CUSTOM_ID = "panel-00000000-0000-4000-8000-000000000000";
 test("default workspace is a v4 collection of typed panel instances", () => {
   const workspace = createDefaultWorkspace({ writer: "main" });
   assert.equal(workspace.version, WORKSPACE_VERSION);
-  assert.equal(workspace.panels.reward.type, "telemetry");
-  assert.equal(workspace.panels.reward.builtin, true);
-  assert.deepEqual(
-    workspace.panels.reward.config.blocks.map((block) => block.kind),
-    ["stats"],
-  );
+  assert.equal(Object.hasOwn(workspace.panels, "reward"), false);
   assert.deepEqual(
     ["value", "step-reward", "episode-return"].map(
       (id) => workspace.panels[id].config.blocks.length,
@@ -45,7 +40,7 @@ test("default workspace is a v4 collection of typed panel instances", () => {
     x: 4,
     y: 15,
     w: 4,
-    h: 9,
+    h: 7,
     visible: true,
     window: "main",
   });
@@ -55,7 +50,7 @@ test("paired workspace gives every panel in a logical row the same height", () =
   const workspace = createDefaultWorkspace({ paired: true });
   const rows = [
     ["game", "controls"],
-    ["policy", "reward", "actions"],
+    ["policy", "actions"],
     ["value", "step-reward", "episode-return"],
     ["observation", "signals", "events"],
   ];
@@ -65,6 +60,67 @@ test("paired workspace gives every panel in a logical row the same height", () =
     assert.equal(new Set(placements.map(({ h }) => h)).size, 1, `${ids} h`);
     assert.equal(new Set(placements.map(({ window }) => window)).size, 1, `${ids} window`);
   });
+  assert.deepEqual(
+    ["policy", "actions"].map((id) => workspace.panels[id].placement.w),
+    [6, 6],
+  );
+});
+
+test("retired reward summary panels are removed from saved workspaces", () => {
+  const workspace = createDefaultWorkspace();
+  workspace.panels.reward = {
+    type: "telemetry",
+    title: "Reward summary",
+    config: {
+      blocks: [{ kind: "stats", metrics: ["reward/provider"] }],
+    },
+    builtin: true,
+    placement: {
+      x: 4,
+      y: 0,
+      w: 4,
+      h: 8,
+      visible: true,
+      window: "stats",
+    },
+  };
+
+  assert.equal(
+    Object.hasOwn(normalizeWorkspace(workspace).panels, "reward"),
+    false,
+  );
+});
+
+test("legacy default chart rows adopt the compact panel height", () => {
+  for (const paired of [false, true]) {
+    const workspace = createDefaultWorkspace({ paired });
+    const rowTop = workspace.panels.value.placement.y;
+    const rowWindow = workspace.panels.value.placement.window;
+    for (const id of ["value", "step-reward", "episode-return"]) {
+      workspace.panels[id].placement.h = 9;
+    }
+    for (const [id, panel] of Object.entries(workspace.panels)) {
+      if (
+        !["value", "step-reward", "episode-return"].includes(id)
+        && panel.placement.window === rowWindow
+        && panel.placement.y >= rowTop + 7
+      ) {
+        panel.placement.y += 2;
+      }
+    }
+
+    const normalized = normalizeWorkspace(workspace, { paired });
+    assert.deepEqual(
+      ["value", "step-reward", "episode-return"].map(
+        (id) => normalized.panels[id].placement.h,
+      ),
+      [7, 7, 7],
+    );
+    assert.equal(
+      normalized.panels.raw.placement.y,
+      paired ? 23 : 30,
+    );
+  }
 });
 
 test("legacy workspace data is deliberately replaced instead of migrated", () => {

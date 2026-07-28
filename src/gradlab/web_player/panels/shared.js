@@ -12,6 +12,12 @@ export function timelineLabel(snapshot) {
   return `STEP ${text(displayedStep(snapshot))}`;
 }
 
+export function setSvgUseHref(element, href) {
+  if (element.getAttribute("href") === href) return false;
+  element.setAttribute("href", href);
+  return true;
+}
+
 export function number(value, digits = 3) {
   return Number.isFinite(Number(value)) ? Number(value).toFixed(digits) : "—";
 }

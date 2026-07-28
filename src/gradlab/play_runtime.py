@@ -87,9 +87,7 @@ def resolve_playback_rom_binding(
     provider = resolve_env_provider(env_provider)
     if rom_path is not None:
         if not provider.requires_external_rom_asset:
-            raise ValueError(
-                f"--rom is not valid for ROM-free provider {provider.provider_id!r}"
-            )
+            raise ValueError(f"--rom is not valid for ROM-free provider {provider.provider_id!r}")
         direct_manifest = direct_rom_asset_manifest(game, rom_path)
         binding_manifest = direct_manifest
         if asset is not None:
@@ -225,98 +223,85 @@ class PlaybackLoader:
         args.model = str(source.model_path)
 
         progress("verifying", "Validating playback contract")
-        contract: Mapping[str, Any] | None = None
-        termination_source = "training"
-        contract_details: dict[str, Any] = {
-            "mode": "training",
-            "available_modes": ["training"],
-            "matches_training": False,
-            "comparison_reasons": ["checkpoint has no portable training contract"],
-        }
-        value_contract: dict[str, Any] | None = None
-        if source.bundle is not None:
-            requested_mode = str(spec.contract_mode or "training")
-            if requested_mode not in {"training", "evaluation", "counterfactual"}:
-                raise ValueError(f"unsupported playback contract mode {requested_mode!r}")
-            base_mode = "evaluation" if requested_mode == "evaluation" else "training"
-            contract = playback_contract(source.bundle.recipe, mode=base_mode)
-            recipe = source.bundle.recipe.get("recipe", {})
-            value_contract = critic_value_contract(source.bundle.recipe)
-            contract_audit = playback_contract_audit(source.bundle.recipe)
-            active_environment = deepcopy(dict(contract["environment"]))
-            if requested_mode == "counterfactual":
-                if spec.reward_clip_override is None:
-                    raise ValueError(
-                        "counterfactual playback requires an explicit reward clipping override"
-                    )
-                task = active_environment.get("task")
-                if not isinstance(task, dict):
-                    raise ValueError("playback environment has no configurable task reward")
-                reward = task.get("reward")
-                if not isinstance(reward, dict):
-                    raise ValueError("playback environment has no configurable reward contract")
-                reward["reward_clip"] = bool(spec.reward_clip_override)
-            artifact_config = env_config_from_config_dict(active_environment)
-            if artifact_config is None:
-                raise ValueError("policy bundle recipe has no playback environment")
-            artifact_config = resolve_env_config(artifact_config)
-            from gradlab.env_identity import policy_environment_hash
+        requested_mode = str(spec.contract_mode or "training")
+        if requested_mode not in {"training", "evaluation", "counterfactual"}:
+            raise ValueError(f"unsupported playback contract mode {requested_mode!r}")
+        base_mode = "evaluation" if requested_mode == "evaluation" else "training"
+        contract = playback_contract(source.bundle.recipe, mode=base_mode)
+        recipe = source.bundle.recipe.get("recipe", {})
+        value_contract = critic_value_contract(source.bundle.recipe)
+        contract_audit = playback_contract_audit(source.bundle.recipe)
+        active_environment = deepcopy(dict(contract["environment"]))
+        if requested_mode == "counterfactual":
+            if spec.reward_clip_override is None:
+                raise ValueError(
+                    "counterfactual playback requires an explicit reward clipping override"
+                )
+            task = active_environment.get("task")
+            if not isinstance(task, dict):
+                raise ValueError("playback environment has no configurable task reward")
+            reward = task.get("reward")
+            if not isinstance(reward, dict):
+                raise ValueError("playback environment has no configurable reward contract")
+            reward["reward_clip"] = bool(spec.reward_clip_override)
+        artifact_config = env_config_from_config_dict(active_environment)
+        if artifact_config is None:
+            raise ValueError("policy bundle recipe has no playback environment")
+        artifact_config = resolve_env_config(artifact_config)
+        from gradlab.env_identity import policy_environment_hash
 
-            active_hash = policy_environment_hash(env_config_metadata(artifact_config))
-            training_hash = str(contract["training_policy_environment_hash"])
-            evaluation_available = isinstance(recipe, Mapping) and isinstance(
-                recipe.get("eval"), Mapping
+        active_hash = policy_environment_hash(env_config_metadata(artifact_config))
+        training_hash = str(contract["training_policy_environment_hash"])
+        evaluation_available = isinstance(recipe, Mapping) and isinstance(
+            recipe.get("eval"), Mapping
+        )
+        evaluation_matches_training: bool | None = None
+        if evaluation_available:
+            evaluation_matches_training = bool(
+                playback_contract(source.bundle.recipe, mode="evaluation")["matches_training"]
             )
-            evaluation_matches_training: bool | None = None
-            if evaluation_available:
-                evaluation_matches_training = bool(
-                    playback_contract(source.bundle.recipe, mode="evaluation")["matches_training"]
-                )
-            available_modes = ["training"]
-            if evaluation_available:
-                available_modes.append("evaluation")
-            available_modes.append("counterfactual")
-            comparison_reasons = (
-                []
-                if active_hash == training_hash
-                else ["active policy environment differs from training"]
+        available_modes = ["training"]
+        if evaluation_available:
+            available_modes.append("evaluation")
+        available_modes.append("counterfactual")
+        comparison_reasons = (
+            []
+            if active_hash == training_hash
+            else ["active policy environment differs from training"]
+        )
+        contract_details: dict[str, Any] = {
+            "mode": requested_mode,
+            "available_modes": available_modes,
+            "reward_clip_override": spec.reward_clip_override,
+            "policy_environment_hash": active_hash,
+            "training_policy_environment_hash": training_hash,
+            "matches_training": not comparison_reasons,
+            "comparison_reasons": comparison_reasons,
+            "evaluation_matches_training": evaluation_matches_training,
+            "legacy_mismatch": bool(evaluation_available and evaluation_matches_training is False),
+            "mismatch_paths": list(contract_audit["mismatch_paths"]),
+            "legacy_override_provenance": bool(contract_audit["legacy_override_provenance"]),
+            "requested_policy_override_paths": list(
+                contract_audit["requested_policy_override_paths"]
+            ),
+        }
+        termination_source = requested_mode
+        if not self.explicit_seed:
+            if not isinstance(recipe, Mapping):
+                raise ValueError("policy bundle recipe is invalid")
+            args.seed = _implicit_playback_seed(
+                recipe,
+                evaluation_result_seed=spec.seed,
             )
-            contract_details = {
-                "mode": requested_mode,
-                "available_modes": available_modes,
-                "reward_clip_override": spec.reward_clip_override,
-                "policy_environment_hash": active_hash,
-                "training_policy_environment_hash": training_hash,
-                "matches_training": not comparison_reasons,
-                "comparison_reasons": comparison_reasons,
-                "evaluation_matches_training": evaluation_matches_training,
-                "legacy_mismatch": bool(
-                    evaluation_available and evaluation_matches_training is False
-                ),
-                "mismatch_paths": list(contract_audit["mismatch_paths"]),
-                "legacy_override_provenance": bool(contract_audit["legacy_override_provenance"]),
-                "requested_policy_override_paths": list(
-                    contract_audit["requested_policy_override_paths"]
-                ),
-            }
-            termination_source = requested_mode
-            if not self.explicit_seed:
-                if not isinstance(recipe, Mapping):
-                    raise ValueError("policy bundle recipe is invalid")
-                args.seed = _implicit_playback_seed(
-                    recipe,
-                    evaluation_result_seed=spec.seed,
-                )
         if args.env_provider:
             artifact_config = resolve_env_config(
                 replace(artifact_config, env_provider=str(args.env_provider))
             )
-            if source.bundle is not None:
-                contract_details["mode"] = "counterfactual"
-                contract_details["matches_training"] = False
-                contract_details["comparison_reasons"] = [
-                    "environment provider override differs from training"
-                ]
+            contract_details["mode"] = "counterfactual"
+            contract_details["matches_training"] = False
+            contract_details["comparison_reasons"] = [
+                "environment provider override differs from training"
+            ]
         termination_base_config = artifact_config
         enabled_termination_ids = (
             () if args.continuous_play else configured_termination_ids(termination_base_config)
@@ -417,19 +402,16 @@ class PlaybackLoader:
                 None,
             )
             saved_action_contract = None
-            if candidate.source.bundle is not None:
-                provenance = candidate.source.bundle.model.get("provenance")
-                training_metadata = (
-                    provenance.get("training_metadata")
-                    if isinstance(provenance, Mapping)
-                    else None
-                )
-                if isinstance(training_metadata, Mapping) and isinstance(
-                    training_metadata.get("action_contract"),
-                    Mapping,
-                ):
-                    saved_action_contract = training_metadata["action_contract"]
-            action_compatibility = assert_action_contract_compatible(
+            provenance = candidate.source.bundle.model.get("provenance")
+            training_metadata = (
+                provenance.get("training_metadata") if isinstance(provenance, Mapping) else None
+            )
+            if isinstance(training_metadata, Mapping) and isinstance(
+                training_metadata.get("action_contract"),
+                Mapping,
+            ):
+                saved_action_contract = training_metadata["action_contract"]
+            assert_action_contract_compatible(
                 saved_action_contract,
                 runtime_action_contract,
             )
@@ -438,44 +420,36 @@ class PlaybackLoader:
                 policy_env.action_space,
                 runtime_action_contract,
             )
+            model_document = candidate.source.bundle.model
+            policy_value = model_document.get("policy")
+            policy = policy_value if isinstance(policy_value, Mapping) else {}
+            provenance_value = model_document.get("provenance")
+            provenance = provenance_value if isinstance(provenance_value, Mapping) else {}
             policy_provenance: dict[str, Any] = {
-                "action_contract": action_compatibility,
+                "training_backend_id": str(policy.get("training_backend_id") or ""),
             }
-            if candidate.source.bundle is not None:
-                model_document = candidate.source.bundle.model
-                policy_value = model_document.get("policy")
-                policy = policy_value if isinstance(policy_value, Mapping) else {}
-                provenance_value = model_document.get("provenance")
-                provenance = (
-                    provenance_value if isinstance(provenance_value, Mapping) else {}
-                )
-                policy_provenance = {
-                    "training_backend_id": str(policy.get("training_backend_id") or ""),
+            search_algorithm_id = str(provenance.get("search_algorithm_id") or "").strip()
+            if search_algorithm_id:
+                policy_provenance["search_algorithm_id"] = search_algorithm_id
+            summary_value = provenance.get("state_archive_summary")
+            if isinstance(summary_value, Mapping):
+                safe_summary_fields = {
+                    "semantic_id",
+                    "schema_version",
+                    "persistence",
+                    "provider_id",
+                    "codec_id",
+                    "compatibility_id",
+                    "entry_count",
+                    "blob_count",
+                    "blob_bytes",
+                    "view_ids",
                 }
-                search_algorithm_id = str(
-                    provenance.get("search_algorithm_id") or ""
-                ).strip()
-                if search_algorithm_id:
-                    policy_provenance["search_algorithm_id"] = search_algorithm_id
-                summary_value = provenance.get("state_archive_summary")
-                if isinstance(summary_value, Mapping):
-                    safe_summary_fields = {
-                        "semantic_id",
-                        "schema_version",
-                        "persistence",
-                        "provider_id",
-                        "codec_id",
-                        "compatibility_id",
-                        "entry_count",
-                        "blob_count",
-                        "blob_bytes",
-                        "view_ids",
-                    }
-                    policy_provenance["state_archive_summary"] = {
-                        str(key): deepcopy(value)
-                        for key, value in summary_value.items()
-                        if key in safe_summary_fields
-                    }
+                policy_provenance["state_archive_summary"] = {
+                    str(key): deepcopy(value)
+                    for key, value in summary_value.items()
+                    if key in safe_summary_fields
+                }
             session = _PlaybackSession(
                 model=model,
                 env=policy_env,

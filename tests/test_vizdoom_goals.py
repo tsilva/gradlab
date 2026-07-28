@@ -7,10 +7,17 @@ from gradlab.recipe_documents import compose_train_document
 
 GOALS_ROOT = Path("experiments/goals")
 EXPECTED_GOALS = {
+    "VizdoomBasic-v1": {
+        "timesteps": 2_000_000,
+        "event": "monster_killed",
+        "acceptance_metric": "eval/full/episode/return/mean",
+        "acceptance_threshold": 0.95,
+        "reward_scale": 100.0,
+    },
     "VizdoomDeadlyCorridor-v1": {
         "timesteps": 25_000_000,
         "event": "vest_reached",
-        "acceptance_metric": "eval/full/outcome/success/rate/min",
+        "acceptance_metric": "eval/full/episode/return/mean",
         "acceptance_threshold": 0.80,
         "reward_scale": 100.0,
     },
@@ -84,6 +91,8 @@ def test_vizdoom_goal_has_complete_evaluated_ppo_contract(
     assert goal["goal_id"] == goal_id
     assert document["recipe_id"] == "ppo"
     assert train_config["timesteps"] == expected["timesteps"]
+    assert train_config["checkpoint_eval_backend"] == "none"
+    assert train_config["stop_on_acceptance"] is False
     assert train_config["env_provider"] == "vizdoom-turbo"
     assert train_config["game"] == goal_id
     assert train_config["state"] == "default"

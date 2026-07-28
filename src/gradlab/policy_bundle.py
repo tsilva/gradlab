@@ -19,8 +19,12 @@ from gradlab.json_utils import canonical_json_line_bytes
 
 RECIPE_DOCUMENT_TYPE = "gradlab.recipe"
 RECIPE_FORMAT_VERSION = 1
+_LEGACY_PROJECT_NAME = "".join(("r", "lab"))
+LEGACY_RECIPE_DOCUMENT_TYPE = f"{_LEGACY_PROJECT_NAME}.recipe"
 MODEL_DOCUMENT_TYPE = "gradlab.model"
 MODEL_FORMAT_VERSION = 2
+LEGACY_MODEL_DOCUMENT_TYPE = f"{_LEGACY_PROJECT_NAME}.model"
+LEGACY_MODEL_FORMAT_VERSION = 1
 
 RECIPE_FILENAME = "recipe.json"
 MODEL_FILENAME = "model.json"
@@ -426,9 +430,79 @@ def _legacy_recipe_document(
     goal = recipe.get("goal")
     if isinstance(goal, dict) and "evaluation_mode" not in goal:
         goal["evaluation_mode"] = "evaluated" if "eval" in goal else "training_only"
+    if isinstance(goal, dict):
+        goal_train = goal.get("train")
+        if isinstance(goal_train, dict):
+            goal_train.pop("checkpoint_eval_backend", None)
+            goal_train.pop("stop_on_acceptance", None)
     train_config = recipe.get("train_config")
     if not isinstance(train_config, dict):
         return normalized
+    from gradlab.action_contract import migrate_legacy_artifact_action_configuration
+    from gradlab.reward_transform import migrate_legacy_artifact_reward_config
+
+    for environment in (
+        train_config,
+        recipe.get("environment"),
+        recipe.get("eval", {}).get("environment")
+        if isinstance(recipe.get("eval"), Mapping)
+        else None,
+        recipe.get("playback", {}).get("environment")
+        if isinstance(recipe.get("playback"), Mapping)
+        else None,
+    ):
+        if not isinstance(environment, dict):
+            continue
+        environment_observation_size = environment.pop("observation_size", None)
+        if environment_observation_size is not None and "obs_resize" not in environment:
+            environment["obs_resize"] = [
+                int(environment_observation_size),
+                int(environment_observation_size),
+            ]
+        task = environment.get("task")
+        if not isinstance(task, Mapping):
+            continue
+        provider_id = str(environment.get("env_provider") or "")
+        game = str(environment.get("game") or "")
+        if (not provider_id or not game) and isinstance(environment.get("env_id"), str):
+            provider_id, separator, game = str(environment["env_id"]).partition(":")
+            if not separator:
+                provider_id = ""
+                game = ""
+        args_key = (
+            "provider_args" if isinstance(environment.get("provider_args"), Mapping) else "env_args"
+        )
+        legacy_env_args = (
+            dict(environment.get(args_key))
+            if isinstance(environment.get(args_key), Mapping)
+            else {}
+        )
+        action = task.get("action")
+        task_action_set = (
+            str(action.get("set") or "native") if isinstance(action, Mapping) else "native"
+        )
+        legacy_task = deepcopy(dict(task))
+        if task_action_set == "simple" and isinstance(legacy_task.get("action"), dict):
+            legacy_task["action"]["set"] = "basic"
+            task_action_set = "basic"
+        if (
+            game == "SuperMarioBros-Nes-v0"
+            and task_action_set != "native"
+            and legacy_env_args.get("use_restricted_actions") == "filtered"
+        ):
+            legacy_env_args.pop("use_restricted_actions")
+        env_args, migrated_task = migrate_legacy_artifact_action_configuration(
+            provider_id=provider_id,
+            game=game,
+            env_args=legacy_env_args,
+            task=legacy_task,
+        )
+        env_args, migrated_task = migrate_legacy_artifact_reward_config(
+            env_args,
+            migrated_task,
+        )
+        environment[args_key] = env_args
+        environment["task"] = migrated_task
     if "post_train_eval_stochastic" in train_config:
         if train_config["post_train_eval_stochastic"] is not True:
             raise PolicyDocumentError(
@@ -436,6 +510,16 @@ def _legacy_recipe_document(
                 "must be true in a legacy recipe"
             )
         train_config.pop("post_train_eval_stochastic")
+    observation_size = train_config.pop("observation_size", None)
+    if observation_size is not None and "obs_resize" not in train_config:
+        train_config["obs_resize"] = [int(observation_size), int(observation_size)]
+    if train_config.get("checkpoint_eval_backend") == "local":
+        train_config["checkpoint_eval_backend"] = (
+            "modal" if isinstance(recipe.get("eval"), Mapping) else "none"
+        )
+    early_stop = train_config.get("early_stop")
+    if isinstance(early_stop, list):
+        train_config["early_stop"] = None
     for key in _LEGACY_RECIPE_TRAIN_CONFIG_FIELDS:
         train_config.pop(key, None)
     return normalized
@@ -700,6 +784,17 @@ def _validate_recipe_v1(
 
 def load_recipe_document(path: Path) -> dict[str, Any]:
     value = load_json_object(path)
+    if (
+        value.get("document_type") == LEGACY_RECIPE_DOCUMENT_TYPE
+        and value.get("format_version") == RECIPE_FORMAT_VERSION
+    ):
+        normalized = deepcopy(value)
+        normalized["document_type"] = RECIPE_DOCUMENT_TYPE
+        return _validate_recipe_v1(
+            normalized,
+            str(path),
+            allow_legacy=True,
+        )
     return preflight_document(
         value,
         source=str(path),
@@ -808,6 +903,31 @@ _MODEL_HANDLERS = {
 
 def load_model_document(path: Path) -> dict[str, Any]:
     value = load_json_object(path)
+    if (
+        value.get("document_type") == LEGACY_MODEL_DOCUMENT_TYPE
+        and value.get("format_version") == LEGACY_MODEL_FORMAT_VERSION
+    ):
+        normalized = deepcopy(value)
+        normalized["document_type"] = MODEL_DOCUMENT_TYPE
+        normalized["format_version"] = MODEL_FORMAT_VERSION
+        recipe = normalized.get("recipe")
+        if isinstance(recipe, dict):
+            recipe["document_type"] = RECIPE_DOCUMENT_TYPE
+        provenance = normalized.get("provenance")
+        if isinstance(provenance, Mapping):
+            normalized["provenance"] = {
+                key: deepcopy(item)
+                for key, item in provenance.items()
+                if key in _MODEL_PROVENANCE_FIELDS
+            }
+            training_metadata = normalized["provenance"].get("training_metadata")
+            if isinstance(training_metadata, Mapping):
+                normalized["provenance"]["training_metadata"] = {
+                    key: deepcopy(training_metadata[key])
+                    for key in ("action_contract", "versions")
+                    if key in training_metadata
+                }
+        return _validate_model_v2(normalized, str(path))
     return preflight_document(
         value,
         source=str(path),

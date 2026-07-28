@@ -46,7 +46,7 @@ const STATIC_DESCRIPTORS = Object.freeze({
   },
   "policy/realized-return": {
     label: "Realized return-to-go G(s)",
-    shortLabel: "Realized G(s)",
+    shortLabel: "G(s)",
     type: "scalar",
     unit: "value",
     phase: "post-episode",

@@ -3,12 +3,13 @@ defaults:
 - _self_
 recipe_id: ppo
 description: >-
-  Seed {{ seed }} trains PPO to eliminate the single monster in {{ goal_id }} from pixels, with
-  stochastic 100-episode evaluation and checkpoint promotion at 95% success. Native rewards are
-  divided by 100 because paired runs indicated that excessive critic-target variance was
-  compromising PPO's shared encoder and collapsing the policy; reward clipping is the supported
-  bounded alternative.
+  Seed {{ seed }} trains PPO to eliminate the single monster in {{ goal_id }} from pixels until the
+  timestep cap or return plateau. This run is training-only; goal-owned evaluation remains
+  available for later explicit use. Native rewards are divided by 100 because paired runs indicated
+  that excessive critic-target variance was compromising PPO's shared encoder and collapsing the
+  policy; reward clipping is the supported bounded alternative.
 train:
+  checkpoint_eval_backend: none
   timesteps: 2000000
   early_stop:
     conditions:

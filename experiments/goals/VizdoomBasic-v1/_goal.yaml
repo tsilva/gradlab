@@ -24,6 +24,10 @@ train:
       reward:
         reward_scale: 100.0
 eval:
+  acceptance:
+  - metric: eval/full/episode/return/mean
+    operator: '>='
+    threshold: 0.95
   environment:
     env_config:
       env_args: *basic_env_args

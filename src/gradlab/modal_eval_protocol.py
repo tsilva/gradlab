@@ -75,20 +75,14 @@ def build_execution_contract(
             label="evaluation contract hash",
         ),
         "asset": (
-            {
-                str(key): value
-                for key, value in asset_manifest.items()
-                if str(key) != "object_uri"
-            }
+            {str(key): value for key, value in asset_manifest.items() if str(key) != "object_uri"}
             if asset_manifest is not None
             else None
         ),
     }
     if contract["episodes"] < 1 or contract["n_envs"] < 1 or contract["max_steps"] < 1:
         raise ValueError("eval episodes, n_envs, and max_steps must be positive")
-    if not str(runtime_image_ref).startswith("docker:") or "@sha256:" not in str(
-        runtime_image_ref
-    ):
+    if not str(runtime_image_ref).startswith("docker:") or "@sha256:" not in str(runtime_image_ref):
         raise ValueError("eval runtime image must be an immutable docker reference")
     if asset_manifest is not None and not str(asset_manifest.get("sha256") or ""):
         raise ValueError("eval asset manifest must include sha256")
@@ -137,9 +131,9 @@ def validate_attempt_result(
     ):
         if name in contract and str(result.get(name) or "") != str(contract[name]):
             raise ValueError(f"eval result {message} mismatch")
-    if "recipe_format_version" in contract and int(
-        result.get("recipe_format_version") or 0
-    ) != int(contract["recipe_format_version"]):
+    if "recipe_format_version" in contract and int(result.get("recipe_format_version") or 0) != int(
+        contract["recipe_format_version"]
+    ):
         raise ValueError("eval result recipe format version mismatch")
     if int(result.get("contract_schema_version") or 0) != int(contract["schema_version"]):
         raise ValueError("eval result contract schema version mismatch")
@@ -178,27 +172,25 @@ def validate_attempt_result(
         raise ValueError("acceptance result metrics must be a mapping")
     _validate_finite(metrics, label="eval metrics")
     _validate_finite(validated_rows, label="eval episodes")
-    if verdict == "rejected":
+    fail_fast = str(contract.get("evidence_policy", {}).get("fail_fast") or "")
+    if fail_fast == "first_failed_episode" and verdict == "rejected":
         if any(str(name).startswith("eval/full/") for name in metrics):
             raise ValueError("partial rejection must not emit completed eval/full metrics")
         if int(computed["failure_count"]) < 1:
             raise ValueError("acceptance rejection has no failed episode")
     else:
         accepted, _observed = evaluate_acceptance(computed, contract=contract)
-        if accepted is not True:
-            raise ValueError("accepted evidence does not satisfy its acceptance rules")
-        for name in (
-            "eval/full/outcome/success/rate/min",
-            "eval/full/outcome/success/rate/mean",
-        ):
-            if name in computed and (
-                name not in metrics
-                or not math.isclose(
-                    float(metrics[name]),
-                    float(computed[name]),
-                    rel_tol=0.0,
-                    abs_tol=1e-12,
-                )
+        if accepted != (verdict == "accepted"):
+            raise ValueError("acceptance verdict does not match its acceptance rules")
+        for rule in contract["acceptance"]:
+            name = str(rule["metric"])
+            if name not in computed:
+                raise ValueError("acceptance result is missing its decisive aggregate")
+            if name not in metrics or not math.isclose(
+                float(metrics[name]),
+                float(computed[name]),
+                rel_tol=0.0,
+                abs_tol=1e-12,
             ):
                 raise ValueError("acceptance result decisive metric mismatch")
     validated_result = dict(result)

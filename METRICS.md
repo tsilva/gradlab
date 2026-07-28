@@ -1,4 +1,4 @@
-# Metrics schema v10
+# Metrics schema v11
 
 This file is the human contract for gradlab telemetry. The Python registry in
 `src/gradlab/metric_names.py` is the executable source of truth. Every emitted metric must match an
@@ -17,7 +17,7 @@ exact registry entry or a bounded template.
 - Public model R2 contains immutable checkpoint closures and a mutable no-cache run index. Private
   eval R2 contains intents, results, and episode evidence. Private control R2 contains leases,
   journals, promotions, and terminal receipts.
-- W&B config contains run-defining dimensions: `metrics_schema_version: 10`, `training_backend_id`,
+- W&B config contains run-defining dimensions: `metrics_schema_version: 11`, `training_backend_id`,
   `training_backend_config_hash`, `algorithm_id`, goal,
   environment, starts, seed, frame skip, environment count, hyperparameters, eval protocol, and
   runtime versions.
@@ -84,7 +84,7 @@ X-axis. Each producer writes only its applicable scientific axis; durable delive
 `orchestration/event_seq`.
 
 Purged legacy W&B and R2 state has no compatibility guarantee. Newly materialized runs declare
-schema v10.
+schema v11.
 
 ## Research interpretation
 
@@ -161,10 +161,13 @@ The reason value is empty, with zero count and rate, when a start has no recorde
 Episode-level evidence stays in R2. Confidence intervals and start-by-reason scalar products
 are intentionally computed offline rather than added to W&B history.
 
-An acceptance rejection is complete evidence of failure, but not a complete 100-episode
-evaluation. W&B history always receives `eval/checkpoint_step`, pass, planned/completed episodes, and
-acceptance duration. It receives no partial `eval/full/*` result. Accepted projections additionally
-include variable return, length, progress, episode count, artifact, source, and `eval/full/by_start`.
+An acceptance contract may reject fail-fast only when the first failed outcome proves its rule
+cannot pass. That rejection is complete evidence of failure, but not a complete 100-episode
+evaluation, so it emits no partial `eval/full/*` result. Aggregate contracts such as mean return
+disable outcome-based fail-fast, run every planned episode, and emit complete `eval/full/*` metrics
+for either verdict. W&B history always receives `eval/checkpoint_step`, pass, planned/completed
+episodes, and acceptance duration. Accepted projections additionally include artifact, source, and
+`eval/full/by_start`.
 Constant acceptance success rates, per-start success scalars, failure-reason scalars, duplicate full
 duration, and constant leader-success fields remain in private-R2 evidence but are suppressed from
 acceptance W&B history.
@@ -212,6 +215,7 @@ unevaluated for future explicit user action. dstack process exit alone is never 
 | Metric or template | Meaning | Unit | Cadence | Surface |
 |---|---|---|---|---|
 | `train/episode/return/shaped/mean` | Rolling mean shaped return over the latest 100 genuine completed training episodes across target and archive origins; a archive-origin return starts at restoration, and control boundaries are excluded. | scalar | rollout | history |
+| `train/episode/return/shaped/max` | Rolling maximum shaped return over the same latest 100 genuine completed training episodes as `train/episode/return/shaped/mean`; this is observed recent headroom, not a theoretical maximum. | return | rollout | history |
 | `train/episode/length/mean` | Rolling mean length over the latest 100 completed training episodes. | steps | rollout | history |
 | `train/outcome/terminal/count` | Cumulative terminal episode records. | episodes | rollout | history |
 | `train/outcome/reason/{reason}/count` | Cumulative failed episodes containing a reason. | episodes | rollout | history |
@@ -348,6 +352,7 @@ unevaluated for future explicit user action. dstack process exit alone is never 
 | `orchestration/drain/idle_gpu_tail_seconds` | Time the training container retained its GPU after the learner exited. | seconds | terminal drain | history |
 | `orchestration/scratch/used_fraction` | Fraction of the task scratch filesystem currently used. | fraction | supervisor sample | history |
 | `train/episode/return/shaped/from/target/mean` | Rolling mean shaped return over the latest 100 genuine target-origin training episodes. | return | rollout | history |
+| `train/episode/return/shaped/from/target/max` | Rolling maximum shaped return over the same latest 100 genuine target-origin training episodes as `train/episode/return/shaped/from/target/mean`; archive-origin episodes are excluded. | return | rollout | history |
 | `train/curriculum/archive/cell/count` | Current archive-curriculum cell count. | cells | rollout | history |
 | `train/curriculum/archive/entry/count` | Current immutable entry count retained by the curriculum view. | entries | rollout | history |
 | `train/curriculum/archive/admission/candidate/count` | Non-terminal cell-crossing candidates observed during the rollout. | transitions | rollout | history |

@@ -759,6 +759,65 @@ class EvalMetricTests(unittest.TestCase):
         self.assertEqual(shared_runtime_config.states, ())
         self.assertEqual(shared_runtime_config.state_probs, ())
 
+    def test_mean_return_acceptance_runs_every_episode_after_failure(self) -> None:
+        class FakeEnv:
+            action_space = None
+
+            def close(self) -> None:
+                pass
+
+        contract = build_checkpoint_eval_contract(
+            environment={"game": "SuperMarioBros-Nes-v0", "state": "Level1-1"},
+            episodes=3,
+            n_envs=1,
+            max_steps=10,
+            seed=10_000,
+            seed_protocol=SEED_PROTOCOL,
+            acceptance=[
+                {
+                    "metric": "eval/full/episode/return/mean",
+                    "operator": ">=",
+                    "threshold": 2.0,
+                }
+            ],
+        )
+        results = [
+            {
+                "actions": [],
+                "start_state": "Level1-1",
+                "return": episode_return,
+                "steps": 1,
+                "outcome": "failure" if index == 0 else "success",
+                "level_complete": index != 0,
+                "terminated": True,
+                "truncated": False,
+                "final_info": {},
+            }
+            for index, episode_return in enumerate((0.0, 2.0, 4.0))
+        ]
+
+        with (
+            patch("gradlab.eval_runner.make_eval_vec_env", return_value=FakeEnv()),
+            patch("gradlab.eval_runner.run_eval_episode", side_effect=results) as run_episode,
+        ):
+            metrics, video_path = evaluate_model_episodes(
+                model=object(),
+                config=EnvConfig(game="SuperMarioBros-Nes-v0", state="Level1-1"),
+                episodes=3,
+                seed=10_000,
+                max_steps=10,
+                deterministic=False,
+                n_envs=1,
+                acceptance_contract=contract,
+            )
+
+        self.assertIsNone(video_path)
+        self.assertEqual(run_episode.call_count, 3)
+        self.assertEqual(len(metrics["episode_results"]), 3)
+        self.assertEqual(metrics["eval/full/episode/return/mean"], 2.0)
+        self.assertEqual(metrics["acceptance_verdict"], "accepted")
+        self.assertEqual(metrics["acceptance_aggregates"]["failure_count"], 1)
+
     def test_vector_eval_accumulates_completed_slots_independently(self) -> None:
         class FakeModel:
             def predict(self, obs, deterministic):

@@ -9,7 +9,9 @@ import numpy as np
 from gradlab.eval_metrics import episode_reason_names
 from gradlab.metric_names import (
     TRAIN_EPISODE_LENGTH_MEAN,
+    TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_MAX,
     TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_MEAN,
+    TRAIN_EPISODE_RETURN_SHAPED_MAX,
     TRAIN_EPISODE_RETURN_SHAPED_MEAN,
     TRAIN_OUTCOME_SUCCESS_CURRENT_RATE_MEAN,
     TRAIN_OUTCOME_SUCCESS_CURRENT_RATE_MIN,
@@ -123,10 +125,14 @@ class EpisodeMetricsReducer:
         }
         if self.returns:
             payload[TRAIN_EPISODE_RETURN_SHAPED_MEAN] = float(np.mean(self.returns))
+            payload[TRAIN_EPISODE_RETURN_SHAPED_MAX] = float(np.max(self.returns))
             payload[TRAIN_EPISODE_LENGTH_MEAN] = float(np.mean(self.lengths))
         if self.target_returns:
             payload[TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_MEAN] = float(
                 np.mean(self.target_returns)
+            )
+            payload[TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_MAX] = float(
+                np.max(self.target_returns)
             )
         for reason, count in sorted(self.reason_counts.items()):
             window = self.reason_windows[reason]
