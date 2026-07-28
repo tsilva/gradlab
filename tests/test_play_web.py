@@ -692,6 +692,32 @@ def test_frame_encoder_batches_game_and_observation_at_one_transition() -> None:
         ) == (FRAME_MAGIC, kind, FRAME_CODEC_PNG, 0, 0, 11, 11)
 
 
+def test_frame_encoder_retains_every_rapidly_submitted_observation() -> None:
+    encoder = FrameEncoder()
+    encoder.start()
+    try:
+        for sequence in range(96):
+            encoder.submit_batch(
+                sequence,
+                {
+                    FRAME_GAME: np.full((3, 4, 3), sequence, dtype=np.uint8),
+                    FRAME_OBSERVATION: np.full((5, 6, 3), sequence, dtype=np.uint8),
+                },
+            )
+        deadline = time.monotonic() + 5.0
+        while not encoder.retained(95) and time.monotonic() < deadline:
+            time.sleep(0.005)
+        retained = [encoder.retained(sequence) for sequence in range(96)]
+    finally:
+        encoder.close()
+
+    assert all(set(frames) == {FRAME_GAME, FRAME_OBSERVATION} for frames in retained)
+    assert all(
+        frames[FRAME_OBSERVATION][0] == sequence
+        for sequence, frames in enumerate(retained)
+    )
+
+
 def test_paired_auto_start_waits_for_both_workspace_windows() -> None:
     class Runner:
         session_epoch = 3
@@ -1025,6 +1051,31 @@ def test_loopback_server_requires_exact_origin_and_fragment_token() -> None:
                         observer_received_latest_frame = True
                         break
                 assert observer_received_latest_frame
+
+                runner.encoder.submit(
+                    FRAME_GAME,
+                    1,
+                    np.full((2, 3, 3), 1, dtype=np.uint8),
+                )
+                while runner.encoder.latest()[FRAME_GAME][0] != 1:
+                    await asyncio.sleep(0.005)
+                await observer.send_json(
+                    {
+                        "type": "inspection_frames",
+                        "session_epoch": 0,
+                        "sequence": 0,
+                        "kinds": [FRAME_GAME],
+                    }
+                )
+                historical_sequence = None
+                for _ in range(6):
+                    message = await asyncio.wait_for(observer.receive(), timeout=2.0)
+                    if message.type != WSMsgType.BINARY:
+                        continue
+                    historical_sequence = FRAME_HEADER.unpack_from(message.data)[5]
+                    if historical_sequence == 0:
+                        break
+                assert historical_sequence == 0
 
                 await observer.send_json({"type": "acquire_control"})
                 acquired_snapshot = None
@@ -1452,6 +1503,8 @@ def test_web_dashboard_assets_are_packaged_beside_server() -> None:
     assert "function hideGoExploreValuePanel(snapshot)" in script
     assert 'search_algorithm_id !== "go-explore"' in script
     assert "hideGoExploreValuePanel(snapshot)" in script
+    assert 'type: "inspection_frames"' in script
+    assert "sequence < (state.receivedFrameSequence" not in script
 
     assert '"gradlab.player.workspace.v4.paired"' in script
     assert '"gradlab.player.workspace.v4.single"' in script

@@ -308,10 +308,12 @@ async function handleFrame(buffer) {
   const epoch = Number(view.getBigUint64(8));
   const sequence = Number(view.getBigUint64(16));
   if (epoch !== state.sessionEpoch) return;
-  if (sequence < (state.receivedFrameSequence.get(kind) ?? -1)) return;
-  state.receivedFrameSequence.set(kind, sequence);
+  state.receivedFrameSequence.set(
+    kind,
+    Math.max(sequence, state.receivedFrameSequence.get(kind) ?? -1),
+  );
   const blob = new Blob([buffer.slice(FRAME_HEADER_BYTES)], { type: "image/png" });
-  rememberFrame(kind, sequence, blob);
+  rememberFrame(kind, sequence, blob, state.inspectionSequence);
   if (
     state.inspectionSequence === sequence
     || (
@@ -701,13 +703,20 @@ function broadcastInspection(sequence) {
 }
 
 function requestInspectionFrames(sequence, kinds) {
-  if (!workspaceChannel || !kinds.length) return;
-  workspaceChannel.postMessage({
-    type: "inspection-frame-request",
+  if (!kinds.length) return;
+  const request = {
     session_epoch: state.sessionEpoch,
     sequence: Number(sequence),
     kinds,
     source: state.windowId,
+  };
+  workspaceChannel?.postMessage({
+    type: "inspection-frame-request",
+    ...request,
+  });
+  send({
+    type: "inspection_frames",
+    ...request,
   });
 }
 

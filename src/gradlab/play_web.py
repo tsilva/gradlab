@@ -31,6 +31,8 @@ PROTOCOL_VERSION = 4
 HISTORY_LIMIT = 4096
 COMMAND_QUEUE_LIMIT = 64
 CLIENT_QUEUE_LIMIT = 64
+FRAME_ENCODER_QUEUE_LIMIT = 64
+INSPECTION_FRAME_WAIT_SECONDS = 2.0
 FRAME_HEADER = struct.Struct(">4sBBHQQ")
 FRAME_MAGIC = b"RLP2"
 FRAME_CODEC_PNG = 1
@@ -363,8 +365,9 @@ def _frame_packet(
 class FrameEncoder:
     def __init__(self) -> None:
         self._condition = threading.Condition()
-        self._pending: tuple[int, int, dict[int, np.ndarray]] | None = None
+        self._pending: deque[tuple[int, int, dict[int, np.ndarray]]] = deque()
         self._latest: dict[int, tuple[int, bytes]] = {}
+        self._retained: dict[tuple[int, int], dict[int, tuple[int, bytes]]] = {}
         self._epoch = 0
         self._closed = False
         self._thread = threading.Thread(target=self._run, name="gradlab-frame-encoder")
@@ -379,8 +382,9 @@ class FrameEncoder:
             if self._thread.is_alive():
                 raise RuntimeError("frame encoder epoch must be set before start")
             self._epoch = int(epoch)
-            self._pending = None
+            self._pending.clear()
             self._latest.clear()
+            self._retained.clear()
 
     def start(self) -> None:
         self._thread.start()
@@ -401,14 +405,32 @@ class FrameEncoder:
         if not owned:
             return
         with self._condition:
-            if self._closed:
-                return
-            self._pending = (self._epoch, int(sequence), owned)
-            self._condition.notify()
+            while len(self._pending) >= FRAME_ENCODER_QUEUE_LIMIT and not self._closed:
+                self._condition.wait()
+            if not self._closed:
+                self._pending.append((self._epoch, int(sequence), owned))
+                self._condition.notify_all()
 
     def latest(self) -> dict[int, tuple[int, bytes]]:
         with self._condition:
             return dict(self._latest)
+
+    def retained(
+        self,
+        sequence: int,
+        *,
+        epoch: int | None = None,
+        timeout: float = 0.0,
+    ) -> dict[int, tuple[int, bytes]]:
+        with self._condition:
+            key = (self._epoch if epoch is None else int(epoch), int(sequence))
+            deadline = time.monotonic() + max(0.0, float(timeout))
+            while key not in self._retained and not self._closed:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                self._condition.wait(remaining)
+            return dict(self._retained.get(key, {}))
 
     def close(self) -> None:
         with self._condition:
@@ -420,15 +442,14 @@ class FrameEncoder:
     def _run(self) -> None:
         while True:
             with self._condition:
-                while self._pending is None and not self._closed:
+                while not self._pending and not self._closed:
                     self._condition.wait()
-                if self._closed and self._pending is None:
+                if self._closed and not self._pending:
                     return
-                pending = self._pending
-                self._pending = None
-            if pending is None:
-                continue
+                pending = self._pending.popleft()
+                self._condition.notify_all()
             epoch, sequence, frames = pending
+            encoded: dict[int, tuple[int, bytes]] = {}
             for kind, frame in frames.items():
                 packet = _frame_packet(
                     kind,
@@ -436,8 +457,14 @@ class FrameEncoder:
                     frame,
                     session_epoch=epoch,
                 )
+                encoded[kind] = (sequence, packet)
                 with self._condition:
                     self._latest[kind] = (sequence, packet)
+            with self._condition:
+                self._retained[(epoch, sequence)] = encoded
+                while len(self._retained) > HISTORY_LIMIT:
+                    del self._retained[next(iter(self._retained))]
+                self._condition.notify_all()
 
 
 @dataclass(frozen=True)
@@ -2140,6 +2167,34 @@ class PlaybackWebServer:
                             client.offer_frame(frame_kind, sequence, packet)
                 elif kind == "history":
                     client.offer_reliable(self.runner.history_payload())
+                elif kind == "inspection_frames":
+                    try:
+                        epoch = int(payload.get("session_epoch", -1))
+                        sequence = int(payload.get("sequence", -1))
+                        requested_kinds = {
+                            int(value) for value in payload.get("kinds", ())
+                        } & {FRAME_GAME, FRAME_OBSERVATION}
+                    except (TypeError, ValueError):
+                        client.offer_reliable(
+                            {"type": "error", "error": "invalid inspection frame request"}
+                        )
+                        continue
+                    if (
+                        epoch != self._runner_epoch()
+                        or sequence < 0
+                        or not requested_kinds
+                    ):
+                        continue
+                    retained = await asyncio.to_thread(
+                        self.runner.encoder.retained,
+                        sequence,
+                        epoch=epoch,
+                        timeout=INSPECTION_FRAME_WAIT_SECONDS,
+                    )
+                    for frame_kind in requested_kinds:
+                        packet = retained.get(frame_kind)
+                        if packet is not None:
+                            client.offer_reliable(packet[1])
                 elif kind == "input":
                     if self.control_holder != client.workspace_id:
                         client.offer_reliable({"type": "error", "error": "control lease required"})
