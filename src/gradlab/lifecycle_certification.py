@@ -98,6 +98,7 @@ DEFAULT_SCENARIOS = (
     "verifier-tamper-detection",
     "early-stop-outcomes",
     "failed-result-live-process",
+    "completed-result-exits-during-iteration",
     "completed-result-hung-process",
     "local-background-jobs",
 )
@@ -1946,6 +1947,40 @@ def _scenario_completed_result_hung_process(root: Path) -> dict[str, Any]:
     }
 
 
+def _scenario_completed_result_exits_during_iteration(root: Path) -> dict[str, Any]:
+    recorder = ScenarioRecorder("completed-result-exits-during-iteration", [])
+    fixture = CertificationFixture(root)
+    prepared = fixture.prepare(run_number=81)
+    process = ScriptedLearnerProcess(pid=81_001)
+    _prepare_scripted_learner(prepared, process=process, status="completed")
+    supervisor = prepared.supervisor
+    supervisor._observe_live_learner_state(supervisor.clock.monotonic())
+    fixture.clock.advance(
+        float(supervisor.manifest.liveness["result_exit_grace_seconds"]) + 3.2
+    )
+    process.alive = False
+
+    still_running = supervisor._observe_learner_after_active_iteration()
+    recorder.require(
+        "completed-result-repoll-observes-exit-before-timeout",
+        not still_running
+        and process.graceful_signals == 0
+        and process.term_signals == 0
+        and process.kill_signals == 0,
+        evidence={
+            "virtual_time_seconds": fixture.clock.monotonic(),
+            "returncode": process.poll(),
+        },
+    )
+    return {
+        "invariants": recorder.invariants,
+        "evidence": {
+            "virtual_time_seconds": fixture.clock.monotonic(),
+            "returncode": process.poll(),
+        },
+    }
+
+
 def _scenario_local_background_jobs(root: Path) -> dict[str, Any]:
     recorder = ScenarioRecorder("local-background-jobs", [])
     clock = DeterministicClock()
@@ -2179,6 +2214,9 @@ SCENARIOS: dict[str, Callable[[Path], dict[str, Any]]] = {
     "verifier-tamper-detection": _scenario_verifier_tamper_detection,
     "early-stop-outcomes": _scenario_early_stop_outcomes,
     "failed-result-live-process": _scenario_failed_result_live_process,
+    "completed-result-exits-during-iteration": (
+        _scenario_completed_result_exits_during_iteration
+    ),
     "completed-result-hung-process": _scenario_completed_result_hung_process,
     "local-background-jobs": _scenario_local_background_jobs,
 }
