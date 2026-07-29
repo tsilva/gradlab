@@ -42,6 +42,10 @@ def load_policy_model(
         from gradlab.action_program import ActionProgramPolicy
 
         return ActionProgramPolicy.load(path)
+    if algorithm_id == "cell-graph":
+        from gradlab.cell_graph import CellGraphPolicy
+
+        return CellGraphPolicy.load(path)
     from gradlab.sb3_models import load_sb3_model
 
     return load_sb3_model(

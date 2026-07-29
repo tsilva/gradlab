@@ -53,6 +53,7 @@ GradLab is a reproducible reinforcement-learning workbench that carries game-age
 - Publication-enabled queued runs must publish every ready periodic and final checkpoint independently of evaluation.
 - Published checkpoints must remain downloadable and playable without private infrastructure credentials.
 - Published policies must include the artifact, portable provenance, reproducibility metadata, verified evaluation evidence, and a representative browser-safe replay.
+- Go-Explore checkpoints must store a portable cell-and-route graph; archive snapshots must be omitted unless explicitly requested in the run configuration.
 
 ### Playback and Human Control
 

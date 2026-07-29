@@ -15,6 +15,8 @@ from pathlib import Path, PurePosixPath
 from urllib.parse import unquote, urlparse
 
 from gradlab.config_loader import RECIPE_TEMPLATE_VALUES, render_template_vars
+from gradlab.env import task_termination
+from gradlab.env_config import env_config_from_mapping
 from gradlab.env_registry import resolve_env_provider
 from gradlab.goal_variants import build_goal_variant_descriptor
 from gradlab.policy_bundle import (
@@ -443,6 +445,9 @@ def main(argv: list[str] | None = None) -> int:
                             seed=int(args.seed),
                             output=str(run_dir),
                             notices=local_notices,
+                            completion_signal_available=bool(
+                                task_termination(env_config_from_mapping(config)).get("success")
+                            ),
                         ),
                         learner=invoke_learner,
                     )

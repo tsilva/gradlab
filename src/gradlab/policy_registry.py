@@ -9,12 +9,19 @@ PolicyAlgorithmId: TypeAlias = Literal[
     "ppo",
     "a2c",
     "action-program",
+    "cell-graph",
     "dqn",
     "recurrent-ppo",
 ]
-RuntimePolicyAlgorithmId: TypeAlias = Literal["ppo", "a2c", "dqn", "action-program"]
+RuntimePolicyAlgorithmId: TypeAlias = Literal[
+    "ppo",
+    "a2c",
+    "dqn",
+    "action-program",
+    "cell-graph",
+]
 Sb3AlgorithmId: TypeAlias = Literal["ppo", "a2c", "dqn"]
-PolicyRuntimeFamily: TypeAlias = Literal["sb3", "action-program"]
+PolicyRuntimeFamily: TypeAlias = Literal["sb3", "action-program", "cell-graph"]
 
 
 @dataclass(frozen=True)
@@ -49,6 +56,11 @@ POLICY_ALGORITHM_SPECS: dict[PolicyAlgorithmId, PolicyAlgorithmSpec] = {
         "action-program",
         "program",
     ),
+    "cell-graph": PolicyAlgorithmSpec(
+        ("gradlab.cell_graph.CellGraphPolicy",),
+        "cell-graph",
+        "route",
+    ),
     "dqn": PolicyAlgorithmSpec(
         ("stable_baselines3.dqn.dqn.DQN",),
         "sb3",
@@ -63,16 +75,22 @@ POLICY_ALGORITHM_SPECS: dict[PolicyAlgorithmId, PolicyAlgorithmSpec] = {
 
 
 TRAINING_BACKEND_SPECS: dict[str, TrainingBackendSpec] = {
-    "gradlab.go-explore": TrainingBackendSpec("gradlab.training.go_explore", "action-program"),
+    "gradlab.go-explore": TrainingBackendSpec("gradlab.training.go_explore", "cell-graph"),
     "gradlab.jerk": TrainingBackendSpec("gradlab.training.jerk", "action-program"),
     "sb3.a2c": TrainingBackendSpec("gradlab.training.sb3", "a2c"),
     "sb3.ppo": TrainingBackendSpec("gradlab.training.sb3", "ppo"),
 }
-BACKEND_PROVENANCE_ALGORITHMS: dict[str, PolicyAlgorithmId] = {
-    **{backend_id: spec.algorithm_id for backend_id, spec in TRAINING_BACKEND_SPECS.items()},
+BACKEND_PROVENANCE_ALGORITHMS: dict[str, frozenset[PolicyAlgorithmId]] = {
+    **{
+        backend_id: frozenset({spec.algorithm_id})
+        for backend_id, spec in TRAINING_BACKEND_SPECS.items()
+    },
+    # Go-Explore action programs are an active legacy policy identity. New
+    # checkpoints use cell-graph while old bundles remain readable.
+    "gradlab.go-explore": frozenset({"action-program", "cell-graph"}),
     # GradLab can validate, load, evaluate, and play archived SB3 DQN
     # checkpoints without claiming that DQN is a launchable training backend.
-    "sb3.dqn": "dqn",
+    "sb3.dqn": frozenset({"dqn"}),
 }
 MODEL_CLASS_ALGORITHMS: dict[str, PolicyAlgorithmId] = {
     model_class: algorithm_id
@@ -97,10 +115,14 @@ SB3_ALGORITHMS = frozenset[PolicyAlgorithmId](
 
 
 def backend_provenance_algorithm(backend_id: str) -> PolicyAlgorithmId:
-    algorithm_id = BACKEND_PROVENANCE_ALGORITHMS.get(str(backend_id).strip())
-    if algorithm_id is None:
+    normalized = str(backend_id).strip()
+    algorithms = BACKEND_PROVENANCE_ALGORITHMS.get(normalized)
+    if algorithms is None:
         raise ValueError(f"unsupported checkpoint training backend: {backend_id}")
-    return algorithm_id
+    spec = TRAINING_BACKEND_SPECS.get(normalized)
+    if spec is not None:
+        return spec.algorithm_id
+    return next(iter(algorithms))
 
 
 def default_action_selection_mode(algorithm_id: PolicyAlgorithmId) -> str:
@@ -118,10 +140,6 @@ def resolve_policy_algorithm(
     metadata = metadata or {}
     resolved: set[PolicyAlgorithmId] = set()
 
-    backend_id = str(metadata.get("training_backend_id") or "").strip()
-    if backend_id:
-        resolved.add(backend_provenance_algorithm(backend_id))
-
     algorithm_id = str(metadata.get("algorithm_id") or "").strip()
     if algorithm_id:
         if algorithm_id not in POLICY_ALGORITHM_SPECS:
@@ -134,6 +152,20 @@ def resolve_policy_algorithm(
         if algorithm is None:
             raise ValueError(f"unsupported checkpoint model class: {model_class}")
         resolved.add(algorithm)
+
+    backend_id = str(metadata.get("training_backend_id") or "").strip()
+    if backend_id:
+        backend_algorithms = BACKEND_PROVENANCE_ALGORITHMS.get(backend_id)
+        if backend_algorithms is None:
+            raise ValueError(f"unsupported checkpoint training backend: {backend_id}")
+        if resolved:
+            incompatible = resolved - backend_algorithms
+            if incompatible:
+                raise ValueError(
+                    "checkpoint backend, algorithm, and model class metadata disagree"
+                )
+        else:
+            resolved.add(backend_provenance_algorithm(backend_id))
 
     if not resolved:
         raise ValueError("checkpoint metadata must identify its policy algorithm")

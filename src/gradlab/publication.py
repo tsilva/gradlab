@@ -550,6 +550,8 @@ def normalize_publication_evaluation(
     allowed_sampling = (
         {"program"}
         if algorithm_id == "action-program"
+        else {"route"}
+        if algorithm_id == "cell-graph"
         else ({"stochastic", "deterministic"} if allow_deterministic else {"stochastic"})
     )
     if action_sampling not in allowed_sampling:
@@ -759,27 +761,34 @@ def render_model_card(
     )
     status = ""
     is_action_program = algorithm == "action-program"
+    is_cell_graph = algorithm == "cell-graph"
+    is_gradlab_policy = is_action_program or is_cell_graph
     provenance = _require_mapping(bundle.model.get("provenance"), label="model.json provenance")
     producer = (
         _required_text(
             provenance.get("search_algorithm_id"),
             label="model provenance search_algorithm_id",
         )
-        if is_action_program
+        if is_gradlab_policy
         else ""
     )
-    library_name = "gradlab" if is_action_program else "stable-baselines3"
-    library_tag = "gradlab-policy" if is_action_program else "stable-baselines3"
+    library_name = "gradlab" if is_gradlab_policy else "stable-baselines3"
+    library_tag = "gradlab-policy" if is_gradlab_policy else "stable-baselines3"
     policy_description = (
         f"GradLab open-loop action program for `{game}` `{goal}`, produced by "
         f"`{producer}` and trained and evaluated with"
         if is_action_program
+        else f"GradLab closed-loop semantic cell graph for `{game}` `{goal}`, "
+        f"produced by `{producer}` and trained and evaluated with"
+        if is_cell_graph
         else f"Stable-Baselines3 {algorithm.upper()} policy for `{game}` `{goal}`, "
         "trained and evaluated with"
     )
     model_file_description = (
         "Portable GradLab open-loop action program"
         if is_action_program
+        else "Portable GradLab closed-loop semantic cell graph"
+        if is_cell_graph
         else "Stable-Baselines3 policy checkpoint"
     )
     run_name = _required_text(source.get("run_name"), label="manifest source.run_name")
@@ -934,6 +943,8 @@ def build_release_manifest(
         raise ValueError("release identity does not match model metadata")
     if identity.algorithm == "action-program" and evaluation.get("action_sampling") != "program":
         raise ValueError("action-program releases require program action sampling")
+    if identity.algorithm == "cell-graph" and evaluation.get("action_sampling") != "route":
+        raise ValueError("cell-graph releases require route action sampling")
     manifest: dict[str, Any] = {
         "document_type": RELEASE_MANIFEST_DOCUMENT_TYPE,
         "format_version": RELEASE_MANIFEST_VERSION,

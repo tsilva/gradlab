@@ -176,6 +176,13 @@ def _evaluate_model_episodes_vector(
                 action = policy_runtime.decide(
                     obs,
                     action_selection_mode=action_selection_mode,
+                    execution_context=(
+                        eval_env.policy_execution_context(model)
+                        if callable(
+                            getattr(eval_env, "policy_execution_context", None)
+                        )
+                        else None
+                    ),
                 ).actions
             obs, _step_rewards, dones, infos = eval_env.step(action)
             reset_policy_state(model, dones)

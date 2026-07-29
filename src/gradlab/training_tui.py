@@ -15,17 +15,19 @@ from textual import events
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.color import Gradient
-from textual.containers import Grid, Vertical
+from textual.containers import Grid, Horizontal, Vertical
 from textual.message import Message
 from textual.widget import Widget
-from textual.widgets import Footer, Header, ProgressBar, RichLog, Sparkline, Static
+from textual.widgets import Footer, ProgressBar, RichLog, Sparkline, Static
 
+from gradlab.metric_names import TRAIN_OUTCOME_SUCCESS_CURRENT_RATE_MEAN
 from gradlab.train import TrainingRuntimeControl, graceful_stop_signal_scope
 from gradlab.training_backend import GracefulStopFlag
 from gradlab.training_lifecycle import (
     PlainProgressSink,
     ProgressField,
     ProgressSink,
+    ProgressValueFormat,
     format_progress_value,
     resolve_progress_fields,
 )
@@ -45,6 +47,7 @@ class LocalTrainingIdentity:
     seed: int
     output: str
     notices: tuple[str, ...] = ()
+    completion_signal_available: bool | None = None
 
 
 @dataclass(frozen=True)
@@ -247,28 +250,114 @@ class LearnerExecution:
 
 class MetricCard(Widget):
     def __init__(self, field: ProgressField, index: int) -> None:
-        super().__init__(classes="metric-card")
+        classes = "metric-row percent-metric" if field.value_format.value == "percent" else (
+            "metric-row"
+        )
+        super().__init__(classes=classes)
         self.field = field
         self.index = index
         self._value = "—"
-        self._history: tuple[float, ...] = ()
+        self._numeric: int | float | None = None
 
     def compose(self) -> ComposeResult:
-        yield Static(self.field.label, classes="metric-label")
-        yield Static(self._value, id=f"metric-value-{self.index}", classes="metric-value")
-        yield Sparkline(
-            self._history,
-            id=f"metric-spark-{self.index}",
-            classes="metric-sparkline",
-        )
+        with Horizontal(classes="metric-row-content"):
+            yield Static(self.field.label, classes="metric-label")
+            if self.field.value_format.value == "percent":
+                yield ProgressBar(
+                    total=1,
+                    show_percentage=False,
+                    show_eta=False,
+                    id=f"metric-meter-{self.index}",
+                    classes="metric-meter",
+                )
+            yield Static(
+                self._value,
+                id=f"metric-value-{self.index}",
+                classes="metric-value",
+            )
 
-    def set_metric(self, value: str, history: Sequence[float]) -> None:
+    def set_metric(
+        self,
+        value: str,
+        numeric: int | float | None,
+        *,
+        meter_available: bool = True,
+    ) -> None:
         self._value = value
-        self._history = tuple(history)
+        self._numeric = numeric
         if not self.is_mounted:
             return
         self.query_one(f"#metric-value-{self.index}", Static).update(value)
-        self.query_one(f"#metric-spark-{self.index}", Sparkline).data = self._history
+        if self.field.value_format.value == "percent":
+            meter = self.query_one(f"#metric-meter-{self.index}", ProgressBar)
+            meter.display = meter_available
+            fraction = (
+                min(max(float(numeric), 0.0), 1.0)
+                if numeric is not None and math.isfinite(float(numeric))
+                else 0.0
+            )
+            meter.update(
+                total=1,
+                progress=fraction,
+            )
+
+    def on_mount(self) -> None:
+        self.set_metric(self._value, self._numeric)
+
+
+class SummaryMetricRow(Widget):
+    def __init__(self, label: str, *, id: str) -> None:
+        super().__init__(id=id, classes="metric-row summary-metric")
+        self.label = label
+        self._value = "—"
+
+    def compose(self) -> ComposeResult:
+        with Horizontal(classes="metric-row-content"):
+            yield Static(self.label, classes="metric-label")
+            yield Static(self._value, classes="metric-value summary-value")
+
+    def set_value(self, value: str) -> None:
+        self._value = value
+        if self.is_mounted:
+            self.query_one(".summary-value", Static).update(value)
+
+
+class MetricGroup(Widget):
+    def __init__(
+        self,
+        group: str,
+        fields: Sequence[tuple[int, ProgressField]],
+    ) -> None:
+        slug = _css_slug(group)
+        super().__init__(
+            id=f"metric-group-{slug}",
+            classes=f"metric-group group-{slug}",
+        )
+        self.group = group
+        self.cards = tuple(MetricCard(field, index) for index, field in fields)
+        self.summary_rows: dict[str, SummaryMetricRow] = {}
+        if group == "traffic":
+            self.summary_rows["rate"] = SummaryMetricRow("rate", id="summary-rate")
+        elif group == "resources":
+            self.summary_rows["budget"] = SummaryMetricRow("budget", id="summary-budget")
+            self.summary_rows["remaining"] = SummaryMetricRow(
+                "remaining",
+                id="summary-remaining",
+            )
+
+    def compose(self) -> ComposeResult:
+        yield Static(
+            self.group.replace("_", " ").upper(),
+            classes="metric-group-title",
+        )
+        with Vertical(classes="metric-rows"):
+            yield from self.cards
+            yield from self.summary_rows.values()
+
+    def set_summary(self, name: str, value: str) -> None:
+        row = self.summary_rows.get(name)
+        if row is not None:
+            row.set_value(value)
 
 
 class TrainingFinished(Message):
@@ -281,6 +370,8 @@ class LocalTrainingApp(App[None]):
     VERTICAL_BREAKPOINTS = [(0, "-short"), (24, "-tall")]
     BINDINGS = [
         Binding("q", "request_stop", "Stop safely", priority=True),
+        Binding("l", "toggle_log", "Log"),
+        Binding("?", "toggle_help", "Help"),
         Binding("ctrl+c", "request_stop", show=False, priority=True),
         Binding("ctrl+q", "request_stop", show=False, priority=True),
     ]
@@ -296,6 +387,7 @@ class LocalTrainingApp(App[None]):
     ) -> None:
         super().__init__()
         self._preserve_capture_file_descriptors()
+        self._capture_active = False
         self.identity = identity
         self.bridge = bridge
         self.stop_flag = stop_flag
@@ -303,10 +395,10 @@ class LocalTrainingApp(App[None]):
         self.learner = learner
         self.title = "gradlab local training"
         self.sub_title = identity.recipe
-        self._last_revision = -1
         self._last_event = 0
         self._cards: dict[str, MetricCard] = {}
-        self._histories: dict[str, deque[float]] = {}
+        self._groups: dict[str, MetricGroup] = {}
+        self._rate_history: deque[float] = deque(maxlen=TUI_HISTORY_LENGTH)
         self._last_history_sample = 0.0
         self._last_rate_step: int | None = None
         self._last_rate_time: float | None = None
@@ -338,45 +430,59 @@ class LocalTrainingApp(App[None]):
             setattr(capture, "fileno", lambda descriptor=descriptor: descriptor)
 
     def compose(self) -> ComposeResult:
-        yield Header(show_clock=True)
+        with Horizontal(id="training-header"):
+            yield Static("gradlab", id="training-brand")
+            yield Static(_header_title(self.identity.recipe), id="training-title")
+            yield Static("INITIALIZING", id="training-status")
         with Vertical(id="training-body"):
             yield Static(
-                Text.assemble(
-                    ("recipe ", "dim"),
-                    self.identity.recipe,
-                    ("  seed ", "dim"),
-                    str(self.identity.seed),
-                    ("\noutput ", "dim"),
-                    self.identity.output,
-                ),
+                _identity_text(self.identity, width=120),
                 id="run-identity",
             )
-            yield Static("initializing learner…", id="training-status")
-            yield ProgressBar(
-                total=None,
-                show_percentage=False,
-                show_eta=False,
-                gradient=Gradient(
-                    (0.0, "#22D3EE"),
-                    (0.55, "#60A5FA"),
-                    (1.0, "#A78BFA"),
-                ),
-                id="training-progress",
-            )
-            yield Static("waiting for training budget", id="progress-meta")
+            with Vertical(id="progress-panel"):
+                yield Static("TRAINING PROGRESS", classes="panel-title")
+                with Horizontal(id="progress-bar-row"):
+                    yield ProgressBar(
+                        total=None,
+                        show_percentage=False,
+                        show_eta=False,
+                        gradient=Gradient(
+                            (0.0, "#22D3EE"),
+                            (0.55, "#38BDF8"),
+                            (1.0, "#67E8F9"),
+                        ),
+                        id="training-progress",
+                    )
+                    yield Static("—", id="progress-percent")
+                with Horizontal(id="progress-stats"):
+                    yield Static("— / —", id="progress-count", classes="progress-stat")
+                    yield Static("—", id="progress-fraction", classes="progress-stat")
+                    yield Static("elapsed —", id="progress-elapsed", classes="progress-stat")
+                    yield Static("ETA —", id="progress-eta", classes="progress-stat")
+                    yield Static("— transitions/s", id="progress-rate", classes="progress-stat")
+                    yield Sparkline(
+                        (),
+                        id="rate-sparkline",
+                        classes="progress-rate-sparkline",
+                    )
             yield Grid(id="metrics")
-            yield RichLog(
-                max_lines=TUI_EVENT_LIMIT,
-                wrap=True,
-                markup=False,
-                auto_scroll=True,
-                id="event-log",
-            )
+            yield Vertical(id="common-metrics")
+        yield Static(_run_notice(self.identity), id="run-notice")
+        yield Static("latest event  waiting for learner", id="latest-event")
+        yield RichLog(
+            max_lines=TUI_EVENT_LIMIT,
+            wrap=True,
+            markup=False,
+            auto_scroll=True,
+            id="event-log",
+        )
         yield Footer()
 
     def on_mount(self) -> None:
         self.begin_capture_print(self, stdout=True, stderr=True)
+        self._capture_active = True
         self.set_interval(TUI_REFRESH_SECONDS, self._refresh_from_bridge)
+        self._update_identity()
         self._refresh_from_bridge()
         self.run_worker(
             self._run_learner,
@@ -386,7 +492,9 @@ class LocalTrainingApp(App[None]):
         )
 
     def on_unmount(self) -> None:
-        self.end_capture_print(self)
+        if self._capture_active:
+            self.end_capture_print(self)
+            self._capture_active = False
 
     def _run_learner(self) -> None:
         try:
@@ -401,6 +509,9 @@ class LocalTrainingApp(App[None]):
     def on_print(self, event: events.Print) -> None:
         self.bridge.write_event(event.text, stderr=event.stderr)
 
+    def on_resize(self, _event: events.Resize) -> None:
+        self._update_identity()
+
     def action_request_stop(self) -> None:
         if self.execution.state == _ExecutionState.DONE:
             return
@@ -408,17 +519,60 @@ class LocalTrainingApp(App[None]):
         self.bridge.write_event(
             "graceful stop requested; waiting for the learner's safe boundary"
         )
-        self.query_one("#training-status", Static).update("stop pending — finishing safely")
+        self._update_header_status("STOP PENDING", "#FBBF24")
+
+    def action_toggle_log(self) -> None:
+        log = self.query_one("#event-log", RichLog)
+        log.display = not log.display
+
+    def action_toggle_help(self) -> None:
+        latest = self.query_one("#latest-event", Static)
+        if latest.has_class("showing-help"):
+            latest.remove_class("showing-help")
+            self._refresh_latest_event()
+            return
+        latest.add_class("showing-help")
+        latest.update(
+            Text.assemble(
+                ("q", "bold #FBBF24"),
+                (" stop safely   ", "#A8B3C7"),
+                ("l", "bold #67E8F9"),
+                (" toggle log   ", "#A8B3C7"),
+                ("ctrl+p", "bold #67E8F9"),
+                (" palette   ", "#A8B3C7"),
+                ("?", "bold #67E8F9"),
+                (" close help", "#A8B3C7"),
+            )
+        )
 
     def _ensure_metric_cards(self, fields: Sequence[ProgressField]) -> None:
-        grid = self.query_one("#metrics", Grid)
+        if self._cards or not fields:
+            return
+        grouped: dict[str, list[tuple[int, ProgressField]]] = {}
         for index, field in enumerate(fields):
-            if field.metric in self._cards:
-                continue
-            card = MetricCard(field, index)
-            self._cards[field.metric] = card
-            self._histories[field.metric] = deque(maxlen=TUI_HISTORY_LENGTH)
-            grid.mount(card)
+            grouped.setdefault(field.group, []).append((index, field))
+
+        group_order = {
+            name: index
+            for index, name in enumerate(
+                ("exploration", "traffic", "resources", "search", "optimization", "algorithm")
+            )
+        }
+        for group_name in sorted(
+            grouped,
+            key=lambda name: (group_order.get(name, len(group_order)), name),
+        ):
+            group = MetricGroup(group_name, grouped[group_name])
+            self._groups[group_name] = group
+            for card in group.cards:
+                self._cards[card.field.metric] = card
+            target = (
+                self.query_one("#common-metrics", Vertical)
+                if group_name == "outcomes"
+                else self.query_one("#metrics", Grid)
+            )
+            target.mount(group)
+        self.call_after_refresh(self._refresh_from_bridge)
 
     def _refresh_from_bridge(self) -> None:
         snapshot = self.bridge.snapshot(after_event=self._last_event)
@@ -428,26 +582,29 @@ class LocalTrainingApp(App[None]):
             for event in snapshot.events:
                 log.write(Text(event.text, style="bold red" if event.stderr else ""))
                 self._last_event = max(self._last_event, event.sequence)
-        snapshot_changed = snapshot.revision != self._last_revision
-        self._last_revision = snapshot.revision
+            self._refresh_latest_event(snapshot.events[-1])
         self._ensure_metric_cards(snapshot.fields)
 
         if snapshot.started_at is None:
-            status = "stop pending — initializing safely" if self.stop_flag.requested else (
-                "initializing learner…"
-            )
-            self.query_one("#training-status", Static).update(status)
+            if self.stop_flag.requested:
+                self._update_header_status("STOP PENDING", "#FBBF24")
+            else:
+                self._update_header_status("INITIALIZING", "#A8B3C7")
             return
 
         if self.stop_flag.requested:
-            status = "stop pending — waiting for a safe learner boundary"
+            status = "STOP PENDING"
+            status_color = "#FBBF24"
         elif snapshot.closed:
-            status = "training finished"
+            status = "FINISHED"
+            status_color = "#34D399"
         elif snapshot.final:
-            status = "finalizing artifacts"
+            status = "FINALIZING"
+            status_color = "#A78BFA"
         else:
-            status = f"running {snapshot.description}"
-        self.query_one("#training-status", Static).update(status)
+            status = "RUNNING"
+            status_color = "#67E8F9"
+        self._update_header_status(status, status_color)
 
         total_for_bar = snapshot.total if snapshot.total > 0 else 1
         progress_for_bar = (
@@ -491,24 +648,138 @@ class LocalTrainingApp(App[None]):
             if self._smoothed_rate is None or self._smoothed_rate <= 0
             else _format_duration(remaining / self._smoothed_rate)
         )
-        self.query_one("#progress-meta", Static).update(
-            f"{snapshot.step:,}/{snapshot.total:,}  {fraction:.1%}   "
-            f"elapsed {_format_duration(elapsed)}   rate {rate_text}   ETA {eta_text}"
-        )
 
         sample_history = now - self._last_history_sample >= TUI_HISTORY_SAMPLE_SECONDS
         if sample_history:
             self._last_history_sample = now
+            if self._smoothed_rate is not None and math.isfinite(self._smoothed_rate):
+                self._rate_history.append(self._smoothed_rate)
+                self.query_one("#rate-sparkline", Sparkline).data = tuple(
+                    self._rate_history
+                )
+
+        self.query_one("#progress-percent", Static).update(f"{fraction:.1%}")
+        self.query_one("#progress-count", Static).update(
+            f"{snapshot.step:,} / {snapshot.total:,}"
+        )
+        self.query_one("#progress-fraction", Static).update(f"{fraction:.1%}")
+        self.query_one("#progress-elapsed", Static).update(
+            Text.assemble(("elapsed ", "dim"), _format_duration(elapsed))
+        )
+        self.query_one("#progress-eta", Static).update(
+            Text.assemble(("ETA ", "dim"), eta_text)
+        )
+        self.query_one("#progress-rate", Static).update(rate_text)
+
+        traffic = self._groups.get("traffic")
+        if traffic is not None:
+            traffic.set_summary(
+                "rate",
+                "—"
+                if self._smoothed_rate is None
+                else f"{self._smoothed_rate:,.0f}/s",
+            )
+        resources = self._groups.get("resources")
+        if resources is not None:
+            resources.set_summary(
+                "budget",
+                f"{format_progress_value(snapshot.total, ProgressValueFormat.COUNT)} transitions",
+            )
+            resources.set_summary(
+                "remaining",
+                format_progress_value(remaining, ProgressValueFormat.COUNT),
+            )
+
         for field in snapshot.fields:
             value = snapshot.metrics.get(field.metric)
-            history = self._histories[field.metric]
-            if value is not None and math.isfinite(float(value)) and sample_history:
-                history.append(float(value))
-            if snapshot_changed or sample_history:
-                self._cards[field.metric].set_metric(
-                    format_progress_value(value, field.value_format),
-                    history,
-                )
+            completion_unavailable = bool(
+                field.metric == TRAIN_OUTCOME_SUCCESS_CURRENT_RATE_MEAN
+                and self.identity.completion_signal_available is False
+            )
+            self._cards[field.metric].set_metric(
+                (
+                    "not declared"
+                    if completion_unavailable
+                    else format_progress_value(value, field.value_format)
+                ),
+                value,
+                meter_available=not completion_unavailable,
+            )
+
+    def _update_identity(self) -> None:
+        if not self.is_mounted:
+            return
+        self.query_one("#run-identity", Static).update(
+            _identity_text(self.identity, width=max(self.size.width, 40))
+        )
+
+    def _update_header_status(self, status: str, color: str) -> None:
+        self.query_one("#training-status", Static).update(
+            Text.assemble(
+                ("● ", f"bold {color}"),
+                (status, f"bold {color}"),
+                ("  ", ""),
+                (time.strftime("%H:%M:%S"), "#D8DEE9"),
+            )
+        )
+
+    def _refresh_latest_event(self, event: TrainingLogEvent | None = None) -> None:
+        latest = self.query_one("#latest-event", Static)
+        if latest.has_class("showing-help"):
+            return
+        if event is None:
+            events_snapshot = self.bridge.snapshot().events
+            event = events_snapshot[-1] if events_snapshot else None
+        if event is None:
+            latest.update("latest event  waiting for learner")
+            return
+        latest.update(
+            Text.assemble(
+                ("latest event  ", "dim"),
+                (event.text, "bold red" if event.stderr else "#C8D4E3"),
+            )
+        )
+
+
+def _css_slug(value: str) -> str:
+    slug = "".join(character.lower() if character.isalnum() else "-" for character in value)
+    return "-".join(part for part in slug.split("-") if part) or "metrics"
+
+
+def _header_title(recipe: str) -> str:
+    return f"LOCAL TRAINING  •  {recipe.replace('/', '  •  ')}".upper()
+
+
+def _ellipsize_left(value: str, width: int) -> str:
+    if len(value) <= width:
+        return value
+    if width <= 1:
+        return "…"
+    return f"…{value[-(width - 1):]}"
+
+
+def _identity_text(identity: LocalTrainingIdentity, *, width: int) -> Text:
+    output_width = max(width - len("output  ") - 8, 16)
+    return Text.assemble(
+        ("recipe  ", "#67949A"),
+        (identity.recipe, "#AFC6E9"),
+        ("    seed  ", "#67949A"),
+        (str(identity.seed), "#D8DEE9"),
+        ("\noutput  ", "#67949A"),
+        (_ellipsize_left(identity.output, output_width), "#8392AB"),
+    )
+
+
+def _run_notice(identity: LocalTrainingIdentity) -> Text:
+    if identity.completion_signal_available is False:
+        detail = "no declared success signal; continues to budget or early-stop"
+    else:
+        detail = "checkpoint evaluation disabled; cannot establish promotion or acceptance"
+    return Text.assemble(
+        ("TRAINING-ONLY RUN", "bold #FBBF24"),
+        ("  •  ", "#9B7831"),
+        (detail, "#E8B847"),
+    )
 
 
 def _format_duration(seconds: float) -> str:

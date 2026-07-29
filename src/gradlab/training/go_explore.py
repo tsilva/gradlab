@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 import time
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -70,30 +70,36 @@ GO_EXPLORE_PROGRESS_FIELDS = (
         TRAIN_GO_EXPLORE_ARCHIVE_CELL_COUNT,
         "cells",
         ProgressValueFormat.COUNT,
+        group="exploration",
     ),
     ProgressField(
         TRAIN_GO_EXPLORE_ARCHIVE_BLOB_BYTES,
-        "archive mem est.",
+        "archive memory est.",
         ProgressValueFormat.BYTES,
+        group="resources",
     ),
     ProgressField(
         TRAIN_GO_EXPLORE_ARCHIVE_VISIT_COUNT,
         "visits",
         ProgressValueFormat.COUNT,
+        group="traffic",
     ),
     ProgressField(
         TRAIN_GO_EXPLORE_ARCHIVE_RECENT_NEW_CELL_RATE,
         "new cells",
         ProgressValueFormat.PERCENT,
+        group="exploration",
     ),
     ProgressField(
         TRAIN_GO_EXPLORE_BEST_PROGRESS,
         "best progress",
+        group="exploration",
     ),
     ProgressField(
         TRAIN_GO_EXPLORE_PROGRESS_GUIDED_SELECTION_RATE,
         "frontier restores",
         ProgressValueFormat.PERCENT,
+        group="traffic",
     ),
 )
 
@@ -166,6 +172,50 @@ def _save_policy(
     step: int,
     terminal: bool = False,
 ) -> Path | None:
+    def save_checkpoint(destination: Path, discriminator: str) -> None:
+        cell_graph_exporter = getattr(search, "cell_graph_policy", None)
+        if bool(getattr(search, "legacy_state", False)) or not callable(
+            cell_graph_exporter
+        ):
+            search.policy().save(
+                destination,
+                artifact_discriminator=discriminator,
+            )
+            return
+        archive_config = context.train_config.get("state_archive")
+        if not isinstance(archive_config, Mapping):
+            raise ValueError("Go-Explore checkpoint requires state_archive configuration")
+        recorder = archive_config.get("recorder")
+        if not isinstance(recorder, Mapping) or not isinstance(
+            recorder.get("cell"), Mapping
+        ):
+            raise ValueError("Go-Explore checkpoint requires its cell detector")
+        cell_detector = recorder["cell"]
+        export = archive_config.get("export", {})
+        snapshot_mode = (
+            str(export.get("snapshots", "none"))
+            if isinstance(export, Mapping)
+            else "none"
+        )
+        snapshot_records: dict[str, tuple[Mapping[str, Any], bytes]] = {}
+        if snapshot_mode == "retained":
+            archive = getattr(runtime, "state_archive", None)
+            if archive is None:
+                raise RuntimeError("snapshot-exporting Go-Explore has no working archive")
+            for entry_id in search.graph_snapshot_entry_ids():
+                snapshot_records[entry_id] = (
+                    archive.entry(entry_id).to_dict(),
+                    archive.payload(entry_id),
+                )
+        cell_graph_exporter(
+            detector=cell_detector,
+            snapshot_mode=snapshot_mode,
+            snapshot_records=snapshot_records,
+        ).save(
+            destination,
+            artifact_discriminator=discriminator,
+        )
+
     return context.session.checkpoints.save(
         kind=kind,
         step=step,
@@ -173,9 +223,9 @@ def _save_policy(
         terminal=terminal,
         save_bundle=lambda path, artifact_kind, artifact_step: install_model_bundle(
             path,
-            save_checkpoint=lambda destination: search.policy().save(
+            save_checkpoint=lambda destination: save_checkpoint(
                 destination,
-                artifact_discriminator=f"{artifact_kind}:{artifact_step}",
+                f"{artifact_kind}:{artifact_step}",
             ),
             train_config=context.train_config,
             config=context.environment,
@@ -513,6 +563,18 @@ class GoExploreBackend:
             raise ValueError("gradlab.go-explore requires state_archive.recorder.mode='backend'")
         if not isinstance(recorder.get("cell"), Mapping):
             raise ValueError("gradlab.go-explore requires state_archive.recorder.cell")
+        dimensions = recorder["cell"].get("dimensions")
+        if (
+            not isinstance(dimensions, Sequence)
+            or isinstance(dimensions, str | bytes)
+            or any(
+                not isinstance(dimension, Mapping) or "source" in dimension
+                for dimension in dimensions
+            )
+        ):
+            raise ValueError(
+                "gradlab.go-explore executable cells require semantic signal dimensions"
+            )
         if archive.get("curriculum") is not None:
             raise ValueError("gradlab.go-explore owns selection; curriculum must be null")
 
@@ -530,7 +592,7 @@ class GoExploreBackend:
             "defaults": DEFAULT_CONFIG,
             "required_config": ["progress_signal"],
             "search_archive_persistence": "ephemeral",
-            "persisted_artifact": "best-action-program",
+            "persisted_artifact": "target-directed-cell-graph",
             "state_archive_priority_metrics": [],
         }
 
@@ -541,9 +603,9 @@ class GoExploreBackend:
         del backend_config
         return {
             "training_backend_id": self.backend_id,
-            "algorithm_id": "action-program",
+            "algorithm_id": "cell-graph",
             "search_algorithm_id": "go-explore",
-            "model_class": "gradlab.action_program.ActionProgramPolicy",
+            "model_class": "gradlab.cell_graph.CellGraphPolicy",
         }
 
 

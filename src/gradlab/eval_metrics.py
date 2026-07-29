@@ -423,6 +423,11 @@ def run_eval_episode(
             action = policy_runtime.decide(
                 obs,
                 action_selection_mode=action_selection_mode,
+                execution_context=(
+                    env.policy_execution_context(model)
+                    if callable(getattr(env, "policy_execution_context", None))
+                    else None
+                ),
             ).actions
         action_value = single_env_action(action)
         if capture_actions:

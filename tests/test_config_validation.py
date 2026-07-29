@@ -172,7 +172,16 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertEqual(train_config["obs_crop_mode"], "mask")
         self.assertEqual(
             train_config["task"]["signals"],
-            {"ball_y": "ball_y", "score": "score"},
+            {
+                "ball_vx": "ball_vx",
+                "ball_vy": "ball_vy",
+                "ball_x": "ball_x",
+                "ball_y": "ball_y",
+                "bricks_remaining": "bricks_remaining",
+                "paddle_x": "paddle_x",
+                "score": "score",
+                "walls_cleared": "walls_cleared",
+            },
         )
         self.assertEqual(
             train_config["task"]["events"],
@@ -616,7 +625,16 @@ class ConfigValidationTests(unittest.TestCase):
         )
         self.assertEqual(
             train_config["task"]["signals"],
-            {"ball_y": "ball_y", "score": "score"},
+            {
+                "ball_vx": "ball_vx",
+                "ball_vy": "ball_vy",
+                "ball_x": "ball_x",
+                "ball_y": "ball_y",
+                "bricks_remaining": "bricks_remaining",
+                "paddle_x": "paddle_x",
+                "score": "score",
+                "walls_cleared": "walls_cleared",
+            },
         )
 
         info_path = _stable_retro_packaged_data_path(
@@ -692,7 +710,7 @@ class ConfigValidationTests(unittest.TestCase):
             compose_train_document(self.BREAKOUT_GOAL, self.BREAKOUT_RECIPE)["train_config"],
         )
 
-    def test_go_explore_persists_only_the_best_action_program(self) -> None:
+    def test_go_explore_persists_portable_cell_graph_without_snapshots(self) -> None:
         recipe = self.MARIO_L11_GOAL.parent / "recipes/go-explore-20m.yaml"
         document = compose_train_document(self.MARIO_L11_GOAL, recipe)
         train_config = document["train_config"]
@@ -704,7 +722,11 @@ class ConfigValidationTests(unittest.TestCase):
         )
         self.assertEqual(
             train_config["state_archive"]["recorder"]["cell"]["dimensions"][4],
-            {"source": "x_pos", "bucket_size": 8.0},
+            {"signal": "x_pos", "bucket_size": 8.0},
+        )
+        self.assertEqual(
+            train_config["state_archive"]["export"],
+            {"snapshots": "none"},
         )
 
     def test_breakout_go_explore_uses_shared_yaml_cell_detector(self) -> None:
@@ -729,22 +751,26 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertEqual(
             train_config["state_archive"]["recorder"]["cell"]["dimensions"],
             [
-                {"source": "walls_cleared", "bucket_size": 1.0},
-                {"source": "bricks_remaining", "bucket_size": 6.0},
-                {"source": "ball_x", "bucket_size": 524_288.0},
+                {"signal": "walls_cleared", "bucket_size": 1.0},
+                {"signal": "bricks_remaining", "bucket_size": 6.0},
+                {"signal": "ball_x", "bucket_size": 524_288.0},
                 {"signal": "ball_y", "bucket_size": 8.0},
-                {"source": "paddle_x", "bucket_size": 1_048_576.0},
+                {"signal": "paddle_x", "bucket_size": 1_048_576.0},
                 {
-                    "source": "ball_vx",
+                    "signal": "ball_vx",
                     "bucket_size": 1.0,
                     "clamp": [-1.0, 1.0],
                 },
                 {
-                    "source": "ball_vy",
+                    "signal": "ball_vy",
                     "bucket_size": 1.0,
                     "clamp": [-1.0, 1.0],
                 },
             ],
+        )
+        self.assertEqual(
+            train_config["state_archive"]["export"],
+            {"snapshots": "none"},
         )
 
     def test_breakout_stable_updates_recipe_adds_late_update_guards(self) -> None:

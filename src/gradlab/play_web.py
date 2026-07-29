@@ -150,6 +150,7 @@ def _decision_payload(decision: PolicyDecision | None) -> dict[str, Any] | None:
         "exploration_rate": decision.exploration_rate,
         "exploratory": decision.exploratory,
         "program": _json_value(decision.program),
+        "route": _json_value(decision.route),
         "sampled": decision.sampled,
         "selected_action": decision.selected_discrete_action,
         "selected_probability": decision.selected_probability,

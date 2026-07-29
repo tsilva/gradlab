@@ -58,6 +58,12 @@ train:
         set: native
       signals:
         ball_y: ball_y
+        walls_cleared: walls_cleared
+        bricks_remaining: bricks_remaining
+        ball_x: ball_x
+        paddle_x: paddle_x
+        ball_vx: ball_vx
+        ball_vy: ball_vy
         # The live-state curriculum groups reachable Breakout states by score stage.
         score: score
       events:

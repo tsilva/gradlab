@@ -183,23 +183,28 @@ class ProgressField:
     metric: str
     label: str
     value_format: ProgressValueFormat = ProgressValueFormat.NUMBER
+    group: str = "algorithm"
 
     def __post_init__(self) -> None:
         if not self.metric.strip():
             raise ValueError("progress field metric must be non-empty")
         if not self.label.strip():
             raise ValueError("progress field label must be non-empty")
+        if not self.group.strip():
+            raise ValueError("progress field group must be non-empty")
 
 
 COMMON_PROGRESS_FIELDS = (
     ProgressField(
         TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_MEAN,
         "mean return",
+        group="outcomes",
     ),
     ProgressField(
         TRAIN_OUTCOME_SUCCESS_CURRENT_RATE_MEAN,
         "completion",
         ProgressValueFormat.PERCENT,
+        group="outcomes",
     ),
 )
 

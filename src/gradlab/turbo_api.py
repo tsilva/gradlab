@@ -27,6 +27,16 @@ CAPABILITY_KEYS = frozenset(
         "supports_per_lane_rgb",
     }
 )
+PROVIDER_CAPABILITY_KEYS = MappingProxyType(
+    {
+        "vizdoom-turbo": frozenset(
+            {
+                "supports_enemy_variants",
+                "supports_surface_variants",
+            }
+        ),
+    }
+)
 ACTION_FIELDS = (
     "buttons",
     "action_mode",
@@ -101,13 +111,18 @@ def validate_turbo_vector_env(env: Any, provider_id: str) -> TurboApiContract:
     capabilities = _require_mapping(getattr(env, "capabilities", None), "capabilities")
     if not isinstance(capabilities, IMMUTABLE_MAPPING_TYPE):
         raise TypeError(f"{provider_id} capabilities must be immutable")
-    missing = CAPABILITY_KEYS - set(capabilities)
-    extra = set(capabilities) - CAPABILITY_KEYS
+    provider_capability_keys = PROVIDER_CAPABILITY_KEYS.get(provider_id, frozenset())
+    expected_capability_keys = CAPABILITY_KEYS | provider_capability_keys
+    missing = expected_capability_keys - set(capabilities)
+    extra = set(capabilities) - expected_capability_keys
     if missing or extra:
         raise RuntimeError(
             f"{provider_id} capabilities mismatch; missing={sorted(missing)}, "
             f"extra={sorted(extra)}"
         )
+    for name in provider_capability_keys:
+        if not isinstance(capabilities[name], bool):
+            raise TypeError(f"{provider_id} capability {name!r} must be boolean")
     action_modes = tuple(str(value) for value in capabilities["supported_action_modes"])
     if (
         not action_modes

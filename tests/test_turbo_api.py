@@ -9,7 +9,7 @@ import pytest
 from gradlab.turbo_api import CAPABILITY_KEYS, TURBO_API_VERSION, validate_turbo_vector_env
 
 
-def _contract_env():
+def _contract_env(*, capability_extensions=None):
     active = np.zeros(2, dtype=np.int32)
     active.setflags(write=False)
     capabilities = {
@@ -25,7 +25,10 @@ def _contract_env():
         "supports_live_snapshots": True,
         "supports_per_lane_rgb": True,
     }
-    assert set(capabilities) == CAPABILITY_KEYS
+    if capability_extensions is None:
+        assert set(capabilities) == CAPABILITY_KEYS
+    else:
+        capabilities.update(capability_extensions)
     signal_spec = MappingProxyType(
         {
             "dtype": np.dtype(np.int64),
@@ -77,6 +80,71 @@ def test_validates_the_declarative_v1_surface_without_resetting_or_stepping() ->
     assert contract.api_version == TURBO_API_VERSION
     assert contract.observation_ownership == "safe_view"
     assert contract.observation_buffer_depth == 2
+
+
+@pytest.mark.parametrize(
+    "provider_id",
+    (
+        "stable-retro-turbo",
+        "supermariobrosnes-turbo",
+        "breakout-turbo-env",
+    ),
+)
+def test_pinned_common_providers_keep_the_exact_common_capability_contract(
+    provider_id: str,
+) -> None:
+    contract = validate_turbo_vector_env(_contract_env(), provider_id)
+
+    assert set(contract.capabilities) == CAPABILITY_KEYS
+
+
+def test_accepts_the_strict_vizdoom_capability_extensions() -> None:
+    env = _contract_env(
+        capability_extensions={
+            "supports_enemy_variants": False,
+            "supports_surface_variants": False,
+        }
+    )
+
+    contract = validate_turbo_vector_env(env, "vizdoom-turbo")
+
+    assert contract.capabilities["supports_enemy_variants"] is False
+    assert contract.capabilities["supports_surface_variants"] is False
+
+
+def test_rejects_vizdoom_capability_extensions_from_other_providers() -> None:
+    env = _contract_env(
+        capability_extensions={
+            "supports_enemy_variants": False,
+            "supports_surface_variants": False,
+        }
+    )
+
+    with pytest.raises(RuntimeError, match="extra=.*supports_enemy_variants"):
+        validate_turbo_vector_env(env, "test-turbo")
+
+
+def test_requires_the_complete_vizdoom_capability_extension_contract() -> None:
+    env = _contract_env(
+        capability_extensions={
+            "supports_enemy_variants": False,
+        }
+    )
+
+    with pytest.raises(RuntimeError, match="missing=.*supports_surface_variants"):
+        validate_turbo_vector_env(env, "vizdoom-turbo")
+
+
+def test_requires_boolean_vizdoom_capability_extensions() -> None:
+    env = _contract_env(
+        capability_extensions={
+            "supports_enemy_variants": "no",
+            "supports_surface_variants": False,
+        }
+    )
+
+    with pytest.raises(TypeError, match="supports_enemy_variants.*boolean"):
+        validate_turbo_vector_env(env, "vizdoom-turbo")
 
 
 def test_rejects_mutable_contract_declarations() -> None:

@@ -118,6 +118,11 @@ def test_training_budget_exposes_requested_and_safe_execution_totals() -> None:
     assert budget.step_quantum == 8_192
 
 
+def test_progress_fields_require_a_nonempty_presentation_group() -> None:
+    with pytest.raises(ValueError, match="group must be non-empty"):
+        ProgressField("train/test/value", "test value", group=" ")
+
+
 def test_execution_modes_resolve_to_fixed_lifecycle_policies() -> None:
     local = TrainingExecutionPolicy.for_mode(TrainingExecutionMode.LOCAL_DEMO)
     supervised = TrainingExecutionPolicy.for_mode(TrainingExecutionMode.SUPERVISED)

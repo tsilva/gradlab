@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
@@ -10,6 +11,7 @@ from typing import Any, Protocol
 import gymnasium as gym
 import numpy as np
 from numba import njit
+from gradlab.json_utils import canonical_json_bytes
 from gradlab.state_archive import (
     ArchiveCellConfig,
     ArchiveCellDetector,
@@ -18,6 +20,7 @@ from gradlab.state_archive import (
     ArchiveSelection,
     RuntimeLaneState,
     StateArchive,
+    normalize_archive_cell_config,
     normalize_state_archive_config,
 )
 from gradlab.task_kernels import BoundTaskKernel, Outcome, event_names_from_bits
@@ -518,6 +521,7 @@ class BatchRuntime:
         )
         self.state_archive: StateArchive | None = None
         self.archive_cell_detector: ArchiveCellDetector | None = None
+        self._policy_cell_detectors: dict[str, ArchiveCellDetector] = {}
         self.archive_curriculum: ArchiveCurriculum | None = None
         if self.state_archive_config is not None:
             if state_archive_root is None:
@@ -851,6 +855,21 @@ class BatchRuntime:
         detector = self.archive_cell_detector
         if detector is None:
             raise RuntimeError("state archive cell detector is disabled")
+        return self._cell_keys_with_detector(
+            detector,
+            infos,
+            mask=mask,
+            source=source,
+        )
+
+    def _cell_keys_with_detector(
+        self,
+        detector: ArchiveCellDetector,
+        infos: Mapping[str, Any],
+        *,
+        mask: np.ndarray | None,
+        source: str,
+    ) -> tuple[bytes, ...]:
         selected = (
             np.ones(self.num_envs, dtype=np.bool_)
             if mask is None
@@ -886,6 +905,60 @@ class BatchRuntime:
                     )
             values[dimension.selector] = raw_values
         return detector.keys(values, n_envs=self.num_envs)
+
+    def policy_cell_keys(
+        self,
+        cell_config: Mapping[str, Any],
+        infos: Mapping[str, Any],
+        *,
+        mask: np.ndarray | None = None,
+        source: str,
+    ) -> tuple[bytes, ...]:
+        """Resolve a declared policy cell detector without enabling snapshots."""
+
+        normalized = normalize_archive_cell_config(
+            cell_config,
+            label="policy.cell_detector",
+        )
+        cache_key = hashlib.sha256(canonical_json_bytes(normalized)).hexdigest()
+        detector = self._policy_cell_detectors.get(cache_key)
+        if detector is None:
+            config = ArchiveCellConfig.from_mapping(
+                normalized,
+                label="policy.cell_detector",
+            )
+            if config.sources:
+                raise ValueError(
+                    "executable policy cell detectors require semantic signals"
+                )
+            for signal in config.signals:
+                self.kernel.validate_archive_signal(signal)
+            detector = ArchiveCellDetector(config)
+            self._policy_cell_detectors[cache_key] = detector
+        return self._cell_keys_with_detector(
+            detector,
+            infos,
+            mask=mask,
+            source=source,
+        )
+
+    def policy_reset_cell_keys(
+        self,
+        cell_config: Mapping[str, Any],
+    ) -> tuple[bytes, ...]:
+        if any(not info for info in self.reset_infos):
+            raise RuntimeError("policy reset cell keys require an initialized runtime")
+        keys = set().union(*(info.keys() for info in self.reset_infos))
+        infos = {
+            key: np.asarray([info.get(key) for info in self.reset_infos])
+            for key in keys
+            if not key.startswith("_")
+        }
+        return self.policy_cell_keys(
+            cell_config,
+            infos,
+            source="reset",
+        )
 
     def state_archive_reset_cell_keys(self) -> tuple[bytes, ...]:
         if any(not info for info in self.reset_infos):

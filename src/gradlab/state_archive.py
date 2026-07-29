@@ -1086,10 +1086,19 @@ def normalize_archive_curriculum_config(
 
 
 _STATE_ARCHIVE_KEYS = frozenset(
-    {"semantic_id", "persistence", "restore_semantics", "recorder", "curriculum"}
+    {
+        "semantic_id",
+        "persistence",
+        "restore_semantics",
+        "recorder",
+        "curriculum",
+        "export",
+    }
 )
 _RECORDER_KEYS = frozenset({"mode", "cell"})
 _RECORDER_MODES = frozenset({"backend", "cell_transition"})
+_EXPORT_KEYS = frozenset({"snapshots"})
+_EXPORT_SNAPSHOT_MODES = frozenset({"none", "retained"})
 
 
 def normalize_state_archive_config(
@@ -1149,6 +1158,18 @@ def normalize_state_archive_config(
             label=f"{label}.curriculum",
             n_envs=n_envs,
         )
+    export = value.get("export", {})
+    if not isinstance(export, Mapping):
+        raise ValueError(f"{label}.export must be an object")
+    unexpected_export = sorted(set(export) - _EXPORT_KEYS)
+    if unexpected_export:
+        raise ValueError(f"{label}.export has unexpected fields: {unexpected_export}")
+    snapshot_mode = str(export.get("snapshots", "none")).strip()
+    if snapshot_mode not in _EXPORT_SNAPSHOT_MODES:
+        raise ValueError(
+            f"{label}.export.snapshots must be one of "
+            f"{sorted(_EXPORT_SNAPSHOT_MODES)}"
+        )
     return {
         "semantic_id": STATE_ARCHIVE_SEMANTIC_ID,
         "persistence": persistence,
@@ -1158,6 +1179,7 @@ def normalize_state_archive_config(
             **({"cell": normalized_cell} if normalized_cell is not None else {}),
         },
         "curriculum": normalized_curriculum,
+        "export": {"snapshots": snapshot_mode},
     }
 
 

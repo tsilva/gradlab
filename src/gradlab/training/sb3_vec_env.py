@@ -31,6 +31,8 @@ class GradLabVecEnv(VecEnv):
         self._archive_curriculum_enabled = getattr(runtime, "archive_curriculum", None) is not None
         self._seed_base: int | None = None
         self._dones = np.zeros(runtime.num_envs, dtype=bool)
+        self._last_transition_info: Mapping[str, Any] | None = None
+        self._last_reset_info: Mapping[str, Any] | None = None
         self._empty_infos: list[dict[str, Any]] = [{} for _ in range(runtime.num_envs)]
         super().__init__(runtime.num_envs, runtime.observation_space, runtime.action_space)
 
@@ -58,6 +60,9 @@ class GradLabVecEnv(VecEnv):
         self._actions = None
         self._step_diagnostics = None
         self._curriculum_step = None
+        self._last_transition_info = None
+        self._last_reset_info = None
+        self._dones.fill(False)
         return observations
 
     def step_async(self, actions: Any) -> None:
@@ -74,6 +79,8 @@ class GradLabVecEnv(VecEnv):
         self.waiting = False
         self.reset_infos = self.runtime.reset_infos
         self._step_diagnostics = step.diagnostics
+        self._last_transition_info = step.transition_info
+        self._last_reset_info = step.reset_info
         if self._archive_curriculum_enabled:
             self._curriculum_step = CurriculumStepAttribution(
                 curriculum_cell_ids=np.asarray(step.curriculum_cell_ids, dtype=object).copy(),
@@ -123,6 +130,33 @@ class GradLabVecEnv(VecEnv):
         # SB3 retains this array as the next transition's episode-start mask.
         # Return a snapshot so the reusable scratch buffer cannot mutate it.
         return step.observations, step.rewards, self._dones.copy(), infos
+
+    def policy_execution_context(self, model: Any):
+        cell_config = getattr(model, "cell_detector_config", None)
+        if not isinstance(cell_config, Mapping):
+            return None
+        from gradlab.cell_graph import CellGraphExecutionContext
+
+        reset_keys = self.runtime.policy_reset_cell_keys(cell_config)
+        if self._last_transition_info is None:
+            keys = reset_keys
+            reset_mask = tuple(True for _ in range(self.num_envs))
+        else:
+            transition_keys = self.runtime.policy_cell_keys(
+                cell_config,
+                self._last_transition_info,
+                source="step",
+            )
+            keys = tuple(
+                reset_keys[lane] if bool(self._dones[lane]) else transition_keys[lane]
+                for lane in range(self.num_envs)
+            )
+            reset_mask = tuple(bool(value) for value in self._dones)
+        return CellGraphExecutionContext(
+            cell_keys=keys,
+            episode_seeds=self.runtime.episode_seeds,
+            reset_mask=reset_mask,
+        )
 
     def take_step_diagnostics(self) -> StepDiagnostics | None:
         diagnostics = self._step_diagnostics
