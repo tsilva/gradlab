@@ -231,7 +231,7 @@ function setSourceMode(active, snapshot = null) {
     updateLayoutTitle();
     return;
   }
-  document.title = "Select playback source · gradlab player";
+  document.title = "Select playback source · gradlab";
   const expected = snapshot;
   void ensureSourceBrowser().then((browser) => {
     if (state.sourceMode && state.applicationSnapshot === expected) browser.render(expected);
@@ -687,11 +687,7 @@ function configureMode(mode) {
   if (state.mode === mode) return;
   state.mode = mode;
   const recording = mode === "recording";
-  const dataset = mode === "dataset";
   document.body.classList.toggle("recording", recording);
-  document.querySelector(".eyebrow").textContent = recording
-    ? "HUMAN RECORDING"
-    : (dataset ? "DATASET PLAYBACK" : "GRADLAB PLAYER");
 }
 
 function renderHistory() {
@@ -951,7 +947,7 @@ function updateLayoutTitle() {
       : environmentTitle;
   $("#page-title").textContent = title;
   $("#layout-name-input").value = state.layout.name;
-  document.title = `${title} · gradlab player`;
+  document.title = `${title} · gradlab`;
 }
 
 async function applyLayout() {
@@ -1220,11 +1216,6 @@ function removeTelemetryPanel(name) {
 }
 
 function bindWorkspaceMenus() {
-  $("#player-home").addEventListener("click", () => {
-    void ensureSourceBrowser()
-      .then((browser) => browser.goHome())
-      .catch((error) => showToast(`Source browser failed: ${error.message || error}`, true));
-  });
   $("#change-source").addEventListener("click", () => {
     void ensureSourceBrowser()
       .then((browser) => browser.browseCurrentSource())

@@ -399,6 +399,17 @@ class JobStore(SqliteStore):
                     "SELECT * FROM job_subjects WHERE job_id = ?",
                     (str(existing["job_id"]),),
                 ).fetchall()
+                existing_identities = {
+                    (str(row["subject_type"]), str(row["subject_id"]))
+                    for row in existing_subjects
+                }
+                if (
+                    str(existing["payload_json"]) != encoded
+                    or existing_identities != set(identities)
+                ):
+                    raise ValueError(
+                        "job idempotency key conflicts with a different request"
+                    )
                 return EnqueueResult(
                     job=self._decode_job(existing),
                     subjects=tuple(self._decode_subject(row) for row in existing_subjects),
@@ -625,7 +636,8 @@ class JobStore(SqliteStore):
                     UPDATE job_subjects SET state = ?, updated_at = ?
                     WHERE job_id = ? AND state IN (
                       'queued', 'running', 'retry_wait',
-                      'waiting_for_training_terminal', 'waiting_for_run_lease'
+                      'waiting_for_training_terminal', 'waiting_for_run_lease',
+                      'submitted', 'submission_uncertain', 'awaiting_projection'
                     )
                     """,
                     (fallback, now, str(job_id)),
@@ -736,7 +748,7 @@ class JobStore(SqliteStore):
             if row is None:
                 raise ValueError(f"unknown job: {job_id}")
             state = str(row["state"])
-            if state not in {"blocked", "failed"}:
+            if state not in {"blocked", "failed", "canceled"}:
                 raise ValueError(f"job {job_id} cannot be retried from {state}")
             connection.execute(
                 """
@@ -750,7 +762,9 @@ class JobStore(SqliteStore):
             connection.execute(
                 """
                 UPDATE job_subjects SET state = 'queued', updated_at = ?
-                WHERE job_id = ? AND state IN ('blocked', 'failed', 'expired')
+                WHERE job_id = ? AND state IN (
+                  'blocked', 'failed', 'expired', 'canceled'
+                )
                 """,
                 (now, str(job_id)),
             )
@@ -866,6 +880,7 @@ def ensure_flusher(
     store: JobStore,
     *,
     start_timeout_seconds: float = DEFAULT_START_TIMEOUT_SECONDS,
+    idle_seconds: float = DEFAULT_IDLE_SECONDS,
 ) -> WorkerStart:
     store.init()
     if not store.has_unfinished():
@@ -880,6 +895,7 @@ def ensure_flusher(
     _rotate_log(store.log_path)
     try:
         log = store.log_path.open("ab", buffering=0)
+        os.chmod(store.log_path, 0o600)
         try:
             process = subprocess.Popen(
                 [
@@ -891,6 +907,8 @@ def ensure_flusher(
                     "_worker",
                     "--generation",
                     generation,
+                    "--idle-seconds",
+                    str(max(0.0, float(idle_seconds))),
                 ],
                 stdin=subprocess.DEVNULL,
                 stdout=log,
@@ -908,8 +926,16 @@ def ensure_flusher(
     deadline = time.monotonic() + max(0.1, float(start_timeout_seconds))
     while time.monotonic() < deadline:
         state = store.worker_state()
-        if state.get("generation") == generation and lock_is_held(store):
-            return WorkerStart("started", pid=int(state.get("pid") or process.pid))
+        if state.get("generation") == generation:
+            if lock_is_held(store):
+                return WorkerStart("started", pid=int(state.get("pid") or process.pid))
+            return_code = process.poll()
+            if return_code == 0 and not store.has_unfinished():
+                return WorkerStart(
+                    "started",
+                    "flusher started and drained the queue",
+                    int(state.get("pid") or process.pid),
+                )
         if process.poll() is not None:
             if lock_is_held(store):
                 state = store.worker_state()
@@ -959,11 +985,18 @@ def run_flusher(
             if job is not None:
                 idle_since = None
                 try:
-                    handler = handler_for(
-                        str(job["job_type"]),
-                        int(job["handler_version"]),
-                    )
-                    result = handler.advance(job)
+                    try:
+                        handler = handler_for(
+                            str(job["job_type"]),
+                            int(job["handler_version"]),
+                        )
+                    except ValueError as exc:
+                        result = HandlerResult(
+                            state="blocked",
+                            message=str(exc),
+                        )
+                    else:
+                        result = handler.advance(job)
                 except Exception as exc:
                     result = HandlerResult(
                         state="failed",

@@ -136,11 +136,17 @@ def _implicit_playback_seed(
     recipe: Mapping[str, Any],
     *,
     evaluation_result_seed: int | None,
+    policy_seed: int | None = None,
 ) -> int:
     if evaluation_result_seed is not None:
         return validate_playback_seed(
             evaluation_result_seed,
             label="evaluation result seed",
+        )
+    if policy_seed is not None:
+        return validate_playback_seed(
+            policy_seed,
+            label="policy initial seed",
         )
     train_config = recipe.get("train_config")
     if not isinstance(train_config, Mapping):
@@ -369,6 +375,24 @@ class PlaybackLoader:
         # an environment. Optional telemetry can degrade later, but action
         # execution and its declared selection modes cannot.
         policy_runtime = PolicyRuntime(model)
+        if not self.explicit_seed:
+            recipe = candidate.source.bundle.recipe.get("recipe", {})
+            if not isinstance(recipe, Mapping):
+                raise ValueError("policy bundle recipe is invalid")
+            policy_seed = getattr(model, "default_playback_seed", None)
+            args.seed = _implicit_playback_seed(
+                recipe,
+                evaluation_result_seed=candidate.spec.seed,
+                policy_seed=policy_seed,
+            )
+            candidate.contract_details["playback_seed_source"] = (
+                "evaluation"
+                if candidate.spec.seed is not None
+                else "policy"
+                if policy_seed is not None
+                else "training"
+            )
+            candidate.contract_details["playback_seed"] = args.seed
 
         if args.attribution != "none":
             if policy_runtime.capabilities.algorithm_id not in {"ppo", "a2c"}:

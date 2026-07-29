@@ -77,8 +77,13 @@ class SupervisorRuntime:
         train_config: Mapping[str, Any],
         *,
         allow_create: bool,
+        update_finish_state: bool = True,
     ) -> WandbProjector:
-        return WandbProjector.resume(train_config, allow_create=allow_create)
+        return WandbProjector.resume(
+            train_config,
+            allow_create=allow_create,
+            update_finish_state=update_finish_state,
+        )
 
     def publish_frames(
         self,
@@ -86,8 +91,14 @@ class SupervisorRuntime:
         projector: WandbProjector,
         *,
         limit: int,
+        event_seq_offset: int = 0,
     ) -> int:
-        return publish_pending_frames(store, projector.run, limit=limit)
+        return publish_pending_frames(
+            store,
+            projector.run,
+            limit=limit,
+            event_seq_offset=event_seq_offset,
+        )
 
     def publish_promotion(
         self,

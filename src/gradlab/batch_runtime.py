@@ -498,9 +498,7 @@ class BatchRuntime:
         self.observation_space = kernel.observation_space
         self.action_space = kernel.action_space
         self.action_contract = (
-            None
-            if action_contract is None
-            else MappingProxyType(dict(action_contract))
+            None if action_contract is None else MappingProxyType(dict(action_contract))
         )
         self.run_seed = int(run_seed)
         self.global_lane_ids = tuple(
@@ -552,21 +550,15 @@ class BatchRuntime:
                             f"archive cell source {source!r}"
                         ) from exc
                     if spec.shape:
-                        raise ValueError(
-                            f"archive cell source {source!r} must be scalar"
-                        )
+                        raise ValueError(f"archive cell source {source!r} must be scalar")
                     if not spec.available_on_reset or not spec.available_on_step:
                         raise ValueError(
-                            f"archive cell source {source!r} must be available "
-                            "on reset and step"
+                            f"archive cell source {source!r} must be available on reset and step"
                         )
                     if not (
-                        np.issubdtype(spec.dtype, np.number)
-                        or np.issubdtype(spec.dtype, np.bool_)
+                        np.issubdtype(spec.dtype, np.number) or np.issubdtype(spec.dtype, np.bool_)
                     ):
-                        raise ValueError(
-                            f"archive cell source {source!r} must be numeric"
-                        )
+                        raise ValueError(f"archive cell source {source!r} must be numeric")
                 self.archive_cell_detector = ArchiveCellDetector(cell_config)
             curriculum_document = self.state_archive_config["curriculum"]
             if curriculum_document is not None:
@@ -731,6 +723,12 @@ class BatchRuntime:
             return [self._seed_for(lane, 0) for lane in range(self.num_envs)]
         return [None if value is None else int(value) for value in seeds]
 
+    @property
+    def episode_seeds(self) -> tuple[int | None, ...]:
+        """Seeds of the active episode in each vector lane."""
+
+        return tuple(self._episode_seeds)
+
     def reset(
         self,
         *,
@@ -827,9 +825,7 @@ class BatchRuntime:
         if selected.shape != (self.num_envs,):
             raise ValueError(f"archive signal mask must have shape ({self.num_envs},)")
         try:
-            values = np.asarray(
-                self.kernel.archive_signal_values(signal, infos, mask=selected)
-            )
+            values = np.asarray(self.kernel.archive_signal_values(signal, infos, mask=selected))
         except (KeyError, ValueError) as exc:
             raise ValueError(
                 f"provider {source} infos cannot resolve archive signal {signal!r}: {exc}"
@@ -873,8 +869,7 @@ class BatchRuntime:
                 continue
             if selector_name not in infos:
                 raise ValueError(
-                    f"provider {source} infos cannot resolve archive cell "
-                    f"source {selector_name!r}"
+                    f"provider {source} infos cannot resolve archive cell source {selector_name!r}"
                 )
             raw_values = np.asarray(infos[selector_name])
             if raw_values.shape != (self.num_envs,):
@@ -887,8 +882,7 @@ class BatchRuntime:
                 present = np.asarray(presence, dtype=np.bool_)
                 if present.shape != (self.num_envs,) or np.any(selected & ~present):
                     raise ValueError(
-                        f"archive cell source {selector_name!r} is absent "
-                        "for active lanes"
+                        f"archive cell source {selector_name!r} is absent for active lanes"
                     )
             values[dimension.selector] = raw_values
         return detector.keys(values, n_envs=self.num_envs)

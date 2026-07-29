@@ -11,7 +11,7 @@ from gradlab.eval_backend import EvalHandle, EvalPoll
 from gradlab.file_utils import atomic_write_json
 from gradlab.goal_variants import build_goal_variant_descriptor
 from gradlab.metric_names import TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_MEAN
-from gradlab.manual_evaluation import ManualEvaluationQueue
+from gradlab.manual_evaluation import ManualEvaluationSupervisor
 from gradlab.policy_bundle import (
     build_recipe_document,
     canonical_json_sha256,
@@ -256,20 +256,59 @@ class RunSupervisorTests(unittest.TestCase):
             },
         )
         backend = CapturingEvalBackend()
-        queue = ManualEvaluationQueue(
+        queue = ManualEvaluationSupervisor(
             authority=self.authority,
             repo_root=Path.cwd(),
             backend_factory=lambda _manifest: backend,
             project_results=False,
-            monitor=False,
+            holder_id="manual-eval-test",
+            work_root=Path(self.temporary.name) / "manual-eval",
         )
 
-        statuses = queue.enqueue(
+        waiting = queue.advance_batch(
+            job_id="job-" + "a" * 32,
             run_id=self.run_id,
             checkpoint_ids=[checkpoint.checkpoint_id],
+            cancel_requested=False,
+        )
+        self.assertEqual(waiting.state, "retry_wait")
+        self.assertEqual(
+            waiting.subjects[0].state,
+            "waiting_for_training_terminal",
+        )
+        self.assertEqual(len(backend.payloads), 0)
+        self.assertFalse(
+            any(
+                key.endswith("/intent.json")
+                for key in self.authority.evaluation.iter_keys(
+                    f"runs/{self.run_id}/evals"
+                )
+            )
         )
 
-        self.assertEqual(statuses[0]["state"], "submitted")
+        with patch.object(
+            queue,
+            "_training_terminal",
+            return_value={"wandb_high_water_mark": 0},
+        ):
+            first = queue.advance_batch(
+                job_id="job-" + "a" * 32,
+                run_id=self.run_id,
+                checkpoint_ids=[checkpoint.checkpoint_id],
+                cancel_requested=False,
+            )
+            repeated = queue.advance_batch(
+                job_id="job-" + "a" * 32,
+                run_id=self.run_id,
+                checkpoint_ids=[checkpoint.checkpoint_id],
+                cancel_requested=False,
+            )
+
+        statuses = first.subjects
+        self.assertEqual(first.state, "retry_wait")
+        self.assertEqual(statuses[0].state, "submitted")
+        self.assertEqual(repeated.state, "retry_wait")
+        self.assertEqual(repeated.subjects[0].state, "submitted")
         self.assertEqual(len(backend.payloads), 1)
         intent = next(
             self.authority.evaluation.get_json(key)
@@ -289,13 +328,89 @@ class RunSupervisorTests(unittest.TestCase):
             )
         )
 
-        repeated = queue.enqueue(
-            run_id=self.run_id,
-            checkpoint_ids=[checkpoint.checkpoint_id],
+    def test_manual_vizdoom_evaluation_rejects_stale_protocol(self) -> None:
+        valid = {
+            "environment": {"game": "VizdoomDefendLine-v1"},
+            "episodes": 100,
+            "evidence_policy": {"fail_fast": "disabled"},
+            "acceptance": [
+                {
+                    "metric": "eval/full/episode/return/mean",
+                    "operator": ">=",
+                    "threshold": 5.0,
+                }
+            ],
+        }
+        ManualEvaluationSupervisor._validate_current_protocol(valid)
+
+        for changed in (
+            {**valid, "episodes": 99},
+            {**valid, "evidence_policy": {"fail_fast": "first_failed_episode"}},
+            {
+                **valid,
+                "acceptance": [
+                    {
+                        "metric": "eval/full/outcome/success/rate/min",
+                        "operator": ">=",
+                        "threshold": 1.0,
+                    }
+                ],
+            },
+        ):
+            with self.assertRaisesRegex(ValueError, "requires|acceptance"):
+                ManualEvaluationSupervisor._validate_current_protocol(changed)
+
+    def test_manual_evaluation_uses_latest_attempt_manifest(self) -> None:
+        latest = replace(
+            self.manifest,
+            attempt_id=new_attempt_id(),
+            created_at="2026-12-31T23:59:59Z",
+        )
+        self.authority.create_attempt_manifest(latest)
+        queue = ManualEvaluationSupervisor(
+            authority=self.authority,
+            repo_root=Path.cwd(),
+            project_results=False,
+            work_root=Path(self.temporary.name) / "manual-eval-latest",
         )
 
-        self.assertEqual(repeated[0]["state"], "submitted")
-        self.assertEqual(len(backend.payloads), 1)
+        self.assertEqual(
+            queue._manifest(self.run_id).attempt_id,
+            latest.attempt_id,
+        )
+
+    def test_manual_evaluation_sequences_after_prior_manual_jobs(self) -> None:
+        queue = ManualEvaluationSupervisor(
+            authority=self.authority,
+            repo_root=Path.cwd(),
+            project_results=False,
+            work_root=Path(self.temporary.name) / "manual-eval-offset",
+        )
+        prefix = f"runs/{self.run_id}/manual-evals"
+        self.authority.control.put_json(
+            f"{prefix}/first/wandb-projection.json",
+            {
+                "schema_version": 1,
+                "run_id": self.run_id,
+                "wandb_high_water_mark": 14,
+            },
+        )
+        self.authority.control.put_json(
+            f"{prefix}/jobs/job-{'a' * 32}/terminal.json",
+            {
+                "schema_version": 1,
+                "run_id": self.run_id,
+                "wandb_high_water_mark": 19,
+            },
+        )
+
+        self.assertEqual(
+            queue._event_seq_offset(
+                self.manifest,
+                {"wandb_high_water_mark": 11},
+            ),
+            19,
+        )
 
     def test_ephemeral_state_archive_is_not_recovered_or_published(self) -> None:
         supervisor = self.supervisor()

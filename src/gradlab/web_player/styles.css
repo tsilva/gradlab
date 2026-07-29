@@ -109,17 +109,9 @@ button.danger { color: #ffabb0; border-color: #673840; }
   white-space: nowrap;
 }
 
-.app-home {
-  padding: 0;
-  border: 0;
-  border-radius: 0;
-  background: transparent;
-}
-
-.app-home:hover:not(:disabled) {
-  border-color: transparent;
-  background: transparent;
-  color: var(--text);
+.app-wordmark {
+  pointer-events: none;
+  user-select: none;
 }
 
 h1 { font-size: .92rem; margin: 0; font-weight: 650; white-space: nowrap; }
@@ -454,12 +446,20 @@ h2 { font-size: .9rem; margin: 0; font-weight: 650; }
 .source-table .evaluation-cell.accepted .evaluation-verdict { color: var(--green); }
 .source-table .evaluation-cell.rejected .evaluation-verdict { color: var(--red); }
 .source-table .evaluation-cell.queued .evaluation-verdict,
+.source-table .evaluation-cell.running .evaluation-verdict,
+.source-table .evaluation-cell.retry_wait .evaluation-verdict,
+.source-table .evaluation-cell.waiting_for_training_terminal .evaluation-verdict,
+.source-table .evaluation-cell.waiting_for_run_lease .evaluation-verdict,
 .source-table .evaluation-cell.submitted .evaluation-verdict,
 .source-table .evaluation-cell.submission_uncertain .evaluation-verdict,
 .source-table .evaluation-cell.awaiting_projection .evaluation-verdict {
   color: var(--yellow);
 }
-.source-table .evaluation-cell.expired .evaluation-verdict { color: var(--red); }
+.source-table .evaluation-cell.blocked .evaluation-verdict,
+.source-table .evaluation-cell.flusher_unavailable .evaluation-verdict,
+.source-table .evaluation-cell.failed .evaluation-verdict,
+.source-table .evaluation-cell.expired .evaluation-verdict,
+.source-table .evaluation-cell.canceled .evaluation-verdict { color: var(--red); }
 .source-table tbody tr { cursor: pointer; transition: background .12s ease; }
 .source-table tbody tr.selected {
   background: rgba(83, 212, 232, .08);

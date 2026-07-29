@@ -161,8 +161,15 @@ export function mount({ definition, services }) {
       }
       if (document.activeElement !== fps) fps.value = Number(session.target_fps || 0);
       const awaitingNextEpisode = Boolean(session.awaiting_next_episode);
+      const defaultSeed = text(session.default_seed, session.seed);
+      if (
+        document.activeElement !== seed
+        && seed.dataset.defaultSeed !== defaultSeed
+      ) {
+        seed.value = defaultSeed;
+        seed.dataset.defaultSeed = defaultSeed;
+      }
       if (!awaitingNextEpisode || !wasAwaitingNextEpisode) {
-        if (document.activeElement !== seed) seed.value = text(session.seed, "");
         sampling.value = actionSelection.requested_mode
           || session.sampling_mode
           || actionSelection.default_mode

@@ -365,10 +365,20 @@ export function checkpointCanEvaluate(item) {
     (!item?.evaluation || typeof item.evaluation !== "object")
     && ![
       "queued",
+      "running",
+      "retry_wait",
+      "waiting_for_training_terminal",
+      "waiting_for_run_lease",
       "submitted",
       "submission_uncertain",
       "awaiting_projection",
+      "flusher_unavailable",
+      "accepted",
+      "rejected",
+      "blocked",
+      "failed",
       "expired",
+      "canceled",
     ].includes(queueState)
   );
 }
@@ -380,10 +390,27 @@ export function checkpointEvaluationCell(item) {
     const state = String(queue?.state || "");
     const presentation = {
       queued: ["Queued", "Waiting to be submitted"],
+      running: ["Starting", "The local evaluation supervisor is preparing this checkpoint"],
+      retry_wait: ["Retrying", queue?.message || "Waiting for the next safe retry"],
+      waiting_for_training_terminal: [
+        "Waiting for training",
+        queue?.message || "Evaluation starts after training is terminal",
+      ],
+      waiting_for_run_lease: [
+        "Waiting for writer",
+        queue?.message || "Waiting for exclusive run-writer authority",
+      ],
       submitted: ["Running", "Submitted to the evaluation worker"],
       submission_uncertain: ["Reconciling", queue?.message || "Checking submission state"],
       awaiting_projection: ["Syncing", queue?.message || "Publishing verified evidence"],
+      flusher_unavailable: [
+        "Flusher unavailable",
+        queue?.message || "The durable request will resume on the next startup attempt",
+      ],
+      blocked: ["Blocked", queue?.message || "Operator action is required"],
+      failed: ["Failed", queue?.message || "Evaluation could not be completed"],
       expired: ["Expired", queue?.message || "Evaluation did not complete"],
+      canceled: ["Canceled", queue?.message || "Canceled by the operator"],
     }[state];
     return presentation
       ? [presentation[0], presentation[1], `evaluation-cell ${state}`]
@@ -1313,13 +1340,28 @@ export class SourceBrowser {
           : item;
       });
       this.selectedCheckpoints.clear();
-      const submitted = [...statuses.values()].filter(
-        (item) => item.state === "submitted",
+      const admitted = [...statuses.values()].filter(
+        (item) => [
+          "queued",
+          "running",
+          "retry_wait",
+          "waiting_for_training_terminal",
+          "waiting_for_run_lease",
+          "submitted",
+          "submission_uncertain",
+          "awaiting_projection",
+        ].includes(String(item.state || "")),
       ).length;
+      const workerWarning = payload?.worker?.state === "start_failed"
+        ? String(payload.worker.message || "The local evaluation flusher could not start.")
+        : "";
       this.showToast(
-        submitted
-          ? `${submitted.toLocaleString()} checkpoint${submitted === 1 ? "" : "s"} submitted for evaluation.`
-          : "The selected checkpoints already have evaluation state.",
+        workerWarning || (
+          admitted
+          ? `${admitted.toLocaleString()} checkpoint${admitted === 1 ? "" : "s"} queued for evaluation.`
+          : "The selected checkpoints already have evaluation state."
+        ),
+        Boolean(workerWarning),
       );
     } catch (error) {
       this.showToast(String(error?.message || error), true);
@@ -1646,11 +1688,9 @@ export class SourceBrowser {
         && efficiency?.item?.run_id === item.run_id
       );
       if (isEfficiencyLeader) row.classList.add("efficiency-leader");
-      if (!showingRuns) {
-        row.tabIndex = this.hasControl() ? 0 : -1;
-        row.setAttribute("role", "button");
-        row.setAttribute("aria-disabled", String(!this.hasControl()));
-      }
+      row.tabIndex = this.hasControl() ? 0 : -1;
+      row.setAttribute("role", "button");
+      row.setAttribute("aria-disabled", String(!this.hasControl()));
       const finish = showingRuns ? runFinishPresentation(item) : null;
       const values = showingRuns
         ? [
@@ -1682,6 +1722,7 @@ export class SourceBrowser {
         if (className) cell.className = className;
         if (className.includes("source-selection-cell")) {
           const selectable = showingCheckpoints && checkpointCanEvaluate(item);
+          cell.addEventListener("click", (event) => event.stopPropagation());
           const checkbox = document.createElement("input");
           checkbox.type = "checkbox";
           checkbox.checked = this.selectedCheckpoints.has(item.checkpoint_id);
@@ -1692,7 +1733,6 @@ export class SourceBrowser {
               ? `Select ${item.checkpoint_id} for evaluation`
               : `${item.checkpoint_id} already has evaluation state`,
           );
-          checkbox.addEventListener("click", (event) => event.stopPropagation());
           checkbox.addEventListener("change", () => {
             if (checkbox.checked) this.selectedCheckpoints.add(item.checkpoint_id);
             else this.selectedCheckpoints.delete(item.checkpoint_id);
@@ -1704,7 +1744,8 @@ export class SourceBrowser {
         }
         if (className.includes("inspection-cell")) {
           const inspect = button("Inspect", { iconName: "code", quiet: true });
-          inspect.addEventListener("click", () => {
+          inspect.addEventListener("click", (event) => {
+            event.stopPropagation();
             void this.inspectRun(item.run_id).catch(
               (error) => this.showToast(String(error?.message || error), true),
             );
@@ -1722,11 +1763,6 @@ export class SourceBrowser {
           identity.type = "button";
           identity.className = "run-identity";
           identity.disabled = !this.hasControl();
-          identity.addEventListener("click", () => this.navigate({
-            level: "runs",
-            run_id: item.run_id,
-            checkpoint_id: "",
-          }));
           const state = document.createElement("span");
           state.className = `run-state ${presentation.tone}`;
           state.title = `Run state: ${presentation.label}`;
@@ -1781,19 +1817,24 @@ export class SourceBrowser {
       }
       const activate = () => {
         if (!this.hasControl()) return;
-        if (!showingRuns) {
+        if (showingRuns) {
+          this.navigate({
+            level: "runs",
+            run_id: item.run_id,
+            checkpoint_id: "",
+          });
+        } else {
           this.selectCheckpoint(item);
         }
       };
-      if (!showingRuns) {
-        row.addEventListener("click", activate);
-        row.addEventListener("keydown", (event) => {
-          if (event.key === "Enter" || event.key === " ") {
-            event.preventDefault();
-            activate();
-          }
-        });
-      }
+      row.addEventListener("click", activate);
+      row.addEventListener("keydown", (event) => {
+        if (event.target !== row) return;
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          activate();
+        }
+      });
       body.append(row);
     });
     table.append(head, body);

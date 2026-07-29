@@ -91,6 +91,24 @@ def test_eval_result_reconciliation_closes_admission_before_new_submit() -> None
     assert scenario["evidence"]["statuses"] == ["accepted", "deferred"]
 
 
+def test_local_background_jobs_cover_recovery_fencing_and_projection() -> None:
+    report = run_simulated_certification(scenarios=["local-background-jobs"])
+    scenario = report["scenarios"][0]
+    invariants = {row["name"] for row in scenario["invariants"]}
+
+    assert scenario["status"] == "passed"
+    assert {
+        "queue-admission-is-durable-and-idempotent",
+        "worker-restart-recovers-running-job",
+        "idle-worker-releases-stable-leadership-lock",
+        "post-training-eval-is-fenced-by-existing-writer",
+        "manual-eval-dispatch-requires-terminal-and-exclusive-lease",
+        "manual-eval-recovers-projects-and-terminalizes",
+        "manual-batch-preserves-global-lowest-step-promotion",
+    } <= invariants
+    assert scenario["evidence"]["manual_wandb_events"] == 1
+
+
 def test_report_keeps_raw_evidence_and_replays_scenario_set(tmp_path: Path) -> None:
     artifacts = tmp_path / "first"
     report = run_simulated_certification(

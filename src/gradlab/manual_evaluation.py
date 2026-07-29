@@ -19,6 +19,7 @@ from gradlab.job_queue import (
     JobStore,
     JobSubject,
     SubjectUpdate,
+    WorkerStart,
     ensure_flusher,
     register_handler,
 )
@@ -56,11 +57,6 @@ from gradlab.run_contracts import (
 )
 from gradlab.supervisor_ledger import SupervisorLedger
 from gradlab.supervisor_runtime import SupervisorRuntime
-from gradlab.wandb_publisher import (
-    WandbProjector,
-    publish_pending_frames,
-    publish_promotion_summary,
-)
 
 
 MANUAL_EVAL_PROTOCOL = "modal-acceptance-v3"
@@ -80,6 +76,10 @@ _STRICT_COMPLETE_MEAN_RETURN_GAMES = frozenset(
 
 
 class EvaluationContractIneligible(ValueError):
+    pass
+
+
+class EvaluationProjectionPending(RuntimeError):
     pass
 
 
@@ -220,6 +220,7 @@ class ManualEvaluationSupervisor:
         project_results: bool = True,
         holder_id: str | None = None,
         work_root: Path | None = None,
+        runtime: SupervisorRuntime | None = None,
     ) -> None:
         self.authority = authority
         self.repo_root = Path(repo_root).resolve()
@@ -229,6 +230,7 @@ class ManualEvaluationSupervisor:
         )
         self.backend_factory = backend_factory or self._modal_backend
         self.project_results = bool(project_results)
+        self.runtime = runtime or SupervisorRuntime(clock=self.clock)
         self._backends: dict[tuple[str, str, str], EvalBackend] = {}
         self._leases: dict[str, Lease] = {}
         self._holder_id = holder_id or f"manual-eval-{uuid.uuid4().hex}"
@@ -260,11 +262,24 @@ class ManualEvaluationSupervisor:
         return backend
 
     def _manifest(self, run_id: str) -> RunManifest:
-        document = self.authority.manifest(run_id)
-        if document is None:
+        documents: list[Mapping[str, Any]] = []
+        root_document = self.authority.manifest(run_id)
+        if root_document is not None:
+            documents.append(root_document)
+        for key in self.authority.control.iter_keys(f"runs/{run_id}/attempts"):
+            if key.endswith("/manifest.json"):
+                documents.append(self.authority.control.get_json(key))
+        if not documents:
             raise ValueError(f"run manifest was not found: {run_id}")
-        manifest = RunManifest(**document)
-        manifest.validate()
+        manifests = [RunManifest(**document) for document in documents]
+        for manifest in manifests:
+            manifest.validate()
+            if manifest.run_id != run_id:
+                raise ValueError("attempt manifest belongs to another run")
+        manifest = max(
+            manifests,
+            key=lambda item: (item.created_at, item.attempt_id),
+        )
         if not bool(manifest.modal.get("enabled")):
             raise ValueError("this run has no goal-owned Modal evaluation contract")
         return manifest
@@ -452,6 +467,8 @@ class ManualEvaluationSupervisor:
         receipt.validate()
         if receipt.run_id != manifest.run_id or receipt.attempt_id != manifest.attempt_id:
             raise ValueError("training terminal receipt identity does not match the run")
+        if receipt.state in {"interrupted", "resumable_failure"}:
+            return None
         return document
 
     def _latest_attempt(
@@ -530,6 +547,37 @@ class ManualEvaluationSupervisor:
             f"{context.intent.idempotency_key}/request.json"
         )
 
+    def _event_seq_offset(
+        self,
+        manifest: RunManifest,
+        training_terminal: Mapping[str, Any],
+    ) -> int:
+        high_water = int(training_terminal.get("wandb_high_water_mark") or 0)
+        for key in self.authority.control.iter_keys(
+            f"runs/{manifest.run_id}/manual-evals"
+        ):
+            if not (
+                key.endswith("/wandb-projection.json")
+                or key.endswith("/terminal.json")
+            ):
+                continue
+            document = self.authority.control.get_json(key)
+            if str(document.get("run_id") or "") != manifest.run_id:
+                raise ValueError("manual evaluation projection belongs to another run")
+            high_water = max(
+                high_water,
+                int(document.get("wandb_high_water_mark") or 0),
+            )
+        return high_water
+
+    @staticmethod
+    def _wandb_run_path(manifest: RunManifest) -> str:
+        return (
+            f"{manifest.wandb['entity']}/"
+            f"{manifest.wandb['project']}/"
+            f"{manifest.run_id}"
+        )
+
     def _lease(self, manifest: RunManifest) -> Lease:
         existing = self._leases.get(manifest.run_id)
         now = self.clock.utc_datetime().astimezone(UTC)
@@ -588,7 +636,7 @@ class ManualEvaluationSupervisor:
             source=f"eval:manual:{context.intent.idempotency_key}",
         )
         ledger.reset_interrupted_metric_frames()
-        projector = WandbProjector.resume(
+        projector = self.runtime.resume_wandb(
             {
                 "wandb_run_id": context.manifest.run_id,
                 "wandb_entity": context.manifest.wandb["entity"],
@@ -599,14 +647,15 @@ class ManualEvaluationSupervisor:
                 "run_name": context.manifest.wandb.get("display_name"),
                 "wandb_group": context.manifest.wandb.get("group"),
             },
+            allow_create=False,
             update_finish_state=False,
         )
         try:
             while ledger.pending_metric_frames(limit=1):
                 if (
-                    publish_pending_frames(
+                    self.runtime.publish_frames(
                         ledger,
-                        projector.run,
+                        projector,
                         limit=100,
                         event_seq_offset=event_seq_offset,
                     )
@@ -614,18 +663,13 @@ class ManualEvaluationSupervisor:
                 ):
                     return False
         finally:
-            projector.close(timeout_seconds=300)
+            self.runtime.close_wandb(projector, timeout_seconds=300)
         with ledger.connection() as connection:
             row = connection.execute(
                 "SELECT COALESCE(MAX(id), 0) FROM metric_frames"
             ).fetchone()
         high_water = event_seq_offset + int(row[0] if row else 0)
-        run_path = (
-            f"{context.manifest.wandb['entity']}/"
-            f"{context.manifest.wandb['project']}/"
-            f"{context.manifest.run_id}"
-        )
-        remote = SupervisorRuntime(clock=self.clock).remote_summary(run_path)
+        remote = self.runtime.remote_summary(self._wandb_run_path(context.manifest))
         if int(remote.get("orchestration/event_seq") or 0) < high_water:
             return False
         self.authority.control.put_json(
@@ -647,7 +691,6 @@ class ManualEvaluationSupervisor:
         self,
         context: _EvaluationContext,
         result: EvalResult,
-        raw: Mapping[str, Any],
     ) -> None:
         key = f"runs/{context.manifest.run_id}/promotion.json"
         existing = self.authority.control.get_json_optional(key)
@@ -667,13 +710,34 @@ class ManualEvaluationSupervisor:
             promoted_at=self.clock.utc_now(),
         )
         self.authority.create_promotion(receipt)
+
+    def _ensure_promotion_projection(
+        self,
+        context: _EvaluationContext,
+        result: EvalResult,
+        raw: Mapping[str, Any],
+        receipt: PromotionReceipt,
+    ) -> None:
+        if not self.project_results:
+            return
+        run_path = self._wandb_run_path(context.manifest)
+        try:
+            remote = self.runtime.remote_summary(run_path)
+            if (
+                str(remote.get("gradlab/goal/outcome") or "") == "accepted"
+                and int(remote.get("leader/checkpoint/step") or -1)
+                == receipt.checkpoint_step
+            ):
+                return
+        except Exception:
+            pass
         metrics = {
             **dict(raw.get("metrics") or {}),
             **dict(result.aggregates),
         }
-        if self.project_results:
+        try:
             environment = context.intent.execution_contract["environment"]
-            projector = WandbProjector.resume(
+            projector = self.runtime.resume_wandb(
                 {
                     "wandb_run_id": context.manifest.run_id,
                     "wandb_entity": context.manifest.wandb["entity"],
@@ -684,18 +748,32 @@ class ManualEvaluationSupervisor:
                     "run_name": context.manifest.wandb.get("display_name"),
                     "wandb_group": context.manifest.wandb.get("group"),
                 },
+                allow_create=False,
                 update_finish_state=False,
             )
             try:
-                publish_promotion_summary(
-                    projector.run,
+                self.runtime.publish_promotion(
+                    projector,
                     checkpoint_step=receipt.checkpoint_step,
                     checkpoint_url=context.checkpoint.public_url,
                     metrics=metrics,
                     updated_at=receipt.promoted_at,
                 )
             finally:
-                projector.close(timeout_seconds=300)
+                self.runtime.close_wandb(projector, timeout_seconds=300)
+            remote = self.runtime.remote_summary(run_path)
+        except Exception as exc:
+            raise EvaluationProjectionPending(
+                f"W&B promotion projection is not yet complete: {exc}"
+            ) from exc
+        if (
+            str(remote.get("gradlab/goal/outcome") or "") != "accepted"
+            or int(remote.get("leader/checkpoint/step") or -1)
+            != receipt.checkpoint_step
+        ):
+            raise EvaluationProjectionPending(
+                "W&B promotion summary is not yet remotely visible"
+            )
 
     def _terminal_status(
         self,
@@ -946,10 +1024,33 @@ class ManualEvaluationSupervisor:
                     "new accepted evidence conflicts with the immutable "
                     "lowest-step promotion"
                 )
-            return existing
-        self._promote(context, result, raw)
-        return self.authority.control.get_json(
-            f"runs/{manifest.run_id}/promotion.json"
+        else:
+            self._promote(context, result)
+            existing = self.authority.control.get_json(
+                f"runs/{manifest.run_id}/promotion.json"
+            )
+        receipt = PromotionReceipt(**existing)
+        receipt.validate()
+        self._ensure_promotion_projection(context, result, raw, receipt)
+        return existing
+
+    def _promotion_retry_result(
+        self,
+        *,
+        run_id: str,
+        statuses: list[dict[str, Any]],
+        error: EvaluationProjectionPending,
+    ) -> HandlerResult:
+        message = str(error)
+        for status in statuses:
+            if str(status["state"]) == "accepted":
+                status["state"] = "awaiting_projection"
+                status["message"] = message
+        return HandlerResult(
+            state="retry_wait",
+            available_at=self.clock.time() + MANUAL_EVAL_RETRY_SECONDS,
+            message=message,
+            subjects=self._subject_updates(run_id, statuses),
         )
 
     def _manual_terminal(
@@ -1065,7 +1166,7 @@ class ManualEvaluationSupervisor:
         self._ensure_intents(contexts, job_id=job_id)
         ledger = SupervisorLedger(self.work_root / job_id / "supervisor.sqlite3", clock=self.clock)
         ledger.init()
-        event_seq_offset = int(terminal.get("wandb_high_water_mark") or 0)
+        event_seq_offset = self._event_seq_offset(manifest, terminal)
         statuses = [
             self._status(
                 context,
@@ -1099,7 +1200,14 @@ class ManualEvaluationSupervisor:
                     except Exception as exc:
                         status["message"] = f"cancel reconciliation failed: {exc}"
                 status["state"] = "canceled"
-            promotion = self._finalize_promotion(manifest)
+            try:
+                promotion = self._finalize_promotion(manifest)
+            except EvaluationProjectionPending as exc:
+                return self._promotion_retry_result(
+                    run_id=run_id,
+                    statuses=statuses,
+                    error=exc,
+                )
             self._manual_terminal(
                 job_id=job_id,
                 manifest=manifest,
@@ -1127,7 +1235,14 @@ class ManualEvaluationSupervisor:
                 subjects=self._subject_updates(run_id, statuses),
             )
 
-        promotion = self._finalize_promotion(manifest)
+        try:
+            promotion = self._finalize_promotion(manifest)
+        except EvaluationProjectionPending as exc:
+            return self._promotion_retry_result(
+                run_id=run_id,
+                statuses=statuses,
+                error=exc,
+            )
         failed = [
             status
             for status in statuses
@@ -1192,11 +1307,15 @@ class ManualEvaluationJobHandler:
         payload = self.validate_payload(job["payload"])
         repo_root = Path(payload["repo_root"])
         _load_environment(repo_root)
+        queue_root = Path(payload["queue_root"])
+        holder_fingerprint = hashlib.sha256(
+            str(queue_root).encode("utf-8")
+        ).hexdigest()[:16]
         supervisor = ManualEvaluationSupervisor(
             authority=RunAuthority(RunStorageConfig.from_env()),
             repo_root=repo_root,
-            holder_id=f"manual-eval-{job['job_id']}",
-            work_root=Path(payload["queue_root"]) / "work",
+            holder_id=f"manual-eval-local-{holder_fingerprint}",
+            work_root=queue_root / "work",
         )
         try:
             return supervisor.advance_batch(
@@ -1279,9 +1398,31 @@ class ManualEvaluationQueue:
             checkpoint_ids,
             enforce_current_protocol=False,
         )
-        subject_ids = [context.checkpoint.checkpoint_id for context in contexts]
+        terminal_items: dict[str, dict[str, Any]] = {}
+        pending_contexts: list[_EvaluationContext] = []
+        for context in contexts:
+            verified = planner.authority.evaluation.get_json_optional(
+                (
+                    f"runs/{run_id}/evals/{context.intent.idempotency_key}"
+                    "/verified-result.json"
+                )
+            )
+            if verified is None:
+                pending_contexts.append(context)
+                continue
+            result = EvalResult(**verified)
+            result.validate()
+            terminal_items[context.checkpoint.checkpoint_id] = {
+                "checkpoint_id": context.checkpoint.checkpoint_id,
+                "job_id": None,
+                "state": result.status,
+                "evaluation": _evaluation_summary(context, result),
+                "message": result.error,
+            }
+        subject_ids = [
+            context.checkpoint.checkpoint_id for context in pending_contexts
+        ]
         subject_type = _evaluation_subject_type(run_id)
-        created_jobs: list[Mapping[str, Any]] = []
 
         for _attempt in range(3):
             existing = self.store.subject_statuses(
@@ -1290,7 +1431,7 @@ class ManualEvaluationQueue:
             )
             pending = [
                 context
-                for context in contexts
+                for context in pending_contexts
                 if context.checkpoint.checkpoint_id not in existing
             ]
             if not pending:
@@ -1311,7 +1452,7 @@ class ManualEvaluationQueue:
                 ).encode()
             ).hexdigest()
             try:
-                enqueued = self.store.enqueue(
+                self.store.enqueue(
                     job_type=MANUAL_EVAL_JOB_TYPE,
                     handler_version=MANUAL_EVAL_JOB_VERSION,
                     payload={
@@ -1344,8 +1485,6 @@ class ManualEvaluationQueue:
                 )
             except sqlite3.IntegrityError:
                 continue
-            if enqueued.job is not None:
-                created_jobs.append(enqueued.job)
             break
         else:
             raise RuntimeError("checkpoint evaluation admission did not converge")
@@ -1357,7 +1496,11 @@ class ManualEvaluationQueue:
         missing = [identifier for identifier in subject_ids if identifier not in statuses]
         if missing:
             raise RuntimeError(f"checkpoint evaluation was not durably queued: {missing[0]}")
-        worker = ensure_flusher(self.store)
+        worker = (
+            ensure_flusher(self.store)
+            if subject_ids
+            else WorkerStart("already_running", "all checkpoints are already terminal")
+        )
         job_ids = {
             str(subject["job_id"])
             for subject in statuses.values()
@@ -1367,11 +1510,29 @@ class ManualEvaluationQueue:
             for job_id in sorted(job_ids)
             if (job := self.store.job(job_id)) is not None
         ]
+        items = [
+            (
+                terminal_items[context.checkpoint.checkpoint_id]
+                if context.checkpoint.checkpoint_id in terminal_items
+                else self._queue_item(statuses[context.checkpoint.checkpoint_id])
+            )
+            for context in contexts
+        ]
+        if worker.state == "start_failed":
+            items = [
+                {
+                    **item,
+                    "state": (
+                        "flusher_unavailable"
+                        if str(item["state"]) in {"queued", "retry_wait", "running"}
+                        else item["state"]
+                    ),
+                    "message": item.get("message") or worker.message,
+                }
+                for item in items
+            ]
         return {
-            "items": [
-                self._queue_item(statuses[context.checkpoint.checkpoint_id])
-                for context in contexts
-            ],
+            "items": items,
             "jobs": jobs,
             "worker": worker.to_dict(),
         }
@@ -1402,6 +1563,7 @@ class ManualEvaluationQueue:
                         values = dict(detail) if isinstance(detail, Mapping) else {}
                         values["message"] = worker.message
                         subject["detail"] = values
+                        subject["state"] = "flusher_unavailable"
         return {
             checkpoint_id: self._queue_item(subject)
             for checkpoint_id, subject in statuses.items()

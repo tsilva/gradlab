@@ -107,6 +107,7 @@ def test_web_playback_retains_step_zero_snapshot_and_frame() -> None:
     snapshot, frames = runner.episode_start_payload()
     assert snapshot["sequence"] == 0
     assert snapshot["session"]["step"] == 0
+    assert snapshot["session"]["default_seed"] == 42
     assert snapshot["session"]["value_discount"] is None
     assert snapshot["transition"] is None
     sequence, packet = frames[FRAME_GAME]
@@ -1402,14 +1403,19 @@ def test_catalog_http_api_requires_the_fragment_session_token() -> None:
 
         def enqueue(self, *, run_id, checkpoint_ids):
             self.requests.append((run_id, list(checkpoint_ids)))
-            return (
-                {
-                    "checkpoint_id": checkpoint_ids[0],
-                    "state": "submitted",
-                    "evaluation": None,
-                    "message": None,
-                },
-            )
+            return {
+                "items": (
+                    {
+                        "checkpoint_id": checkpoint_ids[0],
+                        "job_id": "job-" + "c" * 32,
+                        "state": "queued",
+                        "evaluation": None,
+                        "message": None,
+                    },
+                ),
+                "jobs": [{"job_id": "job-" + "c" * 32, "state": "queued"}],
+                "worker": {"state": "started", "pid": 123, "message": None},
+            }
 
         @staticmethod
         def statuses(*, run_id, checkpoint_ids):
@@ -1539,7 +1545,9 @@ def test_catalog_http_api_requires_the_fragment_session_token() -> None:
                     json={"checkpoint_ids": ["checkpoint-1-" + "b" * 16]},
                 )
                 assert evaluation.status == 202
-                assert (await evaluation.json())["items"][0]["state"] == "submitted"
+                evaluation_payload = await evaluation.json()
+                assert evaluation_payload["items"][0]["state"] == "queued"
+                assert evaluation_payload["worker"]["state"] == "started"
                 assert evaluation_queue.requests == [
                     (
                         "gradlab-" + "a" * 32,
@@ -1569,7 +1577,7 @@ def test_catalog_http_api_requires_the_fragment_session_token() -> None:
                 ):
                     page = await client.get(f"{server.origin}{route}")
                     assert page.status == 200
-                    assert "<title>gradlab player</title>" in await page.text()
+                    assert "<title>gradlab</title>" in await page.text()
         finally:
             runner.stop()
             await asyncio.wait_for(task, timeout=3.0)
@@ -1686,12 +1694,11 @@ def test_web_dashboard_assets_are_packaged_beside_server() -> None:
     assert 'src="/assets/vendor/gridstack/gridstack-all.js"' in markup
     assert '<main id="source-browser" class="source-browser" hidden></main>' in markup
     assert '<h1 id="page-title" hidden>Environment</h1>' in markup
-    assert 'id="player-home"' in markup
-    assert 'aria-label="Return to playback home"' in markup
+    assert '<span class="app-wordmark eyebrow">GRADLAB</span>' in markup
+    assert "GRADLAB PLAYER" not in markup
     assert 'id="source-breadcrumbs"' in markup
     assert '$("#source-breadcrumbs")' in script
-    assert '$("#player-home").addEventListener("click"' in script
-    assert ".then((browser) => browser.goHome())" in script
+    assert '$("#player-home")' not in script
     assert '$("#page-title").hidden = Boolean(state.sourceMode || activeCheckpointRoute);' in script
     assert '$("#page-title").textContent = "Select checkpoint"' not in script
     assert "approval_required" not in source_browser
