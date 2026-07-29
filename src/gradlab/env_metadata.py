@@ -3,7 +3,7 @@ from __future__ import annotations
 import importlib.metadata
 from dataclasses import asdict
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from gradlab.env import (
     EnvConfig,
@@ -18,13 +18,6 @@ from gradlab.env_identity import (
     task_config_from_train_config,
 )
 from gradlab.preprocessing import preprocessing_contract
-from gradlab.train_config import playback_env_arg_keys
-
-if TYPE_CHECKING:
-    from gradlab.policy_bundle import PolicyBundle
-
-
-PLAYBACK_ENV_ARG_KEYS = playback_env_arg_keys()
 
 RUNTIME_VERSION_PACKAGES = {
     "stable_retro_turbo": "stable-retro-turbo",
@@ -100,34 +93,6 @@ def training_metadata(
         "action": declared_action_contract(config),
         "versions": runtime_versions_metadata(),
     }
-
-
-def assert_bundle_runtime_versions(bundle: PolicyBundle) -> None:
-    """Fail closed when a policy bundle's recorded runtime differs from playback."""
-    provenance = bundle.model.get("provenance")
-    training = (
-        provenance.get("training_metadata")
-        if isinstance(provenance, Mapping)
-        else None
-    )
-    versions = training.get("versions") if isinstance(training, Mapping) else None
-    if not isinstance(versions, Mapping):
-        return
-    mismatches: list[str] = []
-    for metadata_key, package in RUNTIME_VERSION_PACKAGES.items():
-        expected = versions.get(metadata_key)
-        if not isinstance(expected, str) or not expected:
-            continue
-        actual = _package_version(package)
-        if actual != expected:
-            mismatches.append(f"{package} expected {expected}, installed {actual or 'missing'}")
-    if mismatches:
-        raise SystemExit(
-            "Artifact runtime version mismatch: "
-            + "; ".join(mismatches)
-            + ". Sync the checked-in environment with `uv sync --frozen` or reinstall the "
-            "gradlab uv tool before playback."
-        )
 
 
 def sanitize_env_config_metadata(config: dict[str, Any]) -> dict[str, Any]:

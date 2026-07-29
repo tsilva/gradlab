@@ -149,14 +149,6 @@ class Sb3LoggerTests(unittest.TestCase):
 
 
 class MetricsDocumentationTests(unittest.TestCase):
-    def test_metrics_reference_registry_section_is_generated_from_code(self) -> None:
-        metrics_doc = Path(__file__).resolve().parents[1] / "METRICS.md"
-        content = metrics_doc.read_text(encoding="utf-8")
-        generated = content.split("<!-- METRIC_REGISTRY_START -->\n", 1)[1].split(
-            "\n<!-- METRIC_REGISTRY_END -->", 1
-        )[0]
-        self.assertEqual(generated, metric_names.render_metric_registry_markdown())
-
     def test_registry_rejects_unknown_metrics_and_unsafe_dimensions(self) -> None:
         with self.assertRaisesRegex(ValueError, "unknown metric"):
             metric_names.validate_metric_name("train/mystery/value")

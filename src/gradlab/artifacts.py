@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import argparse
 import os
 import re
 import shutil
@@ -12,10 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from gradlab.env import EnvConfig
-from gradlab.env_metadata import (
-    PLAYBACK_ENV_ARG_KEYS,
-    runtime_versions_metadata,
-)
+from gradlab.env_metadata import runtime_versions_metadata
 from gradlab.file_utils import fsync_path
 from gradlab.policy_bundle import (
     build_model_document,
@@ -236,27 +232,6 @@ def playback_env_config(
     events.pop("stalled", None)
     task["events"] = events
     return replace(config, task=task)
-
-
-def apply_config_defaults(
-    args: argparse.Namespace,
-    config: dict[str, Any],
-    parser_defaults: dict[str, object],
-    explicit_dests: set[str],
-) -> None:
-    for arg_name, config_keys in PLAYBACK_ENV_ARG_KEYS.items():
-        if arg_name not in parser_defaults or not hasattr(args, arg_name):
-            continue
-        if arg_name in explicit_dests:
-            continue
-        current_value = getattr(args, arg_name)
-        default_value = parser_defaults[arg_name]
-        if current_value != default_value and current_value not in ("", None):
-            continue
-        for config_key in config_keys:
-            if config_key in config and config[config_key] is not None:
-                setattr(args, arg_name, config[config_key])
-                break
 
 
 def write_run_description(train_config: Mapping[str, Any], run_dir: str) -> None:

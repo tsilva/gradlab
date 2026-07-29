@@ -1082,7 +1082,3 @@ def load_goal_contract(
     if validate:
         validate_goal_contract_document(document, resolved_path, resolved_root)
     return document
-
-
-def validate_goal_contract(path: Path, repo_root: Path | None = None) -> None:
-    load_goal_contract(path, repo_root)

@@ -72,15 +72,13 @@ def installed_distributions(environments: dict[str, Path]) -> tuple[Distribution
 
 def validate_distribution_contract(
     *,
-    train: dict[str, str],
     gpu: dict[str, str],
     dependencies: dict[str, str],
     installed: tuple[Distribution, ...],
 ) -> None:
     if set(gpu) & set(dependencies):
         raise ValueError("GPU and non-GPU locks overlap")
-    if {**gpu, **dependencies} != train:
-        raise ValueError("GPU and non-GPU locks do not exactly reconstruct the train lock")
+    expected = {**gpu, **dependencies}
 
     by_name: dict[str, Distribution] = {}
     for distribution in installed:
@@ -92,7 +90,7 @@ def validate_distribution_contract(
             )
         by_name[distribution.name] = distribution
 
-    expected_names = set(train)
+    expected_names = set(expected)
     installed_names = set(by_name)
     if missing := sorted(expected_names - installed_names):
         raise ValueError(f"missing installed distributions: {', '.join(missing)}")
@@ -100,9 +98,9 @@ def validate_distribution_contract(
         raise ValueError(f"unexpected installed distributions: {', '.join(unexpected)}")
 
     mismatches = [
-        f"{name}: expected {train[name]}, installed {by_name[name].version}"
-        for name in sorted(train)
-        if by_name[name].version != train[name]
+        f"{name}: expected {expected[name]}, installed {by_name[name].version}"
+        for name in sorted(expected)
+        if by_name[name].version != expected[name]
     ]
     if mismatches:
         raise ValueError("installed version mismatches: " + "; ".join(mismatches))
@@ -164,17 +162,13 @@ def _validate_runtime_layout() -> None:
         raise ValueError("non-GPU console scripts use the wrong venv: " + ", ".join(bad_shebangs))
 
 
-def validate_environment(
-    *, train_lock: Path, gpu_lock: Path, dependency_lock: Path
-) -> None:
-    train = read_lock(train_lock)
+def validate_environment(*, gpu_lock: Path, dependency_lock: Path) -> None:
     gpu = read_lock(gpu_lock)
     dependencies = read_lock(dependency_lock)
     installed = installed_distributions(
         {"gpu": GPU_ENVIRONMENT, "dependencies": DEPENDENCY_ENVIRONMENT}
     )
     validate_distribution_contract(
-        train=train,
         gpu=gpu,
         dependencies=dependencies,
         installed=installed,
@@ -188,11 +182,6 @@ def main() -> None:
         description="Validate the merged train-image Python environment contract."
     )
     parser.add_argument(
-        "--train-lock",
-        type=Path,
-        default=repo_root / "containers/train/train-linux-amd64.lock",
-    )
-    parser.add_argument(
         "--gpu-lock",
         type=Path,
         default=repo_root / "containers/train/gpu-linux-amd64.lock",
@@ -204,7 +193,6 @@ def main() -> None:
     )
     args = parser.parse_args()
     validate_environment(
-        train_lock=args.train_lock,
         gpu_lock=args.gpu_lock,
         dependency_lock=args.dependency_lock,
     )

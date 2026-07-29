@@ -7,11 +7,9 @@ import unittest
 from pathlib import Path
 
 from gradlab.env import EnvConfig
-from gradlab.env_metadata import PLAYBACK_ENV_ARG_KEYS
 from gradlab.train_config import (
     add_env_config_args,
     add_train_config_args,
-    env_config_arg_fields,
     load_materialized_train_config,
     train_config_field_for_key,
     validate_and_normalize_train_config,
@@ -34,12 +32,6 @@ class TrainConfigFieldSchemaTests(unittest.TestCase):
             parser.parse_args(["--train-config-json", "train.json"])
         with self.assertRaises(SystemExit):
             parser.parse_args(["--training-backend", '{"id":"sb3.ppo"}'])
-
-    def test_playback_argument_registry_is_derived_from_environment_fields(self) -> None:
-        self.assertEqual(
-            PLAYBACK_ENV_ARG_KEYS,
-            {field.dest: (field.dest,) for field in env_config_arg_fields()},
-        )
 
     def test_train_config_json_rejects_invalid_field_types_before_execution(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

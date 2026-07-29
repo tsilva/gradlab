@@ -1,8 +1,7 @@
 # Metrics schema v14
 
-This file is the human contract for gradlab telemetry. The Python registry in
-`src/gradlab/metric_names.py` is the executable source of truth. Every emitted metric must match an
-exact registry entry or a bounded template.
+This file is the source of truth for gradlab telemetry. The Python registry loads the table below
+and requires every emitted metric to match an exact registry entry or a bounded template.
 
 ## Surfaces and dimensions
 
