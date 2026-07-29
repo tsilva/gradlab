@@ -517,31 +517,6 @@ class RunSupervisor:
                 f"learner {kind} document_type is not {expected_type!r}"
             )
         version = document.get("format_version")
-        if version == 2 and kind == "result" and not live:
-            if document.get("execution_mode") != TrainingExecutionMode.SUPERVISED.value:
-                raise LearnerStateContractError("legacy learner result is not supervised")
-            try:
-                reason = TerminalReason(str(document.get("terminal_reason") or ""))
-            except ValueError as exc:
-                raise LearnerStateContractError(
-                    "legacy learner result has an invalid terminal_reason"
-                ) from exc
-            final_step = document.get("final_step")
-            if (
-                isinstance(final_step, bool)
-                or not isinstance(final_step, int)
-                or final_step < 0
-            ):
-                raise LearnerStateContractError(
-                    "legacy learner result has an invalid final_step"
-                )
-            return LearnerState(
-                kind="result",
-                status=str(document.get("status") or ""),
-                terminal_reason=reason.value,
-                final_step=final_step,
-                document=dict(document),
-            )
         if version != LEARNER_STATE_FORMAT_VERSION:
             raise LearnerStateContractError(
                 f"learner {kind} document has unsupported format_version {version!r}"

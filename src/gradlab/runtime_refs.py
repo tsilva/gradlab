@@ -30,8 +30,7 @@ DEFAULT_MODAL_WORKFLOW = "gradlab Modal eval deployment"
 DEFAULT_MODAL_ARTIFACT = "gradlab-modal-eval-readiness"
 DEFAULT_MODAL_ARTIFACT_FILE = "gradlab-modal-eval-readiness.json"
 MODAL_READINESS_SCHEMA_VERSION = 3
-LEGACY_RUNTIME_DESCRIPTOR_SCHEMA_VERSION = 6
-VIZDOOM_SMOKE_CONTRACT_VERSION = 1
+VIZDOOM_SMOKE_CONTRACT_VERSION = 2
 REQUIRED_VIZDOOM_TURBO_VERSION = "1.3.0.post16"
 DEFAULT_RUNTIME_READINESS_TIMEOUT_SECONDS = 20 * 60
 
@@ -80,26 +79,6 @@ class _RuntimeReleasePayload(BoundaryModel):
     base_images: _BaseImages
     workflow_run_id: NonEmptyText
     vizdoom_smoke: _VizdoomSmoke
-    digest: str = ""
-    image: str = ""
-    workflow_run_attempt: str = ""
-
-
-class _LegacyRuntimeReleasePayload(BoundaryModel):
-    schema_version: Literal[LEGACY_RUNTIME_DESCRIPTOR_SCHEMA_VERSION]
-    runtime_image_ref: NonEmptyText
-    source_sha: NonEmptyText
-    runtime_input_sha256: Sha256
-    runtime_build_source_sha: BuildSourceSha
-    overlay_key: Sha256
-    dependency_key: Sha256
-    gpu_key: Sha256
-    train_plan_sha256: Sha256
-    gpu_plan_sha256: Sha256
-    tags: list[NonEmptyText]
-    uv_lock_sha256: Sha256
-    base_images: _BaseImages
-    workflow_run_id: NonEmptyText
     digest: str = ""
     image: str = ""
     workflow_run_attempt: str = ""
@@ -190,15 +169,9 @@ def runtime_release_from_payload(
     *,
     label: str,
     expected_source_sha: str,
-    allow_legacy: bool = False,
 ) -> RuntimeImageInfo:
     schema_version = int(payload.get("schema_version") or 0)
-    if (
-        allow_legacy
-        and schema_version == LEGACY_RUNTIME_DESCRIPTOR_SCHEMA_VERSION
-    ):
-        receipt = validate_boundary(_LegacyRuntimeReleasePayload, payload, label=label)
-    elif schema_version == RUNTIME_DESCRIPTOR_SCHEMA_VERSION:
+    if schema_version == RUNTIME_DESCRIPTOR_SCHEMA_VERSION:
         receipt = validate_boundary(_RuntimeReleasePayload, payload, label=label)
     else:
         raise ValueError(

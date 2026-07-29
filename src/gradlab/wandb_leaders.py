@@ -16,15 +16,9 @@ from gradlab.metric_names import (
     LEADER_CHECKPOINT_STEP,
     LEADER_CHECKPOINT_SUCCESS_ACROSS_STARTS_RATE_MEAN,
     LEADER_CHECKPOINT_SUCCESS_ACROSS_STARTS_RATE_MIN,
-    LEGACY_METRICS_SCHEMA_VERSION,
     TRAIN_EPISODE_RETURN_SHAPED_ACROSS_ORIGINS_ROLLING_UP_TO_100_MEAN,
     TRAIN_GLOBAL_STEP,
     TRAIN_OUTCOME_SUCCESS_ACROSS_STARTS_WINDOW_100_RATE_MIN,
-    V13_LEADER_CHECKPOINT_ARTIFACT_REF,
-    V13_LEADER_CHECKPOINT_EVALUATION_SOURCE,
-    V13_LEADER_CHECKPOINT_RETURN_SHAPED_MEAN,
-    V13_LEADER_CHECKPOINT_SUCCESS_ACROSS_STARTS_RATE_MEAN,
-    V13_LEADER_CHECKPOINT_SUCCESS_ACROSS_STARTS_RATE_MIN,
     evaluation_metric_schema,
     leader_metric_for_rank_metric,
 )
@@ -39,15 +33,12 @@ RUN_OBJECTIVE_KEYS = (
 RUN_PRIMARY_ORDER = "-created_at"
 CHECKPOINT_SUCCESS_KEYS = (
     LEADER_CHECKPOINT_SUCCESS_ACROSS_STARTS_RATE_MIN,
-    V13_LEADER_CHECKPOINT_SUCCESS_ACROSS_STARTS_RATE_MIN,
 )
 CHECKPOINT_SUCCESS_MEAN_KEYS = (
     LEADER_CHECKPOINT_SUCCESS_ACROSS_STARTS_RATE_MEAN,
-    V13_LEADER_CHECKPOINT_SUCCESS_ACROSS_STARTS_RATE_MEAN,
 )
 CHECKPOINT_RETURN_KEYS = (
     LEADER_CHECKPOINT_RETURN_SHAPED_MEAN,
-    V13_LEADER_CHECKPOINT_RETURN_SHAPED_MEAN,
 )
 CHECKPOINT_STEP_KEYS = (LEADER_CHECKPOINT_STEP,)
 # API ordering is only a retrieval hint. Goal-specific ranking happens in Python,
@@ -184,18 +175,8 @@ def run_query_objective_keys(args: argparse.Namespace) -> tuple[str, ...]:
 def checkpoint_summary_filter() -> dict[str, Any]:
     return {
         "$and": [
-            {
-                "$or": [
-                    _exists_filter(LEADER_CHECKPOINT_ARTIFACT_REF),
-                    _exists_filter(V13_LEADER_CHECKPOINT_ARTIFACT_REF),
-                ]
-            },
-            {
-                "$or": [
-                    _exists_filter(LEADER_CHECKPOINT_RETURN_SHAPED_MEAN),
-                    _exists_filter(V13_LEADER_CHECKPOINT_RETURN_SHAPED_MEAN),
-                ]
-            },
+            _exists_filter(LEADER_CHECKPOINT_ARTIFACT_REF),
+            _exists_filter(LEADER_CHECKPOINT_RETURN_SHAPED_MEAN),
         ]
     }
 
@@ -310,41 +291,12 @@ def checkpoint_leader(run: Any) -> CheckpointLeader | None:
         evaluation_metric_schema(metrics_schema_version)
     except (TypeError, ValueError):
         return None
-    legacy = metrics_schema_version == LEGACY_METRICS_SCHEMA_VERSION
-    success = _first_float(
-        summary,
-        (
-            V13_LEADER_CHECKPOINT_SUCCESS_ACROSS_STARTS_RATE_MIN
-            if legacy
-            else LEADER_CHECKPOINT_SUCCESS_ACROSS_STARTS_RATE_MIN,
-        ),
-    )
-    success_mean = _first_float(
-        summary,
-        (
-            V13_LEADER_CHECKPOINT_SUCCESS_ACROSS_STARTS_RATE_MEAN
-            if legacy
-            else LEADER_CHECKPOINT_SUCCESS_ACROSS_STARTS_RATE_MEAN,
-        ),
-    )
-    episode_return = _first_float(
-        summary,
-        (
-            V13_LEADER_CHECKPOINT_RETURN_SHAPED_MEAN
-            if legacy
-            else LEADER_CHECKPOINT_RETURN_SHAPED_MEAN,
-        ),
-    )
+    success = _first_float(summary, CHECKPOINT_SUCCESS_KEYS)
+    success_mean = _first_float(summary, CHECKPOINT_SUCCESS_MEAN_KEYS)
+    episode_return = _first_float(summary, CHECKPOINT_RETURN_KEYS)
     checkpoint_step = _optional_int(_first_float(summary, CHECKPOINT_STEP_KEYS))
     artifact_ref = _first_text(
-        _mapping_value(
-            summary,
-            (
-                V13_LEADER_CHECKPOINT_ARTIFACT_REF
-                if legacy
-                else LEADER_CHECKPOINT_ARTIFACT_REF
-            ),
-        ),
+        _mapping_value(summary, (LEADER_CHECKPOINT_ARTIFACT_REF,)),
     )
     if episode_return is None or not artifact_ref:
         return None
@@ -393,14 +345,7 @@ def checkpoint_leader(run: Any) -> CheckpointLeader | None:
         checkpoint_step=checkpoint_step,
         artifact_ref=artifact_ref,
         eval_source=_first_text(
-            _mapping_value(
-                summary,
-                (
-                    V13_LEADER_CHECKPOINT_EVALUATION_SOURCE
-                    if legacy
-                    else LEADER_CHECKPOINT_EVALUATION_SOURCE
-                ),
-            )
+            _mapping_value(summary, (LEADER_CHECKPOINT_EVALUATION_SOURCE,))
         ),
         rank_score=rank_score(rank_metrics, rank),
     )

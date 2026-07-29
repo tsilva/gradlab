@@ -14,7 +14,7 @@ train:
   early_stop:
     # Address inherited early-stop rules by their stable condition names.
     conditions:
-      # Specialize the inherited successful-stop rule for the Basic task.
+      # Specialize the inherited solved-target rule for the Basic task.
       target_reached:
         # Select the training metric compared with this condition's threshold.
         metric: train/outcome/success/across_starts/window_100/rate/min

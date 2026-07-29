@@ -245,7 +245,6 @@ class GoExploreSearch:
         self._best_success_by_seed: dict[int | None, GoExploreCandidate] = {}
         self._completion_events: list[CompletionEvent] = []
         self._initial_roots: dict[int, tuple[Hashable, str]] = {}
-        self._legacy_state = False
 
     @property
     def archive_count(self) -> int:
@@ -989,9 +988,8 @@ class GoExploreSearch:
         if value.get("semantic_id") != GO_EXPLORE_STATE_SEMANTIC_ID:
             raise ValueError("durable Go-Explore state has an unsupported semantic_id")
         schema_version = int(value.get("schema_version", 0))
-        if schema_version not in {3, GO_EXPLORE_STATE_SCHEMA_VERSION}:
+        if schema_version != GO_EXPLORE_STATE_SCHEMA_VERSION:
             raise ValueError("durable Go-Explore state has an unsupported schema_version")
-        self._legacy_state = schema_version == 3
         configuration = value.get("configuration")
         if not isinstance(configuration, Mapping):
             raise ValueError("durable Go-Explore state has no configuration")
@@ -1042,11 +1040,7 @@ class GoExploreSearch:
                     None if raw_cell.get("initial_seed") is None else int(raw_cell["initial_seed"])
                 ),
                 parent_key=self._key_from_document(raw_cell.get("parent_key")),
-                route_points=(
-                    self._route_from_document(raw_cell.get("route", ()))
-                    if schema_version >= 4
-                    else ()
-                ),
+                route_points=self._route_from_document(raw_cell.get("route", ())),
                 best_success_return=(
                     None
                     if raw_cell.get("best_success_return") is None
@@ -1081,11 +1075,7 @@ class GoExploreSearch:
                     ),
                     steps_since_restart=int(raw_lane["steps_since_restart"]),
                     path_cell_keys=list(path_keys),
-                    route_points=(
-                        list(self._route_from_document(raw_lane.get("route", ())))
-                        if schema_version >= 4
-                        else []
-                    ),
+                    route_points=list(self._route_from_document(raw_lane.get("route", ()))),
                     exploration_action=int(raw_lane["exploration_action"]),
                     exploration_remaining=int(raw_lane["exploration_remaining"]),
                 )
@@ -1134,18 +1124,17 @@ class GoExploreSearch:
             fallback=self._best_success,
         )
         self._initial_roots = {}
-        if schema_version >= 4:
-            raw_roots = value.get("initial_roots", ())
-            if isinstance(raw_roots, str | bytes) or not isinstance(raw_roots, Sequence):
-                raise ValueError("durable Go-Explore initial roots must be a sequence")
-            for raw_root in raw_roots:
-                if not isinstance(raw_root, Mapping):
-                    raise ValueError("durable Go-Explore initial root must be an object")
-                seed = int(raw_root["seed"])
-                key = self._key_from_document(raw_root["key"])
-                if key is None or seed in self._initial_roots:
-                    raise ValueError("durable Go-Explore initial root is invalid")
-                self._initial_roots[seed] = (key, str(raw_root["entry_id"]))
+        raw_roots = value.get("initial_roots", ())
+        if isinstance(raw_roots, str | bytes) or not isinstance(raw_roots, Sequence):
+            raise ValueError("durable Go-Explore initial roots must be a sequence")
+        for raw_root in raw_roots:
+            if not isinstance(raw_root, Mapping):
+                raise ValueError("durable Go-Explore initial root must be an object")
+            seed = int(raw_root["seed"])
+            key = self._key_from_document(raw_root["key"])
+            if key is None or seed in self._initial_roots:
+                raise ValueError("durable Go-Explore initial root is invalid")
+            self._initial_roots[seed] = (key, str(raw_root["entry_id"]))
         return tuple(lane_entry_ids)
 
     def policy(self) -> ActionProgramPolicy:
@@ -1156,10 +1145,6 @@ class GoExploreSearch:
             fallback_action=self.fallback_action,
             initial_seed=None if candidate is None else candidate.initial_seed,
         )
-
-    @property
-    def legacy_state(self) -> bool:
-        return self._legacy_state
 
     def graph_snapshot_entry_ids(self) -> tuple[str, ...]:
         entry_ids = {
@@ -1191,10 +1176,6 @@ class GoExploreSearch:
     ) -> CellGraphPolicy:
         """Build the compact executable graph for the current best route."""
 
-        if self._legacy_state:
-            raise ValueError(
-                "legacy Go-Explore recovery state cannot prove a portable cell graph"
-            )
         candidate = self.best_candidate()
         records = dict(snapshot_records or {})
         snapshot_entries: dict[str, Mapping[str, Any]] = {}

@@ -13,7 +13,6 @@ from gradlab.action_contract import (
     configured_action_meanings,
     configured_action_name,
     declared_action_contract,
-    migrate_legacy_artifact_action_configuration,
     runtime_action_contract,
 )
 from gradlab.batch_runtime import ProviderDescriptor
@@ -35,40 +34,6 @@ def test_runtime_action_contract_traverses_common_environment_wrappers():
     )
 
     assert runtime_action_contract(source) is contract
-
-
-def test_legacy_mario_action_set_moves_to_provider_contract():
-    env_args, task = migrate_legacy_artifact_action_configuration(
-        provider_id="supermariobrosnes-turbo",
-        game="SuperMarioBros-Nes-v0",
-        env_args={"action_set": "basic", "use_restricted_actions": "all"},
-        task={"id": "mario", "action": {"set": "basic"}},
-    )
-
-    assert env_args == {"use_restricted_actions": "basic"}
-    assert task["action"] == {"set": "native"}
-
-
-def test_legacy_task_action_set_moves_to_stable_retro_provider():
-    env_args, task = migrate_legacy_artifact_action_configuration(
-        provider_id="stable-retro-turbo",
-        game="SuperMarioBros-Nes-v0",
-        env_args={"use_restricted_actions": "all"},
-        task={"id": "mario", "action": {"set": "right-jump"}},
-    )
-
-    assert env_args["use_restricted_actions"] == "right-jump"
-    assert task["action"]["set"] == "native"
-
-
-def test_conflicting_legacy_and_provider_action_contracts_fail():
-    with pytest.raises(ValueError, match="conflicts"):
-        migrate_legacy_artifact_action_configuration(
-            provider_id="supermariobrosnes-turbo",
-            game="SuperMarioBros-Nes-v0",
-            env_args={"action_set": "basic", "use_restricted_actions": "right-jump"},
-            task={"id": "mario", "action": {"set": "basic"}},
-        )
 
 
 def test_live_config_rejects_artifact_only_action_fields():
@@ -492,7 +457,8 @@ def test_runtime_action_contract_compatibility_checks_execution_and_semantics():
     )
 
     assert assert_action_contract_compatible(contract, contract)["status"] == "compatible"
-    assert assert_action_contract_compatible(None, contract)["status"] == "legacy-unproven"
+    with pytest.raises(ValueError, match="no saved runtime action contract"):
+        assert_action_contract_compatible(None, contract)
 
     changed = compile_runtime_action_contract(
         config,

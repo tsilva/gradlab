@@ -220,6 +220,8 @@ test("unchanged active checkpoint routes do not rebuild breadcrumbs", () => {
     replaceChildren() {},
   };
   browser.stop = () => {};
+  const historyModes = [];
+  browser.syncUrl = (mode) => historyModes.push(mode);
   let renders = 0;
   browser.renderBreadcrumbs = () => {
     renders += 1;
@@ -242,6 +244,7 @@ test("unchanged active checkpoint routes do not rebuild breadcrumbs", () => {
   browser.renderActiveBreadcrumbs(snapshot);
 
   assert.equal(renders, 1);
+  assert.deepEqual(historyModes, ["replace"]);
 });
 
 test("run metrics use compact labels and values", () => {

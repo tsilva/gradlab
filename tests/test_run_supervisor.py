@@ -689,26 +689,6 @@ class RunSupervisorTests(unittest.TestCase):
 
         self.assertEqual(_summary_scalar(SummarySubDictLike()), 10)
 
-    def test_supervisor_reads_deterministic_training_acceptance_reason(self) -> None:
-        supervisor = self.supervisor()
-        supervisor.run_dir.mkdir(parents=True, exist_ok=True)
-        atomic_write_json(
-            supervisor.run_dir / "training-result.json",
-            {
-                "document_type": "gradlab.training-result",
-                "format_version": 2,
-                "status": "completed",
-                "terminal_reason": "deterministic_training_acceptance",
-                "execution_mode": "supervised",
-                "final_step": 125_000,
-            },
-        )
-
-        self.assertEqual(
-            supervisor._training_terminal_reason(),
-            "deterministic_training_acceptance",
-        )
-
     def test_terminal_training_result_bounds_hung_learner_teardown(self) -> None:
         supervisor = self.supervisor()
         self.prepare_live_learner_contract(supervisor)

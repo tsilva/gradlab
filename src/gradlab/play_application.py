@@ -14,6 +14,45 @@ from gradlab.play_runtime import (
     PlaybackCandidate,
     PlaybackLoader,
 )
+from gradlab.run_contracts import checkpoint_id
+
+
+def _resolved_public_run_route(
+    candidate: PlaybackCandidate,
+    current_route: Mapping[str, Any],
+) -> dict[str, Any] | None:
+    spec = candidate.spec
+    if spec.kind != "public_run" or current_route.get("checkpoint_id"):
+        return None
+    bundle = candidate.source.bundle
+    recipe_document = bundle.recipe.get("recipe")
+    model_checkpoint = bundle.model.get("checkpoint")
+    provenance = bundle.model.get("provenance")
+    if not all(
+        isinstance(value, Mapping)
+        for value in (recipe_document, model_checkpoint, provenance)
+    ):
+        return None
+    goal = recipe_document.get("goal")
+    goal_variant = recipe_document.get("goal_variant")
+    goal = goal if isinstance(goal, Mapping) else {}
+    goal_variant = goal_variant if isinstance(goal_variant, Mapping) else {}
+    try:
+        resolved_checkpoint_id = checkpoint_id(
+            step=int(model_checkpoint.get("step")),
+            sha256=str(model_checkpoint.get("sha256") or ""),
+        )
+    except (TypeError, ValueError):
+        return None
+    return {
+        "level": "runs",
+        "entity": str(spec.entity or current_route.get("entity") or ""),
+        "project": str(spec.project or provenance.get("wandb_project") or ""),
+        "goal_id": str(goal_variant.get("goal_id") or goal.get("goal_id") or ""),
+        "goal_variant_id": str(goal_variant.get("variant_id") or ""),
+        "run_id": str(spec.run_id or provenance.get("wandb_run_id") or spec.value),
+        "checkpoint_id": str(spec.checkpoint_id or resolved_checkpoint_id),
+    }
 
 
 class _EmptyEncoder:
@@ -321,6 +360,9 @@ class PlaybackHost:
                     candidate.cleanup()
                     return
                 self._candidate = candidate
+                resolved_route = _resolved_public_run_route(candidate, self._route)
+                if resolved_route is not None:
+                    self._route = resolved_route
             self._activate_candidate(generation, candidate)
         except Exception as exc:
             if candidate is not None:

@@ -86,10 +86,8 @@ Asynchronous evaluations may arrive after later training rows without changing t
 X-axis. Each producer writes only its applicable scientific axis; durable delivery order uses
 `orchestration/event_seq`.
 
-Purged legacy W&B and R2 state has no compatibility guarantee. Newly materialized runs declare
-schema v14 and emit only v14 names. A release-pinned schema-v13 worker may be used for an explicit
-evaluation of an active v13 run; the current supervisor validates and projects only the finite v13
-compatibility surface documented below and never mixes v13 and v14 in one run.
+Purged W&B and R2 state has no compatibility guarantee. Newly materialized runs declare schema v14,
+and the current supervisor validates and emits only v14 names.
 
 ## Research interpretation
 
@@ -129,8 +127,9 @@ compatibility surface documented below and never mixes v13 and v14 in one run.
 - `train/episode/return/shaped/from/target/window_100/mean` is emitted only after 100 genuine
   target-origin training episodes and then rolls over the latest 100. It is a mature online
   behavior-policy proxy whose episodes may span learner updates, not an estimate of one frozen
-  checkpoint's evaluation performance. A zero-patience threshold intentionally stops at the first
-  qualifying overlapping window. A threshold condition with `progress_baseline` additionally emits
+  checkpoint's evaluation performance. A zero-patience threshold matches on the first qualifying
+  overlapping window; `action: stop` stops there, while `action: observe` continues training and
+  reports the condition state. A threshold condition with `progress_baseline` additionally emits
   `train/early_stop/{condition}/target/progress` as the current metric's clamped fraction from that
   baseline to its threshold; because it consumes the watched metric, a mature rolling-window target
   has no progress value before its full window exists. Only goal-owned checkpoint evaluation may
@@ -227,36 +226,6 @@ A logical run succeeds only when its private-R2 `TerminalReceipt` proves the com
 inventory, the terminal inventory of automatically submitted evaluations, a promotion, the W&B
 high-water mark, and a complete drain. Checkpoints published after acceptance may remain
 unevaluated for future explicit user action. dstack process exit alone is never scientific success.
-
-## Finite schema-v13 evaluation compatibility
-
-Schema v13 is read and projected only when an immutable checkpoint recipe declares
-`metrics_schema_version: 13`. It is not accepted when materializing a new run. The compatibility
-adapter recognizes only the following scientific and acceptance mappings:
-
-| Schema v13 | Schema v14 meaning |
-|---|---|
-| `eval/checkpoint_step` | `eval/checkpoint/step` |
-| `eval/full/episode/return/mean` | `eval/full/episode/return/shaped/mean` |
-| `eval/full/episode/return/std` | `eval/full/episode/return/shaped/std` |
-| `eval/full/episode/return/median` | `eval/full/episode/return/shaped/median` |
-| `eval/full/episode/return/best` | `eval/full/episode/return/shaped/max` |
-| `eval/full/episode/length/mean` | unchanged |
-| `eval/full/episode/count` | `eval/full/episode/completed/count` |
-| `eval/full/outcome/success/rate/min` | `eval/full/outcome/success/across_starts/rate/min` |
-| `eval/full/outcome/success/rate/mean` | `eval/full/outcome/success/across_starts/rate/mean` |
-| `eval/full/progress/{progress}/{mean,max}` | unchanged |
-| `eval/acceptance/pass` | unchanged |
-| `eval/acceptance/episodes/planned` | `eval/acceptance/episode/planned/count` |
-| `eval/acceptance/episodes/completed` | `eval/acceptance/episode/completed/count` |
-| `eval/acceptance/duration/seconds` | unchanged |
-
-The v13 by-start table retains its v13 column labels. Its semantic content is the same as the v14
-table. A v13 promotion writes only its historical semantic leader fields:
-`success_rate_min`, `success_rate_mean`, `return_mean`, `best_return`, `progress_max`,
-`artifact_ref`, and `eval_source`, all below `leader/checkpoint/`, plus the unchanged checkpoint
-step and update timestamp. Current readers translate those fields at the boundary. They do not
-copy them into v14 history or emit the retired generic objective, rank tuple, or acceptance alias.
 
 ## Registry
 

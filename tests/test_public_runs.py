@@ -13,7 +13,7 @@ from gradlab.policy_bundle import (
 )
 from gradlab.r2_store import BucketConfig, RunStorageConfig
 from gradlab.r2_store import PUBLIC_OBJECT_USER_AGENT
-from gradlab.recipe_documents import compose_train_document
+from gradlab.recipe_documents import compose_resolved_train_documents
 from gradlab.run_authority import RunAuthority
 from gradlab.run_contracts import PromotionReceipt, new_run_id, utc_now
 from gradlab.training_backend import training_backend_config_hash
@@ -57,13 +57,20 @@ def _policy_checkpoint(root: Path) -> Path:
     root.mkdir(parents=True, exist_ok=True)
     checkpoint = root / "model.zip"
     checkpoint.write_bytes(b"public checkpoint bytes")
+    resolved = compose_resolved_train_documents(
+        GOAL,
+        RECIPE,
+        source_sha="a" * 40,
+    )
     recipe = build_recipe_document(
-        compose_train_document(GOAL, RECIPE),
+        resolved.effective,
         repo_root=Path.cwd(),
         source_commit="a" * 40,
         run_description="public playback test",
         seed=123,
         runtime_image_ref=RUNTIME,
+        base_materialized_recipe=resolved.base,
+        canonical_goal=resolved.canonical_goal,
     )
     canonical_recipe = write_canonical_json(root / "recipe.json", recipe)
     metadata = {

@@ -92,8 +92,8 @@ def test_catalog_selector_and_raw_reward_override_fail_closed() -> None:
 def test_policy_reward_override_is_mirrored_and_changes_the_effective_goal() -> None:
     baseline = compose_train_document(VIZDOOM_GOAL, VIZDOOM_RECIPE)
     requested = (
-        "train.environment.env_config.env_args.reward_clip=true",
-        "eval.environment.env_config.env_args.reward_clip=true",
+        "train.environment.task.reward.reward_clip=true",
+        "eval.environment.task.reward.reward_clip=true",
     )
 
     document = compose_train_document(
@@ -104,10 +104,7 @@ def test_policy_reward_override_is_mirrored_and_changes_the_effective_goal() -> 
     config = document["train_config"]
 
     assert document["recipe_overrides"] == list(requested)
-    assert document["effective_recipe_overrides"] == [
-        "train.environment.task.reward.reward_clip=true",
-        "eval.environment.task.reward.reward_clip=true",
-    ]
+    assert document["effective_recipe_overrides"] == list(requested)
     assert "reward_clip" not in config["env_args"]
     assert config["task"]["reward"]["reward_clip"] == [-1.0, 1.0]
     assert "reward_clip" not in config["checkpoint_eval_environment"]["env_args"]

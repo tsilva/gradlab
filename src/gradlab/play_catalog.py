@@ -2363,38 +2363,24 @@ class PlayCatalog:
     ) -> tuple[dict[str, Any], dict[str, Any]]:
         validated = validate_recipe_document(document, source=title)
         recipe = dict(validated["recipe"])
-        resolution = validated.get("resolution")
-        if isinstance(resolution, Mapping):
-            goal_resolution = resolution.get("goal")
-            recipe_resolution = resolution.get("recipe")
-            if not isinstance(goal_resolution, Mapping) or not isinstance(
-                recipe_resolution,
-                Mapping,
-            ):
-                raise ValueError("recipe resolution proof is malformed")
-            goal_base = dict(goal_resolution["base"])
-            recipe_base = dict(recipe_resolution["base"])
-            message = ""
-        else:
-            goal_base = None
-            recipe_base = None
-            message = (
-                "This legacy recipe preserves the exact resolved contract but predates "
-                "embedded base-contract proofs, so a historical diff is unavailable."
-            )
+        resolution = validated["resolution"]
+        goal_resolution = resolution.get("goal") if isinstance(resolution, Mapping) else None
+        recipe_resolution = (
+            resolution.get("recipe") if isinstance(resolution, Mapping) else None
+        )
+        if not isinstance(goal_resolution, Mapping) or not isinstance(
+            recipe_resolution,
+            Mapping,
+        ):
+            raise ValueError("recipe resolution proof is malformed")
+        goal_base = dict(goal_resolution["base"])
+        recipe_base = dict(recipe_resolution["base"])
+        message = ""
         goal_variant = recipe.get("goal_variant")
         goal_variant_id = (
             str(goal_variant.get("variant_id") or "") if isinstance(goal_variant, Mapping) else ""
         )
-        recipe_variant_id_value = (
-            str(recipe_resolution.get("variant_id") or "")
-            if isinstance(resolution, Mapping) and isinstance(recipe_resolution, Mapping)
-            else recipe_variant_id(
-                recipe_slug=recipe.get("recipe_id"),
-                source_sha=str(validated.get("provenance", {}).get("source_commit") or ""),
-                recipe_overrides=recipe.get("recipe_overrides"),
-            )
-        )
+        recipe_variant_id_value = str(recipe_resolution.get("variant_id") or "")
         common_metadata = {
             **dict(metadata),
             "recipe_format_version": int(validated["format_version"]),

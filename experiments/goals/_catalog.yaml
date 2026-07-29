@@ -11,6 +11,8 @@ namespaces:
     project: VizdoomBasic-Plus-v1
   VizdoomDeadlyCorridor-v1:
     project: VizdoomDeadlyCorridor-v1
+  VizdoomDeathmatch-v1:
+    project: VizdoomDeathmatch-v1
   VizdoomDefendCenter-v1:
     project: VizdoomDefendCenter-v1
   VizdoomDefendLine-v1:

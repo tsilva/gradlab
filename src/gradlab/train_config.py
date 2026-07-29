@@ -117,23 +117,6 @@ def _add_config_field_argument(
     parser.add_argument(field.flag, *field.aliases, **kwargs)
 
 
-def _legacy_hud_crop(value: str) -> tuple[int, int, int, int] | None:
-    crop_top = int(value)
-    if crop_top < -1:
-        raise argparse.ArgumentTypeError("must be -1 or a non-negative integer")
-    return None if crop_top == -1 else (crop_top, 0, 0, 0)
-
-
-def _add_legacy_preprocessing_aliases(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument(
-        "--hud-crop-top",
-        dest="obs_crop",
-        type=_legacy_hud_crop,
-        default=argparse.SUPPRESS,
-        help=argparse.SUPPRESS,
-    )
-
-
 def add_train_config_args(
     parser: argparse.ArgumentParser,
     *,
@@ -153,7 +136,6 @@ def add_train_config_args(
             parse_json_value=parse_json_value,
             parse_obs_crop=parse_obs_crop,
         )
-    _add_legacy_preprocessing_aliases(parser)
 
 
 def add_env_config_args(
@@ -176,7 +158,6 @@ def add_env_config_args(
             parse_obs_crop=parse_obs_crop,
             dest=dest,
         )
-    _add_legacy_preprocessing_aliases(parser)
     parser.add_argument("--max-steps", type=int, default=max_steps_default)
 
 

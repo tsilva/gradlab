@@ -498,6 +498,9 @@ class GoExploreSearchTests(unittest.TestCase):
                     save=lambda path, **_kwargs: Path(path).write_bytes(b"policy")
                 )
 
+            def cell_graph_policy(self, **_kwargs):
+                return self.policy()
+
         class FakeProgress:
             def __init__(self) -> None:
                 self.n = 0

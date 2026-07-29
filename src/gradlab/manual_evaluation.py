@@ -41,7 +41,6 @@ from gradlab.modal_eval_protocol import (
 )
 from gradlab.operator_environment import load_repository_operator_environment
 from gradlab.policy_bundle import (
-    canonical_json_sha256,
     evaluation_contract,
     evaluation_contract_sha256,
 )
@@ -73,6 +72,7 @@ _STRICT_COMPLETE_ACCEPTANCE_METRIC_BY_GAME = {
     "VizdoomBasic-v1": EVAL_FULL_SUCCESS_ACROSS_STARTS_RATE_MIN,
     "VizdoomBasic-Plus-v1": EVAL_FULL_SUCCESS_ACROSS_STARTS_RATE_MIN,
     "VizdoomDeadlyCorridor-v1": EVAL_FULL_EPISODE_RETURN_SHAPED_MEAN,
+    "VizdoomDeathmatch-v1": EVAL_FULL_EPISODE_RETURN_SHAPED_MEAN,
     "VizdoomDefendLine-v1": EVAL_FULL_EPISODE_RETURN_SHAPED_MEAN,
     "VizdoomDefendLine-Plus-v1": EVAL_FULL_EPISODE_RETURN_SHAPED_MEAN,
 }
@@ -345,28 +345,10 @@ class ManualEvaluationSupervisor:
         contract = evaluation_contract(recipe_document)
         contract_sha256 = evaluation_contract_sha256(recipe_document)
         if contract_sha256 != checkpoint.evaluation_contract_sha256:
-            recipe = recipe_document.get("recipe")
-            playback = recipe.get("playback") if isinstance(recipe, Mapping) else None
-            legacy_training_only_sha256 = (
-                canonical_json_sha256(
-                    {
-                        "training_only": True,
-                        "playback": playback,
-                    }
-                )
-                if isinstance(playback, Mapping)
-                else ""
+            raise ValueError(
+                f"checkpoint evaluation contract hash mismatch: "
+                f"{checkpoint.checkpoint_id}"
             )
-            if (
-                not isinstance(recipe, Mapping)
-                or "eval" in recipe
-                or checkpoint.evaluation_contract_sha256
-                != legacy_training_only_sha256
-            ):
-                raise ValueError(
-                    f"checkpoint evaluation contract hash mismatch: "
-                    f"{checkpoint.checkpoint_id}"
-                )
         contract.update(
             {
                 "schema_version": PROTOCOL_SCHEMA_VERSION,

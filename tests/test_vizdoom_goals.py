@@ -7,6 +7,25 @@ from gradlab.recipe_documents import compose_train_document
 
 
 GOALS_ROOT = Path("experiments/goals")
+DEATHMATCH_ACTIONS = [
+    [],
+    ["ATTACK"],
+    ["MOVE_FORWARD"],
+    ["MOVE_BACKWARD"],
+    ["MOVE_LEFT"],
+    ["MOVE_RIGHT"],
+    ["TURN_LEFT"],
+    ["TURN_RIGHT"],
+    ["SPEED", "MOVE_FORWARD"],
+    ["ATTACK", "MOVE_FORWARD"],
+    ["ATTACK", "MOVE_BACKWARD"],
+    ["ATTACK", "MOVE_LEFT"],
+    ["ATTACK", "MOVE_RIGHT"],
+    ["ATTACK", "TURN_LEFT"],
+    ["ATTACK", "TURN_RIGHT"],
+    ["SELECT_NEXT_WEAPON"],
+    ["SELECT_PREV_WEAPON"],
+]
 EXPECTED_GOALS = {
     "VizdoomBasic-v1": {
         "timesteps": 2_000_000,
@@ -31,6 +50,15 @@ EXPECTED_GOALS = {
         "acceptance_metric": "eval/full/episode/return/shaped/mean",
         "acceptance_threshold": 0.80,
         "reward_scale": 100.0,
+    },
+    "VizdoomDeathmatch-v1": {
+        "timesteps": 20_000_000,
+        "event": "monster_killed",
+        "training_metric": "train/episode/return/shaped/from/target/window_100/mean",
+        "acceptance_metric": "eval/full/episode/return/shaped/mean",
+        "acceptance_threshold": 10.0,
+        "reward_scale": 1.0,
+        "actions": DEATHMATCH_ACTIONS,
     },
     "VizdoomDefendCenter-v1": {
         "timesteps": 10_000_000,
@@ -125,7 +153,9 @@ def test_vizdoom_goal_has_complete_evaluated_ppo_contract(
     assert train_config["state"] == "default"
     assert train_config["n_envs"] == 32
     assert train_config["env_args"]["num_threads"] == 32
-    assert train_config["env_args"]["use_restricted_actions"] == "discrete"
+    assert train_config["env_args"]["use_restricted_actions"] == expected.get(
+        "actions", "discrete"
+    )
     assert train_config["task"]["id"] == "identity"
     assert expected["event"] in train_config["task"]["events"]
     assert train_config["task"]["reward"]["reward_scale"] == expected["reward_scale"]
@@ -145,7 +175,7 @@ def test_vizdoom_goal_has_complete_evaluated_ppo_contract(
         "threshold": expected["acceptance_threshold"],
         "patience_steps": 0,
         "outcome": "success",
-        "action": "stop",
+        "action": "observe",
     }
     assert acceptance == [
         {
@@ -155,6 +185,44 @@ def test_vizdoom_goal_has_complete_evaluated_ppo_contract(
         }
     ]
     assert goal["release"] == {"huggingface": {}}
+
+
+def test_vizdoom_deathmatch_declares_complete_single_player_combat_semantics() -> None:
+    goal_path = GOALS_ROOT / "VizdoomDeathmatch-v1" / "_goal.yaml"
+    recipe_path = goal_path.parent / "recipes/ppo.yaml"
+    document = compose_train_document(goal_path, recipe_path)
+
+    train_config = document["train_config"]
+    eval_environment = document["goal"]["eval"]["environment"]
+
+    assert train_config["env_args"]["players"] == 1
+    assert train_config["env_args"]["use_restricted_actions"] == DEATHMATCH_ACTIONS
+    assert train_config["env_args"]["game_variables"] == [
+        "KILLCOUNT",
+        "HEALTH",
+        "ARMOR",
+        "SELECTED_WEAPON",
+        "SELECTED_WEAPON_AMMO",
+    ]
+    assert train_config["task"]["signals"] == {
+        "kills": "killcount",
+        "health": "health",
+        "armor": "armor",
+        "selected_weapon": "selected_weapon",
+        "selected_weapon_ammo": "selected_weapon_ammo",
+        "player_dead": "player_dead",
+        "episode_done": "pending_reset",
+    }
+    assert train_config["task"]["termination"] == {
+        "max_episode_steps": 1050,
+        "failure": ["player_died"],
+        "timeout": ["episode_ended"],
+    }
+    assert (
+        eval_environment["env_config"]["env_args"]["use_restricted_actions"]
+        == DEATHMATCH_ACTIONS
+    )
+    assert eval_environment["task"] == train_config["task"]
 
 
 def test_vizdoom_goal_training_target_remains_valid_when_evaluation_is_enabled() -> None:
@@ -169,7 +237,9 @@ def test_vizdoom_goal_training_target_remains_valid_when_evaluation_is_enabled()
     train_config = document["train_config"]
     assert train_config["checkpoint_eval_backend"] == "modal"
     assert train_config["stop_on_acceptance"] is True
-    assert train_config["early_stop"]["conditions"]["target_reached"]["outcome"] == "success"
+    target = train_config["early_stop"]["conditions"]["target_reached"]
+    assert target["outcome"] == "success"
+    assert target["action"] == "observe"
     assert train_config["checkpoint_eval_acceptance"] == document["goal"]["eval"]["acceptance"]
 
 

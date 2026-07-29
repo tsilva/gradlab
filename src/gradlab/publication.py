@@ -15,7 +15,7 @@ from huggingface_hub.utils import validate_repo_id
 from jinja2 import Environment, FileSystemLoader, StrictUndefined
 from pydantic import Field, StringConstraints
 
-from gradlab.action_contract import action_contract_meanings, configured_action_meanings
+from gradlab.action_contract import action_contract_meanings
 from gradlab.boundary_schema import BoundaryModel, validate_boundary
 from gradlab.env_registry import game_family_for_environment
 from gradlab.file_utils import file_sha256 as sha256_file
@@ -27,11 +27,6 @@ from gradlab.metric_names import (
     EVAL_FULL_PROGRESS_X_MAX,
     EVAL_FULL_SUCCESS_ACROSS_STARTS_RATE_MEAN,
     EVAL_FULL_SUCCESS_ACROSS_STARTS_RATE_MIN,
-    V13_EVAL_CHECKPOINT_STEP,
-    V13_EVAL_FULL_EPISODE_COMPLETED_COUNT,
-    V13_EVAL_FULL_EPISODE_RETURN_SHAPED_MEAN,
-    V13_EVAL_FULL_SUCCESS_ACROSS_STARTS_RATE_MEAN,
-    V13_EVAL_FULL_SUCCESS_ACROSS_STARTS_RATE_MIN,
 )
 from gradlab.env_registry import environment_spec
 from gradlab.policy_bundle import (
@@ -328,33 +323,19 @@ def policy_variant_from_contract(
 
     action = _require_mapping(task.get("action"), label="publication task.action")
     action_set = str(action.get("set") or "").strip()
-    if isinstance(action_contract, Mapping) and action_contract.get("schema_version") is not None:
-        provider_contract = _require_mapping(
-            action_contract.get("provider"),
-            label="publication runtime action contract provider",
-        )
-        action_set = str(
-            provider_contract.get("preset") or provider_contract.get("mode") or action_set
-        ).strip()
-        meanings = action_contract_meanings(action_contract)
-        if not meanings:
-            raise ValueError(
-                "publication runtime action contract requires semantic IDs "
-                "for every discrete action"
-            )
-    elif isinstance(action_contract, Mapping) and action_contract.get("preset"):
-        action_set = str(action_contract["preset"]).strip()
-        meanings = action_contract.get("meanings")
-        if not isinstance(meanings, Sequence) or isinstance(meanings, str | bytes) or not meanings:
-            raise ValueError("publication action contract meanings must be a non-empty list")
-    else:
-        configured_action_meanings(
-            {
-                "env_provider": provider,
-                "game": game,
-                "env_args": {},
-                "task": task,
-            }
+    if not isinstance(action_contract, Mapping) or action_contract.get("schema_version") is None:
+        raise ValueError("publication requires a structured runtime action contract")
+    provider_contract = _require_mapping(
+        action_contract.get("provider"),
+        label="publication runtime action contract provider",
+    )
+    action_set = str(
+        provider_contract.get("preset") or provider_contract.get("mode") or action_set
+    ).strip()
+    if not action_contract_meanings(action_contract):
+        raise ValueError(
+            "publication runtime action contract requires semantic IDs "
+            "for every discrete action"
         )
     components.append(normalize_publication_component(action_set, label="publication action set"))
     return "-".join(components)
@@ -385,26 +366,8 @@ def publication_identity_from_policy_bundle(
         else None
     )
     if action_contract is None:
-        from gradlab.action_contract import (
-            declared_action_contract,
-            migrate_legacy_artifact_action_configuration,
-        )
-
-        provider_args = environment.get("provider_args")
-        migrated_args, migrated_task = migrate_legacy_artifact_action_configuration(
-            provider_id=provider,
-            game=game,
-            env_args=(dict(provider_args) if isinstance(provider_args, Mapping) else {}),
-            task=task,
-        )
-        task = migrated_task
-        action_contract = declared_action_contract(
-            {
-                "env_provider": provider,
-                "game": game,
-                "env_args": migrated_args,
-                "task": dict(task),
-            }
+        raise ValueError(
+            "model.json provenance must contain a saved runtime action contract"
         )
     algorithm = normalize_algorithm_id(policy.get("algorithm_id"))
     validate_algorithm_model_class(algorithm, policy.get("model_class"))
@@ -569,7 +532,6 @@ def normalize_publication_evaluation(
             evaluation,
             "checkpoint_step",
             EVAL_CHECKPOINT_STEP,
-            V13_EVAL_CHECKPOINT_STEP,
         ),
         label="evaluation checkpoint_step",
     )
@@ -586,7 +548,6 @@ def normalize_publication_evaluation(
             evaluation,
             "episodes",
             EVAL_FULL_EPISODE_COMPLETED_COUNT,
-            V13_EVAL_FULL_EPISODE_COMPLETED_COUNT,
         ),
         label="evaluation episodes",
     )
@@ -597,7 +558,6 @@ def normalize_publication_evaluation(
             evaluation,
             "success_rate_min",
             EVAL_FULL_SUCCESS_ACROSS_STARTS_RATE_MIN,
-            V13_EVAL_FULL_SUCCESS_ACROSS_STARTS_RATE_MIN,
         ),
         label="evaluation success_rate_min",
     )
@@ -606,7 +566,6 @@ def normalize_publication_evaluation(
             evaluation,
             "success_rate_mean",
             EVAL_FULL_SUCCESS_ACROSS_STARTS_RATE_MEAN,
-            V13_EVAL_FULL_SUCCESS_ACROSS_STARTS_RATE_MEAN,
         ),
         label="evaluation success_rate_mean",
     )
@@ -615,7 +574,6 @@ def normalize_publication_evaluation(
             evaluation,
             "return_mean",
             EVAL_FULL_EPISODE_RETURN_SHAPED_MEAN,
-            V13_EVAL_FULL_EPISODE_RETURN_SHAPED_MEAN,
         ),
         label="evaluation return_mean",
     )

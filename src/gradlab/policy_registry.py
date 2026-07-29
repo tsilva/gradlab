@@ -85,9 +85,6 @@ BACKEND_PROVENANCE_ALGORITHMS: dict[str, frozenset[PolicyAlgorithmId]] = {
         backend_id: frozenset({spec.algorithm_id})
         for backend_id, spec in TRAINING_BACKEND_SPECS.items()
     },
-    # Go-Explore action programs are an active legacy policy identity. New
-    # checkpoints use cell-graph while old bundles remain readable.
-    "gradlab.go-explore": frozenset({"action-program", "cell-graph"}),
     # GradLab can validate, load, evaluate, and play archived SB3 DQN
     # checkpoints without claiming that DQN is a launchable training backend.
     "sb3.dqn": frozenset({"dqn"}),

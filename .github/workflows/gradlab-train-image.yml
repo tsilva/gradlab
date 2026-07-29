@@ -171,16 +171,25 @@ jobs:
               raise SystemExit("ViZDoom smoke evidence hash mismatch")
           if payload != {
               **payload,
-              "smoke_contract_version": 1,
+              "smoke_contract_version": 2,
               "provider_distribution": "vizdoom-turbo",
               "provider_version": "1.3.0.post16",
-              "game": "VizdoomBasic-v1",
-              "num_envs": 1,
-              "reset_succeeded": True,
-              "step_succeeded": True,
-              "close_succeeded": True,
           }:
               raise SystemExit("ViZDoom smoke contract mismatch")
+          scenarios = payload.get("scenarios")
+          if (
+              not isinstance(scenarios, list)
+              or [scenario.get("game") for scenario in scenarios]
+              != ["VizdoomBasic-v1", "VizdoomDeathmatch-v1"]
+              or any(
+                  scenario.get("num_envs") != 1
+                  or scenario.get("reset_succeeded") is not True
+                  or scenario.get("step_succeeded") is not True
+                  or scenario.get("close_succeeded") is not True
+                  for scenario in scenarios
+              )
+          ):
+              raise SystemExit("ViZDoom scenario smoke contract mismatch")
           PY
           {
             echo "contract_version=$(jq -r '.smoke_contract_version' vizdoom-smoke.json)"

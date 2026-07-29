@@ -684,9 +684,7 @@ class RewardTransformTaskKernel:
 
         np.copyto(self._raw_rewards, np.asarray(task_step.rewards, dtype=np.float32))
         np.divide(self._raw_rewards, self.transform.scale, out=self._rewards)
-        if self.transform.sign_clip:
-            np.sign(self._rewards, out=self._rewards)
-        elif self.transform.clip_bounds is not None:
+        if self.transform.clip_bounds is not None:
             np.clip(
                 self._rewards,
                 self.transform.clip_bounds[0],

@@ -1,0 +1,5 @@
+defaults:
+- ../../../recipes/_presets/vizdoom-deathmatch-ppo@_global_
+- _self_
+recipe_id: ppo
+description: Single-player ViZDoom Deathmatch pixel PPO with a compact combat action table.

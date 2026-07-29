@@ -23,7 +23,7 @@ from gradlab.policy_bundle import (
     sha256_file,
     write_canonical_json,
 )
-from gradlab.recipe_documents import compose_train_document
+from gradlab.recipe_documents import compose_resolved_train_documents
 from gradlab.training_backend import training_backend_config_hash
 from gradlab.publication import (
     GITATTRIBUTES_TEXT,
@@ -94,6 +94,32 @@ def model_metadata(
 ) -> dict:
     if crop is None and game == "SuperMarioBros-Nes-v0":
         crop = [32, 0, 0, 0]
+    action_meanings = {
+        "basic": ("noop", "right", "right_b", "right_a", "right_a_b", "a", "left"),
+        "right-jump": ("right", "right_b", "right_a", "right_a_b"),
+        "native": ("native",),
+    }
+    if action_set not in action_meanings:
+        raise ValueError(f"unknown action set: {action_set}")
+    meanings = action_meanings[action_set]
+    action_contract = {
+        "schema_version": 1,
+        "provider": {
+            "mode": "native" if action_set == "native" else "custom_discrete",
+            "preset": None if action_set == "native" else action_set,
+        },
+        "policy": {
+            "space": {"type": "discrete", "start": 0, "n": len(meanings)},
+            "semantics": {
+                "status": "available",
+                "encoding": "explicit",
+                "entries": [
+                    {"value": index, "semantic_id": meaning}
+                    for index, meaning in enumerate(meanings)
+                ],
+            },
+        },
+    }
     metadata = {
         "algorithm_id": algorithm,
         "model_class": model_class,
@@ -112,6 +138,7 @@ def model_metadata(
                 "env_id": f"{provider}:{game}",
                 "task": {"action": {"set": action_set}},
             },
+            "action_contract": action_contract,
             "preprocessing": {
                 "obs_resize": list(resize),
                 "obs_crop": crop,
@@ -320,13 +347,6 @@ def test_publication_rejects_unknown_family_and_algorithm_mismatch() -> None:
             "Level1-1",
             policy_bundle_from_metadata(model_metadata(provider="unregistered-mario-provider")),
         )
-    with pytest.raises(ValueError, match="unknown action_set"):
-        publication_identity_from_policy_bundle(
-            "Level1-1",
-            policy_bundle_from_metadata(model_metadata(action_set="unregistered-actions")),
-        )
-
-
 def test_long_repo_names_are_rejected() -> None:
     with pytest.raises(ValueError, match="96"):
         build_model_repo_id(
@@ -429,17 +449,20 @@ def test_release_bundle_has_exact_files_hashes_and_portable_identity() -> None:
         }
         for filename, content in contents.items():
             (root / filename).write_text(content, encoding="utf-8")
-        composed = compose_train_document(
+        resolved = compose_resolved_train_documents(
             Path("experiments/goals/SuperMarioBros-Nes-v0/Level1-1/_goal.yaml"),
             Path("experiments/goals/SuperMarioBros-Nes-v0/Level1-1/recipes/ppo.yaml"),
+            source_sha="a" * 40,
         )
         recipe_document = build_recipe_document(
-            composed,
+            resolved.effective,
             repo_root=Path.cwd(),
             source_commit="a" * 40,
             run_description="release fixture",
             seed=7,
             runtime_image_ref="docker:example.invalid/gradlab@sha256:" + "b" * 64,
+            base_materialized_recipe=resolved.base,
+            canonical_goal=resolved.canonical_goal,
         )
         write_canonical_json(root / "recipe.json", recipe_document)
         metadata["training_backend_id"] = recipe_document["recipe"]["train_config"][
@@ -451,6 +474,7 @@ def test_release_bundle_has_exact_files_hashes_and_portable_identity() -> None:
         metadata["training_metadata"] = {
             "environment_hash": recipe_document["recipe"]["environment_hash"],
             "environment": recipe_document["recipe"]["environment"],
+            "action_contract": metadata["training_metadata"]["action_contract"],
             "preprocessing": recipe_document["recipe"]["environment"]["preprocessing"],
         }
         write_canonical_json(

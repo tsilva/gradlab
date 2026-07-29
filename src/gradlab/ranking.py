@@ -6,10 +6,9 @@ from dataclasses import dataclass
 from typing import Any
 
 from gradlab.metric_names import (
-    LEGACY_METRICS_SCHEMA_VERSION,
     LEADER_CHECKPOINT_STEP,
     METRICS_SCHEMA_VERSION,
-    leader_metric_for_rank_metric,
+    evaluation_metric_schema,
     validate_metric_name,
 )
 
@@ -29,6 +28,10 @@ def parse_objective_rank(
 ) -> tuple[RankCriterion, ...]:
     if not isinstance(value, Sequence) or isinstance(value, str | bytes):
         return ()
+    try:
+        evaluation_metric_schema(metrics_schema_version)
+    except ValueError:
+        return ()
     criteria: list[RankCriterion] = []
     for item in value:
         match = _RANK_RE.fullmatch(str(item).strip())
@@ -36,15 +39,7 @@ def parse_objective_rank(
             return ()
         metric = match.group(2).strip()
         try:
-            if metrics_schema_version == METRICS_SCHEMA_VERSION:
-                validate_metric_name(metric)
-            elif metrics_schema_version == LEGACY_METRICS_SCHEMA_VERSION:
-                leader_metric_for_rank_metric(
-                    metric,
-                    schema_version=metrics_schema_version,
-                )
-            else:
-                return ()
+            validate_metric_name(metric)
         except ValueError:
             return ()
         criteria.append(RankCriterion(match.group(1), metric))

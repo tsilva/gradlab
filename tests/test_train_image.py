@@ -233,6 +233,8 @@ class TrainImageTests(unittest.TestCase):
 
         self.assertIn("Smoke exact ViZDoom runtime image", workflow)
         self.assertIn("python /usr/local/bin/gradlab-vizdoom-smoke", workflow)
+        self.assertIn('"smoke_contract_version": 2', workflow)
+        self.assertIn('"VizdoomDeathmatch-v1"', workflow)
         self.assertIn('"schema_version": 7', workflow)
         self.assertIn('"provider_distribution": "vizdoom-turbo"', workflow)
         self.assertIn('"provider_version": "1.3.0.post16"', workflow)

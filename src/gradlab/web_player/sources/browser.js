@@ -905,6 +905,7 @@ export class SourceBrowser {
     this.activeBreadcrumbRoute = signature;
     this.renderBreadcrumbs(this.breadcrumbsRoot);
     this.breadcrumbsRoot.hidden = false;
+    this.syncUrl("replace");
   }
 
   hasControl() {

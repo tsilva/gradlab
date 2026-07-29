@@ -5,8 +5,6 @@ import pytest
 
 from gradlab.env_identity import environment_hash, environment_identity_from_train_config
 from gradlab.reward_transform import (
-    LEGACY_SIGN_CLIP,
-    migrate_legacy_artifact_reward_config,
     normalize_reward_mapping,
     reward_transform_from_reward,
 )
@@ -81,45 +79,6 @@ def test_disabled_transform_returns_the_original_kernel() -> None:
         )
         is kernel
     )
-
-
-def test_legacy_provider_and_mario_reward_controls_translate_at_artifact_load() -> None:
-    args, identity_task = migrate_legacy_artifact_reward_config(
-        {"reward_clip": True, "num_threads": 8},
-        {"id": "identity", "reward": {"reward_mode": "native"}},
-    )
-    assert args == {"num_threads": 8}
-    assert identity_task["reward"]["reward_clip"] == [-1.0, 1.0]
-
-    _args, mario_task = migrate_legacy_artifact_reward_config(
-        {},
-        {
-            "id": "mario",
-            "reward": {
-                "reward_mode": "baseline",
-                "clip_rewards": True,
-                "reward_scale": 10.0,
-                "time_penalty": 0.001,
-            },
-        },
-    )
-    assert mario_task["reward"]["reward_clip"] == LEGACY_SIGN_CLIP
-    assert mario_task["reward"]["reward_scale"] == 10.0
-    assert mario_task["reward"]["time_penalty"] == pytest.approx(0.01)
-
-    _args, doubly_configured_mario_task = migrate_legacy_artifact_reward_config(
-        {"reward_clip": False},
-        {
-            "id": "mario",
-            "reward": {
-                "reward_mode": "baseline",
-                "clip_rewards": True,
-                "reward_scale": 10.0,
-                "time_penalty": 0.001,
-            },
-        },
-    )
-    assert doubly_configured_mario_task["reward"]["reward_clip"] == LEGACY_SIGN_CLIP
 
 
 def test_reward_transform_changes_environment_hash() -> None:

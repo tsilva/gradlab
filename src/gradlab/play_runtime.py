@@ -288,9 +288,7 @@ class PlaybackLoader:
             "matches_training": not comparison_reasons,
             "comparison_reasons": comparison_reasons,
             "evaluation_matches_training": evaluation_matches_training,
-            "legacy_mismatch": bool(evaluation_available and evaluation_matches_training is False),
             "mismatch_paths": list(contract_audit["mismatch_paths"]),
-            "legacy_override_provenance": bool(contract_audit["legacy_override_provenance"]),
             "requested_policy_override_paths": list(
                 contract_audit["requested_policy_override_paths"]
             ),

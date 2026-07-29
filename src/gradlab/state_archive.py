@@ -777,7 +777,7 @@ _CURRICULUM_KEYS = frozenset(
         *_CURRICULUM_DEFAULTS,
     }
 )
-_CELL_KEYS = frozenset({"signal", "bucket_size", "dimensions"})
+_CELL_KEYS = frozenset({"dimensions"})
 _CELL_DIMENSION_KEYS = frozenset(
     {"signal", "source", "bucket_size", "clamp", "equals"}
 )
@@ -806,21 +806,6 @@ def normalize_archive_cell_config(
     if unexpected:
         raise ValueError(f"{label} has unexpected fields: {unexpected}")
     dimensions = value.get("dimensions")
-    legacy_fields = set(value) & {"signal", "bucket_size"}
-    if dimensions is not None and legacy_fields:
-        raise ValueError(
-            f"{label} must use either dimensions or signal/bucket_size, not both"
-        )
-    if dimensions is None:
-        signal = str(value.get("signal") or "").strip()
-        if not signal:
-            raise ValueError(f"{label}.signal must be a non-empty string")
-        dimensions = (
-            {
-                "signal": signal,
-                "bucket_size": value.get("bucket_size"),
-            },
-        )
     if (
         isinstance(dimensions, str | bytes)
         or not isinstance(dimensions, Sequence)

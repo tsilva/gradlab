@@ -20,16 +20,13 @@ from gradlab.policy_bundle import (
     build_model_document,
     build_recipe_document,
     canonical_json_bytes,
-    canonical_json_sha256,
     critic_value_contract,
     evaluation_contract,
     playback_contract_sha256,
     playback_contract,
-    playback_contract_audit,
     load_policy_bundle,
     load_policy_bundle_from_checkpoint,
     load_recipe_document,
-    sha256_file,
     validate_recipe_document,
     write_canonical_json,
 )
@@ -56,14 +53,20 @@ VIZDOOM_RECIPE = VIZDOOM_GOAL.parent / "recipes/ppo.yaml"
 
 
 def level1_1_recipe_document(*, seed: int = 7) -> dict:
-    materialized = compose_train_document(GOAL, RECIPE)
+    resolved = compose_resolved_train_documents(
+        GOAL,
+        RECIPE,
+        source_sha="a" * 40,
+    )
     return build_recipe_document(
-        materialized,
+        resolved.effective,
         repo_root=Path.cwd(),
         source_commit="a" * 40,
         run_description=f"Level1-1 PPO seed {seed}",
         seed=seed,
         runtime_image_ref=RUNTIME,
+        base_materialized_recipe=resolved.base,
+        canonical_goal=resolved.canonical_goal,
     )
 
 
@@ -111,85 +114,42 @@ def test_recipe_v2_embeds_verified_goal_and_recipe_bases() -> None:
         validate_recipe_document(tampered)
 
 
-def test_recipe_v2_validates_release_pinned_v13_metric_names() -> None:
-    resolved = compose_resolved_train_documents(
-        VIZDOOM_GOAL,
-        VIZDOOM_RECIPE,
-        source_sha="a" * 40,
-    )
+def test_wandb_display_name_is_not_part_of_portable_recipe() -> None:
+    resolved = compose_resolved_train_documents(GOAL, RECIPE, source_sha="a" * 40)
+    resolved.effective["train_config"]["wandb_display_name"] = "Level1-1__ppo__s7__01234567"
+
     document = build_recipe_document(
         resolved.effective,
-        repo_root=Path.cwd(),
-        source_commit="a" * 40,
-        run_description="ViZDoom schema-v13 compatibility fixture",
-        seed=7,
-        runtime_packages=("gradlab==0.1.0",),
-        base_materialized_recipe=resolved.base,
-        canonical_goal=resolved.canonical_goal,
-    )
-    legacy = deepcopy(document)
-    recipes = (
-        legacy["recipe"],
-        legacy["resolution"]["recipe"]["base"],
-    )
-    for recipe in recipes:
-        recipe["train_config"].pop("metrics_schema_version", None)
-        recipe["train_config"]["early_stop"]["conditions"]["return_plateau"]["metric"] = (
-            "train/episode/return/shaped/from/target/mean"
-        )
-    legacy["resolution"]["recipe"]["base_sha256"] = canonical_json_sha256(recipes[1])
-    legacy["resolution"]["recipe"]["effective_sha256"] = canonical_json_sha256(recipes[0])
-
-    assert validate_recipe_document(legacy) == legacy
-
-
-def test_wandb_display_name_is_not_part_of_portable_recipe() -> None:
-    materialized = compose_train_document(GOAL, RECIPE)
-    materialized["train_config"]["wandb_display_name"] = "Level1-1__ppo__s7__01234567"
-
-    document = build_recipe_document(
-        materialized,
         repo_root=Path.cwd(),
         source_commit="a" * 40,
         run_description="W&B presentation identity regression",
         seed=7,
         runtime_image_ref=RUNTIME,
+        base_materialized_recipe=resolved.base,
+        canonical_goal=resolved.canonical_goal,
     )
 
     assert "wandb_display_name" not in document["recipe"]["train_config"]
-
-
-def test_archived_dqn_recipe_is_portably_valid_without_becoming_launchable() -> None:
-    document = level1_1_recipe_document()
-    document["recipe"]["train_config"]["training_backend"] = {
-        "id": "sb3.dqn",
-        "config": {
-            "gamma": 0.99,
-            "exploration_initial_eps": 1.0,
-            "exploration_final_eps": 0.05,
-        },
-    }
-    document["recipe"]["eval"]["action_sampling"] = "epsilon_greedy"
-    document["recipe"].pop("value_contract", None)
-
-    validated = validate_recipe_document(document)
-
-    assert evaluation_contract(validated)["action_sampling"] == "epsilon_greedy"
-    assert critic_value_contract(validated) is None
 
 
 @pytest.mark.parametrize("recipe_path", BREAKOUT_RECIPES)
 def test_breakout_bundle_is_playable_but_has_no_evaluation_contract(
     recipe_path: Path,
 ) -> None:
-    materialized = compose_train_document(BREAKOUT_GOAL, recipe_path)
+    resolved = compose_resolved_train_documents(
+        BREAKOUT_GOAL,
+        recipe_path,
+        source_sha="a" * 40,
+    )
     document = build_recipe_document(
-        materialized,
+        resolved.effective,
         repo_root=Path.cwd(),
         source_commit="a" * 40,
         run_description="training-only Breakout",
         seed=7,
         runtime_image_ref=RUNTIME,
+        base_materialized_recipe=resolved.base,
+        canonical_goal=resolved.canonical_goal,
     )
 
     assert document["recipe"]["train_config"]["checkpoint_eval_backend"] == "none"
@@ -201,11 +161,12 @@ def test_breakout_bundle_is_playable_but_has_no_evaluation_contract(
 
 
 def test_level1_3_training_clear_bundle_omits_eval_and_preserves_early_stop() -> None:
-    materialized = compose_train_document(
+    resolved = compose_resolved_train_documents(
         LEVEL1_3_GOAL,
         LEVEL1_3_TRAIN_CLEAR_RECIPE,
+        source_sha="a" * 40,
     )
-    materialized["train_config"]["rom_asset_manifest"] = {
+    asset = {
         "schema_version": 2,
         "game": "SuperMarioBros-Nes-v0",
         "filename": "mario.nes",
@@ -215,13 +176,17 @@ def test_level1_3_training_clear_bundle_omits_eval_and_preserves_early_stop() ->
         "provider_rom_identity_algorithm": "sha1-provider-body-v1",
         "object_uri": "s3://private-bucket/mario.nes",
     }
+    resolved.effective["train_config"]["rom_asset_manifest"] = asset
+    resolved.base["train_config"]["rom_asset_manifest"] = deepcopy(asset)
     document = build_recipe_document(
-        materialized,
+        resolved.effective,
         repo_root=Path.cwd(),
         source_commit="a" * 40,
         run_description="Level1-3 training-only 100-of-100 clear-rate run",
         seed=123,
         runtime_image_ref=RUNTIME,
+        base_materialized_recipe=resolved.base,
+        canonical_goal=resolved.canonical_goal,
     )
 
     recipe = document["recipe"]
@@ -305,40 +270,6 @@ def test_atomic_bundle_install_commits_only_a_complete_replayable_bundle(
     assert not list(model_path.parent.glob(".*.zip"))
 
 
-def test_legacy_model_environment_mismatch_still_fails_closed(tmp_path: Path) -> None:
-    model_path = tmp_path / "model_100_steps.zip"
-    model_path.write_bytes(b"checkpoint")
-    recipe_document = level1_1_recipe_document()
-    recipe_path = write_canonical_json(
-        model_path.with_suffix(".recipe.json"),
-        recipe_document,
-    )
-    train_config = recipe_document["recipe"]["train_config"]
-    config = resolve_env_config(env_config_from_mapping(train_config))
-    legacy_training = training_metadata(config)
-    legacy_training["environment"] = deepcopy(legacy_training["environment"])
-    legacy_training["environment"]["env_id"] = "gradlab:Bandit-v0"
-    write_canonical_json(
-        model_path.with_suffix(".model.json"),
-        build_model_document(
-            model_path,
-            recipe_path,
-            {
-                "kind": "checkpoint",
-                "checkpoint_step": 100,
-                "algorithm_id": "ppo",
-                "model_class": "stable_baselines3.ppo.ppo.PPO",
-                "training_backend_id": train_config["training_backend"]["id"],
-                "training_backend_config_hash": training_backend_config_hash(train_config),
-                "training_metadata": legacy_training,
-            },
-        ),
-    )
-
-    with pytest.raises(PolicyDocumentError, match="training environment disagrees"):
-        load_policy_bundle_from_checkpoint(model_path)
-
-
 @pytest.mark.parametrize(
     ("goal_path", "recipe_path", "expected_mode", "expected_preset"),
     (
@@ -356,13 +287,20 @@ def test_bundle_metadata_reconstructs_provider_action_contract(
 ) -> None:
     checkpoint_path = tmp_path / f"{goal_path.parent.name}.zip"
     checkpoint_path.write_bytes(b"checkpoint")
+    resolved = compose_resolved_train_documents(
+        goal_path,
+        recipe_path,
+        source_sha="a" * 40,
+    )
     recipe_document = build_recipe_document(
-        compose_train_document(goal_path, recipe_path),
+        resolved.effective,
         repo_root=Path.cwd(),
         source_commit="a" * 40,
         run_description="Bundle metadata action-contract regression.",
         seed=7,
         runtime_image_ref=RUNTIME,
+        base_materialized_recipe=resolved.base,
+        canonical_goal=resolved.canonical_goal,
     )
     train_config = recipe_document["recipe"]["train_config"]
     recipe_sidecar = write_canonical_json(
@@ -434,21 +372,24 @@ def test_level1_1_recipe_fixture_preserves_aligned_train_and_eval_contracts() ->
 
 
 def test_evaluated_bundle_defaults_to_training_contract_and_exposes_eval_explicitly() -> None:
-    materialized = compose_train_document(
+    resolved = compose_resolved_train_documents(
         VIZDOOM_GOAL,
         VIZDOOM_RECIPE,
         recipe_overrides=(
             "train.checkpoint_eval_backend=modal",
             "train.environment.task.reward.reward_clip=true",
         ),
+        source_sha="a" * 40,
     )
     document = build_recipe_document(
-        materialized,
+        resolved.effective,
         repo_root=Path.cwd(),
         source_commit="a" * 40,
         run_description="training-faithful playback regression",
         seed=7,
         runtime_image_ref=RUNTIME,
+        base_materialized_recipe=resolved.base,
+        canonical_goal=resolved.canonical_goal,
     )
 
     training = playback_contract(document)
@@ -459,32 +400,24 @@ def test_evaluated_bundle_defaults_to_training_contract_and_exposes_eval_explici
     assert evaluation["matches_training"] is True
     assert critic_value_contract(document)["discount"] == 0.99
 
-    legacy = deepcopy(document)
-    legacy["recipe"]["eval"]["environment"]["task"]["reward"]["reward_clip"] = False
-    legacy["recipe"].pop("effective_recipe_overrides", None)
-    assert playback_contract(legacy)["environment"]["task"]["reward"]["reward_clip"] == [
-        -1.0,
-        1.0,
-    ]
-    assert playback_contract(legacy, mode="evaluation")["matches_training"] is False
-    audit = playback_contract_audit(legacy)
-    assert audit["evaluation_matches_training"] is False
-    assert audit["mismatch_paths"] == ["environment.task.reward.reward_clip"]
-    assert audit["requested_policy_override_paths"] == ["train.environment.task.reward.reward_clip"]
-    assert audit["legacy_override_provenance"] is True
-
 
 def test_evaluated_goal_preserves_manual_eval_when_automatic_eval_is_disabled() -> None:
-    materialized = compose_train_document(VIZDOOM_GOAL, VIZDOOM_RECIPE)
-    assert materialized["train_config"]["checkpoint_eval_backend"] == "none"
+    resolved = compose_resolved_train_documents(
+        VIZDOOM_GOAL,
+        VIZDOOM_RECIPE,
+        source_sha="a" * 40,
+    )
+    assert resolved.effective["train_config"]["checkpoint_eval_backend"] == "none"
 
     document = build_recipe_document(
-        materialized,
+        resolved.effective,
         repo_root=Path.cwd(),
         source_commit="a" * 40,
         run_description="post-training manual evaluation regression",
         seed=123,
         runtime_image_ref=RUNTIME,
+        base_materialized_recipe=resolved.base,
+        canonical_goal=resolved.canonical_goal,
     )
 
     recipe = document["recipe"]
@@ -493,22 +426,26 @@ def test_evaluated_goal_preserves_manual_eval_when_automatic_eval_is_disabled() 
     assert "playback" in recipe
     contract = evaluation_contract(document)
     assert contract["episodes"] == 100
-    assert contract["acceptance"] == materialized["goal"]["eval"]["acceptance"]
+    assert contract["acceptance"] == resolved.effective["goal"]["eval"]["acceptance"]
 
 
 def test_recipe_materializes_the_backend_config_executed_by_the_learner() -> None:
-    materialized = compose_train_document(GOAL, RECIPE)
+    resolved = compose_resolved_train_documents(GOAL, RECIPE, source_sha="a" * 40)
     document = build_recipe_document(
-        materialized,
+        resolved.effective,
         repo_root=Path.cwd(),
         source_commit="a" * 40,
         run_description="normalized backend contract",
         seed=7,
         runtime_image_ref=RUNTIME,
+        base_materialized_recipe=resolved.base,
+        canonical_goal=resolved.canonical_goal,
     )
 
     recipe_train_config = document["recipe"]["train_config"]
-    executed_train_config = validate_and_normalize_train_config(materialized["train_config"])
+    executed_train_config = validate_and_normalize_train_config(
+        resolved.effective["train_config"]
+    )
 
     assert training_backend_config(recipe_train_config) == training_backend_config(
         executed_train_config
@@ -560,8 +497,8 @@ def test_recipe_materializes_the_environment_identity_executed_by_the_learner() 
 
 
 def test_recipe_keeps_eval_asset_identity_but_removes_private_locations() -> None:
-    materialized = compose_train_document(GOAL, RECIPE)
-    materialized["train_config"]["rom_asset_manifest"] = {
+    resolved = compose_resolved_train_documents(GOAL, RECIPE, source_sha="a" * 40)
+    asset = {
         "schema_version": 2,
         "game": "SuperMarioBros-Nes-v0",
         "filename": "mario.nes",
@@ -571,14 +508,18 @@ def test_recipe_keeps_eval_asset_identity_but_removes_private_locations() -> Non
         "provider_rom_identity_algorithm": "sha1-provider-body-v1",
         "object_uri": "s3://private-bucket/mario.nes",
     }
+    resolved.effective["train_config"]["rom_asset_manifest"] = asset
+    resolved.base["train_config"]["rom_asset_manifest"] = deepcopy(asset)
 
     document = build_recipe_document(
-        materialized,
+        resolved.effective,
         repo_root=Path.cwd(),
         source_commit="a" * 40,
         run_description="portable evaluation asset",
         seed=7,
         runtime_image_ref=RUNTIME,
+        base_materialized_recipe=resolved.base,
+        canonical_goal=resolved.canonical_goal,
     )
 
     expected_asset = {
@@ -594,28 +535,24 @@ def test_recipe_keeps_eval_asset_identity_but_removes_private_locations() -> Non
     assert document["provenance"]["asset"] == expected_asset
 
 
-@pytest.mark.parametrize(
-    "provider",
-    ["supermariobrosnes-turbo", "stable-retro-turbo"],
-)
-def test_recipe_provider_is_exact_and_never_falls_back(provider: str) -> None:
-    document = deepcopy(level1_1_recipe_document())
-
-    def replace_provider(value: object) -> None:
-        if isinstance(value, dict):
-            for key, nested in value.items():
-                if key == "env_provider":
-                    value[key] = provider
-                elif key == "env_id" and isinstance(nested, str) and ":" in nested:
-                    value[key] = f"{provider}:{nested.split(':', 1)[1]}"
-                else:
-                    replace_provider(nested)
-        elif isinstance(value, list):
-            for nested in value:
-                replace_provider(nested)
-
-    replace_provider(document["recipe"])
-    validated = validate_recipe_document(document, source=f"{provider} recipe fixture")
+def test_recipe_provider_is_exact_and_never_falls_back() -> None:
+    provider = "supermariobrosnes-turbo"
+    resolved = compose_resolved_train_documents(
+        GOAL,
+        RECIPE,
+        env_provider=provider,
+        source_sha="a" * 40,
+    )
+    validated = build_recipe_document(
+        resolved.effective,
+        repo_root=Path.cwd(),
+        source_commit="a" * 40,
+        run_description=f"{provider} recipe fixture",
+        seed=7,
+        runtime_image_ref=RUNTIME,
+        base_materialized_recipe=resolved.base,
+        canonical_goal=resolved.canonical_goal,
+    )
 
     assert validated["recipe"]["train_config"]["env_provider"] == provider
     assert evaluation_contract(validated)["environment"]["env_provider"] == provider
@@ -648,8 +585,8 @@ def test_future_recipe_version_fails_with_source_and_supported_versions(tmp_path
     message = str(error.value)
     assert str(path) in message
     assert "999" in message
-    assert "[1, 2]" in message
-    assert "Upgrade gradlab" in message
+    assert "[2]" in message
+    assert "Regenerate the artifact" in message
 
 
 def test_future_model_version_fails_before_checkpoint_access(tmp_path: Path) -> None:
@@ -715,40 +652,6 @@ def test_retired_model_v1_is_rejected(tmp_path: Path) -> None:
         load_policy_bundle(tmp_path)
 
 
-def test_published_legacy_project_v1_bundle_uses_explicit_compatibility(
-    tmp_path: Path,
-) -> None:
-    write_bundle(tmp_path)
-    recipe_path = tmp_path / "recipe.json"
-    recipe = json.loads(recipe_path.read_text(encoding="utf-8"))
-    legacy_project = "".join(("r", "lab"))
-    recipe["document_type"] = f"{legacy_project}.recipe"
-    train_config = recipe["recipe"]["train_config"]
-    resize = train_config.pop("obs_resize")
-    assert resize[0] == resize[1]
-    train_config["observation_size"] = resize[0]
-    train_config["checkpoint_eval_backend"] = "local"
-    write_canonical_json(recipe_path, recipe)
-
-    model_path = tmp_path / "model.json"
-    model = json.loads(model_path.read_text(encoding="utf-8"))
-    model["document_type"] = f"{legacy_project}.model"
-    model["format_version"] = 1
-    model["recipe"]["document_type"] = f"{legacy_project}.recipe"
-    model["recipe"]["sha256"] = sha256_file(recipe_path)
-    model["recipe"]["size_bytes"] = recipe_path.stat().st_size
-    model["provenance"]["queue_train_job_id"] = 123
-    write_canonical_json(model_path, model)
-
-    bundle = load_policy_bundle(tmp_path)
-
-    assert bundle.model["document_type"] == "gradlab.model"
-    assert bundle.model["format_version"] == 2
-    assert bundle.recipe["document_type"] == "gradlab.recipe"
-    assert bundle.recipe["recipe"]["train_config"]["obs_resize"] == resize
-    assert "queue_train_job_id" not in bundle.model["provenance"]
-
-
 def test_known_recipe_schema_rejects_unknown_fields_and_urls(tmp_path: Path) -> None:
     document = level1_1_recipe_document()
     document["unknown"] = True
@@ -763,43 +666,6 @@ def test_known_recipe_schema_rejects_unknown_fields_and_urls(tmp_path: Path) -> 
         load_recipe_document(tmp_path / "recipe.json")
 
 
-def test_recipe_loader_normalizes_retired_goal_and_train_projections(tmp_path: Path) -> None:
-    strict = level1_1_recipe_document()
-    strict["recipe"]["goal"].pop("evaluation_mode")
-    with pytest.raises(PolicyDocumentError, match="evaluation_mode"):
-        validate_recipe_document(strict)
-
-    legacy = level1_1_recipe_document()
-    legacy["recipe"]["goal"].pop("evaluation_mode")
-    train_config = legacy["recipe"]["train_config"]
-    train_config.update(
-        {
-            "post_train_eval_stochastic": True,
-            "goal_variant_id": "goal-variant-legacy",
-            "goal_variant_label": "legacy",
-            "goal_variant_source_relation": "changed",
-            "goal_variant_descriptor_sha256": "d" * 64,
-            "goal_variant_diff_json": "[]",
-        }
-    )
-    path = write_canonical_json(tmp_path / "recipe.json", legacy)
-
-    loaded = load_recipe_document(path)
-
-    assert loaded["recipe"]["goal"]["evaluation_mode"] == "evaluated"
-    assert "post_train_eval_stochastic" not in loaded["recipe"]["train_config"]
-    assert "goal_variant_id" not in loaded["recipe"]["train_config"]
-
-
-def test_recipe_loader_rejects_noncanonical_legacy_stochastic_eval(tmp_path: Path) -> None:
-    legacy = level1_1_recipe_document()
-    legacy["recipe"]["train_config"]["post_train_eval_stochastic"] = False
-    path = write_canonical_json(tmp_path / "recipe.json", legacy)
-
-    with pytest.raises(PolicyDocumentError, match="must be true in a legacy recipe"):
-        load_recipe_document(path)
-
-
 def test_bundle_rejects_checkpoint_and_recipe_hash_mismatches(tmp_path: Path) -> None:
     write_bundle(tmp_path)
     (tmp_path / "model.zip").write_bytes(b"changed")
@@ -810,7 +676,7 @@ def test_bundle_rejects_checkpoint_and_recipe_hash_mismatches(tmp_path: Path) ->
     recipe = json.loads((tmp_path / "recipe.json").read_text(encoding="utf-8"))
     recipe["recipe"]["description"] = "changed"
     write_canonical_json(tmp_path / "recipe.json", recipe)
-    with pytest.raises(PolicyDocumentError, match="recipe.json hash"):
+    with pytest.raises(PolicyDocumentError, match="effective_sha256"):
         load_policy_bundle(tmp_path)
 
 

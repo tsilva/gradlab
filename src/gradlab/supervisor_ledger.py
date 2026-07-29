@@ -65,14 +65,6 @@ class SupervisorLedger(MetricStore):
         super().init()
         with self.connection() as connection:
             connection.executescript(SCHEMA_SQL)
-            eval_columns = {
-                str(row[1])
-                for row in connection.execute("PRAGMA table_info(eval_dispatches)")
-            }
-            if "attempt_expires_at" not in eval_columns:
-                connection.execute(
-                    "ALTER TABLE eval_dispatches ADD COLUMN attempt_expires_at REAL"
-                )
 
     def state(self, key: str, default: Any = None) -> Any:
         with self.connection() as connection:

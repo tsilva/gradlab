@@ -18,14 +18,9 @@ from gradlab.json_utils import canonical_json_line_bytes
 
 
 RECIPE_DOCUMENT_TYPE = "gradlab.recipe"
-LEGACY_RECIPE_FORMAT_VERSION = 1
 RECIPE_FORMAT_VERSION = 2
-_LEGACY_PROJECT_NAME = "".join(("r", "lab"))
-LEGACY_RECIPE_DOCUMENT_TYPE = f"{_LEGACY_PROJECT_NAME}.recipe"
 MODEL_DOCUMENT_TYPE = "gradlab.model"
 MODEL_FORMAT_VERSION = 2
-LEGACY_MODEL_DOCUMENT_TYPE = f"{_LEGACY_PROJECT_NAME}.model"
-LEGACY_MODEL_FORMAT_VERSION = 1
 
 RECIPE_FILENAME = "recipe.json"
 MODEL_FILENAME = "model.json"
@@ -122,9 +117,7 @@ class _RecipeProvenanceDocument(BoundaryModel):
     asset: Any = None
 
 
-class _RecipeDocumentV1(BoundaryModel):
-    document_type: Literal[RECIPE_DOCUMENT_TYPE]
-    format_version: Literal[LEGACY_RECIPE_FORMAT_VERSION]
+class _RecipeContractDocument(BoundaryModel):
     recipe: _RecipeValueDocument
     provenance: _RecipeProvenanceDocument
 
@@ -168,7 +161,7 @@ class _CheckpointDocument(BoundaryModel):
 class _RecipeBindingDocument(BoundaryModel):
     filename: Literal[RECIPE_FILENAME]
     document_type: Literal[RECIPE_DOCUMENT_TYPE]
-    format_version: Literal[LEGACY_RECIPE_FORMAT_VERSION, RECIPE_FORMAT_VERSION]
+    format_version: Literal[RECIPE_FORMAT_VERSION]
     sha256: Sha256
     size_bytes: PositiveInt
 
@@ -278,8 +271,8 @@ class UnsupportedPolicyDocumentVersion(PolicyDocumentError):
         supported = ", ".join(str(item) for item in supported_versions) or "none"
         super().__init__(
             f"Unsupported {document_type!r} format_version {format_version!r} in {source}. "
-            f"This gradlab version supports: [{supported}]. Upgrade gradlab or install an "
-            "explicit compatibility handler."
+            f"This gradlab version supports: [{supported}]. Regenerate the artifact with "
+            "the current gradlab version."
         )
 
 
@@ -398,14 +391,14 @@ def preflight_document(
     if document_type != expected_type:
         raise PolicyDocumentError(
             f"{source} document_type must be {expected_type!r}, got {document_type!r}; "
-            f"supported versions are {supported}. Upgrade gradlab or use an explicit "
-            "compatibility handler."
+            f"supported versions are {supported}. Regenerate the artifact with the current "
+            "gradlab version."
         )
     if isinstance(format_version, bool) or not isinstance(format_version, int):
         raise PolicyDocumentError(
             f"{source} {expected_type!r} format_version must be an integer, got "
-            f"{format_version!r}; supported versions are {supported}. Upgrade gradlab or "
-            "use an explicit compatibility handler."
+            f"{format_version!r}; supported versions are {supported}. Regenerate the artifact "
+            "with the current gradlab version."
         )
     handler = handlers.get(format_version)
     if handler is None:
@@ -422,8 +415,8 @@ def preflight_document(
     except PolicyDocumentError as exc:
         raise PolicyDocumentError(
             f"Invalid {expected_type} format_version {format_version} in {source}; "
-            f"supported versions are {supported}: {exc}. Upgrade gradlab or use an "
-            "explicit compatibility handler."
+            f"supported versions are {supported}: {exc}. Regenerate the artifact with "
+            "the current gradlab version."
         ) from exc
 
 
@@ -435,232 +428,12 @@ def load_json_object(path: Path) -> dict[str, Any]:
     return dict(_required_mapping(value, label=str(path)))
 
 
-_LEGACY_RECIPE_TRAIN_CONFIG_FIELDS = frozenset(
-    {
-        "goal_variant_descriptor_sha256",
-        "goal_variant_diff_json",
-        "goal_variant_id",
-        "goal_variant_label",
-        "goal_variant_source_relation",
-    }
-)
-
-_LEGACY_METRIC_NAME_MAP = {
-    "train/episode/return/shaped/mean": (
-        "train/episode/return/shaped/across_origins/rolling_up_to_100/mean"
-    ),
-    "train/episode/return/shaped/max": (
-        "train/episode/return/shaped/across_origins/rolling_up_to_100/max"
-    ),
-    "train/episode/return/shaped/from/target/mean": (
-        "train/episode/return/shaped/from/target/rolling_up_to_100/mean"
-    ),
-    "train/episode/return/shaped/from/target/max": (
-        "train/episode/return/shaped/from/target/rolling_up_to_100/max"
-    ),
-    "train/episode/length/mean": (
-        "train/episode/length/across_origins/rolling_up_to_100/mean"
-    ),
-    "train/outcome/terminal/count": "train/episode/completed/count",
-    "train/outcome/success/current/rate/min": (
-        "train/outcome/success/across_observed_starts/cumulative/rate/min"
-    ),
-    "train/outcome/success/current/rate/mean": (
-        "train/outcome/success/across_observed_starts/cumulative/rate/mean"
-    ),
-    "train/outcome/success/window_100/rate/min": (
-        "train/outcome/success/across_starts/window_100/rate/min"
-    ),
-    "train/outcome/success/window_100/rate/mean": (
-        "train/outcome/success/across_starts/window_100/rate/mean"
-    ),
-    "train/outcome/success/start_coverage/rate": (
-        "train/outcome/success/across_starts/coverage/rate"
-    ),
-    "eval/checkpoint_step": "eval/checkpoint/step",
-    "eval/full/episode/return/mean": "eval/full/episode/return/shaped/mean",
-    "eval/full/episode/return/best": "eval/full/episode/return/shaped/max",
-    "eval/full/episode/count": "eval/full/episode/completed/count",
-    "eval/full/outcome/success/rate/min": (
-        "eval/full/outcome/success/across_starts/rate/min"
-    ),
-    "eval/full/outcome/success/rate/mean": (
-        "eval/full/outcome/success/across_starts/rate/mean"
-    ),
-    "eval/acceptance/episodes/planned": "eval/acceptance/episode/planned/count",
-    "eval/acceptance/episodes/completed": "eval/acceptance/episode/completed/count",
-}
-
-
-def _migrate_legacy_metric_names(value: Any) -> Any:
-    if isinstance(value, str):
-        mapped = _LEGACY_METRIC_NAME_MAP.get(value)
-        if mapped is not None:
-            return mapped
-        rank_match = re.fullmatch(r"(max|min)\(([^()]+)\)", value)
-        if rank_match is not None:
-            metric = _LEGACY_METRIC_NAME_MAP.get(rank_match.group(2))
-            if metric is not None:
-                return f"{rank_match.group(1)}({metric})"
-        return value
-    if isinstance(value, Mapping):
-        return {
-            key: _migrate_legacy_metric_names(nested)
-            for key, nested in value.items()
-        }
-    if isinstance(value, list):
-        return [_migrate_legacy_metric_names(item) for item in value]
-    return deepcopy(value)
-
-
-def _legacy_metric_compatibility_document(
-    document: Mapping[str, Any],
-) -> dict[str, Any]:
-    recipe = document.get("recipe")
-    train_config = recipe.get("train_config") if isinstance(recipe, Mapping) else None
-    raw_version = (
-        train_config.get("metrics_schema_version")
-        if isinstance(train_config, Mapping)
-        else None
-    )
-    if raw_version not in (None, 13):
-        return deepcopy(dict(document))
-    normalized = _migrate_legacy_metric_names(document)
-    assert isinstance(normalized, dict)
-    from gradlab.metric_names import METRICS_SCHEMA_VERSION
-
-    candidates = [normalized.get("recipe")]
-    resolution = normalized.get("resolution")
-    if isinstance(resolution, Mapping):
-        recipe_resolution = resolution.get("recipe")
-        if isinstance(recipe_resolution, Mapping):
-            candidates.append(recipe_resolution.get("base"))
-    for candidate in candidates:
-        if not isinstance(candidate, dict):
-            continue
-        candidate_train_config = candidate.get("train_config")
-        if isinstance(candidate_train_config, dict):
-            candidate_train_config["metrics_schema_version"] = METRICS_SCHEMA_VERSION
-    return normalized
-
-
-def _legacy_recipe_document(
-    document: Mapping[str, Any],
-    *,
-    source: str,
-) -> dict[str, Any]:
-    normalized = deepcopy(dict(document))
-    recipe = normalized.get("recipe")
-    if not isinstance(recipe, dict):
-        return normalized
-    goal = recipe.get("goal")
-    if isinstance(goal, dict) and "evaluation_mode" not in goal:
-        goal["evaluation_mode"] = "evaluated" if "eval" in goal else "training_only"
-    if isinstance(goal, dict):
-        goal_train = goal.get("train")
-        if isinstance(goal_train, dict):
-            goal_train.pop("checkpoint_eval_backend", None)
-            goal_train.pop("stop_on_acceptance", None)
-    train_config = recipe.get("train_config")
-    if not isinstance(train_config, dict):
-        return normalized
-    from gradlab.action_contract import migrate_legacy_artifact_action_configuration
-    from gradlab.reward_transform import migrate_legacy_artifact_reward_config
-
-    for environment in (
-        train_config,
-        recipe.get("environment"),
-        recipe.get("eval", {}).get("environment")
-        if isinstance(recipe.get("eval"), Mapping)
-        else None,
-        recipe.get("playback", {}).get("environment")
-        if isinstance(recipe.get("playback"), Mapping)
-        else None,
-    ):
-        if not isinstance(environment, dict):
-            continue
-        environment_observation_size = environment.pop("observation_size", None)
-        if environment_observation_size is not None and "obs_resize" not in environment:
-            environment["obs_resize"] = [
-                int(environment_observation_size),
-                int(environment_observation_size),
-            ]
-        task = environment.get("task")
-        if not isinstance(task, Mapping):
-            continue
-        provider_id = str(environment.get("env_provider") or "")
-        game = str(environment.get("game") or "")
-        if (not provider_id or not game) and isinstance(environment.get("env_id"), str):
-            provider_id, separator, game = str(environment["env_id"]).partition(":")
-            if not separator:
-                provider_id = ""
-                game = ""
-        args_key = (
-            "provider_args" if isinstance(environment.get("provider_args"), Mapping) else "env_args"
-        )
-        legacy_env_args = (
-            dict(environment.get(args_key))
-            if isinstance(environment.get(args_key), Mapping)
-            else {}
-        )
-        action = task.get("action")
-        task_action_set = (
-            str(action.get("set") or "native") if isinstance(action, Mapping) else "native"
-        )
-        legacy_task = deepcopy(dict(task))
-        if task_action_set == "simple" and isinstance(legacy_task.get("action"), dict):
-            legacy_task["action"]["set"] = "basic"
-            task_action_set = "basic"
-        if (
-            game == "SuperMarioBros-Nes-v0"
-            and task_action_set != "native"
-            and legacy_env_args.get("use_restricted_actions") == "filtered"
-        ):
-            legacy_env_args.pop("use_restricted_actions")
-        env_args, migrated_task = migrate_legacy_artifact_action_configuration(
-            provider_id=provider_id,
-            game=game,
-            env_args=legacy_env_args,
-            task=legacy_task,
-        )
-        env_args, migrated_task = migrate_legacy_artifact_reward_config(
-            env_args,
-            migrated_task,
-        )
-        environment[args_key] = env_args
-        environment["task"] = migrated_task
-    if "post_train_eval_stochastic" in train_config:
-        if train_config["post_train_eval_stochastic"] is not True:
-            raise PolicyDocumentError(
-                f"{source}.recipe.train_config.post_train_eval_stochastic "
-                "must be true in a legacy recipe"
-            )
-        train_config.pop("post_train_eval_stochastic")
-    observation_size = train_config.pop("observation_size", None)
-    if observation_size is not None and "obs_resize" not in train_config:
-        train_config["obs_resize"] = [int(observation_size), int(observation_size)]
-    if train_config.get("checkpoint_eval_backend") == "local":
-        train_config["checkpoint_eval_backend"] = (
-            "modal" if isinstance(recipe.get("eval"), Mapping) else "none"
-        )
-    early_stop = train_config.get("early_stop")
-    if isinstance(early_stop, list):
-        train_config["early_stop"] = None
-    for key in _LEGACY_RECIPE_TRAIN_CONFIG_FIELDS:
-        train_config.pop(key, None)
-    return normalized
-
-
-def _validate_recipe_v1(
+def _validate_recipe_contract(
     document: Mapping[str, Any],
     source: str,
-    *,
-    allow_legacy: bool = False,
 ) -> dict[str, Any]:
-    if allow_legacy:
-        document = _legacy_recipe_document(document, source=source)
     validate_boundary(
-        _RecipeDocumentV1,
+        _RecipeContractDocument,
         document,
         label=source,
         error_type=PolicyDocumentError,
@@ -725,11 +498,10 @@ def _validate_recipe_v1(
         validate_goal_document_shape(
             goal,
             label=f"{source}.recipe.goal",
-            allow_legacy=allow_legacy,
         )
     except ValueError as exc:
         raise PolicyDocumentError(str(exc)) from exc
-    if not allow_legacy and recipe.get("goal_variant") is None:
+    if recipe.get("goal_variant") is None:
         raise PolicyDocumentError(f"{source}.recipe.goal_variant is required")
     training_only = (
         goal_evaluation_mode(goal, label=f"{source}.recipe.goal") == "training_only"
@@ -802,12 +574,7 @@ def _validate_recipe_v1(
     expected_action_sampling = default_action_selection_mode(
         backend_provenance_algorithm(str(backend.get("id") or ""))
     )
-    if evaluation is not None and evaluation.get("action_sampling") not in {
-        expected_action_sampling,
-        # Version-1 recipes used "stochastic" as a universal boolean-shaped
-        # marker. Readers canonically interpret it using backend provenance.
-        "stochastic",
-    }:
+    if evaluation is not None and evaluation.get("action_sampling") != expected_action_sampling:
         raise PolicyDocumentError(
             f"{source}.recipe.eval.action_sampling must be {expected_action_sampling!r}"
         )
@@ -937,16 +704,13 @@ def _validate_recipe_v2(
         label=source,
         error_type=PolicyDocumentError,
     )
-    validation_document = _legacy_metric_compatibility_document(document)
     effective_document = {
-        "document_type": RECIPE_DOCUMENT_TYPE,
-        "format_version": LEGACY_RECIPE_FORMAT_VERSION,
-        "recipe": deepcopy(validation_document["recipe"]),
-        "provenance": deepcopy(validation_document["provenance"]),
+        "recipe": deepcopy(document["recipe"]),
+        "provenance": deepcopy(document["provenance"]),
     }
-    _validate_recipe_v1(effective_document, f"{source}.effective")
+    _validate_recipe_contract(effective_document, f"{source}.effective")
     validation_resolution = _required_mapping(
-        validation_document["resolution"],
+        document["resolution"],
         label=f"{source}.resolution",
     )
     validation_recipe_resolution = _required_mapping(
@@ -958,12 +722,10 @@ def _validate_recipe_v2(
         label=f"{source}.resolution.recipe.base",
     )
     base_document = {
-        "document_type": RECIPE_DOCUMENT_TYPE,
-        "format_version": LEGACY_RECIPE_FORMAT_VERSION,
         "recipe": deepcopy(validation_base_recipe),
-        "provenance": deepcopy(validation_document["provenance"]),
+        "provenance": deepcopy(document["provenance"]),
     }
-    _validate_recipe_v1(base_document, f"{source}.base")
+    _validate_recipe_contract(base_document, f"{source}.base")
 
     resolution = _required_mapping(document["resolution"], label=f"{source}.resolution")
     goal_resolution = _required_mapping(
@@ -1048,36 +810,17 @@ def _validate_recipe_v2(
 
 
 _RECIPE_HANDLERS: dict[int, Callable[[Mapping[str, Any], str], dict[str, Any]]] = {
-    LEGACY_RECIPE_FORMAT_VERSION: _validate_recipe_v1,
     RECIPE_FORMAT_VERSION: _validate_recipe_v2,
 }
 
 
 def load_recipe_document(path: Path) -> dict[str, Any]:
     value = load_json_object(path)
-    if (
-        value.get("document_type") == LEGACY_RECIPE_DOCUMENT_TYPE
-        and value.get("format_version") == LEGACY_RECIPE_FORMAT_VERSION
-    ):
-        normalized = deepcopy(value)
-        normalized["document_type"] = RECIPE_DOCUMENT_TYPE
-        return _validate_recipe_v1(
-            normalized,
-            str(path),
-            allow_legacy=True,
-        )
     return preflight_document(
         value,
         source=str(path),
         expected_type=RECIPE_DOCUMENT_TYPE,
-        handlers={
-            LEGACY_RECIPE_FORMAT_VERSION: lambda document, source: _validate_recipe_v1(
-                document,
-                source,
-                allow_legacy=True,
-            ),
-            RECIPE_FORMAT_VERSION: _validate_recipe_v2,
-        },
+        handlers=_RECIPE_HANDLERS,
     )
 
 
@@ -1218,31 +961,6 @@ _MODEL_HANDLERS = {
 
 def load_model_document(path: Path) -> dict[str, Any]:
     value = load_json_object(path)
-    if (
-        value.get("document_type") == LEGACY_MODEL_DOCUMENT_TYPE
-        and value.get("format_version") == LEGACY_MODEL_FORMAT_VERSION
-    ):
-        normalized = deepcopy(value)
-        normalized["document_type"] = MODEL_DOCUMENT_TYPE
-        normalized["format_version"] = MODEL_FORMAT_VERSION
-        recipe = normalized.get("recipe")
-        if isinstance(recipe, dict):
-            recipe["document_type"] = RECIPE_DOCUMENT_TYPE
-        provenance = normalized.get("provenance")
-        if isinstance(provenance, Mapping):
-            normalized["provenance"] = {
-                key: deepcopy(item)
-                for key, item in provenance.items()
-                if key in _MODEL_PROVENANCE_FIELDS
-            }
-            training_metadata = normalized["provenance"].get("training_metadata")
-            if isinstance(training_metadata, Mapping):
-                normalized["provenance"]["training_metadata"] = {
-                    key: deepcopy(training_metadata[key])
-                    for key in ("action_contract", "versions")
-                    if key in training_metadata
-                }
-        return _validate_model_v2(normalized, str(path))
     return preflight_document(
         value,
         source=str(path),
@@ -1287,7 +1005,7 @@ def _resolve_recipe_templates(value: object, replacements: Mapping[str, object])
     return rendered
 
 
-def _build_recipe_document_v1(
+def _build_recipe_contract(
     materialized_recipe: Mapping[str, Any],
     *,
     repo_root: Path,
@@ -1481,12 +1199,10 @@ def _build_recipe_document_v1(
             ),
         }
     document = {
-        "document_type": RECIPE_DOCUMENT_TYPE,
-        "format_version": LEGACY_RECIPE_FORMAT_VERSION,
         "recipe": recipe,
         "provenance": provenance,
     }
-    return _validate_recipe_v1(document, RECIPE_FILENAME)
+    return _validate_recipe_contract(document, RECIPE_FILENAME)
 
 
 def build_recipe_document(
@@ -1499,17 +1215,12 @@ def build_recipe_document(
     seed: int | None = None,
     runtime_image_ref: str | None = None,
     runtime_packages: Sequence[str] | None = None,
-    base_materialized_recipe: Mapping[str, Any] | None = None,
-    canonical_goal: Mapping[str, Any] | None = None,
+    base_materialized_recipe: Mapping[str, Any],
+    canonical_goal: Mapping[str, Any],
 ) -> dict[str, Any]:
-    """Build a portable recipe.
+    """Build a portable recipe with an exact, self-contained resolution proof."""
 
-    Callers that supply the checked-in base materialization and canonical goal
-    produce format v2 with an exact, self-contained resolution proof. Omitting
-    both preserves the v1 builder for compatibility fixtures and migrations.
-    """
-
-    effective = _build_recipe_document_v1(
+    effective = _build_recipe_contract(
         materialized_recipe,
         repo_root=repo_root,
         source_commit=source_commit,
@@ -1519,13 +1230,7 @@ def build_recipe_document(
         runtime_image_ref=runtime_image_ref,
         runtime_packages=runtime_packages,
     )
-    if base_materialized_recipe is None and canonical_goal is None:
-        return effective
-    if base_materialized_recipe is None or canonical_goal is None:
-        raise PolicyDocumentError(
-            "recipe format v2 requires both base_materialized_recipe and canonical_goal"
-        )
-    base = _build_recipe_document_v1(
+    base = _build_recipe_contract(
         base_materialized_recipe,
         repo_root=repo_root,
         source_commit=source_commit,
@@ -1954,7 +1659,7 @@ def _contract_difference_paths(
 
 
 def playback_contract_audit(recipe_document: Mapping[str, Any]) -> dict[str, Any]:
-    """Audit persisted train/eval policy semantics and legacy override provenance."""
+    """Audit persisted train/eval policy semantics and override provenance."""
 
     validated = preflight_document(
         recipe_document,
@@ -2018,7 +1723,6 @@ def playback_contract_audit(recipe_document: Mapping[str, Any]) -> dict[str, Any
         "mismatch_paths": mismatch_paths,
         "requested_policy_override_paths": policy_override_paths,
         "effective_recipe_overrides": effective_overrides,
-        "legacy_override_provenance": bool(policy_override_paths and not effective_overrides),
     }
 
 
