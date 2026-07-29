@@ -3,6 +3,7 @@ from pathlib import Path
 
 import pytest
 
+from gradlab.checkpoint_acceptance import CheckpointEvalContractCompiler
 from gradlab.recipe_documents import compose_train_document
 
 
@@ -202,6 +203,35 @@ def test_vizdoom_goal_has_complete_evaluated_ppo_contract(
         }
     ]
     assert goal["release"] == {"huggingface": {}}
+
+
+@pytest.mark.parametrize(
+    ("goal_id", "expected_max_steps"),
+    [
+        ("VizdoomBasic-v1", 75),
+        ("VizdoomBasic-Plus-v1", 75),
+        ("VizdoomDefendLine-v1", 512),
+        ("VizdoomDefendLine-Plus-v1", 512),
+        ("VizdoomDefendCenter-v1", 525),
+        ("VizdoomHealthGathering-v1", 525),
+        ("VizdoomHealthGatheringSupreme-v1", 525),
+    ],
+)
+def test_sequential_vizdoom_goals_materialize_finite_checkpoint_eval_bounds(
+    goal_id: str,
+    expected_max_steps: int,
+) -> None:
+    goal_path = GOALS_ROOT / goal_id / "_goal.yaml"
+    recipe_path = goal_path.parent / "recipes/ppo.yaml"
+    document = compose_train_document(goal_path, recipe_path)
+
+    contract = CheckpointEvalContractCompiler.from_train_config(
+        document["train_config"],
+        require_asset=False,
+        materialize_seed_defaults=True,
+    )
+
+    assert contract.max_steps == expected_max_steps
 
 
 @pytest.mark.parametrize(
