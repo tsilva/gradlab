@@ -121,7 +121,11 @@ class ConfigValidationTests(unittest.TestCase):
                 }
                 contract = resolve_env_provider(provider_id).constructor_contract
                 self.assertIsNotNone(contract)
-                covered_args = set(contract.canonical_args) | set(contract.explicit_env_args)
+                covered_args = (
+                    set(contract.canonical_args)
+                    | set(contract.explicit_env_args)
+                    | set(contract.optional_env_args)
+                )
                 public_signature_args = signature_args - PROVIDER_REWARD_TRANSFORM_KEYS
                 if provider_id == "breakout-turbo-env":
                     # GradLab's compatibility adapter accepts the shared Stable Retro
@@ -484,7 +488,7 @@ class ConfigValidationTests(unittest.TestCase):
                         conditions["return_plateau"]["start_after_steps"],
                     )
 
-    def test_every_vizdoom_recipe_composes_the_shared_plateau_condition(self) -> None:
+    def test_every_vizdoom_recipe_composes_shared_success_and_plateau_conditions(self) -> None:
         recipes = sorted(Path("experiments/goals").glob("Vizdoom*/recipes/*.yaml"))
 
         self.assertEqual(len(recipes), 9)
@@ -493,7 +497,11 @@ class ConfigValidationTests(unittest.TestCase):
                 goal_path = recipe_path.parent.parent / "_goal.yaml"
                 document = compose_train_document(goal_path, recipe_path)
                 train_config = document["train_config"]
-                plateau = train_config["early_stop"]["conditions"]["return_plateau"]
+                conditions = train_config["early_stop"]["conditions"]
+                self.assertEqual(set(conditions), {"return_plateau", "target_reached"})
+                self.assertEqual(conditions["target_reached"]["outcome"], "success")
+                self.assertEqual(conditions["target_reached"]["action"], "stop")
+                plateau = conditions["return_plateau"]
                 calibration_steps = train_config["timesteps"] // 4
 
                 self.assertEqual(

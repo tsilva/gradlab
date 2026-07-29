@@ -7,7 +7,12 @@ from unittest import mock
 
 import pytest
 
-from gradlab.local_train import LOCAL_ROM_CACHE_ENV, _play_uvx_launcher, main
+from gradlab.local_train import (
+    LOCAL_ROM_CACHE_ENV,
+    _play_uvx_launcher,
+    _should_use_training_tui,
+    main,
+)
 from gradlab.play import main as play_main
 from gradlab.play_runtime import (
     resolve_playback_rom_binding,
@@ -135,6 +140,36 @@ def test_play_launcher_pins_published_distribution() -> None:
     assert launcher == ["uvx", "gradlab@9.8.7"]
 
 
+def test_local_tui_requires_usable_input_and_output_ttys(monkeypatch) -> None:
+    tty = mock.Mock()
+    tty.isatty.return_value = True
+    monkeypatch.setenv("TERM", "xterm-256color")
+    with (
+        mock.patch("gradlab.local_train.sys.stdin", tty),
+        mock.patch("gradlab.local_train.sys.stdout", tty),
+    ):
+        assert _should_use_training_tui(disabled=False) is True
+        assert _should_use_training_tui(disabled=True) is False
+
+    monkeypatch.setenv("TERM", "dumb")
+    with (
+        mock.patch("gradlab.local_train.sys.stdin", tty),
+        mock.patch("gradlab.local_train.sys.stdout", tty),
+    ):
+        assert _should_use_training_tui(disabled=False) is False
+
+
+def test_local_train_rejects_non_main_thread_before_recipe_resolution() -> None:
+    with (
+        mock.patch("gradlab.local_train.threading.current_thread", return_value=object()),
+        mock.patch("gradlab.local_train.resolve_recipe_source") as resolve,
+        pytest.raises(RuntimeError, match="main thread"),
+    ):
+        main(["gradlab__bandit/ppo"])
+
+    resolve.assert_not_called()
+
+
 def test_local_train_materializes_credential_free_playable_run(
     tmp_path: Path,
     monkeypatch,
@@ -168,6 +203,7 @@ def test_local_train_materializes_credential_free_playable_run(
                     "smoke",
                     "--set",
                     "train.timesteps=64",
+                    "--no-tui",
                 ]
             )
             == 0
@@ -196,6 +232,9 @@ def test_local_train_materializes_credential_free_playable_run(
     assert receipt["requested_limit"] == 64
     assert receipt["execution_limit"] == 64
     assert "training_execution" not in recipe["recipe"]["train_config"]
+    assert "no_tui" not in config
+    assert "no-tui" not in json.dumps(recipe)
+    assert "no-tui" not in json.dumps(receipt)
 
 
 def test_local_interruption_writes_terminal_receipt_and_is_not_auto_selected(

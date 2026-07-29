@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -12,7 +12,7 @@ from gradlab.action_contract import runtime_action_contract
 from gradlab.artifacts import install_model_bundle
 from gradlab.state_archive import state_archive_artifact_summary
 from gradlab.training_backend import BackendContext
-from gradlab.training_lifecycle import TrainingExecutionMode, TrainingResult
+from gradlab.training_lifecycle import ProgressField, TrainingExecutionMode, TrainingResult
 
 
 ModelFactory = Callable[[BackendContext, Any, Any, str], Any]
@@ -29,6 +29,7 @@ class OnPolicyBackend:
     normalize_config: ConfigNormalizer
     model_factory: ModelFactory
     model_class: str | ModelClassResolver
+    progress_fields: tuple[ProgressField, ...] = ()
 
     @property
     def algorithm_id(self) -> str:
@@ -46,6 +47,7 @@ class OnPolicyBackend:
             context,
             algorithm_id=self.algorithm_id,
             model_factory=self.model_factory,
+            progress_fields=self.progress_fields,
         )
 
     def acceptance_mode(self, backend_config: Mapping[str, Any]) -> str:
@@ -264,6 +266,7 @@ def run_sb3_on_policy(
     *,
     algorithm_id: str,
     model_factory: ModelFactory,
+    progress_fields: Sequence[ProgressField] = (),
 ) -> TrainingResult:
     from stable_baselines3.common.utils import set_random_seed
 
@@ -307,11 +310,10 @@ def run_sb3_on_policy(
         preflight_path = context.run_dir / "state_archive_preflight.json"
         write_canonical_json(preflight_path, preflight)
         common_config["state_archive_preflight_sha256"] = file_sha256(preflight_path)
-        print(
+        context.session.event(
             "state archive provider preflight passed: "
             f"provider={preflight['provider_id']} codec={preflight['codec_id']} "
-            f"lanes={preflight['preflight_lanes']}",
-            flush=True,
+            f"lanes={preflight['preflight_lanes']}"
         )
     env = make_training_vec_env(
         config=config,
@@ -326,18 +328,20 @@ def run_sb3_on_policy(
         set_random_seed(int(common_config["seed"]))
         validate_action_space(env.action_space, algorithm_id=algorithm_id)
         device = resolve_sb3_device(str(backend_config["device"]))
-        print(f"Using torch device: {device}", flush=True)
+        context.session.event(f"using torch device: {device}")
         model = model_factory(context, env, config, device)
         rollout_quantum = n_envs * int(backend_config["n_steps"])
         context.session.configure_budget(
             requested_limit=int(common_config["timesteps"]),
             step_quantum=rollout_quantum,
             initial_step=int(model.num_timesteps),
+            progress_fields=progress_fields,
         )
 
         graceful_stop = GracefulStopHelper(
             context.stop_flag,
             marker_path=context.run_dir / "learner_stop_observed.json",
+            event=context.session.event,
         )
         install_on_policy_safe_boundary_stop(
             model,
@@ -412,11 +416,14 @@ def run_sb3_on_policy(
                     algorithm_id=algorithm_id,
                 )
             )
-        if common_config["checkpoint_eval_backend"] == "none":
+        if (
+            common_config["checkpoint_eval_backend"] == "none"
+            and context.session.execution_policy.mode != TrainingExecutionMode.LOCAL_DEMO
+        ):
             context.session.event(
                 "checkpoint evaluation disabled; this run cannot establish promotion or acceptance"
             )
-        else:
+        elif common_config["checkpoint_eval_backend"] != "none":
             context.session.event(
                 "training-loop eval disabled; async checkpoint eval handles promotion metrics"
             )
@@ -429,10 +436,9 @@ def run_sb3_on_policy(
                 0,
                 int(common_config["timesteps"]) - int(model.num_timesteps),
             )
-            print(
+            context.session.event(
                 f"resuming learner at step={model.num_timesteps} "
-                f"remaining={remaining_timesteps} cap={common_config['timesteps']}",
-                flush=True,
+                f"remaining={remaining_timesteps} cap={common_config['timesteps']}"
             )
             if remaining_timesteps:
                 model.learn(

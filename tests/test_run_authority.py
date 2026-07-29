@@ -21,7 +21,13 @@ from gradlab.run_contracts import (
     new_run_id,
     utc_now,
 )
-from gradlab.policy_bundle import model_document_path, recipe_document_path
+from gradlab.policy_bundle import (
+    build_recipe_document,
+    canonical_json_sha256,
+    model_document_path,
+    recipe_document_path,
+)
+from gradlab.recipe_documents import compose_resolved_train_documents
 
 
 SHA = "a" * 64
@@ -197,7 +203,71 @@ class RunAuthorityTests(unittest.TestCase):
         )
         updated = self.authority.control.get_json(run_index_key)["runs"][0]
         self.assertEqual(updated["state"], "failed")
+        self.assertEqual(updated["stop_reason"], "training_cap_without_acceptance")
+        self.assertEqual(updated["final_step"], 100)
         self.assertEqual(updated["metrics"], {"train/global_step": 100.0})
+
+    def test_v2_recipe_is_content_addressed_and_registers_exact_variant_resolution(
+        self,
+    ) -> None:
+        goal_path = Path("experiments/goals/gradlab__bandit/_goal.yaml")
+        recipe_path = goal_path.parent / "recipes/ppo.yaml"
+        resolved = compose_resolved_train_documents(
+            goal_path,
+            recipe_path,
+            source_sha="e" * 40,
+        )
+        recipe = build_recipe_document(
+            resolved.effective,
+            repo_root=Path.cwd(),
+            source_commit="e" * 40,
+            run_description="content-addressed resolution proof",
+            seed=123,
+            runtime_packages=("gradlab==0.1.0",),
+            base_materialized_recipe=resolved.base,
+            canonical_goal=resolved.canonical_goal,
+        )
+        digest = canonical_json_sha256(recipe)
+
+        self.assertEqual(
+            self.authority.put_recipe_document(recipe, expected_sha256=digest),
+            digest,
+        )
+        self.assertEqual(self.authority.recipe_document(digest), recipe)
+        # A repeated write is idempotent and verifies the existing bytes.
+        self.assertEqual(
+            self.authority.put_recipe_document(recipe, expected_sha256=digest),
+            digest,
+        )
+
+        original = self.manifest(new_run_id(), new_attempt_id())
+        manifest = RunManifest(
+            **{
+                **original.to_dict(),
+                "goal_slug": "gradlab__bandit",
+                "goal_sha256": resolved.effective["train_config"]["effective_goal_contract_sha256"],
+                "recipe_sha256": digest,
+                "environment_sha256": str(resolved.effective["environment_hash"]).removeprefix(
+                    "sha256:"
+                ),
+                "wandb": {
+                    **original.wandb,
+                    "project": "Bandit-v0",
+                },
+                "goal_variant": resolved.effective["goal_variant"],
+            }
+        )
+        self.authority.create_manifest(manifest)
+        scope = goal_variant_scope_key(
+            entity="tsilva",
+            project="Bandit-v0",
+            goal_slug="gradlab__bandit",
+        )
+        index = self.authority.control.get_json(f"{scope}/index.json")
+        self.assertEqual(
+            index["variants"][0]["exact_resolution_run_id"],
+            manifest.run_id,
+        )
 
     def test_lease_takeover_requires_expiry_and_old_etag_cannot_renew(self) -> None:
         run_id = new_run_id()

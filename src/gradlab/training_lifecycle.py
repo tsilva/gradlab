@@ -2,15 +2,12 @@ from __future__ import annotations
 
 import math
 import os
-import sys
 import time
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 from typing import Any, Protocol
-
-from tqdm.auto import tqdm
 
 from gradlab.early_stop import MetricEarlyStopStateMachine, MetricSample
 from gradlab.file_utils import atomic_write_json
@@ -152,7 +149,14 @@ class TrainingBudget:
 
 
 class ProgressSink(Protocol):
-    def start(self, *, total: int, initial: int, description: str) -> None: ...
+    def start(
+        self,
+        *,
+        total: int,
+        initial: int,
+        description: str,
+        fields: Sequence[ProgressField] = (),
+    ) -> None: ...
 
     def update(
         self,
@@ -167,56 +171,89 @@ class ProgressSink(Protocol):
     def close(self) -> None: ...
 
 
-def _progress_postfix(metrics: Mapping[str, int | float]) -> dict[str, str]:
-    mean_return = metrics.get(TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_MEAN)
-    completion = metrics.get(TRAIN_OUTCOME_SUCCESS_CURRENT_RATE_MEAN)
+class ProgressValueFormat(StrEnum):
+    NUMBER = "number"
+    COUNT = "count"
+    PERCENT = "percent"
+
+
+@dataclass(frozen=True)
+class ProgressField:
+    metric: str
+    label: str
+    value_format: ProgressValueFormat = ProgressValueFormat.NUMBER
+
+    def __post_init__(self) -> None:
+        if not self.metric.strip():
+            raise ValueError("progress field metric must be non-empty")
+        if not self.label.strip():
+            raise ValueError("progress field label must be non-empty")
+
+
+COMMON_PROGRESS_FIELDS = (
+    ProgressField(
+        TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_MEAN,
+        "mean return",
+    ),
+    ProgressField(
+        TRAIN_OUTCOME_SUCCESS_CURRENT_RATE_MEAN,
+        "completion",
+        ProgressValueFormat.PERCENT,
+    ),
+)
+
+
+def _compact_count(value: float) -> str:
+    magnitude = abs(value)
+    for scale, suffix in (
+        (1_000_000_000_000.0, "T"),
+        (1_000_000_000.0, "G"),
+        (1_000_000.0, "M"),
+        (1_000.0, "k"),
+    ):
+        if magnitude >= scale:
+            return f"{value / scale:.3g}{suffix}"
+    return f"{value:.0f}"
+
+
+def format_progress_value(
+    value: int | float | None,
+    value_format: ProgressValueFormat,
+) -> str:
+    if value is None or not math.isfinite(float(value)):
+        return "—"
+    numeric = float(value)
+    if value_format == ProgressValueFormat.COUNT:
+        return _compact_count(numeric)
+    if value_format == ProgressValueFormat.PERCENT:
+        return f"{100.0 * numeric:.2f}%"
+    return f"{numeric:.3g}"
+
+
+def resolve_progress_fields(fields: Sequence[ProgressField]) -> tuple[ProgressField, ...]:
+    # Put backend-owned fields first so the most decision-relevant telemetry
+    # remains visible when a terminal layout must compact.
+    resolved = (*tuple(fields), *COMMON_PROGRESS_FIELDS)
+    metrics = [field.metric for field in resolved]
+    labels = [field.label for field in resolved]
+    if len(metrics) != len(set(metrics)):
+        raise ValueError("progress fields must use unique metrics")
+    if len(labels) != len(set(labels)):
+        raise ValueError("progress fields must use unique labels")
+    return resolved
+
+
+def _progress_postfix(
+    metrics: Mapping[str, int | float],
+    fields: Sequence[ProgressField] = (),
+) -> dict[str, str]:
     return {
-        "mean return": "—" if mean_return is None else f"{float(mean_return):.3g}",
-        "completion": "—" if completion is None else f"{100.0 * float(completion):.2f}%",
-    }
-
-
-class TqdmProgressSink:
-    def __init__(self) -> None:
-        self._bar: Any | None = None
-
-    def start(self, *, total: int, initial: int, description: str) -> None:
-        self._bar = tqdm(
-            total=total,
-            initial=initial,
-            desc=description,
-            unit="transition",
-            unit_scale=True,
-            dynamic_ncols=True,
-            file=sys.stdout,
+        field.label: format_progress_value(
+            metrics.get(field.metric),
+            field.value_format,
         )
-        self._bar.set_postfix(_progress_postfix({}), refresh=True)
-
-    def update(
-        self,
-        *,
-        step: int,
-        metrics: Mapping[str, int | float],
-        final: bool = False,
-    ) -> None:
-        if self._bar is None:
-            return
-        if step > int(self._bar.n):
-            self._bar.update(step - int(self._bar.n))
-        self._bar.set_postfix(_progress_postfix(metrics), refresh=False)
-        if final:
-            self._bar.refresh()
-
-    def event(self, message: str) -> None:
-        if self._bar is None:
-            print(message, flush=True)
-        else:
-            self._bar.write(message, file=sys.stdout)
-
-    def close(self) -> None:
-        if self._bar is not None:
-            self._bar.close()
-            self._bar = None
+        for field in resolve_progress_fields(fields)
+    }
 
 
 class PlainProgressSink:
@@ -231,18 +268,27 @@ class PlainProgressSink:
         self.total = 0
         self.description = "training"
         self.last_printed_at: float | None = None
+        self.fields: tuple[ProgressField, ...] = ()
 
-    def start(self, *, total: int, initial: int, description: str) -> None:
+    def start(
+        self,
+        *,
+        total: int,
+        initial: int,
+        description: str,
+        fields: Sequence[ProgressField] = (),
+    ) -> None:
         self.total = int(total)
         self.description = description
+        self.fields = tuple(fields)
         self._print(initial, {})
 
     def _print(self, step: int, metrics: Mapping[str, int | float]) -> None:
-        postfix = _progress_postfix(metrics)
+        postfix = _progress_postfix(metrics, self.fields)
         fraction = min(max(step / self.total, 0.0), 1.0) if self.total else 1.0
         print(
             f"{self.description} progress: {step:,}/{self.total:,} ({fraction:.1%}) "
-            f"mean return={postfix['mean return']} completion={postfix['completion']}",
+            + " ".join(f"{label}={value}" for label, value in postfix.items()),
             flush=True,
         )
         self.last_printed_at = self.clock()
@@ -270,8 +316,15 @@ class PlainProgressSink:
 
 
 class SilentProgressSink:
-    def start(self, *, total: int, initial: int, description: str) -> None:
-        del total, initial, description
+    def start(
+        self,
+        *,
+        total: int,
+        initial: int,
+        description: str,
+        fields: Sequence[ProgressField] = (),
+    ) -> None:
+        del total, initial, description, fields
 
     def update(
         self,
@@ -290,12 +343,7 @@ class SilentProgressSink:
 
 
 def progress_sink_for_mode(mode: str) -> ProgressSink:
-    resolved = mode
-    if mode == "auto":
-        resolved = "interactive" if sys.stdout.isatty() else "plain"
-    if resolved == "interactive":
-        return TqdmProgressSink()
-    if resolved == "plain":
+    if mode in {"auto", "interactive", "plain"}:
         return PlainProgressSink()
     return SilentProgressSink()
 
@@ -507,6 +555,7 @@ class TrainingSession:
         self.first_completion_step: int | None = None
         self.last_report_step: int | None = None
         self.last_report_payload: dict[str, int | float] = {}
+        self.progress_metrics: dict[str, int | float] = {}
         self.ready = False
         self.closed = False
 
@@ -525,6 +574,7 @@ class TrainingSession:
         requested_limit: int,
         step_quantum: int,
         initial_step: int = 0,
+        progress_fields: Sequence[ProgressField] = (),
     ) -> TrainingBudget:
         if self.budget is not None:
             raise RuntimeError("training budget is already configured")
@@ -538,6 +588,7 @@ class TrainingSession:
             total=self.budget.execution_total,
             initial=self.budget.initial_step,
             description=self.backend_id,
+            fields=progress_fields,
         )
         return self.budget
 
@@ -560,7 +611,13 @@ class TrainingSession:
         self.ready = True
         return path
 
-    def advance(self, step: int, records: Iterable[Any] = ()) -> dict[str, int | float]:
+    def advance(
+        self,
+        step: int,
+        records: Iterable[Any] = (),
+        *,
+        progress_metrics: Mapping[str, Any] | None = None,
+    ) -> dict[str, int | float]:
         if self.budget is None:
             raise RuntimeError("training budget must be configured before advancing")
         current = int(step)
@@ -573,7 +630,9 @@ class TrainingSession:
             )
         self.current_step = current
         metrics = self.reducer.consume(records)
-        self.progress.update(step=current, metrics=metrics)
+        self.progress_metrics.update(self._finite_scalars(progress_metrics or {}))
+        self.progress_metrics.update(metrics)
+        self.progress.update(step=current, metrics=self.progress_metrics)
         return metrics
 
     @staticmethod
@@ -596,13 +655,15 @@ class TrainingSession:
         payload = self._finite_scalars(metrics or {})
         payload.update(canonical)
         if self.last_report_step == int(step):
-            self.progress.update(step=int(step), metrics=payload)
+            self.progress_metrics.update(payload)
+            self.progress.update(step=int(step), metrics=self.progress_metrics)
             return self.stop_controller.decision is not None
         payload.update(self.stop_controller.evaluate(payload, step=int(step)))
         self.metric_sink.publish(payload, step=int(step))
         self.last_report_step = int(step)
         self.last_report_payload = dict(payload)
-        self.progress.update(step=int(step), metrics=payload)
+        self.progress_metrics.update(payload)
+        self.progress.update(step=int(step), metrics=self.progress_metrics)
         return self.stop_controller.decision is not None
 
     def event(self, message: str) -> None:
@@ -739,7 +800,7 @@ class TrainingSession:
             )
         self.progress.update(
             step=int(result.final_step),
-            metrics=self.last_report_payload or self.reducer.snapshot(),
+            metrics=self.progress_metrics or self.reducer.snapshot(),
             final=True,
         )
         self.progress.close()

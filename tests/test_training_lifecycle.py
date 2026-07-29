@@ -24,11 +24,14 @@ from gradlab.training_lifecycle import (
     TRAINING_RESULT_FILENAME,
     CheckpointCoordinator,
     PlainProgressSink,
+    ProgressField,
+    ProgressValueFormat,
     TerminalReason,
     TrainingBudget,
     TrainingExecutionMode,
     TrainingExecutionPolicy,
     TrainingSession,
+    progress_sink_for_mode,
 )
 from gradlab.training_metrics import EpisodeMetricsReducer
 
@@ -53,10 +56,19 @@ class MemoryProgressSink:
         self.metrics: list[dict] = []
         self.events: list[str] = []
         self.closed = False
+        self.fields: tuple[ProgressField, ...] = ()
 
-    def start(self, *, total: int, initial: int, description: str) -> None:
+    def start(
+        self,
+        *,
+        total: int,
+        initial: int,
+        description: str,
+        fields=(),
+    ) -> None:
         del description
         self.total = total
+        self.fields = tuple(fields)
         self.steps.append(initial)
         self.metrics.append({})
 
@@ -281,6 +293,53 @@ def test_plain_progress_is_bounded_and_uses_only_canonical_outcomes(
     assert "mean return=5" in output
     assert "completion=25.00%" in output
     assert "best" not in output
+
+
+def test_algorithm_progress_fields_are_formatted_by_the_shared_sink(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    now = [0.0]
+    sink = PlainProgressSink(interval_seconds=10.0, clock=lambda: now[0])
+    sink.start(
+        total=100,
+        initial=0,
+        description="gradlab.go-explore",
+        fields=(
+            ProgressField("algorithm/cells", "cells", ProgressValueFormat.COUNT),
+            ProgressField("algorithm/new_cell_rate", "new cells", ProgressValueFormat.PERCENT),
+        ),
+    )
+    capsys.readouterr()
+
+    now[0] = 10.0
+    sink.update(
+        step=20,
+        metrics={
+            "algorithm/cells": 12_345,
+            "algorithm/new_cell_rate": 0.125,
+        },
+    )
+
+    output = capsys.readouterr().out
+    assert "cells=12.3k" in output
+    assert "new cells=12.50%" in output
+
+
+@pytest.mark.parametrize("mode", ("auto", "interactive", "plain"))
+def test_local_console_modes_without_an_injected_tui_use_plain_progress(mode: str) -> None:
+    assert isinstance(progress_sink_for_mode(mode), PlainProgressSink)
+
+
+def test_session_keeps_algorithm_progress_stats_between_durable_reports(
+    tmp_path: Path,
+) -> None:
+    session, _stop_flag = _session(tmp_path, mode=TrainingExecutionMode.LOCAL_DEMO)
+    assert isinstance(session.progress, MemoryProgressSink)
+
+    session.advance(2, progress_metrics={"algorithm/cells": 7})
+    session.report(step=2, metrics={"train/throughput/loop_fps": 100.0})
+
+    assert session.progress.metrics[-1]["algorithm/cells"] == 7
 
 
 def test_episode_metrics_are_identical_across_target_and_archive_consumers() -> None:

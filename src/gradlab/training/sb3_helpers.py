@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -112,10 +113,17 @@ class Sb3HumanOutputFormatHelper(CallbackHelper):
 
 
 class GracefulStopHelper(CallbackHelper):
-    def __init__(self, stop_flag: Any, *, marker_path: Path | None = None) -> None:
+    def __init__(
+        self,
+        stop_flag: Any,
+        *,
+        marker_path: Path | None = None,
+        event: Callable[[str], None] | None = None,
+    ) -> None:
         super().__init__()
         self.stop_flag = stop_flag
         self.marker_path = marker_path
+        self.event = event
         self.logged = False
 
     def _on_step(self) -> bool:
@@ -128,11 +136,14 @@ class GracefulStopHelper(CallbackHelper):
         if not self.stop_flag.requested or self.logged:
             return
         reason = self.stop_flag.reason or "graceful stop"
-        print(
+        message = (
             f"graceful stop requested by {reason}; stopped at the safe "
-            f"on-policy update boundary at num_timesteps={num_timesteps}",
-            flush=True,
+            f"on-policy update boundary at num_timesteps={num_timesteps}"
         )
+        if self.event is None:
+            print(message, flush=True)
+        else:
+            self.event(message)
         if self.marker_path is not None:
             atomic_write_json(
                 self.marker_path,

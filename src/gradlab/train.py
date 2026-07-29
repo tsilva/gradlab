@@ -8,7 +8,9 @@ import signal
 import sys
 import hashlib
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
+from contextlib import contextmanager, nullcontext
+from dataclasses import dataclass
 from pathlib import Path
 
 os.environ.setdefault("MPLCONFIGDIR", os.path.abspath(".matplotlib"))
@@ -38,6 +40,7 @@ from gradlab.training_backend import (
     training_backend_runtime_metadata,
 )
 from gradlab.training_lifecycle import (
+    ProgressSink,
     TrainingExecutionMode,
     TrainingExecutionPolicy,
     TrainingResult,
@@ -59,6 +62,15 @@ from gradlab.rom_runtime import (
 
 GRACEFUL_STOP_SIGNAL = getattr(signal, "SIGUSR1", None)
 INTERNAL_LEARNER_ENV = "GRADLAB_INTERNAL_LEARNER"
+
+
+@dataclass(frozen=True)
+class TrainingRuntimeControl:
+    """Ephemeral host controls that never enter a materialized run contract."""
+
+    progress_sink: ProgressSink | None = None
+    stop_flag: GracefulStopFlag | None = None
+    signal_handlers_owned_by_host: bool = False
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -110,27 +122,41 @@ def signal_name(signum: int) -> str:
         return f"signal-{signum}"
 
 
-def install_graceful_stop_handler(
+def graceful_stop_signals(*, include_sigint: bool = False) -> tuple[int, ...]:
+    signals: list[int] = []
+    if GRACEFUL_STOP_SIGNAL is not None:
+        signals.append(int(GRACEFUL_STOP_SIGNAL))
+    if include_sigint and int(signal.SIGINT) not in signals:
+        signals.append(int(signal.SIGINT))
+    return tuple(signals)
+
+
+@contextmanager
+def graceful_stop_signal_scope(
     stop_flag: GracefulStopFlag,
     *,
     include_sigint: bool = False,
-) -> int | None:
-    if GRACEFUL_STOP_SIGNAL is None:
-        return None
+) -> Iterator[tuple[int, ...]]:
+    installed = graceful_stop_signals(include_sigint=include_sigint)
+    previous = {signum: signal.getsignal(signum) for signum in installed}
 
     def handle_graceful_stop(signum, _frame) -> None:
         stop_flag.request(signal_name(signum))
 
-    signal.signal(GRACEFUL_STOP_SIGNAL, handle_graceful_stop)
-    if include_sigint:
-        signal.signal(signal.SIGINT, handle_graceful_stop)
-    return int(GRACEFUL_STOP_SIGNAL)
+    for signum in installed:
+        signal.signal(signum, handle_graceful_stop)
+    try:
+        yield installed
+    finally:
+        for signum in reversed(installed):
+            signal.signal(signum, previous[signum])
 
 
 def main(
     argv: list[str] | None = None,
     *,
     runtime_rom_binding: RomRuntimeBinding | None = None,
+    runtime_control: TrainingRuntimeControl | None = None,
 ) -> int:
     if os.environ.get(INTERNAL_LEARNER_ENV) != "1":
         raise RuntimeError(
@@ -208,29 +234,9 @@ def main(
     )
     write_run_description(train_config, str(run_dir))
     run_description = str(train_config.get("run_description") or "").strip()
-    if run_description:
-        print(f"run description: {run_description}", flush=True)
-    else:
-        print("warning: --run-description is empty", flush=True)
 
-    stop_flag = GracefulStopFlag()
-    graceful_stop_signal = install_graceful_stop_handler(
-        stop_flag,
-        include_sigint=execution_policy.handle_sigint,
-    )
-    if graceful_stop_signal is not None:
-        if execution_policy.handle_sigint:
-            print(
-                "graceful stop signals: "
-                f"{signal_name(graceful_stop_signal)}, {signal_name(int(signal.SIGINT))}",
-                flush=True,
-            )
-        else:
-            print(
-                f"graceful stop signal: {signal_name(graceful_stop_signal)}",
-                flush=True,
-            )
-
+    stop_flag = runtime_control.stop_flag if runtime_control is not None else None
+    stop_flag = stop_flag or GracefulStopFlag()
     context = BackendContext(
         train_config=train_config,
         environment=environment,
@@ -260,40 +266,70 @@ def main(
             ),
             execution_policy=execution_policy,
             completion_signal_available=bool(task_termination(environment).get("success")),
+            progress_sink=(
+                runtime_control.progress_sink if runtime_control is not None else None
+            ),
         ),
     )
     context.session.configure_checkpoints(
         run_name=str(train_config["run_name"]),
         eval_required=train_config["checkpoint_eval_backend"] != "none",
     )
-    if (
-        execution_mode == TrainingExecutionMode.LOCAL_DEMO
-        and not context.session.completion_signal_available
-    ):
-        context.session.event(
-            "no declared success signal; local training will continue until its configured "
-            "budget or early-stop condition"
+
+    host_owns_signals = bool(
+        runtime_control is not None and runtime_control.signal_handlers_owned_by_host
+    )
+    installed_signals = graceful_stop_signals(include_sigint=execution_policy.handle_sigint)
+    signal_scope = (
+        nullcontext(installed_signals)
+        if host_owns_signals
+        else graceful_stop_signal_scope(
+            stop_flag,
+            include_sigint=execution_policy.handle_sigint,
         )
-    try:
-        result = backend.run(context)
-        if not isinstance(result, TrainingResult):
-            raise RuntimeError(f"training backend {backend_id!r} did not return a TrainingResult")
-        terminal_model_path = run_dir / result.model_path
-        if result.model_path != "final_model.zip" or not terminal_model_path.is_file():
-            raise RuntimeError(
-                f"training backend {backend_id!r} did not produce the terminal model "
-                f"{run_dir / 'final_model.zip'}"
+    )
+    with signal_scope as active_signals:
+        context.session.event(
+            f"run description: {run_description}"
+            if run_description
+            else "warning: --run-description is empty"
+        )
+        if active_signals:
+            label = "signals" if len(active_signals) > 1 else "signal"
+            context.session.event(
+                f"graceful stop {label}: "
+                + ", ".join(signal_name(signum) for signum in active_signals)
             )
         if (
             execution_mode == TrainingExecutionMode.LOCAL_DEMO
-            and checkpoint_dir.is_dir()
-            and any(checkpoint_dir.iterdir())
+            and not context.session.completion_signal_available
         ):
-            raise RuntimeError("local-demo training produced an intermediate checkpoint")
-        context.session.finalize(result)
-    except BaseException as exc:
-        context.session.fail(exc)
-        raise
+            context.session.event(
+                "no declared success signal; local training will continue until its configured "
+                "budget or early-stop condition"
+            )
+        try:
+            result = backend.run(context)
+            if not isinstance(result, TrainingResult):
+                raise RuntimeError(
+                    f"training backend {backend_id!r} did not return a TrainingResult"
+                )
+            terminal_model_path = run_dir / result.model_path
+            if result.model_path != "final_model.zip" or not terminal_model_path.is_file():
+                raise RuntimeError(
+                    f"training backend {backend_id!r} did not produce the terminal model "
+                    f"{run_dir / 'final_model.zip'}"
+                )
+            if (
+                execution_mode == TrainingExecutionMode.LOCAL_DEMO
+                and checkpoint_dir.is_dir()
+                and any(checkpoint_dir.iterdir())
+            ):
+                raise RuntimeError("local-demo training produced an intermediate checkpoint")
+            context.session.finalize(result)
+        except BaseException as exc:
+            context.session.fail(exc)
+            raise
     return 0
 
 

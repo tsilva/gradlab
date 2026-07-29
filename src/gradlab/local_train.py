@@ -9,6 +9,7 @@ import re
 import shlex
 import subprocess
 import sys
+import threading
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from urllib.parse import unquote, urlparse
@@ -23,7 +24,7 @@ from gradlab.policy_bundle import (
 )
 from gradlab.recipe_catalog import LOCAL_RUN_RECEIPT, recipe_identity, resolve_recipe_source
 from gradlab.recipe_documents import (
-    compose_train_document,
+    compose_resolved_train_documents,
     load_goal_contract,
     prepare_checkpoint_eval_mode,
 )
@@ -99,6 +100,11 @@ def build_parser() -> argparse.ArgumentParser:
             "Use a provider-compatible raw .nes ROM in place for this run without "
             "registering or copying it."
         ),
+    )
+    parser.add_argument(
+        "--no-tui",
+        action="store_true",
+        help="Disable the full-screen local training interface and use plain progress output.",
     )
     return parser
 
@@ -253,15 +259,28 @@ def _write_receipt(run_dir: Path, payload: dict) -> None:
     write_canonical_json(run_dir / LOCAL_RUN_RECEIPT, payload)
 
 
+def _should_use_training_tui(*, disabled: bool) -> bool:
+    if disabled:
+        return False
+    term = os.environ.get("TERM", "").strip().lower()
+    stdin_isatty = getattr(sys.stdin, "isatty", lambda: False)
+    stdout_isatty = getattr(sys.stdout, "isatty", lambda: False)
+    return bool(stdin_isatty() and stdout_isatty() and term not in {"", "dumb"})
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(list(sys.argv[1:] if argv is None else argv))
+    if threading.current_thread() is not threading.main_thread():
+        raise RuntimeError("gradlab train must run on the Python main thread")
+    use_training_tui = _should_use_training_tui(disabled=bool(args.no_tui))
     source = resolve_recipe_source(args.recipe)
     overrides = list(args.recipe_overrides)
     if not args.wandb:
         overrides.extend(("logging.wandb=false", "logging.wandb_mode=disabled"))
 
-    document = compose_train_document(
+    source_commit = _git_commit(source.repository_root) or _installed_source_commit()
+    resolved_documents = compose_resolved_train_documents(
         source.goal_path,
         source.recipe_path,
         recipe_overrides=overrides,
@@ -269,7 +288,9 @@ def main(argv: list[str] | None = None) -> int:
             value,
             checkpoint_eval_backend="none",
         ),
+        source_sha=source_commit or "",
     )
+    document = resolved_documents.effective
     goal_id, recipe_id = recipe_identity(document)
     description = _render_run_description(
         document,
@@ -280,7 +301,6 @@ def main(argv: list[str] | None = None) -> int:
     run_name = args.run_name or _default_run_name(goal_id, recipe_id, args.seed)
     run_dir = _safe_run_dir(args.runs_dir, run_name)
 
-    source_commit = _git_commit(source.repository_root) or _installed_source_commit()
     goals_root = source.repository_root / "experiments" / "goals"
     document["goal_variant"] = build_goal_variant_descriptor(
         goal_slug=source.goal_path.parent.relative_to(goals_root).as_posix(),
@@ -327,6 +347,10 @@ def main(argv: list[str] | None = None) -> int:
             config["rom_asset_manifest"] = rom_asset_manifest_for_game(str(config["game"]))
     document["train_config"] = config
     document["description"] = description
+    base_config = dict(resolved_documents.base["train_config"])
+    if "rom_asset_manifest" in config:
+        base_config["rom_asset_manifest"] = config["rom_asset_manifest"]
+    resolved_documents.base["train_config"] = base_config
 
     recipe_document = build_recipe_document(
         document,
@@ -336,6 +360,8 @@ def main(argv: list[str] | None = None) -> int:
         run_description=description,
         seed=int(args.seed),
         runtime_packages=_runtime_packages(),
+        base_materialized_recipe=resolved_documents.base,
+        canonical_goal=resolved_documents.canonical_goal,
     )
     try:
         run_dir.mkdir(parents=True, exist_ok=False)
@@ -366,14 +392,13 @@ def main(argv: list[str] | None = None) -> int:
         "model": None,
     }
     _write_receipt(run_dir, receipt)
-    print(
+    local_notices = (
         f"local training-only run: recipe={source.reference} seed={args.seed} output={run_dir}",
-        flush=True,
-    )
-    print(
         "checkpoint evaluation is disabled; this run cannot establish promotion or acceptance",
-        flush=True,
     )
+    if not use_training_tui:
+        for notice in local_notices:
+            print(notice, flush=True)
 
     from gradlab.train import main as learner_main
 
@@ -390,10 +415,39 @@ def main(argv: list[str] | None = None) -> int:
                 "--execution-mode",
                 TrainingExecutionMode.LOCAL_DEMO.value,
             ]
-            result = learner_main(
-                learner_args,
-                runtime_rom_binding=runtime_rom_binding,
-            )
+
+            def invoke_learner(runtime_control=None) -> int:
+                kwargs = {"runtime_rom_binding": runtime_rom_binding}
+                if runtime_control is not None:
+                    kwargs["runtime_control"] = runtime_control
+                return learner_main(learner_args, **kwargs)
+
+            if use_training_tui:
+                try:
+                    from gradlab.training_tui import (
+                        LocalTrainingIdentity,
+                        run_local_training_tui,
+                    )
+                except Exception as exc:
+                    print(
+                        f"warning: local training TUI unavailable; using plain output: {exc}",
+                        flush=True,
+                    )
+                    for notice in local_notices:
+                        print(notice, flush=True)
+                    result = invoke_learner()
+                else:
+                    result = run_local_training_tui(
+                        identity=LocalTrainingIdentity(
+                            recipe=source.reference,
+                            seed=int(args.seed),
+                            output=str(run_dir),
+                            notices=local_notices,
+                        ),
+                        learner=invoke_learner,
+                    )
+            else:
+                result = invoke_learner()
         except BaseException as exc:
             receipt.update(
                 {

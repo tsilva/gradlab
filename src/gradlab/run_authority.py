@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -28,7 +29,13 @@ from gradlab.run_contracts import (
     TerminalReceipt,
     checkpoint_id,
 )
-from gradlab.policy_bundle import model_document_path, recipe_document_path
+from gradlab.policy_bundle import (
+    RECIPE_FORMAT_VERSION,
+    canonical_json_bytes,
+    model_document_path,
+    recipe_document_path,
+    validate_recipe_document,
+)
 from gradlab.goal_variants import (
     GOAL_VARIANT_INDEX_SCHEMA_VERSION,
     GOAL_VARIANT_RUN_INDEX_SCHEMA_VERSION,
@@ -41,6 +48,7 @@ from gradlab.recipe_variants import recipe_variant_id
 LEASE_TTL_SECONDS = 60
 LEASE_RENEW_SECONDS = 15
 LEASE_MISSES_BEFORE_STOP = 2
+MAX_RECIPE_DOCUMENT_BYTES = 2 * 1024 * 1024
 
 
 class LeaseUnavailable(RuntimeError):
@@ -126,6 +134,68 @@ class RunAuthority:
     def manifest(self, run_id: str) -> dict[str, Any] | None:
         return self.control.get_json_optional(f"{self.run_prefix(run_id)}/manifest.json")
 
+    @staticmethod
+    def recipe_document_key(recipe_sha256: str) -> str:
+        digest = str(recipe_sha256 or "").strip().lower()
+        if not re.fullmatch(r"[0-9a-f]{64}", digest):
+            raise ValueError("recipe document key requires a lowercase SHA-256")
+        return f"recipes/v2/sha256/{digest[:2]}/{digest}.json"
+
+    def put_recipe_document(
+        self,
+        document: Mapping[str, Any],
+        *,
+        expected_sha256: str | None = None,
+    ) -> str:
+        validated = validate_recipe_document(document, source="control recipe document")
+        if int(validated["format_version"]) != RECIPE_FORMAT_VERSION:
+            raise ValueError("only recipe format v2 may be stored in the resolution catalog")
+        payload = canonical_json_bytes(validated)
+        if len(payload) > MAX_RECIPE_DOCUMENT_BYTES:
+            raise ValueError(f"recipe document exceeds {MAX_RECIPE_DOCUMENT_BYTES} bytes")
+        digest = hashlib.sha256(payload).hexdigest()
+        if expected_sha256 is not None and digest != str(expected_sha256).strip().lower():
+            raise ValueError("recipe document hash disagrees with the expected run hash")
+        key = self.recipe_document_key(digest)
+        try:
+            self.control.put_bytes(
+                key,
+                payload,
+                content_type="application/json",
+                create_only=True,
+                metadata={"sha256": digest},
+            )
+        except ConditionalWriteConflict:
+            if self.control.get_bytes(key) != payload:
+                raise ValueError("content-addressed recipe document conflicts with storage")
+        if self.control.get_bytes(key) != payload:
+            raise ValueError("recipe document read-back verification failed")
+        return digest
+
+    def recipe_document(self, recipe_sha256: str) -> dict[str, Any]:
+        digest = str(recipe_sha256 or "").strip().lower()
+        payload = self.control.get_bytes(self.recipe_document_key(digest))
+        if len(payload) > MAX_RECIPE_DOCUMENT_BYTES:
+            raise ValueError("stored recipe document exceeds the supported size")
+        if hashlib.sha256(payload).hexdigest() != digest:
+            raise ValueError("stored recipe document hash does not match its key")
+        try:
+            decoded = json.loads(payload)
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ValueError("stored recipe document is not valid JSON") from exc
+        if not isinstance(decoded, Mapping):
+            raise ValueError("stored recipe document must be an object")
+        validated = validate_recipe_document(decoded, source="stored recipe document")
+        if int(validated["format_version"]) != RECIPE_FORMAT_VERSION:
+            raise ValueError("stored resolution recipe must use format v2")
+        return validated
+
+    def recipe_document_optional(self, recipe_sha256: str) -> dict[str, Any] | None:
+        key = self.recipe_document_key(recipe_sha256)
+        if self.control.get_json_optional(key) is None:
+            return None
+        return self.recipe_document(recipe_sha256)
+
     def register_goal_variant(self, manifest: RunManifest) -> dict[str, Any]:
         if manifest.goal_variant is None:
             raise ValueError("run manifest has no goal variant descriptor")
@@ -171,6 +241,16 @@ class RunAuthority:
 
             by_id = {str(item.get("variant_id") or ""): item for item in entries}
             existing = by_id.get(str(descriptor["variant_id"]))
+            exact_resolution_run_id = (
+                str(existing.get("exact_resolution_run_id") or "") if existing else ""
+            )
+            if not exact_resolution_run_id:
+                try:
+                    stored_recipe = self.recipe_document(manifest.recipe_sha256)
+                except FileNotFoundError, KeyError, ValueError:
+                    stored_recipe = None
+                if stored_recipe is not None:
+                    exact_resolution_run_id = manifest.run_id
             by_id[str(descriptor["variant_id"])] = {
                 **descriptor,
                 "descriptor_key": descriptor_key,
@@ -178,6 +258,11 @@ class RunAuthority:
                     str(existing.get("first_run_id") or manifest.run_id)
                     if existing
                     else manifest.run_id
+                ),
+                **(
+                    {"exact_resolution_run_id": exact_resolution_run_id}
+                    if exact_resolution_run_id
+                    else {}
                 ),
             }
             document = {
@@ -215,6 +300,9 @@ class RunAuthority:
         state: str,
         updated_at: str | None = None,
         metrics: Mapping[str, Any] | None = None,
+        stop_reason: str | None = None,
+        final_step: int | None = None,
+        early_stop: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         if manifest.goal_variant is None:
             raise ValueError("run manifest has no goal variant descriptor")
@@ -236,10 +324,7 @@ class RunAuthority:
             if current is None:
                 entries: list[dict[str, Any]] = []
             else:
-                if (
-                    int(current.get("schema_version") or 0)
-                    != GOAL_VARIANT_RUN_INDEX_SCHEMA_VERSION
-                ):
+                if int(current.get("schema_version") or 0) != GOAL_VARIANT_RUN_INDEX_SCHEMA_VERSION:
                     raise ValueError("unsupported goal variant run index schema")
                 if current.get("scope") != {
                     "entity": entity,
@@ -266,7 +351,17 @@ class RunAuthority:
                 "run_id": manifest.run_id,
                 "attempt_id": manifest.attempt_id,
                 "name": str(manifest.wandb.get("display_name") or manifest.run_id),
-                "state": str(state),
+                "state": (
+                    str(existing.get("state") or state)
+                    if (
+                        existing
+                        and existing.get("attempt_id") == manifest.attempt_id
+                        and existing.get("stop_reason")
+                        and state == "running"
+                        and stop_reason is None
+                    )
+                    else str(state)
+                ),
                 "goal_slug": manifest.goal_slug,
                 "recipe_slug": manifest.recipe_slug,
                 "recipe_sha256": manifest.recipe_sha256,
@@ -277,9 +372,7 @@ class RunAuthority:
                     recipe_overrides=manifest.recipe_overrides,
                 ),
                 "goal_contract_sha256": str(descriptor["goal_contract_sha256"]),
-                "effective_goal_contract_sha256": str(
-                    descriptor["effective_goal_contract_sha256"]
-                ),
+                "effective_goal_contract_sha256": str(descriptor["effective_goal_contract_sha256"]),
                 "goal_variant_id": variant_id,
                 "goal_variant_label": str(descriptor["label"]),
                 "description": manifest.run_description,
@@ -289,7 +382,17 @@ class RunAuthority:
                     if existing
                     else manifest.created_at
                 ),
-                "updated_at": str(updated_at or manifest.created_at),
+                "updated_at": (
+                    str(existing.get("updated_at") or manifest.created_at)
+                    if (
+                        existing
+                        and existing.get("attempt_id") == manifest.attempt_id
+                        and existing.get("stop_reason")
+                        and updated_at is None
+                        and stop_reason is None
+                    )
+                    else str(updated_at or manifest.created_at)
+                ),
                 "url": str(manifest.wandb.get("url") or ""),
                 "metrics": (
                     normalized_metrics
@@ -297,6 +400,35 @@ class RunAuthority:
                     else dict(existing.get("metrics") or {})
                     if existing
                     else {}
+                ),
+                "stop_reason": (
+                    str(stop_reason)
+                    if stop_reason is not None
+                    else str(existing.get("stop_reason") or "")
+                    if existing and existing.get("attempt_id") == manifest.attempt_id
+                    else ""
+                ),
+                "final_step": (
+                    int(final_step)
+                    if final_step is not None
+                    else int(existing["final_step"])
+                    if (
+                        existing
+                        and existing.get("attempt_id") == manifest.attempt_id
+                        and existing.get("final_step") is not None
+                    )
+                    else None
+                ),
+                "early_stop": (
+                    dict(early_stop)
+                    if early_stop is not None
+                    else dict(existing["early_stop"])
+                    if (
+                        existing
+                        and existing.get("attempt_id") == manifest.attempt_id
+                        and isinstance(existing.get("early_stop"), Mapping)
+                    )
+                    else None
                 ),
             }
             document = {
@@ -326,9 +458,7 @@ class RunAuthority:
                 return document
             except ConditionalWriteConflict:
                 continue
-        raise ConditionalWriteConflict(
-            "goal variant run index changed during every CAS attempt"
-        )
+        raise ConditionalWriteConflict("goal variant run index changed during every CAS attempt")
 
     def update_goal_variant_run_best_effort(
         self,
@@ -337,6 +467,9 @@ class RunAuthority:
         state: str,
         updated_at: str | None = None,
         metrics: Mapping[str, Any] | None = None,
+        stop_reason: str | None = None,
+        final_step: int | None = None,
+        early_stop: Mapping[str, Any] | None = None,
     ) -> bool:
         if manifest.goal_variant is None:
             return False
@@ -346,6 +479,9 @@ class RunAuthority:
                 state=state,
                 updated_at=updated_at,
                 metrics=metrics,
+                stop_reason=stop_reason,
+                final_step=final_step,
+                early_stop=early_stop,
             )
         except Exception:
             return False
@@ -1001,21 +1137,14 @@ class RunAuthority:
             raise ValueError("successful terminal receipt requires checkpoint and eval inventory")
         checkpoint_ids = {str(row.get("checkpoint_id") or "") for row in checkpoints}
         eval_checkpoint_ids = {str(row.get("checkpoint_id") or "") for row in evals}
-        if (
-            "" in checkpoint_ids
-            or len(checkpoints) != len(checkpoint_ids)
-        ):
+        if "" in checkpoint_ids or len(checkpoints) != len(checkpoint_ids):
             raise ValueError("checkpoint inventory contains missing or duplicate identities")
-        if (
-            "" in eval_checkpoint_ids
-            or not eval_checkpoint_ids.issubset(checkpoint_ids)
-        ):
+        if "" in eval_checkpoint_ids or not eval_checkpoint_ids.issubset(checkpoint_ids):
             raise ValueError("eval inventory references a checkpoint outside the run inventory")
         if len(evals) != len(eval_checkpoint_ids):
             raise ValueError("eval inventory contains duplicate checkpoint entries")
         if any(
-            str(row.get("status") or "") not in EVAL_INVENTORY_SETTLED_STATUSES
-            for row in evals
+            str(row.get("status") or "") not in EVAL_INVENTORY_SETTLED_STATUSES for row in evals
         ):
             raise ValueError("eval inventory contains an unsettled evaluation")
         if not any(str(row.get("purpose") or "") == "final" for row in checkpoints):
@@ -1071,19 +1200,28 @@ class RunAuthority:
         *,
         metrics: Mapping[str, Any] | None,
     ) -> None:
-        document = self.manifest(receipt.run_id)
+        document = self.control.get_json_optional(
+            f"{self.run_prefix(receipt.run_id)}/attempts/{receipt.attempt_id}/manifest.json"
+        )
+        if document is None:
+            document = self.manifest(receipt.run_id)
         if document is None:
             return
         try:
             manifest = RunManifest(**document)
             manifest.validate()
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
+            return
+        if manifest.attempt_id != receipt.attempt_id:
             return
         self.update_goal_variant_run_best_effort(
             manifest,
             state=receipt.state,
             updated_at=receipt.completed_at,
             metrics=metrics,
+            stop_reason=receipt.stop_reason,
+            final_step=receipt.final_step,
+            early_stop=receipt.early_stop,
         )
 
     def has_accepted_eval(self, run_id: str) -> bool:

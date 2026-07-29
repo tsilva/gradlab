@@ -8,6 +8,11 @@ objective:
   - max(eval/full/episode/return/best)
   - min(leader/checkpoint/step)
 train:
+  early_stop:
+    conditions:
+      target_reached:
+        metric: train/episode/return/shaped/from/target/window_100/mean
+        threshold: 5.0
   environment:
     env_config:
       env_args: &defend_line_env_args

@@ -18,7 +18,8 @@ from gradlab.json_utils import canonical_json_line_bytes
 
 
 RECIPE_DOCUMENT_TYPE = "gradlab.recipe"
-RECIPE_FORMAT_VERSION = 1
+LEGACY_RECIPE_FORMAT_VERSION = 1
+RECIPE_FORMAT_VERSION = 2
 _LEGACY_PROJECT_NAME = "".join(("r", "lab"))
 LEGACY_RECIPE_DOCUMENT_TYPE = f"{_LEGACY_PROJECT_NAME}.recipe"
 MODEL_DOCUMENT_TYPE = "gradlab.model"
@@ -121,11 +122,37 @@ class _RecipeProvenanceDocument(BoundaryModel):
     asset: Any = None
 
 
-class _RecipeDocument(BoundaryModel):
+class _RecipeDocumentV1(BoundaryModel):
+    document_type: Literal[RECIPE_DOCUMENT_TYPE]
+    format_version: Literal[LEGACY_RECIPE_FORMAT_VERSION]
+    recipe: _RecipeValueDocument
+    provenance: _RecipeProvenanceDocument
+
+
+class _ResolutionBaseDocument(BoundaryModel):
+    base: dict[str, Any]
+    base_sha256: Sha256
+    effective_sha256: Sha256
+    variant_id: NonEmptyText
+
+
+class _RecipeResolutionBaseDocument(_ResolutionBaseDocument):
+    source_revision: NonEmptyText
+    overrides: list[str]
+
+
+class _RecipeResolutionDocument(BoundaryModel):
+    schema_version: Literal[1]
+    goal: _ResolutionBaseDocument
+    recipe: _RecipeResolutionBaseDocument
+
+
+class _RecipeDocumentV2(BoundaryModel):
     document_type: Literal[RECIPE_DOCUMENT_TYPE]
     format_version: Literal[RECIPE_FORMAT_VERSION]
     recipe: _RecipeValueDocument
     provenance: _RecipeProvenanceDocument
+    resolution: _RecipeResolutionDocument
 
 
 class _CheckpointDocument(BoundaryModel):
@@ -141,7 +168,7 @@ class _CheckpointDocument(BoundaryModel):
 class _RecipeBindingDocument(BoundaryModel):
     filename: Literal[RECIPE_FILENAME]
     document_type: Literal[RECIPE_DOCUMENT_TYPE]
-    format_version: Literal[RECIPE_FORMAT_VERSION]
+    format_version: Literal[LEGACY_RECIPE_FORMAT_VERSION, RECIPE_FORMAT_VERSION]
     sha256: Sha256
     size_bytes: PositiveInt
 
@@ -534,7 +561,7 @@ def _validate_recipe_v1(
     if allow_legacy:
         document = _legacy_recipe_document(document, source=source)
     validate_boundary(
-        _RecipeDocument,
+        _RecipeDocumentV1,
         document,
         label=source,
         error_type=PolicyDocumentError,
@@ -782,11 +809,123 @@ def _validate_recipe_v1(
     return deepcopy(dict(document))
 
 
+def _validate_recipe_v2(
+    document: Mapping[str, Any],
+    source: str,
+) -> dict[str, Any]:
+    validate_boundary(
+        _RecipeDocumentV2,
+        document,
+        label=source,
+        error_type=PolicyDocumentError,
+    )
+    effective_document = {
+        "document_type": RECIPE_DOCUMENT_TYPE,
+        "format_version": LEGACY_RECIPE_FORMAT_VERSION,
+        "recipe": deepcopy(document["recipe"]),
+        "provenance": deepcopy(document["provenance"]),
+    }
+    _validate_recipe_v1(effective_document, f"{source}.effective")
+    resolution = _required_mapping(document["resolution"], label=f"{source}.resolution")
+    goal_resolution = _required_mapping(
+        resolution["goal"],
+        label=f"{source}.resolution.goal",
+    )
+    recipe_resolution = _required_mapping(
+        resolution["recipe"],
+        label=f"{source}.resolution.recipe",
+    )
+    base_recipe = _required_mapping(
+        recipe_resolution["base"],
+        label=f"{source}.resolution.recipe.base",
+    )
+    base_document = {
+        "document_type": RECIPE_DOCUMENT_TYPE,
+        "format_version": LEGACY_RECIPE_FORMAT_VERSION,
+        "recipe": deepcopy(base_recipe),
+        "provenance": deepcopy(document["provenance"]),
+    }
+    _validate_recipe_v1(base_document, f"{source}.base")
+
+    effective_recipe = _required_mapping(document["recipe"], label=f"{source}.recipe")
+    base_goal = _required_mapping(
+        goal_resolution["base"],
+        label=f"{source}.resolution.goal.base",
+    )
+    effective_goal = _required_mapping(
+        effective_recipe["goal"],
+        label=f"{source}.recipe.goal",
+    )
+    from gradlab.recipe_documents import goal_contract_sha256
+
+    expected_hashes = {
+        "resolution.goal.base_sha256": goal_contract_sha256(base_goal),
+        "resolution.goal.effective_sha256": goal_contract_sha256(effective_goal),
+        "resolution.recipe.base_sha256": canonical_json_sha256(base_recipe),
+        "resolution.recipe.effective_sha256": canonical_json_sha256(effective_recipe),
+    }
+    for path, expected in expected_hashes.items():
+        current: object = document
+        for part in path.split("."):
+            current = _required_mapping(current, label=f"{source}.{path}")[part]
+        if current != expected:
+            raise PolicyDocumentError(
+                f"{source}.{path} does not match the embedded contract: {current!r} != {expected!r}"
+            )
+
+    from gradlab.goal_variants import validate_goal_variant_descriptor
+
+    goal_variant = validate_goal_variant_descriptor(effective_recipe["goal_variant"])
+    if goal_resolution["variant_id"] != goal_variant["variant_id"]:
+        raise PolicyDocumentError(
+            f"{source}.resolution.goal.variant_id disagrees with recipe.goal_variant"
+        )
+    if goal_resolution["base_sha256"] != goal_variant["canonical_effective_goal_contract_sha256"]:
+        raise PolicyDocumentError(
+            f"{source}.resolution.goal.base_sha256 disagrees with the canonical "
+            "recipe.goal_variant base"
+        )
+    if goal_resolution["effective_sha256"] != goal_variant["effective_goal_contract_sha256"]:
+        raise PolicyDocumentError(
+            f"{source}.resolution.goal.effective_sha256 disagrees with recipe.goal_variant"
+        )
+
+    from gradlab.recipe_variants import recipe_variant_id
+
+    expected_variant_id = recipe_variant_id(
+        recipe_slug=effective_recipe["recipe_id"],
+        source_sha=recipe_resolution["source_revision"],
+        recipe_overrides=recipe_resolution["overrides"],
+    )
+    if recipe_resolution["variant_id"] != expected_variant_id:
+        raise PolicyDocumentError(
+            f"{source}.resolution.recipe.variant_id does not match its source and overrides"
+        )
+    requested_overrides = effective_recipe.get("recipe_overrides") or []
+    if list(recipe_resolution["overrides"]) != list(requested_overrides):
+        raise PolicyDocumentError(
+            f"{source}.resolution.recipe.overrides disagrees with recipe.recipe_overrides"
+        )
+    if base_recipe.get("recipe_overrides"):
+        raise PolicyDocumentError(
+            f"{source}.resolution.recipe.base must not contain launch-time overrides"
+        )
+    _assert_portable(resolution, label=f"{source}.resolution")
+    _assert_finite_json(document, label=source)
+    return deepcopy(dict(document))
+
+
+_RECIPE_HANDLERS: dict[int, Callable[[Mapping[str, Any], str], dict[str, Any]]] = {
+    LEGACY_RECIPE_FORMAT_VERSION: _validate_recipe_v1,
+    RECIPE_FORMAT_VERSION: _validate_recipe_v2,
+}
+
+
 def load_recipe_document(path: Path) -> dict[str, Any]:
     value = load_json_object(path)
     if (
         value.get("document_type") == LEGACY_RECIPE_DOCUMENT_TYPE
-        and value.get("format_version") == RECIPE_FORMAT_VERSION
+        and value.get("format_version") == LEGACY_RECIPE_FORMAT_VERSION
     ):
         normalized = deepcopy(value)
         normalized["document_type"] = RECIPE_DOCUMENT_TYPE
@@ -800,11 +939,12 @@ def load_recipe_document(path: Path) -> dict[str, Any]:
         source=str(path),
         expected_type=RECIPE_DOCUMENT_TYPE,
         handlers={
-            RECIPE_FORMAT_VERSION: lambda document, source: _validate_recipe_v1(
+            LEGACY_RECIPE_FORMAT_VERSION: lambda document, source: _validate_recipe_v1(
                 document,
                 source,
                 allow_legacy=True,
-            )
+            ),
+            RECIPE_FORMAT_VERSION: _validate_recipe_v2,
         },
     )
 
@@ -816,7 +956,7 @@ def validate_recipe_document(
         document,
         source=source,
         expected_type=RECIPE_DOCUMENT_TYPE,
-        handlers={RECIPE_FORMAT_VERSION: _validate_recipe_v1},
+        handlers=_RECIPE_HANDLERS,
     )
 
 
@@ -972,7 +1112,7 @@ def _resolve_recipe_templates(value: object, replacements: Mapping[str, object])
     return rendered
 
 
-def build_recipe_document(
+def _build_recipe_document_v1(
     materialized_recipe: Mapping[str, Any],
     *,
     repo_root: Path,
@@ -1165,11 +1305,109 @@ def build_recipe_document(
         }
     document = {
         "document_type": RECIPE_DOCUMENT_TYPE,
-        "format_version": RECIPE_FORMAT_VERSION,
+        "format_version": LEGACY_RECIPE_FORMAT_VERSION,
         "recipe": recipe,
         "provenance": provenance,
     }
     return _validate_recipe_v1(document, RECIPE_FILENAME)
+
+
+def build_recipe_document(
+    materialized_recipe: Mapping[str, Any],
+    *,
+    repo_root: Path,
+    source_commit: str | None,
+    source_distribution: Mapping[str, str] | None = None,
+    run_description: str | None = None,
+    seed: int | None = None,
+    runtime_image_ref: str | None = None,
+    runtime_packages: Sequence[str] | None = None,
+    base_materialized_recipe: Mapping[str, Any] | None = None,
+    canonical_goal: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build a portable recipe.
+
+    Callers that supply the checked-in base materialization and canonical goal
+    produce format v2 with an exact, self-contained resolution proof. Omitting
+    both preserves the v1 builder for compatibility fixtures and migrations.
+    """
+
+    effective = _build_recipe_document_v1(
+        materialized_recipe,
+        repo_root=repo_root,
+        source_commit=source_commit,
+        source_distribution=source_distribution,
+        run_description=run_description,
+        seed=seed,
+        runtime_image_ref=runtime_image_ref,
+        runtime_packages=runtime_packages,
+    )
+    if base_materialized_recipe is None and canonical_goal is None:
+        return effective
+    if base_materialized_recipe is None or canonical_goal is None:
+        raise PolicyDocumentError(
+            "recipe format v2 requires both base_materialized_recipe and canonical_goal"
+        )
+    base = _build_recipe_document_v1(
+        base_materialized_recipe,
+        repo_root=repo_root,
+        source_commit=source_commit,
+        source_distribution=source_distribution,
+        run_description=run_description,
+        seed=seed,
+        runtime_image_ref=runtime_image_ref,
+        runtime_packages=runtime_packages,
+    )
+    effective_recipe = deepcopy(effective["recipe"])
+    base_recipe = deepcopy(base["recipe"])
+    goal_variant = _required_mapping(
+        effective_recipe.get("goal_variant"),
+        label="recipe.goal_variant",
+    )
+    source_revision = str(source_commit or "").strip()
+    if not source_revision and source_distribution is not None:
+        source_revision = (
+            f"{_required_text(source_distribution.get('name'), label='source distribution name')}"
+            f"=={_required_text(source_distribution.get('version'), label='source distribution version')}"
+        )
+    source_revision = _required_text(source_revision, label="recipe source revision")
+    overrides_value = effective_recipe.get("recipe_overrides") or []
+    overrides = (
+        [str(item) for item in overrides_value]
+        if isinstance(overrides_value, Sequence) and not isinstance(overrides_value, str | bytes)
+        else []
+    )
+    from gradlab.recipe_documents import goal_contract_sha256
+    from gradlab.recipe_variants import recipe_variant_id
+
+    document = {
+        "document_type": RECIPE_DOCUMENT_TYPE,
+        "format_version": RECIPE_FORMAT_VERSION,
+        "recipe": effective_recipe,
+        "provenance": deepcopy(effective["provenance"]),
+        "resolution": {
+            "schema_version": 1,
+            "goal": {
+                "base": deepcopy(dict(canonical_goal)),
+                "base_sha256": goal_contract_sha256(canonical_goal),
+                "effective_sha256": goal_contract_sha256(effective_recipe["goal"]),
+                "variant_id": str(goal_variant["variant_id"]),
+            },
+            "recipe": {
+                "base": base_recipe,
+                "base_sha256": canonical_json_sha256(base_recipe),
+                "effective_sha256": canonical_json_sha256(effective_recipe),
+                "variant_id": recipe_variant_id(
+                    recipe_slug=effective_recipe["recipe_id"],
+                    source_sha=source_revision,
+                    recipe_overrides=overrides,
+                ),
+                "source_revision": source_revision,
+                "overrides": overrides,
+            },
+        },
+    }
+    return _validate_recipe_v2(document, RECIPE_FILENAME)
 
 
 def build_model_document(
@@ -1177,7 +1415,7 @@ def build_model_document(
     recipe_path: Path,
     metadata: Mapping[str, Any],
 ) -> dict[str, Any]:
-    load_recipe_document(recipe_path)
+    recipe_document = load_recipe_document(recipe_path)
     step = metadata.get("checkpoint_step")
     provenance = {
         key: deepcopy(value)
@@ -1201,7 +1439,7 @@ def build_model_document(
         "recipe": {
             "filename": RECIPE_FILENAME,
             "document_type": RECIPE_DOCUMENT_TYPE,
-            "format_version": RECIPE_FORMAT_VERSION,
+            "format_version": int(recipe_document["format_version"]),
             "sha256": sha256_file(recipe_path),
             "size_bytes": recipe_path.stat().st_size,
         },
@@ -1381,7 +1619,7 @@ def evaluation_contract(recipe_document: Mapping[str, Any]) -> dict[str, Any]:
         recipe_document,
         source=RECIPE_FILENAME,
         expected_type=RECIPE_DOCUMENT_TYPE,
-        handlers={RECIPE_FORMAT_VERSION: _validate_recipe_v1},
+        handlers=_RECIPE_HANDLERS,
     )
     if "eval" not in validated["recipe"]:
         raise PolicyDocumentError("training-only policy bundle has no evaluation contract")
@@ -1430,7 +1668,7 @@ def critic_value_contract(recipe_document: Mapping[str, Any]) -> dict[str, Any] 
         recipe_document,
         source=RECIPE_FILENAME,
         expected_type=RECIPE_DOCUMENT_TYPE,
-        handlers={RECIPE_FORMAT_VERSION: _validate_recipe_v1},
+        handlers=_RECIPE_HANDLERS,
     )
     recipe = validated["recipe"]
     environment = _training_playback_environment(recipe)
@@ -1513,7 +1751,7 @@ def playback_contract_audit(recipe_document: Mapping[str, Any]) -> dict[str, Any
         recipe_document,
         source=RECIPE_FILENAME,
         expected_type=RECIPE_DOCUMENT_TYPE,
-        handlers={RECIPE_FORMAT_VERSION: _validate_recipe_v1},
+        handlers=_RECIPE_HANDLERS,
     )
     recipe = validated["recipe"]
     training_environment = _training_playback_environment(recipe)
@@ -1586,7 +1824,7 @@ def playback_contract(
         recipe_document,
         source=RECIPE_FILENAME,
         expected_type=RECIPE_DOCUMENT_TYPE,
-        handlers={RECIPE_FORMAT_VERSION: _validate_recipe_v1},
+        handlers=_RECIPE_HANDLERS,
     )
     recipe = validated["recipe"]
     provenance = validated["provenance"]

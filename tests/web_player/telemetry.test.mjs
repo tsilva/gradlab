@@ -19,6 +19,7 @@ import {
   cursorIndex,
   distributionBlockVisible,
   histogramSelectedLabel,
+  lineLegendPresentation,
   lineBlockFootPresentation,
   selectedPoint,
   statsBlockFoot,
@@ -121,6 +122,38 @@ test("the chart cursor remains on the newest live transition", () => {
       selectedSequence: 5,
     }),
     1,
+  );
+});
+
+test("line legends show each series value at the chart cursor", () => {
+  const descriptors = [
+    descriptorFor("reward/provider"),
+    descriptorFor("reward/shaped"),
+  ];
+  const history = [
+    { sequence: 4, reward_provider: 0.25, reward_shaped: 0.5 },
+    { sequence: 5, reward_provider: null, reward_shaped: -1 },
+  ];
+  assert.deepEqual(
+    lineLegendPresentation(descriptors, history, { selectedSequence: 4 }),
+    [
+      { key: "reward/provider", value: "0.250" },
+      { key: "reward/shaped", value: "0.500" },
+    ],
+  );
+  assert.deepEqual(
+    lineLegendPresentation(descriptors, history, { selectedSequence: 5 }),
+    [
+      { key: "reward/provider", value: "—" },
+      { key: "reward/shaped", value: "-1.000" },
+    ],
+  );
+  assert.deepEqual(
+    lineLegendPresentation(descriptors, history, { selectedSequence: null }),
+    [
+      { key: "reward/provider", value: "—" },
+      { key: "reward/shaped", value: "—" },
+    ],
   );
 });
 

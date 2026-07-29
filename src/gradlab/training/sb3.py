@@ -10,6 +10,7 @@ from gradlab.training.sb3_on_policy import (
     policy_name_for_observation_space,
 )
 from gradlab.training_backend import BackendContext
+from gradlab.training_lifecycle import ProgressField
 
 
 PPO_DEFAULT_CONFIG: dict[str, Any] = {
@@ -60,6 +61,15 @@ A2C_DEFAULT_CONFIG: dict[str, Any] = {
     "resume_approval_hash": None,
     "resume_manifest": None,
 }
+PPO_PROGRESS_FIELDS = (
+    ProgressField("train/approx_kl", "KL"),
+    ProgressField("train/explained_variance", "explained var"),
+    ProgressField("train/entropy_loss", "entropy loss"),
+)
+A2C_PROGRESS_FIELDS = (
+    ProgressField("train/explained_variance", "explained var"),
+    ProgressField("train/entropy_loss", "entropy loss"),
+)
 
 
 def _normalize_ppo(config: Mapping[str, Any], *, label: str) -> dict[str, Any]:
@@ -207,6 +217,7 @@ BACKENDS = {
         _normalize_ppo,
         _ppo_model_factory,
         _ppo_model_class,
+        PPO_PROGRESS_FIELDS,
     ),
     "sb3.a2c": OnPolicyBackend(
         "sb3.a2c",
@@ -214,5 +225,6 @@ BACKENDS = {
         _normalize_a2c,
         _a2c_model_factory,
         "stable_baselines3.a2c.a2c.A2C",
+        A2C_PROGRESS_FIELDS,
     ),
 }

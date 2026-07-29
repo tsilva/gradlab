@@ -40,7 +40,10 @@ from gradlab.r2_store import (
     ConditionalWriteConflict,
     RunStorageConfig,
 )
-from gradlab.recipe_documents import compose_train_document, load_goal_contract
+from gradlab.recipe_documents import (
+    compose_resolved_train_documents,
+    load_goal_contract,
+)
 from gradlab.run_authority import LEASE_TTL_SECONDS, LeaseUnavailable, RunAuthority
 from gradlab.run_contracts import (
     EarlyStopReceipt,
@@ -228,9 +231,7 @@ class CertificationRuntime(SupervisorRuntime):
             self.wandb_events.append(event)
             if self.evidence_path is not None:
                 self.evidence_path.parent.mkdir(parents=True, exist_ok=True)
-                self.evidence_path.write_bytes(
-                    _canonical_bytes({"events": self.wandb_events})
-                )
+                self.evidence_path.write_bytes(_canonical_bytes({"events": self.wandb_events}))
             self.summary["orchestration/event_seq"] = frame_id
             store.mark_metric_frame_published(frame_id, step=row["step"])
             published += 1
@@ -267,6 +268,28 @@ class CertificationRuntime(SupervisorRuntime):
     ) -> None:
         del projector, timeout_seconds
         self.closed = True
+
+    def publish_terminal(
+        self,
+        train_config: Mapping[str, Any],
+        receipt: TerminalReceipt,
+        *,
+        timeout_seconds: float,
+    ) -> None:
+        del train_config, timeout_seconds
+        self.summary.update(
+            {
+                "gradlab/run/terminal_state": receipt.state,
+                "gradlab/run/stop_reason": receipt.stop_reason,
+                "gradlab/run/final_step": receipt.final_step,
+                "gradlab/run/early_stop_trigger": str(
+                    (receipt.early_stop or {}).get("trigger") or ""
+                ),
+                "gradlab/run/early_stop_condition": str(
+                    (receipt.early_stop or {}).get("condition_id") or ""
+                ),
+            }
+        )
 
     def request_learner_stop(self, learner) -> None:
         del learner
@@ -338,7 +361,12 @@ class CertificationFixture:
             "provider_rom_identity": "d" * 40,
             "provider_rom_identity_algorithm": "sha1-provider-body-v1",
         }
-        document = compose_train_document(GOAL_PATH, RECIPE_PATH)
+        resolved_documents = compose_resolved_train_documents(
+            GOAL_PATH,
+            RECIPE_PATH,
+            source_sha=SOURCE_SHA,
+        )
+        document = resolved_documents.effective
         contract_document = dict(document)
         config = dict(contract_document["train_config"])
         config["rom_asset_manifest"] = self.asset
@@ -358,7 +386,17 @@ class CertificationFixture:
             run_description="deterministic Tier 1 lifecycle certification",
             seed=123,
             runtime_image_ref=IMAGE_REF,
+            base_materialized_recipe={
+                **resolved_documents.base,
+                "train_config": {
+                    **resolved_documents.base["train_config"],
+                    "rom_asset_manifest": self.asset,
+                    "checkpoint_eval_backend": "modal",
+                },
+            },
+            canonical_goal=resolved_documents.canonical_goal,
         )
+        self.authority.put_recipe_document(self.recipe_document)
 
     def manifest(
         self,
@@ -399,15 +437,11 @@ class CertificationFixture:
             source_sha=SOURCE_SHA,
             image_digest=IMAGE_REF,
             goal_slug="SuperMarioBros-Nes-v0/Level1-1",
-            goal_sha256=str(
-                self.composed["train_config"]["effective_goal_contract_sha256"]
-            ),
+            goal_sha256=str(self.composed["train_config"]["effective_goal_contract_sha256"]),
             recipe_slug="ppo",
             recipe_sha256=canonical_json_sha256(self.recipe_document),
             recipe_overrides=(),
-            environment_sha256=str(self.composed["environment_hash"]).removeprefix(
-                "sha256:"
-            ),
+            environment_sha256=str(self.composed["environment_hash"]).removeprefix("sha256:"),
             seed=123,
             run_description="deterministic Tier 1 lifecycle certification",
             compute=compute,
@@ -415,10 +449,7 @@ class CertificationFixture:
                 "run_id": run_id,
                 "entity": "certification",
                 "project": "SuperMarioBros-Nes-v0",
-                "url": (
-                    "https://wandb.invalid/certification/"
-                    f"SuperMarioBros-Nes-v0/runs/{run_id}"
-                ),
+                "url": (f"https://wandb.invalid/certification/SuperMarioBros-Nes-v0/runs/{run_id}"),
             },
             modal={
                 "enabled": True,
@@ -450,11 +481,7 @@ class CertificationFixture:
             self.authority.create_manifest(manifest)
         else:
             self.authority.create_attempt_manifest(manifest)
-        evidence_root = (
-            self.root
-            / "evidence"
-            / f"{manifest.run_id}-{manifest.attempt_id}"
-        )
+        evidence_root = self.root / "evidence" / f"{manifest.run_id}-{manifest.attempt_id}"
         runtime = CertificationRuntime(
             clock=self.clock,
             writer_id=f"writer-{run_number}-{attempt_number}",
@@ -462,18 +489,13 @@ class CertificationFixture:
             evidence_path=evidence_root / "wandb-events.json",
         )
         selected_backend = backend or ScriptedEvalBackend()
-        observer = RecordingObserver(
-            evidence_path=evidence_root / "transcript.json"
-        )
+        observer = RecordingObserver(evidence_path=evidence_root / "transcript.json")
         supervisor = RunSupervisor(
             manifest_uri=self.authority.control.uri(
                 (
                     f"runs/{manifest.run_id}/manifest.json"
                     if attempt_number == 1
-                    else (
-                        f"runs/{manifest.run_id}/attempts/"
-                        f"{manifest.attempt_id}/manifest.json"
-                    )
+                    else (f"runs/{manifest.run_id}/attempts/{manifest.attempt_id}/manifest.json")
                 )
             ),
             storage=self.storage,
@@ -488,9 +510,7 @@ class CertificationFixture:
         supervisor.eval_contract = evaluation_contract(self.recipe_document)
         supervisor.store.init()
         supervisor.projector = WandbProjector(object())
-        supervisor.wandb_run_path = (
-            f"certification/SuperMarioBros-Nes-v0/{manifest.run_id}"
-        )
+        supervisor.wandb_run_path = f"certification/SuperMarioBros-Nes-v0/{manifest.run_id}"
         supervisor.lease = self.authority.acquire_lease(
             run_id=manifest.run_id,
             attempt_id=manifest.attempt_id,
@@ -569,14 +589,10 @@ def _accepted_or_rejected_raw(
         "checkpoint_sha256": str(contract["checkpoint_sha256"]),
         "recipe_sha256": str(contract["recipe_sha256"]),
         "recipe_format_version": int(contract["recipe_format_version"]),
-        "evaluation_contract_sha256": str(
-            contract["evaluation_contract_sha256"]
-        ),
+        "evaluation_contract_sha256": str(contract["evaluation_contract_sha256"]),
         "contract_schema_version": int(contract["schema_version"]),
         "runtime_image_ref": str(contract["runtime_image_ref"]),
-        "rom_sha256": (
-            str(asset.get("sha256") or "") if isinstance(asset, Mapping) else ""
-        ),
+        "rom_sha256": (str(asset.get("sha256") or "") if isinstance(asset, Mapping) else ""),
         "seed_protocol": str(contract["seed_protocol"]),
         "n_envs": int(contract["n_envs"]),
         "episodes": int(contract["episodes"]),
@@ -645,19 +661,14 @@ class LifecycleVerifier:
                 raise AssertionError(f"independent verifier: {name}: {dict(evidence)}")
             checks.append({"name": name, "status": "passed", "evidence": dict(evidence)})
 
-        manifest = RunManifest(
-            **authority.control.get_json(f"runs/{run_id}/manifest.json")
-        )
+        manifest = RunManifest(**authority.control.get_json(f"runs/{run_id}/manifest.json"))
         manifest.validate()
         check("manifest-valid", True, {"run_id": run_id})
 
         index = authority.models.get_json(f"runs/{run_id}/index.json")
         checkpoint_rows = [dict(row) for row in index["checkpoints"]]
         for checkpoint in checkpoint_rows:
-            prefix = (
-                f"runs/{run_id}/checkpoints/"
-                f"{int(checkpoint['step'])}-{checkpoint['sha256']}"
-            )
+            prefix = f"runs/{run_id}/checkpoints/{int(checkpoint['step'])}-{checkpoint['sha256']}"
             payload = authority.models.get_bytes(f"{prefix}/model.zip")
             check(
                 f"checkpoint-hash-{checkpoint['step']}",
@@ -695,8 +706,7 @@ class LifecycleVerifier:
         check(
             "all-evals-terminal",
             all(
-                str(row["status"])
-                in {"accepted", "rejected", "failed", "expired", "canceled"}
+                str(row["status"]) in {"accepted", "rejected", "failed", "expired", "canceled"}
                 for row in eval_rows
             ),
             {"statuses": [row["status"] for row in eval_rows]},
@@ -705,9 +715,7 @@ class LifecycleVerifier:
             key = str(row["idempotency_key"])
             check(
                 f"eval-intent-{row['checkpoint_step']}",
-                authority.evaluation.get_json_optional(
-                    f"runs/{run_id}/evals/{key}/intent.json"
-                )
+                authority.evaluation.get_json_optional(f"runs/{run_id}/evals/{key}/intent.json")
                 is not None,
                 {"idempotency_key": key},
             )
@@ -750,9 +758,7 @@ class LifecycleVerifier:
         )
 
         promotion = authority.control.get_json(f"runs/{run_id}/promotion.json")
-        accepted = [
-            row for row in eval_rows if str(row["status"]) == "accepted"
-        ]
+        accepted = [row for row in eval_rows if str(row["status"]) == "accepted"]
         lowest = min(accepted, key=lambda row: int(row["checkpoint_step"]))
         check(
             "lowest-step-accepted-promotion",
@@ -791,9 +797,7 @@ class LifecycleVerifier:
             {"event_sequences": ordered},
         )
         stop_events = [
-            row
-            for row in prepared.observer.events
-            if row["kind"] == "learner_stop_requested"
+            row for row in prepared.observer.events if row["kind"] == "learner_stop_requested"
         ]
         check(
             "eval-driven-stop",
@@ -820,9 +824,7 @@ def _finalize_success(prepared: PreparedSupervisor) -> TerminalReceipt:
     wandb_high_water = supervisor._finish_wandb()
     supervisor._wait_for_remote_delivery(wandb_high_water)
     supervisor._wait_for_remote_promotion(promotion)
-    journal = supervisor.authority.archive_metric_journals(
-        run_id=supervisor.manifest.run_id
-    )
+    journal = supervisor.authority.archive_metric_journals(run_id=supervisor.manifest.run_id)
     checkpoints, evals = supervisor._terminal_inventory()
     receipt = TerminalReceipt(
         run_id=supervisor.manifest.run_id,
@@ -840,8 +842,7 @@ def _finalize_success(prepared: PreparedSupervisor) -> TerminalReceipt:
             "eval_terminal_count": supervisor.store.terminal_eval_count(),
             "journal_archive": journal,
             "journal_expires_at": (
-                supervisor.clock.utc_datetime()
-                + timedelta(days=METRIC_JOURNAL_RETENTION_DAYS)
+                supervisor.clock.utc_datetime() + timedelta(days=METRIC_JOURNAL_RETENTION_DAYS)
             )
             .isoformat()
             .replace("+00:00", "Z"),
@@ -977,31 +978,21 @@ def _scenario_parallel_run_isolation(root: Path) -> dict[str, Any]:
         },
     )
     first_keys = list(
-        fixture.authority.control.iter_keys(
-            f"runs/{first.supervisor.manifest.run_id}"
-        )
+        fixture.authority.control.iter_keys(f"runs/{first.supervisor.manifest.run_id}")
     )
     second_keys = list(
-        fixture.authority.control.iter_keys(
-            f"runs/{second.supervisor.manifest.run_id}"
-        )
+        fixture.authority.control.iter_keys(f"runs/{second.supervisor.manifest.run_id}")
     )
     recorder.require(
         "parallel-storage-prefixes-isolated",
-        first_keys
-        and second_keys
-        and not set(first_keys).intersection(second_keys),
+        first_keys and second_keys and not set(first_keys).intersection(second_keys),
         evidence={"first_keys": len(first_keys), "second_keys": len(second_keys)},
     )
     recorder.require(
         "parallel-wandb-writers-isolated",
-        {row["writer_id"] for row in first.runtime.wandb_events}
-        == {first.runtime.writer_id}
-        and {row["writer_id"] for row in second.runtime.wandb_events}
-        == {second.runtime.writer_id},
-        evidence={
-            "writers": [first.runtime.writer_id, second.runtime.writer_id]
-        },
+        {row["writer_id"] for row in first.runtime.wandb_events} == {first.runtime.writer_id}
+        and {row["writer_id"] for row in second.runtime.wandb_events} == {second.runtime.writer_id},
+        evidence={"writers": [first.runtime.writer_id, second.runtime.writer_id]},
     )
     recorder.require(
         "parallel-modal-dispatches-isolated",
@@ -1096,9 +1087,9 @@ def _scenario_wandb_retry_deduplication(root: Path) -> dict[str, Any]:
     supervisor.active_iteration()
     with supervisor.store.connection() as connection:
         attempts = int(
-            connection.execute(
-                "SELECT attempts FROM metric_frames ORDER BY id LIMIT 1"
-            ).fetchone()[0]
+            connection.execute("SELECT attempts FROM metric_frames ORDER BY id LIMIT 1").fetchone()[
+                0
+            ]
         )
     recorder.require(
         "wandb-retry-publishes-once",
@@ -1427,9 +1418,7 @@ def _scenario_terminal_receipt_gating(root: Path) -> dict[str, Any]:
     recorder.require(
         "process-success-cannot-create-scientific-success",
         rejected
-        and fixture.authority.control.get_json_optional(
-            f"runs/{manifest.run_id}/terminal.json"
-        )
+        and fixture.authority.control.get_json_optional(f"runs/{manifest.run_id}/terminal.json")
         is None
         and fixture.authority.control.get_json_optional(
             f"runs/{manifest.run_id}/attempts/{manifest.attempt_id}/terminal.json"
@@ -1503,6 +1492,39 @@ def _scenario_early_stop_outcomes(root: Path) -> dict[str, Any]:
     fixture = CertificationFixture(root)
     prepared = fixture.prepare(run_number=76)
     manifest = prepared.supervisor.manifest
+
+    def success_receipt_for(run_manifest: RunManifest) -> EarlyStopReceipt:
+        receipt = EarlyStopReceipt(
+            run_id=run_manifest.run_id,
+            attempt_id=run_manifest.attempt_id,
+            condition_id="target_reached",
+            matched_condition_ids=("target_reached",),
+            outcome="success",
+            trigger="threshold",
+            metric="train/outcome/success/window_100/rate/min",
+            metric_step=10,
+            value=0.95,
+            best_value=0.95,
+            elapsed_steps=0,
+            patience_progress=1.0,
+            condition={
+                "metric": "train/outcome/success/window_100/rate/min",
+                "trigger": "threshold",
+                "operator": ">=",
+                "threshold": 0.95,
+                "start_after_steps": 0,
+                "patience_steps": 0,
+                "outcome": "success",
+                "action": "stop",
+            },
+            early_stop_config_sha256="1" * 64,
+            decision_sha256="2" * 64,
+            recorded_at=fixture.clock.utc_now(),
+        )
+        receipt.validate()
+        return receipt
+
+    success_receipt = success_receipt_for(manifest)
     config = {
         "conditions": {
             "return_plateau": {
@@ -1562,13 +1584,25 @@ def _scenario_early_stop_outcomes(root: Path) -> dict[str, Any]:
         evidence={
             "state": state,
             "reason": reason,
-            "eval_statuses": [
-                row["status"] for row in prepared.supervisor.store.evals()
-            ],
+            "eval_statuses": [row["status"] for row in prepared.supervisor.store.evals()],
         },
+    )
+    rejected_state, rejected_reason = _terminal_outcome(
+        cancel_requested=False,
+        failure=None,
+        evaluation_required=True,
+        promotion=None,
+        early_stop=success_receipt,
+    )
+    recorder.require(
+        "training-target-with-complete-rejection-is-scientific-failure",
+        rejected_state == "failed"
+        and rejected_reason == "early_stop_success_without_acceptance:target_reached",
+        evidence={"state": rejected_state, "reason": rejected_reason},
     )
 
     incomplete = fixture.prepare(run_number=77)
+    incomplete_success_receipt = success_receipt_for(incomplete.supervisor.manifest)
     fixture.record_checkpoint(incomplete, step=10, kind="final")
     fixture.clock.advance(5)
     incomplete.supervisor.active_iteration()
@@ -1586,50 +1620,20 @@ def _scenario_early_stop_outcomes(root: Path) -> dict[str, Any]:
         failure=incomplete_failure,
         evaluation_required=True,
         promotion=None,
-        early_stop=failure_receipt,
+        early_stop=incomplete_success_receipt,
     )
     recorder.require(
-        "plateau-with-incomplete-eval-evidence-is-resumable",
+        "training-target-with-incomplete-eval-evidence-is-resumable",
         isinstance(incomplete_failure, IncompleteEvaluationEvidence)
         and incomplete_state == "resumable_failure"
         and incomplete_reason == "evaluation_evidence_incomplete",
         evidence={
             "state": incomplete_state,
             "reason": incomplete_reason,
-            "eval_statuses": [
-                row["status"] for row in incomplete.supervisor.store.evals()
-            ],
+            "eval_statuses": [row["status"] for row in incomplete.supervisor.store.evals()],
         },
     )
 
-    success_receipt = EarlyStopReceipt(
-        run_id=manifest.run_id,
-        attempt_id=manifest.attempt_id,
-        condition_id="clear_100",
-        matched_condition_ids=("clear_100",),
-        outcome="success",
-        trigger="threshold",
-        metric="train/outcome/success/window_100/rate/min",
-        metric_step=10,
-        value=1.0,
-        best_value=1.0,
-        elapsed_steps=0,
-        patience_progress=1.0,
-        condition={
-            "metric": "train/outcome/success/window_100/rate/min",
-            "trigger": "threshold",
-            "operator": ">=",
-            "threshold": 1.0,
-            "start_after_steps": 0,
-            "patience_steps": 0,
-            "outcome": "success",
-            "action": "stop",
-        },
-        early_stop_config_sha256="1" * 64,
-        decision_sha256="2" * 64,
-        recorded_at=fixture.clock.utc_now(),
-    )
-    success_receipt.validate()
     success_state, success_reason = _terminal_outcome(
         cancel_requested=False,
         failure=None,
@@ -1638,9 +1642,8 @@ def _scenario_early_stop_outcomes(root: Path) -> dict[str, Any]:
         early_stop=success_receipt,
     )
     recorder.require(
-        "training-only-success-stop-succeeds",
-        success_state == "succeeded"
-        and success_reason == "early_stop_success:clear_100",
+        "training-only-target-stop-succeeds-attempt",
+        success_state == "succeeded" and success_reason == "early_stop_success:target_reached",
         evidence={"state": success_state, "reason": success_reason},
     )
 
@@ -1658,12 +1661,11 @@ def _scenario_early_stop_outcomes(root: Path) -> dict[str, Any]:
         failure=None,
         evaluation_required=True,
         promotion=promotion,
-        early_stop=failure_receipt,
+        early_stop=success_receipt,
     )
     recorder.require(
-        "evaluation-promotion-overrides-simultaneous-failure-stop",
-        promoted_state == "succeeded"
-        and promoted_reason == "completed_after_eval_acceptance",
+        "evaluation-promotion-overrides-training-target-stop",
+        promoted_state == "succeeded" and promoted_reason == "completed_after_eval_acceptance",
         evidence={"state": promoted_state, "reason": promoted_reason},
     )
 
@@ -1682,7 +1684,8 @@ def _scenario_early_stop_outcomes(root: Path) -> dict[str, Any]:
     return {
         "invariants": recorder.invariants,
         "evidence": {
-            "condition_id": failure_receipt.condition_id,
+            "failure_condition_id": failure_receipt.condition_id,
+            "success_condition_id": success_receipt.condition_id,
             "metric_step": failure_receipt.metric_step,
         },
     }
@@ -1783,11 +1786,7 @@ def run_simulated_certification(
             "tier": "simulated",
             "network_access": "denied",
             "credential_requirement": "none",
-            "status": (
-                "passed"
-                if all(row["status"] == "passed" for row in results)
-                else "failed"
-            ),
+            "status": ("passed" if all(row["status"] == "passed" for row in results) else "failed"),
             "scenarios": results,
         }
         report["report_sha256"] = _sha256(report)

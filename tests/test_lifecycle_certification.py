@@ -69,9 +69,10 @@ def test_early_stop_scenario_covers_failure_success_tamper_and_promotion_race() 
     assert scenario["status"] == "passed"
     assert {
         "plateau-is-scientific-failure-after-valid-rejection",
-        "plateau-with-incomplete-eval-evidence-is-resumable",
-        "training-only-success-stop-succeeds",
-        "evaluation-promotion-overrides-simultaneous-failure-stop",
+        "training-target-with-complete-rejection-is-scientific-failure",
+        "training-target-with-incomplete-eval-evidence-is-resumable",
+        "training-only-target-stop-succeeds-attempt",
+        "evaluation-promotion-overrides-training-target-stop",
         "early-stop-receipt-corruption-rejected",
     } <= invariants
 

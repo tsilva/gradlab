@@ -62,6 +62,7 @@ GradLab is a reproducible reinforcement-learning workbench that carries game-age
 - Goal variants must derive from fully materialized contracts and be labeled by the goal plus a normalized, proven difference from its canonical contract.
 - Playback discovery must use a rebuildable precomputed catalog, avoid synchronous storage scans, display only available acceptance evidence, and progressively resolve CLI references.
 - Run selection must distinguish checked-in recipes from searchable launch-time overrides without requiring new recipes.
+- Playback must expose resolved goal and recipe YAML; derived goal and recipe variants must show their proven differences from the corresponding canonical or checked-in base contract.
 - Interactive playback must provide independently arranged, synchronized views of frames, policy inputs and decisions, transition facts, and bounded histories.
 - Inspection must not alter the trajectory or policy randomness.
 - Playback must expose only semantically applicable actor, critic, action-value, program, attribution, and calibration diagnostics.
@@ -73,10 +74,11 @@ GradLab is a reproducible reinforcement-learning workbench that carries game-age
 ### Queued Operation and Benchmarks
 
 - Queued execution must be fail-closed, isolated, and reproducible.
+- Operator-initiated background work must use one durable, extensible local queue whose single on-demand worker outlives requesting clients, recovers safely after interruption, exposes evidence-backed status, and exits when no work remains.
 - Retries must preserve exact provenance and durable results.
 - Reported states must be evidence-backed, and cleanup must not affect active work.
 - Each v1 training run must execute in one container.
 - Compute placement must support local machines and cost-bounded cloud capacity without provider-specific research code.
-- The orchestration stack must minimize independently operated services and require no project-owned relational database.
+- The orchestration stack must minimize independently operated services and require no project-owned relational database service; embedded file-backed state such as SQLite is allowed.
 - Orchestration must provide a credential-free deterministic certification gate with replayable evidence for authority, delivery, evaluation-driven stopping, recovery, cancellation, and terminal correctness.
 - Benchmark claims must compare equivalent environments, semantics, workloads, concurrency, and host-load conditions reproducibly.

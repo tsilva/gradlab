@@ -740,13 +740,9 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
                 "total_reward": self.session.total_reward,
                 "max_x_pos": self.session.max_x_pos,
                 "action_names": list(self.session.action_names),
-                "action_contract": _json_value(
-                    getattr(self.session, "action_contract", None)
-                ),
+                "action_contract": _json_value(getattr(self.session, "action_contract", None)),
                 "action_contract_comparison": _json_value(
-                    getattr(self.session, "policy_provenance", {}).get(
-                        "action_contract"
-                    )
+                    getattr(self.session, "policy_provenance", {}).get("action_contract")
                 ),
                 "event_names": event_names,
                 "env_id": self.environment_id,
@@ -857,9 +853,7 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
 
     @staticmethod
     def _validate_enabled_termination_conditions(enabled: object) -> list[str]:
-        if not isinstance(enabled, list) or any(
-            not isinstance(value, str) for value in enabled
-        ):
+        if not isinstance(enabled, list) or any(not isinstance(value, str) for value in enabled):
             raise ValueError("enabled termination conditions must be a list of ids")
         return enabled
 
@@ -944,10 +938,8 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
                     "enabled_termination_conditions"
                 )
                 if enabled_termination_conditions is not None:
-                    enabled_termination_conditions = (
-                        self._validate_enabled_termination_conditions(
-                            enabled_termination_conditions
-                        )
+                    enabled_termination_conditions = self._validate_enabled_termination_conditions(
+                        enabled_termination_conditions
                     )
                 self.session.reset_episode(seed)
                 if enabled_termination_conditions is not None:
@@ -1107,9 +1099,7 @@ class DatasetPlaybackRunner(_PlaybackRunnerProtocol):
         self.seed = int(first.get("seed") or 0)
         self.sampling_mode = str(first.get("policy_mode") or "recorded")
         self.action_contract = (
-            dict(action_contract)
-            if isinstance(action_contract, Mapping)
-            else None
+            dict(action_contract) if isinstance(action_contract, Mapping) else None
         )
         self._transition: dict[str, Any] | None = None
 
@@ -1487,9 +1477,7 @@ class HumanRecordingRunner(_PlaybackRunnerProtocol):
                     "total_reward": self.total_reward,
                     "max_x_pos": 0,
                     "action_names": [],
-                    "action_contract": _json_value(
-                        getattr(self.session, "action_contract", None)
-                    ),
+                    "action_contract": _json_value(getattr(self.session, "action_contract", None)),
                     "event_names": [],
                     "env_id": self.environment_id,
                     "sampling_mode": None,
@@ -1687,6 +1675,7 @@ class PlaybackWebServer:
         paired_windows: bool = False,
         catalog: Any | None = None,
         defer_secondary_window: bool = False,
+        manual_evaluation_factory: Any | None = None,
     ) -> None:
         self.runner = runner
         self.args = args
@@ -1709,6 +1698,8 @@ class PlaybackWebServer:
         self._secondary_opened = False
         self._catalog_entity = ""
         self._initial_project_catalog: dict[str, Any] | None = None
+        self._manual_evaluation_factory = manual_evaluation_factory
+        self._manual_evaluation_queue: Any | None = None
 
     @property
     def asset_root(self) -> Path:
@@ -1923,6 +1914,140 @@ class PlaybackWebServer:
             return web.json_response({"error": str(exc)}, status=502)
         return web.json_response(page.to_dict())
 
+    async def catalog_recipes(self, request: web.Request) -> web.Response:
+        self._authorize_api(request)
+        if self.catalog is None:
+            raise web.HTTPNotFound()
+        from gradlab.play_catalog import normalize_search_query
+
+        try:
+            page = await asyncio.to_thread(
+                self.catalog.recipes,
+                entity=request.match_info["entity"],
+                project=request.match_info["project"],
+                goal_id=request.match_info["goal_id"],
+                query=normalize_search_query(request.query.get("q")),
+                cursor=request.query.get("cursor"),
+            )
+        except ValueError as exc:
+            return web.json_response({"error": str(exc)}, status=400)
+        except Exception as exc:
+            return web.json_response({"error": str(exc)}, status=502)
+        return web.json_response(page.to_dict())
+
+    async def inspect_goal(self, request: web.Request) -> web.Response:
+        self._authorize_api(request)
+        if self.catalog is None:
+            raise web.HTTPNotFound()
+        try:
+            document = await asyncio.to_thread(
+                self.catalog.inspect_goal,
+                entity=request.match_info["entity"],
+                project=request.match_info["project"],
+                goal_id=request.match_info["goal_id"],
+            )
+        except ValueError as exc:
+            return web.json_response({"error": str(exc)}, status=400)
+        except Exception as exc:
+            return web.json_response({"error": str(exc)}, status=502)
+        return web.json_response(document)
+
+    async def inspect_recipe(self, request: web.Request) -> web.Response:
+        self._authorize_api(request)
+        if self.catalog is None:
+            raise web.HTTPNotFound()
+        try:
+            document = await asyncio.to_thread(
+                self.catalog.inspect_recipe,
+                entity=request.match_info["entity"],
+                project=request.match_info["project"],
+                goal_id=request.match_info["goal_id"],
+                recipe_id=request.match_info["recipe_id"],
+            )
+        except ValueError as exc:
+            return web.json_response({"error": str(exc)}, status=400)
+        except Exception as exc:
+            return web.json_response({"error": str(exc)}, status=502)
+        return web.json_response(document)
+
+    async def inspect_goal_variant(self, request: web.Request) -> web.Response:
+        self._authorize_api(request)
+        if self.catalog is None:
+            raise web.HTTPNotFound()
+        try:
+            document = await asyncio.to_thread(
+                self.catalog.inspect_goal_variant,
+                entity=request.match_info["entity"],
+                project=request.match_info["project"],
+                goal_id=request.match_info["goal_id"],
+                variant_id=request.match_info["goal_variant_id"],
+            )
+        except ValueError as exc:
+            return web.json_response({"error": str(exc)}, status=400)
+        except Exception as exc:
+            return web.json_response({"error": str(exc)}, status=502)
+        return web.json_response(document)
+
+    async def inspect_run(self, request: web.Request) -> web.Response:
+        self._authorize_api(request)
+        if self.catalog is None:
+            raise web.HTTPNotFound()
+        try:
+            document = await asyncio.to_thread(
+                self.catalog.inspect_run,
+                entity=str(request.query.get("entity") or ""),
+                project=str(request.query.get("project") or ""),
+                run_id=request.match_info["run_id"],
+            )
+        except ValueError as exc:
+            return web.json_response({"error": str(exc)}, status=400)
+        except Exception as exc:
+            return web.json_response({"error": str(exc)}, status=502)
+        return web.json_response(document)
+
+    async def inspect_active_playback(self, request: web.Request) -> web.Response:
+        self._authorize_api(request)
+        from gradlab.contract_inspection import inspection_document
+
+        active_recipe = getattr(self.runner, "active_recipe_document", None)
+        resolved = await asyncio.to_thread(active_recipe) if callable(active_recipe) else None
+        if resolved is None or self.catalog is None:
+            message = "No verified policy bundle is active in the player."
+            unavailable_goal = inspection_document(
+                kind="goal",
+                title="Active playback",
+                availability="unavailable",
+                message=message,
+            )
+            unavailable_recipe = inspection_document(
+                kind="recipe",
+                title="Active playback",
+                availability="unavailable",
+                message=message,
+            )
+            return web.json_response(
+                {
+                    "schema_version": 1,
+                    "source": {"kind": "active-playback"},
+                    "documents": {
+                        "goal": unavailable_goal,
+                        "recipe": unavailable_recipe,
+                    },
+                }
+            )
+        recipe_document, source = resolved
+        try:
+            document = await asyncio.to_thread(
+                self.catalog.inspect_portable_recipe,
+                recipe_document,
+                source=source,
+            )
+        except ValueError as exc:
+            return web.json_response({"error": str(exc)}, status=400)
+        except Exception as exc:
+            return web.json_response({"error": str(exc)}, status=502)
+        return web.json_response(document)
+
     async def catalog_checkpoints(self, request: web.Request) -> web.Response:
         self._authorize_api(request)
         if self.catalog is None:
@@ -1930,17 +2055,100 @@ class PlaybackWebServer:
         from gradlab.play_catalog import normalize_search_query
 
         try:
-            items = await asyncio.to_thread(
-                self.catalog.checkpoints,
-                run_id=request.match_info["run_id"],
-                query=normalize_search_query(request.query.get("q")),
-                entity=request.query.get("entity", ""),
-                project=request.query.get("project", ""),
-                goal_variant_id=request.query.get("goal_variant_id", ""),
+            items = list(
+                await asyncio.to_thread(
+                    self.catalog.checkpoints,
+                    run_id=request.match_info["run_id"],
+                    query=normalize_search_query(request.query.get("q")),
+                    entity=request.query.get("entity", ""),
+                    project=request.query.get("project", ""),
+                    goal_variant_id=request.query.get("goal_variant_id", ""),
+                )
             )
+            queue_service = await asyncio.to_thread(self._manual_evaluations)
+            if queue_service is not None:
+                statuses = await asyncio.to_thread(
+                    queue_service.statuses,
+                    run_id=request.match_info["run_id"],
+                    checkpoint_ids=[
+                        str(item.get("checkpoint_id") or "")
+                        for item in items
+                        if isinstance(item, Mapping)
+                    ],
+                )
+                items = [
+                    {
+                        **dict(item),
+                        "evaluation": (
+                            statuses[str(item["checkpoint_id"])]["evaluation"]
+                            if statuses.get(str(item["checkpoint_id"]), {}).get("evaluation")
+                            is not None
+                            else item.get("evaluation")
+                        ),
+                        "evaluation_queue": statuses.get(str(item["checkpoint_id"])),
+                    }
+                    for item in items
+                ]
         except Exception as exc:
             return web.json_response({"error": str(exc)}, status=502)
-        return web.json_response({"items": list(items), "next_cursor": None})
+        return web.json_response({"items": items, "next_cursor": None})
+
+    def _manual_evaluations(self) -> Any:
+        if self._manual_evaluation_queue is not None:
+            return self._manual_evaluation_queue
+        factory = self._manual_evaluation_factory
+        if factory is None:
+            if self.catalog is None:
+                raise RuntimeError("checkpoint evaluation is unavailable without a catalog")
+            from gradlab.manual_evaluation import build_manual_evaluation_queue
+
+            repo_root = Path(
+                getattr(self.catalog, "repo_root", Path(__file__).resolve().parents[2])
+            )
+
+            def factory() -> Any:
+                return build_manual_evaluation_queue(repo_root)
+
+        self._manual_evaluation_queue = factory()
+        return self._manual_evaluation_queue
+
+    async def catalog_evaluate_checkpoints(self, request: web.Request) -> web.Response:
+        self._authorize_api(request)
+        if self.catalog is None:
+            raise web.HTTPNotFound()
+        try:
+            payload = await request.json()
+        except json.JSONDecodeError, TypeError:
+            return web.json_response({"error": "request body must be JSON"}, status=400)
+        checkpoint_ids = payload.get("checkpoint_ids") if isinstance(payload, Mapping) else None
+        if isinstance(checkpoint_ids, str | bytes) or not isinstance(checkpoint_ids, Sequence):
+            return web.json_response(
+                {"error": "checkpoint_ids must be a JSON array"},
+                status=400,
+            )
+        try:
+            queue_service = await asyncio.to_thread(self._manual_evaluations)
+        except Exception as exc:
+            return web.json_response(
+                {"error": f"manual evaluation is unavailable: {exc}"},
+                status=503,
+            )
+        try:
+            result = await asyncio.to_thread(
+                queue_service.enqueue,
+                run_id=request.match_info["run_id"],
+                checkpoint_ids=[str(value) for value in checkpoint_ids],
+            )
+        except ValueError as exc:
+            return web.json_response({"error": str(exc)}, status=400)
+        except Exception as exc:
+            return web.json_response({"error": str(exc)}, status=502)
+        if isinstance(result, Mapping):
+            response = dict(result)
+            response["items"] = list(response.get("items") or ())
+        else:
+            response = {"items": list(result)}
+        return web.json_response(response, status=202)
 
     def _snapshot_for(self, client: WebClient, snapshot: Mapping[str, Any]) -> dict[str, Any]:
         payload = {
@@ -2197,19 +2405,16 @@ class PlaybackWebServer:
                     try:
                         epoch = int(payload.get("session_epoch", -1))
                         sequence = int(payload.get("sequence", -1))
-                        requested_kinds = {
-                            int(value) for value in payload.get("kinds", ())
-                        } & {FRAME_GAME, FRAME_OBSERVATION}
-                    except (TypeError, ValueError):
+                        requested_kinds = {int(value) for value in payload.get("kinds", ())} & {
+                            FRAME_GAME,
+                            FRAME_OBSERVATION,
+                        }
+                    except TypeError, ValueError:
                         client.offer_reliable(
                             {"type": "error", "error": "invalid inspection frame request"}
                         )
                         continue
-                    if (
-                        epoch != self._runner_epoch()
-                        or sequence < 0
-                        or not requested_kinds
-                    ):
+                    if epoch != self._runner_epoch() or sequence < 0 or not requested_kinds:
                         continue
                     retained = await asyncio.to_thread(
                         self.runner.encoder.retained,
@@ -2437,8 +2642,30 @@ class PlaybackWebServer:
                     self.catalog_goals,
                 ),
                 web.get(
+                    ("/api/catalog/environments/{entity}/{project}/goals/{goal_id}/inspection"),
+                    self.inspect_goal,
+                ),
+                web.get(
+                    ("/api/catalog/environments/{entity}/{project}/goals/{goal_id}/recipes"),
+                    self.catalog_recipes,
+                ),
+                web.get(
+                    (
+                        "/api/catalog/environments/{entity}/{project}/goals/{goal_id}"
+                        "/recipes/{recipe_id}/inspection"
+                    ),
+                    self.inspect_recipe,
+                ),
+                web.get(
                     ("/api/catalog/environments/{entity}/{project}/goals/{goal_id}/variants"),
                     self.catalog_goal_variants,
+                ),
+                web.get(
+                    (
+                        "/api/catalog/environments/{entity}/{project}/goals/{goal_id}"
+                        "/variants/{goal_variant_id}/inspection"
+                    ),
+                    self.inspect_goal_variant,
                 ),
                 web.get(
                     (
@@ -2459,6 +2686,15 @@ class PlaybackWebServer:
                     "/api/catalog/runs/{run_id}/checkpoints",
                     self.catalog_checkpoints,
                 ),
+                web.get(
+                    "/api/catalog/runs/{run_id}/inspection",
+                    self.inspect_run,
+                ),
+                web.post(
+                    "/api/catalog/runs/{run_id}/evaluations",
+                    self.catalog_evaluate_checkpoints,
+                ),
+                web.get("/api/playback/inspection", self.inspect_active_playback),
                 web.get("/ws", self.websocket),
             ]
         )

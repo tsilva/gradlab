@@ -8,15 +8,45 @@ import wandb
 
 from gradlab.metric_names import LEADER_CHECKPOINT_ARTIFACT_REF
 from gradlab.metric_store import MetricStore
+from gradlab.run_contracts import TerminalReceipt, new_attempt_id, new_run_id, utc_now
 from gradlab.wandb_publisher import (
     _publish_frame,
     publish_pending_frames,
     publish_promotion_summary,
+    publish_terminal_summary,
 )
 from gradlab.wandb_utils import configure_wandb_metrics
 
 
 class WandbOfflineMetricIntegrationTests(unittest.TestCase):
+    def test_terminal_receipt_is_projected_into_summary_metadata(self) -> None:
+        class FakeRun:
+            summary: dict[str, object] = {}
+
+        receipt = TerminalReceipt(
+            run_id=new_run_id(),
+            attempt_id=new_attempt_id(),
+            state="failed",
+            acceptance_required=False,
+            stop_reason="early_stop_failure:return_plateau",
+            final_step=500_000,
+            checkpoint_inventory=(),
+            eval_inventory=(),
+            wandb_high_water_mark=10,
+            drain={"complete": True},
+            completed_at=utc_now(),
+        )
+        run = FakeRun()
+
+        publish_terminal_summary(run, receipt)
+
+        self.assertEqual(run.summary["gradlab/run/terminal_state"], "failed")
+        self.assertEqual(
+            run.summary["gradlab/run/stop_reason"],
+            "early_stop_failure:return_plateau",
+        )
+        self.assertEqual(run.summary["gradlab/run/final_step"], 500_000)
+
     def test_configures_scientific_axes_without_overlapping_catchall(self) -> None:
         class FakeRun:
             def __init__(self) -> None:

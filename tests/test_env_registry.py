@@ -93,6 +93,8 @@ def test_resolves_registered_supermariobrosnes_turbo_env_id() -> None:
     provider = resolve_env_provider(resolved.provider_id)
     assert provider.external_rom_asset_strategy == "stable_retro_direct_path_v1"
     assert provider.requires_external_rom_asset
+    assert provider.constructor_contract is not None
+    assert "state_dir" not in provider.constructor_contract.explicit_env_args
 
 
 def test_resolves_vizdoom_turbo_builtin_and_custom_scenarios() -> None:
@@ -105,9 +107,28 @@ def test_resolves_vizdoom_turbo_builtin_and_custom_scenarios() -> None:
     assert resolved.provider_env_id == "VizdoomBasic-v1"
     assert resolved.import_name == "vizdoom_turbo"
     assert env_supports_states("vizdoom-turbo", "VizdoomBasic-v1")
+    provider = resolve_env_provider(resolved.provider_id)
+    assert provider.constructor_contract is not None
+    assert "state_dir" not in provider.constructor_contract.explicit_env_args
 
     custom = resolve_env_id("vizdoom-turbo:/tmp/custom-scenario.cfg")
     assert custom.provider_env_id == "/tmp/custom-scenario.cfg"
+
+
+def test_resolves_vizdoom_turbo_augmented_environment() -> None:
+    env_id = "vizdoom-turbo:VizdoomDefendLine-Plus-v1"
+
+    resolved = resolve_env_id(env_id)
+
+    assert env_id in registered_env_ids()
+    assert resolved.provider_id == "vizdoom-turbo"
+    assert resolved.provider_env_id == "VizdoomDefendLine-Plus-v1"
+    spec = environment_spec(resolved.provider_id, resolved.provider_env_id)
+    assert spec.game_family == "Doom-ViZDoom-DefendLine-Plus"
+    assert spec.wandb_project == "VizdoomDefendLine-Plus-v1"
+    contract = resolve_env_provider(resolved.provider_id).constructor_contract
+    assert contract is not None
+    assert "enemy_variants" in contract.optional_env_args
 
 
 def test_resolves_registered_ale_py_env_id() -> None:

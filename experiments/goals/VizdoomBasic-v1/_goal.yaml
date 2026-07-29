@@ -4,6 +4,11 @@ defaults:
 title: ViZDoom Basic monster elimination
 train:
   checkpoint_freq: 100000
+  early_stop:
+    conditions:
+      target_reached:
+        metric: train/episode/return/shaped/from/target/window_100/mean
+        threshold: 0.95
   environment:
     env_config:
       env_args: &basic_env_args

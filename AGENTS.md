@@ -33,7 +33,7 @@ When changing dstack host behavior, preserve the root-owned runtime-image cleanu
 - Active research goal contracts live under goal-scoped folders in `experiments/goals/`. For current Mario Level1-1 work, read `experiments/goals/SuperMarioBros-Nes-v0/Level1-1/_goal.yaml` before choosing recipes, caps, metrics, or promotion criteria. Seed ranges are owned by `gradlab.seeds`, not goal files.
 - Launchable recipes live under their owning active goal's `recipes/` directory and may inherit reusable defaults from `experiments/recipes/_presets/`.
 - Keep generated artifacts out of source control; use `runs/`, `logs/`, and `models/`.
-- The training-container supervisor is the sole W&B writer. W&B stores metrics, metadata, hashes, and R2 URLs only; checkpoints, evidence, replays, ROMs, and recovery bytes belong in their scoped R2 buckets.
+- The lease-holding run supervisor is the sole W&B writer. Training attempts use the training-container supervisor; operator-initiated post-training evaluation may use the local background evaluation supervisor after it exclusively acquires the run writer lease. W&B stores metrics, metadata, hashes, and R2 URLs only; checkpoints, evidence, replays, ROMs, and recovery bytes belong in their scoped R2 buckets.
 - Every training run needs a specific description via `--run-description`.
 - Training tasks are profileless and locked to exact-source immutable runtime-image digests. One task owns one single-GPU host in v1.
 - Logical run IDs are `gradlab-<32 lowercase hex>` and attempt IDs are `attempt-<16 lowercase hex>`. Retries preserve the run ID and create a new attempt ID. Do not introduce numeric database job IDs or batch IDs.

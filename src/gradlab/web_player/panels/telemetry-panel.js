@@ -29,10 +29,26 @@ export function selectedPoint(history, snapshot, view) {
 }
 
 export function cursorIndex(history, view) {
+  if (view?.selectedSequence === null || view?.selectedSequence === undefined) {
+    return null;
+  }
   const index = history.findIndex(
     (point) => Number(point.sequence) === Number(view.selectedSequence),
   );
   return index < 0 ? null : index;
+}
+
+export function lineLegendPresentation(descriptors, history, view) {
+  const index = cursorIndex(history, view);
+  return descriptors.map((descriptor) => ({
+    key: descriptor.key,
+    value: index === null
+      ? "—"
+      : formatTelemetryValue(
+        seriesForMetric(descriptor.key, history)[index],
+        descriptor,
+      ),
+  }));
 }
 
 function renderedValue(value, descriptor, snapshot) {
@@ -43,12 +59,18 @@ function renderedValue(value, descriptor, snapshot) {
 }
 
 function setLegend(target, descriptors) {
+  const values = new Map();
   target.replaceChildren(...descriptors.map((descriptor) => {
     const item = document.createElement("span");
-    item.textContent = descriptor.shortLabel;
+    const value = document.createElement("strong");
+    value.className = "legend-value";
+    value.textContent = "—";
+    item.append(value, ` ${descriptor.shortLabel}`);
     item.style.setProperty("--legend-color", descriptor.color || "#53d4e8");
+    values.set(descriptor.key, value);
     return item;
   }));
+  return values;
 }
 
 function appendHeading(section, title) {
@@ -150,7 +172,7 @@ function makeLineBlock(block) {
   legend.className = "legend";
   section.append(canvas, legend);
   const foot = appendFoot(section, block.foot, { force: true });
-  setLegend(legend, descriptors);
+  const legendValues = setLegend(legend, descriptors);
   return {
     element: section,
     render({ snapshot, history, view }) {
@@ -168,6 +190,10 @@ function makeLineBlock(block) {
         foot.classList.toggle("warning", presentation.warning);
       }
       section.dataset.telemetryStatus = unavailable?.status || "available";
+      lineLegendPresentation(descriptors, history, view).forEach(({ key, value }) => {
+        const target = legendValues.get(key);
+        if (target) target.textContent = value;
+      });
       drawLines(
         canvas,
         descriptors.map((descriptor) => ({

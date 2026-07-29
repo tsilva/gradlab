@@ -4,8 +4,8 @@ defaults:
 recipe_id: ppo
 description: >-
   Seed {{ seed }} trains PPO from pixels to navigate the My Way Home maze and reach the armor vest,
-  until the timestep cap or return plateau. This run is training-only; goal-owned evaluation
-  remains available for later explicit use.
+  until the training target, timestep cap, or return plateau. This run is training-only; goal-owned
+  evaluation remains available for later explicit use.
 train:
   checkpoint_eval_backend: none
   timesteps: 10000000

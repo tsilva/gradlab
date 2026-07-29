@@ -17,7 +17,12 @@ from gradlab.metric_names import (
     TRAIN_OUTCOME_SUCCESS_CURRENT_RATE_MEAN,
 )
 from gradlab.task_kernels import Outcome
-from gradlab.training.go_explore import GoExploreBackend, normalize_config, run_go_explore
+from gradlab.training.go_explore import (
+    GO_EXPLORE_PROGRESS_FIELDS,
+    GoExploreBackend,
+    normalize_config,
+    run_go_explore,
+)
 from gradlab.training_backend import BackendContext, GracefulStopFlag
 from gradlab.training_lifecycle import (
     TerminalReason,
@@ -187,6 +192,7 @@ class GoExploreSearchTests(unittest.TestCase):
         self.assertEqual(result.first_completion_step, 1)
         self.assertEqual(result.final_step, 1)
         self.assertEqual(progress.n, 1)
+        self.assertEqual(progress.fields, GO_EXPLORE_PROGRESS_FIELDS)
         self.assertEqual(
             progress.metrics[TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_MEAN],
             10.0,
@@ -323,10 +329,19 @@ class GoExploreSearchTests(unittest.TestCase):
                 self.n = 0
                 self.metrics = {}
                 self.closed = False
+                self.fields = ()
 
-            def start(self, *, total: int, initial: int, description: str) -> None:
+            def start(
+                self,
+                *,
+                total: int,
+                initial: int,
+                description: str,
+                fields=(),
+            ) -> None:
                 del total, description
                 self.n = initial
+                self.fields = tuple(fields)
 
             def update(self, *, step: int, metrics, final: bool = False) -> None:
                 del final
@@ -443,6 +458,7 @@ class GoExploreSearchTests(unittest.TestCase):
                 n=progress.n,
                 metrics=progress.metrics,
                 closed=progress.closed,
+                fields=progress.fields,
             ),
             result,
         )

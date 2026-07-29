@@ -175,23 +175,23 @@ class TrainConfigFieldSchemaTests(unittest.TestCase):
         )
 
         self.assertEqual(parser.parse_args([]).checkpoint_eval_backend, "modal")
-        self.assertEqual(parser.parse_args([]).metrics_schema_version, 11)
+        self.assertEqual(parser.parse_args([]).metrics_schema_version, 12)
         self.assertEqual(
             parser.parse_args(["--checkpoint-eval-backend", "none"]).checkpoint_eval_backend,
             "none",
         )
 
-    def test_metrics_schema_version_accepts_only_active_v11(self) -> None:
+    def test_metrics_schema_version_accepts_only_active_v12(self) -> None:
         self.assertEqual(
-            validate_and_normalize_train_config({"metrics_schema_version": 11})[
+            validate_and_normalize_train_config({"metrics_schema_version": 12})[
                 "metrics_schema_version"
             ],
-            11,
+            12,
         )
-        with self.assertRaisesRegex(ValueError, "must be >= 11"):
-            validate_and_normalize_train_config({"metrics_schema_version": 10})
-        with self.assertRaisesRegex(ValueError, "must be <= 11"):
-            validate_and_normalize_train_config({"metrics_schema_version": 12})
+        with self.assertRaisesRegex(ValueError, "must be >= 12"):
+            validate_and_normalize_train_config({"metrics_schema_version": 11})
+        with self.assertRaisesRegex(ValueError, "must be <= 12"):
+            validate_and_normalize_train_config({"metrics_schema_version": 13})
 
     def test_no_eval_config_rejects_eval_metric_stop_behavior(self) -> None:
         with self.assertRaisesRegex(ValueError, "must use a train/\\* metric"):
@@ -252,7 +252,7 @@ class TrainConfigFieldSchemaTests(unittest.TestCase):
             },
         )
 
-    def test_eval_acceptance_allows_failure_but_rejects_training_success(self) -> None:
+    def test_eval_acceptance_allows_training_success_as_a_learner_stop(self) -> None:
         failure_condition = {
             "metric": "train/episode/return/shaped/from/target/mean",
             "trigger": "no_improvement",
@@ -292,22 +292,20 @@ class TrainConfigFieldSchemaTests(unittest.TestCase):
             "outcome": "success",
             "action": "stop",
         }
-        with self.assertRaisesRegex(ValueError, "sole success authority"):
-            validate_and_normalize_train_config(
-                {
-                    "stop_on_acceptance": True,
-                    "checkpoint_eval_acceptance": acceptance,
-                    "early_stop": {"conditions": {"clear": success_condition}},
-                }
-            )
-        with self.assertRaisesRegex(ValueError, "checkpoint_eval_backend=none"):
-            validate_and_normalize_train_config(
-                {
-                    "stop_on_acceptance": False,
-                    "checkpoint_eval_backend": "modal",
-                    "early_stop": {"conditions": {"clear": success_condition}},
-                }
-            )
+        dual_mode = validate_and_normalize_train_config(
+            {
+                "stop_on_acceptance": True,
+                "checkpoint_eval_backend": "modal",
+                "checkpoint_eval_acceptance": acceptance,
+                "early_stop": {"conditions": {"clear": success_condition}},
+            }
+        )
+        self.assertTrue(dual_mode["stop_on_acceptance"])
+        self.assertEqual(dual_mode["checkpoint_eval_backend"], "modal")
+        self.assertEqual(
+            dual_mode["early_stop"]["conditions"]["clear"]["outcome"],
+            "success",
+        )
 
     def test_train_config_rejects_retired_stochastic_eval_flag(self) -> None:
         with self.assertRaisesRegex(ValueError, "is not a known train config field"):

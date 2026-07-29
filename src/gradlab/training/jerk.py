@@ -30,7 +30,13 @@ from gradlab.training_backend import (
     FIRST_TRAINING_SUCCESS_ACCEPTANCE,
     BackendContext,
 )
-from gradlab.training_lifecycle import TerminalReason, TrainingExecutionMode, TrainingResult
+from gradlab.training_lifecycle import (
+    ProgressField,
+    ProgressValueFormat,
+    TerminalReason,
+    TrainingExecutionMode,
+    TrainingResult,
+)
 from gradlab.training_metrics import episode_succeeded
 
 
@@ -57,6 +63,22 @@ _PROBABILITY_FIELDS = {
 }
 _ACTION_FIELDS = {"fallback_action"}
 _ACCEPTANCE_MODES = {CHECKPOINT_EVAL_ACCEPTANCE, FIRST_TRAINING_SUCCESS_ACCEPTANCE}
+JERK_PROGRESS_FIELDS = (
+    ProgressField(
+        TRAIN_ALGORITHM_JERK_RETAINED_COUNT,
+        "retained",
+        ProgressValueFormat.COUNT,
+    ),
+    ProgressField(
+        TRAIN_ALGORITHM_JERK_BEST_RETURN_MEAN,
+        "best return",
+    ),
+    ProgressField(
+        TRAIN_ALGORITHM_JERK_EXPLOIT_PROBABILITY,
+        "archive replay",
+        ProgressValueFormat.PERCENT,
+    ),
+)
 
 
 def normalize_config(
@@ -141,14 +163,9 @@ def _save_policy_bundle(
     )
 
 
-def _metric_payload(
-    search: JerkSearch,
-    *,
-    step: int,
-    elapsed: float,
-) -> dict[str, int | float]:
+def _search_metric_payload(search: JerkSearch) -> dict[str, int | float]:
     candidate = search.best_candidate()
-    payload: dict[str, int | float] = {
+    return {
         TRAIN_ALGORITHM_JERK_RETAINED_COUNT: search.retained_count,
         TRAIN_ALGORITHM_JERK_EXPLOIT_PROBABILITY: search.archive_replay_probability,
         TRAIN_ALGORITHM_JERK_ARCHIVE_SELECTED_PREFIX_RETURN_MEAN: (
@@ -160,9 +177,19 @@ def _metric_payload(
         TRAIN_ALGORITHM_JERK_BEST_RETURN_MEAN: (
             candidate.mean_return if candidate is not None else 0.0
         ),
+    }
+
+
+def _metric_payload(
+    search: JerkSearch,
+    *,
+    step: int,
+    elapsed: float,
+) -> dict[str, int | float]:
+    return {
+        **_search_metric_payload(search),
         TRAIN_THROUGHPUT_LOOP_FPS: step / max(elapsed, 1e-9),
     }
-    return payload
 
 
 def run_jerk(context: BackendContext) -> TrainingResult:
@@ -206,6 +233,7 @@ def run_jerk(context: BackendContext) -> TrainingResult:
         budget = context.session.configure_budget(
             requested_limit=int(common_config["timesteps"]),
             step_quantum=n_envs,
+            progress_fields=JERK_PROGRESS_FIELDS,
         )
         context.mark_ready()
         started_at = time.perf_counter()
@@ -240,7 +268,11 @@ def run_jerk(context: BackendContext) -> TrainingResult:
                         success_records.append(record)
             search.observe(rewards, dones, records_by_lane)
             step = search.global_step
-            context.session.advance(step, records)
+            context.session.advance(
+                step,
+                records,
+                progress_metrics=_search_metric_payload(search),
+            )
             stop_for_completion = context.session.observe_completion(
                 step=step,
                 qualified=bool(success_records),
