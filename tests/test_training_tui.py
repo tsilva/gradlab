@@ -9,7 +9,7 @@ import time
 from unittest import mock
 
 import pytest
-from textual.widgets import RichLog, Sparkline, Static
+from textual.widgets import ProgressBar, RichLog, Sparkline, Static
 
 from gradlab.training_backend import GracefulStopFlag
 from gradlab.training_lifecycle import (
@@ -96,7 +96,7 @@ def test_textual_app_updates_algorithm_cards_inline_and_requests_safe_stop() -> 
 
     def learner() -> int:
         bridge.start(
-            total=100,
+            total=1_000,
             initial=0,
             description="gradlab.go-explore",
             fields=(
@@ -106,6 +106,11 @@ def test_textual_app_updates_algorithm_cards_inline_and_requests_safe_stop() -> 
                     ProgressValueFormat.COUNT,
                 ),
                 ProgressField(
+                    "algorithm/archive-bytes",
+                    "archive mem est.",
+                    ProgressValueFormat.BYTES,
+                ),
+                ProgressField(
                     "algorithm/new-cell-rate",
                     "new cells",
                     ProgressValueFormat.PERCENT,
@@ -113,9 +118,10 @@ def test_textual_app_updates_algorithm_cards_inline_and_requests_safe_stop() -> 
             ),
         )
         bridge.update(
-            step=25,
+            step=9,
             metrics={
                 "algorithm/cells": 1_234,
+                "algorithm/archive-bytes": 3 * 1024**3,
                 "algorithm/new-cell-rate": 0.125,
             },
         )
@@ -139,11 +145,22 @@ def test_textual_app_updates_algorithm_cards_inline_and_requests_safe_stop() -> 
                 if started.is_set() and app.query(MetricCard):
                     break
             cards = list(app.query(MetricCard))
-            assert len(cards) == 4
+            assert len(cards) == 5
             assert "1.23k" in str(app.query_one("#metric-value-0", Static).render())
-            assert "12.50%" in str(app.query_one("#metric-value-1", Static).render())
+            assert "3 GiB" in str(app.query_one("#metric-value-1", Static).render())
+            assert "12.50%" in str(app.query_one("#metric-value-2", Static).render())
             assert app.query_one("#metric-spark-0", Sparkline).display is True
             assert app.query_one("#event-log", RichLog).max_lines == 256
+            step_bar = app.query_one("#training-progress Bar")
+            progress_bar = app.query_one("#training-progress", ProgressBar)
+            assert step_bar.size.width > 32
+            assert step_bar.percentage is not None
+            assert step_bar.percentage > 0
+            assert progress_bar.gradient is not None
+            assert progress_bar.gradient.get_color(0.0).hex == "#22D3EE"
+            assert progress_bar.gradient.get_color(1.0).hex == "#A78BFA"
+            assert app.screen.styles.background.hex == "#08111F"
+            assert cards[0].styles.background.hex == "#0D192A"
 
             await pilot.press("q")
             await pilot.pause()

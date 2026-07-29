@@ -361,8 +361,17 @@ export function checkpointPlaybackSeed(item) {
 
 export function checkpointCanEvaluate(item) {
   const queueState = String(item?.evaluation_queue?.state || "");
+  const evaluation = item?.evaluation;
+  const hasAcceptedEvaluation = (
+    evaluation
+    && typeof evaluation === "object"
+    && (
+      evaluation.pass === true
+      || String(evaluation.status || "") === "accepted"
+    )
+  );
   return (
-    (!item?.evaluation || typeof item.evaluation !== "object")
+    !hasAcceptedEvaluation
     && ![
       "queued",
       "running",
@@ -385,37 +394,36 @@ export function checkpointCanEvaluate(item) {
 
 export function checkpointEvaluationCell(item) {
   const evaluation = item?.evaluation;
-  if (!evaluation || typeof evaluation !== "object") {
-    const queue = item?.evaluation_queue;
-    const state = String(queue?.state || "");
-    const presentation = {
-      queued: ["Queued", "Waiting to be submitted"],
-      running: ["Starting", "The local evaluation supervisor is preparing this checkpoint"],
-      retry_wait: ["Retrying", queue?.message || "Waiting for the next safe retry"],
-      waiting_for_training_terminal: [
-        "Waiting for training",
-        queue?.message || "Evaluation starts after training is terminal",
-      ],
-      waiting_for_run_lease: [
-        "Waiting for writer",
-        queue?.message || "Waiting for exclusive run-writer authority",
-      ],
-      submitted: ["Running", "Submitted to the evaluation worker"],
-      submission_uncertain: ["Reconciling", queue?.message || "Checking submission state"],
-      awaiting_projection: ["Syncing", queue?.message || "Publishing verified evidence"],
-      flusher_unavailable: [
-        "Flusher unavailable",
-        queue?.message || "The durable request will resume on the next startup attempt",
-      ],
-      blocked: ["Blocked", queue?.message || "Operator action is required"],
-      failed: ["Failed", queue?.message || "Evaluation could not be completed"],
-      expired: ["Expired", queue?.message || "Evaluation did not complete"],
-      canceled: ["Canceled", queue?.message || "Canceled by the operator"],
-    }[state];
-    return presentation
-      ? [presentation[0], presentation[1], `evaluation-cell ${state}`]
-      : ["—"];
+  const queue = item?.evaluation_queue;
+  const state = String(queue?.state || "");
+  const presentation = {
+    queued: ["Queued", "Waiting to be submitted"],
+    running: ["Starting", "The local evaluation supervisor is preparing this checkpoint"],
+    retry_wait: ["Retrying", queue?.message || "Waiting for the next safe retry"],
+    waiting_for_training_terminal: [
+      "Waiting for training",
+      queue?.message || "Evaluation starts after training is terminal",
+    ],
+    waiting_for_run_lease: [
+      "Waiting for writer",
+      queue?.message || "Waiting for exclusive run-writer authority",
+    ],
+    submitted: ["Running", "Submitted to the evaluation worker"],
+    submission_uncertain: ["Reconciling", queue?.message || "Checking submission state"],
+    awaiting_projection: ["Syncing", queue?.message || "Publishing verified evidence"],
+    flusher_unavailable: [
+      "Flusher unavailable",
+      queue?.message || "The durable request will resume on the next startup attempt",
+    ],
+    blocked: ["Blocked", queue?.message || "Operator action is required"],
+    failed: ["Failed", queue?.message || "Evaluation could not be completed"],
+    expired: ["Expired", queue?.message || "Evaluation did not complete"],
+    canceled: ["Canceled", queue?.message || "Canceled by the operator"],
+  }[state];
+  if (presentation) {
+    return [presentation[0], presentation[1], `evaluation-cell ${state}`];
   }
+  if (!evaluation || typeof evaluation !== "object") return ["—"];
   const details = [];
   const completed = Number(evaluation.episodes_completed);
   const planned = Number(evaluation.episodes_planned);
@@ -1282,7 +1290,7 @@ export class SourceBrowser {
     const summary = document.createElement("span");
     summary.textContent = selected
       ? `${selected.toLocaleString()} selected`
-      : "Select unevaluated checkpoints";
+      : "Select checkpoints to evaluate";
     const evaluate = button(
       this.evaluating
         ? "Adding to queue…"
@@ -1291,7 +1299,7 @@ export class SourceBrowser {
           : "Evaluate selected",
       { iconName: "player-play", primary: true },
     );
-    evaluate.disabled = !this.hasControl() || !selected || this.evaluating;
+    evaluate.disabled = !selected || this.evaluating;
     evaluate.addEventListener("click", () => this.evaluateSelected());
     const inspect = button("Inspect run YAML", { iconName: "code", quiet: true });
     inspect.addEventListener("click", () => {
@@ -1625,8 +1633,8 @@ export class SourceBrowser {
         const selectAll = document.createElement("input");
         selectAll.type = "checkbox";
         selectAll.checked = allSelected;
-        selectAll.disabled = !this.hasControl() || !eligible.length || this.evaluating;
-        selectAll.setAttribute("aria-label", "Select all unevaluated checkpoints");
+        selectAll.disabled = !eligible.length || this.evaluating;
+        selectAll.setAttribute("aria-label", "Select all eligible checkpoints");
         selectAll.addEventListener("change", () => {
           if (selectAll.checked) {
             eligible.forEach((item) => this.selectedCheckpoints.add(item.checkpoint_id));
@@ -1726,12 +1734,12 @@ export class SourceBrowser {
           const checkbox = document.createElement("input");
           checkbox.type = "checkbox";
           checkbox.checked = this.selectedCheckpoints.has(item.checkpoint_id);
-          checkbox.disabled = !this.hasControl() || !selectable || this.evaluating;
+          checkbox.disabled = !selectable || this.evaluating;
           checkbox.setAttribute(
             "aria-label",
             selectable
               ? `Select ${item.checkpoint_id} for evaluation`
-              : `${item.checkpoint_id} already has evaluation state`,
+              : `${item.checkpoint_id} cannot be evaluated again`,
           );
           checkbox.addEventListener("change", () => {
             if (checkbox.checked) this.selectedCheckpoints.add(item.checkpoint_id);

@@ -360,6 +360,21 @@ class RunSupervisorTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "requires|acceptance"):
                 ManualEvaluationSupervisor._validate_current_protocol(changed)
 
+        upgraded = ManualEvaluationSupervisor._current_protocol_contract(
+            {
+                **valid,
+                "evidence_policy": {
+                    "fail_fast": "first_failed_episode",
+                    "partial_rejection_metrics": True,
+                },
+            }
+        )
+        self.assertEqual(upgraded["evidence_policy"]["fail_fast"], "disabled")
+        self.assertFalse(
+            upgraded["evidence_policy"]["partial_rejection_metrics"]
+        )
+        ManualEvaluationSupervisor._validate_current_protocol(upgraded)
+
     def test_manual_evaluation_uses_latest_attempt_manifest(self) -> None:
         latest = replace(
             self.manifest,

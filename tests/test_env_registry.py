@@ -129,6 +129,7 @@ def test_resolves_vizdoom_turbo_augmented_environment() -> None:
     contract = resolve_env_provider(resolved.provider_id).constructor_contract
     assert contract is not None
     assert "enemy_variants" in contract.optional_env_args
+    assert "surface_variants" in contract.optional_env_args
 
 
 def test_resolves_registered_ale_py_env_id() -> None:

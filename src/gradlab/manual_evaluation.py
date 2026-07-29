@@ -59,10 +59,10 @@ from gradlab.supervisor_ledger import SupervisorLedger
 from gradlab.supervisor_runtime import SupervisorRuntime
 
 
-MANUAL_EVAL_PROTOCOL = "modal-acceptance-v3"
+MANUAL_EVAL_PROTOCOL = "modal-acceptance-v4"
 MAX_MANUAL_EVAL_SELECTION = 100
 MANUAL_EVAL_JOB_TYPE = "evaluate-checkpoints"
-MANUAL_EVAL_JOB_VERSION = 1
+MANUAL_EVAL_JOB_VERSION = 2
 MANUAL_EVAL_RETRY_SECONDS = 2.0
 MANUAL_EVAL_WAIT_SECONDS = 15.0
 
@@ -345,6 +345,7 @@ class ManualEvaluationSupervisor:
             contract["asset"] = {
                 str(key): value for key, value in asset.items() if str(key) != "object_uri"
             }
+        contract = self._current_protocol_contract(contract)
         manifest_index(contract)
         if enforce_current_protocol:
             self._validate_current_protocol(contract)
@@ -425,6 +426,26 @@ class ManualEvaluationSupervisor:
             )
             for identifier in identifiers
         ]
+
+    @staticmethod
+    def _current_protocol_contract(
+        contract: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        normalized = dict(contract)
+        environment = normalized.get("environment")
+        game = (
+            str(environment.get("game") or "")
+            if isinstance(environment, Mapping)
+            else ""
+        )
+        if game not in _STRICT_COMPLETE_MEAN_RETURN_GAMES:
+            return normalized
+        policy_value = normalized.get("evidence_policy")
+        policy = dict(policy_value) if isinstance(policy_value, Mapping) else {}
+        policy["fail_fast"] = "disabled"
+        policy["partial_rejection_metrics"] = False
+        normalized["evidence_policy"] = policy
+        return normalized
 
     @staticmethod
     def _validate_current_protocol(contract: Mapping[str, Any]) -> None:

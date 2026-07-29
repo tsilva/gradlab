@@ -283,7 +283,7 @@ SUPERMARIOBROS_NES_TURBO_PROVIDER = EnvProvider(
     turbo_api_version=1,
     constructor_contract=ProviderConstructorContract(
         canonical_args=_TURBO_CANONICAL_ARGS,
-        explicit_env_args=_TURBO_EXPLICIT_ENV_ARGS - {"use_fire_reset"},
+        explicit_env_args=_TURBO_EXPLICIT_ENV_ARGS,
         required_values={},
     ),
 )
@@ -321,7 +321,7 @@ VIZDOOM_TURBO_PROVIDER = EnvProvider(
             "vizdoom_config",
         },
         required_values={},
-        optional_env_args=frozenset({"enemy_variants"}),
+        optional_env_args=frozenset({"enemy_variants", "surface_variants"}),
     ),
 )
 

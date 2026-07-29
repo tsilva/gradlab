@@ -43,9 +43,9 @@ gradlab validate
 ```
 
 The project uses `uv`, a committed `uv.lock`, and a seven-day package-age gate.
-The exact Turbo runtime is `stable-retro-turbo==1.0.1.post36`,
-`supermariobrosnes-turbo==0.6.0`, `breakout-turbo-env==0.5.1`, and
-`vizdoom-turbo==1.3.0.post14`. Their explicit package-age exceptions are
+The exact Turbo runtime is `stable-retro-turbo==1.0.1.post37`,
+`supermariobrosnes-turbo==0.6.2`, `breakout-turbo-env==0.5.2`, and
+`vizdoom-turbo==1.3.0.post15`. Their explicit package-age exceptions are
 recorded in `pyproject.toml` and `uv-tool.toml`.
 
 The four Turbo providers must implement Turbo Vector API v1. gradlab validates

@@ -264,7 +264,7 @@ unevaluated for future explicit user action. dstack process exit alone is never 
 | `train/algorithm/go_explore/archive/cell_count` | Semantic cells currently retained by Go-Explore. | cells | interval | history |
 | `train/algorithm/go_explore/archive/entry_count` | Immutable entries in the ephemeral working archive, including replacements not yet removed by periodic compaction. | entries | interval | history |
 | `train/algorithm/go_explore/archive/blob_count` | Distinct content-addressed provider-state blobs retained by the search. | blobs | interval | history |
-| `train/algorithm/go_explore/archive/blob_bytes` | Uncompressed bytes in distinct retained provider-state blobs. | bytes | interval | history |
+| `train/algorithm/go_explore/archive/blob_bytes` | Uncompressed bytes in distinct retained provider-state blobs. The local TUI presents this as a low-overhead estimate of the archive's dominant memory footprint; it excludes Python metadata, allocator overhead, and provider-specific live-handle overhead. | bytes | interval | history |
 | `train/algorithm/go_explore/archive/selection_count` | Cumulative archived-cell selections for restoration. | selections | interval | history |
 | `train/algorithm/go_explore/archive/visit_count` | Cumulative semantic cell visits. | visits | interval | history |
 | `train/algorithm/go_explore/archive/update_count` | Cumulative replacements of an existing cell by a better trajectory. | updates | interval | history |
