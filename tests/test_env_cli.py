@@ -100,6 +100,8 @@ class FakeBatchRuntime:
             rewards=np.ones(self.num_envs, dtype=np.float32),
             terminated=np.zeros(self.num_envs, dtype=np.bool_),
             truncated=np.zeros(self.num_envs, dtype=np.bool_),
+            transition_info={},
+            reset_info=None,
             diagnostics=None,
         )
 

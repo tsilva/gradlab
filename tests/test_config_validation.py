@@ -501,7 +501,7 @@ class ConfigValidationTests(unittest.TestCase):
     def test_every_vizdoom_recipe_composes_shared_success_and_plateau_conditions(self) -> None:
         recipes = sorted(Path("experiments/goals").glob("Vizdoom*/recipes/*.yaml"))
 
-        self.assertEqual(len(recipes), 9)
+        self.assertEqual(len(recipes), 10)
         for recipe_path in recipes:
             with self.subTest(recipe=recipe_path):
                 goal_path = recipe_path.parent.parent / "_goal.yaml"
@@ -551,7 +551,7 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertEqual(report.counts["json_files"], 0)
         self.assertGreaterEqual(report.counts["yaml_files"], 15)
         self.assertGreaterEqual(report.counts["goals"], 1)
-        self.assertEqual(report.counts["train_recipes"], 42)
+        self.assertEqual(report.counts["train_recipes"], 43)
         self.assertGreaterEqual(report.counts["env_configs"], 0)
         self.assertEqual(report.counts["benchmark_profiles"], 4)
 
