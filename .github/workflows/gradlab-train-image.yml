@@ -173,7 +173,7 @@ jobs:
               **payload,
               "smoke_contract_version": 1,
               "provider_distribution": "vizdoom-turbo",
-              "provider_version": "1.3.0.post15",
+              "provider_version": "1.3.0.post16",
               "game": "VizdoomBasic-v1",
               "num_envs": 1,
               "reset_succeeded": True,

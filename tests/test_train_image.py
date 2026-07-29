@@ -235,6 +235,7 @@ class TrainImageTests(unittest.TestCase):
         self.assertIn("python /usr/local/bin/gradlab-vizdoom-smoke", workflow)
         self.assertIn('"schema_version": 7', workflow)
         self.assertIn('"provider_distribution": "vizdoom-turbo"', workflow)
+        self.assertIn('"provider_version": "1.3.0.post16"', workflow)
         self.assertIn(
             '"provider_version": os.environ["VIZDOOM_PROVIDER_VERSION"]',
             workflow,
