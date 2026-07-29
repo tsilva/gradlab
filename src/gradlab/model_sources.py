@@ -4,7 +4,6 @@ import argparse
 import json
 import re
 import shutil
-import sys
 import urllib.request
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -12,10 +11,6 @@ from pathlib import Path
 from typing import Any, Literal, TypeAlias
 from urllib.parse import unquote, urlparse
 
-from gradlab.artifacts import apply_config_defaults
-from gradlab.env_metadata import (
-    assert_bundle_runtime_versions,
-)
 from gradlab.file_utils import file_sha256
 from gradlab.policy_bundle import (
     CHECKPOINT_FILENAME,
@@ -24,7 +19,6 @@ from gradlab.policy_bundle import (
     PolicyBundle,
     load_policy_bundle,
     load_policy_bundle_from_checkpoint,
-    playback_contract,
 )
 from gradlab.r2_store import public_object_request
 from gradlab.run_contracts import CheckpointManifest, RUN_ID_PATTERN
@@ -501,30 +495,3 @@ def resolve_single_model_source(
         public_root=Path(getattr(args, "public_model_root", "runs/public_models")),
         hf_root=Path(getattr(args, "hf_model_root", "runs/hf_models")),
     )
-
-
-def apply_model_source_defaults(
-    args: argparse.Namespace,
-    source: ResolvedModelSource,
-    parser: argparse.ArgumentParser,
-    parser_defaults: dict[str, object],
-    explicit_dests: set[str],
-    *,
-    infer_artifact_config: bool = False,
-    metadata_kind: str | None = None,
-    print_loaded_metadata: bool = False,
-) -> bool:
-    del parser, infer_artifact_config, metadata_kind
-    assert_bundle_runtime_versions(source.bundle)
-    saved_config = playback_contract(source.bundle.recipe, mode="training")[
-        "environment"
-    ]
-    if not saved_config:
-        return False
-    apply_config_defaults(args, saved_config, parser_defaults, explicit_dests)
-    if print_loaded_metadata:
-        print(
-            f"loaded playback metadata: {source.bundle.model_path}",
-            file=sys.stderr,
-        )
-    return True

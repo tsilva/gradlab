@@ -565,16 +565,3 @@ def canonical_training_scalars(
             raise ValueError(f"unknown gradlab metric at logger boundary: {key}")
     validate_metric_payload(payload)
     return payload
-
-
-def render_metric_registry_markdown() -> str:
-    lines = [
-        "| Metric or template | Meaning | Unit | Cadence | Surface |",
-        "|---|---|---|---|---|",
-    ]
-    for definition in METRIC_DEFINITIONS:
-        lines.append(
-            f"| `{definition.name}` | {definition.description} | {definition.unit} | "
-            f"{definition.cadence} | {definition.storage} |"
-        )
-    return "\n".join(lines)

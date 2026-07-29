@@ -73,7 +73,13 @@ jobs:
       - run: test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
       - uses: astral-sh/setup-uv@v7
       - name: Validate deterministic lock projections
-        run: uv run --frozen --only-group train-image-build python containers/train/lock_projection.py --check
+        id: locks
+        run: |
+          train_plan_sha256=$(
+            uv run --frozen --only-group train-image-build \
+              python containers/train/lock_projection.py --check --print-train-plan-sha256
+          )
+          echo "train_plan_sha256=$train_plan_sha256" >> "$GITHUB_OUTPUT"
       - uses: docker/setup-buildx-action@v3
       - if: inputs.publish
         uses: docker/login-action@v3
@@ -90,7 +96,7 @@ jobs:
             echo "uv_lock_sha256=$(sha256sum uv.lock | awk '{print $1}')"
             echo "gpu_key=$(python containers/train/gpu_key.py)"
             echo "gpu_plan_sha256=$(sha256sum containers/train/gpu-linux-amd64.lock | awk '{print $1}')"
-            echo "train_plan_sha256=$(sha256sum containers/train/train-linux-amd64.lock | awk '{print $1}')"
+            echo "train_plan_sha256=${{ steps.locks.outputs.train_plan_sha256 }}"
             echo "python_image=$(awk -F= '/^ARG PYTHON_IMAGE=/ {print $2; exit}' containers/train/Dockerfile)"
             echo "uv_image=$(awk -F= '/^ARG UV_IMAGE=/ {print $2; exit}' containers/train/Dockerfile)"
           } >> "$GITHUB_OUTPUT"

@@ -54,26 +54,6 @@ def require_non_empty_string(
     return value.strip() if strip else value
 
 
-def require_schema_version(
-    document: Mapping[str, Any],
-    expected: int,
-    *,
-    label: str,
-    require_present: bool = True,
-) -> None:
-    schema_version = require_int(
-        document,
-        "schema_version",
-        label=label,
-        minimum=1,
-        require_present=require_present,
-    )
-    if schema_version != expected:
-        raise ValueError(
-            f"{label_path(label, 'schema_version')} must be {expected}, got {schema_version}"
-        )
-
-
 def string_list(
     value: Any, *, label: str, allow_empty: bool = False, strip: bool = True
 ) -> list[str]:

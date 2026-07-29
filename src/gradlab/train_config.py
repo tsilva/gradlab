@@ -189,10 +189,6 @@ def env_config_allowed_keys() -> frozenset[str]:
     return frozenset(field.dest for field in env_config_arg_fields())
 
 
-def playback_env_arg_keys() -> dict[str, tuple[str, ...]]:
-    return {field.dest: (field.dest,) for field in env_config_arg_fields()}
-
-
 def train_config_keys_owned_by(owner: FieldOwner) -> frozenset[str]:
     keys: set[str] = set()
     for field in TRAIN_CONFIG_FIELDS:

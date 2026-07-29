@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import subprocess
 import tomllib
 from pathlib import Path
@@ -15,7 +16,6 @@ from packaging.utils import canonicalize_name, parse_wheel_filename
 
 TARGET_PYTHON = (3, 14)
 TARGET_INTERPRETER = "cp314"
-TRAIN_LOCK_NAME = "train-linux-amd64.lock"
 GPU_LOCK_NAME = "gpu-linux-amd64.lock"
 DEPENDENCY_LOCK_NAME = "train-dependencies-linux-amd64.lock"
 GPU_PACKAGE_NAMES = {"torch", "triton"}
@@ -165,7 +165,7 @@ def _is_gpu_package(name: str) -> bool:
     return name in GPU_PACKAGE_NAMES or name.startswith(GPU_PACKAGE_PREFIXES)
 
 
-def projection_contents(repo_root: Path) -> dict[str, str]:
+def _projection(repo_root: Path) -> tuple[dict[str, str], str]:
     train = projected_requirements(repo_root)
     gpu = {name: line for name, line in train.items() if _is_gpu_package(name)}
     dependencies = {name: line for name, line in train.items() if name not in gpu}
@@ -177,11 +177,20 @@ def projection_contents(repo_root: Path) -> dict[str, str]:
         raise ValueError("GPU and non-GPU projections must be disjoint")
     if set(gpu) | set(dependencies) != set(train):
         raise ValueError("GPU and non-GPU projections must reconstruct the train projection")
-    return {
-        TRAIN_LOCK_NAME: _render(train),
+    train_contents = _render(train)
+    outputs = {
         GPU_LOCK_NAME: _render(gpu),
         DEPENDENCY_LOCK_NAME: _render(dependencies),
     }
+    return outputs, hashlib.sha256(train_contents.encode()).hexdigest()
+
+
+def projection_contents(repo_root: Path) -> dict[str, str]:
+    return _projection(repo_root)[0]
+
+
+def train_plan_sha256(repo_root: Path) -> str:
+    return _projection(repo_root)[1]
 
 
 def main() -> int:
@@ -190,8 +199,9 @@ def main() -> int:
         description="Generate deterministic CPython 3.14 Linux/amd64 train-image locks."
     )
     parser.add_argument("--check", action="store_true")
+    parser.add_argument("--print-train-plan-sha256", action="store_true")
     args = parser.parse_args()
-    outputs = projection_contents(repo_root)
+    outputs, train_plan = _projection(repo_root)
     output_dir = repo_root / "containers" / "train"
     stale: list[str] = []
     for name, content in outputs.items():
@@ -211,6 +221,8 @@ def main() -> int:
             + ", ".join(stale)
             + "; run this command without --check"
         )
+    if args.print_train_plan_sha256:
+        print(train_plan)
     return 0
 
 

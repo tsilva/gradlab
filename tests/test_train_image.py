@@ -9,7 +9,7 @@ from pathlib import Path
 from containers.train.dependency_key import dependency_key
 from containers.train.environment_contract import Distribution, validate_distribution_contract
 from containers.train.gpu_key import gpu_key
-from containers.train.lock_projection import projection_contents
+from containers.train.lock_projection import projection_contents, train_plan_sha256
 from containers.train.runtime_key import RUNTIME_INPUT_PATHS, overlay_key, runtime_key
 
 
@@ -237,7 +237,9 @@ class TrainImageTests(unittest.TestCase):
         self.assertIn('"VizdoomDeathmatch-v1"', workflow)
         self.assertIn('"schema_version": 7', workflow)
         self.assertIn('"provider_distribution": "vizdoom-turbo"', workflow)
-        self.assertIn('"provider_version": "1.3.0.post17"', workflow)
+        self.assertIn("train-dependencies-linux-amd64.lock", workflow)
+        self.assertIn('"provider_version": expected_provider_version', workflow)
+        self.assertNotIn('"provider_version": "1.3.0.post17"', workflow)
         self.assertIn(
             '"provider_version": os.environ["VIZDOOM_PROVIDER_VERSION"]',
             workflow,
@@ -248,7 +250,6 @@ class TrainImageTests(unittest.TestCase):
         )
 
     def test_combined_environment_contract_accepts_cross_venv_requirements(self) -> None:
-        train = {"stable-baselines3": "2.8.0", "torch": "2.12.0"}
         gpu = {"torch": "2.12.0"}
         dependencies = {"stable-baselines3": "2.8.0"}
         installed = (
@@ -262,7 +263,6 @@ class TrainImageTests(unittest.TestCase):
         )
 
         validate_distribution_contract(
-            train=train,
             gpu=gpu,
             dependencies=dependencies,
             installed=installed,
@@ -270,7 +270,6 @@ class TrainImageTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "duplicate installed distribution torch"):
             validate_distribution_contract(
-                train=train,
                 gpu=gpu,
                 dependencies=dependencies,
                 installed=installed + (Distribution("torch", "2.12.0", (), "dependencies"),),
@@ -281,7 +280,6 @@ class TrainImageTests(unittest.TestCase):
         )
         with self.assertRaisesRegex(ValueError, "unsatisfied installed requirements"):
             validate_distribution_contract(
-                train=train,
                 gpu=gpu,
                 dependencies=dependencies,
                 installed=broken,
@@ -292,26 +290,31 @@ class TrainImageTests(unittest.TestCase):
         first = projection_contents(root)
         second = projection_contents(root)
         self.assertEqual(first, second)
+        self.assertEqual(
+            set(first),
+            {"gpu-linux-amd64.lock", "train-dependencies-linux-amd64.lock"},
+        )
         for name, content in first.items():
             self.assertEqual(
                 (root / "containers" / "train" / name).read_text(encoding="utf-8"),
                 content,
             )
 
-        train = Path("containers/train/train-linux-amd64.lock").read_text(encoding="utf-8")
         gpu = Path("containers/train/gpu-linux-amd64.lock").read_text(encoding="utf-8")
         dependencies = Path("containers/train/train-dependencies-linux-amd64.lock").read_text(
             encoding="utf-8"
         )
 
         self.assertIn("vizdoom-turbo==1.3.0.post17", dependencies)
-        self.assertNotIn("wandb-workspaces==", train)
+        self.assertNotIn("wandb-workspaces==", gpu + dependencies)
         self.assertIn("torch==2.12.0", gpu)
-        train_lines = set(train.splitlines())
         gpu_lines = set(gpu.splitlines())
         dependency_lines = set(dependencies.splitlines())
         self.assertFalse(gpu_lines & dependency_lines)
-        self.assertEqual(gpu_lines | dependency_lines, train_lines)
+        self.assertEqual(
+            train_plan_sha256(root),
+            "437f353f5b7cc66ad536cbf6c53fb88c3235e83a1d2fcdce1eb717ebf06e1f55",
+        )
         for line in gpu.splitlines():
             name = line.split("==", maxsplit=1)[0]
             self.assertTrue(name in {"torch", "triton"} or name.startswith(("cuda-", "nvidia-")))
@@ -342,6 +345,8 @@ class TrainImageTests(unittest.TestCase):
         self.assertEqual(runtime.count("docker/setup-buildx-action@v3"), 1)
         self.assertIn("runtime-${{ steps.runtime_meta.outputs.runtime_input_sha256 }}", runtime)
         self.assertIn('"schema_version": 7', runtime)
+        self.assertIn("--print-train-plan-sha256", foundations)
+        self.assertNotIn("train-linux-amd64.lock", dependency + foundations + runtime)
         self.assertNotIn("buildcache", dependency + foundations + runtime)
         self.assertNotIn("cache-to:", dependency + foundations + runtime)
 

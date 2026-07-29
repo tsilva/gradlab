@@ -20,7 +20,6 @@ on:
       - containers/train/gpu_key.py
       - containers/train/lock_projection.py
       - containers/train/train-dependencies-linux-amd64.lock
-      - containers/train/train-linux-amd64.lock
       - pyproject.toml
       - uv.lock
 

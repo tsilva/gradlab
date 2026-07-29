@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib.metadata
 import os
 import tempfile
 import unittest
@@ -18,6 +19,7 @@ from gradlab.runtime_contract import (
 RUNTIME_IMAGE_REF = "docker:ghcr.io/tsilva/gradlab/gradlab-train@sha256:" + "a" * 64
 SOURCE_SHA = "1" * 40
 BUILD_SOURCE_SHA = "2" * 40
+VIZDOOM_PROVIDER_VERSION = importlib.metadata.version("vizdoom-turbo")
 
 
 def release_payload(*, source_sha: str = SOURCE_SHA) -> dict:
@@ -45,7 +47,7 @@ def release_payload(*, source_sha: str = SOURCE_SHA) -> dict:
             "contract_version": 2,
             "image_digest": "sha256:" + "a" * 64,
             "provider_distribution": "vizdoom-turbo",
-            "provider_version": "1.3.0.post17",
+            "provider_version": VIZDOOM_PROVIDER_VERSION,
             "evidence_sha256": "6" * 64,
         },
     }

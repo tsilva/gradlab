@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib.metadata
 import io
 import json
 import re
@@ -31,7 +32,6 @@ DEFAULT_MODAL_ARTIFACT = "gradlab-modal-eval-readiness"
 DEFAULT_MODAL_ARTIFACT_FILE = "gradlab-modal-eval-readiness.json"
 MODAL_READINESS_SCHEMA_VERSION = 3
 VIZDOOM_SMOKE_CONTRACT_VERSION = 2
-REQUIRED_VIZDOOM_TURBO_VERSION = "1.3.0.post17"
 DEFAULT_RUNTIME_READINESS_TIMEOUT_SECONDS = 20 * 60
 
 DIGEST_IMAGE_REF_RE = re.compile(r"^docker:[^\s@]+@sha256:(?P<digest>[0-9a-fA-F]{64})$")
@@ -59,7 +59,7 @@ class _VizdoomSmoke(BoundaryModel):
     contract_version: Literal[VIZDOOM_SMOKE_CONTRACT_VERSION]
     image_digest: NonEmptyText
     provider_distribution: Literal["vizdoom-turbo"]
-    provider_version: Literal[REQUIRED_VIZDOOM_TURBO_VERSION]
+    provider_version: NonEmptyText
     evidence_sha256: Sha256
 
 
@@ -155,15 +155,6 @@ def runtime_image_payload_from_file(path: Path) -> dict[str, Any]:
     return {"runtime_image_ref": text}
 
 
-def runtime_image_ref_from_payload(
-    payload: Mapping[str, Any], *, label: str = "runtime image ref JSON"
-) -> str:
-    value = payload.get("runtime_image_ref")
-    if not value:
-        raise ValueError(f"{label} must include runtime_image_ref")
-    return normalize_runtime_image_ref(str(value))
-
-
 def runtime_release_from_payload(
     payload: Mapping[str, Any],
     *,
@@ -207,6 +198,12 @@ def runtime_release_from_payload(
         expected_digest = f"sha256:{runtime_image_digest(runtime_image_ref)}"
         if smoke.image_digest != expected_digest:
             raise ValueError(f"{label} ViZDoom smoke digest does not match runtime image")
+        expected_provider_version = importlib.metadata.version(smoke.provider_distribution)
+        if smoke.provider_version != expected_provider_version:
+            raise ValueError(
+                f"{label} ViZDoom smoke provider version mismatch: expected "
+                f"{expected_provider_version}, got {smoke.provider_version}"
+            )
     return RuntimeImageInfo(
         runtime_image_ref=runtime_image_ref,
         source_sha=source_sha,

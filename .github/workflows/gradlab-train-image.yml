@@ -160,10 +160,23 @@ jobs:
           python - <<'PY'
           import hashlib
           import json
+          from pathlib import Path
 
           path = "vizdoom-smoke.json"
           with open(path, encoding="utf-8") as source:
               payload = json.load(source)
+          provider_lines = [
+              line
+              for line in Path(
+                  "containers/train/train-dependencies-linux-amd64.lock"
+              ).read_text(encoding="utf-8").splitlines()
+              if line.startswith("vizdoom-turbo==")
+          ]
+          if len(provider_lines) != 1:
+              raise SystemExit("Expected one locked vizdoom-turbo provider")
+          expected_provider_version = (
+              provider_lines[0].split(" --hash=", maxsplit=1)[0].split("==", maxsplit=1)[1]
+          )
           expected = payload.pop("evidence_sha256")
           encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
           observed = hashlib.sha256(encoded).hexdigest()
@@ -173,7 +186,7 @@ jobs:
               **payload,
               "smoke_contract_version": 2,
               "provider_distribution": "vizdoom-turbo",
-              "provider_version": "1.3.0.post17",
+              "provider_version": expected_provider_version,
           }:
               raise SystemExit("ViZDoom smoke contract mismatch")
           scenarios = payload.get("scenarios")

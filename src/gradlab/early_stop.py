@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from typing import Any, Literal
 
 from gradlab.json_utils import canonical_json_sha256
@@ -705,9 +705,3 @@ class MetricEarlyStopStateMachine:
             would_trigger_condition_ids=would_trigger,
             stop_decision=decision,
         )
-
-
-def metric_early_stop_observation_document(
-    observation: MetricEarlyStopObservation,
-) -> dict[str, Any]:
-    return asdict(observation)

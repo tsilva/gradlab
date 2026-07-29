@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib.metadata
 import unittest
 from dataclasses import replace
 from types import SimpleNamespace
@@ -10,6 +11,7 @@ from gradlab import runtime_refs
 
 SOURCE_SHA = "1" * 40
 RUNTIME_IMAGE_REF = "docker:ghcr.io/tsilva/gradlab/gradlab-train@sha256:" + "a" * 64
+VIZDOOM_PROVIDER_VERSION = importlib.metadata.version("vizdoom-turbo")
 
 
 def image_payload() -> dict:
@@ -42,7 +44,7 @@ def image_payload() -> dict:
             "contract_version": 2,
             "image_digest": "sha256:" + "a" * 64,
             "provider_distribution": "vizdoom-turbo",
-            "provider_version": "1.3.0.post17",
+            "provider_version": VIZDOOM_PROVIDER_VERSION,
             "evidence_sha256": "6" * 64,
         },
     }
@@ -109,6 +111,16 @@ class RuntimeRefsTests(unittest.TestCase):
         payload = image_payload()
         payload["vizdoom_smoke"]["image_digest"] = "sha256:" + "b" * 64
         with self.assertRaisesRegex(ValueError, "smoke digest"):
+            runtime_refs.runtime_release_from_payload(
+                payload,
+                label="test image",
+                expected_source_sha=SOURCE_SHA,
+            )
+
+    def test_smoke_provider_version_must_match_installed_distribution(self) -> None:
+        payload = image_payload()
+        payload["vizdoom_smoke"]["provider_version"] = "0.0.0"
+        with self.assertRaisesRegex(ValueError, "smoke provider version mismatch"):
             runtime_refs.runtime_release_from_payload(
                 payload,
                 label="test image",

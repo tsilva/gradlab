@@ -159,10 +159,6 @@ class BenchmarkProfile:
         return str(self.payload.get("description") or "")
 
 
-def _is_state_none(value: Any) -> bool:
-    return str(value or "").strip().lower() in STATE_NONE_VALUES
-
-
 def _slug(value: str) -> str:
     text = re.sub(r"[^A-Za-z0-9_.-]+", "-", value.strip().lower()).strip("-")
     return text or "benchmark"
