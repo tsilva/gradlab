@@ -18,6 +18,7 @@ ACTOR_DISTRIBUTION = "actor_distribution"
 STATE_VALUE = "state_value"
 ACTION_VALUE = "action_value"
 PROGRAM = "program"
+ROUTE = "route"
 SELECTED_ACTION_LOG_PROBABILITY = "selected_action_log_probability"
 ENTROPY = "entropy"
 ATTRIBUTION = "attribution"
@@ -85,6 +86,14 @@ POLICY_CAPABILITIES: dict[PolicyAlgorithmId, PolicyCapabilities] = {
         ),
         introspection=frozenset({PROGRAM}),
     ),
+    "cell-graph": PolicyCapabilities(
+        algorithm_id="cell-graph",
+        action_selection_modes=("route",),
+        default_action_selection_mode=registered_default_action_selection_mode(
+            "cell-graph"
+        ),
+        introspection=frozenset({ROUTE}),
+    ),
 }
 
 
@@ -130,6 +139,11 @@ def normalize_action_selection_mode(
         "deterministic",
     }:
         effective = "program"
+    elif capabilities.algorithm_id == "cell-graph" and requested in {
+        "stochastic",
+        "deterministic",
+    }:
+        effective = "route"
     elif capabilities.algorithm_id == "dqn" and requested == "stochastic":
         effective = "epsilon_greedy"
     elif capabilities.algorithm_id == "dqn" and requested == "deterministic":
@@ -190,6 +204,7 @@ class PolicyRuntime:
         observation: Any,
         *,
         action_selection_mode: str | None = None,
+        execution_context: Any | None = None,
     ) -> PolicyBatchDecision:
         requested, effective = normalize_action_selection_mode(
             self.capabilities,
@@ -215,7 +230,17 @@ class PolicyRuntime:
             custom = getattr(self.model, "policy_decisions", None)
             if not callable(custom):
                 raise RuntimeError("programmatic policy has no decision adapter")
-            decisions = tuple(custom(observation, action_selection_mode=effective))
+            decisions = tuple(
+                custom(
+                    observation,
+                    action_selection_mode=effective,
+                    **(
+                        {"execution_context": execution_context}
+                        if self.capabilities.algorithm_id == "cell-graph"
+                        else {}
+                    ),
+                )
+            )
         if not decisions:
             raise RuntimeError("policy runtime produced no actions")
         decisions = tuple(
@@ -236,18 +261,38 @@ class PolicyRuntime:
             decisions=decisions,
         )
 
-    def inspect(self, observation: Any) -> PolicyBatchDecision:
+    def inspect(
+        self,
+        observation: Any,
+        *,
+        execution_context: Any | None = None,
+    ) -> PolicyBatchDecision:
         mode = {
             "ppo": "deterministic",
             "a2c": "deterministic",
             "dqn": "greedy",
             "action-program": "program",
+            "cell-graph": "route",
         }[self.capabilities.algorithm_id]
         custom = getattr(self.model, "inspect_policy_decisions", None)
-        if self.capabilities.algorithm_id == "action-program" and callable(custom):
-            decisions = tuple(custom(observation, action_selection_mode=mode))
+        if self.capabilities.algorithm_id in {"action-program", "cell-graph"} and callable(custom):
+            decisions = tuple(
+                custom(
+                    observation,
+                    action_selection_mode=mode,
+                    **(
+                        {"execution_context": execution_context}
+                        if self.capabilities.algorithm_id == "cell-graph"
+                        else {}
+                    ),
+                )
+            )
             return PolicyBatchDecision(mode, mode, np.asarray([]), decisions)
-        return self.decide(observation, action_selection_mode=mode)
+        return self.decide(
+            observation,
+            action_selection_mode=mode,
+            execution_context=execution_context,
+        )
 
 
 def bind_policy_action_space(
@@ -289,10 +334,12 @@ def policy_action(
     observation: Any,
     *,
     action_selection_mode: str | None = None,
+    execution_context: Any | None = None,
 ) -> tuple[np.ndarray, PolicyBatchDecision]:
     result = PolicyRuntime(model).decide(
         observation,
         action_selection_mode=action_selection_mode,
+        execution_context=execution_context,
     )
     return result.actions, result
 

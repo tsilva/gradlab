@@ -149,6 +149,13 @@ const STATIC_DESCRIPTORS = Object.freeze({
     current: (snapshot) => snapshot?.transition?.decision?.program,
     requires: ["program"],
   },
+  "policy/route": {
+    label: "Route",
+    group: "Policy",
+    unit: "route",
+    current: (snapshot) => snapshot?.transition?.decision?.route,
+    requires: ["route"],
+  },
   "action/policy": {
     label: "Policy-selected action",
     shortLabel: "Policy action",

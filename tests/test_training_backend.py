@@ -168,23 +168,35 @@ def test_jerk_backend_schema_is_strict_and_available() -> None:
 
 
 @pytest.mark.parametrize(
-    ("backend_id", "search_algorithm_id"),
+    ("backend_id", "algorithm_id", "search_algorithm_id", "model_class"),
     [
-        ("gradlab.jerk", "jerk"),
-        ("gradlab.go-explore", "go-explore"),
+        (
+            "gradlab.jerk",
+            "action-program",
+            "jerk",
+            "gradlab.action_program.ActionProgramPolicy",
+        ),
+        (
+            "gradlab.go-explore",
+            "cell-graph",
+            "go-explore",
+            "gradlab.cell_graph.CellGraphPolicy",
+        ),
     ],
 )
 def test_trajectory_search_backends_export_neutral_policy_metadata(
     backend_id: str,
+    algorithm_id: str,
     search_algorithm_id: str,
+    model_class: str,
 ) -> None:
     metadata = training_backend_runtime_metadata(backend_id, {})
 
     assert metadata == {
         "training_backend_id": backend_id,
-        "algorithm_id": "action-program",
+        "algorithm_id": algorithm_id,
         "search_algorithm_id": search_algorithm_id,
-        "model_class": "gradlab.action_program.ActionProgramPolicy",
+        "model_class": model_class,
     }
 
 

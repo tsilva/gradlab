@@ -91,6 +91,25 @@ def _require_disabled_autoreset_mode(env: Any, provider_id: str):
     return env
 
 
+def _validated_turbo_start_info_adapter(
+    env: Any,
+    provider_id: str,
+    *,
+    validate_contract: bool,
+):
+    try:
+        _require_disabled_autoreset_mode(env, provider_id)
+        if validate_contract:
+            validate_turbo_vector_env(env, provider_id)
+    except BaseException:
+        try:
+            env.close()
+        except Exception:
+            pass
+        raise
+    return _StartInfoAdapter(env)
+
+
 def _native_start_catalog(env: Any) -> tuple[str, ...]:
     values = getattr(env, "state_catalog", ())
     values = values() if callable(values) else values
@@ -894,10 +913,11 @@ def _stable_retro_turbo_make_vec_env(
     env_type = retro_vec_env_type
     kwargs = dict(native_kwargs)
     env = env_type(config.game, **kwargs)
-    env = _require_disabled_autoreset_mode(env, STABLE_RETRO_TURBO_PROVIDER.provider_id)
-    if retro_vec_env_type is DEFAULT_RETRO_VEC_ENV:
-        validate_turbo_vector_env(env, STABLE_RETRO_TURBO_PROVIDER.provider_id)
-    return _StartInfoAdapter(env)
+    return _validated_turbo_start_info_adapter(
+        env,
+        STABLE_RETRO_TURBO_PROVIDER.provider_id,
+        validate_contract=retro_vec_env_type is DEFAULT_RETRO_VEC_ENV,
+    )
 
 
 def _super_mario_bros_nes_turbo_make_vec_env(
@@ -913,10 +933,11 @@ def _super_mario_bros_nes_turbo_make_vec_env(
         config.game,
         **kwargs,
     )
-    env = _require_disabled_autoreset_mode(env, SUPERMARIOBROS_NES_TURBO_PROVIDER.provider_id)
-    if super_mario_vec_env_type is super_mario_bros_nes_turbo_vec_env_type:
-        validate_turbo_vector_env(env, SUPERMARIOBROS_NES_TURBO_PROVIDER.provider_id)
-    return _StartInfoAdapter(env)
+    return _validated_turbo_start_info_adapter(
+        env,
+        SUPERMARIOBROS_NES_TURBO_PROVIDER.provider_id,
+        validate_contract=(super_mario_vec_env_type is super_mario_bros_nes_turbo_vec_env_type),
+    )
 
 
 def _ale_py_make_vec_env(
@@ -946,10 +967,11 @@ def _breakout_turbo_make_vec_env(
     env_type = breakout_vec_env_type()
     kwargs = dict(native_kwargs)
     env = env_type(config.game, state=config.state or "Start", **kwargs)
-    env = _require_disabled_autoreset_mode(env, BREAKOUT_TURBO_ENV_PROVIDER.provider_id)
-    if breakout_vec_env_type is breakout_turbo_vec_env_type:
-        validate_turbo_vector_env(env, BREAKOUT_TURBO_ENV_PROVIDER.provider_id)
-    return _StartInfoAdapter(env)
+    return _validated_turbo_start_info_adapter(
+        env,
+        BREAKOUT_TURBO_ENV_PROVIDER.provider_id,
+        validate_contract=breakout_vec_env_type is breakout_turbo_vec_env_type,
+    )
 
 
 def _vizdoom_turbo_make_vec_env(
@@ -961,10 +983,11 @@ def _vizdoom_turbo_make_vec_env(
     _require_provider(config, VIZDOOM_TURBO_PROVIDER.provider_id)
     env_type = vizdoom_vec_env_type()
     env = env_type(config.game, **dict(native_kwargs))
-    env = _require_disabled_autoreset_mode(env, VIZDOOM_TURBO_PROVIDER.provider_id)
-    if vizdoom_vec_env_type is vizdoom_turbo_vec_env_type:
-        validate_turbo_vector_env(env, VIZDOOM_TURBO_PROVIDER.provider_id)
-    return _StartInfoAdapter(env)
+    return _validated_turbo_start_info_adapter(
+        env,
+        VIZDOOM_TURBO_PROVIDER.provider_id,
+        validate_contract=vizdoom_vec_env_type is vizdoom_turbo_vec_env_type,
+    )
 
 
 @dataclass(frozen=True)

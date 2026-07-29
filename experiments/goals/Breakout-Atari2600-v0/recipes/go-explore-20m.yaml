@@ -15,21 +15,23 @@ train:
       mode: backend
       cell:
         dimensions:
-        - {source: walls_cleared, bucket_size: 1}
+        - {signal: walls_cleared, bucket_size: 1}
         # Within a coarse progress band, Go-Explore retains the higher-return
         # representative, so exact per-brick cells add fragmentation without
         # preserving a better frontier.
-        - {source: bricks_remaining, bucket_size: 6}
+        - {signal: bricks_remaining, bucket_size: 6}
         # Breakout Turbo exposes X coordinates in signed 16.16 fixed-point
         # units. Keep the ball at eight-pixel resolution and the wider paddle
         # at sixteen-pixel resolution.
-        - {source: ball_x, bucket_size: 524288}
+        - {signal: ball_x, bucket_size: 524288}
         - {signal: ball_y, bucket_size: 8}
-        - {source: paddle_x, bucket_size: 1048576}
+        - {signal: paddle_x, bucket_size: 1048576}
         # Direction affects future geometry; exact fixed-point speed does not
         # need a separate frontier cell. Clamp maps each velocity to -1, 0, 1.
-        - {source: ball_vx, bucket_size: 1, clamp: [-1, 1]}
-        - {source: ball_vy, bucket_size: 1, clamp: [-1, 1]}
+        - {signal: ball_vx, bucket_size: 1, clamp: [-1, 1]}
+        - {signal: ball_vy, bucket_size: 1, clamp: [-1, 1]}
+    export:
+      snapshots: none
     curriculum: null
   backend:
     id: gradlab.go-explore

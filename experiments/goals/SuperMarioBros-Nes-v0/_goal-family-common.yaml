@@ -88,6 +88,18 @@ train:
         score: score
         lives: lives
         level: [levelHi, levelLo]
+        level_hi: levelHi
+        level_lo: levelLo
+        area_id: area_id
+        area_pointer: area_pointer
+        x_pos: x_pos
+        y_pos: y_pos
+        player_task: player_task
+        loop_command_active: loop_command_active
+        loop_correct_count: loop_correct_count
+        loop_pass_count: loop_pass_count
+        player_motion: player_motion
+        player_power: player_power
       events:
         life_loss: {signal: lives, operation: decrease}
         level_change: {signal: level, operation: change}

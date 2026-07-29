@@ -34,6 +34,17 @@ from gradlab.training_lifecycle import (
 from gradlab.training_metrics import EpisodeMetricsReducer
 
 
+def test_go_explore_progress_fields_define_dashboard_groups() -> None:
+    assert [field.group for field in GO_EXPLORE_PROGRESS_FIELDS] == [
+        "exploration",
+        "resources",
+        "traffic",
+        "exploration",
+        "exploration",
+        "traffic",
+    ]
+
+
 class GoExploreSearchTests(unittest.TestCase):
     @staticmethod
     def search(

@@ -128,10 +128,15 @@ METRIC_JOURNAL_RETENTION_DAYS = 7
 HEALTH_SAMPLE_SECONDS = 15.0
 WANDB_REMOTE_PROBE_SECONDS = 30.0
 WANDB_DRAIN_REMOTE_PROBE_SECONDS = 2.0
+LEARNER_RESULT_EXIT_GRACE_SECONDS = 30.0
 
 
 class IncompleteEvaluationEvidence(RuntimeError):
     """Evaluation did not produce enough valid evidence for scientific rejection."""
+
+
+class LearnerTeardownTimeout(RuntimeError):
+    """The learner wrote its terminal result but did not exit."""
 
 
 def _parse_timestamp(value: str) -> datetime:
@@ -272,6 +277,7 @@ class RunSupervisor:
         self.last_remote_probe = 0.0
         self.wandb_remote_high_water = 0
         self.wandb_remote_visible_lag_seconds = 0.0
+        self.learner_result_observed_at: float | None = None
         self.accepted_observed_at: float | None = None
         self.eval_admission_closed = False
         self.recovered_early_stop: EarlyStopReceipt | None = None
@@ -450,6 +456,28 @@ class RunSupervisor:
         if isinstance(final_step, bool) or not isinstance(final_step, int) or final_step < 0:
             raise ValueError("learner training result has an invalid final_step")
         return reason.value
+
+    def _raise_if_learner_result_stalled(self, now: float) -> None:
+        path = self.run_dir / TRAINING_RESULT_FILENAME
+        if not path.is_file():
+            return
+        reason = self._training_terminal_reason()
+        if self.learner_result_observed_at is None:
+            self.learner_result_observed_at = now
+            self._emit(
+                "learner_terminal_result_observed",
+                terminal_reason=reason,
+            )
+            return
+        elapsed = max(0.0, now - self.learner_result_observed_at)
+        if elapsed < LEARNER_RESULT_EXIT_GRACE_SECONDS:
+            return
+        learner_log_tail = self._learner_log_tail()
+        detail = f"; learner log tail:\n{learner_log_tail[-3_000:]}" if learner_log_tail else ""
+        raise LearnerTeardownTimeout(
+            "learner wrote terminal result "
+            f"{reason!r} but remained alive for {elapsed:.1f}s{detail}"
+        )
 
     @staticmethod
     def _checkpoint_manifest_url(checkpoint: Mapping[str, Any]) -> str:
@@ -2224,6 +2252,7 @@ class RunSupervisor:
         try:
             while self.learner is not None and self.learner.poll() is None:
                 self.active_iteration()
+                self._raise_if_learner_result_stalled(self.clock.monotonic())
                 if self.lease_lost:
                     break
                 self.clock.sleep(0.25)
@@ -2293,7 +2322,8 @@ class RunSupervisor:
                 self.stop_reason = "evaluation_evidence_incomplete"
             self._request_learner_stop("supervisor_failure")
             if self.learner is not None and self.learner.poll() is None:
-                if not self._wait_for_learner_exit_with_lease(120):
+                stop_timeout = 10 if isinstance(exc, LearnerTeardownTimeout) else 120
+                if not self._wait_for_learner_exit_with_lease(stop_timeout):
                     self.learner.terminate()
                     if not self._wait_for_learner_exit_with_lease(30):
                         self.learner.kill()

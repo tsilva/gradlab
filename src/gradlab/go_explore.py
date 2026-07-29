@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import math
 from collections import deque
 from collections.abc import Hashable, Mapping, Sequence
@@ -10,12 +11,27 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from gradlab.action_program import ActionProgramPolicy, ActionRun, canonicalize_action_runs
+from gradlab.cell_graph import (
+    CellGraphEdge,
+    CellGraphNode,
+    CellGraphPolicy,
+    route_edge_id,
+    route_node_id,
+    slice_action_runs,
+)
+from gradlab.json_utils import canonical_json_bytes
 from gradlab.task_kernels import Outcome
 
 
 RECENT_CELL_VISIT_WINDOW = 10_000
 GO_EXPLORE_STATE_SEMANTIC_ID = "go-explore-state-v1"
-GO_EXPLORE_STATE_SCHEMA_VERSION = 3
+GO_EXPLORE_STATE_SCHEMA_VERSION = 4
+
+
+@dataclass(frozen=True)
+class RoutePoint:
+    key: Hashable
+    step: int
 
 
 @dataclass(frozen=True)
@@ -33,6 +49,7 @@ class GoExploreCandidate:
     progress: float
     completed: bool = False
     initial_seed: int | None = None
+    route_points: tuple[RoutePoint, ...] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "runs", canonicalize_action_runs(self.runs))
@@ -52,6 +69,7 @@ class GoExploreCell:
     program_steps: int = 0
     initial_seed: int | None = None
     parent_key: Hashable | None = None
+    route_points: tuple[RoutePoint, ...] = ()
     best_success_return: float | None = None
     progress_selections: int = 0
     success_selections: int = 0
@@ -131,6 +149,7 @@ class _PendingCell:
     step_count: int
     initial_seed: int | None
     parent_key: Hashable | None
+    route_points: tuple[RoutePoint, ...]
     visits: int
 
 
@@ -143,6 +162,7 @@ class _LaneState:
     initial_seed: int | None = None
     steps_since_restart: int = 0
     path_cell_keys: list[Hashable] = field(default_factory=list)
+    route_points: list[RoutePoint] = field(default_factory=list)
     exploration_action: int = 0
     exploration_remaining: int = 0
 
@@ -221,6 +241,8 @@ class GoExploreSearch:
         self._best_incomplete: GoExploreCandidate | None = None
         self._best_success: GoExploreCandidate | None = None
         self._completion_events: list[CompletionEvent] = []
+        self._initial_roots: dict[int, tuple[Hashable, str]] = {}
+        self._legacy_state = False
 
     @property
     def archive_count(self) -> int:
@@ -323,6 +345,7 @@ class GoExploreSearch:
                     episode_return=0.0,
                     progress=0.0,
                     initial_seed=None if initial_seed is None else int(initial_seed),
+                    route_points=(RoutePoint(key, 0),),
                     visits=1,
                 )
                 self._archive[key] = cell
@@ -334,7 +357,10 @@ class GoExploreSearch:
             self._lanes[lane] = _LaneState(
                 initial_seed=None if initial_seed is None else int(initial_seed),
                 path_cell_keys=[key],
+                route_points=[RoutePoint(key, 0)],
             )
+            if initial_seed is not None:
+                self._initial_roots[int(initial_seed)] = (key, str(entry_id))
 
     @staticmethod
     def _append_action(state: _LaneState, action: int) -> None:
@@ -406,6 +432,7 @@ class GoExploreSearch:
                 progress=progress,
                 completed=True,
                 initial_seed=state.initial_seed,
+                route_points=tuple(state.route_points),
             )
             previous = self._best_success
             improved = previous is None or candidate.episode_return > previous.episode_return
@@ -441,6 +468,7 @@ class GoExploreSearch:
                 progress=progress,
                 completed=False,
                 initial_seed=state.initial_seed,
+                route_points=tuple(state.route_points),
             )
             self._record_progress_lineage(state)
             return True
@@ -531,9 +559,11 @@ class GoExploreSearch:
             parent_key: Hashable | None = None
             if not state.path_cell_keys:
                 state.path_cell_keys.append(key)
+                state.route_points.append(RoutePoint(key, state.program_steps))
             elif state.path_cell_keys[-1] != key:
                 parent_key = state.path_cell_keys[-1]
                 state.path_cell_keys.append(key)
+                state.route_points.append(RoutePoint(key, state.program_steps))
             elif len(state.path_cell_keys) >= 2:
                 parent_key = state.path_cell_keys[-2]
             comparison = self._pending.get(key) or self._archive.get(key)
@@ -547,6 +577,7 @@ class GoExploreSearch:
                     step_count=state.program_steps,
                     initial_seed=state.initial_seed,
                     parent_key=parent_key,
+                    route_points=tuple(state.route_points),
                     visits=0,
                 )
             if self._consider_best(state, progress=progress, completed=completed):
@@ -599,6 +630,7 @@ class GoExploreSearch:
                     program_steps=pending.step_count,
                     initial_seed=pending.initial_seed,
                     parent_key=pending.parent_key,
+                    route_points=pending.route_points,
                     visits=pending.visits,
                 )
                 self._archive[pending.key] = cell
@@ -612,6 +644,7 @@ class GoExploreSearch:
                 existing.program_steps = pending.step_count
                 existing.initial_seed = pending.initial_seed
                 existing.parent_key = pending.parent_key
+                existing.route_points = pending.route_points
                 existing.updates += 1
                 self._archive_update_count += 1
         if self._pending_progress_lineage_lane is not None:
@@ -676,6 +709,8 @@ class GoExploreSearch:
                 program_steps=cell.step_count,
                 initial_seed=cell.initial_seed,
                 path_cell_keys=[cell.key],
+                route_points=list(cell.route_points)
+                or [RoutePoint(cell.key, cell.step_count)],
             )
         return tuple(entry_ids)
 
@@ -718,6 +753,36 @@ class GoExploreSearch:
         )
 
     @classmethod
+    def _route_document(
+        cls,
+        route: Sequence[RoutePoint],
+    ) -> list[dict[str, object]]:
+        return [
+            {"key": cls._key_document(point.key), "step": int(point.step)}
+            for point in route
+        ]
+
+    @classmethod
+    def _route_from_document(
+        cls,
+        value: object,
+    ) -> tuple[RoutePoint, ...]:
+        if isinstance(value, str | bytes) or not isinstance(value, Sequence):
+            raise ValueError("durable Go-Explore route must be a sequence")
+        route: list[RoutePoint] = []
+        previous_step = -1
+        for raw_point in value:
+            if not isinstance(raw_point, Mapping):
+                raise ValueError("durable Go-Explore route point must be an object")
+            key = cls._key_from_document(raw_point.get("key"))
+            step = int(raw_point.get("step", -1))
+            if key is None or step < 0 or step <= previous_step:
+                raise ValueError("durable Go-Explore route point is invalid")
+            route.append(RoutePoint(key, step))
+            previous_step = step
+        return tuple(route)
+
+    @classmethod
     def _candidate_document(
         cls,
         candidate: GoExploreCandidate | None,
@@ -730,6 +795,7 @@ class GoExploreSearch:
             "progress": candidate.progress,
             "completed": candidate.completed,
             "initial_seed": candidate.initial_seed,
+            "route": cls._route_document(candidate.route_points),
         }
 
     @classmethod
@@ -749,6 +815,7 @@ class GoExploreSearch:
             initial_seed=(
                 None if value.get("initial_seed") is None else int(value["initial_seed"])
             ),
+            route_points=cls._route_from_document(value.get("route", ())),
         )
 
     def state_document(self, lane_entry_ids: Sequence[str | None]) -> dict[str, object]:
@@ -768,6 +835,7 @@ class GoExploreSearch:
                     "program_steps": cell.program_steps,
                     "initial_seed": cell.initial_seed,
                     "parent_key": self._key_document(cell.parent_key),
+                    "route": self._route_document(cell.route_points),
                     "best_success_return": cell.best_success_return,
                     "progress_selections": cell.progress_selections,
                     "success_selections": cell.success_selections,
@@ -785,6 +853,7 @@ class GoExploreSearch:
                 "initial_seed": state.initial_seed,
                 "steps_since_restart": state.steps_since_restart,
                 "path_cell_keys": [self._key_document(key) for key in state.path_cell_keys],
+                "route": self._route_document(state.route_points),
                 "exploration_action": state.exploration_action,
                 "exploration_remaining": state.exploration_remaining,
                 "entry_id": str(lane_entry_ids[lane]),
@@ -824,13 +893,23 @@ class GoExploreSearch:
             "rng_states": [rng.bit_generator.state for rng in self._rngs],
             "best_incomplete": self._candidate_document(self._best_incomplete),
             "best_success": self._candidate_document(self._best_success),
+            "initial_roots": [
+                {
+                    "seed": seed,
+                    "key": self._key_document(key),
+                    "entry_id": entry_id,
+                }
+                for seed, (key, entry_id) in sorted(self._initial_roots.items())
+            ],
         }
 
     def restore_state(self, value: Mapping[str, object]) -> tuple[str, ...]:
         if value.get("semantic_id") != GO_EXPLORE_STATE_SEMANTIC_ID:
             raise ValueError("durable Go-Explore state has an unsupported semantic_id")
-        if int(value.get("schema_version", 0)) != GO_EXPLORE_STATE_SCHEMA_VERSION:
+        schema_version = int(value.get("schema_version", 0))
+        if schema_version not in {3, GO_EXPLORE_STATE_SCHEMA_VERSION}:
             raise ValueError("durable Go-Explore state has an unsupported schema_version")
+        self._legacy_state = schema_version == 3
         configuration = value.get("configuration")
         if not isinstance(configuration, Mapping):
             raise ValueError("durable Go-Explore state has no configuration")
@@ -881,6 +960,11 @@ class GoExploreSearch:
                     None if raw_cell.get("initial_seed") is None else int(raw_cell["initial_seed"])
                 ),
                 parent_key=self._key_from_document(raw_cell.get("parent_key")),
+                route_points=(
+                    self._route_from_document(raw_cell.get("route", ()))
+                    if schema_version >= 4
+                    else ()
+                ),
                 best_success_return=(
                     None
                     if raw_cell.get("best_success_return") is None
@@ -915,6 +999,11 @@ class GoExploreSearch:
                     ),
                     steps_since_restart=int(raw_lane["steps_since_restart"]),
                     path_cell_keys=list(path_keys),
+                    route_points=(
+                        list(self._route_from_document(raw_lane.get("route", ())))
+                        if schema_version >= 4
+                        else []
+                    ),
                     exploration_action=int(raw_lane["exploration_action"]),
                     exploration_remaining=int(raw_lane["exploration_remaining"]),
                 )
@@ -954,6 +1043,19 @@ class GoExploreSearch:
         self._completion_events = []
         self._best_incomplete = self._candidate_from_document(value["best_incomplete"])
         self._best_success = self._candidate_from_document(value["best_success"])
+        self._initial_roots = {}
+        if schema_version >= 4:
+            raw_roots = value.get("initial_roots", ())
+            if isinstance(raw_roots, str | bytes) or not isinstance(raw_roots, Sequence):
+                raise ValueError("durable Go-Explore initial roots must be a sequence")
+            for raw_root in raw_roots:
+                if not isinstance(raw_root, Mapping):
+                    raise ValueError("durable Go-Explore initial root must be an object")
+                seed = int(raw_root["seed"])
+                key = self._key_from_document(raw_root["key"])
+                if key is None or seed in self._initial_roots:
+                    raise ValueError("durable Go-Explore initial root is invalid")
+                self._initial_roots[seed] = (key, str(raw_root["entry_id"]))
         return tuple(lane_entry_ids)
 
     def policy(self) -> ActionProgramPolicy:
@@ -963,4 +1065,216 @@ class GoExploreSearch:
             action_runs=() if candidate is None else candidate.runs,
             fallback_action=self.fallback_action,
             initial_seed=None if candidate is None else candidate.initial_seed,
+        )
+
+    @property
+    def legacy_state(self) -> bool:
+        return self._legacy_state
+
+    def graph_snapshot_entry_ids(self) -> tuple[str, ...]:
+        entry_ids = {
+            entry_id for _key, entry_id in self._initial_roots.values()
+        }
+        candidate = self.best_candidate()
+        if candidate is not None:
+            for point in candidate.route_points:
+                cell = self._archive.get(point.key)
+                if cell is not None:
+                    entry_ids.add(cell.entry_id)
+        return tuple(sorted(entry_ids))
+
+    def cell_graph_policy(
+        self,
+        *,
+        detector: Mapping[str, Any],
+        snapshot_mode: str = "none",
+        snapshot_records: Mapping[
+            str,
+            tuple[Mapping[str, Any], bytes],
+        ]
+        | None = None,
+    ) -> CellGraphPolicy:
+        """Build the compact executable graph for the current best route."""
+
+        if self._legacy_state:
+            raise ValueError(
+                "legacy Go-Explore recovery state cannot prove a portable cell graph"
+            )
+        candidate = self.best_candidate()
+        records = dict(snapshot_records or {})
+        snapshot_entries: dict[str, Mapping[str, Any]] = {}
+        snapshot_payloads: dict[str, bytes] = {}
+        nodes_by_id: dict[str, CellGraphNode] = {}
+        edges_by_id: dict[str, CellGraphEdge] = {}
+        roots: dict[int, str] = {}
+
+        def snapshot_for_entry(
+            entry_id: str | None,
+        ) -> str | None:
+            if snapshot_mode != "retained" or entry_id is None:
+                return None
+            record = records.get(entry_id)
+            if record is None:
+                return None
+            entry, payload = record
+            provider_snapshot = entry.get("provider_snapshot")
+            if not isinstance(provider_snapshot, Mapping):
+                raise ValueError("Go-Explore snapshot entry has no provider snapshot")
+            ref = provider_snapshot.get("ref")
+            if not isinstance(ref, Mapping):
+                raise ValueError("Go-Explore snapshot entry has no snapshot ref")
+            digest = str(ref.get("blob_sha256") or "")
+            if not digest:
+                raise ValueError("Go-Explore snapshot entry has no blob digest")
+            snapshot_entries[entry_id] = dict(entry)
+            snapshot_payloads[digest] = bytes(payload)
+            return entry_id
+
+        def route_entry_id(
+            point: RoutePoint,
+            prefix: tuple[ActionRun, ...],
+            seed: int | None,
+        ) -> str | None:
+            if point.step == 0 and seed is not None:
+                root = self._initial_roots.get(seed)
+                if root is not None and root[0] == point.key:
+                    return root[1]
+            cell = self._archive.get(point.key)
+            if (
+                cell is not None
+                and cell.initial_seed == seed
+                and cell.step_count == point.step
+                and cell.runs == prefix
+            ):
+                return cell.entry_id
+            return None
+
+        if candidate is None or not candidate.route_points:
+            if not self._initial_roots:
+                raise RuntimeError("Go-Explore has no route roots to export")
+            default_seed = min(self._initial_roots)
+            key, entry_id = self._initial_roots[default_seed]
+            node_id = route_node_id(seed=default_seed, cell_key=key, prefix_runs=())
+            nodes_by_id[node_id] = CellGraphNode(
+                node_id=node_id,
+                cell_key=bytes(key),
+                target_distance=0,
+                initial_seed=default_seed,
+                snapshot_entry_id=snapshot_for_entry(entry_id),
+            )
+            roots[default_seed] = node_id
+            target_node_id = node_id
+        else:
+            seed = candidate.initial_seed
+            route = candidate.route_points
+            if route[0].step != 0:
+                raise ValueError("Go-Explore best route does not begin at step zero")
+            route_node_ids: list[str] = []
+            terminal_distance = 1 if candidate.completed else 0
+            for index, point in enumerate(route):
+                prefix = slice_action_runs(candidate.runs, 0, point.step)
+                node_id = route_node_id(
+                    seed=seed,
+                    cell_key=bytes(point.key),
+                    prefix_runs=prefix,
+                )
+                route_node_ids.append(node_id)
+                entry_id = route_entry_id(point, prefix, seed)
+                nodes_by_id[node_id] = CellGraphNode(
+                    node_id=node_id,
+                    cell_key=bytes(point.key),
+                    target_distance=len(route) - index - 1 + terminal_distance,
+                    initial_seed=seed if index == 0 else None,
+                    snapshot_entry_id=snapshot_for_entry(entry_id),
+                )
+            for index in range(len(route) - 1):
+                segment = slice_action_runs(
+                    candidate.runs,
+                    route[index].step,
+                    route[index + 1].step,
+                )
+                edge_id = route_edge_id(
+                    source_id=route_node_ids[index],
+                    target_id=route_node_ids[index + 1],
+                    action_runs=segment,
+                )
+                edges_by_id[edge_id] = CellGraphEdge(
+                    edge_id=edge_id,
+                    source_id=route_node_ids[index],
+                    target_id=route_node_ids[index + 1],
+                    action_runs=segment,
+                    successful_suffix=candidate.completed,
+                )
+            if candidate.completed:
+                target_node_id = hashlib.sha256(
+                    canonical_json_bytes(
+                        {
+                            "semantic_id": "cell-graph-outcome-v1",
+                            "outcome": "success",
+                            "seed": seed,
+                            "program_steps": candidate.step_count,
+                        }
+                    )
+                ).hexdigest()
+                nodes_by_id[target_node_id] = CellGraphNode(
+                    node_id=target_node_id,
+                    cell_key=None,
+                    target_distance=0,
+                    outcome="success",
+                )
+                suffix = slice_action_runs(
+                    candidate.runs,
+                    route[-1].step,
+                    candidate.step_count,
+                )
+                if not suffix:
+                    raise ValueError("successful Go-Explore route has no terminal action suffix")
+                edge_id = route_edge_id(
+                    source_id=route_node_ids[-1],
+                    target_id=target_node_id,
+                    action_runs=suffix,
+                )
+                edges_by_id[edge_id] = CellGraphEdge(
+                    edge_id=edge_id,
+                    source_id=route_node_ids[-1],
+                    target_id=target_node_id,
+                    action_runs=suffix,
+                    successful_suffix=True,
+                )
+            else:
+                target_node_id = route_node_ids[-1]
+            default_seed = seed
+            if seed is not None:
+                roots[seed] = route_node_ids[0]
+
+        max_distance = max(node.target_distance for node in nodes_by_id.values())
+        for root_seed, (root_key, entry_id) in sorted(self._initial_roots.items()):
+            if root_seed in roots:
+                continue
+            node_id = route_node_id(
+                seed=root_seed,
+                cell_key=bytes(root_key),
+                prefix_runs=(),
+            )
+            nodes_by_id[node_id] = CellGraphNode(
+                node_id=node_id,
+                cell_key=bytes(root_key),
+                target_distance=max_distance + 1,
+                initial_seed=root_seed,
+                snapshot_entry_id=snapshot_for_entry(entry_id),
+            )
+            roots[root_seed] = node_id
+
+        return CellGraphPolicy(
+            action_names=self.action_names,
+            fallback_action=self.fallback_action,
+            detector=detector,
+            nodes=tuple(nodes_by_id[key] for key in sorted(nodes_by_id)),
+            edges=tuple(edges_by_id[key] for key in sorted(edges_by_id)),
+            roots=roots,
+            target_node_id=target_node_id,
+            default_seed=default_seed,
+            snapshot_mode=snapshot_mode,
+            snapshot_entries=snapshot_entries,
+            snapshot_payloads=snapshot_payloads,
         )

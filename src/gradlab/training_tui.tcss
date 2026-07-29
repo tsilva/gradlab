@@ -1,35 +1,84 @@
+$gl_background: #05090d;
+$gl_panel: #080e14;
+$gl_panel_raised: #0b131c;
+$gl_border: #146f75;
+$gl_border_muted: #203842;
+$gl_cyan: #50d8ef;
+$gl_cyan_muted: #67949a;
+$gl_primary: #d8dee9;
+$gl_secondary: #a8b3c7;
+$gl_amber: #fbbf24;
+
 Screen {
-    background: #08111f;
-    color: #dcecff;
+    background: $gl_background;
+    color: $gl_primary;
 }
 
-Header {
-    background: #0d1a2b;
-    color: #dcecff;
+#training-header {
+    height: 3;
+    background: $gl_background;
+    border: solid $gl_border;
+    layout: horizontal;
 }
 
-Footer {
-    background: #0d1a2b;
-    color: #9eb3d4;
-}
-
-#training-body {
+#training-brand {
+    width: 18;
     padding: 0 1;
+    color: $gl_cyan;
+    text-style: bold;
+    content-align: left middle;
 }
 
-#run-identity {
-    height: 2;
-    color: #91a7c7;
-    margin-bottom: 1;
+#training-title {
+    width: 1fr;
+    color: $gl_primary;
+    content-align: center middle;
+    text-overflow: ellipsis;
 }
 
 #training-status {
-    height: 1;
-    color: #67e8f9;
+    width: 26;
+    padding: 0 1;
+    content-align: right middle;
+    text-overflow: ellipsis;
+}
+
+#training-body {
+    height: 1fr;
+    padding: 0 1;
+    overflow-y: auto;
+}
+
+#run-identity {
+    height: 3;
+    padding: 0 1;
+    color: $gl_secondary;
+    content-align: left middle;
+}
+
+#progress-panel {
+    height: 8;
+    background: $gl_panel;
+    border: solid $gl_border;
+    margin-bottom: 1;
+}
+
+.panel-title {
+    height: 2;
+    padding: 0 1;
+    color: $gl_cyan;
     text-style: bold;
+    content-align: left middle;
+}
+
+#progress-bar-row {
+    height: 2;
+    padding: 0 1;
+    layout: horizontal;
 }
 
 #training-progress {
+    width: 1fr;
     height: 1;
     margin-top: 1;
 }
@@ -38,91 +87,267 @@ Footer {
     width: 1fr;
 
     & > .bar--bar {
-        color: #22d3ee;
-        background: #203451;
+        color: $gl_cyan;
+        background: #26313b;
     }
 
     & > .bar--indeterminate {
-        color: #818cf8;
-        background: #203451;
+        color: #7dd3fc;
+        background: #26313b;
     }
 
     & > .bar--complete {
         color: #34d399;
-        background: #203451;
+        background: #26313b;
     }
 }
 
-#progress-meta {
+#progress-percent {
+    width: 9;
+    padding-left: 1;
+    color: $gl_primary;
+    text-style: bold;
+    content-align: right middle;
+}
+
+#progress-stats {
     height: 2;
-    color: #9eb3d4;
-    margin-bottom: 1;
+    border-top: solid $gl_border_muted;
+    layout: horizontal;
+}
+
+.progress-stat {
+    width: 1fr;
+    padding: 0 1;
+    color: $gl_primary;
+    content-align: center middle;
+    border-right: solid $gl_border_muted;
+    text-overflow: ellipsis;
+}
+
+#progress-count {
+    width: 2fr;
+    text-style: bold;
+}
+
+#progress-rate {
+    width: 2fr;
+}
+
+#rate-sparkline {
+    width: 22;
+    height: 1;
+    margin: 0 1;
+
+    & > .sparkline--max-color {
+        color: $gl_cyan;
+    }
+
+    & > .sparkline--min-color {
+        color: $gl_border 60%;
+    }
 }
 
 #metrics {
     grid-size: 3;
     grid-gutter: 0 1;
     height: auto;
-    max-height: 10;
     margin-bottom: 1;
 }
 
-.metric-card {
-    height: 4;
+.metric-group {
+    height: auto;
+    min-height: 8;
+    background: $gl_panel;
+    border: solid $gl_border;
+}
+
+.metric-group-title {
+    height: 2;
     padding: 0 1;
-    background: #0d192a;
-    border: round #29415f;
+    color: $gl_cyan;
+    text-style: bold;
+    content-align: left middle;
+    border-bottom: solid $gl_border;
+}
+
+.metric-rows {
+    height: auto;
+}
+
+.metric-row {
+    height: 2;
+    padding: 0 1;
+    border-bottom: solid $gl_border_muted;
+}
+
+.metric-row:last-child {
+    border-bottom: none;
+}
+
+.metric-row-content {
+    height: 1;
+    layout: horizontal;
 }
 
 .metric-label {
-    height: 1;
-    color: #91a7c7;
+    width: 1fr;
+    color: $gl_secondary;
+    content-align: left middle;
+    text-overflow: ellipsis;
 }
 
 .metric-value {
-    height: 1;
-    color: #e7f3ff;
+    width: 18;
+    color: $gl_primary;
     text-style: bold;
+    content-align: right middle;
+    text-overflow: ellipsis;
 }
 
-.metric-sparkline {
+.metric-meter {
+    width: 16;
     height: 1;
+    margin-right: 1;
+}
 
-    & > .sparkline--max-color {
-        color: #a78bfa;
+.metric-meter Bar {
+    width: 1fr;
+
+    & > .bar--bar {
+        color: $gl_cyan;
+        background: #16353c;
     }
 
-    & > .sparkline--min-color {
-        color: #38bdf8 35%;
+    & > .bar--complete {
+        color: $gl_cyan;
+        background: #16353c;
     }
+}
+
+#common-metrics {
+    height: auto;
+    margin-bottom: 1;
+}
+
+#common-metrics .metric-group {
+    min-height: 5;
+}
+
+#common-metrics .metric-rows {
+    height: 2;
+    layout: horizontal;
+}
+
+#common-metrics .metric-row {
+    width: 1fr;
+    border-bottom: none;
+    border-right: solid $gl_border_muted;
+}
+
+#common-metrics .metric-row:last-child {
+    border-right: none;
+}
+
+#run-notice {
+    height: 3;
+    padding: 0 1;
+    background: #120f08;
+    color: #e8b847;
+    border: solid #745a22;
+    content-align: left middle;
+    text-overflow: ellipsis;
+}
+
+#latest-event {
+    height: 2;
+    padding: 0 1;
+    background: $gl_panel_raised;
+    color: $gl_secondary;
+    border: solid $gl_border_muted;
+    border-top: none;
+    content-align: left middle;
+    text-overflow: ellipsis;
 }
 
 #event-log {
-    height: 1fr;
-    min-height: 4;
-    background: #0b1626;
-    color: #cfe1fa;
-    border: round #29415f;
+    display: none;
+    height: 10;
+    min-height: 6;
+    background: $gl_panel_raised;
+    color: #c8d4e3;
+    border: solid $gl_border_muted;
+    border-top: none;
+}
+
+Footer {
+    height: 1;
+    background: $gl_background;
+    color: $gl_secondary;
+}
+
+Screen.-medium #training-brand {
+    width: 12;
+}
+
+Screen.-medium #training-status {
+    width: 22;
 }
 
 Screen.-medium #metrics {
     grid-size: 2;
 }
 
-Screen.-narrow #metrics {
-    grid-size: 1;
-    max-height: 8;
-    overflow-y: auto;
-}
-
-Screen.-narrow .metric-card {
-    height: 3;
-}
-
-Screen.-narrow .metric-sparkline {
+Screen.-medium #rate-sparkline {
     display: none;
 }
 
-Screen.-short #event-log {
+Screen.-narrow #training-brand {
+    width: 10;
+}
+
+Screen.-narrow #training-title {
+    content-align: left middle;
+}
+
+Screen.-narrow #training-status {
+    width: 16;
+}
+
+Screen.-narrow #run-identity {
+    height: 2;
+}
+
+Screen.-narrow #progress-panel {
+    height: 8;
+}
+
+Screen.-narrow #progress-fraction,
+Screen.-narrow #progress-elapsed,
+Screen.-narrow #progress-eta,
+Screen.-narrow #rate-sparkline {
+    display: none;
+}
+
+Screen.-narrow #metrics {
+    grid-size: 1;
+}
+
+Screen.-narrow #common-metrics .metric-rows {
+    height: auto;
+    layout: vertical;
+}
+
+Screen.-narrow #common-metrics .metric-row {
+    width: 1fr;
+    border-right: none;
+    border-bottom: solid $gl_border_muted;
+}
+
+Screen.-short #run-identity {
+    height: 1;
+}
+
+Screen.-short #latest-event {
     display: none;
 }

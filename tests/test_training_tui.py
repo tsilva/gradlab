@@ -22,6 +22,7 @@ from gradlab.training_tui import (
     LocalTrainingApp,
     LocalTrainingIdentity,
     MetricCard,
+    MetricGroup,
     TrainingProgressBridge,
     run_local_training_tui,
 )
@@ -38,7 +39,12 @@ def test_progress_bridge_keeps_only_declared_fields_and_bounds_events() -> None:
         initial=10,
         description="gradlab.go-explore",
         fields=(
-            ProgressField("algorithm/cells", "cells", ProgressValueFormat.COUNT),
+            ProgressField(
+                "algorithm/cells",
+                "cells",
+                ProgressValueFormat.COUNT,
+                group="exploration",
+            ),
         ),
     )
     bridge.update(
@@ -59,6 +65,11 @@ def test_progress_bridge_keeps_only_declared_fields_and_bounds_events() -> None:
         "cells",
         "mean return",
         "completion",
+    ]
+    assert [field.group for field in snapshot.fields] == [
+        "exploration",
+        "outcomes",
+        "outcomes",
     ]
 
 
@@ -104,16 +115,36 @@ def test_textual_app_updates_algorithm_cards_inline_and_requests_safe_stop() -> 
                     "algorithm/cells",
                     "cells",
                     ProgressValueFormat.COUNT,
+                    group="exploration",
                 ),
                 ProgressField(
                     "algorithm/archive-bytes",
-                    "archive mem est.",
+                    "archive memory est.",
                     ProgressValueFormat.BYTES,
+                    group="resources",
+                ),
+                ProgressField(
+                    "algorithm/visits",
+                    "visits",
+                    ProgressValueFormat.COUNT,
+                    group="traffic",
                 ),
                 ProgressField(
                     "algorithm/new-cell-rate",
                     "new cells",
                     ProgressValueFormat.PERCENT,
+                    group="exploration",
+                ),
+                ProgressField(
+                    "algorithm/best-progress",
+                    "best progress",
+                    group="exploration",
+                ),
+                ProgressField(
+                    "algorithm/frontier-restores",
+                    "frontier restores",
+                    ProgressValueFormat.PERCENT,
+                    group="traffic",
                 ),
             ),
         )
@@ -122,7 +153,10 @@ def test_textual_app_updates_algorithm_cards_inline_and_requests_safe_stop() -> 
             metrics={
                 "algorithm/cells": 1_234,
                 "algorithm/archive-bytes": 3 * 1024**3,
+                "algorithm/visits": 5_678,
                 "algorithm/new-cell-rate": 0.125,
+                "algorithm/best-progress": 32,
+                "algorithm/frontier-restores": 0.5,
             },
         )
         print("provider initialized")
@@ -133,7 +167,12 @@ def test_textual_app_updates_algorithm_cards_inline_and_requests_safe_stop() -> 
 
     async def exercise() -> None:
         app = LocalTrainingApp(
-            identity=LocalTrainingIdentity("breakout/go-explore", 123, "/tmp/run"),
+            identity=LocalTrainingIdentity(
+                "breakout/go-explore",
+                123,
+                "/tmp/run",
+                completion_signal_available=False,
+            ),
             bridge=bridge,
             stop_flag=stop_flag,
             execution=execution,
@@ -145,12 +184,40 @@ def test_textual_app_updates_algorithm_cards_inline_and_requests_safe_stop() -> 
                 if started.is_set() and app.query(MetricCard):
                     break
             cards = list(app.query(MetricCard))
-            assert len(cards) == 5
+            assert len(cards) == 8
+            assert len(list(app.query(MetricGroup))) == 4
             assert "1.23k" in str(app.query_one("#metric-value-0", Static).render())
             assert "3 GiB" in str(app.query_one("#metric-value-1", Static).render())
-            assert "12.50%" in str(app.query_one("#metric-value-2", Static).render())
-            assert app.query_one("#metric-spark-0", Sparkline).display is True
-            assert app.query_one("#event-log", RichLog).max_lines == 256
+            assert "12.50%" in str(app.query_one("#metric-value-3", Static).render())
+            metric_meter = app.query_one("#metric-meter-3", ProgressBar)
+            for _ in range(10):
+                await pilot.pause()
+                if metric_meter.percentage == 0.125:
+                    break
+            assert metric_meter.percentage == 0.125
+
+            bridge.update(
+                step=19,
+                metrics={
+                    "algorithm/cells": 1_300,
+                    "algorithm/new-cell-rate": 0.13,
+                },
+            )
+            app._last_history_sample = 0.0
+            app._refresh_from_bridge()
+            assert "—" not in str(
+                app.query_one("#summary-rate .summary-value", Static).render()
+            )
+            assert app.query_one("#rate-sparkline", Sparkline).display is True
+            assert app.query_one("#rate-sparkline", Sparkline).data
+
+            event_log = app.query_one("#event-log", RichLog)
+            assert event_log.max_lines == 256
+            assert event_log.display is False
+            await pilot.press("l")
+            await pilot.pause()
+            assert event_log.display is True
+
             step_bar = app.query_one("#training-progress Bar")
             progress_bar = app.query_one("#training-progress", ProgressBar)
             assert step_bar.size.width > 32
@@ -158,15 +225,33 @@ def test_textual_app_updates_algorithm_cards_inline_and_requests_safe_stop() -> 
             assert step_bar.percentage > 0
             assert progress_bar.gradient is not None
             assert progress_bar.gradient.get_color(0.0).hex == "#22D3EE"
-            assert progress_bar.gradient.get_color(1.0).hex == "#A78BFA"
-            assert app.screen.styles.background.hex == "#08111F"
-            assert cards[0].styles.background.hex == "#0D192A"
+            assert progress_bar.gradient.get_color(1.0).hex == "#67E8F9"
+            assert app.screen.styles.background.hex == "#05090D"
+            assert app.query_one("#metric-group-exploration").styles.background.hex == (
+                "#080E14"
+            )
+            assert "TRAINING-ONLY RUN" in str(
+                app.query_one("#run-notice", Static).render()
+            )
+            assert "no declared success signal" in str(
+                app.query_one("#run-notice", Static).render()
+            )
+            assert "not declared" in str(
+                app.query_one("#metric-value-7", Static).render()
+            )
+            assert app.query_one("#metric-meter-7", ProgressBar).display is False
+
+            await pilot.press("?")
+            await pilot.pause()
+            assert "ctrl+p" in str(app.query_one("#latest-event", Static).render())
 
             await pilot.press("q")
             await pilot.pause()
             assert stop_flag.requested is True
             assert execution.state == "running"
-            assert "stop pending" in str(app.query_one("#training-status", Static).render())
+            assert "stop pending" in str(
+                app.query_one("#training-status", Static).render()
+            ).lower()
             release.set()
             for _ in range(50):
                 await pilot.pause()

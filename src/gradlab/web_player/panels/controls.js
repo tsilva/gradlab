@@ -78,6 +78,7 @@ export function mount({ definition, services }) {
     epsilon_greedy: "Epsilon-greedy",
     greedy: "Greedy",
     program: "Program",
+    route: "Route",
   })[mode] || String(mode).replaceAll("_", " ");
   const commands = {
     "reset-episode": () => services.command("reset_episode", {

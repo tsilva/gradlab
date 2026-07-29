@@ -4,6 +4,7 @@ import importlib.metadata
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import gymnasium as gym
 import numpy as np
@@ -1254,6 +1255,49 @@ class VizdoomTurboProviderTests(unittest.TestCase):
         self.assertTrue(descriptor.supports_live_snapshots)
         self.assertTrue(descriptor.live_snapshots_deterministic)
         self.assertIn("health", descriptor.signal_schema)
+
+    def test_closes_native_environment_when_strict_validation_fails(self) -> None:
+        constructed = []
+
+        class InvalidVizdoomEnv:
+            metadata = {
+                "autoreset_mode": gym.vector.AutoresetMode.DISABLED,
+            }
+
+            def __init__(self, game: str, **kwargs):
+                self.game = game
+                self.kwargs = kwargs
+                self.closed = False
+                constructed.append(self)
+
+            def close(self):
+                self.closed = True
+
+        config = EnvConfig(
+            env_provider="vizdoom-turbo",
+            game="VizdoomBasic-v1",
+            state="",
+            task={
+                "id": "identity",
+                "action": {"set": "native"},
+                "signals": {},
+                "events": {},
+                "termination": {},
+                "reward": {"reward_mode": "native"},
+            },
+        )
+        with (
+            mock.patch("vizdoom_turbo.VizdoomTurboVecEnv", InvalidVizdoomEnv),
+            mock.patch(
+                "gradlab.env_providers.validate_turbo_vector_env",
+                side_effect=RuntimeError("strict contract mismatch"),
+            ),
+            self.assertRaisesRegex(RuntimeError, "strict contract mismatch"),
+        ):
+            make_provider_vec_env(config, native_kwargs={"num_envs": 2})
+
+        self.assertEqual(len(constructed), 1)
+        self.assertTrue(constructed[0].closed)
 
 
 class AleManualLifecycleTests(unittest.TestCase):

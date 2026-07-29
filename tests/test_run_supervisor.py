@@ -35,6 +35,7 @@ from gradlab.run_contracts import (
 )
 from gradlab.run_supervisor import (
     IncompleteEvaluationEvidence,
+    LearnerTeardownTimeout,
     RunSupervisor,
     _bind_evaluation_contract,
     _summary_scalar,
@@ -575,6 +576,29 @@ class RunSupervisorTests(unittest.TestCase):
             supervisor._training_terminal_reason(),
             "deterministic_training_acceptance",
         )
+
+    def test_terminal_training_result_bounds_hung_learner_teardown(self) -> None:
+        supervisor = self.supervisor()
+        supervisor.run_dir.mkdir(parents=True, exist_ok=True)
+        atomic_write_json(
+            supervisor.run_dir / "training-result.json",
+            {
+                "document_type": "gradlab.training-result",
+                "format_version": 2,
+                "status": "failed",
+                "terminal_reason": "failed",
+                "execution_mode": "supervised",
+                "final_step": 0,
+            },
+        )
+
+        supervisor._raise_if_learner_result_stalled(10.0)
+        supervisor._raise_if_learner_result_stalled(39.9)
+        with self.assertRaisesRegex(
+            LearnerTeardownTimeout,
+            "terminal result 'failed'.*remained alive",
+        ):
+            supervisor._raise_if_learner_result_stalled(40.0)
 
     def test_unaccepted_goal_is_a_clean_scientific_failure(self) -> None:
         state, stop_reason = _terminal_outcome(

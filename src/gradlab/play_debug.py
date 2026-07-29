@@ -40,6 +40,7 @@ class PolicyDecision:
     exploration_rate: float | None = None
     exploratory: bool | None = None
     program: Mapping[str, Any] | None = None
+    route: Mapping[str, Any] | None = None
     sampled: bool | None = None
 
     @property

@@ -789,6 +789,11 @@ class _PlaybackSession:
         batch = self.policy_runtime.decide(
             self.model_obs,
             action_selection_mode=requested_mode,
+            execution_context=(
+                self.env.policy_execution_context(self.model)
+                if callable(getattr(self.env, "policy_execution_context", None))
+                else None
+            ),
         )
         if len(batch.decisions) != 1:
             raise RuntimeError(

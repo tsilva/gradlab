@@ -45,6 +45,64 @@ final result: passed
 
 ---
 
+# Local training TUI dashboard design QA
+
+**Comparison target**
+
+- Source visual truth: `/Users/tsilva/.codex/generated_images/019fae22-435c-7ab3-a6a0-f2a1adfcb4c9/call_FsczY17b0IDEEBjw4x8xlWXI.png`
+- Textual-rendered implementation: `/Users/tsilva/.codex/visualizations/2026/07/29/019fae22-435c-7ab3-a6a0-f2a1adfcb4c9/gradlab-training-tui-wide.png`
+- Normalized implementation content: `/Users/tsilva/.codex/visualizations/2026/07/29/019fae22-435c-7ab3-a6a0-f2a1adfcb4c9/gradlab-training-tui-wide-content.png`
+- Full-view stacked comparison: `/Users/tsilva/.codex/visualizations/2026/07/29/019fae22-435c-7ab3-a6a0-f2a1adfcb4c9/gradlab-training-tui-comparison.png`
+- Narrow responsive capture: `/Users/tsilva/.codex/visualizations/2026/07/29/019fae22-435c-7ab3-a6a0-f2a1adfcb4c9/gradlab-training-tui-narrow.png`
+- Wide terminal viewport: 200 × 40 cells. Narrow terminal viewport: 76 × 52 cells.
+- Source pixels: 2008 × 783. Raw wide implementation pixels: 2458 × 1026 including the Textual export frame. Its terminal-content crop was normalized to 2008 × 783 for comparison. Narrow implementation pixels: 946 × 1319.
+- State: running local Breakout Go-Explore training-only run at 187,776 of 20,000,000 transitions with no declared success signal.
+
+**Full-view comparison evidence**
+
+- The implementation preserves the source hierarchy: compact run header and identity, dominant progress panel, three Go-Explore telemetry groups, persistent training-only notice, and keyboard command footer.
+- The implementation intentionally adds a compact Outcomes strip so algorithm telemetry extends rather than replaces common lifecycle metrics.
+- It also keeps the latest learner event visible and exposes the bounded full log with `l`, preserving diagnostics omitted by the visual concept.
+
+**Focused comparison evidence**
+
+- The full-width comparison keeps the progress values, micro-bars, metric labels, status colors, and keyboard footer legible at the source dimensions, so a separate wide-detail crop was unnecessary.
+- The narrow capture verifies the alternate responsive state: grouped panels stack, the output path is left-ellipsized, progress retains count and rate, and the training-only notice remains pinned while the metric body scrolls.
+
+**Required fidelity surfaces**
+
+- Fonts and typography: the implementation uses the terminal's configured monospace font; the Textual capture uses Fira Code. Label/value contrast, uppercase section hierarchy, bold status, truncation, and line height match the source intent.
+- Spacing and layout rhythm: square terminal borders, single-cell padding, aligned labels and values, three equal wide columns, and compact progress metadata reproduce the source density. The Outcomes strip is an intentional additional product constraint.
+- Colors and visual tokens: black and charcoal surfaces, teal borders, cyan active status, cool-gray secondary copy, and amber training-only messaging match the source palette with accessible contrast.
+- Image quality and asset fidelity: the product screen contains no raster imagery or standalone icon assets. All visuals are native terminal widgets and box drawing; no placeholder imagery was introduced.
+- Copy and content: source run values are preserved. “TRAINING-ONLY GOAL” was corrected to “TRAINING-ONLY RUN” because local execution cannot establish acceptance even when the owning goal is evaluated. Missing completion semantics render as “not declared,” not zero.
+- States and interactions: `q` requests the existing graceful-stop boundary, `l` toggles the bounded event log, `?` toggles shortcut help, and Textual retains its command palette binding.
+- Accessibility and responsiveness: semantic state colors are paired with text, keyboard controls remain persistent, and 200-, 120-, 80-, and sub-80-column layouts use existing breakpoint behavior without horizontal page overflow.
+
+**Findings**
+
+- No actionable P0, P1, or P2 differences remain.
+- P3: the exact font and glyph antialiasing follow the user's terminal emulator rather than the generated bitmap, as expected for a native TUI.
+
+**Comparison history**
+
+- Pass 1 P2: a missing success signal appeared as an empty percentage meter. Fix: render “not declared” and hide the inapplicable meter. Post-fix evidence: the final wide and narrow captures show an explicit semantic state.
+- Pass 1 P2: the notice and shortcuts could fall below the narrow scroll region. Fix: constrain the training body to the remaining viewport and pin the notice, latest-event strip, and footer outside it. Post-fix evidence: the final narrow capture keeps the notice and event strip visible while metric groups scroll.
+- Pass 1 P2: the narrow identity and progress metadata clipped the output path and elapsed value. Fix: reserve additional path slack and retain only the decision-relevant count and throughput fields at narrow widths. Post-fix evidence: the final narrow capture shows the path tail, count, and throughput without collisions.
+- Pass 1 P2: archive bytes were labeled as total archive memory. Fix: restore the “est.” qualifier required by the documented metric semantics. Post-fix evidence: the final captures show “archive memory est.”
+
+**Implementation checklist**
+
+- [x] Recreate the selected terminal-native hierarchy and palette.
+- [x] Group Go-Explore telemetry declaratively without hardcoding metric names into the shared renderer.
+- [x] Preserve common lifecycle outcomes and bounded diagnostics.
+- [x] Implement functional safe-stop, log, help, and palette controls.
+- [x] Verify wide and narrow Textual-rendered states against the selected source.
+
+final result: passed
+
+---
+
 # Timeline label stacking design QA
 
 **Comparison target**
