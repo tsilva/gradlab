@@ -7,6 +7,8 @@ from typing import Any, Literal
 
 from gradlab.json_utils import canonical_json_sha256
 from gradlab.metric_names import metric_path_segment, validate_metric_name
+from gradlab.validation import label_path as _label_path
+from gradlab.validation import require_mapping as _require_mapping
 
 
 EARLY_STOP_OPERATORS = {
@@ -53,16 +55,6 @@ METRIC_EARLY_STOP_DECISION_KEYS = frozenset(
         "value",
     }
 )
-
-
-def _label_path(label: str, key: str) -> str:
-    return f"{label}.{key}" if label else key
-
-
-def _require_mapping(value: Any, *, label: str) -> Mapping[str, Any]:
-    if not isinstance(value, Mapping):
-        raise ValueError(f"{label} must be an object")
-    return value
 
 
 def _require_non_empty_string(document: Mapping[str, Any], key: str, *, label: str) -> str:

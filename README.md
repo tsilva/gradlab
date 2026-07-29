@@ -226,10 +226,9 @@ The player uses shareable hierarchical routes: `/` lists environments,
 `/environments/<environment-id>` lists goals,
 `/environments/<environment-id>/goals/<goal-id>` lists goal variants, and the
 nested `/variants/<goal-variant-id>/runs/<run-id>/checkpoints/<checkpoint-id>`
-route identifies a checkpoint inside the selected run. Legacy `/projects/...`
-links redirect into this hierarchy. Checkpoint rows show goal-required
-acceptance results from W&B when available. Browser Back and Forward navigation
-follow the same resource hierarchy.
+route identifies a checkpoint inside the selected run. Checkpoint rows show
+goal-required acceptance results from W&B when available. Browser Back and
+Forward navigation follow the same resource hierarchy.
 
 The playback dashboard is a GridStack workspace. Policy, reward, action, signal,
 and reward-component views are instances of one configurable telemetry panel:

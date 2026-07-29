@@ -8,12 +8,12 @@ from typing import Any
 
 import pytest
 
-from gradlab.play import build_parser as build_play_parser
 from gradlab.play_catalog import (
     PlayCatalog,
     _wandb_early_stop_projection,
     parse_wandb_location,
 )
+from gradlab.play_session import build_parser as build_play_parser
 from gradlab.policy_bundle import build_recipe_document, canonical_json_sha256
 from gradlab.r2_store import BucketConfig, RunStorageConfig
 from gradlab.goal_variants import (
@@ -606,7 +606,7 @@ def test_repository_catalog_requires_explicit_namespace_index(tmp_path: Path) ->
     (goal_root / "_goal.yaml").write_text("goal_id: Level1-1\n", encoding="utf-8")
 
     with pytest.raises(ValueError, match="repository goal catalog does not exist"):
-        PlayCatalog(repo_root=tmp_path).projects(entity="research")
+        PlayCatalog(repo_root=tmp_path).environments(entity="research")
 
 
 def test_repository_catalog_reconciles_namespace_drift(tmp_path: Path) -> None:
@@ -614,7 +614,7 @@ def test_repository_catalog_reconciles_namespace_drift(tmp_path: Path) -> None:
     goals_root = tmp_path / "experiments" / "goals"
     catalog = PlayCatalog(repo_root=tmp_path)
 
-    assert [item["name"] for item in catalog.projects(entity="research").items] == [
+    assert [item["name"] for item in catalog.environments(entity="research").items] == [
         "Atari",
         "Mario",
     ]
@@ -627,13 +627,13 @@ def test_repository_catalog_reconciles_namespace_drift(tmp_path: Path) -> None:
             path.rmdir()
     (goals_root / "Atari").rmdir()
 
-    assert [item["name"] for item in catalog.projects(entity="research").items] == ["Mario"]
+    assert [item["name"] for item in catalog.environments(entity="research").items] == ["Mario"]
 
     orphan_goal = goals_root / "Undeclared" / "Hidden"
     orphan_goal.mkdir(parents=True)
     (orphan_goal / "_goal.yaml").write_text("goal_id: Hidden\n", encoding="utf-8")
 
-    assert [item["name"] for item in catalog.projects(entity="research").items] == ["Mario"]
+    assert [item["name"] for item in catalog.environments(entity="research").items] == ["Mario"]
 
 
 def test_repository_catalog_allows_empty_namespace_index(tmp_path: Path) -> None:
@@ -644,7 +644,7 @@ def test_repository_catalog_allows_empty_namespace_index(tmp_path: Path) -> None
         encoding="utf-8",
     )
 
-    assert PlayCatalog(repo_root=tmp_path).projects(entity="research").items == ()
+    assert PlayCatalog(repo_root=tmp_path).environments(entity="research").items == ()
 
 
 def test_indexed_project_listing_does_not_parse_goal_contracts_and_scopes_goal_reads(
@@ -671,8 +671,8 @@ def test_indexed_project_listing_does_not_parse_goal_contracts_and_scopes_goal_r
     )
     catalog = PlayCatalog(repo_root=tmp_path)
 
-    projects = catalog.projects(entity="research")
-    assert [item["name"] for item in projects.items] == ["Atari", "Mario"]
+    environments = catalog.environments(entity="research")
+    assert [item["name"] for item in environments.items] == ["Atari", "Mario"]
     assert all(path.name != "_goal.yaml" for path in loaded_paths)
 
     goals = catalog.goals(entity="research", project="Mario")
@@ -713,7 +713,7 @@ def test_checked_in_browse_catalog_matches_composed_goal_contracts() -> None:
     repo_root = Path(__file__).parents[1]
     catalog = PlayCatalog(repo_root=repo_root)
 
-    for project in catalog.projects(entity="research").items:
+    for project in catalog.environments(entity="research").items:
         for goal in catalog.goals(
             entity="research",
             project=str(project["name"]),
@@ -858,7 +858,7 @@ def test_catalog_uses_repository_projects_and_goals_before_querying_wandb(
     api = FakeApi()
     catalog._api = api
 
-    projects = catalog.projects(entity="research", query="mario")
+    environments = catalog.environments(entity="research", query="mario")
     goals = catalog.goals(entity="research", project="Mario")
     assert api.runs_calls == 0
 
@@ -869,9 +869,9 @@ def test_catalog_uses_repository_projects_and_goals_before_querying_wandb(
         query="seed 3",
     )
 
-    assert [item["name"] for item in projects.items] == ["Mario"]
+    assert [item["name"] for item in environments.items] == ["Mario"]
     assert api.runs_filters == [{"config.goal_slug": "Mario/Level1-1"}]
-    assert projects.items[0]["goal_count"] == 1
+    assert environments.items[0]["goal_count"] == 1
     assert [item["goal_id"] for item in goals.items] == ["Level1-1"]
     assert goals.items[0]["title"] == "Mario Level 1-1 completion"
     assert goals.items[0]["recipe_count"] == 1

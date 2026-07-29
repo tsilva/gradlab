@@ -252,6 +252,36 @@ def test_browse_sources_updates_the_shared_resource_route() -> None:
     host.stop()
 
 
+def test_browse_sources_closes_the_active_playback() -> None:
+    loader = FakeLoader()
+    host = PlaybackHost(
+        loader,
+        initial_source=PlaySourceSpec("manifest", "https://models.example/manifest.json"),
+    )
+    host.start()
+    wait_for_phase(host, "active")
+    runner = loader.runners[0]
+    route = {
+        "level": "goals",
+        "entity": "research",
+        "project": "Mario",
+        "goal_id": "",
+        "goal_variant_id": "",
+        "run_id": "",
+        "checkpoint_id": "",
+    }
+
+    host.submit(source_command("browse_sources", {"route": route}))
+
+    snapshot = host.snapshot()
+    assert snapshot["app"]["phase"] == "selecting"
+    assert snapshot["app"]["route"] == route
+    assert snapshot["app"]["has_active_runner"] is False
+    assert runner.stopped is True
+    assert runner.commands == []
+    host.stop()
+
+
 def test_playback_host_activates_without_model_preapproval() -> None:
     loader = FakeLoader()
     source = PlaySourceSpec("local", "/tmp/model.zip")

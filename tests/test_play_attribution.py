@@ -7,13 +7,13 @@ import numpy as np
 import torch
 from torch import nn
 
-from gradlab.play import render_obs_stack
 from gradlab.play_attribution import (
     ActionLogProbForward,
     PolicyActionAttributor,
     actor_image_feature_extractor,
     find_last_conv2d,
 )
+from gradlab.play_session import render_obs_stack
 
 
 class TinyImageExtractor(nn.Module):

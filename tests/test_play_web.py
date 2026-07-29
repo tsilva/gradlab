@@ -12,9 +12,9 @@ from aiohttp import ClientSession, WSServerHandshakeError, WSMsgType
 from PIL import Image
 
 from gradlab.dataset_cli import build_parser as build_dataset_parser
-from gradlab.play import _PlaybackSession, _PlaybackTransition
 from gradlab.play_catalog import CatalogPage
 from gradlab.play_debug import PolicyDecision
+from gradlab.play_session import _PlaybackSession, _PlaybackTransition
 from gradlab.play_web import (
     FRAME_CODEC_PNG,
     FRAME_GAME,
@@ -1200,7 +1200,7 @@ def test_catalog_http_api_requires_the_fragment_session_token() -> None:
             return explicit or "research"
 
         @staticmethod
-        def projects(*, entity, query, cursor):
+        def environments(*, entity, query, cursor):
             assert (entity, query, cursor) == ("research", "mario", None)
             return CatalogPage(
                 items=(
@@ -1212,9 +1212,6 @@ def test_catalog_http_api_requires_the_fragment_session_token() -> None:
                 ),
                 next_cursor=None,
             )
-
-        environments = projects
-
         @staticmethod
         def goals(*, entity, project, query, cursor):
             assert (entity, project, query, cursor) == (
@@ -1447,8 +1444,18 @@ def test_catalog_http_api_requires_the_fragment_session_token() -> None:
             while not server.origin and asyncio.get_running_loop().time() < deadline:
                 await asyncio.sleep(0.01)
             async with ClientSession() as client:
-                denied = await client.get(f"{server.origin}/api/catalog/projects?q=mario")
+                denied = await client.get(f"{server.origin}/api/catalog/environments?q=mario")
                 assert denied.status == 401
+                retired_api = await client.get(
+                    f"{server.origin}/api/catalog/projects?q=mario",
+                    headers={"Authorization": f"Bearer {server.token}"},
+                )
+                assert retired_api.status == 404
+                retired_page = await client.get(
+                    f"{server.origin}/projects/Mario",
+                    allow_redirects=False,
+                )
+                assert retired_page.status == 404
                 accepted = await client.get(
                     f"{server.origin}/api/catalog/environments?q=mario",
                     headers={"Authorization": f"Bearer {server.token}"},
@@ -1575,26 +1582,11 @@ def test_catalog_http_api_requires_the_fragment_session_token() -> None:
                         ["checkpoint-1-" + "b" * 16],
                     )
                 ]
-                legacy = await client.get(
-                    (f"{server.origin}/projects/Mario/goals/Level1-1?workspace=paired"),
-                    allow_redirects=False,
-                )
-                assert legacy.status == 308
-                assert legacy.headers["Location"] == (
-                    "/environments/Mario/goals/Level1-1?workspace=paired"
-                )
                 for route in (
                     "/",
                     "/environments/Mario",
                     "/environments/Mario/goals/Level1-1",
                     (f"/environments/Mario/goals/Level1-1/variants/goal-variant-{'c' * 24}"),
-                    "/projects/Mario",
-                    "/projects/Mario/goals/Level1-1",
-                    f"/projects/Mario/goals/Level1-1/runs/gradlab-{'a' * 32}",
-                    (
-                        f"/projects/Mario/goals/Level1-1/runs/gradlab-{'a' * 32}"
-                        f"/checkpoints/checkpoint-1-{'b' * 16}"
-                    ),
                 ):
                     page = await client.get(f"{server.origin}{route}")
                     assert page.status == 200
@@ -1606,12 +1598,12 @@ def test_catalog_http_api_requires_the_fragment_session_token() -> None:
     asyncio.run(scenario())
 
 
-def test_initial_project_catalog_is_embedded_in_selection_snapshots() -> None:
+def test_initial_environment_catalog_is_embedded_in_selection_snapshots() -> None:
     class FakeCatalog:
         calls = 0
 
         @classmethod
-        def initial_projects(cls, explicit_entity=None):
+        def initial_environments(cls, explicit_entity=None):
             cls.calls += 1
             assert explicit_entity is None
             return {
@@ -1641,7 +1633,7 @@ def test_initial_project_catalog_is_embedded_in_selection_snapshots() -> None:
             "type": "snapshot",
             "app": {
                 "phase": "selecting",
-                "route": {"level": "projects"},
+                "route": {"level": "environments"},
             },
         },
     )
@@ -1802,4 +1794,4 @@ def test_web_dashboard_assets_are_packaged_beside_server() -> None:
     assert 'history.pushState(null, "", target);' in source_browser
     assert 'window.addEventListener("popstate", this.onPopState);' in source_browser
     assert "goHome()" in source_browser
-    assert "hydrateInitialProjects()" in source_browser
+    assert "hydrateInitialEnvironments()" in source_browser

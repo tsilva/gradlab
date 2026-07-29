@@ -170,6 +170,7 @@ async function ensureSourceBrowser() {
         getState: () => state,
         showToast,
         openInspection: (endpoint, options) => openContractInspection(endpoint, options),
+        openSourceRoute: (route) => openSourceRoute(route),
       });
       return sourceBrowser;
     });
@@ -191,6 +192,25 @@ async function ensureContractViewer() {
 async function openContractInspection(endpoint, options = {}) {
   const viewer = await ensureContractViewer();
   return viewer.open(endpoint, options);
+}
+
+function openSourceRoute(route) {
+  const current = state.applicationSnapshot || state.liveSnapshot || {};
+  const snapshot = {
+    ...current,
+    app: {
+      ...(current.app || {}),
+      phase: "selecting",
+      message: "",
+      error: "",
+      route: { ...route },
+      has_active_runner: false,
+    },
+  };
+  state.applicationSnapshot = snapshot;
+  state.liveSnapshot = snapshot;
+  state.snapshot = snapshot;
+  setSourceMode(true, snapshot);
 }
 
 function setSourceMode(active, snapshot = null) {

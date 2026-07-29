@@ -99,6 +99,7 @@ test("playback home is the root environment route", () => {
     run_id: "",
     checkpoint_id: "",
   }), "/");
+  assert.equal(sourceRouteFromPath("/projects/Mario"), null);
 });
 
 test("active checkpoint breadcrumbs retain the full source hierarchy", () => {
@@ -246,6 +247,81 @@ test("unchanged active checkpoint routes do not rebuild breadcrumbs", () => {
 
   assert.equal(renders, 1);
   assert.deepEqual(historyModes, ["replace"]);
+});
+
+test("active checkpoint breadcrumb navigation exits playback at the selected ancestor", () => {
+  const browser = Object.create(SourceBrowser.prototype);
+  browser.route = {
+    level: "runs",
+    entity: "research",
+    project: "ViZDoom",
+    goal_id: "DefendTheLine-v1",
+    goal_variant_id: "goal-variant-a27a8239",
+    run_id: "gradlab-c22f7c7a",
+    checkpoint_id: "checkpoint-10002432-b285ff3b",
+  };
+  const commands = [];
+  const historyModes = [];
+  const openedRoutes = [];
+  browser.command = (name, payload) => {
+    commands.push({ name, payload });
+    return "command-id";
+  };
+  browser.applyRoute = (route) => {
+    browser.route = { ...browser.route, ...route };
+  };
+  browser.syncUrl = (mode) => historyModes.push(mode);
+  browser.openSourceRoute = (route) => openedRoutes.push(route);
+  const target = sourceBreadcrumbItems(browser.route)[2].route;
+
+  assert.equal(browser.navigate(target), true);
+
+  const expected = {
+    level: "goal_variants",
+    entity: "research",
+    project: "ViZDoom",
+    goal_id: "DefendTheLine-v1",
+    goal_variant_id: "",
+    run_id: "",
+    checkpoint_id: "",
+  };
+  assert.deepEqual(commands, [{
+    name: "browse_sources",
+    payload: { route: expected },
+  }]);
+  assert.deepEqual(browser.route, expected);
+  assert.deepEqual(historyModes, ["push"]);
+  assert.deepEqual(openedRoutes, [expected]);
+});
+
+test("rejected active breadcrumb navigation leaves playback and history unchanged", () => {
+  const browser = Object.create(SourceBrowser.prototype);
+  browser.route = {
+    level: "runs",
+    entity: "research",
+    project: "ViZDoom",
+    goal_id: "DefendTheLine-v1",
+    goal_variant_id: "goal-variant-a27a8239",
+    run_id: "gradlab-c22f7c7a",
+    checkpoint_id: "checkpoint-10002432-b285ff3b",
+  };
+  const initialRoute = { ...browser.route };
+  browser.command = () => null;
+  browser.applyRoute = () => {
+    throw new Error("a rejected navigation must not mutate the active route");
+  };
+  browser.syncUrl = () => {
+    throw new Error("a rejected navigation must not mutate browser history");
+  };
+  browser.openSourceRoute = () => {
+    throw new Error("a rejected navigation must not exit playback");
+  };
+
+  assert.equal(
+    browser.navigate(sourceBreadcrumbItems(browser.route)[0].route),
+    false,
+  );
+  assert.deepEqual(browser.route, initialRoute);
 });
 
 test("run metrics use compact labels and values", () => {
@@ -531,64 +607,6 @@ test("selected checkpoints are admitted together through the evaluation API", as
   assert.equal(browser.items[0].evaluation_queue.state, "submitted");
   assert.equal(browser.selectedCheckpoints.size, 0);
   assert.match(toasts[0][0], /2 checkpoints queued/);
-});
-
-test("legacy project routes inherit the entity and use canonical environment APIs", async (context) => {
-  const originalLocation = globalThis.location;
-  const originalWindow = globalThis.window;
-  const originalFetch = globalThis.fetch;
-  const requests = [];
-  globalThis.location = {
-    pathname: "/projects/Mario",
-    search: "",
-    hash: "",
-  };
-  globalThis.window = { addEventListener() {} };
-  globalThis.fetch = async (url) => {
-    requests.push(url);
-    return {
-      ok: true,
-      json: async () => ({ items: [], next_cursor: null }),
-    };
-  };
-  context.after(() => {
-    if (originalLocation === undefined) delete globalThis.location;
-    else globalThis.location = originalLocation;
-    if (originalWindow === undefined) delete globalThis.window;
-    else globalThis.window = originalWindow;
-    if (originalFetch === undefined) delete globalThis.fetch;
-    else globalThis.fetch = originalFetch;
-  });
-
-  const commands = [];
-  const sourceBrowser = new SourceBrowser(
-    {},
-    { replaceChildren() {}, hidden: false },
-    {
-      token: "token",
-      command: (name, payload) => commands.push({ name, payload }),
-      getState: () => ({ hasControl: true }),
-      showToast() {},
-    },
-  );
-  sourceBrowser.renderView = () => {};
-  sourceBrowser.updatePolling = () => {};
-
-  sourceBrowser.render({
-    app: {
-      phase: "selecting",
-      route: { level: "environments" },
-      catalog: { entity: "research", items: [] },
-    },
-  });
-  await new Promise((resolve) => setImmediate(resolve));
-
-  assert.equal(
-    requests[0],
-    "/api/catalog/environments/research/Mario/goals?",
-  );
-  assert.equal(commands[0].name, "browse_sources");
-  assert.equal(commands[0].payload.route.entity, "research");
 });
 
 test("browser back through checkpoint routes preserves the omitted catalog entity", (context) => {

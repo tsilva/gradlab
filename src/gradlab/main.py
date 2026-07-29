@@ -26,11 +26,6 @@ COMMANDS: dict[str, tuple[str, str]] = {
     "reports": ("plan, synchronize, and verify declarative W&B reports", "gradlab.wandb_reports"),
 }
 
-COMPATIBILITY_COMMANDS: dict[str, tuple[str, str]] = {
-    "import-roms": ("import ROMs into the installed gradlab runtime", "gradlab.import_roms"),
-}
-
-
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="gradlab",
@@ -55,7 +50,7 @@ def main(argv: list[str] | None = None) -> int:
         parser.print_help()
         return 0 if argv_list else 2
     command = argv_list[0]
-    route = COMMANDS.get(command) or COMPATIBILITY_COMMANDS.get(command)
+    route = COMMANDS.get(command)
     if route is None:
         parser.error(f"unknown command: {command}")
     _help, module_name = route

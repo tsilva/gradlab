@@ -10,11 +10,8 @@ from pathlib import Path
 from typing import Any
 
 from gradlab.clock import Clock, SystemClock
-from gradlab.file_utils import file_sha256 as _file_sha256
 from gradlab.metric_names import METRICS_SCHEMA_VERSION, validate_metric_payload
 
-
-file_sha256 = _file_sha256
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS checkpoints (

@@ -11,6 +11,8 @@ from gradlab.env import EnvConfig
 from gradlab.metric_names import METRICS_SCHEMA_VERSION
 from gradlab.modal_eval_protocol import SEED_PROTOCOL
 from gradlab.seeds import DEFAULT_TRAIN_SEED, EVAL_SEED_START
+from gradlab.validation import is_int as _is_int
+from gradlab.validation import label_path as _label_path
 from gradlab.validation import normalize_obs_crop, normalize_obs_resize
 
 
@@ -203,14 +205,6 @@ def train_config_keys_owned_by(owner: FieldOwner) -> frozenset[str]:
 
 def train_config_keys_in_source_section(section: SourceSection) -> frozenset[str]:
     return frozenset(field.dest for field in TRAIN_CONFIG_FIELDS if field.source_section == section)
-
-
-def _label_path(label: str, key: str) -> str:
-    return f"{label}.{key}" if label else key
-
-
-def _is_int(value: Any) -> bool:
-    return isinstance(value, int) and not isinstance(value, bool)
 
 
 def _validate_number_bounds(
