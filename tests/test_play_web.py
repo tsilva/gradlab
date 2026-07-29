@@ -1523,11 +1523,11 @@ def test_catalog_http_api_requires_the_fragment_session_token() -> None:
                 assert checkpoint_payload["items"][0]["evaluation"]["pass"] is True
                 assert checkpoint_payload["metric_columns"] == [
                     {
-                        "metric": "train/outcome/success/window_100/rate/min",
+                        "metric": "train/outcome/success/across_starts/window_100/rate/min",
                         "direction": "max",
                     },
                     {
-                        "metric": "train/episode/return/shaped/from/target/mean",
+                        "metric": "train/episode/return/shaped/from/target/rolling_up_to_100/mean",
                         "direction": "max",
                     },
                 ]

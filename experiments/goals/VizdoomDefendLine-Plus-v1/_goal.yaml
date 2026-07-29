@@ -1,4 +1,8 @@
+# Compose this variant from reusable YAML configuration fragments.
 defaults:
+# Load the complete Defend the Line goal under this variant's global identity.
 - ../VizdoomDefendLine-v1/_goal@_global_
+# Apply this file last so variant-specific values can override the inherited contract.
 - _self_
+# Give the variant its operator-facing title while retaining the inherited task semantics.
 title: ViZDoom Defend the Line combat

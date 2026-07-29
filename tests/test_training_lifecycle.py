@@ -7,14 +7,14 @@ import pytest
 
 from gradlab.batch_runtime import EpisodeRecord
 from gradlab.metric_names import (
-    TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_MAX,
-    TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_MEAN,
+    TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_ROLLING_UP_TO_100_MAX,
+    TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_ROLLING_UP_TO_100_MEAN,
     TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_WINDOW_100_MEAN,
-    TRAIN_EPISODE_RETURN_SHAPED_MAX,
-    TRAIN_EPISODE_RETURN_SHAPED_MEAN,
-    TRAIN_OUTCOME_SUCCESS_CURRENT_RATE_MEAN,
-    TRAIN_OUTCOME_SUCCESS_START_COVERAGE_RATE,
-    TRAIN_OUTCOME_TERMINAL_COUNT,
+    TRAIN_EPISODE_RETURN_SHAPED_ACROSS_ORIGINS_ROLLING_UP_TO_100_MAX,
+    TRAIN_EPISODE_RETURN_SHAPED_ACROSS_ORIGINS_ROLLING_UP_TO_100_MEAN,
+    TRAIN_OUTCOME_SUCCESS_ACROSS_OBSERVED_STARTS_CUMULATIVE_RATE_MEAN,
+    TRAIN_OUTCOME_SUCCESS_ACROSS_STARTS_COVERAGE_RATE,
+    TRAIN_EPISODE_COMPLETED_COUNT,
     train_outcome_reason_count_metric,
     train_early_stop_metric,
     train_success_attempts_metric,
@@ -349,8 +349,8 @@ def test_plain_progress_is_bounded_and_uses_only_canonical_outcomes(
     capsys.readouterr()
 
     metrics = {
-        TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_MEAN: 5.0,
-        TRAIN_OUTCOME_SUCCESS_CURRENT_RATE_MEAN: 0.25,
+        TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_ROLLING_UP_TO_100_MEAN: 5.0,
+        TRAIN_OUTCOME_SUCCESS_ACROSS_OBSERVED_STARTS_CUMULATIVE_RATE_MEAN: 0.25,
         "train/algorithm/go_explore/best/progress": 999.0,
     }
     sink.update(step=10, metrics=metrics)
@@ -435,17 +435,17 @@ def test_episode_metrics_are_identical_across_target_and_archive_consumers() -> 
         )
     )
 
-    assert payload[TRAIN_EPISODE_RETURN_SHAPED_MEAN] == 14.0
-    assert payload[TRAIN_EPISODE_RETURN_SHAPED_MAX] == 30.0
-    assert payload[TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_MEAN] == 6.0
-    assert payload[TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_MAX] == 10.0
-    assert payload[TRAIN_OUTCOME_TERMINAL_COUNT] == 3
+    assert payload[TRAIN_EPISODE_RETURN_SHAPED_ACROSS_ORIGINS_ROLLING_UP_TO_100_MEAN] == 14.0
+    assert payload[TRAIN_EPISODE_RETURN_SHAPED_ACROSS_ORIGINS_ROLLING_UP_TO_100_MAX] == 30.0
+    assert payload[TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_ROLLING_UP_TO_100_MEAN] == 6.0
+    assert payload[TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_ROLLING_UP_TO_100_MAX] == 10.0
+    assert payload[TRAIN_EPISODE_COMPLETED_COUNT] == 3
     assert payload[train_outcome_reason_count_metric("life_loss")] == 1
     assert payload[train_success_attempts_metric("StartA")] == 1
     assert payload[train_success_count_metric("StartA")] == 1
     assert payload[train_success_attempts_metric("StartB")] == 1
-    assert payload[TRAIN_OUTCOME_SUCCESS_CURRENT_RATE_MEAN] == 0.5
-    assert payload[TRAIN_OUTCOME_SUCCESS_START_COVERAGE_RATE] == 1.0
+    assert payload[TRAIN_OUTCOME_SUCCESS_ACROSS_OBSERVED_STARTS_CUMULATIVE_RATE_MEAN] == 0.5
+    assert payload[TRAIN_OUTCOME_SUCCESS_ACROSS_STARTS_COVERAGE_RATE] == 1.0
 
 
 def test_episode_return_max_uses_the_same_rolling_window_as_the_mean() -> None:
@@ -458,10 +458,10 @@ def test_episode_return_max_uses_the_same_rolling_window_as_the_mean() -> None:
         for _ in range(100)
     )
 
-    assert payload[TRAIN_EPISODE_RETURN_SHAPED_MEAN] == 0.0
-    assert payload[TRAIN_EPISODE_RETURN_SHAPED_MAX] == 0.0
-    assert payload[TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_MEAN] == 0.0
-    assert payload[TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_MAX] == 0.0
+    assert payload[TRAIN_EPISODE_RETURN_SHAPED_ACROSS_ORIGINS_ROLLING_UP_TO_100_MEAN] == 0.0
+    assert payload[TRAIN_EPISODE_RETURN_SHAPED_ACROSS_ORIGINS_ROLLING_UP_TO_100_MAX] == 0.0
+    assert payload[TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_ROLLING_UP_TO_100_MEAN] == 0.0
+    assert payload[TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_ROLLING_UP_TO_100_MAX] == 0.0
 
 
 @pytest.mark.parametrize(
@@ -514,7 +514,7 @@ def test_shared_session_enforces_backend_conformance(
 
     assert len(store.frames) == 1
     assert store.frames[0][1]["source"] == "train"
-    assert store.frames[0][0][TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_MEAN] == 5.0
+    assert store.frames[0][0][TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_ROLLING_UP_TO_100_MEAN] == 5.0
     with pytest.raises(RuntimeError, match="regressed"):
         session.advance(3)
     with pytest.raises(RuntimeError, match="exceeded"):

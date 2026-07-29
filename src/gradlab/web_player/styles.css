@@ -438,7 +438,7 @@ h2 { font-size: .9rem; margin: 0; font-weight: 650; }
 .source-table .run-state.failed { color: var(--red); }
 .source-table .run-state.pending { color: var(--yellow); }
 .source-table .run-state.stopped { color: var(--muted); }
-.source-table .finish-reason { min-width: 10rem; }
+.source-table .finish-reason { min-width: 18rem; }
 .source-table .finish-reason.success > span { color: var(--green); }
 .source-table .finish-reason.failure > span { color: var(--red); }
 .source-table .finish-reason.unknown > span { color: var(--yellow); }

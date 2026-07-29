@@ -123,7 +123,15 @@ def test_init_wandb_records_resolved_identity_and_submission_group() -> None:
     with (
         tempfile.TemporaryDirectory() as tmp,
         patch("gradlab.wandb_publisher.load_wandb_env"),
-        patch.dict(sys.modules, {"wandb": SimpleNamespace(init=fake_init)}),
+        patch.dict(
+            sys.modules,
+            {
+                "wandb": SimpleNamespace(
+                    init=fake_init,
+                    Settings=lambda **kwargs: kwargs,
+                )
+            },
+        ),
     ):
         _start_wandb(train_config, run_dir=tmp, config=config)
 
@@ -136,6 +144,7 @@ def test_init_wandb_records_resolved_identity_and_submission_group() -> None:
     assert captured["config"]["environment"]["env_id"] == "ale-py:breakout"
     assert "environment_hash" in captured["config"]
     assert "game_family:Atari2600-Breakout" in captured["tags"]
+    assert captured["settings"]["x_server_side_expand_glob_metrics"] is False
 
 
 def test_init_wandb_falls_back_to_run_name_for_legacy_config() -> None:
@@ -163,13 +172,19 @@ def test_init_wandb_falls_back_to_run_name_for_legacy_config() -> None:
         patch("gradlab.wandb_publisher.load_wandb_env"),
         patch.dict(
             sys.modules,
-            {"wandb": SimpleNamespace(init=lambda **kwargs: captured.update(kwargs) or FakeRun())},
+            {
+                "wandb": SimpleNamespace(
+                    init=lambda **kwargs: captured.update(kwargs) or FakeRun(),
+                    Settings=lambda **kwargs: kwargs,
+                )
+            },
         ),
     ):
         _start_wandb(train_config, run_dir=tmp, config=config)
 
     assert captured["name"] == train_config["run_name"]
     assert captured["group"] == "legacy-group"
+    assert captured["settings"]["x_server_side_expand_glob_metrics"] is False
 
 
 @pytest.mark.parametrize(
@@ -214,6 +229,8 @@ def test_resume_wandb_prefers_display_name_with_legacy_fallback(
     assert captured["name"] == expected_name
     assert captured["id"] == train_config["wandb_run_id"]
     assert captured["group"] == train_config["wandb_group"]
+    assert captured["settings"]["x_update_finish_state"] is True
+    assert captured["settings"]["x_server_side_expand_glob_metrics"] is False
 
 
 def test_wandb_finish_has_a_hard_timeout() -> None:
@@ -227,3 +244,15 @@ def test_wandb_finish_has_a_hard_timeout() -> None:
     with pytest.raises(TimeoutError, match="did not finish uploading"):
         projector.close(timeout_seconds=0.01)
     release.set()
+
+
+def test_wandb_finish_can_publish_a_failed_terminal_state() -> None:
+    exit_codes: list[int] = []
+
+    class FakeRun:
+        def finish(self, *, exit_code: int) -> None:
+            exit_codes.append(exit_code)
+
+    WandbProjector(FakeRun()).close(timeout_seconds=1, exit_code=1)
+
+    assert exit_codes == [1]

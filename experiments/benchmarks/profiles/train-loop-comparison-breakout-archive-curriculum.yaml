@@ -18,7 +18,6 @@ recipe_overrides:
 - train.checkpoint_freq=0
 run_description: AB/BA Breakout PPO archive-curriculum training-loop throughput comparison.
 required_metrics:
-- train/throughput/rollout_fps
 - train/throughput/loop_fps
 candidate_required_metrics:
 - train/curriculum/archive/transition/share

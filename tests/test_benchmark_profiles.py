@@ -342,7 +342,6 @@ required_metrics: [train/throughput/not_real]
                 store.init()
                 is_candidate = command.label.startswith("candidate-")
                 payload = {
-                    "train/throughput/rollout_fps": 100.0,
                     "train/throughput/loop_fps": 95.0 if is_candidate else 100.0,
                 }
                 if is_candidate:

@@ -1057,12 +1057,15 @@ def _project_reconciled_terminal(
             "run_name": manifest.wandb.get("display_name"),
             "wandb_group": manifest.wandb.get("group"),
         },
-        update_finish_state=False,
+        update_finish_state=True,
     )
     try:
         publish_terminal_summary(projector.run, receipt)
     finally:
-        projector.close(timeout_seconds=300)
+        projector.close(
+            timeout_seconds=300,
+            exit_code=0 if receipt.state == "succeeded" else 1,
+        )
 
 
 def cmd_reconcile(args: argparse.Namespace) -> int:

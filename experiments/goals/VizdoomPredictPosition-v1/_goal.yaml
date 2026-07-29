@@ -1,28 +1,56 @@
+# Compose this goal from reusable YAML configuration fragments.
 defaults:
+# Load the shared ViZDoom goal contract into the global configuration namespace.
 - ../_vizdoom-common@_global_
+# Apply this file last so interception-specific values override the shared defaults.
 - _self_
+# Give the goal a human-readable name for reports and operator-facing views.
 title: ViZDoom projectile interception
+# Override the shared settings used while training a policy for this goal.
 train:
+  # Override the shared ViZDoom environment contract used for training.
   environment:
+    # Supply arguments for the native vectorized ViZDoom environment.
     env_config:
+      # Reuse these interception-specific provider arguments in evaluation via the YAML anchor.
       env_args: &predict_position_env_args
+        # List the native game variables that ViZDoom must collect and expose.
         game_variables: [KILLCOUNT]
+        # Configure which per-step information the provider exposes to GradLab.
         info_filter:
+          # Control when the selected information keys are emitted.
           mode: all
+          # List the provider information keys retained for task signals.
           keys: [killcount, pending_reset]
+    # Reuse these interception-specific task overrides in evaluation via the YAML anchor.
     task: &predict_position_task
+      # Map task-level signal names to keys from the provider's per-step information.
       signals:
+        # Map the task-level kill signal to its provider information key.
         kills: killcount
+        # Map the task-level episode-boundary signal to its provider information key.
         episode_done: pending_reset
+      # Define discrete task events derived from changes in the declared signals.
       events:
+        # Detect eliminating the target from an increase in the kill counter.
         monster_killed: {signal: kills, operation: increase}
+        # Detect the scenario boundary when the pending-reset flag is asserted for a step.
         episode_ended: {signal: episode_done, operation: equals_for, value: 1, steps: 1}
+      # Define which task events and limits end an episode.
       termination:
+        # List the events that mark an episode as successful.
         success: [monster_killed]
+        # List provider boundaries treated as timeouts rather than task outcomes.
         timeout: [episode_ended]
+        # Cap each attempt in policy-environment transitions.
         max_episode_steps: 70
+# Override the shared settings used to evaluate checkpoints for this goal.
 eval:
+  # Override the shared ViZDoom environment contract used during evaluation.
   environment:
+    # Supply evaluation-time arguments for the native vectorized ViZDoom environment.
     env_config:
+      # Reuse the interception-specific provider arguments declared for training.
       env_args: *predict_position_env_args
+    # Merge the same interception-specific task overrides into the shared evaluation defaults.
     task: *predict_position_task

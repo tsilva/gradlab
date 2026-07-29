@@ -102,6 +102,42 @@ export function runFinishPresentation(item) {
   const stepDetail = Number.isSafeInteger(finalStep) && finalStep >= 0
     ? `Stopped at ${finalStep.toLocaleString()} steps`
     : "";
+  const earlyStop = item?.early_stop && typeof item.early_stop === "object"
+    ? item.early_stop
+    : {};
+  const condition = earlyStop.condition && typeof earlyStop.condition === "object"
+    ? earlyStop.condition
+    : {};
+  const earlyStopMetric = String(earlyStop.metric || condition.metric || "").trim();
+  const earlyStopOperator = String(condition.operator || "").trim();
+  const earlyStopThreshold = condition.threshold;
+  const hasThreshold = (
+    earlyStopMetric
+    && [">", ">=", "<", "<="].includes(earlyStopOperator)
+    && earlyStopThreshold !== null
+    && earlyStopThreshold !== undefined
+    && Number.isFinite(Number(earlyStopThreshold))
+  );
+  const earlyStopCriterion = hasThreshold
+    ? `${metricLabel(earlyStopMetric)} ${earlyStopOperator} ${
+        formatMetricValue(earlyStopMetric, earlyStopThreshold)
+      }`
+    : "";
+  const observedValue = earlyStop.value;
+  const observedDetail = (
+    earlyStopCriterion
+    && observedValue !== null
+    && observedValue !== undefined
+    && Number.isFinite(Number(observedValue))
+  )
+    ? `observed ${formatMetricValue(earlyStopMetric, observedValue)}`
+    : "";
+  const conditionId = String(earlyStop.condition_id || "").trim();
+  const earlyStopDetail = [
+    earlyStopCriterion || (conditionId ? humanizeMetricPart(conditionId) : ""),
+    observedDetail,
+    stepDetail,
+  ].filter(Boolean).join(" · ");
   if (!reason) {
     const state = String(item?.state || "").trim().toLowerCase();
     return ["finished", "failed", "crashed", "canceled", "cancelled", "killed"]
@@ -129,10 +165,11 @@ export function runFinishPresentation(item) {
   }
   if (reason.startsWith("early_stop_success:")) {
     return {
-      label: "Training success criterion met",
-      detail: [humanizeMetricPart(reason.split(":", 2)[1]), stepDetail]
-        .filter(Boolean)
-        .join(" · "),
+      label: "Training target met",
+      detail: earlyStopDetail || [
+        humanizeMetricPart(reason.split(":", 2)[1]),
+        stepDetail,
+      ].filter(Boolean).join(" · "),
       tone: "success",
     };
   }
@@ -191,12 +228,13 @@ export function metricLabel(metric) {
   const known = {
     "leader/checkpoint/step": "Checkpoint step",
     "train/global_step": "Global step",
-    "train/episode/return/shaped/from/target/mean": "Target return",
-    "train/outcome/success/window_100/rate/min": "Min success (100)",
-    "eval/full/outcome/success/rate/min": "Min success",
-    "eval/full/outcome/success/rate/mean": "Mean success",
-    "eval/full/episode/return/mean": "Mean return",
-    "eval/full/episode/return/best": "Best return",
+    "train/episode/return/shaped/from/target/rolling_up_to_100/mean": "Mean target-start return (up to 100)",
+    "train/episode/return/shaped/from/target/window_100/mean": "Mean target-start return (last 100)",
+    "train/outcome/success/across_starts/window_100/rate/min": "Min success (last 100)",
+    "eval/full/outcome/success/across_starts/rate/min": "Min success",
+    "eval/full/outcome/success/across_starts/rate/mean": "Mean success",
+    "eval/full/episode/return/shaped/mean": "Mean return",
+    "eval/full/episode/return/shaped/max": "Best return",
   };
   if (known[name]) return known[name];
   const reason = name.match(/^eval\/full\/outcome\/reason\/([^/]+)\/rate$/);
@@ -709,8 +747,18 @@ export class SourceBrowser {
       ? sourceRouteFromPath(location.pathname)
       : null;
     this.onPopState = () => {
-      const route = sourceRouteFromPath(location.pathname);
-      if (!route) return;
+      const parsedRoute = sourceRouteFromPath(location.pathname);
+      if (!parsedRoute) return;
+      const route = {
+        ...parsedRoute,
+        entity: (
+          parsedRoute.entity
+          || this.route.entity
+          || this.app.route?.entity
+          || this.initialProjectCatalog?.entity
+          || ""
+        ),
+      };
       this.applyRoute(route);
       this.command("browse_sources", { route: { ...this.route } });
     };

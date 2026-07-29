@@ -2,7 +2,4 @@ defaults:
 - ../../../../recipes/_presets/breakout-high-throughput-ppo@_global_
 - _self_
 recipe_id: ppo
-description: >-
-  Seed {{ seed }} trains the three-action no-NOOP Breakout ablation for {{ goal_id }} with the baseline
-  128 environments, 64-step rollouts, resource cap, optimizer schedule, and otherwise unchanged
-  goal-owned training contract.
+description: PPO three-action no-NOOP ablation for {{ goal_id }}.

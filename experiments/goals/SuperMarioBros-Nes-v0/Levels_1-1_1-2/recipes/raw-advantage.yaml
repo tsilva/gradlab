@@ -3,9 +3,7 @@ defaults:
 - _self_
 reward_shape: speedrun-v1
 recipe_id: raw-advantage
-description: >-
-  Seed {{ seed }} trains the task-conditioned {{ goal_id }} PPO policy with raw advantages instead
-  of per-task advantage normalization while leaving the goal contract unchanged.
+description: Task-conditioned PPO for {{ goal_id }} with raw advantages.
 train:
   backend:
     id: sb3.ppo

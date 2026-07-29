@@ -8,8 +8,6 @@ import numpy as np
 from gradlab.metric_names import (
     eval_metric,
     eval_progress_metric,
-    eval_reason_rate_metric,
-    eval_success_from_rate_metric,
     eval_success_rate_metric,
 )
 from gradlab.policy_runtime import reset_policy_state
@@ -206,17 +204,9 @@ def eval_outcome_metrics(
     event_names: Sequence[str] = (),
     track_success: bool = False,
 ) -> dict[str, int | float]:
+    del event_names
     metrics: dict[str, int | float] = {}
     success_rates: list[float] = []
-    configured_reasons = set(str(name) for name in event_names)
-    all_reasons = sorted(
-        configured_reasons
-        | {reason for episode in episode_results for reason in episode_reasons(episode)}
-    )
-    episode_count = len(episode_results)
-    for reason in all_reasons:
-        count = sum(reason in episode_reasons(episode) for episode in episode_results)
-        metrics[eval_reason_rate_metric(protocol, reason)] = count / episode_count
 
     states = sorted(
         {state for episode in episode_results if (state := episode_start_state(episode))}
@@ -230,7 +220,6 @@ def eval_outcome_metrics(
             success_count = sum(episode_is_complete(episode) for episode in state_episodes)
             success_rate = success_count / denominator
             success_rates.append(success_rate)
-            metrics[eval_success_from_rate_metric(protocol, state)] = success_rate
     if success_rates:
         metrics[eval_success_rate_metric(protocol, "min")] = min(success_rates)
         metrics[eval_success_rate_metric(protocol, "mean")] = float(np.mean(success_rates))
@@ -365,12 +354,12 @@ def summarize_episode_results(
         "return_std": float(returns.std()),
         "return_median": float(np.median(returns)),
         "episode_length_mean": float(lengths.mean()),
-        eval_metric("full", "episode/return/mean"): float(returns.mean()),
-        eval_metric("full", "episode/return/std"): float(returns.std()),
-        eval_metric("full", "episode/return/median"): float(np.median(returns)),
-        eval_metric("full", "episode/return/best"): float(returns.max()),
+        eval_metric("full", "episode/return/shaped/mean"): float(returns.mean()),
+        eval_metric("full", "episode/return/shaped/std"): float(returns.std()),
+        eval_metric("full", "episode/return/shaped/median"): float(np.median(returns)),
+        eval_metric("full", "episode/return/shaped/max"): float(returns.max()),
         eval_metric("full", "episode/length/mean"): float(lengths.mean()),
-        eval_metric("full", "episode/count"): episode_count,
+        eval_metric("full", "episode/completed/count"): episode_count,
         "episode_results": episode_results,
     }
     metrics.update(progress_metrics)

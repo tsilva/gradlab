@@ -2,10 +2,7 @@ defaults:
 - _self_
 reward_shape: speedrun-v1
 recipe_id: jerk
-description: >-
-  Seed {{ seed }} searches deterministic {{ goal_id }} attempts with vectorized Just Enough Retained
-  Knowledge, accepting and publishing the first open-loop action sequence that completes the
-  level; exhausting the transition budget without a completion is unsuccessful.
+description: Vectorized deterministic JERK search for a level-clearing {{ goal_id }} action sequence.
 train:
   timesteps: 10000000
   backend:

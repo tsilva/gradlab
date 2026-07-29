@@ -2,10 +2,7 @@ defaults:
 - ../../../recipes/_presets/atari-ppo@_global_
 - _self_
 recipe_id: ppo
-description: >-
-  Seed {{ seed }} trains PPO from pixels to navigate the My Way Home maze and reach the armor vest,
-  until the training target, timestep cap, or return plateau. This run is training-only; goal-owned
-  evaluation remains available for later explicit use.
+description: Training-only pixel PPO for navigating {{ goal_id }}.
 train:
   checkpoint_eval_backend: none
   timesteps: 10000000

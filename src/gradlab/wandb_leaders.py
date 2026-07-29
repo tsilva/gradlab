@@ -10,38 +10,45 @@ from typing import Any
 
 from gradlab.json_utils import json_safe
 from gradlab.metric_names import (
-    EVAL_FULL_EPISODE_RETURN_BEST,
-    EVAL_FULL_EPISODE_RETURN_MEAN,
-    EVAL_FULL_SUCCESS_RATE_MEAN,
-    EVAL_FULL_SUCCESS_RATE_MIN,
     LEADER_CHECKPOINT_ARTIFACT_REF,
-    LEADER_CHECKPOINT_BEST_RETURN,
-    LEADER_CHECKPOINT_EVAL_SOURCE,
-    LEADER_CHECKPOINT_OBJECTIVE,
-    LEADER_CHECKPOINT_PROGRESS_MAX,
-    LEADER_CHECKPOINT_RANK_VALUES,
-    LEADER_CHECKPOINT_RETURN_MEAN,
+    LEADER_CHECKPOINT_EVALUATION_SOURCE,
+    LEADER_CHECKPOINT_RETURN_SHAPED_MEAN,
     LEADER_CHECKPOINT_STEP,
-    LEADER_CHECKPOINT_SUCCESS_RATE_MEAN,
-    LEADER_CHECKPOINT_SUCCESS_RATE_MIN,
-    TRAIN_EPISODE_RETURN_SHAPED_MEAN,
+    LEADER_CHECKPOINT_SUCCESS_ACROSS_STARTS_RATE_MEAN,
+    LEADER_CHECKPOINT_SUCCESS_ACROSS_STARTS_RATE_MIN,
+    LEGACY_METRICS_SCHEMA_VERSION,
+    TRAIN_EPISODE_RETURN_SHAPED_ACROSS_ORIGINS_ROLLING_UP_TO_100_MEAN,
     TRAIN_GLOBAL_STEP,
-    TRAIN_OUTCOME_SUCCESS_WINDOW_100_RATE_MIN,
+    TRAIN_OUTCOME_SUCCESS_ACROSS_STARTS_WINDOW_100_RATE_MIN,
+    V13_LEADER_CHECKPOINT_ARTIFACT_REF,
+    V13_LEADER_CHECKPOINT_EVALUATION_SOURCE,
+    V13_LEADER_CHECKPOINT_RETURN_SHAPED_MEAN,
+    V13_LEADER_CHECKPOINT_SUCCESS_ACROSS_STARTS_RATE_MEAN,
+    V13_LEADER_CHECKPOINT_SUCCESS_ACROSS_STARTS_RATE_MIN,
+    evaluation_metric_schema,
+    leader_metric_for_rank_metric,
 )
 from gradlab.ranking import parse_objective_rank, rank_score
 from gradlab.wandb_utils import DEFAULT_WANDB_PROJECT_PATH, load_wandb_env
 
 
 RUN_OBJECTIVE_KEYS = (
-    TRAIN_OUTCOME_SUCCESS_WINDOW_100_RATE_MIN,
-    TRAIN_EPISODE_RETURN_SHAPED_MEAN,
+    TRAIN_OUTCOME_SUCCESS_ACROSS_STARTS_WINDOW_100_RATE_MIN,
+    TRAIN_EPISODE_RETURN_SHAPED_ACROSS_ORIGINS_ROLLING_UP_TO_100_MEAN,
 )
 RUN_PRIMARY_ORDER = "-created_at"
-CHECKPOINT_SUCCESS_KEYS = (LEADER_CHECKPOINT_SUCCESS_RATE_MIN,)
-CHECKPOINT_SUCCESS_MEAN_KEYS = (LEADER_CHECKPOINT_SUCCESS_RATE_MEAN,)
-CHECKPOINT_OBJECTIVE_KEYS = (LEADER_CHECKPOINT_OBJECTIVE,)
-CHECKPOINT_PROGRESS_KEYS = (LEADER_CHECKPOINT_PROGRESS_MAX,)
-CHECKPOINT_RETURN_KEYS = (LEADER_CHECKPOINT_RETURN_MEAN,)
+CHECKPOINT_SUCCESS_KEYS = (
+    LEADER_CHECKPOINT_SUCCESS_ACROSS_STARTS_RATE_MIN,
+    V13_LEADER_CHECKPOINT_SUCCESS_ACROSS_STARTS_RATE_MIN,
+)
+CHECKPOINT_SUCCESS_MEAN_KEYS = (
+    LEADER_CHECKPOINT_SUCCESS_ACROSS_STARTS_RATE_MEAN,
+    V13_LEADER_CHECKPOINT_SUCCESS_ACROSS_STARTS_RATE_MEAN,
+)
+CHECKPOINT_RETURN_KEYS = (
+    LEADER_CHECKPOINT_RETURN_SHAPED_MEAN,
+    V13_LEADER_CHECKPOINT_RETURN_SHAPED_MEAN,
+)
 CHECKPOINT_STEP_KEYS = (LEADER_CHECKPOINT_STEP,)
 # API ordering is only a retrieval hint. Goal-specific ranking happens in Python,
 # because the primary objective may be either minimized or maximized.
@@ -179,12 +186,16 @@ def checkpoint_summary_filter() -> dict[str, Any]:
         "$and": [
             {
                 "$or": [
-                    _exists_filter(LEADER_CHECKPOINT_OBJECTIVE),
-                    _exists_filter(LEADER_CHECKPOINT_SUCCESS_RATE_MIN),
+                    _exists_filter(LEADER_CHECKPOINT_ARTIFACT_REF),
+                    _exists_filter(V13_LEADER_CHECKPOINT_ARTIFACT_REF),
                 ]
             },
-            _exists_filter(LEADER_CHECKPOINT_RETURN_MEAN),
-            _exists_filter(LEADER_CHECKPOINT_ARTIFACT_REF),
+            {
+                "$or": [
+                    _exists_filter(LEADER_CHECKPOINT_RETURN_SHAPED_MEAN),
+                    _exists_filter(V13_LEADER_CHECKPOINT_RETURN_SHAPED_MEAN),
+                ]
+            },
         ]
     }
 
@@ -294,41 +305,72 @@ def rank_run_leaders(scores: Iterable[RunScore], *, min_seeds: int = 1) -> list[
 def checkpoint_leader(run: Any) -> CheckpointLeader | None:
     config = dict(getattr(run, "config", {}) or {})
     summary = getattr(run, "summary", {}) or {}
-    success = _first_float(summary, CHECKPOINT_SUCCESS_KEYS)
-    success_mean = _first_float(summary, CHECKPOINT_SUCCESS_MEAN_KEYS)
-    objective = _first_float(summary, CHECKPOINT_OBJECTIVE_KEYS)
-    progress = _first_float(summary, CHECKPOINT_PROGRESS_KEYS)
-    episode_return = _first_float(summary, CHECKPOINT_RETURN_KEYS)
+    try:
+        metrics_schema_version = int(config.get("metrics_schema_version"))
+        evaluation_metric_schema(metrics_schema_version)
+    except (TypeError, ValueError):
+        return None
+    legacy = metrics_schema_version == LEGACY_METRICS_SCHEMA_VERSION
+    success = _first_float(
+        summary,
+        (
+            V13_LEADER_CHECKPOINT_SUCCESS_ACROSS_STARTS_RATE_MIN
+            if legacy
+            else LEADER_CHECKPOINT_SUCCESS_ACROSS_STARTS_RATE_MIN,
+        ),
+    )
+    success_mean = _first_float(
+        summary,
+        (
+            V13_LEADER_CHECKPOINT_SUCCESS_ACROSS_STARTS_RATE_MEAN
+            if legacy
+            else LEADER_CHECKPOINT_SUCCESS_ACROSS_STARTS_RATE_MEAN,
+        ),
+    )
+    episode_return = _first_float(
+        summary,
+        (
+            V13_LEADER_CHECKPOINT_RETURN_SHAPED_MEAN
+            if legacy
+            else LEADER_CHECKPOINT_RETURN_SHAPED_MEAN,
+        ),
+    )
     checkpoint_step = _optional_int(_first_float(summary, CHECKPOINT_STEP_KEYS))
     artifact_ref = _first_text(
-        _mapping_value(summary, LEADER_CHECKPOINT_ARTIFACT_REF),
+        _mapping_value(
+            summary,
+            (
+                V13_LEADER_CHECKPOINT_ARTIFACT_REF
+                if legacy
+                else LEADER_CHECKPOINT_ARTIFACT_REF
+            ),
+        ),
     )
-    if objective is None:
-        return None
     if episode_return is None or not artifact_ref:
         return None
-    rank = parse_objective_rank(config.get("selection_rank"))
-    rank_metrics: dict[str, Any] = {
-        EVAL_FULL_SUCCESS_RATE_MIN: success,
-        EVAL_FULL_SUCCESS_RATE_MEAN: success_mean,
-        EVAL_FULL_EPISODE_RETURN_MEAN: episode_return,
-        EVAL_FULL_EPISODE_RETURN_BEST: _first_float(summary, (LEADER_CHECKPOINT_BEST_RETURN,)),
-        LEADER_CHECKPOINT_STEP: checkpoint_step,
-        "checkpoint_step": checkpoint_step,
-    }
-    saved_rank_values = _mapping_value(summary, LEADER_CHECKPOINT_RANK_VALUES)
-    if (
-        rank
-        and isinstance(saved_rank_values, Sequence)
-        and not isinstance(saved_rank_values, str | bytes)
-    ):
-        rank_metrics.update(
-            {
-                criterion.metric: value
-                for criterion, value in zip(rank, saved_rank_values, strict=False)
-            }
-        )
+    rank = parse_objective_rank(
+        config.get("selection_rank"),
+        metrics_schema_version=metrics_schema_version,
+    )
     if not rank:
+        return None
+    rank_metrics: dict[str, Any] = {}
+    progress: float | None = None
+    for criterion in rank:
+        leader_metric = leader_metric_for_rank_metric(
+            criterion.metric,
+            schema_version=metrics_schema_version,
+        )
+        value = (
+            checkpoint_step
+            if leader_metric == LEADER_CHECKPOINT_STEP
+            else _first_float(summary, (leader_metric,))
+        )
+        rank_metrics[criterion.metric] = value
+        if "/progress/" in criterion.metric and criterion.metric.endswith("/max"):
+            progress = value
+    objective = rank_metrics.get(rank[0].metric)
+    if objective is None:
         return None
     return CheckpointLeader(
         goal_slug=_first_text(config.get("goal_slug")),
@@ -342,7 +384,7 @@ def checkpoint_leader(run: Any) -> CheckpointLeader | None:
         run_id=str(getattr(run, "id", "") or ""),
         run_name=str(getattr(run, "name", "") or ""),
         url=str(getattr(run, "url", "") or ""),
-        objective=objective,
+        objective=float(objective),
         objective_name=rank[0].metric,
         success_rate_min=success,
         success_rate_mean=success_mean,
@@ -350,7 +392,16 @@ def checkpoint_leader(run: Any) -> CheckpointLeader | None:
         return_mean=episode_return,
         checkpoint_step=checkpoint_step,
         artifact_ref=artifact_ref,
-        eval_source=_first_text(_mapping_value(summary, LEADER_CHECKPOINT_EVAL_SOURCE)),
+        eval_source=_first_text(
+            _mapping_value(
+                summary,
+                (
+                    V13_LEADER_CHECKPOINT_EVALUATION_SOURCE
+                    if legacy
+                    else LEADER_CHECKPOINT_EVALUATION_SOURCE
+                ),
+            )
+        ),
         rank_score=rank_score(rank_metrics, rank),
     )
 

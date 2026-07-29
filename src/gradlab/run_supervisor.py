@@ -22,17 +22,13 @@ from gradlab.env import resolve_env_config
 from gradlab.env_config import env_config_from_mapping
 from gradlab.eval_metrics import eval_by_start_rows
 from gradlab.eval_backend import EvalBackend, EvalHandle
+from gradlab.evaluation_projection import evaluation_wandb_projection
 from gradlab.file_utils import file_sha256
 from gradlab.goal_variants import (
     build_goal_variant_descriptor,
     validate_goal_variant_descriptor,
 )
 from gradlab.metric_names import (
-    EVAL_ACCEPTANCE_DURATION_SECONDS,
-    EVAL_ACCEPTANCE_EPISODES_COMPLETED,
-    EVAL_ACCEPTANCE_EPISODES_PLANNED,
-    EVAL_ACCEPTANCE_FAILURE_COUNT,
-    EVAL_ACCEPTANCE_PASS,
     METRICS_SCHEMA_VERSION,
     ORCHESTRATION_CHECKPOINT_BACKLOG,
     ORCHESTRATION_IDLE_GPU_TAIL_SECONDS,
@@ -49,7 +45,6 @@ from gradlab.metric_names import (
     ORCHESTRATION_WANDB_HIGH_WATER,
     ORCHESTRATION_WANDB_REMOTE_HIGH_WATER,
     ORCHESTRATION_WANDB_REMOTE_VISIBLE_LAG_SECONDS,
-    metric_definition,
 )
 from gradlab.metric_store import metric_store_path
 from gradlab.model_sources import download_public_checkpoint_manifest_source
@@ -1841,21 +1836,14 @@ class RunSupervisor:
         result: EvalResult,
         raw: Mapping[str, Any],
     ) -> None:
-        metrics = {
-            str(name): value
-            for name, value in dict(raw.get("metrics") or {}).items()
-            if metric_definition(str(name)) is not None
-        }
-        metrics.update(
-            {
-                EVAL_ACCEPTANCE_PASS: 1.0 if result.status == "accepted" else 0.0,
-                EVAL_ACCEPTANCE_EPISODES_PLANNED: float(
-                    row["intent"]["execution_contract"]["episodes"]
-                ),
-                EVAL_ACCEPTANCE_EPISODES_COMPLETED: float(len(result.episode_results)),
-                EVAL_ACCEPTANCE_FAILURE_COUNT: float(result.aggregates.get("failure_count") or 0),
-                EVAL_ACCEPTANCE_DURATION_SECONDS: float(raw.get("duration_seconds") or 0.0),
-            }
+        metrics = evaluation_wandb_projection(
+            dict(raw.get("metrics") or {}),
+            schema_version=METRICS_SCHEMA_VERSION,
+            checkpoint_step=int(row["checkpoint_step"]),
+            accepted=result.status == "accepted",
+            episodes_planned=int(row["intent"]["execution_contract"]["episodes"]),
+            episodes_completed=len(result.episode_results),
+            duration_seconds=float(raw.get("duration_seconds") or 0.0),
         )
         self.store.append_metrics(
             metrics,
@@ -2410,6 +2398,9 @@ class RunSupervisor:
             checkpoint_url=str(checkpoint["public_url"]),
             metrics=metrics,
             updated_at=receipt.promoted_at,
+            selection_rank=self.train_config["selection_rank"],
+            evaluation_source="modal:automatic",
+            metrics_schema_version=METRICS_SCHEMA_VERSION,
         )
 
     def _wait_for_remote_promotion(self, receipt: PromotionReceipt) -> None:

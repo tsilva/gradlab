@@ -12,6 +12,4 @@ train:
       # Keep rollout updates near the 0.015-0.024 KL regime observed in the
       # accepted Level1-2 run and stop before destructive policy drift.
       target_kl: 0.03
-description: >-
-  Seed {{ seed }} trains the stable low-KL late-decay {{ goal_id }} PPO policy-search baseline,
-  using the goal contract's clear-rate gate and async checkpoint evaluation for promotion.
+description: Stable low-KL, late-decay PPO baseline for {{ goal_id }}.

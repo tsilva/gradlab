@@ -8,9 +8,10 @@ from pathlib import Path
 from typing import Any, Mapping
 
 
-METRICS_SCHEMA_VERSION = 13
+METRICS_SCHEMA_VERSION = 14
+LEGACY_METRICS_SCHEMA_VERSION = 13
 TRAIN_GLOBAL_STEP = "train/global_step"
-EVAL_CHECKPOINT_STEP = "eval/checkpoint_step"
+EVAL_CHECKPOINT_STEP = "eval/checkpoint/step"
 ORCHESTRATION_EVENT_SEQ = "orchestration/event_seq"
 ORCHESTRATION_EVENT_ID = "orchestration/event_id"
 ORCHESTRATION_QUEUE_DEPTH = "orchestration/outbox/queue_depth"
@@ -31,14 +32,24 @@ ORCHESTRATION_RESULT_TO_STOP_SECONDS = "orchestration/eval/result_to_stop_second
 ORCHESTRATION_IDLE_GPU_TAIL_SECONDS = "orchestration/drain/idle_gpu_tail_seconds"
 ORCHESTRATION_SCRATCH_USED_FRACTION = "orchestration/scratch/used_fraction"
 
-TRAIN_EPISODE_RETURN_SHAPED_MEAN = "train/episode/return/shaped/mean"
-TRAIN_EPISODE_RETURN_SHAPED_MAX = "train/episode/return/shaped/max"
-TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_MEAN = "train/episode/return/shaped/from/target/mean"
-TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_MAX = "train/episode/return/shaped/from/target/max"
+TRAIN_EPISODE_RETURN_SHAPED_ACROSS_ORIGINS_ROLLING_UP_TO_100_MEAN = (
+    "train/episode/return/shaped/across_origins/rolling_up_to_100/mean"
+)
+TRAIN_EPISODE_RETURN_SHAPED_ACROSS_ORIGINS_ROLLING_UP_TO_100_MAX = (
+    "train/episode/return/shaped/across_origins/rolling_up_to_100/max"
+)
+TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_ROLLING_UP_TO_100_MEAN = (
+    "train/episode/return/shaped/from/target/rolling_up_to_100/mean"
+)
+TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_ROLLING_UP_TO_100_MAX = (
+    "train/episode/return/shaped/from/target/rolling_up_to_100/max"
+)
 TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_WINDOW_100_MEAN = (
     "train/episode/return/shaped/from/target/window_100/mean"
 )
-TRAIN_EPISODE_LENGTH_MEAN = "train/episode/length/mean"
+TRAIN_EPISODE_LENGTH_ACROSS_ORIGINS_ROLLING_UP_TO_100_MEAN = (
+    "train/episode/length/across_origins/rolling_up_to_100/mean"
+)
 
 TRAIN_ARCHIVE_CURRICULUM_ROOT = "train/curriculum/archive"
 TRAIN_ARCHIVE_CURRICULUM_CELL_COUNT = f"{TRAIN_ARCHIVE_CURRICULUM_ROOT}/cell/count"
@@ -64,13 +75,23 @@ TRAIN_ARCHIVE_SAMPLING_EFFECTIVE_CELL_COUNT = (
 TRAIN_ARCHIVE_CAPTURE_SECONDS = f"{TRAIN_ARCHIVE_CURRICULUM_ROOT}/capture/seconds"
 TRAIN_ARCHIVE_RESTORE_SECONDS = f"{TRAIN_ARCHIVE_CURRICULUM_ROOT}/restore/seconds"
 
-TRAIN_OUTCOME_TERMINAL_COUNT = "train/outcome/terminal/count"
+TRAIN_EPISODE_COMPLETED_COUNT = "train/episode/completed/count"
 TRAIN_OUTCOME_SUCCESS_ROOT = "train/outcome/success"
-TRAIN_OUTCOME_SUCCESS_CURRENT_RATE_MIN = f"{TRAIN_OUTCOME_SUCCESS_ROOT}/current/rate/min"
-TRAIN_OUTCOME_SUCCESS_CURRENT_RATE_MEAN = f"{TRAIN_OUTCOME_SUCCESS_ROOT}/current/rate/mean"
-TRAIN_OUTCOME_SUCCESS_WINDOW_100_RATE_MIN = f"{TRAIN_OUTCOME_SUCCESS_ROOT}/window_100/rate/min"
-TRAIN_OUTCOME_SUCCESS_WINDOW_100_RATE_MEAN = f"{TRAIN_OUTCOME_SUCCESS_ROOT}/window_100/rate/mean"
-TRAIN_OUTCOME_SUCCESS_START_COVERAGE_RATE = f"{TRAIN_OUTCOME_SUCCESS_ROOT}/start_coverage/rate"
+TRAIN_OUTCOME_SUCCESS_ACROSS_OBSERVED_STARTS_CUMULATIVE_RATE_MIN = (
+    f"{TRAIN_OUTCOME_SUCCESS_ROOT}/across_observed_starts/cumulative/rate/min"
+)
+TRAIN_OUTCOME_SUCCESS_ACROSS_OBSERVED_STARTS_CUMULATIVE_RATE_MEAN = (
+    f"{TRAIN_OUTCOME_SUCCESS_ROOT}/across_observed_starts/cumulative/rate/mean"
+)
+TRAIN_OUTCOME_SUCCESS_ACROSS_STARTS_WINDOW_100_RATE_MIN = (
+    f"{TRAIN_OUTCOME_SUCCESS_ROOT}/across_starts/window_100/rate/min"
+)
+TRAIN_OUTCOME_SUCCESS_ACROSS_STARTS_WINDOW_100_RATE_MEAN = (
+    f"{TRAIN_OUTCOME_SUCCESS_ROOT}/across_starts/window_100/rate/mean"
+)
+TRAIN_OUTCOME_SUCCESS_ACROSS_STARTS_COVERAGE_RATE = (
+    f"{TRAIN_OUTCOME_SUCCESS_ROOT}/across_starts/coverage/rate"
+)
 
 TRAIN_EARLY_STOP_ROOT = "train/early_stop"
 TRAIN_REWARD_ROOT = "train/reward"
@@ -102,17 +123,11 @@ TRAIN_GO_EXPLORE_ARCHIVE_RECENT_NEW_CELL_RATE = (
 TRAIN_GO_EXPLORE_ARCHIVE_RECENT_VISIT_WINDOW = (
     f"{TRAIN_ALGORITHM_GO_EXPLORE_ROOT}/archive/recent_visit_window"
 )
-TRAIN_GO_EXPLORE_ARCHIVE_VISITS_PER_CELL = (
-    f"{TRAIN_ALGORITHM_GO_EXPLORE_ROOT}/archive/visits_per_cell"
-)
 TRAIN_GO_EXPLORE_PROGRESS_GUIDED_CELL_COUNT = (
     f"{TRAIN_ALGORITHM_GO_EXPLORE_ROOT}/progress_guided/cell_count"
 )
 TRAIN_GO_EXPLORE_PROGRESS_GUIDED_SELECTION_COUNT = (
     f"{TRAIN_ALGORITHM_GO_EXPLORE_ROOT}/progress_guided/selection_count"
-)
-TRAIN_GO_EXPLORE_PROGRESS_GUIDED_SELECTION_RATE = (
-    f"{TRAIN_ALGORITHM_GO_EXPLORE_ROOT}/progress_guided/selection_rate"
 )
 TRAIN_GO_EXPLORE_SUCCESS_GUIDED_CELL_COUNT = (
     f"{TRAIN_ALGORITHM_GO_EXPLORE_ROOT}/success_guided/cell_count"
@@ -154,8 +169,6 @@ TRAIN_A2C_POLICY_ENTROPY = f"{TRAIN_ALGORITHM_A2C_ROOT}/policy/entropy"
 
 TRAIN_THROUGHPUT_ROOT = "train/throughput"
 TRAIN_THROUGHPUT_LOOP_FPS = f"{TRAIN_THROUGHPUT_ROOT}/loop_fps"
-TRAIN_THROUGHPUT_ROLLOUT_FPS = f"{TRAIN_THROUGHPUT_ROOT}/rollout_fps"
-TRAIN_THROUGHPUT_ENV_STEP_FPS = f"{TRAIN_THROUGHPUT_ROOT}/env_step_fps"
 TRAIN_THROUGHPUT_ROLLOUT_SECONDS = f"{TRAIN_THROUGHPUT_ROOT}/rollout_seconds"
 TRAIN_THROUGHPUT_ENV_STEP_SECONDS = f"{TRAIN_THROUGHPUT_ROOT}/env_step_seconds"
 TRAIN_THROUGHPUT_ROLLOUT_OVERHEAD_SECONDS = f"{TRAIN_THROUGHPUT_ROOT}/rollout_overhead_seconds"
@@ -167,34 +180,50 @@ TRAIN_ARTIFACT_UPLOAD_SECONDS = "train/artifact/upload/seconds"
 EVAL_ROOT = "eval"
 EVAL_PROTOCOLS = ("full",)
 EVAL_FULL_ROOT = f"{EVAL_ROOT}/full"
-EVAL_FULL_EPISODE_RETURN_MEAN = f"{EVAL_FULL_ROOT}/episode/return/mean"
-EVAL_FULL_EPISODE_RETURN_BEST = f"{EVAL_FULL_ROOT}/episode/return/best"
-EVAL_FULL_EPISODE_COUNT = f"{EVAL_FULL_ROOT}/episode/count"
+EVAL_FULL_EPISODE_RETURN_SHAPED_MEAN = f"{EVAL_FULL_ROOT}/episode/return/shaped/mean"
+EVAL_FULL_EPISODE_RETURN_SHAPED_MAX = f"{EVAL_FULL_ROOT}/episode/return/shaped/max"
+EVAL_FULL_EPISODE_COMPLETED_COUNT = f"{EVAL_FULL_ROOT}/episode/completed/count"
 EVAL_FULL_PROGRESS_X_MAX = f"{EVAL_FULL_ROOT}/progress/x/max"
-EVAL_FULL_SUCCESS_RATE_MIN = f"{EVAL_FULL_ROOT}/outcome/success/rate/min"
-EVAL_FULL_SUCCESS_RATE_MEAN = f"{EVAL_FULL_ROOT}/outcome/success/rate/mean"
+EVAL_FULL_SUCCESS_ACROSS_STARTS_RATE_MIN = (
+    f"{EVAL_FULL_ROOT}/outcome/success/across_starts/rate/min"
+)
+EVAL_FULL_SUCCESS_ACROSS_STARTS_RATE_MEAN = (
+    f"{EVAL_FULL_ROOT}/outcome/success/across_starts/rate/mean"
+)
 EVAL_FULL_BY_START = f"{EVAL_FULL_ROOT}/by_start"
-EVAL_FULL_CHECKPOINT_STEP = f"{EVAL_FULL_ROOT}/checkpoint/step"
-EVAL_FULL_CHECKPOINT_ARTIFACT = f"{EVAL_FULL_ROOT}/checkpoint/artifact"
-EVAL_FULL_DURATION_SECONDS = f"{EVAL_FULL_ROOT}/duration/seconds"
 EVAL_ACCEPTANCE_PASS = "eval/acceptance/pass"
-EVAL_ACCEPTANCE_EPISODES_PLANNED = "eval/acceptance/episodes/planned"
-EVAL_ACCEPTANCE_EPISODES_COMPLETED = "eval/acceptance/episodes/completed"
-EVAL_ACCEPTANCE_FAILURE_COUNT = "eval/acceptance/failure/count"
+EVAL_ACCEPTANCE_EPISODE_PLANNED_COUNT = "eval/acceptance/episode/planned/count"
+EVAL_ACCEPTANCE_EPISODE_COMPLETED_COUNT = "eval/acceptance/episode/completed/count"
 EVAL_ACCEPTANCE_DURATION_SECONDS = "eval/acceptance/duration/seconds"
 
-LEADER_CHECKPOINT_SUCCESS_RATE_MIN = "leader/checkpoint/success_rate_min"
-LEADER_CHECKPOINT_SUCCESS_RATE_MEAN = "leader/checkpoint/success_rate_mean"
-LEADER_CHECKPOINT_ACCEPTANCE_PASS = "leader/checkpoint/acceptance_pass"
-LEADER_CHECKPOINT_OBJECTIVE = "leader/checkpoint/objective"
-LEADER_CHECKPOINT_RETURN_MEAN = "leader/checkpoint/return_mean"
-LEADER_CHECKPOINT_BEST_RETURN = "leader/checkpoint/best_return"
-LEADER_CHECKPOINT_RANK_VALUES = "leader/checkpoint/rank_values"
-LEADER_CHECKPOINT_PROGRESS_MAX = "leader/checkpoint/progress_max"
+LEADER_CHECKPOINT_SUCCESS_ACROSS_STARTS_RATE_MIN = (
+    "leader/checkpoint/outcome/success/across_starts/rate/min"
+)
+LEADER_CHECKPOINT_SUCCESS_ACROSS_STARTS_RATE_MEAN = (
+    "leader/checkpoint/outcome/success/across_starts/rate/mean"
+)
+LEADER_CHECKPOINT_RETURN_SHAPED_MEAN = "leader/checkpoint/episode/return/shaped/mean"
+LEADER_CHECKPOINT_RETURN_SHAPED_MAX = "leader/checkpoint/episode/return/shaped/max"
 LEADER_CHECKPOINT_STEP = "leader/checkpoint/step"
-LEADER_CHECKPOINT_ARTIFACT_REF = "leader/checkpoint/artifact_ref"
-LEADER_CHECKPOINT_EVAL_SOURCE = "leader/checkpoint/eval_source"
+LEADER_CHECKPOINT_ARTIFACT_REF = "leader/checkpoint/artifact/ref"
+LEADER_CHECKPOINT_EVALUATION_SOURCE = "leader/checkpoint/evaluation/source"
 LEADER_CHECKPOINT_UPDATED_AT = "leader/checkpoint/updated_at"
+
+V13_EVAL_CHECKPOINT_STEP = "eval/checkpoint_step"
+V13_EVAL_FULL_EPISODE_RETURN_SHAPED_MEAN = "eval/full/episode/return/mean"
+V13_EVAL_FULL_EPISODE_RETURN_SHAPED_MAX = "eval/full/episode/return/best"
+V13_EVAL_FULL_EPISODE_COMPLETED_COUNT = "eval/full/episode/count"
+V13_EVAL_FULL_SUCCESS_ACROSS_STARTS_RATE_MIN = "eval/full/outcome/success/rate/min"
+V13_EVAL_FULL_SUCCESS_ACROSS_STARTS_RATE_MEAN = "eval/full/outcome/success/rate/mean"
+V13_EVAL_ACCEPTANCE_EPISODE_PLANNED_COUNT = "eval/acceptance/episodes/planned"
+V13_EVAL_ACCEPTANCE_EPISODE_COMPLETED_COUNT = "eval/acceptance/episodes/completed"
+V13_LEADER_CHECKPOINT_SUCCESS_ACROSS_STARTS_RATE_MIN = "leader/checkpoint/success_rate_min"
+V13_LEADER_CHECKPOINT_SUCCESS_ACROSS_STARTS_RATE_MEAN = "leader/checkpoint/success_rate_mean"
+V13_LEADER_CHECKPOINT_RETURN_SHAPED_MEAN = "leader/checkpoint/return_mean"
+V13_LEADER_CHECKPOINT_RETURN_SHAPED_MAX = "leader/checkpoint/best_return"
+V13_LEADER_CHECKPOINT_PROGRESS_MAX = "leader/checkpoint/progress_max"
+V13_LEADER_CHECKPOINT_ARTIFACT_REF = "leader/checkpoint/artifact_ref"
+V13_LEADER_CHECKPOINT_EVALUATION_SOURCE = "leader/checkpoint/eval_source"
 
 
 @dataclass(frozen=True)
@@ -204,6 +233,137 @@ class MetricDefinition:
     unit: str
     cadence: str
     storage: str
+
+
+@dataclass(frozen=True)
+class EvaluationMetricSchema:
+    version: int
+    checkpoint_step: str
+    return_mean: str
+    return_max: str
+    episode_completed_count: str
+    success_rate_min: str
+    success_rate_mean: str
+    acceptance_episode_planned_count: str
+    acceptance_episode_completed_count: str
+    table_columns: tuple[str, ...]
+
+
+_EVALUATION_METRIC_SCHEMAS = {
+    LEGACY_METRICS_SCHEMA_VERSION: EvaluationMetricSchema(
+        version=LEGACY_METRICS_SCHEMA_VERSION,
+        checkpoint_step=V13_EVAL_CHECKPOINT_STEP,
+        return_mean=V13_EVAL_FULL_EPISODE_RETURN_SHAPED_MEAN,
+        return_max=V13_EVAL_FULL_EPISODE_RETURN_SHAPED_MAX,
+        episode_completed_count=V13_EVAL_FULL_EPISODE_COMPLETED_COUNT,
+        success_rate_min=V13_EVAL_FULL_SUCCESS_ACROSS_STARTS_RATE_MIN,
+        success_rate_mean=V13_EVAL_FULL_SUCCESS_ACROSS_STARTS_RATE_MEAN,
+        acceptance_episode_planned_count=V13_EVAL_ACCEPTANCE_EPISODE_PLANNED_COUNT,
+        acceptance_episode_completed_count=V13_EVAL_ACCEPTANCE_EPISODE_COMPLETED_COUNT,
+        table_columns=(
+            "checkpoint_step",
+            "start_id",
+            "episodes",
+            "success_count",
+            "success_rate",
+            "return_mean",
+            "return_std",
+            "return_median",
+            "reason",
+            "reason_count",
+            "reason_rate",
+        ),
+    ),
+    METRICS_SCHEMA_VERSION: EvaluationMetricSchema(
+        version=METRICS_SCHEMA_VERSION,
+        checkpoint_step=EVAL_CHECKPOINT_STEP,
+        return_mean=EVAL_FULL_EPISODE_RETURN_SHAPED_MEAN,
+        return_max=EVAL_FULL_EPISODE_RETURN_SHAPED_MAX,
+        episode_completed_count=EVAL_FULL_EPISODE_COMPLETED_COUNT,
+        success_rate_min=EVAL_FULL_SUCCESS_ACROSS_STARTS_RATE_MIN,
+        success_rate_mean=EVAL_FULL_SUCCESS_ACROSS_STARTS_RATE_MEAN,
+        acceptance_episode_planned_count=EVAL_ACCEPTANCE_EPISODE_PLANNED_COUNT,
+        acceptance_episode_completed_count=EVAL_ACCEPTANCE_EPISODE_COMPLETED_COUNT,
+        table_columns=(
+            "checkpoint_step",
+            "start_id",
+            "episode_count",
+            "success_count",
+            "success_rate",
+            "shaped_return_mean",
+            "shaped_return_std",
+            "shaped_return_median",
+            "failure_reason",
+            "failure_reason_count",
+            "failure_reason_rate",
+        ),
+    ),
+}
+
+
+def evaluation_metric_schema(version: object) -> EvaluationMetricSchema:
+    try:
+        normalized = int(version)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"unsupported metrics schema version: {version!r}") from exc
+    schema = _EVALUATION_METRIC_SCHEMAS.get(normalized)
+    if schema is None:
+        raise ValueError(f"unsupported metrics schema version: {normalized}")
+    return schema
+
+
+def leader_checkpoint_progress_metric(progress: object) -> str:
+    return validate_metric_name(
+        f"leader/checkpoint/progress/{metric_path_segment(progress)}/max"
+    )
+
+
+def leader_metric_for_rank_metric(
+    metric: str,
+    *,
+    schema_version: int = METRICS_SCHEMA_VERSION,
+) -> str:
+    evaluation_metric_schema(schema_version)
+    fixed = (
+        {
+            EVAL_FULL_SUCCESS_ACROSS_STARTS_RATE_MIN: (
+                LEADER_CHECKPOINT_SUCCESS_ACROSS_STARTS_RATE_MIN
+            ),
+            EVAL_FULL_SUCCESS_ACROSS_STARTS_RATE_MEAN: (
+                LEADER_CHECKPOINT_SUCCESS_ACROSS_STARTS_RATE_MEAN
+            ),
+            EVAL_FULL_EPISODE_RETURN_SHAPED_MEAN: LEADER_CHECKPOINT_RETURN_SHAPED_MEAN,
+            EVAL_FULL_EPISODE_RETURN_SHAPED_MAX: LEADER_CHECKPOINT_RETURN_SHAPED_MAX,
+            LEADER_CHECKPOINT_STEP: LEADER_CHECKPOINT_STEP,
+        }
+        if schema_version == METRICS_SCHEMA_VERSION
+        else {
+            V13_EVAL_FULL_SUCCESS_ACROSS_STARTS_RATE_MIN: (
+                V13_LEADER_CHECKPOINT_SUCCESS_ACROSS_STARTS_RATE_MIN
+            ),
+            V13_EVAL_FULL_SUCCESS_ACROSS_STARTS_RATE_MEAN: (
+                V13_LEADER_CHECKPOINT_SUCCESS_ACROSS_STARTS_RATE_MEAN
+            ),
+            V13_EVAL_FULL_EPISODE_RETURN_SHAPED_MEAN: (
+                V13_LEADER_CHECKPOINT_RETURN_SHAPED_MEAN
+            ),
+            V13_EVAL_FULL_EPISODE_RETURN_SHAPED_MAX: (
+                V13_LEADER_CHECKPOINT_RETURN_SHAPED_MAX
+            ),
+            LEADER_CHECKPOINT_STEP: LEADER_CHECKPOINT_STEP,
+        }
+    )
+    mapped = fixed.get(metric)
+    if mapped is not None:
+        return mapped
+    prefix = f"{EVAL_FULL_ROOT}/progress/"
+    if metric.startswith(prefix) and metric.endswith("/max"):
+        progress = metric[len(prefix) : -len("/max")]
+        if "/" not in progress:
+            if schema_version == LEGACY_METRICS_SCHEMA_VERSION:
+                return V13_LEADER_CHECKPOINT_PROGRESS_MAX
+            return leader_checkpoint_progress_metric(progress)
+    raise ValueError(f"evaluation rank criterion cannot be projected: {metric}")
 
 
 _METRIC_REGISTRY_START = "<!-- METRIC_REGISTRY_START -->"
@@ -328,12 +488,14 @@ def eval_metric(protocol: str, suffix: str) -> str:
 
 
 def train_outcome_reason_count_metric(reason: object) -> str:
-    return validate_metric_name(f"train/outcome/reason/{metric_path_segment(reason)}/count")
+    return validate_metric_name(
+        f"train/outcome/failure/reason/{metric_path_segment(reason)}/episode/count"
+    )
 
 
 def train_outcome_reason_window_rate_metric(reason: object) -> str:
     return validate_metric_name(
-        f"train/outcome/reason/{metric_path_segment(reason)}/rate/window_100"
+        f"train/outcome/failure/reason/{metric_path_segment(reason)}/window_100/rate"
     )
 
 
@@ -350,15 +512,15 @@ def train_success_from_metric(start: object, suffix: str) -> str:
 
 
 def train_success_count_metric(start: object) -> str:
-    return train_success_from_metric(start, "count")
+    return train_success_from_metric(start, "episode/count")
 
 
 def train_success_attempts_metric(start: object) -> str:
-    return train_success_from_metric(start, "attempts")
+    return train_success_from_metric(start, "attempt/count")
 
 
 def train_success_window_rate_metric(start: object) -> str:
-    return train_success_from_metric(start, "rate/window_100")
+    return train_success_from_metric(start, "window_100/rate")
 
 
 def train_reward_component_metric(component: object, stat: str) -> str:
@@ -373,16 +535,11 @@ def train_reward_signal_metric(signal: object, stat: str) -> str:
     )
 
 
-def eval_success_from_rate_metric(protocol: str, start: object) -> str:
-    return eval_metric(protocol, f"outcome/success/from/{metric_value_segment(start)}/rate")
-
-
 def eval_success_rate_metric(protocol: str, stat: str) -> str:
-    return eval_metric(protocol, f"outcome/success/rate/{metric_path_segment(stat)}")
-
-
-def eval_reason_rate_metric(protocol: str, reason: object) -> str:
-    return eval_metric(protocol, f"outcome/reason/{metric_path_segment(reason)}/rate")
+    return eval_metric(
+        protocol,
+        f"outcome/success/across_starts/rate/{metric_path_segment(stat)}",
+    )
 
 
 def eval_progress_metric(
@@ -397,8 +554,14 @@ def eval_progress_metric(
 
 
 SB3_SHARED_ACTOR_CRITIC_SCALAR_MAP = {
-    "rollout/ep_rew_mean": (TRAIN_EPISODE_RETURN_SHAPED_MEAN, 1.0),
-    "rollout/ep_len_mean": (TRAIN_EPISODE_LENGTH_MEAN, 1.0),
+    "rollout/ep_rew_mean": (
+        TRAIN_EPISODE_RETURN_SHAPED_ACROSS_ORIGINS_ROLLING_UP_TO_100_MEAN,
+        1.0,
+    ),
+    "rollout/ep_len_mean": (
+        TRAIN_EPISODE_LENGTH_ACROSS_ORIGINS_ROLLING_UP_TO_100_MEAN,
+        1.0,
+    ),
     "train/entropy_loss": ("policy/entropy", -1.0),
     "train/explained_variance": ("value/explained_variance", 1.0),
     "train/policy_gradient_loss": ("update/policy_gradient_loss", 1.0),

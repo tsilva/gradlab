@@ -175,23 +175,23 @@ class TrainConfigFieldSchemaTests(unittest.TestCase):
         )
 
         self.assertEqual(parser.parse_args([]).checkpoint_eval_backend, "modal")
-        self.assertEqual(parser.parse_args([]).metrics_schema_version, 13)
+        self.assertEqual(parser.parse_args([]).metrics_schema_version, 14)
         self.assertEqual(
             parser.parse_args(["--checkpoint-eval-backend", "none"]).checkpoint_eval_backend,
             "none",
         )
 
-    def test_metrics_schema_version_accepts_only_active_v13(self) -> None:
+    def test_metrics_schema_version_accepts_only_active_v14(self) -> None:
         self.assertEqual(
-            validate_and_normalize_train_config({"metrics_schema_version": 13})[
+            validate_and_normalize_train_config({"metrics_schema_version": 14})[
                 "metrics_schema_version"
             ],
-            13,
+            14,
         )
-        with self.assertRaisesRegex(ValueError, "must be >= 13"):
-            validate_and_normalize_train_config({"metrics_schema_version": 12})
-        with self.assertRaisesRegex(ValueError, "must be <= 13"):
-            validate_and_normalize_train_config({"metrics_schema_version": 14})
+        with self.assertRaisesRegex(ValueError, "must be >= 14"):
+            validate_and_normalize_train_config({"metrics_schema_version": 13})
+        with self.assertRaisesRegex(ValueError, "must be <= 14"):
+            validate_and_normalize_train_config({"metrics_schema_version": 15})
 
     def test_no_eval_config_rejects_eval_metric_stop_behavior(self) -> None:
         with self.assertRaisesRegex(ValueError, "must use a train/\\* metric"):
@@ -201,7 +201,7 @@ class TrainConfigFieldSchemaTests(unittest.TestCase):
                     "early_stop": {
                         "conditions": {
                             "invalid": {
-                                "metric": "eval/full/outcome/success/rate/min",
+                                "metric": "eval/full/outcome/success/across_starts/rate/min",
                                 "trigger": "threshold",
                                 "operator": ">=",
                                 "threshold": 1.0,
@@ -221,7 +221,7 @@ class TrainConfigFieldSchemaTests(unittest.TestCase):
                 "early_stop": {
                     "conditions": {
                         "clear": {
-                            "metric": "train/outcome/success/window_100/rate/min",
+                            "metric": "train/outcome/success/across_starts/window_100/rate/min",
                             "trigger": "threshold",
                             "operator": ">=",
                             "threshold": 1.0,
@@ -239,7 +239,7 @@ class TrainConfigFieldSchemaTests(unittest.TestCase):
             {
                 "conditions": {
                     "clear": {
-                        "metric": "train/outcome/success/window_100/rate/min",
+                        "metric": "train/outcome/success/across_starts/window_100/rate/min",
                         "trigger": "threshold",
                         "outcome": "success",
                         "action": "stop",
@@ -254,7 +254,7 @@ class TrainConfigFieldSchemaTests(unittest.TestCase):
 
     def test_eval_acceptance_allows_training_success_as_a_learner_stop(self) -> None:
         failure_condition = {
-            "metric": "train/episode/return/shaped/from/target/mean",
+            "metric": "train/episode/return/shaped/from/target/rolling_up_to_100/mean",
             "trigger": "no_improvement",
             "direction": "maximize",
             "min_delta": 0.01,
@@ -266,7 +266,7 @@ class TrainConfigFieldSchemaTests(unittest.TestCase):
         }
         acceptance = [
             {
-                "metric": "eval/full/outcome/success/rate/min",
+                "metric": "eval/full/outcome/success/across_starts/rate/min",
                 "operator": ">=",
                 "threshold": 1.0,
             }
@@ -284,7 +284,7 @@ class TrainConfigFieldSchemaTests(unittest.TestCase):
         )
 
         success_condition = {
-            "metric": "train/outcome/success/window_100/rate/min",
+            "metric": "train/outcome/success/across_starts/window_100/rate/min",
             "trigger": "threshold",
             "operator": ">=",
             "threshold": 1.0,

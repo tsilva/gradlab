@@ -1,113 +1,224 @@
+# Compose the shared ViZDoom contract as a reusable YAML configuration fragment.
 defaults:
+# Apply this fragment's own values when it is imported by a concrete goal.
 - _self_
+# Bind the materialized goal identifier supplied by the configuration loader.
 goal_id: "{{ goal_id }}"
+# Declare that ViZDoom goals support acceptance evaluation and checkpoint promotion.
 evaluation_mode: evaluated
+# Attach searchable provenance labels to runs materialized from this contract.
 tags:
+# Record the owning goal identity in the run tags.
 - "goal_id:{{ goal_id }}"
+# Record the selected recipe identity in the run tags.
 - "recipe_id:{{ recipe_id }}"
+# Record the resolved environment identity in the run tags.
 - "env_id:{{ env_id }}"
+# Provide a fallback operator-facing title that concrete goals can override.
 title: ViZDoom {{ goal_id }} objective
+# Define the default ordering used to choose among accepted checkpoints.
 objective:
+  # Rank candidates lexicographically using the priorities listed below.
   rank:
-  - max(eval/full/outcome/success/rate/min)
-  - max(eval/full/episode/return/mean)
+  # Prefer the highest worst-case success rate across represented start states.
+  - max(eval/full/outcome/success/across_starts/rate/min)
+  # Break remaining ties with the highest mean shaped evaluation return.
+  - max(eval/full/episode/return/shaped/mean)
+  # Prefer the earlier checkpoint when outcome criteria remain tied.
   - min(leader/checkpoint/step)
+# Define family-wide settings used while training a policy.
 train:
+  # Set the checkpoint cadence in policy-environment transitions.
   checkpoint_freq: 250000
-  # Family-wide training failure detector; recipes calibrate timing to their budgets.
+  # Define metric-driven rules that can stop training before its timestep cap.
   early_stop:
+    # Address each early-stop rule by a stable condition name.
     conditions:
+      # Stop successfully when the configured training target is reached.
       target_reached:
-        metric: train/outcome/success/window_100/rate/min
+        # Select the training metric compared with this condition's threshold.
+        metric: train/outcome/success/across_starts/window_100/rate/min
+        # Choose direct threshold comparison as the trigger mechanism.
         trigger: threshold
+        # Choose how the observed metric is compared with the threshold.
         operator: '>='
+        # Set the reference value used to report normalized progress toward the target.
         progress_baseline: 0.0
+        # Set the metric value that satisfies the training target.
         threshold: 0.95
+        # Require the threshold to remain satisfied for this many transitions before triggering.
         patience_steps: 0
+        # Classify a trigger from this condition as a successful training outcome.
         outcome: success
+        # Stop the learner when this condition triggers.
         action: stop
+      # Stop unsuccessfully when shaped return ceases to improve meaningfully.
       return_plateau:
-        metric: train/episode/return/shaped/from/target/mean
+        # Select the training metric monitored for improvement.
+        metric: train/episode/return/shaped/from/target/rolling_up_to_100/mean
+        # Choose lack of meaningful improvement as the trigger mechanism.
         trigger: no_improvement
+        # Treat larger metric values as improvements.
         direction: maximize
+        # Set the smallest change counted as a meaningful improvement.
         min_delta: 0.01
+        # Interpret the required improvement as a raw metric difference.
         delta_mode: absolute
+        # Delay eligibility until the learner has consumed this many transitions.
         start_after_steps: 500000
+        # Set how long training may continue without meaningful improvement.
         patience_steps: 500000
+        # Classify a trigger from this condition as an unsuccessful training outcome.
         outcome: failure
+        # Stop the learner when this condition triggers.
         action: stop
+  # Define the provider, environment, preprocessing, and task contract used for training.
   environment:
+    # Select the environment provider and anchor it for evaluation reuse.
     env_provider: &vizdoom_provider vizdoom-turbo
+    # Define provider-independent and provider-specific environment settings.
     env_config:
+      # Anchor the complete base environment mapping for evaluation reuse.
       <<: &vizdoom_env_config
+        # Select the concrete ViZDoom scenario from the materialized goal identity.
         game: "{{ goal_id }}"
+        # Select the provider's named initial-state variant.
         state: default
+        # Set the number of environment lanes stepped in parallel during training.
         n_envs: 32
+        # Pass native-vector runtime options to the ViZDoom provider.
         env_args:
+          # Anchor the shared provider options for evaluation reuse.
           <<: &vizdoom_provider_args
+            # Select the scenario asset entry resolved by the provider.
             scenario: scenario
+            # Supply the legacy API info selector; task signals are configured separately.
             info: data
+            # Select the provider's restricted discrete action table.
             use_restricted_actions: discrete
+            # Control provider-native episode recording.
             record: false
+            # Set the number of players instantiated in each environment lane.
             players: 1
+            # Supply the legacy integer-interface argument retained for API compatibility.
             inttype: stable
+            # Request rendered pixels as policy observations.
             obs_type: image
+            # Request RGB arrays from the renderer rather than an interactive window.
             render_mode: rgb_array
+            # Set the number of native worker threads used by the vector environment.
             num_threads: 32
+            # Optionally override the provider's external game-asset path.
             rom_path: null
+            # Select how observation buffers are exposed without unsafe reuse.
             obs_copy: safe_view
+            # Convert observations to grayscale before they reach the policy.
             obs_grayscale: true
+            # Store observations with channels before spatial dimensions.
             obs_layout: chw
+            # Stack recent processed frames along the channel dimension.
             frame_stack: 4
+            # Cap random no-op actions applied after reset.
             noop_reset_max: 0
+            # Configure which provider information keys are emitted to GradLab.
             info_filter:
+              # Control when the selected information keys are emitted.
               mode: all
+              # Provide an empty family default for goal-specific task signal keys.
               keys: []
+            # Control whether the provider automatically fires after reset.
             use_fire_reset: false
+            # Optionally override the map selected by the scenario definition.
             doom_map: null
+            # Optionally override the difficulty selected by the scenario definition.
             doom_skill: null
+            # Optionally pass additional command-line arguments to the Doom engine.
             game_args: null
+            # Provide an empty family default for goal-specific native game variables.
             game_variables: []
+            # Classify provider time-limit boundaries as truncations rather than terminations.
             treat_episode_timeout_as_truncation: true
+            # Optionally apply additional native ViZDoom configuration values.
             vizdoom_config: null
+    # Define and anchor policy-facing observation and action preprocessing.
     preprocessing: &vizdoom_preprocessing
+      # Repeat each selected policy action for this many native frames.
       frame_skip: 4
+      # Control temporal max pooling across skipped frames.
       max_pool_frames: false
+      # Set the probability of repeating the previous action instead of the selected action.
       sticky_action_prob: 0.0
+      # Set the spatial dimensions of policy-facing observations.
       obs_resize: [84, 84]
+      # Set how many pixels are cropped from each observation edge.
       obs_crop: [0, 0, 0, 0]
+      # Select how the configured crop is applied.
       obs_crop_mode: remove
+      # Set the fill value used by crop modes that create padded regions.
       obs_crop_fill: 0
+      # Select the interpolation algorithm used to resize observations.
       obs_resize_algorithm: area
+    # Define and anchor the family-wide task semantics.
     task: &vizdoom_task
+      # Select the task kernel that derives events directly from provider signals.
       id: identity
+      # Define the policy-facing action contract.
       action:
+        # Preserve the provider's native restricted action set.
         set: native
+      # Provide an empty family default for goal-specific signal mappings.
       signals: {}
+      # Provide an empty family default for goal-specific event definitions.
       events: {}
+      # Define family-wide episode boundaries.
       termination:
+        # Cap each attempt in policy-environment transitions.
         max_episode_steps: 512
+      # Define the transformation from provider reward to learner-facing reward.
       reward:
+        # Use the provider's native reward as the untransformed reward source.
         reward_mode: native
+        # Set the positive divisor applied to native rewards before clipping.
         reward_scale: 1.0
+        # Control clipping after reward scaling.
         reward_clip: false
+# Define the family-wide checkpoint evaluation protocol.
 eval:
+  # Set the number of complete episodes in a full evaluation.
   episodes: 100
+  # Declare every metric threshold a checkpoint must satisfy to be accepted.
   acceptance:
-  - metric: eval/full/outcome/success/rate/min
+  # Select the evaluation metric tested by this acceptance rule.
+  - metric: eval/full/outcome/success/across_starts/rate/min
+    # Choose how the observed metric is compared with the threshold.
     operator: '>='
+    # Set the minimum success rate required across every represented start state.
     threshold: 0.95
+  # Define how checkpoint actions are selected during evaluation.
   policy:
+    # Sample from the policy distribution instead of forcing deterministic actions.
     stochastic: true
+  # Define the provider, environment, preprocessing, and task contract used for evaluation.
   environment:
+    # Reuse the exact provider selected for training.
     env_provider: *vizdoom_provider
+    # Start from the anchored training environment settings and override evaluation capacity.
     env_config:
+      # Merge the base environment mapping declared for training.
       <<: *vizdoom_env_config
+      # Set the number of environment lanes stepped in parallel during evaluation.
       n_envs: 16
+      # Start from the anchored training provider options and override evaluation capacity.
       env_args:
+        # Merge the provider options declared for training.
         <<: *vizdoom_provider_args
+        # Match native worker concurrency to the evaluation lane count.
         num_threads: 16
+    # Reuse the exact policy-facing preprocessing contract from training.
     preprocessing: *vizdoom_preprocessing
+    # Reuse the exact task semantics from training.
     task: *vizdoom_task
+# Declare the publication targets available after valid checkpoint promotion.
 release:
+  # Enable Hugging Face publication with the project's default release settings.
   huggingface: {}

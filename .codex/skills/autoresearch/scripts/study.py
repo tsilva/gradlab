@@ -23,9 +23,10 @@ from typing import Any, Iterator, Mapping
 from urllib.parse import urlparse
 
 from gradlab.metric_names import (
-    TRAIN_EPISODE_RETURN_SHAPED_MEAN,
+    TRAIN_EPISODE_RETURN_SHAPED_ACROSS_ORIGINS_ROLLING_UP_TO_100_MEAN,
     TRAIN_GLOBAL_STEP,
-    TRAIN_OUTCOME_SUCCESS_WINDOW_100_RATE_MIN,
+    TRAIN_OUTCOME_SUCCESS_ACROSS_STARTS_WINDOW_100_RATE_MIN,
+    train_success_count_metric,
 )
 from gradlab.provider_config import provider_num_envs
 from gradlab.recipe_documents import compose_train_document
@@ -1315,12 +1316,12 @@ def fetch_training_evidence(
     run = wandb.Api().run(_wandb_run_path(url))
     if str(getattr(run, "id", "") or "") != str(expected_run_id):
         raise RuntimeError("W&B run identity does not match the recorded dstack run")
-    count_keys = [f"train/outcome/success/from/{start}/count" for start in starts]
+    count_keys = [train_success_count_metric(start) for start in starts]
     keys = [
         TRAIN_GLOBAL_STEP,
         *count_keys,
-        TRAIN_OUTCOME_SUCCESS_WINDOW_100_RATE_MIN,
-        TRAIN_EPISODE_RETURN_SHAPED_MEAN,
+        TRAIN_OUTCOME_SUCCESS_ACROSS_STARTS_WINDOW_100_RATE_MIN,
+        TRAIN_EPISODE_RETURN_SHAPED_ACROSS_ORIGINS_ROLLING_UP_TO_100_MEAN,
     ]
     history = [dict(row) for row in run.scan_history(keys=keys)]
     if not history:
@@ -1340,10 +1341,11 @@ def fetch_training_evidence(
     rate_rows = [
         (
             int(row.get(TRAIN_GLOBAL_STEP) or 0),
-            float(row[TRAIN_OUTCOME_SUCCESS_WINDOW_100_RATE_MIN]),
+            float(row[TRAIN_OUTCOME_SUCCESS_ACROSS_STARTS_WINDOW_100_RATE_MIN]),
         )
         for row in history
-        if row.get(TRAIN_OUTCOME_SUCCESS_WINDOW_100_RATE_MIN) is not None
+        if row.get(TRAIN_OUTCOME_SUCCESS_ACROSS_STARTS_WINDOW_100_RATE_MIN)
+        is not None
     ]
     peak = max((value for _step, value in rate_rows), default=None)
     first_strong_step = next(
@@ -1359,9 +1361,16 @@ def fetch_training_evidence(
         default=0,
     )
     returns = [
-        float(row[TRAIN_EPISODE_RETURN_SHAPED_MEAN])
+        float(
+            row[
+                TRAIN_EPISODE_RETURN_SHAPED_ACROSS_ORIGINS_ROLLING_UP_TO_100_MEAN
+            ]
+        )
         for row in history
-        if row.get(TRAIN_EPISODE_RETURN_SHAPED_MEAN) is not None
+        if row.get(
+            TRAIN_EPISODE_RETURN_SHAPED_ACROSS_ORIGINS_ROLLING_UP_TO_100_MEAN
+        )
+        is not None
     ]
     tail_count = max(1, math.ceil(len(returns) * float(return_tail_fraction))) if returns else 0
     tail_values = returns[-tail_count:] if tail_count else []
@@ -1397,7 +1406,9 @@ def fetch_training_evidence(
         "authority": "wandb_history",
         "rank_direction": "maximize",
         "collected_at": utc_now(),
-        "return_metric": TRAIN_EPISODE_RETURN_SHAPED_MEAN,
+        "return_metric": (
+            TRAIN_EPISODE_RETURN_SHAPED_ACROSS_ORIGINS_ROLLING_UP_TO_100_MEAN
+        ),
         "return_points": return_points,
         "return_tail_fraction": float(return_tail_fraction),
         "return_tail_points": tail_count,

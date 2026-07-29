@@ -38,10 +38,8 @@ from gradlab.metric_names import (
     TRAIN_ARCHIVE_TRANSITION_SHARE,
     TRAIN_REWARD_ROOT,
     TRAIN_THROUGHPUT_BETWEEN_ROLLOUTS_SECONDS,
-    TRAIN_THROUGHPUT_ENV_STEP_FPS,
     TRAIN_THROUGHPUT_ENV_STEP_SECONDS,
     TRAIN_THROUGHPUT_LOOP_FPS,
-    TRAIN_THROUGHPUT_ROLLOUT_FPS,
     TRAIN_THROUGHPUT_ROLLOUT_OVERHEAD_SECONDS,
     TRAIN_THROUGHPUT_ROLLOUT_SECONDS,
     stat_metric,
@@ -291,14 +289,12 @@ class ThroughputHelper(CallbackHelper):
             return
         payload: dict[str, float] = {
             TRAIN_THROUGHPUT_LOOP_FPS: rollout.steps / loop_seconds,
-            TRAIN_THROUGHPUT_ROLLOUT_FPS: rollout.steps / rollout.rollout_seconds,
             TRAIN_THROUGHPUT_ROLLOUT_SECONDS: rollout.rollout_seconds,
             TRAIN_THROUGHPUT_BETWEEN_ROLLOUTS_SECONDS: between_seconds,
         }
         if rollout.env_step_seconds is not None:
             payload.update(
                 {
-                    TRAIN_THROUGHPUT_ENV_STEP_FPS: rollout.steps / rollout.env_step_seconds,
                     TRAIN_THROUGHPUT_ENV_STEP_SECONDS: rollout.env_step_seconds,
                     TRAIN_THROUGHPUT_ROLLOUT_OVERHEAD_SECONDS: max(
                         rollout.rollout_seconds - rollout.env_step_seconds,
@@ -371,10 +367,6 @@ class MetricEarlyStopHelper(CallbackHelper):
                     condition_id,
                     "patience/progress",
                 ): observation.patience_progress,
-                train_early_stop_metric(
-                    condition_id,
-                    "would_trigger",
-                ): float(observation.would_trigger),
             }
             if observation.target_progress is not None:
                 values[train_early_stop_metric(condition_id, "target/progress")] = (

@@ -9,8 +9,8 @@ tags:
 title: Baseline stable-retro Atari Ms. Pac-Man PPO training
 objective:
   rank:
-  - max(eval/full/episode/return/mean)
-  - max(eval/full/episode/return/best)
+  - max(eval/full/episode/return/shaped/mean)
+  - max(eval/full/episode/return/shaped/max)
   - min(leader/checkpoint/step)
 train:
   checkpoint_freq: 500000

@@ -3,9 +3,7 @@ defaults:
 - _self_
 reward_shape: speedrun-v1
 recipe_id: ppo-l14-soft-update
-description: >-
-  Seed {{ seed }} trains the {{ goal_id }} B257 soft-update PPO recipe, preserving the common
-  single-level reward contract while lowering update pressure for stable World 1-4 clears.
+description: B257 soft-update PPO for stable {{ goal_id }} clears.
 train:
   backend:
     id: sb3.ppo

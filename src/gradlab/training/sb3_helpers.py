@@ -11,8 +11,8 @@ from stable_baselines3.common.logger import HumanOutputFormat
 from gradlab.callbacks import CallbackHelper
 from gradlab.file_utils import atomic_write_json
 from gradlab.metric_names import (
-    TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_MEAN,
-    TRAIN_OUTCOME_SUCCESS_CURRENT_RATE_MEAN,
+    TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_ROLLING_UP_TO_100_MEAN,
+    TRAIN_OUTCOME_SUCCESS_ACROSS_OBSERVED_STARTS_CUMULATIVE_RATE_MEAN,
 )
 
 
@@ -31,13 +31,13 @@ class CompactTrainingOutputFormat(HumanOutputFormat):
     ) -> None:
         del key_excluded
         output: dict[str, Any] = {}
-        mean_return = key_values.get(TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_MEAN)
+        mean_return = key_values.get(TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_ROLLING_UP_TO_100_MEAN)
         if mean_return is None:
             mean_return = key_values.get(SB3_ROLLOUT_MEAN_RETURN)
         if mean_return is not None:
             output["mean return"] = float(mean_return)
 
-        completion_rate = key_values.get(TRAIN_OUTCOME_SUCCESS_CURRENT_RATE_MEAN)
+        completion_rate = key_values.get(TRAIN_OUTCOME_SUCCESS_ACROSS_OBSERVED_STARTS_CUMULATIVE_RATE_MEAN)
         if completion_rate is not None:
             output["completion rate"] = f"{100.0 * float(completion_rate):.2f}%"
 

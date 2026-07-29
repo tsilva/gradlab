@@ -6,8 +6,10 @@ from dataclasses import dataclass
 from typing import Any
 
 from gradlab.metric_names import (
+    LEGACY_METRICS_SCHEMA_VERSION,
     LEADER_CHECKPOINT_STEP,
     METRICS_SCHEMA_VERSION,
+    leader_metric_for_rank_metric,
     validate_metric_name,
 )
 
@@ -20,7 +22,11 @@ class RankCriterion:
     metric: str
 
 
-def parse_objective_rank(value: Any) -> tuple[RankCriterion, ...]:
+def parse_objective_rank(
+    value: Any,
+    *,
+    metrics_schema_version: int = METRICS_SCHEMA_VERSION,
+) -> tuple[RankCriterion, ...]:
     if not isinstance(value, Sequence) or isinstance(value, str | bytes):
         return ()
     criteria: list[RankCriterion] = []
@@ -30,18 +36,34 @@ def parse_objective_rank(value: Any) -> tuple[RankCriterion, ...]:
             return ()
         metric = match.group(2).strip()
         try:
-            validate_metric_name(metric)
+            if metrics_schema_version == METRICS_SCHEMA_VERSION:
+                validate_metric_name(metric)
+            elif metrics_schema_version == LEGACY_METRICS_SCHEMA_VERSION:
+                leader_metric_for_rank_metric(
+                    metric,
+                    schema_version=metrics_schema_version,
+                )
+            else:
+                return ()
         except ValueError:
             return ()
         criteria.append(RankCriterion(match.group(1), metric))
     return tuple(criteria)
 
 
-def require_objective_rank(value: Any) -> tuple[RankCriterion, ...]:
-    criteria = parse_objective_rank(value)
+def require_objective_rank(
+    value: Any,
+    *,
+    metrics_schema_version: int = METRICS_SCHEMA_VERSION,
+) -> tuple[RankCriterion, ...]:
+    criteria = parse_objective_rank(
+        value,
+        metrics_schema_version=metrics_schema_version,
+    )
     if not criteria:
         raise ValueError(
-            f"objective.rank must contain valid schema-v{METRICS_SCHEMA_VERSION} metric criteria"
+            "objective.rank must contain valid "
+            f"schema-v{metrics_schema_version} metric criteria"
         )
     return criteria
 

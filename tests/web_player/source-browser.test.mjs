@@ -19,7 +19,7 @@ import {
   sourceRoutePath,
 } from "../../src/gradlab/web_player/sources/browser.js";
 
-const METRIC = "eval/full/episode/return/mean";
+const METRIC = "eval/full/episode/return/shaped/mean";
 
 test("checkpoint selection boxes are centered within their rows", async () => {
   const styles = await readFile(
@@ -215,15 +215,15 @@ test("run metrics use compact labels and values", () => {
   assert.equal(metricLabel("leader/checkpoint/step"), "Checkpoint step");
   assert.equal(metricLabel(METRIC), "Mean return");
   assert.equal(
-    metricLabel("train/outcome/success/window_100/rate/min"),
-    "Min success (100)",
+    metricLabel("train/outcome/success/across_starts/window_100/rate/min"),
+    "Min success (last 100)",
   );
   assert.equal(
-    metricLabel("train/episode/return/shaped/from/target/mean"),
-    "Target return",
+    metricLabel("train/episode/return/shaped/from/target/rolling_up_to_100/mean"),
+    "Mean target-start return (up to 100)",
   );
   assert.equal(
-    formatMetricValue("eval/full/outcome/success/rate/min", 0.875),
+    formatMetricValue("eval/full/outcome/success/across_starts/rate/min", 0.875),
     "87.5%",
   );
   assert.equal(formatMetricValue(METRIC, null), "—");
@@ -255,12 +255,32 @@ test("run finish reasons distinguish resource, training, and evaluation outcomes
       tone: "failure",
     },
   );
-  assert.equal(
+  assert.deepEqual(
     runFinishPresentation({
       state: "succeeded",
       stop_reason: "early_stop_success:training_target",
-    }).label,
-    "Training success criterion met",
+      final_step: 16_384,
+      early_stop: {
+        condition_id: "training_target",
+        trigger: "threshold",
+        metric: "train/episode/return/shaped/from/target/window_100/mean",
+        value: 5.25,
+        condition: {
+          metric: "train/episode/return/shaped/from/target/window_100/mean",
+          trigger: "threshold",
+          operator: ">=",
+          threshold: 5,
+        },
+      },
+    }),
+    {
+      label: "Training target met",
+      detail: (
+        "Mean target-start return (last 100) >= 5"
+        + " · observed 5.25 · Stopped at 16,384 steps"
+      ),
+      tone: "success",
+    },
   );
   assert.equal(
     runFinishPresentation({
@@ -516,6 +536,88 @@ test("legacy project routes inherit the entity and use canonical environment API
   assert.equal(commands[0].payload.route.entity, "research");
 });
 
+test("browser back through checkpoint routes preserves the omitted catalog entity", (context) => {
+  const originalLocation = globalThis.location;
+  const originalWindow = globalThis.window;
+  let popstate;
+  globalThis.location = {
+    pathname: (
+      "/environments/ViZDoom/goals/DefendTheLine-v1"
+      + "/variants/goal-variant-a27a8239/runs/gradlab-c22f7c7a"
+      + "/checkpoints/checkpoint-10002432-b285ff3b"
+    ),
+    search: "",
+    hash: "",
+  };
+  globalThis.window = {
+    addEventListener(name, listener) {
+      if (name === "popstate") popstate = listener;
+    },
+  };
+  context.after(() => {
+    if (originalLocation === undefined) delete globalThis.location;
+    else globalThis.location = originalLocation;
+    if (originalWindow === undefined) delete globalThis.window;
+    else globalThis.window = originalWindow;
+  });
+
+  const commands = [];
+  const sourceBrowser = new SourceBrowser(
+    {},
+    { replaceChildren() {}, hidden: false },
+    {
+      token: "token",
+      command: (name, payload) => commands.push({ name, payload }),
+      getState: () => ({ hasControl: true }),
+      showToast() {},
+    },
+  );
+  sourceBrowser.route = {
+    level: "runs",
+    entity: "research",
+    project: "ViZDoom",
+    goal_id: "DefendTheLine-v1",
+    goal_variant_id: "goal-variant-a27a8239",
+    run_id: "gradlab-c22f7c7a",
+    checkpoint_id: "checkpoint-10002432-b285ff3b",
+  };
+  sourceBrowser.app = {
+    phase: "selecting",
+    route: { ...sourceBrowser.route },
+  };
+  sourceBrowser.applyRoute = (route) => {
+    sourceBrowser.route = route;
+  };
+
+  globalThis.location.pathname = (
+    "/environments/ViZDoom/goals/DefendTheLine-v1"
+    + "/variants/goal-variant-a27a8239/runs/gradlab-c22f7c7a"
+  );
+  popstate();
+
+  assert.equal(sourceBrowser.route.entity, "research");
+  assert.equal(sourceBrowser.endpoint(), (
+    "/api/catalog/runs/gradlab-c22f7c7a/checkpoints?"
+    + "entity=research&project=ViZDoom&goal_variant_id=goal-variant-a27a8239"
+  ));
+  assert.equal(commands[0].name, "browse_sources");
+  assert.equal(commands[0].payload.route.entity, "research");
+
+  globalThis.location.pathname = (
+    "/environments/ViZDoom/goals/DefendTheLine-v1"
+    + "/variants/goal-variant-a27a8239"
+  );
+  popstate();
+
+  assert.equal(sourceBrowser.route.entity, "research");
+  assert.equal(sourceBrowser.endpoint(), (
+    "/api/catalog/environments/research/ViZDoom/goals/DefendTheLine-v1"
+    + "/variants/goal-variant-a27a8239/runs?"
+  ));
+  assert.equal(commands[1].name, "browse_sources");
+  assert.equal(commands[1].payload.route.entity, "research");
+});
+
 test("late catalog responses cannot populate a newer route", async (context) => {
   const originalLocation = globalThis.location;
   const originalFetch = globalThis.fetch;
@@ -673,7 +775,7 @@ test("run efficiency prefers complete goal evaluation and follows its rank order
   ];
   const fallback = [
     {
-      metric: "train/outcome/success/window_100/rate/min",
+      metric: "train/outcome/success/across_starts/window_100/rate/min",
       direction: "max",
     },
     { metric: "train/global_step", direction: "min" },
@@ -683,7 +785,7 @@ test("run efficiency prefers complete goal evaluation and follows its rank order
       run_id: "training-only",
       recipe: "fast-training",
       metrics: {
-        "train/outcome/success/window_100/rate/min": 1,
+        "train/outcome/success/across_starts/window_100/rate/min": 1,
         "train/global_step": 100,
       },
     },
@@ -722,7 +824,7 @@ test("run efficiency labels training fallback without evaluation evidence", () =
   ];
   const fallback = [
     {
-      metric: "train/outcome/success/window_100/rate/min",
+      metric: "train/outcome/success/across_starts/window_100/rate/min",
       direction: "max",
     },
     { metric: "train/global_step", direction: "min" },
@@ -731,14 +833,14 @@ test("run efficiency labels training fallback without evaluation evidence", () =
     {
       run_id: "slower",
       metrics: {
-        "train/outcome/success/window_100/rate/min": 0.9,
+        "train/outcome/success/across_starts/window_100/rate/min": 0.9,
         "train/global_step": 2_000,
       },
     },
     {
       run_id: "faster",
       metrics: {
-        "train/outcome/success/window_100/rate/min": 0.9,
+        "train/outcome/success/across_starts/window_100/rate/min": 0.9,
         "train/global_step": 1_000,
       },
     },

@@ -3,9 +3,7 @@ defaults:
 - _self_
 reward_shape: speedrun-v1
 recipe_id: dstack-smoke
-description: >-
-  Seed {{ seed }} runs the bounded dstack and durable-result integration smoke for
-  {{ goal_id }}.
+description: Bounded dstack and durable-result smoke test for {{ goal_id }}.
 train:
   timesteps: 512
   backend:
