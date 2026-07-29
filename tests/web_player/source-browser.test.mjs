@@ -38,6 +38,22 @@ test("checkpoint selection boxes are centered within their rows", async () => {
   );
 });
 
+test("catalog list hover highlights the complete row", async () => {
+  const styles = await readFile(
+    new URL("../../src/gradlab/web_player/styles.css", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(
+    styles,
+    /\.project-row:hover:not\(:disabled\),\s*\.goal-row:hover,\s*\.goal-row:focus-within\s*\{[^}]*background: #1b3b48;/,
+  );
+  assert.match(
+    styles,
+    /\.goal-row-navigation:hover:not\(:disabled\)\s*\{[^}]*background: transparent;/,
+  );
+});
+
 test("run result evidence is visually promoted above supporting metadata", async () => {
   const styles = await readFile(
     new URL("../../src/gradlab/web_player/styles.css", import.meta.url),
