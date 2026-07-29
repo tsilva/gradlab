@@ -112,6 +112,19 @@ def test_public_run_resolves_promoted_bundle_without_private_credentials(
         },
         recovery_sidecar={"attempt_id": "attempt-" + "a" * 16},
     )
+    authority.publish_checkpoint(
+        run_id=run_id,
+        model_path=checkpoint,
+        step=500_000,
+        purpose="final",
+        contract_hashes={
+            "goal_sha256": "1" * 64,
+            "recipe_sha256": "2" * 64,
+            "environment_sha256": "3" * 64,
+            "evaluation_contract_sha256": "4" * 64,
+        },
+        recovery_sidecar={"attempt_id": "attempt-" + "a" * 16},
+    )
     authority.create_promotion(
         PromotionReceipt(
             run_id=run_id,
@@ -132,6 +145,61 @@ def test_public_run_resolves_promoted_bundle_without_private_credentials(
 
     assert resolved.model_path.read_bytes() == b"public checkpoint bytes"
     assert resolved.checkpoint_step == 250_000
+    assert resolved.bundle is not None
+    assert resolved.artifact_name is not None
+    assert resolved.artifact_name.endswith("/manifest.json")
+
+
+def test_public_run_resolves_final_bundle_when_no_promotion_exists(
+    tmp_path: Path,
+) -> None:
+    models = tmp_path / "models"
+    storage = RunStorageConfig(
+        control=BucketConfig((tmp_path / "control").resolve().as_uri()),
+        evaluation=BucketConfig((tmp_path / "eval").resolve().as_uri()),
+        models=BucketConfig(
+            models.resolve().as_uri(),
+            public_base_url=models.resolve().as_uri(),
+        ),
+    )
+    authority = RunAuthority(storage)
+    run_id = new_run_id()
+    checkpoint = _policy_checkpoint(tmp_path / "source")
+    authority.publish_checkpoint(
+        run_id=run_id,
+        model_path=checkpoint,
+        step=250_000,
+        purpose="final",
+        contract_hashes={
+            "goal_sha256": "1" * 64,
+            "recipe_sha256": "2" * 64,
+            "environment_sha256": "3" * 64,
+            "evaluation_contract_sha256": "4" * 64,
+        },
+        recovery_sidecar={"attempt_id": "attempt-" + "a" * 16},
+    )
+    manifest = authority.publish_checkpoint(
+        run_id=run_id,
+        model_path=checkpoint,
+        step=500_000,
+        purpose="final",
+        contract_hashes={
+            "goal_sha256": "1" * 64,
+            "recipe_sha256": "2" * 64,
+            "environment_sha256": "3" * 64,
+            "evaluation_contract_sha256": "4" * 64,
+        },
+        recovery_sidecar={"attempt_id": "attempt-" + "a" * 16},
+    )
+
+    resolved = download_public_run_source(
+        run_id,
+        root=tmp_path / "download",
+        public_base_url=models.resolve().as_uri(),
+    )
+
+    assert resolved.model_path.read_bytes() == b"public checkpoint bytes"
+    assert resolved.checkpoint_step == manifest.step
     assert resolved.bundle is not None
     assert resolved.artifact_name is not None
     assert resolved.artifact_name.endswith("/manifest.json")
