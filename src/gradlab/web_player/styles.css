@@ -285,7 +285,11 @@ h2 { font-size: .9rem; margin: 0; font-weight: 650; }
   border-radius: 0;
   background: transparent;
   text-align: left;
+  transition: background .12s ease;
 }
+.project-row:hover:not(:disabled),
+.goal-row:hover,
+.goal-row:focus-within { background: #1b3b48; }
 .goal-row { padding: 0; }
 .goal-row-navigation {
   display: block;
@@ -297,7 +301,10 @@ h2 { font-size: .9rem; margin: 0; font-weight: 650; }
   color: inherit;
   text-align: left;
 }
-.goal-row-navigation:hover:not(:disabled) { border-color: transparent; }
+.goal-row-navigation:hover:not(:disabled) {
+  border-color: transparent;
+  background: transparent;
+}
 .goal-row-inspect { margin-right: .72rem; white-space: nowrap; }
 .project-row:last-child,
 .goal-row:last-child { border-bottom: 0; }
