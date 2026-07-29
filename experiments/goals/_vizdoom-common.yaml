@@ -170,10 +170,6 @@ train:
       signals: {}
       # Provide an empty family default for goal-specific event definitions.
       events: {}
-      # Define family-wide episode boundaries.
-      termination:
-        # Cap each attempt in policy-environment transitions.
-        max_episode_steps: 512
       # Define the transformation from provider reward to learner-facing reward.
       reward:
         # Use the provider's native reward as the untransformed reward source.

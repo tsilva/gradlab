@@ -19,19 +19,21 @@ train:
           # Control when the selected information keys are emitted.
           mode: all
           # List the provider information keys retained for task signals.
-          keys: [player_dead]
+          keys: [player_dead, pending_reset]
     # Reuse these scenario-specific task overrides in evaluation via the YAML anchor.
     task: &health_gathering_supreme_task
       # Map task-level signal names to keys from the provider's per-step information.
       signals:
         # Map the task-level death signal to its provider information key.
         player_dead: player_dead
+        # Map the provider's native episode boundary to the survival signal.
+        episode_done: pending_reset
       # Define discrete task events derived from changes in the declared signals.
       events:
         # Detect death when the provider's death flag is asserted for a step.
         player_died: {signal: player_dead, operation: equals_for, value: 1, steps: 1}
-        # Detect survival when the death flag remains clear for the full task horizon.
-        survived: {signal: player_dead, operation: equals_for, value: 0, steps: 512}
+        # Detect survival when the provider reaches the native scenario boundary.
+        survived: {signal: episode_done, operation: equals_for, value: 1, steps: 1}
       # Define which task events end an episode and how each outcome is classified.
       termination:
         # List the events that mark an episode as failed.

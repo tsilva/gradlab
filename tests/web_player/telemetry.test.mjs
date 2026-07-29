@@ -48,6 +48,11 @@ test("signal selectors leave focus-safe space before the chart", () => {
   );
 });
 
+test("distribution contents use the panel as their only scroll container", () => {
+  const rule = styles.match(/\.action-probabilities \{([^}]*)\}/)?.[1] || "";
+  assert.doesNotMatch(rule, /(?:max-height|overflow)\s*:/);
+});
+
 test("dynamic metric names round-trip without path ambiguity", () => {
   const name = "coins / bonus%";
   const encoded = encodeDynamicSegment(name);

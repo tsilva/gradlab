@@ -254,7 +254,7 @@ class ConfigValidationTests(unittest.TestCase):
         )
         self.assertEqual(
             train_config["task"]["termination"],
-            {"success": ["monster_killed"], "max_episode_steps": 72},
+            {"success": ["monster_killed"]},
         )
         expected_reward = {
             "reward_mode": "native",

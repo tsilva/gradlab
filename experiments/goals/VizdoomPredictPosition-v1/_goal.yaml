@@ -42,8 +42,6 @@ train:
         success: [monster_killed]
         # List provider boundaries treated as timeouts rather than task outcomes.
         timeout: [episode_ended]
-        # Cap each attempt in policy-environment transitions.
-        max_episode_steps: 70
 # Override the shared settings used to evaluate checkpoints for this goal.
 eval:
   # Override the shared ViZDoom environment contract used during evaluation.

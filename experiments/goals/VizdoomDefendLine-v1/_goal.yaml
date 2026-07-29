@@ -66,6 +66,8 @@ train:
         failure: [player_died]
         # List provider boundaries treated as timeouts rather than task outcomes.
         timeout: [episode_ended]
+        # Cap each attempt in policy-environment transitions.
+        max_episode_steps: 512
 # Override the shared settings used to evaluate checkpoints for this goal.
 eval:
   # Declare every metric threshold a checkpoint must satisfy to be accepted.

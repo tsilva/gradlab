@@ -411,6 +411,32 @@ h2 { font-size: .9rem; margin: 0; font-weight: 650; }
   margin-top: .36rem;
   padding: .2rem .35rem;
 }
+.source-table .checkpoint-rank-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .28rem;
+  margin-top: .38rem;
+}
+.source-table .checkpoint-rank-badge {
+  display: inline-flex;
+  width: max-content;
+  padding: .2rem .36rem;
+  border: 1px solid rgba(240, 195, 106, .5);
+  border-radius: 99rem;
+  background: rgba(240, 195, 106, .08);
+  color: var(--yellow);
+  font-size: .56rem;
+  font-weight: 800;
+  letter-spacing: .06em;
+  line-height: 1;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.source-table .checkpoint-rank-badge.evaluation {
+  border-color: rgba(96, 211, 148, .5);
+  background: rgba(96, 211, 148, .09);
+  color: var(--green);
+}
 .source-table .run-identity {
   display: flex;
   align-items: flex-start;
@@ -746,7 +772,7 @@ select {
 .stat { min-width: 0; padding: 0; }
 .stat-label { display: block; color: var(--muted); font-size: .61rem; text-transform: uppercase; letter-spacing: .08em; }
 .stat-value { display: block; margin-top: .12rem; font: 600 .8rem ui-monospace, SFMono-Regular, Menlo, monospace; overflow-wrap: anywhere; }
-.action-probabilities { display: grid; gap: .32rem; max-height: 18rem; overflow: auto; }
+.action-probabilities { display: grid; gap: .32rem; }
 .action-row { display: grid; grid-template-columns: minmax(5rem, 1fr) 3fr 3.5rem; gap: .45rem; align-items: center; font-size: .72rem; }
 .probability-track { height: .45rem; background: #071117; border-radius: 99rem; overflow: hidden; }
 .probability-fill { height: 100%; background: var(--cyan); }

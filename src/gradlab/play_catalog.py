@@ -7,7 +7,7 @@ import os
 import re
 import threading
 import time
-from collections.abc import Callable, Iterable, Iterator, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Literal
@@ -28,6 +28,7 @@ from gradlab.goal_variants import (
 from gradlab.evaluation_projection import validate_evaluation_scientific_metric
 from gradlab.metric_names import (
     EVAL_ACCEPTANCE_PASS,
+    LEADER_CHECKPOINT_STEP,
     METRICS_SCHEMA_VERSION,
     TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_ROLLING_UP_TO_100_MEAN,
     TRAIN_EPISODE_RETURN_SHAPED_ACROSS_ORIGINS_ROLLING_UP_TO_100_MEAN,
@@ -252,6 +253,7 @@ class _CheckpointEvaluationData:
         str,
         Mapping[str, tuple[tuple[int, float], ...]],
     ]
+    evaluation_rank: tuple[RankCriterion, ...]
 
 
 @dataclass(frozen=True)
@@ -486,6 +488,38 @@ def _checkpoint_training_metrics(
                 break
         metrics[criterion.metric] = value
     return metrics
+
+
+def _best_checkpoint_id(
+    rows: Sequence[CheckpointSummary],
+    rank: Sequence[RankCriterion],
+    *,
+    evaluation: bool = False,
+) -> str:
+    if not rank:
+        return ""
+    best_id = ""
+    best_score: tuple[float, ...] | None = None
+    for row in rows:
+        if evaluation:
+            result = row.evaluation
+            metrics = result.get("metrics") if isinstance(result, Mapping) else None
+        else:
+            metrics = row.metrics
+        if not isinstance(metrics, Mapping):
+            continue
+        score: list[float] = []
+        for criterion in rank:
+            value = _safe_float(metrics.get(criterion.metric))
+            if value is None:
+                break
+            score.append(value if criterion.direction == "max" else -value)
+        else:
+            candidate = tuple(score)
+            if best_score is None or candidate > best_score:
+                best_id = row.checkpoint_id
+                best_score = candidate
+    return best_id
 
 
 def _complete_run_rank(
@@ -2656,7 +2690,7 @@ class PlayCatalog:
         entity = str(entity or "").strip()
         project = str(project or "").strip()
         if not entity or not project:
-            return _CheckpointEvaluationData({}, None, None, {})
+            return _CheckpointEvaluationData({}, None, None, {}, ())
         cache_key = (entity, project, run_id)
         now = time.monotonic()
         with self._lock:
@@ -2669,6 +2703,10 @@ class PlayCatalog:
             config = dict(getattr(run, "config", {}) or {})
             metric_schema = evaluation_metric_schema(
                 config.get("metrics_schema_version") or METRICS_SCHEMA_VERSION
+            )
+            evaluation_rank = parse_objective_rank(
+                config.get("selection_rank"),
+                metrics_schema_version=metric_schema.version,
             )
             training_seed = _safe_int(config.get("seed"))
             contract = config.get("checkpoint_eval_contract")
@@ -2728,6 +2766,14 @@ class PlayCatalog:
                             raw.get(metric_schema.acceptance_episode_completed_count)
                         ),
                         "criteria": criteria,
+                        "metrics": {
+                            criterion.metric: (
+                                float(step)
+                                if criterion.metric == LEADER_CHECKPOINT_STEP
+                                else None
+                            )
+                            for criterion in evaluation_rank
+                        },
                     }
                 # Fail-fast rejections intentionally omit completed eval/full metrics.
                 # W&B returns no rows when scan_history requests a key that is absent
@@ -2754,11 +2800,27 @@ class PlayCatalog:
                                 float(rule["threshold"]),
                             )
                         )
+                for criterion in evaluation_rank:
+                    metric = criterion.metric
+                    if metric == LEADER_CHECKPOINT_STEP:
+                        continue
+                    for raw in run.scan_history(
+                        keys=[metric_schema.checkpoint_step, metric],
+                        page_size=10_000,
+                    ):
+                        if not isinstance(raw, Mapping):
+                            continue
+                        step = _safe_int(raw.get(metric_schema.checkpoint_step))
+                        value = _safe_float(raw.get(metric))
+                        evaluation = evaluations.get(step) if step is not None else None
+                        if evaluation is not None and value is not None:
+                            evaluation["metrics"][metric] = value
         except Exception:
             # Public checkpoints remain playable when W&B history is unavailable.
             evaluations = {}
             training_seed = None
             evaluation_seed = None
+            evaluation_rank = ()
         training_metric_history = (
             _checkpoint_training_metric_history(run) if run is not None else {}
         )
@@ -2767,6 +2829,7 @@ class PlayCatalog:
             training_seed=training_seed,
             evaluation_seed=evaluation_seed,
             training_metric_history=training_metric_history,
+            evaluation_rank=evaluation_rank,
         )
         with self._lock:
             self._evaluation_cache[cache_key] = (now, data)
@@ -2870,6 +2933,24 @@ class PlayCatalog:
                 ),
                 evaluation=evaluation,
             )
+            rows.append(row)
+        rows.sort(key=lambda row: (row.step, row.sha256), reverse=True)
+        training_rank = tuple(
+            criterion for criterion, _sources in LIVE_TRAINING_METRICS
+        )
+        best_training_id = _best_checkpoint_id(rows, training_rank)
+        best_evaluation_id = _best_checkpoint_id(
+            rows,
+            evaluation_data.evaluation_rank,
+            evaluation=True,
+        )
+        result: list[dict[str, Any]] = []
+        for row in rows:
+            item = {
+                **row.to_dict(),
+                "best_training": row.checkpoint_id == best_training_id,
+                "best_evaluation": row.checkpoint_id == best_evaluation_id,
+            }
             if normalized and normalized not in _search_text(
                 row.checkpoint_id,
                 row.step,
@@ -2881,9 +2962,8 @@ class PlayCatalog:
                 row.evaluation,
             ):
                 continue
-            rows.append(row)
-        rows.sort(key=lambda row: (row.step, row.sha256), reverse=True)
-        return tuple(row.to_dict() for row in rows)
+            result.append(item)
+        return tuple(result)
 
 
 def is_wandb_url(value: object) -> bool:
