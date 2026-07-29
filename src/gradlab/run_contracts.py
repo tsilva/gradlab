@@ -5,9 +5,9 @@ import re
 import secrets
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
-from datetime import UTC, datetime
 from typing import Any, Literal
 
+from gradlab.clock import utc_now as utc_now
 from gradlab.json_utils import canonical_json_sha256 as document_sha256
 
 
@@ -30,16 +30,8 @@ RUN_FINAL_STEP_SUMMARY = "gradlab/run/final_step"
 RUN_EARLY_STOP_TRIGGER_SUMMARY = "gradlab/run/early_stop_trigger"
 RUN_EARLY_STOP_CONDITION_SUMMARY = "gradlab/run/early_stop_condition"
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
-EVAL_RESULT_TERMINAL_STATUSES = frozenset(
-    {"accepted", "rejected", "failed", "expired", "canceled"}
-)
-EVAL_INVENTORY_SETTLED_STATUSES = frozenset(
-    {*EVAL_RESULT_TERMINAL_STATUSES, "deferred"}
-)
-
-
-def utc_now() -> str:
-    return datetime.now(UTC).isoformat().replace("+00:00", "Z")
+EVAL_RESULT_TERMINAL_STATUSES = frozenset({"accepted", "rejected", "failed", "expired", "canceled"})
+EVAL_INVENTORY_SETTLED_STATUSES = frozenset({*EVAL_RESULT_TERMINAL_STATUSES, "deferred"})
 
 
 def new_run_id() -> str:
@@ -120,9 +112,7 @@ def validate_liveness_policy(
         + normalized["failure_drain_timeout_seconds"]
     )
     if teardown_and_drain >= DSTACK_STOP_DURATION_SECONDS:
-        raise ValueError(
-            "liveness teardown and failure drain must fit inside dstack stop_duration"
-        )
+        raise ValueError("liveness teardown and failure drain must fit inside dstack stop_duration")
     return normalized
 
 

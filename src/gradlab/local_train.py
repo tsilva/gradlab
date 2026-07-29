@@ -14,6 +14,7 @@ from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from urllib.parse import unquote, urlparse
 
+from gradlab.clock import utc_now as _utc_now
 from gradlab.config_loader import RECIPE_TEMPLATE_VALUES, render_template_vars
 from gradlab.env import task_termination
 from gradlab.env_config import env_config_from_mapping
@@ -109,10 +110,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="Disable the full-screen local training interface and use plain progress output.",
     )
     return parser
-
-
-def _utc_now() -> str:
-    return datetime.now(UTC).isoformat().replace("+00:00", "Z")
 
 
 def _timestamp_slug() -> str:

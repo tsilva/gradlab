@@ -7,9 +7,9 @@ import signal
 import subprocess
 import sys
 import time
-from datetime import UTC, datetime
 from pathlib import Path
 
+from gradlab.clock import utc_now as _utc_now
 from gradlab.file_utils import atomic_write_json
 from gradlab.training_lifecycle import (
     LEARNER_READY_FILENAME,
@@ -24,10 +24,6 @@ FIXTURE_MODES = (
 )
 
 
-def _utc_now() -> str:
-    return datetime.now(UTC).isoformat().replace("+00:00", "Z")
-
-
 def _child_command(*, ignore_term: bool) -> list[str]:
     handlers = (
         "signal.signal(signal.SIGTERM, signal.SIG_IGN);"
@@ -38,11 +34,7 @@ def _child_command(*, ignore_term: bool) -> list[str]:
     return [
         sys.executable,
         "-c",
-        (
-            "import signal,time;"
-            f"{handlers}"
-            "time.sleep(3600)"
-        ),
+        (f"import signal,time;{handlers}time.sleep(3600)"),
     ]
 
 

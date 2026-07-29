@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
+from gradlab.clock import parse_utc_datetime
 from gradlab.dstack_backend import (
     TERMINAL_DSTACK_STATUSES,
     ComputeRequest,
@@ -1226,9 +1227,7 @@ def _manifest_only_submission(
         raise RuntimeError("run has evaluation state and cannot resume submission")
     if next(authority.models.iter_keys(prefix), None) is not None:
         raise RuntimeError("run has public model state and cannot resume submission")
-    created_at = datetime.fromisoformat(str(manifest.created_at).replace("Z", "+00:00")).astimezone(
-        UTC
-    )
+    created_at = parse_utc_datetime(str(manifest.created_at))
     quiet_for = (datetime.now(UTC) - created_at).total_seconds()
     if quiet_for < QUIESCENCE_SECONDS:
         raise RuntimeError("manifest-only launch has not reached the 30-second quiescence interval")
@@ -1291,7 +1290,7 @@ def _lease_expiry(authority: RunAuthority, run_id: str) -> datetime | None:
     value = authority.control.get_json_optional(f"runs/{run_id}/writer-lease.json")
     if value is None:
         return None
-    return datetime.fromisoformat(str(value["expires_at"]).replace("Z", "+00:00")).astimezone(UTC)
+    return parse_utc_datetime(str(value["expires_at"]))
 
 
 def cmd_retry(args: argparse.Namespace) -> int:
@@ -1313,9 +1312,7 @@ def cmd_retry(args: argparse.Namespace) -> int:
     if expiry is not None and expiry > datetime.now(UTC):
         raise RuntimeError(f"the previous writer lease has not expired: {expiry.isoformat()}")
     if previous_task is None and attempt_terminal is None:
-        created_at = datetime.fromisoformat(
-            str(previous_manifest.created_at).replace("Z", "+00:00")
-        ).astimezone(UTC)
+        created_at = parse_utc_datetime(str(previous_manifest.created_at))
         if (datetime.now(UTC) - created_at).total_seconds() < QUIESCENCE_SECONDS:
             raise RuntimeError(
                 "not-found attempt has not reached the 30-second quiescence interval"

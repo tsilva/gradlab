@@ -5,6 +5,22 @@ from datetime import UTC, datetime
 from typing import Protocol
 
 
+def format_utc_datetime(value: datetime) -> str:
+    return value.astimezone(UTC).isoformat().replace("+00:00", "Z")
+
+
+def parse_utc_datetime(value: str) -> datetime:
+    return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(UTC)
+
+
+def utc_now() -> str:
+    return format_utc_datetime(datetime.now(UTC))
+
+
+def utc_timestamp(unix_seconds: float) -> str:
+    return format_utc_datetime(datetime.fromtimestamp(unix_seconds, UTC))
+
+
 class Clock(Protocol):
     """Time source shared by orchestration state and deterministic certification."""
 
@@ -33,4 +49,4 @@ class SystemClock:
         return datetime.now(UTC)
 
     def utc_now(self) -> str:
-        return self.utc_datetime().isoformat().replace("+00:00", "Z")
+        return format_utc_datetime(self.utc_datetime())

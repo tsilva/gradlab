@@ -11,6 +11,7 @@ from gradlab import runtime_refs
 from gradlab.runtime_contract import (
     RUNTIME_DESCRIPTOR_SCHEMA_VERSION,
     runtime_contract,
+    train_config_contract_payload,
     train_config_contract_sha256,
     validate_config_payload,
 )
@@ -40,7 +41,7 @@ def release_payload(*, source_sha: str = SOURCE_SHA) -> dict:
         "base_images": {
             "gpu": "docker:ghcr.io/tsilva/gradlab/gradlab-train-gpu@sha256:" + "9" * 64,
             "dependencies": "docker:ghcr.io/tsilva/gradlab/gradlab-train-dependencies@sha256:"
-            + "f" * 64
+            + "f" * 64,
         },
         "workflow_run_id": "123",
         "vizdoom_smoke": {
@@ -87,6 +88,15 @@ class RuntimeContractTests(unittest.TestCase):
         self.assertEqual(receipt["runtime_input_sha256"], "d" * 64)
         self.assertEqual(receipt["runtime_image_ref"], RUNTIME_IMAGE_REF)
         self.assertEqual(len(receipt["train_config_contract_sha256"]), 64)
+
+    def test_runtime_contract_excludes_cli_only_field_metadata(self) -> None:
+        fields = train_config_contract_payload()["fields"]
+
+        self.assertTrue(fields)
+        for field in fields:
+            self.assertNotIn("aliases", field)
+            self.assertNotIn("flag", field)
+            self.assertNotIn("help", field)
 
     def test_runtime_payload_validation_accepts_dstack_execution_fields(self) -> None:
         receipt = validate_config_payload(

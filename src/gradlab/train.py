@@ -112,11 +112,6 @@ def parse_train_invocation(
     return config, TrainingExecutionMode(parsed.execution_mode)
 
 
-def parse_train_config(argv: Sequence[str] | None = None) -> dict[str, object]:
-    config, _execution_mode = parse_train_invocation(argv)
-    return config
-
-
 def signal_name(signum: int) -> str:
     try:
         return signal.Signals(signum).name
@@ -270,9 +265,7 @@ def main(
             ),
             execution_policy=execution_policy,
             completion_signal_available=bool(task_termination(environment).get("success")),
-            progress_sink=(
-                runtime_control.progress_sink if runtime_control is not None else None
-            ),
+            progress_sink=(runtime_control.progress_sink if runtime_control is not None else None),
         ),
     )
     context.session.configure_checkpoints(

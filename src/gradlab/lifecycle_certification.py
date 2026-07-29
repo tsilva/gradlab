@@ -18,6 +18,7 @@ from typing import Any
 from unittest.mock import patch
 
 from gradlab.checkpoint_acceptance import acceptance_aggregates
+from gradlab.clock import format_utc_datetime
 from gradlab.early_stop import (
     MetricEarlyStopStateMachine,
     MetricSample,
@@ -135,7 +136,7 @@ class DeterministicClock:
         return datetime.fromtimestamp(self._wall, UTC)
 
     def utc_now(self) -> str:
-        return self.utc_datetime().isoformat().replace("+00:00", "Z")
+        return format_utc_datetime(self.utc_datetime())
 
 
 class RecordingObserver(LifecycleObserver):
@@ -1913,9 +1914,7 @@ def _scenario_completed_result_hung_process(root: Path) -> dict[str, Any]:
     _prepare_scripted_learner(prepared, process=process, status="completed")
     supervisor = prepared.supervisor
     supervisor._observe_live_learner_state(supervisor.clock.monotonic())
-    fixture.clock.advance(
-        float(supervisor.manifest.liveness["result_exit_grace_seconds"])
-    )
+    fixture.clock.advance(float(supervisor.manifest.liveness["result_exit_grace_seconds"]))
     failure: LearnerTeardownTimeout | None = None
     try:
         supervisor._observe_live_learner_state(supervisor.clock.monotonic())
@@ -1955,9 +1954,7 @@ def _scenario_completed_result_exits_during_iteration(root: Path) -> dict[str, A
     _prepare_scripted_learner(prepared, process=process, status="completed")
     supervisor = prepared.supervisor
     supervisor._observe_live_learner_state(supervisor.clock.monotonic())
-    fixture.clock.advance(
-        float(supervisor.manifest.liveness["result_exit_grace_seconds"]) + 3.2
-    )
+    fixture.clock.advance(float(supervisor.manifest.liveness["result_exit_grace_seconds"]) + 3.2)
     process.alive = False
 
     still_running = supervisor._observe_learner_after_active_iteration()
@@ -2073,9 +2070,7 @@ def _scenario_local_background_jobs(root: Path) -> dict[str, Any]:
     supervisor.active_iteration()
     training_terminal = _finalize_success(prepared)
     final_checkpoint = next(
-        row
-        for row in supervisor.store.checkpoint_publications()
-        if int(row["step"]) == 260_000
+        row for row in supervisor.store.checkpoint_publications() if int(row["step"]) == 260_000
     )
 
     manual_backend = ScriptedEvalBackend()
@@ -2084,9 +2079,7 @@ def _scenario_local_background_jobs(root: Path) -> dict[str, Any]:
         writer_id="manual-eval-writer-81",
         evidence_path=root / "evaluation" / "evidence" / "manual-wandb-events.json",
     )
-    manual_runtime.summary["orchestration/event_seq"] = (
-        training_terminal.wandb_high_water_mark
-    )
+    manual_runtime.summary["orchestration/event_seq"] = training_terminal.wandb_high_water_mark
 
     def manual_supervisor() -> ManualEvaluationSupervisor:
         return ManualEvaluationSupervisor(
@@ -2156,10 +2149,7 @@ def _scenario_local_background_jobs(root: Path) -> dict[str, Any]:
         cancel_requested=False,
     )
     manual_receipt = fixture.authority.control.get_json_optional(
-        (
-            f"runs/{supervisor.manifest.run_id}/manual-evals/jobs/"
-            f"job-{'8' * 32}/terminal.json"
-        )
+        (f"runs/{supervisor.manifest.run_id}/manual-evals/jobs/job-{'8' * 32}/terminal.json")
     )
     promotion = fixture.authority.control.get_json(
         f"runs/{supervisor.manifest.run_id}/promotion.json"
@@ -2169,17 +2159,14 @@ def _scenario_local_background_jobs(root: Path) -> dict[str, Any]:
         completed.state == "succeeded"
         and completed.subjects[0].state == "accepted"
         and manual_receipt is not None
-        and int(manual_receipt["wandb_high_water_mark"])
-        > training_terminal.wandb_high_water_mark
+        and int(manual_receipt["wandb_high_water_mark"]) > training_terminal.wandb_high_water_mark
         and len(manual_backend.submissions) == 1,
         evidence={
             "state": completed.state,
             "subject_state": completed.subjects[0].state,
             "message": completed.subjects[0].detail,
             "wandb_high_water": (
-                None
-                if manual_receipt is None
-                else manual_receipt["wandb_high_water_mark"]
+                None if manual_receipt is None else manual_receipt["wandb_high_water_mark"]
             ),
         },
     )
@@ -2214,9 +2201,7 @@ SCENARIOS: dict[str, Callable[[Path], dict[str, Any]]] = {
     "verifier-tamper-detection": _scenario_verifier_tamper_detection,
     "early-stop-outcomes": _scenario_early_stop_outcomes,
     "failed-result-live-process": _scenario_failed_result_live_process,
-    "completed-result-exits-during-iteration": (
-        _scenario_completed_result_exits_during_iteration
-    ),
+    "completed-result-exits-during-iteration": (_scenario_completed_result_exits_during_iteration),
     "completed-result-hung-process": _scenario_completed_result_hung_process,
     "local-background-jobs": _scenario_local_background_jobs,
 }

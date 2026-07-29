@@ -2,16 +2,20 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import re
-import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable
 
-from gradlab.clock import Clock, SystemClock
+from gradlab.clock import (
+    Clock,
+    SystemClock,
+    format_utc_datetime,
+    parse_utc_datetime,
+)
+from gradlab.file_utils import atomic_write_bytes, atomic_write_json
 from gradlab.r2_store import (
     BucketConfig,
     ConditionalWriteConflict,
@@ -53,10 +57,6 @@ MAX_RECIPE_DOCUMENT_BYTES = 2 * 1024 * 1024
 
 class LeaseUnavailable(RuntimeError):
     pass
-
-
-def _parse_timestamp(value: str) -> datetime:
-    return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(UTC)
 
 
 @dataclass(frozen=True)
@@ -536,7 +536,7 @@ class RunAuthority:
         key = f"{self.run_prefix(run_id)}/writer-lease.json"
         current = self.control.get_json_optional(key)
         current_etag = str(self.control.head(key)["etag"]) if current is not None else None
-        if current is not None and _parse_timestamp(str(current["expires_at"])) > instant:
+        if current is not None and parse_utc_datetime(str(current["expires_at"])) > instant:
             if str(current["attempt_id"]) != attempt_id or str(current["holder_id"]) != holder_id:
                 raise LeaseUnavailable(
                     f"writer lease is held by {current['attempt_id']}/{current['holder_id']}"
@@ -547,9 +547,9 @@ class RunAuthority:
             if current is not None
             and str(current["attempt_id"]) == attempt_id
             and str(current["holder_id"]) == holder_id
-            else instant.isoformat().replace("+00:00", "Z")
+            else format_utc_datetime(instant)
         )
-        renewed = instant.isoformat().replace("+00:00", "Z")
+        renewed = format_utc_datetime(instant)
         document = {
             "schema_version": 1,
             "run_id": run_id,
@@ -575,13 +575,13 @@ class RunAuthority:
 
     def renew_lease(self, lease: Lease, *, now: datetime | None = None) -> Lease:
         instant = (now or self.clock.utc_datetime()).astimezone(UTC)
-        if _parse_timestamp(lease.expires_at) <= instant:
+        if parse_utc_datetime(lease.expires_at) <= instant:
             raise LeaseUnavailable("writer lease expired before renewal")
         key = f"{self.run_prefix(lease.run_id)}/writer-lease.json"
         document = {
             **lease.document(),
             "generation": lease.generation + 1,
-            "renewed_at": instant.isoformat().replace("+00:00", "Z"),
+            "renewed_at": format_utc_datetime(instant),
             "expires_at": (instant + timedelta(seconds=LEASE_TTL_SECONDS))
             .isoformat()
             .replace("+00:00", "Z"),
@@ -822,27 +822,10 @@ class RunAuthority:
             if digest != str(raw_object["sha256"]) or len(payload) != int(raw_object["size_bytes"]):
                 raise ValueError(f"state archive object failed verification: {relative}")
             target = destination / relative
-            target.parent.mkdir(parents=True, exist_ok=True)
-            temporary = target.with_name(f".{target.name}.{uuid.uuid4().hex}.tmp")
-            descriptor = os.open(
-                temporary,
-                os.O_WRONLY | os.O_CREAT | os.O_EXCL,
-                0o600,
-            )
-            try:
-                with os.fdopen(descriptor, "wb") as stream:
-                    stream.write(payload)
-                    stream.flush()
-                    os.fsync(stream.fileno())
-                os.replace(temporary, target)
-            except BaseException:
-                temporary.unlink(missing_ok=True)
-                raise
+            atomic_write_bytes(target, payload)
         closure = generation.get("closure")
         if not isinstance(closure, Mapping):
             raise ValueError("state archive generation has no closure")
-        from gradlab.file_utils import atomic_write_json
-
         atomic_write_json(destination / "closure.json", dict(closure))
         return dict(latest)
 

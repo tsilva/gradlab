@@ -41,19 +41,31 @@ def fsync_tree(path: str | Path) -> None:
         fsync_path(directory)
 
 
-def atomic_write_json(path: str | Path, document: Mapping[str, Any]) -> None:
+def atomic_write_bytes(
+    path: str | Path,
+    payload: bytes | bytearray | memoryview,
+) -> None:
     destination = Path(path)
     destination.parent.mkdir(parents=True, exist_ok=True)
     temporary = destination.with_name(f".{destination.name}.{uuid.uuid4().hex}.tmp")
-    payload = json.dumps(document, sort_keys=True, separators=(",", ":"), allow_nan=False)
     descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     try:
-        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
-            stream.write(payload)
+        with os.fdopen(descriptor, "wb") as stream:
+            stream.write(bytes(payload))
             stream.flush()
             os.fsync(stream.fileno())
         os.replace(temporary, destination)
         fsync_path(destination.parent)
-    except Exception:
+    except BaseException:
         temporary.unlink(missing_ok=True)
         raise
+
+
+def atomic_write_json(path: str | Path, document: Mapping[str, Any]) -> None:
+    payload = json.dumps(
+        document,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode()
+    atomic_write_bytes(path, payload)
