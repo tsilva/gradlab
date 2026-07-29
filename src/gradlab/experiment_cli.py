@@ -454,6 +454,15 @@ def _bind_launch_contract(
     return contract_document
 
 
+def _manifest_rom_asset(modal: Mapping[str, Any]) -> dict[str, Any] | None:
+    asset = modal.get("rom_asset_manifest")
+    if asset is None:
+        return None
+    if not isinstance(asset, Mapping):
+        raise ValueError("manifest modal ROM asset must be an object or null")
+    return dict(asset)
+
+
 def cmd_launch(args: argparse.Namespace) -> int:
     root = repository_root()
     source_sha = clean_git_source_sha(root)
@@ -1406,14 +1415,15 @@ def cmd_retry(args: argparse.Namespace) -> int:
                 effective_goal=dict(document["goal"]),
             )
             document["goal_variant"] = repaired_goal_variant
+        asset = _manifest_rom_asset(manifest.modal)
         contract_document = _bind_launch_contract(
             document,
-            asset=dict(manifest.modal["rom_asset_manifest"]),
+            asset=asset,
             checkpoint_eval_backend=checkpoint_eval_backend,
         )
         base_contract_document = _bind_launch_contract(
             repaired_documents.base,
-            asset=dict(manifest.modal["rom_asset_manifest"]),
+            asset=asset,
             checkpoint_eval_backend=checkpoint_eval_backend,
         )
         portable_recipe = build_recipe_document(

@@ -14,6 +14,7 @@ from gradlab.experiment_cli import (
     _compute,
     _follow_fingerprint,
     _latest_attempt_terminal,
+    _manifest_rom_asset,
     _poll_status,
     _project_reconciled_terminal,
     _public_dstack_state,
@@ -969,3 +970,13 @@ def test_rom_free_launch_contract_omits_null_asset() -> None:
         base_materialized_recipe=base_contract,
         canonical_goal=resolved.canonical_goal,
     )
+
+
+def test_repair_runtime_accepts_rom_free_manifest() -> None:
+    assert _manifest_rom_asset({"enabled": False, "rom_asset_manifest": None}) is None
+    assert _manifest_rom_asset(
+        {"enabled": True, "rom_asset_manifest": {"game": "Example-v0"}}
+    ) == {"game": "Example-v0"}
+
+    with pytest.raises(ValueError, match="object or null"):
+        _manifest_rom_asset({"rom_asset_manifest": "invalid"})
