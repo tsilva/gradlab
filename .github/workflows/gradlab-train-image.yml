@@ -173,7 +173,7 @@ jobs:
               **payload,
               "smoke_contract_version": 2,
               "provider_distribution": "vizdoom-turbo",
-              "provider_version": "1.3.0.post16",
+              "provider_version": "1.3.0.post17",
           }:
               raise SystemExit("ViZDoom smoke contract mismatch")
           scenarios = payload.get("scenarios")
