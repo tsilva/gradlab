@@ -1160,6 +1160,19 @@ def test_catalog_attaches_latest_training_metrics_at_each_checkpoint(
         "train/outcome/success/across_starts/window_100/rate/min": 0.9,
         "train/episode/return/shaped/from/target/rolling_up_to_100/mean": 22.0,
     }
+    assert final_row["best_training"] is True
+    assert periodic_row["best_training"] is False
+    assert final_row["best_evaluation"] is False
+    assert periodic_row["best_evaluation"] is False
+    filtered = catalog.checkpoints(
+        entity="research",
+        project="Mario",
+        run_id=RUN_ID,
+        query=periodic["checkpoint_id"],
+    )
+    assert len(filtered) == 1
+    assert filtered[0]["checkpoint_id"] == periodic["checkpoint_id"]
+    assert filtered[0]["best_training"] is False
 
 
 def test_catalog_attaches_goal_required_eval_results_by_checkpoint(
@@ -1181,6 +1194,10 @@ def test_catalog_attaches_goal_required_eval_results_by_checkpoint(
     class EvalRun:
         config = {
             "seed": 7,
+            "selection_rank": [
+                f"max({required_metric})",
+                "min(leader/checkpoint/step)",
+            ],
             "checkpoint_eval_contract": {
                 "seed": 42_000,
                 "acceptance": [
@@ -1248,6 +1265,11 @@ def test_catalog_attaches_goal_required_eval_results_by_checkpoint(
     ]
     assert accepted_row["playback_seed"] == 42_000
     assert accepted_row["playback_seed_source"] == "evaluation"
+    assert accepted["metrics"] == {
+        required_metric: 1.0,
+        "leader/checkpoint/step": 250_000.0,
+    }
+    assert accepted_row["best_evaluation"] is True
     rejected = rejected_row["evaluation"]
     assert rejected["status"] == "rejected"
     assert rejected["episodes_completed"] == 1
@@ -1255,6 +1277,7 @@ def test_catalog_attaches_goal_required_eval_results_by_checkpoint(
     assert rejected["criteria"][0]["value"] is None
     assert rejected_row["playback_seed"] == 42_000
     assert rejected_row["playback_seed_source"] == "evaluation"
+    assert rejected_row["best_evaluation"] is False
 
 
 def test_catalog_uses_training_seed_when_checkpoint_has_no_eval_result(

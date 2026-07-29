@@ -9,6 +9,7 @@ import {
   checkpointCanEvaluate,
   checkpointEvaluationCell,
   checkpointPlaybackSeed,
+  checkpointRankTags,
   formatMetricValue,
   metricLabel,
   rankRunItems,
@@ -451,6 +452,18 @@ test("checkpoint evaluation cells distinguish queued work from terminal evidence
       },
     })[0],
     "Failed",
+  );
+});
+
+test("checkpoint rank tags distinguish training and evaluation leaders", () => {
+  assert.deepEqual(checkpointRankTags({}), []);
+  assert.deepEqual(
+    checkpointRankTags({ best_training: true }),
+    ["Best training"],
+  );
+  assert.deepEqual(
+    checkpointRankTags({ best_training: true, best_evaluation: true }),
+    ["Best training", "Best eval"],
   );
 });
 

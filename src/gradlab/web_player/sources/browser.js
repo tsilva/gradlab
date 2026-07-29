@@ -529,6 +529,13 @@ export function checkpointEvaluationCell(item) {
   ];
 }
 
+export function checkpointRankTags(item) {
+  const tags = [];
+  if (item?.best_training) tags.push("Best training");
+  if (item?.best_evaluation) tags.push("Best eval");
+  return tags;
+}
+
 function decodePathPart(value) {
   try {
     return decodeURIComponent(value);
@@ -1815,7 +1822,11 @@ export class SourceBrowser {
           ]
         : [
             [null, "", "source-selection-cell"],
-            [item.promoted ? `${item.checkpoint_id} · promoted` : item.checkpoint_id, item.sha256],
+            [
+              item.promoted ? `${item.checkpoint_id} · promoted` : item.checkpoint_id,
+              item.sha256,
+              "checkpoint-cell",
+            ],
             [item.purpose],
             [Number(item.step).toLocaleString()],
             ...checkpointMetricColumns.map((column) => [
@@ -1925,6 +1936,22 @@ export class SourceBrowser {
           cell.append(identity);
         } else {
           cell.append(main);
+        }
+        if (className.includes("checkpoint-cell")) {
+          const tags = checkpointRankTags(item);
+          if (tags.length) {
+            const badges = document.createElement("div");
+            badges.className = "checkpoint-rank-badges";
+            tags.forEach((label) => {
+              const badge = document.createElement("span");
+              badge.className = label === "Best eval"
+                ? "checkpoint-rank-badge evaluation"
+                : "checkpoint-rank-badge training";
+              badge.textContent = label;
+              badges.append(badge);
+            });
+            cell.append(badges);
+          }
         }
         if (className.includes("recipe-cell") && isEfficiencyLeader) {
           const badge = document.createElement("span");

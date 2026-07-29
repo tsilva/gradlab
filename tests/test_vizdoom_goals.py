@@ -34,6 +34,7 @@ EXPECTED_GOALS = {
         "acceptance_metric": "eval/full/outcome/success/across_starts/rate/min",
         "acceptance_threshold": 1.0,
         "reward_scale": 100.0,
+        "max_episode_steps": None,
     },
     "VizdoomBasic-Plus-v1": {
         "timesteps": 2_000_000,
@@ -42,6 +43,7 @@ EXPECTED_GOALS = {
         "acceptance_metric": "eval/full/outcome/success/across_starts/rate/min",
         "acceptance_threshold": 1.0,
         "reward_scale": 100.0,
+        "max_episode_steps": None,
     },
     "VizdoomDeadlyCorridor-v1": {
         "timesteps": 25_000_000,
@@ -50,6 +52,7 @@ EXPECTED_GOALS = {
         "acceptance_metric": "eval/full/episode/return/shaped/mean",
         "acceptance_threshold": 0.80,
         "reward_scale": 100.0,
+        "max_episode_steps": None,
     },
     "VizdoomDeathmatch-v1": {
         "timesteps": 20_000_000,
@@ -59,6 +62,7 @@ EXPECTED_GOALS = {
         "acceptance_threshold": 10.0,
         "reward_scale": 1.0,
         "actions": DEATHMATCH_ACTIONS,
+        "max_episode_steps": None,
     },
     "VizdoomDefendCenter-v1": {
         "timesteps": 10_000_000,
@@ -67,6 +71,7 @@ EXPECTED_GOALS = {
         "acceptance_metric": "eval/full/episode/return/shaped/mean",
         "acceptance_threshold": 10.0,
         "reward_scale": 1.0,
+        "max_episode_steps": None,
     },
     "VizdoomDefendLine-v1": {
         "timesteps": 10_000_000,
@@ -75,6 +80,7 @@ EXPECTED_GOALS = {
         "acceptance_metric": "eval/full/episode/return/shaped/mean",
         "acceptance_threshold": 5.0,
         "reward_scale": 1.0,
+        "max_episode_steps": 512,
     },
     "VizdoomDefendLine-Plus-v1": {
         "timesteps": 10_000_000,
@@ -83,6 +89,7 @@ EXPECTED_GOALS = {
         "acceptance_metric": "eval/full/episode/return/shaped/mean",
         "acceptance_threshold": 5.0,
         "reward_scale": 1.0,
+        "max_episode_steps": 512,
     },
     "VizdoomHealthGathering-v1": {
         "timesteps": 10_000_000,
@@ -91,6 +98,7 @@ EXPECTED_GOALS = {
         "acceptance_metric": "eval/full/outcome/success/across_starts/rate/min",
         "acceptance_threshold": 0.95,
         "reward_scale": 100.0,
+        "max_episode_steps": None,
     },
     "VizdoomHealthGatheringSupreme-v1": {
         "timesteps": 20_000_000,
@@ -99,6 +107,7 @@ EXPECTED_GOALS = {
         "acceptance_metric": "eval/full/outcome/success/across_starts/rate/min",
         "acceptance_threshold": 0.95,
         "reward_scale": 100.0,
+        "max_episode_steps": None,
     },
     "VizdoomMyWayHome-v1": {
         "timesteps": 10_000_000,
@@ -107,6 +116,7 @@ EXPECTED_GOALS = {
         "acceptance_metric": "eval/full/outcome/success/across_starts/rate/min",
         "acceptance_threshold": 0.95,
         "reward_scale": 1.0,
+        "max_episode_steps": None,
     },
     "VizdoomPredictPosition-v1": {
         "timesteps": 5_000_000,
@@ -115,6 +125,7 @@ EXPECTED_GOALS = {
         "acceptance_metric": "eval/full/outcome/success/across_starts/rate/min",
         "acceptance_threshold": 0.95,
         "reward_scale": 1.0,
+        "max_episode_steps": None,
     },
     "VizdoomTakeCover-v1": {
         "timesteps": 10_000_000,
@@ -123,6 +134,7 @@ EXPECTED_GOALS = {
         "acceptance_metric": "eval/full/outcome/success/across_starts/rate/min",
         "acceptance_threshold": 0.95,
         "reward_scale": 100.0,
+        "max_episode_steps": 512,
     },
 }
 
@@ -159,6 +171,11 @@ def test_vizdoom_goal_has_complete_evaluated_ppo_contract(
     assert train_config["task"]["id"] == "identity"
     assert expected["event"] in train_config["task"]["events"]
     assert train_config["task"]["reward"]["reward_scale"] == expected["reward_scale"]
+    termination = train_config["task"]["termination"]
+    if expected["max_episode_steps"] is None:
+        assert "max_episode_steps" not in termination
+    else:
+        assert termination["max_episode_steps"] == expected["max_episode_steps"]
     assert train_config["task"] == train_environment["task"]
     assert train_environment["task"] == eval_environment["task"]
     assert eval_environment["env_config"]["n_envs"] == 16
@@ -185,6 +202,38 @@ def test_vizdoom_goal_has_complete_evaluated_ppo_contract(
         }
     ]
     assert goal["release"] == {"huggingface": {}}
+
+
+@pytest.mark.parametrize(
+    "goal_id",
+    ["VizdoomHealthGathering-v1", "VizdoomHealthGatheringSupreme-v1"],
+)
+def test_vizdoom_health_gathering_uses_the_native_provider_boundary_for_survival(
+    goal_id: str,
+) -> None:
+    goal_path = GOALS_ROOT / goal_id / "_goal.yaml"
+    recipe_path = goal_path.parent / "recipes/ppo.yaml"
+    document = compose_train_document(goal_path, recipe_path)
+
+    train_config = document["train_config"]
+    assert train_config["env_args"]["info_filter"] == {
+        "mode": "all",
+        "keys": ["player_dead", "pending_reset"],
+    }
+    assert train_config["task"]["signals"] == {
+        "player_dead": "player_dead",
+        "episode_done": "pending_reset",
+    }
+    assert train_config["task"]["events"]["survived"] == {
+        "signal": "episode_done",
+        "operation": "equals_for",
+        "value": 1,
+        "steps": 1,
+    }
+    assert train_config["task"]["termination"] == {
+        "failure": ["player_died"],
+        "success": ["survived"],
+    }
 
 
 def test_vizdoom_deathmatch_declares_complete_single_player_combat_semantics() -> None:
@@ -214,7 +263,6 @@ def test_vizdoom_deathmatch_declares_complete_single_player_combat_semantics() -
         "episode_done": "pending_reset",
     }
     assert train_config["task"]["termination"] == {
-        "max_episode_steps": 1050,
         "failure": ["player_died"],
         "timeout": ["episode_ended"],
     }
