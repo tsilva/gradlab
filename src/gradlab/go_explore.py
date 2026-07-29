@@ -240,6 +240,8 @@ class GoExploreSearch:
         self._pending: dict[Hashable, _PendingCell] = {}
         self._best_incomplete: GoExploreCandidate | None = None
         self._best_success: GoExploreCandidate | None = None
+        self._best_incomplete_by_seed: dict[int | None, GoExploreCandidate] = {}
+        self._best_success_by_seed: dict[int | None, GoExploreCandidate] = {}
         self._completion_events: list[CompletionEvent] = []
         self._initial_roots: dict[int, tuple[Hashable, str]] = {}
         self._legacy_state = False
@@ -434,8 +436,23 @@ class GoExploreSearch:
                 initial_seed=state.initial_seed,
                 route_points=tuple(state.route_points),
             )
+            previous_for_seed = self._best_success_by_seed.get(candidate.initial_seed)
+            if previous_for_seed is None or (
+                candidate.episode_return,
+                -candidate.step_count,
+            ) > (
+                previous_for_seed.episode_return,
+                -previous_for_seed.step_count,
+            ):
+                self._best_success_by_seed[candidate.initial_seed] = candidate
             previous = self._best_success
-            improved = previous is None or candidate.episode_return > previous.episode_return
+            improved = previous is None or (
+                candidate.episode_return,
+                -candidate.step_count,
+            ) > (
+                previous.episode_return,
+                -previous.step_count,
+            )
             if improved:
                 self._best_success = candidate
                 if self.first_success_return is None:
@@ -453,6 +470,24 @@ class GoExploreSearch:
             )
             return False
         previous = self._best_incomplete
+        previous_for_seed = self._best_incomplete_by_seed.get(state.initial_seed)
+        if previous_for_seed is None or (
+            progress,
+            state.episode_return,
+            -state.program_steps,
+        ) > (
+            previous_for_seed.progress,
+            previous_for_seed.episode_return,
+            -previous_for_seed.step_count,
+        ):
+            self._best_incomplete_by_seed[state.initial_seed] = GoExploreCandidate(
+                runs=tuple(state.runs),
+                episode_return=state.episode_return,
+                progress=progress,
+                completed=False,
+                initial_seed=state.initial_seed,
+                route_points=tuple(state.route_points),
+            )
         if previous is None or (
             progress,
             state.episode_return,
@@ -818,6 +853,32 @@ class GoExploreSearch:
             route_points=cls._route_from_document(value.get("route", ())),
         )
 
+    @classmethod
+    def _candidate_map_from_document(
+        cls,
+        value: object,
+        *,
+        fallback: GoExploreCandidate | None,
+    ) -> dict[int | None, GoExploreCandidate]:
+        if value is None:
+            return {} if fallback is None else {fallback.initial_seed: fallback}
+        if isinstance(value, str | bytes) or not isinstance(value, Sequence):
+            raise ValueError("durable Go-Explore per-seed candidates must be a sequence")
+        candidates: dict[int | None, GoExploreCandidate] = {}
+        for raw_item in value:
+            if not isinstance(raw_item, Mapping):
+                raise ValueError("durable Go-Explore per-seed candidate must be an object")
+            seed = None if raw_item.get("seed") is None else int(raw_item["seed"])
+            candidate = cls._candidate_from_document(raw_item.get("candidate"))
+            if (
+                candidate is None
+                or candidate.initial_seed != seed
+                or seed in candidates
+            ):
+                raise ValueError("durable Go-Explore per-seed candidate is invalid")
+            candidates[seed] = candidate
+        return candidates
+
     def state_document(self, lane_entry_ids: Sequence[str | None]) -> dict[str, object]:
         if len(lane_entry_ids) != self.n_envs or any(not entry_id for entry_id in lane_entry_ids):
             raise ValueError("Go-Explore recovery requires one archive entry per lane")
@@ -893,6 +954,26 @@ class GoExploreSearch:
             "rng_states": [rng.bit_generator.state for rng in self._rngs],
             "best_incomplete": self._candidate_document(self._best_incomplete),
             "best_success": self._candidate_document(self._best_success),
+            "best_incomplete_by_seed": [
+                {
+                    "seed": seed,
+                    "candidate": self._candidate_document(candidate),
+                }
+                for seed, candidate in sorted(
+                    self._best_incomplete_by_seed.items(),
+                    key=lambda item: (-1 if item[0] is None else item[0]),
+                )
+            ],
+            "best_success_by_seed": [
+                {
+                    "seed": seed,
+                    "candidate": self._candidate_document(candidate),
+                }
+                for seed, candidate in sorted(
+                    self._best_success_by_seed.items(),
+                    key=lambda item: (-1 if item[0] is None else item[0]),
+                )
+            ],
             "initial_roots": [
                 {
                     "seed": seed,
@@ -1043,6 +1124,14 @@ class GoExploreSearch:
         self._completion_events = []
         self._best_incomplete = self._candidate_from_document(value["best_incomplete"])
         self._best_success = self._candidate_from_document(value["best_success"])
+        self._best_incomplete_by_seed = self._candidate_map_from_document(
+            value.get("best_incomplete_by_seed"),
+            fallback=self._best_incomplete,
+        )
+        self._best_success_by_seed = self._candidate_map_from_document(
+            value.get("best_success_by_seed"),
+            fallback=self._best_success,
+        )
         self._initial_roots = {}
         if schema_version >= 4:
             raw_roots = value.get("initial_roots", ())

@@ -205,9 +205,7 @@ def test_textual_app_updates_algorithm_cards_inline_and_requests_safe_stop() -> 
             )
             app._last_history_sample = 0.0
             app._refresh_from_bridge()
-            assert "—" not in str(
-                app.query_one("#summary-rate .summary-value", Static).render()
-            )
+            assert "—" not in str(app.query_one("#summary-rate .summary-value", Static).render())
             assert app.query_one("#rate-sparkline", Sparkline).display is True
             assert app.query_one("#rate-sparkline", Sparkline).data
 
@@ -227,18 +225,12 @@ def test_textual_app_updates_algorithm_cards_inline_and_requests_safe_stop() -> 
             assert progress_bar.gradient.get_color(0.0).hex == "#22D3EE"
             assert progress_bar.gradient.get_color(1.0).hex == "#67E8F9"
             assert app.screen.styles.background.hex == "#05090D"
-            assert app.query_one("#metric-group-exploration").styles.background.hex == (
-                "#080E14"
-            )
-            assert "TRAINING-ONLY RUN" in str(
-                app.query_one("#run-notice", Static).render()
-            )
+            assert app.query_one("#metric-group-exploration").styles.background.hex == ("#080E14")
+            assert "TRAINING-ONLY RUN" in str(app.query_one("#run-notice", Static).render())
             assert "no declared success signal" in str(
                 app.query_one("#run-notice", Static).render()
             )
-            assert "not declared" in str(
-                app.query_one("#metric-value-7", Static).render()
-            )
+            assert "not declared" in str(app.query_one("#metric-value-7", Static).render())
             assert app.query_one("#metric-meter-7", ProgressBar).display is False
 
             await pilot.press("?")
@@ -249,9 +241,7 @@ def test_textual_app_updates_algorithm_cards_inline_and_requests_safe_stop() -> 
             await pilot.pause()
             assert stop_flag.requested is True
             assert execution.state == "running"
-            assert "stop pending" in str(
-                app.query_one("#training-status", Static).render()
-            ).lower()
+            assert "stop pending" in str(app.query_one("#training-status", Static).render()).lower()
             release.set()
             for _ in range(50):
                 await pilot.pause()
