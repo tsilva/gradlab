@@ -845,6 +845,15 @@ TRAIN_CONFIG_FIELDS: tuple[TrainConfigField, ...] = (
         help="Immutable orchestration attempt recorded in W&B config.",
     ),
     _field(
+        "supervision_liveness",
+        type_name="json",
+        default={},
+        serialize="json",
+        mapping_value=True,
+        cli_exposed=False,
+        help="Manifest-bound learner startup, polling, teardown, and failure-drain deadlines.",
+    ),
+    _field(
         "dstack_task",
         default="",
         cli_exposed=False,

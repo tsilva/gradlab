@@ -34,9 +34,8 @@ from gradlab.modal_eval_config import load_modal_eval_config
 from gradlab.operator_credentials import (
     OperatorConfigurationError,
     OperatorEnvironmentReport,
-    load_operator_environment,
-    reject_protected_dotenv,
 )
+from gradlab.operator_environment import load_repository_operator_environment
 from gradlab.r2_store import R2Bucket, RunStorageConfig
 from gradlab.policy_bundle import build_recipe_document, canonical_json_sha256
 from gradlab.recipe_documents import (
@@ -53,7 +52,7 @@ from gradlab.rom_assets import (
     provider_rom_identity,
     validate_rom_asset_manifest,
 )
-from gradlab.run_authority import RunAuthority
+from gradlab.run_authority import Lease, RunAuthority
 from gradlab.run_contracts import (
     RUN_ID_PATTERN,
     RunManifest,
@@ -108,6 +107,14 @@ OPERATOR_MODAL_ENV = (
     "MODAL_TOKEN_ID",
     "MODAL_TOKEN_SECRET",
 )
+RECONCILE_STOP_REASONS = (
+    "learner_failure",
+    "startup_timeout",
+    "invalid_result",
+    "exit_contract_mismatch",
+    "teardown_timeout",
+    "supervisor_startup_failure",
+)
 
 
 def _git(root: Path, *arguments: str) -> str:
@@ -129,12 +136,14 @@ def repository_root() -> Path:
 
 
 def _load_environment(root: Path) -> OperatorEnvironmentReport:
-    from gradlab.dotenv import load_env_file
+    return load_repository_operator_environment(root)
 
-    dotenv_path = root / ".env"
-    reject_protected_dotenv(dotenv_path)
-    load_env_file(dotenv_path)
-    return load_operator_environment()
+
+def _default_liveness_policy() -> dict[str, float]:
+    # Keep launch-only schema dependencies out of import-time helper consumers.
+    from gradlab.run_contracts import default_liveness_policy
+
+    return default_liveness_policy()
 
 
 def _tracked_committed_path(root: Path, path: Path, *, label: str) -> Path:
@@ -182,6 +191,13 @@ def _require_run_id(value: str) -> str:
     text = str(value).strip()
     if RUN_ID_PATTERN.fullmatch(text) is None:
         raise argparse.ArgumentTypeError("run id must match gradlab-<32 lowercase hex>")
+    return text
+
+
+def _require_sha256_arg(value: str) -> str:
+    text = str(value).strip().lower()
+    if re.fullmatch(r"[0-9a-f]{64}", text) is None:
+        raise argparse.ArgumentTypeError("evidence hash must be 64 lowercase hexadecimal digits")
     return text
 
 
@@ -562,6 +578,7 @@ def cmd_launch(args: argparse.Namespace) -> int:
         },
         storage=storage.manifest_locations(),
         goal_variant=goal_variant,
+        liveness=_default_liveness_policy(),
     )
     authority.create_manifest(manifest)
     manifest_uri = authority.control.uri(f"runs/{run_id}/manifest.json")
@@ -777,17 +794,26 @@ def _record_terminal_task_without_receipt(
     authority: RunAuthority,
     manifest: RunManifest,
     task: DstackTask,
-) -> None:
+    *,
+    writer_lease: Lease,
+    stop_reason: str = "supervisor_startup_failure",
+    final_step: int = 0,
+    evidence_sha256: tuple[str, ...] = (),
+) -> TerminalReceipt:
     if not task.terminal:
         raise RuntimeError("cannot seal an orphan attempt while its dstack task is active")
-    authority.create_attempt_terminal(
-        TerminalReceipt(
+    if (
+        writer_lease.run_id != manifest.run_id
+        or writer_lease.attempt_id != manifest.attempt_id
+    ):
+        raise RuntimeError("orphan-attempt reconciliation requires its exclusive writer lease")
+    receipt = TerminalReceipt(
             run_id=manifest.run_id,
             attempt_id=manifest.attempt_id,
             state="resumable_failure",
             acceptance_required=bool(manifest.modal["enabled"]),
-            stop_reason="supervisor_startup_failure",
-            final_step=0,
+            stop_reason=stop_reason,
+            final_step=int(final_step),
             checkpoint_inventory=(),
             eval_inventory=(),
             wandb_high_water_mark=0,
@@ -804,10 +830,13 @@ def _record_terminal_task_without_receipt(
                     "dstack task reached terminal status "
                     f"{task.status!r} without an authoritative attempt receipt"
                 ),
+                "evidence_sha256": list(evidence_sha256),
+                "dstack": _public_dstack_state(task),
             },
             completed_at=utc_now(),
         )
-    )
+    authority.create_attempt_terminal(receipt)
+    return receipt
 
 
 def _require_retryable_attempt_terminal(
@@ -988,6 +1017,95 @@ def cmd_cancel(args: argparse.Namespace) -> int:
     return 0
 
 
+def _project_reconciled_terminal(
+    manifest: RunManifest,
+    receipt: TerminalReceipt,
+) -> None:
+    projector = WandbProjector.resume(
+        {
+            "wandb_run_id": manifest.run_id,
+            "wandb_entity": manifest.wandb["entity"],
+            "wandb_project": manifest.wandb["project"],
+            "wandb_mode": "online",
+            "run_name": manifest.wandb.get("display_name"),
+            "wandb_group": manifest.wandb.get("group"),
+        },
+        update_finish_state=False,
+    )
+    try:
+        publish_terminal_summary(projector.run, receipt)
+    finally:
+        projector.close(timeout_seconds=300)
+
+
+def cmd_reconcile(args: argparse.Namespace) -> int:
+    root = repository_root()
+    _storage_config, authority = _storage(root)
+    state = authority.semantic_state(args.run_id)
+    manifest = RunManifest(**_latest_attempt(state))
+    manifest.validate()
+    task = DstackBackend().status(str(manifest.compute["dstack_task"]))
+    if not task.terminal:
+        raise RuntimeError("cannot reconcile while the dstack task is active")
+    lease = authority.acquire_lease(
+        run_id=manifest.run_id,
+        attempt_id=manifest.attempt_id,
+        holder_id=f"operator-reconcile-{os.getpid()}",
+    )
+    created = False
+    try:
+        state = authority.semantic_state(args.run_id)
+        existing = _latest_attempt_terminal(state)
+        if existing is None:
+            checkpoints = [
+                dict(row)
+                for row in ((state.get("public_index") or {}).get("checkpoints") or [])
+                if isinstance(row, Mapping)
+            ]
+            final_step = max(
+                (int(row.get("step") or 0) for row in checkpoints),
+                default=0,
+            )
+            receipt = _record_terminal_task_without_receipt(
+                authority,
+                manifest,
+                task,
+                writer_lease=lease,
+                stop_reason=str(args.stop_reason),
+                final_step=final_step,
+                evidence_sha256=tuple(args.evidence_sha256 or ()),
+            )
+            created = True
+        else:
+            receipt = TerminalReceipt(**existing)
+            receipt.validate()
+            if receipt.attempt_id != manifest.attempt_id:
+                raise RuntimeError("latest attempt terminal belongs to another attempt")
+        _project_reconciled_terminal(manifest, receipt)
+    finally:
+        authority.release_lease(lease)
+    output = {
+        "run_id": manifest.run_id,
+        "attempt_id": manifest.attempt_id,
+        "dstack_task": task.name,
+        "dstack_status": task.status,
+        "terminal_created": created,
+        "state": receipt.state,
+        "stop_reason": receipt.stop_reason,
+        "final_step": receipt.final_step,
+        "wandb_projected": True,
+    }
+    print(
+        json.dumps(output, sort_keys=True)
+        if args.json
+        else (
+            f"reconciled run={manifest.run_id} attempt={manifest.attempt_id} "
+            f"state={receipt.state} reason={receipt.stop_reason}"
+        )
+    )
+    return 0
+
+
 def cmd_logs(args: argparse.Namespace) -> int:
     root = repository_root()
     _storage_config, authority = _storage(root)
@@ -1146,10 +1264,16 @@ def cmd_retry(args: argparse.Namespace) -> int:
             "the previous dstack task is not found without typed pre-submit evidence"
         )
     if previous_task is not None and previous_task.terminal and attempt_terminal is None:
+        reconcile_lease = authority.acquire_lease(
+            run_id=previous_manifest.run_id,
+            attempt_id=previous_manifest.attempt_id,
+            holder_id=f"operator-reconcile-{os.getpid()}",
+        )
         _record_terminal_task_without_receipt(
             authority,
             previous_manifest,
             previous_task,
+            writer_lease=reconcile_lease,
         )
         state = authority.semantic_state(args.run_id)
         attempt_terminal = _latest_attempt_terminal(state)

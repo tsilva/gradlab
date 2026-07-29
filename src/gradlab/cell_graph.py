@@ -5,7 +5,6 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
-import math
 import zipfile
 from collections import defaultdict
 from collections.abc import Mapping, Sequence
@@ -19,7 +18,11 @@ import numpy as np
 from gradlab.action_contract import action_contract_meanings
 from gradlab.action_program import ActionRun, canonicalize_action_runs
 from gradlab.json_utils import canonical_json_bytes
-from gradlab.state_archive import ArchiveCellConfig, normalize_archive_cell_config
+from gradlab.state_archive import (
+    ArchiveCellConfig,
+    StateArchiveEntry,
+    normalize_archive_cell_config,
+)
 
 
 CELL_GRAPH_SCHEMA_VERSION = 1
@@ -32,6 +35,9 @@ CELL_GRAPH_SNAPSHOT_BLOB_PREFIX = "snapshot_blobs/"
 MAX_CELL_GRAPH_NODES = 250_000
 MAX_CELL_GRAPH_EDGES = 500_000
 MAX_CELL_GRAPH_ACTION_RUNS = 1_000_000
+MAX_CELL_GRAPH_DOCUMENT_BYTES = 128 * 1024 * 1024
+MAX_CELL_GRAPH_SNAPSHOT_BLOB_BYTES = 512 * 1024 * 1024
+MAX_CELL_GRAPH_SNAPSHOT_BYTES = 4 * 1024 * 1024 * 1024
 
 
 def _sha256_document(value: object) -> str:
@@ -311,8 +317,32 @@ class CellGraphPolicy:
         if self.snapshot_mode == "none":
             if referenced_snapshots or self.snapshot_entries or self.snapshot_payloads:
                 raise ValueError("snapshot-free cell graph contains snapshot data")
-        elif referenced_snapshots - set(self.snapshot_entries):
-            raise ValueError("cell-graph node references a missing snapshot entry")
+        else:
+            if referenced_snapshots != set(self.snapshot_entries):
+                raise ValueError(
+                    "cell-graph snapshot entries must exactly match node references"
+                )
+            referenced_blobs: set[str] = set()
+            for entry_id, raw_entry in self.snapshot_entries.items():
+                entry = StateArchiveEntry.from_dict(raw_entry)
+                if entry.entry_id != entry_id:
+                    raise ValueError("cell-graph snapshot entry id disagrees")
+                ref = entry.provider_snapshot.ref
+                referenced_blobs.add(ref.blob_sha256)
+                payload = self.snapshot_payloads.get(ref.blob_sha256)
+                if payload is None:
+                    raise ValueError("cell-graph snapshot payload is missing")
+                if (
+                    hashlib.sha256(payload).hexdigest() != ref.blob_sha256
+                    or len(payload) != ref.size_bytes
+                ):
+                    raise ValueError(
+                        "cell-graph snapshot payload failed integrity verification"
+                    )
+            if referenced_blobs != set(self.snapshot_payloads):
+                raise ValueError(
+                    "cell-graph snapshot blobs must exactly match entry references"
+                )
 
     def _edge_rank(self, edge: CellGraphEdge) -> tuple[object, ...]:
         target = next(node for node in self.nodes if node.node_id == edge.target_id)
@@ -609,6 +639,11 @@ class CellGraphPolicy:
                     bool(self._edges_by_source.get(node_id))
                     for node_id in self.roots.values()
                 ),
+                "snapshot_entry_count": len(self.snapshot_entries),
+                "snapshot_blob_count": len(self.snapshot_payloads),
+                "snapshot_blob_bytes": sum(
+                    len(payload) for payload in self.snapshot_payloads.values()
+                ),
             },
         }
 
@@ -657,8 +692,32 @@ class CellGraphPolicy:
     def load(cls, path: str | Path) -> "CellGraphPolicy":
         with zipfile.ZipFile(Path(path)) as archive:
             names = archive.namelist()
+            if len(names) != len(set(names)):
+                raise ValueError("cell-graph artifact contains duplicate members")
+            allowed_exact = {
+                CELL_GRAPH_MEMBER,
+                CELL_GRAPH_ARTIFACT_IDENTITY_MEMBER,
+                CELL_GRAPH_SNAPSHOT_MANIFEST_MEMBER,
+            }
+            unknown = [
+                name
+                for name in names
+                if name not in allowed_exact
+                and not name.startswith(CELL_GRAPH_SNAPSHOT_BLOB_PREFIX)
+            ]
+            if unknown or any(name.endswith("/") or ".." in Path(name).parts for name in names):
+                raise ValueError("cell-graph artifact contains unsupported members")
             if CELL_GRAPH_MEMBER not in names:
                 raise ValueError(f"unsupported policy artifact: missing {CELL_GRAPH_MEMBER}")
+            info_by_name = {info.filename: info for info in archive.infolist()}
+            for document_name in (
+                CELL_GRAPH_MEMBER,
+                CELL_GRAPH_ARTIFACT_IDENTITY_MEMBER,
+                CELL_GRAPH_SNAPSHOT_MANIFEST_MEMBER,
+            ):
+                info = info_by_name.get(document_name)
+                if info is not None and info.file_size > MAX_CELL_GRAPH_DOCUMENT_BYTES:
+                    raise ValueError("cell-graph artifact document is too large")
             payload = json.loads(archive.read(CELL_GRAPH_MEMBER))
             snapshot_entries: dict[str, Mapping[str, Any]] = {}
             snapshot_payloads: dict[str, bytes] = {}
@@ -676,9 +735,16 @@ class CellGraphPolicy:
                 }
                 if len(snapshot_entries) != len(entries):
                     raise ValueError("cell-graph snapshot entry is invalid")
+                snapshot_bytes = 0
                 for name in names:
                     if not name.startswith(CELL_GRAPH_SNAPSHOT_BLOB_PREFIX):
                         continue
+                    info = info_by_name[name]
+                    if info.file_size > MAX_CELL_GRAPH_SNAPSHOT_BLOB_BYTES:
+                        raise ValueError("cell-graph snapshot blob is too large")
+                    snapshot_bytes += info.file_size
+                    if snapshot_bytes > MAX_CELL_GRAPH_SNAPSHOT_BYTES:
+                        raise ValueError("cell-graph snapshot payloads are too large")
                     digest = name.removeprefix(CELL_GRAPH_SNAPSHOT_BLOB_PREFIX).removesuffix(
                         ".bin"
                     )

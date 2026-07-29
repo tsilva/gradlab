@@ -368,6 +368,7 @@ class MetricEarlyStopHelperTests(unittest.TestCase):
                         "metric": TRAIN_OUTCOME_SUCCESS_WINDOW_100_RATE_MIN,
                         "trigger": "threshold",
                         "operator": ">",
+                        "progress_baseline": 0.0,
                         "threshold": 0.99,
                         "patience_steps": 0,
                         "outcome": "success",
@@ -409,6 +410,10 @@ class MetricEarlyStopHelperTests(unittest.TestCase):
             self.assertEqual(decision["value"], 1.0)
             self.assertEqual(
                 model.logger.records[train_early_stop_metric("clear_100", "would_trigger")],
+                1.0,
+            )
+            self.assertEqual(
+                model.logger.records[train_early_stop_metric("clear_100", "target/progress")],
                 1.0,
             )
 

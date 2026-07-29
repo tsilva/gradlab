@@ -60,9 +60,12 @@ from gradlab.run_contracts import (
     PromotionReceipt,
     RunManifest,
     TerminalReceipt,
+    default_liveness_policy,
 )
 from gradlab.run_supervisor import (
     IncompleteEvaluationEvidence,
+    LearnerFailure,
+    LearnerTeardownTimeout,
     METRIC_JOURNAL_RETENTION_DAYS,
     RunSupervisor,
     _terminal_outcome,
@@ -93,6 +96,8 @@ DEFAULT_SCENARIOS = (
     "terminal-receipt-gating",
     "verifier-tamper-detection",
     "early-stop-outcomes",
+    "failed-result-live-process",
+    "completed-result-hung-process",
     "local-background-jobs",
 )
 
@@ -192,6 +197,36 @@ class CertificationJobHandler:
                 ),
             ),
         )
+
+
+@dataclass
+class ScriptedLearnerProcess:
+    pid: int
+    returncode: int = 0
+    alive: bool = True
+    ignore_term: bool = False
+    graceful_signals: int = 0
+    term_signals: int = 0
+    kill_signals: int = 0
+
+    def poll(self) -> int | None:
+        return None if self.alive else self.returncode
+
+    def wait(self) -> int:
+        return self.returncode
+
+    def send_signal(self, signal_number: int) -> None:
+        del signal_number
+        self.graceful_signals += 1
+
+    def terminate(self) -> None:
+        self.term_signals += 1
+        if not self.ignore_term:
+            self.alive = False
+
+    def kill(self) -> None:
+        self.kill_signals += 1
+        self.alive = False
 
 
 class CertificationRuntime(SupervisorRuntime):
@@ -340,8 +375,17 @@ class CertificationRuntime(SupervisorRuntime):
         )
 
     def request_learner_stop(self, learner) -> None:
-        del learner
         self.stop_requests += 1
+        learner.send_signal(0)
+
+    def learner_group_alive(self, learner) -> bool:
+        return bool(learner.alive)
+
+    def terminate_learner_group(self, learner) -> None:
+        learner.terminate()
+
+    def kill_learner_group(self, learner) -> None:
+        learner.kill()
 
     def start_learner(self, command, *, log_path: Path, environment):
         del command, log_path, environment
@@ -509,6 +553,7 @@ class CertificationFixture:
             },
             storage=self.storage.manifest_locations(),
             goal_variant=self.composed["goal_variant"],
+            liveness=default_liveness_policy(),
         )
 
     def prepare(
@@ -1739,6 +1784,156 @@ def _scenario_early_stop_outcomes(root: Path) -> dict[str, Any]:
     }
 
 
+def _scripted_learner_result(
+    prepared: PreparedSupervisor,
+    *,
+    process: ScriptedLearnerProcess,
+    status: str,
+) -> dict[str, Any]:
+    failed = status == "failed"
+    return {
+        "document_type": "gradlab.training-result",
+        "format_version": 3,
+        "run_id": prepared.supervisor.manifest.run_id,
+        "attempt_id": prepared.supervisor.manifest.attempt_id,
+        "learner_pid": process.pid,
+        "training_backend_id": "sb3.ppo",
+        "status": status,
+        "terminal_reason": "failed" if failed else "resource_exhaustion",
+        "execution_mode": "supervised",
+        "execution_policy": {},
+        "first_completion_step": None,
+        "final_step": 0,
+        "requested_limit": 1,
+        "execution_limit": 1,
+        "error_type": "RuntimeError" if failed else None,
+        "error_message": "scripted learner failure" if failed else None,
+        "model_kind": None if failed else "final",
+        "model": None if failed else "final_model.zip",
+        "terminal_at": prepared.supervisor.clock.utc_now(),
+    }
+
+
+def _prepare_scripted_learner(
+    prepared: PreparedSupervisor,
+    *,
+    process: ScriptedLearnerProcess,
+    status: str,
+) -> None:
+    supervisor = prepared.supervisor
+    supervisor.run_dir.mkdir(parents=True, exist_ok=True)
+    supervisor.train_config = {"training_backend": {"id": "sb3.ppo"}}
+    supervisor.learner = process
+    supervisor.expected_learner_pid = process.pid
+    supervisor.learner_started_at = supervisor.clock.monotonic()
+    write_canonical_json(
+        supervisor.run_dir / "training-result.json",
+        _scripted_learner_result(prepared, process=process, status=status),
+    )
+
+
+def _scenario_failed_result_live_process(root: Path) -> dict[str, Any]:
+    recorder = ScenarioRecorder("failed-result-live-process", [])
+    fixture = CertificationFixture(root)
+    prepared = fixture.prepare(run_number=79)
+    process = ScriptedLearnerProcess(pid=79_001)
+    _prepare_scripted_learner(prepared, process=process, status="failed")
+    supervisor = prepared.supervisor
+    detected_at = supervisor.clock.monotonic()
+    failure: LearnerFailure | None = None
+    try:
+        supervisor._observe_live_learner_state(detected_at)
+    except LearnerFailure as exc:
+        failure = exc
+    recorder.require(
+        "failed-result-is-authoritative-within-one-poll",
+        failure is not None
+        and supervisor.learner_result_observed_at == detected_at
+        and supervisor.learner_final_step == 0,
+        evidence={
+            "poll_interval_seconds": supervisor.manifest.liveness["poll_interval_seconds"],
+            "detected_at": detected_at,
+        },
+    )
+    assert failure is not None
+    supervisor.stop_reason = failure.stop_reason
+    supervisor.cancel_requested = True
+    supervisor._request_learner_stop("supervisor_failure")
+    teardown_failure = supervisor._teardown_learner_group(primary_failure=failure)
+    supervisor._failure_drain(failure)
+    state, reason = _terminal_outcome(
+        cancel_requested=supervisor.cancel_requested,
+        failure=failure,
+        evaluation_required=True,
+        promotion=None,
+        early_stop=None,
+    )
+    recorder.require(
+        "learner-failure-dominates-cancel-and-reaps-group",
+        teardown_failure is None
+        and not process.alive
+        and process.term_signals == 1
+        and state == "resumable_failure"
+        and reason == "learner_failure"
+        and supervisor.stop_reason == "learner_failure"
+        and supervisor.store.all_evals_settled(),
+        evidence={
+            "state": state,
+            "stop_reason": supervisor.stop_reason,
+            "teardown": supervisor.learner_teardown_evidence,
+        },
+    )
+    return {
+        "invariants": recorder.invariants,
+        "evidence": {
+            "final_step": supervisor.learner_final_step,
+            "teardown_phase": supervisor.learner_teardown_evidence["completed_phase"],
+        },
+    }
+
+
+def _scenario_completed_result_hung_process(root: Path) -> dict[str, Any]:
+    recorder = ScenarioRecorder("completed-result-hung-process", [])
+    fixture = CertificationFixture(root)
+    prepared = fixture.prepare(run_number=80)
+    process = ScriptedLearnerProcess(pid=80_001, ignore_term=True)
+    _prepare_scripted_learner(prepared, process=process, status="completed")
+    supervisor = prepared.supervisor
+    supervisor._observe_live_learner_state(supervisor.clock.monotonic())
+    fixture.clock.advance(
+        float(supervisor.manifest.liveness["result_exit_grace_seconds"])
+    )
+    failure: LearnerTeardownTimeout | None = None
+    try:
+        supervisor._observe_live_learner_state(supervisor.clock.monotonic())
+    except LearnerTeardownTimeout as exc:
+        failure = exc
+    assert failure is not None
+    supervisor.stop_reason = failure.stop_reason
+    supervisor._request_learner_stop("supervisor_failure")
+    teardown_failure = supervisor._teardown_learner_group(primary_failure=failure)
+    recorder.require(
+        "hung-completed-result-escalates-through-kill",
+        teardown_failure is None
+        and not process.alive
+        and process.term_signals == 1
+        and process.kill_signals == 1
+        and supervisor.learner_teardown_evidence["completed_phase"] == "kill"
+        and supervisor.stop_reason == "teardown_timeout",
+        evidence={
+            "virtual_time_seconds": fixture.clock.monotonic(),
+            "teardown": supervisor.learner_teardown_evidence,
+        },
+    )
+    return {
+        "invariants": recorder.invariants,
+        "evidence": {
+            "virtual_time_seconds": fixture.clock.monotonic(),
+            "teardown_phase": supervisor.learner_teardown_evidence["completed_phase"],
+        },
+    }
+
+
 def _scenario_local_background_jobs(root: Path) -> dict[str, Any]:
     recorder = ScenarioRecorder("local-background-jobs", [])
     clock = DeterministicClock()
@@ -1971,6 +2166,8 @@ SCENARIOS: dict[str, Callable[[Path], dict[str, Any]]] = {
     "terminal-receipt-gating": _scenario_terminal_receipt_gating,
     "verifier-tamper-detection": _scenario_verifier_tamper_detection,
     "early-stop-outcomes": _scenario_early_stop_outcomes,
+    "failed-result-live-process": _scenario_failed_result_live_process,
+    "completed-result-hung-process": _scenario_completed_result_hung_process,
     "local-background-jobs": _scenario_local_background_jobs,
 }
 

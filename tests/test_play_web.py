@@ -1519,7 +1519,18 @@ def test_catalog_http_api_requires_the_fragment_session_token() -> None:
                     headers={"Authorization": f"Bearer {server.token}"},
                 )
                 assert checkpoints.status == 200
-                assert (await checkpoints.json())["items"][0]["evaluation"]["pass"] is True
+                checkpoint_payload = await checkpoints.json()
+                assert checkpoint_payload["items"][0]["evaluation"]["pass"] is True
+                assert checkpoint_payload["metric_columns"] == [
+                    {
+                        "metric": "train/outcome/success/window_100/rate/min",
+                        "direction": "max",
+                    },
+                    {
+                        "metric": "train/episode/return/shaped/from/target/mean",
+                        "direction": "max",
+                    },
+                ]
                 run_inspection = await client.get(
                     (
                         f"{server.origin}/api/catalog/runs/gradlab-{'a' * 32}"
@@ -1660,6 +1671,7 @@ def test_web_dashboard_assets_are_packaged_beside_server() -> None:
         root / "vendor" / "gridstack" / "gridstack.min.css",
         root / "sources" / "browser.js",
         root / "documents" / "viewer.js",
+        root / "documents" / "syntax.js",
         panel_root / "catalog.js",
         panel_root / "layout-sizing.js",
         panel_root / "manager.js",
@@ -1679,6 +1691,8 @@ def test_web_dashboard_assets_are_packaged_beside_server() -> None:
     styles = (root / "styles.css").read_text(encoding="utf-8")
     script = (root / "app.js").read_text(encoding="utf-8")
     source_browser = (root / "sources" / "browser.js").read_text(encoding="utf-8")
+    contract_viewer = (root / "documents" / "viewer.js").read_text(encoding="utf-8")
+    contract_syntax = (root / "documents" / "syntax.js").read_text(encoding="utf-8")
     catalog = (panel_root / "catalog.js").read_text(encoding="utf-8")
     controls = (panel_root / "controls.js").read_text(encoding="utf-8")
     manager = (panel_root / "manager.js").read_text(encoding="utf-8")
@@ -1764,6 +1778,10 @@ def test_web_dashboard_assets_are_packaged_beside_server() -> None:
     assert "panel-drag-target" not in script
     assert ".telemetry-blocks" in styles
     assert ".panel-editor" in styles
+    assert ".syntax-key" in styles
+    assert "contractSyntaxTokens(value, this.view)" in contract_viewer
+    assert "export function contractSyntaxTokens(value, view)" in contract_syntax
+    assert "export function contractSearchRanges(value, query)" in contract_syntax
 
     assert "export function sourceRouteFromPath(" in source_browser
     assert "export function sourceRoutePath(" in source_browser

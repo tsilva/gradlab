@@ -33,6 +33,7 @@ class GradLabVecEnv(VecEnv):
         self._dones = np.zeros(runtime.num_envs, dtype=bool)
         self._last_transition_info: Mapping[str, Any] | None = None
         self._last_reset_info: Mapping[str, Any] | None = None
+        self._policy_resumed = False
         self._empty_infos: list[dict[str, Any]] = [{} for _ in range(runtime.num_envs)]
         super().__init__(runtime.num_envs, runtime.observation_space, runtime.action_space)
 
@@ -62,6 +63,7 @@ class GradLabVecEnv(VecEnv):
         self._curriculum_step = None
         self._last_transition_info = None
         self._last_reset_info = None
+        self._policy_resumed = False
         self._dones.fill(False)
         return observations
 
@@ -140,7 +142,9 @@ class GradLabVecEnv(VecEnv):
         reset_keys = self.runtime.policy_reset_cell_keys(cell_config)
         if self._last_transition_info is None:
             keys = reset_keys
-            reset_mask = tuple(True for _ in range(self.num_envs))
+            reset_mask = tuple(
+                not self._policy_resumed for _ in range(self.num_envs)
+            )
         else:
             transition_keys = self.runtime.policy_cell_keys(
                 cell_config,
@@ -157,6 +161,14 @@ class GradLabVecEnv(VecEnv):
             episode_seeds=self.runtime.episode_seeds,
             reset_mask=reset_mask,
         )
+
+    def mark_policy_resumed(self) -> None:
+        """Preserve an explicitly selected route representative after restore."""
+
+        self._last_transition_info = None
+        self._last_reset_info = None
+        self._dones.fill(False)
+        self._policy_resumed = True
 
     def take_step_diagnostics(self) -> StepDiagnostics | None:
         diagnostics = self._step_diagnostics

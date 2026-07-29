@@ -278,9 +278,9 @@ class ConfigValidationTests(unittest.TestCase):
             document["goal"]["eval"]["acceptance"],
             [
                 {
-                    "metric": "eval/full/episode/return/mean",
+                    "metric": "eval/full/outcome/success/rate/min",
                     "operator": ">=",
-                    "threshold": 0.95,
+                    "threshold": 1.0,
                 }
             ],
         )
@@ -445,6 +445,7 @@ class ConfigValidationTests(unittest.TestCase):
                 "action": "stop",
                 "patience_steps": 0,
                 "operator": ">=",
+                "progress_baseline": 0.0,
                 "threshold": 1.0,
             },
         )

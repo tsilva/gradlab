@@ -21,6 +21,7 @@ train:
         metric: train/outcome/success/window_100/rate/min
         trigger: threshold
         operator: '>='
+        progress_baseline: 0.0
         threshold: 0.95
         patience_steps: 0
         outcome: success

@@ -17,6 +17,7 @@ from gradlab.cell_graph import (
     CellGraphNode,
     CellGraphPolicy,
 )
+from gradlab.json_utils import canonical_json_bytes
 from gradlab.policy_registry import resolve_policy_algorithm
 from gradlab.policy_runtime import PolicyRuntime
 
@@ -31,6 +32,11 @@ def _policy(
     snapshot_entries=None,
     snapshot_payloads=None,
 ) -> CellGraphPolicy:
+    snapshot_entry_id = (
+        next(iter(snapshot_entries))
+        if snapshot_mode == "retained" and snapshot_entries
+        else None
+    )
     nodes = (
         CellGraphNode(
             node_id="middle",
@@ -42,9 +48,7 @@ def _policy(
             cell_key=ROOT_KEY,
             target_distance=2,
             initial_seed=7,
-            snapshot_entry_id=(
-                "root-snapshot" if snapshot_mode == "retained" else None
-            ),
+            snapshot_entry_id=snapshot_entry_id,
         ),
         CellGraphNode(
             node_id="target",
@@ -126,6 +130,13 @@ def test_cell_graph_runtime_routes_replans_and_reports_fallback() -> None:
     assert replanned.route["edge_id"] == "middle-target"
     assert replanned.route["target_distance"] == 1
 
+    generalized = runtime.decide(
+        observation,
+        execution_context=_context(ROOT_KEY, seed=99, reset=True),
+    ).decisions[0]
+    assert int(generalized.executed_action) == 1
+    assert generalized.route["representative_id"] == "root"
+
     fallback = runtime.decide(
         observation,
         execution_context=_context(b"unseen", seed=99, reset=True),
@@ -168,7 +179,19 @@ def test_cell_graph_default_artifact_contains_no_snapshot_members(tmp_path: Path
         "edge_count": 2,
         "root_count": 1,
         "routable_root_count": 1,
+        "snapshot_entry_count": 0,
+        "snapshot_blob_count": 0,
+        "snapshot_blob_bytes": 0,
     }
+
+def test_cell_graph_rejects_unknown_zip_members(tmp_path: Path) -> None:
+    path = tmp_path / "policy.zip"
+    _policy().save(path)
+    with zipfile.ZipFile(path, mode="a") as archive:
+        archive.writestr("unexpected.bin", b"no")
+
+    with pytest.raises(ValueError, match="unsupported members"):
+        CellGraphPolicy.load(path)
 
 
 def test_cell_graph_retained_snapshot_is_opt_in_and_integrity_checked(
@@ -176,17 +199,30 @@ def test_cell_graph_retained_snapshot_is_opt_in_and_integrity_checked(
 ) -> None:
     payload = b"provider-state"
     digest = hashlib.sha256(payload).hexdigest()
-    entry = {
+    identity = {
+        "semantic_id": "state-archive-v1",
+        "schema_version": 1,
         "provider_snapshot": {
+            "provider_id": "breakout-turbo-env",
+            "compatibility_id": "test-environment-v1",
             "ref": {
+                "codec_id": "breakout-turbo-env.state-v1",
                 "blob_sha256": digest,
+                "size_bytes": len(payload),
             }
-        }
+        },
+        "task_state": None,
+        "runtime_state": None,
+        "restore_semantics": "episode_start",
+        "created_step": 0,
+        "metadata": {},
     }
+    entry_id = hashlib.sha256(canonical_json_bytes(identity)).hexdigest()
+    entry = {"entry_id": entry_id, **identity}
     path = tmp_path / "policy.zip"
     _policy(
         snapshot_mode="retained",
-        snapshot_entries={"root-snapshot": entry},
+        snapshot_entries={entry_id: entry},
         snapshot_payloads={digest: payload},
     ).save(path)
 
@@ -233,4 +269,3 @@ def test_go_explore_legacy_action_program_metadata_remains_readable() -> None:
         )
         == "action-program"
     )
-

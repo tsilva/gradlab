@@ -10,7 +10,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from gradlab.checkpoint_acceptance import manifest_index
+from gradlab.checkpoint_acceptance import manifest_index, requires_complete_evaluation
 from gradlab.clock import Clock, SystemClock
 from gradlab.early_stop import EARLY_STOP_OPERATORS
 from gradlab.eval_backend import EvalBackend
@@ -30,6 +30,8 @@ from gradlab.metric_names import (
     EVAL_ACCEPTANCE_FAILURE_COUNT,
     EVAL_ACCEPTANCE_PASS,
     EVAL_CHECKPOINT_STEP,
+    EVAL_FULL_EPISODE_RETURN_MEAN,
+    EVAL_FULL_SUCCESS_RATE_MIN,
     metric_definition,
 )
 from gradlab.modal_eval_backend import ModalEvalBackend
@@ -39,7 +41,9 @@ from gradlab.modal_eval_protocol import (
     execution_key,
     validate_attempt_result,
 )
+from gradlab.operator_environment import load_repository_operator_environment
 from gradlab.policy_bundle import (
+    canonical_json_sha256,
     evaluation_contract,
     evaluation_contract_sha256,
 )
@@ -55,6 +59,7 @@ from gradlab.run_contracts import (
     document_sha256,
     eval_idempotency_key,
 )
+from gradlab.runtime_refs import RuntimeImageInfo, modal_readiness_for_release
 from gradlab.supervisor_ledger import SupervisorLedger
 from gradlab.supervisor_runtime import SupervisorRuntime
 
@@ -62,17 +67,15 @@ from gradlab.supervisor_runtime import SupervisorRuntime
 MANUAL_EVAL_PROTOCOL = "modal-acceptance-v4"
 MAX_MANUAL_EVAL_SELECTION = 100
 MANUAL_EVAL_JOB_TYPE = "evaluate-checkpoints"
-MANUAL_EVAL_JOB_VERSION = 2
+MANUAL_EVAL_JOB_VERSION = 3
 MANUAL_EVAL_RETRY_SECONDS = 2.0
 MANUAL_EVAL_WAIT_SECONDS = 15.0
 
-_STRICT_COMPLETE_MEAN_RETURN_GAMES = frozenset(
-    {
-        "VizdoomBasic-v1",
-        "VizdoomDeadlyCorridor-v1",
-        "VizdoomDefendLine-v1",
-    }
-)
+_STRICT_COMPLETE_ACCEPTANCE_METRIC_BY_GAME = {
+    "VizdoomBasic-v1": EVAL_FULL_SUCCESS_RATE_MIN,
+    "VizdoomDeadlyCorridor-v1": EVAL_FULL_EPISODE_RETURN_MEAN,
+    "VizdoomDefendLine-v1": EVAL_FULL_EPISODE_RETURN_MEAN,
+}
 
 
 class EvaluationContractIneligible(ValueError):
@@ -231,7 +234,7 @@ class ManualEvaluationSupervisor:
         self.backend_factory = backend_factory or self._modal_backend
         self.project_results = bool(project_results)
         self.runtime = runtime or SupervisorRuntime(clock=self.clock)
-        self._backends: dict[tuple[str, str, str], EvalBackend] = {}
+        self._backends: dict[str, EvalBackend] = {}
         self._leases: dict[str, Lease] = {}
         self._holder_id = holder_id or f"manual-eval-{uuid.uuid4().hex}"
         self.work_root = (
@@ -241,20 +244,35 @@ class ManualEvaluationSupervisor:
         )
         self.work_root.mkdir(parents=True, exist_ok=True)
 
-    @staticmethod
-    def _modal_backend(manifest: RunManifest) -> EvalBackend:
+    def _modal_backend(self, manifest: RunManifest) -> EvalBackend:
+        app_name = str(manifest.modal.get("app_name") or "").strip()
+        if not bool(manifest.modal.get("enabled")):
+            readiness = modal_readiness_for_release(
+                RuntimeImageInfo(
+                    runtime_image_ref=manifest.image_digest,
+                    source_sha=manifest.source_sha,
+                    commit_message="",
+                    published_at="",
+                    workflow_run_id=str(
+                        manifest.compute.get("runtime_workflow_run_id") or ""
+                    ),
+                    runtime_input_sha256=str(
+                        manifest.compute.get("runtime_input_sha256") or ""
+                    ),
+                    runtime_build_source_sha=str(
+                        manifest.compute.get("runtime_build_source_sha") or ""
+                    ),
+                )
+            )
+            app_name = readiness.modal_app_name
         return ModalEvalBackend(
-            app_name=str(manifest.modal["app_name"]),
+            app_name=app_name,
             function_name=str(manifest.modal.get("function_name") or "evaluate_checkpoint"),
             environment_name=str(manifest.modal.get("environment_name") or "gradlab-eval"),
         )
 
     def _backend(self, manifest: RunManifest) -> EvalBackend:
-        key = (
-            str(manifest.modal.get("environment_name") or "gradlab-eval"),
-            str(manifest.modal["app_name"]),
-            str(manifest.modal.get("function_name") or "evaluate_checkpoint"),
-        )
+        key = manifest.run_id
         backend = self._backends.get(key)
         if backend is None:
             backend = self.backend_factory(manifest)
@@ -280,8 +298,6 @@ class ManualEvaluationSupervisor:
             manifests,
             key=lambda item: (item.created_at, item.attempt_id),
         )
-        if not bool(manifest.modal.get("enabled")):
-            raise ValueError("this run has no goal-owned Modal evaluation contract")
         return manifest
 
     def _checkpoint_map(self, run_id: str) -> dict[str, CheckpointManifest]:
@@ -326,10 +342,30 @@ class ManualEvaluationSupervisor:
             )
         recipe_document = self._recipe_document(checkpoint)
         contract = evaluation_contract(recipe_document)
-        if evaluation_contract_sha256(recipe_document) != checkpoint.evaluation_contract_sha256:
-            raise ValueError(
-                f"checkpoint evaluation contract hash mismatch: {checkpoint.checkpoint_id}"
+        contract_sha256 = evaluation_contract_sha256(recipe_document)
+        if contract_sha256 != checkpoint.evaluation_contract_sha256:
+            recipe = recipe_document.get("recipe")
+            playback = recipe.get("playback") if isinstance(recipe, Mapping) else None
+            legacy_training_only_sha256 = (
+                canonical_json_sha256(
+                    {
+                        "training_only": True,
+                        "playback": playback,
+                    }
+                )
+                if isinstance(playback, Mapping)
+                else ""
             )
+            if (
+                not isinstance(recipe, Mapping)
+                or "eval" in recipe
+                or checkpoint.evaluation_contract_sha256
+                != legacy_training_only_sha256
+            ):
+                raise ValueError(
+                    f"checkpoint evaluation contract hash mismatch: "
+                    f"{checkpoint.checkpoint_id}"
+                )
         contract.update(
             {
                 "schema_version": PROTOCOL_SCHEMA_VERSION,
@@ -337,7 +373,7 @@ class ManualEvaluationSupervisor:
                 "runtime_image_ref": manifest.image_digest,
                 "recipe_sha256": checkpoint.recipe_document_sha256,
                 "recipe_format_version": int(recipe_document["format_version"]),
-                "evaluation_contract_sha256": checkpoint.evaluation_contract_sha256,
+                "evaluation_contract_sha256": contract_sha256,
             }
         )
         asset = contract.get("asset")
@@ -353,7 +389,7 @@ class ManualEvaluationSupervisor:
         key = eval_idempotency_key(
             run_id=manifest.run_id,
             checkpoint_sha256=checkpoint.sha256,
-            evaluation_contract_sha256=checkpoint.evaluation_contract_sha256,
+            evaluation_contract_sha256=contract_sha256,
             episode_manifest_sha256=episode_manifest_sha,
             protocol=MANUAL_EVAL_PROTOCOL,
         )
@@ -367,7 +403,7 @@ class ManualEvaluationSupervisor:
             goal_sha256=manifest.goal_sha256,
             recipe_sha256=manifest.recipe_sha256,
             environment_sha256=manifest.environment_sha256,
-            evaluation_contract_sha256=checkpoint.evaluation_contract_sha256,
+            evaluation_contract_sha256=contract_sha256,
             episode_manifest_sha256=episode_manifest_sha,
             protocol=MANUAL_EVAL_PROTOCOL,
             execution_contract=contract,
@@ -433,12 +469,7 @@ class ManualEvaluationSupervisor:
     ) -> dict[str, Any]:
         normalized = dict(contract)
         environment = normalized.get("environment")
-        game = (
-            str(environment.get("game") or "")
-            if isinstance(environment, Mapping)
-            else ""
-        )
-        if game not in _STRICT_COMPLETE_MEAN_RETURN_GAMES:
+        if not requires_complete_evaluation(environment):
             return normalized
         policy_value = normalized.get("evidence_policy")
         policy = dict(policy_value) if isinstance(policy_value, Mapping) else {}
@@ -451,7 +482,8 @@ class ManualEvaluationSupervisor:
     def _validate_current_protocol(contract: Mapping[str, Any]) -> None:
         environment = contract.get("environment")
         game = str(environment.get("game") or "") if isinstance(environment, Mapping) else ""
-        if game not in _STRICT_COMPLETE_MEAN_RETURN_GAMES:
+        expected_metric = _STRICT_COMPLETE_ACCEPTANCE_METRIC_BY_GAME.get(game)
+        if expected_metric is None:
             return
         if int(contract.get("episodes") or 0) != 100:
             raise EvaluationContractIneligible(
@@ -468,11 +500,10 @@ class ManualEvaluationSupervisor:
             not isinstance(acceptance, list)
             or len(acceptance) != 1
             or not isinstance(acceptance[0], Mapping)
-            or str(acceptance[0].get("metric") or "")
-            != "eval/full/episode/return/mean"
+            or str(acceptance[0].get("metric") or "") != expected_metric
         ):
             raise EvaluationContractIneligible(
-                f"{game} acceptance must use only the complete 100-episode mean return"
+                f"{game} acceptance must use only {expected_metric} over all 100 episodes"
             )
 
     def _training_terminal(self, manifest: RunManifest) -> Mapping[str, Any] | None:
@@ -1323,11 +1354,9 @@ class ManualEvaluationJobHandler:
         }
 
     def advance(self, job: Mapping[str, Any]) -> HandlerResult:
-        from gradlab.experiment_cli import _load_environment
-
         payload = self.validate_payload(job["payload"])
         repo_root = Path(payload["repo_root"])
-        _load_environment(repo_root)
+        load_repository_operator_environment(repo_root)
         queue_root = Path(payload["queue_root"])
         holder_fingerprint = hashlib.sha256(
             str(queue_root).encode("utf-8")
@@ -1385,9 +1414,7 @@ class ManualEvaluationQueue:
         self._last_ensure = 0.0
 
     def _planner(self) -> ManualEvaluationSupervisor:
-        from gradlab.experiment_cli import _load_environment
-
-        _load_environment(self.repo_root)
+        load_repository_operator_environment(self.repo_root)
         return ManualEvaluationSupervisor(
             authority=RunAuthority(RunStorageConfig.from_env()),
             repo_root=self.repo_root,

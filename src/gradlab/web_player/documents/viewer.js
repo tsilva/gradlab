@@ -1,3 +1,8 @@
+import {
+  contractSearchRanges,
+  contractSyntaxTokens,
+} from "./syntax.js";
+
 function makeTab(label, value, group, onSelect) {
   const tab = document.createElement("button");
   tab.type = "button";
@@ -257,33 +262,61 @@ export class ContractViewer {
   renderContent() {
     const value = this.currentText();
     const query = this.search.value;
+    const matches = contractSearchRanges(value, query);
+    const tokens = contractSyntaxTokens(value, this.view);
     this.code.replaceChildren();
-    if (!query || !value) {
-      this.code.textContent = value;
-      this.searchCount.textContent = "";
+    let offset = 0;
+    let matchIndex = 0;
+    tokens.forEach((token) => {
+      const tokenEnd = offset + token.text.length;
+      let cursor = offset;
+      while (cursor < tokenEnd) {
+        while (matches[matchIndex]?.end <= cursor) matchIndex += 1;
+        const match = matches[matchIndex];
+        const nextBoundary = match && match.start < tokenEnd
+          ? Math.max(cursor, Math.min(tokenEnd, match.start))
+          : tokenEnd;
+        if (nextBoundary > cursor) {
+          this.appendSyntaxText(
+            token.text.slice(cursor - offset, nextBoundary - offset),
+            token.className,
+          );
+          cursor = nextBoundary;
+          continue;
+        }
+        const markedEnd = Math.min(tokenEnd, match.end);
+        this.appendSyntaxText(
+          token.text.slice(cursor - offset, markedEnd - offset),
+          token.className,
+          true,
+        );
+        cursor = markedEnd;
+      }
+      offset = tokenEnd;
+    });
+    this.searchCount.textContent = query
+      ? (
+        matches.length
+          ? `${matches.length.toLocaleString()} match${matches.length === 1 ? "" : "es"}`
+          : "No matches"
+      )
+      : "";
+    if (query) this.code.querySelector("mark")?.scrollIntoView({ block: "center" });
+  }
+
+  appendSyntaxText(value, className, marked = false) {
+    if (!value) return;
+    const syntax = className ? document.createElement("span") : null;
+    const textParent = syntax || document.createDocumentFragment();
+    textParent.append(document.createTextNode(value));
+    if (syntax) syntax.className = className;
+    if (!marked) {
+      this.code.append(textParent);
       return;
     }
-    const normalized = query.toLocaleLowerCase();
-    const source = value.toLocaleLowerCase();
-    let cursor = 0;
-    let count = 0;
-    while (cursor < value.length) {
-      const index = source.indexOf(normalized, cursor);
-      if (index < 0) {
-        this.code.append(document.createTextNode(value.slice(cursor)));
-        break;
-      }
-      this.code.append(document.createTextNode(value.slice(cursor, index)));
-      const mark = document.createElement("mark");
-      mark.textContent = value.slice(index, index + query.length);
-      this.code.append(mark);
-      count += 1;
-      cursor = index + query.length;
-    }
-    this.searchCount.textContent = count
-      ? `${count.toLocaleString()} match${count === 1 ? "" : "es"}`
-      : "No matches";
-    this.code.querySelector("mark")?.scrollIntoView({ block: "center" });
+    const mark = document.createElement("mark");
+    mark.append(textParent);
+    this.code.append(mark);
   }
 
   setLoading(loading) {

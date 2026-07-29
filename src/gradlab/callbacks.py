@@ -376,6 +376,10 @@ class MetricEarlyStopHelper(CallbackHelper):
                     "would_trigger",
                 ): float(observation.would_trigger),
             }
+            if observation.target_progress is not None:
+                values[train_early_stop_metric(condition_id, "target/progress")] = (
+                    observation.target_progress
+                )
             for name, value in values.items():
                 self.logger.record(name, value)
         if update.stop_decision is None:

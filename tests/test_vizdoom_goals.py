@@ -10,9 +10,9 @@ EXPECTED_GOALS = {
     "VizdoomBasic-v1": {
         "timesteps": 2_000_000,
         "event": "monster_killed",
-        "training_metric": "train/episode/return/shaped/from/target/window_100/mean",
-        "acceptance_metric": "eval/full/episode/return/mean",
-        "acceptance_threshold": 0.95,
+        "training_metric": "train/outcome/success/window_100/rate/min",
+        "acceptance_metric": "eval/full/outcome/success/rate/min",
+        "acceptance_threshold": 1.0,
         "reward_scale": 100.0,
     },
     "VizdoomDeadlyCorridor-v1": {
@@ -124,6 +124,7 @@ def test_vizdoom_goal_has_complete_evaluated_ppo_contract(
         "metric": expected["training_metric"],
         "trigger": "threshold",
         "operator": ">=",
+        "progress_baseline": 0.0,
         "threshold": expected["acceptance_threshold"],
         "patience_steps": 0,
         "outcome": "success",

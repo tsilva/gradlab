@@ -24,6 +24,7 @@ from gradlab.run_authority import RunAuthority
 from gradlab.run_contracts import (
     RunManifest,
     checkpoint_id,
+    default_liveness_policy,
     new_attempt_id,
     new_run_id,
     utc_now,
@@ -741,6 +742,7 @@ def test_run_and_goal_variant_inspection_use_the_verified_v2_control_recipe(
         modal={"enabled": False, "rom_asset_manifest": None},
         storage=storage.manifest_locations(),
         goal_variant=resolved.effective["goal_variant"],
+        liveness=default_liveness_policy(),
     )
     authority.create_manifest(manifest)
     catalog = PlayCatalog(repo_root=repo_root, control_bucket=authority.control)
@@ -1001,6 +1003,84 @@ def test_catalog_validates_and_orders_public_checkpoints(monkeypatch: pytest.Mon
     ]
     assert rows[1]["promoted"] is True
     assert rows[1]["manifest_url"].endswith("/manifest.json")
+
+
+def test_catalog_attaches_latest_training_metrics_at_each_checkpoint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    periodic = checkpoint_row(step=250_000, digest="2" * 64, purpose="periodic")
+    final = checkpoint_row(step=500_000, digest="3" * 64, purpose="final")
+    monkeypatch.setattr(
+        "gradlab.play_catalog._public_json",
+        lambda _url: {
+            "schema_version": 1,
+            "run_id": RUN_ID,
+            "checkpoints": [final, periodic],
+            "promotion": None,
+        },
+    )
+
+    class TrainingRun:
+        config = {"seed": 7}
+
+        @staticmethod
+        def scan_history(*, keys, page_size):
+            assert page_size == 10_000
+            if keys == [
+                "train/global_step",
+                "train/outcome/success/window_100/rate/min",
+            ]:
+                return [
+                    {
+                        "train/global_step": 200_000,
+                        "train/outcome/success/window_100/rate/min": 0.25,
+                    },
+                    {
+                        "train/global_step": 490_000,
+                        "train/outcome/success/window_100/rate/min": 0.9,
+                    },
+                ]
+            if keys == [
+                "train/global_step",
+                "train/episode/return/shaped/mean",
+            ]:
+                return [
+                    {
+                        "train/global_step": 220_000,
+                        "train/episode/return/shaped/mean": 11.5,
+                    },
+                    {
+                        "train/global_step": 480_000,
+                        "train/episode/return/shaped/mean": 22.0,
+                    },
+                ]
+            return []
+
+    class TrainingApi:
+        @staticmethod
+        def run(path):
+            assert path == f"research/Mario/{RUN_ID}"
+            return TrainingRun()
+
+    catalog = PlayCatalog(public_models_base_url="https://models.example")
+    catalog._api = TrainingApi()
+
+    final_row, periodic_row = catalog.checkpoints(
+        entity="research",
+        project="Mario",
+        run_id=RUN_ID,
+    )
+
+    assert periodic_row["metrics"] == {
+        "train/global_step": 250_000.0,
+        "train/outcome/success/window_100/rate/min": 0.25,
+        "train/episode/return/shaped/from/target/mean": 11.5,
+    }
+    assert final_row["metrics"] == {
+        "train/global_step": 500_000.0,
+        "train/outcome/success/window_100/rate/min": 0.9,
+        "train/episode/return/shaped/from/target/mean": 22.0,
+    }
 
 
 def test_catalog_attaches_goal_required_eval_results_by_checkpoint(

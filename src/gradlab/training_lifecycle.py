@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import math
 import os
+import re
 import time
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
 from typing import Any, Protocol
@@ -22,6 +24,25 @@ from gradlab.training_metrics import EpisodeMetricsReducer, episode_succeeded
 
 
 TRAINING_RESULT_FILENAME = "training-result.json"
+LEARNER_READY_FILENAME = "learner-ready.json"
+LEARNER_STATE_FORMAT_VERSION = 3
+MAX_LEARNER_ERROR_TYPE_LENGTH = 200
+MAX_LEARNER_ERROR_MESSAGE_LENGTH = 2_000
+
+
+def _utc_now() -> str:
+    return datetime.now(UTC).isoformat().replace("+00:00", "Z")
+
+
+def _bounded_failure_text(exc: BaseException) -> tuple[str, str]:
+    error_type = type(exc).__name__[:MAX_LEARNER_ERROR_TYPE_LENGTH]
+    message = str(exc).replace("\x00", "\N{REPLACEMENT CHARACTER}")
+    message = re.sub(
+        r"(?i)(api[_-]?key|access[_-]?key|secret|token|password)(\\s*[:=]\\s*)\\S+",
+        r"\1\2<redacted>",
+        message,
+    )
+    return error_type, message[:MAX_LEARNER_ERROR_MESSAGE_LENGTH]
 
 
 class TerminalReason(StrEnum):
@@ -56,10 +77,22 @@ class TrainingResult:
             else "completed"
         )
 
-    def to_document(self) -> dict[str, Any]:
+    def to_document(
+        self,
+        *,
+        run_id: str,
+        attempt_id: str,
+        learner_pid: int,
+        backend_id: str,
+        terminal_at: str,
+    ) -> dict[str, Any]:
         return {
             "document_type": "gradlab.training-result",
-            "format_version": 2,
+            "format_version": LEARNER_STATE_FORMAT_VERSION,
+            "run_id": run_id,
+            "attempt_id": attempt_id,
+            "learner_pid": int(learner_pid),
+            "training_backend_id": backend_id,
             "status": self.status,
             "terminal_reason": self.terminal_reason.value,
             "execution_mode": self.execution_mode.value,
@@ -70,6 +103,7 @@ class TrainingResult:
             "execution_limit": int(self.execution_limit),
             "model_kind": self.model_kind,
             "model": self.model_path,
+            "terminal_at": terminal_at,
         }
 
 
@@ -474,6 +508,28 @@ class MetricStopController:
         self.event = event
         self.decision: Mapping[str, Any] | None = None
 
+    def target_progress_fields(self) -> tuple[ProgressField, ...]:
+        if self.machine is None:
+            return ()
+        fields: list[ProgressField] = []
+        for condition_id, condition in self.machine.conditions.items():
+            if str(condition["trigger"]) != "threshold" or "progress_baseline" not in condition:
+                continue
+            label = (
+                "target progress"
+                if condition_id == "target_reached"
+                else f"{condition_id.replace('_', ' ')} progress"
+            )
+            fields.append(
+                ProgressField(
+                    train_early_stop_metric(condition_id, "target/progress"),
+                    label,
+                    ProgressValueFormat.PERCENT,
+                    group="outcomes",
+                )
+            )
+        return tuple(fields)
+
     def evaluate(
         self,
         payload: Mapping[str, int | float],
@@ -513,6 +569,10 @@ class MetricStopController:
                     ),
                 }
             )
+            if observation.target_progress is not None:
+                metrics[train_early_stop_metric(condition_id, "target/progress")] = (
+                    observation.target_progress
+                )
         if update.stop_decision is not None:
             self.decision = update.stop_decision
             atomic_write_json(self.decision_path, update.stop_decision)
@@ -541,12 +601,15 @@ class TrainingSession:
         stop_flag: Any,
         early_stop_config: Any,
         attempt_id: str,
+        run_id: str,
         reducer: EpisodeMetricsReducer,
         execution_policy: TrainingExecutionPolicy,
         completion_signal_available: bool,
         progress_sink: ProgressSink | None = None,
     ) -> None:
         self.run_dir = run_dir
+        self.run_id = str(run_id)
+        self.attempt_id = str(attempt_id)
         self.backend_id = backend_id
         self.stop_flag = stop_flag
         self.reducer = reducer
@@ -609,7 +672,7 @@ class TrainingSession:
             total=self.budget.execution_total,
             initial=self.budget.initial_step,
             description=self.backend_id,
-            fields=progress_fields,
+            fields=(*progress_fields, *self.stop_controller.target_progress_fields()),
         )
         return self.budget
 
@@ -619,14 +682,19 @@ class TrainingSession:
     def mark_ready(self) -> Path:
         if self.ready:
             raise RuntimeError("learner readiness may be emitted only once")
-        path = self.run_dir / "learner_ready.json"
+        path = self.run_dir / LEARNER_READY_FILENAME
         atomic_write_json(
             path,
             {
-                "schema_version": 1,
-                "pid": os.getpid(),
-                "ready_at_unix": time.time(),
+                "document_type": "gradlab.learner-ready",
+                "format_version": LEARNER_STATE_FORMAT_VERSION,
+                "run_id": self.run_id,
+                "attempt_id": self.attempt_id,
+                "learner_pid": os.getpid(),
+                "status": "ready",
+                "execution_mode": self.execution_policy.mode.value,
                 "training_backend_id": self.backend_id,
+                "ready_at": _utc_now(),
             },
         )
         self.ready = True
@@ -825,18 +893,32 @@ class TrainingSession:
             final=True,
         )
         self.progress.close()
-        atomic_write_json(self.run_dir / TRAINING_RESULT_FILENAME, result.to_document())
+        atomic_write_json(
+            self.run_dir / TRAINING_RESULT_FILENAME,
+            result.to_document(
+                run_id=self.run_id,
+                attempt_id=self.attempt_id,
+                learner_pid=os.getpid(),
+                backend_id=self.backend_id,
+                terminal_at=_utc_now(),
+            ),
+        )
         self.closed = True
 
     def fail(self, exc: BaseException) -> None:
         if self.closed:
             return
         self.progress.close()
+        error_type, error_message = _bounded_failure_text(exc)
         atomic_write_json(
             self.run_dir / TRAINING_RESULT_FILENAME,
             {
                 "document_type": "gradlab.training-result",
-                "format_version": 2,
+                "format_version": LEARNER_STATE_FORMAT_VERSION,
+                "run_id": self.run_id,
+                "attempt_id": self.attempt_id,
+                "learner_pid": os.getpid(),
+                "training_backend_id": self.backend_id,
                 "status": "failed",
                 "terminal_reason": TerminalReason.FAILED.value,
                 "execution_mode": self.execution_policy.mode.value,
@@ -849,10 +931,11 @@ class TrainingSession:
                 "execution_limit": (
                     None if self.budget is None else int(self.budget.execution_total)
                 ),
-                "error_type": type(exc).__name__,
-                "error": str(exc),
+                "error_type": error_type,
+                "error_message": error_message,
                 "model_kind": None,
                 "model": None,
+                "terminal_at": _utc_now(),
             },
         )
         self.closed = True

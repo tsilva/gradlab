@@ -2058,7 +2058,10 @@ class PlaybackWebServer:
         self._authorize_api(request)
         if self.catalog is None:
             raise web.HTTPNotFound()
-        from gradlab.play_catalog import normalize_search_query
+        from gradlab.play_catalog import (
+            checkpoint_training_metric_columns,
+            normalize_search_query,
+        )
 
         try:
             items = list(
@@ -2097,7 +2100,13 @@ class PlaybackWebServer:
                 ]
         except Exception as exc:
             return web.json_response({"error": str(exc)}, status=502)
-        return web.json_response({"items": items, "next_cursor": None})
+        return web.json_response(
+            {
+                "items": items,
+                "next_cursor": None,
+                "metric_columns": list(checkpoint_training_metric_columns()),
+            }
+        )
 
     def _manual_evaluations(self) -> Any:
         if self._manual_evaluation_queue is not None:

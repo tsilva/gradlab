@@ -7,6 +7,7 @@ import math
 from collections import deque
 from collections.abc import Hashable, Mapping, Sequence
 from dataclasses import dataclass, field
+from typing import Any
 
 import numpy as np
 

@@ -7,8 +7,8 @@ train:
   early_stop:
     conditions:
       target_reached:
-        metric: train/episode/return/shaped/from/target/window_100/mean
-        threshold: 0.95
+        metric: train/outcome/success/window_100/rate/min
+        threshold: 1.0
   environment:
     env_config:
       env_args: &basic_env_args
@@ -30,9 +30,9 @@ train:
         reward_scale: 100.0
 eval:
   acceptance:
-  - metric: eval/full/episode/return/mean
+  - metric: eval/full/outcome/success/rate/min
     operator: '>='
-    threshold: 0.95
+    threshold: 1.0
   environment:
     env_config:
       env_args: *basic_env_args

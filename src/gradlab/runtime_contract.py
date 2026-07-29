@@ -14,7 +14,7 @@ from gradlab.train_config import TRAIN_CONFIG_FIELDS, validate_and_normalize_tra
 from gradlab.training_backend import training_backend_contract_payload
 
 
-RUNTIME_DESCRIPTOR_SCHEMA_VERSION = 6
+RUNTIME_DESCRIPTOR_SCHEMA_VERSION = 7
 
 
 def train_config_contract_payload() -> dict[str, Any]:

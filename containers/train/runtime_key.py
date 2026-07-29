@@ -19,6 +19,7 @@ RUNTIME_INPUT_PATHS = (
     "containers/train/entrypoint.sh",
     "containers/train/gradlab",
     "containers/train/smoke.py",
+    "containers/train/vizdoom_smoke.py",
     "experiments/goals",
     "experiments/modal_eval.yaml",
     "experiments/recipes",

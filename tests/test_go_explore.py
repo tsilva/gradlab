@@ -11,6 +11,7 @@ from gymnasium import spaces
 
 from gradlab.action_program import ActionProgramPolicy
 from gradlab.batch_runtime import EpisodeRecord
+from gradlab.cell_graph import CellGraphExecutionContext, CellGraphPolicy
 from gradlab.go_explore import GoExploreSearch
 from gradlab.metric_names import (
     TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_MEAN,
@@ -215,6 +216,65 @@ class GoExploreSearchTests(unittest.TestCase):
 
     def test_search_exports_a_neutral_action_program(self) -> None:
         self.assertIsInstance(self.search().policy(), ActionProgramPolicy)
+
+    def test_cell_graph_exports_best_success_route_per_seed_with_evidence(self) -> None:
+        search = GoExploreSearch(
+            n_envs=2,
+            seed=17,
+            action_names=("noop",),
+            fallback_action="noop",
+            explore_steps=100,
+            run_duration_mean=1.0,
+            run_duration_max=1,
+        )
+        search.initialize(
+            (b"shared-root", b"shared-root"),
+            ("root-7", "root-8"),
+            (7, 8),
+        )
+        search.next_actions()
+        first = search.observe(
+            rewards=np.asarray([1.0, 2.0]),
+            dones=np.asarray([False, False]),
+            cell_keys=(b"middle", b"middle"),
+            progresses=np.asarray([1.0, 1.0]),
+        )
+        self.assertTrue(np.any(first.archive_mask))
+        search.commit_archive((None, "middle-entry"))
+
+        search.next_actions()
+        search.observe(
+            rewards=np.asarray([10.0, 9.0]),
+            dones=np.asarray([True, True]),
+            cell_keys=(b"terminal", b"terminal"),
+            records_by_lane={
+                0: SimpleNamespace(outcome=Outcome.SUCCESS),
+                1: SimpleNamespace(outcome=Outcome.SUCCESS),
+            },
+            progresses=np.asarray([2.0, 2.0]),
+        )
+
+        policy = search.cell_graph_policy(
+            detector={"dimensions": [{"signal": "x", "bucket_size": 1}]},
+        )
+
+        self.assertIsInstance(policy, CellGraphPolicy)
+        self.assertEqual(set(policy.roots), {7, 8})
+        self.assertEqual(len(policy.nodes), 5)
+        self.assertEqual(len(policy.edges), 4)
+        self.assertTrue(all(edge.observation_count == 2 for edge in policy.edges))
+        self.assertTrue(all(edge.seed_count == 2 for edge in policy.edges))
+        self.assertTrue(all(edge.successful_suffix for edge in policy.edges))
+
+        decision = policy.policy_decisions(
+            np.zeros((1, 1), dtype=np.float32),
+            execution_context=CellGraphExecutionContext(
+                cell_keys=(b"shared-root",),
+                episode_seeds=(99,),
+                reset_mask=(True,),
+            ),
+        )[0]
+        self.assertFalse(decision.route["fallback"])
 
     def test_local_run_saves_only_one_final_or_interrupted_model(self) -> None:
         for interrupted in (False, True):
@@ -494,6 +554,7 @@ class GoExploreSearchTests(unittest.TestCase):
             stop_flag=stop_flag,
             early_stop_config=None,
             attempt_id="attempt-test",
+            run_id="run-test",
             reducer=EpisodeMetricsReducer(
                 configured_starts=("Level1-1",),
                 track_success=True,
@@ -512,7 +573,20 @@ class GoExploreSearchTests(unittest.TestCase):
                 "resolved_n_envs": 1,
                 "run_name": "run-test",
                 "seed": 123,
-                "state_archive": {"persistence": "ephemeral"},
+                "state_archive": {
+                    "persistence": "ephemeral",
+                    "restore_semantics": "continuation",
+                    "recorder": {
+                        "mode": "backend",
+                        "cell": {
+                            "dimensions": [
+                                {"signal": "x", "bucket_size": 1.0},
+                            ]
+                        },
+                    },
+                    "curriculum": None,
+                    "export": {"snapshots": "none"},
+                },
                 "timesteps": 2,
                 "training_backend": {
                     "id": "gradlab.go-explore",

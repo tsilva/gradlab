@@ -403,8 +403,7 @@ class SupervisorLedger(MetricStore):
                 UPDATE eval_dispatches
                 SET status = 'deferred', last_error = ?, updated_at = ?
                 WHERE idempotency_key = ?
-                  AND status = 'pending'
-                  AND attempt = 0
+                  AND status IN ('pending', 'submitted')
                 """,
                 (reason[:4000], now, idempotency_key),
             )

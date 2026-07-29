@@ -292,6 +292,25 @@ def run_go_explore(context: BackendContext) -> TrainingResult:
     n_envs = int(common_config["resolved_n_envs"])
     if int(common_config["timesteps"]) % n_envs != 0:
         raise ValueError("Go-Explore timesteps must be divisible by n_envs")
+    archive_config = common_config.get("state_archive")
+    recorder = (
+        archive_config.get("recorder")
+        if isinstance(archive_config, Mapping)
+        else None
+    )
+    cell = recorder.get("cell") if isinstance(recorder, Mapping) else None
+    dimensions = cell.get("dimensions") if isinstance(cell, Mapping) else None
+    if (
+        not isinstance(dimensions, Sequence)
+        or isinstance(dimensions, str | bytes)
+        or any(
+            not isinstance(dimension, Mapping) or "source" in dimension
+            for dimension in dimensions
+        )
+    ):
+        raise ValueError(
+            "gradlab.go-explore executable cells require semantic signal dimensions"
+        )
     preflight = preflight_state_archive_provider(
         config=config,
         n_envs=n_envs,
@@ -446,8 +465,22 @@ def run_go_explore(context: BackendContext) -> TrainingResult:
                 )
                 saved_checkpoint_steps.add(step)
             while step >= next_compaction:
+                retained_entry_ids = {
+                    cell.entry_id for cell in search.archive.values()
+                }
+                archive_config = common_config.get("state_archive")
+                export = (
+                    archive_config.get("export", {})
+                    if isinstance(archive_config, Mapping)
+                    else {}
+                )
+                if (
+                    isinstance(export, Mapping)
+                    and export.get("snapshots") == "retained"
+                ):
+                    retained_entry_ids.update(search.graph_snapshot_entry_ids())
                 compacted = runtime.retain_state_archive_entries(
-                    tuple(cell.entry_id for cell in search.archive.values())
+                    tuple(sorted(retained_entry_ids))
                 )
                 context.session.telemetry_event(
                     "compacted ephemeral Go-Explore archive "
@@ -563,18 +596,6 @@ class GoExploreBackend:
             raise ValueError("gradlab.go-explore requires state_archive.recorder.mode='backend'")
         if not isinstance(recorder.get("cell"), Mapping):
             raise ValueError("gradlab.go-explore requires state_archive.recorder.cell")
-        dimensions = recorder["cell"].get("dimensions")
-        if (
-            not isinstance(dimensions, Sequence)
-            or isinstance(dimensions, str | bytes)
-            or any(
-                not isinstance(dimension, Mapping) or "source" in dimension
-                for dimension in dimensions
-            )
-        ):
-            raise ValueError(
-                "gradlab.go-explore executable cells require semantic signal dimensions"
-            )
         if archive.get("curriculum") is not None:
             raise ValueError("gradlab.go-explore owns selection; curriculum must be null")
 

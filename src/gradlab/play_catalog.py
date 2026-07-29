@@ -219,6 +219,7 @@ class CheckpointSummary:
     promoted: bool
     playback_seed: int | None
     playback_seed_source: Literal["evaluation", "training"] | None
+    metrics: Mapping[str, float | None]
     evaluation: Mapping[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
@@ -248,6 +249,10 @@ class _CheckpointEvaluationData:
     evaluations: Mapping[int, dict[str, Any]]
     training_seed: int | None
     evaluation_seed: int | None
+    training_metric_history: Mapping[
+        str,
+        Mapping[str, tuple[tuple[int, float], ...]],
+    ]
 
 
 @dataclass(frozen=True)
@@ -384,6 +389,67 @@ def _run_fallback_metric_specs(
     if not rank or all(criterion.metric.startswith("train/") for criterion in rank):
         return ()
     return LIVE_TRAINING_METRICS
+
+
+def checkpoint_training_metric_columns() -> tuple[dict[str, str], ...]:
+    return tuple(
+        {"metric": criterion.metric, "direction": criterion.direction}
+        for criterion, _sources in LIVE_TRAINING_METRICS
+        if criterion.metric != TRAIN_GLOBAL_STEP
+    )
+
+
+def _checkpoint_training_metric_history(
+    run: Any,
+) -> dict[str, dict[str, tuple[tuple[int, float], ...]]]:
+    history: dict[str, dict[str, tuple[tuple[int, float], ...]]] = {}
+    for criterion, sources in LIVE_TRAINING_METRICS:
+        if criterion.metric == TRAIN_GLOBAL_STEP:
+            continue
+        source_history: dict[str, tuple[tuple[int, float], ...]] = {}
+        for source in sources:
+            samples: dict[int, float] = {}
+            try:
+                rows = run.scan_history(
+                    keys=[TRAIN_GLOBAL_STEP, source],
+                    page_size=10_000,
+                )
+                for raw in rows:
+                    if not isinstance(raw, Mapping):
+                        continue
+                    step = _safe_int(raw.get(TRAIN_GLOBAL_STEP))
+                    value = _safe_float(raw.get(source))
+                    if step is not None and value is not None:
+                        samples[step] = value
+            except Exception:
+                continue
+            if samples:
+                source_history[source] = tuple(sorted(samples.items()))
+        if source_history:
+            history[criterion.metric] = source_history
+    return history
+
+
+def _checkpoint_training_metrics(
+    history: Mapping[str, Mapping[str, tuple[tuple[int, float], ...]]],
+    *,
+    checkpoint_step: int,
+) -> dict[str, float | None]:
+    metrics: dict[str, float | None] = {TRAIN_GLOBAL_STEP: float(checkpoint_step)}
+    for criterion, sources in LIVE_TRAINING_METRICS:
+        if criterion.metric == TRAIN_GLOBAL_STEP:
+            continue
+        value = None
+        source_history = history.get(criterion.metric, {})
+        for source in sources:
+            samples = source_history.get(source, ())
+            eligible = (sample for sample in samples if sample[0] <= checkpoint_step)
+            latest = max(eligible, default=None, key=lambda sample: sample[0])
+            if latest is not None:
+                value = latest[1]
+                break
+        metrics[criterion.metric] = value
+    return metrics
 
 
 def _complete_run_rank(
@@ -2382,10 +2448,7 @@ class PlayCatalog:
             source=manifest.recipe_document_url,
         )
         observed = canonical_json_sha256(document)
-        if (
-            observed != manifest.recipe_document_sha256
-            or observed != manifest.recipe_sha256
-        ):
+        if observed != manifest.recipe_document_sha256 or observed != manifest.recipe_sha256:
             raise ValueError("public recipe document hash mismatch")
         if manifest.run_id != run_id:
             raise ValueError("public checkpoint run identity mismatch")
@@ -2590,13 +2653,14 @@ class PlayCatalog:
         entity = str(entity or "").strip()
         project = str(project or "").strip()
         if not entity or not project:
-            return _CheckpointEvaluationData({}, None, None)
+            return _CheckpointEvaluationData({}, None, None, {})
         cache_key = (entity, project, run_id)
         now = time.monotonic()
         with self._lock:
             cached = self._evaluation_cache.get(cache_key)
             if cached is not None and now - cached[0] < EVALUATION_CACHE_SECONDS:
                 return cached[1]
+        run = None
         try:
             run = self._wandb_api().run(f"{entity}/{project}/{run_id}")
             config = dict(getattr(run, "config", {}) or {})
@@ -2685,10 +2749,14 @@ class PlayCatalog:
             evaluations = {}
             training_seed = None
             evaluation_seed = None
+        training_metric_history = (
+            _checkpoint_training_metric_history(run) if run is not None else {}
+        )
         data = _CheckpointEvaluationData(
             evaluations=evaluations,
             training_seed=training_seed,
             evaluation_seed=evaluation_seed,
+            training_metric_history=training_metric_history,
         )
         with self._lock:
             self._evaluation_cache[cache_key] = (now, data)
@@ -2786,6 +2854,10 @@ class PlayCatalog:
                 promoted=manifest.checkpoint_id == promoted_id,
                 playback_seed=playback_seed,
                 playback_seed_source=playback_seed_source,
+                metrics=_checkpoint_training_metrics(
+                    evaluation_data.training_metric_history,
+                    checkpoint_step=manifest.step,
+                ),
                 evaluation=evaluation,
             )
             if normalized and normalized not in _search_text(
@@ -2795,6 +2867,7 @@ class PlayCatalog:
                 row.sha256,
                 row.created_at,
                 "promoted" if row.promoted else "",
+                row.metrics,
                 row.evaluation,
             ):
                 continue
@@ -2816,6 +2889,7 @@ __all__ = [
     "CATALOG_PAGE_SIZE",
     "CatalogPage",
     "CheckpointSummary",
+    "checkpoint_training_metric_columns",
     "EnvironmentSummary",
     "GoalSummary",
     "GoalVariantSummary",

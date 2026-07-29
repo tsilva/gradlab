@@ -330,6 +330,7 @@ def _jerk_context(
         stop_flag=stop_flag,
         early_stop_config=early_stop,
         attempt_id=train_config["attempt_id"],
+        run_id="run-test",
         reducer=EpisodeMetricsReducer(
             configured_starts=("Level1-1",),
             track_success=True,

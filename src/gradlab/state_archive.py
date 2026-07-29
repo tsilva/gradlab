@@ -530,6 +530,46 @@ class StateArchive:
         self.handles.put(ref, handle)
         return entry
 
+    def import_entry(
+        self,
+        value: Mapping[str, Any],
+        payload: bytes,
+    ) -> StateArchiveEntry:
+        """Import one portable entry after verifying its identity and payload."""
+
+        entry = StateArchiveEntry.from_dict(value)
+        self._validate_compatibility(entry)
+        ref = entry.provider_snapshot.ref
+        raw_payload = bytes(payload)
+        if (
+            hashlib.sha256(raw_payload).hexdigest() != ref.blob_sha256
+            or len(raw_payload) != ref.size_bytes
+        ):
+            raise ValueError("imported state archive payload failed integrity verification")
+        stored = self.blobs.put(raw_payload)
+        if (
+            stored.blob_sha256 != ref.blob_sha256
+            or stored.size_bytes != ref.size_bytes
+        ):
+            raise ValueError("imported state archive payload identity mismatch")
+        existing = self._entries.get(entry.entry_id)
+        if existing is not None:
+            if existing != entry:
+                raise RuntimeError("state archive entry hash collision")
+            return existing
+        path = self.entries_root / f"{entry.entry_id}.json"
+        if path.exists():
+            on_disk = StateArchiveEntry.from_dict(
+                json.loads(path.read_text(encoding="utf-8"))
+            )
+            if on_disk != entry:
+                raise RuntimeError("state archive entry hash collision")
+        else:
+            atomic_write_json(path, entry.to_dict())
+        self._entries[entry.entry_id] = entry
+        self._track_entry_blob(entry)
+        return entry
+
     def entry(self, entry_id: str) -> StateArchiveEntry:
         try:
             return self._entries[str(entry_id)]

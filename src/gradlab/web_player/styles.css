@@ -382,11 +382,13 @@ h2 { font-size: .9rem; margin: 0; font-weight: 650; }
   max-width: 2.6rem;
   padding-right: .2rem;
   text-align: center;
+  vertical-align: middle;
 }
 .source-selection-cell input {
+  display: block;
   width: 1rem;
   height: 1rem;
-  margin: 0;
+  margin: 0 auto;
   accent-color: var(--cyan);
   cursor: pointer;
 }
@@ -939,11 +941,25 @@ td:last-child { text-align: right; }
   overflow-wrap: normal;
   tab-size: 2;
 }
+.contract-viewer-content .syntax-key { color: #78c7f3; font-weight: 600; }
+.contract-viewer-content .syntax-string { color: #9bd185; }
+.contract-viewer-content .syntax-number { color: #e6b673; }
+.contract-viewer-content .syntax-boolean { color: #d5a6ff; }
+.contract-viewer-content .syntax-null { color: #ff9ba2; font-style: italic; }
+.contract-viewer-content .syntax-comment { color: #718791; font-style: italic; }
+.contract-viewer-content .syntax-reference { color: #f08fcc; }
+.contract-viewer-content .syntax-punctuation { color: #8da6b2; }
+.contract-viewer-content .syntax-directive,
+.contract-viewer-content .syntax-diff-metadata { color: #53d4e8; }
+.contract-viewer-content .syntax-diff-hunk { color: #d5a6ff; }
+.contract-viewer-content .syntax-diff-added { color: #78d89f; }
+.contract-viewer-content .syntax-diff-removed { color: #ff8990; }
 .contract-viewer-content mark {
   border-radius: .12rem;
   background: var(--yellow);
   color: #09151c;
 }
+#contract-viewer-content mark * { color: #09151c; }
 
 .toast { position: fixed; right: 1rem; bottom: 1rem; max-width: 28rem; padding: .68rem .85rem; border-radius: .48rem; background: #142a34; border: 1px solid #31505e; transform: translateY(6rem); transition: transform .2s ease; z-index: 90; }
 .toast.visible { transform: translateY(0); }

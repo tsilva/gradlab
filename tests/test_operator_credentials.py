@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
@@ -10,6 +11,7 @@ from gradlab.operator_credentials import (
     load_operator_environment,
     reject_protected_dotenv,
 )
+from gradlab.operator_environment import load_repository_operator_environment
 
 
 def _write(path: Path, text: str, *, mode: int = 0o600) -> Path:
@@ -167,6 +169,24 @@ def test_protected_dotenv_values_are_rejected(tmp_path: Path) -> None:
 
     with pytest.raises(OperatorConfigurationError, match="WANDB_API_KEY"):
         reject_protected_dotenv(dotenv_path)
+
+
+def test_repository_operator_environment_loads_safe_dotenv_before_operator_config(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _write(tmp_path / ".env", "WANDB_ENTITY=repository-entity\n")
+    monkeypatch.delenv("WANDB_ENTITY", raising=False)
+    monkeypatch.setenv(
+        "GRADLAB_OPERATOR_CONFIG",
+        str(tmp_path / "missing-operator.toml"),
+    )
+
+    report = load_repository_operator_environment(tmp_path)
+
+    assert report.config_present is False
+    assert report.config_path == (tmp_path / "missing-operator.toml").resolve()
+    assert os.environ["WANDB_ENTITY"] == "repository-entity"
 
 
 def test_missing_keychain_item_is_reported_without_a_value(tmp_path: Path) -> None:
