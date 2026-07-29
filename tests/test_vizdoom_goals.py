@@ -16,6 +16,14 @@ EXPECTED_GOALS = {
         "acceptance_threshold": 1.0,
         "reward_scale": 100.0,
     },
+    "VizdoomBasic-Plus-v1": {
+        "timesteps": 2_000_000,
+        "event": "monster_killed",
+        "training_metric": "train/outcome/success/across_starts/window_100/rate/min",
+        "acceptance_metric": "eval/full/outcome/success/across_starts/rate/min",
+        "acceptance_threshold": 1.0,
+        "reward_scale": 100.0,
+    },
     "VizdoomDeadlyCorridor-v1": {
         "timesteps": 25_000_000,
         "event": "vest_reached",
@@ -183,5 +191,27 @@ def test_vizdoom_defend_line_plus_differs_only_by_environment_identity() -> None
 
     assert normalized_plus_goal == base["goal"]
     assert plus["train_config"]["game"] == "VizdoomDefendLine-Plus-v1"
+    assert plus["train_config"]["task"] == base["train_config"]["task"]
+    assert plus["train_config"]["training_backend"] == base["train_config"]["training_backend"]
+
+
+def test_vizdoom_basic_plus_differs_only_by_environment_identity() -> None:
+    base_goal_path = GOALS_ROOT / "VizdoomBasic-v1" / "_goal.yaml"
+    plus_goal_path = GOALS_ROOT / "VizdoomBasic-Plus-v1" / "_goal.yaml"
+    base = compose_train_document(base_goal_path, base_goal_path.parent / "recipes/ppo.yaml")
+    plus = compose_train_document(plus_goal_path, plus_goal_path.parent / "recipes/ppo.yaml")
+
+    normalized_plus_goal = deepcopy(plus["goal"])
+    normalized_plus_goal["goal_id"] = base["goal"]["goal_id"]
+    normalized_plus_goal["tags"] = base["goal"]["tags"]
+    normalized_plus_goal["train"]["environment"]["env_config"]["game"] = (
+        base["goal"]["train"]["environment"]["env_config"]["game"]
+    )
+    normalized_plus_goal["eval"]["environment"]["env_config"]["game"] = (
+        base["goal"]["eval"]["environment"]["env_config"]["game"]
+    )
+
+    assert normalized_plus_goal == base["goal"]
+    assert plus["train_config"]["game"] == "VizdoomBasic-Plus-v1"
     assert plus["train_config"]["task"] == base["train_config"]["task"]
     assert plus["train_config"]["training_backend"] == base["train_config"]["training_backend"]

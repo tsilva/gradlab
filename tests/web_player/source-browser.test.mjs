@@ -4,6 +4,7 @@ import test from "node:test";
 
 import {
   activeRunMetricColumns,
+  availableRunMetricColumns,
   bestRunEfficiency,
   checkpointCanEvaluate,
   checkpointEvaluationCell,
@@ -34,6 +35,22 @@ test("checkpoint selection boxes are centered within their rows", async () => {
   assert.match(
     styles,
     /\.source-selection-cell input \{[^}]*display: block;[^}]*margin: 0 auto;/,
+  );
+});
+
+test("run result evidence is visually promoted above supporting metadata", async () => {
+  const styles = await readFile(
+    new URL("../../src/gradlab/web_player/styles.css", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(
+    styles,
+    /\.source-table \.finish-evidence \{[^}]*display: grid;/,
+  );
+  assert.match(
+    styles,
+    /\.source-table \.finish-evidence-value \{[^}]*font-size: \.96rem;/,
   );
 });
 
@@ -276,9 +293,15 @@ test("run finish reasons distinguish resource, training, and evaluation outcomes
     {
       label: "Training target met",
       detail: (
-        "Mean target-start return (last 100) >= 5"
+        "Mean target-start return (last 100) ≥ 5"
         + " · observed 5.25 · Stopped at 16,384 steps"
       ),
+      evidence: {
+        metric: "Mean target-start return (last 100)",
+        observed: "5.25",
+        required: "≥ 5",
+        step: "Stopped at 16,384 steps",
+      },
       tone: "success",
     },
   );
@@ -766,6 +789,19 @@ test("run metric sorting respects direction and keeps missing values last", () =
       .map((item) => item.run_id),
     ["low", "high", "missing"],
   );
+});
+
+test("run panels omit metric columns with no visible evidence", () => {
+  const columns = [
+    { metric: "missing", direction: "max" },
+    { metric: "available", direction: "max" },
+  ];
+  const items = [
+    { metrics: { missing: null, available: 7.63 } },
+    { metrics: { missing: undefined, available: null } },
+  ];
+
+  assert.deepEqual(availableRunMetricColumns(items, columns), [columns[1]]);
 });
 
 test("run efficiency prefers complete goal evaluation and follows its rank order", () => {

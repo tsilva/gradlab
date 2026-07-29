@@ -301,7 +301,7 @@ class TrainImageTests(unittest.TestCase):
             encoding="utf-8"
         )
 
-        self.assertIn("vizdoom-turbo==1.3.0.post15", dependencies)
+        self.assertIn("vizdoom-turbo==1.3.0.post16", dependencies)
         self.assertNotIn("wandb-workspaces==", train)
         self.assertIn("torch==2.12.0", gpu)
         train_lines = set(train.splitlines())

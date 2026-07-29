@@ -96,6 +96,15 @@ function humanizeMetricPart(value) {
     .replace(/\b\w/g, (character) => character.toUpperCase());
 }
 
+function comparisonOperatorLabel(value) {
+  return {
+    ">": ">",
+    ">=": "≥",
+    "<": "<",
+    "<=": "≤",
+  }[String(value || "")] || String(value || "");
+}
+
 export function runFinishPresentation(item) {
   const reason = String(item?.stop_reason || "").trim();
   const finalStep = Number(item?.final_step);
@@ -119,7 +128,7 @@ export function runFinishPresentation(item) {
     && Number.isFinite(Number(earlyStopThreshold))
   );
   const earlyStopCriterion = hasThreshold
-    ? `${metricLabel(earlyStopMetric)} ${earlyStopOperator} ${
+    ? `${metricLabel(earlyStopMetric)} ${comparisonOperatorLabel(earlyStopOperator)} ${
         formatMetricValue(earlyStopMetric, earlyStopThreshold)
       }`
     : "";
@@ -170,6 +179,23 @@ export function runFinishPresentation(item) {
         humanizeMetricPart(reason.split(":", 2)[1]),
         stepDetail,
       ].filter(Boolean).join(" · "),
+      evidence: hasThreshold
+        ? {
+            metric: metricLabel(earlyStopMetric),
+            observed: (
+              observedValue !== null
+              && observedValue !== undefined
+              && Number.isFinite(Number(observedValue))
+            )
+              ? formatMetricValue(earlyStopMetric, observedValue)
+              : "—",
+            required: (
+              `${comparisonOperatorLabel(earlyStopOperator)} `
+              + formatMetricValue(earlyStopMetric, earlyStopThreshold)
+            ),
+            step: stepDetail,
+          }
+        : null,
       tone: "success",
     };
   }
@@ -350,6 +376,15 @@ export function activeRunMetricColumns(items, primaryColumns, fallbackColumns = 
     return primary;
   }
   return fallback.length ? fallback : primary;
+}
+
+export function availableRunMetricColumns(items, columns) {
+  return (Array.isArray(columns) ? columns : []).filter((column) => (
+    items.some((item) => {
+      const value = item?.metrics?.[column.metric];
+      return value !== null && value !== undefined && Number.isFinite(Number(value));
+    })
+  ));
 }
 
 export function rankRunItems(items, columns) {
@@ -1645,14 +1680,15 @@ export class SourceBrowser {
     const headerRow = document.createElement("tr");
     const showingRuns = this.route.level === "runs" && !this.route.run_id;
     const showingCheckpoints = this.route.level === "runs" && Boolean(this.route.run_id);
-    const runMetricColumns = showingRuns ? this.activeRunMetricColumns() : [];
+    const runRankingColumns = showingRuns ? this.activeRunMetricColumns() : [];
+    const runMetricColumns = availableRunMetricColumns(this.items, runRankingColumns);
     const checkpointMetricColumns = showingCheckpoints ? this.metricColumns : [];
     const columns = showingRuns
       ? [
           { label: "Run" },
           { label: "Recipe / variant" },
           { label: "Seed" },
-          { label: "Finished because" },
+          { label: "Training result" },
           ...runMetricColumns.map((column) => ({
             ...column,
             label: metricLabel(column.metric),
@@ -1740,7 +1776,7 @@ export class SourceBrowser {
     const items = showingRuns
       ? this.sort.metric
         ? sortRunItems(this.items, this.sort)
-        : rankRunItems(this.items, runMetricColumns)
+        : rankRunItems(this.items, runRankingColumns)
       : showingCheckpoints && this.sort.metric
         ? sortRunItems(this.items, this.sort)
       : this.items;
@@ -1764,7 +1800,12 @@ export class SourceBrowser {
               "recipe-cell",
             ],
             [item.seed ?? "—"],
-            [finish.label, finish.detail, `finish-reason ${finish.tone}`],
+            [
+              finish.label,
+              finish.detail,
+              `finish-reason ${finish.tone}`,
+              finish.evidence,
+            ],
             ...runMetricColumns.map((column) => [
               formatMetricValue(column.metric, item.metrics?.[column.metric]),
             ]),
@@ -1783,7 +1824,7 @@ export class SourceBrowser {
             [formatBytes(item.size_bytes)],
             [formatDate(item.created_at)],
           ];
-      values.forEach(([primary, secondary = "", className = ""]) => {
+      values.forEach(([primary, secondary = "", className = "", evidence = null]) => {
         const cell = document.createElement("td");
         if (className) cell.className = className;
         if (className.includes("source-selection-cell")) {
@@ -1817,6 +1858,42 @@ export class SourceBrowser {
             );
           });
           cell.append(inspect);
+          row.append(cell);
+          return;
+        }
+        if (className.includes("finish-reason") && evidence) {
+          const status = document.createElement("span");
+          status.className = "finish-status";
+          status.textContent = String(primary);
+
+          const comparison = document.createElement("div");
+          comparison.className = "finish-evidence";
+          [
+            ["Observed", evidence.observed],
+            ["Required", evidence.required],
+          ].forEach(([labelText, valueText]) => {
+            const item = document.createElement("div");
+            item.className = "finish-evidence-item";
+            const value = document.createElement("strong");
+            value.className = "finish-evidence-value";
+            value.textContent = String(valueText);
+            const label = document.createElement("span");
+            label.className = "finish-evidence-label";
+            label.textContent = labelText;
+            item.append(value, label);
+            comparison.append(item);
+          });
+
+          const metric = document.createElement("small");
+          metric.className = "finish-evidence-metric";
+          metric.textContent = String(evidence.metric);
+          cell.append(status, comparison, metric);
+          if (evidence.step) {
+            const step = document.createElement("small");
+            step.className = "finish-evidence-step";
+            step.textContent = String(evidence.step);
+            cell.append(step);
+          }
           row.append(cell);
           return;
         }

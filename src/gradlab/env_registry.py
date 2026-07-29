@@ -117,6 +117,11 @@ ENVIRONMENT_SPECS: Mapping[str, EnvironmentSpec] = MappingProxyType(
         "VizdoomBasic-v1": EnvironmentSpec(
             "VizdoomBasic-v1", "Doom-ViZDoom-Basic", "VizdoomBasic-v1"
         ),
+        "VizdoomBasic-Plus-v1": EnvironmentSpec(
+            "VizdoomBasic-Plus-v1",
+            "Doom-ViZDoom-Basic-Plus",
+            "VizdoomBasic-Plus-v1",
+        ),
         "VizdoomDeadlyCorridor-v1": EnvironmentSpec(
             "VizdoomDeadlyCorridor-v1",
             "Doom-ViZDoom-DeadlyCorridor",
@@ -296,6 +301,7 @@ VIZDOOM_TURBO_PROVIDER = EnvProvider(
         spec_id: EnvRegistration(spec_id)
         for spec_id in (
             "VizdoomBasic-v1",
+            "VizdoomBasic-Plus-v1",
             "VizdoomDeadlyCorridor-v1",
             "VizdoomDefendCenter-v1",
             "VizdoomDefendLine-v1",

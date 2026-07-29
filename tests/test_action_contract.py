@@ -181,6 +181,7 @@ def test_vizdoom_preflight_uses_configured_available_buttons():
     ("game", "meanings"),
     [
         ("VizdoomBasic-v1", ("noop", "move_left", "move_right", "attack")),
+        ("VizdoomBasic-Plus-v1", ("noop", "move_left", "move_right", "attack")),
         (
             "VizdoomDeadlyCorridor-v1",
             (

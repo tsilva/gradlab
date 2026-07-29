@@ -439,9 +439,53 @@ h2 { font-size: .9rem; margin: 0; font-weight: 650; }
 .source-table .run-state.pending { color: var(--yellow); }
 .source-table .run-state.stopped { color: var(--muted); }
 .source-table .finish-reason { min-width: 18rem; }
-.source-table .finish-reason.success > span { color: var(--green); }
-.source-table .finish-reason.failure > span { color: var(--red); }
-.source-table .finish-reason.unknown > span { color: var(--yellow); }
+.source-table .finish-status {
+  color: var(--text);
+  font-size: .78rem;
+  font-weight: 750;
+}
+.source-table .finish-reason.success .finish-status { color: var(--green); }
+.source-table .finish-reason.failure .finish-status { color: var(--red); }
+.source-table .finish-reason.unknown .finish-status { color: var(--yellow); }
+.source-table .finish-evidence {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: .42rem;
+  margin-top: .5rem;
+}
+.source-table .finish-evidence-item {
+  min-width: 0;
+  padding: .4rem .5rem;
+  border: 1px solid #294652;
+  border-radius: .34rem;
+  background: rgba(83, 212, 232, .045);
+}
+.source-table .finish-evidence-value,
+.source-table .finish-evidence-label {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.source-table .finish-evidence-value {
+  color: var(--text);
+  font-size: .96rem;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.15;
+}
+.source-table .finish-evidence-label {
+  margin-top: .16rem;
+  color: var(--muted);
+  font-size: .55rem;
+  font-weight: 750;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+.source-table .finish-evidence-metric,
+.source-table .finish-evidence-step {
+  white-space: normal;
+  line-height: 1.35;
+}
+.source-table .finish-evidence-metric { margin-top: .42rem; color: #a7c3cd; }
 .source-table .inspection-cell { width: 1%; white-space: nowrap; }
 .source-table .evaluation-cell { min-width: 18rem; }
 .source-table .evaluation-verdict { font-weight: 700; }
