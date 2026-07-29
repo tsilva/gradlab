@@ -50,6 +50,8 @@ eval:
   environment:
     # Supply evaluation-time arguments for the native vectorized ViZDoom environment.
     env_config:
+      # Bound evaluation at the scenario's 2,100-tic native horizon after four-frame skipping.
+      max_steps: 525
       # Reuse the scenario-specific provider arguments declared for training.
       env_args: *health_gathering_supreme_env_args
     # Merge the same scenario-specific task overrides into the shared evaluation defaults.
