@@ -14,6 +14,11 @@ from gradlab.checkpoint_acceptance import manifest_index, requires_complete_eval
 from gradlab.clock import Clock, SystemClock
 from gradlab.early_stop import EARLY_STOP_OPERATORS
 from gradlab.eval_backend import EvalBackend
+from gradlab.eval_metrics import eval_by_start_rows
+from gradlab.evaluation_projection import (
+    evaluation_wandb_projection,
+    metrics_schema_version_from_recipe_document,
+)
 from gradlab.job_queue import (
     HandlerResult,
     JobStore,
@@ -24,15 +29,8 @@ from gradlab.job_queue import (
     register_handler,
 )
 from gradlab.metric_names import (
-    EVAL_ACCEPTANCE_DURATION_SECONDS,
-    EVAL_ACCEPTANCE_EPISODES_COMPLETED,
-    EVAL_ACCEPTANCE_EPISODES_PLANNED,
-    EVAL_ACCEPTANCE_FAILURE_COUNT,
-    EVAL_ACCEPTANCE_PASS,
-    EVAL_CHECKPOINT_STEP,
-    EVAL_FULL_EPISODE_RETURN_MEAN,
-    EVAL_FULL_SUCCESS_RATE_MIN,
-    metric_definition,
+    EVAL_FULL_EPISODE_RETURN_SHAPED_MEAN,
+    EVAL_FULL_SUCCESS_ACROSS_STARTS_RATE_MIN,
 )
 from gradlab.modal_eval_backend import ModalEvalBackend
 from gradlab.modal_eval_config import ModalEvalConfig, load_modal_eval_config
@@ -72,10 +70,10 @@ MANUAL_EVAL_RETRY_SECONDS = 2.0
 MANUAL_EVAL_WAIT_SECONDS = 15.0
 
 _STRICT_COMPLETE_ACCEPTANCE_METRIC_BY_GAME = {
-    "VizdoomBasic-v1": EVAL_FULL_SUCCESS_RATE_MIN,
-    "VizdoomDeadlyCorridor-v1": EVAL_FULL_EPISODE_RETURN_MEAN,
-    "VizdoomDefendLine-v1": EVAL_FULL_EPISODE_RETURN_MEAN,
-    "VizdoomDefendLine-Plus-v1": EVAL_FULL_EPISODE_RETURN_MEAN,
+    "VizdoomBasic-v1": EVAL_FULL_SUCCESS_ACROSS_STARTS_RATE_MIN,
+    "VizdoomDeadlyCorridor-v1": EVAL_FULL_EPISODE_RETURN_SHAPED_MEAN,
+    "VizdoomDefendLine-v1": EVAL_FULL_EPISODE_RETURN_SHAPED_MEAN,
+    "VizdoomDefendLine-Plus-v1": EVAL_FULL_EPISODE_RETURN_SHAPED_MEAN,
 }
 
 
@@ -663,32 +661,35 @@ class ManualEvaluationSupervisor:
             return True
         self._lease(context.manifest)
         environment = context.intent.execution_contract["environment"]
-        metrics = {
-            str(name): value
-            for name, value in dict(raw.get("metrics") or {}).items()
-            if metric_definition(str(name)) is not None
-        }
-        metrics.update(
-            {
-                EVAL_CHECKPOINT_STEP: context.checkpoint.step,
-                EVAL_ACCEPTANCE_PASS: 1.0 if result.status == "accepted" else 0.0,
-                EVAL_ACCEPTANCE_EPISODES_PLANNED: float(
-                    context.intent.execution_contract["episodes"]
-                ),
-                EVAL_ACCEPTANCE_EPISODES_COMPLETED: float(len(result.episode_results)),
-                EVAL_ACCEPTANCE_FAILURE_COUNT: float(
-                    result.aggregates.get("failure_count") or 0
-                ),
-                EVAL_ACCEPTANCE_DURATION_SECONDS: float(
-                    raw.get("duration_seconds") or 0.0
-                ),
-            }
+        metrics_schema_version = metrics_schema_version_from_recipe_document(
+            context.recipe_document
+        )
+        metrics = evaluation_wandb_projection(
+            dict(raw.get("metrics") or {}),
+            schema_version=metrics_schema_version,
+            checkpoint_step=context.checkpoint.step,
+            accepted=result.status == "accepted",
+            episodes_planned=int(context.intent.execution_contract["episodes"]),
+            episodes_completed=len(result.episode_results),
+            duration_seconds=float(raw.get("duration_seconds") or 0.0),
         )
         ledger.append_metrics(
             metrics,
             step=context.checkpoint.step,
             source=f"eval:manual:{context.intent.idempotency_key}",
+            metrics_schema_version=metrics_schema_version,
         )
+        if result.status == "accepted":
+            ledger.enqueue_event(
+                kind="eval_by_start",
+                payload={
+                    "rows": eval_by_start_rows(
+                        [dict(episode) for episode in result.episode_results]
+                    )
+                },
+                step=context.checkpoint.step,
+                source=f"eval:manual:{context.intent.idempotency_key}:by_start",
+            )
         ledger.reset_interrupted_metric_frames()
         projector = self.runtime.resume_wandb(
             {
@@ -700,6 +701,7 @@ class ManualEvaluationSupervisor:
                 "env_provider": environment["env_provider"],
                 "run_name": context.manifest.wandb.get("display_name"),
                 "wandb_group": context.manifest.wandb.get("group"),
+                "metrics_schema_version": metrics_schema_version,
             },
             allow_create=False,
             update_finish_state=False,
@@ -789,6 +791,15 @@ class ManualEvaluationSupervisor:
             **dict(raw.get("metrics") or {}),
             **dict(result.aggregates),
         }
+        metrics_schema_version = metrics_schema_version_from_recipe_document(
+            context.recipe_document
+        )
+        recipe = context.recipe_document.get("recipe")
+        train_config = recipe.get("train_config") if isinstance(recipe, Mapping) else None
+        if not isinstance(train_config, Mapping):
+            raise EvaluationProjectionPending(
+                "checkpoint recipe has no train_config for promotion ranking"
+            )
         try:
             environment = context.intent.execution_contract["environment"]
             projector = self.runtime.resume_wandb(
@@ -801,6 +812,7 @@ class ManualEvaluationSupervisor:
                     "env_provider": environment["env_provider"],
                     "run_name": context.manifest.wandb.get("display_name"),
                     "wandb_group": context.manifest.wandb.get("group"),
+                    "metrics_schema_version": metrics_schema_version,
                 },
                 allow_create=False,
                 update_finish_state=False,
@@ -812,6 +824,9 @@ class ManualEvaluationSupervisor:
                     checkpoint_url=context.checkpoint.public_url,
                     metrics=metrics,
                     updated_at=receipt.promoted_at,
+                    selection_rank=train_config.get("selection_rank") or (),
+                    evaluation_source="modal:manual",
+                    metrics_schema_version=metrics_schema_version,
                 )
             finally:
                 self.runtime.close_wandb(projector, timeout_seconds=300)

@@ -18,7 +18,7 @@ from gradlab.env_registry import (
 )
 from gradlab.goal_schema import goal_evaluation_mode, validate_goal_document_shape
 from gradlab.reward_programs import goal_for_contract_validation, validate_reward_shape_catalog
-from gradlab.metric_names import metric_path_segment
+from gradlab.metric_names import leader_metric_for_rank_metric, metric_path_segment
 from gradlab.ranking import parse_objective_rank
 from gradlab.seeds import validate_eval_seed
 from gradlab.train_config import (
@@ -398,6 +398,16 @@ def _validate_goal_eval(document: Mapping[str, Any], *, label: str) -> None:
             label=f"{label}.eval.env_config",
             require_game=False,
         )
+    objective = document.get("objective")
+    rank = objective.get("rank") if isinstance(objective, Mapping) else None
+    for criterion in parse_objective_rank(rank):
+        try:
+            leader_metric_for_rank_metric(criterion.metric)
+        except ValueError as exc:
+            raise ValueError(
+                f"{label}.objective.rank metric cannot be projected to a checkpoint leader: "
+                f"{criterion.metric}"
+            ) from exc
 
 
 def _validate_rank_order(rank_order: Any, *, label: str) -> None:

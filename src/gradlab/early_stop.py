@@ -109,7 +109,12 @@ def _non_negative_integer(
     return int(value)
 
 
-def normalize_metric_threshold_rule(value: Any, *, label: str) -> dict[str, Any]:
+def normalize_metric_threshold_rule(
+    value: Any,
+    *,
+    label: str,
+    metric_validator: Callable[[str], object] = validate_metric_name,
+) -> dict[str, Any]:
     """Normalize one stateless rule used by checkpoint acceptance."""
 
     node = _require_mapping(value, label=label)
@@ -118,7 +123,7 @@ def normalize_metric_threshold_rule(value: Any, *, label: str) -> dict[str, Any]
         raise ValueError(f"{label} has unexpected keys: {extra_keys}")
     metric = _require_non_empty_string(node, "metric", label=label)
     try:
-        validate_metric_name(metric)
+        metric_validator(metric)
     except ValueError as exc:
         raise ValueError(
             f"{_label_path(label, 'metric')} is not a registered metric: {metric}"
@@ -135,13 +140,18 @@ def normalize_metric_threshold_rules(
     value: Any,
     *,
     label: str,
+    metric_validator: Callable[[str], object] = validate_metric_name,
 ) -> list[dict[str, Any]]:
     if not isinstance(value, Sequence) or isinstance(value, str | bytes):
         raise ValueError(f"{label} must be a non-empty list")
     if not value:
         raise ValueError(f"{label} must be a non-empty list")
     return [
-        normalize_metric_threshold_rule(rule, label=f"{label}[{index}]")
+        normalize_metric_threshold_rule(
+            rule,
+            label=f"{label}[{index}]",
+            metric_validator=metric_validator,
+        )
         for index, rule in enumerate(value)
     ]
 

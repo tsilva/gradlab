@@ -206,7 +206,7 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertEqual(
             train_config["selection_rank"],
             [
-                "max(train/episode/return/shaped/from/target/mean)",
+                "max(train/episode/return/shaped/from/target/rolling_up_to_100/mean)",
                 "min(train/global_step)",
             ],
         )
@@ -278,7 +278,7 @@ class ConfigValidationTests(unittest.TestCase):
             document["goal"]["eval"]["acceptance"],
             [
                 {
-                    "metric": "eval/full/outcome/success/rate/min",
+                    "metric": "eval/full/outcome/success/across_starts/rate/min",
                     "operator": ">=",
                     "threshold": 1.0,
                 }
@@ -439,7 +439,7 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertEqual(
             train_config["early_stop"]["conditions"]["clear_100"],
             {
-                "metric": "train/outcome/success/window_100/rate/min",
+                "metric": "train/outcome/success/across_starts/window_100/rate/min",
                 "trigger": "threshold",
                 "outcome": "success",
                 "action": "stop",
@@ -516,7 +516,7 @@ class ConfigValidationTests(unittest.TestCase):
 
                 self.assertEqual(
                     plateau["metric"],
-                    "train/episode/return/shaped/from/target/mean",
+                    "train/episode/return/shaped/from/target/rolling_up_to_100/mean",
                 )
                 self.assertEqual(plateau["trigger"], "no_improvement")
                 self.assertEqual(plateau["direction"], "maximize")
@@ -574,7 +574,7 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertEqual(
             train_config["selection_rank"],
             [
-                "max(train/episode/return/shaped/from/target/mean)",
+                "max(train/episode/return/shaped/from/target/rolling_up_to_100/mean)",
                 "min(train/global_step)",
             ],
         )
@@ -846,7 +846,7 @@ class ConfigValidationTests(unittest.TestCase):
         document = load_goal_contract(path)
         document["train"]["early_stop"] = [
             {
-                "metric": "train/outcome/success/window_100/rate/min",
+                "metric": "train/outcome/success/across_starts/window_100/rate/min",
                 "operator": ">",
                 "threshold": 0.99,
             }
@@ -857,7 +857,7 @@ class ConfigValidationTests(unittest.TestCase):
     def test_goal_validator_rejects_rank_forms_the_runtime_cannot_parse(self) -> None:
         with self.assertRaisesRegex(ValueError, "max\\(metric\\) or min\\(metric\\)"):
             experiment_contracts._validate_rank_order(
-                [{"metric": "eval/full/episode/return/mean", "direction": "maximize"}],
+                [{"metric": "eval/full/episode/return/shaped/mean", "direction": "maximize"}],
                 label="objective.rank",
             )
 
@@ -884,7 +884,7 @@ class ConfigValidationTests(unittest.TestCase):
         invalid_documents = []
 
         eval_rank = deepcopy(base)
-        eval_rank["objective"]["rank"] = ["max(eval/full/episode/return/mean)"]
+        eval_rank["objective"]["rank"] = ["max(eval/full/episode/return/shaped/mean)"]
         invalid_documents.append((eval_rank, "may use only training metrics"))
 
         eval_config = deepcopy(base)
@@ -920,7 +920,7 @@ class ConfigValidationTests(unittest.TestCase):
         path = self.MARIO_L11_GOAL.resolve()
         document = load_goal_contract(path)
         document["objective"]["success"] = {
-            "metric": "train/outcome/success/window_100/rate/min",
+            "metric": "train/outcome/success/across_starts/window_100/rate/min",
             "operator": ">",
             "threshold": 0.99,
         }
@@ -995,7 +995,7 @@ class ConfigValidationTests(unittest.TestCase):
             document["eval"]["acceptance"],
             [
                 {
-                    "metric": "eval/full/outcome/success/rate/min",
+                    "metric": "eval/full/outcome/success/across_starts/rate/min",
                     "operator": ">=",
                     "threshold": 1.0,
                 }
@@ -1005,7 +1005,7 @@ class ConfigValidationTests(unittest.TestCase):
             document["objective"]["rank"],
             [
                 "min(leader/checkpoint/step)",
-                "max(eval/full/episode/return/mean)",
+                "max(eval/full/episode/return/shaped/mean)",
             ],
         )
         stalled_event = {"signal": "x", "operation": "unchanged_for", "steps": 300}

@@ -221,7 +221,9 @@ def test_local_train_materializes_credential_free_playable_run(
     assert config["wandb"] is False
     assert config["wandb_mode"] == "disabled"
     assert config["timesteps"] == 64
-    assert "Seed 123" in config["run_description"]
+    assert config["run_description"] == (
+        "PPO smoke test for the ROM-free native-vector gradlab__bandit target."
+    )
     assert "image_ref" not in recipe["provenance"]["runtime"]
     assert recipe["provenance"]["runtime"]["packages"]
     assert recipe["provenance"]["source_distribution"]["name"].lower() == "gradlab"

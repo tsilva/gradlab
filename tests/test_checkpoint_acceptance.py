@@ -38,7 +38,7 @@ def contract(
         acceptance=acceptance
         or [
             {
-                "metric": "eval/full/outcome/success/rate/min",
+                "metric": "eval/full/outcome/success/across_starts/rate/min",
                 "operator": ">=",
                 "threshold": 1.0,
             }
@@ -101,7 +101,7 @@ def test_mean_return_acceptance_requires_and_uses_every_episode(
         n_envs=2,
         acceptance=[
             {
-                "metric": "eval/full/episode/return/mean",
+                "metric": "eval/full/episode/return/shaped/mean",
                 "operator": ">=",
                 "threshold": 2.5,
             }
@@ -120,7 +120,7 @@ def test_mean_return_acceptance_requires_and_uses_every_episode(
 
     assert aggregates["episodes_completed"] == 4
     assert aggregates["failure_count"] == 2
-    assert aggregates["eval/full/episode/return/mean"] == sum(returns) / 4
+    assert aggregates["eval/full/episode/return/shaped/mean"] == sum(returns) / 4
     accepted, _observed = evaluate_acceptance(aggregates, contract=value)
     assert accepted is (verdict == "accepted")
 
@@ -135,7 +135,7 @@ def test_vizdoom_basic_perfect_success_acceptance_requires_every_episode() -> No
         seed_protocol="vector-lane-v1",
         acceptance=[
             {
-                "metric": "eval/full/outcome/success/rate/min",
+                "metric": "eval/full/outcome/success/across_starts/rate/min",
                 "operator": ">=",
                 "threshold": 1.0,
             }
@@ -153,7 +153,7 @@ def test_vizdoom_basic_perfect_success_acceptance_requires_every_episode() -> No
 
     assert aggregates["episodes_completed"] == 4
     assert aggregates["failure_count"] == 1
-    assert aggregates["eval/full/outcome/success/rate/min"] == 0.75
+    assert aggregates["eval/full/outcome/success/across_starts/rate/min"] == 0.75
     accepted, _observed = evaluate_acceptance(aggregates, contract=value)
     assert accepted is False
 
@@ -164,7 +164,7 @@ def test_modal_protocol_accepts_complete_mean_return_rejection() -> None:
         n_envs=1,
         acceptance=[
             {
-                "metric": "eval/full/episode/return/mean",
+                "metric": "eval/full/episode/return/shaped/mean",
                 "operator": ">=",
                 "threshold": 1.0,
             }
@@ -203,7 +203,7 @@ def test_modal_protocol_accepts_complete_mean_return_rejection() -> None:
         "verdict": "rejected",
         "episode_results": rows,
         "claimed_aggregates": aggregates,
-        "metrics": {"eval/full/episode/return/mean": 0.25},
+        "metrics": {"eval/full/episode/return/shaped/mean": 0.25},
     }
 
     validated = validate_attempt_result(result, contract=value, attempt_id=attempt_id)

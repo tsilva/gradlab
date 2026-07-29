@@ -14,9 +14,9 @@ from gradlab.batch_runtime import EpisodeRecord
 from gradlab.cell_graph import CellGraphExecutionContext, CellGraphPolicy
 from gradlab.go_explore import GoExploreSearch
 from gradlab.metric_names import (
-    TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_MEAN,
+    TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_ROLLING_UP_TO_100_MEAN,
     TRAIN_GO_EXPLORE_ARCHIVE_BLOB_BYTES,
-    TRAIN_OUTCOME_SUCCESS_CURRENT_RATE_MEAN,
+    TRAIN_OUTCOME_SUCCESS_ACROSS_OBSERVED_STARTS_CUMULATIVE_RATE_MEAN,
 )
 from gradlab.task_kernels import Outcome
 from gradlab.training.go_explore import (
@@ -303,7 +303,7 @@ class GoExploreSearchTests(unittest.TestCase):
                 )
                 self.assertEqual(progress.n, 1 if interrupted else 2)
                 self.assertNotIn(
-                    TRAIN_OUTCOME_SUCCESS_CURRENT_RATE_MEAN,
+                    TRAIN_OUTCOME_SUCCESS_ACROSS_OBSERVED_STARTS_CUMULATIVE_RATE_MEAN,
                     progress.metrics,
                 )
 
@@ -361,11 +361,11 @@ class GoExploreSearchTests(unittest.TestCase):
             0,
         )
         self.assertEqual(
-            progress.metrics[TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_MEAN],
+            progress.metrics[TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_ROLLING_UP_TO_100_MEAN],
             10.0,
         )
         self.assertEqual(
-            progress.metrics[TRAIN_OUTCOME_SUCCESS_CURRENT_RATE_MEAN],
+            progress.metrics[TRAIN_OUTCOME_SUCCESS_ACROSS_OBSERVED_STARTS_CUMULATIVE_RATE_MEAN],
             1.0,
         )
 

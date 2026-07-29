@@ -11,7 +11,7 @@ from typing import Any
 
 from gradlab.clock import Clock, SystemClock
 from gradlab.file_utils import file_sha256 as _file_sha256
-from gradlab.metric_names import validate_metric_payload
+from gradlab.metric_names import METRICS_SCHEMA_VERSION, validate_metric_payload
 
 
 file_sha256 = _file_sha256
@@ -149,6 +149,7 @@ class MetricStore(SqliteStore):
         source: str,
         created_at: float | None = None,
         publish: bool = True,
+        metrics_schema_version: int = METRICS_SCHEMA_VERSION,
     ) -> int:
         payload = {
             str(name): float(value)
@@ -159,7 +160,15 @@ class MetricStore(SqliteStore):
         }
         if not payload:
             return 0
-        validate_metric_payload(payload)
+        if metrics_schema_version == METRICS_SCHEMA_VERSION:
+            validate_metric_payload(payload)
+        else:
+            from gradlab.evaluation_projection import validate_evaluation_metric_payload
+
+            validate_evaluation_metric_payload(
+                payload,
+                schema_version=metrics_schema_version,
+            )
         now = self.clock.time() if created_at is None else float(created_at)
         event_id = self._event_id(
             source=source,

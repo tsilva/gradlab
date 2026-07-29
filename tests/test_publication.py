@@ -168,12 +168,12 @@ def evaluation_payload() -> dict:
     return {
         "action_sampling": "stochastic",
         "protocol": "full",
-        "eval/full/checkpoint/step": 4_000_000,
-        "eval/full/checkpoint/artifact": "tsilva/project/run-checkpoint:v3",
-        "eval/full/episode/count": 30,
-        "eval/full/outcome/success/rate/min": 0.8,
-        "eval/full/outcome/success/rate/mean": 0.9,
-        "eval/full/episode/return/mean": 123.5,
+        "eval/checkpoint/step": 4_000_000,
+        "checkpoint_artifact": "tsilva/project/run-checkpoint:v3",
+        "eval/full/episode/completed/count": 30,
+        "eval/full/outcome/success/across_starts/rate/min": 0.8,
+        "eval/full/outcome/success/across_starts/rate/mean": 0.9,
+        "eval/full/episode/return/shaped/mean": 123.5,
         "eval/full/progress/x/max": 6256,
         "eval/full/by_start": [
             {
@@ -359,7 +359,7 @@ def test_publication_evaluation_requires_stochastic_consistent_by_start() -> Non
         normalize_publication_evaluation(deterministic)
 
     inconsistent = evaluation_payload()
-    inconsistent["eval/full/outcome/success/rate/min"] = 0.7
+    inconsistent["eval/full/outcome/success/across_starts/rate/min"] = 0.7
     with pytest.raises(ValueError, match="success_rate_min"):
         normalize_publication_evaluation(inconsistent)
 

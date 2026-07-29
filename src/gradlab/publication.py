@@ -20,14 +20,18 @@ from gradlab.boundary_schema import BoundaryModel, validate_boundary
 from gradlab.env_registry import game_family_for_environment
 from gradlab.file_utils import file_sha256 as sha256_file
 from gradlab.metric_names import (
+    EVAL_CHECKPOINT_STEP,
     EVAL_FULL_BY_START,
-    EVAL_FULL_CHECKPOINT_ARTIFACT,
-    EVAL_FULL_CHECKPOINT_STEP,
-    EVAL_FULL_EPISODE_COUNT,
-    EVAL_FULL_EPISODE_RETURN_MEAN,
+    EVAL_FULL_EPISODE_COMPLETED_COUNT,
+    EVAL_FULL_EPISODE_RETURN_SHAPED_MEAN,
     EVAL_FULL_PROGRESS_X_MAX,
-    EVAL_FULL_SUCCESS_RATE_MEAN,
-    EVAL_FULL_SUCCESS_RATE_MIN,
+    EVAL_FULL_SUCCESS_ACROSS_STARTS_RATE_MEAN,
+    EVAL_FULL_SUCCESS_ACROSS_STARTS_RATE_MIN,
+    V13_EVAL_CHECKPOINT_STEP,
+    V13_EVAL_FULL_EPISODE_COMPLETED_COUNT,
+    V13_EVAL_FULL_EPISODE_RETURN_SHAPED_MEAN,
+    V13_EVAL_FULL_SUCCESS_ACROSS_STARTS_RATE_MEAN,
+    V13_EVAL_FULL_SUCCESS_ACROSS_STARTS_RATE_MIN,
 )
 from gradlab.env_registry import environment_spec
 from gradlab.policy_bundle import (
@@ -561,29 +565,58 @@ def normalize_publication_evaluation(
     if protocol != "full":
         raise ValueError("release evaluation protocol must be 'full'")
     checkpoint_step = _required_int(
-        _first_present(evaluation, "checkpoint_step", EVAL_FULL_CHECKPOINT_STEP),
+        _first_present(
+            evaluation,
+            "checkpoint_step",
+            EVAL_CHECKPOINT_STEP,
+            V13_EVAL_CHECKPOINT_STEP,
+        ),
         label="evaluation checkpoint_step",
     )
     checkpoint_artifact = _required_text(
-        _first_present(evaluation, "checkpoint_artifact", EVAL_FULL_CHECKPOINT_ARTIFACT),
+        _first_present(
+            evaluation,
+            "checkpoint_artifact",
+            "eval/full/checkpoint/artifact",
+        ),
         label="evaluation checkpoint_artifact",
     )
     episodes = _required_int(
-        _first_present(evaluation, "episodes", EVAL_FULL_EPISODE_COUNT),
+        _first_present(
+            evaluation,
+            "episodes",
+            EVAL_FULL_EPISODE_COMPLETED_COUNT,
+            V13_EVAL_FULL_EPISODE_COMPLETED_COUNT,
+        ),
         label="evaluation episodes",
     )
     if episodes <= 0:
         raise ValueError("evaluation episodes must be positive")
     success_rate_min = _required_rate(
-        _first_present(evaluation, "success_rate_min", EVAL_FULL_SUCCESS_RATE_MIN),
+        _first_present(
+            evaluation,
+            "success_rate_min",
+            EVAL_FULL_SUCCESS_ACROSS_STARTS_RATE_MIN,
+            V13_EVAL_FULL_SUCCESS_ACROSS_STARTS_RATE_MIN,
+        ),
         label="evaluation success_rate_min",
     )
     success_rate_mean = _required_rate(
-        _first_present(evaluation, "success_rate_mean", EVAL_FULL_SUCCESS_RATE_MEAN),
+        _first_present(
+            evaluation,
+            "success_rate_mean",
+            EVAL_FULL_SUCCESS_ACROSS_STARTS_RATE_MEAN,
+            V13_EVAL_FULL_SUCCESS_ACROSS_STARTS_RATE_MEAN,
+        ),
         label="evaluation success_rate_mean",
     )
     return_mean = _required_float(
-        _first_present(evaluation, "return_mean", EVAL_FULL_EPISODE_RETURN_MEAN),
+        _first_present(
+            evaluation,
+            "return_mean",
+            EVAL_FULL_EPISODE_RETURN_SHAPED_MEAN,
+            V13_EVAL_FULL_EPISODE_RETURN_SHAPED_MEAN,
+        ),
         label="evaluation return_mean",
     )
     progress_value = _first_present(evaluation, "progress_max", EVAL_FULL_PROGRESS_X_MAX)

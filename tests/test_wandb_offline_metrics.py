@@ -5,8 +5,19 @@ import unittest
 from pathlib import Path
 
 import wandb
+from wandb.proto import wandb_internal_pb2
+from wandb.sdk.internal.datastore import DataStore
 
-from gradlab.metric_names import LEADER_CHECKPOINT_ARTIFACT_REF
+from gradlab.metric_names import (
+    EVAL_ACCEPTANCE_PASS,
+    EVAL_CHECKPOINT_STEP,
+    LEADER_CHECKPOINT_ARTIFACT_REF,
+    ORCHESTRATION_EVENT_SEQ,
+    ORCHESTRATION_QUEUE_DEPTH,
+    TRAIN_EPISODE_RETURN_SHAPED_ACROSS_ORIGINS_ROLLING_UP_TO_100_MEAN,
+    TRAIN_GLOBAL_STEP,
+    TRAIN_OUTCOME_SUCCESS_ACROSS_STARTS_WINDOW_100_RATE_MEAN,
+)
 from gradlab.metric_store import MetricStore
 from gradlab.run_contracts import TerminalReceipt, new_attempt_id, new_run_id, utc_now
 from gradlab.wandb_publisher import (
@@ -16,6 +27,25 @@ from gradlab.wandb_publisher import (
     publish_terminal_summary,
 )
 from gradlab.wandb_utils import configure_wandb_metrics
+
+
+def _offline_wandb_records(root: Path):
+    transactions = list(root.rglob("*.wandb"))
+    if len(transactions) != 1:
+        raise AssertionError(f"expected one W&B transaction, found {transactions!r}")
+    store = DataStore()
+    store.open_for_scan(str(transactions[0]))
+    while data := store.scan_data():
+        record = wandb_internal_pb2.Record()
+        record.ParseFromString(data)
+        yield record
+
+
+def _history_payload(record) -> dict[str, object]:
+    return {
+        "/".join(item.nested_key) or item.key: item.value_json
+        for item in record.history.item
+    }
 
 
 class WandbOfflineMetricIntegrationTests(unittest.TestCase):
@@ -59,18 +89,124 @@ class WandbOfflineMetricIntegrationTests(unittest.TestCase):
 
         self.assertIs(configure_wandb_metrics(run), run)
         self.assertIn(
-            (("train/*",), {"step_metric": "train/global_step"}),
+            ((TRAIN_GLOBAL_STEP,), {"summary": "max"}),
             run.calls,
         )
         self.assertIn(
-            (("eval/*",), {"step_metric": "eval/checkpoint_step"}),
+            ((EVAL_CHECKPOINT_STEP,), {"summary": "max"}),
             run.calls,
         )
         self.assertIn(
-            (("orchestration/*",), {"step_metric": "orchestration/event_seq"}),
+            ((ORCHESTRATION_EVENT_SEQ,), {"summary": "max"}),
             run.calls,
         )
-        self.assertNotIn("*", {str(args[0]) for args, _kwargs in run.calls})
+        self.assertIn(
+            (
+                (EVAL_ACCEPTANCE_PASS,),
+                {"step_metric": EVAL_CHECKPOINT_STEP, "summary": "max"},
+            ),
+            run.calls,
+        )
+        self.assertIn(
+            (
+                (
+                    TRAIN_EPISODE_RETURN_SHAPED_ACROSS_ORIGINS_ROLLING_UP_TO_100_MEAN,
+                ),
+                {"step_metric": TRAIN_GLOBAL_STEP, "summary": "last"},
+            ),
+            run.calls,
+        )
+        self.assertFalse(
+            any("*" in str(args[0]) for args, _kwargs in run.calls),
+            run.calls,
+        )
+
+    def test_real_sdk_serializes_only_concrete_scientific_axis_bindings(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            store = MetricStore(root / "gradlab.sqlite")
+            store.init()
+            store.append_metrics(
+                {
+                    TRAIN_OUTCOME_SUCCESS_ACROSS_STARTS_WINDOW_100_RATE_MEAN: 0.55,
+                },
+                step=8192,
+                source="train:rollout",
+            )
+            store.append_metrics(
+                {EVAL_ACCEPTANCE_PASS: 1.0},
+                step=4096,
+                source="eval:modal",
+            )
+            store.append_metrics(
+                {ORCHESTRATION_QUEUE_DEPTH: 2.0},
+                step=0,
+                source="orchestration:supervisor",
+            )
+            run = configure_wandb_metrics(
+                wandb.init(
+                    project="gradlab-metrics-axis-test",
+                    dir=tmp,
+                    mode="offline",
+                    reinit="finish_previous",
+                    settings=wandb.Settings(
+                        silent=True,
+                        disable_git=True,
+                        x_server_side_expand_glob_metrics=False,
+                    ),
+                )
+            )
+            assert run is not None
+
+            published = publish_pending_frames(store, run, limit=10)
+            run.finish()
+
+            self.assertEqual(published, 3)
+            self.assertEqual(store.metric_outbox_stats()["frames"], 0)
+            records = list(_offline_wandb_records(root))
+
+        metric_records = [
+            record.metric for record in records if record.WhichOneof("record_type") == "metric"
+        ]
+        self.assertFalse(
+            any(metric.glob_name or "*" in metric.name for metric in metric_records),
+            metric_records,
+        )
+        bindings = {
+            (metric.name, metric.step_metric)
+            for metric in metric_records
+            if metric.name and metric.step_metric
+        }
+        self.assertIn(
+            (
+                TRAIN_OUTCOME_SUCCESS_ACROSS_STARTS_WINDOW_100_RATE_MEAN,
+                TRAIN_GLOBAL_STEP,
+            ),
+            bindings,
+        )
+        self.assertIn((EVAL_ACCEPTANCE_PASS, EVAL_CHECKPOINT_STEP), bindings)
+        self.assertIn((ORCHESTRATION_QUEUE_DEPTH, ORCHESTRATION_EVENT_SEQ), bindings)
+
+        history = [
+            _history_payload(record)
+            for record in records
+            if record.WhichOneof("record_type") == "history"
+        ]
+        train_row = next(
+            row
+            for row in history
+            if TRAIN_OUTCOME_SUCCESS_ACROSS_STARTS_WINDOW_100_RATE_MEAN in row
+        )
+        eval_row = next(row for row in history if EVAL_ACCEPTANCE_PASS in row)
+        orchestration_row = next(row for row in history if ORCHESTRATION_QUEUE_DEPTH in row)
+        self.assertEqual(train_row[TRAIN_GLOBAL_STEP], "8192")
+        self.assertEqual(eval_row[EVAL_CHECKPOINT_STEP], "4096")
+        self.assertNotEqual(train_row["_step"], train_row[TRAIN_GLOBAL_STEP])
+        self.assertNotEqual(eval_row["_step"], eval_row[EVAL_CHECKPOINT_STEP])
+        self.assertEqual(
+            orchestration_row["_step"],
+            orchestration_row[ORCHESTRATION_EVENT_SEQ],
+        )
 
     def test_replayed_outbox_event_reuses_the_same_wandb_step(self) -> None:
         class FakeRun:
@@ -91,9 +227,8 @@ class WandbOfflineMetricIntegrationTests(unittest.TestCase):
             store.init()
             store.append_metrics(
                 {
-                    "train/episode/return/shaped/from/target/mean": 5.0,
+                    "train/episode/return/shaped/from/target/rolling_up_to_100/mean": 5.0,
                     "train/early_stop/return_plateau/patience/progress": 0.25,
-                    "train/early_stop/return_plateau/would_trigger": 0.0,
                 },
                 step=400_000,
                 source="train:rollout",
@@ -118,9 +253,8 @@ class WandbOfflineMetricIntegrationTests(unittest.TestCase):
             {400_000},
         )
         for metric_name in (
-            "train/episode/return/shaped/from/target/mean",
+            "train/episode/return/shaped/from/target/rolling_up_to_100/mean",
             "train/early_stop/return_plateau/patience/progress",
-            "train/early_stop/return_plateau/would_trigger",
         ):
             definition = (
                 (metric_name,),
@@ -140,10 +274,10 @@ class WandbOfflineMetricIntegrationTests(unittest.TestCase):
             store.init()
             store.append_metrics(
                 {
-                    "eval/full/episode/return/mean": 5.0,
-                    "eval/full/episode/return/best": 5.0,
-                    "eval/full/outcome/success/rate/min": 1.0,
-                    "eval/full/outcome/success/rate/mean": 1.0,
+                    "eval/full/episode/return/shaped/mean": 5.0,
+                    "eval/full/episode/return/shaped/max": 5.0,
+                    "eval/full/outcome/success/across_starts/rate/min": 1.0,
+                    "eval/full/outcome/success/across_starts/rate/mean": 1.0,
                 },
                 step=100,
                 source="eval:modal",
@@ -178,12 +312,18 @@ class WandbOfflineMetricIntegrationTests(unittest.TestCase):
                 checkpoint_step=100,
                 checkpoint_url="https://models.example/model.zip",
                 metrics={
-                    "eval/full/episode/return/mean": 5.0,
-                    "eval/full/episode/return/best": 5.0,
-                    "eval/full/outcome/success/rate/min": 1.0,
-                    "eval/full/outcome/success/rate/mean": 1.0,
+                    "eval/full/episode/return/shaped/mean": 5.0,
+                    "eval/full/episode/return/shaped/max": 5.0,
+                    "eval/full/outcome/success/across_starts/rate/min": 1.0,
+                    "eval/full/outcome/success/across_starts/rate/mean": 1.0,
                 },
                 updated_at="2026-07-24T00:00:00Z",
+                selection_rank=[
+                    "max(eval/full/outcome/success/across_starts/rate/min)",
+                    "max(eval/full/episode/return/shaped/mean)",
+                    "min(leader/checkpoint/step)",
+                ],
+                evaluation_source="modal:test",
             )
 
             self.assertEqual(published, 2)

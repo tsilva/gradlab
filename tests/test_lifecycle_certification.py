@@ -106,7 +106,7 @@ def test_local_background_jobs_cover_recovery_fencing_and_projection() -> None:
         "manual-eval-recovers-projects-and-terminalizes",
         "manual-batch-preserves-global-lowest-step-promotion",
     } <= invariants
-    assert scenario["evidence"]["manual_wandb_events"] == 1
+    assert scenario["evidence"]["manual_wandb_events"] == 2
 
 
 def test_report_keeps_raw_evidence_and_replays_scenario_set(tmp_path: Path) -> None:

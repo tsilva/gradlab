@@ -1,4 +1,4 @@
-# Metrics schema v13
+# Metrics schema v14
 
 This file is the human contract for gradlab telemetry. The Python registry in
 `src/gradlab/metric_names.py` is the executable source of truth. Every emitted metric must match an
@@ -17,7 +17,7 @@ exact registry entry or a bounded template.
 - Public model R2 contains immutable checkpoint closures and a mutable no-cache run index. Private
   eval R2 contains intents, results, and episode evidence. Private control R2 contains leases,
   journals, promotions, and terminal receipts.
-- W&B config contains run-defining dimensions: `metrics_schema_version: 13`, `training_backend_id`,
+- W&B config contains run-defining dimensions: `metrics_schema_version: 14`, `training_backend_id`,
   `training_backend_config_hash`, `algorithm_id`, goal,
   environment, starts, seed, frame skip, environment count, hyperparameters, eval protocol, and
   runtime versions.
@@ -71,7 +71,7 @@ An episode metric is a **return**. `reward` is reserved for per-step shaping and
 attribution. Frame skip remains run config. W&B uses three explicit axes:
 
 - `train/global_step`: policy environment transitions consumed by training.
-- `eval/checkpoint_step`: step of the checkpoint represented by an evaluation row.
+- `eval/checkpoint/step`: step of the checkpoint represented by an evaluation row.
 - `orchestration/event_seq`: durable supervisor delivery order.
 
 Each axis is configured with a W&B `max` summary reducer. W&B's public API may therefore expose
@@ -87,7 +87,9 @@ X-axis. Each producer writes only its applicable scientific axis; durable delive
 `orchestration/event_seq`.
 
 Purged legacy W&B and R2 state has no compatibility guarantee. Newly materialized runs declare
-schema v13.
+schema v14 and emit only v14 names. A release-pinned schema-v13 worker may be used for an explicit
+evaluation of an active v13 run; the current supervisor validates and projects only the finite v13
+compatibility surface documented below and never mixes v13 and v14 in one run.
 
 ## Research interpretation
 
@@ -98,15 +100,17 @@ schema v13.
   successful outcomes. Learner explained variance uses its rollout value targets and is not the
   same statistic as a single playback trajectory's `V(s) - G(s)`.
 - Mario ranks checkpoints only after acceptance: earliest `leader/checkpoint/step`, then highest
-  `eval/full/episode/return/mean`. Breakout is training-only and ranks current-contract seeded recipe
-  cohorts using `train/episode/return/shaped/from/target/mean`, which excludes archive-curriculum
-  origins and non-episode control boundaries; tied cohorts prefer fewer policy transitions.
-- Aggregate training `current/rate/*` is cumulative. Aggregate `window_100/rate/*` is the latest
-  100 attempts. Global
+  `eval/full/episode/return/shaped/mean`. Breakout is training-only and ranks current-contract seeded
+  recipe cohorts using `train/episode/return/shaped/from/target/rolling_up_to_100/mean`, which
+  excludes archive-curriculum origins and non-episode control boundaries; tied cohorts prefer fewer
+  policy transitions.
+- Aggregate training `across_observed_starts/cumulative/rate/*` is cumulative. Aggregate
+  `across_starts/window_100/rate/*` is the latest 100 attempts. Global
   window-100 min/mean appear only after every configured start has 100 attempts. Always pair early
-  current aggregates with `start_coverage/rate`.
+  cumulative aggregates with `across_starts/coverage/rate`.
 - A bounded training-only search may use per-start success counts and the history peak and first
-  threshold crossing of `train/outcome/success/window_100/rate/min` to screen and rank recipes.
+  threshold crossing of `train/outcome/success/across_starts/window_100/rate/min` to screen and rank
+  recipes.
   That evidence is not checkpoint evaluation and cannot establish checkpoint promotion, goal
   acceptance, or release evidence.
 - Failure reasons may overlap, so reason counts and rates need not sum to the terminal count.
@@ -166,8 +170,9 @@ schema v13.
 
 `eval/full/by_start` has one row per start and observed failure reason with these columns:
 
-`checkpoint_step`, `start_id`, `episodes`, `success_count`, `success_rate`, `return_mean`,
-`return_std`, `return_median`, `reason`, `reason_count`, `reason_rate`.
+`checkpoint_step`, `start_id`, `episode_count`, `success_count`, `success_rate`,
+`shaped_return_mean`, `shaped_return_std`, `shaped_return_median`, `failure_reason`,
+`failure_reason_count`, `failure_reason_rate`.
 The reason value is empty, with zero count and rate, when a start has no recorded failure reason.
 
 Episode-level evidence stays in R2. Confidence intervals and start-by-reason scalar products
@@ -177,20 +182,22 @@ An acceptance contract may reject fail-fast only when the first failed outcome p
 cannot pass. That rejection is complete evidence of failure, but not a complete 100-episode
 evaluation, so it emits no partial `eval/full/*` result. Aggregate contracts such as mean return
 disable outcome-based fail-fast, run every planned episode, and emit complete `eval/full/*` metrics
-for either verdict. W&B history always receives `eval/checkpoint_step`, pass, planned/completed
+for either verdict. W&B history always receives `eval/checkpoint/step`, pass, planned/completed
 episodes, and acceptance duration. Accepted projections additionally include artifact, source, and
 `eval/full/by_start`.
-Constant acceptance success rates, per-start success scalars, failure-reason scalars, duplicate full
-duration, and constant leader-success fields remain in private-R2 evidence but are suppressed from
-acceptance W&B history.
+Per-start success and failure-reason summaries are derived from immutable private-R2 episode rows.
+Duplicate full duration, artifact, source, and failure count stay in typed result or checkpoint
+metadata rather than the W&B-shaped metric map.
 
 `eval/acceptance/pass` is per-checkpoint history. W&B summarizes that history with `max`, so the
 summary means that some checkpoint passed; it is not the run verdict. The authoritative verdict is
 the create-only private-R2 `PromotionReceipt`, whose selected result is hash-bound to the complete
 acceptance evidence. At terminal publication, that receipt restamps `gradlab/goal/outcome`, the diagnostic
-`leader/checkpoint/*` fields, and the accepted W&B projection. Later rejected checkpoint projections
-remain in history and never modify the active projection. Raw acceptance aggregates and episode
-evidence remain authoritative in private eval R2.
+`leader/checkpoint/*` fields, and the accepted W&B projection. Leader fields mirror only finite
+selected metrics required by the configured rank plus available diagnostics; no generic objective,
+serialized rank tuple, constant acceptance alias, or fabricated default is emitted. Later rejected
+checkpoint projections remain in history and never modify the active projection. Raw acceptance
+aggregates and episode evidence remain authoritative in private eval R2.
 
 ## Delivery, backpressure, and recovery
 
@@ -221,46 +228,75 @@ inventory, the terminal inventory of automatically submitted evaluations, a prom
 high-water mark, and a complete drain. Checkpoints published after acceptance may remain
 unevaluated for future explicit user action. dstack process exit alone is never scientific success.
 
+## Finite schema-v13 evaluation compatibility
+
+Schema v13 is read and projected only when an immutable checkpoint recipe declares
+`metrics_schema_version: 13`. It is not accepted when materializing a new run. The compatibility
+adapter recognizes only the following scientific and acceptance mappings:
+
+| Schema v13 | Schema v14 meaning |
+|---|---|
+| `eval/checkpoint_step` | `eval/checkpoint/step` |
+| `eval/full/episode/return/mean` | `eval/full/episode/return/shaped/mean` |
+| `eval/full/episode/return/std` | `eval/full/episode/return/shaped/std` |
+| `eval/full/episode/return/median` | `eval/full/episode/return/shaped/median` |
+| `eval/full/episode/return/best` | `eval/full/episode/return/shaped/max` |
+| `eval/full/episode/length/mean` | unchanged |
+| `eval/full/episode/count` | `eval/full/episode/completed/count` |
+| `eval/full/outcome/success/rate/min` | `eval/full/outcome/success/across_starts/rate/min` |
+| `eval/full/outcome/success/rate/mean` | `eval/full/outcome/success/across_starts/rate/mean` |
+| `eval/full/progress/{progress}/{mean,max}` | unchanged |
+| `eval/acceptance/pass` | unchanged |
+| `eval/acceptance/episodes/planned` | `eval/acceptance/episode/planned/count` |
+| `eval/acceptance/episodes/completed` | `eval/acceptance/episode/completed/count` |
+| `eval/acceptance/duration/seconds` | unchanged |
+
+The v13 by-start table retains its v13 column labels. Its semantic content is the same as the v14
+table. A v13 promotion writes only its historical semantic leader fields:
+`success_rate_min`, `success_rate_mean`, `return_mean`, `best_return`, `progress_max`,
+`artifact_ref`, and `eval_source`, all below `leader/checkpoint/`, plus the unchanged checkpoint
+step and update timestamp. Current readers translate those fields at the boundary. They do not
+copy them into v14 history or emit the retired generic objective, rank tuple, or acceptance alias.
+
 ## Registry
 
 <!-- METRIC_REGISTRY_START -->
 | Metric or template | Meaning | Unit | Cadence | Surface |
 |---|---|---|---|---|
-| `train/episode/return/shaped/mean` | Rolling mean shaped return over the latest 100 genuine completed training episodes across target and archive origins; a archive-origin return starts at restoration, and control boundaries are excluded. | scalar | rollout | history |
-| `train/episode/return/shaped/max` | Rolling maximum shaped return over the same latest 100 genuine completed training episodes as `train/episode/return/shaped/mean`; this is observed recent headroom, not a theoretical maximum. | return | rollout | history |
-| `train/episode/length/mean` | Rolling mean length over the latest 100 completed training episodes. | steps | rollout | history |
-| `train/outcome/terminal/count` | Cumulative terminal episode records. | episodes | rollout | history |
-| `train/outcome/reason/{reason}/count` | Cumulative failed episodes containing a reason. | episodes | rollout | history |
-| `train/outcome/reason/{reason}/rate/window_100` | Failure-reason incidence over the latest 100 terminal episodes. | fraction | rollout | history |
-| `train/outcome/success/from/{start}/count` | Cumulative successful genuine target-origin episodes from a start; archive-origin episodes are excluded. | episodes | rollout | history |
-| `train/outcome/success/from/{start}/attempts` | Cumulative genuine target-origin episode attempts from a start; archive-origin episodes are excluded. | episodes | rollout | history |
-| `train/outcome/success/from/{start}/rate/window_100` | Success rate over the latest 100 genuine target-origin attempts from a start. | fraction | rollout | history |
-| `train/outcome/success/current/rate/min` | Minimum cumulative target-origin success rate across observed starts. | fraction | rollout | history |
-| `train/outcome/success/current/rate/mean` | Mean cumulative target-origin success rate across observed starts. | fraction | rollout | history |
-| `train/outcome/success/window_100/rate/min` | Minimum target-origin window-100 success rate after every start has 100 genuine target-origin attempts. | fraction | rollout | history |
-| `train/outcome/success/window_100/rate/mean` | Mean target-origin window-100 success rate after every start has 100 genuine target-origin attempts. | fraction | rollout | history |
-| `train/outcome/success/start_coverage/rate` | Configured starts with a genuine target-origin attempt divided by configured starts. | fraction | rollout | history |
+| `train/episode/return/shaped/across_origins/rolling_up_to_100/mean` | Rolling mean shaped return over up to the latest 100 genuine completed training episodes across target and archive origins; an archive-origin return starts at restoration, and control boundaries are excluded. | return | rollout | history |
+| `train/episode/return/shaped/across_origins/rolling_up_to_100/max` | Rolling maximum shaped return over the same episodes as the across-origin rolling mean; this is observed recent headroom, not a theoretical maximum. | return | rollout | history |
+| `train/episode/length/across_origins/rolling_up_to_100/mean` | Rolling mean length over up to the latest 100 completed training episodes across target and archive origins. | steps | rollout | history |
+| `train/episode/completed/count` | Cumulative completed episode records. | episodes | rollout | history |
+| `train/outcome/failure/reason/{reason}/episode/count` | Cumulative failed episodes containing a reason. | episodes | rollout | history |
+| `train/outcome/failure/reason/{reason}/window_100/rate` | Failure-reason incidence over the latest 100 completed episodes. | fraction | rollout | history |
+| `train/outcome/success/from/{start}/episode/count` | Cumulative successful genuine target-origin episodes from a start; archive-origin episodes are excluded. | episodes | rollout | history |
+| `train/outcome/success/from/{start}/attempt/count` | Cumulative genuine target-origin episode attempts from a start; archive-origin episodes are excluded. | episodes | rollout | history |
+| `train/outcome/success/from/{start}/window_100/rate` | Success rate over the latest 100 genuine target-origin attempts from a start. | fraction | rollout | history |
+| `train/outcome/success/across_observed_starts/cumulative/rate/min` | Minimum cumulative target-origin success rate across starts with at least one genuine attempt. | fraction | rollout | history |
+| `train/outcome/success/across_observed_starts/cumulative/rate/mean` | Mean cumulative target-origin success rate across starts with at least one genuine attempt. | fraction | rollout | history |
+| `train/outcome/success/across_starts/window_100/rate/min` | Minimum target-origin window-100 success rate after every configured start has 100 genuine attempts. | fraction | rollout | history |
+| `train/outcome/success/across_starts/window_100/rate/mean` | Mean target-origin window-100 success rate after every configured start has 100 genuine attempts. | fraction | rollout | history |
+| `train/outcome/success/across_starts/coverage/rate` | Configured starts with a genuine target-origin attempt divided by configured starts. | fraction | rollout | history |
 | `train/early_stop/{condition}/value` | Current finite value consumed by a configured metric early-stop condition. | scalar | watched metric sample | history |
 | `train/early_stop/{condition}/best` | Best value retained by a configured metric early-stop condition. | scalar | watched metric sample | history |
 | `train/early_stop/{condition}/patience/elapsed_steps` | Policy steps elapsed in the condition's current patience interval. | steps | watched metric sample | history |
 | `train/early_stop/{condition}/patience/progress` | Condition patience progress capped at one; one means the condition would trigger. | fraction | watched metric sample | history |
 | `train/early_stop/{condition}/target/progress` | Current threshold-metric progress, clamped to zero through one, from the configured `progress_baseline` to the threshold in the operator's improving direction; emitted only for threshold conditions that declare a valid baseline. | fraction | watched metric sample | history |
-| `train/early_stop/{condition}/would_trigger` | Whether the configured condition would trigger at this sample, regardless of observe or stop action. | boolean | watched metric sample | history |
 | `train/reward/shaped/mean` | Distribution of learner-facing per-step reward after gradlab applies the task reward scale and then clipping. | scalar | rollout | history |
 | `train/reward/shaped/std` | Distribution of learner-facing per-step reward after gradlab applies the task reward scale and then clipping. | scalar | rollout | history |
 | `train/reward/shaped/min` | Distribution of learner-facing per-step reward after gradlab applies the task reward scale and then clipping. | scalar | rollout | history |
 | `train/reward/shaped/max` | Distribution of learner-facing per-step reward after gradlab applies the task reward scale and then clipping. | scalar | rollout | history |
-| `train/reward/shaped/nonzero_rate` | Distribution of learner-facing per-step reward after gradlab applies the task reward scale and then clipping. | scalar | rollout | history |
+| `train/reward/shaped/nonzero_rate` | Fraction of learner-facing per-step rewards that are nonzero after gradlab applies the task reward scale and then clipping. | fraction | rollout | history |
 | `train/reward/raw/mean` | Distribution of completed task reward immediately before gradlab-owned scaling and clipping, emitted when distinct from shaped reward. For an identity task this is the untransformed provider reward. | scalar | rollout | history |
 | `train/reward/raw/std` | Distribution of completed task reward immediately before gradlab-owned scaling and clipping, emitted when distinct from shaped reward. For an identity task this is the untransformed provider reward. | scalar | rollout | history |
 | `train/reward/component/{component}/mean` | Active reward-component attribution in pre-transform task-reward units. | scalar | rollout | history |
-| `train/reward/component/{component}/nonzero_rate` | Active reward-component attribution in pre-transform task-reward units. | scalar | rollout | history |
-| `train/reward/component/{component}/share` | Absolute contribution share computed from components in pre-transform task-reward units. | scalar | rollout | history |
+| `train/reward/component/{component}/nonzero_rate` | Fraction of active reward-component values that are nonzero. | fraction | rollout | history |
+| `train/reward/component/{component}/share` | Absolute contribution share computed from components in pre-transform task-reward units. | fraction | rollout | history |
 | `train/reward/signal/{signal}/mean` | Configured reward-source signal. | scalar | rollout | history |
 | `train/reward/signal/{signal}/max` | Configured reward-source signal. | scalar | rollout | history |
-| `train/reward/signal/{signal}/nonzero_rate` | Configured reward-source signal. | scalar | rollout | history |
+| `train/reward/signal/{signal}/nonzero_rate` | Fraction of configured reward-source signal values that are nonzero. | fraction | rollout | history |
 | `train/algorithm/ppo/update/approx_kl` | Approximate KL divergence for the PPO update. | scalar | rollout | history |
-| `train/algorithm/ppo/update/clip_fraction` | Fraction of policy ratios clipped by PPO. | scalar | rollout | history |
+| `train/algorithm/ppo/update/clip_fraction` | Fraction of policy ratios clipped by PPO. | fraction | rollout | history |
 | `train/algorithm/jerk/retained/count` | Distinct action sequences retained by JERK search. | sequences | rollout | history |
 | `train/algorithm/jerk/best/return_mean` | Mean observed return of JERK's highest-ranked retained sequence. | return | rollout | history |
 | `train/algorithm/jerk/best/sequence_length` | Action length of JERK's highest-ranked retained sequence. | steps | rollout | history |
@@ -275,10 +311,8 @@ unevaluated for future explicit user action. dstack process exit alone is never 
 | `train/algorithm/go_explore/archive/update_count` | Cumulative replacements of an existing cell by a better trajectory. | updates | interval | history |
 | `train/algorithm/go_explore/archive/recent_new_cell_rate` | New semantic cells divided by visits in the bounded recent visit window. | fraction | interval | history |
 | `train/algorithm/go_explore/archive/recent_visit_window` | Visit count represented by the recent new-cell-rate window. | visits | interval | history |
-| `train/algorithm/go_explore/archive/visits_per_cell` | Cumulative visits divided by current cell count. | ratio | interval | history |
 | `train/algorithm/go_explore/progress_guided/cell_count` | Cells on the current best-progress lineage used for guided restores before the first success. | cells | interval | history |
 | `train/algorithm/go_explore/progress_guided/selection_count` | Cumulative restores selected from the best-progress lineage before the first success. | selections | interval | history |
-| `train/algorithm/go_explore/progress_guided/selection_rate` | Cumulative progress-lineage restores divided by all archived-cell restores. | fraction | interval | history |
 | `train/algorithm/go_explore/success_guided/cell_count` | Cells on the current best-success lineage. | cells | interval | history |
 | `train/algorithm/go_explore/success_guided/selection_count` | Cumulative selections made by success-lineage guidance. | selections | interval | history |
 | `train/algorithm/go_explore/best/progress` | Greatest task progress reached by the best retained trajectory. | progress | interval | history |
@@ -293,7 +327,7 @@ unevaluated for future explicit user action. dstack process exit alone is never 
 | `train/algorithm/{algorithm}/update/learning_rate` | Current actor-critic learning rate. | scalar | rollout | history |
 | `train/algorithm/{algorithm}/policy/entropy` | Positive actor-critic policy entropy. | scalar | rollout | history |
 | `train/algorithm/{algorithm}/policy/distribution_std` | Continuous-action distribution standard deviation. | scalar | rollout | history |
-| `train/algorithm/{algorithm}/policy/dominant_action_rate` | Fraction assigned to the most frequent sampled discrete action. | scalar | rollout | history |
+| `train/algorithm/{algorithm}/policy/dominant_action_rate` | Fraction assigned to the most frequent sampled discrete action. | fraction | rollout | history |
 | `train/algorithm/{algorithm}/policy/action_hist` | Sampled discrete-action histogram. | histogram | every 64 rollouts | history |
 | `train/algorithm/{algorithm}/rollout/value_prediction/mean` | Rollout value-prediction distribution diagnostic. | scalar | rollout | history |
 | `train/algorithm/{algorithm}/rollout/value_prediction/std` | Rollout value-prediction distribution diagnostic. | scalar | rollout | history |
@@ -307,49 +341,38 @@ unevaluated for future explicit user action. dstack process exit alone is never 
 | `train/algorithm/{algorithm}/rollout/advantage/hist` | Rollout advantage histogram. | histogram | every 64 rollouts | history |
 | `train/algorithm/{algorithm}/hyperparameter/entropy_coefficient` | Current scheduled entropy coefficient. | scalar | rollout | history |
 | `train/throughput/loop_fps` | Policy transitions divided by rollout-start-to-next-rollout-start wall time. | steps/second | rollout | history |
-| `train/throughput/rollout_fps` | Policy transitions divided by rollout-collection wall time. | steps/second | rollout | history |
-| `train/throughput/env_step_fps` | Policy transitions divided by native-provider step wall time accumulated during the rollout. | steps/second | rollout | history |
 | `train/throughput/rollout_seconds` | Wall time spent collecting one rollout. | seconds | rollout | history |
 | `train/throughput/env_step_seconds` | Native-provider step wall time accumulated while collecting one rollout. | seconds | rollout | history |
 | `train/throughput/rollout_overhead_seconds` | Rollout wall time outside native-provider step calls, including policy inference and wrapper, buffer, reset, task, and callback work. | seconds | rollout | history |
 | `train/throughput/between_rollouts_seconds` | Wall time after rollout collection and before the next rollout, including optimizer updates, callbacks, and logging. | seconds | rollout | history |
 | `train/artifact/save/seconds` | Local model save duration. | seconds | artifact | history |
 | `train/artifact/upload/seconds` | Public R2 checkpoint publication duration. | seconds | artifact | history |
-| `eval/{protocol}/episode/return/mean` | Evaluation episode-return distribution accumulated from learner-facing rewards after gradlab-owned scaling and clipping. | return | evaluation | history |
-| `eval/{protocol}/episode/return/std` | Evaluation episode-return distribution accumulated from learner-facing rewards after gradlab-owned scaling and clipping. | return | evaluation | history |
-| `eval/{protocol}/episode/return/median` | Evaluation episode-return distribution accumulated from learner-facing rewards after gradlab-owned scaling and clipping. | return | evaluation | history |
-| `eval/full/episode/return/best` | Best full-evaluation episode return accumulated after gradlab-owned scaling and clipping. | return | evaluation | history |
+| `eval/{protocol}/episode/return/shaped/mean` | Evaluation episode-return distribution accumulated from learner-facing rewards after gradlab-owned scaling and clipping. | return | evaluation | history |
+| `eval/{protocol}/episode/return/shaped/std` | Evaluation episode-return distribution accumulated from learner-facing rewards after gradlab-owned scaling and clipping. | return | evaluation | history |
+| `eval/{protocol}/episode/return/shaped/median` | Evaluation episode-return distribution accumulated from learner-facing rewards after gradlab-owned scaling and clipping. | return | evaluation | history |
+| `eval/full/episode/return/shaped/max` | Maximum full-evaluation episode return accumulated after gradlab-owned scaling and clipping. | return | evaluation | history |
 | `eval/{protocol}/episode/length/mean` | Mean evaluation episode length. | steps | evaluation | history |
-| `eval/{protocol}/episode/count` | Evaluation episodes represented. | episodes | evaluation | history |
-| `eval/{protocol}/outcome/success/from/{start}/rate` | Evaluation success rate from a start. | fraction | evaluation | history |
-| `eval/{protocol}/outcome/success/rate/min` | Aggregate per-start evaluation success rate. | fraction | evaluation | history |
-| `eval/{protocol}/outcome/success/rate/mean` | Aggregate per-start evaluation success rate. | fraction | evaluation | history |
-| `eval/{protocol}/outcome/reason/{reason}/rate` | Evaluation failure-reason incidence. | fraction | evaluation | history |
+| `eval/{protocol}/episode/completed/count` | Completed evaluation episodes represented. | episodes | evaluation | history |
+| `eval/{protocol}/outcome/success/across_starts/rate/min` | Minimum evaluation success rate across represented starts. | fraction | evaluation | history |
+| `eval/{protocol}/outcome/success/across_starts/rate/mean` | Mean evaluation success rate across represented starts. | fraction | evaluation | history |
 | `eval/full/progress/{progress}/mean` | Goal-configured full-evaluation progress summary. | value | evaluation | history |
 | `eval/full/progress/{progress}/max` | Goal-configured full-evaluation progress summary. | value | evaluation | history |
-| `eval/{protocol}/checkpoint/artifact` | Evaluated checkpoint artifact reference. | metadata | evaluation | history |
-| `eval/{protocol}/duration/seconds` | Evaluation wall duration. | seconds | evaluation | history |
-| `eval/{protocol}/source` | Evaluation execution source. | text | evaluation | history |
 | `eval/acceptance/pass` | Per-checkpoint acceptance result; W&B summarizes its history with max, not as the verdict. | boolean | acceptance evaluation | history |
-| `eval/acceptance/episodes/planned` | Exact episode identities required by the acceptance manifest. | episodes | acceptance evaluation | history |
-| `eval/acceptance/episodes/completed` | Valid planned episode rows completed before acceptance or fail-fast rejection. | episodes | acceptance evaluation | history |
-| `eval/acceptance/failure/count` | Failed planned episodes; zero for acceptance and one for fail-fast rejection. | episodes | acceptance evaluation | history |
+| `eval/acceptance/episode/planned/count` | Exact episode identities required by the acceptance manifest. | episodes | acceptance evaluation | history |
+| `eval/acceptance/episode/completed/count` | Valid planned episode rows completed before acceptance or fail-fast rejection. | episodes | acceptance evaluation | history |
 | `eval/acceptance/duration/seconds` | Acceptance-worker evaluation wall duration. | seconds | acceptance evaluation | history |
 | `eval/full/by_start` | Structured full-evaluation evidence by start and reason. | table | evaluation | history |
-| `leader/checkpoint/acceptance_pass` | Diagnostic projection of the promoted-checkpoint verdict; `eval_scope_exact` is authoritative. | boolean | selection | summary |
-| `leader/checkpoint/success_rate_min` | Diagnostic selected-checkpoint projection. | summary | selection | summary |
-| `leader/checkpoint/success_rate_mean` | Diagnostic selected-checkpoint projection. | summary | selection | summary |
-| `leader/checkpoint/objective` | Diagnostic selected-checkpoint projection; never a ranking input. | summary | selection | summary |
-| `leader/checkpoint/return_mean` | Diagnostic selected-checkpoint projection. | summary | selection | summary |
-| `leader/checkpoint/best_return` | Diagnostic selected-checkpoint projection. | summary | selection | summary |
-| `leader/checkpoint/rank_values` | Diagnostic rendering of authoritative rank values. | summary | selection | summary |
-| `leader/checkpoint/progress_max` | Diagnostic selected-checkpoint projection. | summary | selection | summary |
-| `leader/checkpoint/step` | Diagnostic selected-checkpoint projection. | summary | selection | summary |
-| `leader/checkpoint/artifact_ref` | Diagnostic immutable artifact reference projection. | summary | selection | summary |
-| `leader/checkpoint/eval_source` | Diagnostic evaluation-source projection. | summary | selection | summary |
-| `leader/checkpoint/updated_at` | Diagnostic projection update time. | summary | selection | summary |
+| `leader/checkpoint/outcome/success/across_starts/rate/min` | Selected-checkpoint projection of minimum success rate across starts. | fraction | selection | summary |
+| `leader/checkpoint/outcome/success/across_starts/rate/mean` | Selected-checkpoint projection of mean success rate across starts. | fraction | selection | summary |
+| `leader/checkpoint/episode/return/shaped/mean` | Selected-checkpoint mean shaped episode return. | return | selection | summary |
+| `leader/checkpoint/episode/return/shaped/max` | Selected-checkpoint maximum shaped episode return. | return | selection | summary |
+| `leader/checkpoint/progress/{progress}/max` | Selected-checkpoint maximum for one named progress dimension. | value | selection | summary |
+| `leader/checkpoint/step` | Selected checkpoint policy step. | steps | selection | summary |
+| `leader/checkpoint/artifact/ref` | Selected checkpoint immutable artifact reference. | metadata | selection | summary |
+| `leader/checkpoint/evaluation/source` | Selected checkpoint evaluation source. | text | selection | summary |
+| `leader/checkpoint/updated_at` | Selected checkpoint projection update time. | timestamp | selection | summary |
 | `train/global_step` | Scientific training X-axis: policy environment transitions consumed. | steps | frame | history |
-| `eval/checkpoint_step` | Scientific evaluation X-axis: step of the evaluated checkpoint. | steps | evaluation | history |
+| `eval/checkpoint/step` | Scientific evaluation X-axis: step of the evaluated checkpoint. | steps | evaluation | history |
 | `orchestration/event_seq` | Monotonic local outbox event sequence used as W&B delivery order. | events | frame | history |
 | `orchestration/event_id` | Stable content-derived identifier used to deduplicate at-least-once delivery. | metadata | frame | history |
 | `orchestration/outbox/queue_depth` | Metric outbox frames not yet acknowledged by the W&B SDK. | events | supervisor sample | history |
@@ -367,9 +390,9 @@ unevaluated for future explicit user action. dstack process exit alone is never 
 | `orchestration/eval/result_to_stop_seconds` | Time from observing an accepted eval result to signaling the learner. | seconds | accepted evaluation | history |
 | `orchestration/drain/idle_gpu_tail_seconds` | Time the training container retained its GPU after the learner exited. | seconds | terminal drain | history |
 | `orchestration/scratch/used_fraction` | Fraction of the task scratch filesystem currently used. | fraction | supervisor sample | history |
-| `train/episode/return/shaped/from/target/mean` | Rolling mean shaped return over up to the latest 100 genuine target-origin training episodes, emitted beginning with the first such episode. | return | rollout | history |
+| `train/episode/return/shaped/from/target/rolling_up_to_100/mean` | Rolling mean shaped return over up to the latest 100 genuine target-origin training episodes, emitted beginning with the first such episode. | return | rollout | history |
 | `train/episode/return/shaped/from/target/window_100/mean` | Mature online behavior-policy mean shaped return over the latest 100 genuine target-origin training episodes, emitted only once the full window exists; this is a mean return in policy-facing reward units, not a success probability, so a threshold such as `0.95` requires mean return `>= 0.95`; comparable to evaluation return only in reward contract and units, not as a frozen-checkpoint estimate. | return | rollout | history |
-| `train/episode/return/shaped/from/target/max` | Rolling maximum shaped return over the same latest 100 genuine target-origin training episodes as `train/episode/return/shaped/from/target/mean`; archive-origin episodes are excluded. | return | rollout | history |
+| `train/episode/return/shaped/from/target/rolling_up_to_100/max` | Rolling maximum shaped return over the same genuine target-origin training episodes as the warm-up rolling mean; archive-origin episodes are excluded. | return | rollout | history |
 | `train/curriculum/archive/cell/count` | Current archive-curriculum cell count. | cells | rollout | history |
 | `train/curriculum/archive/entry/count` | Current immutable entry count retained by the curriculum view. | entries | rollout | history |
 | `train/curriculum/archive/admission/candidate/count` | Non-terminal cell-crossing candidates observed during the rollout. | transitions | rollout | history |

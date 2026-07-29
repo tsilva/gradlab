@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from gradlab.clock import Clock, SystemClock
+from gradlab.metric_names import METRICS_SCHEMA_VERSION
 from gradlab.metric_store import MetricStore
 from gradlab.run_contracts import TerminalReceipt
 from gradlab.runtime_contract import runtime_contract
@@ -100,6 +101,7 @@ class SupervisorRuntime:
             projector.run,
             limit=limit,
             event_seq_offset=event_seq_offset,
+            metrics_schema_version=projector.metrics_schema_version,
         )
 
     def publish_promotion(
@@ -110,6 +112,9 @@ class SupervisorRuntime:
         checkpoint_url: str,
         metrics: Mapping[str, Any],
         updated_at: str,
+        selection_rank: Sequence[str],
+        evaluation_source: str,
+        metrics_schema_version: int = METRICS_SCHEMA_VERSION,
     ) -> None:
         publish_promotion_summary(
             projector.run,
@@ -117,6 +122,9 @@ class SupervisorRuntime:
             checkpoint_url=checkpoint_url,
             metrics=metrics,
             updated_at=updated_at,
+            selection_rank=selection_rank,
+            evaluation_source=evaluation_source,
+            metrics_schema_version=metrics_schema_version,
         )
 
     def publish_terminal(
@@ -128,12 +136,15 @@ class SupervisorRuntime:
     ) -> None:
         projector = WandbProjector.resume(
             train_config,
-            update_finish_state=False,
+            update_finish_state=True,
         )
         try:
             publish_terminal_summary(projector.run, receipt)
         finally:
-            projector.close(timeout_seconds=timeout_seconds)
+            projector.close(
+                timeout_seconds=timeout_seconds,
+                exit_code=0 if receipt.state == "succeeded" else 1,
+            )
 
     def remote_summary(self, run_path: str) -> dict[str, Any]:
         import wandb

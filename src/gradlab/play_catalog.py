@@ -25,16 +25,15 @@ from gradlab.goal_variants import (
     unknown_goal_variant_id,
     validate_goal_variant_descriptor,
 )
+from gradlab.evaluation_projection import validate_evaluation_scientific_metric
 from gradlab.metric_names import (
-    EVAL_ACCEPTANCE_EPISODES_COMPLETED,
-    EVAL_ACCEPTANCE_EPISODES_PLANNED,
-    EVAL_ACCEPTANCE_FAILURE_COUNT,
     EVAL_ACCEPTANCE_PASS,
-    EVAL_CHECKPOINT_STEP,
-    TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_MEAN,
-    TRAIN_EPISODE_RETURN_SHAPED_MEAN,
+    METRICS_SCHEMA_VERSION,
+    TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_ROLLING_UP_TO_100_MEAN,
+    TRAIN_EPISODE_RETURN_SHAPED_ACROSS_ORIGINS_ROLLING_UP_TO_100_MEAN,
     TRAIN_GLOBAL_STEP,
-    TRAIN_OUTCOME_SUCCESS_WINDOW_100_RATE_MIN,
+    TRAIN_OUTCOME_SUCCESS_ACROSS_STARTS_WINDOW_100_RATE_MIN,
+    evaluation_metric_schema,
 )
 from gradlab.model_sources import DEFAULT_PUBLIC_MODELS_BASE_URL, _public_json
 from gradlab.policy_bundle import canonical_json_sha256, validate_recipe_document
@@ -68,7 +67,7 @@ from gradlab.wandb_utils import (
 WANDB_HOSTS = {"wandb.ai", "www.wandb.ai"}
 CATALOG_PAGE_SIZE = 50
 CATALOG_INDEX_SCHEMA_VERSION = 1
-CATALOG_CACHE_SCHEMA_VERSION = 2
+CATALOG_CACHE_SCHEMA_VERSION = 3
 CATALOG_INDEX_FILENAME = "_catalog.yaml"
 EVALUATION_CACHE_SECONDS = 10.0
 WANDB_CATALOG_PAGE_SIZE = 200
@@ -78,18 +77,18 @@ LIVE_TRAINING_METRICS = (
     (
         RankCriterion(
             direction="max",
-            metric=TRAIN_OUTCOME_SUCCESS_WINDOW_100_RATE_MIN,
+            metric=TRAIN_OUTCOME_SUCCESS_ACROSS_STARTS_WINDOW_100_RATE_MIN,
         ),
-        (TRAIN_OUTCOME_SUCCESS_WINDOW_100_RATE_MIN,),
+        (TRAIN_OUTCOME_SUCCESS_ACROSS_STARTS_WINDOW_100_RATE_MIN,),
     ),
     (
         RankCriterion(
             direction="max",
-            metric=TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_MEAN,
+            metric=TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_ROLLING_UP_TO_100_MEAN,
         ),
         (
-            TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_MEAN,
-            TRAIN_EPISODE_RETURN_SHAPED_MEAN,
+            TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_ROLLING_UP_TO_100_MEAN,
+            TRAIN_EPISODE_RETURN_SHAPED_ACROSS_ORIGINS_ROLLING_UP_TO_100_MEAN,
         ),
     ),
     (
@@ -377,6 +376,43 @@ def _first_summary_float(summary: Any, metrics: Iterable[str]) -> float | None:
     return None
 
 
+def _wandb_early_stop_projection(
+    *,
+    config: Mapping[str, Any],
+    summary: Mapping[str, Any],
+    stop_reason: str,
+) -> dict[str, Any] | None:
+    condition_id = str(summary.get(RUN_EARLY_STOP_CONDITION_SUMMARY) or "").strip()
+    if not condition_id and stop_reason.startswith("early_stop_") and ":" in stop_reason:
+        condition_id = stop_reason.split(":", 1)[1].strip()
+    trigger = str(summary.get(RUN_EARLY_STOP_TRIGGER_SUMMARY) or "").strip()
+    if not condition_id and not trigger:
+        return None
+
+    projection: dict[str, Any] = {}
+    if condition_id:
+        projection["condition_id"] = condition_id
+    if trigger:
+        projection["trigger"] = trigger
+
+    configured = config.get("early_stop")
+    conditions = configured.get("conditions") if isinstance(configured, Mapping) else None
+    condition = conditions.get(condition_id) if isinstance(conditions, Mapping) else None
+    if isinstance(condition, Mapping):
+        projected_condition = dict(condition)
+        projection["condition"] = projected_condition
+        metric = str(projected_condition.get("metric") or "").strip()
+        configured_trigger = str(projected_condition.get("trigger") or "").strip()
+        if metric:
+            projection["metric"] = metric
+            value = _safe_summary_float(summary.get(metric))
+            if value is not None:
+                projection["value"] = value
+        if configured_trigger and not trigger:
+            projection["trigger"] = configured_trigger
+    return projection
+
+
 def _run_metric_specs(
     rank: tuple[RankCriterion, ...],
 ) -> tuple[tuple[RankCriterion, tuple[str, ...]], ...]:
@@ -554,7 +590,7 @@ class PlayCatalog:
         self._repository_details: dict[tuple[str, str], _RepositoryGoal] = {}
         self._namespace_cache: (
             tuple[
-                tuple[int, int],
+                tuple[tuple[str, int, int], ...],
                 tuple[_RepositoryNamespace, ...],
             ]
             | None
@@ -791,8 +827,8 @@ class PlayCatalog:
         index_path = self.goals_root / CATALOG_INDEX_FILENAME
         if not index_path.is_file():
             raise ValueError(f"repository goal catalog does not exist: {index_path}")
-        stat_result = index_path.stat()
-        fingerprint = (stat_result.st_mtime_ns, stat_result.st_size)
+        goal_paths = tuple(self.goals_root.rglob("_goal.yaml"))
+        fingerprint = self._catalog_fingerprint((index_path, *goal_paths))
         with self._cache_lock:
             cached = self._namespace_cache
             if cached is not None and cached[0] == fingerprint:
@@ -805,8 +841,8 @@ class PlayCatalog:
                 f"{CATALOG_INDEX_SCHEMA_VERSION}: {index_path}"
             )
         raw_namespaces = document.get("namespaces")
-        if not isinstance(raw_namespaces, Mapping) or not raw_namespaces:
-            raise ValueError(f"repository goal catalog has no namespaces: {index_path}")
+        if not isinstance(raw_namespaces, Mapping):
+            raise ValueError(f"repository goal catalog namespaces must be a mapping: {index_path}")
 
         namespaces: list[_RepositoryNamespace] = []
         for raw_directory, raw_metadata in raw_namespaces.items():
@@ -834,11 +870,6 @@ class PlayCatalog:
             title_template = str(raw_metadata.get("title_template") or "").strip()
             if not project:
                 raise ValueError(f"repository goal catalog namespace {directory!r} has no project")
-            namespace_root = self.goals_root / directory
-            if not namespace_root.is_dir():
-                raise ValueError(
-                    f"repository goal catalog namespace does not exist: {namespace_root}"
-                )
             if title_template:
                 try:
                     title_template.format(goal_id="example")
@@ -847,6 +878,11 @@ class PlayCatalog:
                         f"repository goal catalog namespace {directory!r} has an invalid "
                         "title_template"
                     ) from exc
+            namespace_root = self.goals_root / directory
+            if not namespace_root.is_dir() or not any(
+                path.is_relative_to(namespace_root) for path in goal_paths
+            ):
+                continue
             namespaces.append(
                 _RepositoryNamespace(
                     directory=directory,
@@ -855,21 +891,6 @@ class PlayCatalog:
                 )
             )
 
-        declared = {namespace.directory for namespace in namespaces}
-        discovered = {
-            path.relative_to(self.goals_root).parts[0]
-            for path in self.goals_root.rglob("_goal.yaml")
-        }
-        missing = discovered - declared
-        stale = declared - discovered
-        if missing:
-            raise ValueError(
-                "repository goal catalog is missing namespaces: " + ", ".join(sorted(missing))
-            )
-        if stale:
-            raise ValueError(
-                "repository goal catalog declares empty namespaces: " + ", ".join(sorted(stale))
-            )
         result = tuple(sorted(namespaces, key=lambda item: item.directory))
         with self._cache_lock:
             self._namespace_cache = (fingerprint, result)
@@ -1739,8 +1760,11 @@ class PlayCatalog:
                 continue
             run_metrics = run.summary
             stop_reason = str(run_metrics.get(RUN_STOP_REASON_SUMMARY) or "")
-            early_stop_trigger = str(run_metrics.get(RUN_EARLY_STOP_TRIGGER_SUMMARY) or "")
-            early_stop_condition = str(run_metrics.get(RUN_EARLY_STOP_CONDITION_SUMMARY) or "")
+            early_stop = _wandb_early_stop_projection(
+                config=config,
+                summary=run_metrics,
+                stop_reason=stop_reason,
+            )
             overrides = normalize_recipe_overrides(config.get("recipe_overrides"))
             configured_variant_id = str(config.get("recipe_variant_id") or "").strip()
             variant_id = configured_variant_id or (
@@ -1761,14 +1785,7 @@ class PlayCatalog:
                     state=str(run_metrics.get(RUN_TERMINAL_STATE_SUMMARY) or run.state),
                     stop_reason=stop_reason,
                     final_step=_safe_int(run_metrics.get(RUN_FINAL_STEP_SUMMARY)),
-                    early_stop=(
-                        {
-                            "trigger": early_stop_trigger,
-                            "condition_id": early_stop_condition,
-                        }
-                        if stop_reason and (early_stop_trigger or early_stop_condition)
-                        else None
-                    ),
+                    early_stop=early_stop,
                     goal=goal_slug,
                     recipe=str(config.get("recipe_slug") or ""),
                     recipe_sha256=str(config.get("recipe_sha256") or ""),
@@ -2664,6 +2681,9 @@ class PlayCatalog:
         try:
             run = self._wandb_api().run(f"{entity}/{project}/{run_id}")
             config = dict(getattr(run, "config", {}) or {})
+            metric_schema = evaluation_metric_schema(
+                config.get("metrics_schema_version") or METRICS_SCHEMA_VERSION
+            )
             training_seed = _safe_int(config.get("seed"))
             contract = config.get("checkpoint_eval_contract")
             if not isinstance(contract, Mapping):
@@ -2674,19 +2694,22 @@ class PlayCatalog:
                 rules = normalize_metric_threshold_rules(
                     contract.get("acceptance"),
                     label="checkpoint_eval_contract.acceptance",
+                    metric_validator=lambda name: validate_evaluation_scientific_metric(
+                        name,
+                        schema_version=metric_schema.version,
+                    ),
                 )
                 result_keys = {
-                    EVAL_CHECKPOINT_STEP,
+                    metric_schema.checkpoint_step,
                     EVAL_ACCEPTANCE_PASS,
-                    EVAL_ACCEPTANCE_EPISODES_PLANNED,
-                    EVAL_ACCEPTANCE_EPISODES_COMPLETED,
-                    EVAL_ACCEPTANCE_FAILURE_COUNT,
+                    metric_schema.acceptance_episode_planned_count,
+                    metric_schema.acceptance_episode_completed_count,
                 }
                 evaluations = {}
                 for raw in run.scan_history(keys=sorted(result_keys), page_size=10_000):
                     if not isinstance(raw, Mapping):
                         continue
-                    step = _safe_int(raw.get(EVAL_CHECKPOINT_STEP))
+                    step = _safe_int(raw.get(metric_schema.checkpoint_step))
                     accepted = _safe_float(raw.get(EVAL_ACCEPTANCE_PASS))
                     if step is None or accepted is None:
                         continue
@@ -2712,11 +2735,12 @@ class PlayCatalog:
                     evaluations[step] = {
                         "status": "accepted" if accepted >= 0.5 else "rejected",
                         "pass": accepted >= 0.5,
-                        "episodes_planned": _safe_int(raw.get(EVAL_ACCEPTANCE_EPISODES_PLANNED)),
-                        "episodes_completed": _safe_int(
-                            raw.get(EVAL_ACCEPTANCE_EPISODES_COMPLETED)
+                        "episodes_planned": _safe_int(
+                            raw.get(metric_schema.acceptance_episode_planned_count)
                         ),
-                        "failure_count": _safe_int(raw.get(EVAL_ACCEPTANCE_FAILURE_COUNT)),
+                        "episodes_completed": _safe_int(
+                            raw.get(metric_schema.acceptance_episode_completed_count)
+                        ),
                         "criteria": criteria,
                     }
                 # Fail-fast rejections intentionally omit completed eval/full metrics.
@@ -2726,12 +2750,12 @@ class PlayCatalog:
                 for rule_index, rule in enumerate(rules):
                     metric = str(rule["metric"])
                     for raw in run.scan_history(
-                        keys=[EVAL_CHECKPOINT_STEP, metric],
+                        keys=[metric_schema.checkpoint_step, metric],
                         page_size=10_000,
                     ):
                         if not isinstance(raw, Mapping):
                             continue
-                        step = _safe_int(raw.get(EVAL_CHECKPOINT_STEP))
+                        step = _safe_int(raw.get(metric_schema.checkpoint_step))
                         value = _safe_float(raw.get(metric))
                         evaluation = evaluations.get(step) if step is not None else None
                         if evaluation is None or value is None:

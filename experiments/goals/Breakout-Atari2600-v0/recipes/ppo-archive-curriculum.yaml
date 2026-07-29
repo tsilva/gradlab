@@ -2,10 +2,7 @@ defaults:
 - ../../../recipes/_presets/breakout-high-throughput-ppo@_global_
 - _self_
 recipe_id: ppo-archive-curriculum
-description: >-
-  Seed {{ seed }} trains the default high-throughput Breakout PPO policy for {{ goal_id }} while reserving
-  approximately 20 percent of lanes for a bounded live-state curriculum keyed by 50-point score
-  stages and prioritized by value error plus staleness.
+description: High-throughput PPO for {{ goal_id }} with a score-staged live-state curriculum.
 train:
   state_archive:
     semantic_id: state-archive-v1

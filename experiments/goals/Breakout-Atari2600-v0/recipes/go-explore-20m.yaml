@@ -1,11 +1,7 @@
 defaults:
 - _self_
 recipe_id: go-explore-20m
-description: >-
-  Seed {{ seed }} runs Go-Explore trajectory discovery for {{ goal_id }} with
-  YAML-defined Breakout frontier cells, an ephemeral local state archive, and
-  a portable route graph without embedded snapshots, under a 20
-  million-transition search limit.
+description: 20M-transition Go-Explore search for {{ goal_id }}.
 train:
   timesteps: 20000000
   state_archive:

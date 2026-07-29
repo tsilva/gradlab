@@ -229,7 +229,7 @@ def test_bandit_recipe_materializes_fixed_train_and_eval_contracts() -> None:
     assert train_config["stop_on_acceptance"] is True
     assert train_config["checkpoint_eval_acceptance"] == [
         {
-            "metric": "eval/full/episode/return/mean",
+            "metric": "eval/full/episode/return/shaped/mean",
             "operator": ">=",
             "threshold": 0.9,
         }

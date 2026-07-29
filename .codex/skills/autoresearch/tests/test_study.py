@@ -31,14 +31,14 @@ class ReturnEvidenceTests(unittest.TestCase):
     def test_infers_return_mode_without_success_termination(self) -> None:
         train = {
             "task": {"termination": {"failure": ["serve_stall"]}},
-            "selection_rank": ["max(eval/full/episode/return/mean)"],
+            "selection_rank": ["max(eval/full/episode/return/shaped/mean)"],
         }
         self.assertEqual(study.infer_evidence_mode(train), "return")
 
     def test_success_termination_takes_precedence(self) -> None:
         train = {
             "task": {"termination": {"success": ["level_complete"]}},
-            "selection_rank": ["max(eval/full/episode/return/mean)"],
+            "selection_rank": ["max(eval/full/episode/return/shaped/mean)"],
         }
         self.assertEqual(study.infer_evidence_mode(train), "success")
 

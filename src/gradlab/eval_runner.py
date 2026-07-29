@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import time
 from collections.abc import Mapping
 from dataclasses import replace
 from pathlib import Path
@@ -21,7 +20,6 @@ from gradlab.eval_metrics import (
     run_eval_episode,
     summarize_episode_results,
 )
-from gradlab.metric_names import EVAL_FULL_DURATION_SECONDS
 from gradlab.modal_eval_protocol import SEED_PROTOCOL
 from gradlab.checkpoint_acceptance import (
     acceptance_aggregates,
@@ -261,7 +259,6 @@ def evaluate_model_episodes(
 ) -> tuple[dict[str, Any], Path | None]:
     if deterministic:
         raise ValueError("deterministic policy evaluation is unsupported; use stochastic sampling")
-    started_at = time.perf_counter()
     episode_results: list[dict[str, Any]] = []
     best_episode_result: dict[str, Any] | None = None
     best_episode_actions: list[int] = []
@@ -462,7 +459,6 @@ def evaluate_model_episodes(
         metrics["best_episode_video"] = str(video_path)
         written_video = video_path
 
-    metrics[EVAL_FULL_DURATION_SECONDS] = time.perf_counter() - started_at
     if acceptance_contract is not None:
         aggregates = acceptance_aggregates(episode_results, contract=acceptance_contract)
         accepted, _observed = evaluate_acceptance(

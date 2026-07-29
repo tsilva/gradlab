@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import itertools
 import re
+import tomllib
 import unittest
 from pathlib import Path
 
@@ -27,7 +28,7 @@ class Sb3LoggerTests(unittest.TestCase):
         from stable_baselines3.common.logger import HumanOutputFormat
 
         key_values = {
-            "train/outcome/success/from/Level1-2_bonus_room_checkpoint/count": 1,
+            "train/outcome/success/from/Level1-2_bonus_room_checkpoint/episode/count": 1,
             "train/outcome/success/from/Level1-2_bonus_room_checkpoint/rate/current": 0.0,
         }
         key_excluded = {key: () for key in key_values}
@@ -82,8 +83,8 @@ class Sb3LoggerTests(unittest.TestCase):
         output_format.write(
             {
                 "rollout/ep_rew_mean": 99.0,
-                "train/episode/return/shaped/from/target/mean": 357.25,
-                "train/outcome/success/current/rate/mean": 0.125,
+                "train/episode/return/shaped/from/target/rolling_up_to_100/mean": 357.25,
+                "train/outcome/success/across_observed_starts/cumulative/rate/mean": 0.125,
                 "train/algorithm/ppo/update/value_loss": 42.0,
                 "time/fps": 1_344,
             },
@@ -132,8 +133,8 @@ class Sb3LoggerTests(unittest.TestCase):
         )
         self.assertIs(logger.output_formats[1], complete_format)
 
-        logger.record("train/episode/return/shaped/from/target/mean", 10.0)
-        logger.record("train/outcome/success/current/rate/mean", 0.5)
+        logger.record("train/episode/return/shaped/from/target/rolling_up_to_100/mean", 10.0)
+        logger.record("train/outcome/success/across_observed_starts/cumulative/rate/mean", 0.5)
         logger.record("train/algorithm/ppo/update/value_loss", 42.0)
         logger.dump(step=8_192)
 
@@ -170,7 +171,15 @@ class MetricsDocumentationTests(unittest.TestCase):
         removed = (
             "global_step",
             "train/episode/count",
+            "train/episode/return/shaped/mean",
+            "train/throughput/rollout_fps",
+            "train/throughput/env_step_fps",
+            "train/early_stop/clear_100/would_trigger",
             "train/outcome/success/from/Start/rate/current",
+            "eval/checkpoint_step",
+            "eval/full/episode/return/mean",
+            "eval/full/episode/count",
+            "eval/full/outcome/success/from/Start/rate",
             "eval/full/outcome/reason/stalled/count",
             "eval/full/checkpoint/step",
             "train/throughput/loop_seconds",
@@ -178,16 +187,16 @@ class MetricsDocumentationTests(unittest.TestCase):
             "leader/checkpoint/local_path",
             "leader/checkpoint/rank",
             "leader/checkpoint/objective_name",
+            "leader/checkpoint/objective",
+            "leader/checkpoint/rank_values",
+            "leader/checkpoint/acceptance_pass",
             "eval/screen/candidate/pass",
+            "eval/acceptance/failure/count",
         )
         for name in removed:
             with self.subTest(name=name):
                 with self.assertRaisesRegex(ValueError, "unknown metric"):
                     metric_names.validate_metric_name(name)
-        self.assertEqual(
-            metric_names.validate_metric_name("eval/acceptance/failure/count"),
-            "eval/acceptance/failure/count",
-        )
 
     def test_logger_boundary_rejects_misspelled_gradlab_metrics(self) -> None:
         with self.assertRaisesRegex(ValueError, "logger boundary"):
@@ -225,16 +234,8 @@ class MetricsDocumentationTests(unittest.TestCase):
         self.assertFalse(any("/reason/" in name and "/from/" in name for name in names))
 
     def test_eval_outcome_cardinality_stays_bounded(self) -> None:
-        starts = [f"Start-{index}" for index in range(32)]
-        reasons = [f"reason-{index}" for index in range(5)]
-        names = set()
+        names = {metric_names.EVAL_FULL_BY_START}
         for protocol in metric_names.EVAL_PROTOCOLS:
-            names.update(
-                metric_names.eval_success_from_rate_metric(protocol, start) for start in starts
-            )
-            names.update(
-                metric_names.eval_reason_rate_metric(protocol, reason) for reason in reasons
-            )
             names.update(
                 {
                     metric_names.eval_success_rate_metric(protocol, "min"),
@@ -242,9 +243,8 @@ class MetricsDocumentationTests(unittest.TestCase):
                 }
             )
 
-        self.assertEqual(len(names), 39)
+        self.assertEqual(len(names), 3)
         self.assertLessEqual(len(names), 50)
-        self.assertFalse(any("/reason/" in name and "/from/" in name for name in names))
 
     def test_cardinality_margins_and_single_start_lifecycle(self) -> None:
         protocols = list(metric_names.EVAL_PROTOCOLS)
@@ -271,7 +271,8 @@ class MetricsDocumentationTests(unittest.TestCase):
                     name = name.replace(f"{{{placeholder}}}", replacement, 1)
                 scalar_names.add(name)
 
-        self.assertLessEqual(len(scalar_names), 175)
+        self.assertEqual(len(metric_names.METRIC_DEFINITIONS), 144)
+        self.assertEqual(len(scalar_names), 155)
         self.assertEqual(
             len(
                 {
@@ -282,6 +283,82 @@ class MetricsDocumentationTests(unittest.TestCase):
             ),
             3,
         )
+
+    def test_registry_grammar_units_templates_and_package_data_are_bounded(self) -> None:
+        allowed_units = {
+            "blobs",
+            "boolean",
+            "boundaries",
+            "bytes",
+            "calls",
+            "cells",
+            "checkpoints",
+            "entries",
+            "episodes",
+            "evaluations",
+            "events",
+            "events/second",
+            "fraction",
+            "histogram",
+            "improvements",
+            "metadata",
+            "progress",
+            "ratio",
+            "return",
+            "runs",
+            "scalar",
+            "seconds",
+            "selections",
+            "sequences",
+            "steps",
+            "steps/second",
+            "table",
+            "text",
+            "timestamp",
+            "trajectories",
+            "transitions",
+            "updates",
+            "value",
+            "visits",
+        }
+        for definition in metric_names.METRIC_DEFINITIONS:
+            with self.subTest(metric=definition.name):
+                self.assertRegex(
+                    definition.name,
+                    r"^(train|eval|leader|orchestration)/",
+                )
+                self.assertNotIn("//", definition.name)
+                self.assertIn(definition.unit, allowed_units)
+                placeholders = re.findall(r"\{([^}]+)\}", definition.name)
+                self.assertTrue(
+                    set(placeholders) <= set(metric_names._PLACEHOLDER_PATTERNS)
+                )
+                sample_values = {
+                    "algorithm": "ppo",
+                    "protocol": "full",
+                }
+                sample = definition.name
+                for placeholder in placeholders:
+                    sample = sample.replace(
+                        f"{{{placeholder}}}",
+                        sample_values.get(placeholder, "sample"),
+                        1,
+                    )
+                matches = [
+                    candidate.name
+                    for candidate, pattern in metric_names._DEFINITION_PATTERNS
+                    if pattern.fullmatch(sample)
+                ]
+                self.assertEqual(matches, [definition.name])
+
+        project_root = Path(__file__).resolve().parents[1]
+        pyproject = tomllib.loads(
+            (project_root / "pyproject.toml").read_text(encoding="utf-8")
+        )
+        force_include = pyproject["tool"]["hatch"]["build"]["targets"]["wheel"][
+            "force-include"
+        ]
+        self.assertEqual(force_include["METRICS.md"], "gradlab/METRICS.md")
         self.assertEqual(
             len(
                 {

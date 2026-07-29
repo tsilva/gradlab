@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import signal
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock, call, patch
 
 from gradlab.supervisor_runtime import SupervisorRuntime
@@ -51,3 +52,28 @@ def test_missing_process_group_is_already_gone() -> None:
         assert runtime.learner_group_alive(learner) is False
         runtime.terminate_learner_group(learner)
         runtime.kill_learner_group(learner)
+
+
+def test_failed_terminal_projection_closes_wandb_with_nonzero_exit() -> None:
+    projector = MagicMock()
+    receipt = SimpleNamespace(state="resumable_failure")
+
+    with (
+        patch(
+            "gradlab.supervisor_runtime.WandbProjector.resume",
+            return_value=projector,
+        ) as resume,
+        patch("gradlab.supervisor_runtime.publish_terminal_summary") as publish,
+    ):
+        SupervisorRuntime().publish_terminal(
+            {"wandb_run_id": "gradlab-" + "0" * 32},
+            receipt,
+            timeout_seconds=12,
+        )
+
+    resume.assert_called_once_with(
+        {"wandb_run_id": "gradlab-" + "0" * 32},
+        update_finish_state=True,
+    )
+    publish.assert_called_once_with(projector.run, receipt)
+    projector.close.assert_called_once_with(timeout_seconds=12, exit_code=1)

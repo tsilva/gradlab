@@ -25,7 +25,5 @@ namespaces:
     project: VizdoomPredictPosition-v1
   VizdoomTakeCover-v1:
     project: VizdoomTakeCover-v1
-  alepy__mspacman:
-    project: MsPacman-Atari2600-v0
   gradlab__bandit:
     project: Bandit-v0

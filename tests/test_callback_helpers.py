@@ -32,7 +32,7 @@ from gradlab.env import EnvConfig, resolve_env_config
 from gradlab.env_config import env_config_from_mapping
 from gradlab.metric_store import MetricStore
 from gradlab.metric_names import (
-    TRAIN_OUTCOME_SUCCESS_WINDOW_100_RATE_MIN,
+    TRAIN_OUTCOME_SUCCESS_ACROSS_STARTS_WINDOW_100_RATE_MIN,
     train_early_stop_metric,
 )
 from gradlab.policy_bundle import build_recipe_document, write_canonical_json
@@ -82,11 +82,11 @@ class RuntimeMetricsHelperTests(unittest.TestCase):
         )
         self.assertEqual(logger.records, {})
         callback._on_rollout_end()
-        self.assertEqual(logger.records["train/outcome/terminal/count"], 2)
-        self.assertEqual(logger.records["train/outcome/reason/life_loss/count"], 1)
-        self.assertEqual(logger.records["train/outcome/reason/stalled/count"], 1)
-        self.assertEqual(logger.records["train/outcome/reason/max_steps/count"], 1)
-        self.assertNotIn("train/outcome/reason/unclassified/count", logger.records)
+        self.assertEqual(logger.records["train/episode/completed/count"], 2)
+        self.assertEqual(logger.records["train/outcome/failure/reason/life_loss/episode/count"], 1)
+        self.assertEqual(logger.records["train/outcome/failure/reason/stalled/episode/count"], 1)
+        self.assertEqual(logger.records["train/outcome/failure/reason/max_steps/episode/count"], 1)
+        self.assertNotIn("train/outcome/failure/reason/unclassified/episode/count", logger.records)
         self.assertFalse(any("/success/" in key for key in logger.records))
 
     def test_done_reason_rate_is_pooled_without_start_cross_product(self) -> None:
@@ -108,11 +108,11 @@ class RuntimeMetricsHelperTests(unittest.TestCase):
         callback._on_rollout_end()
 
         self.assertEqual(
-            logger.records["train/outcome/reason/life_loss/rate/window_100"],
+            logger.records["train/outcome/failure/reason/life_loss/window_100/rate"],
             0.5,
         )
         self.assertEqual(
-            logger.records["train/outcome/reason/stalled/rate/window_100"],
+            logger.records["train/outcome/failure/reason/stalled/window_100/rate"],
             0.5,
         )
 
@@ -179,11 +179,11 @@ class GradLabCallbackTests(unittest.TestCase):
         callback._on_rollout_end()
 
         self.assertEqual(env.drain_calls, 1)
-        self.assertEqual(model.logger.records["train/outcome/terminal/count"], 1)
-        self.assertEqual(model.logger.records["train/outcome/reason/level_change/count"], 0)
-        self.assertNotIn("train/outcome/reason/life_loss/count", model.logger.records)
+        self.assertEqual(model.logger.records["train/episode/completed/count"], 1)
+        self.assertEqual(model.logger.records["train/outcome/failure/reason/level_change/episode/count"], 0)
+        self.assertNotIn("train/outcome/failure/reason/life_loss/episode/count", model.logger.records)
         self.assertEqual(
-            model.logger.records["train/outcome/success/from/Level1-1/count"],
+            model.logger.records["train/outcome/success/from/Level1-1/episode/count"],
             1,
         )
 
@@ -255,9 +255,9 @@ class RuntimeMetricsCompletionTests(unittest.TestCase):
             ]
         )
         callback._on_rollout_end()
-        self.assertEqual(logger.records["train/outcome/success/from/StartA/count"], 1)
-        self.assertEqual(logger.records["train/outcome/success/from/StartB/count"], 0)
-        self.assertEqual(logger.records["train/outcome/success/start_coverage/rate"], 1.0)
+        self.assertEqual(logger.records["train/outcome/success/from/StartA/episode/count"], 1)
+        self.assertEqual(logger.records["train/outcome/success/from/StartB/episode/count"], 0)
+        self.assertEqual(logger.records["train/outcome/success/across_starts/coverage/rate"], 1.0)
 
     def test_success_metrics_exclude_snapshot_origin_attempts(self) -> None:
         logger = SimpleNamespace(records={})
@@ -294,14 +294,14 @@ class RuntimeMetricsCompletionTests(unittest.TestCase):
         callback._on_rollout_end()
 
         self.assertEqual(
-            logger.records["train/outcome/success/from/Level1-3/attempts"],
+            logger.records["train/outcome/success/from/Level1-3/attempt/count"],
             1,
         )
         self.assertEqual(
-            logger.records["train/outcome/success/from/Level1-3/count"],
+            logger.records["train/outcome/success/from/Level1-3/episode/count"],
             0,
         )
-        self.assertNotIn("train/outcome/success/window_100/rate/min", logger.records)
+        self.assertNotIn("train/outcome/success/across_starts/window_100/rate/min", logger.records)
 
     def test_success_window_requires_every_configured_start_and_attempts_are_cumulative(
         self,
@@ -327,8 +327,8 @@ class RuntimeMetricsCompletionTests(unittest.TestCase):
             ]
         )
         callback._on_rollout_end()
-        self.assertEqual(logger.records["train/outcome/success/from/StartA/attempts"], 150)
-        self.assertNotIn("train/outcome/success/window_100/rate/min", logger.records)
+        self.assertEqual(logger.records["train/outcome/success/from/StartA/attempt/count"], 150)
+        self.assertNotIn("train/outcome/success/across_starts/window_100/rate/min", logger.records)
 
         callback._on_records(
             [
@@ -343,8 +343,8 @@ class RuntimeMetricsCompletionTests(unittest.TestCase):
             ]
         )
         callback._on_rollout_end()
-        self.assertEqual(logger.records["train/outcome/success/window_100/rate/min"], 0.0)
-        self.assertEqual(logger.records["train/outcome/success/window_100/rate/mean"], 0.5)
+        self.assertEqual(logger.records["train/outcome/success/across_starts/window_100/rate/min"], 0.0)
+        self.assertEqual(logger.records["train/outcome/success/across_starts/window_100/rate/mean"], 0.5)
 
 
 class MetricEarlyStopHelperTests(unittest.TestCase):
@@ -365,7 +365,7 @@ class MetricEarlyStopHelperTests(unittest.TestCase):
             config={
                 "conditions": {
                     "clear_100": {
-                        "metric": TRAIN_OUTCOME_SUCCESS_WINDOW_100_RATE_MIN,
+                        "metric": TRAIN_OUTCOME_SUCCESS_ACROSS_STARTS_WINDOW_100_RATE_MIN,
                         "trigger": "threshold",
                         "operator": ">",
                         "progress_baseline": 0.0,
@@ -391,12 +391,12 @@ class MetricEarlyStopHelperTests(unittest.TestCase):
             self.assertTrue(callback._on_step())
             self.assertFalse(decision_path.exists())
 
-            model.logger.records[TRAIN_OUTCOME_SUCCESS_WINDOW_100_RATE_MIN] = 0.99
+            model.logger.records[TRAIN_OUTCOME_SUCCESS_ACROSS_STARTS_WINDOW_100_RATE_MIN] = 0.99
             callback._on_rollout_end()
             self.assertTrue(callback._on_step())
             self.assertFalse(decision_path.exists())
 
-            model.logger.records[TRAIN_OUTCOME_SUCCESS_WINDOW_100_RATE_MIN] = 1.0
+            model.logger.records[TRAIN_OUTCOME_SUCCESS_ACROSS_STARTS_WINDOW_100_RATE_MIN] = 1.0
             callback.num_timesteps = 200
             callback._on_rollout_end()
             self.assertTrue(callback._on_step())
@@ -408,9 +408,9 @@ class MetricEarlyStopHelperTests(unittest.TestCase):
             self.assertEqual(decision["outcome"], "success")
             self.assertEqual(decision["metric_step"], 200)
             self.assertEqual(decision["value"], 1.0)
-            self.assertEqual(
-                model.logger.records[train_early_stop_metric("clear_100", "would_trigger")],
-                1.0,
+            self.assertNotIn(
+                "train/early_stop/clear_100/would_trigger",
+                model.logger.records,
             )
             self.assertEqual(
                 model.logger.records[train_early_stop_metric("clear_100", "target/progress")],
@@ -424,7 +424,7 @@ class MetricEarlyStopHelperTests(unittest.TestCase):
             store = MetricStore(store_path)
             store.init()
             store.append_metrics(
-                {TRAIN_OUTCOME_SUCCESS_WINDOW_100_RATE_MIN: 1.0},
+                {TRAIN_OUTCOME_SUCCESS_ACROSS_STARTS_WINDOW_100_RATE_MIN: 1.0},
                 step=120000,
                 source="train",
             )
@@ -433,7 +433,7 @@ class MetricEarlyStopHelperTests(unittest.TestCase):
                 config={
                     "conditions": {
                         "clear_100": {
-                            "metric": TRAIN_OUTCOME_SUCCESS_WINDOW_100_RATE_MIN,
+                            "metric": TRAIN_OUTCOME_SUCCESS_ACROSS_STARTS_WINDOW_100_RATE_MIN,
                             "trigger": "threshold",
                             "operator": ">=",
                             "threshold": 1.0,
@@ -465,7 +465,7 @@ class MetricEarlyStopHelperTests(unittest.TestCase):
             output_format = MetricStoreOutputFormat(store_path)
             output_format.write(
                 {
-                    TRAIN_OUTCOME_SUCCESS_WINDOW_100_RATE_MIN: 0.5,
+                    TRAIN_OUTCOME_SUCCESS_ACROSS_STARTS_WINDOW_100_RATE_MIN: 0.5,
                     "rollout/ep_rew_mean": np.float32(4.25),
                     "train/entropy_loss": -0.7,
                     "train/clip_range": 0.2,
@@ -480,8 +480,8 @@ class MetricEarlyStopHelperTests(unittest.TestCase):
             )
 
             store = MetricStore(store_path)
-            self.assertEqual(store.latest_metric(TRAIN_OUTCOME_SUCCESS_WINDOW_100_RATE_MIN), 0.5)
-            self.assertEqual(store.latest_metric("train/episode/return/shaped/mean"), 4.25)
+            self.assertEqual(store.latest_metric(TRAIN_OUTCOME_SUCCESS_ACROSS_STARTS_WINDOW_100_RATE_MIN), 0.5)
+            self.assertEqual(store.latest_metric("train/episode/return/shaped/across_origins/rolling_up_to_100/mean"), 4.25)
             self.assertEqual(store.latest_metric("train/algorithm/ppo/policy/entropy"), 0.7)
             self.assertIsNone(store.latest_metric("train/clip_range"))
             self.assertIsNone(store.latest_metric("time/iterations"))
@@ -554,8 +554,8 @@ class MetricEarlyStopHelperTests(unittest.TestCase):
                 env.close()
 
             store = MetricStore(store_path)
-            self.assertEqual(store.latest_metric("train/episode/return/shaped/mean"), 2.0)
-            self.assertEqual(store.latest_metric("train/episode/length/mean"), 1.0)
+            self.assertEqual(store.latest_metric("train/episode/return/shaped/across_origins/rolling_up_to_100/mean"), 2.0)
+            self.assertEqual(store.latest_metric("train/episode/length/across_origins/rolling_up_to_100/mean"), 1.0)
             self.assertIsNone(store.latest_metric("time/fps"))
             self.assertIsNone(store.latest_metric("train/loss"))
 
@@ -703,7 +703,6 @@ class ThroughputHelperTests(unittest.TestCase):
             dict(model.logger.records),
             {
                 "train/throughput/loop_fps": 20.0,
-                "train/throughput/rollout_fps": 50.0,
                 "train/throughput/rollout_seconds": 2.0,
                 "train/throughput/between_rollouts_seconds": 3.0,
             },
@@ -753,7 +752,7 @@ class ThroughputHelperTests(unittest.TestCase):
         self.assertEqual(frame["train/throughput/between_rollouts_seconds"], 2.0)
         self.assertEqual(frame["train/throughput/env_step_seconds"], 2.0)
         self.assertEqual(frame["train/throughput/rollout_overhead_seconds"], 3.0)
-        self.assertEqual(frame["train/throughput/env_step_fps"], 50.0)
+        self.assertNotIn("train/throughput/env_step_fps", frame)
         self.assertEqual(
             7.0,
             frame["train/throughput/rollout_seconds"]
@@ -1055,7 +1054,7 @@ class RuntimeMetricsRewardTests(unittest.TestCase):
             )
         callback._on_rollout_end()
 
-        self.assertEqual(logger.records["train/outcome/terminal/count"], 3)
+        self.assertEqual(logger.records["train/episode/completed/count"], 3)
 
     def test_reward_accumulator_reuses_preallocated_buffers(self) -> None:
         callback = RuntimeMetricsHelper()

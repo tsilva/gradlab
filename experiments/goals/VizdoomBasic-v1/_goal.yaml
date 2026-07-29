@@ -1,39 +1,78 @@
+# Compose this goal from reusable YAML configuration fragments.
 defaults:
+# Load the shared ViZDoom goal contract into the global configuration namespace.
 - ../_vizdoom-common@_global_
+# Apply this file last so the Basic-specific values below override the shared defaults.
 - _self_
+# Give the goal a human-readable name for reports and operator-facing views.
 title: ViZDoom Basic monster elimination
+# Override the shared settings used while training a policy for this goal.
 train:
+  # Set the checkpoint cadence in policy-environment transitions.
   checkpoint_freq: 100000
+  # Refine the family-wide rules that can stop training before its timestep cap.
   early_stop:
+    # Address inherited early-stop rules by their stable condition names.
     conditions:
+      # Specialize the inherited successful-stop rule for the Basic task.
       target_reached:
-        metric: train/outcome/success/window_100/rate/min
+        # Select the training metric compared with this condition's threshold.
+        metric: train/outcome/success/across_starts/window_100/rate/min
+        # Align the training target with this goal's perfect-success acceptance requirement.
         threshold: 1.0
+  # Override the shared ViZDoom environment contract used for training.
   environment:
+    # Supply arguments for the native vectorized ViZDoom environment.
     env_config:
+      # Reuse these Basic-specific provider arguments in evaluation via the YAML anchor.
       env_args: &basic_env_args
+        # Configure which per-step information the provider exposes to GradLab.
         info_filter:
+          # Control when the selected information keys are emitted.
           mode: all
+          # List the provider information keys retained for task signals.
           keys: [killcount]
+        # List the native game variables that ViZDoom must collect and expose.
         game_variables: [KILLCOUNT]
+    # Reuse these Basic-specific task overrides in evaluation via the YAML anchor.
     task: &basic_task
+      # Map task-level signal names to keys from the provider's per-step information.
       signals:
+        # Map the task-level `kills` signal to its provider information key.
         kills: killcount
+      # Define discrete task events derived from changes in the declared signals.
       events:
+        # Name the event that represents eliminating the scenario's monster.
         monster_killed:
+          # Select the task signal observed by this event.
           signal: kills
+          # Select the signal transition that fires this event.
           operation: increase
+      # Define which task events and limits end an episode.
       termination:
+        # List the events that mark an episode as successful.
         success: [monster_killed]
+        # Cap each attempt in policy-environment transitions.
         max_episode_steps: 72
+      # Configure the reward presented to the policy after the inherited native reward is computed.
       reward:
+        # Set the positive divisor applied to native rewards before clipping.
         reward_scale: 100.0
+# Override the shared settings used to evaluate checkpoints for this goal.
 eval:
+  # Declare every metric threshold a checkpoint must satisfy to be accepted.
   acceptance:
-  - metric: eval/full/outcome/success/rate/min
+  # Select the evaluation metric tested by this acceptance rule.
+  - metric: eval/full/outcome/success/across_starts/rate/min
+    # Choose how the observed metric is compared with the threshold.
     operator: '>='
+    # Make perfect success across every represented start state mandatory for acceptance.
     threshold: 1.0
+  # Override the shared ViZDoom environment contract used during evaluation.
   environment:
+    # Supply evaluation-time arguments for the native vectorized ViZDoom environment.
     env_config:
+      # Reuse the Basic provider arguments declared for training.
       env_args: *basic_env_args
+    # Merge the same Basic-specific task overrides into the shared evaluation task defaults.
     task: *basic_task

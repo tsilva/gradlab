@@ -9,7 +9,11 @@ from typing import Any
 import pytest
 
 from gradlab.play import build_parser as build_play_parser
-from gradlab.play_catalog import PlayCatalog, parse_wandb_location
+from gradlab.play_catalog import (
+    PlayCatalog,
+    _wandb_early_stop_projection,
+    parse_wandb_location,
+)
 from gradlab.policy_bundle import build_recipe_document, canonical_json_sha256
 from gradlab.r2_store import BucketConfig, RunStorageConfig
 from gradlab.goal_variants import (
@@ -33,6 +37,43 @@ from gradlab.run_contracts import (
 
 RUN_ID = "gradlab-" + "a" * 32
 SECOND_RUN_ID = "gradlab-" + "b" * 32
+
+
+def test_wandb_early_stop_projection_exposes_the_criterion_and_observed_value() -> None:
+    metric = "train/episode/return/shaped/from/target/window_100/mean"
+
+    projection = _wandb_early_stop_projection(
+        config={
+            "early_stop": {
+                "conditions": {
+                    "target_reached": {
+                        "metric": metric,
+                        "trigger": "threshold",
+                        "operator": ">=",
+                        "threshold": 5.0,
+                        "outcome": "success",
+                        "action": "stop",
+                        "start_after_steps": 0,
+                        "patience_steps": 0,
+                    }
+                }
+            }
+        },
+        summary={
+            "gradlab/run/early_stop_trigger": "threshold",
+            "gradlab/run/early_stop_condition": "target_reached",
+            metric: 5.25,
+        },
+        stop_reason="early_stop_success:target_reached",
+    )
+
+    assert projection is not None
+    assert projection["condition_id"] == "target_reached"
+    assert projection["trigger"] == "threshold"
+    assert projection["metric"] == metric
+    assert projection["value"] == 5.25
+    assert projection["condition"]["operator"] == ">="
+    assert projection["condition"]["threshold"] == 5.0
 
 
 class FakeSummarySubDict:
@@ -89,9 +130,9 @@ class FakeApi:
                 },
                 summary={
                     "leader/checkpoint/step": 1_500_000,
-                    "eval/full/episode/return/mean": 321.25,
-                    "train/outcome/success/window_100/rate/min": 0.75,
-                    "train/episode/return/shaped/from/target/mean": 123.5,
+                    "eval/full/episode/return/shaped/mean": 321.25,
+                    "train/outcome/success/across_starts/window_100/rate/min": 0.75,
+                    "train/episode/return/shaped/from/target/rolling_up_to_100/mean": 123.5,
                     "train/global_step": FakeSummarySubDict({"max": 2_000_000}),
                 },
                 notes="accepted",
@@ -134,7 +175,7 @@ def wandb_catalog_node(
                 "gradlab/run/stop_reason": "training_cap_complete",
                 "gradlab/run/final_step": leader_step,
                 "leader/checkpoint/step": leader_step,
-                "eval/full/episode/return/mean": 321.25,
+                "eval/full/episode/return/shaped/mean": 321.25,
             }
         ),
     }
@@ -223,7 +264,7 @@ def write_goal_catalog(repo_root: Path) -> None:
                 "objective:",
                 "  rank:",
                 "  - min(leader/checkpoint/step)",
-                "  - max(eval/full/episode/return/mean)",
+                "  - max(eval/full/episode/return/shaped/mean)",
                 "train:",
                 "  environment:",
                 "    env_provider: gymnasium",
@@ -501,7 +542,7 @@ def test_run_catalog_uses_lifecycle_owned_variant_index_without_wandb(
                         "url": f"https://wandb.ai/research/Mario/runs/{RUN_ID}",
                         "metrics": {
                             "leader/checkpoint/step": 1_500_000,
-                            "eval/full/episode/return/mean": 321.25,
+                            "eval/full/episode/return/shaped/mean": 321.25,
                         },
                     }
                 ],
@@ -566,6 +607,44 @@ def test_repository_catalog_requires_explicit_namespace_index(tmp_path: Path) ->
 
     with pytest.raises(ValueError, match="repository goal catalog does not exist"):
         PlayCatalog(repo_root=tmp_path).projects(entity="research")
+
+
+def test_repository_catalog_reconciles_namespace_drift(tmp_path: Path) -> None:
+    write_indexed_goal_catalog(tmp_path)
+    goals_root = tmp_path / "experiments" / "goals"
+    catalog = PlayCatalog(repo_root=tmp_path)
+
+    assert [item["name"] for item in catalog.projects(entity="research").items] == [
+        "Atari",
+        "Mario",
+    ]
+
+    for path in (goals_root / "Atari").rglob("*"):
+        if path.is_file():
+            path.unlink()
+    for path in sorted((goals_root / "Atari").rglob("*"), reverse=True):
+        if path.is_dir():
+            path.rmdir()
+    (goals_root / "Atari").rmdir()
+
+    assert [item["name"] for item in catalog.projects(entity="research").items] == ["Mario"]
+
+    orphan_goal = goals_root / "Undeclared" / "Hidden"
+    orphan_goal.mkdir(parents=True)
+    (orphan_goal / "_goal.yaml").write_text("goal_id: Hidden\n", encoding="utf-8")
+
+    assert [item["name"] for item in catalog.projects(entity="research").items] == ["Mario"]
+
+
+def test_repository_catalog_allows_empty_namespace_index(tmp_path: Path) -> None:
+    goals_root = tmp_path / "experiments" / "goals"
+    goals_root.mkdir(parents=True)
+    (goals_root / "_catalog.yaml").write_text(
+        "schema_version: 1\nnamespaces: {}\n",
+        encoding="utf-8",
+    )
+
+    assert PlayCatalog(repo_root=tmp_path).projects(entity="research").items == ()
 
 
 def test_indexed_project_listing_does_not_parse_goal_contracts_and_scopes_goal_reads(
@@ -813,17 +892,17 @@ def test_catalog_uses_repository_projects_and_goals_before_querying_wandb(
             "direction": "min",
         },
         {
-            "metric": "eval/full/episode/return/mean",
+            "metric": "eval/full/episode/return/shaped/mean",
             "direction": "max",
         },
     )
     assert runs.fallback_metric_columns == (
         {
-            "metric": "train/outcome/success/window_100/rate/min",
+            "metric": "train/outcome/success/across_starts/window_100/rate/min",
             "direction": "max",
         },
         {
-            "metric": "train/episode/return/shaped/from/target/mean",
+            "metric": "train/episode/return/shaped/from/target/rolling_up_to_100/mean",
             "direction": "max",
         },
         {
@@ -833,9 +912,9 @@ def test_catalog_uses_repository_projects_and_goals_before_querying_wandb(
     )
     assert runs.items[0]["metrics"] == {
         "leader/checkpoint/step": 1_500_000.0,
-        "eval/full/episode/return/mean": 321.25,
-        "train/outcome/success/window_100/rate/min": 0.75,
-        "train/episode/return/shaped/from/target/mean": 123.5,
+        "eval/full/episode/return/shaped/mean": 321.25,
+        "train/outcome/success/across_starts/window_100/rate/min": 0.75,
+        "train/episode/return/shaped/from/target/rolling_up_to_100/mean": 123.5,
         "train/global_step": 2_000_000.0,
     }
     override_runs = catalog.runs(
@@ -1028,30 +1107,30 @@ def test_catalog_attaches_latest_training_metrics_at_each_checkpoint(
             assert page_size == 10_000
             if keys == [
                 "train/global_step",
-                "train/outcome/success/window_100/rate/min",
+                "train/outcome/success/across_starts/window_100/rate/min",
             ]:
                 return [
                     {
                         "train/global_step": 200_000,
-                        "train/outcome/success/window_100/rate/min": 0.25,
+                        "train/outcome/success/across_starts/window_100/rate/min": 0.25,
                     },
                     {
                         "train/global_step": 490_000,
-                        "train/outcome/success/window_100/rate/min": 0.9,
+                        "train/outcome/success/across_starts/window_100/rate/min": 0.9,
                     },
                 ]
             if keys == [
                 "train/global_step",
-                "train/episode/return/shaped/mean",
+                "train/episode/return/shaped/across_origins/rolling_up_to_100/mean",
             ]:
                 return [
                     {
                         "train/global_step": 220_000,
-                        "train/episode/return/shaped/mean": 11.5,
+                        "train/episode/return/shaped/across_origins/rolling_up_to_100/mean": 11.5,
                     },
                     {
                         "train/global_step": 480_000,
-                        "train/episode/return/shaped/mean": 22.0,
+                        "train/episode/return/shaped/across_origins/rolling_up_to_100/mean": 22.0,
                     },
                 ]
             return []
@@ -1073,13 +1152,13 @@ def test_catalog_attaches_latest_training_metrics_at_each_checkpoint(
 
     assert periodic_row["metrics"] == {
         "train/global_step": 250_000.0,
-        "train/outcome/success/window_100/rate/min": 0.25,
-        "train/episode/return/shaped/from/target/mean": 11.5,
+        "train/outcome/success/across_starts/window_100/rate/min": 0.25,
+        "train/episode/return/shaped/from/target/rolling_up_to_100/mean": 11.5,
     }
     assert final_row["metrics"] == {
         "train/global_step": 500_000.0,
-        "train/outcome/success/window_100/rate/min": 0.9,
-        "train/episode/return/shaped/from/target/mean": 22.0,
+        "train/outcome/success/across_starts/window_100/rate/min": 0.9,
+        "train/episode/return/shaped/from/target/rolling_up_to_100/mean": 22.0,
     }
 
 
@@ -1097,7 +1176,7 @@ def test_catalog_attaches_goal_required_eval_results_by_checkpoint(
             "promotion": {"checkpoint_id": periodic["checkpoint_id"]},
         },
     )
-    required_metric = "eval/full/outcome/success/rate/min"
+    required_metric = "eval/full/outcome/success/across_starts/rate/min"
 
     class EvalRun:
         config = {
@@ -1119,24 +1198,22 @@ def test_catalog_attaches_goal_required_eval_results_by_checkpoint(
             if required_metric in keys:
                 return [
                     {
-                        "eval/checkpoint_step": 250_000,
+                        "eval/checkpoint/step": 250_000,
                         required_metric: 1.0,
                     }
                 ]
             return [
                 {
-                    "eval/checkpoint_step": 250_000,
+                    "eval/checkpoint/step": 250_000,
                     "eval/acceptance/pass": 1.0,
-                    "eval/acceptance/episodes/planned": 100.0,
-                    "eval/acceptance/episodes/completed": 100.0,
-                    "eval/acceptance/failure/count": 0.0,
+                    "eval/acceptance/episode/planned/count": 100.0,
+                    "eval/acceptance/episode/completed/count": 100.0,
                 },
                 {
-                    "eval/checkpoint_step": 500_000,
+                    "eval/checkpoint/step": 500_000,
                     "eval/acceptance/pass": 0.0,
-                    "eval/acceptance/episodes/planned": 100.0,
-                    "eval/acceptance/episodes/completed": 1.0,
-                    "eval/acceptance/failure/count": 1.0,
+                    "eval/acceptance/episode/planned/count": 100.0,
+                    "eval/acceptance/episode/completed/count": 1.0,
                 },
             ]
 
@@ -1174,7 +1251,7 @@ def test_catalog_attaches_goal_required_eval_results_by_checkpoint(
     rejected = rejected_row["evaluation"]
     assert rejected["status"] == "rejected"
     assert rejected["episodes_completed"] == 1
-    assert rejected["failure_count"] == 1
+    assert "failure_count" not in rejected
     assert rejected["criteria"][0]["value"] is None
     assert rejected_row["playback_seed"] == 42_000
     assert rejected_row["playback_seed_source"] == "evaluation"
@@ -1201,7 +1278,7 @@ def test_catalog_uses_training_seed_when_checkpoint_has_no_eval_result(
                 "seed": 42_000,
                 "acceptance": [
                     {
-                        "metric": "eval/full/outcome/success/rate/min",
+                        "metric": "eval/full/outcome/success/across_starts/rate/min",
                         "operator": ">=",
                         "threshold": 1.0,
                     }
@@ -1230,3 +1307,55 @@ def test_catalog_uses_training_seed_when_checkpoint_has_no_eval_result(
     assert row["evaluation"] is None
     assert row["playback_seed"] == 7
     assert row["playback_seed_source"] == "training"
+
+
+def test_catalog_reads_v13_evaluation_history_through_recipe_owned_schema() -> None:
+    metric = "eval/full/outcome/success/rate/min"
+
+    class LegacyRun:
+        config = {
+            "metrics_schema_version": 13,
+            "seed": 7,
+            "checkpoint_eval_contract": {
+                "seed": 42_000,
+                "acceptance": [
+                    {
+                        "metric": metric,
+                        "operator": ">=",
+                        "threshold": 1.0,
+                    }
+                ],
+            },
+        }
+
+        @staticmethod
+        def scan_history(*, keys, page_size):
+            assert page_size == 10_000
+            if metric in keys:
+                return [{"eval/checkpoint_step": 250_000, metric: 1.0}]
+            assert "eval/checkpoint_step" in keys
+            return [
+                {
+                    "eval/checkpoint_step": 250_000,
+                    "eval/acceptance/pass": 1.0,
+                    "eval/acceptance/episodes/planned": 100.0,
+                    "eval/acceptance/episodes/completed": 100.0,
+                }
+            ]
+
+    class LegacyApi:
+        @staticmethod
+        def run(_path):
+            return LegacyRun()
+
+    catalog = PlayCatalog(public_models_base_url="https://models.example")
+    catalog._api = LegacyApi()
+    data = catalog._checkpoint_evaluations(
+        entity="research",
+        project="Mario",
+        run_id=RUN_ID,
+    )
+
+    assert data.evaluations[250_000]["status"] == "accepted"
+    assert data.evaluations[250_000]["episodes_completed"] == 100
+    assert data.evaluations[250_000]["criteria"][0]["value"] == 1.0

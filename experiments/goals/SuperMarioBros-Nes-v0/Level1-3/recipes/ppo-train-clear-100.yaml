@@ -3,17 +3,13 @@ defaults:
 - _self_
 reward_shape: speedrun-v1
 recipe_id: ppo-train-clear-100
-description: >-
-  Seed {{ seed }} trains the stable low-KL late-decay {{ goal_id }} PPO policy as a training-only
-  run, with checkpoint evaluation disabled, and stops when all of the latest 100 level attempts
-  complete successfully. The run publishes checkpoints and training evidence but cannot establish
-  checkpoint promotion or goal acceptance.
+description: Training-only PPO for {{ goal_id }}, targeting 100 consecutive clears.
 train:
   checkpoint_eval_backend: none
   early_stop:
     conditions:
       clear_100:
-        metric: train/outcome/success/window_100/rate/min
+        metric: train/outcome/success/across_starts/window_100/rate/min
         trigger: threshold
         operator: '>='
         progress_baseline: 0.0

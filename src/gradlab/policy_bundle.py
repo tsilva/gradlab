@@ -445,6 +445,104 @@ _LEGACY_RECIPE_TRAIN_CONFIG_FIELDS = frozenset(
     }
 )
 
+_LEGACY_METRIC_NAME_MAP = {
+    "train/episode/return/shaped/mean": (
+        "train/episode/return/shaped/across_origins/rolling_up_to_100/mean"
+    ),
+    "train/episode/return/shaped/max": (
+        "train/episode/return/shaped/across_origins/rolling_up_to_100/max"
+    ),
+    "train/episode/return/shaped/from/target/mean": (
+        "train/episode/return/shaped/from/target/rolling_up_to_100/mean"
+    ),
+    "train/episode/return/shaped/from/target/max": (
+        "train/episode/return/shaped/from/target/rolling_up_to_100/max"
+    ),
+    "train/episode/length/mean": (
+        "train/episode/length/across_origins/rolling_up_to_100/mean"
+    ),
+    "train/outcome/terminal/count": "train/episode/completed/count",
+    "train/outcome/success/current/rate/min": (
+        "train/outcome/success/across_observed_starts/cumulative/rate/min"
+    ),
+    "train/outcome/success/current/rate/mean": (
+        "train/outcome/success/across_observed_starts/cumulative/rate/mean"
+    ),
+    "train/outcome/success/window_100/rate/min": (
+        "train/outcome/success/across_starts/window_100/rate/min"
+    ),
+    "train/outcome/success/window_100/rate/mean": (
+        "train/outcome/success/across_starts/window_100/rate/mean"
+    ),
+    "train/outcome/success/start_coverage/rate": (
+        "train/outcome/success/across_starts/coverage/rate"
+    ),
+    "eval/checkpoint_step": "eval/checkpoint/step",
+    "eval/full/episode/return/mean": "eval/full/episode/return/shaped/mean",
+    "eval/full/episode/return/best": "eval/full/episode/return/shaped/max",
+    "eval/full/episode/count": "eval/full/episode/completed/count",
+    "eval/full/outcome/success/rate/min": (
+        "eval/full/outcome/success/across_starts/rate/min"
+    ),
+    "eval/full/outcome/success/rate/mean": (
+        "eval/full/outcome/success/across_starts/rate/mean"
+    ),
+    "eval/acceptance/episodes/planned": "eval/acceptance/episode/planned/count",
+    "eval/acceptance/episodes/completed": "eval/acceptance/episode/completed/count",
+}
+
+
+def _migrate_legacy_metric_names(value: Any) -> Any:
+    if isinstance(value, str):
+        mapped = _LEGACY_METRIC_NAME_MAP.get(value)
+        if mapped is not None:
+            return mapped
+        rank_match = re.fullmatch(r"(max|min)\(([^()]+)\)", value)
+        if rank_match is not None:
+            metric = _LEGACY_METRIC_NAME_MAP.get(rank_match.group(2))
+            if metric is not None:
+                return f"{rank_match.group(1)}({metric})"
+        return value
+    if isinstance(value, Mapping):
+        return {
+            key: _migrate_legacy_metric_names(nested)
+            for key, nested in value.items()
+        }
+    if isinstance(value, list):
+        return [_migrate_legacy_metric_names(item) for item in value]
+    return deepcopy(value)
+
+
+def _legacy_metric_compatibility_document(
+    document: Mapping[str, Any],
+) -> dict[str, Any]:
+    recipe = document.get("recipe")
+    train_config = recipe.get("train_config") if isinstance(recipe, Mapping) else None
+    raw_version = (
+        train_config.get("metrics_schema_version")
+        if isinstance(train_config, Mapping)
+        else None
+    )
+    if raw_version not in (None, 13):
+        return deepcopy(dict(document))
+    normalized = _migrate_legacy_metric_names(document)
+    assert isinstance(normalized, dict)
+    from gradlab.metric_names import METRICS_SCHEMA_VERSION
+
+    candidates = [normalized.get("recipe")]
+    resolution = normalized.get("resolution")
+    if isinstance(resolution, Mapping):
+        recipe_resolution = resolution.get("recipe")
+        if isinstance(recipe_resolution, Mapping):
+            candidates.append(recipe_resolution.get("base"))
+    for candidate in candidates:
+        if not isinstance(candidate, dict):
+            continue
+        candidate_train_config = candidate.get("train_config")
+        if isinstance(candidate_train_config, dict):
+            candidate_train_config["metrics_schema_version"] = METRICS_SCHEMA_VERSION
+    return normalized
+
 
 def _legacy_recipe_document(
     document: Mapping[str, Any],
@@ -839,13 +937,34 @@ def _validate_recipe_v2(
         label=source,
         error_type=PolicyDocumentError,
     )
+    validation_document = _legacy_metric_compatibility_document(document)
     effective_document = {
         "document_type": RECIPE_DOCUMENT_TYPE,
         "format_version": LEGACY_RECIPE_FORMAT_VERSION,
-        "recipe": deepcopy(document["recipe"]),
-        "provenance": deepcopy(document["provenance"]),
+        "recipe": deepcopy(validation_document["recipe"]),
+        "provenance": deepcopy(validation_document["provenance"]),
     }
     _validate_recipe_v1(effective_document, f"{source}.effective")
+    validation_resolution = _required_mapping(
+        validation_document["resolution"],
+        label=f"{source}.resolution",
+    )
+    validation_recipe_resolution = _required_mapping(
+        validation_resolution["recipe"],
+        label=f"{source}.resolution.recipe",
+    )
+    validation_base_recipe = _required_mapping(
+        validation_recipe_resolution["base"],
+        label=f"{source}.resolution.recipe.base",
+    )
+    base_document = {
+        "document_type": RECIPE_DOCUMENT_TYPE,
+        "format_version": LEGACY_RECIPE_FORMAT_VERSION,
+        "recipe": deepcopy(validation_base_recipe),
+        "provenance": deepcopy(validation_document["provenance"]),
+    }
+    _validate_recipe_v1(base_document, f"{source}.base")
+
     resolution = _required_mapping(document["resolution"], label=f"{source}.resolution")
     goal_resolution = _required_mapping(
         resolution["goal"],
@@ -859,13 +978,6 @@ def _validate_recipe_v2(
         recipe_resolution["base"],
         label=f"{source}.resolution.recipe.base",
     )
-    base_document = {
-        "document_type": RECIPE_DOCUMENT_TYPE,
-        "format_version": LEGACY_RECIPE_FORMAT_VERSION,
-        "recipe": deepcopy(base_recipe),
-        "provenance": deepcopy(document["provenance"]),
-    }
-    _validate_recipe_v1(base_document, f"{source}.base")
 
     effective_recipe = _required_mapping(document["recipe"], label=f"{source}.recipe")
     base_goal = _required_mapping(
@@ -1194,7 +1306,9 @@ def _build_recipe_document_v1(
     # backend defaults here, before the supervisor adds operational fields, so its backend
     # hash is identical to the normalized config executed by the learner.
     from gradlab.train_config import env_config_allowed_keys, validate_and_normalize_train_config
+    from gradlab.metric_names import METRICS_SCHEMA_VERSION
 
+    train_config.setdefault("metrics_schema_version", METRICS_SCHEMA_VERSION)
     train_config = validate_and_normalize_train_config(
         train_config,
         label="recipe.json train_config",

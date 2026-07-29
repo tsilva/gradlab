@@ -20,6 +20,7 @@ from gradlab.policy_bundle import (
     build_model_document,
     build_recipe_document,
     canonical_json_bytes,
+    canonical_json_sha256,
     critic_value_contract,
     evaluation_contract,
     playback_contract_sha256,
@@ -85,6 +86,13 @@ def test_recipe_v2_embeds_verified_goal_and_recipe_bases() -> None:
     )
 
     assert document["format_version"] == 2
+    assert document["recipe"]["train_config"]["metrics_schema_version"] == 14
+    assert (
+        document["resolution"]["recipe"]["base"]["train_config"][
+            "metrics_schema_version"
+        ]
+        == 14
+    )
     assert document["resolution"]["goal"]["base"] == resolved.canonical_goal
     assert document["resolution"]["recipe"]["variant_id"].startswith("v-")
     assert (
@@ -101,6 +109,38 @@ def test_recipe_v2_embeds_verified_goal_and_recipe_bases() -> None:
     ] = 0.5
     with pytest.raises(PolicyDocumentError, match="base_sha256"):
         validate_recipe_document(tampered)
+
+
+def test_recipe_v2_validates_release_pinned_v13_metric_names() -> None:
+    resolved = compose_resolved_train_documents(
+        VIZDOOM_GOAL,
+        VIZDOOM_RECIPE,
+        source_sha="a" * 40,
+    )
+    document = build_recipe_document(
+        resolved.effective,
+        repo_root=Path.cwd(),
+        source_commit="a" * 40,
+        run_description="ViZDoom schema-v13 compatibility fixture",
+        seed=7,
+        runtime_packages=("gradlab==0.1.0",),
+        base_materialized_recipe=resolved.base,
+        canonical_goal=resolved.canonical_goal,
+    )
+    legacy = deepcopy(document)
+    recipes = (
+        legacy["recipe"],
+        legacy["resolution"]["recipe"]["base"],
+    )
+    for recipe in recipes:
+        recipe["train_config"].pop("metrics_schema_version", None)
+        recipe["train_config"]["early_stop"]["conditions"]["return_plateau"]["metric"] = (
+            "train/episode/return/shaped/from/target/mean"
+        )
+    legacy["resolution"]["recipe"]["base_sha256"] = canonical_json_sha256(recipes[1])
+    legacy["resolution"]["recipe"]["effective_sha256"] = canonical_json_sha256(recipes[0])
+
+    assert validate_recipe_document(legacy) == legacy
 
 
 def test_wandb_display_name_is_not_part_of_portable_recipe() -> None:
@@ -192,7 +232,7 @@ def test_level1_3_training_clear_bundle_omits_eval_and_preserves_early_stop() ->
         "return_plateau",
     }
     assert recipe["train_config"]["early_stop"]["conditions"]["clear_100"] == {
-        "metric": "train/outcome/success/window_100/rate/min",
+        "metric": "train/outcome/success/across_starts/window_100/rate/min",
         "trigger": "threshold",
         "outcome": "success",
         "action": "stop",

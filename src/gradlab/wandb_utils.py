@@ -8,10 +8,11 @@ from gradlab.dotenv import load_env_file
 from gradlab.env_registry import game_family_for_environment, wandb_project_for_environment
 from gradlab.metric_names import (
     EVAL_ACCEPTANCE_PASS,
-    EVAL_CHECKPOINT_STEP,
+    METRICS_SCHEMA_VERSION,
     ORCHESTRATION_EVENT_SEQ,
-    TRAIN_EPISODE_RETURN_SHAPED_MEAN,
+    TRAIN_EPISODE_RETURN_SHAPED_ACROSS_ORIGINS_ROLLING_UP_TO_100_MEAN,
     TRAIN_GLOBAL_STEP,
+    evaluation_metric_schema,
 )
 from gradlab.operator_credentials import (
     load_operator_environment,
@@ -23,11 +24,6 @@ DEFAULT_WANDB_PROJECT = "SuperMarioBros-Nes-v0"
 DEFAULT_WANDB_PROJECT_PATH = f"{DEFAULT_WANDB_ENTITY}/{DEFAULT_WANDB_PROJECT}"
 
 WANDB_ENV_PREFIXES = ("WANDB_",)
-_WANDB_AXIS_BY_PREFIX = (
-    ("train/", TRAIN_GLOBAL_STEP),
-    ("eval/", EVAL_CHECKPOINT_STEP),
-    ("orchestration/", ORCHESTRATION_EVENT_SEQ),
-)
 _WANDB_AXIS_METRICS: WeakKeyDictionary[object, set[str]] = WeakKeyDictionary()
 
 
@@ -108,41 +104,45 @@ def resolve_wandb_namespace(
     return entity, project
 
 
-def configure_wandb_metrics(run):
+def configure_wandb_metrics(
+    run,
+    *,
+    metrics_schema_version: int = METRICS_SCHEMA_VERSION,
+):
+    eval_schema = evaluation_metric_schema(metrics_schema_version)
     if run is not None:
         run.define_metric(TRAIN_GLOBAL_STEP, summary="max")
-        run.define_metric(EVAL_CHECKPOINT_STEP, summary="max")
+        run.define_metric(eval_schema.checkpoint_step, summary="max")
         run.define_metric(ORCHESTRATION_EVENT_SEQ, summary="max")
         run.define_metric(
-            "train/*",
-            step_metric=TRAIN_GLOBAL_STEP,
-        )
-        run.define_metric(
-            "eval/*",
-            step_metric=EVAL_CHECKPOINT_STEP,
-        )
-        run.define_metric(
-            "orchestration/*",
-            step_metric=ORCHESTRATION_EVENT_SEQ,
-        )
-        run.define_metric(
             EVAL_ACCEPTANCE_PASS,
-            step_metric=EVAL_CHECKPOINT_STEP,
+            step_metric=eval_schema.checkpoint_step,
             summary="max",
         )
         run.define_metric(
-            TRAIN_EPISODE_RETURN_SHAPED_MEAN,
+            TRAIN_EPISODE_RETURN_SHAPED_ACROSS_ORIGINS_ROLLING_UP_TO_100_MEAN,
             step_metric=TRAIN_GLOBAL_STEP,
             summary="last",
         )
     return run
 
 
-def configure_wandb_metric_axes(run, metric_names):
+def configure_wandb_metric_axes(
+    run,
+    metric_names,
+    *,
+    metrics_schema_version: int = METRICS_SCHEMA_VERSION,
+):
     """Bind concrete history metrics to their scientific W&B X-axis."""
 
     if run is None:
         return run
+    eval_schema = evaluation_metric_schema(metrics_schema_version)
+    axes_by_prefix = (
+        ("train/", TRAIN_GLOBAL_STEP),
+        ("eval/", eval_schema.checkpoint_step),
+        ("orchestration/", ORCHESTRATION_EVENT_SEQ),
+    )
     configured = _WANDB_AXIS_METRICS.setdefault(run, set())
     for name in sorted({str(metric_name) for metric_name in metric_names}):
         if name in configured:
@@ -150,7 +150,7 @@ def configure_wandb_metric_axes(run, metric_names):
         axis = next(
             (
                 candidate_axis
-                for prefix, candidate_axis in _WANDB_AXIS_BY_PREFIX
+                for prefix, candidate_axis in axes_by_prefix
                 if name.startswith(prefix)
             ),
             None,

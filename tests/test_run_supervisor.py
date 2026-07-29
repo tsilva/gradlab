@@ -10,7 +10,7 @@ from gradlab.early_stop import MetricEarlyStopStateMachine, MetricSample
 from gradlab.eval_backend import EvalHandle, EvalPoll
 from gradlab.file_utils import atomic_write_json
 from gradlab.goal_variants import build_goal_variant_descriptor
-from gradlab.metric_names import TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_MEAN
+from gradlab.metric_names import TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_ROLLING_UP_TO_100_MEAN
 from gradlab.manual_evaluation import ManualEvaluationSupervisor
 from gradlab.policy_bundle import (
     build_recipe_document,
@@ -403,7 +403,7 @@ class RunSupervisorTests(unittest.TestCase):
             "evidence_policy": {"fail_fast": "disabled"},
             "acceptance": [
                 {
-                    "metric": "eval/full/episode/return/mean",
+                    "metric": "eval/full/episode/return/shaped/mean",
                     "operator": ">=",
                     "threshold": 5.0,
                 }
@@ -418,7 +418,7 @@ class RunSupervisorTests(unittest.TestCase):
                 **valid,
                 "acceptance": [
                     {
-                        "metric": "eval/full/outcome/success/rate/min",
+                        "metric": "eval/full/outcome/success/across_starts/rate/min",
                         "operator": ">=",
                         "threshold": 1.0,
                     }
@@ -450,7 +450,7 @@ class RunSupervisorTests(unittest.TestCase):
             "evidence_policy": {"fail_fast": "disabled"},
             "acceptance": [
                 {
-                    "metric": "eval/full/outcome/success/rate/min",
+                    "metric": "eval/full/outcome/success/across_starts/rate/min",
                     "operator": ">=",
                     "threshold": 1.0,
                 }
@@ -462,7 +462,7 @@ class RunSupervisorTests(unittest.TestCase):
             **valid,
             "acceptance": [
                 {
-                    "metric": "eval/full/episode/return/mean",
+                    "metric": "eval/full/episode/return/shaped/mean",
                     "operator": ">=",
                     "threshold": 0.95,
                 }
@@ -851,14 +851,14 @@ class RunSupervisorTests(unittest.TestCase):
             matched_condition_ids=("return_plateau",),
             outcome=outcome,  # type: ignore[arg-type]
             trigger="no_improvement",
-            metric="train/episode/return/shaped/from/target/mean",
+            metric="train/episode/return/shaped/from/target/rolling_up_to_100/mean",
             metric_step=2_000_000,
             value=650.0,
             best_value=650.0,
             elapsed_steps=1_000_000,
             patience_progress=1.0,
             condition={
-                "metric": "train/episode/return/shaped/from/target/mean",
+                "metric": "train/episode/return/shaped/from/target/rolling_up_to_100/mean",
                 "trigger": "no_improvement",
             },
             early_stop_config_sha256="d" * 64,
@@ -938,7 +938,7 @@ class RunSupervisorTests(unittest.TestCase):
         config = {
             "conditions": {
                 "return_plateau": {
-                    "metric": TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_MEAN,
+                    "metric": TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_ROLLING_UP_TO_100_MEAN,
                     "trigger": "no_improvement",
                     "direction": "maximize",
                     "min_delta": 0.01,
@@ -953,7 +953,7 @@ class RunSupervisorTests(unittest.TestCase):
         machine = MetricEarlyStopStateMachine(config)
         machine.update(
             {
-                TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_MEAN: MetricSample(
+                TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_ROLLING_UP_TO_100_MEAN: MetricSample(
                     value=100.0,
                     step=0,
                 )
@@ -961,7 +961,7 @@ class RunSupervisorTests(unittest.TestCase):
         )
         update = machine.update(
             {
-                TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_MEAN: MetricSample(
+                TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_ROLLING_UP_TO_100_MEAN: MetricSample(
                     value=100.0,
                     step=10,
                 )
@@ -999,7 +999,7 @@ class RunSupervisorTests(unittest.TestCase):
         config = {
             "conditions": {
                 "clear": {
-                    "metric": "train/outcome/success/window_100/rate/min",
+                    "metric": "train/outcome/success/across_starts/window_100/rate/min",
                     "trigger": "threshold",
                     "operator": ">=",
                     "threshold": 1.0,
@@ -1012,7 +1012,7 @@ class RunSupervisorTests(unittest.TestCase):
         machine = MetricEarlyStopStateMachine(config)
         update = machine.update(
             {
-                "train/outcome/success/window_100/rate/min": MetricSample(
+                "train/outcome/success/across_starts/window_100/rate/min": MetricSample(
                     value=1.0,
                     step=10,
                 )
@@ -1034,7 +1034,7 @@ class RunSupervisorTests(unittest.TestCase):
         config = {
             "conditions": {
                 "return_plateau": {
-                    "metric": TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_MEAN,
+                    "metric": TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_ROLLING_UP_TO_100_MEAN,
                     "trigger": "no_improvement",
                     "direction": "maximize",
                     "min_delta": 0.01,
@@ -1049,7 +1049,7 @@ class RunSupervisorTests(unittest.TestCase):
         machine = MetricEarlyStopStateMachine(config)
         machine.update(
             {
-                TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_MEAN: MetricSample(
+                TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_ROLLING_UP_TO_100_MEAN: MetricSample(
                     value=100.0,
                     step=0,
                 )
@@ -1057,7 +1057,7 @@ class RunSupervisorTests(unittest.TestCase):
         )
         update = machine.update(
             {
-                TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_MEAN: MetricSample(
+                TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_ROLLING_UP_TO_100_MEAN: MetricSample(
                     value=100.0,
                     step=10,
                 )
@@ -1158,7 +1158,7 @@ class RunSupervisorTests(unittest.TestCase):
             supervisor.eval_contract["acceptance"],
             [
                 {
-                    "metric": "eval/full/outcome/success/rate/min",
+                    "metric": "eval/full/outcome/success/across_starts/rate/min",
                     "operator": ">=",
                     "threshold": 1.0,
                 }
@@ -1254,13 +1254,13 @@ class RunSupervisorTests(unittest.TestCase):
                 "metrics": {
                     "death_count": 0,
                     "success_count": 100,
-                    "eval/full/episode/count": 100,
+                    "eval/full/episode/completed/count": 100,
                 },
             },
         )
 
         self.assertEqual(
-            supervisor.store.latest_metric("eval/full/episode/count"),
+            supervisor.store.latest_metric("eval/full/episode/completed/count"),
             100,
         )
         self.assertIsNone(supervisor.store.latest_metric("death_count"))

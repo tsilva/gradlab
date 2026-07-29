@@ -91,7 +91,8 @@ group, write an R2 `resumable_failure` receipt with stop reason
 `learner_failure`, project that receipt to W&B, and exit nonzero. dstack must
 terminalize the task without retry because GradLab retries only
 `no-capacity` and `interruption`. Before declaring the fixture passed, verify
-the R2 receipt exists, the dstack task is terminal, and B3 is idle again.
+the R2 receipt exists, the W&B run is terminal `failed`, the dstack task is
+terminal, and B3 is idle again.
 
 The alternate `completed-result-hung-process` mode ignores both graceful stop
 and SIGTERM so the same path must reach SIGKILL and terminalize with

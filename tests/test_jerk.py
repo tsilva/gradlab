@@ -15,7 +15,7 @@ from gradlab.jerk import (
     JerkSearch,
     RetainedSequence,
 )
-from gradlab.metric_names import TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_MEAN
+from gradlab.metric_names import TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_ROLLING_UP_TO_100_MEAN
 from gradlab.task_kernels import Outcome
 from gradlab.training import jerk as jerk_training
 from gradlab.training_backend import GracefulStopFlag
@@ -394,9 +394,9 @@ def test_first_training_success_saves_playable_checkpoint_and_stops(tmp_path) ->
     final_metrics = next(
         payload
         for payload, _metadata in context.metric_store.payloads
-        if "train/outcome/success/from/Level1-1/count" in payload
+        if "train/outcome/success/from/Level1-1/episode/count" in payload
     )
-    assert final_metrics["train/outcome/success/from/Level1-1/count"] == 1
+    assert final_metrics["train/outcome/success/from/Level1-1/episode/count"] == 1
 
 
 def test_local_jerk_success_stops_without_scientific_acceptance_checkpoint(tmp_path) -> None:
@@ -433,7 +433,7 @@ def test_local_jerk_success_stops_without_scientific_acceptance_checkpoint(tmp_p
 
 def test_sb3_and_jerk_early_stop_adapters_make_identical_decisions(tmp_path) -> None:
     condition = {
-        "metric": TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_MEAN,
+        "metric": TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_ROLLING_UP_TO_100_MEAN,
         "trigger": "no_improvement",
         "direction": "maximize",
         "min_delta": 0.01,
@@ -456,7 +456,7 @@ def test_sb3_and_jerk_early_stop_adapters_make_identical_decisions(tmp_path) -> 
     sb3_helper.model = SimpleNamespace(logger=sb3_logger)  # type: ignore[assignment]
     for step in (0, 10):
         sb3_helper.num_timesteps = step
-        sb3_logger.records[TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_MEAN] = 100.0
+        sb3_logger.records[TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_ROLLING_UP_TO_100_MEAN] = 100.0
         sb3_helper._on_rollout_end()
 
     jerk_context = _jerk_context(tmp_path / "jerk", timesteps=10, early_stop=config)
@@ -464,7 +464,7 @@ def test_sb3_and_jerk_early_stop_adapters_make_identical_decisions(tmp_path) -> 
     for step in (0, 10):
         jerk_context.session.report(
             step=step,
-            metrics={TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_MEAN: 100.0},
+            metrics={TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_ROLLING_UP_TO_100_MEAN: 100.0},
         )
 
     jerk_path = (

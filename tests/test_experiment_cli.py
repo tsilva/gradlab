@@ -15,6 +15,7 @@ from gradlab.experiment_cli import (
     _follow_fingerprint,
     _latest_attempt_terminal,
     _poll_status,
+    _project_reconciled_terminal,
     _public_dstack_state,
     _record_pre_submit_failure,
     _record_terminal_task_without_receipt,
@@ -696,6 +697,35 @@ def test_reconcile_acquires_lease_writes_r2_before_wandb_and_releases(
     assert receipt.drain["evidence_sha256"] == ["f" * 64]
     output = json.loads(capsys.readouterr().out)
     assert output["wandb_projected"] is True
+
+
+def test_reconciled_failure_closes_wandb_with_nonzero_exit() -> None:
+    manifest = _manifest_only_run()
+    projector = mock.MagicMock()
+    receipt = SimpleNamespace(state="resumable_failure")
+
+    with (
+        mock.patch(
+            "gradlab.experiment_cli.WandbProjector.resume",
+            return_value=projector,
+        ) as resume,
+        mock.patch("gradlab.experiment_cli.publish_terminal_summary") as publish,
+    ):
+        _project_reconciled_terminal(manifest, receipt)
+
+    resume.assert_called_once_with(
+        {
+            "wandb_run_id": manifest.run_id,
+            "wandb_entity": manifest.wandb["entity"],
+            "wandb_project": manifest.wandb["project"],
+            "wandb_mode": "online",
+            "run_name": manifest.wandb.get("display_name"),
+            "wandb_group": manifest.wandb.get("group"),
+        },
+        update_finish_state=True,
+    )
+    publish.assert_called_once_with(projector.run, receipt)
+    projector.close.assert_called_once_with(timeout_seconds=300, exit_code=1)
 
 
 def test_resume_submit_recovers_only_the_original_manifest(

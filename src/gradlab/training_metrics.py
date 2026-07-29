@@ -8,18 +8,18 @@ import numpy as np
 
 from gradlab.eval_metrics import episode_reason_names
 from gradlab.metric_names import (
-    TRAIN_EPISODE_LENGTH_MEAN,
-    TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_MAX,
-    TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_MEAN,
+    TRAIN_EPISODE_LENGTH_ACROSS_ORIGINS_ROLLING_UP_TO_100_MEAN,
+    TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_ROLLING_UP_TO_100_MAX,
+    TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_ROLLING_UP_TO_100_MEAN,
     TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_WINDOW_100_MEAN,
-    TRAIN_EPISODE_RETURN_SHAPED_MAX,
-    TRAIN_EPISODE_RETURN_SHAPED_MEAN,
-    TRAIN_OUTCOME_SUCCESS_CURRENT_RATE_MEAN,
-    TRAIN_OUTCOME_SUCCESS_CURRENT_RATE_MIN,
-    TRAIN_OUTCOME_SUCCESS_START_COVERAGE_RATE,
-    TRAIN_OUTCOME_SUCCESS_WINDOW_100_RATE_MEAN,
-    TRAIN_OUTCOME_SUCCESS_WINDOW_100_RATE_MIN,
-    TRAIN_OUTCOME_TERMINAL_COUNT,
+    TRAIN_EPISODE_RETURN_SHAPED_ACROSS_ORIGINS_ROLLING_UP_TO_100_MAX,
+    TRAIN_EPISODE_RETURN_SHAPED_ACROSS_ORIGINS_ROLLING_UP_TO_100_MEAN,
+    TRAIN_OUTCOME_SUCCESS_ACROSS_OBSERVED_STARTS_CUMULATIVE_RATE_MEAN,
+    TRAIN_OUTCOME_SUCCESS_ACROSS_OBSERVED_STARTS_CUMULATIVE_RATE_MIN,
+    TRAIN_OUTCOME_SUCCESS_ACROSS_STARTS_COVERAGE_RATE,
+    TRAIN_OUTCOME_SUCCESS_ACROSS_STARTS_WINDOW_100_RATE_MEAN,
+    TRAIN_OUTCOME_SUCCESS_ACROSS_STARTS_WINDOW_100_RATE_MIN,
+    TRAIN_EPISODE_COMPLETED_COUNT,
     metric_value_segment,
     train_outcome_reason_count_metric,
     train_outcome_reason_window_rate_metric,
@@ -122,17 +122,17 @@ class EpisodeMetricsReducer:
 
     def snapshot(self) -> dict[str, int | float]:
         payload: dict[str, int | float] = {
-            TRAIN_OUTCOME_TERMINAL_COUNT: self.terminal_count,
+            TRAIN_EPISODE_COMPLETED_COUNT: self.terminal_count,
         }
         if self.returns:
-            payload[TRAIN_EPISODE_RETURN_SHAPED_MEAN] = float(np.mean(self.returns))
-            payload[TRAIN_EPISODE_RETURN_SHAPED_MAX] = float(np.max(self.returns))
-            payload[TRAIN_EPISODE_LENGTH_MEAN] = float(np.mean(self.lengths))
+            payload[TRAIN_EPISODE_RETURN_SHAPED_ACROSS_ORIGINS_ROLLING_UP_TO_100_MEAN] = float(np.mean(self.returns))
+            payload[TRAIN_EPISODE_RETURN_SHAPED_ACROSS_ORIGINS_ROLLING_UP_TO_100_MAX] = float(np.max(self.returns))
+            payload[TRAIN_EPISODE_LENGTH_ACROSS_ORIGINS_ROLLING_UP_TO_100_MEAN] = float(np.mean(self.lengths))
         if self.target_returns:
-            payload[TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_MEAN] = float(
+            payload[TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_ROLLING_UP_TO_100_MEAN] = float(
                 np.mean(self.target_returns)
             )
-            payload[TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_MAX] = float(
+            payload[TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_ROLLING_UP_TO_100_MAX] = float(
                 np.max(self.target_returns)
             )
             if len(self.target_returns) >= self.window_size:
@@ -159,9 +159,9 @@ class EpisodeMetricsReducer:
                 payload[train_success_window_rate_metric(start)] = sum(window) / len(window)
 
         expected = self.configured_starts or tuple(self.attempt_counts)
-        payload[TRAIN_OUTCOME_SUCCESS_CURRENT_RATE_MIN] = min(rates.values())
-        payload[TRAIN_OUTCOME_SUCCESS_CURRENT_RATE_MEAN] = float(np.mean(tuple(rates.values())))
-        payload[TRAIN_OUTCOME_SUCCESS_START_COVERAGE_RATE] = sum(
+        payload[TRAIN_OUTCOME_SUCCESS_ACROSS_OBSERVED_STARTS_CUMULATIVE_RATE_MIN] = min(rates.values())
+        payload[TRAIN_OUTCOME_SUCCESS_ACROSS_OBSERVED_STARTS_CUMULATIVE_RATE_MEAN] = float(np.mean(tuple(rates.values())))
+        payload[TRAIN_OUTCOME_SUCCESS_ACROSS_STARTS_COVERAGE_RATE] = sum(
             start in self.attempt_counts for start in expected
         ) / len(expected)
         if expected and all(
@@ -171,6 +171,6 @@ class EpisodeMetricsReducer:
                 sum(self.success_windows[start]) / len(self.success_windows[start])
                 for start in expected
             ]
-            payload[TRAIN_OUTCOME_SUCCESS_WINDOW_100_RATE_MIN] = min(window_rates)
-            payload[TRAIN_OUTCOME_SUCCESS_WINDOW_100_RATE_MEAN] = float(np.mean(window_rates))
+            payload[TRAIN_OUTCOME_SUCCESS_ACROSS_STARTS_WINDOW_100_RATE_MIN] = min(window_rates)
+            payload[TRAIN_OUTCOME_SUCCESS_ACROSS_STARTS_WINDOW_100_RATE_MEAN] = float(np.mean(window_rates))
         return payload
