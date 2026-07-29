@@ -132,8 +132,7 @@ class TrainingProgressBridge(ProgressSink):
             selected = {
                 field.metric: value
                 for field in self._fields
-                if (value := metrics.get(field.metric)) is not None
-                and math.isfinite(float(value))
+                if (value := metrics.get(field.metric)) is not None and math.isfinite(float(value))
             }
             self._metrics.update(selected)
             self._step = int(step)
@@ -180,9 +179,7 @@ class TrainingProgressBridge(ProgressSink):
                 step=self._step,
                 fields=self._fields,
                 metrics=dict(self._metrics),
-                events=tuple(
-                    event for event in self._events if event.sequence > int(after_event)
-                ),
+                events=tuple(event for event in self._events if event.sequence > int(after_event)),
                 started_at=self._started_at,
                 updated_at=self._updated_at,
                 final=self._final,
@@ -250,8 +247,8 @@ class LearnerExecution:
 
 class MetricCard(Widget):
     def __init__(self, field: ProgressField, index: int) -> None:
-        classes = "metric-row percent-metric" if field.value_format.value == "percent" else (
-            "metric-row"
+        classes = (
+            "metric-row percent-metric" if field.value_format.value == "percent" else ("metric-row")
         )
         super().__init__(classes=classes)
         self.field = field
@@ -423,7 +420,7 @@ class LocalTrainingApp(App[None]):
                 continue
             try:
                 descriptor = int(original.fileno())
-            except (AttributeError, OSError, ValueError):
+            except AttributeError, OSError, ValueError:
                 continue
             if descriptor < 0:
                 continue
@@ -516,9 +513,7 @@ class LocalTrainingApp(App[None]):
         if self.execution.state == _ExecutionState.DONE:
             return
         self.stop_flag.request("interactive_tui")
-        self.bridge.write_event(
-            "graceful stop requested; waiting for the learner's safe boundary"
-        )
+        self.bridge.write_event("graceful stop requested; waiting for the learner's safe boundary")
         self._update_header_status("STOP PENDING", "#FBBF24")
 
     def action_toggle_log(self) -> None:
@@ -607,9 +602,7 @@ class LocalTrainingApp(App[None]):
         self._update_header_status(status, status_color)
 
         total_for_bar = snapshot.total if snapshot.total > 0 else 1
-        progress_for_bar = (
-            min(max(snapshot.step, 0), total_for_bar) if snapshot.total > 0 else 1
-        )
+        progress_for_bar = min(max(snapshot.step, 0), total_for_bar) if snapshot.total > 0 else 1
         self.query_one("#training-progress", ProgressBar).update(
             total=total_for_bar,
             progress=progress_for_bar,
@@ -632,15 +625,9 @@ class LocalTrainingApp(App[None]):
             self._last_rate_time = now
 
         elapsed = max(now - snapshot.started_at, 0.0)
-        fraction = (
-            min(max(snapshot.step / snapshot.total, 0.0), 1.0)
-            if snapshot.total
-            else 1.0
-        )
+        fraction = min(max(snapshot.step / snapshot.total, 0.0), 1.0) if snapshot.total else 1.0
         rate_text = (
-            "—"
-            if self._smoothed_rate is None
-            else f"{self._smoothed_rate:,.0f} transitions/s"
+            "—" if self._smoothed_rate is None else f"{self._smoothed_rate:,.0f} transitions/s"
         )
         remaining = max(snapshot.total - snapshot.step, 0)
         eta_text = (
@@ -654,30 +641,22 @@ class LocalTrainingApp(App[None]):
             self._last_history_sample = now
             if self._smoothed_rate is not None and math.isfinite(self._smoothed_rate):
                 self._rate_history.append(self._smoothed_rate)
-                self.query_one("#rate-sparkline", Sparkline).data = tuple(
-                    self._rate_history
-                )
+                self.query_one("#rate-sparkline", Sparkline).data = tuple(self._rate_history)
 
         self.query_one("#progress-percent", Static).update(f"{fraction:.1%}")
-        self.query_one("#progress-count", Static).update(
-            f"{snapshot.step:,} / {snapshot.total:,}"
-        )
+        self.query_one("#progress-count", Static).update(f"{snapshot.step:,} / {snapshot.total:,}")
         self.query_one("#progress-fraction", Static).update(f"{fraction:.1%}")
         self.query_one("#progress-elapsed", Static).update(
             Text.assemble(("elapsed ", "dim"), _format_duration(elapsed))
         )
-        self.query_one("#progress-eta", Static).update(
-            Text.assemble(("ETA ", "dim"), eta_text)
-        )
+        self.query_one("#progress-eta", Static).update(Text.assemble(("ETA ", "dim"), eta_text))
         self.query_one("#progress-rate", Static).update(rate_text)
 
         traffic = self._groups.get("traffic")
         if traffic is not None:
             traffic.set_summary(
                 "rate",
-                "—"
-                if self._smoothed_rate is None
-                else f"{self._smoothed_rate:,.0f}/s",
+                "—" if self._smoothed_rate is None else f"{self._smoothed_rate:,.0f}/s",
             )
         resources = self._groups.get("resources")
         if resources is not None:
@@ -755,7 +734,7 @@ def _ellipsize_left(value: str, width: int) -> str:
         return value
     if width <= 1:
         return "…"
-    return f"…{value[-(width - 1):]}"
+    return f"…{value[-(width - 1) :]}"
 
 
 def _identity_text(identity: LocalTrainingIdentity, *, width: int) -> Text:
@@ -786,11 +765,7 @@ def _format_duration(seconds: float) -> str:
     total = max(int(seconds), 0)
     hours, remainder = divmod(total, 3_600)
     minutes, seconds = divmod(remainder, 60)
-    return (
-        f"{hours:d}:{minutes:02d}:{seconds:02d}"
-        if hours
-        else f"{minutes:02d}:{seconds:02d}"
-    )
+    return f"{hours:d}:{minutes:02d}:{seconds:02d}" if hours else f"{minutes:02d}:{seconds:02d}"
 
 
 def _emit_plain_notices(identity: LocalTrainingIdentity) -> None:
@@ -801,9 +776,7 @@ def _emit_plain_notices(identity: LocalTrainingIdentity) -> None:
 def _plain_snapshot_line(snapshot: TrainingProgressSnapshot) -> str:
     if snapshot.started_at is None:
         return "local training progress: initializing learner"
-    fraction = (
-        min(max(snapshot.step / snapshot.total, 0.0), 1.0) if snapshot.total else 1.0
-    )
+    fraction = min(max(snapshot.step / snapshot.total, 0.0), 1.0) if snapshot.total else 1.0
     fields = " ".join(
         f"{field.label}={format_progress_value(snapshot.metrics.get(field.metric), field.value_format)}"
         for field in snapshot.fields
