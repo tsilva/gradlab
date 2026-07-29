@@ -6,11 +6,11 @@ import re
 import time
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
 from typing import Any, Protocol
 
+from gradlab.clock import utc_now as _utc_now
 from gradlab.early_stop import MetricEarlyStopStateMachine, MetricSample
 from gradlab.file_utils import atomic_write_json
 from gradlab.metric_names import (
@@ -28,10 +28,6 @@ LEARNER_READY_FILENAME = "learner-ready.json"
 LEARNER_STATE_FORMAT_VERSION = 3
 MAX_LEARNER_ERROR_TYPE_LENGTH = 200
 MAX_LEARNER_ERROR_MESSAGE_LENGTH = 2_000
-
-
-def _utc_now() -> str:
-    return datetime.now(UTC).isoformat().replace("+00:00", "Z")
 
 
 def _bounded_failure_text(exc: BaseException) -> tuple[str, str]:

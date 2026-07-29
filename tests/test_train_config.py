@@ -9,14 +9,14 @@ from pathlib import Path
 from gradlab.env import EnvConfig
 from gradlab.train_config import (
     add_env_config_args,
-    add_train_config_args,
     load_materialized_train_config,
     train_config_field_for_key,
     validate_and_normalize_train_config,
     validate_train_config_fields,
     validate_train_config_value,
 )
-from gradlab.train import build_parser as build_train_parser, parse_train_config
+from gradlab.train import build_parser as build_train_parser, parse_train_invocation
+from gradlab.training_lifecycle import TrainingExecutionMode
 
 
 class TrainConfigFieldSchemaTests(unittest.TestCase):
@@ -47,7 +47,7 @@ class TrainConfigFieldSchemaTests(unittest.TestCase):
             )
 
             with self.assertRaisesRegex(ValueError, "timesteps must be an integer"):
-                parse_train_config(
+                parse_train_invocation(
                     [
                         "--train-config-json",
                         str(path),
@@ -56,7 +56,7 @@ class TrainConfigFieldSchemaTests(unittest.TestCase):
                     ]
                 )
 
-    def test_materialized_config_loader_matches_cli_json_defaults(self) -> None:
+    def test_materialized_config_loader_matches_internal_invocation_defaults(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "train.json"
             path.write_text(
@@ -71,7 +71,7 @@ class TrainConfigFieldSchemaTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            cli_config = parse_train_config(
+            invocation_config, execution_mode = parse_train_invocation(
                 [
                     "--train-config-json",
                     str(path),
@@ -82,38 +82,8 @@ class TrainConfigFieldSchemaTests(unittest.TestCase):
             worker_config = load_materialized_train_config(path)
 
         for key in ("game", "seed", "wandb_tags", "frame_skip", "checkpoint_eval_n_envs"):
-            self.assertEqual(worker_config[key], cli_config[key])
-
-    def test_train_and_eval_parsers_share_env_field_behavior(self) -> None:
-        train_parser = argparse.ArgumentParser()
-        eval_parser = argparse.ArgumentParser()
-        parser_kwargs = {
-            "parse_json_value": json.loads,
-            "parse_obs_crop": lambda value: tuple(int(item) for item in value.split(",")),
-        }
-        add_train_config_args(train_parser, env_defaults=EnvConfig(), **parser_kwargs)
-        add_env_config_args(
-            eval_parser,
-            max_steps_default=987,
-            defaults=EnvConfig(),
-            **parser_kwargs,
-        )
-
-        args = [
-            "--env-provider",
-            "ale-py",
-            "--env-args",
-            '{"game":"breakout"}',
-            "--obs-crop",
-            "1,2,3,4",
-        ]
-        train_args = train_parser.parse_args(args)
-        eval_args = eval_parser.parse_args([*args, "--max-steps", "123"])
-
-        for dest in ("env_provider", "env_args", "obs_crop"):
-            self.assertEqual(getattr(train_args, dest), getattr(eval_args, dest))
-        self.assertEqual(eval_args.max_steps, 123)
-        self.assertFalse(hasattr(eval_args, "max_episode_steps"))
+            self.assertEqual(worker_config[key], invocation_config[key])
+        self.assertEqual(execution_mode, TrainingExecutionMode.SUPERVISED)
 
     def test_obs_resize_is_canonical_and_square_cli_alias_is_boundary_only(self) -> None:
         parser = argparse.ArgumentParser()
@@ -139,37 +109,14 @@ class TrainConfigFieldSchemaTests(unittest.TestCase):
         self.assertEqual(field.dest, "task")
         self.assertTrue(field.environment)
 
-    def test_checkpoint_eval_has_one_cli_flag(self) -> None:
-        parser = argparse.ArgumentParser()
-        add_train_config_args(
-            parser,
-            env_defaults=EnvConfig(),
-            parse_json_value=json.loads,
-            parse_obs_crop=lambda value: tuple(int(item) for item in value.split(",")),
-        )
-        options = {option for action in parser._actions for option in action.option_strings}
-
-        self.assertIn("--checkpoint-eval-n-envs", options)
-        self.assertNotIn("--post-train-eval-n-envs", options)
-        self.assertNotIn("--post-train-eval-stochastic", options)
-        self.assertNotIn("--no-post-train-eval-stochastic", options)
-        self.assertFalse(hasattr(parser.parse_args([]), "post_train_eval_stochastic"))
-
     def test_checkpoint_eval_backend_supports_only_modal_and_none(self) -> None:
-        parser = argparse.ArgumentParser()
-        add_train_config_args(
-            parser,
-            env_defaults=EnvConfig(),
-            parse_json_value=json.loads,
-            parse_obs_crop=lambda value: tuple(int(item) for item in value.split(",")),
-        )
-
-        self.assertEqual(parser.parse_args([]).checkpoint_eval_backend, "modal")
-        self.assertEqual(parser.parse_args([]).metrics_schema_version, 14)
+        normalized = validate_and_normalize_train_config({"checkpoint_eval_backend": "none"})
         self.assertEqual(
-            parser.parse_args(["--checkpoint-eval-backend", "none"]).checkpoint_eval_backend,
+            normalized["checkpoint_eval_backend"],
             "none",
         )
+        with self.assertRaisesRegex(ValueError, "must be one of modal, none"):
+            validate_and_normalize_train_config({"checkpoint_eval_backend": "local"})
 
     def test_metrics_schema_version_accepts_only_active_v14(self) -> None:
         self.assertEqual(

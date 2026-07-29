@@ -3,10 +3,8 @@ from __future__ import annotations
 import hashlib
 import json
 import math
-import os
 import re
 import shutil
-import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import MappingProxyType
@@ -14,7 +12,7 @@ from typing import Any, Mapping, Sequence
 
 import numpy as np
 
-from gradlab.file_utils import atomic_write_json, fsync_path
+from gradlab.file_utils import atomic_write_bytes, atomic_write_json
 from gradlab.json_utils import canonical_json_bytes, json_safe
 
 
@@ -243,19 +241,7 @@ class ContentAddressedBlobStore:
             if existing != value:
                 raise RuntimeError("content-addressed snapshot blob collision")
             return SnapshotRef(codec_id="unbound", blob_sha256=digest, size_bytes=len(value))
-        path.parent.mkdir(parents=True, exist_ok=True)
-        temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
-        descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        try:
-            with os.fdopen(descriptor, "wb") as stream:
-                stream.write(value)
-                stream.flush()
-                os.fsync(stream.fileno())
-            os.replace(temporary, path)
-            fsync_path(path.parent)
-        except BaseException:
-            temporary.unlink(missing_ok=True)
-            raise
+        atomic_write_bytes(path, value)
         return SnapshotRef(codec_id="unbound", blob_sha256=digest, size_bytes=len(value))
 
     def get(self, ref: SnapshotRef) -> bytes:
@@ -289,9 +275,7 @@ class SessionHandleStore:
 
     def retain(self, blob_sha256s: set[str]) -> None:
         self._handles = {
-            digest: handle
-            for digest, handle in self._handles.items()
-            if digest in blob_sha256s
+            digest: handle for digest, handle in self._handles.items() if digest in blob_sha256s
         }
 
     def clear(self) -> None:
@@ -410,8 +394,7 @@ class StateArchive:
         self.persistence = str(persistence)
         if self.persistence not in STATE_ARCHIVE_PERSISTENCE:
             raise ValueError(
-                "state archive persistence must be one of "
-                f"{sorted(STATE_ARCHIVE_PERSISTENCE)}"
+                f"state archive persistence must be one of {sorted(STATE_ARCHIVE_PERSISTENCE)}"
             )
         self.codec = codec_registry.resolve(codec_id, provider_id=provider_id)
         self._entries: dict[str, StateArchiveEntry] = {}
@@ -547,10 +530,7 @@ class StateArchive:
         ):
             raise ValueError("imported state archive payload failed integrity verification")
         stored = self.blobs.put(raw_payload)
-        if (
-            stored.blob_sha256 != ref.blob_sha256
-            or stored.size_bytes != ref.size_bytes
-        ):
+        if stored.blob_sha256 != ref.blob_sha256 or stored.size_bytes != ref.size_bytes:
             raise ValueError("imported state archive payload identity mismatch")
         existing = self._entries.get(entry.entry_id)
         if existing is not None:
@@ -559,9 +539,7 @@ class StateArchive:
             return existing
         path = self.entries_root / f"{entry.entry_id}.json"
         if path.exists():
-            on_disk = StateArchiveEntry.from_dict(
-                json.loads(path.read_text(encoding="utf-8"))
-            )
+            on_disk = StateArchiveEntry.from_dict(json.loads(path.read_text(encoding="utf-8")))
             if on_disk != entry:
                 raise RuntimeError("state archive entry hash collision")
         else:
@@ -661,8 +639,7 @@ class StateArchive:
             )
         removed_entries = set(self._entries) - retained
         retained_blobs = {
-            self._entries[entry_id].provider_snapshot.ref.blob_sha256
-            for entry_id in retained
+            self._entries[entry_id].provider_snapshot.ref.blob_sha256 for entry_id in retained
         }
         removed_blobs = {
             self._entries[entry_id].provider_snapshot.ref.blob_sha256
@@ -778,9 +755,7 @@ _CURRICULUM_KEYS = frozenset(
     }
 )
 _CELL_KEYS = frozenset({"dimensions"})
-_CELL_DIMENSION_KEYS = frozenset(
-    {"signal", "source", "bucket_size", "clamp", "equals"}
-)
+_CELL_DIMENSION_KEYS = frozenset({"signal", "source", "bucket_size", "clamp", "equals"})
 
 
 def _finite_number(value: Any, *, label: str) -> float:
@@ -823,25 +798,18 @@ def normalize_archive_cell_config(
             raise ValueError(f"{dimension_label} must be an object")
         unexpected_dimension = sorted(set(raw_dimension) - _CELL_DIMENSION_KEYS)
         if unexpected_dimension:
-            raise ValueError(
-                f"{dimension_label} has unexpected fields: {unexpected_dimension}"
-            )
+            raise ValueError(f"{dimension_label} has unexpected fields: {unexpected_dimension}")
         selector_fields = set(raw_dimension) & {"signal", "source"}
         if len(selector_fields) != 1:
-            raise ValueError(
-                f"{dimension_label} must define exactly one of signal or source"
-            )
+            raise ValueError(f"{dimension_label} must define exactly one of signal or source")
         selector_kind = next(iter(selector_fields))
         selector_name = str(raw_dimension.get(selector_kind) or "").strip()
         if not selector_name:
-            raise ValueError(
-                f"{dimension_label}.{selector_kind} must be a non-empty string"
-            )
+            raise ValueError(f"{dimension_label}.{selector_kind} must be a non-empty string")
         selector = (selector_kind, selector_name)
         if selector in seen_selectors:
             raise ValueError(
-                f"{label}.dimensions contains duplicate "
-                f"{selector_kind} {selector_name!r}"
+                f"{label}.dimensions contains duplicate {selector_kind} {selector_name!r}"
             )
         seen_selectors.add(selector)
 
@@ -883,9 +851,7 @@ def normalize_archive_cell_config(
                     label=f"{dimension_label}.clamp[1]",
                 )
                 if minimum > maximum:
-                    raise ValueError(
-                        f"{dimension_label}.clamp minimum must not exceed maximum"
-                    )
+                    raise ValueError(f"{dimension_label}.clamp minimum must not exceed maximum")
                 normalized_dimension["clamp"] = [minimum, maximum]
         normalized_dimensions.append(normalized_dimension)
     return {"dimensions": normalized_dimensions}
@@ -938,16 +904,10 @@ class ArchiveCellConfig:
         return cls(
             dimensions=tuple(
                 ArchiveCellDimension(
-                    signal=(
-                        str(dimension["signal"]) if "signal" in dimension else None
-                    ),
-                    source=(
-                        str(dimension["source"]) if "source" in dimension else None
-                    ),
+                    signal=(str(dimension["signal"]) if "signal" in dimension else None),
+                    source=(str(dimension["source"]) if "source" in dimension else None),
                     bucket_size=(
-                        float(dimension["bucket_size"])
-                        if "bucket_size" in dimension
-                        else None
+                        float(dimension["bucket_size"]) if "bucket_size" in dimension else None
                     ),
                     clamp=(
                         (
@@ -957,9 +917,7 @@ class ArchiveCellConfig:
                         if "clamp" in dimension
                         else None
                     ),
-                    equals=(
-                        float(dimension["equals"]) if "equals" in dimension else None
-                    ),
+                    equals=(float(dimension["equals"]) if "equals" in dimension else None),
                 )
                 for dimension in normalized["dimensions"]
             )
@@ -968,17 +926,13 @@ class ArchiveCellConfig:
     @property
     def signals(self) -> tuple[str, ...]:
         return tuple(
-            dimension.signal
-            for dimension in self.dimensions
-            if dimension.signal is not None
+            dimension.signal for dimension in self.dimensions if dimension.signal is not None
         )
 
     @property
     def sources(self) -> tuple[str, ...]:
         return tuple(
-            dimension.source
-            for dimension in self.dimensions
-            if dimension.source is not None
+            dimension.source for dimension in self.dimensions if dimension.source is not None
         )
 
 
@@ -999,14 +953,11 @@ class ArchiveCellDetector:
             selector = dimension.selector
             kind, name = selector
             if selector not in values_by_selector:
-                raise ValueError(
-                    f"archive cell {kind} {name!r} was not resolved"
-                )
+                raise ValueError(f"archive cell {kind} {name!r} was not resolved")
             values = np.asarray(values_by_selector[selector])
             if values.shape != (n_envs,):
                 raise ValueError(
-                    f"archive cell {kind} {name!r} must have shape "
-                    f"({n_envs},), got {values.shape}"
+                    f"archive cell {kind} {name!r} must have shape ({n_envs},), got {values.shape}"
                 )
             for lane in range(n_envs):
                 rows[lane].append(dimension.bucket(values[lane]))
@@ -1017,10 +968,7 @@ class ArchiveCellDetector:
                 and dimension.clamp is None
                 and dimension.equals is None
             ):
-                return tuple(
-                    f"{dimension.signal}:{row[0]}".encode("ascii")
-                    for row in rows
-                )
+                return tuple(f"{dimension.signal}:{row[0]}".encode("ascii") for row in rows)
         return tuple(canonical_json_bytes(row) for row in rows)
 
 
@@ -1144,9 +1092,7 @@ def normalize_state_archive_config(
         raise ValueError(f"{label}.semantic_id must be {STATE_ARCHIVE_SEMANTIC_ID!r}")
     persistence = str(value.get("persistence", "durable"))
     if persistence not in STATE_ARCHIVE_PERSISTENCE:
-        raise ValueError(
-            f"{label}.persistence must be one of {sorted(STATE_ARCHIVE_PERSISTENCE)}"
-        )
+        raise ValueError(f"{label}.persistence must be one of {sorted(STATE_ARCHIVE_PERSISTENCE)}")
     restore_semantics = str(value.get("restore_semantics", "continuation"))
     if restore_semantics not in RESTORE_SEMANTICS:
         raise ValueError(f"{label}.restore_semantics must be one of {sorted(RESTORE_SEMANTICS)}")
@@ -1192,8 +1138,7 @@ def normalize_state_archive_config(
     snapshot_mode = str(export.get("snapshots", "none")).strip()
     if snapshot_mode not in _EXPORT_SNAPSHOT_MODES:
         raise ValueError(
-            f"{label}.export.snapshots must be one of "
-            f"{sorted(_EXPORT_SNAPSHOT_MODES)}"
+            f"{label}.export.snapshots must be one of {sorted(_EXPORT_SNAPSHOT_MODES)}"
         )
     return {
         "semantic_id": STATE_ARCHIVE_SEMANTIC_ID,
@@ -1233,8 +1178,7 @@ def validate_state_archive_runtime_contract(
         missing = sorted(required - declared)
         if missing:
             raise ValueError(
-                "state_archive cell requires declared task signal(s): "
-                + ", ".join(missing)
+                "state_archive cell requires declared task signal(s): " + ", ".join(missing)
             )
     curriculum = normalized["curriculum"]
     if curriculum is None:

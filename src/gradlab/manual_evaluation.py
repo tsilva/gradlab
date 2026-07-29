@@ -6,12 +6,12 @@ import sqlite3
 import uuid
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, timedelta
 from pathlib import Path
 from typing import Any
 
 from gradlab.checkpoint_acceptance import manifest_index, requires_complete_evaluation
-from gradlab.clock import Clock, SystemClock
+from gradlab.clock import Clock, SystemClock, format_utc_datetime, parse_utc_datetime
 from gradlab.early_stop import EARLY_STOP_OPERATORS
 from gradlab.eval_backend import EvalBackend
 from gradlab.eval_metrics import eval_by_start_rows
@@ -94,15 +94,8 @@ class _EvaluationContext:
     intent: EvalIntent
 
 
-def _parse_timestamp(value: str) -> datetime:
-    return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(UTC)
-
-
 def _checkpoint_object_prefix(checkpoint: CheckpointManifest) -> str:
-    return (
-        f"runs/{checkpoint.run_id}/checkpoints/"
-        f"{checkpoint.step}-{checkpoint.sha256}"
-    )
+    return f"runs/{checkpoint.run_id}/checkpoints/{checkpoint.step}-{checkpoint.sha256}"
 
 
 def _evaluation_subject_type(run_id: str) -> str:
@@ -177,9 +170,7 @@ def _evaluation_summary(
         metric = str(rule["metric"])
         value = result.aggregates.get(metric)
         numeric = (
-            float(value)
-            if not isinstance(value, bool) and isinstance(value, int | float)
-            else None
+            float(value) if not isinstance(value, bool) and isinstance(value, int | float) else None
         )
         criteria.append(
             {
@@ -253,12 +244,8 @@ class ManualEvaluationSupervisor:
                     source_sha=manifest.source_sha,
                     commit_message="",
                     published_at="",
-                    workflow_run_id=str(
-                        manifest.compute.get("runtime_workflow_run_id") or ""
-                    ),
-                    runtime_input_sha256=str(
-                        manifest.compute.get("runtime_input_sha256") or ""
-                    ),
+                    workflow_run_id=str(manifest.compute.get("runtime_workflow_run_id") or ""),
+                    runtime_input_sha256=str(manifest.compute.get("runtime_input_sha256") or ""),
                     runtime_build_source_sha=str(
                         manifest.compute.get("runtime_build_source_sha") or ""
                     ),
@@ -320,7 +307,9 @@ class ManualEvaluationSupervisor:
         key = f"{_checkpoint_object_prefix(checkpoint)}/recipe.json"
         encoded = self.authority.models.get_bytes(key)
         if hashlib.sha256(encoded).hexdigest() != checkpoint.recipe_document_sha256:
-            raise ValueError(f"checkpoint recipe document hash mismatch: {checkpoint.checkpoint_id}")
+            raise ValueError(
+                f"checkpoint recipe document hash mismatch: {checkpoint.checkpoint_id}"
+            )
         document = json.loads(encoded)
         if not isinstance(document, dict):
             raise ValueError("checkpoint recipe document must be a mapping")
@@ -346,8 +335,7 @@ class ManualEvaluationSupervisor:
         contract_sha256 = evaluation_contract_sha256(recipe_document)
         if contract_sha256 != checkpoint.evaluation_contract_sha256:
             raise ValueError(
-                f"checkpoint evaluation contract hash mismatch: "
-                f"{checkpoint.checkpoint_id}"
+                f"checkpoint evaluation contract hash mismatch: {checkpoint.checkpoint_id}"
             )
         contract.update(
             {
@@ -392,8 +380,8 @@ class ManualEvaluationSupervisor:
             execution_contract=contract,
             result_key=f"runs/{manifest.run_id}/evals/{key}/result.json",
             timeout_seconds=timeout,
-            created_at=now.isoformat().replace("+00:00", "Z"),
-            expires_at=(now + timedelta(seconds=timeout)).isoformat().replace("+00:00", "Z"),
+            created_at=format_utc_datetime(now),
+            expires_at=format_utc_datetime(now + timedelta(seconds=timeout)),
         )
         existing = self.authority.eval_intent(
             run_id=manifest.run_id,
@@ -429,9 +417,7 @@ class ManualEvaluationSupervisor:
         if not identifiers or any(not value for value in identifiers):
             raise ValueError("select at least one checkpoint")
         if len(identifiers) > MAX_MANUAL_EVAL_SELECTION:
-            raise ValueError(
-                f"select at most {MAX_MANUAL_EVAL_SELECTION} checkpoints per request"
-            )
+            raise ValueError(f"select at most {MAX_MANUAL_EVAL_SELECTION} checkpoints per request")
         manifest = self._manifest(run_id)
         checkpoints = self._checkpoint_map(run_id)
         missing = [identifier for identifier in identifiers if identifier not in checkpoints]
@@ -491,10 +477,7 @@ class ManualEvaluationSupervisor:
 
     def _training_terminal(self, manifest: RunManifest) -> Mapping[str, Any] | None:
         document = self.authority.control.get_json_optional(
-            (
-                f"runs/{manifest.run_id}/attempts/"
-                f"{manifest.attempt_id}/terminal.json"
-            )
+            (f"runs/{manifest.run_id}/attempts/{manifest.attempt_id}/terminal.json")
         )
         if document is None:
             return None
@@ -554,9 +537,7 @@ class ManualEvaluationSupervisor:
             "result_uri": self.authority.evaluation.uri(context.intent.result_key),
             "result_put_url": self.authority.evaluation.presign_put(
                 context.intent.result_key,
-                expires_seconds=(
-                    timeout + int(self.modal_config.timeouts.expiry_margin_seconds)
-                ),
+                expires_seconds=(timeout + int(self.modal_config.timeouts.expiry_margin_seconds)),
             ),
         }
         asset = context.manifest.modal.get("rom_asset_manifest")
@@ -564,9 +545,7 @@ class ManualEvaluationSupervisor:
             rom_key = self.authority.evaluation.key_from_uri(str(asset["object_uri"]))
             payload["rom_get_url"] = self.authority.evaluation.presign_get(
                 rom_key,
-                expires_seconds=(
-                    timeout + int(self.modal_config.timeouts.expiry_margin_seconds)
-                ),
+                expires_seconds=(timeout + int(self.modal_config.timeouts.expiry_margin_seconds)),
             )
         return payload
 
@@ -588,13 +567,8 @@ class ManualEvaluationSupervisor:
         training_terminal: Mapping[str, Any],
     ) -> int:
         high_water = int(training_terminal.get("wandb_high_water_mark") or 0)
-        for key in self.authority.control.iter_keys(
-            f"runs/{manifest.run_id}/manual-evals"
-        ):
-            if not (
-                key.endswith("/wandb-projection.json")
-                or key.endswith("/terminal.json")
-            ):
+        for key in self.authority.control.iter_keys(f"runs/{manifest.run_id}/manual-evals"):
+            if not (key.endswith("/wandb-projection.json") or key.endswith("/terminal.json")):
                 continue
             document = self.authority.control.get_json(key)
             if str(document.get("run_id") or "") != manifest.run_id:
@@ -607,16 +581,12 @@ class ManualEvaluationSupervisor:
 
     @staticmethod
     def _wandb_run_path(manifest: RunManifest) -> str:
-        return (
-            f"{manifest.wandb['entity']}/"
-            f"{manifest.wandb['project']}/"
-            f"{manifest.run_id}"
-        )
+        return f"{manifest.wandb['entity']}/{manifest.wandb['project']}/{manifest.run_id}"
 
     def _lease(self, manifest: RunManifest) -> Lease:
         existing = self._leases.get(manifest.run_id)
         now = self.clock.utc_datetime().astimezone(UTC)
-        if existing is not None and _parse_timestamp(existing.expires_at) > now:
+        if existing is not None and parse_utc_datetime(existing.expires_at) > now:
             existing = self.authority.renew_lease(existing, now=now)
         else:
             existing = self.authority.acquire_lease(
@@ -704,9 +674,7 @@ class ManualEvaluationSupervisor:
         finally:
             self.runtime.close_wandb(projector, timeout_seconds=300)
         with ledger.connection() as connection:
-            row = connection.execute(
-                "SELECT COALESCE(MAX(id), 0) FROM metric_frames"
-            ).fetchone()
+            row = connection.execute("SELECT COALESCE(MAX(id), 0) FROM metric_frames").fetchone()
         high_water = event_seq_offset + int(row[0] if row else 0)
         remote = self.runtime.remote_summary(self._wandb_run_path(context.manifest))
         if int(remote.get("orchestration/event_seq") or 0) < high_water:
@@ -764,8 +732,7 @@ class ManualEvaluationSupervisor:
             remote = self.runtime.remote_summary(run_path)
             if (
                 str(remote.get("gradlab/goal/outcome") or "") == "accepted"
-                and int(remote.get("leader/checkpoint/step") or -1)
-                == receipt.checkpoint_step
+                and int(remote.get("leader/checkpoint/step") or -1) == receipt.checkpoint_step
             ):
                 return
         except Exception:
@@ -820,12 +787,9 @@ class ManualEvaluationSupervisor:
             ) from exc
         if (
             str(remote.get("gradlab/goal/outcome") or "") != "accepted"
-            or int(remote.get("leader/checkpoint/step") or -1)
-            != receipt.checkpoint_step
+            or int(remote.get("leader/checkpoint/step") or -1) != receipt.checkpoint_step
         ):
-            raise EvaluationProjectionPending(
-                "W&B promotion summary is not yet remotely visible"
-            )
+            raise EvaluationProjectionPending("W&B promotion summary is not yet remotely visible")
 
     def _terminal_status(
         self,
@@ -836,13 +800,12 @@ class ManualEvaluationSupervisor:
         ledger: SupervisorLedger,
         event_seq_offset: int,
     ) -> dict[str, Any]:
-        manually_requested = self.authority.control.get_json_optional(
-            self._request_key(context)
-        ) is not None
+        manually_requested = (
+            self.authority.control.get_json_optional(self._request_key(context)) is not None
+        )
         projected = (
             not manually_requested
-            or self.authority.control.get_json_optional(self._projection_key(context))
-            is not None
+            or self.authority.control.get_json_optional(self._projection_key(context)) is not None
         )
         projection_error = None
         if raw is not None and not projected:
@@ -1019,12 +982,8 @@ class ManualEvaluationSupervisor:
         manifest: RunManifest,
     ) -> tuple[_EvaluationContext, EvalResult, Mapping[str, Any]] | None:
         checkpoints = self._checkpoint_map(manifest.run_id)
-        candidates: list[
-            tuple[int, str, _EvaluationContext, EvalResult, Mapping[str, Any]]
-        ] = []
-        for key in self.authority.evaluation.iter_keys(
-            f"runs/{manifest.run_id}/evals"
-        ):
+        candidates: list[tuple[int, str, _EvaluationContext, EvalResult, Mapping[str, Any]]] = []
+        for key in self.authority.evaluation.iter_keys(f"runs/{manifest.run_id}/evals"):
             if not key.endswith("/verified-result.json"):
                 continue
             document = self.authority.evaluation.get_json(key)
@@ -1068,19 +1027,15 @@ class ManualEvaluationSupervisor:
         context, result, raw = candidate
         if existing is not None:
             if (
-                str(existing.get("checkpoint_id") or "")
-                != context.checkpoint.checkpoint_id
+                str(existing.get("checkpoint_id") or "") != context.checkpoint.checkpoint_id
                 or int(existing.get("checkpoint_step") or -1) != context.checkpoint.step
             ):
                 raise EvaluationContractIneligible(
-                    "new accepted evidence conflicts with the immutable "
-                    "lowest-step promotion"
+                    "new accepted evidence conflicts with the immutable lowest-step promotion"
                 )
         else:
             self._promote(context, result)
-            existing = self.authority.control.get_json(
-                f"runs/{manifest.run_id}/promotion.json"
-            )
+            existing = self.authority.control.get_json(f"runs/{manifest.run_id}/promotion.json")
         receipt = PromotionReceipt(**existing)
         receipt.validate()
         self._ensure_promotion_projection(context, result, raw, receipt)
@@ -1123,13 +1078,9 @@ class ManualEvaluationSupervisor:
                 for item in self._contexts(manifest.run_id, [checkpoint_id])
                 if item.checkpoint.checkpoint_id == checkpoint_id
             )
-            projection = self.authority.control.get_json_optional(
-                self._projection_key(context)
-            )
+            projection = self.authority.control.get_json_optional(self._projection_key(context))
             if projection is not None:
-                projection_high_waters.append(
-                    int(projection.get("wandb_high_water_mark") or 0)
-                )
+                projection_high_waters.append(int(projection.get("wandb_high_water_mark") or 0))
         document = {
             "schema_version": 1,
             "job_id": job_id,
@@ -1276,8 +1227,7 @@ class ManualEvaluationSupervisor:
         unsettled = [
             status
             for status in statuses
-            if str(status["state"])
-            not in {"accepted", "rejected", "failed", "expired"}
+            if str(status["state"]) not in {"accepted", "rejected", "failed", "expired"}
         ]
         if unsettled:
             return HandlerResult(
@@ -1295,11 +1245,7 @@ class ManualEvaluationSupervisor:
                 statuses=statuses,
                 error=exc,
             )
-        failed = [
-            status
-            for status in statuses
-            if str(status["state"]) in {"failed", "expired"}
-        ]
+        failed = [status for status in statuses if str(status["state"]) in {"failed", "expired"}]
         state = "failed" if failed else "succeeded"
         self._manual_terminal(
             job_id=job_id,
@@ -1310,11 +1256,7 @@ class ManualEvaluationSupervisor:
         )
         return HandlerResult(
             state=state,  # type: ignore[arg-type]
-            message=(
-                "one or more evaluations failed or expired"
-                if failed
-                else None
-            ),
+            message=("one or more evaluations failed or expired" if failed else None),
             subjects=self._subject_updates(run_id, statuses),
         )
 
@@ -1343,9 +1285,7 @@ class ManualEvaluationJobHandler:
         if not checkpoint_ids or any(not value for value in checkpoint_ids):
             raise ValueError("manual evaluation job requires checkpoints")
         if len(checkpoint_ids) > MAX_MANUAL_EVAL_SELECTION:
-            raise ValueError(
-                f"select at most {MAX_MANUAL_EVAL_SELECTION} checkpoints per request"
-            )
+            raise ValueError(f"select at most {MAX_MANUAL_EVAL_SELECTION} checkpoints per request")
         return {
             "repo_root": str(repo_root.resolve()),
             "queue_root": str(queue_root.resolve()),
@@ -1358,9 +1298,7 @@ class ManualEvaluationJobHandler:
         repo_root = Path(payload["repo_root"])
         load_repository_operator_environment(repo_root)
         queue_root = Path(payload["queue_root"])
-        holder_fingerprint = hashlib.sha256(
-            str(queue_root).encode("utf-8")
-        ).hexdigest()[:16]
+        holder_fingerprint = hashlib.sha256(str(queue_root).encode("utf-8")).hexdigest()[:16]
         supervisor = ManualEvaluationSupervisor(
             authority=RunAuthority(RunStorageConfig.from_env()),
             repo_root=repo_root,
@@ -1450,10 +1388,7 @@ class ManualEvaluationQueue:
         pending_contexts: list[_EvaluationContext] = []
         for context in contexts:
             verified = planner.authority.evaluation.get_json_optional(
-                (
-                    f"runs/{run_id}/evals/{context.intent.idempotency_key}"
-                    "/verified-result.json"
-                )
+                (f"runs/{run_id}/evals/{context.intent.idempotency_key}/verified-result.json")
             )
             if verified is None:
                 pending_contexts.append(context)
@@ -1467,9 +1402,7 @@ class ManualEvaluationQueue:
                 "evaluation": _evaluation_summary(context, result),
                 "message": result.error,
             }
-        subject_ids = [
-            context.checkpoint.checkpoint_id for context in pending_contexts
-        ]
+        subject_ids = [context.checkpoint.checkpoint_id for context in pending_contexts]
         subject_type = _evaluation_subject_type(run_id)
 
         for _attempt in range(3):
@@ -1488,9 +1421,7 @@ class ManualEvaluationQueue:
                 "type": MANUAL_EVAL_JOB_TYPE,
                 "version": MANUAL_EVAL_JOB_VERSION,
                 "run_id": run_id,
-                "evaluations": sorted(
-                    context.intent.idempotency_key for context in pending
-                ),
+                "evaluations": sorted(context.intent.idempotency_key for context in pending),
             }
             idempotency_key = hashlib.sha256(
                 json.dumps(
@@ -1507,9 +1438,7 @@ class ManualEvaluationQueue:
                         "repo_root": str(self.repo_root),
                         "queue_root": str(self.store.root),
                         "run_id": run_id,
-                        "checkpoint_ids": [
-                            context.checkpoint.checkpoint_id for context in pending
-                        ],
+                        "checkpoint_ids": [context.checkpoint.checkpoint_id for context in pending],
                     },
                     idempotency_key=idempotency_key,
                     subjects=[
@@ -1517,15 +1446,12 @@ class ManualEvaluationQueue:
                             subject_type=subject_type,
                             subject_id=context.checkpoint.checkpoint_id,
                             exclusive_key=(
-                                f"{MANUAL_EVAL_JOB_TYPE}:"
-                                f"{context.intent.idempotency_key}"
+                                f"{MANUAL_EVAL_JOB_TYPE}:{context.intent.idempotency_key}"
                             ),
                             detail={
                                 "evaluation": None,
                                 "message": None,
-                                "eval_idempotency_key": (
-                                    context.intent.idempotency_key
-                                ),
+                                "eval_idempotency_key": (context.intent.idempotency_key),
                             },
                         )
                         for context in pending
@@ -1549,15 +1475,8 @@ class ManualEvaluationQueue:
             if subject_ids
             else WorkerStart("already_running", "all checkpoints are already terminal")
         )
-        job_ids = {
-            str(subject["job_id"])
-            for subject in statuses.values()
-        }
-        jobs = [
-            job
-            for job_id in sorted(job_ids)
-            if (job := self.store.job(job_id)) is not None
-        ]
+        job_ids = {str(subject["job_id"]) for subject in statuses.values()}
+        jobs = [job for job_id in sorted(job_ids) if (job := self.store.job(job_id)) is not None]
         items = [
             (
                 terminal_items[context.checkpoint.checkpoint_id]
@@ -1613,8 +1532,7 @@ class ManualEvaluationQueue:
                         subject["detail"] = values
                         subject["state"] = "flusher_unavailable"
         return {
-            checkpoint_id: self._queue_item(subject)
-            for checkpoint_id, subject in statuses.items()
+            checkpoint_id: self._queue_item(subject) for checkpoint_id, subject in statuses.items()
         }
 
 

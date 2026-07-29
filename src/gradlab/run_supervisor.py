@@ -10,12 +10,13 @@ import sys
 import tempfile
 from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import timedelta
 from functools import partial
 from pathlib import Path
 from typing import Any
 
 from gradlab.checkpoint_acceptance import manifest_index
+from gradlab.clock import format_utc_datetime, parse_utc_datetime, utc_timestamp
 from gradlab.dstack_backend import DSTACK_VERSION
 from gradlab.early_stop import validate_metric_early_stop_decision
 from gradlab.env import resolve_env_config
@@ -173,14 +174,6 @@ class LearnerState:
     terminal_reason: str | None
     final_step: int | None
     document: Mapping[str, Any]
-
-
-def _parse_timestamp(value: str) -> datetime:
-    return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(UTC)
-
-
-def _timestamp(unix_seconds: float) -> str:
-    return datetime.fromtimestamp(unix_seconds, UTC).isoformat().replace("+00:00", "Z")
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -509,9 +502,7 @@ class RunSupervisor:
         kind: str,
         live: bool,
     ) -> LearnerState:
-        expected_type = (
-            "gradlab.learner-ready" if kind == "ready" else "gradlab.training-result"
-        )
+        expected_type = "gradlab.learner-ready" if kind == "ready" else "gradlab.training-result"
         if document.get("document_type") != expected_type:
             raise LearnerStateContractError(
                 f"learner {kind} document_type is not {expected_type!r}"
@@ -524,15 +515,9 @@ class RunSupervisor:
         if document.get("run_id") != self.manifest.run_id:
             raise LearnerStateContractError(f"learner {kind} run_id does not match manifest")
         if document.get("attempt_id") != self.manifest.attempt_id:
-            raise LearnerStateContractError(
-                f"learner {kind} attempt_id does not match manifest"
-            )
+            raise LearnerStateContractError(f"learner {kind} attempt_id does not match manifest")
         learner_pid = document.get("learner_pid")
-        if (
-            isinstance(learner_pid, bool)
-            or not isinstance(learner_pid, int)
-            or learner_pid <= 0
-        ):
+        if isinstance(learner_pid, bool) or not isinstance(learner_pid, int) or learner_pid <= 0:
             raise LearnerStateContractError(f"learner {kind} has an invalid learner_pid")
         if live and learner_pid != self.expected_learner_pid:
             raise LearnerStateContractError(
@@ -551,11 +536,9 @@ class RunSupervisor:
         timestamp_field = "ready_at" if kind == "ready" else "terminal_at"
         timestamp = document.get(timestamp_field)
         if not isinstance(timestamp, str):
-            raise LearnerStateContractError(
-                f"learner {kind} has no valid {timestamp_field}"
-            )
+            raise LearnerStateContractError(f"learner {kind} has no valid {timestamp_field}")
         try:
-            _parse_timestamp(timestamp)
+            parse_utc_datetime(timestamp)
         except (TypeError, ValueError) as exc:
             raise LearnerStateContractError(
                 f"learner {kind} has an invalid {timestamp_field}"
@@ -581,9 +564,7 @@ class RunSupervisor:
                 "learner result has an invalid terminal_reason"
             ) from exc
         if (status == "failed") != (reason == TerminalReason.FAILED):
-            raise LearnerStateContractError(
-                "learner result status and terminal_reason disagree"
-            )
+            raise LearnerStateContractError("learner result status and terminal_reason disagree")
         interruption_reasons = {
             TerminalReason.LOCAL_INTERRUPTION,
             TerminalReason.EXTERNAL_SIGNAL,
@@ -593,11 +574,7 @@ class RunSupervisor:
                 "learner result interrupted status and terminal_reason disagree"
             )
         final_step = document.get("final_step")
-        if (
-            isinstance(final_step, bool)
-            or not isinstance(final_step, int)
-            or final_step < 0
-        ):
+        if isinstance(final_step, bool) or not isinstance(final_step, int) or final_step < 0:
             raise LearnerStateContractError("learner result has an invalid final_step")
         if not isinstance(document.get("execution_policy"), Mapping):
             raise LearnerStateContractError("learner result has no execution_policy")
@@ -635,9 +612,7 @@ class RunSupervisor:
         try:
             document = _read_json(path)
         except (OSError, ValueError, json.JSONDecodeError) as exc:
-            raise LearnerStateContractError(
-                f"learner {kind} document is unreadable"
-            ) from exc
+            raise LearnerStateContractError(f"learner {kind} document is unreadable") from exc
         return self._parse_learner_state(document, kind=kind, live=live)
 
     def _training_terminal_reason(self) -> str:
@@ -983,9 +958,7 @@ class RunSupervisor:
                 environment.pop(name, None)
         environment["GRADLAB_INTERNAL_LEARNER"] = "1"
         environment["GRADLAB_ROM_CACHE_DIR"] = str(CONTAINER_ROM_CACHE)
-        fault_fixture = str(
-            environment.get("GRADLAB_SUPERVISION_FAULT_FIXTURE") or ""
-        ).strip()
+        fault_fixture = str(environment.get("GRADLAB_SUPERVISION_FAULT_FIXTURE") or "").strip()
         command = (
             [
                 sys.executable,
@@ -1034,8 +1007,7 @@ class RunSupervisor:
             suffix = 0
             while True:
                 marker = (
-                    self.run_dir
-                    / f"{filename}.pre-spawn-{self.manifest.attempt_id}-{suffix}.json"
+                    self.run_dir / f"{filename}.pre-spawn-{self.manifest.attempt_id}-{suffix}.json"
                 )
                 if not marker.exists():
                     break
@@ -1458,7 +1430,7 @@ class RunSupervisor:
                         "kind": kind,
                         "local_path": str(path),
                     },
-                    created_at=_timestamp(float(checkpoint["created_at"])),
+                    created_at=utc_timestamp(float(checkpoint["created_at"])),
                 )
             except Exception as exc:
                 self.store.mark_checkpoint_upload_failed(ledger_id, repr(exc))
@@ -1532,7 +1504,7 @@ class RunSupervisor:
             protocol="modal-acceptance-v3",
         )
         timeout = int(self.modal_config.timeouts.acceptance_seconds)
-        created = _parse_timestamp(checkpoint.created_at)
+        created = parse_utc_datetime(checkpoint.created_at)
         result_key = f"runs/{self.manifest.run_id}/evals/{key}/result.json"
         intent = EvalIntent(
             run_id=self.manifest.run_id,
@@ -1548,8 +1520,8 @@ class RunSupervisor:
             execution_contract=contract,
             result_key=result_key,
             timeout_seconds=timeout,
-            created_at=created.isoformat().replace("+00:00", "Z"),
-            expires_at=(created + timedelta(seconds=timeout)).isoformat().replace("+00:00", "Z"),
+            created_at=format_utc_datetime(created),
+            expires_at=format_utc_datetime(created + timedelta(seconds=timeout)),
         )
         existing = self.authority.eval_intent(
             run_id=self.manifest.run_id,
@@ -2274,10 +2246,7 @@ class RunSupervisor:
 
     def _failure_drain(self, failure: BaseException) -> None:
         self._close_eval_admission_for_failure(failure)
-        deadline = (
-            self.clock.monotonic()
-            + self._liveness_seconds("failure_drain_timeout_seconds")
-        )
+        deadline = self.clock.monotonic() + self._liveness_seconds("failure_drain_timeout_seconds")
         while True:
             now = self.clock.monotonic()
             activity, converged = self.drain_iteration(now=now)
@@ -2817,9 +2786,7 @@ class RunSupervisor:
                     if self.peak_ingress_rate > 0.0
                     else None
                 ),
-                "failure": (
-                    _bounded_exception_document(failure) if failure is not None else None
-                ),
+                "failure": (_bounded_exception_document(failure) if failure is not None else None),
                 "learner_terminal": self.learner_terminal_document,
                 "learner_teardown": self.learner_teardown_evidence or None,
                 "learner_log": self._learner_log_evidence(),
