@@ -1713,7 +1713,7 @@ class PlaybackWebServer:
         self._observed_session_change = int(getattr(self.runner, "session_change", 0))
         self._secondary_opened = False
         self._catalog_entity = ""
-        self._initial_project_catalog: dict[str, Any] | None = None
+        self._initial_environment_catalog: dict[str, Any] | None = None
         self._manual_evaluation_factory = manual_evaluation_factory
         self._manual_evaluation_queue: Any | None = None
 
@@ -1753,35 +1753,6 @@ class PlaybackWebServer:
     async def page(self, _request: web.Request) -> web.FileResponse:
         return web.FileResponse(self.asset_root / "index.html")
 
-    async def legacy_source_page(self, request: web.Request) -> web.StreamResponse:
-        route: dict[str, Any] = {
-            "project": request.match_info.get("project_id", ""),
-            "goal_id": request.match_info.get("goal_id", ""),
-            "run_id": request.match_info.get("run_id", ""),
-            "checkpoint_id": request.match_info.get("checkpoint_id", ""),
-        }
-        if route["run_id"] and self.catalog is not None:
-            try:
-                entity = self._catalog_entity or await asyncio.to_thread(
-                    self.catalog.default_entity,
-                    getattr(self.args, "wandb_entity", None),
-                )
-                goal_id, variant_id = await asyncio.to_thread(
-                    self.catalog.run_goal_variant,
-                    entity=entity,
-                    project=route["project"],
-                    run_id=route["run_id"],
-                )
-                route["goal_id"] = goal_id
-                route["goal_variant_id"] = variant_id
-            except Exception:
-                route["run_id"] = ""
-                route["checkpoint_id"] = ""
-        location = source_browser_path(route)
-        if request.query_string:
-            location = f"{location}?{request.query_string}"
-        raise web.HTTPPermanentRedirect(location=location)
-
     async def asset(self, request: web.Request) -> web.FileResponse:
         relative = Path(request.match_info["path"])
         root = self.asset_root.resolve()
@@ -1807,30 +1778,6 @@ class PlaybackWebServer:
             self.token,
         ):
             raise web.HTTPUnauthorized(text="catalog token required")
-
-    async def catalog_projects(self, request: web.Request) -> web.Response:
-        self._authorize_api(request)
-        if self.catalog is None:
-            raise web.HTTPNotFound()
-        from gradlab.play_catalog import normalize_search_query
-
-        try:
-            requested_entity = str(
-                request.query.get("entity") or getattr(self.args, "wandb_entity", None) or ""
-            ).strip()
-            entity = requested_entity or self._catalog_entity
-            if not entity:
-                entity = await asyncio.to_thread(self.catalog.default_entity)
-                self._catalog_entity = entity
-            page = await asyncio.to_thread(
-                self.catalog.projects,
-                entity=entity,
-                query=normalize_search_query(request.query.get("q")),
-                cursor=request.query.get("cursor"),
-            )
-        except Exception as exc:
-            return web.json_response({"error": str(exc)}, status=502)
-        return web.json_response({"entity": entity, **page.to_dict()})
 
     async def catalog_environments(self, request: web.Request) -> web.Response:
         self._authorize_api(request)
@@ -1861,17 +1808,15 @@ class PlaybackWebServer:
             return
         initial_environments = getattr(self.catalog, "initial_environments", None)
         if not callable(initial_environments):
-            initial_environments = getattr(self.catalog, "initial_projects", None)
-        if not callable(initial_environments):
             return
         payload = await asyncio.to_thread(
             initial_environments,
             getattr(self.args, "wandb_entity", None),
         )
         if not isinstance(payload, Mapping):
-            raise ValueError("initial project catalog must be a mapping")
+            raise ValueError("initial environment catalog must be a mapping")
         self._catalog_entity = str(payload.get("entity") or "").strip()
-        self._initial_project_catalog = dict(payload)
+        self._initial_environment_catalog = dict(payload)
 
     async def catalog_runs(self, request: web.Request) -> web.Response:
         self._authorize_api(request)
@@ -2190,13 +2135,13 @@ class PlaybackWebServer:
         }
         app = payload.get("app")
         if (
-            self._initial_project_catalog is not None
+            self._initial_environment_catalog is not None
             and isinstance(app, Mapping)
             and app.get("phase") == "selecting"
         ):
             payload["app"] = {
                 **app,
-                "catalog": dict(self._initial_project_catalog),
+                "catalog": dict(self._initial_environment_catalog),
             }
         return payload
 
@@ -2640,27 +2585,10 @@ class PlaybackWebServer:
                     ),
                     self.page,
                 ),
-                web.get("/projects/{project_id}", self.legacy_source_page),
-                web.get(
-                    "/projects/{project_id}/goals/{goal_id}",
-                    self.legacy_source_page,
-                ),
-                web.get(
-                    "/projects/{project_id}/goals/{goal_id}/runs/{run_id}",
-                    self.legacy_source_page,
-                ),
-                web.get(
-                    (
-                        "/projects/{project_id}/goals/{goal_id}/runs/{run_id}"
-                        "/checkpoints/{checkpoint_id}"
-                    ),
-                    self.legacy_source_page,
-                ),
                 web.get("/panel/{panel}", self.page),
                 web.get("/workspace/{window}", self.page),
                 web.get("/sources/{path:.*}", self.page),
                 web.get("/assets/{path:.*}", self.asset),
-                web.get("/api/catalog/projects", self.catalog_projects),
                 web.get("/api/catalog/environments", self.catalog_environments),
                 web.get(
                     "/api/catalog/environments/{entity}/{project}/goals",
@@ -2697,14 +2625,6 @@ class PlaybackWebServer:
                         "/api/catalog/environments/{entity}/{project}/goals/{goal_id}"
                         "/variants/{goal_variant_id}/runs"
                     ),
-                    self.catalog_runs,
-                ),
-                web.get(
-                    "/api/catalog/projects/{entity}/{project}/goals",
-                    self.catalog_goals,
-                ),
-                web.get(
-                    ("/api/catalog/projects/{entity}/{project}/goals/{goal_id}/runs"),
                     self.catalog_runs,
                 ),
                 web.get(

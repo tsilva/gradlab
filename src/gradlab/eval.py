@@ -173,9 +173,7 @@ def build_parser(*, prog: str = "gradlab eval") -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     argv_list = list(sys.argv[1:] if argv is None else argv)
-    if argv_list[:1] == ["run"]:
-        argv_list = argv_list[1:]
-    elif not argv_list:
+    if not argv_list:
         parser.print_help()
         return 2
     explicit_dests = explicit_arg_dests(parser, argv_list)

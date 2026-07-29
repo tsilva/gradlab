@@ -37,6 +37,7 @@ from gradlab.policy_bundle import (
     preflight_document,
 )
 from gradlab.policy_registry import ALGORITHM_MODEL_CLASSES
+from gradlab.validation import require_mapping as _require_mapping
 
 
 HUGGINGFACE_NAMESPACE = "tsilva"
@@ -211,12 +212,6 @@ def normalize_publication_component(value: object, *, label: str) -> str:
     if "_" in normalized:
         raise AssertionError("publication component normalization retained an underscore")
     return normalized
-
-
-def _require_mapping(value: object, *, label: str) -> Mapping[str, Any]:
-    if not isinstance(value, Mapping):
-        raise ValueError(f"{label} must be an object")
-    return value
 
 
 def _provider_and_environment(qualified_env_id: object) -> tuple[str, str]:

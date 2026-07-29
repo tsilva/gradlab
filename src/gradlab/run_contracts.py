@@ -8,10 +8,7 @@ from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from typing import Any, Literal
 
-from gradlab.json_utils import (
-    canonical_json_bytes,
-    canonical_json_sha256 as document_sha256,
-)
+from gradlab.json_utils import canonical_json_sha256 as document_sha256
 
 
 SCHEMA_VERSION = 2
@@ -32,7 +29,6 @@ RUN_STOP_REASON_SUMMARY = "gradlab/run/stop_reason"
 RUN_FINAL_STEP_SUMMARY = "gradlab/run/final_step"
 RUN_EARLY_STOP_TRIGGER_SUMMARY = "gradlab/run/early_stop_trigger"
 RUN_EARLY_STOP_CONDITION_SUMMARY = "gradlab/run/early_stop_condition"
-canonical_json = canonical_json_bytes
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 EVAL_RESULT_TERMINAL_STATUSES = frozenset(
     {"accepted", "rejected", "failed", "expired", "canceled"}

@@ -480,24 +480,26 @@ class PlaybackHost:
                 )
             elif command.name == "browse_sources":
                 with self._lock:
+                    self._generation += 1
+                    candidate = self._candidate
+                    active = self._active
+                    self._candidate = None
+                    self._active = None
                     route = command.payload.get("route")
                     if isinstance(route, Mapping):
                         self._route = dict(route)
-                    elif self._active is None:
+                    elif active is None:
                         self._route = {"level": "environments"}
                     self._phase = "selecting"
                     self._message = ""
                     self._error = ""
                     self._revision += 1
-                self.clear_input()
-                with self._lock:
-                    active = self._active
+                    if active is not None:
+                        self._session_change += 1
+                if candidate is not None:
+                    candidate.cleanup()
                 if active is not None:
-                    from gradlab.play_web import PlaybackCommand
-
-                    active.runner.submit(
-                        PlaybackCommand(uuid.uuid4().hex, command.client_id, "pause", {}, None)
-                    )
+                    active.close()
             elif command.name == "cancel_source":
                 with self._lock:
                     self._generation += 1

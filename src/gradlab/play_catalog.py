@@ -129,17 +129,13 @@ class CatalogPage:
 
 
 @dataclass(frozen=True)
-class ProjectSummary:
+class EnvironmentSummary:
     entity: str
     name: str
     goal_count: int
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
-
-
-EnvironmentSummary = ProjectSummary
-
 
 @dataclass(frozen=True)
 class GoalSummary:
@@ -1696,7 +1692,7 @@ class PlayCatalog:
             daemon=True,
         ).start()
 
-    def projects(
+    def environments(
         self,
         *,
         entity: str,
@@ -1706,7 +1702,7 @@ class PlayCatalog:
         normalized = str(query or "").strip().casefold()
         goal_counts = self._repository_projects()
         items = [
-            ProjectSummary(
+            EnvironmentSummary(
                 entity=entity,
                 name=project,
                 goal_count=goal_count,
@@ -1715,20 +1711,6 @@ class PlayCatalog:
             if not normalized or normalized in _search_text(entity, project)
         ]
         return _page_items(items, cursor)
-
-    def environments(
-        self,
-        *,
-        entity: str,
-        query: str = "",
-        cursor: str | None = None,
-    ) -> CatalogPage:
-        return self.projects(entity=entity, query=query, cursor=cursor)
-
-    def initial_projects(self, explicit_entity: object = None) -> dict[str, Any]:
-        entity = self.default_entity(explicit_entity)
-        page = self.projects(entity=entity)
-        return {"entity": entity, **page.to_dict()}
 
     def initial_environments(self, explicit_entity: object = None) -> dict[str, Any]:
         entity = self.default_entity(explicit_entity)
@@ -2984,7 +2966,6 @@ __all__ = [
     "GoalSummary",
     "GoalVariantSummary",
     "PlayCatalog",
-    "ProjectSummary",
     "RunSummary",
     "WandbLocation",
     "checkpoint_manifest_url",

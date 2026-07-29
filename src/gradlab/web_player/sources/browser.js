@@ -557,8 +557,7 @@ export function sourceRouteFromPath(pathname = location.pathname) {
       checkpoint_id: "",
     };
   }
-  if (!["environments", "projects"].includes(parts[0]) || !parts[1]) return null;
-  const legacy = parts[0] === "projects";
+  if (parts[0] !== "environments" || !parts[1]) return null;
   const project = decodePathPart(parts[1]);
   if (!project) return null;
   if (parts.length === 2) {
@@ -586,7 +585,6 @@ export function sourceRouteFromPath(pathname = location.pathname) {
       checkpoint_id: "",
     };
   }
-  if (legacy) return null;
   if (parts[4] !== "variants" || !parts[5]) return null;
   const goal_variant_id = decodePathPart(parts[5]);
   if (!goal_variant_id) return null;
@@ -739,6 +737,7 @@ export class SourceBrowser {
       getState,
       showToast,
       openInspection,
+      openSourceRoute,
       catalogRequestTimeoutMs = 30_000,
     },
   ) {
@@ -749,6 +748,7 @@ export class SourceBrowser {
     this.getState = getState;
     this.showToast = showToast;
     this.openInspection = openInspection;
+    this.openSourceRoute = openSourceRoute;
     this.route = {
       level: "environments",
       entity: "",
@@ -779,11 +779,10 @@ export class SourceBrowser {
     this.evaluating = false;
     this.autoSelectedRoute = "";
     this.activeBreadcrumbRoute = "";
-    this.initialProjectCatalog = null;
+    this.initialEnvironmentCatalog = null;
     this.historyEnabled = (
       location.pathname === "/"
       || location.pathname.startsWith("/environments/")
-      || location.pathname.startsWith("/projects/")
     );
     this.pendingLocationRoute = this.historyEnabled
       ? sourceRouteFromPath(location.pathname)
@@ -797,12 +796,11 @@ export class SourceBrowser {
           parsedRoute.entity
           || this.route.entity
           || this.app.route?.entity
-          || this.initialProjectCatalog?.entity
+          || this.initialEnvironmentCatalog?.entity
           || ""
         ),
       };
-      this.applyRoute(route);
-      this.command("browse_sources", { route: { ...this.route } });
+      this.navigate(route, { historyMode: null });
     };
     if (this.historyEnabled) window.addEventListener("popstate", this.onPopState);
   }
@@ -810,7 +808,7 @@ export class SourceBrowser {
   render(snapshot) {
     this.app = snapshot?.app || { phase: "active" };
     if (this.app.catalog && typeof this.app.catalog === "object") {
-      this.initialProjectCatalog = this.app.catalog;
+      this.initialEnvironmentCatalog = this.app.catalog;
     }
     const appRoute = this.app.route || {};
     if (
@@ -824,7 +822,7 @@ export class SourceBrowser {
         entity: (
           this.pendingLocationRoute.entity
           || appRoute.entity
-          || this.initialProjectCatalog?.entity
+          || this.initialEnvironmentCatalog?.entity
           || ""
         ),
       };
@@ -859,7 +857,7 @@ export class SourceBrowser {
       this.autoSelectedRoute = "";
       this.syncUrl("replace");
     }
-    this.hydrateInitialProjects();
+    this.hydrateInitialEnvironments();
     this.renderView();
     if (this.app.phase === "selecting") this.ensureLoaded();
     this.updatePolling();
@@ -957,8 +955,8 @@ export class SourceBrowser {
     return `${routeSignature(this.route)}:${this.query.trim().toLocaleLowerCase()}`;
   }
 
-  hydrateInitialProjects() {
-    const catalog = this.initialProjectCatalog;
+  hydrateInitialEnvironments() {
+    const catalog = this.initialEnvironmentCatalog;
     if (
       !catalog
       || this.route.level !== "environments"
@@ -1136,7 +1134,7 @@ export class SourceBrowser {
     this.error = "";
     this.selectedCheckpoints.clear();
     this.autoSelectedRoute = "";
-    this.hydrateInitialProjects();
+    this.hydrateInitialEnvironments();
     this.renderView();
     this.ensureLoaded();
     this.updatePolling();
@@ -1153,9 +1151,13 @@ export class SourceBrowser {
   }
 
   navigate(route, { historyMode = "push" } = {}) {
+    const nextRoute = { ...this.route, ...route };
+    const commandId = this.command("browse_sources", { route: nextRoute });
+    if (commandId === null) return false;
     this.applyRoute(route);
-    this.syncUrl(historyMode);
-    this.command("browse_sources", { route: { ...this.route } });
+    if (historyMode) this.syncUrl(historyMode);
+    this.openSourceRoute?.({ ...this.route });
+    return true;
   }
 
   browseCurrentSource() {

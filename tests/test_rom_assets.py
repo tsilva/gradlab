@@ -10,7 +10,6 @@ from unittest.mock import patch
 import pytest
 
 from gradlab.env_identity import environment_identity_from_train_config
-from gradlab.main import main as cli_main
 from gradlab.rom_assets import (
     ROM_ASSET_IDENTITY_ALGORITHM,
     cache_path,
@@ -349,14 +348,3 @@ def test_rom_import_missing_path_is_a_usage_error(
 
     assert exc.value.code == 2
     assert ROM_IMPORT_DIR_ENV in capsys.readouterr().err
-
-
-def test_hidden_import_roms_route_executes_shared_import_handler(
-    tmp_path: Path,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    with patch("stable_retro.scripts.import_path.main") as stable_retro_import:
-        assert cli_main(["import-roms", str(tmp_path)]) == 0
-
-    stable_retro_import.assert_called_once_with()
-    assert f"ROM import finished from {tmp_path}" in capsys.readouterr().out

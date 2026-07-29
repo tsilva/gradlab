@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import numpy as np
 
 from gradlab.env import EnvConfig
-from gradlab.play import (
+from gradlab.play_session import (
     optional_fast_env_frames,
     playback_model_observation,
     vector_env_frame,

@@ -22,7 +22,7 @@ from gradlab.model_sources import (
     positional_model_source_arg,
     resolve_model_source,
 )
-from gradlab.play import (
+from gradlab.play_session import (
     _PlaybackSession,
     build_parser as build_play_parser,
     playback_should_end_episode,

@@ -25,6 +25,15 @@ class PublicCliHelpTests(unittest.TestCase):
         self.assertIn("    rom ", help_text)
         self.assertNotIn("import-roms", help_text)
 
+    def test_retired_command_forms_are_rejected(self) -> None:
+        for argv in (
+            ["import-roms"],
+            ["eval", "run", "--n-envs", "0"],
+        ):
+            with self.subTest(command=" ".join(argv)), self.assertRaises(SystemExit) as raised:
+                main(argv)
+            self.assertEqual(raised.exception.code, 2)
+
     def test_ordinary_help_does_not_import_optional_or_rom_import_stacks(self) -> None:
         script = """
 import sys
@@ -65,10 +74,8 @@ for name in sorted(sys.modules):
             (("experiment", "launch", "--help"), "usage: gradlab experiment launch"),
             (("experiment", "follow", "--help"), "usage: gradlab experiment follow"),
             (("eval", "--help"), "usage: gradlab eval"),
-            (("eval", "run", "--help"), "usage: gradlab eval"),
             (("play", "--help"), "usage: gradlab play"),
             (("rom", "import", "--help"), "usage: gradlab rom import"),
-            (("import-roms", "--help"), "usage: gradlab import-roms"),
             (("benchmark", "run", "--help"), "usage: gradlab benchmark run"),
             (("validate", "--help"), "usage: gradlab validate"),
             (("env", "preflight", "--help"), "usage: gradlab env preflight"),
