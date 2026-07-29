@@ -705,6 +705,22 @@ class RunSupervisorTests(unittest.TestCase):
         ):
             supervisor._observe_live_learner_state(15.0)
 
+    def test_active_iteration_repolls_before_declaring_completed_learner_hung(self) -> None:
+        supervisor = self.supervisor()
+        self.prepare_live_learner_contract(supervisor)
+        atomic_write_json(
+            supervisor.run_dir / "training-result.json",
+            self.learner_result(final_step=0),
+        )
+        supervisor._observe_live_learner_state(10.0)
+        supervisor.learner = MagicMock()
+        supervisor.learner.poll.return_value = 0
+
+        with patch.object(supervisor.clock, "monotonic", return_value=18.2):
+            self.assertFalse(supervisor._observe_learner_after_active_iteration())
+
+        supervisor.learner.poll.assert_called_once_with()
+
     def test_failed_learner_result_is_authoritative_immediately(self) -> None:
         supervisor = self.supervisor()
         self.prepare_live_learner_contract(supervisor)

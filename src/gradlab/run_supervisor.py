@@ -702,6 +702,15 @@ class RunSupervisor:
             )
         return terminal_state
 
+    def _observe_learner_after_active_iteration(self) -> bool:
+        """Recheck liveness after potentially blocking supervisor work."""
+
+        learner = self.learner
+        if learner is None or learner.poll() is not None:
+            return False
+        self._observe_live_learner_state(self.clock.monotonic())
+        return True
+
     @staticmethod
     def _checkpoint_manifest_url(checkpoint: Mapping[str, Any]) -> str:
         model_url = str(checkpoint.get("public_url") or "")
@@ -2660,7 +2669,8 @@ class RunSupervisor:
         try:
             while self.learner is not None and self.learner.poll() is None:
                 self.active_iteration()
-                self._observe_live_learner_state(self.clock.monotonic())
+                if not self._observe_learner_after_active_iteration():
+                    break
                 if self.lease_lost:
                     break
                 self.clock.sleep(self._liveness_seconds("poll_interval_seconds"))
