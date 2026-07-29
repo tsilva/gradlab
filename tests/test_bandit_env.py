@@ -285,7 +285,7 @@ def test_bandit_local_demo_runs_to_cap_without_a_declared_success_signal(
     )
 
     run_dir = tmp_path / "backend-smoke"
-    assert (run_dir / "learner_ready.json").is_file()
+    assert (run_dir / "learner-ready.json").is_file()
     assert (run_dir / "final_model.zip").is_file()
     bundle = load_policy_bundle_from_checkpoint(run_dir / "final_model.zip")
     assert bundle is not None

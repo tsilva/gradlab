@@ -624,6 +624,30 @@ class RunSupervisorTests(unittest.TestCase):
         command = start.call_args.args[0]
         self.assertEqual(command[-2:], ["--execution-mode", "supervised"])
 
+    def test_fault_fixture_uses_dedicated_non_training_learner(self) -> None:
+        supervisor = self.supervisor()
+        with (
+            patch.dict(
+                "os.environ",
+                {
+                    "GRADLAB_SUPERVISION_FAULT_FIXTURE": (
+                        "failed-result-live-process"
+                    )
+                },
+            ),
+            patch.object(
+                supervisor.runtime,
+                "start_learner",
+                return_value=MagicMock(pid=1234),
+            ) as start,
+        ):
+            supervisor._start_learner()
+
+        command = start.call_args.args[0]
+        self.assertIn("gradlab.supervision_fault_learner", command)
+        self.assertEqual(command[-2:], ["--mode", "failed-result-live-process"])
+        self.assertNotIn("gradlab.train", command)
+
     def test_training_only_contract_omits_null_eval_contract(self) -> None:
         config = {"checkpoint_eval_contract": None}
         contract = _bind_evaluation_contract(

@@ -296,6 +296,29 @@ class RunAuthorityTests(unittest.TestCase):
         with self.assertRaises(LeaseUnavailable):
             self.authority.renew_lease(lease, now=instant + timedelta(seconds=10))
 
+    def test_writer_lease_release_is_conditional_and_immediate(self) -> None:
+        run_id = new_run_id()
+        attempt_id = new_attempt_id()
+        lease = self.authority.acquire_lease(
+            run_id=run_id,
+            attempt_id=attempt_id,
+            holder_id="operator-reconcile",
+        )
+
+        self.authority.release_lease(lease)
+
+        self.assertIsNone(
+            self.authority.control.get_json_optional(
+                f"runs/{run_id}/writer-lease.json"
+            )
+        )
+        replacement = self.authority.acquire_lease(
+            run_id=run_id,
+            attempt_id=new_attempt_id(),
+            holder_id="next-writer",
+        )
+        self.assertEqual(replacement.generation, 1)
+
     def test_metric_segments_are_ordered_and_immutable(self) -> None:
         run_id = new_run_id()
         attempt_id = new_attempt_id()

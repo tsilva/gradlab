@@ -1004,15 +1004,30 @@ class RunSupervisor:
                 environment.pop(name, None)
         environment["GRADLAB_INTERNAL_LEARNER"] = "1"
         environment["GRADLAB_ROM_CACHE_DIR"] = str(CONTAINER_ROM_CACHE)
-        command = [
-            sys.executable,
-            "-m",
-            "gradlab.train",
-            "--train-config-json",
-            str(self.config_path),
-            "--execution-mode",
-            "supervised",
-        ]
+        fault_fixture = str(
+            environment.get("GRADLAB_SUPERVISION_FAULT_FIXTURE") or ""
+        ).strip()
+        command = (
+            [
+                sys.executable,
+                "-m",
+                "gradlab.supervision_fault_learner",
+                "--train-config-json",
+                str(self.config_path),
+                "--mode",
+                fault_fixture,
+            ]
+            if fault_fixture
+            else [
+                sys.executable,
+                "-m",
+                "gradlab.train",
+                "--train-config-json",
+                str(self.config_path),
+                "--execution-mode",
+                "supervised",
+            ]
+        )
         self.learner = self.runtime.start_learner(
             command,
             log_path=self.learner_log_path,

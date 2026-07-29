@@ -359,17 +359,23 @@ def _task_request(manifest: RunManifest, *, manifest_uri: str) -> TaskRequest:
         **dict(manifest.compute.get("selected") or manifest.compute["request"])
     )
     local = compute.kind == "local"
+    plain_env = (
+        {"MODAL_ENVIRONMENT": str(manifest.modal["environment_name"])}
+        if bool(manifest.modal["enabled"])
+        else {}
+    )
+    fault_fixture = str(
+        manifest.compute.get("supervision_fault_fixture") or ""
+    ).strip()
+    if fault_fixture:
+        plain_env["GRADLAB_SUPERVISION_FAULT_FIXTURE"] = fault_fixture
     return TaskRequest(
         run_id=manifest.run_id,
         task_name=str(manifest.compute["dstack_task"]),
         image=manifest.image_digest,
         manifest_uri=manifest_uri,
         compute=compute,
-        plain_env=(
-            {"MODAL_ENVIRONMENT": str(manifest.modal["environment_name"])}
-            if bool(manifest.modal["enabled"])
-            else {}
-        ),
+        plain_env=plain_env,
         secret_env=(
             *COMMON_SECRET_ENV,
             *(
@@ -542,6 +548,37 @@ def cmd_launch(args: argparse.Namespace) -> int:
         portable_recipe,
         expected_sha256=recipe_sha256,
     )
+    fault_fixture = str(
+        getattr(args, "supervision_fault_fixture", "") or ""
+    ).strip()
+    manifest_compute = {
+        "request": compute.as_manifest(),
+        "selected": selected_compute.as_manifest(),
+        "selected_offer": selected_offer,
+        "dstack_task": dstack_task,
+        "source_branch": branch,
+        "runtime_workflow_run_id": release.workflow_run_id,
+        "runtime_input_sha256": release.runtime_input_sha256,
+        "runtime_build_source_sha": release.runtime_build_source_sha,
+        "submission_key": str(args.submission_key or ""),
+    }
+    liveness = _default_liveness_policy()
+    if fault_fixture:
+        if fault_fixture not in {
+            "failed-result-live-process",
+            "completed-result-hung-process",
+        }:
+            raise ValueError(f"unsupported supervision fault fixture: {fault_fixture}")
+        manifest_compute["supervision_fault_fixture"] = fault_fixture
+        liveness.update(
+            {
+                "startup_timeout_seconds": 30.0,
+                "result_exit_grace_seconds": 2.0,
+                "terminate_grace_seconds": 3.0,
+                "kill_grace_seconds": 2.0,
+                "failure_drain_timeout_seconds": 30.0,
+            }
+        )
     manifest = RunManifest(
         run_id=run_id,
         attempt_id=attempt_id,
@@ -556,17 +593,7 @@ def cmd_launch(args: argparse.Namespace) -> int:
         environment_sha256=str(document["environment_hash"]).removeprefix("sha256:"),
         seed=int(args.seed),
         run_description=str(args.run_description),
-        compute={
-            "request": compute.as_manifest(),
-            "selected": selected_compute.as_manifest(),
-            "selected_offer": selected_offer,
-            "dstack_task": dstack_task,
-            "source_branch": branch,
-            "runtime_workflow_run_id": release.workflow_run_id,
-            "runtime_input_sha256": release.runtime_input_sha256,
-            "runtime_build_source_sha": release.runtime_build_source_sha,
-            "submission_key": str(args.submission_key or ""),
-        },
+        compute=manifest_compute,
         wandb=wandb,
         modal={
             "enabled": checkpoint_eval_backend == "modal",
@@ -578,7 +605,7 @@ def cmd_launch(args: argparse.Namespace) -> int:
         },
         storage=storage.manifest_locations(),
         goal_variant=goal_variant,
-        liveness=_default_liveness_policy(),
+        liveness=liveness,
     )
     authority.create_manifest(manifest)
     manifest_uri = authority.control.uri(f"runs/{run_id}/manifest.json")
@@ -1106,6 +1133,39 @@ def cmd_reconcile(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_fault_test(args: argparse.Namespace) -> int:
+    launch_args = argparse.Namespace(
+        goal_file=Path("experiments/goals/VizdoomBasic-v1/_goal.yaml"),
+        recipe_file=Path(
+            "experiments/goals/VizdoomBasic-v1/recipes/ppo.yaml"
+        ),
+        seed=17,
+        run_description=(
+            "Non-production bounded B3 learner-supervision fault fixture; "
+            f"mode={args.mode}."
+        ),
+        recipe_overrides=[],
+        checkpoint_eval_backend="none",
+        submission_key="supervision-fault-fixture-v1",
+        compute="local",
+        target="b3",
+        max_price=None,
+        max_cost_usd=None,
+        allow_on_demand=False,
+        max_duration=120,
+        rom_path=None,
+        runtime_image_ref_file=args.runtime_image_ref_file,
+        image_workflow=args.image_workflow,
+        image_artifact=args.image_artifact,
+        image_branch=args.image_branch,
+        existing_runtime_only=bool(args.existing_runtime_only),
+        runtime_readiness_timeout=args.runtime_readiness_timeout,
+        supervision_fault_fixture=str(args.mode),
+        json=bool(args.json),
+    )
+    return cmd_launch(launch_args)
+
+
 def cmd_logs(args: argparse.Namespace) -> int:
     root = repository_root()
     _storage_config, authority = _storage(root)
@@ -1269,12 +1329,15 @@ def cmd_retry(args: argparse.Namespace) -> int:
             attempt_id=previous_manifest.attempt_id,
             holder_id=f"operator-reconcile-{os.getpid()}",
         )
-        _record_terminal_task_without_receipt(
-            authority,
-            previous_manifest,
-            previous_task,
-            writer_lease=reconcile_lease,
-        )
+        try:
+            _record_terminal_task_without_receipt(
+                authority,
+                previous_manifest,
+                previous_task,
+                writer_lease=reconcile_lease,
+            )
+        finally:
+            authority.release_lease(reconcile_lease)
         state = authority.semantic_state(args.run_id)
         attempt_terminal = _latest_attempt_terminal(state)
     _require_retryable_attempt_terminal(attempt_terminal)
@@ -1611,6 +1674,59 @@ def build_parser() -> argparse.ArgumentParser:
     cancel.add_argument("--run", dest="run_id", type=_require_run_id, required=True)
     cancel.add_argument("--abort", action="store_true")
     cancel.set_defaults(func=cmd_cancel)
+
+    reconcile = commands.add_parser(
+        "reconcile",
+        help="Seal a terminal dstack attempt that has no authoritative receipt.",
+        description=(
+            "Acquire the attempt writer lease, create an idempotent operational-failure "
+            "receipt for a terminal dstack task, then project that receipt to W&B."
+        ),
+    )
+    reconcile.add_argument("--run", dest="run_id", type=_require_run_id, required=True)
+    reconcile.add_argument(
+        "--stop-reason",
+        choices=RECONCILE_STOP_REASONS,
+        default="supervisor_startup_failure",
+    )
+    reconcile.add_argument(
+        "--evidence-sha256",
+        action="append",
+        type=_require_sha256_arg,
+        default=[],
+        help="Bounded external failure-evidence hash; repeat to record multiple objects.",
+    )
+    reconcile.add_argument("--json", action="store_true")
+    reconcile.set_defaults(func=cmd_reconcile)
+
+    fault_test = commands.add_parser(
+        "fault-test",
+        help="Launch the bounded non-production B3 learner-supervision fixture.",
+        description=(
+            "Launch an exact-source, two-minute B3 task that bypasses training and "
+            "intentionally exercises failed-result or hung-result process-group teardown."
+        ),
+    )
+    fault_test.add_argument(
+        "--mode",
+        choices=(
+            "failed-result-live-process",
+            "completed-result-hung-process",
+        ),
+        default="failed-result-live-process",
+    )
+    fault_test.add_argument("--runtime-image-ref-file", type=Path)
+    fault_test.add_argument("--image-workflow", default=DEFAULT_IMAGE_WORKFLOW)
+    fault_test.add_argument("--image-artifact", default=DEFAULT_IMAGE_ARTIFACT)
+    fault_test.add_argument("--image-branch")
+    fault_test.add_argument("--existing-runtime-only", action="store_true")
+    fault_test.add_argument(
+        "--runtime-readiness-timeout",
+        type=_parse_duration,
+        default=DEFAULT_RUNTIME_READINESS_TIMEOUT_SECONDS,
+    )
+    fault_test.add_argument("--json", action="store_true")
+    fault_test.set_defaults(func=cmd_fault_test)
 
     retry = commands.add_parser("retry", help="Retry a terminal failed attempt.")
     retry.add_argument("--run", dest="run_id", type=_require_run_id, required=True)

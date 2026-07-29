@@ -1,0 +1,4 @@
+defaults:
+- ../VizdoomDefendLine-v1/_goal@_global_
+- _self_
+title: ViZDoom Defend the Line combat

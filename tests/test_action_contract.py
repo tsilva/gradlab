@@ -196,6 +196,7 @@ def test_vizdoom_preflight_uses_configured_available_buttons():
         ),
         ("VizdoomDefendCenter-v1", ("noop", "turn_left", "turn_right", "attack")),
         ("VizdoomDefendLine-v1", ("noop", "turn_left", "turn_right", "attack")),
+        ("VizdoomDefendLine-Plus-v1", ("noop", "turn_left", "turn_right", "attack")),
         (
             "VizdoomHealthGathering-v1",
             ("noop", "turn_left", "turn_right", "move_forward"),

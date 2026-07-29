@@ -152,6 +152,19 @@ class RuntimeContractTests(unittest.TestCase):
                 expected_runtime_input_sha256="d" * 64,
                 expected_runtime_build_source_sha=BUILD_SOURCE_SHA,
             )
+        readiness = runtime_refs.modal_readiness_from_payload(
+            payload,
+            label="historical Modal readiness",
+            expected_source_sha=SOURCE_SHA,
+            expected_runtime_image_ref=RUNTIME_IMAGE_REF,
+            expected_runtime_input_sha256="d" * 64,
+            expected_runtime_build_source_sha=BUILD_SOURCE_SHA,
+            require_current_contract=False,
+        )
+        self.assertEqual(
+            readiness.startup_probe["train_config_contract_sha256"],
+            "b" * 64,
+        )
 
     def test_version_five_receipt_rejects_invalid_runtime_identity_fields(self) -> None:
         cases = {

@@ -13,6 +13,8 @@ namespaces:
     project: VizdoomDefendCenter-v1
   VizdoomDefendLine-v1:
     project: VizdoomDefendLine-v1
+  VizdoomDefendLine-Plus-v1:
+    project: VizdoomDefendLine-Plus-v1
   VizdoomHealthGathering-v1:
     project: VizdoomHealthGathering-v1
   VizdoomHealthGatheringSupreme-v1:

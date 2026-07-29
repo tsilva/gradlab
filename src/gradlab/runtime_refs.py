@@ -269,6 +269,7 @@ def modal_readiness_from_payload(
     expected_runtime_image_ref: str,
     expected_runtime_input_sha256: str = "",
     expected_runtime_build_source_sha: str = "",
+    require_current_contract: bool = True,
 ) -> ModalReadinessInfo:
     schema_version = int(payload.get("schema_version") or 0)
     if schema_version != MODAL_READINESS_SCHEMA_VERSION:
@@ -304,7 +305,6 @@ def modal_readiness_from_payload(
         raise ValueError(f"{label} runtime_build_source_sha does not match image receipt")
     expected_probe = {
         "runtime_image_ref": runtime_image_ref,
-        "train_config_contract_sha256": train_config_contract_sha256(),
         "app_name": modal_app_name,
     }
     expected_probe.update(
@@ -316,6 +316,20 @@ def modal_readiness_from_payload(
     for key, expected in expected_probe.items():
         if startup_probe.get(key) != expected:
             raise ValueError(f"{label} startup_probe.{key} does not match readiness")
+    probe_contract_sha256 = str(
+        startup_probe.get("train_config_contract_sha256") or ""
+    ).strip().lower()
+    if re.fullmatch(r"[0-9a-f]{64}", probe_contract_sha256) is None:
+        raise ValueError(
+            f"{label} startup_probe.train_config_contract_sha256 is invalid"
+        )
+    if (
+        require_current_contract
+        and probe_contract_sha256 != train_config_contract_sha256()
+    ):
+        raise ValueError(
+            f"{label} startup_probe.train_config_contract_sha256 does not match readiness"
+        )
     return ModalReadinessInfo(
         runtime_image_ref=runtime_image_ref,
         source_sha=source_sha,
@@ -675,6 +689,7 @@ def modal_readiness_for_release(
     *,
     artifact_name: str = DEFAULT_MODAL_ARTIFACT,
     image_workflow: str = DEFAULT_IMAGE_WORKFLOW,
+    require_current_contract: bool = True,
 ) -> ModalReadinessInfo:
     run_ids = [release.workflow_run_id] if release.workflow_run_id else []
     for workflow in (image_workflow, DEFAULT_MODAL_WORKFLOW):
@@ -695,6 +710,7 @@ def modal_readiness_for_release(
                 expected_runtime_image_ref=release.runtime_image_ref,
                 expected_runtime_input_sha256=release.runtime_input_sha256,
                 expected_runtime_build_source_sha=release.runtime_build_source_sha,
+                require_current_contract=require_current_contract,
             )
         except Exception as exc:
             errors.append(f"run {run_id}: {exc}")
