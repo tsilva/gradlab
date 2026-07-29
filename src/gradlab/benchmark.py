@@ -23,7 +23,7 @@ from gradlab.benchmark_profiles import (
 from gradlab.env import default_run_dir
 from gradlab.metric_store import MetricStore, metric_store_path
 from gradlab.policy_bundle import build_recipe_document, write_canonical_json
-from gradlab.recipe_documents import compose_train_document
+from gradlab.recipe_documents import compose_resolved_train_documents
 
 
 def _timestamp() -> str:
@@ -57,18 +57,22 @@ def _execution_commands(
         else:
             variant = "candidate" if command.label.startswith("candidate-") else "baseline"
             recipe_file = str(profile.payload[f"{variant}_recipe_file"])
-        materialized = compose_train_document(
+        source_commit = _git_commit() or "0" * 40
+        resolved = compose_resolved_train_documents(
             Path(str(profile.payload["goal_file"])),
             Path(recipe_file),
             recipe_overrides=profile.payload.get("recipe_overrides", ()),
+            source_sha=source_commit,
         )
         recipe_document = build_recipe_document(
-            materialized,
+            resolved.effective,
             repo_root=Path.cwd(),
-            source_commit=_git_commit() or "0" * 40,
+            source_commit=source_commit,
             run_description=str(config["run_description"]),
             seed=int(config["seed"]),
             runtime_image_ref="docker:gradlab-benchmark@sha256:" + "0" * 64,
+            base_materialized_recipe=resolved.base,
+            canonical_goal=resolved.canonical_goal,
         )
         recipe_path = (
             output_dir

@@ -33,7 +33,10 @@ from gradlab.policy_bundle import (
     write_canonical_json,
 )
 from gradlab.eval_runner import normalized_evaluation_request
-from gradlab.recipe_documents import compose_train_document
+from gradlab.recipe_documents import (
+    compose_resolved_train_documents,
+    compose_train_document,
+)
 from gradlab.train_config import validate_and_normalize_train_config
 from gradlab.training_backend import training_backend_config, training_backend_config_hash
 
@@ -61,6 +64,43 @@ def level1_1_recipe_document(*, seed: int = 7) -> dict:
         seed=seed,
         runtime_image_ref=RUNTIME,
     )
+
+
+def test_recipe_v2_embeds_verified_goal_and_recipe_bases() -> None:
+    resolved = compose_resolved_train_documents(
+        BANDIT_GOAL,
+        BANDIT_RECIPE,
+        recipe_overrides=("train.backend.config.gamma=0.97",),
+        source_sha="a" * 40,
+    )
+    document = build_recipe_document(
+        resolved.effective,
+        repo_root=Path.cwd(),
+        source_commit="a" * 40,
+        run_description="Bandit recipe v2 proof",
+        seed=7,
+        runtime_packages=("gradlab==0.1.0",),
+        base_materialized_recipe=resolved.base,
+        canonical_goal=resolved.canonical_goal,
+    )
+
+    assert document["format_version"] == 2
+    assert document["resolution"]["goal"]["base"] == resolved.canonical_goal
+    assert document["resolution"]["recipe"]["variant_id"].startswith("v-")
+    assert (
+        document["resolution"]["recipe"]["base"]["train_config"]["training_backend"]["config"][
+            "gamma"
+        ]
+        != document["recipe"]["train_config"]["training_backend"]["config"]["gamma"]
+    )
+    assert validate_recipe_document(document) == document
+
+    tampered = deepcopy(document)
+    tampered["resolution"]["recipe"]["base"]["train_config"]["training_backend"]["config"][
+        "gamma"
+    ] = 0.5
+    with pytest.raises(PolicyDocumentError, match="base_sha256"):
+        validate_recipe_document(tampered)
 
 
 def test_wandb_display_name_is_not_part_of_portable_recipe() -> None:
@@ -545,7 +585,7 @@ def test_future_recipe_version_fails_with_source_and_supported_versions(tmp_path
     message = str(error.value)
     assert str(path) in message
     assert "999" in message
-    assert "[1]" in message
+    assert "[1, 2]" in message
     assert "Upgrade gradlab" in message
 
 

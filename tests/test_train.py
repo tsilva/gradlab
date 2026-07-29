@@ -14,7 +14,7 @@ from gradlab.training.sb3_helpers import (
 )
 from gradlab.training.sb3_on_policy import checkpoint_save_frequency
 from gradlab.training_backend import GracefulStopFlag
-from gradlab.train import install_graceful_stop_handler
+from gradlab.train import graceful_stop_signal_scope
 from gradlab.seeds import (
     DEFAULT_EVAL_SEED,
     validate_eval_seed,
@@ -25,14 +25,19 @@ class TrainTests(unittest.TestCase):
     def test_local_training_treats_sigint_as_a_graceful_stop(self) -> None:
         stop_flag = GracefulStopFlag()
 
-        with mock.patch("gradlab.train.signal.signal") as register:
-            install_graceful_stop_handler(stop_flag, include_sigint=True)
+        with (
+            mock.patch("gradlab.train.signal.getsignal", return_value=signal.SIG_DFL),
+            mock.patch("gradlab.train.signal.signal") as register,
+        ):
+            with graceful_stop_signal_scope(stop_flag, include_sigint=True):
+                handlers = {call.args[0]: call.args[1] for call in register.call_args_list}
+                self.assertIn(signal.SIGINT, handlers)
+                handlers[signal.SIGINT](signal.SIGINT, None)
+            restored = [call for call in register.call_args_list if call.args[1] == signal.SIG_DFL]
 
-        handlers = {call.args[0]: call.args[1] for call in register.call_args_list}
-        self.assertIn(signal.SIGINT, handlers)
-        handlers[signal.SIGINT](signal.SIGINT, None)
         self.assertTrue(stop_flag.requested)
         self.assertEqual(stop_flag.reason, "SIGINT")
+        self.assertEqual(len(restored), len(handlers))
 
     def test_only_gradlab_callback_implements_the_sb3_callback_protocol(self) -> None:
         self.assertTrue(issubclass(GradLabCallback, BaseCallback))

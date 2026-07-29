@@ -116,9 +116,7 @@ def test_wandb_identity_cohort_group_includes_override_variant() -> None:
             seed=123,
         )
 
-    assert identity["group"] == (
-        "cohort::SuperMarioBros-Nes-v0/Level1-1::ppo-b3::v-12345678"
-    )
+    assert identity["group"] == ("cohort::SuperMarioBros-Nes-v0/Level1-1::ppo-b3::v-12345678")
 
 
 def _manifest_only_run() -> RunManifest:
@@ -151,9 +149,7 @@ def _manifest_only_run() -> RunManifest:
     manifest = RunManifest(
         run_id=run_id,
         attempt_id=attempt_id,
-        created_at=(datetime.now(UTC) - timedelta(minutes=1))
-        .isoformat()
-        .replace("+00:00", "Z"),
+        created_at=(datetime.now(UTC) - timedelta(minutes=1)).isoformat().replace("+00:00", "Z"),
         source_sha=source_sha,
         image_digest="docker:example/gradlab@sha256:" + "c" * 64,
         goal_slug="example/goal",
@@ -286,8 +282,10 @@ def test_launch_operator_preflight_runs_before_runtime_readiness(
             side_effect=[goal, recipe],
         ),
         mock.patch(
-            "gradlab.experiment_cli.compose_train_document",
-            return_value={"train_config": {"checkpoint_eval_backend": "modal"}},
+            "gradlab.experiment_cli.compose_resolved_train_documents",
+            return_value=SimpleNamespace(
+                effective={"train_config": {"checkpoint_eval_backend": "modal"}},
+            ),
         ),
         mock.patch(
             "gradlab.experiment_cli._operator_preflight",
@@ -612,9 +610,7 @@ def test_resume_submit_recovers_only_the_original_manifest(
             f"{prefix}/attempts/{manifest.attempt_id}/manifest.json",
         ]
     )
-    authority.control.uri.side_effect = (
-        lambda key: f"s3://control-private/{key}"
-    )
+    authority.control.uri.side_effect = lambda key: f"s3://control-private/{key}"
     authority.evaluation.iter_keys.return_value = iter(())
     authority.models.iter_keys.return_value = iter(())
     authority.models.public_url.return_value = (
@@ -640,9 +636,7 @@ def test_resume_submit_recovers_only_the_original_manifest(
             return_value=(storage, authority, backend, {"status": "ready"}),
         ),
     ):
-        assert (
-            cmd_resume_submit(SimpleNamespace(run_id=manifest.run_id, json=True)) == 0
-        )
+        assert cmd_resume_submit(SimpleNamespace(run_id=manifest.run_id, json=True)) == 0
 
     submitted_request = backend.submit.call_args.args[0]
     assert submitted_request.run_id == manifest.run_id

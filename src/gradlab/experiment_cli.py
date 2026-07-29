@@ -40,7 +40,7 @@ from gradlab.operator_credentials import (
 from gradlab.r2_store import R2Bucket, RunStorageConfig
 from gradlab.policy_bundle import build_recipe_document, canonical_json_sha256
 from gradlab.recipe_documents import (
-    compose_train_document,
+    compose_resolved_train_documents,
     load_goal_contract,
     prepare_checkpoint_eval_mode,
 )
@@ -74,6 +74,7 @@ from gradlab.wandb_utils import (
     canonical_wandb_environment,
     wandb_entity_from_env,
 )
+from gradlab.wandb_publisher import WandbProjector, publish_terminal_summary
 
 
 DEFAULT_MAX_DURATION_SECONDS = 48 * 60 * 60
@@ -439,7 +440,7 @@ def cmd_launch(args: argparse.Namespace) -> int:
     recipe_path = _tracked_committed_path(root, args.recipe_file, label="recipe")
     recipe_overrides = tuple(str(value) for value in args.recipe_overrides)
     requested_checkpoint_eval_backend = args.checkpoint_eval_backend
-    document = compose_train_document(
+    resolved_documents = compose_resolved_train_documents(
         goal_path,
         recipe_path,
         recipe_overrides=recipe_overrides,
@@ -447,7 +448,9 @@ def cmd_launch(args: argparse.Namespace) -> int:
             prepare_checkpoint_eval_mode,
             checkpoint_eval_backend=requested_checkpoint_eval_backend,
         ),
+        source_sha=source_sha,
     )
+    document = resolved_documents.effective
     checkpoint_eval_backend = str(document["train_config"]["checkpoint_eval_backend"])
     compute = _compute(args)
     storage, authority, dstack_backend, _preflight_report = _operator_preflight(
@@ -503,6 +506,11 @@ def cmd_launch(args: argparse.Namespace) -> int:
         asset=asset,
         checkpoint_eval_backend=checkpoint_eval_backend,
     )
+    base_contract_document = _bind_launch_contract(
+        resolved_documents.base,
+        asset=asset,
+        checkpoint_eval_backend=checkpoint_eval_backend,
+    )
     portable_recipe = build_recipe_document(
         contract_document,
         repo_root=root,
@@ -510,6 +518,13 @@ def cmd_launch(args: argparse.Namespace) -> int:
         run_description=str(args.run_description),
         seed=int(args.seed),
         runtime_image_ref=release.runtime_image_ref,
+        base_materialized_recipe=base_contract_document,
+        canonical_goal=resolved_documents.canonical_goal,
+    )
+    recipe_sha256 = canonical_json_sha256(portable_recipe)
+    authority.put_recipe_document(
+        portable_recipe,
+        expected_sha256=recipe_sha256,
     )
     manifest = RunManifest(
         run_id=run_id,
@@ -520,7 +535,7 @@ def cmd_launch(args: argparse.Namespace) -> int:
         goal_slug=goal_slug,
         goal_sha256=str(document["train_config"]["effective_goal_contract_sha256"]),
         recipe_slug=recipe_slug,
-        recipe_sha256=canonical_json_sha256(portable_recipe),
+        recipe_sha256=recipe_sha256,
         recipe_overrides=recipe_overrides,
         environment_sha256=str(document["environment_hash"]).removeprefix("sha256:"),
         seed=int(args.seed),
@@ -616,19 +631,60 @@ def cmd_catalog_repair(args: argparse.Namespace) -> int:
     authority = RunAuthority(storage)
     discovered = 0
     registered = 0
+    terminal_summaries = 0
     skipped_legacy = 0
     failed: list[dict[str, str]] = []
+    terminal_summary_failed: list[dict[str, str]] = []
     for key in sorted(authority.control.iter_keys("runs/")):
         if not re.fullmatch(r"runs/gradlab-[0-9a-f]{32}/manifest\.json", key):
             continue
         discovered += 1
         try:
-            manifest = RunManifest(**authority.control.get_json(key))
+            state = authority.semantic_state(key.split("/")[1])
+            manifest = RunManifest(**_latest_attempt(state))
             manifest.validate()
             if manifest.goal_variant is None:
                 skipped_legacy += 1
                 continue
             authority.register_goal_variant(manifest)
+            terminal_document = _latest_attempt_terminal(state)
+            if terminal_document is not None:
+                terminal = TerminalReceipt(**terminal_document)
+                terminal.validate()
+                if not authority.update_goal_variant_run_best_effort(
+                    manifest,
+                    state=terminal.state,
+                    updated_at=terminal.completed_at,
+                    stop_reason=terminal.stop_reason,
+                    final_step=terminal.final_step,
+                    early_stop=terminal.early_stop,
+                ):
+                    raise RuntimeError("could not project terminal reason into run index")
+                try:
+                    projector = WandbProjector.resume(
+                        {
+                            "wandb_run_id": manifest.run_id,
+                            "wandb_entity": manifest.wandb["entity"],
+                            "wandb_project": manifest.wandb["project"],
+                            "wandb_mode": "online",
+                            "run_name": manifest.wandb.get("display_name"),
+                            "wandb_group": manifest.wandb.get("group"),
+                        },
+                        update_finish_state=False,
+                    )
+                    try:
+                        publish_terminal_summary(projector.run, terminal)
+                    finally:
+                        projector.close(timeout_seconds=300)
+                    terminal_summaries += 1
+                except Exception as exc:
+                    terminal_summary_failed.append(
+                        {
+                            "key": key,
+                            "error_type": type(exc).__name__,
+                            "error": str(exc),
+                        }
+                    )
             authority.record_goal_variant_registration(manifest)
             registered += 1
         except Exception as exc:
@@ -643,6 +699,8 @@ def cmd_catalog_repair(args: argparse.Namespace) -> int:
         "schema_version": 1,
         "discovered": discovered,
         "registered": registered,
+        "terminal_summaries": terminal_summaries,
+        "terminal_summary_failed": terminal_summary_failed,
         "skipped_legacy": skipped_legacy,
         "failed": failed,
     }
@@ -652,9 +710,11 @@ def cmd_catalog_repair(args: argparse.Namespace) -> int:
         print(
             "Goal-variant catalog repair: "
             f"{registered} registered, {skipped_legacy} legacy skipped, "
-            f"{len(failed)} failed"
+            f"{terminal_summaries} terminal summaries projected, "
+            f"{len(terminal_summary_failed)} summary projections failed, "
+            f"{len(failed)} index repairs failed"
         )
-    return 1 if failed else 0
+    return 1 if failed or terminal_summary_failed else 0
 
 
 def _latest_attempt(state: dict[str, Any]) -> dict[str, Any]:
@@ -1137,7 +1197,7 @@ def cmd_retry(args: argparse.Namespace) -> int:
             raise RuntimeError("repair runtime source does not match committed HEAD")
         goal_path = root / "experiments" / "goals" / manifest.goal_slug / "_goal.yaml"
         recipe_path = goal_path.parent / "recipes" / f"{manifest.recipe_slug}.yaml"
-        document = compose_train_document(
+        repaired_documents = compose_resolved_train_documents(
             goal_path,
             recipe_path,
             recipe_overrides=manifest.recipe_overrides,
@@ -1145,7 +1205,9 @@ def cmd_retry(args: argparse.Namespace) -> int:
                 prepare_checkpoint_eval_mode,
                 checkpoint_eval_backend=checkpoint_eval_backend,
             ),
+            source_sha=source_sha,
         )
+        document = repaired_documents.effective
         if str(document["train_config"]["effective_goal_contract_sha256"]) != manifest.goal_sha256:
             raise RuntimeError("repair runtime changed the effective goal contract")
         if str(document["environment_hash"]).removeprefix("sha256:") != manifest.environment_sha256:
@@ -1164,6 +1226,11 @@ def cmd_retry(args: argparse.Namespace) -> int:
             asset=dict(manifest.modal["rom_asset_manifest"]),
             checkpoint_eval_backend=checkpoint_eval_backend,
         )
+        base_contract_document = _bind_launch_contract(
+            repaired_documents.base,
+            asset=dict(manifest.modal["rom_asset_manifest"]),
+            checkpoint_eval_backend=checkpoint_eval_backend,
+        )
         portable_recipe = build_recipe_document(
             contract_document,
             repo_root=root,
@@ -1171,6 +1238,13 @@ def cmd_retry(args: argparse.Namespace) -> int:
             run_description=manifest.run_description,
             seed=manifest.seed,
             runtime_image_ref=release.runtime_image_ref,
+            base_materialized_recipe=base_contract_document,
+            canonical_goal=repaired_documents.canonical_goal,
+        )
+        repaired_recipe_sha256 = canonical_json_sha256(portable_recipe)
+        authority.put_recipe_document(
+            portable_recipe,
+            expected_sha256=repaired_recipe_sha256,
         )
         compute.update(
             {
@@ -1189,7 +1263,7 @@ def cmd_retry(args: argparse.Namespace) -> int:
             manifest,
             source_sha=source_sha,
             image_digest=release.runtime_image_ref,
-            recipe_sha256=canonical_json_sha256(portable_recipe),
+            recipe_sha256=repaired_recipe_sha256,
             compute=compute,
             modal=modal,
             goal_variant=repaired_goal_variant,
@@ -1387,7 +1461,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     catalog_repair = commands.add_parser(
         "catalog-repair",
-        help="Rebuild private goal-variant indexes from immutable run manifests.",
+        help="Rebuild run discovery indexes and terminal summary projections.",
     )
     catalog_repair.add_argument("--json", action="store_true")
     catalog_repair.set_defaults(func=cmd_catalog_repair)

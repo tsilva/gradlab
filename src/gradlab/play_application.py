@@ -4,6 +4,7 @@ import queue
 import threading
 import uuid
 from collections.abc import Mapping, Sequence
+from copy import deepcopy
 from dataclasses import replace
 from typing import Any
 
@@ -80,6 +81,22 @@ class PlaybackHost:
     def has_active_runner(self) -> bool:
         with self._lock:
             return self._active is not None and self._phase == "active"
+
+    def active_recipe_document(self) -> tuple[dict[str, Any], dict[str, Any]] | None:
+        with self._lock:
+            if self._active is None or self._phase != "active":
+                return None
+            return (
+                deepcopy(self._active.source.bundle.recipe),
+                {
+                    "kind": "active-playback",
+                    "artifact_ref": str(self._active.source.artifact_ref or ""),
+                    "artifact_name": str(self._active.source.artifact_name or ""),
+                    "checkpoint_step": self._active.source.checkpoint_step,
+                    "source": self._active.source.bundle.source,
+                    "revision": str(self._active.source.bundle.revision or ""),
+                },
+            )
 
     def start(self) -> None:
         with self._lock:

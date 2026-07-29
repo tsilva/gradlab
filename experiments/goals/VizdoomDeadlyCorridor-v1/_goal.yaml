@@ -3,6 +3,11 @@ defaults:
 - _self_
 title: ViZDoom Deadly Corridor completion
 train:
+  early_stop:
+    conditions:
+      target_reached:
+        metric: train/episode/return/shaped/from/target/window_100/mean
+        threshold: 0.80
   environment:
     env_config:
       env_args: &deadly_corridor_env_args

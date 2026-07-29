@@ -1,4 +1,4 @@
-# Metrics schema v11
+# Metrics schema v12
 
 This file is the human contract for gradlab telemetry. The Python registry in
 `src/gradlab/metric_names.py` is the executable source of truth. Every emitted metric must match an
@@ -17,7 +17,7 @@ exact registry entry or a bounded template.
 - Public model R2 contains immutable checkpoint closures and a mutable no-cache run index. Private
   eval R2 contains intents, results, and episode evidence. Private control R2 contains leases,
   journals, promotions, and terminal receipts.
-- W&B config contains run-defining dimensions: `metrics_schema_version: 11`, `training_backend_id`,
+- W&B config contains run-defining dimensions: `metrics_schema_version: 12`, `training_backend_id`,
   `training_backend_config_hash`, `algorithm_id`, goal,
   environment, starts, seed, frame skip, environment count, hyperparameters, eval protocol, and
   runtime versions.
@@ -37,6 +37,9 @@ exact registry entry or a bounded template.
   without scanning runs, objects, or artifacts.
 - `leader/checkpoint/*` contains diagnostic projections of the selected checkpoint. The
   create-only private-R2 `PromotionReceipt` is the authoritative selection.
+- `gradlab/run/terminal_state`, `gradlab/run/stop_reason`, `gradlab/run/final_step`,
+  `gradlab/run/early_stop_trigger`, and `gradlab/run/early_stop_condition` are W&B summary-only
+  catalog projections, not history metrics; the private-R2 `TerminalReceipt` remains authoritative.
 - Heavy model bytes, videos, replays, episode rows, diagnostics, and recovery payloads never go to
   W&B.
 - Interactive playback uses local descriptor keys such as `reward/shaped`, `policy/value`, and
@@ -84,7 +87,7 @@ X-axis. Each producer writes only its applicable scientific axis; durable delive
 `orchestration/event_seq`.
 
 Purged legacy W&B and R2 state has no compatibility guarantee. Newly materialized runs declare
-schema v11.
+schema v12.
 
 ## Research interpretation
 
@@ -119,6 +122,11 @@ schema v11.
 - Do not compare shaped episode-return or value magnitudes as policy quality across different reward
   transforms. Use task success and acceptance-evaluation metrics for the outcome comparison; use
   reward, critic, and policy metrics to locate the causal chain.
+- `train/episode/return/shaped/from/target/window_100/mean` is emitted only after 100 genuine
+  target-origin training episodes and then rolls over the latest 100. It is a mature online
+  behavior-policy proxy whose episodes may span learner updates, not an estimate of one frozen
+  checkpoint's evaluation performance. A zero-patience threshold intentionally stops at the first
+  qualifying overlapping window; only goal-owned checkpoint evaluation may establish acceptance.
 - Snapshot-curriculum `sampling/probability/max` and `sampling/effective_cell/count` summarize the
   current cell-probability distribution. They do not report realized per-cell selection frequency
   or identify which resident cells were selected.
@@ -351,7 +359,8 @@ unevaluated for future explicit user action. dstack process exit alone is never 
 | `orchestration/eval/result_to_stop_seconds` | Time from observing an accepted eval result to signaling the learner. | seconds | accepted evaluation | history |
 | `orchestration/drain/idle_gpu_tail_seconds` | Time the training container retained its GPU after the learner exited. | seconds | terminal drain | history |
 | `orchestration/scratch/used_fraction` | Fraction of the task scratch filesystem currently used. | fraction | supervisor sample | history |
-| `train/episode/return/shaped/from/target/mean` | Rolling mean shaped return over the latest 100 genuine target-origin training episodes. | return | rollout | history |
+| `train/episode/return/shaped/from/target/mean` | Rolling mean shaped return over up to the latest 100 genuine target-origin training episodes, emitted beginning with the first such episode. | return | rollout | history |
+| `train/episode/return/shaped/from/target/window_100/mean` | Mature online behavior-policy mean shaped return over the latest 100 genuine target-origin training episodes, emitted only once the full window exists; comparable to evaluation return only in reward contract and units, not as a frozen-checkpoint estimate. | return | rollout | history |
 | `train/episode/return/shaped/from/target/max` | Rolling maximum shaped return over the same latest 100 genuine target-origin training episodes as `train/episode/return/shaped/from/target/mean`; archive-origin episodes are excluded. | return | rollout | history |
 | `train/curriculum/archive/cell/count` | Current archive-curriculum cell count. | cells | rollout | history |
 | `train/curriculum/archive/entry/count` | Current immutable entry count retained by the curriculum view. | entries | rollout | history |

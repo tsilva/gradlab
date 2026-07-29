@@ -11,9 +11,8 @@ export function mount({ definition, services }) {
       <div class="control-components">
         <div class="playback-field playback-fps">
           <label for="playback-fps">Play FPS</label>
-          <input id="playback-fps" data-fps type="number" min="0" step="1" value="0" inputmode="decimal" aria-describedby="playback-fps-hint">
+          <input id="playback-fps" data-fps type="number" min="0" step="1" value="0" inputmode="decimal">
         </div>
-        <p id="playback-fps-hint" class="control-hint">0 runs playback uncapped · changes apply immediately</p>
         <div class="playback-field next-episode-seed">
           <label for="next-episode-seed">Seed</label>
           <input id="next-episode-seed" data-seed inputmode="numeric">
@@ -251,9 +250,6 @@ export function mount({ definition, services }) {
           : "The configured episode limit has been reached")
         : "Reset the current episode to the configured seed and pause";
       fps.min = recording ? "1" : "0";
-      element.querySelector("#playback-fps-hint").textContent = recording
-        ? "Recording FPS must be at least 1 · changes apply immediately"
-        : "0 runs playback uncapped · changes apply immediately";
       updateControl();
     },
   };

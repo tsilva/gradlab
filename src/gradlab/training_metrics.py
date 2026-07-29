@@ -11,6 +11,7 @@ from gradlab.metric_names import (
     TRAIN_EPISODE_LENGTH_MEAN,
     TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_MAX,
     TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_MEAN,
+    TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_WINDOW_100_MEAN,
     TRAIN_EPISODE_RETURN_SHAPED_MAX,
     TRAIN_EPISODE_RETURN_SHAPED_MEAN,
     TRAIN_OUTCOME_SUCCESS_CURRENT_RATE_MEAN,
@@ -134,6 +135,10 @@ class EpisodeMetricsReducer:
             payload[TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_MAX] = float(
                 np.max(self.target_returns)
             )
+            if len(self.target_returns) >= self.window_size:
+                payload[TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_WINDOW_100_MEAN] = float(
+                    np.mean(self.target_returns)
+                )
         for reason, count in sorted(self.reason_counts.items()):
             window = self.reason_windows[reason]
             payload[train_outcome_reason_count_metric(reason)] = count

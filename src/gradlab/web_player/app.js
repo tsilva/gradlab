@@ -81,6 +81,8 @@ const state = {
 let panelRuntime = null;
 let sourceBrowser = null;
 let sourceBrowserPromise = null;
+let contractViewer = null;
+let contractViewerPromise = null;
 let gridStack = null;
 let gridCellHeight = DEFAULT_GRID_CELL_HEIGHT;
 let syncingGrid = false;
@@ -167,11 +169,28 @@ async function ensureSourceBrowser() {
         command,
         getState: () => state,
         showToast,
+        openInspection: (endpoint, options) => openContractInspection(endpoint, options),
       });
       return sourceBrowser;
     });
   }
   return sourceBrowserPromise;
+}
+
+async function ensureContractViewer() {
+  if (contractViewer) return contractViewer;
+  if (!contractViewerPromise) {
+    contractViewerPromise = import("./documents/viewer.js").then(({ ContractViewer }) => {
+      contractViewer = new ContractViewer($("#contract-viewer"), { token, showToast });
+      return contractViewer;
+    });
+  }
+  return contractViewerPromise;
+}
+
+async function openContractInspection(endpoint, options = {}) {
+  const viewer = await ensureContractViewer();
+  return viewer.open(endpoint, options);
 }
 
 function setSourceMode(active, snapshot = null) {
@@ -186,6 +205,9 @@ function setSourceMode(active, snapshot = null) {
   $("#change-source").hidden = (
     state.sourceMode
     || !(snapshot?.app?.has_active_runner || state.liveSnapshot?.app?.has_active_runner)
+  );
+  $("#inspect-active").hidden = !(
+    snapshot?.app?.has_active_runner || state.liveSnapshot?.app?.has_active_runner
   );
   if (!state.sourceMode) {
     const expected = snapshot;
@@ -1482,6 +1504,11 @@ function initWorkspace() {
   bindWorkspaceMenus();
   bindWorkspaceSync();
   bindTimeline();
+  $("#inspect-active").addEventListener("click", () => {
+    void openContractInspection("/api/playback/inspection", {
+      preferredDocument: "goal",
+    }).catch((error) => showToast(`Contract viewer failed: ${error.message || error}`, true));
+  });
 }
 
 panelRuntime = new PanelRuntime({

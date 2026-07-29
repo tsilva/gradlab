@@ -100,6 +100,14 @@ acceptance or checkpoint promotion. Use repeatable `--set KEY=VALUE` overrides,
 `--seed`, `--runs-dir`, or `--wandb` when needed. A recipe YAML in another
 repository also works when it lives at
 `experiments/goals/<goal>/recipes/<recipe>.yaml` beside its owning `_goal.yaml`.
+On an interactive terminal, local training opens a Textual dashboard with
+in-place progress, rate and ETA, bounded events and histories, and the common
+plus algorithm-specific telemetry declared by the backend. Press `q`, `Ctrl+C`,
+or `Ctrl+Q` to request a graceful stop at the backend's safe boundary; the
+dashboard remains open until the learner finishes writing its terminal model
+and result. Pass `--no-tui`, redirect output, or use a dumb terminal for stable
+plain progress logs. The dashboard is presentation-only and does not enter
+recipe hashes, training metrics, or run receipts.
 For Mario, `--rom` verifies and uses a lawful raw `.nes` file in place without
 copying it or modifying GradLab's ROM registry or cache. The completed run prints
 a version-pinned `uvx ... play` command using the same ROM. The demo targets

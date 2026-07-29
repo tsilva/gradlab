@@ -43,7 +43,12 @@ from gradlab.metric_names import (
 from gradlab.policy_bundle import write_canonical_json
 from gradlab.state_archive import state_archive_artifact_summary
 from gradlab.training_backend import BackendContext, CHECKPOINT_EVAL_ACCEPTANCE
-from gradlab.training_lifecycle import TerminalReason, TrainingResult
+from gradlab.training_lifecycle import (
+    ProgressField,
+    ProgressValueFormat,
+    TerminalReason,
+    TrainingResult,
+)
 
 
 DEFAULT_CONFIG: dict[str, Any] = {
@@ -55,6 +60,27 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "compaction_interval_steps": 250_000,
 }
 _CONFIG_KEYS = frozenset({*DEFAULT_CONFIG, "progress_signal"})
+GO_EXPLORE_PROGRESS_FIELDS = (
+    ProgressField(
+        TRAIN_GO_EXPLORE_ARCHIVE_CELL_COUNT,
+        "cells",
+        ProgressValueFormat.COUNT,
+    ),
+    ProgressField(
+        TRAIN_GO_EXPLORE_ARCHIVE_VISIT_COUNT,
+        "visits",
+        ProgressValueFormat.COUNT,
+    ),
+    ProgressField(
+        TRAIN_GO_EXPLORE_ARCHIVE_RECENT_NEW_CELL_RATE,
+        "new cells",
+        ProgressValueFormat.PERCENT,
+    ),
+    ProgressField(
+        TRAIN_GO_EXPLORE_BEST_PROGRESS,
+        "best progress",
+    ),
+)
 
 
 def normalize_config(
@@ -133,19 +159,10 @@ def _save_policy(
     )
 
 
-def _metric_payload(
-    search: GoExploreSearch,
-    runtime: Any,
-    *,
-    elapsed: float,
-) -> dict[str, int | float]:
+def _search_metric_payload(search: GoExploreSearch) -> dict[str, int | float]:
     candidate = search.best_candidate()
-    archive = runtime.state_archive_summary() or {}
     return {
         TRAIN_GO_EXPLORE_ARCHIVE_CELL_COUNT: search.archive_count,
-        TRAIN_GO_EXPLORE_ARCHIVE_ENTRY_COUNT: int(archive.get("entry_count", 0)),
-        TRAIN_GO_EXPLORE_ARCHIVE_BLOB_COUNT: int(archive.get("blob_count", 0)),
-        TRAIN_GO_EXPLORE_ARCHIVE_BLOB_BYTES: int(archive.get("blob_bytes", 0)),
         TRAIN_GO_EXPLORE_ARCHIVE_SELECTION_COUNT: search.archive_selection_count,
         TRAIN_GO_EXPLORE_ARCHIVE_VISIT_COUNT: search.archive_visit_count,
         TRAIN_GO_EXPLORE_ARCHIVE_UPDATE_COUNT: search.archive_update_count,
@@ -160,6 +177,21 @@ def _metric_payload(
         TRAIN_GO_EXPLORE_BEST_PROGRAM_RUNS: len(candidate.runs) if candidate else 0,
         TRAIN_GO_EXPLORE_BEST_COMPLETED: int(candidate.completed) if candidate else 0,
         TRAIN_GO_EXPLORE_IMPROVEMENT_COUNT: search.improvement_count,
+    }
+
+
+def _metric_payload(
+    search: GoExploreSearch,
+    runtime: Any,
+    *,
+    elapsed: float,
+) -> dict[str, int | float]:
+    archive = runtime.state_archive_summary() or {}
+    return {
+        **_search_metric_payload(search),
+        TRAIN_GO_EXPLORE_ARCHIVE_ENTRY_COUNT: int(archive.get("entry_count", 0)),
+        TRAIN_GO_EXPLORE_ARCHIVE_BLOB_COUNT: int(archive.get("blob_count", 0)),
+        TRAIN_GO_EXPLORE_ARCHIVE_BLOB_BYTES: int(archive.get("blob_bytes", 0)),
         TRAIN_THROUGHPUT_LOOP_FPS: search.global_step / max(elapsed, 1e-9),
     }
 
@@ -225,6 +257,7 @@ def run_go_explore(context: BackendContext) -> TrainingResult:
         budget = context.session.configure_budget(
             requested_limit=int(common_config["timesteps"]),
             step_quantum=n_envs,
+            progress_fields=GO_EXPLORE_PROGRESS_FIELDS,
         )
         context.mark_ready()
         started_at = time.perf_counter()
@@ -288,7 +321,11 @@ def run_go_explore(context: BackendContext) -> TrainingResult:
                 entry_ids = search.restart(observation.restart_mask)
                 runtime.restore_archive_entries(observation.restart_mask, entry_ids)
             step = search.global_step
-            context.session.advance(step, records)
+            context.session.advance(
+                step,
+                records,
+                progress_metrics=_search_metric_payload(search),
+            )
             if stop_for_completion:
                 stopped_on_completion = True
                 break

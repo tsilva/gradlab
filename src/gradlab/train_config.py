@@ -449,22 +449,10 @@ def validate_and_normalize_train_config(
         if isinstance(condition, Mapping)
     )
     if normalized.get("stop_on_acceptance"):
-        if has_training_success_condition:
-            raise ValueError(
-                f"{label}.early_stop success conditions are incompatible with "
-                "stop_on_acceptance; goal.eval.acceptance is the sole success authority"
-            )
         if not normalized.get("checkpoint_eval_acceptance"):
             raise ValueError(
                 f"{label}.checkpoint_eval_acceptance is required when stop_on_acceptance is true"
             )
-    if has_training_success_condition and (
-        normalized.get("checkpoint_eval_backend") == "modal"
-    ):
-        raise ValueError(
-            f"{label}.early_stop success conditions require "
-            "checkpoint_eval_backend=none; evaluated-goal acceptance must come from evaluation"
-        )
     if "training_backend" in normalized:
         from gradlab.training_backend import normalize_training_backend
 

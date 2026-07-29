@@ -19,6 +19,7 @@
         <nav id="source-breadcrumbs" class="source-breadcrumbs header-breadcrumbs" aria-label="Playback source" hidden></nav>
       </div>
       <div class="header-status">
+        <button id="inspect-active" class="quiet icon-only" type="button" aria-label="Inspect active goal and recipe YAML" title="Inspect active goal and recipe YAML" hidden><svg class="icon" aria-hidden="true"><use href="/assets/tabler-icons.svg#ti-code"></use></svg></button>
         <button id="change-source" class="quiet icon-only" type="button" aria-label="Choose another checkpoint" title="Choose another checkpoint" hidden><svg class="icon" aria-hidden="true"><use href="/assets/tabler-icons.svg#ti-folder-search"></use></svg></button>
         <button id="layouts-toggle" class="quiet icon-only" type="button" aria-label="Layouts" title="Layouts"><svg class="icon" aria-hidden="true"><use href="/assets/tabler-icons.svg#ti-layout-dashboard"></use></svg></button>
         <button id="panels-toggle" class="quiet icon-only" type="button" aria-label="Panels" title="Panels" aria-controls="panel-shelf" aria-expanded="false"><svg class="icon" aria-hidden="true"><use href="/assets/tabler-icons.svg#ti-layout-grid"></use></svg></button>
@@ -90,6 +91,36 @@
           <button class="primary" type="submit">Save panel</button>
         </footer>
       </form>
+    </dialog>
+
+    <dialog id="contract-viewer" class="contract-viewer" aria-labelledby="contract-viewer-heading">
+      <div class="contract-viewer-shell">
+        <header class="contract-viewer-header">
+          <div>
+            <span class="eyebrow">RESOLVED CONTRACT</span>
+            <h2 id="contract-viewer-heading">Goal and recipe YAML</h2>
+            <p id="contract-viewer-status" class="contract-viewer-status" aria-live="polite"></p>
+          </div>
+          <button id="contract-viewer-close" class="quiet icon-only" type="button" aria-label="Close contract viewer" title="Close"><svg class="icon" aria-hidden="true"><use href="/assets/tabler-icons.svg#ti-x"></use></svg></button>
+        </header>
+        <div class="contract-viewer-toolbar">
+          <div id="contract-document-tabs" class="contract-tabs" role="tablist" aria-label="Contract document"></div>
+          <label id="contract-recipe-picker-label" class="contract-recipe-picker" hidden>
+            <span>Recipe</span>
+            <select id="contract-recipe-picker"></select>
+          </label>
+          <div id="contract-view-tabs" class="contract-tabs contract-view-tabs" role="tablist" aria-label="Contract view"></div>
+          <label class="contract-search">
+            <svg class="icon" aria-hidden="true"><use href="/assets/tabler-icons.svg#ti-search"></use></svg>
+            <input id="contract-search-input" type="search" autocomplete="off" placeholder="Search YAML or diff" aria-label="Search YAML or diff">
+            <span id="contract-search-count" aria-live="polite"></span>
+          </label>
+          <button id="contract-copy" class="quiet button-with-icon" type="button"><svg class="icon" aria-hidden="true"><use href="/assets/tabler-icons.svg#ti-copy"></use></svg><span>Copy</span></button>
+        </div>
+        <div id="contract-viewer-message" class="contract-viewer-message" hidden></div>
+        <div id="contract-viewer-loading" class="contract-viewer-loading" hidden><span class="spinner" aria-hidden="true"></span><span>Loading contract…</span></div>
+        <pre id="contract-viewer-content" class="contract-viewer-content" tabindex="0"><code></code></pre>
+      </div>
     </dialog>
 
     <div id="toast" class="toast" role="status" aria-live="polite"></div>

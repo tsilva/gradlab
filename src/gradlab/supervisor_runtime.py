@@ -11,11 +11,13 @@ from typing import Any, Protocol
 
 from gradlab.clock import Clock, SystemClock
 from gradlab.metric_store import MetricStore
+from gradlab.run_contracts import TerminalReceipt
 from gradlab.runtime_contract import runtime_contract
 from gradlab.wandb_publisher import (
     WandbProjector,
     publish_pending_frames,
     publish_promotion_summary,
+    publish_terminal_summary,
 )
 
 
@@ -103,6 +105,22 @@ class SupervisorRuntime:
             metrics=metrics,
             updated_at=updated_at,
         )
+
+    def publish_terminal(
+        self,
+        train_config: Mapping[str, Any],
+        receipt: TerminalReceipt,
+        *,
+        timeout_seconds: float,
+    ) -> None:
+        projector = WandbProjector.resume(
+            train_config,
+            update_finish_state=False,
+        )
+        try:
+            publish_terminal_summary(projector.run, receipt)
+        finally:
+            projector.close(timeout_seconds=timeout_seconds)
 
     def remote_summary(self, run_path: str) -> dict[str, Any]:
         import wandb

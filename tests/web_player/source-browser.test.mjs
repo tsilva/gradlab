@@ -5,10 +5,13 @@ import test from "node:test";
 import {
   activeRunMetricColumns,
   bestRunEfficiency,
+  checkpointCanEvaluate,
+  checkpointEvaluationCell,
   checkpointPlaybackSeed,
   formatMetricValue,
   metricLabel,
   rankRunItems,
+  runFinishPresentation,
   SourceBrowser,
   sortRunItems,
   sourceBreadcrumbItems,
@@ -202,11 +205,173 @@ test("run metrics use compact labels and values", () => {
   assert.equal(formatMetricValue(METRIC, null), "—");
 });
 
+test("run finish reasons distinguish resource, training, and evaluation outcomes", () => {
+  assert.deepEqual(
+    runFinishPresentation({
+      state: "succeeded",
+      stop_reason: "training_cap_complete",
+      final_step: 2_000_000,
+    }),
+    {
+      label: "Maximum timesteps reached",
+      detail: "Stopped at 2,000,000 steps",
+      tone: "neutral",
+    },
+  );
+  assert.deepEqual(
+    runFinishPresentation({
+      state: "failed",
+      stop_reason: "early_stop_failure:return_plateau",
+      final_step: 500_000,
+      early_stop: { trigger: "no_improvement" },
+    }),
+    {
+      label: "Training stalled",
+      detail: "Return Plateau · Stopped at 500,000 steps",
+      tone: "failure",
+    },
+  );
+  assert.equal(
+    runFinishPresentation({
+      state: "succeeded",
+      stop_reason: "early_stop_success:training_target",
+    }).label,
+    "Training success criterion met",
+  );
+  assert.equal(
+    runFinishPresentation({
+      state: "succeeded",
+      stop_reason: "eval_acceptance",
+    }).label,
+    "Evaluation criteria met",
+  );
+});
+
+test("finished runs without terminal evidence do not get a guessed reason", () => {
+  assert.deepEqual(
+    runFinishPresentation({ state: "finished" }),
+    {
+      label: "Reason unavailable",
+      detail: "This run has no projected terminal receipt.",
+      tone: "unknown",
+    },
+  );
+  assert.equal(runFinishPresentation({ state: "running" }).label, "—");
+});
+
 test("checkpoint playback seed accepts catalog provenance and rejects invalid values", () => {
   assert.equal(checkpointPlaybackSeed({ playback_seed: 42_000 }), 42_000);
   assert.equal(checkpointPlaybackSeed({ playback_seed: 0 }), 0);
   assert.equal(checkpointPlaybackSeed({ playback_seed: null }), null);
   assert.equal(checkpointPlaybackSeed({ playback_seed: -1 }), null);
+});
+
+test("only checkpoints without terminal or queued evaluation state are selectable", () => {
+  assert.equal(checkpointCanEvaluate({ evaluation: null }), true);
+  assert.equal(
+    checkpointCanEvaluate({ evaluation: { status: "rejected", pass: false } }),
+    false,
+  );
+  assert.equal(
+    checkpointCanEvaluate({ evaluation: null, evaluation_queue: { state: "submitted" } }),
+    false,
+  );
+  assert.equal(
+    checkpointCanEvaluate({ evaluation: null, evaluation_queue: { state: "expired" } }),
+    false,
+  );
+});
+
+test("checkpoint evaluation cells distinguish queued work from terminal evidence", () => {
+  assert.deepEqual(
+    checkpointEvaluationCell({
+      evaluation: null,
+      evaluation_queue: { state: "submitted" },
+    }),
+    [
+      "Running",
+      "Submitted to the evaluation worker",
+      "evaluation-cell submitted",
+    ],
+  );
+  assert.equal(
+    checkpointEvaluationCell({
+      evaluation: {
+        status: "rejected",
+        pass: false,
+        episodes_completed: 1,
+        episodes_planned: 100,
+        failure_count: 1,
+        criteria: [],
+      },
+    })[0],
+    "Failed",
+  );
+});
+
+test("selected checkpoints are admitted together through the evaluation API", async (context) => {
+  const originalLocation = globalThis.location;
+  const originalFetch = globalThis.fetch;
+  const requests = [];
+  const toasts = [];
+  globalThis.location = { pathname: "/embedded-player", search: "", hash: "" };
+  globalThis.fetch = async (url, options) => {
+    requests.push({ url, options });
+    return {
+      ok: true,
+      status: 202,
+      json: async () => ({
+        items: [
+          {
+            checkpoint_id: "checkpoint-a",
+            state: "submitted",
+            evaluation: null,
+            message: null,
+          },
+          {
+            checkpoint_id: "checkpoint-b",
+            state: "submitted",
+            evaluation: null,
+            message: null,
+          },
+        ],
+      }),
+    };
+  };
+  context.after(() => {
+    if (originalLocation === undefined) delete globalThis.location;
+    else globalThis.location = originalLocation;
+    if (originalFetch === undefined) delete globalThis.fetch;
+    else globalThis.fetch = originalFetch;
+  });
+  const browser = new SourceBrowser(
+    {},
+    { replaceChildren() {}, hidden: false },
+    {
+      token: "token",
+      command() {},
+      getState: () => ({ hasControl: true }),
+      showToast: (...args) => toasts.push(args),
+    },
+  );
+  browser.renderView = () => {};
+  browser.route = { level: "runs", run_id: "gradlab-run" };
+  browser.items = [
+    { checkpoint_id: "checkpoint-a", evaluation: null },
+    { checkpoint_id: "checkpoint-b", evaluation: null },
+  ];
+  browser.selectedCheckpoints = new Set(["checkpoint-a", "checkpoint-b"]);
+
+  await browser.evaluateSelected();
+
+  assert.equal(requests[0].url, "/api/catalog/runs/gradlab-run/evaluations");
+  assert.equal(requests[0].options.method, "POST");
+  assert.deepEqual(JSON.parse(requests[0].options.body), {
+    checkpoint_ids: ["checkpoint-a", "checkpoint-b"],
+  });
+  assert.equal(browser.items[0].evaluation_queue.state, "submitted");
+  assert.equal(browser.selectedCheckpoints.size, 0);
+  assert.match(toasts[0][0], /2 checkpoints submitted/);
 });
 
 test("legacy project routes inherit the entity and use canonical environment APIs", async (context) => {

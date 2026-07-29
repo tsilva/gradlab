@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import importlib
 import json
+import threading
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -14,12 +15,23 @@ from gradlab.training_lifecycle import TrainingResult
 
 class GracefulStopFlag:
     def __init__(self) -> None:
-        self.requested = False
-        self.reason = ""
+        self._requested = threading.Event()
+        self._lock = threading.RLock()
+        self._reason = ""
+
+    @property
+    def requested(self) -> bool:
+        return self._requested.is_set()
+
+    @property
+    def reason(self) -> str:
+        with self._lock:
+            return self._reason
 
     def request(self, reason: str) -> None:
-        self.requested = True
-        self.reason = reason
+        with self._lock:
+            self._reason = str(reason)
+            self._requested.set()
 
 
 @dataclass

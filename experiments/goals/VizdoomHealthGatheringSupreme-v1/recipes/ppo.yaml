@@ -4,8 +4,8 @@ defaults:
 recipe_id: ppo
 description: >-
   Seed {{ seed }} trains PPO from pixels to gather health in the Supreme layout and survive 512
-  policy steps until the timestep cap or return plateau. This run is training-only; goal-owned
-  evaluation remains available for later explicit use.
+  policy steps until the training target, timestep cap, or return plateau. This run is training-only;
+  goal-owned evaluation remains available for later explicit use.
 train:
   checkpoint_eval_backend: none
   timesteps: 20000000

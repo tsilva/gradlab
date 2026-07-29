@@ -5,7 +5,7 @@ import hashlib
 import json
 import subprocess
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -265,9 +265,7 @@ def _goal_train_defaults(document: Mapping[str, Any]) -> dict[str, Any]:
         config = deep_merge(config, _train_config_from_train_section(train))
     config = deep_merge(config, _eval_train_defaults(document))
     evaluation_mode = goal_evaluation_mode(document, label="goal")
-    config["checkpoint_eval_backend"] = (
-        "modal" if evaluation_mode == "evaluated" else "none"
-    )
+    config["checkpoint_eval_backend"] = "modal" if evaluation_mode == "evaluated" else "none"
     eval_section = document.get("eval")
     config["stop_on_acceptance"] = bool(
         evaluation_mode == "evaluated"
@@ -581,8 +579,7 @@ def materialize_train_recipe_document(
             )
             if explicit_backend not in {None, "none"}:
                 raise ValueError(
-                    "first-training-success backend requires "
-                    "train.checkpoint_eval_backend=none"
+                    "first-training-success backend requires train.checkpoint_eval_backend=none"
                 )
             train_config["checkpoint_eval_backend"] = "none"
         evaluation_mode = goal_evaluation_mode(goal_document or {}, label="goal")
@@ -590,9 +587,7 @@ def materialize_train_recipe_document(
             evaluation_mode == "training_only"
             and train_config.get("checkpoint_eval_backend") != "none"
         ):
-            raise ValueError(
-                "training-only goal requires train.checkpoint_eval_backend=none"
-            )
+            raise ValueError("training-only goal requires train.checkpoint_eval_backend=none")
         if train_config.get("checkpoint_eval_backend") == "none":
             train_config["stop_on_acceptance"] = False
         else:
@@ -929,6 +924,74 @@ def compose_train_document(
     return document
 
 
+@dataclass(frozen=True)
+class ResolvedTrainDocuments:
+    canonical_goal: dict[str, Any]
+    base: dict[str, Any]
+    effective: dict[str, Any]
+
+
+def compose_resolved_train_documents(
+    goal_path: Path,
+    recipe_path: Path,
+    *,
+    recipe_overrides: Sequence[str] = (),
+    env_provider: str | None = None,
+    prepare_materialized: Callable[[dict[str, Any]], None] | None = None,
+    source_sha: str = "",
+) -> ResolvedTrainDocuments:
+    """Resolve the checked-in base and exact launch contract through one path."""
+
+    base = compose_train_document(
+        goal_path,
+        recipe_path,
+        env_provider=env_provider,
+        prepare_materialized=prepare_materialized,
+    )
+    effective = (
+        compose_train_document(
+            goal_path,
+            recipe_path,
+            recipe_overrides=recipe_overrides,
+            env_provider=env_provider,
+            prepare_materialized=prepare_materialized,
+        )
+        if recipe_overrides
+        else copy.deepcopy(base)
+    )
+    from gradlab.goal_variants import build_goal_variant_descriptor
+    from gradlab.reward_programs import goal_for_contract_validation
+
+    goals_root = next(
+        (
+            parent
+            for parent in goal_path.resolve().parents
+            if parent.name == "goals" and parent.parent.name == "experiments"
+        ),
+        None,
+    )
+    if goals_root is None:
+        raise ValueError(f"goal {goal_path} is not under an experiments/goals tree")
+    authored_goal = load_goal_contract(goal_path, goals_root.parent.parent)
+    goal_slug = goal_path.resolve().parent.relative_to(goals_root).as_posix()
+    for document in (base, effective):
+        document["goal_variant"] = build_goal_variant_descriptor(
+            goal_slug=goal_slug,
+            source_sha=source_sha,
+            authored_goal=authored_goal,
+            effective_goal=dict(document["goal"]),
+        )
+    canonical_goal = goal_for_contract_validation(
+        authored_goal,
+        label=f"goal file {goal_path}",
+    )
+    return ResolvedTrainDocuments(
+        canonical_goal=canonical_goal,
+        base=base,
+        effective=effective,
+    )
+
+
 def prepare_checkpoint_eval_mode(
     document: dict[str, Any],
     *,
@@ -953,15 +1016,11 @@ def prepare_checkpoint_eval_mode(
     from gradlab.training_backend import accepts_first_training_success
 
     if mode == "modal" and accepts_first_training_success(config):
-        raise ValueError(
-            "first-training-success backend requires checkpoint_eval_backend=none"
-        )
+        raise ValueError("first-training-success backend requires checkpoint_eval_backend=none")
     config["checkpoint_eval_backend"] = mode
     eval_section = goal.get("eval")
     config["stop_on_acceptance"] = bool(
-        mode == "modal"
-        and isinstance(eval_section, Mapping)
-        and "acceptance" in eval_section
+        mode == "modal" and isinstance(eval_section, Mapping) and "acceptance" in eval_section
     )
     document["train_config"] = config
 

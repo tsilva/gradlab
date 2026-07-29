@@ -26,6 +26,14 @@ from gradlab.metric_names import (
     validate_metric_payload,
 )
 from gradlab.metric_store import MetricStore
+from gradlab.run_contracts import (
+    RUN_EARLY_STOP_CONDITION_SUMMARY,
+    RUN_EARLY_STOP_TRIGGER_SUMMARY,
+    RUN_FINAL_STEP_SUMMARY,
+    RUN_STOP_REASON_SUMMARY,
+    RUN_TERMINAL_STATE_SUMMARY,
+    TerminalReceipt,
+)
 from gradlab.wandb_utils import (
     configure_wandb_metric_axes,
     configure_wandb_metrics,
@@ -239,12 +247,17 @@ class WandbProjector:
             raise errors[0]
 
 
-def _publish_frame(run, row: Mapping[str, Any]) -> None:
+def _publish_frame(
+    run,
+    row: Mapping[str, Any],
+    *,
+    event_seq_offset: int = 0,
+) -> None:
     if run is None:
         raise RuntimeError("W&B run is unavailable")
     payload = json.loads(str(row["payload_json"]))
     kind = str(row["kind"])
-    event_seq = int(row["id"])
+    event_seq = int(row["id"]) + int(event_seq_offset)
     event_id = str(row["event_id"])
     step = int(row["step"] or 0)
     source = str(row.get("source") or "")
@@ -319,6 +332,7 @@ def publish_pending_frames(
     run,
     *,
     limit: int,
+    event_seq_offset: int = 0,
 ) -> int:
     published = 0
     for row in store.pending_metric_frames(limit=limit):
@@ -326,7 +340,7 @@ def publish_pending_frames(
         if not store.claim_metric_frame(frame_id):
             continue
         try:
-            _publish_frame(run, row)
+            _publish_frame(run, row, event_seq_offset=event_seq_offset)
         except Exception as exc:
             store.mark_metric_frame_failed(frame_id, repr(exc))
             print(f"W&B frame publish failed id={frame_id}: {exc}", flush=True)
@@ -386,5 +400,21 @@ def publish_promotion_summary(
             LEADER_CHECKPOINT_ARTIFACT_REF: checkpoint_url,
             LEADER_CHECKPOINT_EVAL_SOURCE: "modal:acceptance",
             LEADER_CHECKPOINT_UPDATED_AT: updated_at,
+        }
+    )
+
+
+def publish_terminal_summary(run, receipt: TerminalReceipt) -> None:
+    if run is None:
+        raise RuntimeError("W&B run is unavailable")
+    receipt.validate()
+    early_stop = receipt.early_stop if isinstance(receipt.early_stop, Mapping) else {}
+    run.summary.update(
+        {
+            RUN_TERMINAL_STATE_SUMMARY: receipt.state,
+            RUN_STOP_REASON_SUMMARY: receipt.stop_reason,
+            RUN_FINAL_STEP_SUMMARY: int(receipt.final_step),
+            RUN_EARLY_STOP_TRIGGER_SUMMARY: str(early_stop.get("trigger") or ""),
+            RUN_EARLY_STOP_CONDITION_SUMMARY: str(early_stop.get("condition_id") or ""),
         }
     )

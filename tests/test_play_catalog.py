@@ -10,15 +10,24 @@ import pytest
 
 from gradlab.play import build_parser as build_play_parser
 from gradlab.play_catalog import PlayCatalog, parse_wandb_location
+from gradlab.policy_bundle import build_recipe_document, canonical_json_sha256
+from gradlab.r2_store import BucketConfig, RunStorageConfig
 from gradlab.goal_variants import (
     build_goal_variant_descriptor,
     goal_variant_scope_key,
     unknown_goal_variant_id,
 )
-from gradlab.recipe_documents import load_goal_contract
+from gradlab.recipe_documents import compose_resolved_train_documents, load_goal_contract
 from gradlab.recipe_variants import recipe_variant_id
 from gradlab.reward_programs import goal_for_contract_validation
-from gradlab.run_contracts import checkpoint_id
+from gradlab.run_authority import RunAuthority
+from gradlab.run_contracts import (
+    RunManifest,
+    checkpoint_id,
+    new_attempt_id,
+    new_run_id,
+    utc_now,
+)
 
 
 RUN_ID = "gradlab-" + "a" * 32
@@ -120,6 +129,9 @@ def wandb_catalog_node(
         "notes": "",
         "summaryMetrics": json.dumps(
             {
+                "gradlab/run/terminal_state": "succeeded",
+                "gradlab/run/stop_reason": "training_cap_complete",
+                "gradlab/run/final_step": leader_step,
                 "leader/checkpoint/step": leader_step,
                 "eval/full/episode/return/mean": 321.25,
             }
@@ -394,6 +406,7 @@ def test_goal_variants_use_one_private_index_read_without_wandb(
                         **descriptor,
                         "descriptor_key": (f"{scope}/descriptors/{descriptor['variant_id']}.json"),
                         "first_run_id": RUN_ID,
+                        "exact_resolution_run_id": RUN_ID,
                     }
                 ],
             }
@@ -413,6 +426,7 @@ def test_goal_variants_use_one_private_index_read_without_wandb(
     )
 
     assert [item["variant_id"] for item in page.items] == [descriptor["variant_id"]]
+    assert page.items[0]["exact_resolution_run_id"] == RUN_ID
     assert bucket.calls == [f"{scope}/index.json"]
 
 
@@ -465,6 +479,9 @@ def test_run_catalog_uses_lifecycle_owned_variant_index_without_wandb(
                         "attempt_id": "attempt-" + "b" * 16,
                         "name": "Indexed run",
                         "state": "succeeded",
+                        "stop_reason": "eval_acceptance",
+                        "final_step": 1_750_000,
+                        "early_stop": None,
                         "goal_slug": "Mario/Level1-1",
                         "recipe_slug": "ppo",
                         "recipe_sha256": "f" * 64,
@@ -494,9 +511,7 @@ def test_run_catalog_uses_lifecycle_owned_variant_index_without_wandb(
     monkeypatch.setattr(
         catalog,
         "_wandb_api",
-        lambda: (_ for _ in ()).throw(
-            AssertionError("lifecycle-owned run index must avoid W&B")
-        ),
+        lambda: (_ for _ in ()).throw(AssertionError("lifecycle-owned run index must avoid W&B")),
     )
 
     page = catalog.runs(
@@ -507,7 +522,16 @@ def test_run_catalog_uses_lifecycle_owned_variant_index_without_wandb(
 
     assert [item["run_id"] for item in page.items] == [RUN_ID]
     assert page.items[0]["description"] == "lifecycle projection"
+    assert page.items[0]["stop_reason"] == "eval_acceptance"
+    assert page.items[0]["final_step"] == 1_750_000
     assert page.items[0]["metrics"]["leader/checkpoint/step"] == 1_500_000.0
+    searched = catalog.runs(
+        entity="research",
+        project="Mario",
+        goal_id="Level1-1",
+        query="eval_acceptance",
+    )
+    assert [item["run_id"] for item in searched.items] == [RUN_ID]
     assert bucket.calls == [
         f"{scope}/index.json",
         f"{scope}/runs/{descriptor['variant_id']}.json",
@@ -621,6 +645,130 @@ def test_checked_in_browse_catalog_matches_composed_goal_contracts() -> None:
             assert detailed.title == goal["title"]
 
 
+def test_checked_in_goal_and_recipe_inspection_use_resolved_repository_contracts() -> None:
+    repo_root = Path(__file__).parents[1]
+    catalog = PlayCatalog(repo_root=repo_root)
+    project = "Bandit-v0"
+    goal_id = "gradlab__bandit"
+
+    goal = catalog.inspect_goal(
+        entity="research",
+        project=project,
+        goal_id=goal_id,
+    )
+    recipes = catalog.recipes(
+        entity="research",
+        project=project,
+        goal_id=goal_id,
+    )
+    recipe = catalog.inspect_recipe(
+        entity="research",
+        project=project,
+        goal_id=goal_id,
+        recipe_id=str(recipes.items[0]["recipe_id"]),
+    )
+
+    assert goal["documents"]["goal"]["availability"] == "exact"
+    assert "goal_id: gradlab__bandit" in goal["documents"]["goal"]["views"]["resolved"]
+    assert recipe["documents"]["recipe"]["availability"] == "static-preview"
+    assert "training_backend:" in recipe["documents"]["recipe"]["views"]["resolved"]
+    assert recipe["documents"]["recipe"]["views"]["changes"]["entries"] == []
+
+
+def test_run_and_goal_variant_inspection_use_the_verified_v2_control_recipe(
+    tmp_path: Path,
+) -> None:
+    repo_root = Path(__file__).parents[1]
+    storage = RunStorageConfig(
+        control=BucketConfig((tmp_path / "control").resolve().as_uri()),
+        evaluation=BucketConfig((tmp_path / "evaluation").resolve().as_uri()),
+        models=BucketConfig(
+            (tmp_path / "models").resolve().as_uri(),
+            public_base_url="https://models.example.test",
+        ),
+    )
+    authority = RunAuthority(storage)
+    goal_path = repo_root / "experiments/goals/gradlab__bandit/_goal.yaml"
+    recipe_path = goal_path.parent / "recipes/ppo.yaml"
+    source_sha = "a" * 40
+    resolved = compose_resolved_train_documents(
+        goal_path,
+        recipe_path,
+        recipe_overrides=("train.backend.config.gamma=0.97",),
+        source_sha=source_sha,
+    )
+    recipe = build_recipe_document(
+        resolved.effective,
+        repo_root=repo_root,
+        source_commit=source_sha,
+        run_description="inspect an exact queued run",
+        seed=3,
+        runtime_packages=("gradlab==0.1.0",),
+        base_materialized_recipe=resolved.base,
+        canonical_goal=resolved.canonical_goal,
+    )
+    recipe_sha256 = canonical_json_sha256(recipe)
+    authority.put_recipe_document(recipe, expected_sha256=recipe_sha256)
+    run_id = new_run_id()
+    manifest = RunManifest(
+        run_id=run_id,
+        attempt_id=new_attempt_id(),
+        created_at=utc_now(),
+        source_sha=source_sha,
+        image_digest="docker:example/gradlab@sha256:" + "b" * 64,
+        goal_slug="gradlab__bandit",
+        goal_sha256=resolved.effective["train_config"]["effective_goal_contract_sha256"],
+        recipe_slug="ppo",
+        recipe_sha256=recipe_sha256,
+        recipe_overrides=("train.backend.config.gamma=0.97",),
+        environment_sha256=str(resolved.effective["environment_hash"]).removeprefix("sha256:"),
+        seed=3,
+        run_description="inspect an exact queued run",
+        compute={
+            "request": {"kind": "local", "max_duration_seconds": 3600},
+            "selected": {"kind": "local", "max_duration_seconds": 3600},
+            "dstack_task": run_id,
+            "runtime_workflow_run_id": "1",
+            "runtime_input_sha256": "c" * 64,
+            "runtime_build_source_sha": source_sha,
+        },
+        wandb={
+            "run_id": run_id,
+            "entity": "research",
+            "project": "Bandit-v0",
+            "url": f"https://wandb.ai/research/Bandit-v0/runs/{run_id}",
+        },
+        modal={"enabled": False, "rom_asset_manifest": None},
+        storage=storage.manifest_locations(),
+        goal_variant=resolved.effective["goal_variant"],
+    )
+    authority.create_manifest(manifest)
+    catalog = PlayCatalog(repo_root=repo_root, control_bucket=authority.control)
+
+    run = catalog.inspect_run(
+        entity="research",
+        project="Bandit-v0",
+        run_id=run_id,
+    )
+    variant = catalog.inspect_goal_variant(
+        entity="research",
+        project="Bandit-v0",
+        goal_id="gradlab__bandit",
+        variant_id=resolved.effective["goal_variant"]["variant_id"],
+    )
+
+    assert run["documents"]["goal"]["availability"] == "exact"
+    assert run["documents"]["recipe"]["is_variant"] is True
+    assert "/train_config/training_backend/config/gamma" in {
+        entry["path"] for entry in run["documents"]["recipe"]["views"]["changes"]["entries"]
+    }
+    assert variant["source"]["exact_resolution_run_id"] == run_id
+    assert (
+        variant["documents"]["goal"]["variant_id"]
+        == resolved.effective["goal_variant"]["variant_id"]
+    )
+
+
 def test_catalog_uses_repository_projects_and_goals_before_querying_wandb(
     tmp_path: Path,
 ) -> None:
@@ -717,6 +865,9 @@ def test_run_catalog_uses_one_bounded_projection_instead_of_lazy_run_hydration(
     assert page.items[0]["description"] == "description b"
     assert page.items[0]["recipe"] == "ppo"
     assert page.items[0]["seed"] == 3
+    assert page.items[0]["state"] == "succeeded"
+    assert page.items[0]["stop_reason"] == "training_cap_complete"
+    assert page.items[0]["final_step"] == 1_000_000
     assert page.items[0]["metrics"]["leader/checkpoint/step"] == 1_000_000
     assert page.items[0]["url"] == (f"https://wandb.example/research/Mario/runs/{SECOND_RUN_ID}")
     assert [call["cursor"] for call in api.client.calls] == [None, "page-2"]
@@ -884,8 +1035,14 @@ def test_catalog_attaches_goal_required_eval_results_by_checkpoint(
         }
 
         def scan_history(self, *, keys, page_size):
-            assert required_metric in keys
             assert page_size == 10_000
+            if required_metric in keys:
+                return [
+                    {
+                        "eval/checkpoint_step": 250_000,
+                        required_metric: 1.0,
+                    }
+                ]
             return [
                 {
                     "eval/checkpoint_step": 250_000,
@@ -893,7 +1050,6 @@ def test_catalog_attaches_goal_required_eval_results_by_checkpoint(
                     "eval/acceptance/episodes/planned": 100.0,
                     "eval/acceptance/episodes/completed": 100.0,
                     "eval/acceptance/failure/count": 0.0,
-                    required_metric: 1.0,
                 },
                 {
                     "eval/checkpoint_step": 500_000,

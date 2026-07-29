@@ -132,6 +132,11 @@ ENVIRONMENT_SPECS: Mapping[str, EnvironmentSpec] = MappingProxyType(
             "Doom-ViZDoom-DefendLine",
             "VizdoomDefendLine-v1",
         ),
+        "VizdoomDefendLine-Plus-v1": EnvironmentSpec(
+            "VizdoomDefendLine-Plus-v1",
+            "Doom-ViZDoom-DefendLine-Plus",
+            "VizdoomDefendLine-Plus-v1",
+        ),
         "VizdoomHealthGathering-v1": EnvironmentSpec(
             "VizdoomHealthGathering-v1",
             "Doom-ViZDoom-HealthGathering",
@@ -278,7 +283,7 @@ SUPERMARIOBROS_NES_TURBO_PROVIDER = EnvProvider(
     turbo_api_version=1,
     constructor_contract=ProviderConstructorContract(
         canonical_args=_TURBO_CANONICAL_ARGS,
-        explicit_env_args=(_TURBO_EXPLICIT_ENV_ARGS - {"use_fire_reset"}) | {"state_dir"},
+        explicit_env_args=_TURBO_EXPLICIT_ENV_ARGS - {"use_fire_reset"},
         required_values={},
     ),
 )
@@ -294,6 +299,7 @@ VIZDOOM_TURBO_PROVIDER = EnvProvider(
             "VizdoomDeadlyCorridor-v1",
             "VizdoomDefendCenter-v1",
             "VizdoomDefendLine-v1",
+            "VizdoomDefendLine-Plus-v1",
             "VizdoomHealthGathering-v1",
             "VizdoomHealthGatheringSupreme-v1",
             "VizdoomMyWayHome-v1",
@@ -311,11 +317,11 @@ VIZDOOM_TURBO_PROVIDER = EnvProvider(
             "doom_skill",
             "game_args",
             "game_variables",
-            "state_dir",
             "treat_episode_timeout_as_truncation",
             "vizdoom_config",
         },
         required_values={},
+        optional_env_args=frozenset({"enemy_variants"}),
     ),
 )
 

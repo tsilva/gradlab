@@ -17,6 +17,14 @@ train:
   # Family-wide training failure detector; recipes calibrate timing to their budgets.
   early_stop:
     conditions:
+      target_reached:
+        metric: train/outcome/success/window_100/rate/min
+        trigger: threshold
+        operator: '>='
+        threshold: 0.95
+        patience_steps: 0
+        outcome: success
+        action: stop
       return_plateau:
         metric: train/episode/return/shaped/from/target/mean
         trigger: no_improvement
@@ -55,7 +63,6 @@ train:
               mode: all
               keys: []
             use_fire_reset: false
-            state_dir: null
             doom_map: null
             doom_skill: null
             game_args: null

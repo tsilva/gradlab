@@ -66,7 +66,7 @@ from gradlab.policy_bundle import (
 )
 from gradlab.r2_store import ConditionalWriteConflict, RunStorageConfig
 from gradlab.recipe_documents import (
-    compose_train_document,
+    compose_resolved_train_documents,
     load_goal_contract,
     prepare_checkpoint_eval_mode,
     recipe_tags,
@@ -107,6 +107,11 @@ from gradlab.supervisor_runtime import (
 from gradlab.train_config import (
     load_materialized_train_config,
     validate_and_normalize_train_config,
+)
+from gradlab.training_lifecycle import (
+    TRAINING_RESULT_FILENAME,
+    TerminalReason,
+    TrainingExecutionMode,
 )
 from gradlab.trusted_inputs import stage_model_input
 from gradlab.wandb_publisher import WandbProjector
@@ -428,6 +433,24 @@ class RunSupervisor:
         )
         return receipt
 
+    def _training_terminal_reason(self) -> str:
+        path = self.run_dir / TRAINING_RESULT_FILENAME
+        if not path.is_file():
+            return ""
+        document = _read_json(path)
+        if (
+            document.get("document_type") != "gradlab.training-result"
+            or int(document.get("format_version") or 0) != 2
+        ):
+            raise ValueError("learner training result has an unsupported contract")
+        if document.get("execution_mode") != TrainingExecutionMode.SUPERVISED.value:
+            raise ValueError("learner training result is not supervised")
+        reason = TerminalReason(str(document.get("terminal_reason") or ""))
+        final_step = document.get("final_step")
+        if isinstance(final_step, bool) or not isinstance(final_step, int) or final_step < 0:
+            raise ValueError("learner training result has an invalid final_step")
+        return reason.value
+
     @staticmethod
     def _checkpoint_manifest_url(checkpoint: Mapping[str, Any]) -> str:
         model_url = str(checkpoint.get("public_url") or "")
@@ -497,7 +520,7 @@ class RunSupervisor:
             self.repo_root / "experiments" / "goals" / self.manifest.goal_slug / "_goal.yaml"
         )
         recipe_path = goal_path.parent / "recipes" / f"{self.manifest.recipe_slug}.yaml"
-        materialized = compose_train_document(
+        resolved_documents = compose_resolved_train_documents(
             goal_path,
             recipe_path,
             recipe_overrides=self.manifest.recipe_overrides,
@@ -505,7 +528,10 @@ class RunSupervisor:
                 prepare_checkpoint_eval_mode,
                 checkpoint_eval_backend=("modal" if self.evaluation_required else "none"),
             ),
+            source_sha=self.manifest.source_sha,
         )
+        materialized = resolved_documents.effective
+        base_materialized = resolved_documents.base
         materialized_goal_hash = str(materialized["train_config"]["effective_goal_contract_sha256"])
         if materialized_goal_hash != self.manifest.goal_sha256:
             raise RuntimeError("effective goal hash does not match the run manifest")
@@ -551,6 +577,9 @@ class RunSupervisor:
                     staged.write_bytes(self.authority.evaluation.get_bytes(object_key))
                     install_rom_file(staged, normalized_asset, CONTAINER_ROM_CACHE)
             config["rom_asset_manifest"] = normalized_asset
+            base_config = dict(base_materialized["train_config"])
+            base_config["rom_asset_manifest"] = normalized_asset
+            base_materialized["train_config"] = base_config
         materialized["train_config"] = config
         self.recipe_document = build_recipe_document(
             materialized,
@@ -559,6 +588,8 @@ class RunSupervisor:
             run_description=self.manifest.run_description,
             seed=self.manifest.seed,
             runtime_image_ref=self.manifest.image_digest,
+            base_materialized_recipe=base_materialized,
+            canonical_goal=resolved_documents.canonical_goal,
         )
         if canonical_json_sha256(self.recipe_document) != self.manifest.recipe_sha256:
             raise RuntimeError("portable recipe hash does not match the run manifest")
@@ -1206,7 +1237,9 @@ class RunSupervisor:
                 return False
             self.authority.put_eval_intent(intent)
         elif existing != intent.to_dict():
-            raise ValueError(f"evaluation intent conflicts with checkpoint {checkpoint.checkpoint_id}")
+            raise ValueError(
+                f"evaluation intent conflicts with checkpoint {checkpoint.checkpoint_id}"
+            )
         self.store.ensure_eval(
             checkpoint_ledger_id=checkpoint_ledger_id,
             intent={
@@ -1589,9 +1622,8 @@ class RunSupervisor:
             expires_at = float(row.get("attempt_expires_at") or 0)
             if expires_at > wall_now:
                 continue
-            if (
-                not self.eval_admission_closed
-                and int(row["attempt"] or 0) < int(self.modal_config.protocol.max_attempts)
+            if not self.eval_admission_closed and int(row["attempt"] or 0) < int(
+                self.modal_config.protocol.max_attempts
             ):
                 self.store.reset_expired_eval(
                     idempotency_key=str(row["idempotency_key"]),
@@ -1759,8 +1791,7 @@ class RunSupervisor:
 
     def _has_public_final_checkpoint(self) -> bool:
         return any(
-            str(row.get("purpose") or "") == "final"
-            for row in self.store.checkpoint_publications()
+            str(row.get("purpose") or "") == "final" for row in self.store.checkpoint_publications()
         )
 
     def _durable_state_archive_enabled(self) -> bool:
@@ -1926,13 +1957,8 @@ class RunSupervisor:
     def _validate_no_acceptance_evidence(self) -> None:
         if not self.evaluation_required or self.store.evals(statuses=("accepted",)):
             return
-        checkpoints = {
-            str(row["checkpoint_id"]) for row in self.store.checkpoint_publications()
-        }
-        evals = {
-            str(row["checkpoint_id"]): row
-            for row in self.store.evals()
-        }
+        checkpoints = {str(row["checkpoint_id"]) for row in self.store.checkpoint_publications()}
+        evals = {str(row["checkpoint_id"]): row for row in self.store.evals()}
         missing = sorted(checkpoints - set(evals))
         invalid = sorted(
             (
@@ -2135,9 +2161,7 @@ class RunSupervisor:
             self.store.reset_interrupted_metric_frames()
             self._recover_durable_state()
             self.recovered_early_stop = (
-                self._authoritative_early_stop_receipt(
-                    attempt_id=self.manifest.attempt_id
-                )
+                self._authoritative_early_stop_receipt(attempt_id=self.manifest.attempt_id)
                 or self._prior_early_stop_receipt()
             )
             self._start_wandb()
@@ -2186,9 +2210,7 @@ class RunSupervisor:
                 failure,
                 phase="startup/recovery",
             )
-        learner_exited_at: float | None = (
-            self.clock.time() if self.learner is None else None
-        )
+        learner_exited_at: float | None = self.clock.time() if self.learner is None else None
 
         def cancel(_signum, _frame) -> None:
             self.cancel_requested = True
@@ -2198,6 +2220,7 @@ class RunSupervisor:
         failure: BaseException | None = None
         promotion: PromotionReceipt | None = None
         early_stop: EarlyStopReceipt | None = None
+        training_terminal_reason = ""
         try:
             while self.learner is not None and self.learner.poll() is None:
                 self.active_iteration()
@@ -2212,6 +2235,7 @@ class RunSupervisor:
                     log.close()
                 print(f"learner exited returncode={learner_returncode}", flush=True)
                 early_stop = self._resolve_early_stop_receipt()
+                training_terminal_reason = self._training_terminal_reason()
                 if learner_returncode != 0:
                     learner_log_tail = self._learner_log_tail()
                     if learner_log_tail:
@@ -2323,6 +2347,11 @@ class RunSupervisor:
             early_stop=early_stop,
         )
         stop_reason = self.stop_reason or default_stop_reason
+        if stop_reason == "training_cap_complete" and training_terminal_reason in {
+            TerminalReason.FIRST_COMPLETION.value,
+            TerminalReason.TRAINING_ACCEPTANCE.value,
+        }:
+            stop_reason = training_terminal_reason
         receipt = TerminalReceipt(
             run_id=self.manifest.run_id,
             attempt_id=self.manifest.attempt_id,
@@ -2362,6 +2391,14 @@ class RunSupervisor:
             stop_reason=receipt.stop_reason,
             final_step=receipt.final_step,
         )
+        try:
+            self.runtime.publish_terminal(
+                self.train_config,
+                receipt,
+                timeout_seconds=WANDB_DRAIN_TIMEOUT_SECONDS,
+            )
+        except Exception as exc:
+            print(f"W&B terminal summary projection failed: {exc!r}", flush=True)
         if failure is not None:
             print(f"run failed: {failure!r}", flush=True)
             return 1

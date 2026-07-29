@@ -58,13 +58,13 @@ function formatBytes(value) {
 
 function runStatePresentation(value) {
   const state = String(value || "").trim().toLowerCase();
-  if (state === "finished") {
+  if (state === "finished" || state === "succeeded") {
     return { iconName: "check", tone: "finished", label: "Finished" };
   }
   if (state === "running") {
     return { iconName: "activity-heartbeat", tone: "running", label: "Running" };
   }
-  if (state === "failed" || state === "crashed") {
+  if (["failed", "crashed", "resumable_failure"].includes(state)) {
     return {
       iconName: "x",
       tone: "failed",
@@ -78,7 +78,9 @@ function runStatePresentation(value) {
       label: state ? humanizeMetricPart(state) : "Pending",
     };
   }
-  if (["killed", "cancelled", "canceled", "preempted"].includes(state)) {
+  if (
+    ["killed", "cancelled", "canceled", "preempted", "interrupted"].includes(state)
+  ) {
     return { iconName: "x", tone: "stopped", label: humanizeMetricPart(state) };
   }
   return {
@@ -92,6 +94,96 @@ function humanizeMetricPart(value) {
   return String(value || "")
     .replaceAll("_", " ")
     .replace(/\b\w/g, (character) => character.toUpperCase());
+}
+
+export function runFinishPresentation(item) {
+  const reason = String(item?.stop_reason || "").trim();
+  const finalStep = Number(item?.final_step);
+  const stepDetail = Number.isSafeInteger(finalStep) && finalStep >= 0
+    ? `Stopped at ${finalStep.toLocaleString()} steps`
+    : "";
+  if (!reason) {
+    const state = String(item?.state || "").trim().toLowerCase();
+    return ["finished", "failed", "crashed", "canceled", "cancelled", "killed"]
+      .includes(state)
+      ? {
+          label: "Reason unavailable",
+          detail: "This run has no projected terminal receipt.",
+          tone: "unknown",
+        }
+      : { label: "—", detail: "", tone: "none" };
+  }
+  if (["eval_acceptance", "completed_after_eval_acceptance"].includes(reason)) {
+    return {
+      label: "Evaluation criteria met",
+      detail: stepDetail,
+      tone: "success",
+    };
+  }
+  if (["deterministic_training_acceptance", "first_completion"].includes(reason)) {
+    return {
+      label: "Training success criterion met",
+      detail: stepDetail,
+      tone: "success",
+    };
+  }
+  if (reason.startsWith("early_stop_success:")) {
+    return {
+      label: "Training success criterion met",
+      detail: [humanizeMetricPart(reason.split(":", 2)[1]), stepDetail]
+        .filter(Boolean)
+        .join(" · "),
+      tone: "success",
+    };
+  }
+  if (reason.startsWith("early_stop_failure:")) {
+    const stalled = String(item?.early_stop?.trigger || "") === "no_improvement";
+    return {
+      label: stalled ? "Training stalled" : "Training stop criterion met",
+      detail: [humanizeMetricPart(reason.split(":", 2)[1]), stepDetail]
+        .filter(Boolean)
+        .join(" · "),
+      tone: "failure",
+    };
+  }
+  if (reason.startsWith("early_stop_success_without_acceptance:")) {
+    return {
+      label: "Training target met; evaluation not accepted",
+      detail: [humanizeMetricPart(reason.split(":", 2)[1]), stepDetail]
+        .filter(Boolean)
+        .join(" · "),
+      tone: "failure",
+    };
+  }
+  if (reason === "training_cap_complete") {
+    return {
+      label: "Maximum timesteps reached",
+      detail: stepDetail,
+      tone: "neutral",
+    };
+  }
+  if (reason === "training_cap_without_acceptance") {
+    return {
+      label: "Maximum timesteps; evaluation not accepted",
+      detail: stepDetail,
+      tone: "failure",
+    };
+  }
+  if (reason === "canceled") {
+    return { label: "Canceled", detail: stepDetail, tone: "neutral" };
+  }
+  const known = {
+    evaluation_evidence_incomplete: "Evaluation evidence incomplete",
+    pre_submit_failure: "Submission failed",
+    supervisor_startup_failure: "Supervisor failed to start",
+    supervisor_failure: "Supervisor failed",
+    scratch_storage_above_80_percent: "Scratch storage limit reached",
+  };
+  return {
+    label: known[reason] || humanizeMetricPart(reason),
+    detail: stepDetail,
+    tone: "failure",
+  };
 }
 
 export function metricLabel(metric) {
@@ -267,9 +359,36 @@ export function checkpointPlaybackSeed(item) {
   return Number.isSafeInteger(seed) && seed >= 0 ? seed : null;
 }
 
-function checkpointEvaluationCell(item) {
+export function checkpointCanEvaluate(item) {
+  const queueState = String(item?.evaluation_queue?.state || "");
+  return (
+    (!item?.evaluation || typeof item.evaluation !== "object")
+    && ![
+      "queued",
+      "submitted",
+      "submission_uncertain",
+      "awaiting_projection",
+      "expired",
+    ].includes(queueState)
+  );
+}
+
+export function checkpointEvaluationCell(item) {
   const evaluation = item?.evaluation;
-  if (!evaluation || typeof evaluation !== "object") return ["—"];
+  if (!evaluation || typeof evaluation !== "object") {
+    const queue = item?.evaluation_queue;
+    const state = String(queue?.state || "");
+    const presentation = {
+      queued: ["Queued", "Waiting to be submitted"],
+      submitted: ["Running", "Submitted to the evaluation worker"],
+      submission_uncertain: ["Reconciling", queue?.message || "Checking submission state"],
+      awaiting_projection: ["Syncing", queue?.message || "Publishing verified evidence"],
+      expired: ["Expired", queue?.message || "Evaluation did not complete"],
+    }[state];
+    return presentation
+      ? [presentation[0], presentation[1], `evaluation-cell ${state}`]
+      : ["—"];
+  }
   const details = [];
   const completed = Number(evaluation.episodes_completed);
   const planned = Number(evaluation.episodes_planned);
@@ -504,6 +623,7 @@ export class SourceBrowser {
       command,
       getState,
       showToast,
+      openInspection,
       catalogRequestTimeoutMs = 30_000,
     },
   ) {
@@ -513,6 +633,7 @@ export class SourceBrowser {
     this.command = command;
     this.getState = getState;
     this.showToast = showToast;
+    this.openInspection = openInspection;
     this.route = {
       level: "environments",
       entity: "",
@@ -539,6 +660,8 @@ export class SourceBrowser {
     this.catalogRequestTimeoutMs = catalogRequestTimeoutMs;
     this.searchTimer = null;
     this.pollTimer = null;
+    this.selectedCheckpoints = new Set();
+    this.evaluating = false;
     this.autoSelectedRoute = "";
     this.activeBreadcrumbRoute = "";
     this.initialProjectCatalog = null;
@@ -607,6 +730,7 @@ export class SourceBrowser {
       this.nextCursor = null;
       this.loadedKey = "";
       this.error = "";
+      this.selectedCheckpoints.clear();
       this.autoSelectedRoute = "";
       this.syncUrl("replace");
     }
@@ -667,6 +791,40 @@ export class SourceBrowser {
 
   hasControl() {
     return Boolean(this.getState()?.hasControl);
+  }
+
+  inspectGoal(goal) {
+    const base = (
+      `/api/catalog/environments/${encodeURIComponent(this.route.entity)}`
+      + `/${encodeURIComponent(this.route.project)}/goals/${encodeURIComponent(goal.goal_id)}`
+    );
+    return this.openInspection(`${base}/inspection`, {
+      preferredDocument: "goal",
+      recipesEndpoint: `${base}/recipes`,
+      recipeEndpoint: (recipeId) => (
+        `${base}/recipes/${encodeURIComponent(recipeId)}/inspection`
+      ),
+    });
+  }
+
+  inspectGoalVariant(variant) {
+    return this.openInspection(
+      `/api/catalog/environments/${encodeURIComponent(this.route.entity)}`
+      + `/${encodeURIComponent(this.route.project)}/goals/${encodeURIComponent(this.route.goal_id)}`
+      + `/variants/${encodeURIComponent(variant.variant_id)}/inspection`,
+      { preferredDocument: "goal" },
+    );
+  }
+
+  inspectRun(runId = this.route.run_id) {
+    const query = new URLSearchParams({
+      entity: this.route.entity,
+      project: this.route.project,
+    });
+    return this.openInspection(
+      `/api/catalog/runs/${encodeURIComponent(runId)}/inspection?${query}`,
+      { preferredDocument: "recipe" },
+    );
   }
 
   routeKey() {
@@ -759,6 +917,16 @@ export class SourceBrowser {
       }
       const received = Array.isArray(payload.items) ? payload.items : [];
       this.items = append ? [...this.items, ...received] : received;
+      const visibleEligible = new Set(
+        this.items
+          .filter(checkpointCanEvaluate)
+          .map((item) => String(item.checkpoint_id || "")),
+      );
+      this.selectedCheckpoints = new Set(
+        [...this.selectedCheckpoints].filter((checkpointId) => (
+          visibleEligible.has(checkpointId)
+        )),
+      );
       if (!append) {
         this.metricColumns = Array.isArray(payload.metric_columns)
           ? payload.metric_columns
@@ -840,6 +1008,7 @@ export class SourceBrowser {
     this.nextCursor = null;
     this.loadedKey = "";
     this.error = "";
+    this.selectedCheckpoints.clear();
     this.autoSelectedRoute = "";
     this.hydrateInitialProjects();
     this.renderView();
@@ -1015,7 +1184,11 @@ export class SourceBrowser {
     } else if (["resolving", "verifying", "loading"].includes(this.app.phase)) {
       shell.append(this.renderProgress());
     } else {
-      shell.append(this.renderSearch(), this.renderResults());
+      shell.append(this.renderSearch());
+      if (this.route.level === "runs" && this.route.run_id) {
+        shell.append(this.renderEvaluationActions());
+      }
+      shell.append(this.renderResults());
     }
     this.root.replaceChildren(shell);
     if (restoreSearchFocus) {
@@ -1067,12 +1240,93 @@ export class SourceBrowser {
         : this.route.level === "goal_variants"
           ? "Search goal variant, diff, status, or contract hash"
           : this.route.level === "runs" && !this.route.run_id
-          ? "Search run, description, recipe, variant, override, or seed"
+          ? "Search run, finish reason, description, recipe, variant, override, or seed"
           : "Search checkpoint, step, hash, purpose, or evaluation";
     input.setAttribute("aria-label", input.placeholder);
     input.addEventListener("input", (event) => this.setSearch(event.target.value));
     wrap.append(input);
     return wrap;
+  }
+
+  renderEvaluationActions() {
+    const actions = document.createElement("div");
+    actions.className = "source-evaluation-actions";
+    const selected = this.selectedCheckpoints.size;
+    const summary = document.createElement("span");
+    summary.textContent = selected
+      ? `${selected.toLocaleString()} selected`
+      : "Select unevaluated checkpoints";
+    const evaluate = button(
+      this.evaluating
+        ? "Adding to queue…"
+        : selected
+          ? `Evaluate ${selected.toLocaleString()}`
+          : "Evaluate selected",
+      { iconName: "player-play", primary: true },
+    );
+    evaluate.disabled = !this.hasControl() || !selected || this.evaluating;
+    evaluate.addEventListener("click", () => this.evaluateSelected());
+    const inspect = button("Inspect run YAML", { iconName: "code", quiet: true });
+    inspect.addEventListener("click", () => {
+      void this.inspectRun().catch(
+        (error) => this.showToast(String(error?.message || error), true),
+      );
+    });
+    actions.append(summary, inspect, evaluate);
+    return actions;
+  }
+
+  async evaluateSelected() {
+    const checkpointIds = [...this.selectedCheckpoints];
+    if (!checkpointIds.length || this.evaluating) return;
+    this.evaluating = true;
+    this.renderView();
+    try {
+      const response = await fetch(
+        `/api/catalog/runs/${encodeURIComponent(this.route.run_id)}/evaluations`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${this.token}`,
+            "Content-Type": "application/json",
+          },
+          cache: "no-store",
+          body: JSON.stringify({ checkpoint_ids: checkpointIds }),
+        },
+      );
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(payload.error || `Evaluation request failed (${response.status})`);
+      }
+      const statuses = new Map(
+        (Array.isArray(payload.items) ? payload.items : [])
+          .map((item) => [String(item.checkpoint_id || ""), item]),
+      );
+      this.items = this.items.map((item) => {
+        const status = statuses.get(String(item.checkpoint_id || ""));
+        return status
+          ? {
+              ...item,
+              evaluation: status.evaluation || item.evaluation,
+              evaluation_queue: status,
+            }
+          : item;
+      });
+      this.selectedCheckpoints.clear();
+      const submitted = [...statuses.values()].filter(
+        (item) => item.state === "submitted",
+      ).length;
+      this.showToast(
+        submitted
+          ? `${submitted.toLocaleString()} checkpoint${submitted === 1 ? "" : "s"} submitted for evaluation.`
+          : "The selected checkpoints already have evaluation state.",
+      );
+    } catch (error) {
+      this.showToast(String(error?.message || error), true);
+    } finally {
+      this.evaluating = false;
+      this.renderView();
+    }
   }
 
   renderResults() {
@@ -1164,10 +1418,12 @@ export class SourceBrowser {
     const list = document.createElement("div");
     list.className = "goal-list";
     this.items.forEach((goal) => {
-      const row = document.createElement("button");
-      row.type = "button";
+      const row = document.createElement("div");
       row.className = "goal-row";
-      row.disabled = !this.hasControl();
+      const navigate = document.createElement("button");
+      navigate.type = "button";
+      navigate.className = "goal-row-navigation";
+      navigate.disabled = !this.hasControl();
       const identity = document.createElement("div");
       const name = document.createElement("strong");
       name.textContent = goal.goal_id;
@@ -1181,14 +1437,22 @@ export class SourceBrowser {
         slug.textContent = goal.goal_slug;
         identity.append(slug);
       }
-      row.append(identity);
-      row.addEventListener("click", () => this.navigate({
+      navigate.append(identity);
+      navigate.addEventListener("click", () => this.navigate({
         level: "goal_variants",
         goal_id: goal.goal_id,
         goal_variant_id: "",
         run_id: "",
         checkpoint_id: "",
       }));
+      const inspect = button("Inspect", { iconName: "code", quiet: true });
+      inspect.classList.add("goal-row-inspect");
+      inspect.addEventListener("click", () => {
+        void this.inspectGoal(goal).catch(
+          (error) => this.showToast(String(error?.message || error), true),
+        );
+      });
+      row.append(navigate, inspect);
       list.append(row);
     });
     return list;
@@ -1198,10 +1462,12 @@ export class SourceBrowser {
     const list = document.createElement("div");
     list.className = "goal-list goal-variant-list";
     this.items.forEach((variant) => {
-      const row = document.createElement("button");
-      row.type = "button";
+      const row = document.createElement("div");
       row.className = "goal-row goal-variant-row";
-      row.disabled = !this.hasControl();
+      const navigate = document.createElement("button");
+      navigate.type = "button";
+      navigate.className = "goal-row-navigation";
+      navigate.disabled = !this.hasControl();
       const identity = document.createElement("div");
       const name = document.createElement("strong");
       name.textContent = variant.label || variant.variant_id;
@@ -1227,13 +1493,21 @@ export class SourceBrowser {
         }).join(" · ");
         identity.append(detail);
       }
-      row.append(identity);
-      row.addEventListener("click", () => this.navigate({
+      navigate.append(identity);
+      navigate.addEventListener("click", () => this.navigate({
         level: "runs",
         goal_variant_id: variant.variant_id,
         run_id: "",
         checkpoint_id: "",
       }));
+      const inspect = button("Inspect", { iconName: "code", quiet: true });
+      inspect.classList.add("goal-row-inspect");
+      inspect.addEventListener("click", () => {
+        void this.inspectGoalVariant(variant).catch(
+          (error) => this.showToast(String(error?.message || error), true),
+        );
+      });
+      row.append(navigate, inspect);
       list.append(row);
     });
     return list;
@@ -1272,19 +1546,23 @@ export class SourceBrowser {
     const head = document.createElement("thead");
     const headerRow = document.createElement("tr");
     const showingRuns = this.route.level === "runs" && !this.route.run_id;
+    const showingCheckpoints = this.route.level === "runs" && Boolean(this.route.run_id);
     const runMetricColumns = showingRuns ? this.activeRunMetricColumns() : [];
     const columns = showingRuns
       ? [
           { label: "Run" },
           { label: "Recipe / variant" },
           { label: "Seed" },
+          { label: "Finished because" },
           ...runMetricColumns.map((column) => ({
             ...column,
             label: metricLabel(column.metric),
           })),
           { label: "Updated" },
+          { label: "Contract" },
         ]
       : [
+          { label: "", selection: true },
           { label: "Checkpoint" },
           { label: "Purpose" },
           { label: "Step" },
@@ -1295,7 +1573,28 @@ export class SourceBrowser {
     columns.forEach((column) => {
       const cell = document.createElement("th");
       cell.scope = "col";
-      if (column.metric) {
+      if (column.selection) {
+        cell.className = "source-selection-cell";
+        const eligible = this.items.filter(checkpointCanEvaluate);
+        const allSelected = (
+          eligible.length > 0
+          && eligible.every((item) => this.selectedCheckpoints.has(item.checkpoint_id))
+        );
+        const selectAll = document.createElement("input");
+        selectAll.type = "checkbox";
+        selectAll.checked = allSelected;
+        selectAll.disabled = !this.hasControl() || !eligible.length || this.evaluating;
+        selectAll.setAttribute("aria-label", "Select all unevaluated checkpoints");
+        selectAll.addEventListener("change", () => {
+          if (selectAll.checked) {
+            eligible.forEach((item) => this.selectedCheckpoints.add(item.checkpoint_id));
+          } else {
+            eligible.forEach((item) => this.selectedCheckpoints.delete(item.checkpoint_id));
+          }
+          this.renderView();
+        });
+        cell.append(selectAll);
+      } else if (column.metric) {
         const active = this.sort.metric === column.metric;
         const defaultDirection = column.direction === "min" ? "ascending" : "descending";
         const nextDirection = active && this.sort.direction === "ascending"
@@ -1347,9 +1646,12 @@ export class SourceBrowser {
         && efficiency?.item?.run_id === item.run_id
       );
       if (isEfficiencyLeader) row.classList.add("efficiency-leader");
-      row.tabIndex = this.hasControl() ? 0 : -1;
-      row.setAttribute("role", "button");
-      row.setAttribute("aria-disabled", String(!this.hasControl()));
+      if (!showingRuns) {
+        row.tabIndex = this.hasControl() ? 0 : -1;
+        row.setAttribute("role", "button");
+        row.setAttribute("aria-disabled", String(!this.hasControl()));
+      }
+      const finish = showingRuns ? runFinishPresentation(item) : null;
       const values = showingRuns
         ? [
             [item.description || item.name || item.run_id, item.run_id, "run-cell"],
@@ -1359,12 +1661,15 @@ export class SourceBrowser {
               "recipe-cell",
             ],
             [item.seed ?? "—"],
+            [finish.label, finish.detail, `finish-reason ${finish.tone}`],
             ...runMetricColumns.map((column) => [
               formatMetricValue(column.metric, item.metrics?.[column.metric]),
             ]),
             [formatDate(item.updated_at || item.created_at)],
+            [null, "", "inspection-cell"],
           ]
         : [
+            [null, "", "source-selection-cell"],
             [item.promoted ? `${item.checkpoint_id} · promoted` : item.checkpoint_id, item.sha256],
             [item.purpose],
             [Number(item.step).toLocaleString()],
@@ -1375,13 +1680,53 @@ export class SourceBrowser {
       values.forEach(([primary, secondary = "", className = ""]) => {
         const cell = document.createElement("td");
         if (className) cell.className = className;
+        if (className.includes("source-selection-cell")) {
+          const selectable = showingCheckpoints && checkpointCanEvaluate(item);
+          const checkbox = document.createElement("input");
+          checkbox.type = "checkbox";
+          checkbox.checked = this.selectedCheckpoints.has(item.checkpoint_id);
+          checkbox.disabled = !this.hasControl() || !selectable || this.evaluating;
+          checkbox.setAttribute(
+            "aria-label",
+            selectable
+              ? `Select ${item.checkpoint_id} for evaluation`
+              : `${item.checkpoint_id} already has evaluation state`,
+          );
+          checkbox.addEventListener("click", (event) => event.stopPropagation());
+          checkbox.addEventListener("change", () => {
+            if (checkbox.checked) this.selectedCheckpoints.add(item.checkpoint_id);
+            else this.selectedCheckpoints.delete(item.checkpoint_id);
+            this.renderView();
+          });
+          cell.append(checkbox);
+          row.append(cell);
+          return;
+        }
+        if (className.includes("inspection-cell")) {
+          const inspect = button("Inspect", { iconName: "code", quiet: true });
+          inspect.addEventListener("click", () => {
+            void this.inspectRun(item.run_id).catch(
+              (error) => this.showToast(String(error?.message || error), true),
+            );
+          });
+          cell.append(inspect);
+          row.append(cell);
+          return;
+        }
         const main = document.createElement("span");
         if (className.includes("evaluation-cell")) main.className = "evaluation-verdict";
         main.textContent = String(primary);
         if (className.includes("run-cell")) {
           const presentation = runStatePresentation(item.state);
-          const identity = document.createElement("div");
+          const identity = document.createElement("button");
+          identity.type = "button";
           identity.className = "run-identity";
+          identity.disabled = !this.hasControl();
+          identity.addEventListener("click", () => this.navigate({
+            level: "runs",
+            run_id: item.run_id,
+            checkpoint_id: "",
+          }));
           const state = document.createElement("span");
           state.className = `run-state ${presentation.tone}`;
           state.title = `Run state: ${presentation.label}`;
@@ -1431,25 +1776,24 @@ export class SourceBrowser {
         }
         row.append(cell);
       });
+      if (this.selectedCheckpoints.has(item.checkpoint_id)) {
+        row.classList.add("selected");
+      }
       const activate = () => {
         if (!this.hasControl()) return;
-        if (showingRuns) {
-          this.navigate({
-            level: "runs",
-            run_id: item.run_id,
-            checkpoint_id: "",
-          });
-        } else {
+        if (!showingRuns) {
           this.selectCheckpoint(item);
         }
       };
-      row.addEventListener("click", activate);
-      row.addEventListener("keydown", (event) => {
-        if (event.key === "Enter" || event.key === " ") {
-          event.preventDefault();
-          activate();
-        }
-      });
+      if (!showingRuns) {
+        row.addEventListener("click", activate);
+        row.addEventListener("keydown", (event) => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            activate();
+          }
+        });
+      }
       body.append(row);
     });
     table.append(head, body);

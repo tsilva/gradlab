@@ -11,13 +11,17 @@ from gradlab.eval_backend import EvalHandle, EvalPoll
 from gradlab.file_utils import atomic_write_json
 from gradlab.goal_variants import build_goal_variant_descriptor
 from gradlab.metric_names import TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_MEAN
+from gradlab.manual_evaluation import ManualEvaluationQueue
 from gradlab.policy_bundle import (
     build_recipe_document,
     canonical_json_sha256,
     evaluation_contract_sha256,
 )
 from gradlab.r2_store import BucketConfig, RunStorageConfig
-from gradlab.recipe_documents import compose_train_document, load_goal_contract
+from gradlab.recipe_documents import (
+    compose_resolved_train_documents,
+    load_goal_contract,
+)
 from gradlab.run_authority import RunAuthority
 from gradlab.run_contracts import (
     CheckpointManifest,
@@ -57,6 +61,21 @@ class FailingSpawnBackend:
         return None
 
 
+class CapturingEvalBackend:
+    def __init__(self) -> None:
+        self.payloads = []
+
+    def submit(self, intent):
+        self.payloads.append(intent)
+        return EvalHandle(provider="modal", call_id=f"fc-{len(self.payloads)}")
+
+    def poll(self, handle: EvalHandle) -> EvalPoll:
+        return EvalPoll(status="running")
+
+    def cancel(self, handle: EvalHandle) -> None:
+        return None
+
+
 class RunSupervisorTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
@@ -70,7 +89,12 @@ class RunSupervisorTests(unittest.TestCase):
             ),
         )
         self.authority = RunAuthority(self.storage)
-        document = compose_train_document(GOAL, RECIPE)
+        resolved_documents = compose_resolved_train_documents(
+            GOAL,
+            RECIPE,
+            source_sha=SOURCE_SHA,
+        )
+        document = resolved_documents.effective
         self.run_id = new_run_id()
         self.asset = {
             "schema_version": 2,
@@ -100,7 +124,17 @@ class RunSupervisorTests(unittest.TestCase):
             run_description="supervisor unit test",
             seed=123,
             runtime_image_ref=IMAGE,
+            base_materialized_recipe={
+                **resolved_documents.base,
+                "train_config": {
+                    **resolved_documents.base["train_config"],
+                    "rom_asset_manifest": self.asset,
+                    "checkpoint_eval_backend": "modal",
+                },
+            },
+            canonical_goal=resolved_documents.canonical_goal,
         )
+        self.portable_recipe = portable_recipe
         self.manifest = RunManifest(
             run_id=self.run_id,
             attempt_id=new_attempt_id(),
@@ -185,6 +219,83 @@ class RunSupervisorTests(unittest.TestCase):
             ),
         ):
             supervisor.validate_runtime()
+
+    def test_manual_evaluation_queue_reuses_durable_intent_and_modal_dispatch(self) -> None:
+        checkpoint = CheckpointManifest(
+            run_id=self.run_id,
+            checkpoint_id="checkpoint-250000-" + "e" * 16,
+            step=250_000,
+            purpose="periodic",
+            sha256="e" * 64,
+            size_bytes=10,
+            public_url="https://models.example/model.zip",
+            model_document_url="https://models.example/model.json",
+            model_document_sha256="f" * 64,
+            recipe_document_url="https://models.example/recipe.json",
+            recipe_document_sha256=canonical_json_sha256(self.portable_recipe),
+            goal_sha256=self.manifest.goal_sha256,
+            recipe_sha256=self.manifest.recipe_sha256,
+            environment_sha256=self.manifest.environment_sha256,
+            evaluation_contract_sha256=evaluation_contract_sha256(self.portable_recipe),
+            recovery_sidecar_key="recovery.json",
+            created_at=utc_now(),
+        )
+        checkpoint_prefix = f"runs/{self.run_id}/checkpoints/{checkpoint.step}-{checkpoint.sha256}"
+        self.authority.models.put_json(
+            f"{checkpoint_prefix}/recipe.json",
+            self.portable_recipe,
+        )
+        self.authority.models.put_json(
+            f"runs/{self.run_id}/index.json",
+            {
+                "schema_version": 1,
+                "run_id": self.run_id,
+                "updated_at": utc_now(),
+                "checkpoints": [checkpoint.to_dict()],
+                "promotion": None,
+            },
+        )
+        backend = CapturingEvalBackend()
+        queue = ManualEvaluationQueue(
+            authority=self.authority,
+            repo_root=Path.cwd(),
+            backend_factory=lambda _manifest: backend,
+            project_results=False,
+            monitor=False,
+        )
+
+        statuses = queue.enqueue(
+            run_id=self.run_id,
+            checkpoint_ids=[checkpoint.checkpoint_id],
+        )
+
+        self.assertEqual(statuses[0]["state"], "submitted")
+        self.assertEqual(len(backend.payloads), 1)
+        intent = next(
+            self.authority.evaluation.get_json(key)
+            for key in self.authority.evaluation.iter_keys(f"runs/{self.run_id}/evals")
+            if key.endswith("/intent.json")
+        )
+        self.assertEqual(intent["checkpoint_id"], checkpoint.checkpoint_id)
+        self.assertEqual(
+            backend.payloads[0]["contract"],
+            intent["execution_contract"],
+        )
+        self.assertIsNotNone(
+            self.authority.eval_dispatch(
+                run_id=self.run_id,
+                idempotency_key=intent["idempotency_key"],
+                attempt=1,
+            )
+        )
+
+        repeated = queue.enqueue(
+            run_id=self.run_id,
+            checkpoint_ids=[checkpoint.checkpoint_id],
+        )
+
+        self.assertEqual(repeated[0]["state"], "submitted")
+        self.assertEqual(len(backend.payloads), 1)
 
     def test_ephemeral_state_archive_is_not_recovered_or_published(self) -> None:
         supervisor = self.supervisor()
@@ -314,6 +425,26 @@ class RunSupervisorTests(unittest.TestCase):
                 return {"max": 10}.get(key)
 
         self.assertEqual(_summary_scalar(SummarySubDictLike()), 10)
+
+    def test_supervisor_reads_deterministic_training_acceptance_reason(self) -> None:
+        supervisor = self.supervisor()
+        supervisor.run_dir.mkdir(parents=True, exist_ok=True)
+        atomic_write_json(
+            supervisor.run_dir / "training-result.json",
+            {
+                "document_type": "gradlab.training-result",
+                "format_version": 2,
+                "status": "completed",
+                "terminal_reason": "deterministic_training_acceptance",
+                "execution_mode": "supervised",
+                "final_step": 125_000,
+            },
+        )
+
+        self.assertEqual(
+            supervisor._training_terminal_reason(),
+            "deterministic_training_acceptance",
+        )
 
     def test_unaccepted_goal_is_a_clean_scientific_failure(self) -> None:
         state, stop_reason = _terminal_outcome(
@@ -676,11 +807,13 @@ class RunSupervisorTests(unittest.TestCase):
     def test_materializes_launch_time_recipe_variant_metadata(self) -> None:
         supervisor = self.supervisor()
         overrides = ("train.timesteps=50000000",)
-        document = compose_train_document(
+        resolved_documents = compose_resolved_train_documents(
             GOAL,
             RECIPE,
             recipe_overrides=overrides,
+            source_sha=SOURCE_SHA,
         )
+        document = resolved_documents.effective
         contract_document = dict(document)
         contract_config = dict(contract_document["train_config"])
         contract_config["rom_asset_manifest"] = self.asset
@@ -699,6 +832,15 @@ class RunSupervisorTests(unittest.TestCase):
             run_description=self.manifest.run_description,
             seed=self.manifest.seed,
             runtime_image_ref=IMAGE,
+            base_materialized_recipe={
+                **resolved_documents.base,
+                "train_config": {
+                    **resolved_documents.base["train_config"],
+                    "rom_asset_manifest": self.asset,
+                    "checkpoint_eval_backend": "modal",
+                },
+            },
+            canonical_goal=resolved_documents.canonical_goal,
         )
         supervisor.manifest = replace(
             supervisor.manifest,
@@ -909,8 +1051,7 @@ class RunSupervisorTests(unittest.TestCase):
         )
         with supervisor.store.connection() as connection:
             connection.execute(
-                "UPDATE eval_dispatches SET attempt_expires_at = 1000 "
-                "WHERE status = 'submitted'"
+                "UPDATE eval_dispatches SET attempt_expires_at = 1000 WHERE status = 'submitted'"
             )
         with patch.object(supervisor.clock, "time", return_value=1001):
             self.assertEqual(supervisor._poll_evals(10.0), 2)
@@ -1003,7 +1144,7 @@ class RunSupervisorTests(unittest.TestCase):
         with supervisor.store.connection() as connection:
             connection.execute(
                 "UPDATE eval_dispatches SET status = 'rejected', "
-                "result_json = '{\"status\":\"rejected\"}' "
+                'result_json = \'{"status":"rejected"}\' '
                 "WHERE idempotency_key = ?",
                 ("2" * 64,),
             )

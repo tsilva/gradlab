@@ -14,6 +14,7 @@ from typing import Any, Literal
 from urllib.parse import unquote, urlparse
 
 from gradlab.config_loader import load_mapping_document
+from gradlab.contract_inspection import inspection_document
 from gradlab.early_stop import EARLY_STOP_OPERATORS, normalize_metric_threshold_rules
 from gradlab.goal_variants import (
     GOAL_VARIANT_INDEX_SCHEMA_VERSION,
@@ -36,12 +37,27 @@ from gradlab.metric_names import (
     TRAIN_OUTCOME_SUCCESS_WINDOW_100_RATE_MIN,
 )
 from gradlab.model_sources import DEFAULT_PUBLIC_MODELS_BASE_URL, _public_json
+from gradlab.policy_bundle import canonical_json_sha256, validate_recipe_document
 from gradlab.r2_store import BucketConfig, R2Bucket
 from gradlab.ranking import RankCriterion, parse_objective_rank
 from gradlab.recipe_variants import normalize_recipe_overrides, recipe_variant_id
-from gradlab.recipe_documents import load_goal_contract
+from gradlab.recipe_documents import (
+    compose_resolved_train_documents,
+    load_goal_contract,
+    load_recipe_source_document,
+)
 from gradlab.reward_programs import goal_for_contract_validation
-from gradlab.run_contracts import CheckpointManifest, RUN_ID_PATTERN
+from gradlab.run_contracts import (
+    RUN_EARLY_STOP_CONDITION_SUMMARY,
+    RUN_EARLY_STOP_TRIGGER_SUMMARY,
+    RUN_FINAL_STEP_SUMMARY,
+    RUN_ID_PATTERN,
+    RUN_STOP_REASON_SUMMARY,
+    RUN_TERMINAL_STATE_SUMMARY,
+    CheckpointManifest,
+    RunManifest,
+)
+from gradlab.run_authority import RunAuthority
 from gradlab.wandb_utils import (
     load_wandb_env,
     resolve_wandb_project,
@@ -154,6 +170,7 @@ class GoalVariantSummary:
     status: str
     diff: tuple[Mapping[str, Any], ...]
     diff_truncated: bool
+    exact_resolution_run_id: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -166,6 +183,9 @@ class RunSummary:
     run_id: str
     name: str
     state: str
+    stop_reason: str
+    final_step: int | None
+    early_stop: Mapping[str, Any] | None
     goal: str
     recipe: str
     recipe_sha256: str
@@ -949,6 +969,13 @@ class PlayCatalog:
                         run_id=run_id,
                         name=str(raw_item.get("name") or run_id),
                         state=str(raw_item.get("state") or ""),
+                        stop_reason=str(raw_item.get("stop_reason") or ""),
+                        final_step=_safe_int(raw_item.get("final_step")),
+                        early_stop=(
+                            dict(raw_item["early_stop"])
+                            if isinstance(raw_item.get("early_stop"), Mapping)
+                            else None
+                        ),
                         goal=str(raw_item.get("goal") or ""),
                         recipe=str(raw_item.get("recipe") or ""),
                         recipe_sha256=str(raw_item.get("recipe_sha256") or ""),
@@ -1286,6 +1313,7 @@ class PlayCatalog:
         project: str,
         repository_goal: _RepositoryGoal,
         current: Mapping[str, Any],
+        exact_resolution_run_id: str = "",
     ) -> dict[str, Any]:
         validated = validate_goal_variant_descriptor(descriptor)
         authored_current = validated["goal_contract_sha256"] == current["goal_contract_sha256"]
@@ -1313,6 +1341,7 @@ class PlayCatalog:
             status=status,
             diff=tuple(dict(item) for item in validated["diff"]),
             diff_truncated=bool(validated["diff_truncated"]),
+            exact_resolution_run_id=str(exact_resolution_run_id or ""),
         ).to_dict()
 
     def _control_goal_variants(
@@ -1351,7 +1380,12 @@ class PlayCatalog:
             descriptor = {
                 key: value
                 for key, value in raw.items()
-                if key not in {"descriptor_key", "first_run_id"}
+                if key
+                not in {
+                    "descriptor_key",
+                    "first_run_id",
+                    "exact_resolution_run_id",
+                }
             }
             items.append(
                 self._variant_summary(
@@ -1360,6 +1394,7 @@ class PlayCatalog:
                     project=project,
                     repository_goal=repository_goal,
                     current=current,
+                    exact_resolution_run_id=str(raw.get("exact_resolution_run_id") or ""),
                 )
             )
         return tuple(items)
@@ -1637,6 +1672,9 @@ class PlayCatalog:
             if selected_goal_variant_id and run_goal_variant_id != selected_goal_variant_id:
                 continue
             run_metrics = run.summary
+            stop_reason = str(run_metrics.get(RUN_STOP_REASON_SUMMARY) or "")
+            early_stop_trigger = str(run_metrics.get(RUN_EARLY_STOP_TRIGGER_SUMMARY) or "")
+            early_stop_condition = str(run_metrics.get(RUN_EARLY_STOP_CONDITION_SUMMARY) or "")
             overrides = normalize_recipe_overrides(config.get("recipe_overrides"))
             configured_variant_id = str(config.get("recipe_variant_id") or "").strip()
             variant_id = configured_variant_id or (
@@ -1654,7 +1692,17 @@ class PlayCatalog:
                     project=project,
                     run_id=run_id,
                     name=run.name or run_id,
-                    state=run.state,
+                    state=str(run_metrics.get(RUN_TERMINAL_STATE_SUMMARY) or run.state),
+                    stop_reason=stop_reason,
+                    final_step=_safe_int(run_metrics.get(RUN_FINAL_STEP_SUMMARY)),
+                    early_stop=(
+                        {
+                            "trigger": early_stop_trigger,
+                            "condition_id": early_stop_condition,
+                        }
+                        if stop_reason and (early_stop_trigger or early_stop_condition)
+                        else None
+                    ),
                     goal=goal_slug,
                     recipe=str(config.get("recipe_slug") or ""),
                     recipe_sha256=str(config.get("recipe_sha256") or ""),
@@ -1717,25 +1765,17 @@ class PlayCatalog:
             str(item.get("variant_id") or "")
             for item in raw_variants
             if isinstance(item, Mapping)
-            and (
-                not selected_goal_variant_id
-                or item.get("variant_id") == selected_goal_variant_id
-            )
+            and (not selected_goal_variant_id or item.get("variant_id") == selected_goal_variant_id)
         ]
         if any(not value for value in variant_ids):
             raise ValueError("goal variant index contains an invalid entry")
 
         summaries: list[dict[str, Any]] = []
         for variant_id in variant_ids:
-            document = self.control_bucket.get_json_optional(
-                f"{scope_key}/runs/{variant_id}.json"
-            )
+            document = self.control_bucket.get_json_optional(f"{scope_key}/runs/{variant_id}.json")
             if document is None:
                 continue
-            if (
-                int(document.get("schema_version") or 0)
-                != GOAL_VARIANT_RUN_INDEX_SCHEMA_VERSION
-            ):
+            if int(document.get("schema_version") or 0) != GOAL_VARIANT_RUN_INDEX_SCHEMA_VERSION:
                 raise ValueError("unsupported goal variant run index schema")
             if document.get("scope") != {
                 "entity": entity,
@@ -1759,6 +1799,10 @@ class PlayCatalog:
                     or raw.get("goal_slug") != selected_goal_slug
                     or raw.get("goal_variant_id") != variant_id
                     or not isinstance(metrics, Mapping)
+                    or (
+                        raw.get("early_stop") is not None
+                        and not isinstance(raw.get("early_stop"), Mapping)
+                    )
                 ):
                     raise ValueError("goal variant run index contains an invalid run")
                 summaries.append(
@@ -1768,6 +1812,13 @@ class PlayCatalog:
                         run_id=run_id,
                         name=str(raw.get("name") or run_id),
                         state=str(raw.get("state") or ""),
+                        stop_reason=str(raw.get("stop_reason") or ""),
+                        final_step=_safe_int(raw.get("final_step")),
+                        early_stop=(
+                            dict(raw["early_stop"])
+                            if isinstance(raw.get("early_stop"), Mapping)
+                            else None
+                        ),
                         goal=selected_goal_slug,
                         recipe=str(raw.get("recipe_slug") or ""),
                         recipe_sha256=str(raw.get("recipe_sha256") or ""),
@@ -1786,10 +1837,7 @@ class PlayCatalog:
                         created_at=str(raw.get("created_at") or ""),
                         updated_at=str(raw.get("updated_at") or ""),
                         url=str(raw.get("url") or ""),
-                        metrics={
-                            str(name): _safe_float(value)
-                            for name, value in metrics.items()
-                        },
+                        metrics={str(name): _safe_float(value) for name, value in metrics.items()},
                     ).to_dict()
                 )
         _rank_run_summaries(
@@ -1875,10 +1923,14 @@ class PlayCatalog:
         )
         selected_goal_slug = repository_goal.goal_slug if repository_goal else ""
         selected_goal_variant = str(goal_variant_id or "").strip()
-        if selected_goal_variant and re.fullmatch(
-            r"goal-variant-(?:[0-9a-f]{24}|unknown-[0-9a-f]{16})",
-            selected_goal_variant,
-        ) is None:
+        if (
+            selected_goal_variant
+            and re.fullmatch(
+                r"goal-variant-(?:[0-9a-f]{24}|unknown-[0-9a-f]{16})",
+                selected_goal_variant,
+            )
+            is None
+        ):
             raise ValueError("invalid goal variant id")
         rank = (repository_goal.rank or ()) if repository_goal else ()
         metric_specs = _run_metric_specs(rank) if repository_goal else ()
@@ -1933,6 +1985,8 @@ class PlayCatalog:
                 summary.get("run_id"),
                 summary.get("name"),
                 summary.get("state"),
+                summary.get("stop_reason"),
+                summary.get("early_stop"),
                 summary.get("goal"),
                 summary.get("recipe"),
                 summary.get("recipe_sha256"),
@@ -2040,6 +2094,430 @@ class PlayCatalog:
         ]
         return _page_items(filtered, cursor)
 
+    @staticmethod
+    def _inspection_envelope(
+        *,
+        source: Mapping[str, Any],
+        goal: Mapping[str, Any] | None = None,
+        recipe: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        documents = {}
+        if goal is not None:
+            documents["goal"] = dict(goal)
+        if recipe is not None:
+            documents["recipe"] = dict(recipe)
+        return {
+            "schema_version": 1,
+            "source": dict(source),
+            "documents": documents,
+        }
+
+    @staticmethod
+    def _preview_recipe(document: Mapping[str, Any]) -> dict[str, Any]:
+        preview = json.loads(json.dumps(document))
+        preview.pop("_composition", None)
+        return preview
+
+    def recipes(
+        self,
+        *,
+        entity: str,
+        project: str,
+        goal_id: str,
+        query: str = "",
+        cursor: str | None = None,
+    ) -> CatalogPage:
+        repository_goal = self._repository_goal(project=project, goal_id=goal_id)
+        recipes_root = (self.repo_root / repository_goal.goal_path).parent / "recipes"
+        normalized = str(query or "").strip().casefold()
+        items: list[dict[str, Any]] = []
+        for path in sorted(recipes_root.glob("*.yaml")):
+            composed = load_recipe_source_document(path).document
+            recipe_id = str(composed.get("recipe_id") or path.stem).strip()
+            description = str(composed.get("description") or "").strip()
+            item = {
+                "entity": entity,
+                "project": project,
+                "goal_id": goal_id,
+                "goal_slug": repository_goal.goal_slug,
+                "recipe_id": recipe_id,
+                "title": recipe_id,
+                "description": description,
+                "path": path.relative_to(self.repo_root).as_posix(),
+                "availability": "static-preview",
+            }
+            if not normalized or normalized in _search_text(
+                recipe_id,
+                description,
+                item["path"],
+            ):
+                items.append(item)
+        return _page_items(items, cursor)
+
+    def inspect_goal(
+        self,
+        *,
+        entity: str,
+        project: str,
+        goal_id: str,
+    ) -> dict[str, Any]:
+        repository_goal = self._repository_goal(project=project, goal_id=goal_id)
+        authored = load_goal_contract(
+            self.repo_root / repository_goal.goal_path,
+            self.repo_root,
+        )
+        canonical = goal_for_contract_validation(
+            authored,
+            label=f"repository goal {repository_goal.goal_slug}",
+        )
+        descriptor = build_goal_variant_descriptor(
+            goal_slug=repository_goal.goal_slug,
+            source_sha="",
+            authored_goal=authored,
+            effective_goal=canonical,
+        )
+        goal = inspection_document(
+            kind="goal",
+            title=repository_goal.title,
+            availability="exact",
+            resolved=canonical,
+            base=canonical,
+            variant_id=str(descriptor["variant_id"]),
+            metadata={
+                "entity": entity,
+                "project": project,
+                "goal_id": goal_id,
+                "goal_slug": repository_goal.goal_slug,
+                "goal_contract_sha256": descriptor["goal_contract_sha256"],
+                "effective_goal_contract_sha256": descriptor["effective_goal_contract_sha256"],
+            },
+            allow_placeholders=True,
+        )
+        return self._inspection_envelope(
+            source={
+                "kind": "repository-goal",
+                "goal_path": repository_goal.goal_path,
+            },
+            goal=goal,
+        )
+
+    def inspect_recipe(
+        self,
+        *,
+        entity: str,
+        project: str,
+        goal_id: str,
+        recipe_id: str,
+    ) -> dict[str, Any]:
+        repository_goal = self._repository_goal(project=project, goal_id=goal_id)
+        normalized_recipe_id = str(recipe_id or "").strip()
+        if (
+            not normalized_recipe_id
+            or re.fullmatch(
+                r"[A-Za-z0-9][A-Za-z0-9_.-]*",
+                normalized_recipe_id,
+            )
+            is None
+        ):
+            raise ValueError("invalid recipe id")
+        goal_path = self.repo_root / repository_goal.goal_path
+        recipe_path = goal_path.parent / "recipes" / f"{normalized_recipe_id}.yaml"
+        if not recipe_path.is_file():
+            raise ValueError(f"repository has no recipe {project}/{goal_id}/{normalized_recipe_id}")
+        resolved = compose_resolved_train_documents(goal_path, recipe_path)
+        preview = self._preview_recipe(resolved.base)
+        recipe = inspection_document(
+            kind="recipe",
+            title=str(preview.get("recipe_id") or normalized_recipe_id),
+            availability="static-preview",
+            resolved=preview,
+            base=preview,
+            variant_id="base",
+            message=(
+                "Launch-bound values remain as placeholders until a run supplies "
+                "its seed, description, assets, and runtime."
+            ),
+            metadata={
+                "entity": entity,
+                "project": project,
+                "goal_id": goal_id,
+                "goal_slug": repository_goal.goal_slug,
+                "recipe_id": normalized_recipe_id,
+                "recipe_path": recipe_path.relative_to(self.repo_root).as_posix(),
+            },
+            allow_placeholders=True,
+        )
+        return self._inspection_envelope(
+            source={
+                "kind": "repository-recipe",
+                "goal_path": repository_goal.goal_path,
+                "recipe_path": recipe_path.relative_to(self.repo_root).as_posix(),
+            },
+            recipe=recipe,
+        )
+
+    def _control_recipe_document(self, recipe_sha256: str) -> dict[str, Any] | None:
+        if self.control_bucket is None:
+            return None
+        key = RunAuthority.recipe_document_key(recipe_sha256)
+        document = self.control_bucket.get_json_optional(key)
+        if document is None:
+            return None
+        validated = validate_recipe_document(
+            document,
+            source=f"control recipe {recipe_sha256}",
+        )
+        if canonical_json_sha256(validated) != recipe_sha256:
+            raise ValueError("control recipe document hash mismatch")
+        return validated
+
+    @staticmethod
+    def _recipe_document_inspections(
+        document: Mapping[str, Any],
+        *,
+        title: str,
+        metadata: Mapping[str, Any],
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        validated = validate_recipe_document(document, source=title)
+        recipe = dict(validated["recipe"])
+        resolution = validated.get("resolution")
+        if isinstance(resolution, Mapping):
+            goal_resolution = resolution.get("goal")
+            recipe_resolution = resolution.get("recipe")
+            if not isinstance(goal_resolution, Mapping) or not isinstance(
+                recipe_resolution,
+                Mapping,
+            ):
+                raise ValueError("recipe resolution proof is malformed")
+            goal_base = dict(goal_resolution["base"])
+            recipe_base = dict(recipe_resolution["base"])
+            message = ""
+        else:
+            goal_base = None
+            recipe_base = None
+            message = (
+                "This legacy recipe preserves the exact resolved contract but predates "
+                "embedded base-contract proofs, so a historical diff is unavailable."
+            )
+        goal_variant = recipe.get("goal_variant")
+        goal_variant_id = (
+            str(goal_variant.get("variant_id") or "") if isinstance(goal_variant, Mapping) else ""
+        )
+        recipe_variant_id_value = (
+            str(recipe_resolution.get("variant_id") or "")
+            if isinstance(resolution, Mapping) and isinstance(recipe_resolution, Mapping)
+            else recipe_variant_id(
+                recipe_slug=recipe.get("recipe_id"),
+                source_sha=str(validated.get("provenance", {}).get("source_commit") or ""),
+                recipe_overrides=recipe.get("recipe_overrides"),
+            )
+        )
+        common_metadata = {
+            **dict(metadata),
+            "recipe_format_version": int(validated["format_version"]),
+            "recipe_sha256": canonical_json_sha256(validated),
+        }
+        return (
+            inspection_document(
+                kind="goal",
+                title=str(recipe.get("goal", {}).get("title") or title),
+                availability="exact",
+                resolved=dict(recipe["goal"]),
+                base=goal_base,
+                variant_id=goal_variant_id,
+                message=message,
+                metadata=common_metadata,
+                allow_placeholders=True,
+            ),
+            inspection_document(
+                kind="recipe",
+                title=str(recipe.get("recipe_id") or title),
+                availability="exact",
+                resolved=recipe,
+                base=recipe_base,
+                variant_id=recipe_variant_id_value,
+                message=message,
+                metadata=common_metadata,
+                allow_placeholders=True,
+            ),
+        )
+
+    def inspect_portable_recipe(
+        self,
+        document: Mapping[str, Any],
+        *,
+        source: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        goal, recipe = self._recipe_document_inspections(
+            document,
+            title=str(source.get("artifact_name") or source.get("run_id") or "Active playback"),
+            metadata=dict(source),
+        )
+        return self._inspection_envelope(
+            source=source,
+            goal=goal,
+            recipe=recipe,
+        )
+
+    def _public_run_recipe_document(self, run_id: str) -> dict[str, Any] | None:
+        index_url = f"{self.public_models_base_url}/runs/{run_id}/index.json"
+        try:
+            index = _public_json(index_url)
+        except Exception:
+            return None
+        if int(index.get("schema_version") or 0) != 1 or index.get("run_id") != run_id:
+            raise ValueError("public run index identity mismatch")
+        manifests = []
+        for raw in index.get("checkpoints") or ():
+            if not isinstance(raw, Mapping):
+                raise ValueError("public run index contains an invalid checkpoint")
+            manifest = CheckpointManifest(**dict(raw))
+            manifest.validate()
+            manifests.append(manifest)
+        if not manifests:
+            return None
+        manifest = max(manifests, key=lambda item: (item.step, item.checkpoint_id))
+        document = validate_recipe_document(
+            _public_json(manifest.recipe_document_url),
+            source=manifest.recipe_document_url,
+        )
+        observed = canonical_json_sha256(document)
+        if (
+            observed != manifest.recipe_document_sha256
+            or observed != manifest.recipe_sha256
+        ):
+            raise ValueError("public recipe document hash mismatch")
+        if manifest.run_id != run_id:
+            raise ValueError("public checkpoint run identity mismatch")
+        return document
+
+    def inspect_run(
+        self,
+        *,
+        entity: str,
+        project: str,
+        run_id: str,
+    ) -> dict[str, Any]:
+        if RUN_ID_PATTERN.fullmatch(run_id) is None:
+            raise ValueError("run id must match gradlab-<32 lowercase hex>")
+        manifest_document = (
+            self.control_bucket.get_json_optional(f"runs/{run_id}/manifest.json")
+            if self.control_bucket is not None
+            else None
+        )
+        document = None
+        metadata: dict[str, Any] = {
+            "entity": entity,
+            "project": project,
+            "run_id": run_id,
+        }
+        if manifest_document is not None:
+            manifest = RunManifest(**dict(manifest_document))
+            manifest.validate()
+            if (
+                manifest.run_id != run_id
+                or manifest.wandb.get("entity") != entity
+                or manifest.wandb.get("project") != project
+            ):
+                raise ValueError("run manifest identity mismatch")
+            metadata.update(
+                {
+                    "goal_slug": manifest.goal_slug,
+                    "recipe_slug": manifest.recipe_slug,
+                    "recipe_sha256": manifest.recipe_sha256,
+                }
+            )
+            document = self._control_recipe_document(manifest.recipe_sha256)
+        if document is None:
+            document = self._public_run_recipe_document(run_id)
+        if document is None:
+            unavailable = inspection_document(
+                kind="recipe",
+                title=run_id,
+                availability="summary-only",
+                message=(
+                    "The run summary is available, but no verified portable recipe "
+                    "document with resolved YAML is accessible."
+                ),
+                metadata=metadata,
+            )
+            return self._inspection_envelope(
+                source={"kind": "run-summary", "run_id": run_id},
+                recipe=unavailable,
+            )
+        goal, recipe = self._recipe_document_inspections(
+            document,
+            title=run_id,
+            metadata=metadata,
+        )
+        return self._inspection_envelope(
+            source={"kind": "run", "run_id": run_id},
+            goal=goal,
+            recipe=recipe,
+        )
+
+    def inspect_goal_variant(
+        self,
+        *,
+        entity: str,
+        project: str,
+        goal_id: str,
+        variant_id: str,
+    ) -> dict[str, Any]:
+        repository_goal = self._repository_goal(project=project, goal_id=goal_id)
+        selected = None
+        cursor = None
+        while selected is None:
+            page = self.goal_variants(
+                entity=entity,
+                project=project,
+                goal_id=goal_id,
+                cursor=cursor,
+            )
+            selected = next(
+                (item for item in page.items if item.get("variant_id") == variant_id),
+                None,
+            )
+            cursor = page.next_cursor
+            if cursor is None:
+                break
+        if selected is None:
+            raise ValueError(f"goal variant does not exist: {variant_id}")
+        exact_run_id = str(selected.get("exact_resolution_run_id") or "")
+        if not exact_run_id:
+            summary = inspection_document(
+                kind="goal",
+                title=str(selected.get("label") or repository_goal.title),
+                availability="summary-only",
+                variant_id=variant_id,
+                message=(
+                    "This historical variant has summary metadata but no verified "
+                    "format-v2 resolution proof."
+                ),
+                metadata=dict(selected),
+            )
+            return self._inspection_envelope(
+                source={"kind": "goal-variant-summary", "variant_id": variant_id},
+                goal=summary,
+            )
+        envelope = self.inspect_run(
+            entity=entity,
+            project=project,
+            run_id=exact_run_id,
+        )
+        goal = envelope["documents"].get("goal")
+        if not isinstance(goal, Mapping) or goal.get("variant_id") != variant_id:
+            raise ValueError("goal variant resolution run does not prove the selected variant")
+        return {
+            **envelope,
+            "source": {
+                "kind": "goal-variant",
+                "variant_id": variant_id,
+                "exact_resolution_run_id": exact_run_id,
+            },
+            "documents": {"goal": dict(goal)},
+        }
+
     def run_goal(self, *, entity: str, project: str, run_id: str) -> str:
         goal_id, _variant_id = self.run_goal_variant(
             entity=entity,
@@ -2133,16 +2611,15 @@ class PlayCatalog:
                     contract.get("acceptance"),
                     label="checkpoint_eval_contract.acceptance",
                 )
-                keys = {
+                result_keys = {
                     EVAL_CHECKPOINT_STEP,
                     EVAL_ACCEPTANCE_PASS,
                     EVAL_ACCEPTANCE_EPISODES_PLANNED,
                     EVAL_ACCEPTANCE_EPISODES_COMPLETED,
                     EVAL_ACCEPTANCE_FAILURE_COUNT,
-                    *(str(rule["metric"]) for rule in rules),
                 }
                 evaluations = {}
-                for raw in run.scan_history(keys=sorted(keys), page_size=10_000):
+                for raw in run.scan_history(keys=sorted(result_keys), page_size=10_000):
                     if not isinstance(raw, Mapping):
                         continue
                     step = _safe_int(raw.get(EVAL_CHECKPOINT_STEP))
@@ -2178,6 +2655,31 @@ class PlayCatalog:
                         "failure_count": _safe_int(raw.get(EVAL_ACCEPTANCE_FAILURE_COUNT)),
                         "criteria": criteria,
                     }
+                # Fail-fast rejections intentionally omit completed eval/full metrics.
+                # W&B returns no rows when scan_history requests a key that is absent
+                # from some history records, so fetch each optional criterion
+                # independently and merge it into the authoritative verdict rows.
+                for rule_index, rule in enumerate(rules):
+                    metric = str(rule["metric"])
+                    for raw in run.scan_history(
+                        keys=[EVAL_CHECKPOINT_STEP, metric],
+                        page_size=10_000,
+                    ):
+                        if not isinstance(raw, Mapping):
+                            continue
+                        step = _safe_int(raw.get(EVAL_CHECKPOINT_STEP))
+                        value = _safe_float(raw.get(metric))
+                        evaluation = evaluations.get(step) if step is not None else None
+                        if evaluation is None or value is None:
+                            continue
+                        criterion = evaluation["criteria"][rule_index]
+                        criterion["value"] = value
+                        criterion["passed"] = bool(
+                            EARLY_STOP_OPERATORS[str(rule["operator"])](
+                                value,
+                                float(rule["threshold"]),
+                            )
+                        )
         except Exception:
             # Public checkpoints remain playable when W&B history is unavailable.
             evaluations = {}

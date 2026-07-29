@@ -1,0 +1,86 @@
+Screen {
+    background: $surface;
+}
+
+#training-body {
+    padding: 0 1;
+}
+
+#run-identity {
+    height: 2;
+    color: $text-muted;
+    margin-bottom: 1;
+}
+
+#training-status {
+    height: 1;
+    color: $accent;
+    text-style: bold;
+}
+
+#training-progress {
+    height: 1;
+    margin-top: 1;
+}
+
+#progress-meta {
+    height: 2;
+    color: $text-muted;
+    margin-bottom: 1;
+}
+
+#metrics {
+    grid-size: 3;
+    grid-gutter: 0 1;
+    height: auto;
+    max-height: 10;
+    margin-bottom: 1;
+}
+
+.metric-card {
+    height: 4;
+    padding: 0 1;
+    border: round $primary-background-lighten-2;
+}
+
+.metric-label {
+    height: 1;
+    color: $text-muted;
+}
+
+.metric-value {
+    height: 1;
+    text-style: bold;
+}
+
+.metric-sparkline {
+    height: 1;
+}
+
+#event-log {
+    height: 1fr;
+    min-height: 4;
+    border: round $primary-background-lighten-2;
+}
+
+Screen.-medium #metrics {
+    grid-size: 2;
+}
+
+Screen.-narrow #metrics {
+    grid-size: 1;
+    max-height: 8;
+    overflow-y: auto;
+}
+
+Screen.-narrow .metric-card {
+    height: 3;
+}
+
+Screen.-narrow .metric-sparkline {
+    display: none;
+}
+
+Screen.-short #event-log {
+    display: none;
+}

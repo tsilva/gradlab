@@ -770,10 +770,7 @@ def test_frame_encoder_retains_every_rapidly_submitted_observation() -> None:
         encoder.close()
 
     assert all(set(frames) == {FRAME_GAME, FRAME_OBSERVATION} for frames in retained)
-    assert all(
-        frames[FRAME_OBSERVATION][0] == sequence
-        for sequence, frames in enumerate(retained)
-    )
+    assert all(frames[FRAME_OBSERVATION][0] == sequence for sequence, frames in enumerate(retained))
 
 
 def test_paired_auto_start_waits_for_both_workspace_windows() -> None:
@@ -1259,6 +1256,79 @@ def test_catalog_http_api_requires_the_fragment_session_token() -> None:
             )
 
         @staticmethod
+        def recipes(*, entity, project, goal_id, query, cursor):
+            assert (entity, project, goal_id, query, cursor) == (
+                "research",
+                "Mario",
+                "Level1-1",
+                "",
+                None,
+            )
+            return CatalogPage(
+                items=(
+                    {
+                        "recipe_id": "ppo",
+                        "title": "ppo",
+                        "availability": "static-preview",
+                    },
+                ),
+                next_cursor=None,
+            )
+
+        @staticmethod
+        def inspect_goal(*, entity, project, goal_id):
+            assert (entity, project, goal_id) == ("research", "Mario", "Level1-1")
+            return {
+                "schema_version": 1,
+                "source": {"kind": "repository-goal"},
+                "documents": {"goal": {"availability": "exact"}},
+            }
+
+        @staticmethod
+        def inspect_recipe(*, entity, project, goal_id, recipe_id):
+            assert (entity, project, goal_id, recipe_id) == (
+                "research",
+                "Mario",
+                "Level1-1",
+                "ppo",
+            )
+            return {
+                "schema_version": 1,
+                "source": {"kind": "repository-recipe"},
+                "documents": {"recipe": {"availability": "static-preview"}},
+            }
+
+        @staticmethod
+        def inspect_goal_variant(*, entity, project, goal_id, variant_id):
+            assert (entity, project, goal_id, variant_id) == (
+                "research",
+                "Mario",
+                "Level1-1",
+                "goal-variant-" + "c" * 24,
+            )
+            return {
+                "schema_version": 1,
+                "source": {"kind": "goal-variant"},
+                "documents": {"goal": {"availability": "summary-only"}},
+            }
+
+        @staticmethod
+        def inspect_run(*, entity, project, run_id):
+            assert (entity, project, run_id) == (
+                "research",
+                "Mario",
+                "gradlab-" + "a" * 32,
+            )
+            return {
+                "schema_version": 1,
+                "source": {"kind": "run"},
+                "documents": {
+                    "goal": {"availability": "exact"},
+                    "recipe": {"availability": "exact"},
+                },
+            }
+
+        @staticmethod
         def runs(
             *,
             entity,
@@ -1326,9 +1396,35 @@ def test_catalog_http_api_requires_the_fragment_session_token() -> None:
                 },
             )
 
+    class FakeEvaluationQueue:
+        def __init__(self):
+            self.requests = []
+
+        def enqueue(self, *, run_id, checkpoint_ids):
+            self.requests.append((run_id, list(checkpoint_ids)))
+            return (
+                {
+                    "checkpoint_id": checkpoint_ids[0],
+                    "state": "submitted",
+                    "evaluation": None,
+                    "message": None,
+                },
+            )
+
+        @staticmethod
+        def statuses(*, run_id, checkpoint_ids):
+            del run_id, checkpoint_ids
+            return {}
+
     async def scenario() -> None:
         runner = HumanRecordingRunner(FakeHumanSession(), human_args())
-        server = PlaybackWebServer(runner, human_args(), catalog=FakeCatalog())
+        evaluation_queue = FakeEvaluationQueue()
+        server = PlaybackWebServer(
+            runner,
+            human_args(),
+            catalog=FakeCatalog(),
+            manual_evaluation_factory=lambda: evaluation_queue,
+        )
         task = asyncio.create_task(server.run())
         try:
             deadline = asyncio.get_running_loop().time() + 3.0
@@ -1349,6 +1445,37 @@ def test_catalog_http_api_requires_the_fragment_session_token() -> None:
                 )
                 assert goals.status == 200
                 assert (await goals.json())["items"][0]["goal_id"] == "Level1-1"
+                goal_inspection = await client.get(
+                    (
+                        f"{server.origin}/api/catalog/environments/research/Mario"
+                        "/goals/Level1-1/inspection"
+                    ),
+                    headers={"Authorization": f"Bearer {server.token}"},
+                )
+                assert goal_inspection.status == 200
+                assert (await goal_inspection.json())["documents"]["goal"][
+                    "availability"
+                ] == "exact"
+                recipes = await client.get(
+                    (
+                        f"{server.origin}/api/catalog/environments/research/Mario"
+                        "/goals/Level1-1/recipes"
+                    ),
+                    headers={"Authorization": f"Bearer {server.token}"},
+                )
+                assert recipes.status == 200
+                assert (await recipes.json())["items"][0]["recipe_id"] == "ppo"
+                recipe_inspection = await client.get(
+                    (
+                        f"{server.origin}/api/catalog/environments/research/Mario"
+                        "/goals/Level1-1/recipes/ppo/inspection"
+                    ),
+                    headers={"Authorization": f"Bearer {server.token}"},
+                )
+                assert recipe_inspection.status == 200
+                assert (await recipe_inspection.json())["documents"]["recipe"][
+                    "availability"
+                ] == "static-preview"
                 variants = await client.get(
                     (
                         f"{server.origin}/api/catalog/environments/research/Mario"
@@ -1358,6 +1485,17 @@ def test_catalog_http_api_requires_the_fragment_session_token() -> None:
                 )
                 assert variants.status == 200
                 variant_id = (await variants.json())["items"][0]["variant_id"]
+                variant_inspection = await client.get(
+                    (
+                        f"{server.origin}/api/catalog/environments/research/Mario"
+                        f"/goals/Level1-1/variants/{variant_id}/inspection"
+                    ),
+                    headers={"Authorization": f"Bearer {server.token}"},
+                )
+                assert variant_inspection.status == 200
+                assert (await variant_inspection.json())["documents"]["goal"][
+                    "availability"
+                ] == "summary-only"
                 runs = await client.get(
                     (
                         f"{server.origin}/api/catalog/environments/research/Mario"
@@ -1376,6 +1514,38 @@ def test_catalog_http_api_requires_the_fragment_session_token() -> None:
                 )
                 assert checkpoints.status == 200
                 assert (await checkpoints.json())["items"][0]["evaluation"]["pass"] is True
+                run_inspection = await client.get(
+                    (
+                        f"{server.origin}/api/catalog/runs/gradlab-{'a' * 32}"
+                        "/inspection?entity=research&project=Mario"
+                    ),
+                    headers={"Authorization": f"Bearer {server.token}"},
+                )
+                assert run_inspection.status == 200
+                assert (await run_inspection.json())["documents"]["recipe"][
+                    "availability"
+                ] == "exact"
+                active_inspection = await client.get(
+                    f"{server.origin}/api/playback/inspection",
+                    headers={"Authorization": f"Bearer {server.token}"},
+                )
+                assert active_inspection.status == 200
+                assert (await active_inspection.json())["documents"]["recipe"][
+                    "availability"
+                ] == "unavailable"
+                evaluation = await client.post(
+                    (f"{server.origin}/api/catalog/runs/gradlab-{'a' * 32}/evaluations"),
+                    headers={"Authorization": f"Bearer {server.token}"},
+                    json={"checkpoint_ids": ["checkpoint-1-" + "b" * 16]},
+                )
+                assert evaluation.status == 202
+                assert (await evaluation.json())["items"][0]["state"] == "submitted"
+                assert evaluation_queue.requests == [
+                    (
+                        "gradlab-" + "a" * 32,
+                        ["checkpoint-1-" + "b" * 16],
+                    )
+                ]
                 legacy = await client.get(
                     (f"{server.origin}/projects/Mario/goals/Level1-1?workspace=paired"),
                     allow_redirects=False,
@@ -1481,6 +1651,7 @@ def test_web_dashboard_assets_are_packaged_beside_server() -> None:
         root / "vendor" / "gridstack" / "gridstack-all.js",
         root / "vendor" / "gridstack" / "gridstack.min.css",
         root / "sources" / "browser.js",
+        root / "documents" / "viewer.js",
         panel_root / "catalog.js",
         panel_root / "layout-sizing.js",
         panel_root / "manager.js",
@@ -1521,10 +1692,7 @@ def test_web_dashboard_assets_are_packaged_beside_server() -> None:
     assert '$("#source-breadcrumbs")' in script
     assert '$("#player-home").addEventListener("click"' in script
     assert ".then((browser) => browser.goHome())" in script
-    assert (
-        '$("#page-title").hidden = Boolean(state.sourceMode || activeCheckpointRoute);'
-        in script
-    )
+    assert '$("#page-title").hidden = Boolean(state.sourceMode || activeCheckpointRoute);' in script
     assert '$("#page-title").textContent = "Select checkpoint"' not in script
     assert "approval_required" not in source_browser
     assert "approve_source" not in source_browser
