@@ -14,8 +14,8 @@ from gradlab.task_kernels import Outcome
 
 
 RECENT_CELL_VISIT_WINDOW = 10_000
-SUCCESS_GUIDED_RESTORE_PROBABILITY = 0.5
 GO_EXPLORE_STATE_SEMANTIC_ID = "go-explore-state-v1"
+GO_EXPLORE_STATE_SCHEMA_VERSION = 3
 
 
 @dataclass(frozen=True)
@@ -32,6 +32,7 @@ class GoExploreCandidate:
     episode_return: float
     progress: float
     completed: bool = False
+    initial_seed: int | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "runs", canonicalize_action_runs(self.runs))
@@ -49,8 +50,10 @@ class GoExploreCell:
     episode_return: float
     progress: float
     program_steps: int = 0
+    initial_seed: int | None = None
     parent_key: Hashable | None = None
     best_success_return: float | None = None
+    progress_selections: int = 0
     success_selections: int = 0
     visits: int = 0
     selections: int = 0
@@ -126,6 +129,7 @@ class _PendingCell:
     episode_return: float
     progress: float
     step_count: int
+    initial_seed: int | None
     parent_key: Hashable | None
     visits: int
 
@@ -136,6 +140,7 @@ class _LaneState:
     episode_return: float = 0.0
     progress: float = 0.0
     program_steps: int = 0
+    initial_seed: int | None = None
     steps_since_restart: int = 0
     path_cell_keys: list[Hashable] = field(default_factory=list)
     exploration_action: int = 0
@@ -155,11 +160,24 @@ class GoExploreSearch:
         explore_steps: int,
         run_duration_mean: float,
         run_duration_max: int,
+        progress_guided_restore_probability: float = 0.5,
+        success_guided_restore_probability: float = 0.5,
     ) -> None:
         if n_envs < 1 or explore_steps < 1:
             raise ValueError("Go-Explore environment and exploration counts must be positive")
         if run_duration_mean < 1.0 or run_duration_max < 1:
             raise ValueError("Go-Explore run durations must be at least one")
+        for label, probability in (
+            ("progress-guided", progress_guided_restore_probability),
+            ("success-guided", success_guided_restore_probability),
+        ):
+            if (
+                not isinstance(probability, int | float)
+                or isinstance(probability, bool)
+                or not math.isfinite(float(probability))
+                or not 0.0 <= float(probability) <= 1.0
+            ):
+                raise ValueError(f"Go-Explore {label} restore probability must be in [0, 1]")
         self.n_envs = int(n_envs)
         self.action_names = tuple(str(name) for name in action_names)
         if not self.action_names:
@@ -173,6 +191,8 @@ class GoExploreSearch:
         self.explore_steps = int(explore_steps)
         self.run_duration_mean = float(run_duration_mean)
         self.run_duration_max = int(run_duration_max)
+        self.progress_guided_restore_probability = float(progress_guided_restore_probability)
+        self.success_guided_restore_probability = float(success_guided_restore_probability)
         self.global_step = 0
         self.completed_episodes = 0
         self.successful_episodes = 0
@@ -187,6 +207,9 @@ class GoExploreSearch:
         self._recent_batches: deque[tuple[int, int]] = deque()
         self._recent_visits = 0
         self._recent_new_cells = 0
+        self._elite_progress_keys: tuple[Hashable, ...] = ()
+        self._progress_guided_selection_count = 0
+        self._pending_progress_lineage_lane: int | None = None
         self._elite_success_keys: tuple[Hashable, ...] = ()
         self._success_guided_selection_count = 0
         self._lanes = [_LaneState() for _ in range(self.n_envs)]
@@ -228,6 +251,22 @@ class GoExploreSearch:
         return self._archive_visit_count / len(self._archive) if self._archive else 0.0
 
     @property
+    def progress_guided_cell_count(self) -> int:
+        return len(self._elite_progress_keys)
+
+    @property
+    def progress_guided_selection_count(self) -> int:
+        return self._progress_guided_selection_count
+
+    @property
+    def progress_guided_selection_rate(self) -> float:
+        return (
+            self._progress_guided_selection_count / self._archive_selection_count
+            if self._archive_selection_count
+            else 0.0
+        )
+
+    @property
     def success_guided_cell_count(self) -> int:
         return len(self._elite_success_keys)
 
@@ -257,12 +296,24 @@ class GoExploreSearch:
         self,
         cell_keys: Sequence[Hashable],
         entry_ids: Sequence[str | None],
+        initial_seeds: Sequence[int | None] | None = None,
     ) -> None:
         if len(cell_keys) != self.n_envs or len(entry_ids) != self.n_envs:
             raise ValueError("Go-Explore initialization requires one value per lane")
-        for lane, (key, entry_id) in enumerate(zip(cell_keys, entry_ids, strict=True)):
+        seeds = (
+            tuple(None for _ in range(self.n_envs))
+            if initial_seeds is None
+            else tuple(initial_seeds)
+        )
+        if len(seeds) != self.n_envs:
+            raise ValueError("Go-Explore initialization requires one seed per lane")
+        for lane, (key, entry_id, initial_seed) in enumerate(
+            zip(cell_keys, entry_ids, seeds, strict=True)
+        ):
             if not entry_id:
                 raise ValueError("Go-Explore initialization entries cannot be empty")
+            if initial_seed is not None and int(initial_seed) < 0:
+                raise ValueError("Go-Explore initial seeds must be non-negative")
             cell = self._archive.get(key)
             if cell is None:
                 cell = GoExploreCell(
@@ -271,6 +322,7 @@ class GoExploreSearch:
                     runs=(),
                     episode_return=0.0,
                     progress=0.0,
+                    initial_seed=None if initial_seed is None else int(initial_seed),
                     visits=1,
                 )
                 self._archive[key] = cell
@@ -279,7 +331,10 @@ class GoExploreSearch:
                 cell.visits += 1
                 self._update_weight(cell)
             self._archive_visit_count += 1
-            self._lanes[lane] = _LaneState(path_cell_keys=[key])
+            self._lanes[lane] = _LaneState(
+                initial_seed=None if initial_seed is None else int(initial_seed),
+                path_cell_keys=[key],
+            )
 
     @staticmethod
     def _append_action(state: _LaneState, action: int) -> None:
@@ -343,13 +398,14 @@ class GoExploreSearch:
         *,
         progress: float,
         completed: bool,
-    ) -> None:
+    ) -> bool:
         if completed:
             candidate = GoExploreCandidate(
                 runs=tuple(state.runs),
                 episode_return=state.episode_return,
                 progress=progress,
                 completed=True,
+                initial_seed=state.initial_seed,
             )
             previous = self._best_success
             improved = previous is None or candidate.episode_return > previous.episode_return
@@ -368,7 +424,7 @@ class GoExploreSearch:
                     improved=improved,
                 )
             )
-            return
+            return False
         previous = self._best_incomplete
         if previous is None or (
             progress,
@@ -384,7 +440,11 @@ class GoExploreSearch:
                 episode_return=state.episode_return,
                 progress=progress,
                 completed=False,
+                initial_seed=state.initial_seed,
             )
+            self._record_progress_lineage(state)
+            return True
+        return False
 
     def _lineage(self, state: _LaneState) -> tuple[Hashable, ...]:
         if not state.path_cell_keys:
@@ -421,6 +481,12 @@ class GoExploreSearch:
             cell.success_selections = 0
         self._elite_success_keys = lineage
 
+    def _record_progress_lineage(self, state: _LaneState) -> None:
+        lineage = self._lineage(state)
+        for key in lineage:
+            self._archive[key].progress_selections = 0
+        self._elite_progress_keys = lineage
+
     def observe(
         self,
         rewards: Sequence[float],
@@ -445,6 +511,7 @@ class GoExploreSearch:
             raise ValueError("Go-Explore observations must contain one value per lane")
         self.global_step += self.n_envs
         self._pending = {}
+        self._pending_progress_lineage_lane = None
         counts: dict[Hashable, int] = {}
         restart_mask = np.zeros(self.n_envs, dtype=np.bool_)
         records_by_lane = records_by_lane or {}
@@ -453,8 +520,8 @@ class GoExploreSearch:
             state.progress = max(state.progress, float(progress_array[lane]))
             completed = self._record_completed(records_by_lane.get(lane))
             progress = state.progress
-            self._consider_best(state, progress=progress, completed=completed)
             if dones_array[lane]:
+                self._consider_best(state, progress=progress, completed=completed)
                 self.completed_episodes += 1
                 self.successful_episodes += int(completed)
                 restart_mask[lane] = True
@@ -478,9 +545,13 @@ class GoExploreSearch:
                     episode_return=state.episode_return,
                     progress=progress,
                     step_count=state.program_steps,
+                    initial_seed=state.initial_seed,
                     parent_key=parent_key,
                     visits=0,
                 )
+            if self._consider_best(state, progress=progress, completed=completed):
+                if key not in self._archive:
+                    self._pending_progress_lineage_lane = lane
             if state.steps_since_restart >= self.explore_steps:
                 restart_mask[lane] = True
         for key, count in counts.items():
@@ -526,6 +597,7 @@ class GoExploreSearch:
                     episode_return=pending.episode_return,
                     progress=pending.progress,
                     program_steps=pending.step_count,
+                    initial_seed=pending.initial_seed,
                     parent_key=pending.parent_key,
                     visits=pending.visits,
                 )
@@ -538,18 +610,49 @@ class GoExploreSearch:
                 existing.episode_return = pending.episode_return
                 existing.progress = pending.progress
                 existing.program_steps = pending.step_count
+                existing.initial_seed = pending.initial_seed
                 existing.parent_key = pending.parent_key
                 existing.updates += 1
                 self._archive_update_count += 1
+        if self._pending_progress_lineage_lane is not None:
+            self._record_progress_lineage(self._lanes[self._pending_progress_lineage_lane])
+            self._pending_progress_lineage_lane = None
         self._pending = {}
+
+    @staticmethod
+    def _select_guided_cell(
+        rng: np.random.Generator,
+        cells: Sequence[GoExploreCell],
+        *,
+        counter: str,
+    ) -> GoExploreCell:
+        weights = np.asarray([1.0 / math.sqrt(1.0 + int(getattr(cell, counter))) for cell in cells])
+        cell = cells[int(rng.choice(len(cells), p=weights / weights.sum()))]
+        setattr(cell, counter, int(getattr(cell, counter)) + 1)
+        return cell
 
     def _select_cell(self, lane: int) -> GoExploreCell:
         rng = self._rngs[lane]
-        if self._elite_success_keys and rng.random() < SUCCESS_GUIDED_RESTORE_PROBABILITY:
+        if (
+            self._best_success is None
+            and self._elite_progress_keys
+            and rng.random() < self.progress_guided_restore_probability
+        ):
+            cells = tuple(self._archive[key] for key in self._elite_progress_keys)
+            cell = self._select_guided_cell(
+                rng,
+                cells,
+                counter="progress_selections",
+            )
+            self._progress_guided_selection_count += 1
+            return cell
+        if self._elite_success_keys and rng.random() < self.success_guided_restore_probability:
             cells = tuple(self._archive[key] for key in self._elite_success_keys)
-            weights = np.asarray([1.0 / math.sqrt(1.0 + cell.success_selections) for cell in cells])
-            cell = cells[int(rng.choice(len(cells), p=weights / weights.sum()))]
-            cell.success_selections += 1
+            cell = self._select_guided_cell(
+                rng,
+                cells,
+                counter="success_selections",
+            )
             self._success_guided_selection_count += 1
             return cell
         return self._selection_cells[self._selection_weights.sample(rng.random())]
@@ -571,6 +674,7 @@ class GoExploreSearch:
                 episode_return=cell.episode_return,
                 progress=cell.progress,
                 program_steps=cell.step_count,
+                initial_seed=cell.initial_seed,
                 path_cell_keys=[cell.key],
             )
         return tuple(entry_ids)
@@ -625,6 +729,7 @@ class GoExploreSearch:
             "episode_return": candidate.episode_return,
             "progress": candidate.progress,
             "completed": candidate.completed,
+            "initial_seed": candidate.initial_seed,
         }
 
     @classmethod
@@ -641,6 +746,9 @@ class GoExploreSearch:
             episode_return=float(value["episode_return"]),
             progress=float(value["progress"]),
             completed=bool(value["completed"]),
+            initial_seed=(
+                None if value.get("initial_seed") is None else int(value["initial_seed"])
+            ),
         )
 
     def state_document(self, lane_entry_ids: Sequence[str | None]) -> dict[str, object]:
@@ -658,8 +766,10 @@ class GoExploreSearch:
                     "episode_return": cell.episode_return,
                     "progress": cell.progress,
                     "program_steps": cell.program_steps,
+                    "initial_seed": cell.initial_seed,
                     "parent_key": self._key_document(cell.parent_key),
                     "best_success_return": cell.best_success_return,
+                    "progress_selections": cell.progress_selections,
                     "success_selections": cell.success_selections,
                     "visits": cell.visits,
                     "selections": cell.selections,
@@ -672,6 +782,7 @@ class GoExploreSearch:
                 "episode_return": state.episode_return,
                 "progress": state.progress,
                 "program_steps": state.program_steps,
+                "initial_seed": state.initial_seed,
                 "steps_since_restart": state.steps_since_restart,
                 "path_cell_keys": [self._key_document(key) for key in state.path_cell_keys],
                 "exploration_action": state.exploration_action,
@@ -682,7 +793,7 @@ class GoExploreSearch:
         ]
         return {
             "semantic_id": GO_EXPLORE_STATE_SEMANTIC_ID,
-            "schema_version": 1,
+            "schema_version": GO_EXPLORE_STATE_SCHEMA_VERSION,
             "configuration": {
                 "n_envs": self.n_envs,
                 "action_names": list(self.action_names),
@@ -690,6 +801,8 @@ class GoExploreSearch:
                 "explore_steps": self.explore_steps,
                 "run_duration_mean": self.run_duration_mean,
                 "run_duration_max": self.run_duration_max,
+                "progress_guided_restore_probability": (self.progress_guided_restore_probability),
+                "success_guided_restore_probability": (self.success_guided_restore_probability),
             },
             "global_step": self.global_step,
             "completed_episodes": self.completed_episodes,
@@ -702,6 +815,8 @@ class GoExploreSearch:
             "recent_batches": [list(item) for item in self._recent_batches],
             "recent_visits": self._recent_visits,
             "recent_new_cells": self._recent_new_cells,
+            "elite_progress_keys": [self._key_document(key) for key in self._elite_progress_keys],
+            "progress_guided_selection_count": self._progress_guided_selection_count,
             "elite_success_keys": [self._key_document(key) for key in self._elite_success_keys],
             "success_guided_selection_count": self._success_guided_selection_count,
             "cells": cells,
@@ -714,7 +829,7 @@ class GoExploreSearch:
     def restore_state(self, value: Mapping[str, object]) -> tuple[str, ...]:
         if value.get("semantic_id") != GO_EXPLORE_STATE_SEMANTIC_ID:
             raise ValueError("durable Go-Explore state has an unsupported semantic_id")
-        if int(value.get("schema_version", 0)) != 1:
+        if int(value.get("schema_version", 0)) != GO_EXPLORE_STATE_SCHEMA_VERSION:
             raise ValueError("durable Go-Explore state has an unsupported schema_version")
         configuration = value.get("configuration")
         if not isinstance(configuration, Mapping):
@@ -726,6 +841,8 @@ class GoExploreSearch:
             "explore_steps": self.explore_steps,
             "run_duration_mean": self.run_duration_mean,
             "run_duration_max": self.run_duration_max,
+            "progress_guided_restore_probability": (self.progress_guided_restore_probability),
+            "success_guided_restore_probability": (self.success_guided_restore_probability),
         }
         if dict(configuration) != expected_configuration:
             raise ValueError("durable Go-Explore state configuration mismatch")
@@ -760,12 +877,16 @@ class GoExploreSearch:
                 episode_return=float(raw_cell["episode_return"]),
                 progress=float(raw_cell["progress"]),
                 program_steps=int(raw_cell["program_steps"]),
+                initial_seed=(
+                    None if raw_cell.get("initial_seed") is None else int(raw_cell["initial_seed"])
+                ),
                 parent_key=self._key_from_document(raw_cell.get("parent_key")),
                 best_success_return=(
                     None
                     if raw_cell.get("best_success_return") is None
                     else float(raw_cell["best_success_return"])
                 ),
+                progress_selections=int(raw_cell["progress_selections"]),
                 success_selections=int(raw_cell["success_selections"]),
                 visits=int(raw_cell["visits"]),
                 selections=int(raw_cell["selections"]),
@@ -787,6 +908,11 @@ class GoExploreSearch:
                     episode_return=float(raw_lane["episode_return"]),
                     progress=float(raw_lane["progress"]),
                     program_steps=int(raw_lane["program_steps"]),
+                    initial_seed=(
+                        None
+                        if raw_lane.get("initial_seed") is None
+                        else int(raw_lane["initial_seed"])
+                    ),
                     steps_since_restart=int(raw_lane["steps_since_restart"]),
                     path_cell_keys=list(path_keys),
                     exploration_action=int(raw_lane["exploration_action"]),
@@ -813,6 +939,12 @@ class GoExploreSearch:
         self._recent_batches = deque((int(row[0]), int(row[1])) for row in value["recent_batches"])
         self._recent_visits = int(value["recent_visits"])
         self._recent_new_cells = int(value["recent_new_cells"])
+        progress_elite = tuple(self._key_from_document(key) for key in value["elite_progress_keys"])
+        if any(key is None or key not in self._archive for key in progress_elite):
+            raise ValueError("durable Go-Explore progress lineage references an unknown cell")
+        self._elite_progress_keys = progress_elite
+        self._progress_guided_selection_count = int(value["progress_guided_selection_count"])
+        self._pending_progress_lineage_lane = None
         elite = tuple(self._key_from_document(key) for key in value["elite_success_keys"])
         if any(key is None or key not in self._archive for key in elite):
             raise ValueError("durable Go-Explore success lineage references an unknown cell")
@@ -830,4 +962,5 @@ class GoExploreSearch:
             action_names=self.action_names,
             action_runs=() if candidate is None else candidate.runs,
             fallback_action=self.fallback_action,
+            initial_seed=None if candidate is None else candidate.initial_seed,
         )

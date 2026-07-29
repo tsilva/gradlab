@@ -715,12 +715,36 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertEqual(train_config["env_provider"], "breakout-turbo-env")
         self.assertEqual(train_config["training_backend"]["id"], "gradlab.go-explore")
         self.assertEqual(
+            train_config["training_backend"]["config"]["progress_guided_restore_probability"],
+            0.5,
+        )
+        self.assertEqual(
+            train_config["training_backend"]["config"]["explore_steps"],
+            64,
+        )
+        self.assertEqual(
             train_config["training_backend"]["config"]["progress_signal"],
             "score",
         )
         self.assertEqual(
-            train_config["state_archive"]["recorder"]["cell"]["dimensions"][2],
-            {"source": "ball_x", "bucket_size": 8.0},
+            train_config["state_archive"]["recorder"]["cell"]["dimensions"],
+            [
+                {"source": "walls_cleared", "bucket_size": 1.0},
+                {"source": "bricks_remaining", "bucket_size": 6.0},
+                {"source": "ball_x", "bucket_size": 524_288.0},
+                {"signal": "ball_y", "bucket_size": 8.0},
+                {"source": "paddle_x", "bucket_size": 1_048_576.0},
+                {
+                    "source": "ball_vx",
+                    "bucket_size": 1.0,
+                    "clamp": [-1.0, 1.0],
+                },
+                {
+                    "source": "ball_vy",
+                    "bucket_size": 1.0,
+                    "clamp": [-1.0, 1.0],
+                },
+            ],
         )
 
     def test_breakout_stable_updates_recipe_adds_late_update_guards(self) -> None:

@@ -36,6 +36,9 @@ from gradlab.metric_names import (
     TRAIN_GO_EXPLORE_BEST_PROGRESS,
     TRAIN_GO_EXPLORE_BEST_RETURN,
     TRAIN_GO_EXPLORE_IMPROVEMENT_COUNT,
+    TRAIN_GO_EXPLORE_PROGRESS_GUIDED_CELL_COUNT,
+    TRAIN_GO_EXPLORE_PROGRESS_GUIDED_SELECTION_COUNT,
+    TRAIN_GO_EXPLORE_PROGRESS_GUIDED_SELECTION_RATE,
     TRAIN_GO_EXPLORE_SUCCESS_GUIDED_CELL_COUNT,
     TRAIN_GO_EXPLORE_SUCCESS_GUIDED_SELECTION_COUNT,
     TRAIN_THROUGHPUT_LOOP_FPS,
@@ -56,6 +59,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "run_duration_mean": 4.0,
     "run_duration_max": 32,
     "fallback_action": "noop",
+    "progress_guided_restore_probability": 0.5,
+    "success_guided_restore_probability": 0.5,
     "log_interval_steps": 10_000,
     "compaction_interval_steps": 250_000,
 }
@@ -79,6 +84,11 @@ GO_EXPLORE_PROGRESS_FIELDS = (
     ProgressField(
         TRAIN_GO_EXPLORE_BEST_PROGRESS,
         "best progress",
+    ),
+    ProgressField(
+        TRAIN_GO_EXPLORE_PROGRESS_GUIDED_SELECTION_RATE,
+        "frontier restores",
+        ProgressValueFormat.PERCENT,
     ),
 )
 
@@ -113,6 +123,19 @@ def normalize_config(
     ):
         raise ValueError(f"{label}.run_duration_mean must be a finite number >= 1")
     normalized["run_duration_mean"] = float(mean)
+    for key in (
+        "progress_guided_restore_probability",
+        "success_guided_restore_probability",
+    ):
+        probability = normalized[key]
+        if (
+            not isinstance(probability, int | float)
+            or isinstance(probability, bool)
+            or not np.isfinite(float(probability))
+            or not 0.0 <= float(probability) <= 1.0
+        ):
+            raise ValueError(f"{label}.{key} must be a finite number in [0, 1]")
+        normalized[key] = float(probability)
     fallback = normalized["fallback_action"]
     if not isinstance(fallback, str) or not fallback.strip():
         raise ValueError(f"{label}.fallback_action must be a non-empty string")
@@ -169,6 +192,9 @@ def _search_metric_payload(search: GoExploreSearch) -> dict[str, int | float]:
         TRAIN_GO_EXPLORE_ARCHIVE_RECENT_NEW_CELL_RATE: (search.archive_recent_new_cell_rate),
         TRAIN_GO_EXPLORE_ARCHIVE_RECENT_VISIT_WINDOW: (search.archive_recent_visit_window),
         TRAIN_GO_EXPLORE_ARCHIVE_VISITS_PER_CELL: search.archive_visits_per_cell,
+        TRAIN_GO_EXPLORE_PROGRESS_GUIDED_CELL_COUNT: search.progress_guided_cell_count,
+        TRAIN_GO_EXPLORE_PROGRESS_GUIDED_SELECTION_COUNT: (search.progress_guided_selection_count),
+        TRAIN_GO_EXPLORE_PROGRESS_GUIDED_SELECTION_RATE: (search.progress_guided_selection_rate),
         TRAIN_GO_EXPLORE_SUCCESS_GUIDED_CELL_COUNT: search.success_guided_cell_count,
         TRAIN_GO_EXPLORE_SUCCESS_GUIDED_SELECTION_COUNT: (search.success_guided_selection_count),
         TRAIN_GO_EXPLORE_BEST_PROGRESS: candidate.progress if candidate else 0.0,
@@ -241,6 +267,12 @@ def run_go_explore(context: BackendContext) -> TrainingResult:
             explore_steps=int(backend_config["explore_steps"]),
             run_duration_mean=float(backend_config["run_duration_mean"]),
             run_duration_max=int(backend_config["run_duration_max"]),
+            progress_guided_restore_probability=float(
+                backend_config["progress_guided_restore_probability"]
+            ),
+            success_guided_restore_probability=float(
+                backend_config["success_guided_restore_probability"]
+            ),
         )
         runtime.reset(seed=int(common_config["seed"]))
         all_lanes = np.ones(n_envs, dtype=np.bool_)
@@ -253,6 +285,7 @@ def run_go_explore(context: BackendContext) -> TrainingResult:
         search.initialize(
             runtime.state_archive_reset_cell_keys(),
             initial_entries,
+            runtime.episode_seeds,
         )
         budget = context.session.configure_budget(
             requested_limit=int(common_config["timesteps"]),
@@ -444,9 +477,7 @@ class GoExploreBackend:
         signals = task.get("signals") if isinstance(task, Mapping) else None
         progress_signal = str(backend_config.get("progress_signal") or "")
         if not isinstance(signals, Mapping) or progress_signal not in signals:
-            raise ValueError(
-                "gradlab.go-explore progress_signal must name a declared task signal"
-            )
+            raise ValueError("gradlab.go-explore progress_signal must name a declared task signal")
         archive = common_config.get("state_archive")
         if not isinstance(archive, Mapping):
             raise ValueError("gradlab.go-explore requires state_archive")

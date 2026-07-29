@@ -46,6 +46,8 @@ train:
     id: gradlab.go-explore
     config:
       explore_steps: 128
+      progress_guided_restore_probability: 0.5
+      success_guided_restore_probability: 0.5
       run_duration_mean: 4.0
       run_duration_max: 32
       fallback_action: noop

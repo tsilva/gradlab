@@ -81,6 +81,15 @@ test("episode termination selections apply through the existing episode actions"
   );
 });
 
+test("seed control keeps the loaded checkpoint default across automatic resets", () => {
+  assert.match(
+    source,
+    /const defaultSeed = text\(session\.default_seed, session\.seed\);/,
+  );
+  assert.match(source, /seed\.dataset\.defaultSeed !== defaultSeed/);
+  assert.match(source, /seed\.value = defaultSeed;/);
+});
+
 test("control groups have no playback or episode separators", () => {
   assert.equal(styles.includes(".playback-settings"), false);
   assert.equal(styles.includes(".next-episode-settings {"), false);

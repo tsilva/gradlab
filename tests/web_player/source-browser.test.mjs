@@ -280,6 +280,13 @@ test("only checkpoints without terminal or queued evaluation state are selectabl
     checkpointCanEvaluate({ evaluation: null, evaluation_queue: { state: "expired" } }),
     false,
   );
+  assert.equal(
+    checkpointCanEvaluate({
+      evaluation: null,
+      evaluation_queue: { state: "waiting_for_training_terminal" },
+    }),
+    false,
+  );
 });
 
 test("checkpoint evaluation cells distinguish queued work from terminal evidence", () => {
@@ -292,6 +299,34 @@ test("checkpoint evaluation cells distinguish queued work from terminal evidence
       "Running",
       "Submitted to the evaluation worker",
       "evaluation-cell submitted",
+    ],
+  );
+  assert.deepEqual(
+    checkpointEvaluationCell({
+      evaluation: null,
+      evaluation_queue: {
+        state: "flusher_unavailable",
+        message: "worker startup timed out",
+      },
+    }),
+    [
+      "Flusher unavailable",
+      "worker startup timed out",
+      "evaluation-cell flusher_unavailable",
+    ],
+  );
+  assert.deepEqual(
+    checkpointEvaluationCell({
+      evaluation: null,
+      evaluation_queue: {
+        state: "waiting_for_run_lease",
+        message: "writer is still draining",
+      },
+    }),
+    [
+      "Waiting for writer",
+      "writer is still draining",
+      "evaluation-cell waiting_for_run_lease",
     ],
   );
   assert.equal(
@@ -321,6 +356,7 @@ test("selected checkpoints are admitted together through the evaluation API", as
       ok: true,
       status: 202,
       json: async () => ({
+        worker: { state: "started", pid: 123, message: null },
         items: [
           {
             checkpoint_id: "checkpoint-a",
@@ -371,7 +407,7 @@ test("selected checkpoints are admitted together through the evaluation API", as
   });
   assert.equal(browser.items[0].evaluation_queue.state, "submitted");
   assert.equal(browser.selectedCheckpoints.size, 0);
-  assert.match(toasts[0][0], /2 checkpoints submitted/);
+  assert.match(toasts[0][0], /2 checkpoints queued/);
 });
 
 test("legacy project routes inherit the entity and use canonical environment APIs", async (context) => {

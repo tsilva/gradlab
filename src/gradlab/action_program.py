@@ -12,7 +12,7 @@ import numpy as np
 
 from gradlab.action_contract import action_contract_meanings
 
-ACTION_PROGRAM_SCHEMA_VERSION = 1
+ACTION_PROGRAM_SCHEMA_VERSION = 2
 ACTION_PROGRAM_MEMBER = "action_program.json"
 ACTION_PROGRAM_ARTIFACT_IDENTITY_MEMBER = "artifact_identity.json"
 ACTION_PROGRAM_POLICY_TYPE = "action-program"
@@ -70,10 +70,14 @@ class ActionProgramPolicy:
         action_names: Sequence[str],
         action_runs: Sequence[ActionRun],
         fallback_action: int,
+        initial_seed: int | None = None,
     ) -> None:
         self.action_names = tuple(str(name) for name in action_names)
         self.action_runs = canonicalize_action_runs(action_runs)
         self.fallback_action = int(fallback_action)
+        self.initial_seed = None if initial_seed is None else int(initial_seed)
+        if self.initial_seed is not None and self.initial_seed < 0:
+            raise ValueError("action-program initial_seed must be non-negative")
         self.action_space: gym.Space | None = None
         self.observation_space = None
         self._run_indices = np.zeros(1, dtype=np.int64)
@@ -95,6 +99,10 @@ class ActionProgramPolicy:
     @property
     def step_count(self) -> int:
         return sum(run.duration for run in self.action_runs)
+
+    @property
+    def default_playback_seed(self) -> int | None:
+        return self.initial_seed
 
     @staticmethod
     def _batch_size(observation: Any) -> int:
@@ -262,6 +270,7 @@ class ActionProgramPolicy:
             "action_names": list(self.action_names),
             "action_runs": [[run.action, run.duration] for run in self.action_runs],
             "fallback_action": self.fallback_action,
+            "initial_seed": self.initial_seed,
         }
 
     def save(
@@ -302,6 +311,9 @@ class ActionProgramPolicy:
             payload = json.loads(archive.read(ACTION_PROGRAM_MEMBER))
         if not isinstance(payload, Mapping):
             raise ValueError("action-program payload must be an object")
+        schema_version = int(payload.get("schema_version") or 0)
+        if schema_version not in {1, ACTION_PROGRAM_SCHEMA_VERSION}:
+            raise ValueError("unsupported action-program schema version")
         expected_fields = {
             "schema_version",
             "policy_type",
@@ -310,6 +322,8 @@ class ActionProgramPolicy:
             "action_runs",
             "fallback_action",
         }
+        if schema_version >= 2:
+            expected_fields.add("initial_seed")
         if set(payload) != expected_fields:
             missing = sorted(expected_fields - set(payload))
             unexpected = sorted(set(payload) - expected_fields)
@@ -317,9 +331,6 @@ class ActionProgramPolicy:
                 f"action-program payload fields disagree; "
                 f"missing={missing}, unexpected={unexpected}"
             )
-        schema_version = int(payload.get("schema_version") or 0)
-        if schema_version != ACTION_PROGRAM_SCHEMA_VERSION:
-            raise ValueError("unsupported action-program schema version")
         if payload.get("policy_type") != ACTION_PROGRAM_POLICY_TYPE:
             raise ValueError("action-program payload has the wrong policy type")
         if payload.get("model_class") != ACTION_PROGRAM_MODEL_CLASS:
@@ -328,4 +339,5 @@ class ActionProgramPolicy:
             action_names=payload["action_names"],
             action_runs=tuple(ActionRun(*run) for run in payload["action_runs"]),
             fallback_action=payload["fallback_action"],
+            initial_seed=payload.get("initial_seed"),
         )

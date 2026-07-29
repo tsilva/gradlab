@@ -35,7 +35,11 @@ from gradlab.training_metrics import EpisodeMetricsReducer
 
 class GoExploreSearchTests(unittest.TestCase):
     @staticmethod
-    def search() -> GoExploreSearch:
+    def search(
+        *,
+        progress_guided_restore_probability: float = 0.5,
+        success_guided_restore_probability: float = 0.5,
+    ) -> GoExploreSearch:
         return GoExploreSearch(
             n_envs=2,
             seed=17,
@@ -44,11 +48,17 @@ class GoExploreSearchTests(unittest.TestCase):
             explore_steps=1,
             run_duration_mean=2.0,
             run_duration_max=4,
+            progress_guided_restore_probability=(progress_guided_restore_probability),
+            success_guided_restore_probability=success_guided_restore_probability,
         )
 
     def test_durable_state_round_trip_preserves_exact_next_actions(self) -> None:
         search = self.search()
-        search.initialize((b"initial-a", b"initial-b"), ("entry-a", "entry-b"))
+        search.initialize(
+            (b"initial-a", b"initial-b"),
+            ("entry-a", "entry-b"),
+            (127, 128),
+        )
         search.next_actions()
         observation = search.observe(
             rewards=np.asarray([1.0, 2.0]),
@@ -67,6 +77,69 @@ class GoExploreSearchTests(unittest.TestCase):
         self.assertEqual(restored.restore_state(document), ("lane-a", "lane-b"))
         self.assertEqual(restored.state_document(("lane-a", "lane-b")), document)
         np.testing.assert_array_equal(restored.next_actions(), search.next_actions())
+
+    def test_progress_guidance_restores_best_lineage_until_success(self) -> None:
+        search = GoExploreSearch(
+            n_envs=1,
+            seed=17,
+            action_names=("noop", "right"),
+            fallback_action="noop",
+            explore_steps=1,
+            run_duration_mean=1.0,
+            run_duration_max=1,
+            progress_guided_restore_probability=1.0,
+            success_guided_restore_probability=1.0,
+        )
+        search.initialize((b"initial",), ("entry-initial",), (127,))
+        search.next_actions()
+        observation = search.observe(
+            rewards=np.asarray([1.0]),
+            dones=np.asarray([False]),
+            cell_keys=(b"frontier",),
+            progresses=np.asarray([5.0]),
+        )
+        search.commit_archive(("entry-frontier",))
+
+        self.assertEqual(search.progress_guided_cell_count, 2)
+        selected = search.restart(observation.restart_mask)
+        self.assertIn(selected[0], {"entry-initial", "entry-frontier"})
+        self.assertEqual(search.progress_guided_selection_count, 1)
+        self.assertEqual(search.progress_guided_selection_rate, 1.0)
+        self.assertEqual(search.success_guided_selection_count, 0)
+        self.assertEqual(search.policy().default_playback_seed, 127)
+
+        search.next_actions()
+        success = search.observe(
+            rewards=np.asarray([1.0]),
+            dones=np.asarray([True]),
+            cell_keys=(b"frontier",),
+            records_by_lane={0: SimpleNamespace(outcome=Outcome.SUCCESS)},
+            progresses=np.asarray([6.0]),
+        )
+        search.take_completion_events()
+        search.restart(success.restart_mask)
+
+        self.assertEqual(search.progress_guided_selection_count, 1)
+        self.assertEqual(search.success_guided_selection_count, 1)
+
+    def test_best_program_keeps_winning_lane_seed_when_initial_cells_match(self) -> None:
+        search = self.search()
+        search.initialize(
+            (b"shared-initial", b"shared-initial"),
+            ("entry-123", "entry-127"),
+            (123, 127),
+        )
+        search.next_actions()
+        observation = search.observe(
+            rewards=np.asarray([0.0, 10.0]),
+            dones=np.asarray([False, False]),
+            cell_keys=(b"lane-123", b"lane-127"),
+            progresses=np.asarray([0.0, 10.0]),
+        )
+        search.commit_archive(("cell-123", "cell-127"))
+
+        self.assertTrue(np.all(observation.restart_mask))
+        self.assertEqual(search.policy().default_playback_seed, 127)
 
     def test_backend_accepts_provider_neutral_declared_cells_and_progress(self) -> None:
         backend_config = normalize_config(
@@ -103,12 +176,30 @@ class GoExploreSearchTests(unittest.TestCase):
         )
 
         self.assertEqual(config["compaction_interval_steps"], 500_000)
+        self.assertEqual(config["progress_guided_restore_probability"], 0.5)
+        self.assertEqual(config["success_guided_restore_probability"], 0.5)
         with self.assertRaisesRegex(ValueError, "recovery_interval_steps"):
             normalize_config(
                 "gradlab.go-explore",
                 {"recovery_interval_steps": 500_000, "progress_signal": "x"},
                 label="backend",
             )
+        for field in (
+            "progress_guided_restore_probability",
+            "success_guided_restore_probability",
+        ):
+            with (
+                self.subTest(field=field),
+                self.assertRaisesRegex(
+                    ValueError,
+                    r"finite number in \[0, 1\]",
+                ),
+            ):
+                normalize_config(
+                    "gradlab.go-explore",
+                    {"progress_signal": "x", field: 1.01},
+                    label="backend",
+                )
 
     def test_search_exports_a_neutral_action_program(self) -> None:
         self.assertIsInstance(self.search().policy(), ActionProgramPolicy)
@@ -221,6 +312,10 @@ class GoExploreSearchTests(unittest.TestCase):
             def reset(self, *, seed: int) -> None:
                 del seed
 
+            @property
+            def episode_seeds(self):
+                return (123,)
+
             def validate_archive_signal(self, signal):
                 del signal
 
@@ -287,12 +382,15 @@ class GoExploreSearchTests(unittest.TestCase):
                 self.archive_recent_new_cell_rate = 0.0
                 self.archive_recent_visit_window = 0
                 self.archive_visits_per_cell = 0.0
+                self.progress_guided_cell_count = 0
+                self.progress_guided_selection_count = 0
+                self.progress_guided_selection_rate = 0.0
                 self.success_guided_cell_count = 0
                 self.success_guided_selection_count = 0
                 self.improvement_count = 0
 
-            def initialize(self, cell_keys, initial_entries) -> None:
-                del cell_keys, initial_entries
+            def initialize(self, cell_keys, initial_entries, initial_seeds) -> None:
+                del cell_keys, initial_entries, initial_seeds
 
             def next_actions(self):
                 return np.asarray([0])
@@ -408,8 +506,10 @@ class GoExploreSearchTests(unittest.TestCase):
                         "fallback_action": "noop",
                         "log_interval_steps": 100,
                         "progress_signal": "x",
+                        "progress_guided_restore_probability": 0.5,
                         "run_duration_max": 1,
                         "run_duration_mean": 1.0,
+                        "success_guided_restore_probability": 0.5,
                     },
                 },
             },

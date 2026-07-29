@@ -19,6 +19,7 @@ import {
   cursorIndex,
   distributionBlockVisible,
   histogramSelectedLabel,
+  lineLegendPrefix,
   lineLegendPresentation,
   lineBlockFootPresentation,
   selectedPoint,
@@ -154,6 +155,13 @@ test("line legends show each series value at the chart cursor", () => {
       { key: "reward/provider", value: "—" },
       { key: "reward/shaped", value: "—" },
     ],
+  );
+});
+
+test("line legends place the label and equals sign before the value", () => {
+  assert.equal(
+    lineLegendPrefix(descriptorFor("reward/provider")),
+    "Provider r = ",
   );
 });
 

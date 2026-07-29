@@ -41,7 +41,10 @@ def _parser() -> argparse.ArgumentParser:
     flush_parser = subparsers.add_parser("flush", help="flush jobs in the foreground")
     flush_parser.add_argument("--idle-seconds", type=float, default=DEFAULT_IDLE_SECONDS)
 
-    retry_parser = subparsers.add_parser("retry", help="retry a failed or blocked job")
+    retry_parser = subparsers.add_parser(
+        "retry",
+        help="retry a failed, blocked, or canceled job",
+    )
     retry_parser.add_argument("job_id")
 
     cancel_parser = subparsers.add_parser("cancel", help="cancel a queued or running job")

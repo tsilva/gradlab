@@ -58,6 +58,10 @@ function renderedValue(value, descriptor, snapshot) {
   return formatTelemetryValue(value, descriptor);
 }
 
+export function lineLegendPrefix(descriptor) {
+  return `${descriptor.shortLabel} = `;
+}
+
 function setLegend(target, descriptors) {
   const values = new Map();
   target.replaceChildren(...descriptors.map((descriptor) => {
@@ -65,7 +69,7 @@ function setLegend(target, descriptors) {
     const value = document.createElement("strong");
     value.className = "legend-value";
     value.textContent = "—";
-    item.append(value, ` ${descriptor.shortLabel}`);
+    item.append(lineLegendPrefix(descriptor), value);
     item.style.setProperty("--legend-color", descriptor.color || "#53d4e8");
     values.set(descriptor.key, value);
     return item;

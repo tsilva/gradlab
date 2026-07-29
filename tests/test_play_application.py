@@ -161,11 +161,32 @@ def test_playback_host_starts_without_a_source_then_activates_selection() -> Non
     host.stop()
 
 
-def test_implicit_playback_seed_prefers_evaluation_result_then_training() -> None:
+def test_implicit_playback_seed_prefers_evaluation_then_policy_then_training() -> None:
     recipe = {"train_config": {"seed": 7}}
 
-    assert _implicit_playback_seed(recipe, evaluation_result_seed=42_000) == 42_000
-    assert _implicit_playback_seed(recipe, evaluation_result_seed=None) == 7
+    assert (
+        _implicit_playback_seed(
+            recipe,
+            evaluation_result_seed=42_000,
+            policy_seed=127,
+        )
+        == 42_000
+    )
+    assert (
+        _implicit_playback_seed(
+            recipe,
+            evaluation_result_seed=None,
+            policy_seed=127,
+        )
+        == 127
+    )
+    assert (
+        _implicit_playback_seed(
+            recipe,
+            evaluation_result_seed=None,
+        )
+        == 7
+    )
 
 
 def test_playback_loader_passes_bundle_algorithm_to_model_loader(monkeypatch) -> None:

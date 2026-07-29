@@ -271,6 +271,9 @@ unevaluated for future explicit user action. dstack process exit alone is never 
 | `train/algorithm/go_explore/archive/recent_new_cell_rate` | New semantic cells divided by visits in the bounded recent visit window. | fraction | interval | history |
 | `train/algorithm/go_explore/archive/recent_visit_window` | Visit count represented by the recent new-cell-rate window. | visits | interval | history |
 | `train/algorithm/go_explore/archive/visits_per_cell` | Cumulative visits divided by current cell count. | ratio | interval | history |
+| `train/algorithm/go_explore/progress_guided/cell_count` | Cells on the current best-progress lineage used for guided restores before the first success. | cells | interval | history |
+| `train/algorithm/go_explore/progress_guided/selection_count` | Cumulative restores selected from the best-progress lineage before the first success. | selections | interval | history |
+| `train/algorithm/go_explore/progress_guided/selection_rate` | Cumulative progress-lineage restores divided by all archived-cell restores. | fraction | interval | history |
 | `train/algorithm/go_explore/success_guided/cell_count` | Cells on the current best-success lineage. | cells | interval | history |
 | `train/algorithm/go_explore/success_guided/selection_count` | Cumulative selections made by success-lineage guidance. | selections | interval | history |
 | `train/algorithm/go_explore/best/progress` | Greatest task progress reached by the best retained trajectory. | progress | interval | history |

@@ -25,6 +25,16 @@ from gradlab.early_stop import (
 )
 from gradlab.eval_backend import EvalHandle, EvalPoll
 from gradlab.goal_variants import build_goal_variant_descriptor
+from gradlab.job_queue import (
+    HandlerResult,
+    JobStore,
+    JobSubject,
+    SubjectUpdate,
+    lock_is_held,
+    register_handler,
+    run_flusher,
+)
+from gradlab.manual_evaluation import ManualEvaluationSupervisor
 from gradlab.modal_eval_protocol import execution_key
 from gradlab.policy_bundle import (
     build_recipe_document,
@@ -83,6 +93,7 @@ DEFAULT_SCENARIOS = (
     "terminal-receipt-gating",
     "verifier-tamper-detection",
     "early-stop-outcomes",
+    "local-background-jobs",
 )
 
 
@@ -158,6 +169,31 @@ class ScriptedEvalBackend:
         self.canceled.append(handle.call_id)
 
 
+class CertificationJobHandler:
+    job_type = "certification-job"
+    version = 1
+
+    @classmethod
+    def validate_payload(cls, payload: Mapping[str, Any]) -> dict[str, Any]:
+        value = str(payload.get("value") or "")
+        if not value:
+            raise ValueError("certification job requires a value")
+        return {"value": value}
+
+    def advance(self, job: Mapping[str, Any]) -> HandlerResult:
+        return HandlerResult(
+            state="succeeded",
+            subjects=(
+                SubjectUpdate(
+                    subject_type="certification",
+                    subject_id=str(job["payload"]["value"]),
+                    state="succeeded",
+                    detail={"attempts": int(job["attempts"])},
+                ),
+            ),
+        )
+
+
 class CertificationRuntime(SupervisorRuntime):
     """Scriptable stand-in for process, W&B, signals, and host state."""
 
@@ -200,6 +236,7 @@ class CertificationRuntime(SupervisorRuntime):
         projector: WandbProjector,
         *,
         limit: int,
+        event_seq_offset: int = 0,
     ) -> int:
         del projector
         published = 0
@@ -212,8 +249,9 @@ class CertificationRuntime(SupervisorRuntime):
                 store.mark_metric_frame_failed(frame_id, "simulated W&B outage")
                 continue
             payload = json.loads(str(row["payload_json"]))
+            event_seq = frame_id + int(event_seq_offset)
             event = {
-                "event_seq": frame_id,
+                "event_seq": event_seq,
                 "event_id": str(row["event_id"]),
                 "kind": str(row["kind"]),
                 "source": str(row["source"]),
@@ -222,7 +260,7 @@ class CertificationRuntime(SupervisorRuntime):
                 "payload": payload,
             }
             if event["kind"] == "history":
-                event["payload"]["orchestration/event_seq"] = frame_id
+                event["payload"]["orchestration/event_seq"] = event_seq
                 event["payload"]["orchestration/event_id"] = event["event_id"]
                 if event["source"].startswith("eval"):
                     event["payload"]["eval/checkpoint_step"] = event["step"]
@@ -232,10 +270,20 @@ class CertificationRuntime(SupervisorRuntime):
             if self.evidence_path is not None:
                 self.evidence_path.parent.mkdir(parents=True, exist_ok=True)
                 self.evidence_path.write_bytes(_canonical_bytes({"events": self.wandb_events}))
-            self.summary["orchestration/event_seq"] = frame_id
+            self.summary["orchestration/event_seq"] = event_seq
             store.mark_metric_frame_published(frame_id, step=row["step"])
             published += 1
         return published
+
+    def resume_wandb(
+        self,
+        train_config: Mapping[str, Any],
+        *,
+        allow_create: bool,
+        update_finish_state: bool = True,
+    ) -> WandbProjector:
+        del train_config, allow_create, update_finish_state
+        return WandbProjector(object())
 
     def publish_promotion(
         self,
@@ -1691,6 +1739,223 @@ def _scenario_early_stop_outcomes(root: Path) -> dict[str, Any]:
     }
 
 
+def _scenario_local_background_jobs(root: Path) -> dict[str, Any]:
+    recorder = ScenarioRecorder("local-background-jobs", [])
+    clock = DeterministicClock()
+    register_handler(
+        CertificationJobHandler.job_type,
+        CertificationJobHandler.version,
+        CertificationJobHandler,
+        replace=True,
+    )
+    job_store = JobStore(root / "jobs", clock=clock)
+    admitted = job_store.enqueue(
+        job_type=CertificationJobHandler.job_type,
+        handler_version=CertificationJobHandler.version,
+        payload={"value": "checkpoint-a"},
+        idempotency_key="certification-request",
+        subjects=[
+            JobSubject(
+                subject_type="certification",
+                subject_id="checkpoint-a",
+                exclusive_key="certification:checkpoint-a",
+            )
+        ],
+    )
+    repeated = job_store.enqueue(
+        job_type=CertificationJobHandler.job_type,
+        handler_version=CertificationJobHandler.version,
+        payload={"value": "checkpoint-a"},
+        idempotency_key="certification-request",
+        subjects=[
+            JobSubject(
+                subject_type="certification",
+                subject_id="checkpoint-a",
+                exclusive_key="certification:checkpoint-a",
+            )
+        ],
+    )
+    claimed = job_store.claim_next()
+    recorder.require(
+        "queue-admission-is-durable-and-idempotent",
+        admitted.created
+        and not repeated.created
+        and admitted.job is not None
+        and repeated.job is not None
+        and admitted.job["job_id"] == repeated.job["job_id"]
+        and claimed is not None
+        and claimed["state"] == "running",
+        evidence={
+            "created_once": admitted.created and not repeated.created,
+        },
+    )
+
+    # Leaving the claimed row running simulates abrupt worker death. The next
+    # leader must recover it before invoking the handler.
+    run_flusher(job_store, idle_seconds=0, clock=clock)
+    recovered = job_store.job(str(admitted.job["job_id"]))
+    subject = job_store.subjects(str(admitted.job["job_id"]))[0]
+    recorder.require(
+        "worker-restart-recovers-running-job",
+        recovered is not None
+        and recovered["state"] == "succeeded"
+        and subject["state"] == "succeeded"
+        and int(subject["detail"]["attempts"]) == 2,
+        evidence={
+            "job_state": None if recovered is None else recovered["state"],
+            "attempts": None if recovered is None else recovered["attempts"],
+        },
+    )
+    recorder.require(
+        "idle-worker-releases-stable-leadership-lock",
+        not lock_is_held(job_store) and job_store.lock_path.is_file(),
+        evidence={"lock_path": "jobs/flusher.lock"},
+    )
+
+    fixture = CertificationFixture(root / "evaluation", clock=clock)
+    prepared = fixture.prepare(run_number=81)
+    supervisor = prepared.supervisor
+    supervisor.store.append_metrics(
+        {"train/episode/return/shaped/mean": 1.0},
+        step=250_000,
+        source="learner",
+    )
+    fixture.record_checkpoint(prepared, step=250_000, kind="checkpoint")
+    clock.advance(5)
+    supervisor.active_iteration()
+    _write_raw_result(prepared, accepted=True)
+    clock.advance(2)
+    supervisor.active_iteration()
+    fixture.record_checkpoint(prepared, step=260_000, kind="final")
+    clock.advance(5)
+    supervisor.active_iteration()
+    training_terminal = _finalize_success(prepared)
+    final_checkpoint = next(
+        row
+        for row in supervisor.store.checkpoint_publications()
+        if int(row["step"]) == 260_000
+    )
+
+    manual_backend = ScriptedEvalBackend()
+    manual_runtime = CertificationRuntime(
+        clock=clock,
+        writer_id="manual-eval-writer-81",
+        evidence_path=root / "evaluation" / "evidence" / "manual-wandb-events.json",
+    )
+    manual_runtime.summary["orchestration/event_seq"] = (
+        training_terminal.wandb_high_water_mark
+    )
+
+    def manual_supervisor() -> ManualEvaluationSupervisor:
+        return ManualEvaluationSupervisor(
+            authority=fixture.authority,
+            repo_root=Path.cwd(),
+            clock=clock,
+            backend_factory=lambda _manifest: manual_backend,
+            holder_id="manual-eval-job-certification",
+            work_root=root / "evaluation" / "manual-work",
+            runtime=manual_runtime,
+        )
+
+    lease_wait = manual_supervisor().advance_batch(
+        job_id="job-" + "8" * 32,
+        run_id=supervisor.manifest.run_id,
+        checkpoint_ids=[str(final_checkpoint["checkpoint_id"])],
+        cancel_requested=False,
+    )
+    recorder.require(
+        "post-training-eval-is-fenced-by-existing-writer",
+        lease_wait.state == "retry_wait"
+        and lease_wait.subjects[0].state == "waiting_for_run_lease"
+        and len(manual_backend.submissions) == 0,
+        evidence={
+            "job_state": lease_wait.state,
+            "subject_state": lease_wait.subjects[0].state,
+        },
+    )
+
+    supervisor.lease = None
+    clock.advance(LEASE_TTL_SECONDS + 1)
+    submitted = manual_supervisor().advance_batch(
+        job_id="job-" + "8" * 32,
+        run_id=supervisor.manifest.run_id,
+        checkpoint_ids=[str(final_checkpoint["checkpoint_id"])],
+        cancel_requested=False,
+    )
+    recorder.require(
+        "manual-eval-dispatch-requires-terminal-and-exclusive-lease",
+        submitted.state == "retry_wait"
+        and submitted.subjects[0].state == "submitted"
+        and len(manual_backend.submissions) == 1,
+        evidence={
+            "subject_state": submitted.subjects[0].state,
+            "submissions": len(manual_backend.submissions),
+        },
+    )
+
+    recovery = manual_supervisor()
+    context = recovery._contexts(
+        supervisor.manifest.run_id,
+        [str(final_checkpoint["checkpoint_id"])],
+    )[0]
+    fixture.authority.evaluation.put_json(
+        context.intent.result_key,
+        _accepted_or_rejected_raw(
+            {"intent": context.intent.to_dict(), "attempt": 1},
+            accepted=True,
+        ),
+        create_only=True,
+    )
+    clock.advance(2)
+    completed = recovery.advance_batch(
+        job_id="job-" + "8" * 32,
+        run_id=supervisor.manifest.run_id,
+        checkpoint_ids=[str(final_checkpoint["checkpoint_id"])],
+        cancel_requested=False,
+    )
+    manual_receipt = fixture.authority.control.get_json_optional(
+        (
+            f"runs/{supervisor.manifest.run_id}/manual-evals/jobs/"
+            f"job-{'8' * 32}/terminal.json"
+        )
+    )
+    promotion = fixture.authority.control.get_json(
+        f"runs/{supervisor.manifest.run_id}/promotion.json"
+    )
+    recorder.require(
+        "manual-eval-recovers-projects-and-terminalizes",
+        completed.state == "succeeded"
+        and completed.subjects[0].state == "accepted"
+        and manual_receipt is not None
+        and int(manual_receipt["wandb_high_water_mark"])
+        > training_terminal.wandb_high_water_mark
+        and len(manual_backend.submissions) == 1,
+        evidence={
+            "state": completed.state,
+            "subject_state": completed.subjects[0].state,
+            "message": completed.subjects[0].detail,
+            "wandb_high_water": (
+                None
+                if manual_receipt is None
+                else manual_receipt["wandb_high_water_mark"]
+            ),
+        },
+    )
+    recorder.require(
+        "manual-batch-preserves-global-lowest-step-promotion",
+        int(promotion["checkpoint_step"]) == 250_000,
+        evidence={"checkpoint_step": promotion["checkpoint_step"]},
+    )
+    return {
+        "invariants": recorder.invariants,
+        "evidence": {
+            "job_state": recovered["state"],
+            "run_id": supervisor.manifest.run_id,
+            "manual_wandb_events": len(manual_runtime.wandb_events),
+        },
+    }
+
+
 SCENARIOS: dict[str, Callable[[Path], dict[str, Any]]] = {
     "full-lifecycle": _scenario_full_lifecycle,
     "parallel-run-isolation": _scenario_parallel_run_isolation,
@@ -1706,6 +1971,7 @@ SCENARIOS: dict[str, Callable[[Path], dict[str, Any]]] = {
     "terminal-receipt-gating": _scenario_terminal_receipt_gating,
     "verifier-tamper-detection": _scenario_verifier_tamper_detection,
     "early-stop-outcomes": _scenario_early_stop_outcomes,
+    "local-background-jobs": _scenario_local_background_jobs,
 }
 
 

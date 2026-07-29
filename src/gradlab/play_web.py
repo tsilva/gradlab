@@ -736,6 +736,11 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
                 "episode": self.session.episode,
                 "step": self.session.step_index,
                 "seed": self.session.active_seed,
+                "default_seed": getattr(
+                    self.session,
+                    "initial_seed",
+                    self.session.active_seed,
+                ),
                 "task": _json_value(self.session.active_task),
                 "total_reward": self.session.total_reward,
                 "max_x_pos": self.session.max_x_pos,
