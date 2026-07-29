@@ -1,4 +1,4 @@
-from types import SimpleNamespace
+from types import MappingProxyType, SimpleNamespace
 
 import gymnasium as gym
 import numpy as np
@@ -6,6 +6,7 @@ import pytest
 
 from gradlab.action_contract import (
     action_contract_meanings,
+    action_contract_payload,
     action_index_for_controls,
     assert_action_contract_compatible,
     compile_runtime_action_contract,
@@ -403,6 +404,20 @@ def test_runtime_vizdoom_contract_uses_provider_meanings_and_structured_controls
     }
     assert action_index_for_controls(contract, ["LEFT"]) == 1
     assert action_index_for_controls(contract, ["a"]) == 3
+    payload = action_contract_payload(MappingProxyType(contract))
+    assert payload is not contract
+    assert payload["policy"]["semantics"]["entries"][1] == {
+        "value": 1,
+        "semantic_id": "move_left",
+        "label": "move left",
+        "controls": [
+            {
+                "player": 1,
+                "atoms": ["move_left"],
+                "inputs": ["left"],
+            }
+        ],
+    }
 
 
 def test_runtime_discrete_cartesian_contract_is_compact_and_exact():
@@ -436,6 +451,42 @@ def test_runtime_discrete_cartesian_contract_is_compact_and_exact():
         "right",
         "a_right",
     )
+    payload = action_contract_payload(contract)
+    assert payload["policy"]["semantics"]["axes"][1]["values"][2] == {
+        "value": 4,
+        "semantic_id": "right",
+        "label": "right",
+        "atoms": ["right"],
+        "inputs": ["right"],
+    }
+
+
+def test_runtime_component_contract_payload_preserves_structured_labels():
+    descriptor = _descriptor(
+        provider_id="stable-retro-turbo",
+        action_space=gym.spaces.MultiBinary(3),
+        mode="all",
+        buttons=("A", "LEFT", "RIGHT"),
+    )
+    config = SimpleNamespace(
+        env_provider="stable-retro-turbo",
+        game="Fixture-Nes-v0",
+        env_args={"use_restricted_actions": "all"},
+        task={"action": {"set": "native"}},
+    )
+    contract = compile_runtime_action_contract(
+        config,
+        descriptor,
+        descriptor.native_action_space,
+    )
+
+    payload = action_contract_payload(contract)
+
+    assert payload["policy"]["semantics"]["components"] == [
+        {"index": 0, "semantic_id": "a", "label": "a", "input": "a"},
+        {"index": 1, "semantic_id": "left", "label": "left", "input": "left"},
+        {"index": 2, "semantic_id": "right", "label": "right", "input": "right"},
+    ]
 
 
 def test_runtime_action_contract_compatibility_checks_execution_and_semantics():

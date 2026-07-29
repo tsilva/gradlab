@@ -116,6 +116,7 @@ export const BUILTIN_PANEL_PRESETS = Object.freeze({
           kind: "line",
           title: "Value estimate vs realized return-to-go",
           metrics: ["policy/value", "policy/realized-return"],
+          foot: "V(s) is expected discounted future policy reward; G(s) is this trajectory’s realized discounted future reward—not its success flag or cumulative episode return.",
         },
       ],
     },

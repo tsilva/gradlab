@@ -95,8 +95,13 @@ and the current supervisor validates and emits only v14 names.
   checkpoint policy, while realized `G(s)` is one completed trajectory sample from that
   distribution. Exact pointwise agreement on one episode is not expected; assess calibration and
   residual bias across many contract-comparable trajectories without conditioning only on
-  successful outcomes. Learner explained variance uses its rollout value targets and is not the
-  same statistic as a single playback trajectory's `V(s) - G(s)`.
+  successful outcomes. At a selected step, `G(s)` includes only discounted rewards from that step
+  onward; it is neither the cumulative whole-episode return nor a success/survival flag. Near a
+  finite time limit it can therefore be small even in a successful episode. If remaining time is
+  absent from the policy observation, visually similar early and late states are aliased for the
+  critic, which can amplify the terminal-horizon discrepancy. Learner explained variance uses its
+  rollout value targets and is not the same statistic as a single playback trajectory's
+  `V(s) - G(s)`.
 - Mario ranks checkpoints only after acceptance: earliest `leader/checkpoint/step`, then highest
   `eval/full/episode/return/shaped/mean`. Breakout is training-only and ranks current-contract seeded
   recipe cohorts using `train/episode/return/shaped/from/target/rolling_up_to_100/mean`, which

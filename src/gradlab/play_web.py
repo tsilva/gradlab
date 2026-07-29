@@ -22,6 +22,7 @@ import numpy as np
 from aiohttp import WSMsgType, web
 from PIL import Image
 
+from gradlab.action_contract import action_contract_payload
 from gradlab.play_session import _PlaybackSession, _PlaybackTransition, render_obs_stack
 from gradlab.play_debug import ANSI_PATTERN, PolicyDecision, model_input_lines
 from gradlab.seeds import validate_playback_seed
@@ -80,14 +81,14 @@ def _session_environment_id(session: Any, args: argparse.Namespace) -> str | Non
 
 
 def _json_value(value: Any, *, depth: int = 0) -> Any:
-    if depth >= MAX_JSON_DEPTH:
-        return f"<{type(value).__name__}>"
     if value is None or isinstance(value, bool | int | str):
         if isinstance(value, str) and len(value) > MAX_JSON_TEXT:
             return value[:MAX_JSON_TEXT] + "…"
         return value
     if isinstance(value, float):
         return value if np.isfinite(value) else str(value)
+    if depth >= MAX_JSON_DEPTH:
+        return f"<{type(value).__name__}>"
     if isinstance(value, np.generic):
         return _json_value(value.item(), depth=depth + 1)
     if isinstance(value, np.ndarray):
@@ -125,6 +126,13 @@ def _json_value(value: Any, *, depth: int = 0) -> Any:
     if isinstance(value, bytes | bytearray | memoryview):
         return f"<{len(value)} bytes>"
     return str(value)[:MAX_JSON_TEXT]
+
+
+def _session_action_contract_payload(session: Any) -> dict[str, Any] | None:
+    cached = getattr(session, "action_contract_payload", None)
+    if isinstance(cached, Mapping):
+        return dict(cached)
+    return action_contract_payload(getattr(session, "action_contract", None))
 
 
 def _decision_payload(decision: PolicyDecision | None) -> dict[str, Any] | None:
@@ -746,9 +754,9 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
                 "total_reward": self.session.total_reward,
                 "max_x_pos": self.session.max_x_pos,
                 "action_names": list(self.session.action_names),
-                "action_contract": _json_value(getattr(self.session, "action_contract", None)),
-                "action_contract_comparison": _json_value(
-                    getattr(self.session, "policy_provenance", {}).get("action_contract")
+                "action_contract": _session_action_contract_payload(self.session),
+                "action_contract_comparison": action_contract_payload(
+                    getattr(self.session, "policy_provenance", {}).get("action_contract"),
                 ),
                 "event_names": event_names,
                 "env_id": self.environment_id,
@@ -1107,6 +1115,7 @@ class DatasetPlaybackRunner(_PlaybackRunnerProtocol):
         self.action_contract = (
             dict(action_contract) if isinstance(action_contract, Mapping) else None
         )
+        self.action_contract_payload = action_contract_payload(self.action_contract)
         self._transition: dict[str, Any] | None = None
 
     def update_input(self, _labels: Sequence[str], *, focused: bool) -> None:
@@ -1142,7 +1151,7 @@ class DatasetPlaybackRunner(_PlaybackRunnerProtocol):
                 "total_reward": self.total_reward,
                 "max_x_pos": _max_x_pos(self._transition),
                 "action_names": [],
-                "action_contract": _json_value(self.action_contract),
+                "action_contract": self.action_contract_payload,
                 "event_names": [],
                 "env_id": self.environment_id,
                 "sampling_mode": self.sampling_mode,
@@ -1397,6 +1406,7 @@ class HumanRecordingRunner(_PlaybackRunnerProtocol):
         self.target_fps = max(float(getattr(args, "fps", None) or session.fps), 1.0)
         self._status_message = "Focus the game view, then press Play to begin recording"
         self.environment_id = _session_environment_id(session, args)
+        self.action_contract_payload = _session_action_contract_payload(session)
 
     def stop(self) -> None:
         self._stop.set()
@@ -1483,7 +1493,7 @@ class HumanRecordingRunner(_PlaybackRunnerProtocol):
                     "total_reward": self.total_reward,
                     "max_x_pos": 0,
                     "action_names": [],
-                    "action_contract": _json_value(getattr(self.session, "action_contract", None)),
+                    "action_contract": self.action_contract_payload,
                     "event_names": [],
                     "env_id": self.environment_id,
                     "sampling_mode": None,

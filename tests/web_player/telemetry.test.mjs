@@ -389,3 +389,103 @@ test("missing action semantics are explicit instead of fabricated labels", () =>
     "raw action 1 · semantics unavailable: provider did not declare meanings",
   );
 });
+
+test("truncated action entries use the server-resolved names instead of raw indices", () => {
+  const snapshot = {
+    session: {
+      action_names: ["noop", "turn_left", "turn_right", "move_forward"],
+      action_contract: {
+        policy: {
+          space: { type: "discrete", n: 4, start: 0 },
+          semantics: {
+            status: "available",
+            encoding: "explicit",
+            entries: [
+              { value: "<int>", semantic_id: "<str>", label: "<str>" },
+            ],
+          },
+        },
+      },
+    },
+  };
+
+  assert.equal(formatActionValue(2, snapshot), "turn right");
+  assert.deepEqual(
+    discreteActionLabels(snapshot, 4),
+    ["noop", "turn left", "turn right", "move forward"],
+  );
+});
+
+test("malformed available action semantics fail visibly when no exact fallback exists", () => {
+  const snapshot = {
+    session: {
+      action_contract: {
+        policy: {
+          space: { type: "discrete", n: 2, start: 0 },
+          semantics: {
+            status: "available",
+            encoding: "explicit",
+            entries: [{ value: "<int>", label: "<str>" }],
+          },
+        },
+      },
+    },
+  };
+
+  assert.equal(
+    formatActionValue(1, snapshot),
+    "raw action 1 · semantics unavailable: "
+      + "the declared action semantics do not describe this value",
+  );
+});
+
+test("component action spaces render only complete declared semantics", () => {
+  const snapshot = {
+    session: {
+      action_contract: {
+        policy: {
+          space: { type: "multi_binary" },
+          semantics: {
+            status: "available",
+            encoding: "components",
+            components: [
+              { index: 0, semantic_id: "attack", label: "attack" },
+              { index: 1, semantic_id: "left", label: "left" },
+            ],
+          },
+        },
+      },
+    },
+  };
+
+  assert.equal(formatActionValue([1, 0], snapshot), "attack");
+  assert.match(
+    formatActionValue([1], snapshot),
+    /declared action semantics do not describe this value/,
+  );
+});
+
+test("value comparison foot explains returns and finite-horizon aliasing", () => {
+  const presentation = lineBlockFootPresentation(
+    {
+      metrics: ["policy/value", "policy/realized-return"],
+    },
+    null,
+    {
+      session: {
+        termination_conditions: [
+          {
+            id: "limit:max_episode_steps",
+            enabled: true,
+            value: 512,
+          },
+        ],
+      },
+    },
+  );
+
+  assert.match(presentation.text, /not its success flag or cumulative episode return/);
+  assert.match(presentation.text, /Finite horizon: 512 policy steps/);
+  assert.match(presentation.text, /remaining time is absent from the policy observation/);
+  assert.equal(presentation.warning, false);
+});
