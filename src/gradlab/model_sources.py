@@ -27,7 +27,7 @@ from gradlab.policy_bundle import (
     playback_contract,
 )
 from gradlab.r2_store import public_object_request
-from gradlab.run_contracts import RUN_ID_PATTERN
+from gradlab.run_contracts import CheckpointManifest, RUN_ID_PATTERN
 
 
 HUGGINGFACE_MODEL_SCHEME = "hf://"
@@ -223,19 +223,30 @@ def public_run_checkpoint_manifest_url(
     index = _public_json(f"{base}/runs/{value}/index.json")
     if str(index.get("run_id") or "") != value:
         raise ValueError("public run index identity mismatch")
+    checkpoints: list[CheckpointManifest] = []
+    for raw in index.get("checkpoints") or []:
+        if not isinstance(raw, Mapping):
+            raise ValueError("public run index contains an invalid checkpoint")
+        manifest = CheckpointManifest(**dict(raw))
+        manifest.validate()
+        if manifest.run_id != value:
+            raise ValueError("checkpoint does not belong to the public run index")
+        checkpoints.append(manifest)
     promotion = index.get("promotion")
-    if not isinstance(promotion, Mapping):
-        raise ValueError(f"run {value} has no promoted checkpoint")
-    checkpoint_id = str(promotion.get("checkpoint_id") or "")
-    rows = [
-        row
-        for row in index.get("checkpoints") or []
-        if isinstance(row, Mapping)
-        and str(row.get("checkpoint_id") or "") == checkpoint_id
-    ]
-    if len(rows) != 1:
-        raise ValueError("public promotion does not identify exactly one checkpoint")
-    model_url = str(rows[0].get("public_url") or "")
+    if promotion is not None:
+        if not isinstance(promotion, Mapping):
+            raise ValueError("public run promotion is malformed")
+        checkpoint_id = str(promotion.get("checkpoint_id") or "")
+        selected = [row for row in checkpoints if row.checkpoint_id == checkpoint_id]
+        if len(selected) != 1:
+            raise ValueError("public promotion does not identify exactly one checkpoint")
+        checkpoint = selected[0]
+    else:
+        finals = [row for row in checkpoints if row.purpose == "final"]
+        if not finals:
+            raise ValueError(f"run {value} has no promoted or final checkpoint")
+        checkpoint = max(finals, key=lambda row: (row.step, row.sha256))
+    model_url = checkpoint.public_url
     if not model_url.endswith("/model.zip"):
         raise ValueError("public checkpoint model URL is malformed")
     return f"{model_url.removesuffix('/model.zip')}/manifest.json"

@@ -252,8 +252,9 @@ def add_play_source_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--run",
         help=(
-            "Immutable gradlab run ID. Resolves its public promoted checkpoint without "
-            "W&B or private R2 credentials."
+            "Immutable gradlab run ID. Resolves its public promoted checkpoint, or its "
+            "highest-step final checkpoint when no promotion exists, without W&B or "
+            "private R2 credentials."
         ),
     )
     parser.add_argument(
