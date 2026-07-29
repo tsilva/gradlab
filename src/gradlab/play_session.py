@@ -353,6 +353,13 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--resume-cell",
+        help=(
+            "Resume a cell-graph representative by node ID. The model must have "
+            "been exported with state_archive.export.snapshots=retained."
+        ),
+    )
+    parser.add_argument(
         "--no-progress",
         action="store_true",
         help="Disable model-download and player-startup progress bars.",
@@ -419,6 +426,7 @@ def resolved_play_launch_lines(
             f"seed={args.seed} episodes={args.episodes} "
             f"max_steps={task_max_episode_steps(policy_config)} "
             f"debug={getattr(args, 'debug', False)} "
+            f"resume_cell={getattr(args, 'resume_cell', None) or '-'} "
             "interface=web "
             f"respect_task_termination={getattr(args, 'respect_task_termination', False)}",
             "green",
@@ -746,6 +754,53 @@ class _PlaybackSession:
         self.episode = episode
         self.step_index = 0
         self.total_reward = 0.0
+        self.max_x_pos = 0
+        self.interactive = False
+        self.last_transition = None
+        self.current_frame = optional_vector_env_frame(self.env)
+        self.frames = optional_fast_env_frames(self.policy_obs)
+
+    def resume_cell(
+        self,
+        node_id: str,
+        *,
+        entry_document: Mapping[str, object],
+        payload: bytes,
+    ) -> None:
+        """Restore an explicitly embedded cell snapshot and continue its route."""
+
+        runtime = getattr(self.env, "runtime", None)
+        archive = getattr(runtime, "state_archive", None)
+        resume_node = getattr(self.model, "resume_node", None)
+        if runtime is None or archive is None or not callable(resume_node):
+            raise RuntimeError("this playback session cannot resume cell snapshots")
+        entry = archive.import_entry(entry_document, payload)
+        self.policy_obs = runtime.restore_archive_entries(
+            np.asarray([True], dtype=np.bool_),
+            (entry.entry_id,),
+        )
+        reset_policy_state(self.model)
+        resume_node(str(node_id), lane=0)
+        mark_resumed = getattr(self.env, "mark_policy_resumed", None)
+        if callable(mark_resumed):
+            mark_resumed()
+        reset_info = dict(self.env.reset_infos[0])
+        self._set_initial_conditioning(reset_info)
+        runtime_state = entry.runtime_state
+        self.active_seed = (
+            self.initial_seed
+            if runtime_state is None or runtime_state.episode_seed is None
+            else runtime_state.episode_seed
+        )
+        self.episode = (
+            self.episode
+            if runtime_state is None
+            else runtime_state.episode_index + 1
+        )
+        self.step_index = 0 if runtime_state is None else runtime_state.episode_length
+        self.total_reward = (
+            0.0 if runtime_state is None else runtime_state.episode_return
+        )
         self.max_x_pos = 0
         self.interactive = False
         self.last_transition = None

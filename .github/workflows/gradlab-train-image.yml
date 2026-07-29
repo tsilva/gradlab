@@ -146,6 +146,48 @@ jobs:
           test -n "$source_sha"
           echo "runtime_build_source_sha=$source_sha" >> "$GITHUB_OUTPUT"
 
+      - name: Smoke exact ViZDoom runtime image
+        id: vizdoom_smoke
+        if: github.event_name != 'pull_request'
+        env:
+          DIGEST: ${{ steps.published_image.outputs.digest }}
+        run: |
+          set -o pipefail
+          image="${REGISTRY}/${IMAGE_NAME}@${DIGEST}"
+          docker pull "$image"
+          docker run --rm "$image" python /usr/local/bin/gradlab-vizdoom-smoke \
+            | tail -n 1 > vizdoom-smoke.json
+          python - <<'PY'
+          import hashlib
+          import json
+
+          path = "vizdoom-smoke.json"
+          with open(path, encoding="utf-8") as source:
+              payload = json.load(source)
+          expected = payload.pop("evidence_sha256")
+          encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+          observed = hashlib.sha256(encoded).hexdigest()
+          if observed != expected:
+              raise SystemExit("ViZDoom smoke evidence hash mismatch")
+          if payload != {
+              **payload,
+              "smoke_contract_version": 1,
+              "provider_distribution": "vizdoom-turbo",
+              "provider_version": "1.3.0.post15",
+              "game": "VizdoomBasic-v1",
+              "num_envs": 1,
+              "reset_succeeded": True,
+              "step_succeeded": True,
+              "close_succeeded": True,
+          }:
+              raise SystemExit("ViZDoom smoke contract mismatch")
+          PY
+          {
+            echo "contract_version=$(jq -r '.smoke_contract_version' vizdoom-smoke.json)"
+            echo "provider_version=$(jq -r '.provider_version' vizdoom-smoke.json)"
+            echo "evidence_sha256=$(jq -r '.evidence_sha256' vizdoom-smoke.json)"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Write image receipt
         if: github.event_name != 'pull_request'
         env:
@@ -163,6 +205,9 @@ jobs:
           GPU_PLAN_SHA256: ${{ needs.foundations.outputs.gpu_plan_sha256 }}
           TRAIN_PLAN_SHA256: ${{ needs.foundations.outputs.train_plan_sha256 }}
           RUNTIME_BUILD_SOURCE_SHA: ${{ steps.runtime_identity.outputs.runtime_build_source_sha }}
+          VIZDOOM_SMOKE_CONTRACT_VERSION: ${{ steps.vizdoom_smoke.outputs.contract_version }}
+          VIZDOOM_PROVIDER_VERSION: ${{ steps.vizdoom_smoke.outputs.provider_version }}
+          VIZDOOM_SMOKE_EVIDENCE_SHA256: ${{ steps.vizdoom_smoke.outputs.evidence_sha256 }}
         run: |
           python - <<'PY'
           import json
@@ -170,7 +215,7 @@ jobs:
 
           registry = os.environ["REGISTRY"]
           payload = {
-              "schema_version": 6,
+              "schema_version": 7,
               "image": f"{registry}/{os.environ['IMAGE_NAME']}",
               "digest": os.environ["DIGEST"],
               "runtime_image_ref": os.environ["RUNTIME_IMAGE_REF"],
@@ -189,6 +234,13 @@ jobs:
                   "uv": os.environ["UV_IMAGE"],
                   "gpu": f"docker:{registry}/{os.environ['GPU_IMAGE_NAME']}@{os.environ['GPU_DIGEST']}",
                   "dependencies": f"docker:{registry}/{os.environ['DEPENDENCY_IMAGE_NAME']}@{os.environ['DEPENDENCY_DIGEST']}",
+              },
+              "vizdoom_smoke": {
+                  "contract_version": int(os.environ["VIZDOOM_SMOKE_CONTRACT_VERSION"]),
+                  "image_digest": os.environ["DIGEST"],
+                  "provider_distribution": "vizdoom-turbo",
+                  "provider_version": os.environ["VIZDOOM_PROVIDER_VERSION"],
+                  "evidence_sha256": os.environ["VIZDOOM_SMOKE_EVIDENCE_SHA256"],
               },
               "workflow_run_id": os.environ["GITHUB_RUN_ID"],
               "workflow_run_attempt": os.environ["GITHUB_RUN_ATTEMPT"],

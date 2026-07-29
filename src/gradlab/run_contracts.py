@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import math
 import re
 import secrets
 from collections.abc import Mapping, Sequence
@@ -16,7 +17,17 @@ from gradlab.json_utils import (
 
 SCHEMA_VERSION = 2
 LEGACY_RUN_MANIFEST_SCHEMA_VERSION = 3
-RUN_MANIFEST_SCHEMA_VERSION = 4
+GOAL_VARIANT_RUN_MANIFEST_SCHEMA_VERSION = 4
+RUN_MANIFEST_SCHEMA_VERSION = 5
+DSTACK_STOP_DURATION_SECONDS = 10 * 60
+DEFAULT_LIVENESS_POLICY: dict[str, float] = {
+    "startup_timeout_seconds": 600.0,
+    "result_exit_grace_seconds": 5.0,
+    "terminate_grace_seconds": 10.0,
+    "kill_grace_seconds": 5.0,
+    "failure_drain_timeout_seconds": 300.0,
+    "poll_interval_seconds": 0.25,
+}
 RUN_ID_PATTERN = re.compile(r"^gradlab-[0-9a-f]{32}$")
 ATTEMPT_ID_PATTERN = re.compile(r"^attempt-[0-9a-f]{16}$")
 RUN_TERMINAL_STATE_SUMMARY = "gradlab/run/terminal_state"
@@ -81,6 +92,47 @@ def checkpoint_id(*, step: int, sha256: str) -> str:
     return f"checkpoint-{int(step)}-{digest[:16]}"
 
 
+def default_liveness_policy() -> dict[str, float]:
+    return dict(DEFAULT_LIVENESS_POLICY)
+
+
+def validate_liveness_policy(
+    value: object,
+    *,
+    max_duration_seconds: int,
+) -> dict[str, float]:
+    if not isinstance(value, Mapping):
+        raise ValueError("liveness must be a mapping")
+    expected = set(DEFAULT_LIVENESS_POLICY)
+    observed = {str(key) for key in value}
+    if observed != expected:
+        missing = sorted(expected - observed)
+        extra = sorted(observed - expected)
+        raise ValueError(f"liveness keys mismatch: missing={missing}, extra={extra}")
+    normalized: dict[str, float] = {}
+    for key in sorted(expected):
+        raw = value[key]
+        if isinstance(raw, bool) or not isinstance(raw, int | float):
+            raise ValueError(f"liveness.{key} must be a number")
+        number = float(raw)
+        if not math.isfinite(number) or number <= 0:
+            raise ValueError(f"liveness.{key} must be finite and positive")
+        normalized[key] = number
+    if normalized["startup_timeout_seconds"] >= int(max_duration_seconds):
+        raise ValueError("liveness startup timeout must be below the selected max duration")
+    teardown_and_drain = (
+        normalized["result_exit_grace_seconds"]
+        + normalized["terminate_grace_seconds"]
+        + normalized["kill_grace_seconds"]
+        + normalized["failure_drain_timeout_seconds"]
+    )
+    if teardown_and_drain >= DSTACK_STOP_DURATION_SECONDS:
+        raise ValueError(
+            "liveness teardown and failure drain must fit inside dstack stop_duration"
+        )
+    return normalized
+
+
 @dataclass(frozen=True)
 class RunManifest:
     run_id: str
@@ -101,6 +153,7 @@ class RunManifest:
     modal: Mapping[str, Any]
     storage: Mapping[str, Any]
     goal_variant: Mapping[str, Any] | None = None
+    liveness: Mapping[str, Any] | None = None
     schema_version: int = RUN_MANIFEST_SCHEMA_VERSION
 
     def validate(self) -> None:
@@ -130,14 +183,16 @@ class RunManifest:
         if int(self.schema_version) not in {
             SCHEMA_VERSION,
             LEGACY_RUN_MANIFEST_SCHEMA_VERSION,
+            GOAL_VARIANT_RUN_MANIFEST_SCHEMA_VERSION,
             RUN_MANIFEST_SCHEMA_VERSION,
         }:
             raise ValueError(f"unsupported run manifest schema: {self.schema_version}")
         if (
-            int(self.schema_version) == RUN_MANIFEST_SCHEMA_VERSION
+            int(self.schema_version)
+            in {GOAL_VARIANT_RUN_MANIFEST_SCHEMA_VERSION, RUN_MANIFEST_SCHEMA_VERSION}
             and self.goal_variant is None
         ):
-            raise ValueError("run manifest v4 requires goal_variant")
+            raise ValueError("run manifest v4+ requires goal_variant")
         if self.goal_variant is not None:
             from gradlab.goal_variants import validate_goal_variant_descriptor
 
@@ -169,6 +224,16 @@ class RunManifest:
             duration = value.get("max_duration_seconds")
             if isinstance(duration, bool) or not isinstance(duration, int) or duration <= 0:
                 raise ValueError(f"compute.{label}.max_duration_seconds must be positive")
+        if int(self.schema_version) == RUN_MANIFEST_SCHEMA_VERSION:
+            validate_liveness_policy(
+                self.liveness,
+                max_duration_seconds=int(selected["max_duration_seconds"]),
+            )
+        elif self.liveness is not None:
+            validate_liveness_policy(
+                self.liveness,
+                max_duration_seconds=int(selected["max_duration_seconds"]),
+            )
         _require_text(self.compute.get("dstack_task"), "compute.dstack_task")
         _require_text(
             self.compute.get("runtime_workflow_run_id"),

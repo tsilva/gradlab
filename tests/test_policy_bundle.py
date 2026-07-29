@@ -199,6 +199,7 @@ def test_level1_3_training_clear_bundle_omits_eval_and_preserves_early_stop() ->
         "start_after_steps": 0,
         "patience_steps": 0,
         "operator": ">=",
+        "progress_baseline": 0.0,
         "threshold": 1.0,
     }
 
@@ -431,6 +432,28 @@ def test_evaluated_bundle_defaults_to_training_contract_and_exposes_eval_explici
     assert audit["mismatch_paths"] == ["environment.task.reward.reward_clip"]
     assert audit["requested_policy_override_paths"] == ["train.environment.task.reward.reward_clip"]
     assert audit["legacy_override_provenance"] is True
+
+
+def test_evaluated_goal_preserves_manual_eval_when_automatic_eval_is_disabled() -> None:
+    materialized = compose_train_document(VIZDOOM_GOAL, VIZDOOM_RECIPE)
+    assert materialized["train_config"]["checkpoint_eval_backend"] == "none"
+
+    document = build_recipe_document(
+        materialized,
+        repo_root=Path.cwd(),
+        source_commit="a" * 40,
+        run_description="post-training manual evaluation regression",
+        seed=123,
+        runtime_image_ref=RUNTIME,
+    )
+
+    recipe = document["recipe"]
+    assert recipe["train_config"]["checkpoint_eval_backend"] == "none"
+    assert "eval" not in recipe
+    assert "playback" in recipe
+    contract = evaluation_contract(document)
+    assert contract["episodes"] == 100
+    assert contract["acceptance"] == materialized["goal"]["eval"]["acceptance"]
 
 
 def test_recipe_materializes_the_backend_config_executed_by_the_learner() -> None:

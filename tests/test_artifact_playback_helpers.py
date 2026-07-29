@@ -236,6 +236,70 @@ def test_playback_session_rebuilds_environment_for_termination_change() -> None:
     assert session.env is replacement_env
     assert session.termination_source == "evaluation"
 
+def test_playback_session_resumes_an_explicit_cell_representative() -> None:
+    runtime_state = SimpleNamespace(
+        episode_seed=127,
+        episode_index=3,
+        episode_length=42,
+        episode_return=19.0,
+    )
+    entry = SimpleNamespace(entry_id="entry", runtime_state=runtime_state)
+
+    class Archive:
+        def import_entry(self, document, payload):
+            assert document == {"entry_id": "entry"}
+            assert payload == b"snapshot"
+            return entry
+
+    class Runtime:
+        state_archive = Archive()
+
+        def restore_archive_entries(self, mask, entry_ids):
+            assert mask.tolist() == [True]
+            assert entry_ids == ("entry",)
+            return "restored-observation"
+
+    class Env:
+        runtime = Runtime()
+        reset_infos = [{"x": 1}]
+
+        def mark_policy_resumed(self):
+            self.marked = True
+
+    class Model:
+        def reset_episode(self):
+            self.reset = True
+
+        def resume_node(self, node_id, *, lane):
+            self.resumed = (node_id, lane)
+
+    model = Model()
+    env = Env()
+    session = _PlaybackSession(
+        model=model,
+        env=env,
+        config=EnvConfig(env_provider="gradlab", game="Bandit-v0"),
+        initial_seed=10_000,
+        attributor=None,
+        attribution_mode="none",
+        attribution_interval=1,
+        attribution_opacity=0.45,
+    )
+
+    session.resume_cell(
+        "representative",
+        entry_document={"entry_id": "entry"},
+        payload=b"snapshot",
+    )
+
+    assert session.policy_obs == "restored-observation"
+    assert model.resumed == ("representative", 0)
+    assert env.marked is True
+    assert session.active_seed == 127
+    assert session.episode == 4
+    assert session.step_index == 42
+    assert session.total_reward == 19.0
+
 
 def test_public_source_parsers_exclude_wandb_artifacts() -> None:
     manifest = (
@@ -254,6 +318,7 @@ def test_public_source_parsers_exclude_wandb_artifacts() -> None:
     play_help = build_play_parser().format_help()
     assert "--artifact" not in eval_help
     assert "W&B artifact" not in play_help
+    assert "--resume-cell" in play_help
 
 
 def test_huggingface_refs_parse_and_resolve_from_cli_namespace() -> None:

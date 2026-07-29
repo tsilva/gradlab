@@ -140,6 +140,7 @@ COPY experiments/modal_eval.yaml /root/gradlab/experiments/modal_eval.yaml
 COPY --chmod=755 containers/train/gradlab /usr/local/bin/gradlab
 COPY --chmod=755 containers/train/entrypoint.sh /usr/local/bin/gradlab-container-entrypoint
 COPY --chmod=755 containers/train/smoke.py /usr/local/bin/gradlab-container-smoke
+COPY --chmod=755 containers/train/vizdoom_smoke.py /usr/local/bin/gradlab-vizdoom-smoke
 
 FROM ${RUNTIME_BASE} AS runtime
 

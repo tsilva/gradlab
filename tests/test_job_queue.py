@@ -305,6 +305,45 @@ class JobQueueTests(unittest.TestCase):
         )
         self.assertEqual(len(self.store.jobs()), 1)
 
+    def test_checkpoint_planner_loads_operator_environment_without_launcher_import(
+        self,
+    ) -> None:
+        facade = ManualEvaluationQueue(
+            repo_root=Path.cwd(),
+            store=self.store,
+        )
+        storage = object()
+        authority = object()
+        planner = object()
+
+        with (
+            patch(
+                "gradlab.manual_evaluation.load_repository_operator_environment"
+            ) as load_environment,
+            patch(
+                "gradlab.manual_evaluation.RunStorageConfig.from_env",
+                return_value=storage,
+            ),
+            patch(
+                "gradlab.manual_evaluation.RunAuthority",
+                return_value=authority,
+            ),
+            patch(
+                "gradlab.manual_evaluation.ManualEvaluationSupervisor",
+                return_value=planner,
+            ) as supervisor,
+        ):
+            result = facade._planner()
+
+        self.assertIs(result, planner)
+        load_environment.assert_called_once_with(facade.repo_root)
+        supervisor.assert_called_once_with(
+            authority=authority,
+            repo_root=facade.repo_root,
+            project_results=False,
+            work_root=self.store.work_root,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

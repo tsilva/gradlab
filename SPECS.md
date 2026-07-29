@@ -10,7 +10,7 @@ GradLab is a reproducible reinforcement-learning workbench that carries game-age
 - Evaluated goals must define their environment, success criteria, ranking, evaluation, and release rules.
 - Training-only goals must remain ineligible for acceptance, completion, checkpoint promotion, or release.
 - Every launchable training configuration must belong to one goal, declare a finite resource limit and meaningful description, and resolve all execution choices.
-- Mario and ViZDoom recipes must configure an unsuccessful early-stop condition for sustained lack of improvement in a task-aligned training metric by default; an explicit launch-time override may disable it for a bounded run, and neither the condition nor its absence may establish goal acceptance or checkpoint promotion.
+- Launchable training recipes must configure an unsuccessful early-stop condition for sustained lack of improvement in a task-aligned training metric by default; an explicit launch-time override may disable it for a bounded run, and neither the condition nor its absence may establish goal acceptance or checkpoint promotion.
 - Invalid or inconsistent goals, run configurations, benchmarks, capacity rules, and execution settings must be rejected before execution or external mutation.
 - Each run must declare one complete observation, action, reward, discount, event, start-state, and episode-boundary contract and preserve its policy-facing semantics.
 - Training-only curricula and phase-specific behavior must be declared, and evidence outside the final evaluation contract must not establish acceptance or promotion.
@@ -18,7 +18,7 @@ GradLab is a reproducible reinforcement-learning workbench that carries game-age
 ### Evaluation and Evidence
 
 - Acceptance and promotion must use goal-defined checkpoint evaluation except in an explicitly declared deterministic-search workflow.
-- ViZDoom Basic, Deadly Corridor, and Defend the Line checkpoint evaluations must run all 100 episodes without outcome-based early termination and determine acceptance only from the complete 100-episode mean return.
+- Checkpoint evaluations whose acceptance criterion is a fixed-episode mean return must run the complete declared episode count without outcome-based early termination and determine acceptance only from the complete mean return.
 - Deterministic search may accept only a policy that produces the goal’s success event within its resource limit; the accepted policy must be published and playable.
 - Recording, playback, integrity verification, reexecution, and their datasets or results must not establish acceptance or promotion.
 - Evaluation and playback must preserve declared action-selection semantics by default; playback counterfactuals must be visible and ineligible for evaluation or promotion evidence.

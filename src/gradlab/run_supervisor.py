@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import argparse
 import copy
+import hashlib
 import json
 import os
+import re
 import sys
 import tempfile
 from collections.abc import Mapping
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from functools import partial
 from pathlib import Path
@@ -109,6 +112,8 @@ from gradlab.train_config import (
     validate_and_normalize_train_config,
 )
 from gradlab.training_lifecycle import (
+    LEARNER_READY_FILENAME,
+    LEARNER_STATE_FORMAT_VERSION,
     TRAINING_RESULT_FILENAME,
     TerminalReason,
     TrainingExecutionMode,
@@ -128,15 +133,51 @@ METRIC_JOURNAL_RETENTION_DAYS = 7
 HEALTH_SAMPLE_SECONDS = 15.0
 WANDB_REMOTE_PROBE_SECONDS = 30.0
 WANDB_DRAIN_REMOTE_PROBE_SECONDS = 2.0
-LEARNER_RESULT_EXIT_GRACE_SECONDS = 30.0
 
 
 class IncompleteEvaluationEvidence(RuntimeError):
     """Evaluation did not produce enough valid evidence for scientific rejection."""
 
 
-class LearnerTeardownTimeout(RuntimeError):
-    """The learner wrote its terminal result but did not exit."""
+class LearnerOperationalFailure(RuntimeError):
+    stop_reason = "learner_failure"
+
+
+class LearnerFailure(LearnerOperationalFailure):
+    """The learner emitted an authoritative failed terminal result."""
+
+
+class LearnerStartupTimeout(LearnerOperationalFailure):
+    """The learner did not emit readiness or a terminal result before its deadline."""
+
+    stop_reason = "startup_timeout"
+
+
+class LearnerStateContractError(LearnerOperationalFailure):
+    """The learner emitted malformed, stale, or identity-mismatched state."""
+
+    stop_reason = "invalid_result"
+
+
+class LearnerExitContractMismatch(LearnerOperationalFailure):
+    """The learner process exit disagreed with its terminal document."""
+
+    stop_reason = "exit_contract_mismatch"
+
+
+class LearnerTeardownTimeout(LearnerOperationalFailure):
+    """The learner process group remained alive after bounded escalation."""
+
+    stop_reason = "teardown_timeout"
+
+
+@dataclass(frozen=True)
+class LearnerState:
+    kind: str
+    status: str
+    terminal_reason: str | None
+    final_step: int | None
+    document: Mapping[str, Any]
 
 
 def _parse_timestamp(value: str) -> datetime:
@@ -152,6 +193,19 @@ def _read_json(path: Path) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise ValueError(f"expected a JSON object: {path}")
     return value
+
+
+def _bounded_exception_document(failure: BaseException) -> dict[str, str]:
+    message = str(failure).replace("\x00", "\N{REPLACEMENT CHARACTER}")
+    message = re.sub(
+        r"(?i)(api[_-]?key|access[_-]?key|secret|token|password)(\\s*[:=]\\s*)\\S+",
+        r"\1\2<redacted>",
+        message,
+    )
+    return {
+        "type": type(failure).__name__[:200],
+        "message": message[:4_000],
+    }
 
 
 def _manifest_from_document(value: Mapping[str, Any]) -> RunManifest:
@@ -192,12 +246,14 @@ def _terminal_outcome(
     promotion: PromotionReceipt | None,
     early_stop: EarlyStopReceipt | None,
 ) -> tuple[str, str]:
-    if cancel_requested:
-        return "canceled", "canceled"
     if isinstance(failure, IncompleteEvaluationEvidence):
         return "resumable_failure", "evaluation_evidence_incomplete"
+    if isinstance(failure, LearnerOperationalFailure):
+        return "resumable_failure", failure.stop_reason
     if failure is not None:
         return "resumable_failure", "supervisor_failure"
+    if cancel_requested:
+        return "canceled", "canceled"
     if evaluation_required and promotion is not None:
         return "succeeded", "completed_after_eval_acceptance"
     if early_stop is not None:
@@ -277,7 +333,12 @@ class RunSupervisor:
         self.last_remote_probe = 0.0
         self.wandb_remote_high_water = 0
         self.wandb_remote_visible_lag_seconds = 0.0
+        self.learner_started_at: float | None = None
+        self.expected_learner_pid: int | None = None
         self.learner_result_observed_at: float | None = None
+        self.learner_final_step: int | None = None
+        self.learner_terminal_document: dict[str, Any] | None = None
+        self.learner_teardown_evidence: dict[str, Any] = {}
         self.accepted_observed_at: float | None = None
         self.eval_admission_closed = False
         self.recovered_early_stop: EarlyStopReceipt | None = None
@@ -310,6 +371,7 @@ class RunSupervisor:
             {
                 "run_id": self.manifest.run_id,
                 "attempt_id": self.manifest.attempt_id,
+                "supervision_liveness": dict(self.manifest.liveness or {}),
                 "at": self.clock.utc_now(),
                 **payload,
             },
@@ -439,45 +501,236 @@ class RunSupervisor:
         )
         return receipt
 
-    def _training_terminal_reason(self) -> str:
-        path = self.run_dir / TRAINING_RESULT_FILENAME
-        if not path.is_file():
-            return ""
-        document = _read_json(path)
-        if (
-            document.get("document_type") != "gradlab.training-result"
-            or int(document.get("format_version") or 0) != 2
-        ):
-            raise ValueError("learner training result has an unsupported contract")
-        if document.get("execution_mode") != TrainingExecutionMode.SUPERVISED.value:
-            raise ValueError("learner training result is not supervised")
-        reason = TerminalReason(str(document.get("terminal_reason") or ""))
-        final_step = document.get("final_step")
-        if isinstance(final_step, bool) or not isinstance(final_step, int) or final_step < 0:
-            raise ValueError("learner training result has an invalid final_step")
-        return reason.value
+    def _liveness_seconds(self, key: str) -> float:
+        value = (self.manifest.liveness or {}).get(key)
+        if isinstance(value, bool) or not isinstance(value, int | float):
+            raise RuntimeError(f"run manifest has no valid liveness.{key}")
+        return float(value)
 
-    def _raise_if_learner_result_stalled(self, now: float) -> None:
-        path = self.run_dir / TRAINING_RESULT_FILENAME
-        if not path.is_file():
-            return
-        reason = self._training_terminal_reason()
-        if self.learner_result_observed_at is None:
-            self.learner_result_observed_at = now
-            self._emit(
-                "learner_terminal_result_observed",
-                terminal_reason=reason,
-            )
-            return
-        elapsed = max(0.0, now - self.learner_result_observed_at)
-        if elapsed < LEARNER_RESULT_EXIT_GRACE_SECONDS:
-            return
-        learner_log_tail = self._learner_log_tail()
-        detail = f"; learner log tail:\n{learner_log_tail[-3_000:]}" if learner_log_tail else ""
-        raise LearnerTeardownTimeout(
-            "learner wrote terminal result "
-            f"{reason!r} but remained alive for {elapsed:.1f}s{detail}"
+    def _parse_learner_state(
+        self,
+        document: Mapping[str, Any],
+        *,
+        kind: str,
+        live: bool,
+    ) -> LearnerState:
+        expected_type = (
+            "gradlab.learner-ready" if kind == "ready" else "gradlab.training-result"
         )
+        if document.get("document_type") != expected_type:
+            raise LearnerStateContractError(
+                f"learner {kind} document_type is not {expected_type!r}"
+            )
+        version = document.get("format_version")
+        if version == 2 and kind == "result" and not live:
+            if document.get("execution_mode") != TrainingExecutionMode.SUPERVISED.value:
+                raise LearnerStateContractError("legacy learner result is not supervised")
+            try:
+                reason = TerminalReason(str(document.get("terminal_reason") or ""))
+            except ValueError as exc:
+                raise LearnerStateContractError(
+                    "legacy learner result has an invalid terminal_reason"
+                ) from exc
+            final_step = document.get("final_step")
+            if (
+                isinstance(final_step, bool)
+                or not isinstance(final_step, int)
+                or final_step < 0
+            ):
+                raise LearnerStateContractError(
+                    "legacy learner result has an invalid final_step"
+                )
+            return LearnerState(
+                kind="result",
+                status=str(document.get("status") or ""),
+                terminal_reason=reason.value,
+                final_step=final_step,
+                document=dict(document),
+            )
+        if version != LEARNER_STATE_FORMAT_VERSION:
+            raise LearnerStateContractError(
+                f"learner {kind} document has unsupported format_version {version!r}"
+            )
+        if document.get("run_id") != self.manifest.run_id:
+            raise LearnerStateContractError(f"learner {kind} run_id does not match manifest")
+        if document.get("attempt_id") != self.manifest.attempt_id:
+            raise LearnerStateContractError(
+                f"learner {kind} attempt_id does not match manifest"
+            )
+        learner_pid = document.get("learner_pid")
+        if (
+            isinstance(learner_pid, bool)
+            or not isinstance(learner_pid, int)
+            or learner_pid <= 0
+        ):
+            raise LearnerStateContractError(f"learner {kind} has an invalid learner_pid")
+        if live and learner_pid != self.expected_learner_pid:
+            raise LearnerStateContractError(
+                f"learner {kind} pid {learner_pid} does not match "
+                f"spawned pid {self.expected_learner_pid}"
+            )
+        if document.get("execution_mode") != TrainingExecutionMode.SUPERVISED.value:
+            raise LearnerStateContractError(f"learner {kind} is not supervised")
+        expected_backend = str(
+            dict(self.train_config.get("training_backend") or {}).get("id") or ""
+        )
+        if not expected_backend or document.get("training_backend_id") != expected_backend:
+            raise LearnerStateContractError(
+                f"learner {kind} training_backend_id does not match materialized config"
+            )
+        timestamp_field = "ready_at" if kind == "ready" else "terminal_at"
+        timestamp = document.get(timestamp_field)
+        if not isinstance(timestamp, str):
+            raise LearnerStateContractError(
+                f"learner {kind} has no valid {timestamp_field}"
+            )
+        try:
+            _parse_timestamp(timestamp)
+        except (TypeError, ValueError) as exc:
+            raise LearnerStateContractError(
+                f"learner {kind} has an invalid {timestamp_field}"
+            ) from exc
+        if kind == "ready":
+            if document.get("status") != "ready":
+                raise LearnerStateContractError("learner readiness status is not 'ready'")
+            return LearnerState(
+                kind="ready",
+                status="ready",
+                terminal_reason=None,
+                final_step=None,
+                document=dict(document),
+            )
+
+        status = str(document.get("status") or "")
+        if status not in {"completed", "interrupted", "failed"}:
+            raise LearnerStateContractError("learner result has an invalid status")
+        try:
+            reason = TerminalReason(str(document.get("terminal_reason") or ""))
+        except ValueError as exc:
+            raise LearnerStateContractError(
+                "learner result has an invalid terminal_reason"
+            ) from exc
+        if (status == "failed") != (reason == TerminalReason.FAILED):
+            raise LearnerStateContractError(
+                "learner result status and terminal_reason disagree"
+            )
+        interruption_reasons = {
+            TerminalReason.LOCAL_INTERRUPTION,
+            TerminalReason.EXTERNAL_SIGNAL,
+        }
+        if (status == "interrupted") != (reason in interruption_reasons):
+            raise LearnerStateContractError(
+                "learner result interrupted status and terminal_reason disagree"
+            )
+        final_step = document.get("final_step")
+        if (
+            isinstance(final_step, bool)
+            or not isinstance(final_step, int)
+            or final_step < 0
+        ):
+            raise LearnerStateContractError("learner result has an invalid final_step")
+        if not isinstance(document.get("execution_policy"), Mapping):
+            raise LearnerStateContractError("learner result has no execution_policy")
+        if status == "failed":
+            error_type = document.get("error_type")
+            error_message = document.get("error_message")
+            if (
+                not isinstance(error_type, str)
+                or not error_type
+                or len(error_type) > 200
+                or not isinstance(error_message, str)
+                or len(error_message) > 2_000
+            ):
+                raise LearnerStateContractError(
+                    "failed learner result has invalid bounded error evidence"
+                )
+        return LearnerState(
+            kind="result",
+            status=status,
+            terminal_reason=reason.value,
+            final_step=final_step,
+            document=dict(document),
+        )
+
+    def _learner_state_file(
+        self,
+        *,
+        kind: str,
+        live: bool,
+    ) -> LearnerState | None:
+        filename = LEARNER_READY_FILENAME if kind == "ready" else TRAINING_RESULT_FILENAME
+        path = self.run_dir / filename
+        if not path.is_file():
+            return None
+        try:
+            document = _read_json(path)
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            raise LearnerStateContractError(
+                f"learner {kind} document is unreadable"
+            ) from exc
+        return self._parse_learner_state(document, kind=kind, live=live)
+
+    def _training_terminal_reason(self) -> str:
+        state = self._learner_state_file(kind="result", live=False)
+        return "" if state is None else str(state.terminal_reason or "")
+
+    def _observe_live_learner_state(self, now: float) -> LearnerState | None:
+        result = self._learner_state_file(kind="result", live=True)
+        if result is not None:
+            self.learner_final_step = result.final_step
+            self.learner_terminal_document = dict(result.document)
+            if self.learner_result_observed_at is None:
+                self.learner_result_observed_at = now
+                self._emit(
+                    "learner_terminal_result_observed",
+                    status=result.status,
+                    terminal_reason=result.terminal_reason,
+                    final_step=result.final_step,
+                )
+            if result.status == "failed":
+                error_type = str(result.document.get("error_type") or "LearnerError")
+                error_message = str(result.document.get("error_message") or "")
+                raise LearnerFailure(f"{error_type}: {error_message}")
+            elapsed = max(0.0, now - self.learner_result_observed_at)
+            grace = self._liveness_seconds("result_exit_grace_seconds")
+            if elapsed >= grace:
+                raise LearnerTeardownTimeout(
+                    "learner wrote terminal result "
+                    f"{result.terminal_reason!r} but remained alive for {elapsed:.1f}s"
+                )
+            return result
+
+        ready = self._learner_state_file(kind="ready", live=True)
+        if ready is not None:
+            return ready
+        if self.learner_started_at is None:
+            raise LearnerStateContractError("learner startup time was not recorded")
+        elapsed = max(0.0, now - self.learner_started_at)
+        timeout = self._liveness_seconds("startup_timeout_seconds")
+        if elapsed >= timeout:
+            raise LearnerStartupTimeout(
+                f"learner emitted no readiness or terminal result within {timeout:.1f}s"
+            )
+        return None
+
+    def _validate_learner_exit(self, returncode: int) -> LearnerState:
+        terminal_state = self._learner_state_file(kind="result", live=True)
+        if terminal_state is None:
+            raise LearnerStateContractError(
+                f"learner exited with code {returncode} without a terminal result"
+            )
+        self.learner_final_step = terminal_state.final_step
+        self.learner_terminal_document = dict(terminal_state.document)
+        if terminal_state.status == "failed":
+            raise LearnerFailure(
+                f"{terminal_state.document.get('error_type')}: "
+                f"{terminal_state.document.get('error_message')}"
+            )
+        if returncode != 0:
+            raise LearnerExitContractMismatch(
+                f"learner emitted {terminal_state.status!r} but exited with code {returncode}"
+            )
+        return terminal_state
 
     @staticmethod
     def _checkpoint_manifest_url(checkpoint: Mapping[str, Any]) -> str:
@@ -738,6 +991,7 @@ class RunSupervisor:
             )
 
     def _start_learner(self) -> None:
+        self._archive_pre_spawn_learner_state()
         environment = os.environ.copy()
         for name in tuple(environment):
             if (
@@ -764,10 +1018,40 @@ class RunSupervisor:
             log_path=self.learner_log_path,
             environment=environment,
         )
+        learner_pid = getattr(self.learner, "pid", None)
+        if isinstance(learner_pid, bool) or not isinstance(learner_pid, int) or learner_pid <= 0:
+            raise RuntimeError("spawned learner has no valid pid")
+        self.expected_learner_pid = learner_pid
+        self.learner_started_at = self.clock.monotonic()
         print(
-            f"learner started log={self.learner_log_path}",
+            f"learner started pid={learner_pid} log={self.learner_log_path}",
             flush=True,
         )
+
+    def _archive_pre_spawn_learner_state(self) -> None:
+        for filename in (
+            LEARNER_READY_FILENAME,
+            "learner_ready.json",
+            TRAINING_RESULT_FILENAME,
+        ):
+            path = self.run_dir / filename
+            if not path.exists():
+                continue
+            suffix = 0
+            while True:
+                marker = (
+                    self.run_dir
+                    / f"{filename}.pre-spawn-{self.manifest.attempt_id}-{suffix}.json"
+                )
+                if not marker.exists():
+                    break
+                suffix += 1
+            path.replace(marker)
+            self._emit(
+                "pre_spawn_learner_state_archived",
+                filename=filename,
+                archived_path=str(marker),
+            )
 
     def _learner_log_tail(self, *, max_bytes: int = 12_000) -> str:
         if max_bytes <= 0 or not self.learner_log_path.is_file():
@@ -778,6 +1062,23 @@ class RunSupervisor:
             source.seek(max(size - max_bytes, 0))
             encoded = source.read(max_bytes)
         return encoded.decode("utf-8", errors="replace").strip()
+
+    def _learner_log_evidence(self) -> dict[str, Any] | None:
+        if not self.learner_log_path.is_file():
+            return None
+        payload = self.learner_log_path.read_bytes()
+        return {
+            "path": self.learner_log_path.name,
+            "size_bytes": len(payload),
+            "sha256": hashlib.sha256(payload).hexdigest(),
+        }
+
+    def _close_learner_log(self) -> None:
+        if self.learner is None:
+            return
+        log = getattr(self.learner, "_gradlab_log", None)
+        if log is not None and not getattr(log, "closed", False):
+            log.close()
 
     def _recover_durable_state(self) -> None:
         if self._durable_state_archive_enabled():
@@ -1413,6 +1714,8 @@ class RunSupervisor:
     def _settle_closed_eval_admission(self) -> int:
         if not self.eval_admission_closed:
             return 0
+        admission = self.store.state("automatic_eval_admission") or {}
+        admission_reason = str(admission.get("reason") or "closed")
         settled = 0
         for row in self.store.evals(statuses=("pending",)):
             attempt = int(row.get("attempt") or 0)
@@ -1424,13 +1727,13 @@ class RunSupervisor:
                     row,
                     error=(
                         "prior eval attempt expired without a valid result; "
-                        "automatic retry was suppressed after acceptance"
+                        f"automatic retry was suppressed after {admission_reason}"
                     ),
                 )
             else:
                 self.store.mark_eval_deferred(
                     idempotency_key=str(row["idempotency_key"]),
-                    reason="automatic evaluation admission closed after acceptance",
+                    reason=f"automatic evaluation admission closed: {admission_reason}",
                 )
                 self._emit(
                     "eval_deferred",
@@ -1945,6 +2248,69 @@ class RunSupervisor:
             if activity == 0:
                 self.clock.sleep(0.5)
 
+    def _close_eval_admission_for_failure(self, failure: BaseException) -> None:
+        if self.eval_admission_closed:
+            return
+        reason = (
+            failure.stop_reason
+            if isinstance(failure, LearnerOperationalFailure)
+            else "supervisor_failure"
+        )
+        self.eval_admission_closed = True
+        self.store.set_state(
+            "automatic_eval_admission",
+            {
+                "closed": True,
+                "reason": reason,
+                "closed_at": self.clock.utc_now(),
+            },
+        )
+        self._emit("automatic_eval_admission_closed", reason=reason)
+
+    def _defer_unsettled_evals_after_failure(self) -> int:
+        deferred = 0
+        for row in self.store.evals(statuses=("pending", "submitted")):
+            if self._observe_result(row) or self._reconcile_verified_eval_result(row):
+                continue
+            self.store.mark_eval_deferred(
+                idempotency_key=str(row["idempotency_key"]),
+                reason="failure drain deadline reached; explicit reconciliation required",
+            )
+            self._emit(
+                "eval_deferred",
+                checkpoint_id=str(row["checkpoint_id"]),
+                idempotency_key=str(row["idempotency_key"]),
+                reason="failure_drain_deadline",
+            )
+            deferred += 1
+        return deferred
+
+    def _failure_drain(self, failure: BaseException) -> None:
+        self._close_eval_admission_for_failure(failure)
+        deadline = (
+            self.clock.monotonic()
+            + self._liveness_seconds("failure_drain_timeout_seconds")
+        )
+        while True:
+            now = self.clock.monotonic()
+            activity, converged = self.drain_iteration(now=now)
+            if converged:
+                return
+            if now >= deadline:
+                activity += self._defer_unsettled_evals_after_failure()
+                activity += self._publish_wandb()
+                if (
+                    self._all_ready_checkpoints_published()
+                    and self.store.all_evals_settled()
+                    and self.store.metric_outbox_stats()["frames"] == 0
+                ):
+                    return
+                raise TimeoutError(
+                    "failure drain deadline reached before durable publication converged"
+                )
+            if activity == 0:
+                self.clock.sleep(self._liveness_seconds("poll_interval_seconds"))
+
     def _create_promotion(self) -> PromotionReceipt | None:
         existing = self.authority.control.get_json_optional(
             f"runs/{self.manifest.run_id}/promotion.json"
@@ -2128,6 +2494,67 @@ class RunSupervisor:
             self.clock.sleep(0.25)
         return True
 
+    def _wait_for_learner_group_exit_with_lease(self, timeout_seconds: float) -> bool:
+        learner = self.learner
+        if learner is None:
+            return True
+        deadline = self.clock.monotonic() + timeout_seconds
+        while self.runtime.learner_group_alive(learner):
+            learner.poll()
+            now = self.clock.monotonic()
+            if now >= deadline:
+                return False
+            if not self.lease_lost:
+                self._renew_lease(now)
+            self.clock.sleep(self._liveness_seconds("poll_interval_seconds"))
+        learner.poll()
+        return True
+
+    def _teardown_learner_group(
+        self,
+        *,
+        primary_failure: BaseException,
+    ) -> LearnerTeardownTimeout | None:
+        learner = self.learner
+        if learner is None:
+            return None
+        evidence: dict[str, Any] = {
+            "primary_failure_type": type(primary_failure).__name__,
+            "graceful_stop_requested": True,
+            "term_sent": False,
+            "kill_sent": False,
+            "group_gone": False,
+        }
+        result_grace = self._liveness_seconds("result_exit_grace_seconds")
+        if self._wait_for_learner_group_exit_with_lease(result_grace):
+            evidence["group_gone"] = True
+            evidence["completed_phase"] = "graceful"
+            self.learner_teardown_evidence = evidence
+            return None
+        self.runtime.terminate_learner_group(learner)
+        evidence["term_sent"] = True
+        if self._wait_for_learner_group_exit_with_lease(
+            self._liveness_seconds("terminate_grace_seconds")
+        ):
+            evidence["group_gone"] = True
+            evidence["completed_phase"] = "term"
+            self.learner_teardown_evidence = evidence
+            return None
+        self.runtime.kill_learner_group(learner)
+        evidence["kill_sent"] = True
+        if self._wait_for_learner_group_exit_with_lease(
+            self._liveness_seconds("kill_grace_seconds")
+        ):
+            evidence["group_gone"] = True
+            evidence["completed_phase"] = "kill"
+            self.learner_teardown_evidence = evidence
+            return None
+        evidence["completed_phase"] = "timeout"
+        self.learner_teardown_evidence = evidence
+        return LearnerTeardownTimeout(
+            "learner process group survived SIGUSR1, SIGTERM, and SIGKILL deadlines"
+        )
+
     def _record_startup_failure(
         self,
         failure: BaseException,
@@ -2153,7 +2580,7 @@ class RunSupervisor:
                 "journal_expires_at": None,
                 "wandb_remote_high_water_mark": 0,
                 "publication_capacity_ratio": None,
-                "failure": repr(failure)[:4000],
+                "failure": _bounded_exception_document(failure),
             },
             completed_at=self.clock.utc_now(),
         )
@@ -2252,32 +2679,18 @@ class RunSupervisor:
         try:
             while self.learner is not None and self.learner.poll() is None:
                 self.active_iteration()
-                self._raise_if_learner_result_stalled(self.clock.monotonic())
+                self._observe_live_learner_state(self.clock.monotonic())
                 if self.lease_lost:
                     break
-                self.clock.sleep(0.25)
+                self.clock.sleep(self._liveness_seconds("poll_interval_seconds"))
             if self.learner is not None:
                 learner_returncode = self.learner.wait()
                 learner_exited_at = self.clock.time()
-                log = getattr(self.learner, "_gradlab_log", None)
-                if log is not None:
-                    log.close()
+                self._close_learner_log()
                 print(f"learner exited returncode={learner_returncode}", flush=True)
                 early_stop = self._resolve_early_stop_receipt()
-                training_terminal_reason = self._training_terminal_reason()
-                if learner_returncode != 0:
-                    learner_log_tail = self._learner_log_tail()
-                    if learner_log_tail:
-                        print(
-                            f"learner log tail:\n{learner_log_tail}",
-                            flush=True,
-                        )
-                        receipt_tail = learner_log_tail[-3_000:]
-                        raise RuntimeError(
-                            f"learner exited with code {learner_returncode}; "
-                            f"learner log tail:\n{receipt_tail}"
-                        )
-                    raise RuntimeError(f"learner exited with code {learner_returncode}")
+                terminal_state = self._validate_learner_exit(learner_returncode)
+                training_terminal_reason = str(terminal_state.terminal_reason or "")
             else:
                 early_stop = self._resolve_early_stop_receipt()
             if self.lease_lost:
@@ -2320,18 +2733,21 @@ class RunSupervisor:
             failure = exc
             if isinstance(exc, IncompleteEvaluationEvidence):
                 self.stop_reason = "evaluation_evidence_incomplete"
+            elif isinstance(exc, LearnerOperationalFailure):
+                self.stop_reason = exc.stop_reason
             self._request_learner_stop("supervisor_failure")
-            if self.learner is not None and self.learner.poll() is None:
-                stop_timeout = 10 if isinstance(exc, LearnerTeardownTimeout) else 120
-                if not self._wait_for_learner_exit_with_lease(stop_timeout):
-                    self.learner.terminate()
-                    if not self._wait_for_learner_exit_with_lease(30):
-                        self.learner.kill()
-                        self._wait_for_learner_exit_with_lease(10)
+            if self.learner is not None:
+                teardown_failure = self._teardown_learner_group(primary_failure=exc)
+                self._close_learner_log()
+                if teardown_failure is not None and not isinstance(
+                    failure, LearnerOperationalFailure
+                ):
+                    failure = teardown_failure
+                    self.stop_reason = teardown_failure.stop_reason
             if not self.lease_lost:
                 try:
                     self._publish_state_archive()
-                    self._drain()
+                    self._failure_drain(failure)
                 except Exception as drain_exc:
                     print(f"failure drain incomplete: {drain_exc}", flush=True)
         finally:
@@ -2368,7 +2784,12 @@ class RunSupervisor:
             except Exception as exc:
                 failure = exc
         checkpoints, evals = self._terminal_inventory()
-        final_step = max((int(row["step"]) for row in checkpoints), default=0)
+        durable_checkpoint_step = max((int(row["step"]) for row in checkpoints), default=0)
+        final_step = (
+            int(self.learner_final_step)
+            if self.learner_final_step is not None
+            else durable_checkpoint_step
+        )
         state, default_stop_reason = _terminal_outcome(
             cancel_requested=self.cancel_requested,
             failure=failure,
@@ -2405,7 +2826,12 @@ class RunSupervisor:
                     if self.peak_ingress_rate > 0.0
                     else None
                 ),
-                "failure": repr(failure)[:4000] if failure is not None else None,
+                "failure": (
+                    _bounded_exception_document(failure) if failure is not None else None
+                ),
+                "learner_terminal": self.learner_terminal_document,
+                "learner_teardown": self.learner_teardown_evidence or None,
+                "learner_log": self._learner_log_evidence(),
             },
             completed_at=self.clock.utc_now(),
             early_stop=(early_stop.to_dict() if early_stop is not None else None),

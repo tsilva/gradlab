@@ -41,6 +41,13 @@ def release_payload(*, source_sha: str = SOURCE_SHA) -> dict:
             + "f" * 64
         },
         "workflow_run_id": "123",
+        "vizdoom_smoke": {
+            "contract_version": 1,
+            "image_digest": "sha256:" + "a" * 64,
+            "provider_distribution": "vizdoom-turbo",
+            "provider_version": "1.3.0.post15",
+            "evidence_sha256": "6" * 64,
+        },
     }
 
 
@@ -99,7 +106,7 @@ class RuntimeContractTests(unittest.TestCase):
         self.assertEqual(receipt["validated_field_count"], 10)
 
     def test_image_receipt_rejects_retired_schema_and_digest_mismatch(self) -> None:
-        with self.assertRaisesRegex(ValueError, "schema_version must be 6"):
+        with self.assertRaisesRegex(ValueError, "schema_version must be 7"):
             runtime_refs.runtime_release_from_payload(
                 {"runtime_image_ref": RUNTIME_IMAGE_REF, "source_sha": SOURCE_SHA},
                 label="release",

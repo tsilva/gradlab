@@ -40,6 +40,8 @@ from gradlab.training_backend import (
     training_backend_runtime_metadata,
 )
 from gradlab.training_lifecycle import (
+    LEARNER_READY_FILENAME,
+    TRAINING_RESULT_FILENAME,
     ProgressSink,
     TrainingExecutionMode,
     TrainingExecutionPolicy,
@@ -209,7 +211,8 @@ def main(
     run_dir.mkdir(parents=True, exist_ok=True)
     if execution_policy.persist_intermediate_checkpoints:
         checkpoint_dir.mkdir(parents=True, exist_ok=True)
-    (run_dir / "learner_ready.json").unlink(missing_ok=True)
+    (run_dir / LEARNER_READY_FILENAME).unlink(missing_ok=True)
+    (run_dir / TRAINING_RESULT_FILENAME).unlink(missing_ok=True)
     store = MetricStore(metric_store_path(run_dir))
     store.init()
     store.register_recovery_manifest(
@@ -254,6 +257,7 @@ def main(
             stop_flag=stop_flag,
             early_stop_config=train_config.get("early_stop"),
             attempt_id=str(train_config["attempt_id"]),
+            run_id=str(train_config.get("wandb_run_id") or train_config["run_name"]),
             reducer=EpisodeMetricsReducer(
                 event_names=tuple(task_termination(environment).get("failure", ())),
                 configured_starts=tuple(

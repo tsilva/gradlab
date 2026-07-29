@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import tempfile
 from collections.abc import Callable, Mapping
 from copy import deepcopy
 from dataclasses import dataclass, field, replace
@@ -183,6 +184,7 @@ class ActivePlayback:
     policy_env: Any
     spec: PlaySourceSpec
     source: ResolvedModelSource
+    archive_resource: Any | None = None
 
     def close(self) -> None:
         try:
@@ -194,6 +196,8 @@ class ActivePlayback:
                 active_env.close()
             except Exception:
                 pass
+            if self.archive_resource is not None:
+                self.archive_resource.cleanup()
 
 
 class PlaybackLoader:
@@ -371,6 +375,34 @@ class PlaybackLoader:
                 device=resolve_sb3_device(args.device),
                 algorithm_id=algorithm_id,
             )
+        resume_cell = str(getattr(args, "resume_cell", None) or "").strip()
+        archive_resource = None
+        snapshot_record: tuple[Mapping[str, Any], bytes] | None = None
+        playback_archive_config: Mapping[str, Any] | None = None
+        if resume_cell:
+            snapshot = getattr(model, "snapshot", None)
+            detector = getattr(model, "cell_detector_config", None)
+            if not callable(snapshot) or not isinstance(detector, Mapping):
+                raise ValueError("--resume-cell requires a cell-graph policy")
+            snapshot_record = snapshot(resume_cell)
+            entry_document, _payload = snapshot_record
+            restore_semantics = str(
+                entry_document.get("restore_semantics") or "continuation"
+            )
+            playback_archive_config = {
+                "semantic_id": "state-archive-v1",
+                "persistence": "ephemeral",
+                "restore_semantics": restore_semantics,
+                "recorder": {
+                    "mode": "backend",
+                    "cell": dict(detector),
+                },
+                "curriculum": None,
+                "export": {"snapshots": "none"},
+            }
+            archive_resource = tempfile.TemporaryDirectory(
+                prefix="gradlab-play-cell-"
+            )
         # Validate the executable policy contract before creating or stepping
         # an environment. Optional telemetry can degrade later, but action
         # execution and its declared selection modes cannot.
@@ -414,6 +446,10 @@ class PlaybackLoader:
                 seed=seed,
                 capture_step_diagnostics=True,
                 rom_binding=candidate.rom_binding,
+                state_archive=playback_archive_config,
+                state_archive_root=(
+                    None if archive_resource is None else archive_resource.name
+                ),
             )
 
         policy_env = make_policy_env(candidate.config, args.seed)
@@ -455,6 +491,9 @@ class PlaybackLoader:
             search_algorithm_id = str(provenance.get("search_algorithm_id") or "").strip()
             if search_algorithm_id:
                 policy_provenance["search_algorithm_id"] = search_algorithm_id
+            graph_value = provenance.get("cell_graph")
+            if isinstance(graph_value, Mapping):
+                policy_provenance["cell_graph"] = deepcopy(dict(graph_value))
             summary_value = provenance.get("state_archive_summary")
             if isinstance(summary_value, Mapping):
                 safe_summary_fields = {
@@ -491,6 +530,14 @@ class PlaybackLoader:
             )
             progress("loading", "Resetting policy environment")
             session.restart(args.seed)
+            if snapshot_record is not None:
+                entry_document, payload = snapshot_record
+                progress("loading", f"Resuming cell {resume_cell}")
+                session.resume_cell(
+                    resume_cell,
+                    entry_document=entry_document,
+                    payload=payload,
+                )
             config_text = "\n".join(
                 resolved_play_launch_lines(
                     args,
@@ -517,9 +564,12 @@ class PlaybackLoader:
                 policy_env=policy_env,
                 spec=candidate.spec,
                 source=candidate.source,
+                archive_resource=archive_resource,
             )
         except Exception:
             policy_env.close()
+            if archive_resource is not None:
+                archive_resource.cleanup()
             raise
 
 

@@ -29,12 +29,17 @@ from gradlab.run_contracts import (
     EvalResult,
     PromotionReceipt,
     RunManifest,
+    default_liveness_policy,
     new_attempt_id,
     new_run_id,
     utc_now,
 )
 from gradlab.run_supervisor import (
     IncompleteEvaluationEvidence,
+    LearnerExitContractMismatch,
+    LearnerFailure,
+    LearnerStartupTimeout,
+    LearnerStateContractError,
     LearnerTeardownTimeout,
     RunSupervisor,
     _bind_evaluation_contract,
@@ -190,6 +195,7 @@ class RunSupervisorTests(unittest.TestCase):
             },
             storage=self.storage.manifest_locations(),
             goal_variant=contract_document["goal_variant"],
+            liveness=default_liveness_policy(),
         )
         self.authority.create_manifest(self.manifest)
 
@@ -206,6 +212,48 @@ class RunSupervisorTests(unittest.TestCase):
             work_root=root / "work",
         )
 
+    def learner_result(
+        self,
+        *,
+        status: str = "completed",
+        terminal_reason: str = "resource_exhaustion",
+        final_step: int = 125_000,
+        learner_pid: int = 1234,
+    ) -> dict[str, object]:
+        document: dict[str, object] = {
+            "document_type": "gradlab.training-result",
+            "format_version": 3,
+            "run_id": self.run_id,
+            "attempt_id": self.manifest.attempt_id,
+            "learner_pid": learner_pid,
+            "training_backend_id": "sb3.ppo",
+            "status": status,
+            "terminal_reason": terminal_reason,
+            "execution_mode": "supervised",
+            "execution_policy": {},
+            "first_completion_step": None,
+            "final_step": final_step,
+            "requested_limit": 125_000,
+            "execution_limit": 125_000,
+            "model_kind": None if status == "failed" else "final",
+            "model": None if status == "failed" else "final_model.zip",
+            "terminal_at": utc_now(),
+        }
+        if status == "failed":
+            document.update(
+                {
+                    "error_type": "RuntimeError",
+                    "error_message": "learner exploded",
+                }
+            )
+        return document
+
+    def prepare_live_learner_contract(self, supervisor: RunSupervisor) -> None:
+        supervisor.run_dir.mkdir(parents=True, exist_ok=True)
+        supervisor.train_config = {"training_backend": {"id": "sb3.ppo"}}
+        supervisor.expected_learner_pid = 1234
+        supervisor.learner_started_at = 0.0
+
     def test_runtime_verification_uses_build_identity_and_runtime_input(self) -> None:
         supervisor = self.supervisor()
         with (
@@ -220,6 +268,25 @@ class RunSupervisorTests(unittest.TestCase):
             ),
         ):
             supervisor.validate_runtime()
+
+    def test_manifest_v5_requires_bounded_liveness_policy(self) -> None:
+        self.manifest.validate()
+        self.assertEqual(self.manifest.schema_version, 5)
+        self.assertEqual(self.manifest.liveness["poll_interval_seconds"], 0.25)
+
+        missing = RunManifest(**{**self.manifest.to_dict(), "liveness": None})
+        with self.assertRaisesRegex(ValueError, "liveness must be a mapping"):
+            missing.validate()
+
+        invalid_policy = {
+            **dict(self.manifest.liveness),
+            "startup_timeout_seconds": 3600.0,
+        }
+        invalid = RunManifest(
+            **{**self.manifest.to_dict(), "liveness": invalid_policy}
+        )
+        with self.assertRaisesRegex(ValueError, "below the selected max duration"):
+            invalid.validate()
 
     def test_manual_evaluation_queue_reuses_durable_intent_and_modal_dispatch(self) -> None:
         checkpoint = CheckpointManifest(
@@ -376,6 +443,47 @@ class RunSupervisorTests(unittest.TestCase):
         )
         ManualEvaluationSupervisor._validate_current_protocol(upgraded)
 
+    def test_manual_vizdoom_basic_evaluation_requires_complete_perfect_success(self) -> None:
+        valid = {
+            "environment": {"game": "VizdoomBasic-v1"},
+            "episodes": 100,
+            "evidence_policy": {"fail_fast": "disabled"},
+            "acceptance": [
+                {
+                    "metric": "eval/full/outcome/success/rate/min",
+                    "operator": ">=",
+                    "threshold": 1.0,
+                }
+            ],
+        }
+        ManualEvaluationSupervisor._validate_current_protocol(valid)
+
+        stale = {
+            **valid,
+            "acceptance": [
+                {
+                    "metric": "eval/full/episode/return/mean",
+                    "operator": ">=",
+                    "threshold": 0.95,
+                }
+            ],
+        }
+        with self.assertRaisesRegex(ValueError, "acceptance"):
+            ManualEvaluationSupervisor._validate_current_protocol(stale)
+
+        upgraded = ManualEvaluationSupervisor._current_protocol_contract(
+            {
+                **valid,
+                "evidence_policy": {
+                    "fail_fast": "first_failed_episode",
+                    "partial_rejection_metrics": True,
+                },
+            }
+        )
+        self.assertEqual(upgraded["evidence_policy"]["fail_fast"], "disabled")
+        self.assertFalse(upgraded["evidence_policy"]["partial_rejection_metrics"])
+        ManualEvaluationSupervisor._validate_current_protocol(upgraded)
+
     def test_manual_evaluation_uses_latest_attempt_manifest(self) -> None:
         latest = replace(
             self.manifest,
@@ -455,7 +563,7 @@ class RunSupervisorTests(unittest.TestCase):
         self.assertEqual(receipt["state"], "resumable_failure")
         self.assertEqual(receipt["stop_reason"], "supervisor_startup_failure")
         self.assertEqual(receipt["drain"]["phase"], "startup")
-        self.assertIn("invalid runtime", receipt["drain"]["failure"])
+        self.assertIn("invalid runtime", receipt["drain"]["failure"]["message"])
 
         with (
             patch.dict("os.environ", {"GRADLAB_ORCHESTRATOR": "dstack"}),
@@ -490,7 +598,7 @@ class RunSupervisorTests(unittest.TestCase):
         self.assertEqual(receipt["state"], "resumable_failure")
         self.assertEqual(receipt["stop_reason"], "supervisor_startup_failure")
         self.assertEqual(receipt["drain"]["phase"], "startup/recovery")
-        self.assertIn("recovery exploded", receipt["drain"]["failure"])
+        self.assertIn("recovery exploded", receipt["drain"]["failure"]["message"])
 
     def test_learner_log_tail_is_bounded_and_preserves_latest_failure(self) -> None:
         supervisor = self.supervisor()
@@ -509,7 +617,7 @@ class RunSupervisorTests(unittest.TestCase):
         with patch.object(
             supervisor.runtime,
             "start_learner",
-            return_value=object(),
+            return_value=MagicMock(pid=1234),
         ) as start:
             supervisor._start_learner()
 
@@ -579,26 +687,89 @@ class RunSupervisorTests(unittest.TestCase):
 
     def test_terminal_training_result_bounds_hung_learner_teardown(self) -> None:
         supervisor = self.supervisor()
-        supervisor.run_dir.mkdir(parents=True, exist_ok=True)
+        self.prepare_live_learner_contract(supervisor)
         atomic_write_json(
             supervisor.run_dir / "training-result.json",
-            {
-                "document_type": "gradlab.training-result",
-                "format_version": 2,
-                "status": "failed",
-                "terminal_reason": "failed",
-                "execution_mode": "supervised",
-                "final_step": 0,
-            },
+            self.learner_result(final_step=0),
         )
 
-        supervisor._raise_if_learner_result_stalled(10.0)
-        supervisor._raise_if_learner_result_stalled(39.9)
+        supervisor._observe_live_learner_state(10.0)
+        supervisor._observe_live_learner_state(14.9)
         with self.assertRaisesRegex(
             LearnerTeardownTimeout,
-            "terminal result 'failed'.*remained alive",
+            "terminal result 'resource_exhaustion'.*remained alive",
         ):
-            supervisor._raise_if_learner_result_stalled(40.0)
+            supervisor._observe_live_learner_state(15.0)
+
+    def test_failed_learner_result_is_authoritative_immediately(self) -> None:
+        supervisor = self.supervisor()
+        self.prepare_live_learner_contract(supervisor)
+        atomic_write_json(
+            supervisor.run_dir / "training-result.json",
+            self.learner_result(
+                status="failed",
+                terminal_reason="failed",
+                final_step=17,
+            ),
+        )
+
+        with self.assertRaisesRegex(LearnerFailure, "learner exploded"):
+            supervisor._observe_live_learner_state(0.25)
+
+        self.assertEqual(supervisor.learner_final_step, 17)
+        self.assertEqual(supervisor.learner_result_observed_at, 0.25)
+
+    def test_live_learner_state_rejects_legacy_and_identity_mismatch(self) -> None:
+        supervisor = self.supervisor()
+        self.prepare_live_learner_contract(supervisor)
+        legacy = {
+            "document_type": "gradlab.training-result",
+            "format_version": 2,
+            "status": "completed",
+            "terminal_reason": "resource_exhaustion",
+            "execution_mode": "supervised",
+            "final_step": 1,
+        }
+        atomic_write_json(supervisor.run_dir / "training-result.json", legacy)
+        with self.assertRaisesRegex(LearnerStateContractError, "format_version"):
+            supervisor._observe_live_learner_state(0.25)
+
+        mismatched = self.learner_result()
+        mismatched["attempt_id"] = new_attempt_id()
+        atomic_write_json(supervisor.run_dir / "training-result.json", mismatched)
+        with self.assertRaisesRegex(LearnerStateContractError, "attempt_id"):
+            supervisor._observe_live_learner_state(0.5)
+
+    def test_learner_startup_deadline_uses_manifest_policy(self) -> None:
+        supervisor = self.supervisor()
+        self.prepare_live_learner_contract(supervisor)
+
+        self.assertIsNone(supervisor._observe_live_learner_state(599.9))
+        with self.assertRaisesRegex(LearnerStartupTimeout, "within 600.0s"):
+            supervisor._observe_live_learner_state(600.0)
+
+    def test_exit_result_contract_matrix(self) -> None:
+        supervisor = self.supervisor()
+        self.prepare_live_learner_contract(supervisor)
+        result_path = supervisor.run_dir / "training-result.json"
+
+        atomic_write_json(result_path, self.learner_result())
+        self.assertEqual(supervisor._validate_learner_exit(0).status, "completed")
+        with self.assertRaises(LearnerExitContractMismatch):
+            supervisor._validate_learner_exit(9)
+
+        atomic_write_json(
+            result_path,
+            self.learner_result(status="failed", terminal_reason="failed"),
+        )
+        with self.assertRaises(LearnerFailure):
+            supervisor._validate_learner_exit(0)
+        with self.assertRaises(LearnerFailure):
+            supervisor._validate_learner_exit(9)
+
+        result_path.unlink()
+        with self.assertRaisesRegex(LearnerStateContractError, "without a terminal result"):
+            supervisor._validate_learner_exit(0)
 
     def test_unaccepted_goal_is_a_clean_scientific_failure(self) -> None:
         state, stop_reason = _terminal_outcome(
@@ -623,6 +794,18 @@ class RunSupervisorTests(unittest.TestCase):
 
         self.assertEqual(state, "resumable_failure")
         self.assertEqual(stop_reason, "supervisor_failure")
+
+    def test_learner_failure_dominates_later_cancellation(self) -> None:
+        state, stop_reason = _terminal_outcome(
+            cancel_requested=True,
+            failure=LearnerFailure("failed at step zero"),
+            evaluation_required=True,
+            promotion=None,
+            early_stop=self._early_stop_receipt(),
+        )
+
+        self.assertEqual(state, "resumable_failure")
+        self.assertEqual(stop_reason, "learner_failure")
 
     def test_incomplete_eval_evidence_has_typed_resumable_outcome(self) -> None:
         state, stop_reason = _terminal_outcome(
@@ -1260,6 +1443,44 @@ class RunSupervisorTests(unittest.TestCase):
             [row["status"] for row in supervisor.store.evals()],
             ["accepted", "deferred"],
         )
+
+    def test_failure_closes_eval_admission_and_defers_inflight_work(self) -> None:
+        supervisor = self.supervisor()
+        supervisor.store.init()
+        supervisor.store.ensure_eval(
+            checkpoint_ledger_id=1,
+            intent={
+                "idempotency_key": "1" * 64,
+                "checkpoint_id": "checkpoint-1-" + "1" * 16,
+                "checkpoint_step": 1,
+            },
+        )
+        supervisor.store.mark_eval_submitted(
+            idempotency_key="1" * 64,
+            attempt=1,
+            modal_call_id="fc-one",
+            attempt_expires_at=10_000.0,
+        )
+        failure = LearnerFailure("scripted learner failure")
+
+        supervisor._close_eval_admission_for_failure(failure)
+
+        self.assertTrue(supervisor.eval_admission_closed)
+        self.assertEqual(supervisor._submit_pending_evals(), 0)
+        self.assertEqual(
+            supervisor.store.state("automatic_eval_admission")["reason"],
+            "learner_failure",
+        )
+        with (
+            patch.object(supervisor, "_observe_result", return_value=False),
+            patch.object(
+                supervisor,
+                "_reconcile_verified_eval_result",
+                return_value=False,
+            ),
+        ):
+            self.assertEqual(supervisor._defer_unsettled_evals_after_failure(), 1)
+        self.assertEqual(supervisor.store.evals()[0]["status"], "deferred")
 
     def test_plateau_requires_valid_rejection_for_every_checkpoint(self) -> None:
         supervisor = self.supervisor()

@@ -9,12 +9,14 @@ from gradlab.batch_runtime import EpisodeRecord
 from gradlab.metric_names import (
     TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_MAX,
     TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_MEAN,
+    TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_WINDOW_100_MEAN,
     TRAIN_EPISODE_RETURN_SHAPED_MAX,
     TRAIN_EPISODE_RETURN_SHAPED_MEAN,
     TRAIN_OUTCOME_SUCCESS_CURRENT_RATE_MEAN,
     TRAIN_OUTCOME_SUCCESS_START_COVERAGE_RATE,
     TRAIN_OUTCOME_TERMINAL_COUNT,
     train_outcome_reason_count_metric,
+    train_early_stop_metric,
     train_success_attempts_metric,
     train_success_count_metric,
 )
@@ -123,6 +125,61 @@ def test_progress_fields_require_a_nonempty_presentation_group() -> None:
         ProgressField("train/test/value", "test value", group=" ")
 
 
+def test_threshold_target_progress_is_published_and_shown_as_an_outcome(
+    tmp_path: Path,
+) -> None:
+    progress = MemoryProgressSink()
+    store = FakeMetricStore()
+    session = TrainingSession(
+        run_dir=tmp_path,
+        backend_id="sb3.ppo",
+        metric_store=store,
+        wandb_enabled=False,
+        stop_flag=GracefulStopFlag(),
+        early_stop_config={
+            "conditions": {
+                "target_reached": {
+                    "metric": TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_WINDOW_100_MEAN,
+                    "trigger": "threshold",
+                    "operator": ">=",
+                    "progress_baseline": 0.0,
+                    "threshold": 10.0,
+                    "patience_steps": 0,
+                    "outcome": "success",
+                    "action": "stop",
+                }
+            }
+        },
+        attempt_id="attempt-test",
+        run_id="run-test",
+        reducer=EpisodeMetricsReducer(track_success=False),
+        execution_policy=TrainingExecutionPolicy.for_mode(TrainingExecutionMode.SUPERVISED),
+        completion_signal_available=False,
+        progress_sink=progress,
+    )
+
+    session.configure_budget(requested_limit=10, step_quantum=1)
+    metric = train_early_stop_metric("target_reached", "target/progress")
+    assert progress.fields == (
+        ProgressField(
+            metric,
+            "target progress",
+            ProgressValueFormat.PERCENT,
+            group="outcomes",
+        ),
+    )
+
+    session.report(
+        step=1,
+        metrics={
+            TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_WINDOW_100_MEAN: 5.0,
+        },
+    )
+
+    assert store.frames[-1][0][metric] == 0.5
+    assert progress.metrics[-1][metric] == 0.5
+
+
 def test_execution_modes_resolve_to_fixed_lifecycle_policies() -> None:
     local = TrainingExecutionPolicy.for_mode(TrainingExecutionMode.LOCAL_DEMO)
     supervised = TrainingExecutionPolicy.for_mode(TrainingExecutionMode.SUPERVISED)
@@ -161,6 +218,7 @@ def _session(
         stop_flag=stop_flag,
         early_stop_config=None,
         attempt_id="attempt-test",
+        run_id="run-test",
         reducer=EpisodeMetricsReducer(
             configured_starts=("StartA",),
             track_success=completion_signal_available,
@@ -268,12 +326,18 @@ def test_failed_session_closes_progress_and_writes_precise_result(tmp_path: Path
         (tmp_path / "local-demo-with-signal" / TRAINING_RESULT_FILENAME).read_text(encoding="utf-8")
     )
     assert document["status"] == "failed"
+    assert document["format_version"] == 3
+    assert document["run_id"] == "run-test"
+    assert document["attempt_id"] == "attempt-test"
+    assert document["learner_pid"] > 0
     assert document["terminal_reason"] == "failed"
     assert document["execution_mode"] == "local-demo"
     assert document["final_step"] == 4
     assert document["requested_limit"] == 10
     assert document["execution_limit"] == 12
     assert document["model"] is None
+    assert document["error_type"] == "RuntimeError"
+    assert document["error_message"] == "learner exploded"
 
 
 def test_plain_progress_is_bounded_and_uses_only_canonical_outcomes(
@@ -420,6 +484,7 @@ def test_shared_session_enforces_backend_conformance(
         stop_flag=GracefulStopFlag(),
         early_stop_config=None,
         attempt_id="attempt-test",
+        run_id="run-test",
         reducer=EpisodeMetricsReducer(
             configured_starts=("StartA",),
             track_success=True,
@@ -432,9 +497,15 @@ def test_shared_session_enforces_backend_conformance(
     budget = session.configure_budget(requested_limit=10, step_quantum=4)
 
     assert budget.execution_total == 12
-    session.mark_ready()
+    ready_path = session.mark_ready()
     with pytest.raises(RuntimeError, match="only once"):
         session.mark_ready()
+    ready = json.loads(ready_path.read_text(encoding="utf-8"))
+    assert ready["document_type"] == "gradlab.learner-ready"
+    assert ready["format_version"] == 3
+    assert ready["run_id"] == "run-test"
+    assert ready["attempt_id"] == "attempt-test"
+    assert ready["status"] == "ready"
 
     record = _episode(start="StartA", episode_return=5.0, outcome=Outcome.SUCCESS)
     session.advance(4, (record,))
@@ -459,6 +530,9 @@ def test_shared_session_enforces_backend_conformance(
     assert progress.closed is True
     result = json.loads((run_dir / TRAINING_RESULT_FILENAME).read_text(encoding="utf-8"))
     assert result["status"] == "completed"
+    assert result["format_version"] == 3
+    assert result["run_id"] == "run-test"
+    assert result["attempt_id"] == "attempt-test"
     assert result["terminal_reason"] == "resource_exhaustion"
     assert result["execution_mode"] == "supervised"
     assert result["requested_limit"] == 10

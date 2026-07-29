@@ -597,6 +597,13 @@ class RunAuthority:
             raise LeaseUnavailable("writer lease was lost during renewal") from exc
         return Lease.from_document(document, etag=etag)
 
+    def release_lease(self, lease: Lease) -> None:
+        key = f"{self.run_prefix(lease.run_id)}/writer-lease.json"
+        try:
+            self.control.delete(key, if_match=lease.etag)
+        except ConditionalWriteConflict as exc:
+            raise LeaseUnavailable("writer lease was lost before release") from exc
+
     def seal_metric_segment(
         self,
         *,

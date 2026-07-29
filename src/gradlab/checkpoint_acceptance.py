@@ -27,6 +27,20 @@ ACCEPTANCE_PROTOCOL_VERSION = 2
 EPISODE_MANIFEST_VERSION = 1
 EVIDENCE_POLICY_VERSION = 1
 SEED_PROTOCOL = "vector-lane-v1"
+COMPLETE_EVALUATION_REQUIRED_GAMES = frozenset(
+    {
+        "VizdoomBasic-v1",
+        "VizdoomDeadlyCorridor-v1",
+        "VizdoomDefendLine-v1",
+    }
+)
+
+
+def requires_complete_evaluation(environment: Any) -> bool:
+    return (
+        isinstance(environment, Mapping)
+        and str(environment.get("game") or "") in COMPLETE_EVALUATION_REQUIRED_GAMES
+    )
 
 
 def checkpoint_eval_max_steps(config: Mapping[str, Any]) -> int:
@@ -336,7 +350,8 @@ def build_checkpoint_eval_contract(
     )
     fail_fast = (
         "first_failed_episode"
-        if all(
+        if not requires_complete_evaluation(environment)
+        and all(
             str(rule["metric"]) in {EVAL_FULL_SUCCESS_RATE_MIN, EVAL_FULL_SUCCESS_RATE_MEAN}
             and str(rule["operator"]) == ">="
             and float(rule["threshold"]) >= 1.0

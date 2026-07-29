@@ -22,6 +22,8 @@ from gradlab.wandb_publisher import (
 
 
 class LearnerProcess(Protocol):
+    pid: int
+
     def poll(self) -> int | None: ...
 
     def wait(self) -> int: ...
@@ -164,12 +166,42 @@ class SupervisorRuntime:
             stderr=subprocess.STDOUT,
             text=True,
             env=dict(environment),
+            start_new_session=True,
         )
         learner._gradlab_log = log  # type: ignore[attr-defined]
+        learner._gradlab_process_group_id = learner.pid  # type: ignore[attr-defined]
         return learner
 
     def request_learner_stop(self, learner: LearnerProcess) -> None:
         learner.send_signal(getattr(signal, "SIGUSR1", signal.SIGTERM))
+
+    @staticmethod
+    def _learner_process_group_id(learner: LearnerProcess) -> int:
+        recorded = getattr(learner, "_gradlab_process_group_id", None)
+        if isinstance(recorded, int) and recorded > 0:
+            return recorded
+        return os.getpgid(int(learner.pid))
+
+    def learner_group_alive(self, learner: LearnerProcess) -> bool:
+        try:
+            os.killpg(self._learner_process_group_id(learner), 0)
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return True
+        return True
+
+    def terminate_learner_group(self, learner: LearnerProcess) -> None:
+        try:
+            os.killpg(self._learner_process_group_id(learner), signal.SIGTERM)
+        except ProcessLookupError:
+            return
+
+    def kill_learner_group(self, learner: LearnerProcess) -> None:
+        try:
+            os.killpg(self._learner_process_group_id(learner), signal.SIGKILL)
+        except ProcessLookupError:
+            return
 
     def install_cancel_handlers(
         self,

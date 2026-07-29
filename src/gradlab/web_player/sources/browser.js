@@ -1598,6 +1598,7 @@ export class SourceBrowser {
     const showingRuns = this.route.level === "runs" && !this.route.run_id;
     const showingCheckpoints = this.route.level === "runs" && Boolean(this.route.run_id);
     const runMetricColumns = showingRuns ? this.activeRunMetricColumns() : [];
+    const checkpointMetricColumns = showingCheckpoints ? this.metricColumns : [];
     const columns = showingRuns
       ? [
           { label: "Run" },
@@ -1616,6 +1617,10 @@ export class SourceBrowser {
           { label: "Checkpoint" },
           { label: "Purpose" },
           { label: "Step" },
+          ...checkpointMetricColumns.map((column) => ({
+            ...column,
+            label: metricLabel(column.metric),
+          })),
           { label: "Evaluation" },
           { label: "Size" },
           { label: "Created" },
@@ -1688,6 +1693,8 @@ export class SourceBrowser {
       ? this.sort.metric
         ? sortRunItems(this.items, this.sort)
         : rankRunItems(this.items, runMetricColumns)
+      : showingCheckpoints && this.sort.metric
+        ? sortRunItems(this.items, this.sort)
       : this.items;
     items.forEach((item) => {
       const row = document.createElement("tr");
@@ -1721,6 +1728,9 @@ export class SourceBrowser {
             [item.promoted ? `${item.checkpoint_id} · promoted` : item.checkpoint_id, item.sha256],
             [item.purpose],
             [Number(item.step).toLocaleString()],
+            ...checkpointMetricColumns.map((column) => [
+              formatMetricValue(column.metric, item.metrics?.[column.metric]),
+            ]),
             checkpointEvaluationCell(item),
             [formatBytes(item.size_bytes)],
             [formatDate(item.created_at)],

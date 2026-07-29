@@ -14,7 +14,7 @@ RUNTIME_IMAGE_REF = "docker:ghcr.io/tsilva/gradlab/gradlab-train@sha256:" + "a" 
 
 def image_payload() -> dict:
     return {
-        "schema_version": 6,
+        "schema_version": 7,
         "runtime_image_ref": RUNTIME_IMAGE_REF,
         "digest": "sha256:" + "a" * 64,
         "source_sha": SOURCE_SHA,
@@ -38,6 +38,13 @@ def image_payload() -> dict:
             ),
         },
         "workflow_run_id": "11",
+        "vizdoom_smoke": {
+            "contract_version": 1,
+            "image_digest": "sha256:" + "a" * 64,
+            "provider_distribution": "vizdoom-turbo",
+            "provider_version": "1.3.0.post15",
+            "evidence_sha256": "6" * 64,
+        },
     }
 
 
@@ -75,7 +82,7 @@ class RuntimeRefsTests(unittest.TestCase):
         self.assertEqual(release.commit_message, "Publish immutable runtime")
         self.assertEqual(release.published_at, "2026-07-27T12:00:00Z")
 
-    def test_schema_five_rejects_obsolete_descriptive_fields(self) -> None:
+    def test_current_schema_rejects_obsolete_descriptive_fields(self) -> None:
         for field in ("commit_message", "published_at", "created_at", "publishedAt"):
             with self.subTest(field=field):
                 payload = image_payload()
@@ -86,6 +93,36 @@ class RuntimeRefsTests(unittest.TestCase):
                         label="test image",
                         expected_source_sha=SOURCE_SHA,
                     )
+
+    def test_legacy_schema_is_readable_but_not_launchable(self) -> None:
+        payload = image_payload()
+        payload["schema_version"] = 6
+        payload.pop("vizdoom_smoke")
+        with self.assertRaisesRegex(ValueError, "schema_version must be 7"):
+            runtime_refs.runtime_release_from_payload(
+                payload,
+                label="legacy image",
+                expected_source_sha=SOURCE_SHA,
+            )
+
+        release = runtime_refs.runtime_release_from_payload(
+            payload,
+            label="legacy image",
+            expected_source_sha=SOURCE_SHA,
+            allow_legacy=True,
+        )
+        self.assertEqual(release.schema_version, 6)
+        self.assertEqual(release.vizdoom_smoke_contract_version, 0)
+
+    def test_smoke_evidence_must_match_the_exact_image_digest(self) -> None:
+        payload = image_payload()
+        payload["vizdoom_smoke"]["image_digest"] = "sha256:" + "b" * 64
+        with self.assertRaisesRegex(ValueError, "smoke digest"):
+            runtime_refs.runtime_release_from_payload(
+                payload,
+                label="test image",
+                expected_source_sha=SOURCE_SHA,
+            )
 
     def test_active_workflow_is_reused_without_dispatch(self) -> None:
         active = {

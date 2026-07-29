@@ -4,9 +4,9 @@ reward_shape: speedrun-v1
 recipe_id: go-explore-20m
 description: >-
   Seed {{ seed }} runs route-aware Go-Explore trajectory discovery for {{ goal_id }}
-  over an ephemeral local state archive, persists only the best open-loop action
-  program, and caps search at 20 million transitions with checkpoint evaluation
-  as acceptance authority.
+  over an ephemeral local state archive, persists the best successful route per
+  initial seed as a portable cell graph without snapshots, and caps search at 20
+  million transitions with checkpoint evaluation as acceptance authority.
 train:
   timesteps: 20000000
   early_stop:

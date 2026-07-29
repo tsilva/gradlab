@@ -27,6 +27,7 @@ class TrainImageTests(unittest.TestCase):
         self.assertEqual(len(key), 64)
         self.assertNotEqual(key, runtime_key(repo_root=root, dependency_digest=DIGEST_B))
         self.assertIn("THIRD_PARTY_NOTICES.md", RUNTIME_INPUT_PATHS)
+        self.assertIn("containers/train/vizdoom_smoke.py", RUNTIME_INPUT_PATHS)
         self.assertIn("experiments/goals", RUNTIME_INPUT_PATHS)
         self.assertIn("experiments/recipes", RUNTIME_INPUT_PATHS)
         self.assertIn("src", RUNTIME_INPUT_PATHS)
@@ -174,6 +175,11 @@ class TrainImageTests(unittest.TestCase):
         self.assertIn("FROM ${GPU_BASE} AS dependencies", dockerfile)
         self.assertIn("FROM scratch AS runtime-overlay", dockerfile)
         self.assertIn("COPY METRICS.md /root/gradlab/METRICS.md", dockerfile)
+        self.assertIn(
+            "COPY --chmod=755 containers/train/vizdoom_smoke.py "
+            "/usr/local/bin/gradlab-vizdoom-smoke",
+            dockerfile,
+        )
         self.assertIn("FROM ${RUNTIME_BASE} AS runtime", dockerfile)
         runtime = dockerfile.split("FROM ${RUNTIME_BASE} AS runtime", maxsplit=1)[1]
         instructions = [line.strip() for line in runtime.splitlines() if line and not line.startswith(" ")]
@@ -218,6 +224,24 @@ class TrainImageTests(unittest.TestCase):
         self.assertIn(
             'ENV PATH="/opt/gradlab-dependencies/bin:/root/gradlab/.venv/bin:${PATH}"',
             dependencies,
+        )
+
+    def test_image_receipt_requires_exact_vizdoom_smoke(self) -> None:
+        workflow = Path(".github/workflows/gradlab-train-image.yml").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("Smoke exact ViZDoom runtime image", workflow)
+        self.assertIn("python /usr/local/bin/gradlab-vizdoom-smoke", workflow)
+        self.assertIn('"schema_version": 7', workflow)
+        self.assertIn('"provider_distribution": "vizdoom-turbo"', workflow)
+        self.assertIn(
+            '"provider_version": os.environ["VIZDOOM_PROVIDER_VERSION"]',
+            workflow,
+        )
+        self.assertIn(
+            '"evidence_sha256": os.environ["VIZDOOM_SMOKE_EVIDENCE_SHA256"]',
+            workflow,
         )
 
     def test_combined_environment_contract_accepts_cross_venv_requirements(self) -> None:
@@ -314,7 +338,7 @@ class TrainImageTests(unittest.TestCase):
         self.assertNotIn("name: Build train dependencies", runtime)
         self.assertEqual(runtime.count("docker/setup-buildx-action@v3"), 1)
         self.assertIn("runtime-${{ steps.runtime_meta.outputs.runtime_input_sha256 }}", runtime)
-        self.assertIn('"schema_version": 6', runtime)
+        self.assertIn('"schema_version": 7', runtime)
         self.assertNotIn("buildcache", dependency + foundations + runtime)
         self.assertNotIn("cache-to:", dependency + foundations + runtime)
 
@@ -326,7 +350,7 @@ class TrainImageTests(unittest.TestCase):
             "  deploy-modal-evaluator:", maxsplit=1
         )[0]
         self.assertIn("name: gradlab-train-image", build)
-        self.assertIn('"schema_version": 6', build)
+        self.assertIn('"schema_version": 7', build)
         self.assertIn('"gpu_plan_sha256"', build)
         self.assertIn("workflow_call:", modal)
         self.assertIn("name: gradlab-modal-eval-readiness", modal)

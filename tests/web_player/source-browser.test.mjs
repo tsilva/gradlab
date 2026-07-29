@@ -21,6 +21,22 @@ import {
 
 const METRIC = "eval/full/episode/return/mean";
 
+test("checkpoint selection boxes are centered within their rows", async () => {
+  const styles = await readFile(
+    new URL("../../src/gradlab/web_player/styles.css", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(
+    styles,
+    /\.source-table \.source-selection-cell \{[^}]*vertical-align: middle;/,
+  );
+  assert.match(
+    styles,
+    /\.source-selection-cell input \{[^}]*display: block;[^}]*margin: 0 auto;/,
+  );
+});
+
 test("active-run status icon is available in the shared icon sprite", async () => {
   const sprite = await readFile(
     new URL("../../src/gradlab/web_player/tabler-icons.svg", import.meta.url),
@@ -198,6 +214,14 @@ test("unchanged active checkpoint routes do not rebuild breadcrumbs", () => {
 test("run metrics use compact labels and values", () => {
   assert.equal(metricLabel("leader/checkpoint/step"), "Checkpoint step");
   assert.equal(metricLabel(METRIC), "Mean return");
+  assert.equal(
+    metricLabel("train/outcome/success/window_100/rate/min"),
+    "Min success (100)",
+  );
+  assert.equal(
+    metricLabel("train/episode/return/shaped/from/target/mean"),
+    "Target return",
+  );
   assert.equal(
     formatMetricValue("eval/full/outcome/success/rate/min", 0.875),
     "87.5%",

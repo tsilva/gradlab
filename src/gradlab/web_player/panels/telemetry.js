@@ -150,9 +150,11 @@ const STATIC_DESCRIPTORS = Object.freeze({
     requires: ["program"],
   },
   "policy/route": {
-    label: "Route",
-    group: "Policy",
+    label: "Cell-graph route",
+    shortLabel: "Route",
+    type: "text",
     unit: "route",
+    phase: "pre-action",
     current: (snapshot) => snapshot?.transition?.decision?.route,
     requires: ["route"],
   },

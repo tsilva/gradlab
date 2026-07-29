@@ -317,6 +317,19 @@ class StateArchiveTests(unittest.TestCase):
             self.assertEqual(summary["persistence"], "durable")
             self.assertEqual(summary["entry_count"], 1)
             entry_id = str(receipt["entry_id"])
+            entry_document = runtime.state_archive.entry(entry_id).to_dict()
+            entry_payload = runtime.state_archive.payload(entry_id)
+            with tempfile.TemporaryDirectory() as imported_root:
+                imported = StateArchive(
+                    imported_root,
+                    provider_id="breakout-turbo-env",
+                    codec_id="breakout-turbo-env.state-v1",
+                    compatibility_id="test-environment-v1",
+                    persistence="ephemeral",
+                )
+                imported_entry = imported.import_entry(entry_document, entry_payload)
+                self.assertEqual(imported_entry.entry_id, entry_id)
+                self.assertEqual(imported.payload(entry_id), entry_payload)
             view = runtime.write_state_archive_view(
                 "test-view",
                 {"step": 17, "entry_id": entry_id},

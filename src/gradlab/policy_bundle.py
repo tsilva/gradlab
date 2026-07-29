@@ -216,6 +216,7 @@ class _ModelProvenanceDocument(BoundaryModel):
     training_terminal: Any = None
     state_archive_preflight_sha256: Any = None
     state_archive_summary: Any = None
+    cell_graph: Any = None
 
 
 _MODEL_PROVENANCE_FIELDS = frozenset(_ModelProvenanceDocument.model_fields)
@@ -580,7 +581,7 @@ def _validate_recipe_v1(
     playback = playback_value if isinstance(playback_value, Mapping) else None
     from gradlab.env_identity import validate_task_config
     from gradlab.env_registry import resolve_env_provider
-    from gradlab.goal_schema import validate_goal_document_shape
+    from gradlab.goal_schema import goal_evaluation_mode, validate_goal_document_shape
     from gradlab.train_config import (
         TRAIN_CONFIG_FIELDS,
         env_config_allowed_keys,
@@ -632,11 +633,30 @@ def _validate_recipe_v1(
         raise PolicyDocumentError(str(exc)) from exc
     if not allow_legacy and recipe.get("goal_variant") is None:
         raise PolicyDocumentError(f"{source}.recipe.goal_variant is required")
-    training_only = str(train_config.get("checkpoint_eval_backend") or "") == "none"
+    training_only = (
+        goal_evaluation_mode(goal, label=f"{source}.recipe.goal") == "training_only"
+    )
     if training_only and evaluation is not None:
         raise PolicyDocumentError(f"{source}.recipe training-only contract cannot define eval")
     if not training_only and evaluation is None:
-        raise PolicyDocumentError(f"{source}.recipe evaluated contract must define eval")
+        from gradlab.checkpoint_acceptance import CheckpointEvalContractCompiler
+
+        try:
+            compiler = CheckpointEvalContractCompiler.from_train_config(
+                train_config,
+                portable_asset=True,
+                require_asset=False,
+                materialize_seed_defaults=True,
+            )
+            evaluation = compiler.contract(require_acceptance=True)
+            if evaluation.get("asset") is None and isinstance(playback, Mapping):
+                playback_asset = playback.get("asset")
+                if isinstance(playback_asset, Mapping):
+                    evaluation["asset"] = deepcopy(dict(playback_asset))
+        except ValueError as exc:
+            raise PolicyDocumentError(
+                f"{source}.recipe evaluated contract cannot be derived: {exc}"
+            ) from exc
     if evaluation is not None:
         portable_environment = evaluation.get("environment")
         portable_environment_label = "evaluation"
@@ -1004,6 +1024,44 @@ def _validate_state_archive_summary(value: object, *, label: str) -> None:
     if curriculum is not None and not isinstance(curriculum, Mapping):
         raise PolicyDocumentError(f"{label}.curriculum must be an object")
 
+def _validate_cell_graph_provenance(value: object, *, label: str) -> None:
+    graph = _required_mapping(value, label=label)
+    _reject_unknown(
+        graph,
+        frozenset({"detector_sha256", "snapshot_mode", "summary"}),
+        label=label,
+    )
+    _required_sha256(
+        graph.get("detector_sha256"),
+        label=f"{label}.detector_sha256",
+    )
+    if graph.get("snapshot_mode") not in {"none", "retained"}:
+        raise PolicyDocumentError(
+            f"{label}.snapshot_mode must be 'none' or 'retained'"
+        )
+    summary = _required_mapping(graph.get("summary"), label=f"{label}.summary")
+    expected_summary = frozenset(
+        {
+            "semantic_cell_count",
+            "representative_count",
+            "edge_count",
+            "root_count",
+            "routable_root_count",
+            "snapshot_entry_count",
+            "snapshot_blob_count",
+            "snapshot_blob_bytes",
+        }
+    )
+    _reject_unknown(summary, expected_summary, label=f"{label}.summary")
+    if set(summary) != expected_summary:
+        raise PolicyDocumentError(f"{label}.summary fields disagree")
+    for key in expected_summary:
+        item = summary[key]
+        if not isinstance(item, int) or isinstance(item, bool) or item < 0:
+            raise PolicyDocumentError(
+                f"{label}.summary.{key} must be a non-negative integer"
+            )
+
 
 def _validate_model(
     document: Mapping[str, Any],
@@ -1026,6 +1084,11 @@ def _validate_model(
         _validate_state_archive_summary(
             provenance["state_archive_summary"],
             label=f"{source}.provenance.state_archive_summary",
+        )
+    if "cell_graph" in provenance:
+        _validate_cell_graph_provenance(
+            provenance["cell_graph"],
+            label=f"{source}.provenance.cell_graph",
         )
     _assert_portable(provenance, label=f"{source}.provenance")
     _assert_finite_json(document, label=source)
@@ -1621,11 +1684,43 @@ def evaluation_contract(recipe_document: Mapping[str, Any]) -> dict[str, Any]:
         expected_type=RECIPE_DOCUMENT_TYPE,
         handlers=_RECIPE_HANDLERS,
     )
-    if "eval" not in validated["recipe"]:
-        raise PolicyDocumentError("training-only policy bundle has no evaluation contract")
-    contract = deepcopy(dict(validated["recipe"]["eval"]))
+    recipe = validated["recipe"]
+    evaluation = recipe.get("eval")
+    if isinstance(evaluation, Mapping):
+        contract = deepcopy(dict(evaluation))
+    else:
+        from gradlab.checkpoint_acceptance import CheckpointEvalContractCompiler
+        from gradlab.goal_schema import goal_evaluation_mode
+
+        goal = _required_mapping(
+            recipe.get("goal"),
+            label="recipe.json evaluation goal",
+        )
+        if goal_evaluation_mode(goal, label="recipe.json evaluation goal") != "evaluated":
+            raise PolicyDocumentError("training-only policy bundle has no evaluation contract")
+        train_config = _required_mapping(
+            recipe.get("train_config"),
+            label="recipe.json evaluation training config",
+        )
+        try:
+            compiler = CheckpointEvalContractCompiler.from_train_config(
+                train_config,
+                portable_asset=True,
+                require_asset=False,
+                materialize_seed_defaults=True,
+            )
+            contract = compiler.contract(require_acceptance=True)
+        except ValueError as exc:
+            raise PolicyDocumentError(
+                f"evaluated policy bundle contract cannot be derived: {exc}"
+            ) from exc
+        playback = recipe.get("playback")
+        if contract.get("asset") is None and isinstance(playback, Mapping):
+            asset = playback.get("asset")
+            if isinstance(asset, Mapping):
+                contract["asset"] = deepcopy(dict(asset))
     train_config = _required_mapping(
-        validated["recipe"].get("train_config"),
+        recipe.get("train_config"),
         label="recipe.json evaluation training config",
     )
     backend = _required_mapping(

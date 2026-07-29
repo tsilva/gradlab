@@ -41,6 +41,7 @@ def build_model_provenance(
     checkpoint_step_value: int | None = None,
     state_archive_summary: Mapping[str, Any] | None = None,
     action_contract: Mapping[str, Any] | None = None,
+    checkpoint_source_path: Path | None = None,
 ) -> dict[str, Any]:
     del config
     if action_contract is not None:
@@ -103,6 +104,15 @@ def build_model_provenance(
         provenance["state_archive_preflight_sha256"] = preflight_sha256
     if state_archive_summary is not None:
         provenance["state_archive_summary"] = deepcopy(dict(state_archive_summary))
+    if str(train_config.get("algorithm_id") or "").strip() == "cell-graph":
+        from gradlab.cell_graph import CellGraphPolicy
+
+        graph = CellGraphPolicy.load(checkpoint_source_path or model_path).payload()
+        provenance["cell_graph"] = {
+            "detector_sha256": graph["detector_sha256"],
+            "snapshot_mode": graph["snapshot_mode"],
+            "summary": deepcopy(dict(graph["summary"])),
+        }
     return provenance
 
 
@@ -160,6 +170,7 @@ def install_model_bundle(
             checkpoint_step_value=checkpoint_step_value,
             state_archive_summary=state_archive_summary,
             action_contract=action_contract,
+            checkpoint_source_path=staged_checkpoint,
         )
         recipe_source = Path(str(train_config.get("recipe_json_path") or ""))
         if not recipe_source.is_file():

@@ -27,10 +27,8 @@ METRIC_EARLY_STOP_COMMON_KEYS = frozenset(
         "trigger",
     }
 )
-METRIC_EARLY_STOP_THRESHOLD_KEYS = frozenset({"operator", "threshold"})
-METRIC_EARLY_STOP_NO_IMPROVEMENT_KEYS = frozenset(
-    {"delta_mode", "direction", "min_delta"}
-)
+METRIC_EARLY_STOP_THRESHOLD_KEYS = frozenset({"operator", "progress_baseline", "threshold"})
+METRIC_EARLY_STOP_NO_IMPROVEMENT_KEYS = frozenset({"delta_mode", "direction", "min_delta"})
 METRIC_EARLY_STOP_TRIGGERS = frozenset({"no_improvement", "threshold"})
 METRIC_EARLY_STOP_OUTCOMES = frozenset({"failure", "success"})
 METRIC_EARLY_STOP_ACTIONS = frozenset({"observe", "stop"})
@@ -230,12 +228,32 @@ def _normalize_metric_early_stop_condition(
         if operator not in EARLY_STOP_OPERATORS:
             allowed = ", ".join(sorted(EARLY_STOP_OPERATORS))
             raise ValueError(f"{_label_path(label, 'operator')} must be one of {allowed}")
+        threshold = _require_finite_number(node, "threshold", label=label)
         normalized.update(
             {
                 "operator": operator,
-                "threshold": _require_finite_number(node, "threshold", label=label),
+                "threshold": threshold,
             }
         )
+        if "progress_baseline" in node:
+            progress_baseline = _require_finite_number(
+                node,
+                "progress_baseline",
+                label=label,
+            )
+            direction = "maximize" if operator in {">", ">="} else "minimize"
+            invalid_baseline = (
+                progress_baseline >= threshold
+                if direction == "maximize"
+                else progress_baseline <= threshold
+            )
+            if invalid_baseline:
+                relation = "below" if direction == "maximize" else "above"
+                raise ValueError(
+                    f"{_label_path(label, 'progress_baseline')} must be {relation} "
+                    f"threshold for operator {operator}"
+                )
+            normalized["progress_baseline"] = progress_baseline
     else:
         min_delta = _require_finite_number(node, "min_delta", label=label)
         if min_delta < 0:
@@ -404,6 +422,7 @@ class MetricEarlyStopObservation:
     best_value: float
     elapsed_steps: int
     patience_progress: float
+    target_progress: float | None
     eligible: bool
     would_trigger: bool
 
@@ -489,6 +508,19 @@ class MetricEarlyStopStateMachine:
             return 1.0 if triggered else 0.0
         return min(1.0, max(0.0, elapsed / patience))
 
+    @staticmethod
+    def _target_progress(
+        condition: Mapping[str, Any],
+        *,
+        value: float,
+    ) -> float | None:
+        if "progress_baseline" not in condition:
+            return None
+        baseline = float(condition["progress_baseline"])
+        threshold = float(condition["threshold"])
+        progress = (value - baseline) / (threshold - baseline)
+        return min(1.0, max(0.0, progress))
+
     def _update_threshold(
         self,
         *,
@@ -535,6 +567,7 @@ class MetricEarlyStopStateMachine:
                 patience=patience,
                 triggered=triggered,
             ),
+            target_progress=self._target_progress(condition, value=sample.value),
             eligible=eligible,
             would_trigger=triggered,
         )
@@ -586,6 +619,7 @@ class MetricEarlyStopStateMachine:
                 patience=patience,
                 triggered=triggered,
             ),
+            target_progress=None,
             eligible=eligible,
             would_trigger=triggered,
         )

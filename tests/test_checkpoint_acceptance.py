@@ -125,6 +125,39 @@ def test_mean_return_acceptance_requires_and_uses_every_episode(
     assert accepted is (verdict == "accepted")
 
 
+def test_vizdoom_basic_perfect_success_acceptance_requires_every_episode() -> None:
+    value = build_checkpoint_eval_contract(
+        environment={"game": "VizdoomBasic-v1", "state": "default"},
+        episodes=4,
+        n_envs=2,
+        max_steps=72,
+        seed=10_000,
+        seed_protocol="vector-lane-v1",
+        acceptance=[
+            {
+                "metric": "eval/full/outcome/success/rate/min",
+                "operator": ">=",
+                "threshold": 1.0,
+            }
+        ],
+    )
+    assert value["evidence_policy"]["fail_fast"] == "disabled"
+    rows = [
+        row(entry, success=index != 1) for index, entry in enumerate(value["manifest"]["episodes"])
+    ]
+
+    with pytest.raises(ValueError, match="every planned episode"):
+        validate_episode_rows(rows[:-1], contract=value, verdict="rejected")
+    validate_episode_rows(rows, contract=value, verdict="rejected")
+    aggregates = acceptance_aggregates(rows, contract=value)
+
+    assert aggregates["episodes_completed"] == 4
+    assert aggregates["failure_count"] == 1
+    assert aggregates["eval/full/outcome/success/rate/min"] == 0.75
+    accepted, _observed = evaluate_acceptance(aggregates, contract=value)
+    assert accepted is False
+
+
 def test_modal_protocol_accepts_complete_mean_return_rejection() -> None:
     value = contract(
         episodes=2,

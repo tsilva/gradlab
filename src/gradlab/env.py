@@ -663,6 +663,8 @@ def make_eval_vec_env(
     *,
     capture_step_diagnostics: bool = False,
     rom_binding: RomRuntimeBinding | None = None,
+    state_archive: Mapping[str, Any] | None = None,
+    state_archive_root: str | os.PathLike[str] | None = None,
 ) -> Any:
     return make_vec_envs(
         config=resolve_env_config(config),
@@ -670,6 +672,8 @@ def make_eval_vec_env(
         seed=seed,
         capture_step_diagnostics=capture_step_diagnostics,
         rom_binding=rom_binding,
+        state_archive=state_archive,
+        state_archive_root=state_archive_root,
     )
 
 

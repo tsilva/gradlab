@@ -43,11 +43,12 @@ def threshold_condition(
     *,
     operator: str = ">=",
     threshold: float = 1.0,
+    progress_baseline: float | None = None,
     patience_steps: int = 0,
     outcome: str = "success",
     action: str = "stop",
 ) -> dict:
-    return {
+    condition = {
         "metric": TRAIN_OUTCOME_SUCCESS_WINDOW_100_RATE_MIN,
         "trigger": "threshold",
         "operator": operator,
@@ -56,6 +57,9 @@ def threshold_condition(
         "outcome": outcome,
         "action": action,
     }
+    if progress_baseline is not None:
+        condition["progress_baseline"] = progress_baseline
+    return condition
 
 
 def update(machine: MetricEarlyStopStateMachine, metric: str, value: float, step: int):
@@ -63,9 +67,7 @@ def update(machine: MetricEarlyStopStateMachine, metric: str, value: float, step
 
 
 def test_threshold_zero_patience_fires_immediately() -> None:
-    machine = MetricEarlyStopStateMachine(
-        {"conditions": {"clear": threshold_condition()}}
-    )
+    machine = MetricEarlyStopStateMachine({"conditions": {"clear": threshold_condition()}})
 
     result = update(machine, TRAIN_OUTCOME_SUCCESS_WINDOW_100_RATE_MIN, 1.0, 10)
 
@@ -83,19 +85,59 @@ def test_threshold_patience_requires_continuous_truth_and_resets() -> None:
         }
     )
 
-    assert update(machine, TRAIN_OUTCOME_SUCCESS_WINDOW_100_RATE_MIN, 1.0, 100).stop_decision is None
-    assert update(machine, TRAIN_OUTCOME_SUCCESS_WINDOW_100_RATE_MIN, 0.5, 150).stop_decision is None
-    assert update(machine, TRAIN_OUTCOME_SUCCESS_WINDOW_100_RATE_MIN, 1.0, 200).stop_decision is None
+    assert (
+        update(machine, TRAIN_OUTCOME_SUCCESS_WINDOW_100_RATE_MIN, 1.0, 100).stop_decision is None
+    )
+    assert (
+        update(machine, TRAIN_OUTCOME_SUCCESS_WINDOW_100_RATE_MIN, 0.5, 150).stop_decision is None
+    )
+    assert (
+        update(machine, TRAIN_OUTCOME_SUCCESS_WINDOW_100_RATE_MIN, 1.0, 200).stop_decision is None
+    )
     result = update(machine, TRAIN_OUTCOME_SUCCESS_WINDOW_100_RATE_MIN, 1.0, 300)
 
     assert result.stop_decision is not None
     assert result.observations["clear"].elapsed_steps == 100
 
 
-def test_plateau_tracks_relative_improvement_after_warmup() -> None:
-    machine = MetricEarlyStopStateMachine(
-        {"conditions": {"plateau": plateau_condition()}}
+def test_threshold_progress_is_baseline_aware_and_clamped() -> None:
+    maximize = MetricEarlyStopStateMachine(
+        {
+            "conditions": {
+                "return_target": threshold_condition(
+                    threshold=10.0,
+                    progress_baseline=0.0,
+                )
+            }
+        }
     )
+
+    below = update(maximize, TRAIN_OUTCOME_SUCCESS_WINDOW_100_RATE_MIN, -2.0, 10)
+    halfway = update(maximize, TRAIN_OUTCOME_SUCCESS_WINDOW_100_RATE_MIN, 5.0, 20)
+    reached = update(maximize, TRAIN_OUTCOME_SUCCESS_WINDOW_100_RATE_MIN, 12.0, 30)
+
+    assert below.observations["return_target"].target_progress == 0.0
+    assert halfway.observations["return_target"].target_progress == 0.5
+    assert reached.observations["return_target"].target_progress == 1.0
+
+    minimize = MetricEarlyStopStateMachine(
+        {
+            "conditions": {
+                "loss_target": threshold_condition(
+                    operator="<=",
+                    threshold=2.0,
+                    progress_baseline=10.0,
+                )
+            }
+        }
+    )
+    minimizing = update(minimize, TRAIN_OUTCOME_SUCCESS_WINDOW_100_RATE_MIN, 6.0, 10)
+
+    assert minimizing.observations["loss_target"].target_progress == 0.5
+
+
+def test_plateau_tracks_relative_improvement_after_warmup() -> None:
+    machine = MetricEarlyStopStateMachine({"conditions": {"plateau": plateau_condition()}})
 
     update(machine, TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_MEAN, 100.0, 50)
     update(machine, TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_MEAN, 100.5, 100)
@@ -108,12 +150,15 @@ def test_plateau_tracks_relative_improvement_after_warmup() -> None:
     assert improvement.observations["plateau"].best_value == 101.0
     assert improvement.observations["plateau"].elapsed_steps == 0
 
-    assert update(
-        machine,
-        TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_MEAN,
-        101.5,
-        200,
-    ).stop_decision is None
+    assert (
+        update(
+            machine,
+            TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_MEAN,
+            101.5,
+            200,
+        ).stop_decision
+        is None
+    )
     result = update(
         machine,
         TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_MEAN,
@@ -181,12 +226,15 @@ def test_invalid_duplicate_and_out_of_order_samples_do_not_advance_patience() ->
         float("nan"),
         20,
     ).observations
-    assert update(
-        machine,
-        TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_MEAN,
-        10.0,
-        9,
-    ).stop_decision is None
+    assert (
+        update(
+            machine,
+            TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_MEAN,
+            10.0,
+            9,
+        ).stop_decision
+        is None
+    )
 
 
 def test_observe_mode_reports_and_can_recover_without_stopping() -> None:
@@ -283,6 +331,29 @@ def test_decision_validation_rejects_tampering() -> None:
                 }
             },
             "unexpected keys",
+        ),
+        (
+            {
+                "conditions": {
+                    "bad": threshold_condition(
+                        threshold=1.0,
+                        progress_baseline=1.0,
+                    )
+                }
+            },
+            "progress_baseline.*below threshold",
+        ),
+        (
+            {
+                "conditions": {
+                    "bad": threshold_condition(
+                        operator="<=",
+                        threshold=1.0,
+                        progress_baseline=0.0,
+                    )
+                }
+            },
+            "progress_baseline.*above threshold",
         ),
     ],
 )
