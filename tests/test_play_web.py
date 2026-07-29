@@ -28,6 +28,7 @@ from gradlab.play_web import (
     PlaybackWebServer,
     WebPlaybackRunner,
     _decision_payload,
+    _json_value,
     _session_environment_id,
     annotate_realized_returns,
     history_point_payload,
@@ -64,6 +65,15 @@ def test_playback_environment_title_uses_configured_env_id() -> None:
     )
 
     assert _session_environment_id(session, human_args()) == "BreakoutTurbo-v0"
+
+
+def test_json_projection_preserves_bounded_scalars_at_the_depth_limit() -> None:
+    payload = {"a": {"b": {"c": {"d": {"label": "turn right", "items": [1]}}}}}
+
+    projected = _json_value(payload)
+
+    assert projected["a"]["b"]["c"]["d"]["label"] == "turn right"
+    assert projected["a"]["b"]["c"]["d"]["items"] == "<list>"
 
 
 def test_action_program_decision_payload_omits_probability_diagnostics() -> None:

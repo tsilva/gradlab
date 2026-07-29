@@ -18,6 +18,9 @@ import {
   formatActionValue,
 } from "./action-contract.js";
 
+const VALUE_COMPARISON_FOOT =
+  "V(s) is expected discounted future policy reward; G(s) is this trajectory’s realized discounted future reward—not its success flag or cumulative episode return.";
+
 export function selectedPoint(history, snapshot, view) {
   const sequence = view?.selectedSequence ?? snapshot?.transition?.sequence;
   if (sequence !== null && sequence !== undefined) {
@@ -99,12 +102,31 @@ export function statsBlockFoot(block, snapshot) {
   return block.foot || "";
 }
 
-export function lineBlockFootPresentation(block, unavailable) {
+function finiteHorizonFoot(snapshot) {
+  const condition = snapshot?.session?.termination_conditions?.find(
+    (item) => item?.id === "limit:max_episode_steps" && item.enabled,
+  );
+  const steps = Number(condition?.value);
+  if (!Number.isInteger(steps) || steps <= 0) return "";
+  return `Finite horizon: ${steps.toLocaleString()} policy steps. If remaining time is absent from the policy observation, visually similar early and late states can share one V(s).`;
+}
+
+export function lineBlockFootPresentation(block, unavailable, snapshot = null) {
   const visibleUnavailable = unavailable?.status === "protocol-error"
     ? null
     : unavailable;
+  const valueComparison = Array.isArray(block.metrics)
+    && block.metrics.includes("policy/value")
+    && block.metrics.includes("policy/realized-return");
+  const horizon = valueComparison
+    ? finiteHorizonFoot(snapshot)
+    : "";
+  const text = [
+    block.foot || (valueComparison ? VALUE_COMPARISON_FOOT : ""),
+    horizon,
+  ].filter(Boolean).join(" ");
   return {
-    text: visibleUnavailable?.message || block.foot || "",
+    text: visibleUnavailable?.message || text,
     warning: Boolean(visibleUnavailable),
   };
 }
@@ -180,7 +202,7 @@ function makeLineBlock(block) {
           && availability.status !== "not-yet-observed",
       );
       if (foot) {
-        const presentation = lineBlockFootPresentation(block, unavailable);
+        const presentation = lineBlockFootPresentation(block, unavailable, snapshot);
         foot.textContent = presentation.text;
         foot.hidden = !foot.textContent;
         foot.classList.toggle("warning", presentation.warning);

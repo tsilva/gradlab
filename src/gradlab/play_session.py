@@ -17,6 +17,7 @@ import numpy as np
 import torch
 from gradlab.action_contract import (
     action_contract_meanings,
+    action_contract_payload,
     action_index_for_controls,
     configured_action_meanings,
     configured_action_name,
@@ -625,9 +626,11 @@ class _PlaybackSession:
         contract = getattr(runtime, "action_contract", None)
         if isinstance(contract, Mapping):
             self.action_contract = contract
+            self.action_contract_payload = action_contract_payload(contract)
             self.action_names = action_contract_meanings(contract)
             return
         self.action_contract = None
+        self.action_contract_payload = None
         try:
             self.action_names = configured_action_meanings(self.config)
         except ValueError:

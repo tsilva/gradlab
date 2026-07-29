@@ -1032,6 +1032,28 @@ def validate_runtime_action_contract(contract: Mapping[str, Any]) -> None:
             raise ValueError("explicit Discrete semantic IDs must be non-empty and unique")
 
 
+def action_contract_payload(
+    contract: Mapping[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Return one complete JSON-native validated runtime action contract.
+
+    Action contracts are bounded protocol documents, not arbitrary provider
+    diagnostics. Projecting them through a generic depth-limited serializer can
+    preserve the outer ``available`` status while destroying the nested values
+    and labels that make the contract usable.
+    """
+
+    if contract is None:
+        return None
+    if not isinstance(contract, Mapping):
+        raise ValueError("runtime action contract must be an object")
+    validate_runtime_action_contract(contract)
+    payload = _json_action_value(contract)
+    if not isinstance(payload, dict):
+        raise ValueError("runtime action contract did not project to an object")
+    return payload
+
+
 def assert_action_contract_compatible(
     saved_contract: Mapping[str, Any] | None,
     runtime_contract: Mapping[str, Any],
@@ -1087,6 +1109,7 @@ __all__ = [
     "MARIO_PROVIDERS",
     "action_contract_entry",
     "action_contract_meanings",
+    "action_contract_payload",
     "action_index_for_controls",
     "action_space_document",
     "assert_action_contract_compatible",
