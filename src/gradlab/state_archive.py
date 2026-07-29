@@ -416,6 +416,9 @@ class StateArchive:
         self.codec = codec_registry.resolve(codec_id, provider_id=provider_id)
         self._entries: dict[str, StateArchiveEntry] = {}
         self._views: dict[str, dict[str, Any]] = {}
+        self._blob_ref_counts: dict[str, int] = {}
+        self._blob_sizes: dict[str, int] = {}
+        self._blob_bytes = 0
         self.entries_root.mkdir(parents=True, exist_ok=True)
         self.views_root.mkdir(parents=True, exist_ok=True)
         for path in sorted(self.entries_root.glob("*.json")):
@@ -423,6 +426,7 @@ class StateArchive:
             entry = StateArchiveEntry.from_dict(raw)
             self._validate_compatibility(entry)
             self._entries[entry.entry_id] = entry
+            self._track_entry_blob(entry)
         for path in sorted(self.views_root.glob("*.json")):
             raw = json.loads(path.read_text(encoding="utf-8"))
             view_id = path.stem
@@ -448,6 +452,28 @@ class StateArchive:
             return False
         value = json.loads(path.read_text(encoding="utf-8"))
         return value.get("status") == "closed"
+
+    def _track_entry_blob(self, entry: StateArchiveEntry) -> None:
+        ref = entry.provider_snapshot.ref
+        digest = ref.blob_sha256
+        size = int(ref.size_bytes)
+        known_size = self._blob_sizes.get(digest)
+        if known_size is not None and known_size != size:
+            raise RuntimeError("state archive blob size changed for the same digest")
+        references = self._blob_ref_counts.get(digest, 0)
+        if references == 0:
+            self._blob_sizes[digest] = size
+            self._blob_bytes += size
+        self._blob_ref_counts[digest] = references + 1
+
+    def _untrack_entry_blob(self, entry: StateArchiveEntry) -> None:
+        digest = entry.provider_snapshot.ref.blob_sha256
+        references = self._blob_ref_counts[digest]
+        if references > 1:
+            self._blob_ref_counts[digest] = references - 1
+            return
+        del self._blob_ref_counts[digest]
+        self._blob_bytes -= self._blob_sizes.pop(digest)
 
     def create_entry(
         self,
@@ -498,6 +524,8 @@ class StateArchive:
                 raise RuntimeError("state archive entry hash collision")
         else:
             atomic_write_json(path, entry.to_dict())
+        if entry_id not in self._entries:
+            self._track_entry_blob(entry)
         self._entries[entry_id] = entry
         self.handles.put(ref, handle)
         return entry
@@ -602,6 +630,7 @@ class StateArchive:
         } - retained_blobs
         for entry_id in removed_entries:
             (self.entries_root / f"{entry_id}.json").unlink(missing_ok=True)
+            self._untrack_entry_blob(self._entries[entry_id])
             del self._entries[entry_id]
         for blob_sha256 in removed_blobs:
             self.blobs.discard(blob_sha256)
@@ -622,10 +651,6 @@ class StateArchive:
         return MappingProxyType(dict(value["document"]))
 
     def summary(self) -> dict[str, Any]:
-        blob_refs = {
-            entry.provider_snapshot.ref.blob_sha256: entry.provider_snapshot.ref.size_bytes
-            for entry in self._entries.values()
-        }
         return {
             "semantic_id": STATE_ARCHIVE_SEMANTIC_ID,
             "schema_version": 1,
@@ -634,8 +659,8 @@ class StateArchive:
             "codec_id": self.codec_id,
             "compatibility_id": self.compatibility_id,
             "entry_count": len(self._entries),
-            "blob_count": len(blob_refs),
-            "blob_bytes": sum(blob_refs.values()),
+            "blob_count": len(self._blob_ref_counts),
+            "blob_bytes": self._blob_bytes,
             "view_ids": sorted(self._views),
         }
 

@@ -175,6 +175,7 @@ class ProgressValueFormat(StrEnum):
     NUMBER = "number"
     COUNT = "count"
     PERCENT = "percent"
+    BYTES = "bytes"
 
 
 @dataclass(frozen=True)
@@ -216,6 +217,19 @@ def _compact_count(value: float) -> str:
     return f"{value:.0f}"
 
 
+def _compact_bytes(value: float) -> str:
+    magnitude = abs(value)
+    for scale, suffix in (
+        (1024.0**4, "TiB"),
+        (1024.0**3, "GiB"),
+        (1024.0**2, "MiB"),
+        (1024.0, "KiB"),
+    ):
+        if magnitude >= scale:
+            return f"{value / scale:.3g} {suffix}"
+    return f"{value:.0f} B"
+
+
 def format_progress_value(
     value: int | float | None,
     value_format: ProgressValueFormat,
@@ -225,6 +239,8 @@ def format_progress_value(
     numeric = float(value)
     if value_format == ProgressValueFormat.COUNT:
         return _compact_count(numeric)
+    if value_format == ProgressValueFormat.BYTES:
+        return _compact_bytes(numeric)
     if value_format == ProgressValueFormat.PERCENT:
         return f"{100.0 * numeric:.2f}%"
     return f"{numeric:.3g}"

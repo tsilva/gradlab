@@ -14,6 +14,7 @@ from rich.text import Text
 from textual import events
 from textual.app import App, ComposeResult
 from textual.binding import Binding
+from textual.color import Gradient
 from textual.containers import Grid, Vertical
 from textual.message import Message
 from textual.widget import Widget
@@ -355,6 +356,11 @@ class LocalTrainingApp(App[None]):
                 total=None,
                 show_percentage=False,
                 show_eta=False,
+                gradient=Gradient(
+                    (0.0, "#22D3EE"),
+                    (0.55, "#60A5FA"),
+                    (1.0, "#A78BFA"),
+                ),
                 id="training-progress",
             )
             yield Static("waiting for training budget", id="progress-meta")

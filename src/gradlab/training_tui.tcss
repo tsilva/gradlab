@@ -1,5 +1,16 @@
 Screen {
-    background: $surface;
+    background: #08111f;
+    color: #dcecff;
+}
+
+Header {
+    background: #0d1a2b;
+    color: #dcecff;
+}
+
+Footer {
+    background: #0d1a2b;
+    color: #9eb3d4;
 }
 
 #training-body {
@@ -8,13 +19,13 @@ Screen {
 
 #run-identity {
     height: 2;
-    color: $text-muted;
+    color: #91a7c7;
     margin-bottom: 1;
 }
 
 #training-status {
     height: 1;
-    color: $accent;
+    color: #67e8f9;
     text-style: bold;
 }
 
@@ -23,9 +34,28 @@ Screen {
     margin-top: 1;
 }
 
+#training-progress Bar {
+    width: 1fr;
+
+    & > .bar--bar {
+        color: #22d3ee;
+        background: #203451;
+    }
+
+    & > .bar--indeterminate {
+        color: #818cf8;
+        background: #203451;
+    }
+
+    & > .bar--complete {
+        color: #34d399;
+        background: #203451;
+    }
+}
+
 #progress-meta {
     height: 2;
-    color: $text-muted;
+    color: #9eb3d4;
     margin-bottom: 1;
 }
 
@@ -40,27 +70,39 @@ Screen {
 .metric-card {
     height: 4;
     padding: 0 1;
-    border: round $primary-background-lighten-2;
+    background: #0d192a;
+    border: round #29415f;
 }
 
 .metric-label {
     height: 1;
-    color: $text-muted;
+    color: #91a7c7;
 }
 
 .metric-value {
     height: 1;
+    color: #e7f3ff;
     text-style: bold;
 }
 
 .metric-sparkline {
     height: 1;
+
+    & > .sparkline--max-color {
+        color: #a78bfa;
+    }
+
+    & > .sparkline--min-color {
+        color: #38bdf8 35%;
+    }
 }
 
 #event-log {
     height: 1fr;
     min-height: 4;
-    border: round $primary-background-lighten-2;
+    background: #0b1626;
+    color: #cfe1fa;
+    border: round #29415f;
 }
 
 Screen.-medium #metrics {

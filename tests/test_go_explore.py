@@ -14,6 +14,7 @@ from gradlab.batch_runtime import EpisodeRecord
 from gradlab.go_explore import GoExploreSearch
 from gradlab.metric_names import (
     TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_MEAN,
+    TRAIN_GO_EXPLORE_ARCHIVE_BLOB_BYTES,
     TRAIN_OUTCOME_SUCCESS_CURRENT_RATE_MEAN,
 )
 from gradlab.task_kernels import Outcome
@@ -284,6 +285,10 @@ class GoExploreSearchTests(unittest.TestCase):
         self.assertEqual(result.final_step, 1)
         self.assertEqual(progress.n, 1)
         self.assertEqual(progress.fields, GO_EXPLORE_PROGRESS_FIELDS)
+        self.assertEqual(
+            progress.metrics[TRAIN_GO_EXPLORE_ARCHIVE_BLOB_BYTES],
+            0,
+        )
         self.assertEqual(
             progress.metrics[TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_MEAN],
             10.0,

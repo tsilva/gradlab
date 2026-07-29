@@ -266,10 +266,18 @@ test("checkpoint playback seed accepts catalog provenance and rejects invalid va
   assert.equal(checkpointPlaybackSeed({ playback_seed: -1 }), null);
 });
 
-test("only checkpoints without terminal or queued evaluation state are selectable", () => {
+test("unevaluated and unsuccessfully evaluated checkpoints are selectable", () => {
   assert.equal(checkpointCanEvaluate({ evaluation: null }), true);
   assert.equal(
     checkpointCanEvaluate({ evaluation: { status: "rejected", pass: false } }),
+    true,
+  );
+  assert.equal(
+    checkpointCanEvaluate({ evaluation: { status: "failed", pass: false } }),
+    true,
+  );
+  assert.equal(
+    checkpointCanEvaluate({ evaluation: { status: "accepted", pass: true } }),
     false,
   );
   assert.equal(
@@ -299,6 +307,22 @@ test("checkpoint evaluation cells distinguish queued work from terminal evidence
       "Running",
       "Submitted to the evaluation worker",
       "evaluation-cell submitted",
+    ],
+  );
+  assert.deepEqual(
+    checkpointEvaluationCell({
+      evaluation: {
+        status: "rejected",
+        pass: false,
+        episodes_completed: 1,
+        episodes_planned: 100,
+      },
+      evaluation_queue: { state: "queued" },
+    }),
+    [
+      "Queued",
+      "Waiting to be submitted",
+      "evaluation-cell queued",
     ],
   );
   assert.deepEqual(

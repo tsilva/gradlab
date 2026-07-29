@@ -72,6 +72,11 @@ GO_EXPLORE_PROGRESS_FIELDS = (
         ProgressValueFormat.COUNT,
     ),
     ProgressField(
+        TRAIN_GO_EXPLORE_ARCHIVE_BLOB_BYTES,
+        "archive mem est.",
+        ProgressValueFormat.BYTES,
+    ),
+    ProgressField(
         TRAIN_GO_EXPLORE_ARCHIVE_VISIT_COUNT,
         "visits",
         ProgressValueFormat.COUNT,
@@ -182,10 +187,15 @@ def _save_policy(
     )
 
 
-def _search_metric_payload(search: GoExploreSearch) -> dict[str, int | float]:
+def _search_metric_payload(
+    search: GoExploreSearch,
+    *,
+    archive_blob_bytes: int,
+) -> dict[str, int | float]:
     candidate = search.best_candidate()
     return {
         TRAIN_GO_EXPLORE_ARCHIVE_CELL_COUNT: search.archive_count,
+        TRAIN_GO_EXPLORE_ARCHIVE_BLOB_BYTES: archive_blob_bytes,
         TRAIN_GO_EXPLORE_ARCHIVE_SELECTION_COUNT: search.archive_selection_count,
         TRAIN_GO_EXPLORE_ARCHIVE_VISIT_COUNT: search.archive_visit_count,
         TRAIN_GO_EXPLORE_ARCHIVE_UPDATE_COUNT: search.archive_update_count,
@@ -214,7 +224,10 @@ def _metric_payload(
 ) -> dict[str, int | float]:
     archive = runtime.state_archive_summary() or {}
     return {
-        **_search_metric_payload(search),
+        **_search_metric_payload(
+            search,
+            archive_blob_bytes=int(archive.get("blob_bytes", 0)),
+        ),
         TRAIN_GO_EXPLORE_ARCHIVE_ENTRY_COUNT: int(archive.get("entry_count", 0)),
         TRAIN_GO_EXPLORE_ARCHIVE_BLOB_COUNT: int(archive.get("blob_count", 0)),
         TRAIN_GO_EXPLORE_ARCHIVE_BLOB_BYTES: int(archive.get("blob_bytes", 0)),
@@ -287,6 +300,7 @@ def run_go_explore(context: BackendContext) -> TrainingResult:
             initial_entries,
             runtime.episode_seeds,
         )
+        archive_blob_bytes = int((runtime.state_archive_summary() or {}).get("blob_bytes", 0))
         budget = context.session.configure_budget(
             requested_limit=int(common_config["timesteps"]),
             step_quantum=n_envs,
@@ -344,6 +358,9 @@ def run_go_explore(context: BackendContext) -> TrainingResult:
                     },
                 )
                 search.commit_archive(entries)
+                archive_blob_bytes = int(
+                    (runtime.state_archive_summary() or {}).get("blob_bytes", 0)
+                )
             completion_events = search.take_completion_events()
             improved = any(event.improved for event in completion_events)
             stop_for_completion = context.session.observe_completion(
@@ -357,7 +374,10 @@ def run_go_explore(context: BackendContext) -> TrainingResult:
             context.session.advance(
                 step,
                 records,
-                progress_metrics=_search_metric_payload(search),
+                progress_metrics=_search_metric_payload(
+                    search,
+                    archive_blob_bytes=archive_blob_bytes,
+                ),
             )
             if stop_for_completion:
                 stopped_on_completion = True
@@ -383,6 +403,9 @@ def run_go_explore(context: BackendContext) -> TrainingResult:
                     "compacted ephemeral Go-Explore archive "
                     f"step={step} retained={compacted['retained_entries']} "
                     f"removed={compacted['removed_entries']}"
+                )
+                archive_blob_bytes = int(
+                    (runtime.state_archive_summary() or {}).get("blob_bytes", 0)
                 )
                 next_compaction += compaction_interval_steps
             if step >= next_log:

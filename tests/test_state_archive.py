@@ -335,6 +335,8 @@ class StateArchiveTests(unittest.TestCase):
                 persistence="durable",
             )
             self.assertEqual(reopened.entry_count, 1)
+            self.assertEqual(reopened.summary()["blob_count"], summary["blob_count"])
+            self.assertEqual(reopened.summary()["blob_bytes"], summary["blob_bytes"])
             self.assertEqual(
                 reopened.view_document("test-view"),
                 {"step": 17, "entry_id": entry_id},
@@ -379,7 +381,26 @@ class StateArchiveTests(unittest.TestCase):
             self.assertEqual(compacted["retained_entries"], 3)
             self.assertEqual(compacted["removed_entries"], 3)
             self.assertIsNone(state_archive_artifact_summary(runtime))
-            self.assertEqual(runtime.state_archive_summary()["persistence"], "ephemeral")
+            summary = runtime.state_archive_summary()
+            self.assertEqual(summary["persistence"], "ephemeral")
+            retained_refs = {}
+            for entry_id in second:
+                ref = runtime.state_archive.entry(entry_id).provider_snapshot.ref
+                retained_refs[ref.blob_sha256] = ref.size_bytes
+            self.assertEqual(summary["blob_count"], len(retained_refs))
+            self.assertEqual(summary["blob_bytes"], sum(retained_refs.values()))
+            entries = runtime.state_archive._entries
+
+            class EntriesWithoutScans(dict):
+                def values(self):
+                    raise AssertionError("archive summary scanned retained entries")
+
+            runtime.state_archive._entries = EntriesWithoutScans(entries)
+            self.assertEqual(
+                runtime.state_archive_summary()["blob_bytes"],
+                sum(retained_refs.values()),
+            )
+            runtime.state_archive._entries = entries
             for entry_id in first:
                 with self.assertRaises(KeyError):
                     runtime.state_archive.entry(entry_id)
