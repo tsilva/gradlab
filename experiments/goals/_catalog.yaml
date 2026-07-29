@@ -7,6 +7,8 @@ namespaces:
     title_template: Sample-efficient SuperMarioBros-NES {goal_id} completion
   VizdoomBasic-v1:
     project: VizdoomBasic-v1
+  VizdoomBasic-Plus-v1:
+    project: VizdoomBasic-Plus-v1
   VizdoomDeadlyCorridor-v1:
     project: VizdoomDeadlyCorridor-v1
   VizdoomDefendCenter-v1:

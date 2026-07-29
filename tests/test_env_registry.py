@@ -116,16 +116,20 @@ def test_resolves_vizdoom_turbo_builtin_and_custom_scenarios() -> None:
 
 
 def test_resolves_vizdoom_turbo_augmented_environment() -> None:
-    env_id = "vizdoom-turbo:VizdoomDefendLine-Plus-v1"
+    expected = {
+        "VizdoomBasic-Plus-v1": "Doom-ViZDoom-Basic-Plus",
+        "VizdoomDefendLine-Plus-v1": "Doom-ViZDoom-DefendLine-Plus",
+    }
+    for game, game_family in expected.items():
+        env_id = f"vizdoom-turbo:{game}"
+        resolved = resolve_env_id(env_id)
 
-    resolved = resolve_env_id(env_id)
-
-    assert env_id in registered_env_ids()
-    assert resolved.provider_id == "vizdoom-turbo"
-    assert resolved.provider_env_id == "VizdoomDefendLine-Plus-v1"
-    spec = environment_spec(resolved.provider_id, resolved.provider_env_id)
-    assert spec.game_family == "Doom-ViZDoom-DefendLine-Plus"
-    assert spec.wandb_project == "VizdoomDefendLine-Plus-v1"
+        assert env_id in registered_env_ids()
+        assert resolved.provider_id == "vizdoom-turbo"
+        assert resolved.provider_env_id == game
+        spec = environment_spec(resolved.provider_id, resolved.provider_env_id)
+        assert spec.game_family == game_family
+        assert spec.wandb_project == game
     contract = resolve_env_provider(resolved.provider_id).constructor_contract
     assert contract is not None
     assert "enemy_variants" in contract.optional_env_args

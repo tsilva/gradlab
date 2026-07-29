@@ -1,0 +1,11 @@
+defaults:
+- atari-ppo@_global_
+- _self_
+train:
+  checkpoint_eval_backend: none
+  timesteps: 2000000
+  early_stop:
+    conditions:
+      return_plateau:
+        start_after_steps: 500000
+        patience_steps: 500000
