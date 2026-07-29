@@ -42,7 +42,7 @@ def image_payload() -> dict:
             "contract_version": 2,
             "image_digest": "sha256:" + "a" * 64,
             "provider_distribution": "vizdoom-turbo",
-            "provider_version": "1.3.0.post16",
+            "provider_version": "1.3.0.post17",
             "evidence_sha256": "6" * 64,
         },
     }

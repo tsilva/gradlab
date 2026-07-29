@@ -237,7 +237,7 @@ class TrainImageTests(unittest.TestCase):
         self.assertIn('"VizdoomDeathmatch-v1"', workflow)
         self.assertIn('"schema_version": 7', workflow)
         self.assertIn('"provider_distribution": "vizdoom-turbo"', workflow)
-        self.assertIn('"provider_version": "1.3.0.post16"', workflow)
+        self.assertIn('"provider_version": "1.3.0.post17"', workflow)
         self.assertIn(
             '"provider_version": os.environ["VIZDOOM_PROVIDER_VERSION"]',
             workflow,
@@ -304,7 +304,7 @@ class TrainImageTests(unittest.TestCase):
             encoding="utf-8"
         )
 
-        self.assertIn("vizdoom-turbo==1.3.0.post16", dependencies)
+        self.assertIn("vizdoom-turbo==1.3.0.post17", dependencies)
         self.assertNotIn("wandb-workspaces==", train)
         self.assertIn("torch==2.12.0", gpu)
         train_lines = set(train.splitlines())
