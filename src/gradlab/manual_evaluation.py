@@ -75,6 +75,7 @@ _STRICT_COMPLETE_ACCEPTANCE_METRIC_BY_GAME = {
     "VizdoomBasic-v1": EVAL_FULL_SUCCESS_RATE_MIN,
     "VizdoomDeadlyCorridor-v1": EVAL_FULL_EPISODE_RETURN_MEAN,
     "VizdoomDefendLine-v1": EVAL_FULL_EPISODE_RETURN_MEAN,
+    "VizdoomDefendLine-Plus-v1": EVAL_FULL_EPISODE_RETURN_MEAN,
 }
 
 
@@ -262,7 +263,8 @@ class ManualEvaluationSupervisor:
                     runtime_build_source_sha=str(
                         manifest.compute.get("runtime_build_source_sha") or ""
                     ),
-                )
+                ),
+                require_current_contract=False,
             )
             app_name = readiness.modal_app_name
         return ModalEvalBackend(

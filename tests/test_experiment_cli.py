@@ -27,7 +27,9 @@ from gradlab.experiment_cli import (
     _wandb_identity,
     build_parser,
     cmd_follow,
+    cmd_fault_test,
     cmd_launch,
+    cmd_reconcile,
     cmd_resume_submit,
     cmd_wait,
     main,
@@ -222,6 +224,35 @@ def test_launch_parser_exposes_bounded_compute_and_hash_bound_overrides() -> Non
     assert compute.target == "aws"
     assert compute.max_duration_seconds == 8 * 60 * 60
     assert compute.bounded_duration_seconds == 4 * 60 * 60
+
+
+def test_fault_test_is_bounded_and_not_exposed_as_a_launch_override() -> None:
+    parser = build_parser()
+    args = parser.parse_args(["fault-test", "--json"])
+    with mock.patch("gradlab.experiment_cli.cmd_launch", return_value=0) as launch:
+        assert cmd_fault_test(args) == 0
+
+    forwarded = launch.call_args.args[0]
+    assert forwarded.max_duration == 120
+    assert forwarded.compute == "local"
+    assert forwarded.target == "b3"
+    assert forwarded.checkpoint_eval_backend == "none"
+    assert forwarded.recipe_overrides == []
+    assert forwarded.supervision_fault_fixture == "failed-result-live-process"
+    launch_args = parser.parse_args(
+        [
+            "launch",
+            "--goal-file",
+            "experiments/goals/VizdoomBasic-v1/_goal.yaml",
+            "--recipe-file",
+            "experiments/goals/VizdoomBasic-v1/recipes/ppo.yaml",
+            "--seed",
+            "17",
+            "--run-description",
+            "normal launch",
+        ]
+    )
+    assert not hasattr(launch_args, "supervision_fault_fixture")
 
 
 def test_auto_without_cloud_budget_stays_local() -> None:
@@ -563,7 +594,15 @@ def test_terminal_task_without_receipt_records_typed_startup_failure() -> None:
     authority = mock.MagicMock()
     task = DstackTask(project="main", name="gradlab-retry", status="failed")
 
-    _record_terminal_task_without_receipt(authority, manifest, task)
+    _record_terminal_task_without_receipt(
+        authority,
+        manifest,
+        task,
+        writer_lease=SimpleNamespace(
+            run_id=manifest.run_id,
+            attempt_id=manifest.attempt_id,
+        ),
+    )
 
     receipt = authority.create_attempt_terminal.call_args.args[0]
     assert receipt.run_id == manifest.run_id
@@ -580,7 +619,83 @@ def test_active_task_without_receipt_cannot_be_sealed() -> None:
     task = DstackTask(project="main", name="gradlab-retry", status="running")
 
     with pytest.raises(RuntimeError, match="while its dstack task is active"):
-        _record_terminal_task_without_receipt(authority, manifest, task)
+        _record_terminal_task_without_receipt(
+            authority,
+            manifest,
+            task,
+            writer_lease=SimpleNamespace(
+                run_id=manifest.run_id,
+                attempt_id=manifest.attempt_id,
+            ),
+        )
+
+
+def test_reconcile_acquires_lease_writes_r2_before_wandb_and_releases(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    manifest = _manifest_only_run()
+    document = manifest.to_dict()
+    state = {
+        "run_id": manifest.run_id,
+        "manifest": document,
+        "attempts": [document],
+        "attempt_terminals": [],
+        "public_index": {
+            "checkpoints": [
+                {
+                    "checkpoint_id": "checkpoint-17-" + "a" * 16,
+                    "step": 17,
+                }
+            ]
+        },
+    }
+    authority = mock.MagicMock()
+    authority.semantic_state.side_effect = [state, state]
+    lease = SimpleNamespace(
+        run_id=manifest.run_id,
+        attempt_id=manifest.attempt_id,
+    )
+    authority.acquire_lease.return_value = lease
+    events: list[str] = []
+    authority.create_attempt_terminal.side_effect = lambda _receipt: events.append("r2")
+    backend = mock.MagicMock()
+    backend.status.return_value = DstackTask(
+        project="main",
+        name=str(manifest.compute["dstack_task"]),
+        status="failed",
+    )
+    args = SimpleNamespace(
+        run_id=manifest.run_id,
+        stop_reason="learner_failure",
+        evidence_sha256=["f" * 64],
+        json=True,
+    )
+
+    with (
+        mock.patch("gradlab.experiment_cli.repository_root", return_value=tmp_path),
+        mock.patch(
+            "gradlab.experiment_cli._storage",
+            return_value=(SimpleNamespace(), authority),
+        ),
+        mock.patch("gradlab.experiment_cli.DstackBackend", return_value=backend),
+        mock.patch(
+            "gradlab.experiment_cli._project_reconciled_terminal",
+            side_effect=lambda *_args: events.append("wandb"),
+        ),
+    ):
+        assert cmd_reconcile(args) == 0
+
+    assert events == ["r2", "wandb"]
+    authority.acquire_lease.assert_called_once()
+    authority.release_lease.assert_called_once_with(lease)
+    receipt = authority.create_attempt_terminal.call_args.args[0]
+    assert receipt.state == "resumable_failure"
+    assert receipt.stop_reason == "learner_failure"
+    assert receipt.final_step == 17
+    assert receipt.drain["evidence_sha256"] == ["f" * 64]
+    output = json.loads(capsys.readouterr().out)
+    assert output["wandb_projected"] is True
 
 
 def test_resume_submit_recovers_only_the_original_manifest(
@@ -739,6 +854,33 @@ def test_training_only_task_does_not_receive_modal_credentials() -> None:
     assert "MODAL_TOKEN_SECRET" not in task.secret_env
     assert not any(value.startswith("MODAL_ENVIRONMENT=") for value in task.secret_env)
     assert task.rom_mount is None
+
+
+def test_fault_fixture_switch_is_bound_only_through_manifest_compute() -> None:
+    manifest = SimpleNamespace(
+        run_id=new_run_id(),
+        image_digest="docker:example/gradlab@sha256:" + "a" * 64,
+        compute={
+            "selected": {
+                "kind": "local",
+                "target": "b3",
+                "max_price": None,
+                "max_cost_usd": None,
+                "allow_on_demand": False,
+                "max_duration_seconds": 120,
+            },
+            "dstack_task": "fault-fixture",
+            "supervision_fault_fixture": "failed-result-live-process",
+        },
+        modal={"enabled": False, "environment_name": "gradlab-eval"},
+    )
+
+    task = _task_request(manifest, manifest_uri="s3://control/run/manifest.json")
+
+    assert task.plain_env == {
+        "GRADLAB_SUPERVISION_FAULT_FIXTURE": "failed-result-live-process"
+    }
+    assert "GRADLAB_SUPERVISION_FAULT_FIXTURE" not in task.secret_env
 
 
 def test_rom_free_provider_does_not_require_or_stage_an_asset() -> None:

@@ -74,3 +74,26 @@ journals stay beneath the run attempt until W&B remote visibility and all
 terminal drain gates pass; only then does the supervisor atomically relocate
 them beneath the expiring prefix. Cloudflare requires a token with Workers R2
 Storage Write permission to install this bucket-level rule.
+
+## Learner-supervision fault fixture
+
+`gradlab experiment fault-test --mode failed-result-live-process --json` is the
+only supported entry point for the paid B3 fault fixture. It creates a fresh
+training-only logical run with an exact-source schema-7 runtime image, a
+two-minute task cap, and short manifest-bound teardown deadlines. The task sets
+`GRADLAB_SUPERVISION_FAULT_FIXTURE` in dstack's generated plain environment;
+normal recipe fields and launch overrides cannot set this switch.
+
+The fixture learner writes an identity-bound failed result at step zero, leaves
+a child process alive, and waits. The real run supervisor must detect the
+result within one 250 ms poll, close evaluation admission, reap the full process
+group, write an R2 `resumable_failure` receipt with stop reason
+`learner_failure`, project that receipt to W&B, and exit nonzero. dstack must
+terminalize the task without retry because GradLab retries only
+`no-capacity` and `interruption`. Before declaring the fixture passed, verify
+the R2 receipt exists, the dstack task is terminal, and B3 is idle again.
+
+The alternate `completed-result-hung-process` mode ignores both graceful stop
+and SIGTERM so the same path must reach SIGKILL and terminalize with
+`teardown_timeout`. Neither fixture mode constructs an environment or performs
+training; the exact-image ViZDoom smoke receipt is the separate provider gate.

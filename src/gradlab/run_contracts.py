@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import math
-import math
 import re
 import secrets
 from collections.abc import Mapping, Sequence

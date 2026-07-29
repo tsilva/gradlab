@@ -32,6 +32,7 @@ COMPLETE_EVALUATION_REQUIRED_GAMES = frozenset(
         "VizdoomBasic-v1",
         "VizdoomDeadlyCorridor-v1",
         "VizdoomDefendLine-v1",
+        "VizdoomDefendLine-Plus-v1",
     }
 )
 
