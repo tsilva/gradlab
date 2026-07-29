@@ -1164,8 +1164,13 @@ class GoExploreSearch:
         entry_ids = {
             entry_id for _key, entry_id in self._initial_roots.values()
         }
-        candidate = self.best_candidate()
-        if candidate is not None:
+        candidates = (
+            tuple(self._best_success_by_seed.values())
+            or tuple(self._best_incomplete_by_seed.values())
+            or (() if self.best_candidate() is None else (self.best_candidate(),))
+        )
+        for candidate in candidates:
+            assert candidate is not None
             for point in candidate.route_points:
                 cell = self._archive.get(point.key)
                 if cell is not None:
@@ -1238,7 +1243,22 @@ class GoExploreSearch:
                 return cell.entry_id
             return None
 
-        if candidate is None or not candidate.route_points:
+        route_candidates = (
+            tuple(
+                candidate
+                for _seed, candidate in sorted(
+                    self._best_success_by_seed.items(),
+                    key=lambda item: (-1 if item[0] is None else item[0]),
+                )
+                if candidate.route_points
+            )
+            if self._best_success_by_seed
+            else ()
+        )
+        if not route_candidates and candidate is not None and candidate.route_points:
+            route_candidates = (candidate,)
+
+        if not route_candidates:
             if not self._initial_roots:
                 raise RuntimeError("Go-Explore has no route roots to export")
             default_seed = min(self._initial_roots)
@@ -1254,54 +1274,15 @@ class GoExploreSearch:
             roots[default_seed] = node_id
             target_node_id = node_id
         else:
-            seed = candidate.initial_seed
-            route = candidate.route_points
-            if route[0].step != 0:
-                raise ValueError("Go-Explore best route does not begin at step zero")
-            route_node_ids: list[str] = []
-            terminal_distance = 1 if candidate.completed else 0
-            for index, point in enumerate(route):
-                prefix = slice_action_runs(candidate.runs, 0, point.step)
-                node_id = route_node_id(
-                    seed=seed,
-                    cell_key=bytes(point.key),
-                    prefix_runs=prefix,
-                )
-                route_node_ids.append(node_id)
-                entry_id = route_entry_id(point, prefix, seed)
-                nodes_by_id[node_id] = CellGraphNode(
-                    node_id=node_id,
-                    cell_key=bytes(point.key),
-                    target_distance=len(route) - index - 1 + terminal_distance,
-                    initial_seed=seed if index == 0 else None,
-                    snapshot_entry_id=snapshot_for_entry(entry_id),
-                )
-            for index in range(len(route) - 1):
-                segment = slice_action_runs(
-                    candidate.runs,
-                    route[index].step,
-                    route[index + 1].step,
-                )
-                edge_id = route_edge_id(
-                    source_id=route_node_ids[index],
-                    target_id=route_node_ids[index + 1],
-                    action_runs=segment,
-                )
-                edges_by_id[edge_id] = CellGraphEdge(
-                    edge_id=edge_id,
-                    source_id=route_node_ids[index],
-                    target_id=route_node_ids[index + 1],
-                    action_runs=segment,
-                    successful_suffix=candidate.completed,
-                )
-            if candidate.completed:
+            completed_routes = all(item.completed for item in route_candidates)
+            if any(item.completed for item in route_candidates) != completed_routes:
+                raise ValueError("Go-Explore graph cannot mix success and frontier targets")
+            if completed_routes:
                 target_node_id = hashlib.sha256(
                     canonical_json_bytes(
                         {
                             "semantic_id": "cell-graph-outcome-v1",
                             "outcome": "success",
-                            "seed": seed,
-                            "program_steps": candidate.step_count,
                         }
                     )
                 ).hexdigest()
@@ -1311,30 +1292,114 @@ class GoExploreSearch:
                     target_distance=0,
                     outcome="success",
                 )
-                suffix = slice_action_runs(
-                    candidate.runs,
-                    route[-1].step,
-                    candidate.step_count,
-                )
-                if not suffix:
-                    raise ValueError("successful Go-Explore route has no terminal action suffix")
+            else:
+                target_node_id = ""
+
+            edge_drafts: list[
+                tuple[
+                    str,
+                    str,
+                    tuple[ActionRun, ...],
+                    tuple[bytes, bytes | None, tuple[ActionRun, ...]],
+                    int | None,
+                    bool,
+                ]
+            ] = []
+            for route_candidate in route_candidates:
+                seed = route_candidate.initial_seed
+                route = route_candidate.route_points
+                if route[0].step != 0:
+                    raise ValueError("Go-Explore best route does not begin at step zero")
+                route_node_ids: list[str] = []
+                terminal_distance = 1 if route_candidate.completed else 0
+                for index, point in enumerate(route):
+                    prefix = slice_action_runs(route_candidate.runs, 0, point.step)
+                    node_id = route_node_id(
+                        seed=seed,
+                        cell_key=bytes(point.key),
+                        prefix_runs=prefix,
+                    )
+                    route_node_ids.append(node_id)
+                    entry_id = route_entry_id(point, prefix, seed)
+                    nodes_by_id[node_id] = CellGraphNode(
+                        node_id=node_id,
+                        cell_key=bytes(point.key),
+                        target_distance=len(route) - index - 1 + terminal_distance,
+                        initial_seed=seed if index == 0 else None,
+                        snapshot_entry_id=snapshot_for_entry(entry_id),
+                    )
+                if seed is not None:
+                    roots[seed] = route_node_ids[0]
+                for index in range(len(route) - 1):
+                    segment = slice_action_runs(
+                        route_candidate.runs,
+                        route[index].step,
+                        route[index + 1].step,
+                    )
+                    edge_drafts.append(
+                        (
+                            route_node_ids[index],
+                            route_node_ids[index + 1],
+                            segment,
+                            (
+                                bytes(route[index].key),
+                                bytes(route[index + 1].key),
+                                segment,
+                            ),
+                            seed,
+                            route_candidate.completed,
+                        )
+                    )
+                if route_candidate.completed:
+                    suffix = slice_action_runs(
+                        route_candidate.runs,
+                        route[-1].step,
+                        route_candidate.step_count,
+                    )
+                    if not suffix:
+                        raise ValueError(
+                            "successful Go-Explore route has no terminal action suffix"
+                        )
+                    edge_drafts.append(
+                        (
+                            route_node_ids[-1],
+                            target_node_id,
+                            suffix,
+                            (bytes(route[-1].key), None, suffix),
+                            seed,
+                            True,
+                        )
+                    )
+                else:
+                    target_node_id = route_node_ids[-1]
+
+            observations: dict[
+                tuple[bytes, bytes | None, tuple[ActionRun, ...]],
+                int,
+            ] = {}
+            evidence_seeds: dict[
+                tuple[bytes, bytes | None, tuple[ActionRun, ...]],
+                set[int | None],
+            ] = {}
+            for _source, _target, _segment, signature, seed, _successful in edge_drafts:
+                observations[signature] = observations.get(signature, 0) + 1
+                evidence_seeds.setdefault(signature, set()).add(seed)
+            for source_id, edge_target_id, segment, signature, _seed, successful in edge_drafts:
                 edge_id = route_edge_id(
-                    source_id=route_node_ids[-1],
-                    target_id=target_node_id,
-                    action_runs=suffix,
+                    source_id=source_id,
+                    target_id=edge_target_id,
+                    action_runs=segment,
                 )
                 edges_by_id[edge_id] = CellGraphEdge(
                     edge_id=edge_id,
-                    source_id=route_node_ids[-1],
-                    target_id=target_node_id,
-                    action_runs=suffix,
-                    successful_suffix=True,
+                    source_id=source_id,
+                    target_id=edge_target_id,
+                    action_runs=segment,
+                    observation_count=observations[signature],
+                    seed_count=len(evidence_seeds[signature]),
+                    successful_suffix=successful,
                 )
-            else:
-                target_node_id = route_node_ids[-1]
-            default_seed = seed
-            if seed is not None:
-                roots[seed] = route_node_ids[0]
+            default_seed = candidate.initial_seed if candidate is not None else None
 
         max_distance = max(node.target_distance for node in nodes_by_id.values())
         for root_seed, (root_key, entry_id) in sorted(self._initial_roots.items()):

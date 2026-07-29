@@ -382,28 +382,45 @@ class CellGraphPolicy:
             exact = self.roots.get(seed)
             if exact is not None and self._nodes_by_id[exact].cell_key == key:
                 return exact
-        candidates = [
-            node
-            for node in self._nodes_by_key.get(key, ())
-            if any(
-                edge.seed_count >= 2
+        return self._generalized_node_for_key(key)
+
+    def _generalized_node_for_key(
+        self,
+        key: bytes,
+        *,
+        maximum_distance: int | None = None,
+    ) -> str | None:
+        candidates: list[tuple[object, ...]] = []
+        for node in self._nodes_by_key.get(key, ()):
+            if (
+                maximum_distance is not None
+                and node.target_distance >= maximum_distance
+            ):
+                continue
+            edges = [
+                edge
                 for edge in self._edges_by_source.get(node.node_id, ())
+                if edge.seed_count >= 2
+            ]
+            if not edges:
+                continue
+            edge = min(edges, key=self._edge_rank)
+            candidates.append(
+                (
+                    node.target_distance,
+                    self._edge_rank(edge),
+                    node.node_id,
+                )
             )
-        ]
-        if len(candidates) == 1:
-            return candidates[0].node_id
-        return None
+        if not candidates:
+            return None
+        return str(min(candidates)[-1])
 
     def _replan_for_key(self, key: bytes, *, maximum_distance: int) -> str | None:
-        candidates = [
-            node
-            for node in self._nodes_by_key.get(key, ())
-            if node.target_distance < maximum_distance
-            and self._edges_by_source.get(node.node_id)
-        ]
-        if len(candidates) != 1:
-            return None
-        return candidates[0].node_id
+        return self._generalized_node_for_key(
+            key,
+            maximum_distance=maximum_distance,
+        )
 
     def _select_edge(self, state: _LaneRouteState) -> CellGraphEdge | None:
         if state.node_id is None:
