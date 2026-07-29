@@ -248,20 +248,6 @@ class StateArchiveTests(unittest.TestCase):
 
         self.assertEqual(keys, (b"[1,7,1]", b"[2,0,0]"))
 
-        legacy = ArchiveCellDetector(
-            ArchiveCellConfig.from_mapping(
-                {"signal": "score", "bucket_size": 50},
-                label="cell",
-            )
-        )
-        self.assertEqual(
-            legacy.keys(
-                {("signal", "score"): np.asarray([49, 50])},
-                n_envs=2,
-            ),
-            (b"score:0", b"score:1"),
-        )
-
     def test_ephemeral_archive_rejects_curriculum(self) -> None:
         with self.assertRaisesRegex(ValueError, "requires persistence='durable'"):
             archive_config(persistence="ephemeral")

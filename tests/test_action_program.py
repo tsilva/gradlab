@@ -101,28 +101,10 @@ def test_action_program_rejects_legacy_jerk_artifact(tmp_path) -> None:
         ActionProgramPolicy.load(path)
 
 
-def test_action_program_loads_schema_one_without_an_initial_seed(tmp_path) -> None:
-    path = tmp_path / "schema-one.zip"
-    payload = {
-        "schema_version": 1,
-        "policy_type": ACTION_PROGRAM_POLICY_TYPE,
-        "model_class": ACTION_PROGRAM_MODEL_CLASS,
-        "action_names": list(ACTIONS),
-        "action_runs": [[2, 2], [4, 1]],
-        "fallback_action": 0,
-    }
-    with zipfile.ZipFile(path, mode="w") as archive:
-        archive.writestr(ACTION_PROGRAM_MEMBER, json.dumps(payload))
-
-    loaded = ActionProgramPolicy.load(path)
-
-    assert loaded.default_playback_seed is None
-    assert loaded.action_runs == (ActionRun(2, 2), ActionRun(4, 1))
-
-
 @pytest.mark.parametrize(
     ("field", "value", "message"),
     [
+        ("schema_version", 1, "unsupported action-program schema version"),
         ("schema_version", 3, "unsupported action-program schema version"),
         ("policy_type", "jerk", "wrong policy type"),
         ("model_class", "gradlab.jerk.JerkPolicy", "wrong model class"),

@@ -97,12 +97,6 @@ _PHASE_EXECUTION_ENV_PATHS = frozenset(
         "env_config.seed",
     }
 )
-_LEGACY_PROVIDER_REWARD_PATHS = {
-    "env_config.env_args.reward_clip": "task.reward.reward_clip",
-    "env_config.env_args.reward_clipping": "task.reward.reward_clip",
-}
-
-
 def goal_contract_sha256(document: Mapping[str, Any]) -> str:
     """Hash the fully composed semantic goal contract, excluding source formatting."""
 
@@ -143,10 +137,6 @@ def _is_execution_environment_path(relative: str) -> bool:
     )
 
 
-def _canonical_policy_environment_path(relative: str) -> str:
-    return _LEGACY_PROVIDER_REWARD_PATHS.get(relative, relative)
-
-
 def _partition_policy_environment_overrides(
     overrides: Sequence[str],
     *,
@@ -164,7 +154,7 @@ def _partition_policy_environment_overrides(
             source_overrides.append(item)
             continue
         phase, relative = phase_path
-        canonical = _canonical_policy_environment_path(relative)
+        canonical = relative
         if canonical == relative and _is_execution_environment_path(relative):
             if phase == "eval":
                 raise ValueError(

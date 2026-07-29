@@ -131,30 +131,13 @@ def normalize_action_selection_mode(
     requested_mode: str | None,
 ) -> tuple[str, str]:
     requested = str(requested_mode or capabilities.default_action_selection_mode).strip()
-    effective = requested
-    # Explicit compatibility interpretation for protocol-v3 and legacy recipe
-    # readers, which represented all policy execution as a stochastic boolean.
-    if capabilities.algorithm_id == "action-program" and requested in {
-        "stochastic",
-        "deterministic",
-    }:
-        effective = "program"
-    elif capabilities.algorithm_id == "cell-graph" and requested in {
-        "stochastic",
-        "deterministic",
-    }:
-        effective = "route"
-    elif capabilities.algorithm_id == "dqn" and requested == "stochastic":
-        effective = "epsilon_greedy"
-    elif capabilities.algorithm_id == "dqn" and requested == "deterministic":
-        effective = "greedy"
-    if effective not in capabilities.action_selection_modes:
+    if requested not in capabilities.action_selection_modes:
         modes = ", ".join(capabilities.action_selection_modes)
         raise ValueError(
             f"unsupported action-selection mode {requested!r} for "
             f"{capabilities.algorithm_id}; supported: {modes}"
         )
-    return requested, effective
+    return requested, requested
 
 
 class PolicyRuntime:

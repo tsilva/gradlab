@@ -265,6 +265,63 @@ def test_playback_host_activates_without_model_preapproval() -> None:
     host.stop()
 
 
+def test_direct_public_run_resolves_active_checkpoint_breadcrumb_route() -> None:
+    class PublicRunLoader(FakeLoader):
+        def prepare(self, spec, progress):
+            candidate = super().prepare(spec, progress)
+            candidate.source = SimpleNamespace(
+                bundle=SimpleNamespace(
+                    recipe={
+                        "recipe": {
+                            "goal": {"goal_id": "DefendTheLine-v1"},
+                            "goal_variant": {
+                                "goal_id": "DefendTheLine-v1",
+                                "variant_id": "goal-variant-" + "c" * 24,
+                            },
+                        },
+                    },
+                    model={
+                        "checkpoint": {
+                            "step": 10_002_432,
+                            "sha256": "b" * 64,
+                        },
+                        "provenance": {
+                            "wandb_project": "ViZDoom",
+                            "wandb_run_id": "gradlab-" + "a" * 32,
+                        },
+                    },
+                ),
+            )
+            return candidate
+
+    loader = PublicRunLoader()
+    run_id = "gradlab-" + "a" * 32
+    host = PlaybackHost(
+        loader,
+        initial_route={"level": "environments", "entity": "research"},
+        initial_source=PlaySourceSpec(
+            "public_run",
+            run_id,
+            entity="research",
+            run_id=run_id,
+        ),
+    )
+    host.start()
+
+    snapshot = wait_for_phase(host, "active")
+
+    assert snapshot["app"]["route"] == {
+        "level": "runs",
+        "entity": "research",
+        "project": "ViZDoom",
+        "goal_id": "DefendTheLine-v1",
+        "goal_variant_id": "goal-variant-" + "c" * 24,
+        "run_id": run_id,
+        "checkpoint_id": "checkpoint-10002432-" + "b" * 16,
+    }
+    host.stop()
+
+
 def test_contract_mode_switch_atomically_replaces_the_shared_session() -> None:
     loader = FakeLoader()
     source = PlaySourceSpec("local", "/tmp/model.zip")

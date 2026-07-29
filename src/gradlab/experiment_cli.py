@@ -676,7 +676,6 @@ def cmd_catalog_repair(args: argparse.Namespace) -> int:
     discovered = 0
     registered = 0
     terminal_summaries = 0
-    skipped_legacy = 0
     failed: list[dict[str, str]] = []
     terminal_summary_failed: list[dict[str, str]] = []
     for key in sorted(authority.control.iter_keys("runs/")):
@@ -687,9 +686,6 @@ def cmd_catalog_repair(args: argparse.Namespace) -> int:
             state = authority.semantic_state(key.split("/")[1])
             manifest = RunManifest(**_latest_attempt(state))
             manifest.validate()
-            if manifest.goal_variant is None:
-                skipped_legacy += 1
-                continue
             authority.register_goal_variant(manifest)
             terminal_document = _latest_attempt_terminal(state)
             if terminal_document is not None:
@@ -745,7 +741,6 @@ def cmd_catalog_repair(args: argparse.Namespace) -> int:
         "registered": registered,
         "terminal_summaries": terminal_summaries,
         "terminal_summary_failed": terminal_summary_failed,
-        "skipped_legacy": skipped_legacy,
         "failed": failed,
     }
     if args.json:
@@ -753,7 +748,7 @@ def cmd_catalog_repair(args: argparse.Namespace) -> int:
     else:
         print(
             "Goal-variant catalog repair: "
-            f"{registered} registered, {skipped_legacy} legacy skipped, "
+            f"{registered} registered, "
             f"{terminal_summaries} terminal summaries projected, "
             f"{len(terminal_summary_failed)} summary projections failed, "
             f"{len(failed)} index repairs failed"

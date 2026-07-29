@@ -63,9 +63,7 @@ export function actionEntry(snapshot, value) {
 export function actionSemanticsReason(snapshot) {
   const contract = sessionContract(snapshot);
   if (!contract) {
-    return snapshot?.session?.action_names?.length
-      ? "legacy session exposes labels without a structured action contract"
-      : "this source did not record an action contract";
+    return "this source did not record an action contract";
   }
   const semantics = contract?.policy?.semantics;
   if (semantics?.status === "available") return null;
@@ -117,8 +115,6 @@ export function formatActionValue(value, snapshot) {
   }
 
   const scalar = scalarActionIndex(value);
-  const legacy = scalar === null ? null : snapshot?.session?.action_names?.[scalar];
-  if (legacy) return String(legacy).replaceAll("_", " ");
   const raw = scalar === null ? JSON.stringify(value) : String(scalar);
   const reason = actionSemanticsReason(snapshot);
   return reason ? `raw action ${raw} · semantics unavailable: ${reason}` : `raw action ${raw}`;

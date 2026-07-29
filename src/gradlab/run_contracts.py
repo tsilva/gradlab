@@ -15,8 +15,6 @@ from gradlab.json_utils import (
 
 
 SCHEMA_VERSION = 2
-LEGACY_RUN_MANIFEST_SCHEMA_VERSION = 3
-GOAL_VARIANT_RUN_MANIFEST_SCHEMA_VERSION = 4
 RUN_MANIFEST_SCHEMA_VERSION = 5
 DSTACK_STOP_DURATION_SECONDS = 10 * 60
 DEFAULT_LIVENESS_POLICY: dict[str, float] = {
@@ -179,19 +177,10 @@ class RunManifest:
         if isinstance(self.seed, bool) or int(self.seed) < 0:
             raise ValueError("seed must be a non-negative integer")
         _require_text(self.run_description, "run_description")
-        if int(self.schema_version) not in {
-            SCHEMA_VERSION,
-            LEGACY_RUN_MANIFEST_SCHEMA_VERSION,
-            GOAL_VARIANT_RUN_MANIFEST_SCHEMA_VERSION,
-            RUN_MANIFEST_SCHEMA_VERSION,
-        }:
+        if int(self.schema_version) != RUN_MANIFEST_SCHEMA_VERSION:
             raise ValueError(f"unsupported run manifest schema: {self.schema_version}")
-        if (
-            int(self.schema_version)
-            in {GOAL_VARIANT_RUN_MANIFEST_SCHEMA_VERSION, RUN_MANIFEST_SCHEMA_VERSION}
-            and self.goal_variant is None
-        ):
-            raise ValueError("run manifest v4+ requires goal_variant")
+        if self.goal_variant is None:
+            raise ValueError("run manifest requires goal_variant")
         if self.goal_variant is not None:
             from gradlab.goal_variants import validate_goal_variant_descriptor
 
@@ -223,16 +212,10 @@ class RunManifest:
             duration = value.get("max_duration_seconds")
             if isinstance(duration, bool) or not isinstance(duration, int) or duration <= 0:
                 raise ValueError(f"compute.{label}.max_duration_seconds must be positive")
-        if int(self.schema_version) == RUN_MANIFEST_SCHEMA_VERSION:
-            validate_liveness_policy(
-                self.liveness,
-                max_duration_seconds=int(selected["max_duration_seconds"]),
-            )
-        elif self.liveness is not None:
-            validate_liveness_policy(
-                self.liveness,
-                max_duration_seconds=int(selected["max_duration_seconds"]),
-            )
+        validate_liveness_policy(
+            self.liveness,
+            max_duration_seconds=int(selected["max_duration_seconds"]),
+        )
         _require_text(self.compute.get("dstack_task"), "compute.dstack_task")
         _require_text(
             self.compute.get("runtime_workflow_run_id"),

@@ -18,7 +18,6 @@ from gradlab.cell_graph import (
     CellGraphPolicy,
 )
 from gradlab.json_utils import canonical_json_bytes
-from gradlab.policy_registry import resolve_policy_algorithm
 from gradlab.policy_runtime import PolicyRuntime
 
 
@@ -256,16 +255,3 @@ def test_cell_graph_rejects_training_only_source_dimensions() -> None:
             target_node_id="target",
             default_seed=None,
         )
-
-
-def test_go_explore_legacy_action_program_metadata_remains_readable() -> None:
-    assert (
-        resolve_policy_algorithm(
-            {
-                "training_backend_id": "gradlab.go-explore",
-                "algorithm_id": "action-program",
-                "model_class": "gradlab.action_program.ActionProgramPolicy",
-            }
-        )
-        == "action-program"
-    )

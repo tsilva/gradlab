@@ -34,7 +34,7 @@ train:
   early_stop:
     # Address each early-stop rule by a stable condition name.
     conditions:
-      # Stop successfully when the configured training target is reached.
+      # Observe when training behavior reaches the configured solved threshold.
       target_reached:
         # Select the training metric compared with this condition's threshold.
         metric: train/outcome/success/across_starts/window_100/rate/min
@@ -50,8 +50,8 @@ train:
         patience_steps: 0
         # Classify a trigger from this condition as a successful training outcome.
         outcome: success
-        # Stop the learner when this condition triggers.
-        action: stop
+        # Record solved-target evidence without stopping further objective optimization.
+        action: observe
       # Stop unsuccessfully when shaped return ceases to improve meaningfully.
       return_plateau:
         # Select the training metric monitored for improvement.

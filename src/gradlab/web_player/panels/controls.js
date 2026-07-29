@@ -201,9 +201,9 @@ export function mount({ definition, services }) {
       if (comparisonReasons.length) {
         contractMessages.push(`Critic comparison unavailable: ${comparisonReasons.join("; ")}.`);
       }
-      if (playbackContract.legacy_mismatch) {
+      if (playbackContract.evaluation_matches_training === false) {
         contractMessages.push(
-          `Legacy warning: published evaluation semantics differ from training${
+          `Published evaluation semantics differ from training${
             mismatchPaths.length ? ` at ${mismatchPaths.join(", ")}` : ""
           }.`,
         );

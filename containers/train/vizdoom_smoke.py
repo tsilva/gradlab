@@ -12,8 +12,27 @@ from gradlab.env import EnvConfig, native_obs_crop, resolve_env_config
 from gradlab.env_providers import make_provider_vec_env, provider_native_vec_kwargs
 
 
-SMOKE_CONTRACT_VERSION = 1
+SMOKE_CONTRACT_VERSION = 2
 PROVIDER_DISTRIBUTION = "vizdoom-turbo"
+DEATHMATCH_ACTIONS = [
+    [],
+    ["ATTACK"],
+    ["MOVE_FORWARD"],
+    ["MOVE_BACKWARD"],
+    ["MOVE_LEFT"],
+    ["MOVE_RIGHT"],
+    ["TURN_LEFT"],
+    ["TURN_RIGHT"],
+    ["SPEED", "MOVE_FORWARD"],
+    ["ATTACK", "MOVE_FORWARD"],
+    ["ATTACK", "MOVE_BACKWARD"],
+    ["ATTACK", "MOVE_LEFT"],
+    ["ATTACK", "MOVE_RIGHT"],
+    ["ATTACK", "TURN_LEFT"],
+    ["ATTACK", "TURN_RIGHT"],
+    ["SELECT_NEXT_WEAPON"],
+    ["SELECT_PREV_WEAPON"],
+]
 
 
 def _canonical_sha256(document: Mapping[str, object]) -> str:
@@ -25,11 +44,12 @@ def _canonical_sha256(document: Mapping[str, object]) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
-def main() -> None:
-    config = resolve_env_config(
+def _config(game: str) -> EnvConfig:
+    deathmatch = game == "VizdoomDeathmatch-v1"
+    return resolve_env_config(
         EnvConfig(
             env_provider="vizdoom-turbo",
-            game="VizdoomBasic-v1",
+            game=game,
             state="default",
             frame_skip=4,
             max_pool_frames=False,
@@ -39,7 +59,7 @@ def main() -> None:
             env_args={
                 "scenario": "scenario",
                 "info": "data",
-                "use_restricted_actions": "discrete",
+                "use_restricted_actions": DEATHMATCH_ACTIONS if deathmatch else "discrete",
                 "record": False,
                 "players": 1,
                 "inttype": "stable",
@@ -52,12 +72,23 @@ def main() -> None:
                 "obs_layout": "chw",
                 "frame_stack": 4,
                 "noop_reset_max": 0,
-                "info_filter": {"mode": "all", "keys": []},
+                "info_filter": {
+                    "mode": "all",
+                    "keys": (
+                        ["killcount", "player_dead", "pending_reset"]
+                        if deathmatch
+                        else []
+                    ),
+                },
                 "use_fire_reset": False,
+                "game_variables": ["KILLCOUNT"] if deathmatch else [],
                 "treat_episode_timeout_as_truncation": True,
             },
         )
     )
+
+
+def _smoke(config: EnvConfig) -> dict[str, object]:
     kwargs = provider_native_vec_kwargs(
         config,
         n_envs=1,
@@ -77,6 +108,16 @@ def main() -> None:
         next_observations, rewards, terminated, truncated, step_info = step
         if not isinstance(step_info, Mapping):
             raise TypeError("step info must be a columnar mapping")
+        if config.game == "VizdoomDeathmatch-v1":
+            missing = {
+                "killcount",
+                "player_dead",
+                "pending_reset",
+            } - set(step_info)
+            if missing:
+                raise ValueError(
+                    f"Deathmatch step info is missing required keys: {sorted(missing)}"
+                )
         for label, value in (
             ("reset observations", observations),
             ("step observations", next_observations),
@@ -88,10 +129,7 @@ def main() -> None:
                 raise ValueError(f"{label} must contain exactly one lane")
         native = getattr(env, "env", env)
         capabilities = getattr(native, "capabilities", {})
-        evidence: dict[str, object] = {
-            "smoke_contract_version": SMOKE_CONTRACT_VERSION,
-            "provider_distribution": PROVIDER_DISTRIBUTION,
-            "provider_version": importlib.metadata.version(PROVIDER_DISTRIBUTION),
+        scenario: dict[str, object] = {
             "game": config.game,
             "num_envs": int(env.num_envs),
             "observation_shape": list(np.asarray(observations).shape),
@@ -106,7 +144,20 @@ def main() -> None:
         if env is not None:
             env.close()
             closed = True
-    evidence["close_succeeded"] = closed
+    scenario["close_succeeded"] = closed
+    return scenario
+
+
+def main() -> None:
+    evidence: dict[str, object] = {
+        "smoke_contract_version": SMOKE_CONTRACT_VERSION,
+        "provider_distribution": PROVIDER_DISTRIBUTION,
+        "provider_version": importlib.metadata.version(PROVIDER_DISTRIBUTION),
+        "scenarios": [
+            _smoke(_config("VizdoomBasic-v1")),
+            _smoke(_config("VizdoomDeathmatch-v1")),
+        ],
+    }
     evidence["evidence_sha256"] = _canonical_sha256(evidence)
     print(json.dumps(evidence, sort_keys=True, separators=(",", ":")))
 

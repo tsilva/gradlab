@@ -47,11 +47,8 @@ def goal_evaluation_mode(
     document: Mapping[str, Any],
     *,
     label: str,
-    allow_legacy: bool = False,
 ) -> str:
     value = document.get("evaluation_mode")
-    if value is None and allow_legacy:
-        return "evaluated" if "eval" in document else "training_only"
     if not isinstance(value, str) or value not in GOAL_EVALUATION_MODES:
         choices = ", ".join(sorted(GOAL_EVALUATION_MODES))
         raise ValueError(f"{label}.evaluation_mode must be one of: {choices}")
@@ -62,12 +59,11 @@ def validate_goal_document_shape(
     document: Mapping[str, Any],
     *,
     label: str,
-    allow_legacy: bool = False,
 ) -> None:
     """Reject misspelled goal-owned fields without importing runtime orchestration."""
 
     _reject_unknown_fields(document, allowed=GOAL_FIELDS, label=label)
-    goal_evaluation_mode(document, label=label, allow_legacy=allow_legacy)
+    goal_evaluation_mode(document, label=label)
     _reject_unknown_fields(
         document.get("objective"),
         allowed=GOAL_OBJECTIVE_FIELDS,

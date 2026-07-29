@@ -1,4 +1,4 @@
-"""Resolve provider-owned actions and migrate historical artifact metadata."""
+"""Resolve provider-owned actions and validate persisted action semantics."""
 
 from __future__ import annotations
 
@@ -59,54 +59,6 @@ MARIO_ACTION_TABLES = {
 def _mode_name(value: Any) -> str:
     name = getattr(value, "name", value)
     return str(name).split(".")[-1].strip().casefold()
-
-
-def _set_native_task_action(task: dict[str, Any]) -> None:
-    action = task.get("action")
-    if isinstance(action, Mapping):
-        normalized = dict(action)
-        normalized["set"] = "native"
-        task["action"] = normalized
-
-
-def migrate_legacy_artifact_action_configuration(
-    *,
-    provider_id: str,
-    game: str,
-    env_args: Mapping[str, Any] | None,
-    task: Mapping[str, Any] | None,
-) -> tuple[dict[str, Any], dict[str, Any]]:
-    """Translate historical artifact action codecs to provider-owned action tables."""
-    normalized_args = deepcopy(dict(env_args or {}))
-    normalized_task = deepcopy(dict(task or {}))
-    legacy_action_set = normalized_args.pop("action_set", None)
-    action = normalized_task.get("action")
-    task_action_set = (
-        str(action.get("set", "native")).strip() if isinstance(action, Mapping) else "native"
-    )
-
-    requested_preset = None
-    if legacy_action_set is not None:
-        requested_preset = str(legacy_action_set).strip()
-    elif (
-        game == "SuperMarioBros-Nes-v0"
-        and provider_id in MARIO_PROVIDERS
-        and task_action_set != "native"
-    ):
-        requested_preset = task_action_set
-
-    if requested_preset:
-        existing = normalized_args.get("use_restricted_actions")
-        existing_name = _mode_name(existing) if existing is not None else ""
-        if existing is not None and existing_name not in {"", "all", requested_preset.casefold()}:
-            raise ValueError(
-                "legacy action set conflicts with env_args.use_restricted_actions: "
-                f"{requested_preset!r} != {existing!r}"
-            )
-        normalized_args["use_restricted_actions"] = requested_preset
-        _set_native_task_action(normalized_task)
-
-    return normalized_args, normalized_task
 
 
 def _packaged_action_sets(provider_id: str, game: str) -> Mapping[str, Any]:
@@ -1090,11 +1042,7 @@ def assert_action_contract_compatible(
         raise ValueError("runtime did not expose its final action contract")
     validate_runtime_action_contract(runtime_contract)
     if saved_contract is None:
-        return {
-            "status": "legacy-unproven",
-            "comparable": False,
-            "reason": "artifact predates saved runtime action contracts",
-        }
+        raise ValueError("checkpoint has no saved runtime action contract")
     validate_runtime_action_contract(saved_contract)
     mismatches = [
         name
@@ -1147,7 +1095,6 @@ __all__ = [
     "configured_action_name",
     "configured_action_values",
     "declared_action_contract",
-    "migrate_legacy_artifact_action_configuration",
     "runtime_action_contract",
     "validate_runtime_action_contract",
 ]

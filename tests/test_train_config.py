@@ -135,8 +135,6 @@ class TrainConfigFieldSchemaTests(unittest.TestCase):
 
         self.assertEqual(parser.parse_args(["--obs-resize", "72,96"]).obs_resize, (72, 96))
         self.assertEqual(parser.parse_args(["--observation-size", "72"]).obs_resize, (72, 72))
-        self.assertEqual(parser.parse_args(["--hud-crop-top", "24"]).obs_crop, (24, 0, 0, 0))
-        self.assertIsNone(parser.parse_args(["--hud-crop-top", "-1"]).obs_crop)
         normalized = validate_and_normalize_train_config({"obs_resize": [72, 96]})
         self.assertEqual(normalized["obs_resize"], (72, 96))
         with self.assertRaisesRegex(ValueError, "both be zero or both be positive"):

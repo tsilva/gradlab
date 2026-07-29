@@ -9,7 +9,7 @@ from stable_baselines3 import DQN
 from stable_baselines3.common.policies import ActorCriticPolicy
 
 from gradlab.action_program import ActionProgramPolicy, ActionRun
-from gradlab.policy_runtime import PolicyRuntime, normalize_action_selection_mode
+from gradlab.policy_runtime import PolicyRuntime
 
 
 def _actor_critic_runtime(action_space: gym.Space) -> tuple[PolicyRuntime, np.ndarray]:
@@ -96,13 +96,13 @@ def test_dqn_epsilon_greedy_records_requested_and_effective_mode() -> None:
     model.exploration_rate = 1.0
     result = PolicyRuntime(model).decide(
         np.zeros((1, 4), dtype=np.float32),
-        action_selection_mode="stochastic",
+        action_selection_mode="epsilon_greedy",
     )
     decision = result.decisions[0]
 
-    assert result.requested_action_selection_mode == "stochastic"
+    assert result.requested_action_selection_mode == "epsilon_greedy"
     assert result.effective_action_selection_mode == "epsilon_greedy"
-    assert decision.requested_action_selection_mode == "stochastic"
+    assert decision.requested_action_selection_mode == "epsilon_greedy"
     assert decision.action_selection_mode == "epsilon_greedy"
     assert decision.exploratory is True
     model.get_env().close()
@@ -143,24 +143,3 @@ def test_action_program_runtime_exposes_cursor_without_fabricated_distribution()
     assert first.entropy is None
     assert first.log_probability is None
     assert first.sampled is None
-
-
-def test_action_program_legacy_boolean_modes_have_explicit_program_interpretation() -> None:
-    capabilities = PolicyRuntime(
-        ActionProgramPolicy(
-            action_names=("noop",),
-            action_runs=(),
-            fallback_action=0,
-        )
-    ).capabilities
-
-    assert normalize_action_selection_mode(capabilities, "stochastic") == (
-        "stochastic",
-        "program",
-    )
-    assert normalize_action_selection_mode(capabilities, "deterministic") == (
-        "deterministic",
-        "program",
-    )
-    with pytest.raises(ValueError, match="supported: program"):
-        normalize_action_selection_mode(capabilities, "greedy")

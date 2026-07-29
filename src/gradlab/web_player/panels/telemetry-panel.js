@@ -96,15 +96,7 @@ function appendFoot(section, value, { force = false } = {}) {
 }
 
 export function statsBlockFoot(block, snapshot) {
-  const actionComparison = snapshot?.session?.action_contract_comparison;
-  const actionContractMessage = block.metrics.some(
-    (key) => ["action/policy", "action/executed"].includes(key),
-  ) && actionComparison?.status === "legacy-unproven"
-    ? "Legacy checkpoint: training-time action equivalence is unproven."
-    : "";
-  return [block.foot || "", actionContractMessage]
-    .filter(Boolean)
-    .join(" ");
+  return block.foot || "";
 }
 
 export function lineBlockFootPresentation(block, unavailable) {
@@ -307,14 +299,11 @@ function makeDistributionBlock(block) {
     element: section,
     render({ snapshot }) {
       const availability = descriptorAvailability(descriptor, { snapshot });
-      const actionComparison = snapshot?.session?.action_contract_comparison;
       const semantics = snapshot?.session?.action_contract?.policy?.semantics;
       if (semantics?.status === "unavailable") {
         foot.textContent = `Action semantics unavailable: ${
           semantics.reason || "the provider did not declare them"
         }.`;
-      } else if (actionComparison?.status === "legacy-unproven") {
-        foot.textContent = "Legacy checkpoint: action labels come from the current runtime and cannot be proven identical to training.";
       } else {
         foot.textContent = block.foot || "";
       }

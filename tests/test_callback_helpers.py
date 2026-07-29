@@ -36,7 +36,7 @@ from gradlab.metric_names import (
     train_early_stop_metric,
 )
 from gradlab.policy_bundle import build_recipe_document, write_canonical_json
-from gradlab.recipe_documents import compose_train_document
+from gradlab.recipe_documents import compose_resolved_train_documents
 from gradlab.training_backend import GracefulStopFlag, training_backend_config_hash
 
 
@@ -626,15 +626,20 @@ class LedgerCheckpointHelperTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             run_dir = Path(tmp) / "run"
             store_path = run_dir / "gradlab.sqlite"
+            goal_path = Path("experiments/goals/gradlab__bandit/_goal.yaml")
+            resolved = compose_resolved_train_documents(
+                goal_path,
+                goal_path.parent / "recipes/ppo.yaml",
+                source_sha="a" * 40,
+            )
             recipe_document = build_recipe_document(
-                compose_train_document(
-                    Path("experiments/goals/gradlab__bandit/_goal.yaml"),
-                    Path("experiments/goals/gradlab__bandit/recipes/ppo.yaml"),
-                ),
+                resolved.effective,
                 repo_root=Path.cwd(),
                 source_commit="a" * 40,
                 run_description="Exact SB3 checkpoint path regression.",
                 runtime_image_ref="docker:example/runtime@sha256:" + "b" * 64,
+                base_materialized_recipe=resolved.base,
+                canonical_goal=resolved.canonical_goal,
             )
             train_config = recipe_document["recipe"]["train_config"]
             recipe_path = write_canonical_json(run_dir / "recipe.json", recipe_document)

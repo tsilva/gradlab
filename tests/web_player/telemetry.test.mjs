@@ -332,17 +332,10 @@ test("the default policy distribution omits its redundant heading", () => {
   );
 });
 
-test("stats omit unsupported summaries but preserve contract warnings", () => {
+test("stats omit unsupported summaries", () => {
   assert.equal(statsBlockFoot({
     metrics: ["policy/selected-q-value", "policy/program"],
   }, {}), "");
-  assert.equal(statsBlockFoot({
-    metrics: ["action/policy"],
-  }, {
-    session: {
-      action_contract_comparison: { status: "legacy-unproven" },
-    },
-  }), "Legacy checkpoint: training-time action equivalence is unproven.");
 });
 
 test("ViZDoom actions use the structured runtime contract in every telemetry view", () => {

@@ -312,7 +312,7 @@ class ActionProgramPolicy:
         if not isinstance(payload, Mapping):
             raise ValueError("action-program payload must be an object")
         schema_version = int(payload.get("schema_version") or 0)
-        if schema_version not in {1, ACTION_PROGRAM_SCHEMA_VERSION}:
+        if schema_version != ACTION_PROGRAM_SCHEMA_VERSION:
             raise ValueError("unsupported action-program schema version")
         expected_fields = {
             "schema_version",
@@ -321,9 +321,8 @@ class ActionProgramPolicy:
             "action_names",
             "action_runs",
             "fallback_action",
+            "initial_seed",
         }
-        if schema_version >= 2:
-            expected_fields.add("initial_seed")
         if set(payload) != expected_fields:
             missing = sorted(expected_fields - set(payload))
             unexpected = sorted(set(payload) - expected_fields)

@@ -12,6 +12,7 @@ from gradlab.checkpoint_acceptance import (
     checkpoint_eval_max_steps,
     evaluate_acceptance,
     manifest_index,
+    requires_complete_evaluation,
     validate_episode_rows,
 )
 from gradlab.modal_eval_protocol import (
@@ -156,6 +157,12 @@ def test_vizdoom_basic_perfect_success_acceptance_requires_every_episode() -> No
     assert aggregates["eval/full/outcome/success/across_starts/rate/min"] == 0.75
     accepted, _observed = evaluate_acceptance(aggregates, contract=value)
     assert accepted is False
+
+
+def test_vizdoom_deathmatch_requires_complete_evaluation() -> None:
+    assert requires_complete_evaluation(
+        {"game": "VizdoomDeathmatch-v1", "state": "default"}
+    )
 
 
 def test_modal_protocol_accepts_complete_mean_return_rejection() -> None:

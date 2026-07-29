@@ -15,14 +15,9 @@ from gradlab.early_stop import (
 from gradlab.eval_metrics import episode_is_complete, episode_start_state
 from gradlab.env_registry import resolve_env_provider
 from gradlab.metric_names import (
-    EVAL_FULL_EPISODE_RETURN_SHAPED_MEAN,
     EVAL_FULL_SUCCESS_ACROSS_STARTS_RATE_MEAN,
     EVAL_FULL_SUCCESS_ACROSS_STARTS_RATE_MIN,
-    LEGACY_METRICS_SCHEMA_VERSION,
     METRICS_SCHEMA_VERSION,
-    V13_EVAL_FULL_EPISODE_RETURN_SHAPED_MEAN,
-    V13_EVAL_FULL_SUCCESS_ACROSS_STARTS_RATE_MEAN,
-    V13_EVAL_FULL_SUCCESS_ACROSS_STARTS_RATE_MIN,
     evaluation_metric_schema,
 )
 from gradlab.seeds import EVAL_SEED_START
@@ -37,6 +32,7 @@ COMPLETE_EVALUATION_REQUIRED_GAMES = frozenset(
     {
         "VizdoomBasic-v1",
         "VizdoomDeadlyCorridor-v1",
+        "VizdoomDeathmatch-v1",
         "VizdoomDefendLine-v1",
         "VizdoomDefendLine-Plus-v1",
     }
@@ -426,29 +422,7 @@ def manifest_index(contract: Mapping[str, Any]) -> dict[tuple[int, int], dict[st
 def acceptance_aggregates(
     episode_rows: Sequence[Mapping[str, Any]], *, contract: Mapping[str, Any]
 ) -> dict[str, Any]:
-    rule_metrics = {
-        str(rule.get("metric") or "")
-        for rule in contract.get("acceptance", ())
-        if isinstance(rule, Mapping)
-    }
-    legacy_metrics = {
-        V13_EVAL_FULL_SUCCESS_ACROSS_STARTS_RATE_MIN,
-        V13_EVAL_FULL_SUCCESS_ACROSS_STARTS_RATE_MEAN,
-        V13_EVAL_FULL_EPISODE_RETURN_SHAPED_MEAN,
-    }
-    current_metrics = {
-        EVAL_FULL_SUCCESS_ACROSS_STARTS_RATE_MIN,
-        EVAL_FULL_SUCCESS_ACROSS_STARTS_RATE_MEAN,
-        EVAL_FULL_EPISODE_RETURN_SHAPED_MEAN,
-    }
-    if rule_metrics & legacy_metrics and rule_metrics & current_metrics:
-        raise ValueError("acceptance contract mixes metrics schema versions")
-    metrics_schema_version = (
-        LEGACY_METRICS_SCHEMA_VERSION
-        if rule_metrics & legacy_metrics
-        else METRICS_SCHEMA_VERSION
-    )
-    metric_schema = evaluation_metric_schema(metrics_schema_version)
+    metric_schema = evaluation_metric_schema(METRICS_SCHEMA_VERSION)
     rows = [dict(row) for row in episode_rows]
     failures = sum(not episode_is_complete(row) for row in rows)
     successes = len(rows) - failures

@@ -11,6 +11,7 @@ from gradlab.r2_store import BucketConfig, ConditionalWriteConflict, RunStorageC
 from gradlab.goal_variants import build_goal_variant_descriptor, goal_variant_scope_key
 from gradlab.run_authority import LeaseUnavailable, RunAuthority
 from gradlab.run_contracts import (
+    DEFAULT_LIVENESS_POLICY,
     EvalIntent,
     PromotionReceipt,
     RunManifest,
@@ -51,14 +52,21 @@ class RunAuthorityTests(unittest.TestCase):
         self.temporary.cleanup()
 
     def manifest(self, run_id: str, attempt_id: str) -> RunManifest:
+        goal_slug = "SuperMarioBros-Nes-v0/Level1-1"
+        goal_variant = build_goal_variant_descriptor(
+            goal_slug=goal_slug,
+            source_sha="e" * 40,
+            authored_goal={"goal_id": "Level1-1"},
+            effective_goal={"goal_id": "Level1-1"},
+        )
         return RunManifest(
             run_id=run_id,
             attempt_id=attempt_id,
             created_at=utc_now(),
             source_sha="e" * 40,
             image_digest="docker:registry.example/gradlab@sha256:" + SHA,
-            goal_slug="SuperMarioBros-Nes-v0/Level1-1",
-            goal_sha256=SHA,
+            goal_slug=goal_slug,
+            goal_sha256=goal_variant["effective_goal_contract_sha256"],
             recipe_slug="ppo",
             recipe_sha256=SHA,
             recipe_overrides=(),
@@ -96,7 +104,8 @@ class RunAuthorityTests(unittest.TestCase):
                 "rom_asset_manifest": {"sha256": SHA},
             },
             storage=self.storage.manifest_locations(),
-            schema_version=3,
+            goal_variant=goal_variant,
+            liveness=DEFAULT_LIVENESS_POLICY,
         )
 
     def test_identifiers_have_required_shapes(self) -> None:

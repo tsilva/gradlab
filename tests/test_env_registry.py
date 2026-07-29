@@ -98,18 +98,22 @@ def test_resolves_registered_supermariobrosnes_turbo_env_id() -> None:
 
 
 def test_resolves_vizdoom_turbo_builtin_and_custom_scenarios() -> None:
-    env_id = "vizdoom-turbo:VizdoomBasic-v1"
+    for game in ("VizdoomBasic-v1", "VizdoomDeathmatch-v1"):
+        env_id = f"vizdoom-turbo:{game}"
+        resolved = resolve_env_id(env_id)
 
-    resolved = resolve_env_id(env_id)
-
-    assert env_id in registered_env_ids()
-    assert resolved.provider_id == "vizdoom-turbo"
-    assert resolved.provider_env_id == "VizdoomBasic-v1"
-    assert resolved.import_name == "vizdoom_turbo"
-    assert env_supports_states("vizdoom-turbo", "VizdoomBasic-v1")
+        assert env_id in registered_env_ids()
+        assert resolved.provider_id == "vizdoom-turbo"
+        assert resolved.provider_env_id == game
+        assert resolved.import_name == "vizdoom_turbo"
+        assert env_supports_states("vizdoom-turbo", game)
     provider = resolve_env_provider(resolved.provider_id)
     assert provider.constructor_contract is not None
     assert "state_dir" not in provider.constructor_contract.explicit_env_args
+
+    deathmatch = environment_spec("vizdoom-turbo", "VizdoomDeathmatch-v1")
+    assert deathmatch.game_family == "Doom-ViZDoom-Deathmatch"
+    assert deathmatch.wandb_project == "VizdoomDeathmatch-v1"
 
     custom = resolve_env_id("vizdoom-turbo:/tmp/custom-scenario.cfg")
     assert custom.provider_env_id == "/tmp/custom-scenario.cfg"

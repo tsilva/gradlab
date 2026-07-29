@@ -42,7 +42,7 @@ def release_payload(*, source_sha: str = SOURCE_SHA) -> dict:
         },
         "workflow_run_id": "123",
         "vizdoom_smoke": {
-            "contract_version": 1,
+            "contract_version": 2,
             "image_digest": "sha256:" + "a" * 64,
             "provider_distribution": "vizdoom-turbo",
             "provider_version": "1.3.0.post16",

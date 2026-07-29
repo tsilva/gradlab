@@ -36,9 +36,17 @@ from gradlab.experiment_cli import (
     main,
 )
 from gradlab.operator_credentials import OperatorConfigurationError
+from gradlab.goal_variants import build_goal_variant_descriptor
 from gradlab.policy_bundle import build_recipe_document
-from gradlab.recipe_documents import compose_train_document
-from gradlab.run_contracts import RunManifest, new_attempt_id, new_run_id
+from gradlab.recipe_documents import (
+    compose_resolved_train_documents,
+)
+from gradlab.run_contracts import (
+    DEFAULT_LIVENESS_POLICY,
+    RunManifest,
+    new_attempt_id,
+    new_run_id,
+)
 
 
 @pytest.mark.parametrize(
@@ -149,6 +157,12 @@ def _manifest_only_run() -> RunManifest:
         "runtime_input_sha256": "b" * 64,
         "runtime_build_source_sha": source_sha,
     }
+    goal_variant = build_goal_variant_descriptor(
+        goal_slug="example/goal",
+        source_sha=source_sha,
+        authored_goal={"goal_id": "goal"},
+        effective_goal={"goal_id": "goal"},
+    )
     manifest = RunManifest(
         run_id=run_id,
         attempt_id=attempt_id,
@@ -156,7 +170,7 @@ def _manifest_only_run() -> RunManifest:
         source_sha=source_sha,
         image_digest="docker:example/gradlab@sha256:" + "c" * 64,
         goal_slug="example/goal",
-        goal_sha256="d" * 64,
+        goal_sha256=goal_variant["effective_goal_contract_sha256"],
         recipe_slug="ppo",
         recipe_sha256="e" * 64,
         recipe_overrides=[],
@@ -184,7 +198,8 @@ def _manifest_only_run() -> RunManifest:
             "models": "s3://models-public",
             "public_models_base_url": "https://models.example",
         },
-        schema_version=3,
+        goal_variant=goal_variant,
+        liveness=DEFAULT_LIVENESS_POLICY,
     )
     manifest.validate()
     return manifest
@@ -927,9 +942,18 @@ def test_rom_free_provider_does_not_require_or_stage_an_asset() -> None:
 
 def test_rom_free_launch_contract_omits_null_asset() -> None:
     goal = Path("experiments/goals/gradlab__bandit/_goal.yaml")
-    document = compose_train_document(goal, goal.parent / "recipes/ppo.yaml")
+    resolved = compose_resolved_train_documents(
+        goal,
+        goal.parent / "recipes/ppo.yaml",
+        source_sha="a" * 40,
+    )
     contract = _bind_launch_contract(
-        document,
+        resolved.effective,
+        asset=None,
+        checkpoint_eval_backend="none",
+    )
+    base_contract = _bind_launch_contract(
+        resolved.base,
         asset=None,
         checkpoint_eval_backend="none",
     )
@@ -942,4 +966,6 @@ def test_rom_free_launch_contract_omits_null_asset() -> None:
         run_description="ROM-free launch contract regression",
         seed=123,
         runtime_image_ref="docker:example/gradlab@sha256:" + "b" * 64,
+        base_materialized_recipe=base_contract,
+        canonical_goal=resolved.canonical_goal,
     )

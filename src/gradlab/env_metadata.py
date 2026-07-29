@@ -11,17 +11,13 @@ from gradlab.env import (
     validate_obs_crop,
     validate_obs_resize,
 )
-from gradlab.action_contract import (
-    declared_action_contract,
-    migrate_legacy_artifact_action_configuration,
-)
+from gradlab.action_contract import declared_action_contract
 from gradlab.env_identity import (
     environment_hash,
     environment_identity_from_train_config,
     task_config_from_train_config,
 )
 from gradlab.preprocessing import preprocessing_contract
-from gradlab.reward_transform import migrate_legacy_artifact_reward_config
 from gradlab.train_config import playback_env_arg_keys
 
 if TYPE_CHECKING:
@@ -138,43 +134,6 @@ def sanitize_env_config_metadata(config: dict[str, Any]) -> dict[str, Any]:
     cleaned = dict(config)
     if not cleaned:
         return {}
-    legacy_size = cleaned.pop("observation_size", None)
-    if "obs_resize" not in cleaned and legacy_size is not None:
-        cleaned["obs_resize"] = (int(legacy_size), int(legacy_size))
-    legacy_crop_top = cleaned.pop("hud_crop_top", None)
-    if "obs_crop" not in cleaned and legacy_crop_top is not None:
-        crop_top = int(legacy_crop_top)
-        if crop_top >= 0:
-            cleaned["obs_crop"] = (crop_top, 0, 0, 0)
-    env_args = cleaned.get("env_args")
-    if isinstance(env_args, dict):
-        env_args = dict(env_args)
-        legacy_game = env_args.pop("game", None)
-        env_args.pop("num_envs", None)
-        if legacy_game is not None:
-            cleaned.setdefault("game", legacy_game)
-        cleaned["env_args"] = env_args
-    existing_task = cleaned.get("task")
-    raw_task = (
-        dict(existing_task)
-        if isinstance(existing_task, dict)
-        else task_config_from_train_config(cleaned)
-    )
-    migrated_args, migrated_task = migrate_legacy_artifact_reward_config(
-        cleaned.get("env_args"),
-        raw_task,
-    )
-    cleaned["env_args"] = migrated_args
-    cleaned["task"] = migrated_task
-    normalized_args, normalized_task = migrate_legacy_artifact_action_configuration(
-        provider_id=str(cleaned.get("env_provider") or "stable-retro-turbo"),
-        game=str(cleaned.get("game") or ""),
-        env_args=cleaned.get("env_args"),
-        task=cleaned.get("task"),
-    )
-    cleaned["env_args"] = normalized_args
-    if normalized_task:
-        cleaned["task"] = normalized_task
     unexpected = sorted(set(cleaned) - ENV_CONFIG_METADATA_KEYS)
     if unexpected:
         raise ValueError(f"artifact environment config has unexpected keys: {unexpected}")

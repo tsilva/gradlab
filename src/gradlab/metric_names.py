@@ -9,7 +9,6 @@ from typing import Any, Mapping
 
 
 METRICS_SCHEMA_VERSION = 14
-LEGACY_METRICS_SCHEMA_VERSION = 13
 TRAIN_GLOBAL_STEP = "train/global_step"
 EVAL_CHECKPOINT_STEP = "eval/checkpoint/step"
 ORCHESTRATION_EVENT_SEQ = "orchestration/event_seq"
@@ -209,23 +208,6 @@ LEADER_CHECKPOINT_ARTIFACT_REF = "leader/checkpoint/artifact/ref"
 LEADER_CHECKPOINT_EVALUATION_SOURCE = "leader/checkpoint/evaluation/source"
 LEADER_CHECKPOINT_UPDATED_AT = "leader/checkpoint/updated_at"
 
-V13_EVAL_CHECKPOINT_STEP = "eval/checkpoint_step"
-V13_EVAL_FULL_EPISODE_RETURN_SHAPED_MEAN = "eval/full/episode/return/mean"
-V13_EVAL_FULL_EPISODE_RETURN_SHAPED_MAX = "eval/full/episode/return/best"
-V13_EVAL_FULL_EPISODE_COMPLETED_COUNT = "eval/full/episode/count"
-V13_EVAL_FULL_SUCCESS_ACROSS_STARTS_RATE_MIN = "eval/full/outcome/success/rate/min"
-V13_EVAL_FULL_SUCCESS_ACROSS_STARTS_RATE_MEAN = "eval/full/outcome/success/rate/mean"
-V13_EVAL_ACCEPTANCE_EPISODE_PLANNED_COUNT = "eval/acceptance/episodes/planned"
-V13_EVAL_ACCEPTANCE_EPISODE_COMPLETED_COUNT = "eval/acceptance/episodes/completed"
-V13_LEADER_CHECKPOINT_SUCCESS_ACROSS_STARTS_RATE_MIN = "leader/checkpoint/success_rate_min"
-V13_LEADER_CHECKPOINT_SUCCESS_ACROSS_STARTS_RATE_MEAN = "leader/checkpoint/success_rate_mean"
-V13_LEADER_CHECKPOINT_RETURN_SHAPED_MEAN = "leader/checkpoint/return_mean"
-V13_LEADER_CHECKPOINT_RETURN_SHAPED_MAX = "leader/checkpoint/best_return"
-V13_LEADER_CHECKPOINT_PROGRESS_MAX = "leader/checkpoint/progress_max"
-V13_LEADER_CHECKPOINT_ARTIFACT_REF = "leader/checkpoint/artifact_ref"
-V13_LEADER_CHECKPOINT_EVALUATION_SOURCE = "leader/checkpoint/eval_source"
-
-
 @dataclass(frozen=True)
 class MetricDefinition:
     name: str
@@ -249,56 +231,30 @@ class EvaluationMetricSchema:
     table_columns: tuple[str, ...]
 
 
-_EVALUATION_METRIC_SCHEMAS = {
-    LEGACY_METRICS_SCHEMA_VERSION: EvaluationMetricSchema(
-        version=LEGACY_METRICS_SCHEMA_VERSION,
-        checkpoint_step=V13_EVAL_CHECKPOINT_STEP,
-        return_mean=V13_EVAL_FULL_EPISODE_RETURN_SHAPED_MEAN,
-        return_max=V13_EVAL_FULL_EPISODE_RETURN_SHAPED_MAX,
-        episode_completed_count=V13_EVAL_FULL_EPISODE_COMPLETED_COUNT,
-        success_rate_min=V13_EVAL_FULL_SUCCESS_ACROSS_STARTS_RATE_MIN,
-        success_rate_mean=V13_EVAL_FULL_SUCCESS_ACROSS_STARTS_RATE_MEAN,
-        acceptance_episode_planned_count=V13_EVAL_ACCEPTANCE_EPISODE_PLANNED_COUNT,
-        acceptance_episode_completed_count=V13_EVAL_ACCEPTANCE_EPISODE_COMPLETED_COUNT,
-        table_columns=(
-            "checkpoint_step",
-            "start_id",
-            "episodes",
-            "success_count",
-            "success_rate",
-            "return_mean",
-            "return_std",
-            "return_median",
-            "reason",
-            "reason_count",
-            "reason_rate",
-        ),
+_EVALUATION_METRIC_SCHEMA = EvaluationMetricSchema(
+    version=METRICS_SCHEMA_VERSION,
+    checkpoint_step=EVAL_CHECKPOINT_STEP,
+    return_mean=EVAL_FULL_EPISODE_RETURN_SHAPED_MEAN,
+    return_max=EVAL_FULL_EPISODE_RETURN_SHAPED_MAX,
+    episode_completed_count=EVAL_FULL_EPISODE_COMPLETED_COUNT,
+    success_rate_min=EVAL_FULL_SUCCESS_ACROSS_STARTS_RATE_MIN,
+    success_rate_mean=EVAL_FULL_SUCCESS_ACROSS_STARTS_RATE_MEAN,
+    acceptance_episode_planned_count=EVAL_ACCEPTANCE_EPISODE_PLANNED_COUNT,
+    acceptance_episode_completed_count=EVAL_ACCEPTANCE_EPISODE_COMPLETED_COUNT,
+    table_columns=(
+        "checkpoint_step",
+        "start_id",
+        "episode_count",
+        "success_count",
+        "success_rate",
+        "shaped_return_mean",
+        "shaped_return_std",
+        "shaped_return_median",
+        "failure_reason",
+        "failure_reason_count",
+        "failure_reason_rate",
     ),
-    METRICS_SCHEMA_VERSION: EvaluationMetricSchema(
-        version=METRICS_SCHEMA_VERSION,
-        checkpoint_step=EVAL_CHECKPOINT_STEP,
-        return_mean=EVAL_FULL_EPISODE_RETURN_SHAPED_MEAN,
-        return_max=EVAL_FULL_EPISODE_RETURN_SHAPED_MAX,
-        episode_completed_count=EVAL_FULL_EPISODE_COMPLETED_COUNT,
-        success_rate_min=EVAL_FULL_SUCCESS_ACROSS_STARTS_RATE_MIN,
-        success_rate_mean=EVAL_FULL_SUCCESS_ACROSS_STARTS_RATE_MEAN,
-        acceptance_episode_planned_count=EVAL_ACCEPTANCE_EPISODE_PLANNED_COUNT,
-        acceptance_episode_completed_count=EVAL_ACCEPTANCE_EPISODE_COMPLETED_COUNT,
-        table_columns=(
-            "checkpoint_step",
-            "start_id",
-            "episode_count",
-            "success_count",
-            "success_rate",
-            "shaped_return_mean",
-            "shaped_return_std",
-            "shaped_return_median",
-            "failure_reason",
-            "failure_reason_count",
-            "failure_reason_rate",
-        ),
-    ),
-}
+)
 
 
 def evaluation_metric_schema(version: object) -> EvaluationMetricSchema:
@@ -306,10 +262,9 @@ def evaluation_metric_schema(version: object) -> EvaluationMetricSchema:
         normalized = int(version)
     except (TypeError, ValueError) as exc:
         raise ValueError(f"unsupported metrics schema version: {version!r}") from exc
-    schema = _EVALUATION_METRIC_SCHEMAS.get(normalized)
-    if schema is None:
+    if normalized != METRICS_SCHEMA_VERSION:
         raise ValueError(f"unsupported metrics schema version: {normalized}")
-    return schema
+    return _EVALUATION_METRIC_SCHEMA
 
 
 def leader_checkpoint_progress_metric(progress: object) -> str:
@@ -324,35 +279,17 @@ def leader_metric_for_rank_metric(
     schema_version: int = METRICS_SCHEMA_VERSION,
 ) -> str:
     evaluation_metric_schema(schema_version)
-    fixed = (
-        {
-            EVAL_FULL_SUCCESS_ACROSS_STARTS_RATE_MIN: (
-                LEADER_CHECKPOINT_SUCCESS_ACROSS_STARTS_RATE_MIN
-            ),
-            EVAL_FULL_SUCCESS_ACROSS_STARTS_RATE_MEAN: (
-                LEADER_CHECKPOINT_SUCCESS_ACROSS_STARTS_RATE_MEAN
-            ),
-            EVAL_FULL_EPISODE_RETURN_SHAPED_MEAN: LEADER_CHECKPOINT_RETURN_SHAPED_MEAN,
-            EVAL_FULL_EPISODE_RETURN_SHAPED_MAX: LEADER_CHECKPOINT_RETURN_SHAPED_MAX,
-            LEADER_CHECKPOINT_STEP: LEADER_CHECKPOINT_STEP,
-        }
-        if schema_version == METRICS_SCHEMA_VERSION
-        else {
-            V13_EVAL_FULL_SUCCESS_ACROSS_STARTS_RATE_MIN: (
-                V13_LEADER_CHECKPOINT_SUCCESS_ACROSS_STARTS_RATE_MIN
-            ),
-            V13_EVAL_FULL_SUCCESS_ACROSS_STARTS_RATE_MEAN: (
-                V13_LEADER_CHECKPOINT_SUCCESS_ACROSS_STARTS_RATE_MEAN
-            ),
-            V13_EVAL_FULL_EPISODE_RETURN_SHAPED_MEAN: (
-                V13_LEADER_CHECKPOINT_RETURN_SHAPED_MEAN
-            ),
-            V13_EVAL_FULL_EPISODE_RETURN_SHAPED_MAX: (
-                V13_LEADER_CHECKPOINT_RETURN_SHAPED_MAX
-            ),
-            LEADER_CHECKPOINT_STEP: LEADER_CHECKPOINT_STEP,
-        }
-    )
+    fixed = {
+        EVAL_FULL_SUCCESS_ACROSS_STARTS_RATE_MIN: (
+            LEADER_CHECKPOINT_SUCCESS_ACROSS_STARTS_RATE_MIN
+        ),
+        EVAL_FULL_SUCCESS_ACROSS_STARTS_RATE_MEAN: (
+            LEADER_CHECKPOINT_SUCCESS_ACROSS_STARTS_RATE_MEAN
+        ),
+        EVAL_FULL_EPISODE_RETURN_SHAPED_MEAN: LEADER_CHECKPOINT_RETURN_SHAPED_MEAN,
+        EVAL_FULL_EPISODE_RETURN_SHAPED_MAX: LEADER_CHECKPOINT_RETURN_SHAPED_MAX,
+        LEADER_CHECKPOINT_STEP: LEADER_CHECKPOINT_STEP,
+    }
     mapped = fixed.get(metric)
     if mapped is not None:
         return mapped
@@ -360,8 +297,6 @@ def leader_metric_for_rank_metric(
     if metric.startswith(prefix) and metric.endswith("/max"):
         progress = metric[len(prefix) : -len("/max")]
         if "/" not in progress:
-            if schema_version == LEGACY_METRICS_SCHEMA_VERSION:
-                return V13_LEADER_CHECKPOINT_PROGRESS_MAX
             return leader_checkpoint_progress_metric(progress)
     raise ValueError(f"evaluation rank criterion cannot be projected: {metric}")
 

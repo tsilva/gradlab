@@ -19,7 +19,10 @@ from gradlab.policy_bundle import (
     load_policy_bundle_from_checkpoint,
     write_canonical_json,
 )
-from gradlab.recipe_documents import compose_train_document
+from gradlab.recipe_documents import (
+    compose_resolved_train_documents,
+    compose_train_document,
+)
 from gradlab.recipe_schema import validate_materialized_train_recipe
 from gradlab.sb3_models import load_sb3_model
 from gradlab.train import main as train_main
@@ -35,6 +38,11 @@ def _bandit_recipe_document():
 
 def _write_versioned_recipe(tmp_path: Path, document: dict) -> Path:
     path = tmp_path / "recipe.json"
+    resolved = compose_resolved_train_documents(
+        BANDIT_GOAL,
+        BANDIT_RECIPE,
+        source_sha="a" * 40,
+    )
     return write_canonical_json(
         path,
         build_recipe_document(
@@ -43,6 +51,8 @@ def _write_versioned_recipe(tmp_path: Path, document: dict) -> Path:
             source_commit="a" * 40,
             run_description="ROM-free backend boundary smoke.",
             runtime_image_ref="docker:ghcr.io/tsilva/gradlab-runtime@sha256:" + "b" * 64,
+            base_materialized_recipe=resolved.base,
+            canonical_goal=resolved.canonical_goal,
         ),
     )
 

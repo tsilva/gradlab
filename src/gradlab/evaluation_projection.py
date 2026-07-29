@@ -7,13 +7,6 @@ from typing import Any
 from gradlab.metric_names import (
     EVAL_ACCEPTANCE_DURATION_SECONDS,
     EVAL_ACCEPTANCE_PASS,
-    LEGACY_METRICS_SCHEMA_VERSION,
-    METRICS_SCHEMA_VERSION,
-    V13_EVAL_FULL_EPISODE_COMPLETED_COUNT,
-    V13_EVAL_FULL_EPISODE_RETURN_SHAPED_MAX,
-    V13_EVAL_FULL_EPISODE_RETURN_SHAPED_MEAN,
-    V13_EVAL_FULL_SUCCESS_ACROSS_STARTS_RATE_MEAN,
-    V13_EVAL_FULL_SUCCESS_ACROSS_STARTS_RATE_MIN,
     evaluation_metric_schema,
     metric_definition,
 )
@@ -29,18 +22,6 @@ _CURRENT_FIXED_FULL_METRICS = frozenset(
         "eval/full/episode/completed/count",
         "eval/full/outcome/success/across_starts/rate/min",
         "eval/full/outcome/success/across_starts/rate/mean",
-    }
-)
-_LEGACY_FIXED_FULL_METRICS = frozenset(
-    {
-        V13_EVAL_FULL_EPISODE_RETURN_SHAPED_MEAN,
-        "eval/full/episode/return/std",
-        "eval/full/episode/return/median",
-        V13_EVAL_FULL_EPISODE_RETURN_SHAPED_MAX,
-        "eval/full/episode/length/mean",
-        V13_EVAL_FULL_EPISODE_COMPLETED_COUNT,
-        V13_EVAL_FULL_SUCCESS_ACROSS_STARTS_RATE_MIN,
-        V13_EVAL_FULL_SUCCESS_ACROSS_STARTS_RATE_MEAN,
     }
 )
 _PROGRESS_METRIC_RE = re.compile(r"^eval/full/progress/[A-Za-z0-9_.-]+/(?:mean|max)$")
@@ -63,13 +44,10 @@ def metrics_schema_version_from_recipe_document(document: Mapping[str, Any]) -> 
 
 
 def _allowed_full_metric(name: str, *, schema_version: int) -> bool:
+    evaluation_metric_schema(schema_version)
     if _PROGRESS_METRIC_RE.fullmatch(name):
         return True
-    if schema_version == METRICS_SCHEMA_VERSION:
-        return name in _CURRENT_FIXED_FULL_METRICS and metric_definition(name) is not None
-    if schema_version == LEGACY_METRICS_SCHEMA_VERSION:
-        return name in _LEGACY_FIXED_FULL_METRICS
-    raise ValueError(f"unsupported metrics schema version: {schema_version}")
+    return name in _CURRENT_FIXED_FULL_METRICS and metric_definition(name) is not None
 
 
 def validate_evaluation_scientific_metric(

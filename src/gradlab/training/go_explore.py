@@ -171,15 +171,6 @@ def _save_policy(
     terminal: bool = False,
 ) -> Path | None:
     def save_checkpoint(destination: Path, discriminator: str) -> None:
-        cell_graph_exporter = getattr(search, "cell_graph_policy", None)
-        if bool(getattr(search, "legacy_state", False)) or not callable(
-            cell_graph_exporter
-        ):
-            search.policy().save(
-                destination,
-                artifact_discriminator=discriminator,
-            )
-            return
         archive_config = context.train_config.get("state_archive")
         if not isinstance(archive_config, Mapping):
             raise ValueError("Go-Explore checkpoint requires state_archive configuration")
@@ -205,7 +196,7 @@ def _save_policy(
                     archive.entry(entry_id).to_dict(),
                     archive.payload(entry_id),
                 )
-        cell_graph_exporter(
+        search.cell_graph_policy(
             detector=cell_detector,
             snapshot_mode=snapshot_mode,
             snapshot_records=snapshot_records,

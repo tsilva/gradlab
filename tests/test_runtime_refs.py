@@ -39,7 +39,7 @@ def image_payload() -> dict:
         },
         "workflow_run_id": "11",
         "vizdoom_smoke": {
-            "contract_version": 1,
+            "contract_version": 2,
             "image_digest": "sha256:" + "a" * 64,
             "provider_distribution": "vizdoom-turbo",
             "provider_version": "1.3.0.post16",
@@ -94,25 +94,16 @@ class RuntimeRefsTests(unittest.TestCase):
                         expected_source_sha=SOURCE_SHA,
                     )
 
-    def test_legacy_schema_is_readable_but_not_launchable(self) -> None:
+    def test_old_schema_is_rejected(self) -> None:
         payload = image_payload()
         payload["schema_version"] = 6
         payload.pop("vizdoom_smoke")
         with self.assertRaisesRegex(ValueError, "schema_version must be 7"):
             runtime_refs.runtime_release_from_payload(
                 payload,
-                label="legacy image",
+                label="old image",
                 expected_source_sha=SOURCE_SHA,
             )
-
-        release = runtime_refs.runtime_release_from_payload(
-            payload,
-            label="legacy image",
-            expected_source_sha=SOURCE_SHA,
-            allow_legacy=True,
-        )
-        self.assertEqual(release.schema_version, 6)
-        self.assertEqual(release.vizdoom_smoke_contract_version, 0)
 
     def test_smoke_evidence_must_match_the_exact_image_digest(self) -> None:
         payload = image_payload()

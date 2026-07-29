@@ -40,7 +40,7 @@ from gradlab.policy_bundle import (
     playback_contract,
     write_canonical_json,
 )
-from gradlab.recipe_documents import compose_train_document
+from gradlab.recipe_documents import compose_resolved_train_documents
 from gradlab.training_backend import training_backend_config_hash
 
 
@@ -52,17 +52,20 @@ def test_checkpoint_step_is_derived_from_learner_filename() -> None:
 def test_model_metadata_round_trips_playback_environment(tmp_path: Path) -> None:
     model = tmp_path / "model_250000_steps.zip"
     model.write_bytes(b"checkpoint")
-    materialized = compose_train_document(
+    resolved = compose_resolved_train_documents(
         Path("experiments/goals/gradlab__bandit/_goal.yaml"),
         Path("experiments/goals/gradlab__bandit/recipes/ppo.yaml"),
+        source_sha="a" * 40,
     )
     recipe_document = build_recipe_document(
-        materialized,
+        resolved.effective,
         repo_root=Path.cwd(),
         source_commit="a" * 40,
         run_description="Versioned playback metadata regression.",
         seed=123,
         runtime_image_ref="docker:example/image@sha256:" + "f" * 64,
+        base_materialized_recipe=resolved.base,
+        canonical_goal=resolved.canonical_goal,
     )
     train_config = recipe_document["recipe"]["train_config"]
     config = resolve_env_config(env_config_from_mapping(train_config))

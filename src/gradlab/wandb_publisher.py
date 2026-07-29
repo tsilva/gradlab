@@ -16,10 +16,7 @@ from gradlab.metric_names import (
     LEADER_CHECKPOINT_EVALUATION_SOURCE,
     LEADER_CHECKPOINT_STEP,
     LEADER_CHECKPOINT_UPDATED_AT,
-    LEGACY_METRICS_SCHEMA_VERSION,
     METRICS_SCHEMA_VERSION,
-    V13_LEADER_CHECKPOINT_ARTIFACT_REF,
-    V13_LEADER_CHECKPOINT_EVALUATION_SOURCE,
     evaluation_metric_schema,
     leader_metric_for_rank_metric,
     validate_metric_payload,
@@ -412,22 +409,11 @@ def publish_promotion_summary(
         selection_rank,
         metrics_schema_version=metrics_schema_version,
     )
-    legacy = metrics_schema_version == LEGACY_METRICS_SCHEMA_VERSION
-    artifact_metric = (
-        V13_LEADER_CHECKPOINT_ARTIFACT_REF
-        if legacy
-        else LEADER_CHECKPOINT_ARTIFACT_REF
-    )
-    source_metric = (
-        V13_LEADER_CHECKPOINT_EVALUATION_SOURCE
-        if legacy
-        else LEADER_CHECKPOINT_EVALUATION_SOURCE
-    )
     projection: dict[str, Any] = {
         "gradlab/goal/outcome": "accepted",
         LEADER_CHECKPOINT_STEP: int(checkpoint_step),
-        artifact_metric: checkpoint_url,
-        source_metric: str(evaluation_source),
+        LEADER_CHECKPOINT_ARTIFACT_REF: checkpoint_url,
+        LEADER_CHECKPOINT_EVALUATION_SOURCE: str(evaluation_source),
         LEADER_CHECKPOINT_UPDATED_AT: updated_at,
     }
     available: dict[str, float] = {}
