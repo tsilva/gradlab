@@ -50,6 +50,15 @@ regenerates dstack's host inventory on every shim start; it does not remove
 Use an SSH tunnel such as `ssh -N -L 3000:127.0.0.1:3000 tsilva@beast-3`, then
 point the client at `http://127.0.0.1:3000`.
 
+## Container DNS
+
+B3's Docker daemon uses Cloudflare's `1.1.1.1` and `1.0.0.1` resolvers so
+long-lived containers and newly scheduled training tasks do not retain a stale
+router DNS address after the host changes subnets. The dstack server unit also
+declares those resolvers explicitly. Preserve the host's systemd-resolved and
+Tailscale split-DNS configuration; this setting applies only to Docker
+containers.
+
 ## Host image cleanup
 
 The pinned runner removes terminated task containers but does not prune their
