@@ -269,7 +269,7 @@ unevaluated for future explicit user action. dstack process exit alone is never 
 | `train/reward/signal/{signal}/max` | Configured reward-source signal. | scalar | rollout | history |
 | `train/reward/signal/{signal}/nonzero_rate` | Fraction of configured reward-source signal values that are nonzero. | fraction | rollout | history |
 | `train/algorithm/ppo/update/approx_kl` | Approximate KL divergence for the PPO update. | scalar | rollout | history |
-| `train/algorithm/ppo/update/clip_fraction` | Fraction of policy ratios clipped by PPO. | fraction | rollout | history |
+| `train/algorithm/ppo/update/clip_fraction` | Fraction of sampled policy ratios outside PPO's clipping interval and therefore clipped in the surrogate objective. This is an update-pressure diagnostic, not a target to maximize; interpret it with `approx_kl` and task return. | fraction | rollout | history |
 | `train/algorithm/jerk/retained/count` | Distinct action sequences retained by JERK search. | sequences | rollout | history |
 | `train/algorithm/jerk/best/return_mean` | Mean observed return of JERK's highest-ranked retained sequence. | return | rollout | history |
 | `train/algorithm/jerk/best/sequence_length` | Action length of JERK's highest-ranked retained sequence. | steps | rollout | history |
