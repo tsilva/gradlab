@@ -59,13 +59,13 @@ W&B events, report, and replay manifest:
 ```bash
 gradlab experiment certify \
   --tier simulated \
-  --artifacts-dir runs/certification/manual-check \
+  --artifacts-dir ~/.config/gradlab/runs/certification/manual-check \
   --json
 ```
 
 The destination must be empty. Without an explicit destination, passing
 artifacts are temporary; failing artifacts are preserved under
-`runs/certification/failure-<report-prefix>/`.
+`~/.config/gradlab/runs/certification/failure-<report-prefix>/`.
 
 Replay the exact scenario set:
 
@@ -84,5 +84,5 @@ by the scenario rather than weakening the invariant or changing the replay.
 Tier 1 proves deterministic orchestration semantics with real local persistence
 and scripted service boundaries. It does not prove live dstack scheduling, real
 R2 permissions/consistency, W&B backend visibility, Modal deployment, ROM
-provisioning, or GPU training. Those belong to the service-integration and B3
-Mario acceptance tiers.
+provisioning, or GPU training. Those belong to service-integration and
+hardware-specific acceptance tiers.

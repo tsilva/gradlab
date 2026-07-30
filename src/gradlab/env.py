@@ -30,6 +30,7 @@ from gradlab.env_registry import (
     resolve_env_provider,
     validate_provider_constructor_args,
 )
+from gradlab.local_paths import PORTABLE_DEFAULT_RUNS_DIR
 from gradlab.env_identity import task_config_from_train_config, validate_task_config
 from gradlab.env_registry import environment_spec
 from gradlab.task_kernels import (
@@ -697,5 +698,8 @@ def assert_provider_runtime_available(
             )
 
 
-def default_run_dir(run_name: str, runs_dir: str = "runs") -> str:
-    return os.path.join(runs_dir, run_name)
+def default_run_dir(
+    run_name: str,
+    runs_dir: str = PORTABLE_DEFAULT_RUNS_DIR,
+) -> str:
+    return os.path.join(os.path.expanduser(runs_dir), run_name)

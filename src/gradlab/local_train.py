@@ -14,6 +14,7 @@ from pathlib import Path, PurePosixPath
 from urllib.parse import unquote, urlparse
 
 from gradlab.cli_parser import ExactArgumentParser
+from gradlab.local_paths import default_runs_dir
 from gradlab.clock import utc_now as _utc_now
 from gradlab.config_loader import RECIPE_TEMPLATE_VALUES, render_template_vars
 from gradlab.env import task_termination
@@ -74,8 +75,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--runs-dir",
         type=Path,
-        default=Path("runs"),
-        help="Local run root; defaults to ./runs.",
+        default=default_runs_dir(),
+        help="Local run root; defaults to ~/.config/gradlab/runs.",
     )
     parser.add_argument(
         "--run-name",

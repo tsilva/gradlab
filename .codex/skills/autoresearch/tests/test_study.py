@@ -71,18 +71,14 @@ class ReturnEvidenceTests(unittest.TestCase):
                     "round": 1,
                     "candidate_id": "lower-floor",
                     "seeds": [123],
-                    "terminal_runs": [
-                        {"training_evidence": return_evidence(100.0, 30.0, 200.0)}
-                    ],
+                    "terminal_runs": [{"training_evidence": return_evidence(100.0, 30.0, 200.0)}],
                 },
                 {
                     "phase": "search-screen",
                     "round": 1,
                     "candidate_id": "higher-floor",
                     "seeds": [123],
-                    "terminal_runs": [
-                        {"training_evidence": return_evidence(100.0, 40.0, 180.0)}
-                    ],
+                    "terminal_runs": [{"training_evidence": return_evidence(100.0, 40.0, 180.0)}],
                 },
             ],
         }
@@ -99,7 +95,9 @@ class StudyDiscoveryTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             subprocess.run(["git", "init", "-q"], cwd=root, check=True)
-            subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=root, check=True)
+            subprocess.run(
+                ["git", "config", "user.email", "test@example.com"], cwd=root, check=True
+            )
             subprocess.run(["git", "config", "user.name", "Test"], cwd=root, check=True)
             goal = root / "goal.yaml"
             recipe = root / "recipe.yaml"
@@ -128,11 +126,15 @@ class StudyDiscoveryTests(unittest.TestCase):
             )
             args = SimpleNamespace(
                 root=str(root),
+                runs_dir=root / "runs",
                 goal="goal.yaml",
                 recipe="recipe.yaml",
                 strong_threshold=study.DEFAULT_STRONG_THRESHOLD,
+                target="local-gpu",
             )
-            with mock.patch.object(study, "compose_train_document", side_effect=RuntimeError("new-study")):
+            with mock.patch.object(
+                study, "compose_train_document", side_effect=RuntimeError("new-study")
+            ):
                 with self.assertRaisesRegex(RuntimeError, "new-study"):
                     study.command_init(args)
             self.assertEqual(study.git_head(root), head)
@@ -157,7 +159,7 @@ class StudyDiscoveryTests(unittest.TestCase):
             "study_id": "abcdef123456",
             "goal_path": "experiments/goals/game/goal/_goal.yaml",
             "recipe_path": "experiments/goals/game/goal/recipes/ppo.yaml",
-            "policy": {"compute_target": "b3"},
+            "policy": {"compute_target": "local-gpu"},
             "candidates": {"candidate": {"delta": {"learning_rate": 0.000125}}},
         }
         wave = {
@@ -176,7 +178,7 @@ class StudyDiscoveryTests(unittest.TestCase):
             command[command.index("--checkpoint-eval-backend") + 1],
             "none",
         )
-        self.assertEqual(command[command.index("--target") + 1], "b3")
+        self.assertEqual(command[command.index("--target") + 1], "local-gpu")
         self.assertIn("--existing-runtime-only", command)
         self.assertNotIn("--machine", command)
         self.assertNotIn("--request-id", command)

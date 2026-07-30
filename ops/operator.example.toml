@@ -3,7 +3,9 @@ schema_version = 2
 # Non-sensitive operator metadata. Copy this file to:
 #   ~/.config/gradlab/operator.toml
 [environment]
+DSTACK_PROJECT = "<dstack-project>"
 DSTACK_SERVER_URL = "http://127.0.0.1:3000"
+GRADLAB_LOCAL_FLEET = "<local-fleet>"
 WANDB_ENTITY = "<wandb-entity>"
 GRADLAB_CONTROL_R2_URI = "s3://<control-bucket>"
 GRADLAB_CONTROL_R2_ENDPOINT_URL = "https://<account-id>.r2.cloudflarestorage.com"

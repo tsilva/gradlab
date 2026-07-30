@@ -4,6 +4,5 @@ kind: local_smoke
 description: Tiny dstack local training and durable-result smoke on Mario Level1-1.
 goal_file: experiments/goals/SuperMarioBros-Nes-v0/Level1-1/_goal.yaml
 recipe_file: experiments/goals/SuperMarioBros-Nes-v0/Level1-1/recipes/dstack-smoke.yaml
-target: b3
 seed: 123
 max_duration: 30m

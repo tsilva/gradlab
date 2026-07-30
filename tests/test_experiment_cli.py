@@ -17,12 +17,15 @@ from gradlab.experiment_cli import (
     _follow_fingerprint,
     _latest_attempt_terminal,
     _manifest_rom_asset,
+    _manifest_dstack_project,
+    _operator_preflight,
     _poll_status,
     _project_reconciled_terminal,
     _public_dstack_state,
     _record_pre_submit_failure,
     _record_terminal_task_without_receipt,
     _require_retryable_attempt_terminal,
+    _retry_compute_request,
     _required_operator_environment,
     _run_completed,
     _stage_rom,
@@ -78,21 +81,21 @@ def test_wandb_identity_uses_project_relative_goal_display_names(
             document,
             run_id,
             goal_slug=goal_slug,
-            recipe_slug="ppo-b3",
+            recipe_slug="ppo-local",
             recipe_variant="base",
             seed=7,
         )
 
     assert identity["project"] == "SuperMarioBros-Nes-v0"
-    assert identity["display_name"] == f"{expected_goal}__ppo-b3__s7__01234567"
-    assert identity["group"] == f"cohort::{goal_slug}::ppo-b3::base"
+    assert identity["display_name"] == f"{expected_goal}__ppo-local__s7__01234567"
+    assert identity["group"] == f"cohort::{goal_slug}::ppo-local::base"
     assert identity["run_id"] == run_id
     assert identity["url"].endswith(f"/runs/{run_id}")
 
 
 def test_wandb_identity_prefers_declared_campaign_group() -> None:
     document = {
-        "campaign_id": "mario-b3-confirmation",
+        "campaign_id": "mario-local-confirmation",
         "train_config": {
             "env_provider": "supermariobrosnes-turbo",
             "game": "SuperMarioBros-Nes-v0",
@@ -104,12 +107,12 @@ def test_wandb_identity_prefers_declared_campaign_group() -> None:
             document,
             "gradlab-fedcba9876543210fedcba9876543210",
             goal_slug="SuperMarioBros-Nes-v0/Level1-1",
-            recipe_slug="ppo-b3",
+            recipe_slug="ppo-local",
             recipe_variant="v-12345678",
             seed=123,
         )
 
-    assert identity["group"] == "campaign::mario-b3-confirmation"
+    assert identity["group"] == "campaign::mario-local-confirmation"
 
 
 def test_catalog_cli_exposes_only_the_current_rebuild_command() -> None:
@@ -166,12 +169,12 @@ def test_wandb_identity_cohort_group_includes_override_variant() -> None:
             document,
             "gradlab-fedcba9876543210fedcba9876543210",
             goal_slug="SuperMarioBros-Nes-v0/Level1-1",
-            recipe_slug="ppo-b3",
+            recipe_slug="ppo-local",
             recipe_variant="v-12345678",
             seed=123,
         )
 
-    assert identity["group"] == ("cohort::SuperMarioBros-Nes-v0/Level1-1::ppo-b3::v-12345678")
+    assert identity["group"] == ("cohort::SuperMarioBros-Nes-v0/Level1-1::ppo-local::v-12345678")
 
 
 def _manifest_only_run() -> RunManifest:
@@ -181,7 +184,7 @@ def _manifest_only_run() -> RunManifest:
     compute = {
         "request": {
             "kind": "local",
-            "target": "b3",
+            "target": "local-gpu",
             "max_price": None,
             "max_cost_usd": None,
             "allow_on_demand": False,
@@ -189,13 +192,14 @@ def _manifest_only_run() -> RunManifest:
         },
         "selected": {
             "kind": "local",
-            "target": "b3",
+            "target": "local-gpu",
             "max_price": None,
             "max_cost_usd": None,
             "allow_on_demand": False,
             "max_duration_seconds": 3600,
         },
         "selected_offer": None,
+        "dstack_project": "research",
         "dstack_task": run_id,
         "runtime_workflow_run_id": "12345",
         "runtime_input_sha256": "b" * 64,
@@ -295,7 +299,7 @@ def test_fault_test_is_bounded_and_not_exposed_as_a_launch_override() -> None:
     forwarded = launch.call_args.args[0]
     assert forwarded.max_duration == 120
     assert forwarded.compute == "local"
-    assert forwarded.target == "b3"
+    assert forwarded.target is None
     assert forwarded.checkpoint_eval_backend == "none"
     assert forwarded.recipe_overrides == []
     assert forwarded.supervision_fault_fixture == "failed-result-live-process"
@@ -315,18 +319,20 @@ def test_fault_test_is_bounded_and_not_exposed_as_a_launch_override() -> None:
     assert not hasattr(launch_args, "supervision_fault_fixture")
 
 
-def test_auto_without_cloud_budget_stays_local() -> None:
-    compute = _compute(
-        SimpleNamespace(
-            compute="auto",
-            target=None,
-            max_price=None,
-            max_cost_usd=None,
-            allow_on_demand=False,
-            max_duration=3600,
+def test_auto_without_cloud_budget_uses_operator_local_fleet() -> None:
+    with mock.patch.dict("os.environ", {"GRADLAB_LOCAL_FLEET": "local-gpu"}):
+        compute = _compute(
+            SimpleNamespace(
+                compute="auto",
+                target=None,
+                max_price=None,
+                max_cost_usd=None,
+                allow_on_demand=False,
+                max_duration=3600,
+            )
         )
-    )
     assert compute.kind == "auto"
+    assert compute.target == "local-gpu"
     assert compute.max_price is None
     assert compute.bounded_duration_seconds == 3600
 
@@ -335,7 +341,106 @@ def test_operator_preflight_parser_defaults_to_modal() -> None:
     args = build_parser().parse_args(["operator-preflight", "--json"])
 
     assert args.checkpoint_eval_backend == "modal"
+    assert args.target is None
     assert args.json is True
+
+
+def test_operator_preflight_parser_accepts_local_target_override() -> None:
+    args = build_parser().parse_args(
+        ["operator-preflight", "--target", "alternate-local", "--json"]
+    )
+
+    assert args.target == "alternate-local"
+
+
+def test_manifest_project_binding_wins_and_legacy_manifest_uses_operator_project(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("DSTACK_PROJECT", "operator-project")
+
+    assert _manifest_dstack_project({"dstack_project": "bound-project"}) == "bound-project"
+    assert _manifest_dstack_project({}) == "operator-project"
+
+
+def test_targetless_legacy_retry_reuses_previously_selected_local_fleet() -> None:
+    request = _retry_compute_request(
+        {
+            "request": {
+                "kind": "local",
+                "target": None,
+                "max_price": None,
+                "max_cost_usd": None,
+                "allow_on_demand": False,
+                "max_duration_seconds": 3600,
+            },
+            "selected": {"kind": "local", "target": "recorded-local"},
+        }
+    )
+
+    assert request["target"] == "recorded-local"
+
+
+def test_targetless_legacy_retry_without_selected_fleet_fails_closed() -> None:
+    with pytest.raises(RuntimeError, match="no recorded local fleet"):
+        _retry_compute_request(
+            {
+                "request": {"kind": "auto", "target": None},
+                "selected": {"kind": "spot", "target": None},
+            }
+        )
+
+
+def test_operator_preflight_reports_resolved_project_fleet_and_sources(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    for name in _required_operator_environment("none"):
+        monkeypatch.setenv(name, "operator-value")
+    monkeypatch.setenv("DSTACK_PROJECT", "research")
+    monkeypatch.setenv("GRADLAB_LOCAL_FLEET", "configured-local")
+
+    environment_report = SimpleNamespace(
+        config_path=tmp_path / "operator.toml",
+        config_present=True,
+        source_for=lambda name, environment: (
+            "operator-config" if str(environment.get(name) or "").strip() else "missing"
+        ),
+    )
+    storage = SimpleNamespace(
+        control=SimpleNamespace(),
+        evaluation=SimpleNamespace(),
+        models=SimpleNamespace(),
+    )
+    bucket = mock.MagicMock()
+    bucket.iter_keys.return_value = iter(())
+    with (
+        mock.patch(
+            "gradlab.experiment_cli._load_environment",
+            return_value=environment_report,
+        ),
+        mock.patch(
+            "gradlab.experiment_cli.RunStorageConfig.from_env",
+            return_value=storage,
+        ),
+        mock.patch("gradlab.experiment_cli.RunAuthority", return_value=mock.MagicMock()),
+        mock.patch("gradlab.experiment_cli.R2Bucket", return_value=bucket),
+        mock.patch("gradlab.experiment_cli.DstackBackend.preflight"),
+        mock.patch(
+            "gradlab.experiment_cli.wandb_entity_from_env",
+            return_value="example-entity",
+        ),
+    ):
+        _storage, _authority, backend, report = _operator_preflight(
+            tmp_path,
+            checkpoint_eval_backend="none",
+        )
+
+    assert backend.project == "research"
+    assert report["dstack"]["project"] == "research"
+    assert report["compute"] == {
+        "local_fleet": "configured-local",
+        "source": "operator-config",
+    }
 
 
 def test_resume_submit_parser_requires_one_existing_run() -> None:
@@ -357,7 +462,7 @@ def test_launch_operator_preflight_runs_before_runtime_readiness(
         recipe_overrides=[],
         checkpoint_eval_backend="modal",
         compute="local",
-        target="b3",
+        target="local-gpu",
         max_price=None,
         max_cost_usd=None,
         allow_on_demand=False,
@@ -410,11 +515,11 @@ def test_operator_configuration_error_is_concise_without_traceback(
 def test_public_dstack_state_never_exposes_raw_task_environment() -> None:
     value = _public_dstack_state(
         DstackTask(
-            project="main",
+            project="research",
             name="run-one",
             status="running",
             raw={
-                "fleet": {"name": "b3"},
+                "fleet": {"name": "local-gpu"},
                 "submitted_at": "2026-07-24T16:00:00Z",
                 "run_spec": {
                     "configuration": {
@@ -429,7 +534,7 @@ def test_public_dstack_state_never_exposes_raw_task_environment() -> None:
     )
 
     encoded = json.dumps(value, sort_keys=True)
-    assert value["fleet"] == "b3"
+    assert value["fleet"] == "local-gpu"
     assert "raw" not in value
     assert "should-never-appear" not in encoded
     assert "also-secret" not in encoded
@@ -652,7 +757,7 @@ def test_pre_submit_failure_records_typed_attempt_evidence() -> None:
 def test_terminal_task_without_receipt_records_typed_startup_failure() -> None:
     manifest = _manifest_only_run()
     authority = mock.MagicMock()
-    task = DstackTask(project="main", name="gradlab-retry", status="failed")
+    task = DstackTask(project="research", name="gradlab-retry", status="failed")
 
     _record_terminal_task_without_receipt(
         authority,
@@ -676,7 +781,7 @@ def test_terminal_task_without_receipt_records_typed_startup_failure() -> None:
 def test_active_task_without_receipt_cannot_be_sealed() -> None:
     manifest = _manifest_only_run()
     authority = mock.MagicMock()
-    task = DstackTask(project="main", name="gradlab-retry", status="running")
+    task = DstackTask(project="research", name="gradlab-retry", status="running")
 
     with pytest.raises(RuntimeError, match="while its dstack task is active"):
         _record_terminal_task_without_receipt(
@@ -721,7 +826,7 @@ def test_reconcile_acquires_lease_writes_r2_before_wandb_and_releases(
     authority.create_attempt_terminal.side_effect = lambda _receipt: events.append("r2")
     backend = mock.MagicMock()
     backend.status.return_value = DstackTask(
-        project="main",
+        project="research",
         name=str(manifest.compute["dstack_task"]),
         status="failed",
     )
@@ -824,7 +929,7 @@ def test_resume_submit_recovers_only_the_original_manifest(
     backend = mock.MagicMock()
     backend.status.side_effect = KeyError("not found")
     backend.submit.return_value = DstackTask(
-        project="main",
+        project="research",
         name=manifest.run_id,
         status="submitted",
     )
@@ -926,7 +1031,7 @@ def test_training_only_task_does_not_receive_modal_credentials() -> None:
         compute={
             "selected": {
                 "kind": "local",
-                "target": "b3",
+                "target": "local-gpu",
                 "max_price": None,
                 "max_cost_usd": None,
                 "allow_on_demand": False,
@@ -952,7 +1057,7 @@ def test_fault_fixture_switch_is_bound_only_through_manifest_compute() -> None:
         compute={
             "selected": {
                 "kind": "local",
-                "target": "b3",
+                "target": "local-gpu",
                 "max_price": None,
                 "max_cost_usd": None,
                 "allow_on_demand": False,
@@ -966,9 +1071,7 @@ def test_fault_fixture_switch_is_bound_only_through_manifest_compute() -> None:
 
     task = _task_request(manifest, manifest_uri="s3://control/run/manifest.json")
 
-    assert task.plain_env == {
-        "GRADLAB_SUPERVISION_FAULT_FIXTURE": "failed-result-live-process"
-    }
+    assert task.plain_env == {"GRADLAB_SUPERVISION_FAULT_FIXTURE": "failed-result-live-process"}
     assert "GRADLAB_SUPERVISION_FAULT_FIXTURE" not in task.secret_env
 
 
@@ -1017,9 +1120,9 @@ def test_rom_free_launch_contract_omits_null_asset() -> None:
 
 def test_repair_runtime_accepts_rom_free_manifest() -> None:
     assert _manifest_rom_asset({"enabled": False, "rom_asset_manifest": None}) is None
-    assert _manifest_rom_asset(
-        {"enabled": True, "rom_asset_manifest": {"game": "Example-v0"}}
-    ) == {"game": "Example-v0"}
+    assert _manifest_rom_asset({"enabled": True, "rom_asset_manifest": {"game": "Example-v0"}}) == {
+        "game": "Example-v0"
+    }
 
     with pytest.raises(ValueError, match="object or null"):
         _manifest_rom_asset({"rom_asset_manifest": "invalid"})

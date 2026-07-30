@@ -7,8 +7,9 @@ signals. Use success evidence when the task declares success termination. When a
 episode return but declares no success event, use robust late-training return evidence instead.
 Autoresearch does not evaluate or promote checkpoints and cannot establish goal acceptance.
 
-Use `beast-3`, at most 48 reserved jobs, three stale search rounds, a `0.90` strong threshold, and
-five untouched confirmation seeds requiring at least four strong runs. Freeze at initialization:
+Use the operator-configured local fleet, at most 48 reserved jobs, three stale
+search rounds, a `0.90` strong threshold, and five untouched confirmation seeds
+requiring at least four strong runs. Resolve and freeze the fleet at initialization:
 
 ```text
 rollout_quantum = n_steps * n_envs
@@ -140,5 +141,5 @@ confirmation rule. Record the result as `training-signal-confirmed`, never accep
 Apply in two phases: preregister the exact leaf postimage and hash while the leaf equals its pinned
 preimage, then apply and recompose. Require the recomposed train configuration to equal the frozen
 baseline plus only the winning numeric backend delta. Preserve all goal-owned evaluation settings
-for ordinary future launches. Keep reports under `runs/autoresearch/`; only the leaf recipe patch is
+for ordinary future launches. Keep reports under `~/.config/gradlab/runs/autoresearch/`; only the leaf recipe patch is
 source content.

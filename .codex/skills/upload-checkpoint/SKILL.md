@@ -33,7 +33,7 @@ If a required fact is ambiguous and cannot be safely inferred from source artifa
 1. Gather source evidence.
    - Verify the checkpoint file or artifact exists.
    - Verify reported metrics against private-R2 evaluation evidence, W&B metrics, model metadata, or generated eval summaries.
-   - Keep generated staging artifacts under ignored locations such as `runs/`.
+   - Keep generated staging artifacts under `~/.config/gradlab/runs/`.
 
 2. Resolve the deterministic publication identity.
    - Run the repository-owned `scripts/prepare_huggingface_release.py` with
@@ -72,7 +72,7 @@ If a required fact is ambiguous and cannot be safely inferred from source artifa
    - Run `scripts/audit_huggingface_release.py <repo-id> --revision <vN>` after publication. It
      verifies the live generated card, exact remote file set, manifest hashes, main/tag commit,
      replay encoding, and Collection membership through the Hugging Face API.
-   - Save upload results under the staging directory, for example `runs/hf_upload/<repo>/youtube_upload_result.json`.
+   - Save upload results under the staging directory, for example `~/.config/gradlab/runs/hf_upload/<repo>/youtube_upload_result.json`.
    - Report the Hugging Face model URL, Hugging Face commit URL when available, YouTube URL, playlist URL when available, and exact local staging paths.
 
 ## Contract Ownership

@@ -501,7 +501,7 @@ class CertificationFixture:
         compute = {
             "request": {
                 "kind": "local",
-                "target": "simulated-b3",
+                "target": "simulated-local-gpu",
                 "max_price": None,
                 "max_cost_usd": None,
                 "allow_on_demand": False,
@@ -509,7 +509,7 @@ class CertificationFixture:
             },
             "selected": {
                 "kind": "local",
-                "target": "simulated-b3",
+                "target": "simulated-local-gpu",
                 "max_price": None,
                 "max_cost_usd": None,
                 "allow_on_demand": False,
@@ -754,9 +754,7 @@ class LifecycleVerifier:
                 raise AssertionError(f"independent verifier: {name}: {dict(evidence)}")
             checks.append({"name": name, "status": "passed", "evidence": dict(evidence)})
 
-        RunManifest.from_dict(
-            authority.control.get_json(f"runs/{run_id}/manifest.json")
-        )
+        RunManifest.from_dict(authority.control.get_json(f"runs/{run_id}/manifest.json"))
         check("manifest-valid", True, {"run_id": run_id})
 
         index = authority.models.get_json(f"runs/{run_id}/index.json")

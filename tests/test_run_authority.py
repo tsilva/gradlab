@@ -72,16 +72,16 @@ class RunAuthorityTests(unittest.TestCase):
             recipe_overrides=(),
             environment_sha256=SHA,
             seed=123,
-            run_description="B3 clean-slate dstack acceptance",
+            run_description="local clean-slate dstack acceptance",
             compute={
                 "request": {
                     "kind": "local",
-                    "target": "b3",
+                    "target": "local-gpu",
                     "max_duration_seconds": 86_400,
                 },
                 "selected": {
                     "kind": "local",
-                    "target": "b3",
+                    "target": "local-gpu",
                     "max_duration_seconds": 86_400,
                 },
                 "dstack_task": run_id,
@@ -111,9 +111,7 @@ class RunAuthorityTests(unittest.TestCase):
     def test_incremental_catalog_scope_merge_cannot_regress_a_concurrent_run(
         self,
     ) -> None:
-        descriptor = dict(
-            self.manifest(new_run_id(), new_attempt_id()).goal_variant or {}
-        )
+        descriptor = dict(self.manifest(new_run_id(), new_attempt_id()).goal_variant or {})
         current = {
             "goal_slug": "SuperMarioBros-Nes-v0/Level1-1",
             "variants": [descriptor],
@@ -302,9 +300,7 @@ class RunAuthorityTests(unittest.TestCase):
         descriptor = dict(first.goal_variant or {})
         scope = goal_variant_scope_key(goal_slug=first.goal_slug)
         index = self.authority.control.get_json(f"{scope}/index.json")
-        run_index = self.authority.control.get_json(
-            f"{scope}/runs/{descriptor['variant_id']}.json"
-        )
+        run_index = self.authority.control.get_json(f"{scope}/runs/{descriptor['variant_id']}.json")
         self.assertEqual(len(index["variants"]), 1)
         self.assertEqual(
             {row["run_id"] for row in run_index["runs"]},
@@ -423,9 +419,7 @@ class RunAuthorityTests(unittest.TestCase):
         self.authority.release_lease(lease)
 
         self.assertIsNone(
-            self.authority.control.get_json_optional(
-                f"runs/{run_id}/writer-lease.json"
-            )
+            self.authority.control.get_json_optional(f"runs/{run_id}/writer-lease.json")
         )
         replacement = self.authority.acquire_lease(
             run_id=run_id,

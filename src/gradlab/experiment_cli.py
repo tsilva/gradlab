@@ -20,11 +20,15 @@ from urllib.parse import quote
 from gradlab.cli_parser import ExactArgumentParser
 from gradlab.clock import parse_utc_datetime
 from gradlab.dstack_backend import (
+    DSTACK_PROJECT_ENV,
+    LOCAL_FLEET_ENV,
     TERMINAL_DSTACK_STATUSES,
     ComputeRequest,
     DstackBackend,
     TaskRequest,
     DstackTask,
+    resolve_dstack_project,
+    resolve_local_fleet,
 )
 from gradlab.env_registry import resolve_env_provider
 from gradlab.file_utils import file_sha256
@@ -100,6 +104,7 @@ COMMON_SECRET_ENV = (
     "GRADLAB_MODELS_R2_PUBLIC_BASE_URL",
 )
 OPERATOR_DSTACK_ENV = (
+    DSTACK_PROJECT_ENV,
     "DSTACK_SERVER_URL",
     "DSTACK_TOKEN",
 )
@@ -215,6 +220,8 @@ def _operator_preflight(
     root: Path,
     *,
     checkpoint_eval_backend: str,
+    dstack_project: str | None = None,
+    local_target: str | None = None,
 ) -> tuple[
     RunStorageConfig,
     RunAuthority,
@@ -241,7 +248,7 @@ def _operator_preflight(
         storage = RunStorageConfig.from_env()
     except ValueError as exc:
         raise OperatorConfigurationError(str(exc)) from exc
-    dstack_backend = DstackBackend()
+    dstack_backend = DstackBackend(project=dstack_project)
     try:
         dstack_backend.preflight()
     except (RuntimeError, ValueError) as exc:
@@ -260,6 +267,12 @@ def _operator_preflight(
                 f"verify the {label} endpoint, bucket, and credential pair"
             ) from exc
     sources = {name: environment_report.source_for(name, os.environ) for name in sorted(required)}
+    configured_local_fleet = str(local_target or os.environ.get(LOCAL_FLEET_ENV) or "").strip()
+    local_fleet_source = (
+        "command-line"
+        if str(local_target or "").strip()
+        else environment_report.source_for(LOCAL_FLEET_ENV, os.environ)
+    )
     report = {
         "status": "ready",
         "checkpoint_eval_backend": checkpoint_eval_backend,
@@ -272,6 +285,10 @@ def _operator_preflight(
         "dstack": {
             "project": dstack_backend.project,
             "server": "authenticated",
+        },
+        "compute": {
+            "local_fleet": configured_local_fleet or None,
+            "source": local_fleet_source,
         },
         "wandb": {"entity": wandb_entity_from_env()},
         "modal": {
@@ -328,15 +345,44 @@ def _stage_rom(
 
 
 def _compute(args: argparse.Namespace) -> ComputeRequest:
+    target = (
+        resolve_local_fleet(args.target)
+        if str(args.compute) in {"auto", "local"}
+        else (str(args.target).strip() or None)
+    )
     request = ComputeRequest(
         kind=args.compute,
-        target=args.target,
+        target=target,
         max_price=args.max_price,
         max_cost_usd=args.max_cost_usd,
         allow_on_demand=bool(args.allow_on_demand),
         max_duration_seconds=int(args.max_duration),
     )
     request.validate()
+    return request
+
+
+def _manifest_dstack_project(compute: Mapping[str, Any]) -> str:
+    return resolve_dstack_project(str(compute.get("dstack_project") or "") or None)
+
+
+def _dstack_backend_for_compute(compute: Mapping[str, Any]) -> DstackBackend:
+    return DstackBackend(project=_manifest_dstack_project(compute))
+
+
+def _retry_compute_request(compute: Mapping[str, Any]) -> dict[str, Any]:
+    request = dict(compute["request"])
+    if (
+        str(request.get("kind") or "") in {"auto", "local"}
+        and not str(request.get("target") or "").strip()
+    ):
+        selected = compute.get("selected")
+        selected_target = str(
+            (selected.get("target") or "") if isinstance(selected, Mapping) else ""
+        ).strip()
+        if not selected_target:
+            raise RuntimeError("current run has no recorded local fleet for retry")
+        request["target"] = selected_target
     return request
 
 
@@ -357,9 +403,7 @@ def _task_request(manifest: RunManifest, *, manifest_uri: str) -> TaskRequest:
         if bool(manifest.modal["enabled"])
         else {}
     )
-    fault_fixture = str(
-        manifest.compute.get("supervision_fault_fixture") or ""
-    ).strip()
+    fault_fixture = str(manifest.compute.get("supervision_fault_fixture") or "").strip()
     if fault_fixture:
         plain_env["GRADLAB_SUPERVISION_FAULT_FIXTURE"] = fault_fixture
     return TaskRequest(
@@ -476,11 +520,12 @@ def cmd_launch(args: argparse.Namespace) -> int:
     )
     document = resolved_documents.effective
     checkpoint_eval_backend = str(document["train_config"]["checkpoint_eval_backend"])
-    compute = _compute(args)
     storage, authority, dstack_backend, _preflight_report = _operator_preflight(
         root,
         checkpoint_eval_backend=checkpoint_eval_backend,
+        local_target=args.target,
     )
+    compute = _compute(args)
     selected_compute, selected_offer = dstack_backend.select_compute(compute)
     release = runtime_release_from_args(
         args,
@@ -544,13 +589,12 @@ def cmd_launch(args: argparse.Namespace) -> int:
         portable_recipe,
         expected_sha256=recipe_sha256,
     )
-    fault_fixture = str(
-        getattr(args, "supervision_fault_fixture", "") or ""
-    ).strip()
+    fault_fixture = str(getattr(args, "supervision_fault_fixture", "") or "").strip()
     manifest_compute = {
         "request": compute.as_manifest(),
         "selected": selected_compute.as_manifest(),
         "selected_offer": selected_offer,
+        "dstack_project": dstack_backend.project,
         "dstack_task": dstack_task,
         "source_branch": branch,
         "runtime_workflow_run_id": release.workflow_run_id,
@@ -651,6 +695,7 @@ def cmd_operator_preflight(args: argparse.Namespace) -> int:
     _storage_config, _authority, _dstack_backend, report = _operator_preflight(
         root,
         checkpoint_eval_backend=str(args.checkpoint_eval_backend),
+        local_target=args.target,
     )
     if args.json:
         print(json.dumps(report, sort_keys=True))
@@ -831,39 +876,36 @@ def _record_terminal_task_without_receipt(
 ) -> TerminalReceipt:
     if not task.terminal:
         raise RuntimeError("cannot seal an orphan attempt while its dstack task is active")
-    if (
-        writer_lease.run_id != manifest.run_id
-        or writer_lease.attempt_id != manifest.attempt_id
-    ):
+    if writer_lease.run_id != manifest.run_id or writer_lease.attempt_id != manifest.attempt_id:
         raise RuntimeError("orphan-attempt reconciliation requires its exclusive writer lease")
     receipt = TerminalReceipt(
-            run_id=manifest.run_id,
-            attempt_id=manifest.attempt_id,
-            state="resumable_failure",
-            acceptance_required=bool(manifest.modal["enabled"]),
-            stop_reason=stop_reason,
-            final_step=int(final_step),
-            checkpoint_inventory=(),
-            eval_inventory=(),
-            wandb_high_water_mark=0,
-            drain={
-                "complete": False,
-                "phase": "startup/recovery",
-                "metric_segment_high_water": 0,
-                "eval_terminal_count": 0,
-                "journal_archive": None,
-                "journal_expires_at": None,
-                "wandb_remote_high_water_mark": 0,
-                "publication_capacity_ratio": None,
-                "failure": (
-                    "dstack task reached terminal status "
-                    f"{task.status!r} without an authoritative attempt receipt"
-                ),
-                "evidence_sha256": list(evidence_sha256),
-                "dstack": _public_dstack_state(task),
-            },
-            completed_at=utc_now(),
-        )
+        run_id=manifest.run_id,
+        attempt_id=manifest.attempt_id,
+        state="resumable_failure",
+        acceptance_required=bool(manifest.modal["enabled"]),
+        stop_reason=stop_reason,
+        final_step=int(final_step),
+        checkpoint_inventory=(),
+        eval_inventory=(),
+        wandb_high_water_mark=0,
+        drain={
+            "complete": False,
+            "phase": "startup/recovery",
+            "metric_segment_high_water": 0,
+            "eval_terminal_count": 0,
+            "journal_archive": None,
+            "journal_expires_at": None,
+            "wandb_remote_high_water_mark": 0,
+            "publication_capacity_ratio": None,
+            "failure": (
+                "dstack task reached terminal status "
+                f"{task.status!r} without an authoritative attempt receipt"
+            ),
+            "evidence_sha256": list(evidence_sha256),
+            "dstack": _public_dstack_state(task),
+        },
+        completed_at=utc_now(),
+    )
     authority.create_attempt_terminal(receipt)
     return receipt
 
@@ -918,12 +960,13 @@ def _status(root: Path, run_id: str) -> dict[str, Any]:
     semantic = authority.semantic_state(run_id)
     attempt = _latest_attempt(semantic)
     task_name = str(attempt["compute"]["dstack_task"])
+    dstack_backend = _dstack_backend_for_compute(attempt["compute"])
     try:
-        dstack = DstackBackend().status(task_name)
+        dstack = dstack_backend.status(task_name)
         dstack_value = _public_dstack_state(dstack)
     except KeyError:
         dstack_value = {
-            "project": DstackBackend().project,
+            "project": dstack_backend.project,
             "task": task_name,
             "status": "not-found",
             "terminal": False,
@@ -1030,7 +1073,10 @@ def cmd_cancel(args: argparse.Namespace) -> int:
     state = authority.semantic_state(args.run_id)
     attempt = _latest_attempt(state)
     task_name = str(attempt["compute"]["dstack_task"])
-    DstackBackend().cancel(task_name, abort=bool(args.abort))
+    _dstack_backend_for_compute(attempt["compute"]).cancel(
+        task_name,
+        abort=bool(args.abort),
+    )
     print(
         json.dumps(
             {
@@ -1075,7 +1121,9 @@ def cmd_reconcile(args: argparse.Namespace) -> int:
     _storage_config, authority = _storage(root)
     state = authority.semantic_state(args.run_id)
     manifest = RunManifest.from_dict(_latest_attempt(state))
-    task = DstackBackend().status(str(manifest.compute["dstack_task"]))
+    task = _dstack_backend_for_compute(manifest.compute).status(
+        str(manifest.compute["dstack_task"])
+    )
     if not task.terminal:
         raise RuntimeError("cannot reconcile while the dstack task is active")
     lease = authority.acquire_lease(
@@ -1139,19 +1187,17 @@ def cmd_reconcile(args: argparse.Namespace) -> int:
 def cmd_fault_test(args: argparse.Namespace) -> int:
     launch_args = argparse.Namespace(
         goal_file=Path("experiments/goals/VizdoomBasic-v1/_goal.yaml"),
-        recipe_file=Path(
-            "experiments/goals/VizdoomBasic-v1/recipes/ppo.yaml"
-        ),
+        recipe_file=Path("experiments/goals/VizdoomBasic-v1/recipes/ppo.yaml"),
         seed=17,
         run_description=(
-            "Non-production bounded B3 learner-supervision fault fixture; "
+            "Non-production bounded local-fleet learner-supervision fault fixture; "
             f"mode={args.mode}."
         ),
         recipe_overrides=[],
         checkpoint_eval_backend="none",
         submission_key="supervision-fault-fixture-v1",
         compute="local",
-        target="b3",
+        target=args.target,
         max_price=None,
         max_cost_usd=None,
         allow_on_demand=False,
@@ -1173,7 +1219,10 @@ def cmd_logs(args: argparse.Namespace) -> int:
     root = repository_root()
     _storage_config, authority = _storage(root)
     attempt = _latest_attempt(authority.semantic_state(args.run_id))
-    text = DstackBackend().logs(str(attempt["compute"]["dstack_task"]), since=args.since)
+    text = _dstack_backend_for_compute(attempt["compute"]).logs(
+        str(attempt["compute"]["dstack_task"]),
+        since=args.since,
+    )
     lines = text.splitlines()
     if args.tail > 0:
         lines = lines[-args.tail :]
@@ -1236,6 +1285,7 @@ def cmd_resume_submit(args: argparse.Namespace) -> int:
     _storage_config, _authority, dstack_backend, _report = _operator_preflight(
         root,
         checkpoint_eval_backend=checkpoint_eval_backend,
+        dstack_project=_manifest_dstack_project(manifest.compute),
     )
     task_name = str(manifest.compute["dstack_task"])
     try:
@@ -1296,7 +1346,7 @@ def cmd_retry(args: argparse.Namespace) -> int:
     previous = _latest_attempt(state)
     previous_manifest = RunManifest.from_dict(previous)
     attempt_terminal = _latest_attempt_terminal(state)
-    dstack_backend = DstackBackend()
+    dstack_backend = _dstack_backend_for_compute(previous["compute"])
     try:
         previous_task = dstack_backend.status(str(previous["compute"]["dstack_task"]))
     except KeyError:
@@ -1347,8 +1397,11 @@ def cmd_retry(args: argparse.Namespace) -> int:
     task_name = _task_name(args.run_id, attempt_id, initial=False)
     compute = dict(previous["compute"])
     compute["dstack_task"] = task_name
+    request_compute = _retry_compute_request(compute)
+    compute["request"] = request_compute
+    compute["dstack_project"] = dstack_backend.project
     selected_compute, selected_offer = dstack_backend.select_compute(
-        ComputeRequest(**dict(compute["request"]))
+        ComputeRequest(**request_compute)
     )
     compute["selected"] = selected_compute.as_manifest()
     compute["selected_offer"] = selected_offer
@@ -1485,6 +1538,7 @@ def cmd_certify(args: argparse.Namespace) -> int:
         replay_simulated_certification,
         run_simulated_certification,
     )
+    from gradlab.local_paths import default_runs_dir
 
     if args.list_scenarios:
         for name in SCENARIOS:
@@ -1523,8 +1577,10 @@ def cmd_certify(args: argparse.Namespace) -> int:
             failure_bundle = None
             if report["status"] == "failed":
                 destination = (
-                    Path("runs") / "certification" / f"failure-{str(report['report_sha256'])[:16]}"
-                ).resolve()
+                    default_runs_dir()
+                    / "certification"
+                    / f"failure-{str(report['report_sha256'])[:16]}"
+                )
                 if destination.exists():
                     failure_bundle = destination
                 else:
@@ -1635,6 +1691,10 @@ def build_parser() -> argparse.ArgumentParser:
         choices=("modal", "none"),
         default="modal",
     )
+    operator_preflight.add_argument(
+        "--target",
+        help="Optional local fleet to report instead of the configured default.",
+    )
     operator_preflight.add_argument("--json", action="store_true")
     operator_preflight.set_defaults(func=cmd_operator_preflight)
 
@@ -1693,9 +1753,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     fault_test = commands.add_parser(
         "fault-test",
-        help="Launch the bounded non-production B3 learner-supervision fixture.",
+        help="Launch the bounded non-production local-fleet learner-supervision fixture.",
         description=(
-            "Launch an exact-source, two-minute B3 task that bypasses training and "
+            "Launch an exact-source, two-minute local-fleet task that bypasses training and "
             "intentionally exercises failed-result or hung-result process-group teardown."
         ),
     )
@@ -1706,6 +1766,10 @@ def build_parser() -> argparse.ArgumentParser:
             "completed-result-hung-process",
         ),
         default="failed-result-live-process",
+    )
+    fault_test.add_argument(
+        "--target",
+        help="Local dstack fleet; defaults to GRADLAB_LOCAL_FLEET.",
     )
     fault_test.add_argument("--runtime-image-ref-file", type=Path)
     fault_test.add_argument("--image-workflow", default=DEFAULT_IMAGE_WORKFLOW)

@@ -10,8 +10,10 @@ logs, cancellation, retries for genuine interruption/no-capacity, and resource
 release. Private R2 receipts own run, checkpoint, evaluation, promotion, and
 terminal semantics. Never infer scientific success from dstack exit status.
 
-Read `SPECS.md` before either launch or existing-run monitoring. Before a new
-launch also read `INSTANCES.md`, the selected goal, and the selected recipe.
+Read `SPECS.md` and `COMPUTE.md` before either launch or existing-run monitoring.
+Before a new local launch also read `~/.config/gradlab/instances.md`, plus the
+selected goal and recipe. If the local inventory is absent, do not invent a
+fleet name or capacity.
 
 Before a new launch, run the credential-safe read-only operator gate:
 
@@ -46,10 +48,10 @@ explicitly asks to combine them. Repeatable `--set KEY=VALUE` overrides are
 allowed when each launch row records its complete isolated override list; they
 are composed, validated, and hash-bound in the immutable recipe contract.
 
-Default to `--compute auto`. For the known local B3 host use
-`--compute local --target b3`. Spot requires finite `--max-price` and
-`--max-cost-usd`. On-demand additionally requires `--allow-on-demand`. Always
-use a finite `--max-duration`.
+Default to `--compute auto`, which uses `GRADLAB_LOCAL_FLEET` from the private
+operator configuration. Use `--target <fleet>` only for an explicit per-launch
+override. Spot requires finite `--max-price` and `--max-cost-usd`. On-demand
+additionally requires `--allow-on-demand`. Always use a finite `--max-duration`.
 
 ```bash
 gradlab experiment launch \

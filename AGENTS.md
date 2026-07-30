@@ -12,7 +12,7 @@ Before every task in this repository, use the `$specs-author` skill to read the 
 
 ## GPU Instances
 
-Before choosing hardware, launching training, changing concurrency, or recommending beast targets, read `INSTANCES.md`. It is the source of truth for known GPU instances, access commands, child counts, cleanup, and gotchas. Update it when benchmark or access facts change.
+Before choosing hardware, launching training, changing concurrency, or recommending compute targets, read `COMPUTE.md`. For local compute, also read the operator-local `~/.config/gradlab/instances.md`; it is the source of truth for that operator's fleet names, access commands, capacity, enrollment, cleanup, and host-specific gotchas. If the local inventory is absent, do not invent a target or capacity.
 
 When changing dstack host behavior, preserve the root-owned runtime-image cleanup contract: prune only unused gradlab-managed images while preserving active containers and every immutable digest demanded by pending or active dstack tasks.
 
@@ -24,7 +24,7 @@ When changing dstack host behavior, preserve the root-owned runtime-image cleanu
 - Runtime version source of truth: the exact pins in `pyproject.toml` and the resolved versions in `uv.lock`. Use `uv sync --frozen`; make overrides explicit in recipes, compute policy, run descriptions, and W&B tags.
 - Every Turbo provider must declare and pass the strict Turbo Vector API v1 contract before gradlab consumes it. Do not add provider probing or legacy fallbacks.
 - Native-vector observations are channel-first `(n_envs, channels, height, width)`. Reject other layouts instead of transposing or guessing.
-- Keep version history and benchmark conclusions in `INSTANCES.md` or experiment reports.
+- Keep portable runtime history and benchmark conclusions in experiment reports. Keep machine-specific access and benchmark facts in the operator-local inventory.
 
 ## Training Runs
 
@@ -33,7 +33,7 @@ When changing dstack host behavior, preserve the root-owned runtime-image cleanu
 - When asked to tune or optimize a checked-in SB3 PPO/A2C recipe for sample efficiency and stability across training seeds, use the project-level `$autoresearch` skill in `.codex/skills/autoresearch`. It runs a bounded training-only 20%/50% fixed-rung search, launches no checkpoint evaluations, confirms the winner from five untouched full-cap training seeds, and patches only the pointed leaf recipe. Its result is training-signal-confirmed, not checkpoint-promoted or goal-accepted.
 - Active research goal contracts live under goal-scoped folders in `experiments/goals/`. For current Mario Level1-1 work, read `experiments/goals/SuperMarioBros-Nes-v0/Level1-1/_goal.yaml` before choosing recipes, caps, metrics, or promotion criteria. Seed ranges are owned by `gradlab.seeds`, not goal files.
 - Launchable recipes live under their owning active goal's `recipes/` directory and may inherit reusable defaults from `experiments/recipes/_presets/`.
-- Keep generated artifacts out of source control; use `runs/`, `logs/`, and `models/`.
+- Keep generated artifacts out of source control; store runs under `~/.config/gradlab/runs/` and use ignored `logs/` and `models/` paths for other generated outputs.
 - The lease-holding run supervisor is the sole W&B writer. Training attempts use the training-container supervisor; operator-initiated post-training evaluation may use the local background evaluation supervisor after it exclusively acquires the run writer lease. W&B stores metrics, metadata, hashes, and R2 URLs only; checkpoints, evidence, replays, ROMs, and recovery bytes belong in their scoped R2 buckets.
 - Every training run needs a specific description via `--run-description`.
 - Training tasks are profileless and locked to exact-source immutable runtime-image digests. One task owns one single-GPU host in v1.

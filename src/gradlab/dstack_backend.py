@@ -18,6 +18,8 @@ from gradlab.run_contracts import RUN_ID_PATTERN
 
 
 DSTACK_VERSION = "0.20.28"
+DSTACK_PROJECT_ENV = "DSTACK_PROJECT"
+LOCAL_FLEET_ENV = "GRADLAB_LOCAL_FLEET"
 TERMINAL_DSTACK_STATUSES = {
     "done",
     "failed",
@@ -27,9 +29,31 @@ TERMINAL_DSTACK_STATUSES = {
 }
 SECRET_ENV_NAME_PATTERN = re.compile(r"[A-Z][A-Z0-9_]*")
 DSTACK_TASK_NAME_PATTERN = re.compile(r"[a-z][a-z0-9-]{1,40}")
-SENSITIVE_ENV_NAME_PATTERN = re.compile(
-    r"(?:API_KEY|ACCESS_KEY|CREDENTIAL|PASSWORD|SECRET|TOKEN)"
-)
+SENSITIVE_ENV_NAME_PATTERN = re.compile(r"(?:API_KEY|ACCESS_KEY|CREDENTIAL|PASSWORD|SECRET|TOKEN)")
+
+
+def resolve_dstack_project(
+    project: str | None = None,
+    *,
+    environment: Mapping[str, str] | None = None,
+) -> str:
+    values = os.environ if environment is None else environment
+    resolved = str(project or values.get(DSTACK_PROJECT_ENV) or "").strip()
+    if not resolved:
+        raise ValueError("DSTACK_PROJECT must identify the operator's dstack project")
+    return resolved
+
+
+def resolve_local_fleet(
+    target: str | None = None,
+    *,
+    environment: Mapping[str, str] | None = None,
+) -> str:
+    values = os.environ if environment is None else environment
+    resolved = str(target or values.get(LOCAL_FLEET_ENV) or "").strip()
+    if not resolved:
+        raise ValueError(f"local compute requires --target or {LOCAL_FLEET_ENV}")
+    return resolved
 
 
 @dataclass(frozen=True)
@@ -44,6 +68,8 @@ class ComputeRequest:
     def validate(self) -> None:
         if self.kind not in {"auto", "local", "spot", "on-demand"}:
             raise ValueError(f"unsupported compute policy: {self.kind}")
+        if self.kind in {"auto", "local"} and not str(self.target or "").strip():
+            raise ValueError(f"local compute requires --target or {LOCAL_FLEET_ENV}")
         if int(self.max_duration_seconds) <= 0:
             raise ValueError("max_duration_seconds must be finite and positive")
         for label, value in (
@@ -105,10 +131,7 @@ class TaskRequest:
     def validate(self) -> None:
         if RUN_ID_PATTERN.fullmatch(self.run_id) is None:
             raise ValueError("run_id must be the immutable gradlab run id")
-        if (
-            not self.task_name
-            or DSTACK_TASK_NAME_PATTERN.fullmatch(self.task_name) is None
-        ):
+        if not self.task_name or DSTACK_TASK_NAME_PATTERN.fullmatch(self.task_name) is None:
             raise ValueError("dstack task_name must be a lowercase DNS-style name")
         if "@sha256:" not in self.image:
             raise ValueError("dstack task image must be immutable")
@@ -143,9 +166,7 @@ class TaskRequest:
                 + ", ".join(invalid_plain_names)
             )
         sensitive_plain_names = sorted(
-            name
-            for name in self.plain_env
-            if SENSITIVE_ENV_NAME_PATTERN.search(name) is not None
+            name for name in self.plain_env if SENSITIVE_ENV_NAME_PATTERN.search(name) is not None
         )
         if sensitive_plain_names:
             raise ValueError(
@@ -155,8 +176,7 @@ class TaskRequest:
         overlapping_names = sorted(set(self.plain_env) & set(self.secret_env))
         if overlapping_names:
             raise ValueError(
-                "environment names cannot be both plain and secret: "
-                + ", ".join(overlapping_names)
+                "environment names cannot be both plain and secret: " + ", ".join(overlapping_names)
             )
         invalid_plain_values = sorted(
             name
@@ -170,11 +190,7 @@ class TaskRequest:
             )
         if self.rom_mount is not None:
             source, separator, destination = self.rom_mount.partition(":")
-            if (
-                separator != ":"
-                or not source.startswith("/")
-                or not destination.startswith("/")
-            ):
+            if separator != ":" or not source.startswith("/") or not destination.startswith("/"):
                 raise ValueError("ROM mount must be /host/path:/container/path")
         self.compute.validate()
 
@@ -214,14 +230,9 @@ def render_task_config(request: TaskRequest) -> dict[str, Any]:
             f"GRADLAB_RUN_MANIFEST_URI={request.manifest_uri}",
             "GRADLAB_ORCHESTRATOR=dstack",
             *[f"{name}={value}" for name, value in sorted(request.plain_env.items())],
-            *[
-                f"{name}=${{{{ secrets.{name} }}}}"
-                for name in sorted(set(request.secret_env))
-            ],
+            *[f"{name}=${{{{ secrets.{name} }}}}" for name in sorted(set(request.secret_env))],
         ],
-        "commands": [
-            'python -m gradlab.run_supervisor --manifest-uri "$GRADLAB_RUN_MANIFEST_URI"'
-        ],
+        "commands": ['python -m gradlab.run_supervisor --manifest-uri "$GRADLAB_RUN_MANIFEST_URI"'],
         "resources": {
             # An unsplit SSH fleet contributes the whole machine as one block.
             # Minimum ranges admit that block while retaining the resource floor
@@ -258,7 +269,7 @@ def render_task_config(request: TaskRequest) -> dict[str, Any]:
         config["idle_duration"] = "0s"
     elif compute.kind in {"auto", "local"}:
         config["creation_policy"] = "reuse"
-        config["fleets"] = [target or "b3"]
+        config["fleets"] = [target]
     else:
         config["creation_policy"] = "create"
         config["spot_policy"] = "spot" if compute.kind == "spot" else "on-demand"
@@ -295,13 +306,13 @@ class DstackBackend:
     def __init__(
         self,
         *,
-        project: str = "main",
+        project: str | None = None,
         executable: str = "dstack",
         environment: Mapping[str, str] | None = None,
     ):
-        self.project = str(project).strip() or "main"
-        self.executable = executable
         self.environment = dict(os.environ if environment is None else environment)
+        self.project = resolve_dstack_project(project, environment=self.environment)
+        self.executable = executable
 
     def _command(
         self,
@@ -336,9 +347,7 @@ class DstackBackend:
                 f"dstack CLI must be {DSTACK_VERSION}, got {result.stdout.strip() or 'unknown'}"
             )
         if not self.environment.get("DSTACK_SERVER_URL", "").strip():
-            raise RuntimeError(
-                "DSTACK_SERVER_URL must identify the pinned private server"
-            )
+            raise RuntimeError("DSTACK_SERVER_URL must identify the pinned private server")
         if not self.environment.get("DSTACK_TOKEN", "").strip():
             raise RuntimeError("DSTACK_TOKEN must be set outside source control")
         self._command(
@@ -374,15 +383,11 @@ class DstackBackend:
                     f"failed to synchronize dstack project secret {name}: HTTP {exc.code}"
                 ) from exc
             except urllib.error.URLError as exc:
-                raise RuntimeError(
-                    f"failed to synchronize dstack project secret {name}"
-                ) from exc
+                raise RuntimeError(f"failed to synchronize dstack project secret {name}") from exc
 
     def select_compute(
         self,
         request: ComputeRequest,
-        *,
-        local_fleet: str = "b3",
     ) -> tuple[ComputeRequest, Mapping[str, Any] | None]:
         request.validate()
         if request.kind != "auto":
@@ -390,7 +395,7 @@ class DstackBackend:
         local = replace(
             request,
             kind="local",
-            target=str(request.target or local_fleet),
+            target=str(request.target),
             max_price=None,
             max_cost_usd=None,
         )
@@ -404,7 +409,7 @@ class DstackBackend:
                 self.project,
                 "--json",
                 "--fleet",
-                str(request.target or local_fleet),
+                str(request.target),
                 "--reuse",
                 "--cpu",
                 "12..",
@@ -475,9 +480,7 @@ class DstackBackend:
             raise ValueError("dstack ps runs must contain objects")
         for row in ordered_rows:
             run_spec = row.get("run_spec")
-            configuration = (
-                run_spec.get("configuration") if isinstance(run_spec, Mapping) else None
-            )
+            configuration = run_spec.get("configuration") if isinstance(run_spec, Mapping) else None
             if not isinstance(configuration, Mapping):
                 raise ValueError("dstack ps run must contain run_spec.configuration")
             configured_name = str(configuration.get("name") or "")

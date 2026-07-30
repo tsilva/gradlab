@@ -22,6 +22,7 @@ from gradlab.model_sources import (
     positional_model_source_arg,
     resolve_model_source,
 )
+from gradlab.local_paths import default_runs_dir
 from gradlab.play_session import (
     _PlaybackSession,
     build_parser as build_play_parser,
@@ -47,6 +48,14 @@ from gradlab.training_backend import training_backend_config_hash
 def test_checkpoint_step_is_derived_from_learner_filename() -> None:
     assert checkpoint_step(Path("model_250000_steps.zip")) == 250_000
     assert checkpoint_step(Path("final_model.zip")) is None
+
+
+def test_playback_caches_and_recipe_discovery_default_outside_the_repository() -> None:
+    args = build_play_parser().parse_args(["--model", "/tmp/model.zip"])
+
+    assert args.runs_dir == default_runs_dir()
+    assert Path(args.public_model_root) == default_runs_dir() / "public_models"
+    assert Path(args.hf_model_root) == default_runs_dir() / "hf_models"
 
 
 def test_model_metadata_round_trips_playback_environment(tmp_path: Path) -> None:

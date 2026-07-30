@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from gradlab.cli_parser import ExactArgumentParser
+from gradlab.local_paths import default_runs_dir
 
 
 YOUTUBE_UPLOAD_SCOPES = (
@@ -585,7 +586,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Do not generate or upload a custom thumbnail.",
     )
-    parser.add_argument("--output", type=Path, default=Path("runs/youtube_upload_result.json"))
+    parser.add_argument(
+        "--output",
+        type=Path,
+        default=default_runs_dir() / "youtube_upload_result.json",
+    )
     parser.add_argument("--no-browser", action="store_true")
     return parser
 

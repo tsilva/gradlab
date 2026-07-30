@@ -120,7 +120,7 @@ def base_state(root: Path) -> dict:
         },
         "runtime": None,
         "policy": {
-            "compute_target": "b3",
+            "compute_target": "local-gpu",
             "max_reserved_jobs": 48,
             "stale_round_limit": 3,
             "confirmation_runs": 5,
@@ -269,6 +269,7 @@ class AutoresearchStudyTests(unittest.TestCase):
             }
             args = SimpleNamespace(
                 root=str(root),
+                runs_dir=root / "runs",
                 goal=str(goal),
                 recipe=str(recipe),
                 strong_threshold=0.9,
@@ -455,9 +456,7 @@ class AutoresearchStudyTests(unittest.TestCase):
                         "source_sha": state["source_sha"],
                         "goal_file": state["goal_path"],
                         "recipe_file": state["recipe_path"],
-                        "recipe_overrides": study.expected_recipe_overrides(
-                            state, wave
-                        ),
+                        "recipe_overrides": study.expected_recipe_overrides(state, wave),
                         "run_description": study.run_description(state, wave, 123),
                         "checkpoint_eval_backend": "none",
                         "image_digest": runtime["image_ref"],
@@ -732,10 +731,10 @@ class AutoresearchStudyTests(unittest.TestCase):
             state="finished",
             scan_history=lambda **_kwargs: [
                 {
-                "train/global_step": 50_176,
-                "train/outcome/success/from/A/episode/count": 2,
-                "train/outcome/success/from/B/episode/count": 0,
-                "train/outcome/success/across_starts/window_100/rate/min": 0.91,
+                    "train/global_step": 50_176,
+                    "train/outcome/success/from/A/episode/count": 2,
+                    "train/outcome/success/from/B/episode/count": 0,
+                    "train/outcome/success/across_starts/window_100/rate/min": 0.91,
                 }
             ],
         )
@@ -760,10 +759,7 @@ class AutoresearchStudyTests(unittest.TestCase):
 
     def test_return_evidence_does_not_query_absent_success_metrics(self) -> None:
         queried_keys: list[list[str]] = []
-        return_metric = (
-            "train/episode/return/shaped/across_origins/"
-            "rolling_up_to_100/mean"
-        )
+        return_metric = "train/episode/return/shaped/across_origins/rolling_up_to_100/mean"
         return_rows = [
             {
                 "train/global_step": step * 4096,
@@ -806,13 +802,7 @@ class AutoresearchStudyTests(unittest.TestCase):
         self.assertEqual(evidence["success_counts_by_start"], {"default": 0})
         self.assertFalse(evidence["all_starts_succeeded"])
         self.assertFalse(evidence["strong"])
-        self.assertFalse(
-            any(
-                "outcome/success" in key
-                for keys in queried_keys
-                for key in keys
-            )
-        )
+        self.assertFalse(any("outcome/success" in key for keys in queried_keys for key in keys))
 
     def test_eval_backed_or_unverified_terminal_pauses(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -895,7 +885,13 @@ class AutoresearchStudyTests(unittest.TestCase):
             confirmed = study.load_state(state_path)
             wave = confirmed["waves"][-1]
             wave["terminal_runs"] = [
-                run_record(100 + index, seed, strong=index < 4, step=60_000 if index < 4 else None, peak=0.95 if index < 4 else 0.6)
+                run_record(
+                    100 + index,
+                    seed,
+                    strong=index < 4,
+                    step=60_000 if index < 4 else None,
+                    peak=0.95 if index < 4 else 0.6,
+                )
                 for index, seed in enumerate(confirmed["confirmation_seeds"])
             ]
             wave["status"] = "evidence_complete"
@@ -924,7 +920,13 @@ class AutoresearchStudyTests(unittest.TestCase):
             failed = study.load_state(state_path)
             wave = failed["waves"][-1]
             wave["terminal_runs"] = [
-                run_record(200 + index, seed, strong=index < 3, step=70_000 if index < 3 else None, peak=0.92 if index < 3 else 0.4)
+                run_record(
+                    200 + index,
+                    seed,
+                    strong=index < 3,
+                    step=70_000 if index < 3 else None,
+                    peak=0.92 if index < 3 else 0.4,
+                )
                 for index, seed in enumerate(failed["confirmation_seeds"])
             ]
             wave["status"] = "evidence_complete"
@@ -970,7 +972,9 @@ class AutoresearchStudyTests(unittest.TestCase):
                 study.command_prepare_apply(
                     SimpleNamespace(study=str(state_path), postimage_file=str(postimage))
                 )
-            (root / "recipe.yaml").write_text(postimage.read_text(encoding="utf-8"), encoding="utf-8")
+            (root / "recipe.yaml").write_text(
+                postimage.read_text(encoding="utf-8"), encoding="utf-8"
+            )
             expected = json.loads(json.dumps(state["baseline"]["train_config"]))
             expected["training_backend"]["config"].update(delta)
             with (
@@ -987,9 +991,7 @@ class AutoresearchStudyTests(unittest.TestCase):
             report = json.loads((state_path.parent / "report.json").read_text(encoding="utf-8"))
 
         self.assertEqual(completed["status"], "done")
-        self.assertEqual(
-            completed["baseline"]["train_config"]["checkpoint_eval_backend"], "modal"
-        )
+        self.assertEqual(completed["baseline"]["train_config"]["checkpoint_eval_backend"], "modal")
         self.assertFalse(report["checkpoint_promoted"])
         self.assertFalse(report["goal_accepted"])
 

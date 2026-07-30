@@ -18,6 +18,7 @@ from gradlab.runtime_contract import train_config_contract_payload, train_config
 from gradlab.task_kernels import IdentityTaskDefinition
 from gradlab.train import main as train_main
 from gradlab.train_config import load_materialized_train_config, validate_and_normalize_train_config
+from gradlab.local_paths import PORTABLE_DEFAULT_RUNS_DIR
 from gradlab.training_backend import BackendContext, training_backend_runtime_metadata
 
 
@@ -241,6 +242,7 @@ def test_materialized_config_preserves_nested_backend_ownership() -> None:
         )
         config = load_materialized_train_config(path)
     assert config["timesteps"] == 20
+    assert config["runs_dir"] == PORTABLE_DEFAULT_RUNS_DIR
     assert "n_steps" not in config
     assert config["training_backend"]["id"] == "sb3.ppo"
     assert config["training_backend"]["config"]["n_steps"] == 7

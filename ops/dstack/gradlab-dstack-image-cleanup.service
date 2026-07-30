@@ -1,13 +1,12 @@
 [Unit]
 Description=Prune unused gradlab dstack training images
-After=docker.service gradlab-dstack-server.service
+After=docker.service
 Requires=docker.service
 
 [Service]
 Type=oneshot
 EnvironmentFile=/etc/gradlab/dstack/server.env
 Environment=DSTACK_SERVER_URL=http://127.0.0.1:3000
-Environment=DSTACK_PROJECT=main
 ExecStart=/usr/local/libexec/gradlab-dstack-image-cleanup
 Nice=10
 IOSchedulingClass=idle

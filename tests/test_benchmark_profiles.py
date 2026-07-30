@@ -152,8 +152,7 @@ timstepz: 10
             commands[0].argv[commands[0].argv.index("--compute") + 1],
             "local",
         )
-        self.assertIn("--target", commands[0].argv)
-        self.assertIn("b3", commands[0].argv)
+        self.assertNotIn("--target", commands[0].argv)
         self.assertIn("--max-duration", commands[0].argv)
         self.assertIn("--json", commands[0].argv)
         self.assertEqual(commands[0].argv[commands[0].argv.index("--seed") + 1], "123")
@@ -163,7 +162,7 @@ timstepz: 10
         parsed = build_experiment_parser().parse_args(list(commands[0].argv[2:]))
         self.assertEqual(parsed.command, "launch")
         self.assertEqual(parsed.compute, "local")
-        self.assertEqual(parsed.target, "b3")
+        self.assertIsNone(parsed.target)
         self.assertTrue(parsed.json)
 
     def test_env_throughput_generates_mode_env_matrix(self) -> None:
