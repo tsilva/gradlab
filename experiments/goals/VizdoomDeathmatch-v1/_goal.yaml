@@ -113,6 +113,8 @@ eval:
   environment:
     # Supply evaluation-time arguments for the native vectorized ViZDoom environment.
     env_config:
+      # Match the scenario's 4,200-frame timeout after the policy's four-frame action repeat.
+      max_steps: 1050
       # Reuse the Deathmatch provider arguments declared for training.
       env_args: *deathmatch_env_args
     # Merge the same Deathmatch task overrides into the shared evaluation defaults.
