@@ -8,8 +8,6 @@ defaults:
 title: ViZDoom Basic monster elimination
 # Override the shared settings used while training a policy for this goal.
 train:
-  # Set the checkpoint cadence in policy-environment transitions.
-  checkpoint_freq: 100000
   # Refine the family-wide rules that can stop training before its timestep cap.
   early_stop:
     # Address inherited early-stop rules by their stable condition names.
