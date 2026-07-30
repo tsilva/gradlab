@@ -19,6 +19,8 @@ ExecStart=/usr/bin/docker run --rm --name gradlab-dstack-server \
   --env DSTACK_SERVER_ENVIRONMENT=production \
   --env DSTACK_SERVER_LOG_LEVEL=WARNING \
   --publish 127.0.0.1:3000:3000 \
+  --dns 1.1.1.1 \
+  --dns 1.0.0.1 \
   --add-host host.docker.internal:host-gateway \
   --volume /var/lib/gradlab/dstack:/root/.dstack/server \
   --security-opt no-new-privileges:true \

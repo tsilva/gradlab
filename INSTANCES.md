@@ -32,6 +32,8 @@ a separate finalizer.
 - Persistent state: `/var/lib/gradlab/dstack` on B3.
 - API binding: B3 loopback port 3000 only.
 - Client access: SSH tunnel to `http://127.0.0.1:3000`.
+- Container DNS: Cloudflare `1.1.1.1` and `1.0.0.1` through Docker daemon
+  defaults, repeated explicitly by the dstack server unit.
 - Secrets: `/etc/gradlab/dstack/server.env`, local private environment/Keychain,
   and AES-256-GCM-encrypted project-scoped dstack secrets; never source
   control or inline task environment values.
