@@ -2,4 +2,10 @@ defaults:
 - ../../../recipes/_presets/vizdoom-deathmatch-ppo@_global_
 - _self_
 recipe_id: ppo
-description: Single-player ViZDoom Deathmatch pixel PPO with a compact combat action table.
+description: Single-player ViZDoom Deathmatch pixel PPO tuned for stable policy updates.
+train:
+  timesteps: 2998272
+  backend:
+    config:
+      n_epochs: 2
+      learning_rate: 6.25e-5
