@@ -141,7 +141,7 @@ def test_recording_constructs_the_shared_native_provider_runtime():
 
 def test_recording_rejects_provider_constructor_arguments_at_the_dataset_boundary():
     with pytest.raises(ValueError, match="unknown environment config"):
-        validate_provider_request({"rom_path": "/tmp/legacy.nes"})
+        validate_provider_request({"rom_path": "/tmp/noncurrent.nes"})
     with pytest.raises(ValueError, match="runtime owns"):
         validate_provider_request({"env_args": {"num_envs": 2}})
 

@@ -239,6 +239,7 @@ class JobStore(SqliteStore):
         return self.root / "work"
 
     def init(self) -> None:
+        database_existed = self.path.exists()
         self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
         os.chmod(self.root, 0o700)
         self.work_root.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -247,15 +248,15 @@ class JobStore(SqliteStore):
         os.close(descriptor)
         os.chmod(self.lock_path, 0o600)
         with self.connection() as connection:
+            version = int(connection.execute("PRAGMA user_version").fetchone()[0])
+            if database_existed and version != JOB_SCHEMA_VERSION:
+                raise RuntimeError(
+                    f"unsupported local job queue schema {version}; "
+                    f"this executable requires {JOB_SCHEMA_VERSION}"
+                )
             connection.execute("PRAGMA journal_mode=WAL")
             connection.execute("PRAGMA synchronous=FULL")
             connection.executescript(SCHEMA_SQL)
-            version = int(connection.execute("PRAGMA user_version").fetchone()[0])
-            if version not in {0, JOB_SCHEMA_VERSION}:
-                raise RuntimeError(
-                    f"unsupported local job queue schema {version}; "
-                    f"this executable supports {JOB_SCHEMA_VERSION}"
-                )
             connection.execute(f"PRAGMA user_version={JOB_SCHEMA_VERSION}")
         os.chmod(self.path, 0o600)
 

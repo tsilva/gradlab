@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import unquote, urlparse
 
+from gradlab.cli_parser import ExactArgumentParser
 from gradlab.env_registry import (
     ENV_PROVIDERS,
     GRADLAB_PROVIDER,
@@ -635,7 +636,7 @@ def _cmd_preflight(args: argparse.Namespace) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="gradlab env", description="Inspect environment providers.")
+    parser = ExactArgumentParser(prog="gradlab env", description="Inspect environment providers.")
     commands = parser.add_subparsers(dest="command", required=True)
 
     list_parser = commands.add_parser("list", help="List declared providers and environments.")

@@ -10,6 +10,7 @@ from typing import Any
 
 from huggingface_hub import HfApi, hf_hub_download
 
+from gradlab.cli_parser import ExactArgumentParser
 from gradlab.publication import (
     HUGGINGFACE_RELEASE_FILES,
     validate_release_bundle,
@@ -18,7 +19,7 @@ from gradlab.publication import (
 
 
 def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
+    parser = ExactArgumentParser(
         description="Audit one immutable gradlab model release on the Hugging Face Hub."
     )
     parser.add_argument("repo_id")

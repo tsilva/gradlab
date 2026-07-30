@@ -18,19 +18,18 @@ MAX_MATERIALIZED_BYTES = 16 * 1024**3
 def _action_space(document: Mapping[str, Any]):
     import gymnasium as gym
 
-    kind = str(document.get("type") or "")
-    dtype = np.dtype(str(document.get("dtype") or "int64"))
+    kind = str(document["type"])
+    dtype = np.dtype(str(document["dtype"]))
     if kind == "Discrete":
-        return gym.spaces.Discrete(int(document["n"]), start=int(document.get("start", 0)))
+        return gym.spaces.Discrete(int(document["n"]), start=int(document["start"]))
     if kind == "MultiBinary":
-        value = document.get("n") or document.get("shape")
-        return gym.spaces.MultiBinary(value)
+        return gym.spaces.MultiBinary(document["n"])
     if kind == "MultiDiscrete":
         return gym.spaces.MultiDiscrete(np.asarray(document["nvec"], dtype=dtype))
     if kind == "Box":
         shape = tuple(int(value) for value in document["shape"])
-        low = np.asarray(document.get("low", -np.inf), dtype=dtype)
-        high = np.asarray(document.get("high", np.inf), dtype=dtype)
+        low = np.asarray(document["low"], dtype=dtype)
+        high = np.asarray(document["high"], dtype=dtype)
         return gym.spaces.Box(low=low, high=high, shape=shape, dtype=dtype)
     raise ValueError(f"Minari export does not support action space {kind!r}")
 

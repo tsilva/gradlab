@@ -84,7 +84,9 @@ def resolve_playback_rom_binding(
     provider = resolve_env_provider(env_provider)
     if rom_path is not None:
         if not provider.requires_external_rom_asset:
-            raise ValueError(f"--rom is not valid for ROM-free provider {provider.provider_id!r}")
+            raise ValueError(
+                f"--rom-path is not valid for ROM-free provider {provider.provider_id!r}"
+            )
         direct_manifest = direct_rom_asset_manifest(game, rom_path)
         binding_manifest = direct_manifest
         if asset is not None:
@@ -96,7 +98,9 @@ def resolve_playback_rom_binding(
             if portable_rom_asset_identity(expected) != portable_rom_asset_identity(
                 direct_manifest
             ):
-                raise ValueError("--rom does not match the ROM identity recorded by the model")
+                raise ValueError(
+                    "--rom-path does not match the ROM identity recorded by the model"
+                )
             binding_manifest = expected
         return bind_rom_path(binding_manifest, rom_path.expanduser())
     if not provider.requires_external_rom_asset:

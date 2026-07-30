@@ -28,6 +28,7 @@ class BenchmarkProfileTests(unittest.TestCase):
                 env_provider="supermariobrosnes-turbo",
                 game="SuperMarioBros-Nes-v0",
                 state="Level1-1",
+                envs=16,
             )
         )
 

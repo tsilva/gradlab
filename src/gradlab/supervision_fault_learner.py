@@ -9,6 +9,7 @@ import sys
 import time
 from pathlib import Path
 
+from gradlab.cli_parser import ExactArgumentParser
 from gradlab.clock import utc_now as _utc_now
 from gradlab.file_utils import atomic_write_json
 from gradlab.training_lifecycle import (
@@ -117,7 +118,7 @@ def run_fixture(*, train_config_path: Path, mode: str) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
+    parser = ExactArgumentParser(
         description="Non-production learner fixture for supervisor fault certification."
     )
     parser.add_argument("--train-config-json", type=Path, required=True)

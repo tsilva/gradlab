@@ -221,8 +221,7 @@ def public_run_checkpoint_manifest_url(
     for raw in index.get("checkpoints") or []:
         if not isinstance(raw, Mapping):
             raise ValueError("public run index contains an invalid checkpoint")
-        manifest = CheckpointManifest(**dict(raw))
-        manifest.validate()
+        manifest = CheckpointManifest.from_dict(raw)
         if manifest.run_id != value:
             raise ValueError("checkpoint does not belong to the public run index")
         checkpoints.append(manifest)

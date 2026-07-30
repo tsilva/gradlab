@@ -8,6 +8,7 @@ from dataclasses import asdict, dataclass
 from statistics import mean
 from typing import Any
 
+from gradlab.cli_parser import ExactArgumentParser
 from gradlab.json_utils import json_safe
 from gradlab.metric_names import (
     LEADER_CHECKPOINT_ARTIFACT_REF,
@@ -462,7 +463,7 @@ def add_common_args(parser: argparse.ArgumentParser, *, suppress_defaults: bool 
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
+    parser = ExactArgumentParser(
         prog="gradlab leaders",
         description="Query W&B summaries projected from verified R2 run receipts.",
     )

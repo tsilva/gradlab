@@ -50,6 +50,7 @@ def _write_versioned_recipe(tmp_path: Path, document: dict) -> Path:
             repo_root=Path.cwd(),
             source_commit="a" * 40,
             run_description="ROM-free backend boundary smoke.",
+            seed=7,
             runtime_image_ref="docker:ghcr.io/tsilva/gradlab-runtime@sha256:" + "b" * 64,
             base_materialized_recipe=resolved.base,
             canonical_goal=resolved.canonical_goal,

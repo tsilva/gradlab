@@ -8,6 +8,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
+from gradlab.cli_parser import ExactArgumentParser
 from gradlab.dotenv import load_env_file
 from gradlab.rom_assets import (
     DEFAULT_LOCAL_ROM_CACHE,
@@ -142,7 +143,7 @@ def cmd_status(args: argparse.Namespace) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="gradlab rom")
+    parser = ExactArgumentParser(prog="gradlab rom")
     commands = parser.add_subparsers(dest="command", required=True)
     import_parser = commands.add_parser(
         "import",

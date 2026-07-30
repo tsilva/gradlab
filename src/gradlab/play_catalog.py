@@ -31,7 +31,6 @@ from gradlab.evaluation_projection import validate_evaluation_scientific_metric
 from gradlab.metric_names import (
     EVAL_ACCEPTANCE_PASS,
     LEADER_CHECKPOINT_STEP,
-    METRICS_SCHEMA_VERSION,
     TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_ROLLING_UP_TO_100_MEAN,
     TRAIN_EPISODE_RETURN_SHAPED_ACROSS_ORIGINS_ROLLING_UP_TO_100_MEAN,
     TRAIN_GLOBAL_STEP,
@@ -936,7 +935,7 @@ class PlayCatalog:
         *,
         environment_id: str,
     ) -> _RepositoryGoal:
-        document = load_goal_contract(path, self.repo_root, validate=False)
+        document = load_goal_contract(path, self.repo_root)
         goal_id = str(document.get("goal_id") or "").strip()
         if not environment_id or not goal_id:
             raise ValueError(f"repository goal has no environment or goal identity: {path}")
@@ -1169,7 +1168,6 @@ class PlayCatalog:
         authored = load_goal_contract(
             self.repo_root / repository_goal.goal_path,
             self.repo_root,
-            validate=False,
         )
         descriptor = build_goal_variant_descriptor(
             goal_slug=repository_goal.goal_slug,
@@ -1981,8 +1979,7 @@ class PlayCatalog:
         for raw in index.get("checkpoints") or ():
             if not isinstance(raw, Mapping):
                 raise ValueError("public run index contains an invalid checkpoint")
-            manifest = CheckpointManifest(**dict(raw))
-            manifest.validate()
+            manifest = CheckpointManifest.from_dict(raw)
             manifests.append(manifest)
         if not manifests:
             return None
@@ -2013,8 +2010,7 @@ class PlayCatalog:
         document = None
         metadata: dict[str, Any] = {"run_id": run_id}
         if manifest_document is not None:
-            manifest = RunManifest(**dict(manifest_document))
-            manifest.validate()
+            manifest = RunManifest.from_dict(manifest_document)
             if manifest.run_id != run_id:
                 raise ValueError("run manifest identity mismatch")
             metadata.update(
@@ -2185,9 +2181,7 @@ class PlayCatalog:
         try:
             run = self._wandb_api().run(f"{entity}/{project}/{run_id}")
             config = dict(getattr(run, "config", {}) or {})
-            metric_schema = evaluation_metric_schema(
-                config.get("metrics_schema_version") or METRICS_SCHEMA_VERSION
-            )
+            metric_schema = evaluation_metric_schema(config.get("metrics_schema_version"))
             evaluation_rank = parse_objective_rank(
                 config.get("selection_rank"),
                 metrics_schema_version=metric_schema.version,
@@ -2374,8 +2368,7 @@ class PlayCatalog:
         for raw in index.get("checkpoints") or ():
             if not isinstance(raw, Mapping):
                 raise ValueError("public run index contains an invalid checkpoint")
-            manifest = CheckpointManifest(**dict(raw))
-            manifest.validate()
+            manifest = CheckpointManifest.from_dict(raw)
             if manifest.run_id != run_id:
                 raise ValueError("checkpoint does not belong to the selected run")
             if (

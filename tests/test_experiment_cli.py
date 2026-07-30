@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -11,6 +12,7 @@ import pytest
 from gradlab.dstack_backend import DstackTask
 from gradlab.experiment_cli import (
     _bind_launch_contract,
+    _catalog_rebuild_contract_failures,
     _compute,
     _follow_fingerprint,
     _latest_attempt_terminal,
@@ -115,7 +117,40 @@ def test_catalog_cli_exposes_only_the_current_rebuild_command() -> None:
 
     assert args.command == "catalog-rebuild"
     with pytest.raises(SystemExit):
-        build_parser().parse_args(["catalog-repair"])
+        build_parser().parse_args(["unknown-catalog-command"])
+
+
+def test_catalog_rebuild_rejects_conflicting_current_descriptors_before_clear() -> None:
+    first = _manifest_only_run()
+    second_run_id = new_run_id()
+    second = replace(
+        first,
+        run_id=second_run_id,
+        attempt_id=new_attempt_id(),
+        compute={**first.compute, "dstack_task": second_run_id},
+        wandb={
+            **first.wandb,
+            "run_id": second_run_id,
+            "url": f"https://wandb.example/runs/{second_run_id}",
+        },
+        goal_variant={**dict(first.goal_variant or {}), "label": "Conflicting label"},
+    )
+    second.validate()
+
+    failures = _catalog_rebuild_contract_failures(
+        [
+            (f"runs/{first.run_id}/manifest.json", first, None),
+            (f"runs/{second.run_id}/manifest.json", second, None),
+        ]
+    )
+
+    assert failures == [
+        {
+            "key": f"runs/{second.run_id}/manifest.json",
+            "error_type": "ValueError",
+            "error": "goal variant descriptor conflicts with another current run",
+        }
+    ]
 
 
 def test_wandb_identity_cohort_group_includes_override_variant() -> None:

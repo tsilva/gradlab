@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from gradlab.cli_parser import ExactArgumentParser
 from gradlab.job_queue import (
     DEFAULT_IDLE_SECONDS,
     JobStore,
@@ -14,7 +15,7 @@ from gradlab.job_queue import (
 
 
 def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
+    parser = ExactArgumentParser(
         prog="gradlab jobs",
         description="Inspect and flush GradLab's durable per-user background jobs.",
     )

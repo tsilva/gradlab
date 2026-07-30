@@ -144,15 +144,15 @@ def normalize_runtime_image_ref(value: str | None) -> str:
 
 
 def runtime_image_payload_from_file(path: Path) -> dict[str, Any]:
-    text = path.read_text(encoding="utf-8").strip()
-    if not text:
-        raise ValueError(f"runtime image ref file is empty: {path}")
-    if text.startswith("{"):
-        payload: Any = json.loads(text)
-        if not isinstance(payload, dict):
-            raise ValueError(f"runtime image ref file must contain a JSON object: {path}")
-        return dict(payload)
-    return {"runtime_image_ref": text}
+    try:
+        payload: Any = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(
+            f"runtime image descriptor must contain a JSON object: {path}"
+        ) from exc
+    if not isinstance(payload, dict):
+        raise ValueError(f"runtime image descriptor must contain a JSON object: {path}")
+    return dict(payload)
 
 
 def runtime_release_from_payload(
@@ -239,7 +239,6 @@ def modal_readiness_from_payload(
     expected_runtime_image_ref: str,
     expected_runtime_input_sha256: str = "",
     expected_runtime_build_source_sha: str = "",
-    require_current_contract: bool = True,
 ) -> ModalReadinessInfo:
     schema_version = int(payload.get("schema_version") or 0)
     if schema_version != MODAL_READINESS_SCHEMA_VERSION:
@@ -293,10 +292,7 @@ def modal_readiness_from_payload(
         raise ValueError(
             f"{label} startup_probe.train_config_contract_sha256 is invalid"
         )
-    if (
-        require_current_contract
-        and probe_contract_sha256 != train_config_contract_sha256()
-    ):
+    if probe_contract_sha256 != train_config_contract_sha256():
         raise ValueError(
             f"{label} startup_probe.train_config_contract_sha256 does not match readiness"
         )
@@ -659,7 +655,6 @@ def modal_readiness_for_release(
     *,
     artifact_name: str = DEFAULT_MODAL_ARTIFACT,
     image_workflow: str = DEFAULT_IMAGE_WORKFLOW,
-    require_current_contract: bool = True,
 ) -> ModalReadinessInfo:
     run_ids = [release.workflow_run_id] if release.workflow_run_id else []
     for workflow in (image_workflow, DEFAULT_MODAL_WORKFLOW):
@@ -680,7 +675,6 @@ def modal_readiness_for_release(
                 expected_runtime_image_ref=release.runtime_image_ref,
                 expected_runtime_input_sha256=release.runtime_input_sha256,
                 expected_runtime_build_source_sha=release.runtime_build_source_sha,
-                require_current_contract=require_current_contract,
             )
         except Exception as exc:
             errors.append(f"run {run_id}: {exc}")

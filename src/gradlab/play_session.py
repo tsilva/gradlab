@@ -23,6 +23,7 @@ from gradlab.action_contract import (
     configured_action_name,
 )
 from gradlab.batch_runtime import StepDiagnostics
+from gradlab.cli_parser import ExactArgumentParser
 from gradlab.env import (
     info_value_from_state_name,
     state_name_candidates_from_level_id,
@@ -241,9 +242,7 @@ def add_play_source_args(parser: argparse.ArgumentParser) -> None:
         help="Local run root searched by --recipe; defaults to ./runs.",
     )
     parser.add_argument(
-        "--rom",
         "--rom-path",
-        dest="rom_path",
         type=Path,
         help=(
             "Use a provider-compatible raw .nes ROM in place for playback without "
@@ -296,11 +295,11 @@ def attribution_opacity_arg(value: str) -> float:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
+    parser = ExactArgumentParser(
         prog="gradlab play",
         description=(
-            "Browse W&B runs and public checkpoints, then inspect a policy in the "
-            "interactive web player"
+            "Browse repository goals and control-plane runs, then inspect a public "
+            "checkpoint in the interactive web player"
         ),
     )
     add_play_source_args(parser)

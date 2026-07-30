@@ -89,8 +89,8 @@ def test_model_metadata_round_trips_playback_environment(tmp_path: Path) -> None
                 ),
                 "training_metadata": {
                     **training_metadata(config),
-                    "preprocessing": {"legacy": True},
-                    "action": {"legacy": True},
+                    "preprocessing": {"unsupported": True},
+                    "action": {"unsupported": True},
                 },
             },
         ),

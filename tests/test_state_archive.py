@@ -19,6 +19,7 @@ from gradlab.state_archive import (
     ArchiveCurriculum,
     ArchiveCurriculumConfig,
     StateArchive,
+    StateArchiveEntry,
     normalize_state_archive_config,
     state_archive_artifact_summary,
     validate_state_archive_runtime_contract,
@@ -305,6 +306,8 @@ class StateArchiveTests(unittest.TestCase):
             entry_id = str(receipt["entry_id"])
             entry_document = runtime.state_archive.entry(entry_id).to_dict()
             entry_payload = runtime.state_archive.payload(entry_id)
+            with self.assertRaisesRegex(ValueError, "unexpected=.*old_field"):
+                StateArchiveEntry.from_dict({**entry_document, "old_field": True})
             with tempfile.TemporaryDirectory() as imported_root:
                 imported = StateArchive(
                     imported_root,

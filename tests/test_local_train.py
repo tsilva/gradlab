@@ -11,6 +11,7 @@ from gradlab.local_train import (
     LOCAL_ROM_CACHE_ENV,
     _play_uvx_launcher,
     _should_use_training_tui,
+    build_parser as build_local_train_parser,
     main,
 )
 from gradlab.play import main as play_main
@@ -61,6 +62,16 @@ def _write_training_result(
         ),
         encoding="utf-8",
     )
+
+
+def test_local_train_parser_exposes_only_rom_path() -> None:
+    parser = build_local_train_parser()
+
+    assert parser.parse_args(["goal/recipe", "--rom-path", "/tmp/game.nes"]).rom_path == Path(
+        "/tmp/game.nes"
+    )
+    with pytest.raises(SystemExit):
+        parser.parse_args(["goal/recipe", "--rom", "/tmp/game.nes"])
 
 
 def test_builtin_recipe_reference_resolves_goal_and_recipe() -> None:
@@ -428,7 +439,7 @@ def test_local_mario_train_uses_direct_rom_without_registry_or_cache_mutation(
             main(
                 [
                     "SuperMarioBros-Nes-v0/Level1-1/turbo-demo",
-                    "--rom",
+                    "--rom-path",
                     str(rom),
                     "--runs-dir",
                     str(tmp_path / "runs"),
@@ -454,7 +465,7 @@ def test_local_mario_train_uses_direct_rom_without_registry_or_cache_mutation(
     output = capsys.readouterr().out
     assert f"uvx --from {Path.cwd()} --with-editable {Path.cwd()}" in output
     assert "--refresh-package gradlab gradlab play" in output
-    assert f"--rom {rom.resolve()}" in output
+    assert f"--rom-path {rom.resolve()}" in output
 
 
 def test_local_train_rejects_rom_for_rom_free_provider_before_creating_run(
@@ -493,7 +504,7 @@ def test_local_mario_direct_rom_failure_precedes_run_creation(tmp_path: Path) ->
         main(
             [
                 "SuperMarioBros-Nes-v0/Level1-1/turbo-demo",
-                "--rom",
+                "--rom-path",
                 str(rom),
                 "--runs-dir",
                 str(tmp_path),

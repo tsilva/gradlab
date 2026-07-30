@@ -8,6 +8,8 @@ from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any
 
+from gradlab.cli_parser import ExactArgumentParser
+
 
 Command = Callable[[argparse.Namespace], int]
 
@@ -101,7 +103,7 @@ def _export_minari(args: argparse.Namespace) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
+    parser = ExactArgumentParser(
         prog="gradlab dataset",
         description=(
             "Record and inspect Gymrec v3-compatible gameplay datasets. Dataset results are "

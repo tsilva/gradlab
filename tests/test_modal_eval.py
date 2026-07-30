@@ -50,7 +50,7 @@ def test_checked_in_modal_contract_is_cold_and_cost_bounded() -> None:
     assert config.protocol.max_attempts == 2
 
 
-def test_modal_contract_rejects_retired_enabled_flag(tmp_path: Path) -> None:
+def test_modal_contract_rejects_noncurrent_enabled_flag(tmp_path: Path) -> None:
     source = ROOT / "experiments" / "modal_eval.yaml"
     path = tmp_path / "modal_eval.yaml"
     path.write_text(f"enabled: true\n{source.read_text(encoding='utf-8')}", encoding="utf-8")

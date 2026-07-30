@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from gradlab.checkpoint_acceptance import manifest_index
+from gradlab.cli_parser import ExactArgumentParser
 from gradlab.clock import format_utc_datetime, parse_utc_datetime, utc_timestamp
 from gradlab.dstack_backend import DSTACK_VERSION
 from gradlab.early_stop import validate_metric_early_stop_decision
@@ -192,9 +193,7 @@ def _bounded_exception_document(failure: BaseException) -> dict[str, str]:
 
 
 def _manifest_from_document(value: Mapping[str, Any]) -> RunManifest:
-    manifest = RunManifest(**dict(value))
-    manifest.validate()
-    return manifest
+    return RunManifest.from_dict(value)
 
 
 def _bind_evaluation_contract(
@@ -371,8 +370,7 @@ class RunSupervisor:
         )
         if existing_document is None:
             return None
-        existing = EarlyStopReceipt(**existing_document)
-        existing.validate()
+        existing = EarlyStopReceipt.from_dict(existing_document)
         early_stop_config = self.train_config.get("early_stop")
         if not isinstance(early_stop_config, Mapping):
             raise ValueError(
@@ -1117,8 +1115,7 @@ class RunSupervisor:
                 },
             )
         for position, document in enumerate(checkpoints, start=1):
-            checkpoint = CheckpointManifest(**document)
-            checkpoint.validate()
+            checkpoint = CheckpointManifest.from_dict(document)
             ledger_id = -position
             self.store.record_checkpoint_publication(
                 checkpoint_ledger_id=ledger_id,
@@ -1170,8 +1167,7 @@ class RunSupervisor:
                 idempotency_key=key,
             )
             if verified is not None:
-                result = EvalResult(**verified)
-                result.validate()
+                result = EvalResult.from_dict(verified)
                 self.store.mark_eval_terminal(
                     idempotency_key=key,
                     status=result.status,
@@ -1258,8 +1254,7 @@ class RunSupervisor:
         )
         if document is None:
             return False
-        result = EvalResult(**document)
-        result.validate()
+        result = EvalResult.from_dict(document)
         self.store.mark_eval_terminal(
             idempotency_key=result.idempotency_key,
             status=result.status,
@@ -2230,8 +2225,7 @@ class RunSupervisor:
             f"runs/{self.manifest.run_id}/promotion.json"
         )
         if existing is not None:
-            receipt = PromotionReceipt(**existing)
-            receipt.validate()
+            receipt = PromotionReceipt.from_dict(existing)
             self.authority.create_promotion(receipt)
             return receipt
         accepted = self.store.evals(statuses=("accepted",))
@@ -2793,7 +2787,7 @@ class RunSupervisor:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
+    parser = ExactArgumentParser(
         description="Supervise one immutable dstack gradlab training run."
     )
     parser.add_argument("--manifest-uri", required=True)

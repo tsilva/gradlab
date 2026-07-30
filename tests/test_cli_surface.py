@@ -25,7 +25,7 @@ class PublicCliHelpTests(unittest.TestCase):
         self.assertIn("    rom ", help_text)
         self.assertNotIn("import-roms", help_text)
 
-    def test_retired_command_forms_are_rejected(self) -> None:
+    def test_noncurrent_command_forms_are_rejected(self) -> None:
         for argv in (
             ["import-roms"],
             ["eval", "run", "--n-envs", "0"],

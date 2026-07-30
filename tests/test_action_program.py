@@ -84,8 +84,8 @@ def test_action_program_artifact_discriminator_prevents_same_step_role_collision
     )
 
 
-def test_action_program_rejects_legacy_jerk_artifact(tmp_path) -> None:
-    path = tmp_path / "legacy-model.zip"
+def test_action_program_rejects_noncurrent_jerk_artifact(tmp_path) -> None:
+    path = tmp_path / "noncurrent-model.zip"
     payload = {
         "schema_version": 2,
         "algorithm_id": "jerk",
@@ -155,7 +155,7 @@ def test_generic_policy_loader_dispatches_action_program(tmp_path) -> None:
     assert isinstance(loaded, ActionProgramPolicy)
 
 
-def test_policy_registry_rejects_legacy_jerk_metadata() -> None:
+def test_policy_registry_rejects_noncurrent_jerk_metadata() -> None:
     with pytest.raises(ValueError, match="unsupported checkpoint algorithm: jerk"):
         resolve_policy_algorithm(
             {

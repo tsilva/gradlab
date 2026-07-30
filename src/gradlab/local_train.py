@@ -13,6 +13,7 @@ from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from urllib.parse import unquote, urlparse
 
+from gradlab.cli_parser import ExactArgumentParser
 from gradlab.clock import utc_now as _utc_now
 from gradlab.config_loader import RECIPE_TEMPLATE_VALUES, render_template_vars
 from gradlab.env import task_termination
@@ -48,7 +49,7 @@ LOCAL_ROM_CACHE_ENV = "GRADLAB_ROM_CACHE_DIR"
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
+    parser = ExactArgumentParser(
         prog="gradlab train",
         description=(
             "Train a checked-in recipe locally and produce a directly playable policy bundle. "
@@ -93,9 +94,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Preserve the recipe's W&B logging settings. Local training disables W&B by default.",
     )
     parser.add_argument(
-        "--rom",
         "--rom-path",
-        dest="rom_path",
         type=Path,
         help=(
             "Use a provider-compatible raw .nes ROM in place for this run without "
@@ -308,7 +307,9 @@ def main(argv: list[str] | None = None) -> int:
     uses_local_rom_cache = provider.requires_external_rom_asset
     runtime_rom_binding: RomRuntimeBinding | None = None
     if args.rom_path is not None and not uses_local_rom_cache:
-        raise ValueError(f"--rom is not valid for ROM-free provider {provider.provider_id!r}")
+        raise ValueError(
+            f"--rom-path is not valid for ROM-free provider {provider.provider_id!r}"
+        )
     if uses_local_rom_cache:
         if args.rom_path is not None:
             manifest = direct_rom_asset_manifest(str(config["game"]), args.rom_path)
@@ -527,7 +528,7 @@ def main(argv: list[str] | None = None) -> int:
             str(model_path),
         ]
         if runtime_rom_binding is not None:
-            play_command.extend(("--rom", str(runtime_rom_binding.path)))
+            play_command.extend(("--rom-path", str(runtime_rom_binding.path)))
         print(f"play interrupted model: {shlex.join(play_command)}", flush=True)
         return 130
     play_command = [
@@ -539,7 +540,7 @@ def main(argv: list[str] | None = None) -> int:
         str(args.runs_dir.expanduser().resolve()),
     ]
     if runtime_rom_binding is not None:
-        play_command.extend(("--rom", str(runtime_rom_binding.path)))
+        play_command.extend(("--rom-path", str(runtime_rom_binding.path)))
     print(f"play it: {shlex.join(play_command)}", flush=True)
     return 0
 

@@ -739,10 +739,10 @@ class RunSupervisorTests(unittest.TestCase):
         self.assertEqual(supervisor.learner_final_step, 17)
         self.assertEqual(supervisor.learner_result_observed_at, 0.25)
 
-    def test_live_learner_state_rejects_legacy_and_identity_mismatch(self) -> None:
+    def test_live_learner_state_rejects_noncurrent_and_identity_mismatch(self) -> None:
         supervisor = self.supervisor()
         self.prepare_live_learner_contract(supervisor)
-        legacy = {
+        noncurrent = {
             "document_type": "gradlab.training-result",
             "format_version": 2,
             "status": "completed",
@@ -750,7 +750,7 @@ class RunSupervisorTests(unittest.TestCase):
             "execution_mode": "supervised",
             "final_step": 1,
         }
-        atomic_write_json(supervisor.run_dir / "training-result.json", legacy)
+        atomic_write_json(supervisor.run_dir / "training-result.json", noncurrent)
         with self.assertRaisesRegex(LearnerStateContractError, "format_version"):
             supervisor._observe_live_learner_state(0.25)
 

@@ -1419,16 +1419,16 @@ def test_catalog_http_api_requires_the_fragment_session_token() -> None:
             async with ClientSession() as client:
                 denied = await client.get(f"{server.origin}/api/catalog/environments?q=mario")
                 assert denied.status == 401
-                retired_api = await client.get(
+                noncurrent_api = await client.get(
                     f"{server.origin}/api/catalog/projects?q=mario",
                     headers={"Authorization": f"Bearer {server.token}"},
                 )
-                assert retired_api.status == 404
-                retired_page = await client.get(
+                assert noncurrent_api.status == 404
+                noncurrent_page = await client.get(
                     f"{server.origin}/projects/Mario",
                     allow_redirects=False,
                 )
-                assert retired_page.status == 404
+                assert noncurrent_page.status == 404
                 accepted = await client.get(
                     f"{server.origin}/api/catalog/environments?q=mario",
                     headers={"Authorization": f"Bearer {server.token}"},

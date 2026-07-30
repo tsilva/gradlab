@@ -204,6 +204,9 @@ class WandbProjector:
         display_name = str(train_config.get("wandb_display_name") or "").strip()
         if not display_name:
             raise ValueError("W&B projection requires wandb_display_name")
+        metrics_schema_version = evaluation_metric_schema(
+            train_config.get("metrics_schema_version")
+        ).version
         run = configure_wandb_metrics(
             wandb.init(
                 entity=entity,
@@ -220,15 +223,11 @@ class WandbProjector:
                     x_server_side_expand_glob_metrics=False,
                 ),
             ),
-            metrics_schema_version=int(
-                train_config.get("metrics_schema_version") or METRICS_SCHEMA_VERSION
-            ),
+            metrics_schema_version=metrics_schema_version,
         )
         return cls(
             run,
-            metrics_schema_version=int(
-                train_config.get("metrics_schema_version") or METRICS_SCHEMA_VERSION
-            ),
+            metrics_schema_version=metrics_schema_version,
         )
 
     def close(

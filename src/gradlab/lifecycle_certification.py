@@ -754,8 +754,9 @@ class LifecycleVerifier:
                 raise AssertionError(f"independent verifier: {name}: {dict(evidence)}")
             checks.append({"name": name, "status": "passed", "evidence": dict(evidence)})
 
-        manifest = RunManifest(**authority.control.get_json(f"runs/{run_id}/manifest.json"))
-        manifest.validate()
+        RunManifest.from_dict(
+            authority.control.get_json(f"runs/{run_id}/manifest.json")
+        )
         check("manifest-valid", True, {"run_id": run_id})
 
         index = authority.models.get_json(f"runs/{run_id}/index.json")
@@ -1766,7 +1767,7 @@ def _scenario_early_stop_outcomes(root: Path) -> dict[str, Any]:
     tampered["decision_sha256"] = "corrupted"
     corruption_rejected = False
     try:
-        EarlyStopReceipt(**tampered).validate()
+        EarlyStopReceipt.from_dict(tampered)
     except ValueError:
         corruption_rejected = True
     recorder.require(
