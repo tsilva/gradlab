@@ -119,6 +119,14 @@ does not read, project, or preserve noncurrent W&B or R2 schemas.
   Successful episodes contribute to success metrics, not the failure-reason families.
 - Positive PPO policy entropy, dominant-action rate, and the action histogram diagnose discrete
   policy collapse. Value prediction and advantage histograms are sampled every 64 rollouts.
+- Actor-critic explained variance is `1 - Var(value_target - value_prediction) /
+  Var(value_target)`: one is perfect, zero means the critic explains no more target variance than a
+  constant baseline, and negative values are worse than that baseline. A near-zero value is not by
+  itself evidence of exploding value loss. Pair it with value-prediction and advantage dispersion:
+  predictions with much less dispersion than the residual advantages indicate a mostly
+  state-insensitive baseline, while tiny target variance can make the ratio ill-conditioned.
+  Common causes include partially observed return-relevant state, rapidly changing policy state
+  occupancy, shared actor-critic feature drift, and bootstrap-heavy rollouts.
 - For reward-transform ablations, first compare `train/reward/raw/*` with
   `train/reward/shaped/*`. `task.reward.reward_scale` is a positive divisor, so a value below one
   amplifies the policy-facing reward. If raw rewards match but shaped magnitudes diverge, inspect
