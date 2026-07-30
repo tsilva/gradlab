@@ -13,7 +13,6 @@ from gradlab.env_identity import validate_task_config
 from gradlab.env_registry import (
     env_supports_states,
     qualify_env_id,
-    resolve_env_id,
     validate_provider_constructor_args,
 )
 from gradlab.goal_schema import goal_evaluation_mode, validate_goal_document_shape
@@ -80,24 +79,24 @@ def _require_string_list(
 
 
 def _validate_obs_crop(preprocessing: Mapping[str, Any], *, label: str) -> None:
-    if "hud_crop_top" in preprocessing:
-        raise ValueError(f"{label}.hud_crop_top is redundant; use obs_crop")
     if "obs_crop" not in preprocessing:
         raise ValueError(f"{label}.obs_crop is required")
     normalize_obs_crop(preprocessing["obs_crop"], label=f"{label}.obs_crop")
 
 
 def _validate_obs_resize(preprocessing: Mapping[str, Any], *, label: str) -> None:
-    if "observation_size" in preprocessing:
-        raise ValueError(f"{label}.observation_size is redundant; use obs_resize")
     if "obs_resize" not in preprocessing:
         raise ValueError(f"{label}.obs_resize is required")
     value = preprocessing["obs_resize"]
     if not isinstance(value, Sequence) or isinstance(value, str | bytes) or len(value) != 2:
         raise ValueError(f"{label}.obs_resize must be [height, width]")
+    dimensions: list[int] = []
     for index, item in enumerate(value):
-        if not _is_int(item) or item <= 0:
-            raise ValueError(f"{label}.obs_resize[{index}] must be a positive integer")
+        if not _is_int(item) or item < 0:
+            raise ValueError(f"{label}.obs_resize[{index}] must be a non-negative integer")
+        dimensions.append(int(item))
+    if (dimensions[0] == 0) != (dimensions[1] == 0):
+        raise ValueError(f"{label}.obs_resize dimensions must both be zero or both be positive")
 
 
 def _validate_environment_identity(
@@ -109,41 +108,53 @@ def _validate_environment_identity(
         _require_key(document, "environment", label=label),
         label=f"{label}.environment",
     )
-    env_config = environment.get("env_config")
-    if isinstance(env_config, Mapping):
-        _validate_environment_env_config(
-            environment,
-            env_config,
-            label=f"{label}.environment",
-            require_game=True,
+    allowed_environment_keys = {"env_provider", "env_config", "preprocessing", "task"}
+    extra_environment_keys = sorted(set(environment) - allowed_environment_keys)
+    if extra_environment_keys:
+        raise ValueError(
+            f"{label}.environment has unexpected keys: {extra_environment_keys}"
         )
-        task = _require_mapping(
-            _require_key(environment, "task", label=f"{label}.environment"),
-            label=f"{label}.environment.task",
-        )
-        validate_task_config(task, label=f"{label}.environment.task")
-        return environment
-
-    env_id = _require_non_empty_string(environment, "env_id", label=f"{label}.environment")
-    try:
-        resolve_env_id(env_id)
-    except ValueError as exc:
-        raise ValueError(f"{label}.environment.env_id is invalid: {exc}") from exc
+    env_config = _require_mapping(
+        _require_key(environment, "env_config", label=f"{label}.environment"),
+        label=f"{label}.environment.env_config",
+    )
+    _validate_environment_env_config(
+        environment,
+        env_config,
+        label=f"{label}.environment",
+        require_game=True,
+    )
     task = _require_mapping(
         _require_key(environment, "task", label=f"{label}.environment"),
         label=f"{label}.environment.task",
     )
     validate_task_config(task, label=f"{label}.environment.task")
-    preprocessing = _require_mapping(
-        _require_key(environment, "preprocessing", label=f"{label}.environment"),
-        label=f"{label}.environment.preprocessing",
-    )
-    _validate_obs_crop(preprocessing, label=f"{label}.environment.preprocessing")
-    _validate_obs_resize(preprocessing, label=f"{label}.environment.preprocessing")
-    _require_mapping(
-        _require_key(environment, "termination", label=f"{label}.environment"),
-        label=f"{label}.environment.termination",
-    )
+    preprocessing = environment.get("preprocessing")
+    if preprocessing is not None:
+        preprocessing = _require_mapping(
+            preprocessing,
+            label=f"{label}.environment.preprocessing",
+        )
+        allowed_preprocessing_keys = {
+            "frame_skip",
+            "max_pool_frames",
+            "obs_crop",
+            "obs_crop_fill",
+            "obs_crop_mode",
+            "obs_resize",
+            "obs_resize_algorithm",
+            "sticky_action_prob",
+        }
+        extra_preprocessing_keys = sorted(
+            set(preprocessing) - allowed_preprocessing_keys
+        )
+        if extra_preprocessing_keys:
+            raise ValueError(
+                f"{label}.environment.preprocessing has unexpected keys: "
+                f"{extra_preprocessing_keys}"
+            )
+        _validate_obs_crop(preprocessing, label=f"{label}.environment.preprocessing")
+        _validate_obs_resize(preprocessing, label=f"{label}.environment.preprocessing")
     return environment
 
 
@@ -188,9 +199,7 @@ def _validate_explicit_goal_environment_args(
             + ", ".join(missing_config)
         )
 
-    provider_id = str(
-        environment.get("env_provider") or explicit_config.get("env_provider") or ""
-    ).strip()
+    provider_id = str(environment.get("env_provider") or "").strip()
     if env_supports_states(provider_id, str(explicit_config.get("game") or "")) and not (
         "state" in explicit_config or "states" in explicit_config
     ):
@@ -217,9 +226,6 @@ def _validate_env_config(
     if "env_args" in env_config and not isinstance(env_config["env_args"], Mapping):
         raise ValueError(f"{label}.env_args must be an object")
     validation_config = dict(env_config)
-    env_args = env_config.get("env_args")
-    if isinstance(env_args, Mapping) and "game" in env_args and "game" not in validation_config:
-        validation_config["game"] = env_args["game"]
     required_keys = []
     if require_provider:
         required_keys.append("env_provider")
@@ -287,8 +293,6 @@ def _goal_train_environment(
 
 
 def _validate_goal_eval(document: Mapping[str, Any], *, label: str) -> None:
-    if "eval_spec" in document:
-        raise ValueError(f"{label}.eval_spec moved to eval")
     evaluation_mode = goal_evaluation_mode(document, label=label)
     if evaluation_mode == "training_only":
         if "eval" in document:
@@ -315,18 +319,8 @@ def _validate_goal_eval(document: Mapping[str, Any], *, label: str) -> None:
             eval_section["acceptance"],
             label=f"{label}.eval.acceptance",
         )
-    if "eval_config" in eval_section:
-        raise ValueError(f"{label}.eval.eval_config moved to eval.policy")
-    if "eval" in eval_section:
-        raise ValueError(f"{label}.eval.eval moved to eval.policy")
     policy = eval_section.get("policy")
     if isinstance(policy, Mapping):
-        for moved_key in ("seed", "n_envs", "max_steps"):
-            if moved_key in policy:
-                raise ValueError(
-                    f"{label}.eval.policy.{moved_key} moved to "
-                    f"{label}.eval.environment.env_config.{moved_key}"
-                )
         if "stochastic" in policy:
             stochastic = _require_bool(policy, "stochastic", label=f"{label}.eval.policy")
             if not stochastic:
@@ -354,10 +348,6 @@ def _validate_goal_eval(document: Mapping[str, Any], *, label: str) -> None:
             _require_key(eval_environment, "env_config", label=f"{label}.eval.environment"),
             label=f"{label}.eval.environment.env_config",
         )
-        if "max_episodes" in eval_env_config:
-            raise ValueError(
-                f"{label}.eval.environment.env_config.max_episodes moved to {label}.eval.episodes"
-            )
         _validate_environment_env_config(
             eval_environment,
             eval_env_config,
@@ -447,34 +437,9 @@ def validate_goal_contract_document(
 ) -> None:
     label = f"goal file {_display_path(path, repo_root)}"
     authored_document = document
+    validate_goal_document_shape(authored_document, label=label)
     validate_reward_shape_catalog(document, label=label)
     document = goal_for_contract_validation(document, label=label)
-    if "schema_version" in document:
-        raise ValueError(f"{label}.schema_version is not part of goal contracts")
-    if "status" in document:
-        raise ValueError(f"{label}.status is not part of goal contracts")
-    narrative_top_level_keys = {
-        "batch_record_fields",
-        "capacity_policy_file",
-        "cap_policy",
-        "constraints",
-        "default_eval_profile",
-        "default_train_profile",
-        "default_train_profile_note",
-        "determinism",
-        "environment_hash",
-        "execution",
-        "notes",
-        "runtime",
-        "search_protocol",
-    }
-    present_narrative_keys = sorted(set(document) & narrative_top_level_keys)
-    if present_narrative_keys:
-        raise ValueError(
-            f"{label} must be script-readable; remove narrative keys: {present_narrative_keys}"
-        )
-    if "selection_policy" in document:
-        raise ValueError(f"{label}.selection_policy moved to objective.rank")
     _validate_goal_release(document, label=label)
     goal_id = _require_non_empty_string(document, "goal_id", label=label)
     _require_non_empty_string(document, "title", label=label)
@@ -486,26 +451,9 @@ def validate_goal_contract_document(
     objective = _require_mapping(
         _require_key(document, "objective", label=label), label=f"{label}.objective"
     )
-    narrative_objective_keys = {"algorithm", "forbidden_stop_rules", "game", "success_requirement"}
-    present_objective_narrative_keys = sorted(set(objective) & narrative_objective_keys)
-    if present_objective_narrative_keys:
-        raise ValueError(
-            f"{label}.objective must be script-readable; "
-            f"remove narrative keys: {present_objective_narrative_keys}"
-        )
-    if "success" in objective:
-        raise ValueError(f"{label}.objective.success moved to train.early_stop")
     _validate_objective_rank(objective, label=f"{label}.objective")
 
     train = _goal_train_section(document, label=label)
-    if "training" in document:
-        raise ValueError(f"{label}.training is not part of goal contracts")
-    if "max_train_timesteps" in train:
-        raise ValueError(f"{label}.train.max_train_timesteps is not part of goal contracts")
-    if "policy" in train:
-        raise ValueError(
-            f"{label}.train.policy is retired; use train.backend with an explicit id and config"
-        )
     if "early_stop" in train:
         normalize_metric_early_stop_config(
             train["early_stop"],
@@ -567,7 +515,6 @@ def validate_goal_contract_document(
                 f"{label}.train.environment start identifiers must be safe metric dimensions"
             ) from exc
 
-    validate_goal_document_shape(authored_document, label=label)
     _validate_goal_eval(document, label=label)
 
 

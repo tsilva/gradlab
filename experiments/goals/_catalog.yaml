@@ -1,33 +1,33 @@
-schema_version: 1
+schema_version: 2
 namespaces:
   Breakout-Atari2600-v0:
-    project: Breakout-Atari2600-v0
+    environment_id: Breakout-Atari2600-v0
   SuperMarioBros-Nes-v0:
-    project: SuperMarioBros-Nes-v0
+    environment_id: SuperMarioBros-Nes-v0
     title_template: Sample-efficient SuperMarioBros-NES {goal_id} completion
   VizdoomBasic-v1:
-    project: VizdoomBasic-v1
+    environment_id: VizdoomBasic-v1
   VizdoomBasic-Plus-v1:
-    project: VizdoomBasic-Plus-v1
+    environment_id: VizdoomBasic-Plus-v1
   VizdoomDeadlyCorridor-v1:
-    project: VizdoomDeadlyCorridor-v1
+    environment_id: VizdoomDeadlyCorridor-v1
   VizdoomDeathmatch-v1:
-    project: VizdoomDeathmatch-v1
+    environment_id: VizdoomDeathmatch-v1
   VizdoomDefendCenter-v1:
-    project: VizdoomDefendCenter-v1
+    environment_id: VizdoomDefendCenter-v1
   VizdoomDefendLine-v1:
-    project: VizdoomDefendLine-v1
+    environment_id: VizdoomDefendLine-v1
   VizdoomDefendLine-Plus-v1:
-    project: VizdoomDefendLine-Plus-v1
+    environment_id: VizdoomDefendLine-Plus-v1
   VizdoomHealthGathering-v1:
-    project: VizdoomHealthGathering-v1
+    environment_id: VizdoomHealthGathering-v1
   VizdoomHealthGatheringSupreme-v1:
-    project: VizdoomHealthGatheringSupreme-v1
+    environment_id: VizdoomHealthGatheringSupreme-v1
   VizdoomMyWayHome-v1:
-    project: VizdoomMyWayHome-v1
+    environment_id: VizdoomMyWayHome-v1
   VizdoomPredictPosition-v1:
-    project: VizdoomPredictPosition-v1
+    environment_id: VizdoomPredictPosition-v1
   VizdoomTakeCover-v1:
-    project: VizdoomTakeCover-v1
+    environment_id: VizdoomTakeCover-v1
   gradlab__bandit:
-    project: Bandit-v0
+    environment_id: Bandit-v0

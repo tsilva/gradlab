@@ -381,41 +381,40 @@ def preflight_document(
     *,
     source: str,
     expected_type: str,
-    handlers: Mapping[int, Callable[[Mapping[str, Any], str], dict[str, Any]]],
+    current_version: int,
+    validator: Callable[[Mapping[str, Any], str], dict[str, Any]],
 ) -> dict[str, Any]:
-    supported = sorted(handlers)
     document = _required_mapping(value, label=source)
     document_type = document.get("document_type")
     format_version = document.get("format_version")
     if document_type != expected_type:
         raise PolicyDocumentError(
             f"{source} document_type must be {expected_type!r}, got {document_type!r}; "
-            f"supported versions are {supported}. Regenerate the artifact with the current "
-            "gradlab version."
+            f"required format_version is {current_version}. Regenerate the artifact with "
+            "the current gradlab version."
         )
     if isinstance(format_version, bool) or not isinstance(format_version, int):
         raise PolicyDocumentError(
             f"{source} {expected_type!r} format_version must be an integer, got "
-            f"{format_version!r}; supported versions are {supported}. Regenerate the artifact "
-            "with the current gradlab version."
+            f"{format_version!r}; required format_version is {current_version}. Regenerate "
+            "the artifact with the current gradlab version."
         )
-    handler = handlers.get(format_version)
-    if handler is None:
+    if format_version != current_version:
         raise UnsupportedPolicyDocumentVersion(
             source=source,
             document_type=document_type,
             format_version=format_version,
-            supported_versions=sorted(handlers),
+            supported_versions=[current_version],
         )
     try:
-        return handler(document, source)
+        return validator(document, source)
     except UnsupportedPolicyDocumentVersion:
         raise
     except PolicyDocumentError as exc:
         raise PolicyDocumentError(
             f"Invalid {expected_type} format_version {format_version} in {source}; "
-            f"supported versions are {supported}: {exc}. Regenerate the artifact with "
-            "the current gradlab version."
+            f"required format_version is {current_version}: {exc}. Regenerate the artifact "
+            "with the current gradlab version."
         ) from exc
 
 
@@ -446,9 +445,6 @@ def _validate_recipe_contract(
     assert isinstance(goal, Mapping)
     assert isinstance(raw_train_config, Mapping)
     train_config = dict(raw_train_config)
-    # Portable contracts written before the canonical acceptance cleanup may
-    # contain this derived flag. Their stored eval contract is authoritative.
-    train_config.pop("stop_on_acceptance", None)
     evaluation_value = recipe.get("eval")
     playback_value = recipe.get("playback")
     evaluation = evaluation_value if isinstance(evaluation_value, Mapping) else None
@@ -472,30 +468,13 @@ def _validate_recipe_contract(
         backend_value = train_config.get("training_backend")
         backend = backend_value if isinstance(backend_value, Mapping) else {}
         backend_id = str(backend.get("id") or "").strip()
-        from gradlab.policy_registry import (
-            BACKEND_PROVENANCE_ALGORITHMS,
-            TRAINING_BACKEND_SPECS,
-        )
+        from gradlab.policy_registry import TRAINING_BACKEND_SPECS
 
         if backend_id in TRAINING_BACKEND_SPECS:
             validate_and_normalize_train_config(
                 train_config,
                 label=f"{source}.recipe.train_config",
             )
-        elif backend_id in BACKEND_PROVENANCE_ALGORITHMS:
-            # Archived, non-launchable backends still get strict portable
-            # field/environment validation without importing or inventing a
-            # local learner implementation.
-            validate_train_config_fields(
-                train_config,
-                label=f"{source}.recipe.train_config",
-                required_keys=("training_backend",),
-            )
-            backend_config = backend.get("config")
-            if not isinstance(backend_config, Mapping):
-                raise ValueError(
-                    f"{source}.recipe.train_config.training_backend.config must be an object"
-                )
         else:
             raise ValueError(f"unknown training backend {backend_id!r}")
         validate_goal_document_shape(
@@ -697,7 +676,7 @@ def _validate_recipe_contract(
     return deepcopy(dict(document))
 
 
-def _validate_recipe_v2(
+def _validate_recipe(
     document: Mapping[str, Any],
     source: str,
 ) -> dict[str, Any]:
@@ -812,18 +791,14 @@ def _validate_recipe_v2(
     return deepcopy(dict(document))
 
 
-_RECIPE_HANDLERS: dict[int, Callable[[Mapping[str, Any], str], dict[str, Any]]] = {
-    RECIPE_FORMAT_VERSION: _validate_recipe_v2,
-}
-
-
 def load_recipe_document(path: Path) -> dict[str, Any]:
     value = load_json_object(path)
     return preflight_document(
         value,
         source=str(path),
         expected_type=RECIPE_DOCUMENT_TYPE,
-        handlers=_RECIPE_HANDLERS,
+        current_version=RECIPE_FORMAT_VERSION,
+        validator=_validate_recipe,
     )
 
 
@@ -834,7 +809,8 @@ def validate_recipe_document(
         document,
         source=source,
         expected_type=RECIPE_DOCUMENT_TYPE,
-        handlers=_RECIPE_HANDLERS,
+        current_version=RECIPE_FORMAT_VERSION,
+        validator=_validate_recipe,
     )
 
 
@@ -953,22 +929,14 @@ def _validate_model(
     return deepcopy(dict(document))
 
 
-def _validate_model_v2(document: Mapping[str, Any], source: str) -> dict[str, Any]:
-    return _validate_model(document, source)
-
-
-_MODEL_HANDLERS = {
-    MODEL_FORMAT_VERSION: _validate_model_v2,
-}
-
-
 def load_model_document(path: Path) -> dict[str, Any]:
     value = load_json_object(path)
     return preflight_document(
         value,
         source=str(path),
         expected_type=MODEL_DOCUMENT_TYPE,
-        handlers=_MODEL_HANDLERS,
+        current_version=MODEL_FORMAT_VERSION,
+        validator=_validate_model,
     )
 
 
@@ -1015,7 +983,7 @@ def _build_recipe_contract(
     source_commit: str | None,
     source_distribution: Mapping[str, str] | None = None,
     run_description: str | None = None,
-    seed: int | None = None,
+    seed: int,
     runtime_image_ref: str | None = None,
     runtime_packages: Sequence[str] | None = None,
 ) -> dict[str, Any]:
@@ -1139,8 +1107,7 @@ def _build_recipe_contract(
     for key in _OPERATIONAL_TRAIN_FIELDS:
         train_config.pop(key, None)
     train_config.pop("rom_asset_manifest", None)
-    if seed is not None:
-        train_config["seed"] = int(seed)
+    train_config["seed"] = int(seed)
     recipe["train_config"] = train_config
     if run_description:
         recipe["description"] = str(run_description)
@@ -1148,7 +1115,7 @@ def _build_recipe_contract(
         _resolve_recipe_templates(
             recipe,
             {
-                "seed": "" if seed is None else int(seed),
+                "seed": int(seed),
                 "recipe_id": recipe.get("recipe_id") or "",
                 "env_id": train_config.get("game") or "",
             },
@@ -1217,7 +1184,7 @@ def build_recipe_document(
     source_commit: str | None,
     source_distribution: Mapping[str, str] | None = None,
     run_description: str | None = None,
-    seed: int | None = None,
+    seed: int,
     runtime_image_ref: str | None = None,
     runtime_packages: Sequence[str] | None = None,
     base_materialized_recipe: Mapping[str, Any],
@@ -1294,7 +1261,7 @@ def build_recipe_document(
             },
         },
     }
-    return _validate_recipe_v2(document, RECIPE_FILENAME)
+    return _validate_recipe(document, RECIPE_FILENAME)
 
 
 def build_model_document(
@@ -1338,7 +1305,7 @@ def build_model_document(
         },
         "provenance": provenance,
     }
-    return _validate_model_v2(document, MODEL_FILENAME)
+    return _validate_model(document, MODEL_FILENAME)
 
 
 def _validate_cross_document_contract(model: Mapping[str, Any], recipe: Mapping[str, Any]) -> None:
@@ -1506,7 +1473,8 @@ def evaluation_contract(recipe_document: Mapping[str, Any]) -> dict[str, Any]:
         recipe_document,
         source=RECIPE_FILENAME,
         expected_type=RECIPE_DOCUMENT_TYPE,
-        handlers=_RECIPE_HANDLERS,
+        current_version=RECIPE_FORMAT_VERSION,
+        validator=_validate_recipe,
     )
     recipe = validated["recipe"]
     evaluation = recipe.get("eval")
@@ -1587,7 +1555,8 @@ def critic_value_contract(recipe_document: Mapping[str, Any]) -> dict[str, Any] 
         recipe_document,
         source=RECIPE_FILENAME,
         expected_type=RECIPE_DOCUMENT_TYPE,
-        handlers=_RECIPE_HANDLERS,
+        current_version=RECIPE_FORMAT_VERSION,
+        validator=_validate_recipe,
     )
     recipe = validated["recipe"]
     environment = _training_playback_environment(recipe)
@@ -1670,7 +1639,8 @@ def playback_contract_audit(recipe_document: Mapping[str, Any]) -> dict[str, Any
         recipe_document,
         source=RECIPE_FILENAME,
         expected_type=RECIPE_DOCUMENT_TYPE,
-        handlers=_RECIPE_HANDLERS,
+        current_version=RECIPE_FORMAT_VERSION,
+        validator=_validate_recipe,
     )
     recipe = validated["recipe"]
     training_environment = _training_playback_environment(recipe)
@@ -1742,7 +1712,8 @@ def playback_contract(
         recipe_document,
         source=RECIPE_FILENAME,
         expected_type=RECIPE_DOCUMENT_TYPE,
-        handlers=_RECIPE_HANDLERS,
+        current_version=RECIPE_FORMAT_VERSION,
+        validator=_validate_recipe,
     )
     recipe = validated["recipe"]
     provenance = validated["provenance"]
@@ -1757,9 +1728,6 @@ def playback_contract(
             label="recipe.json training playback config",
         )
         seed_value = train_config.get("seed")
-        if not isinstance(seed_value, int) or isinstance(seed_value, bool):
-            portable = recipe.get("eval") or recipe.get("playback") or {}
-            seed_value = portable.get("seed") if isinstance(portable, Mapping) else None
         if not isinstance(seed_value, int) or isinstance(seed_value, bool):
             raise PolicyDocumentError("recipe.json training playback seed must be an integer")
         return {

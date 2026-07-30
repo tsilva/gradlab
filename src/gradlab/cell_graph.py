@@ -17,7 +17,7 @@ import numpy as np
 
 from gradlab.action_contract import action_contract_meanings
 from gradlab.action_program import ActionRun, canonicalize_action_runs
-from gradlab.json_utils import canonical_json_bytes
+from gradlab.json_utils import canonical_json_bytes, canonical_json_sha256
 from gradlab.state_archive import (
     ArchiveCellConfig,
     StateArchiveEntry,
@@ -38,10 +38,6 @@ MAX_CELL_GRAPH_ACTION_RUNS = 1_000_000
 MAX_CELL_GRAPH_DOCUMENT_BYTES = 128 * 1024 * 1024
 MAX_CELL_GRAPH_SNAPSHOT_BLOB_BYTES = 512 * 1024 * 1024
 MAX_CELL_GRAPH_SNAPSHOT_BYTES = 4 * 1024 * 1024 * 1024
-
-
-def _sha256_document(value: object) -> str:
-    return hashlib.sha256(canonical_json_bytes(value)).hexdigest()
 
 
 def _cell_key_document(value: bytes | None) -> str | None:
@@ -618,7 +614,7 @@ class CellGraphPolicy:
             "action_names": list(self.action_names),
             "fallback_action": self.fallback_action,
             "detector": self.detector,
-            "detector_sha256": _sha256_document(self.detector),
+            "detector_sha256": canonical_json_sha256(self.detector),
             "nodes": [node.document() for node in self.nodes],
             "edges": [edge.document() for edge in self.edges],
             "roots": [
@@ -786,7 +782,7 @@ class CellGraphPolicy:
             detector,
             label="cell_graph.detector",
         )
-        if payload["detector_sha256"] != _sha256_document(normalized_detector):
+        if payload["detector_sha256"] != canonical_json_sha256(normalized_detector):
             raise ValueError("cell-graph detector hash mismatch")
         raw_nodes = payload["nodes"]
         raw_edges = payload["edges"]
@@ -884,7 +880,7 @@ def route_node_id(
     cell_key: bytes,
     prefix_runs: Sequence[ActionRun],
 ) -> str:
-    return _sha256_document(
+    return canonical_json_sha256(
         {
             "semantic_id": "cell-graph-representative-v1",
             "seed": seed,
@@ -900,7 +896,7 @@ def route_edge_id(
     target_id: str,
     action_runs: Sequence[ActionRun],
 ) -> str:
-    return _sha256_document(
+    return canonical_json_sha256(
         {
             "semantic_id": "cell-graph-edge-v1",
             "source": source_id,

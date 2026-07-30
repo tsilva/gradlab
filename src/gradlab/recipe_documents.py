@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import copy
-import hashlib
-import json
 import subprocess
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
@@ -30,6 +28,7 @@ from gradlab.env_identity import (
 from gradlab.experiment_contracts import validate_goal_contract_document
 from gradlab.file_utils import file_sha256
 from gradlab.goal_schema import goal_evaluation_mode
+from gradlab.json_utils import canonical_json_sha256
 from gradlab.provider_config import NON_SEMANTIC_ENV_ARG_KEYS
 from gradlab.recipe_schema import (
     train_recipe_id,
@@ -100,8 +99,7 @@ _PHASE_EXECUTION_ENV_PATHS = frozenset(
 def goal_contract_sha256(document: Mapping[str, Any]) -> str:
     """Hash the fully composed semantic goal contract, excluding source formatting."""
 
-    payload = json.dumps(document, sort_keys=True, separators=(",", ":"), default=str)
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+    return canonical_json_sha256(document, default=str, ensure_ascii=True)
 
 
 def _override_parts(value: str, *, label: str) -> tuple[str, str, Any]:
@@ -278,8 +276,21 @@ def _eval_train_defaults(document: Mapping[str, Any]) -> dict[str, Any]:
     eval_config = _train_environment_section_config(environment)
     if "n_envs" in eval_config:
         defaults["checkpoint_eval_n_envs"] = eval_config.pop("n_envs")
-    if "max_steps" in eval_config:
-        defaults["post_train_eval_max_steps"] = eval_config.pop("max_steps")
+    task = eval_config.get("task")
+    termination = task.get("termination") if isinstance(task, Mapping) else None
+    max_episode_steps = (
+        termination.get("max_episode_steps") if isinstance(termination, Mapping) else None
+    )
+    if (
+        not isinstance(max_episode_steps, int)
+        or isinstance(max_episode_steps, bool)
+        or max_episode_steps <= 0
+    ):
+        raise ValueError(
+            "goal eval.environment.task.termination.max_episode_steps must be a "
+            "positive integer"
+        )
+    defaults["post_train_eval_max_steps"] = max_episode_steps
     defaults["checkpoint_eval_environment"] = eval_config
     return defaults
 
@@ -459,11 +470,6 @@ def _validate_reward_catalog_source_ownership(sources: Sequence[Path]) -> None:
             definition_owners[key] = source
 
 
-def _reject_active_specs_path(path: Path) -> None:
-    if "specs" in path.parts:
-        raise ValueError(f"{path} is under removed active specs/ layout; use recipes/ instead")
-
-
 def _materialize_goal_owned_fields(
     materialized: dict[str, Any],
     *,
@@ -532,14 +538,8 @@ def materialize_train_recipe_document(
     goal_composition: ComposedDocument | None = None,
 ) -> dict[str, Any]:
     materialized = copy.deepcopy(dict(document))
-    source_sections = [key for key in TRAIN_CONFIG_SECTION_KEYS if key in materialized]
     if isinstance(materialized.get("train_config"), Mapping):
-        if source_sections:
-            raise ValueError(
-                "recipe cannot mix compiled train_config with source section(s): "
-                + ", ".join(source_sections)
-            )
-        return materialized
+        raise ValueError("source recipes must not contain compiled train_config")
     normalized_train = _normalized_train_section(materialized.get("train"))
     if normalized_train:
         materialized["train"] = normalized_train
@@ -605,14 +605,6 @@ def validate_source_recipe_shape(
     preset: bool = False,
 ) -> None:
     allowed_fields = SOURCE_PRESET_FIELDS if preset else SOURCE_RECIPE_FIELDS
-    retired = sorted(
-        set(document) & {"environment", "reward", "train_config", "group_id", "batch_id"}
-    )
-    if retired:
-        raise ValueError(
-            f"{label} uses compiled or retired source field(s): {', '.join(retired)}; "
-            "author recipes with train.backend and logging"
-        )
     unknown = sorted(str(key) for key in set(document) - allowed_fields)
     if unknown:
         kind = "recipe preset" if preset else "recipe"
@@ -623,10 +615,6 @@ def validate_source_recipe_shape(
     if train is not None:
         if not isinstance(train, Mapping):
             raise ValueError(f"{label}.train must be an object")
-        if "policy" in train:
-            raise ValueError(
-                f"{label}.train.policy is retired; use train.backend with an explicit id and config"
-            )
         allowed = TRAIN_NESTED_SECTION_KEYS | COMMON_TRAIN_CONFIG_KEYS
         unexpected = sorted(set(train) - allowed)
         if unexpected:
@@ -647,7 +635,6 @@ def validate_source_recipe_shape(
 
 
 def load_recipe_source_document(path: Path) -> ComposedDocument:
-    _reject_active_specs_path(path)
     validate_source_recipe_shape(
         load_mapping_document(path, label=f"recipe file {path}"),
         label=f"recipe file {path}",

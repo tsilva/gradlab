@@ -34,7 +34,7 @@ from gradlab.run_contracts import RUN_ID_PATTERN
 from gradlab.training_backend import training_backend_id
 
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 SUPPORTED_BACKENDS = frozenset({"sb3.ppo", "sb3.a2c"})
 TRACE_ONLY_OVERRIDES = frozenset({"campaign_id", "description", "recipe_id"})
 FROZEN_BACKEND_KEYS = frozenset({"n_steps"})
@@ -184,7 +184,7 @@ def load_state(path: Path) -> dict[str, Any]:
     if version != SCHEMA_VERSION:
         raise ValueError(
             f"unsupported autoresearch study schema {version} in {path}; "
-            "queue-backed v1/v2 studies are historical and cannot be resumed"
+            f"only schema {SCHEMA_VERSION} is current"
         )
     return state
 
@@ -726,7 +726,7 @@ def command_init(args: argparse.Namespace) -> None:
         backend = training_backend_id(train)
         if backend not in SUPPORTED_BACKENDS:
             raise ValueError(
-                f"autoresearch v2 supports only {sorted(SUPPORTED_BACKENDS)}, got {backend}"
+                f"autoresearch supports only {sorted(SUPPORTED_BACKENDS)}, got {backend}"
             )
         composition = document.get("_composition") or {}
         sources = [
@@ -1504,75 +1504,6 @@ def command_collect_training_evidence(args: argparse.Namespace) -> None:
     )
 
 
-def command_upgrade_return_mode(args: argparse.Namespace) -> None:
-    path = study_path(args.study)
-    state = load_state(path)
-    source_guard(state)
-    if evidence_mode(state) == EVIDENCE_RETURN:
-        emit({"study": str(path), "duplicate": True, "next": next_action(state)})
-        return
-    if state["status"] != "active":
-        raise RuntimeError(f"cannot upgrade evidence while study is {state['status']}")
-    if infer_evidence_mode(state["baseline"]["train_config"]) != EVIDENCE_RETURN:
-        raise RuntimeError("the frozen goal is not a return-only training objective")
-    if state.get("confirmation") or state.get("winner") or state.get("apply"):
-        raise RuntimeError("return-mode upgrade must precede confirmation or winner application")
-    if any(candidate.get("pair_runs") for candidate in state["candidates"].values()):
-        raise RuntimeError("return-mode upgrade must precede paired evidence")
-
-    records: dict[str, dict[str, Any]] = {}
-    for wave in state["waves"]:
-        for item in wave.get("terminal_runs") or []:
-            run_id = str(item["run_id"])
-            records[run_id] = fetch_training_evidence(
-                url=str(item["wandb_url"]),
-                expected_run_id=str(item["wandb_run_id"]),
-                starts=list(state["configured_starts"]),
-                strong_threshold=float(state["policy"]["strong_threshold"]),
-                mode=EVIDENCE_RETURN,
-                return_tail_fraction=RETURN_TAIL_FRACTION,
-            )
-
-    with edit_state(path) as current:
-        source_guard(current)
-        if evidence_mode(current) == EVIDENCE_RETURN:
-            emit({"study": str(path), "duplicate": True, "next": next_action(current)})
-            return
-        current["evidence_mode"] = EVIDENCE_RETURN
-        current["policy"]["return_tail_fraction"] = RETURN_TAIL_FRACTION
-        for wave in current["waves"]:
-            if wave["phase"] in SEARCH_PHASES:
-                wave["closed"] = False
-            for item in wave.get("terminal_runs") or []:
-                item["training_evidence"] = copy.deepcopy(records[str(item["run_id"])])
-        for candidate in current["candidates"].values():
-            for destination in ("screen_runs", "pair_runs", "confirmation_runs"):
-                for item in candidate.get(destination) or []:
-                    run_id = item.get("run_id")
-                    if run_id is not None and str(run_id) in records:
-                        item["training_evidence"] = copy.deepcopy(records[str(run_id)])
-        current["search_round"] = 0
-        current["stale_rounds"] = 0
-        current["incumbent_candidate_id"] = None
-        current["incumbent_evidence"] = None
-        current.setdefault("migration_history", []).append(
-            {
-                "event": "success_to_return_evidence",
-                "migrated_at": utc_now(),
-                "run_ids": sorted(records),
-            }
-        )
-        action = next_action(current)
-    emit(
-        {
-            "study": str(path),
-            "evidence_mode": EVIDENCE_RETURN,
-            "migrated_run_ids": sorted(records),
-            "next": action,
-        }
-    )
-
-
 def command_close_round(args: argparse.Namespace) -> None:
     path = study_path(args.study)
     with edit_state(path) as state:
@@ -1869,10 +1800,6 @@ def build_parser() -> argparse.ArgumentParser:
     evidence.add_argument("--study", required=True)
     evidence.add_argument("--run-id", required=True)
     evidence.set_defaults(handler=command_collect_training_evidence)
-
-    return_mode = commands.add_parser("upgrade-return-mode")
-    return_mode.add_argument("--study", required=True)
-    return_mode.set_defaults(handler=command_upgrade_return_mode)
 
     close_round = commands.add_parser("close-round")
     close_round.add_argument("--study", required=True)

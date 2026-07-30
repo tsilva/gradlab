@@ -22,7 +22,7 @@ and requires every emitted metric to match an exact registry entry or a bounded 
   runtime versions.
 - `goal_contract_sha256` is the semantic SHA-256 of the fully composed, rendered, validated goal
   contract. Generated goal reports use it with `goal_slug` to keep current-contract leaderboards
-  comparable; runs without the current fingerprint remain historical evidence only.
+  comparable; noncurrent contracts are not queried or rendered.
 - Catalog-backed runs also record `effective_goal_contract_sha256`, `reward_program_kind`,
   `reward_program_revision`, `reward_shape`, `reward_shape_sha256`, and
   `reward_shape_is_default`. Reward-derived returns are comparable only when the selected reward
@@ -85,8 +85,8 @@ Asynchronous evaluations may arrive after later training rows without changing t
 X-axis. Each producer writes only its applicable scientific axis; durable delivery order uses
 `orchestration/event_seq`.
 
-Purged W&B and R2 state has no compatibility guarantee. Newly materialized runs declare schema v14,
-and the current supervisor validates and emits only v14 names.
+Current runs declare schema v14, and the supervisor validates and emits only v14 names. GradLab
+does not read, project, or preserve noncurrent W&B or R2 schemas.
 
 ## Research interpretation
 

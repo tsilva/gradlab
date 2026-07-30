@@ -13,7 +13,7 @@ from typing import Any, Mapping, Sequence
 import numpy as np
 
 from gradlab.file_utils import atomic_write_bytes, atomic_write_json
-from gradlab.json_utils import canonical_json_bytes, json_safe
+from gradlab.json_utils import canonical_json_bytes, canonical_json_sha256, json_safe
 
 
 STATE_ARCHIVE_SEMANTIC_ID = "state-archive-v1"
@@ -211,7 +211,7 @@ class StateArchiveEntry:
             semantic_id=str(value.get("semantic_id", "")),
             schema_version=int(value.get("schema_version", 0)),
         )
-        expected = hashlib.sha256(canonical_json_bytes(entry.identity_dict())).hexdigest()
+        expected = canonical_json_sha256(entry.identity_dict())
         if entry.entry_id != expected:
             raise ValueError(
                 f"archive entry hash mismatch: expected {entry.entry_id}, got {expected}"
@@ -490,7 +490,7 @@ class StateArchive:
             "created_step": int(created_step),
             "metadata": dict(json_safe(metadata or {})),
         }
-        entry_id = hashlib.sha256(canonical_json_bytes(identity)).hexdigest()
+        entry_id = canonical_json_sha256(identity)
         entry = StateArchiveEntry(
             entry_id=entry_id,
             provider_snapshot=provider_snapshot,
@@ -592,7 +592,7 @@ class StateArchive:
             )
         for entry_id in referenced:
             self.entry(str(entry_id))
-        document_sha256 = hashlib.sha256(canonical_json_bytes(document)).hexdigest()
+        document_sha256 = canonical_json_sha256(document)
         if value.get("document_sha256") != document_sha256:
             raise ValueError(f"archive view {normalized!r} document hash mismatch")
         return dict(json_safe(value))
@@ -613,7 +613,7 @@ class StateArchive:
             "semantic_id": STATE_ARCHIVE_SEMANTIC_ID,
             "schema_version": 1,
             "view_id": normalized,
-            "document_sha256": hashlib.sha256(canonical_json_bytes(safe_document)).hexdigest(),
+            "document_sha256": canonical_json_sha256(safe_document),
             "referenced_entry_ids": references,
             "document": safe_document,
         }
@@ -725,7 +725,7 @@ class StateArchive:
             "archive": self.summary(),
             "files": files,
         }
-        closure["inventory_sha256"] = hashlib.sha256(canonical_json_bytes(files)).hexdigest()
+        closure["inventory_sha256"] = canonical_json_sha256(files)
         atomic_write_json(self.root / "closure.json", closure)
         return closure
 

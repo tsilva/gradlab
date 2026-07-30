@@ -230,31 +230,7 @@ test("the timeline shows the displayed transition step across a boundary", () =>
   );
 });
 
-test("policy descriptors distinguish unsupported, pending, and incomparable data", () => {
-  const dqn = {
-    policy: {
-      algorithm_id: "dqn",
-      introspection: ["action_value"],
-    },
-    transition: {
-      decision: {
-        selected_q_value: 1.25,
-      },
-    },
-    session: { critic_comparison: { reasons: [] } },
-  };
-  assert.equal(
-    descriptorAvailability(descriptorFor("policy/value"), { snapshot: dqn }).status,
-    "unsupported",
-  );
-  assert.equal(
-    descriptorAvailability(
-      descriptorFor("policy/selected-q-value"),
-      { snapshot: dqn },
-    ).status,
-    "available",
-  );
-
+test("policy descriptors distinguish pending and incomparable data", () => {
   const ppoStart = {
     policy: {
       algorithm_id: "ppo",
@@ -328,18 +304,11 @@ test("the default policy distribution omits its redundant heading", () => {
     ),
     "Action probabilities",
   );
-  assert.equal(
-    distributionBlockTitle(
-      { metric: "policy/q-values" },
-      descriptorFor("policy/q-values"),
-    ),
-    "Action values Q(s,a)",
-  );
 });
 
 test("stats omit unsupported summaries", () => {
   assert.equal(statsBlockFoot({
-    metrics: ["policy/selected-q-value", "policy/program"],
+    metrics: ["policy/program"],
   }, {}), "");
 });
 

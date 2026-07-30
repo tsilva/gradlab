@@ -27,16 +27,20 @@ def _resolved_public_run_route(
     bundle = candidate.source.bundle
     recipe_document = bundle.recipe.get("recipe")
     model_checkpoint = bundle.model.get("checkpoint")
-    provenance = bundle.model.get("provenance")
-    if not all(
-        isinstance(value, Mapping)
-        for value in (recipe_document, model_checkpoint, provenance)
+    if not isinstance(recipe_document, Mapping) or not isinstance(
+        model_checkpoint, Mapping
     ):
         return None
-    goal = recipe_document.get("goal")
     goal_variant = recipe_document.get("goal_variant")
-    goal = goal if isinstance(goal, Mapping) else {}
-    goal_variant = goal_variant if isinstance(goal_variant, Mapping) else {}
+    if not isinstance(goal_variant, Mapping):
+        return None
+    goal_slug = str(goal_variant.get("goal_slug") or "").strip()
+    environment_id, separator, _goal_path = goal_slug.partition("/")
+    goal_id = str(goal_variant.get("goal_id") or "").strip()
+    goal_variant_id = str(goal_variant.get("variant_id") or "").strip()
+    run_id = str(spec.run_id).strip()
+    if not separator or not all((environment_id, goal_id, goal_variant_id, run_id)):
+        return None
     try:
         resolved_checkpoint_id = checkpoint_id(
             step=int(model_checkpoint.get("step")),
@@ -46,11 +50,10 @@ def _resolved_public_run_route(
         return None
     return {
         "level": "runs",
-        "entity": str(spec.entity or current_route.get("entity") or ""),
-        "project": str(spec.project or provenance.get("wandb_project") or ""),
-        "goal_id": str(goal_variant.get("goal_id") or goal.get("goal_id") or ""),
-        "goal_variant_id": str(goal_variant.get("variant_id") or ""),
-        "run_id": str(spec.run_id or provenance.get("wandb_run_id") or spec.value),
+        "environment_id": environment_id,
+        "goal_id": goal_id,
+        "goal_variant_id": goal_variant_id,
+        "run_id": run_id,
         "checkpoint_id": str(spec.checkpoint_id or resolved_checkpoint_id),
     }
 
@@ -436,8 +439,6 @@ class PlaybackHost:
         return PlaySourceSpec(
             kind=kind,  # type: ignore[arg-type]
             value=value,
-            entity=str(source.get("entity") or ""),
-            project=str(source.get("project") or ""),
             run_id=str(source.get("run_id") or ""),
             checkpoint_id=str(source.get("checkpoint_id") or ""),
             seed=seed_value,

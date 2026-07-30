@@ -290,19 +290,15 @@ def test_execution_key_changes_for_acceptance_or_evidence_changes(mutation) -> N
     assert execution_key(changed) != execution_key(baseline)
 
 
-def test_checkpoint_eval_max_steps_prefers_explicit_then_environment() -> None:
-    environment = {"task": {"termination": {"max_episode_steps": 50}}}
-
+def test_checkpoint_eval_max_steps_requires_materialized_value() -> None:
     assert (
         checkpoint_eval_max_steps(
             {
                 "post_train_eval_max_steps": 40,
-                "checkpoint_eval_environment": environment,
             }
         )
         == 40
     )
-    assert checkpoint_eval_max_steps({"checkpoint_eval_environment": environment}) == 50
 
     with pytest.raises(ValueError, match="not materialized"):
         checkpoint_eval_max_steps({"checkpoint_eval_environment": {}})

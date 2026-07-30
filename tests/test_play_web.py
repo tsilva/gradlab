@@ -625,14 +625,17 @@ def test_source_browser_paths_are_hierarchical_and_url_encoded() -> None:
     variant_id = "goal-variant-" + "c" * 24
 
     assert source_browser_path(None) == "/"
-    assert source_browser_path({"project": "Mario Bros"}) == "/environments/Mario%20Bros"
     assert (
-        source_browser_path({"project": "Mario Bros", "goal_id": "Level 1-1"})
+        source_browser_path({"environment_id": "Mario Bros"})
+        == "/environments/Mario%20Bros"
+    )
+    assert (
+        source_browser_path({"environment_id": "Mario Bros", "goal_id": "Level 1-1"})
         == "/environments/Mario%20Bros/goals/Level%201-1"
     )
     assert source_browser_path(
         {
-            "project": "Mario Bros",
+            "environment_id": "Mario Bros",
             "goal_id": "Level 1-1",
             "goal_variant_id": variant_id,
             "run_id": run_id,
@@ -640,7 +643,7 @@ def test_source_browser_paths_are_hierarchical_and_url_encoded() -> None:
     ) == (f"/environments/Mario%20Bros/goals/Level%201-1/variants/{variant_id}/runs/{run_id}")
     assert source_browser_path(
         {
-            "project": "Mario Bros",
+            "environment_id": "Mario Bros",
             "goal_id": "Level 1-1",
             "goal_variant_id": variant_id,
             "run_id": run_id,
@@ -1196,16 +1199,11 @@ def test_loopback_server_requires_exact_origin_and_fragment_token() -> None:
 def test_catalog_http_api_requires_the_fragment_session_token() -> None:
     class FakeCatalog:
         @staticmethod
-        def default_entity(explicit=None):
-            return explicit or "research"
-
-        @staticmethod
-        def environments(*, entity, query, cursor):
-            assert (entity, query, cursor) == ("research", "mario", None)
+        def environments(*, query, cursor):
+            assert (query, cursor) == ("mario", None)
             return CatalogPage(
                 items=(
                     {
-                        "entity": "research",
                         "name": "Mario",
                         "goal_count": 1,
                     },
@@ -1213,9 +1211,8 @@ def test_catalog_http_api_requires_the_fragment_session_token() -> None:
                 next_cursor=None,
             )
         @staticmethod
-        def goals(*, entity, project, query, cursor):
-            assert (entity, project, query, cursor) == (
-                "research",
+        def goals(*, environment_id, query, cursor):
+            assert (environment_id, query, cursor) == (
                 "Mario",
                 "",
                 None,
@@ -1223,8 +1220,7 @@ def test_catalog_http_api_requires_the_fragment_session_token() -> None:
             return CatalogPage(
                 items=(
                     {
-                        "entity": entity,
-                        "project": project,
+                        "environment_id": environment_id,
                         "goal_id": "Level1-1",
                         "goal_slug": "Mario/Level1-1",
                         "title": "Mario Level 1-1 completion",
@@ -1236,9 +1232,8 @@ def test_catalog_http_api_requires_the_fragment_session_token() -> None:
             )
 
         @staticmethod
-        def goal_variants(*, entity, project, goal_id, query, cursor):
-            assert (entity, project, goal_id, query, cursor) == (
-                "research",
+        def goal_variants(*, environment_id, goal_id, query, cursor):
+            assert (environment_id, goal_id, query, cursor) == (
                 "Mario",
                 "Level1-1",
                 "",
@@ -1247,8 +1242,7 @@ def test_catalog_http_api_requires_the_fragment_session_token() -> None:
             return CatalogPage(
                 items=(
                     {
-                        "entity": entity,
-                        "project": project,
+                        "environment_id": environment_id,
                         "goal_id": goal_id,
                         "goal_slug": "Mario/Level1-1",
                         "variant_id": "goal-variant-" + "c" * 24,
@@ -1264,9 +1258,8 @@ def test_catalog_http_api_requires_the_fragment_session_token() -> None:
             )
 
         @staticmethod
-        def recipes(*, entity, project, goal_id, query, cursor):
-            assert (entity, project, goal_id, query, cursor) == (
-                "research",
+        def recipes(*, environment_id, goal_id, query, cursor):
+            assert (environment_id, goal_id, query, cursor) == (
                 "Mario",
                 "Level1-1",
                 "",
@@ -1284,8 +1277,8 @@ def test_catalog_http_api_requires_the_fragment_session_token() -> None:
             )
 
         @staticmethod
-        def inspect_goal(*, entity, project, goal_id):
-            assert (entity, project, goal_id) == ("research", "Mario", "Level1-1")
+        def inspect_goal(*, environment_id, goal_id):
+            assert (environment_id, goal_id) == ("Mario", "Level1-1")
             return {
                 "schema_version": 1,
                 "source": {"kind": "repository-goal"},
@@ -1293,9 +1286,8 @@ def test_catalog_http_api_requires_the_fragment_session_token() -> None:
             }
 
         @staticmethod
-        def inspect_recipe(*, entity, project, goal_id, recipe_id):
-            assert (entity, project, goal_id, recipe_id) == (
-                "research",
+        def inspect_recipe(*, environment_id, goal_id, recipe_id):
+            assert (environment_id, goal_id, recipe_id) == (
                 "Mario",
                 "Level1-1",
                 "ppo",
@@ -1307,9 +1299,8 @@ def test_catalog_http_api_requires_the_fragment_session_token() -> None:
             }
 
         @staticmethod
-        def inspect_goal_variant(*, entity, project, goal_id, variant_id):
-            assert (entity, project, goal_id, variant_id) == (
-                "research",
+        def inspect_goal_variant(*, environment_id, goal_id, variant_id):
+            assert (environment_id, goal_id, variant_id) == (
                 "Mario",
                 "Level1-1",
                 "goal-variant-" + "c" * 24,
@@ -1321,12 +1312,8 @@ def test_catalog_http_api_requires_the_fragment_session_token() -> None:
             }
 
         @staticmethod
-        def inspect_run(*, entity, project, run_id):
-            assert (entity, project, run_id) == (
-                "research",
-                "Mario",
-                "gradlab-" + "a" * 32,
-            )
+        def inspect_run(*, run_id):
+            assert run_id == "gradlab-" + "a" * 32
             return {
                 "schema_version": 1,
                 "source": {"kind": "run"},
@@ -1339,22 +1326,19 @@ def test_catalog_http_api_requires_the_fragment_session_token() -> None:
         @staticmethod
         def runs(
             *,
-            entity,
-            project,
+            environment_id,
             goal_id,
             goal_variant_id,
             query,
             cursor,
         ):
             assert (
-                entity,
-                project,
+                environment_id,
                 goal_id,
                 goal_variant_id,
                 query,
                 cursor,
             ) == (
-                "research",
                 "Mario",
                 "Level1-1",
                 "goal-variant-" + "c" * 24,
@@ -1372,23 +1356,12 @@ def test_catalog_http_api_requires_the_fragment_session_token() -> None:
             )
 
         @staticmethod
-        def run_goal_variant(*, entity, project, run_id):
-            assert (entity, project, run_id) == (
-                "research",
-                "Mario",
-                "gradlab-" + "a" * 32,
-            )
-            return "Level1-1", "goal-variant-" + "c" * 24
-
-        @staticmethod
-        def checkpoints(*, run_id, query, entity, project, goal_variant_id):
+        def checkpoints(*, run_id, query, goal_variant_id):
             assert (
                 run_id,
                 query,
-                entity,
-                project,
                 goal_variant_id,
-            ) == ("gradlab-" + "a" * 32, "", "research", "Mario", "")
+            ) == ("gradlab-" + "a" * 32, "", "")
             return (
                 {
                     "run_id": run_id,
@@ -1463,14 +1436,14 @@ def test_catalog_http_api_requires_the_fragment_session_token() -> None:
                 assert accepted.status == 200
                 assert (await accepted.json())["items"][0]["name"] == "Mario"
                 goals = await client.get(
-                    f"{server.origin}/api/catalog/environments/research/Mario/goals",
+                    f"{server.origin}/api/catalog/environments/Mario/goals",
                     headers={"Authorization": f"Bearer {server.token}"},
                 )
                 assert goals.status == 200
                 assert (await goals.json())["items"][0]["goal_id"] == "Level1-1"
                 goal_inspection = await client.get(
                     (
-                        f"{server.origin}/api/catalog/environments/research/Mario"
+                        f"{server.origin}/api/catalog/environments/Mario"
                         "/goals/Level1-1/inspection"
                     ),
                     headers={"Authorization": f"Bearer {server.token}"},
@@ -1481,7 +1454,7 @@ def test_catalog_http_api_requires_the_fragment_session_token() -> None:
                 ] == "exact"
                 recipes = await client.get(
                     (
-                        f"{server.origin}/api/catalog/environments/research/Mario"
+                        f"{server.origin}/api/catalog/environments/Mario"
                         "/goals/Level1-1/recipes"
                     ),
                     headers={"Authorization": f"Bearer {server.token}"},
@@ -1490,7 +1463,7 @@ def test_catalog_http_api_requires_the_fragment_session_token() -> None:
                 assert (await recipes.json())["items"][0]["recipe_id"] == "ppo"
                 recipe_inspection = await client.get(
                     (
-                        f"{server.origin}/api/catalog/environments/research/Mario"
+                        f"{server.origin}/api/catalog/environments/Mario"
                         "/goals/Level1-1/recipes/ppo/inspection"
                     ),
                     headers={"Authorization": f"Bearer {server.token}"},
@@ -1501,7 +1474,7 @@ def test_catalog_http_api_requires_the_fragment_session_token() -> None:
                 ] == "static-preview"
                 variants = await client.get(
                     (
-                        f"{server.origin}/api/catalog/environments/research/Mario"
+                        f"{server.origin}/api/catalog/environments/Mario"
                         "/goals/Level1-1/variants"
                     ),
                     headers={"Authorization": f"Bearer {server.token}"},
@@ -1510,7 +1483,7 @@ def test_catalog_http_api_requires_the_fragment_session_token() -> None:
                 variant_id = (await variants.json())["items"][0]["variant_id"]
                 variant_inspection = await client.get(
                     (
-                        f"{server.origin}/api/catalog/environments/research/Mario"
+                        f"{server.origin}/api/catalog/environments/Mario"
                         f"/goals/Level1-1/variants/{variant_id}/inspection"
                     ),
                     headers={"Authorization": f"Bearer {server.token}"},
@@ -1521,7 +1494,7 @@ def test_catalog_http_api_requires_the_fragment_session_token() -> None:
                 ] == "summary-only"
                 runs = await client.get(
                     (
-                        f"{server.origin}/api/catalog/environments/research/Mario"
+                        f"{server.origin}/api/catalog/environments/Mario"
                         f"/goals/Level1-1/variants/{variant_id}/runs"
                     ),
                     headers={"Authorization": f"Bearer {server.token}"},
@@ -1529,10 +1502,7 @@ def test_catalog_http_api_requires_the_fragment_session_token() -> None:
                 assert runs.status == 200
                 assert (await runs.json())["items"][0]["goal_variant_id"] == variant_id
                 checkpoints = await client.get(
-                    (
-                        f"{server.origin}/api/catalog/runs/gradlab-{'a' * 32}/checkpoints"
-                        "?entity=research&project=Mario"
-                    ),
+                    f"{server.origin}/api/catalog/runs/gradlab-{'a' * 32}/checkpoints",
                     headers={"Authorization": f"Bearer {server.token}"},
                 )
                 assert checkpoints.status == 200
@@ -1549,10 +1519,7 @@ def test_catalog_http_api_requires_the_fragment_session_token() -> None:
                     },
                 ]
                 run_inspection = await client.get(
-                    (
-                        f"{server.origin}/api/catalog/runs/gradlab-{'a' * 32}"
-                        "/inspection?entity=research&project=Mario"
-                    ),
+                    f"{server.origin}/api/catalog/runs/gradlab-{'a' * 32}/inspection",
                     headers={"Authorization": f"Bearer {server.token}"},
                 )
                 assert run_inspection.status == 200
@@ -1603,14 +1570,11 @@ def test_initial_environment_catalog_is_embedded_in_selection_snapshots() -> Non
         calls = 0
 
         @classmethod
-        def initial_environments(cls, explicit_entity=None):
+        def initial_environments(cls):
             cls.calls += 1
-            assert explicit_entity is None
             return {
-                "entity": "research",
                 "items": [
                     {
-                        "entity": "research",
                         "name": "Mario",
                         "goal_count": 1,
                     }
@@ -1639,7 +1603,6 @@ def test_initial_environment_catalog_is_embedded_in_selection_snapshots() -> Non
     )
 
     assert FakeCatalog.calls == 1
-    assert snapshot["app"]["catalog"]["entity"] == "research"
     assert snapshot["app"]["catalog"]["items"][0]["name"] == "Mario"
 
     nested_snapshot = server._snapshot_for(
@@ -1650,14 +1613,13 @@ def test_initial_environment_catalog_is_embedded_in_selection_snapshots() -> Non
                 "phase": "selecting",
                 "route": {
                     "level": "runs",
-                    "project": "Mario",
+                    "environment_id": "Mario",
                     "goal_id": "Level1-1",
                 },
             },
         },
     )
-
-    assert nested_snapshot["app"]["catalog"]["entity"] == "research"
+    assert nested_snapshot["app"]["catalog"]["items"][0]["name"] == "Mario"
 
 
 def test_web_dashboard_assets_are_packaged_beside_server() -> None:
@@ -1741,7 +1703,7 @@ def test_web_dashboard_assets_are_packaged_beside_server() -> None:
     assert 'data-command="set-fps"' not in controls
     assert 'fps.addEventListener("input"' in controls
     assert 'services.command("set_fps", { fps: Number(fps.value) })' in controls
-    assert "WORKSPACE_VERSION = 4" in workspace
+    assert "WORKSPACE_VERSION = 5" in workspace
     assert "createTelemetryInstance" in workspace
     assert "value.version !== WORKSPACE_VERSION" in workspace
     assert "compareWorkspaceRevisions" in workspace
@@ -1763,8 +1725,8 @@ def test_web_dashboard_assets_are_packaged_beside_server() -> None:
     assert 'type: "inspection_frames"' in script
     assert "sequence < (state.receivedFrameSequence" not in script
 
-    assert '"gradlab.player.workspace.v4.paired"' in script
-    assert '"gradlab.player.workspace.v4.single"' in script
+    assert '"gradlab.player.workspace.v5.paired"' in script
+    assert '"gradlab.player.workspace.v5.single"' in script
     assert "createTelemetryPanel" in script
     assert "updateTelemetryPanel" in script
     assert "snapshot.history_point" in script

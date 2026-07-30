@@ -42,8 +42,8 @@ train:
         kills: killcount
       # Define discrete task events derived from changes in the declared signals.
       events:
-        # Name the event that represents eliminating the scenario's monster.
-        monster_killed:
+        # Name the standardized event that represents reaching this scenario's goal.
+        goal_reached:
           # Select the task signal observed by this event.
           signal: kills
           # Select the signal transition that fires this event.
@@ -51,7 +51,7 @@ train:
       # Define which task events and limits end an episode.
       termination:
         # List the events that mark an episode as successful.
-        success: [monster_killed]
+        success: [goal_reached]
       # Configure the reward presented to the policy after the inherited native reward is computed.
       reward:
         # Set the positive divisor applied to native rewards before clipping.

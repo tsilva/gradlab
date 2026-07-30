@@ -32,14 +32,14 @@ train:
         episode_done: pending_reset
       # Define discrete task events derived from changes in the declared signals.
       events:
-        # Detect eliminating the target from an increase in the kill counter.
-        monster_killed: {signal: kills, operation: increase}
+        # Detect reaching the elimination goal from an increase in the kill counter.
+        goal_reached: {signal: kills, operation: increase}
         # Detect the scenario boundary when the pending-reset flag is asserted for a step.
         episode_ended: {signal: episode_done, operation: equals_for, value: 1, steps: 1}
       # Define which task events and limits end an episode.
       termination:
         # List the events that mark an episode as successful.
-        success: [monster_killed]
+        success: [goal_reached]
         # List provider boundaries treated as timeouts rather than task outcomes.
         timeout: [episode_ended]
 # Override the shared settings used to evaluate checkpoints for this goal.

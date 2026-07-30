@@ -144,8 +144,7 @@ def test_playback_host_starts_without_a_source_then_activates_selection() -> Non
                 },
                 "route": {
                     "level": "checkpoints",
-                    "entity": "research",
-                    "project": "Mario",
+                    "environment_id": "Mario",
                     "run_id": "gradlab-" + "b" * 32,
                 },
             },
@@ -154,7 +153,7 @@ def test_playback_host_starts_without_a_source_then_activates_selection() -> Non
     snapshot = wait_for_phase(host, "active")
 
     assert snapshot["session_epoch"] == 1
-    assert snapshot["app"]["route"]["project"] == "Mario"
+    assert snapshot["app"]["route"]["environment_id"] == "Mario"
     assert loader.runners[0].encoder.epoch == 1
     assert loader.runners[0].started is True
     assert loader.prepared_specs[0].seed == 42_000
@@ -238,8 +237,7 @@ def test_browse_sources_updates_the_shared_resource_route() -> None:
     host = PlaybackHost(FakeLoader())
     route = {
         "level": "checkpoints",
-        "entity": "research",
-        "project": "Mario",
+        "environment_id": "Mario",
         "run_id": "gradlab-" + "b" * 32,
         "checkpoint_id": "",
     }
@@ -263,8 +261,7 @@ def test_browse_sources_closes_the_active_playback() -> None:
     runner = loader.runners[0]
     route = {
         "level": "goals",
-        "entity": "research",
-        "project": "Mario",
+        "environment_id": "Mario",
         "goal_id": "",
         "goal_variant_id": "",
         "run_id": "",
@@ -304,10 +301,11 @@ def test_direct_public_run_resolves_active_checkpoint_breadcrumb_route() -> None
                     recipe={
                         "recipe": {
                             "goal": {"goal_id": "DefendTheLine-v1"},
-                            "goal_variant": {
-                                "goal_id": "DefendTheLine-v1",
-                                "variant_id": "goal-variant-" + "c" * 24,
-                            },
+                                "goal_variant": {
+                                    "goal_id": "DefendTheLine-v1",
+                                    "goal_slug": "ViZDoom/DefendTheLine-v1",
+                                    "variant_id": "goal-variant-" + "c" * 24,
+                                },
                         },
                     },
                     model={
@@ -328,11 +326,10 @@ def test_direct_public_run_resolves_active_checkpoint_breadcrumb_route() -> None
     run_id = "gradlab-" + "a" * 32
     host = PlaybackHost(
         loader,
-        initial_route={"level": "environments", "entity": "research"},
+        initial_route={"level": "environments", "environment_id": "ViZDoom"},
         initial_source=PlaySourceSpec(
             "public_run",
             run_id,
-            entity="research",
             run_id=run_id,
         ),
     )
@@ -342,8 +339,7 @@ def test_direct_public_run_resolves_active_checkpoint_breadcrumb_route() -> None
 
     assert snapshot["app"]["route"] == {
         "level": "runs",
-        "entity": "research",
-        "project": "ViZDoom",
+        "environment_id": "ViZDoom",
         "goal_id": "DefendTheLine-v1",
         "goal_variant_id": "goal-variant-" + "c" * 24,
         "run_id": run_id,

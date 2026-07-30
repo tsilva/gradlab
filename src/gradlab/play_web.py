@@ -49,14 +49,14 @@ PAIRED_START_GRACE_SECONDS = 2.0
 
 def source_browser_path(route: Mapping[str, Any] | None) -> str:
     route = route or {}
-    project = str(route.get("project") or "").strip()
+    environment_id = str(route.get("environment_id") or "").strip()
     goal_id = str(route.get("goal_id") or "").strip()
     goal_variant_id = str(route.get("goal_variant_id") or "").strip()
     run_id = str(route.get("run_id") or "").strip()
     checkpoint_id = str(route.get("checkpoint_id") or "").strip()
-    if not project:
+    if not environment_id:
         return "/"
-    path = f"/environments/{quote(project, safe='')}"
+    path = f"/environments/{quote(environment_id, safe='')}"
     if not goal_id:
         return path
     path += f"/goals/{quote(goal_id, safe='')}"
@@ -152,11 +152,6 @@ def _decision_payload(decision: PolicyDecision | None) -> dict[str, Any] | None:
         "component_probabilities": _json_value(decision.component_probabilities),
         "mean": _json_value(decision.mean),
         "stddev": _json_value(decision.stddev),
-        "q_values": _json_value(decision.q_values),
-        "selected_q_value": decision.selected_q_value,
-        "selected_q_rank": decision.selected_q_rank,
-        "exploration_rate": decision.exploration_rate,
-        "exploratory": decision.exploratory,
         "program": _json_value(decision.program),
         "route": _json_value(decision.route),
         "sampled": decision.sampled,
@@ -271,7 +266,6 @@ def history_point_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
         "reward_shaped": reward["shaped"],
         "return": reward["return"],
         "value": decision.get("value"),
-        "selected_q_value": decision.get("selected_q_value"),
         "entropy": decision.get("entropy"),
         "log_probability": decision.get("log_probability"),
         "action_selection_mode": decision.get("action_selection_mode"),
@@ -1712,7 +1706,6 @@ class PlaybackWebServer:
         self._auto_start_task_epoch = -1
         self._observed_session_change = int(getattr(self.runner, "session_change", 0))
         self._secondary_opened = False
-        self._catalog_entity = ""
         self._initial_environment_catalog: dict[str, Any] | None = None
         self._manual_evaluation_factory = manual_evaluation_factory
         self._manual_evaluation_queue: Any | None = None
@@ -1786,22 +1779,14 @@ class PlaybackWebServer:
         from gradlab.play_catalog import normalize_search_query
 
         try:
-            requested_entity = str(
-                request.query.get("entity") or getattr(self.args, "wandb_entity", None) or ""
-            ).strip()
-            entity = requested_entity or self._catalog_entity
-            if not entity:
-                entity = await asyncio.to_thread(self.catalog.default_entity)
-                self._catalog_entity = entity
             page = await asyncio.to_thread(
                 self.catalog.environments,
-                entity=entity,
                 query=normalize_search_query(request.query.get("q")),
                 cursor=request.query.get("cursor"),
             )
         except Exception as exc:
             return web.json_response({"error": str(exc)}, status=502)
-        return web.json_response({"entity": entity, **page.to_dict()})
+        return web.json_response(page.to_dict())
 
     async def _prepare_initial_catalog(self) -> None:
         if self.catalog is None:
@@ -1809,13 +1794,9 @@ class PlaybackWebServer:
         initial_environments = getattr(self.catalog, "initial_environments", None)
         if not callable(initial_environments):
             return
-        payload = await asyncio.to_thread(
-            initial_environments,
-            getattr(self.args, "wandb_entity", None),
-        )
+        payload = await asyncio.to_thread(initial_environments)
         if not isinstance(payload, Mapping):
             raise ValueError("initial environment catalog must be a mapping")
-        self._catalog_entity = str(payload.get("entity") or "").strip()
         self._initial_environment_catalog = dict(payload)
 
     async def catalog_runs(self, request: web.Request) -> web.Response:
@@ -1827,8 +1808,7 @@ class PlaybackWebServer:
         try:
             page = await asyncio.to_thread(
                 self.catalog.runs,
-                entity=request.match_info["entity"],
-                project=request.match_info["project"],
+                environment_id=request.match_info["environment_id"],
                 goal_id=request.match_info.get("goal_id", ""),
                 goal_variant_id=request.match_info.get("goal_variant_id", ""),
                 query=normalize_search_query(request.query.get("q")),
@@ -1847,8 +1827,7 @@ class PlaybackWebServer:
         try:
             page = await asyncio.to_thread(
                 self.catalog.goal_variants,
-                entity=request.match_info["entity"],
-                project=request.match_info["project"],
+                environment_id=request.match_info["environment_id"],
                 goal_id=request.match_info["goal_id"],
                 query=normalize_search_query(request.query.get("q")),
                 cursor=request.query.get("cursor"),
@@ -1866,8 +1845,7 @@ class PlaybackWebServer:
         try:
             page = await asyncio.to_thread(
                 self.catalog.goals,
-                entity=request.match_info["entity"],
-                project=request.match_info["project"],
+                environment_id=request.match_info["environment_id"],
                 query=normalize_search_query(request.query.get("q")),
                 cursor=request.query.get("cursor"),
             )
@@ -1884,8 +1862,7 @@ class PlaybackWebServer:
         try:
             page = await asyncio.to_thread(
                 self.catalog.recipes,
-                entity=request.match_info["entity"],
-                project=request.match_info["project"],
+                environment_id=request.match_info["environment_id"],
                 goal_id=request.match_info["goal_id"],
                 query=normalize_search_query(request.query.get("q")),
                 cursor=request.query.get("cursor"),
@@ -1903,8 +1880,7 @@ class PlaybackWebServer:
         try:
             document = await asyncio.to_thread(
                 self.catalog.inspect_goal,
-                entity=request.match_info["entity"],
-                project=request.match_info["project"],
+                environment_id=request.match_info["environment_id"],
                 goal_id=request.match_info["goal_id"],
             )
         except ValueError as exc:
@@ -1920,8 +1896,7 @@ class PlaybackWebServer:
         try:
             document = await asyncio.to_thread(
                 self.catalog.inspect_recipe,
-                entity=request.match_info["entity"],
-                project=request.match_info["project"],
+                environment_id=request.match_info["environment_id"],
                 goal_id=request.match_info["goal_id"],
                 recipe_id=request.match_info["recipe_id"],
             )
@@ -1938,8 +1913,7 @@ class PlaybackWebServer:
         try:
             document = await asyncio.to_thread(
                 self.catalog.inspect_goal_variant,
-                entity=request.match_info["entity"],
-                project=request.match_info["project"],
+                environment_id=request.match_info["environment_id"],
                 goal_id=request.match_info["goal_id"],
                 variant_id=request.match_info["goal_variant_id"],
             )
@@ -1956,8 +1930,6 @@ class PlaybackWebServer:
         try:
             document = await asyncio.to_thread(
                 self.catalog.inspect_run,
-                entity=str(request.query.get("entity") or ""),
-                project=str(request.query.get("project") or ""),
                 run_id=request.match_info["run_id"],
             )
         except ValueError as exc:
@@ -2024,8 +1996,6 @@ class PlaybackWebServer:
                     self.catalog.checkpoints,
                     run_id=request.match_info["run_id"],
                     query=normalize_search_query(request.query.get("q")),
-                    entity=request.query.get("entity", ""),
-                    project=request.query.get("project", ""),
                     goal_variant_id=request.query.get("goal_variant_id", ""),
                 )
             )
@@ -2564,22 +2534,25 @@ class PlaybackWebServer:
         app.add_routes(
             [
                 web.get("/", self.page),
-                web.get("/environments/{project_id}", self.page),
-                web.get("/environments/{project_id}/goals/{goal_id}", self.page),
+                web.get("/environments/{environment_id}", self.page),
+                web.get("/environments/{environment_id}/goals/{goal_id}", self.page),
                 web.get(
-                    ("/environments/{project_id}/goals/{goal_id}/variants/{goal_variant_id}"),
+                    (
+                        "/environments/{environment_id}/goals/{goal_id}"
+                        "/variants/{goal_variant_id}"
+                    ),
                     self.page,
                 ),
                 web.get(
                     (
-                        "/environments/{project_id}/goals/{goal_id}"
+                        "/environments/{environment_id}/goals/{goal_id}"
                         "/variants/{goal_variant_id}/runs/{run_id}"
                     ),
                     self.page,
                 ),
                 web.get(
                     (
-                        "/environments/{project_id}/goals/{goal_id}"
+                        "/environments/{environment_id}/goals/{goal_id}"
                         "/variants/{goal_variant_id}/runs/{run_id}"
                         "/checkpoints/{checkpoint_id}"
                     ),
@@ -2591,38 +2564,47 @@ class PlaybackWebServer:
                 web.get("/assets/{path:.*}", self.asset),
                 web.get("/api/catalog/environments", self.catalog_environments),
                 web.get(
-                    "/api/catalog/environments/{entity}/{project}/goals",
+                    "/api/catalog/environments/{environment_id}/goals",
                     self.catalog_goals,
                 ),
                 web.get(
-                    ("/api/catalog/environments/{entity}/{project}/goals/{goal_id}/inspection"),
+                    (
+                        "/api/catalog/environments/{environment_id}"
+                        "/goals/{goal_id}/inspection"
+                    ),
                     self.inspect_goal,
                 ),
                 web.get(
-                    ("/api/catalog/environments/{entity}/{project}/goals/{goal_id}/recipes"),
+                    (
+                        "/api/catalog/environments/{environment_id}"
+                        "/goals/{goal_id}/recipes"
+                    ),
                     self.catalog_recipes,
                 ),
                 web.get(
                     (
-                        "/api/catalog/environments/{entity}/{project}/goals/{goal_id}"
+                        "/api/catalog/environments/{environment_id}/goals/{goal_id}"
                         "/recipes/{recipe_id}/inspection"
                     ),
                     self.inspect_recipe,
                 ),
                 web.get(
-                    ("/api/catalog/environments/{entity}/{project}/goals/{goal_id}/variants"),
+                    (
+                        "/api/catalog/environments/{environment_id}"
+                        "/goals/{goal_id}/variants"
+                    ),
                     self.catalog_goal_variants,
                 ),
                 web.get(
                     (
-                        "/api/catalog/environments/{entity}/{project}/goals/{goal_id}"
+                        "/api/catalog/environments/{environment_id}/goals/{goal_id}"
                         "/variants/{goal_variant_id}/inspection"
                     ),
                     self.inspect_goal_variant,
                 ),
                 web.get(
                     (
-                        "/api/catalog/environments/{entity}/{project}/goals/{goal_id}"
+                        "/api/catalog/environments/{environment_id}/goals/{goal_id}"
                         "/variants/{goal_variant_id}/runs"
                     ),
                     self.catalog_runs,

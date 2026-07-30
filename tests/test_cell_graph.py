@@ -103,7 +103,7 @@ def _context(
 
 
 def test_cell_graph_runtime_routes_replans_and_reports_fallback() -> None:
-    runtime = PolicyRuntime(_policy())
+    runtime = PolicyRuntime(_policy(), algorithm_id="cell-graph")
     observation = np.zeros((1, 1), dtype=np.float32)
 
     first = runtime.decide(
@@ -146,7 +146,7 @@ def test_cell_graph_runtime_routes_replans_and_reports_fallback() -> None:
 
 
 def test_cell_graph_inspection_does_not_advance_route() -> None:
-    runtime = PolicyRuntime(_policy())
+    runtime = PolicyRuntime(_policy(), algorithm_id="cell-graph")
     observation = np.zeros((1, 1), dtype=np.float32)
     context = _context(ROOT_KEY, reset=True)
 

@@ -347,34 +347,6 @@ function makeDistributionBlock(block) {
         section.dataset.telemetryStatus = "not-yet-observed";
         return;
       }
-      if (Array.isArray(decision.q_values)) {
-        const values = decision.q_values.map(Number);
-        const names = discreteActionLabels(snapshot, values.length);
-        const minimum = Math.min(...values);
-        const maximum = Math.max(...values);
-        const span = Math.max(maximum - minimum, Number.EPSILON);
-        target.className = "action-probabilities action-values";
-        target.replaceChildren(...values.map((value, index) => {
-          const row = document.createElement("div");
-          row.className = `action-row ${
-            index === decision.selected_action ? "selected" : ""
-          }`;
-          const label = document.createElement("span");
-          label.textContent = names[index] || formatActionValue(index, snapshot);
-          const track = document.createElement("div");
-          track.className = "probability-track";
-          const fill = document.createElement("div");
-          fill.className = "probability-fill";
-          fill.style.width = `${Math.max(2, ((value - minimum) / span) * 100)}%`;
-          track.append(fill);
-          const amount = document.createElement("span");
-          amount.textContent = Number.isFinite(value) ? value.toFixed(4) : "—";
-          row.append(label, track, amount);
-          return row;
-        }));
-        section.dataset.telemetryStatus = "available";
-        return;
-      }
       if (!Array.isArray(decision.probabilities)) {
         target.className = "distribution-summary";
         target.textContent = [

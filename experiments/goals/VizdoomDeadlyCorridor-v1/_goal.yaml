@@ -44,8 +44,8 @@ train:
         episode_done: pending_reset
       # Define discrete task events derived from changes in the declared signals.
       events:
-        # Detect reaching the vest from an increase in armor.
-        vest_reached: {signal: armor, operation: increase}
+        # Detect reaching the goal vest from an increase in armor.
+        goal_reached: {signal: armor, operation: increase}
         # Detect death when the provider's death flag is asserted for a step.
         player_died: {signal: player_dead, operation: equals_for, value: 1, steps: 1}
         # Detect the scenario boundary when the pending-reset flag is asserted for a step.
@@ -55,7 +55,7 @@ train:
         # List the events that mark an episode as failed.
         failure: [player_died]
         # List the events that mark an episode as successful.
-        success: [vest_reached]
+        success: [goal_reached]
         # List provider boundaries treated as timeouts rather than task outcomes.
         timeout: [episode_ended]
       # Configure the reward presented to the policy after the inherited native reward is computed.

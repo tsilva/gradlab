@@ -210,12 +210,11 @@ The public index is mutable through ETag compare-and-swap and served with
 `Cache-Control: no-store`; checkpoint objects are immutable and cacheable.
 Start the web player without a source to browse repository-declared
 environments and goals, automatically indexed goal-contract variants, then
-their W&B runs and public checkpoints. A W&B project or run URL preselects that
-level; an exact source still opens directly:
+their control-plane runs and public checkpoints. An exact W&B run URL opens that
+run directly:
 
 ```bash
 gradlab play
-gradlab play "https://wandb.ai/<entity>/<project>"
 gradlab play "https://wandb.ai/<entity>/<project>/runs/<gradlab-run-id>"
 gradlab play --run <gradlab-run-id>
 gradlab play --model <local-checkpoint>
@@ -237,25 +236,24 @@ policy distributions, and dynamic metric explorers. Panels can be edited,
 duplicated, hidden, resized, rearranged, or moved to a synchronized window.
 The reward summary, value estimate, step reward, and episode return each have
 their own built-in panel so history graphs never force the summary panel to
-scroll. Workspace v4 intentionally starts clean instead of migrating older
-saved layouts.
+scroll. The player reads and writes only the current workspace v5 schema;
+noncurrent saved layouts are ignored.
 
 Policy diagnostics are capability-driven. PPO and A2C expose their actor
-distribution and state-value critic; DQN exposes Q-values and its
-epsilon-greedy/greedy selection modes; action programs expose their fixed
-program cursor and fallback behavior. Go-Explore checkpoints retain safe search
-and archive summary provenance while playing the resulting action program. Unsupported
-diagnostics remain visibly unavailable instead of being replaced with
-synthetic probabilities, entropy, log-probabilities, or values.
+distribution and state-value critic; action programs expose their fixed program
+cursor and fallback behavior. Go-Explore checkpoints retain safe search and
+archive summary provenance while playing the resulting action program.
+Unsupported diagnostics remain visibly unavailable instead of being replaced
+with synthetic probabilities, entropy, log-probabilities, or values.
 
 The required `experiments/goals/_catalog.yaml` namespace index supplies
 environments and goals. Launch and supervisor paths register each versioned
 goal-variant descriptor in a rebuildable private-control-R2 per-goal index, so
 the variant panel needs one bounded object read rather than a run or artifact
-scan; `gradlab experiment catalog-repair` rebuilds those indexes from immutable
-new-format run manifests. W&B is the compatibility fallback and supplies run
-metadata and available goal-required acceptance results only after a variant is
-selected. Playback downloads model bytes from the public checkpoint store;
+scan; `gradlab experiment catalog-rebuild` replaces those indexes from immutable
+current run manifests. The private index supplies run metadata; W&B supplies
+available goal-required acceptance results only after a checkpoint-bearing run
+is selected. Playback downloads model bytes from the public checkpoint store;
 videos, episode evidence, ROMs, and recovery journals remain in R2.
 
 ## Evaluation and early stop

@@ -18,6 +18,7 @@ from gradlab.action_contract import (
 )
 from gradlab.batch_runtime import ProviderDescriptor
 from gradlab.env import EnvConfig, resolve_env_config
+from gradlab.env_identity import validate_task_config
 
 
 BREAKOUT_NO_NOOP_ACTIONS = [["BUTTON"], ["RIGHT"], ["LEFT"]]
@@ -37,8 +38,8 @@ def test_runtime_action_contract_traverses_common_environment_wrappers():
     assert runtime_action_contract(source) is contract
 
 
-def test_live_config_rejects_artifact_only_action_fields():
-    with pytest.raises(ValueError, match="artifact-only legacy metadata"):
+def test_live_config_rejects_unknown_provider_and_task_action_fields():
+    with pytest.raises(ValueError, match="constructor argument"):
         resolve_env_config(
             EnvConfig(
                 env_provider="supermariobrosnes-turbo",
@@ -47,20 +48,16 @@ def test_live_config_rejects_artifact_only_action_fields():
             )
         )
 
-    with pytest.raises(ValueError, match="use env_args.use_restricted_actions"):
-        resolve_env_config(
-            EnvConfig(
-                env_provider="supermariobrosnes-turbo",
-                game="SuperMarioBros-Nes-v0",
-                task={
-                    "id": "mario",
-                    "action": {"set": "basic"},
-                    "signals": {},
-                    "events": {},
-                    "termination": {},
-                    "reward": {"reward_mode": "native"},
-                },
-            )
+    with pytest.raises(ValueError, match=r"task\.action\.set must be 'native'"):
+        validate_task_config(
+            {
+                "id": "mario",
+                "action": {"set": "basic"},
+                "signals": {},
+                "events": {},
+                "termination": {},
+                "reward": {"reward_mode": "native"},
+            }
         )
 
 

@@ -176,10 +176,12 @@ def test_dynamic_native_provider_ids_are_explicit_but_not_hardcoded() -> None:
     assert gym_id.provider_env_id == "CustomNativeVector-v0"
 
 
-def test_environment_identity_normalizes_bare_stable_retro_game() -> None:
-    identity = environment_identity_from_train_config({"game": "SuperMarioBros-Nes-v0"})
-
-    assert identity["env_id"] == "stable-retro-turbo:SuperMarioBros-Nes-v0"
+def test_environment_identity_requires_explicit_provider() -> None:
+    with unittest.TestCase().assertRaisesRegex(
+        ValueError,
+        "environment provider identity is required",
+    ):
+        environment_identity_from_train_config({"game": "SuperMarioBros-Nes-v0"})
 
 
 def test_rejects_unknown_provider_alias() -> None:

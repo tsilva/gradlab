@@ -125,13 +125,7 @@ class ConfigValidationTests(unittest.TestCase):
                     | set(contract.optional_env_args)
                 )
                 public_signature_args = signature_args - PROVIDER_REWARD_TRANSFORM_KEYS
-                if provider_id == "breakout-turbo-env":
-                    # GradLab's compatibility adapter accepts the shared Stable Retro
-                    # contract even when an older installed Turbo release ignores
-                    # adapter-only fields through **unsupported.
-                    self.assertLessEqual(public_signature_args, covered_args)
-                else:
-                    self.assertEqual(covered_args, public_signature_args)
+                self.assertEqual(covered_args, public_signature_args)
 
     def test_breakout_goal_hotswaps_provider_without_changing_semantics(self) -> None:
         document = compose_train_document(
@@ -247,12 +241,12 @@ class ConfigValidationTests(unittest.TestCase):
             {"mode": "all", "keys": ["killcount"]},
         )
         self.assertEqual(
-            train_config["task"]["events"]["monster_killed"],
+            train_config["task"]["events"]["goal_reached"],
             {"signal": "kills", "operation": "increase"},
         )
         self.assertEqual(
             train_config["task"]["termination"],
-            {"success": ["monster_killed"]},
+            {"success": ["goal_reached"]},
         )
         expected_reward = {
             "reward_mode": "native",
@@ -508,7 +502,7 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertEqual(report.counts["json_files"], 0)
         self.assertGreaterEqual(report.counts["yaml_files"], 15)
         self.assertGreaterEqual(report.counts["goals"], 1)
-        self.assertEqual(report.counts["train_recipes"], 45)
+        self.assertEqual(report.counts["train_recipes"], 44)
         self.assertGreaterEqual(report.counts["env_configs"], 0)
         self.assertEqual(report.counts["benchmark_profiles"], 4)
 
@@ -882,7 +876,7 @@ class ConfigValidationTests(unittest.TestCase):
             "threshold": 0.99,
         }
 
-        with self.assertRaisesRegex(ValueError, "objective\\.success moved to train\\.early_stop"):
+        with self.assertRaisesRegex(ValueError, "objective has unknown field\\(s\\): success"):
             validate_goal_contract_document(document, path, Path(".").resolve())
 
     def test_goal_validator_rejects_environment_hash(self) -> None:

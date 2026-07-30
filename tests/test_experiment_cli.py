@@ -110,6 +110,14 @@ def test_wandb_identity_prefers_declared_campaign_group() -> None:
     assert identity["group"] == "campaign::mario-b3-confirmation"
 
 
+def test_catalog_cli_exposes_only_the_current_rebuild_command() -> None:
+    args = build_parser().parse_args(["catalog-rebuild", "--json"])
+
+    assert args.command == "catalog-rebuild"
+    with pytest.raises(SystemExit):
+        build_parser().parse_args(["catalog-repair"])
+
+
 def test_wandb_identity_cohort_group_includes_override_variant() -> None:
     document = {
         "train_config": {

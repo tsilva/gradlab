@@ -176,11 +176,7 @@ class RunAuthorityTests(unittest.TestCase):
         second = self.authority.register_goal_variant(manifest)
 
         self.assertEqual(first, second)
-        scope = goal_variant_scope_key(
-            entity="tsilva",
-            project="super-mario-bros",
-            goal_slug=manifest.goal_slug,
-        )
+        scope = goal_variant_scope_key(goal_slug=manifest.goal_slug)
         index = self.authority.control.get_json(f"{scope}/index.json")
         self.assertEqual(len(index["variants"]), 1)
         self.assertEqual(
@@ -215,6 +211,36 @@ class RunAuthorityTests(unittest.TestCase):
         self.assertEqual(updated["stop_reason"], "training_cap_without_acceptance")
         self.assertEqual(updated["final_step"], 100)
         self.assertEqual(updated["metrics"], {"train/global_step": 100.0})
+
+    def test_catalog_clear_removes_current_and_noncurrent_indexes_and_projection_receipts(
+        self,
+    ) -> None:
+        manifest = self.manifest(new_run_id(), new_attempt_id())
+        self.authority.create_manifest(manifest)
+        self.authority.control.put_json(
+            "goal-variants/v1/scopes/obsolete/index.json",
+            {"schema_version": 1},
+        )
+        self.authority.control.put_json(
+            f"runs/{manifest.run_id}/goal-variant-registration.json",
+            {"schema_version": 1},
+        )
+
+        cleared = self.authority.clear_goal_variant_catalog()
+
+        self.assertGreaterEqual(cleared["catalog_objects"], 3)
+        self.assertEqual(cleared["projection_receipts"], 2)
+        self.assertEqual(list(self.authority.control.iter_keys("goal-variants/")), [])
+        self.assertIsNone(
+            self.authority.control.get_json_optional(
+                f"runs/{manifest.run_id}/goal-variant-projection.json"
+            )
+        )
+        self.assertIsNone(
+            self.authority.control.get_json_optional(
+                f"runs/{manifest.run_id}/goal-variant-registration.json"
+            )
+        )
 
     def test_v2_recipe_is_content_addressed_and_registers_exact_variant_resolution(
         self,
@@ -267,11 +293,7 @@ class RunAuthorityTests(unittest.TestCase):
             }
         )
         self.authority.create_manifest(manifest)
-        scope = goal_variant_scope_key(
-            entity="tsilva",
-            project="Bandit-v0",
-            goal_slug="gradlab__bandit",
-        )
+        scope = goal_variant_scope_key(goal_slug="gradlab__bandit")
         index = self.authority.control.get_json(f"{scope}/index.json")
         self.assertEqual(
             index["variants"][0]["exact_resolution_run_id"],

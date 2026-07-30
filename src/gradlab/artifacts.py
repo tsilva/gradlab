@@ -71,9 +71,7 @@ def build_model_provenance(
         "recipe_sha256": train_config.get("recipe_sha256", ""),
         "runtime_image_ref": train_config.get("runtime_image_ref", ""),
         "seed": train_config.get("seed"),
-        "repo_git_commit": str(
-            train_config.get("source_sha") or train_config.get("repo_git_commit") or ""
-        ).strip(),
+        "repo_git_commit": str(train_config.get("source_sha") or "").strip(),
         "checkpoint_step": checkpoint_step(model_path)
         if checkpoint_step(model_path) is not None
         else checkpoint_step_value,

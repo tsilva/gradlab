@@ -7,16 +7,13 @@ from typing import Any
 import numpy as np
 
 from gradlab.policy_registry import (
-    MODEL_CLASS_ALGORITHMS,
     PolicyAlgorithmId,
-    RUNTIME_POLICY_ALGORITHMS,
     default_action_selection_mode as registered_default_action_selection_mode,
 )
 
 
 ACTOR_DISTRIBUTION = "actor_distribution"
 STATE_VALUE = "state_value"
-ACTION_VALUE = "action_value"
 PROGRAM = "program"
 ROUTE = "route"
 SELECTED_ACTION_LOG_PROBABILITY = "selected_action_log_probability"
@@ -72,12 +69,6 @@ POLICY_CAPABILITIES: dict[PolicyAlgorithmId, PolicyCapabilities] = {
             }
         ),
     ),
-    "dqn": PolicyCapabilities(
-        algorithm_id="dqn",
-        action_selection_modes=("epsilon_greedy", "greedy"),
-        default_action_selection_mode=registered_default_action_selection_mode("dqn"),
-        introspection=frozenset({ACTION_VALUE}),
-    ),
     "action-program": PolicyCapabilities(
         algorithm_id="action-program",
         action_selection_modes=("program",),
@@ -105,27 +96,6 @@ class PolicyBatchDecision:
     decisions: tuple[Any, ...]
 
 
-def _model_class_name(model: Any) -> str:
-    model_type = type(model)
-    return f"{model_type.__module__}.{model_type.__qualname__}"
-
-
-def infer_policy_algorithm(model: Any) -> PolicyAlgorithmId:
-    algorithm = MODEL_CLASS_ALGORITHMS.get(_model_class_name(model))
-    if algorithm in RUNTIME_POLICY_ALGORITHMS:
-        return algorithm
-    if callable(getattr(model, "policy_decisions", None)):
-        return "action-program"
-    policy = getattr(model, "policy", None)
-    if policy is not None and hasattr(policy, "q_net"):
-        return "dqn"
-    if policy is not None and hasattr(policy, "value_net"):
-        # Test doubles and compatible SB3 actor-critic subclasses can use the
-        # common adapter even when their precise provenance is unavailable.
-        return "ppo"
-    raise ValueError(f"unsupported playback policy class: {_model_class_name(model)}")
-
-
 def normalize_action_selection_mode(
     capabilities: PolicyCapabilities,
     requested_mode: str | None,
@@ -147,13 +117,12 @@ class PolicyRuntime:
         self,
         model: Any,
         *,
-        algorithm_id: PolicyAlgorithmId | None = None,
+        algorithm_id: PolicyAlgorithmId,
     ) -> None:
         self.model = model
-        inferred = infer_policy_algorithm(model) if algorithm_id is None else algorithm_id
-        if inferred not in POLICY_CAPABILITIES:
-            raise ValueError(f"unsupported runtime policy algorithm: {inferred}")
-        self.capabilities = POLICY_CAPABILITIES[inferred]
+        if algorithm_id not in POLICY_CAPABILITIES:
+            raise ValueError(f"unsupported runtime policy algorithm: {algorithm_id}")
+        self.capabilities = POLICY_CAPABILITIES[algorithm_id]
 
     def bind_action_space(
         self,
@@ -201,14 +170,6 @@ class PolicyRuntime:
                 observation,
                 deterministic=effective == "deterministic",
             )
-        elif self.capabilities.algorithm_id == "dqn":
-            from gradlab.play_debug import dqn_policy_decisions
-
-            decisions = dqn_policy_decisions(
-                self.model,
-                observation,
-                epsilon_greedy=effective == "epsilon_greedy",
-            )
         else:
             custom = getattr(self.model, "policy_decisions", None)
             if not callable(custom):
@@ -253,7 +214,6 @@ class PolicyRuntime:
         mode = {
             "ppo": "deterministic",
             "a2c": "deterministic",
-            "dqn": "greedy",
             "action-program": "program",
             "cell-graph": "route",
         }[self.capabilities.algorithm_id]
@@ -302,23 +262,7 @@ def reset_policy_state(model: Any, lanes: Any | None = None) -> None:
         reset() if lanes is None else reset(lanes)
 
 
-def policy_action(
-    model: Any,
-    observation: Any,
-    *,
-    action_selection_mode: str | None = None,
-    execution_context: Any | None = None,
-) -> tuple[np.ndarray, PolicyBatchDecision]:
-    result = PolicyRuntime(model).decide(
-        observation,
-        action_selection_mode=action_selection_mode,
-        execution_context=execution_context,
-    )
-    return result.actions, result
-
-
 __all__ = [
-    "ACTION_VALUE",
     "ACTOR_DISTRIBUTION",
     "ATTRIBUTION",
     "ENTROPY",
@@ -330,8 +274,6 @@ __all__ = [
     "SELECTED_ACTION_LOG_PROBABILITY",
     "STATE_VALUE",
     "bind_policy_action_space",
-    "infer_policy_algorithm",
     "normalize_action_selection_mode",
-    "policy_action",
     "reset_policy_state",
 ]

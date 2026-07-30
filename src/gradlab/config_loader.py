@@ -138,23 +138,10 @@ def _environment_template_context_from_document(document: Mapping[str, Any]) -> 
     if not isinstance(environment, Mapping):
         return {}
     env_provider = _concrete_template_source(environment.get("env_provider"))
-    env_id = _concrete_template_source(environment.get("env_id"))
-    if env_id:
-        if ":" in env_id:
-            provider, provider_env_id = env_id.split(":", 1)
-            return {"env_provider": provider, "env_id": provider_env_id}
-        context = {"env_id": env_id}
-        if env_provider:
-            context["env_provider"] = env_provider
-        return context
     env_config = environment.get("env_config")
     game = (
         _concrete_template_source(env_config.get("game")) if isinstance(env_config, Mapping) else ""
     )
-    if not game and isinstance(env_config, Mapping):
-        env_args = env_config.get("env_args")
-        if isinstance(env_args, Mapping):
-            game = _concrete_template_source(env_args.get("game"))
     context = {}
     if env_provider:
         context["env_provider"] = env_provider

@@ -50,16 +50,6 @@ def checkpoint_eval_max_steps(config: Mapping[str, Any]) -> int:
     explicit = int(config.get("post_train_eval_max_steps") or 0)
     if explicit > 0:
         return explicit
-    environment = config.get("checkpoint_eval_environment")
-    task = environment.get("task") if isinstance(environment, Mapping) else None
-    termination = task.get("termination") if isinstance(task, Mapping) else None
-    fallback = int(
-        termination.get("max_episode_steps")
-        if isinstance(termination, Mapping) and termination.get("max_episode_steps") is not None
-        else 0
-    )
-    if fallback > 0:
-        return fallback
     raise ValueError("checkpoint eval max steps are not materialized")
 
 
@@ -70,7 +60,7 @@ def portable_asset_from_train_config(
 ) -> dict[str, Any] | None:
     """Return the portable asset identity shared by eval and playback recipes."""
 
-    selected_environment = environment or train_config
+    selected_environment = train_config if environment is None else environment
     provider = str(selected_environment.get("env_provider") or "").strip()
     game = str(selected_environment.get("game") or "").strip()
     if not provider or not game:

@@ -47,40 +47,29 @@ def wandb_entity_from_env(*, fallback: str = DEFAULT_WANDB_ENTITY) -> str:
 def canonical_wandb_environment(
     env_provider: object,
     env_id: object,
-    *,
-    fallback: str = DEFAULT_WANDB_PROJECT,
 ) -> tuple[str, str]:
     """Return the canonical W&B project and provider-neutral game family."""
 
-    project = wandb_project_for_environment(
-        env_provider,
-        env_id,
-        fallback=fallback,
-    )
-    family = game_family_for_environment(
-        env_provider,
-        env_id,
-        fallback=project,
-    )
+    project = wandb_project_for_environment(env_provider, env_id)
+    family = game_family_for_environment(env_provider, env_id)
     return project, family
 
 
 def wandb_project_for_env_id(
     env_id: str | None,
     *,
-    env_provider: object = None,
-    fallback: str = DEFAULT_WANDB_PROJECT,
+    env_provider: object,
 ) -> str:
     """Return the default W&B project name for a provider-local environment id."""
 
-    return canonical_wandb_environment(env_provider, env_id, fallback=fallback)[0]
+    return canonical_wandb_environment(env_provider, env_id)[0]
 
 
 def resolve_wandb_project(
     explicit_project: object,
     env_id: str | None,
     *,
-    env_provider: object = None,
+    env_provider: object,
 ) -> str:
     """Use explicit W&B project when supplied, otherwise default to the env id."""
 
@@ -93,7 +82,7 @@ def resolve_wandb_namespace(
     explicit_project: object,
     env_id: str | None,
     *,
-    env_provider: object = None,
+    env_provider: object,
 ) -> tuple[str, str]:
     entity = str(explicit_entity or "").strip() or wandb_entity_from_env()
     project = resolve_wandb_project(

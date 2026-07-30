@@ -19,27 +19,27 @@ train:
           # Control when the selected information keys are emitted.
           mode: all
           # List the provider information keys retained for task signals.
-          keys: [player_dead, pending_reset]
+          keys: [player_dead]
     # Reuse these scenario-specific task overrides in evaluation via the YAML anchor.
     task: &health_gathering_supreme_task
       # Map task-level signal names to keys from the provider's per-step information.
       signals:
         # Map the task-level death signal to its provider information key.
         player_dead: player_dead
-        # Map the provider's native episode boundary to the survival signal.
-        episode_done: pending_reset
+        # Map the provider's native timeout boundary to the survival signal.
+        native_timeout: provider_truncated
       # Define discrete task events derived from changes in the declared signals.
       events:
         # Detect death when the provider's death flag is asserted for a step.
         player_died: {signal: player_dead, operation: equals_for, value: 1, steps: 1}
-        # Detect survival when the provider reaches the native scenario boundary.
-        survived: {signal: episode_done, operation: equals_for, value: 1, steps: 1}
+        # Detect reaching the survival goal at the native scenario timeout.
+        goal_reached: {signal: native_timeout, operation: equals_for, value: 1, steps: 1}
       # Define which task events end an episode and how each outcome is classified.
       termination:
         # List the events that mark an episode as failed.
         failure: [player_died]
         # List the events that mark an episode as successful.
-        success: [survived]
+        success: [goal_reached]
       # Configure the reward presented to the policy after the inherited native reward is computed.
       reward:
         # Set the positive divisor applied to native rewards before clipping.

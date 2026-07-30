@@ -562,8 +562,7 @@ export function sourceRouteFromPath(pathname = location.pathname) {
   if (!parts.length) {
     return {
       level: "environments",
-      entity: "",
-      project: "",
+      environment_id: "",
       goal_id: "",
       goal_variant_id: "",
       run_id: "",
@@ -571,13 +570,12 @@ export function sourceRouteFromPath(pathname = location.pathname) {
     };
   }
   if (parts[0] !== "environments" || !parts[1]) return null;
-  const project = decodePathPart(parts[1]);
-  if (!project) return null;
+  const environment_id = decodePathPart(parts[1]);
+  if (!environment_id) return null;
   if (parts.length === 2) {
     return {
       level: "goals",
-      entity: "",
-      project,
+      environment_id,
       goal_id: "",
       goal_variant_id: "",
       run_id: "",
@@ -590,8 +588,7 @@ export function sourceRouteFromPath(pathname = location.pathname) {
   if (parts.length === 4) {
     return {
       level: "goal_variants",
-      entity: "",
-      project,
+      environment_id,
       goal_id,
       goal_variant_id: "",
       run_id: "",
@@ -604,8 +601,7 @@ export function sourceRouteFromPath(pathname = location.pathname) {
   if (parts.length === 6) {
     return {
       level: "runs",
-      entity: "",
-      project,
+      environment_id,
       goal_id,
       goal_variant_id,
       run_id: "",
@@ -618,8 +614,7 @@ export function sourceRouteFromPath(pathname = location.pathname) {
   if (parts.length === 8) {
     return {
       level: "runs",
-      entity: "",
-      project,
+      environment_id,
       goal_id,
       goal_variant_id,
       run_id,
@@ -631,8 +626,7 @@ export function sourceRouteFromPath(pathname = location.pathname) {
   if (!checkpoint_id) return null;
   return {
     level: "runs",
-    entity: "",
-    project,
+    environment_id,
     goal_id,
     goal_variant_id,
     run_id,
@@ -641,13 +635,13 @@ export function sourceRouteFromPath(pathname = location.pathname) {
 }
 
 export function sourceRoutePath(route) {
-  const project = String(route?.project || "").trim();
+  const environmentId = String(route?.environment_id || "").trim();
   const goalId = String(route?.goal_id || "").trim();
   const goalVariantId = String(route?.goal_variant_id || "").trim();
   const runId = String(route?.run_id || "").trim();
   const checkpointId = String(route?.checkpoint_id || "").trim();
-  if (!project) return "/";
-  let path = `/environments/${encodeURIComponent(project)}`;
+  if (!environmentId) return "/";
+  let path = `/environments/${encodeURIComponent(environmentId)}`;
   if (!goalId) return path;
   path += `/goals/${encodeURIComponent(goalId)}`;
   if (!goalVariantId) return path;
@@ -661,8 +655,7 @@ export function sourceRoutePath(route) {
 function routeSignature(route) {
   return JSON.stringify({
     level: route?.level || "environments",
-    entity: route?.entity || "",
-    project: route?.project || "",
+    environment_id: route?.environment_id || "",
     goal_id: route?.goal_id || "",
     goal_variant_id: route?.goal_variant_id || "",
     run_id: route?.run_id || "",
@@ -677,16 +670,16 @@ export function sourceBreadcrumbItems(route) {
     current: route?.level === "environments" && !hasActiveCheckpoint,
     route: {
       level: "environments",
-      project: "",
+      environment_id: "",
       goal_id: "",
       goal_variant_id: "",
       run_id: "",
       checkpoint_id: "",
     },
   }];
-  if (route?.project) {
+  if (route?.environment_id) {
     items.push({
-      label: route.project,
+      label: route.environment_id,
       current: route.level === "goals" && !hasActiveCheckpoint,
       route: {
         level: "goals",
@@ -764,8 +757,7 @@ export class SourceBrowser {
     this.openSourceRoute = openSourceRoute;
     this.route = {
       level: "environments",
-      entity: "",
-      project: "",
+      environment_id: "",
       goal_id: "",
       goal_variant_id: "",
       run_id: "",
@@ -803,17 +795,7 @@ export class SourceBrowser {
     this.onPopState = () => {
       const parsedRoute = sourceRouteFromPath(location.pathname);
       if (!parsedRoute) return;
-      const route = {
-        ...parsedRoute,
-        entity: (
-          parsedRoute.entity
-          || this.route.entity
-          || this.app.route?.entity
-          || this.initialEnvironmentCatalog?.entity
-          || ""
-        ),
-      };
-      this.navigate(route, { historyMode: null });
+      this.navigate(parsedRoute, { historyMode: null });
     };
     if (this.historyEnabled) window.addEventListener("popstate", this.onPopState);
   }
@@ -830,15 +812,7 @@ export class SourceBrowser {
       && this.app.phase === "selecting"
       && !this.app.source
     ) {
-      const pending = {
-        ...this.pendingLocationRoute,
-        entity: (
-          this.pendingLocationRoute.entity
-          || appRoute.entity
-          || this.initialEnvironmentCatalog?.entity
-          || ""
-        ),
-      };
+      const pending = { ...this.pendingLocationRoute };
       this.pendingLocationRoute = null;
       this.lastAppRoute = routeSignature(appRoute);
       this.applyRoute(pending);
@@ -851,8 +825,7 @@ export class SourceBrowser {
       this.lastAppRoute = signature;
       this.route = {
         level: appRoute.level || "environments",
-        entity: appRoute.entity || "",
-        project: appRoute.project || "",
+        environment_id: appRoute.environment_id || "",
         goal_id: appRoute.goal_id || "",
         goal_variant_id: appRoute.goal_variant_id || "",
         run_id: appRoute.run_id || "",
@@ -913,8 +886,7 @@ export class SourceBrowser {
     }
     this.route = {
       level: route.level || "runs",
-      entity: route.entity || "",
-      project: route.project || "",
+      environment_id: route.environment_id || "",
       goal_id: route.goal_id || "",
       goal_variant_id: route.goal_variant_id || "",
       run_id: route.run_id || "",
@@ -932,8 +904,8 @@ export class SourceBrowser {
 
   inspectGoal(goal) {
     const base = (
-      `/api/catalog/environments/${encodeURIComponent(this.route.entity)}`
-      + `/${encodeURIComponent(this.route.project)}/goals/${encodeURIComponent(goal.goal_id)}`
+      `/api/catalog/environments/${encodeURIComponent(this.route.environment_id)}`
+      + `/goals/${encodeURIComponent(goal.goal_id)}`
     );
     return this.openInspection(`${base}/inspection`, {
       preferredDocument: "goal",
@@ -946,20 +918,16 @@ export class SourceBrowser {
 
   inspectGoalVariant(variant) {
     return this.openInspection(
-      `/api/catalog/environments/${encodeURIComponent(this.route.entity)}`
-      + `/${encodeURIComponent(this.route.project)}/goals/${encodeURIComponent(this.route.goal_id)}`
+      `/api/catalog/environments/${encodeURIComponent(this.route.environment_id)}`
+      + `/goals/${encodeURIComponent(this.route.goal_id)}`
       + `/variants/${encodeURIComponent(variant.variant_id)}/inspection`,
       { preferredDocument: "goal" },
     );
   }
 
   inspectRun(runId = this.route.run_id) {
-    const query = new URLSearchParams({
-      entity: this.route.entity,
-      project: this.route.project,
-    });
     return this.openInspection(
-      `/api/catalog/runs/${encodeURIComponent(runId)}/inspection?${query}`,
+      `/api/catalog/runs/${encodeURIComponent(runId)}/inspection`,
       { preferredDocument: "recipe" },
     );
   }
@@ -978,7 +946,6 @@ export class SourceBrowser {
     ) {
       return false;
     }
-    if (catalog.entity && !this.route.entity) this.route.entity = catalog.entity;
     this.items = Array.isArray(catalog.items) ? [...catalog.items] : [];
     this.metricColumns = Array.isArray(catalog.metric_columns)
       ? [...catalog.metric_columns]
@@ -997,23 +964,20 @@ export class SourceBrowser {
     if (this.query.trim()) query.set("q", this.query.trim());
     if (cursor) query.set("cursor", cursor);
     if (this.route.level === "goals") {
-      return `/api/catalog/environments/${encodeURIComponent(this.route.entity)}/${encodeURIComponent(this.route.project)}/goals?${query}`;
+      return `/api/catalog/environments/${encodeURIComponent(this.route.environment_id)}/goals?${query}`;
     }
     if (this.route.level === "goal_variants") {
-      return `/api/catalog/environments/${encodeURIComponent(this.route.entity)}/${encodeURIComponent(this.route.project)}/goals/${encodeURIComponent(this.route.goal_id)}/variants?${query}`;
+      return `/api/catalog/environments/${encodeURIComponent(this.route.environment_id)}/goals/${encodeURIComponent(this.route.goal_id)}/variants?${query}`;
     }
     if (this.route.level === "runs" && this.route.run_id) {
-      if (this.route.entity) query.set("entity", this.route.entity);
-      if (this.route.project) query.set("project", this.route.project);
       if (this.route.goal_variant_id) {
         query.set("goal_variant_id", this.route.goal_variant_id);
       }
       return `/api/catalog/runs/${encodeURIComponent(this.route.run_id)}/checkpoints?${query}`;
     }
     if (this.route.level === "runs") {
-      return `/api/catalog/environments/${encodeURIComponent(this.route.entity)}/${encodeURIComponent(this.route.project)}/goals/${encodeURIComponent(this.route.goal_id)}/variants/${encodeURIComponent(this.route.goal_variant_id)}/runs?${query}`;
+      return `/api/catalog/environments/${encodeURIComponent(this.route.environment_id)}/goals/${encodeURIComponent(this.route.goal_id)}/variants/${encodeURIComponent(this.route.goal_variant_id)}/runs?${query}`;
     }
-    if (this.route.entity) query.set("entity", this.route.entity);
     return `/api/catalog/environments?${query}`;
   }
 
@@ -1049,9 +1013,6 @@ export class SourceBrowser {
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(payload.error || `Catalog request failed (${response.status})`);
       if (serial !== this.requestSerial || key !== this.routeKey()) return;
-      if (this.route.level === "environments" && payload.entity && !this.route.entity) {
-        this.route.entity = payload.entity;
-      }
       const received = Array.isArray(payload.items) ? payload.items : [];
       this.items = append ? [...this.items, ...received] : received;
       const visibleEligible = new Set(
@@ -1179,8 +1140,7 @@ export class SourceBrowser {
       ? { ...route, level: "runs", checkpoint_id: "" }
       : {
           level: "environments",
-          entity: route.entity || "",
-          project: "",
+          environment_id: "",
           goal_id: "",
           goal_variant_id: "",
           run_id: "",
@@ -1192,8 +1152,7 @@ export class SourceBrowser {
   goHome() {
     this.navigate({
       level: "environments",
-      entity: this.route.entity || this.app.route?.entity || "",
-      project: "",
+      environment_id: "",
       goal_id: "",
       goal_variant_id: "",
       run_id: "",
@@ -1213,8 +1172,6 @@ export class SourceBrowser {
       source: {
         kind: "manifest",
         value: item.manifest_url,
-        entity: route.entity,
-        project: route.project,
         run_id: item.run_id,
         checkpoint_id: item.checkpoint_id,
         seed: checkpointPlaybackSeed(item),
@@ -1244,7 +1201,7 @@ export class SourceBrowser {
     } else if (this.route.level === "goals") {
       this.navigate({
         level: "environments",
-        project: "",
+        environment_id: "",
         goal_id: "",
         goal_variant_id: "",
         run_id: "",
@@ -1523,7 +1480,7 @@ export class SourceBrowser {
     }
     body.append(
       this.route.level === "environments"
-        ? this.renderProjects()
+        ? this.renderEnvironments()
         : this.route.level === "goals"
           ? this.renderGoals()
           : this.route.level === "goal_variants"
@@ -1542,24 +1499,23 @@ export class SourceBrowser {
     return body;
   }
 
-  renderProjects() {
+  renderEnvironments() {
     const list = document.createElement("div");
-    list.className = "project-list";
-    this.items.forEach((project) => {
+    list.className = "environment-list";
+    this.items.forEach((environment) => {
       const row = document.createElement("button");
       row.type = "button";
-      row.className = "project-row";
+      row.className = "environment-row";
       row.disabled = !this.hasControl();
       const name = document.createElement("strong");
-      name.textContent = project.name;
+      name.textContent = environment.name;
       const meta = document.createElement("span");
-      const goalLabel = Number(project.goal_count) === 1 ? "goal" : "goals";
-      meta.textContent = `${project.entity} · ${Number(project.goal_count).toLocaleString()} ${goalLabel}`;
+      const goalLabel = Number(environment.goal_count) === 1 ? "goal" : "goals";
+      meta.textContent = `${Number(environment.goal_count).toLocaleString()} ${goalLabel}`;
       row.append(name, meta);
       row.addEventListener("click", () => this.navigate({
         level: "goals",
-        entity: project.entity || this.route.entity,
-        project: project.name,
+        environment_id: environment.name,
         goal_id: "",
         goal_variant_id: "",
         run_id: "",

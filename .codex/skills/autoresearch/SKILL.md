@@ -20,11 +20,12 @@ Before acting:
 3. Read [search-policy.md](references/search-policy.md) completely.
 4. Use `$launch-experiment` in observe mode for every launch and monitor.
 
-Resolve exactly one checked-in goal and recipe. V3 accepts only `sb3.ppo` and `sb3.a2c` recipes
+Resolve exactly one checked-in goal and recipe. The current study contract accepts only
+`sb3.ppo` and `sb3.a2c` recipes
 with explicit training start states and distinct quantized 20%, 50%, and full training caps.
 It uses success evidence when the task declares success termination and return evidence when the
 goal ranks episode return but declares no success event.
-Historical queue-backed schema-v1/v2 studies are inert and cannot be resumed.
+Only current schema-v4 studies can be resumed.
 
 ## Initialize or resume
 
@@ -35,7 +36,7 @@ uv run python .codex/skills/autoresearch/scripts/study.py init \
   [--strong-threshold 0.90]
 ```
 
-The helper resumes the sole matching schema-v2 study, pins committed `HEAD`, all composed source
+The helper resumes the sole matching current study, pins committed `HEAD`, all composed source
 hashes, the runtime triplet, rung caps, seeds, and threshold, and stores authoritative state in
 `runs/autoresearch/<study>/study.json`. Never hand-edit it.
 
@@ -154,16 +155,6 @@ A transient W&B read failure leaves the action pending and is safe to repeat. Mi
 window-100 metrics are valid negative evidence, not an infrastructure failure. Return-mode
 studies collect the final 10% mean, p05, standard deviation, peak, and last value of
 `train/episode/return/shaped/across_origins/rolling_up_to_100/mean`.
-
-An active v2 study incorrectly screened as success-only may be upgraded only when its frozen goal
-is return-ranked, it has no paired evidence, and confirmation or apply has not started:
-
-```bash
-uv run python .codex/skills/autoresearch/scripts/study.py upgrade-return-mode --study <study>
-```
-
-This re-reads the exact finished W&B runs and reopens only prematurely closed screen barriers. It
-does not alter or relaunch a queue job.
 
 Persist attention and resume only from supported new evidence:
 

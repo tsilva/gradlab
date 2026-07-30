@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import math
 import sqlite3
 from collections.abc import Iterator, Mapping
@@ -10,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from gradlab.clock import Clock, SystemClock
+from gradlab.json_utils import canonical_json_sha256, canonical_json_text
 from gradlab.metric_names import METRICS_SCHEMA_VERSION, validate_metric_payload
 
 
@@ -125,18 +125,16 @@ class MetricStore(SqliteStore):
         kind: str,
         payload: Mapping[str, object],
     ) -> str:
-        encoded = json.dumps(
+        return canonical_json_sha256(
             {
                 "source": source,
                 "step": step,
                 "kind": kind,
                 "payload": payload,
             },
-            sort_keys=True,
-            separators=(",", ":"),
             default=str,
-        ).encode()
-        return hashlib.sha256(encoded).hexdigest()
+            ensure_ascii=True,
+        )
 
     def append_metrics(
         self,
@@ -187,7 +185,7 @@ class MetricStore(SqliteStore):
                         event_id,
                         step,
                         source,
-                        json.dumps(payload, sort_keys=True),
+                        canonical_json_text(payload, ensure_ascii=True),
                         now,
                         now,
                     ),
@@ -251,7 +249,11 @@ class MetricStore(SqliteStore):
                     step,
                     source,
                     kind,
-                    json.dumps(normalized, sort_keys=True, default=str),
+                    canonical_json_text(
+                        normalized,
+                        default=str,
+                        ensure_ascii=True,
+                    ),
                     now,
                     now,
                 ),
@@ -429,11 +431,10 @@ class MetricStore(SqliteStore):
             raise ValueError(
                 f"recovery manifest contains secret-like fields: {sorted(forbidden)}"
             )
-        payload = json.dumps(
+        payload = canonical_json_text(
             dict(manifest),
-            sort_keys=True,
-            separators=(",", ":"),
             default=str,
+            ensure_ascii=True,
         )
         digest = hashlib.sha256(payload.encode()).hexdigest()
         now = self.clock.time()

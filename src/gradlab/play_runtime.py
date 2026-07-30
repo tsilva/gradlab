@@ -56,8 +56,6 @@ PlaybackContractMode = Literal["training", "evaluation", "counterfactual"]
 class PlaySourceSpec:
     kind: ModelSourceKind
     value: str
-    entity: str = ""
-    project: str = ""
     run_id: str = ""
     checkpoint_id: str = ""
     seed: int | None = None
@@ -68,8 +66,6 @@ class PlaySourceSpec:
         return {
             "kind": self.kind,
             "value": self.value,
-            "entity": self.entity,
-            "project": self.project,
             "run_id": self.run_id,
             "checkpoint_id": self.checkpoint_id,
             "seed": self.seed,
@@ -404,7 +400,7 @@ class PlaybackLoader:
         # Validate the executable policy contract before creating or stepping
         # an environment. Optional telemetry can degrade later, but action
         # execution and its declared selection modes cannot.
-        policy_runtime = PolicyRuntime(model)
+        policy_runtime = PolicyRuntime(model, algorithm_id=algorithm_id)
         if not self.explicit_seed:
             recipe = candidate.source.bundle.recipe.get("recipe", {})
             if not isinstance(recipe, Mapping):

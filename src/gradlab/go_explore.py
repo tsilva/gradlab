@@ -28,6 +28,88 @@ RECENT_CELL_VISIT_WINDOW = 10_000
 GO_EXPLORE_STATE_SEMANTIC_ID = "go-explore-state-v1"
 GO_EXPLORE_STATE_SCHEMA_VERSION = 4
 
+_GO_EXPLORE_STATE_KEYS = frozenset(
+    {
+        "semantic_id",
+        "schema_version",
+        "configuration",
+        "global_step",
+        "completed_episodes",
+        "successful_episodes",
+        "improvement_count",
+        "first_success_return",
+        "archive_selection_count",
+        "archive_visit_count",
+        "archive_update_count",
+        "recent_batches",
+        "recent_visits",
+        "recent_new_cells",
+        "elite_progress_keys",
+        "progress_guided_selection_count",
+        "elite_success_keys",
+        "success_guided_selection_count",
+        "cells",
+        "lanes",
+        "rng_states",
+        "best_incomplete",
+        "best_success",
+        "best_incomplete_by_seed",
+        "best_success_by_seed",
+        "initial_roots",
+    }
+)
+_GO_EXPLORE_CANDIDATE_KEYS = frozenset(
+    {"runs", "episode_return", "progress", "completed", "initial_seed", "route"}
+)
+_GO_EXPLORE_CELL_KEYS = frozenset(
+    {
+        "key",
+        "entry_id",
+        "runs",
+        "episode_return",
+        "progress",
+        "program_steps",
+        "initial_seed",
+        "parent_key",
+        "route",
+        "best_success_return",
+        "progress_selections",
+        "success_selections",
+        "visits",
+        "selections",
+        "updates",
+    }
+)
+_GO_EXPLORE_LANE_KEYS = frozenset(
+    {
+        "runs",
+        "episode_return",
+        "progress",
+        "program_steps",
+        "initial_seed",
+        "steps_since_restart",
+        "path_cell_keys",
+        "route",
+        "exploration_action",
+        "exploration_remaining",
+        "entry_id",
+    }
+)
+
+
+def _require_exact_state_keys(
+    value: Mapping[str, object],
+    expected: frozenset[str],
+    *,
+    label: str,
+) -> None:
+    observed = {str(key) for key in value}
+    if observed != expected:
+        raise ValueError(
+            f"{label} fields mismatch: "
+            f"missing={sorted(expected - observed)}, extra={sorted(observed - expected)}"
+        )
+
 
 @dataclass(frozen=True)
 class RoutePoint:
@@ -842,34 +924,40 @@ class GoExploreSearch:
             return None
         if not isinstance(value, Mapping):
             raise ValueError("durable Go-Explore candidate must be an object")
+        _require_exact_state_keys(
+            value,
+            _GO_EXPLORE_CANDIDATE_KEYS,
+            label="durable Go-Explore candidate",
+        )
         return GoExploreCandidate(
             runs=cls._runs_from_document(value["runs"]),
             episode_return=float(value["episode_return"]),
             progress=float(value["progress"]),
             completed=bool(value["completed"]),
             initial_seed=(
-                None if value.get("initial_seed") is None else int(value["initial_seed"])
+                None if value["initial_seed"] is None else int(value["initial_seed"])
             ),
-            route_points=cls._route_from_document(value.get("route", ())),
+            route_points=cls._route_from_document(value["route"]),
         )
 
     @classmethod
     def _candidate_map_from_document(
         cls,
         value: object,
-        *,
-        fallback: GoExploreCandidate | None,
     ) -> dict[int | None, GoExploreCandidate]:
-        if value is None:
-            return {} if fallback is None else {fallback.initial_seed: fallback}
         if isinstance(value, str | bytes) or not isinstance(value, Sequence):
             raise ValueError("durable Go-Explore per-seed candidates must be a sequence")
         candidates: dict[int | None, GoExploreCandidate] = {}
         for raw_item in value:
             if not isinstance(raw_item, Mapping):
                 raise ValueError("durable Go-Explore per-seed candidate must be an object")
-            seed = None if raw_item.get("seed") is None else int(raw_item["seed"])
-            candidate = cls._candidate_from_document(raw_item.get("candidate"))
+            _require_exact_state_keys(
+                raw_item,
+                frozenset({"seed", "candidate"}),
+                label="durable Go-Explore per-seed candidate",
+            )
+            seed = None if raw_item["seed"] is None else int(raw_item["seed"])
+            candidate = cls._candidate_from_document(raw_item["candidate"])
             if (
                 candidate is None
                 or candidate.initial_seed != seed
@@ -985,6 +1073,11 @@ class GoExploreSearch:
         }
 
     def restore_state(self, value: Mapping[str, object]) -> tuple[str, ...]:
+        _require_exact_state_keys(
+            value,
+            _GO_EXPLORE_STATE_KEYS,
+            label="durable Go-Explore state",
+        )
         if value.get("semantic_id") != GO_EXPLORE_STATE_SEMANTIC_ID:
             raise ValueError("durable Go-Explore state has an unsupported semantic_id")
         schema_version = int(value.get("schema_version", 0))
@@ -1025,6 +1118,11 @@ class GoExploreSearch:
         for raw_cell in raw_cells:
             if not isinstance(raw_cell, Mapping):
                 raise ValueError("durable Go-Explore cell must be an object")
+            _require_exact_state_keys(
+                raw_cell,
+                _GO_EXPLORE_CELL_KEYS,
+                label="durable Go-Explore cell",
+            )
             key = self._key_from_document(raw_cell["key"])
             assert key is not None
             if key in self._archive:
@@ -1037,13 +1135,13 @@ class GoExploreSearch:
                 progress=float(raw_cell["progress"]),
                 program_steps=int(raw_cell["program_steps"]),
                 initial_seed=(
-                    None if raw_cell.get("initial_seed") is None else int(raw_cell["initial_seed"])
+                    None if raw_cell["initial_seed"] is None else int(raw_cell["initial_seed"])
                 ),
-                parent_key=self._key_from_document(raw_cell.get("parent_key")),
-                route_points=self._route_from_document(raw_cell.get("route", ())),
+                parent_key=self._key_from_document(raw_cell["parent_key"]),
+                route_points=self._route_from_document(raw_cell["route"]),
                 best_success_return=(
                     None
-                    if raw_cell.get("best_success_return") is None
+                    if raw_cell["best_success_return"] is None
                     else float(raw_cell["best_success_return"])
                 ),
                 progress_selections=int(raw_cell["progress_selections"]),
@@ -1059,6 +1157,11 @@ class GoExploreSearch:
         for raw_lane in raw_lanes:
             if not isinstance(raw_lane, Mapping):
                 raise ValueError("durable Go-Explore lane must be an object")
+            _require_exact_state_keys(
+                raw_lane,
+                _GO_EXPLORE_LANE_KEYS,
+                label="durable Go-Explore lane",
+            )
             path_keys = [self._key_from_document(key) for key in raw_lane["path_cell_keys"]]
             if any(key is None for key in path_keys):
                 raise ValueError("durable Go-Explore lane path contains a null key")
@@ -1070,12 +1173,12 @@ class GoExploreSearch:
                     program_steps=int(raw_lane["program_steps"]),
                     initial_seed=(
                         None
-                        if raw_lane.get("initial_seed") is None
+                        if raw_lane["initial_seed"] is None
                         else int(raw_lane["initial_seed"])
                     ),
                     steps_since_restart=int(raw_lane["steps_since_restart"]),
                     path_cell_keys=list(path_keys),
-                    route_points=list(self._route_from_document(raw_lane.get("route", ()))),
+                    route_points=list(self._route_from_document(raw_lane["route"])),
                     exploration_action=int(raw_lane["exploration_action"]),
                     exploration_remaining=int(raw_lane["exploration_remaining"]),
                 )
@@ -1116,20 +1219,23 @@ class GoExploreSearch:
         self._best_incomplete = self._candidate_from_document(value["best_incomplete"])
         self._best_success = self._candidate_from_document(value["best_success"])
         self._best_incomplete_by_seed = self._candidate_map_from_document(
-            value.get("best_incomplete_by_seed"),
-            fallback=self._best_incomplete,
+            value["best_incomplete_by_seed"],
         )
         self._best_success_by_seed = self._candidate_map_from_document(
-            value.get("best_success_by_seed"),
-            fallback=self._best_success,
+            value["best_success_by_seed"],
         )
         self._initial_roots = {}
-        raw_roots = value.get("initial_roots", ())
+        raw_roots = value["initial_roots"]
         if isinstance(raw_roots, str | bytes) or not isinstance(raw_roots, Sequence):
             raise ValueError("durable Go-Explore initial roots must be a sequence")
         for raw_root in raw_roots:
             if not isinstance(raw_root, Mapping):
                 raise ValueError("durable Go-Explore initial root must be an object")
+            _require_exact_state_keys(
+                raw_root,
+                frozenset({"seed", "key", "entry_id"}),
+                label="durable Go-Explore initial root",
+            )
             seed = int(raw_root["seed"])
             key = self._key_from_document(raw_root["key"])
             if key is None or seed in self._initial_roots:

@@ -3,7 +3,6 @@ from __future__ import annotations
 import argparse
 import copy
 import dataclasses
-import hashlib
 import json
 import re
 from collections.abc import Mapping, Sequence
@@ -11,8 +10,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-import yaml
-
+from gradlab.config_loader import load_mapping_document
+from gradlab.json_utils import canonical_json_sha256
 from gradlab.metric_names import (
     EVAL_FULL_BY_START,
     EVAL_FULL_EPISODE_RETURN_SHAPED_MEAN,
@@ -80,7 +79,6 @@ GOAL_SECTIONS = frozenset(
         "failure_reasons",
         "algorithm_health",
         "throughput",
-        "historical_contracts",
     }
 )
 
@@ -223,23 +221,13 @@ def _sections(value: Any, *, allowed: frozenset[str], label: str) -> tuple[str, 
     return result
 
 
-def _load_yaml(path: Path, *, label: str) -> dict[str, Any]:
-    try:
-        value = yaml.safe_load(path.read_text(encoding="utf-8"))
-    except yaml.YAMLError as exc:
-        raise ValueError(f"{label} is not valid YAML: {exc}") from exc
-    return _mapping(value, label=label)
-
-
 def _goal_starts(document: Mapping[str, Any]) -> tuple[str, ...]:
     objective = _mapping(document.get("objective"), label="goal objective")
     if "states" in objective:
         return tuple(str(value) for value in objective["states"])
     train = _mapping(document.get("train"), label="goal train")
     environment = _mapping(train.get("environment"), label="goal train.environment")
-    env_config = _mapping(
-        environment.get("env_config", environment), label="goal train.environment.env_config"
-    )
+    env_config = _mapping(environment.get("env_config"), label="goal train.environment.env_config")
     if "states" in env_config:
         return tuple(str(value) for value in env_config["states"])
     if "state" in env_config:
@@ -250,13 +238,11 @@ def _goal_starts(document: Mapping[str, Any]) -> tuple[str, ...]:
 def _goal_project(document: Mapping[str, Any]) -> str:
     train = _mapping(document.get("train"), label="goal train")
     environment = _mapping(train.get("environment"), label="goal train.environment")
-    env_config = _mapping(
-        environment.get("env_config", environment), label="goal train.environment.env_config"
-    )
+    env_config = _mapping(environment.get("env_config"), label="goal train.environment.env_config")
     return resolve_wandb_project(
         None,
         str(env_config.get("game") or ""),
-        env_provider=environment.get("env_provider") or env_config.get("env_provider"),
+        env_provider=environment.get("env_provider"),
     )
 
 
@@ -275,7 +261,10 @@ def compile_report_specs(
     repo_root = Path(repo_root).resolve()
     family_root = repo_root / "experiments" / "goals" / MARIO_FAMILY
     manifest_path = family_root / "_reports.yaml"
-    manifest = _load_yaml(manifest_path, label=f"report manifest {manifest_path}")
+    manifest = load_mapping_document(
+        manifest_path,
+        label=f"report manifest {manifest_path}",
+    )
     _reject_unknown(manifest, {"schema_version", "portfolio", "goal"}, str(manifest_path))
     if manifest.get("schema_version") != REPORT_SCHEMA_VERSION:
         raise ValueError(f"{manifest_path}.schema_version must equal {REPORT_SCHEMA_VERSION}")
@@ -319,7 +308,10 @@ def compile_report_specs(
         sections = goal_sections
         override_path = goal_path.parent / "_report.yaml"
         if override_path.is_file():
-            override = _load_yaml(override_path, label=f"report override {override_path}")
+            override = load_mapping_document(
+                override_path,
+                label=f"report override {override_path}",
+            )
             _reject_unknown(override, {"enabled", "title", "sections"}, str(override_path))
             if "enabled" in override:
                 if not isinstance(override["enabled"], bool):
@@ -406,13 +398,6 @@ def _active_filter_text(goal: GoalReportSpec) -> str:
     return _current_filter_text(goal) + " and Metric('state') in ['running']"
 
 
-def _historical_filter_text(goal: GoalReportSpec) -> str:
-    return (
-        f"Config('goal_slug') = '{goal.goal_id}' and "
-        f"Config('goal_contract_sha256') != '{goal.goal_contract_sha256}'"
-    )
-
-
 def _leader_filter_text(goal: GoalReportSpec) -> str:
     return (
         _current_filter_text(goal) + f" and SummaryMetric('{LEADER_CHECKPOINT_ARTIFACT_REF}') != ''"
@@ -481,15 +466,15 @@ def _leader_runset(wr, goal: GoalReportSpec, *, entity: str):
     )
 
 
-def _run_table(wr, goal: GoalReportSpec, *, entity: str, active: bool):
-    columns = ACTIVE_COLUMNS if active else _leader_columns(goal)
+def _active_run_table(wr, goal: GoalReportSpec, *, entity: str):
+    columns = ACTIVE_COLUMNS
     return wr.Runset(
         entity=entity,
         project=goal.project,
-        name=f"{goal.goal_id} {'active' if active else 'historical'} runs",
-        filters=_active_filter_text(goal) if active else _historical_filter_text(goal),
+        name=f"{goal.goal_id} active runs",
+        filters=_active_filter_text(goal),
         pinned_columns=columns,
-        visible_columns=columns if active else [*columns, "tags:__ALL__"],
+        visible_columns=columns,
         column_order=columns,
         column_widths=COLUMN_WIDTHS,
         lock_columns=True,
@@ -624,7 +609,7 @@ def _goal_section_blocks(wr, section: str, goal: GoalReportSpec, *, entity: str)
         return [
             wr.H2("Active experiments"),
             wr.PanelGrid(
-                runsets=[_run_table(wr, goal, entity=entity, active=True)],
+                runsets=[_active_run_table(wr, goal, entity=entity)],
                 hide_run_sets=False,
                 panels=[],
             ),
@@ -715,18 +700,6 @@ def _goal_section_blocks(wr, section: str, goal: GoalReportSpec, *, entity: str)
                         y=[TRAIN_ARTIFACT_SAVE_SECONDS, TRAIN_ARTIFACT_UPLOAD_SECONDS],
                     ),
                 ],
-            ),
-        ]
-    if section == "historical_contracts":
-        return [
-            wr.H2("Historical and incompatible goal contracts"),
-            wr.MarkdownBlock(
-                "These runs share the goal id but not the current composed goal contract. They are excluded from current leaderboards."
-            ),
-            wr.PanelGrid(
-                runsets=[_run_table(wr, goal, entity=entity, active=False)],
-                hide_run_sets=False,
-                panels=[],
             ),
         ]
     raise AssertionError(f"unhandled goal report section: {section}")
@@ -974,10 +947,11 @@ def _normalized_report(value: Any) -> Any:
 
 
 def _structure_sha256(report: Any) -> str:
-    payload = json.dumps(
-        _normalized_report(report), sort_keys=True, separators=(",", ":"), default=str
+    return canonical_json_sha256(
+        _normalized_report(report),
+        default=str,
+        ensure_ascii=True,
     )
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 def verify_reports(

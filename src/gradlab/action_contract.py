@@ -62,8 +62,8 @@ def _mode_name(value: Any) -> str:
 
 
 def _packaged_action_sets(provider_id: str, game: str) -> Mapping[str, Any]:
-    # Stable Retro does not package the canonical aliases exposed by the dedicated
-    # Mario runtime, so keep the equivalent compatibility tables on that provider.
+    # Stable Retro does not package the dedicated Mario runtime's named action
+    # sets, so GradLab supplies the same current semantic tables for that provider.
     if game == "SuperMarioBros-Nes-v0" and provider_id == "stable-retro-turbo":
         return MARIO_ACTION_TABLES
     if provider_id == "stable-retro-turbo":

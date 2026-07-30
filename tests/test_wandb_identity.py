@@ -78,17 +78,11 @@ def test_explicit_project_wins_and_unknown_environment_falls_back() -> None:
     )
 
 
-def test_historical_env_id_fallbacks_are_preserved() -> None:
-    assert canonical_wandb_environment(None, "SuperMarioBros-Nes-v0") == (
-        "SuperMarioBros-Nes-v0",
-        "NES-SuperMarioBros",
-    )
-    assert canonical_wandb_environment("legacy-provider", "breakout") == (
-        "breakout",
-        "Atari2600-Breakout",
-    )
-    with pytest.raises(ValueError, match="no registered canonical game family"):
-        game_family_for_environment(None, "SuperMarioBros-Nes-v0", strict=True)
+def test_environment_identity_requires_a_current_registered_provider() -> None:
+    with pytest.raises(ValueError, match="provider identity is required"):
+        canonical_wandb_environment(None, "SuperMarioBros-Nes-v0")
+    with pytest.raises(ValueError, match="unknown environment provider"):
+        canonical_wandb_environment("unknown-provider", "breakout")
 
 
 def test_init_wandb_records_resolved_identity_and_submission_group() -> None:
@@ -146,7 +140,7 @@ def test_init_wandb_records_resolved_identity_and_submission_group() -> None:
     assert captured["settings"]["x_server_side_expand_glob_metrics"] is False
 
 
-def test_init_wandb_falls_back_to_run_name_for_legacy_config() -> None:
+def test_init_wandb_requires_display_name() -> None:
     captured = {}
 
     class FakeRun:
@@ -157,9 +151,9 @@ def test_init_wandb_falls_back_to_run_name_for_legacy_config() -> None:
         "wandb_tags": "",
         "wandb_entity": "entity",
         "wandb_project": None,
-        "wandb_group": "legacy-group",
-        "run_name": "legacy-run-name",
-        "run_description": "legacy identity canary",
+        "wandb_group": "local-group",
+        "run_name": "local-run-name",
+        "run_description": "local identity canary",
         "wandb_mode": "offline",
         "wandb_run_id": "gradlab-0123456789abcdef01234567",
     }
@@ -178,23 +172,22 @@ def test_init_wandb_falls_back_to_run_name_for_legacy_config() -> None:
             },
         ),
     ):
-        _start_wandb(train_config, run_dir=tmp, config=config)
+        with pytest.raises(ValueError, match="wandb_display_name"):
+            _start_wandb(train_config, run_dir=tmp, config=config)
 
-    assert captured["name"] == train_config["run_name"]
-    assert captured["group"] == "legacy-group"
-    assert captured["settings"]["x_server_side_expand_glob_metrics"] is False
+    assert captured == {}
 
 
 @pytest.mark.parametrize(
     ("display_name", "expected_name"),
     [
         ("Level1-1__ppo__s7__01234567", "Level1-1__ppo__s7__01234567"),
-        (None, "gradlab-0123456789abcdef0123456789abcdef"),
+        (None, None),
     ],
 )
-def test_resume_wandb_prefers_display_name_with_legacy_fallback(
+def test_resume_wandb_requires_or_uses_display_name(
     display_name: str | None,
-    expected_name: str,
+    expected_name: str | None,
 ) -> None:
     captured = {}
 
@@ -222,7 +215,15 @@ def test_resume_wandb_prefers_display_name_with_legacy_fallback(
         patch("gradlab.wandb_publisher.load_wandb_env"),
         patch.dict(sys.modules, {"wandb": fake_wandb}),
     ):
-        WandbProjector.resume(train_config)
+        if expected_name is None:
+            with pytest.raises(ValueError, match="wandb_display_name"):
+                WandbProjector.resume(train_config)
+        else:
+            WandbProjector.resume(train_config)
+
+    if expected_name is None:
+        assert captured == {}
+        return
 
     assert captured["name"] == expected_name
     assert captured["id"] == train_config["wandb_run_id"]

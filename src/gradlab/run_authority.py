@@ -15,7 +15,8 @@ from gradlab.clock import (
     format_utc_datetime,
     parse_utc_datetime,
 )
-from gradlab.file_utils import atomic_write_bytes, atomic_write_json
+from gradlab.file_utils import atomic_write_bytes, atomic_write_json, file_sha256
+from gradlab.json_utils import canonical_json_sha256
 from gradlab.r2_store import (
     BucketConfig,
     ConditionalWriteConflict,
@@ -121,7 +122,7 @@ class RunAuthority:
             create_only=True,
         )
         self.create_attempt_manifest(manifest)
-        self.register_goal_variant_best_effort(manifest)
+        self.project_goal_variant_best_effort(manifest)
         return etag
 
     def create_attempt_manifest(self, manifest: RunManifest) -> str:
@@ -200,13 +201,7 @@ class RunAuthority:
         if manifest.goal_variant is None:
             raise ValueError("run manifest has no goal variant descriptor")
         descriptor = validate_goal_variant_descriptor(manifest.goal_variant)
-        entity = str(manifest.wandb.get("entity") or "").strip()
-        project = str(manifest.wandb.get("project") or "").strip()
-        scope_key = goal_variant_scope_key(
-            entity=entity,
-            project=project,
-            goal_slug=manifest.goal_slug,
-        )
+        scope_key = goal_variant_scope_key(goal_slug=manifest.goal_slug)
         descriptor_key = f"{scope_key}/descriptors/{descriptor['variant_id']}.json"
         try:
             self.control.put_json(descriptor_key, descriptor, create_only=True)
@@ -227,8 +222,6 @@ class RunAuthority:
                     raise ValueError("unsupported goal variant index schema")
                 identity = current.get("scope")
                 if not isinstance(identity, Mapping) or dict(identity) != {
-                    "entity": entity,
-                    "project": project,
                     "goal_slug": manifest.goal_slug,
                 }:
                     raise ValueError("goal variant index scope mismatch")
@@ -267,11 +260,7 @@ class RunAuthority:
             }
             document = {
                 "schema_version": GOAL_VARIANT_INDEX_SCHEMA_VERSION,
-                "scope": {
-                    "entity": entity,
-                    "project": project,
-                    "goal_slug": manifest.goal_slug,
-                },
+                "scope": {"goal_slug": manifest.goal_slug},
                 "variants": sorted(
                     by_id.values(),
                     key=lambda item: (
@@ -287,13 +276,13 @@ class RunAuthority:
                     create_only=current is None,
                     if_match=current_etag,
                 )
-                self._upsert_goal_variant_run(manifest, state="running")
+                self.update_goal_variant_run(manifest, state="running")
                 return document
             except ConditionalWriteConflict:
                 continue
         raise ConditionalWriteConflict("goal variant index changed during every CAS attempt")
 
-    def _upsert_goal_variant_run(
+    def update_goal_variant_run(
         self,
         manifest: RunManifest,
         *,
@@ -307,13 +296,7 @@ class RunAuthority:
         if manifest.goal_variant is None:
             raise ValueError("run manifest has no goal variant descriptor")
         descriptor = validate_goal_variant_descriptor(manifest.goal_variant)
-        entity = str(manifest.wandb.get("entity") or "").strip()
-        project = str(manifest.wandb.get("project") or "").strip()
-        scope_key = goal_variant_scope_key(
-            entity=entity,
-            project=project,
-            goal_slug=manifest.goal_slug,
-        )
+        scope_key = goal_variant_scope_key(goal_slug=manifest.goal_slug)
         variant_id = str(descriptor["variant_id"])
         index_key = f"{scope_key}/runs/{variant_id}.json"
         for _attempt in range(8):
@@ -327,8 +310,6 @@ class RunAuthority:
                 if int(current.get("schema_version") or 0) != GOAL_VARIANT_RUN_INDEX_SCHEMA_VERSION:
                     raise ValueError("unsupported goal variant run index schema")
                 if current.get("scope") != {
-                    "entity": entity,
-                    "project": project,
                     "goal_slug": manifest.goal_slug,
                     "variant_id": variant_id,
                 }:
@@ -434,8 +415,6 @@ class RunAuthority:
             document = {
                 "schema_version": GOAL_VARIANT_RUN_INDEX_SCHEMA_VERSION,
                 "scope": {
-                    "entity": entity,
-                    "project": project,
                     "goal_slug": manifest.goal_slug,
                     "variant_id": variant_id,
                 },
@@ -474,7 +453,7 @@ class RunAuthority:
         if manifest.goal_variant is None:
             return False
         try:
-            self._upsert_goal_variant_run(
+            self.update_goal_variant_run(
                 manifest,
                 state=state,
                 updated_at=updated_at,
@@ -487,14 +466,14 @@ class RunAuthority:
             return False
         return True
 
-    def record_goal_variant_registration(
+    def record_goal_variant_projection(
         self,
         manifest: RunManifest,
         *,
         error: BaseException | None = None,
     ) -> None:
         self.control.put_json(
-            f"{self.run_prefix(manifest.run_id)}/goal-variant-registration.json",
+            f"{self.run_prefix(manifest.run_id)}/goal-variant-projection.json",
             {
                 "schema_version": 1,
                 "run_id": manifest.run_id,
@@ -503,26 +482,43 @@ class RunAuthority:
                     if isinstance(manifest.goal_variant, Mapping)
                     else ""
                 ),
-                "status": "pending_repair" if error is not None else "registered",
+                "status": "pending_rebuild" if error is not None else "indexed",
                 "error_type": type(error).__name__ if error is not None else "",
                 "updated_at": self.clock.utc_now(),
             },
             create_only=False,
         )
 
-    def register_goal_variant_best_effort(self, manifest: RunManifest) -> bool:
+    def project_goal_variant_best_effort(self, manifest: RunManifest) -> bool:
         if manifest.goal_variant is None:
             return False
         try:
             self.register_goal_variant(manifest)
         except Exception as exc:
             try:
-                self.record_goal_variant_registration(manifest, error=exc)
+                self.record_goal_variant_projection(manifest, error=exc)
             except Exception:
                 pass
             return False
-        self.record_goal_variant_registration(manifest)
+        self.record_goal_variant_projection(manifest)
         return True
+
+    def clear_goal_variant_catalog(self) -> dict[str, int]:
+        catalog_keys = sorted(self.control.iter_keys("goal-variants/"))
+        obsolete_projection_keys = sorted(
+            key
+            for key in self.control.iter_keys("runs/")
+            if re.fullmatch(
+                r"runs/gradlab-[0-9a-f]{32}/goal-variant-(?:projection|registration)\.json",
+                key,
+            )
+        )
+        for key in (*catalog_keys, *obsolete_projection_keys):
+            self.control.delete(key, if_match=str(self.control.head(key)["etag"]))
+        return {
+            "catalog_objects": len(catalog_keys),
+            "projection_receipts": len(obsolete_projection_keys),
+        }
 
     def acquire_lease(
         self,
@@ -676,15 +672,7 @@ class RunAuthority:
 
     @staticmethod
     def _archive_document_sha256(value: Mapping[str, Any]) -> str:
-        return hashlib.sha256(
-            json.dumps(
-                value,
-                sort_keys=True,
-                separators=(",", ":"),
-                ensure_ascii=False,
-                allow_nan=False,
-            ).encode("utf-8")
-        ).hexdigest()
+        return canonical_json_sha256(value)
 
     def state_archive_closure(self, *, run_id: str) -> dict[str, Any] | None:
         return self.control.get_json_optional(
@@ -840,13 +828,13 @@ class RunAuthority:
         recovery_sidecar: Mapping[str, Any],
         created_at: str | None = None,
     ) -> CheckpointManifest:
-        digest = hashlib.sha256(model_path.read_bytes()).hexdigest()
+        digest = file_sha256(model_path)
         model_sidecar = model_document_path(model_path)
         recipe_sidecar = recipe_document_path(model_path)
         if not model_sidecar.is_file() or not recipe_sidecar.is_file():
             raise ValueError("checkpoint is missing its immutable model.json or recipe.json")
-        model_sidecar_digest = hashlib.sha256(model_sidecar.read_bytes()).hexdigest()
-        recipe_sidecar_digest = hashlib.sha256(recipe_sidecar.read_bytes()).hexdigest()
+        model_sidecar_digest = file_sha256(model_sidecar)
+        recipe_sidecar_digest = file_sha256(recipe_sidecar)
         identifier = checkpoint_id(step=step, sha256=digest)
         public_prefix = f"{self.run_prefix(run_id)}/checkpoints/{int(step)}-{digest}"
         model_key = f"{public_prefix}/model.zip"

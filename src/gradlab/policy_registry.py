@@ -10,17 +10,14 @@ PolicyAlgorithmId: TypeAlias = Literal[
     "a2c",
     "action-program",
     "cell-graph",
-    "dqn",
-    "recurrent-ppo",
 ]
 RuntimePolicyAlgorithmId: TypeAlias = Literal[
     "ppo",
     "a2c",
-    "dqn",
     "action-program",
     "cell-graph",
 ]
-Sb3AlgorithmId: TypeAlias = Literal["ppo", "a2c", "dqn"]
+Sb3AlgorithmId: TypeAlias = Literal["ppo", "a2c"]
 PolicyRuntimeFamily: TypeAlias = Literal["sb3", "action-program", "cell-graph"]
 
 
@@ -61,16 +58,6 @@ POLICY_ALGORITHM_SPECS: dict[PolicyAlgorithmId, PolicyAlgorithmSpec] = {
         "cell-graph",
         "route",
     ),
-    "dqn": PolicyAlgorithmSpec(
-        ("stable_baselines3.dqn.dqn.DQN",),
-        "sb3",
-        "epsilon_greedy",
-    ),
-    "recurrent-ppo": PolicyAlgorithmSpec(
-        ("sb3_contrib.ppo_recurrent.ppo_recurrent.RecurrentPPO",),
-        None,
-        "stochastic",
-    ),
 }
 
 
@@ -79,15 +66,6 @@ TRAINING_BACKEND_SPECS: dict[str, TrainingBackendSpec] = {
     "gradlab.jerk": TrainingBackendSpec("gradlab.training.jerk", "action-program"),
     "sb3.a2c": TrainingBackendSpec("gradlab.training.sb3", "a2c"),
     "sb3.ppo": TrainingBackendSpec("gradlab.training.sb3", "ppo"),
-}
-BACKEND_PROVENANCE_ALGORITHMS: dict[str, frozenset[PolicyAlgorithmId]] = {
-    **{
-        backend_id: frozenset({spec.algorithm_id})
-        for backend_id, spec in TRAINING_BACKEND_SPECS.items()
-    },
-    # GradLab can validate, load, evaluate, and play archived SB3 DQN
-    # checkpoints without claiming that DQN is a launchable training backend.
-    "sb3.dqn": frozenset({"dqn"}),
 }
 MODEL_CLASS_ALGORITHMS: dict[str, PolicyAlgorithmId] = {
     model_class: algorithm_id
@@ -113,13 +91,10 @@ SB3_ALGORITHMS = frozenset[PolicyAlgorithmId](
 
 def backend_provenance_algorithm(backend_id: str) -> PolicyAlgorithmId:
     normalized = str(backend_id).strip()
-    algorithms = BACKEND_PROVENANCE_ALGORITHMS.get(normalized)
-    if algorithms is None:
-        raise ValueError(f"unsupported checkpoint training backend: {backend_id}")
     spec = TRAINING_BACKEND_SPECS.get(normalized)
-    if spec is not None:
-        return spec.algorithm_id
-    return next(iter(algorithms))
+    if spec is None:
+        raise ValueError(f"unsupported checkpoint training backend: {backend_id}")
+    return spec.algorithm_id
 
 
 def default_action_selection_mode(algorithm_id: PolicyAlgorithmId) -> str:
@@ -135,41 +110,34 @@ def resolve_policy_algorithm(
     allowed: frozenset[PolicyAlgorithmId] = RUNTIME_POLICY_ALGORITHMS,
 ) -> PolicyAlgorithmId:
     metadata = metadata or {}
-    resolved: set[PolicyAlgorithmId] = set()
 
     algorithm_id = str(metadata.get("algorithm_id") or "").strip()
-    if algorithm_id:
-        if algorithm_id not in POLICY_ALGORITHM_SPECS:
-            raise ValueError(f"unsupported checkpoint algorithm: {algorithm_id}")
-        resolved.add(cast(PolicyAlgorithmId, algorithm_id))
+    if not algorithm_id:
+        raise ValueError("checkpoint metadata must identify its policy algorithm")
+    if algorithm_id not in POLICY_ALGORITHM_SPECS:
+        raise ValueError(f"unsupported checkpoint algorithm: {algorithm_id}")
+    algorithm = cast(PolicyAlgorithmId, algorithm_id)
 
     model_class = str(metadata.get("model_class") or "").strip()
     if model_class:
-        algorithm = MODEL_CLASS_ALGORITHMS.get(model_class)
-        if algorithm is None:
+        model_algorithm = MODEL_CLASS_ALGORITHMS.get(model_class)
+        if model_algorithm is None:
             raise ValueError(f"unsupported checkpoint model class: {model_class}")
-        resolved.add(algorithm)
+        if model_algorithm != algorithm:
+            raise ValueError(
+                "checkpoint backend, algorithm, and model class metadata disagree"
+            )
 
     backend_id = str(metadata.get("training_backend_id") or "").strip()
     if backend_id:
-        backend_algorithms = BACKEND_PROVENANCE_ALGORITHMS.get(backend_id)
-        if backend_algorithms is None:
+        backend = TRAINING_BACKEND_SPECS.get(backend_id)
+        if backend is None:
             raise ValueError(f"unsupported checkpoint training backend: {backend_id}")
-        if resolved:
-            incompatible = resolved - backend_algorithms
-            if incompatible:
-                raise ValueError(
-                    "checkpoint backend, algorithm, and model class metadata disagree"
-                )
-        else:
-            resolved.add(backend_provenance_algorithm(backend_id))
+        if backend.algorithm_id != algorithm:
+            raise ValueError(
+                "checkpoint backend, algorithm, and model class metadata disagree"
+            )
 
-    if not resolved:
-        raise ValueError("checkpoint metadata must identify its policy algorithm")
-    if len(resolved) > 1:
-        raise ValueError("checkpoint backend, algorithm, and model class metadata disagree")
-
-    algorithm = next(iter(resolved))
     if algorithm not in allowed:
         raise ValueError(f"unsupported checkpoint algorithm: {algorithm}")
     return algorithm

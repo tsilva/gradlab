@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import hashlib
 import importlib
-import json
 import threading
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -10,6 +8,7 @@ from pathlib import Path
 from typing import Any, Protocol, cast
 
 from gradlab.policy_registry import TRAINING_BACKEND_SPECS
+from gradlab.json_utils import canonical_json_sha256
 from gradlab.training_lifecycle import TrainingResult
 
 
@@ -195,13 +194,11 @@ def training_backend_config_hash(config: Mapping[str, Any]) -> str:
     for key in ("resume", "resume_approval_hash", "resume_manifest"):
         if key in hash_config:
             hash_config[key] = None
-    encoded = json.dumps(
+    return canonical_json_sha256(
         hash_config,
-        sort_keys=True,
-        separators=(",", ":"),
         default=str,
-    ).encode("utf-8")
-    return hashlib.sha256(encoded).hexdigest()
+        ensure_ascii=True,
+    )
 
 
 def training_backend_runtime_metadata(

@@ -114,9 +114,9 @@ def _start_wandb(
     )
     wandb_config["environment"] = training["environment"]
     wandb_config["environment_hash"] = training["environment_hash"]
-    display_name = str(train_config.get("wandb_display_name") or "").strip() or str(
-        train_config["run_name"]
-    )
+    display_name = str(train_config.get("wandb_display_name") or "").strip()
+    if not display_name:
+        raise ValueError("W&B projection requires wandb_display_name")
     return configure_wandb_metrics(
         wandb.init(
             project=project,
@@ -201,11 +201,9 @@ class WandbProjector:
             if isinstance(raw_tags, str)
             else [str(tag) for tag in raw_tags]
         )
-        display_name = (
-            str(train_config.get("wandb_display_name") or "").strip()
-            or str(train_config.get("run_name") or "").strip()
-            or None
-        )
+        display_name = str(train_config.get("wandb_display_name") or "").strip()
+        if not display_name:
+            raise ValueError("W&B projection requires wandb_display_name")
         run = configure_wandb_metrics(
             wandb.init(
                 entity=entity,

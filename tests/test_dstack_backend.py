@@ -320,6 +320,28 @@ class DstackBackendTests(unittest.TestCase):
         backend = DstackBackend(environment={})
         self.assertEqual(backend.status("run-one").status, "running")
 
+    @mock.patch("gradlab.dstack_backend.subprocess.run")
+    def test_status_rejects_noncurrent_name_and_state_aliases(self, run) -> None:
+        run.return_value = subprocess.CompletedProcess(
+            ["dstack", "ps"],
+            0,
+            json.dumps(
+                {
+                    "runs": [
+                        {
+                            "name": "run-one",
+                            "state": "running",
+                            "submitted_at": "2026-07-24T13:00:00Z",
+                        }
+                    ]
+                }
+            ),
+            "",
+        )
+
+        with self.assertRaisesRegex(ValueError, "run_spec.configuration"):
+            DstackBackend(environment={}).status("run-one")
+
 
 if __name__ == "__main__":
     unittest.main()

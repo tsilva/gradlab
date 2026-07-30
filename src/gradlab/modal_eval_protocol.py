@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import math
 from collections.abc import Mapping
 from typing import Any
@@ -30,7 +29,7 @@ def canonical_json(value: object) -> str:
 
 
 def stable_hash(value: object) -> str:
-    return hashlib.sha256(canonical_json(value).encode("utf-8")).hexdigest()
+    return canonical_json_sha256(value, default=str, allow_nan=True)
 
 
 def build_execution_contract(
@@ -129,11 +128,9 @@ def validate_attempt_result(
         ("recipe_sha256", "recipe hash"),
         ("evaluation_contract_sha256", "evaluation contract hash"),
     ):
-        if name in contract and str(result.get(name) or "") != str(contract[name]):
+        if str(result.get(name) or "") != str(contract[name]):
             raise ValueError(f"eval result {message} mismatch")
-    if "recipe_format_version" in contract and int(result.get("recipe_format_version") or 0) != int(
-        contract["recipe_format_version"]
-    ):
+    if int(result.get("recipe_format_version") or 0) != int(contract["recipe_format_version"]):
         raise ValueError("eval result recipe format version mismatch")
     if int(result.get("contract_schema_version") or 0) != int(contract["schema_version"]):
         raise ValueError("eval result contract schema version mismatch")
@@ -152,7 +149,7 @@ def validate_attempt_result(
     if str(result.get("status") or "") != "succeeded":
         raise ValueError("eval attempt did not succeed")
     if "acceptance" not in contract:
-        raise ValueError("v1 Modal evaluation requires an acceptance contract")
+        raise ValueError("Modal evaluation requires an acceptance contract")
 
     episodes = result.get("episode_results")
     if not isinstance(episodes, list):

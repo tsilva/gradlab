@@ -69,8 +69,6 @@ class EnvironmentSpec:
 @dataclass(frozen=True)
 class EnvRegistration:
     spec_id: str
-    env_id_game_family_fallback: bool = True
-    env_id_wandb_project_fallback: bool = True
 
 
 MARIO_EVAL_SEMANTICS = EvalSemantics(
@@ -358,14 +356,8 @@ ALE_PY_PROVIDER = EnvProvider(
     import_name="ale_py",
     distribution_name="ale-py",
     environments={
-        "breakout": EnvRegistration(
-            "Breakout-Atari2600-v0",
-            env_id_wandb_project_fallback=False,
-        ),
-        "ms_pacman": EnvRegistration(
-            "MsPacman-Atari2600-v0",
-            env_id_wandb_project_fallback=False,
-        ),
+        "breakout": EnvRegistration("Breakout-Atari2600-v0"),
+        "ms_pacman": EnvRegistration("MsPacman-Atari2600-v0"),
     },
     supports_states=False,
     constructor_contract=ProviderConstructorContract(
@@ -440,57 +432,36 @@ STABLE_RETRO_ATARI_ENV_IDS = frozenset({"Breakout-Atari2600-v0", "MsPacman-Atari
 def _environment_identity(provider_id: object, env_id: object) -> tuple[str, str]:
     provider = str(provider_id or "").strip()
     environment = str(env_id or "").strip()
-    if not provider and ":" in environment:
-        provider, environment = environment.split(":", 1)
+    if not provider:
+        raise ValueError("environment provider identity is required")
+    if not environment:
+        raise ValueError("environment id is required")
     return provider, environment
-
-
-def _canonical_identity_by_env_id(
-    env_id: str,
-    *,
-    fallback_field: str,
-) -> EnvironmentSpec | None:
-    matches = {
-        ENVIRONMENT_SPECS[registration.spec_id]
-        for provider in ENV_PROVIDERS.values()
-        if (registration := provider.environments.get(env_id)) is not None
-        and getattr(registration, fallback_field)
-    }
-    if len(matches) == 1:
-        return matches.pop()
-    return None
 
 
 def _canonical_environment_identity(
     provider_id: object,
     env_id: object,
-    *,
-    fallback_field: str,
-    allow_env_id_fallback: bool = True,
 ) -> tuple[str, EnvironmentSpec | None]:
-    """Resolve a registered public identity while preserving historical reads."""
+    """Resolve an exact provider-owned public environment identity."""
 
     provider, environment = _environment_identity(provider_id, env_id)
-    registration = (
-        ENV_PROVIDERS[provider].environments.get(environment) if provider in ENV_PROVIDERS else None
-    )
-    identity = ENVIRONMENT_SPECS[registration.spec_id] if registration is not None else None
-    if identity is None and allow_env_id_fallback:
-        identity = _canonical_identity_by_env_id(
-            environment,
-            fallback_field=fallback_field,
+    provider_spec = ENV_PROVIDERS.get(provider)
+    if provider_spec is None:
+        raise ValueError(f"unknown environment provider: {provider}")
+    registration = provider_spec.environments.get(environment)
+    if registration is None and not provider_spec.allows_unregistered_env_ids:
+        raise ValueError(
+            f"environment {environment!r} is not registered for provider {provider!r}"
         )
+    identity = ENVIRONMENT_SPECS[registration.spec_id] if registration is not None else None
     return environment, identity
 
 
 def environment_spec(provider_id: object, env_id: object) -> EnvironmentSpec:
     """Return the one registered environment contract or a generic runtime spec."""
 
-    environment, spec = _canonical_environment_identity(
-        provider_id,
-        env_id,
-        fallback_field="env_id_game_family_fallback",
-    )
+    environment, spec = _canonical_environment_identity(provider_id, env_id)
     if spec is not None:
         return spec
     return EnvironmentSpec(
@@ -510,47 +481,30 @@ def game_family_for_environment(
     provider_id: object,
     env_id: object,
     *,
-    strict: bool = False,
-    fallback: str = "environment",
+    require_registered: bool = False,
 ) -> str:
-    """Return the provider-neutral public family for an environment.
+    """Return the provider-neutral public family for an environment."""
 
-    Training metadata retains the historical fallback for arbitrary Gymnasium
-    environments. Publication passes ``strict=True`` and therefore requires an
-    explicit registered family rather than guessing a public model identity.
-    """
-
-    environment, identity = _canonical_environment_identity(
-        provider_id,
-        env_id,
-        fallback_field="env_id_game_family_fallback",
-        allow_env_id_fallback=not strict,
-    )
+    environment, identity = _canonical_environment_identity(provider_id, env_id)
     if identity is not None:
         return identity.game_family
-    if strict:
+    if require_registered:
         provider, _environment = _environment_identity(provider_id, env_id)
-        qualified = f"{provider}:{environment}" if provider else environment
+        qualified = f"{provider}:{environment}"
         raise ValueError(f"environment {qualified!r} has no registered canonical game family")
-    return _fallback_game_family(environment, fallback=fallback)
+    return _fallback_game_family(environment, fallback="environment")
 
 
 def wandb_project_for_environment(
     provider_id: object,
     env_id: object,
-    *,
-    fallback: str,
 ) -> str:
-    """Return the registered W&B project with historical providerless fallback."""
+    """Return the exact registered W&B project or current dynamic environment id."""
 
-    environment, identity = _canonical_environment_identity(
-        provider_id,
-        env_id,
-        fallback_field="env_id_wandb_project_fallback",
-    )
+    environment, identity = _canonical_environment_identity(provider_id, env_id)
     if identity is not None:
         return identity.wandb_project
-    return environment or fallback
+    return environment
 
 
 def is_stable_retro_atari_env(provider_id: str, game: str) -> bool:

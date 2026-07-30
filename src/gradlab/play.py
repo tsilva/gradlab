@@ -60,10 +60,7 @@ def main(argv: list[str] | None = None) -> int:
         repo_root=repo_root,
         cache_path=PlayCatalog.default_cache_path(repo_root),
     )
-    initial_route: dict[str, object] = {
-        "level": "environments",
-        "entity": str(args.wandb_entity or ""),
-    }
+    initial_route: dict[str, object] = {"level": "environments"}
     initial_source: PlaySourceSpec | None = None
     if args.run:
         initial_source = PlaySourceSpec("public_run", str(args.run), run_id=str(args.run))
@@ -72,24 +69,17 @@ def main(argv: list[str] | None = None) -> int:
     elif args.artifact_ref:
         wandb_location = parse_wandb_location(args.artifact_ref)
         if wandb_location is not None:
-            goal_id, goal_variant_id = (
-                catalog.run_goal_variant(
-                    entity=wandb_location.entity,
-                    project=wandb_location.project,
-                    run_id=wandb_location.run_id,
-                )
-                if wandb_location.run_id
-                else ("", "")
+            goal_id, goal_variant_id = catalog.run_goal_variant(
+                environment_id=wandb_location.project,
+                run_id=wandb_location.run_id,
             )
             initial_route = {
-                "level": "runs" if wandb_location.run_id else "goals",
-                "entity": wandb_location.entity,
-                "project": wandb_location.project,
+                "level": "runs",
+                "environment_id": wandb_location.project,
                 "goal_id": goal_id,
                 "goal_variant_id": goal_variant_id,
-                "run_id": wandb_location.run_id or "",
+                "run_id": wandb_location.run_id,
             }
-            args.wandb_entity = wandb_location.entity
         elif is_huggingface_model_ref(args.artifact_ref):
             initial_source = PlaySourceSpec("huggingface", str(args.artifact_ref))
         else:

@@ -4,6 +4,7 @@ import json
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+from gradlab.json_utils import canonical_json_text
 from gradlab.metric_store import MetricStore
 from gradlab.run_contracts import (
     EVAL_INVENTORY_SETTLED_STATUSES,
@@ -76,7 +77,7 @@ class SupervisorLedger(MetricStore):
 
     def set_state(self, key: str, value: Any) -> None:
         now = self.clock.time()
-        payload = json.dumps(value, sort_keys=True, separators=(",", ":"), default=str)
+        payload = canonical_json_text(value, default=str, ensure_ascii=True)
         with self.connection() as connection:
             connection.execute(
                 """
@@ -159,7 +160,7 @@ class SupervisorLedger(MetricStore):
         manifest: Mapping[str, Any],
     ) -> None:
         now = self.clock.time()
-        payload = json.dumps(dict(manifest), sort_keys=True, separators=(",", ":"))
+        payload = canonical_json_text(dict(manifest), ensure_ascii=True)
         with self.connection() as connection:
             connection.execute(
                 """
@@ -232,7 +233,7 @@ class SupervisorLedger(MetricStore):
         intent: Mapping[str, Any],
     ) -> None:
         now = self.clock.time()
-        payload = json.dumps(dict(intent), sort_keys=True, separators=(",", ":"))
+        payload = canonical_json_text(dict(intent), ensure_ascii=True)
         with self.connection() as connection:
             connection.execute(
                 """
@@ -363,7 +364,7 @@ class SupervisorLedger(MetricStore):
         if status not in EVAL_RESULT_TERMINAL_STATUSES:
             raise ValueError(f"invalid terminal eval status: {status}")
         now = self.clock.time()
-        payload = json.dumps(dict(result), sort_keys=True, separators=(",", ":"), default=str)
+        payload = canonical_json_text(dict(result), default=str, ensure_ascii=True)
         with self.connection() as connection:
             cursor = connection.execute(
                 """
