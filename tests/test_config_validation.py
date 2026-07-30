@@ -26,8 +26,6 @@ from gradlab.recipe_schema import validate_materialized_train_recipe
 class ConfigValidationTests(unittest.TestCase):
     BREAKOUT_GOAL = Path("experiments/goals/Breakout-Atari2600-v0/_goal.yaml")
     BREAKOUT_RECIPE = BREAKOUT_GOAL.parent / "recipes/ppo.yaml"
-    BREAKOUT_NO_NOOP_GOAL = BREAKOUT_GOAL.parent / "no-noop/_goal.yaml"
-    BREAKOUT_NO_NOOP_RECIPE = BREAKOUT_NO_NOOP_GOAL.parent / "recipes/ppo.yaml"
     MARIO_L11_GOAL = Path("experiments/goals/SuperMarioBros-Nes-v0/Level1-1/_goal.yaml")
     MARIO_L12_GOAL = Path("experiments/goals/SuperMarioBros-Nes-v0/Level1-2/_goal.yaml")
     MARIO_L13_GOAL = Path("experiments/goals/SuperMarioBros-Nes-v0/Level1-3/_goal.yaml")
@@ -285,50 +283,6 @@ class ConfigValidationTests(unittest.TestCase):
             ],
         )
         self.assertEqual(document["goal"]["release"], {"huggingface": {}})
-
-    def test_breakout_no_noop_ablation_changes_only_goal_identity_and_action_table(self) -> None:
-        baseline = compose_train_document(
-            self.BREAKOUT_GOAL,
-            self.BREAKOUT_RECIPE,
-        )
-        ablation = compose_train_document(
-            self.BREAKOUT_NO_NOOP_GOAL,
-            self.BREAKOUT_NO_NOOP_RECIPE,
-        )
-        stable_ablation = compose_train_document(
-            self.BREAKOUT_NO_NOOP_GOAL,
-            self.BREAKOUT_NO_NOOP_RECIPE,
-            env_provider="stable-retro-turbo",
-        )
-
-        expected_actions = [["BUTTON"], ["RIGHT"], ["LEFT"]]
-        self.assertEqual(ablation["goal"]["goal_id"], "no-noop")
-        self.assertEqual(
-            ablation["goal"]["title"],
-            "Atari 2600 Breakout no-NOOP action ablation",
-        )
-        self.assertIn("three-action no-NOOP", ablation["description"])
-        self.assertEqual(
-            ablation["train_config"]["env_args"]["use_restricted_actions"],
-            expected_actions,
-        )
-        self.assertEqual(
-            stable_ablation["train_config"]["env_args"]["use_restricted_actions"],
-            expected_actions,
-        )
-        self.assertEqual(
-            stable_ablation["train_config"]["env_provider"],
-            "stable-retro-turbo",
-        )
-        self.assertNotEqual(baseline["environment_hash"], ablation["environment_hash"])
-
-        baseline_config = deepcopy(baseline["train_config"])
-        ablation_config = deepcopy(ablation["train_config"])
-        for config in (baseline_config, ablation_config):
-            config.pop("goal_contract_sha256")
-            config.pop("effective_goal_contract_sha256")
-            config["env_args"].pop("use_restricted_actions")
-        self.assertEqual(baseline_config, ablation_config)
 
     def test_goal_environment_rejects_implicit_provider_defaults(self) -> None:
         environment = {

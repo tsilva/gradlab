@@ -1,5 +1,0 @@
-defaults:
-- ../../../../recipes/_presets/breakout-high-throughput-ppo@_global_
-- _self_
-recipe_id: ppo
-description: PPO three-action no-NOOP ablation for {{ goal_id }}.
