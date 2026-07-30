@@ -9,9 +9,9 @@ from gradlab.play_session import build_parser
 
 def main(argv: list[str] | None = None) -> int:
     from gradlab.model_sources import is_huggingface_model_ref
-    from gradlab.play_application import PlaybackHost
     from gradlab.play_catalog import PlayCatalog, parse_wandb_location
-    from gradlab.play_runtime import PlaySourceSpec, PlaybackLoader
+    from gradlab.play_runtime import PlaySourceSpec
+    from gradlab.playback_worker import IsolatedPlaybackHost
     from gradlab.play_web import run_web_player_application
     from gradlab.recipe_catalog import (
         experiments_root,
@@ -55,10 +55,29 @@ def main(argv: list[str] | None = None) -> int:
         args.attribution_interval = 8 if args.attribution == "occlusion" else 1
 
     repo_root = experiments_root().parent
+    catalog_authority = None
+    catalog_control_error = ""
+    from gradlab.catalog_errors import CatalogError, CatalogIntegrityError, CatalogUnavailable
+    from gradlab.play_catalog_authority import (
+        scrub_protected_environment,
+        start_catalog_authority_helper,
+    )
+
+    def start_private_catalog() -> None:
+        nonlocal catalog_authority, catalog_control_error
+        try:
+            catalog_authority = start_catalog_authority_helper(repo_root)
+        except CatalogError as exc:
+            catalog_control_error = str(exc)
+
+    if selected_sources == 0:
+        start_private_catalog()
     catalog = PlayCatalog(
         public_models_base_url=args.public_models_base_url,
         repo_root=repo_root,
         cache_path=PlayCatalog.default_cache_path(repo_root),
+        control_bucket=catalog_authority,
+        control_error=catalog_control_error,
     )
     initial_route: dict[str, object] = {"level": "environments"}
     initial_source: PlaySourceSpec | None = None
@@ -69,10 +88,39 @@ def main(argv: list[str] | None = None) -> int:
     elif args.artifact_ref:
         wandb_location = parse_wandb_location(args.artifact_ref)
         if wandb_location is not None:
-            goal_id, goal_variant_id = catalog.run_goal_variant(
-                environment_id=wandb_location.project,
-                run_id=wandb_location.run_id,
-            )
+            try:
+                goal_id, goal_variant_id = catalog.run_goal_variant(
+                    environment_id=wandb_location.project,
+                    run_id=wandb_location.run_id,
+                )
+            except CatalogIntegrityError:
+                raise
+            except CatalogUnavailable as exc:
+                if exc.problem.code not in {
+                    "public_proof_absent",
+                    "public_catalog_transient",
+                }:
+                    raise
+                start_private_catalog()
+                if catalog_authority is None:
+                    raise CatalogUnavailable(
+                        catalog_control_error
+                        or "private catalog authority could not be started",
+                        code="catalog_configuration",
+                        retryable=False,
+                        source="control-catalog",
+                    ) from exc
+                catalog = PlayCatalog(
+                    public_models_base_url=args.public_models_base_url,
+                    repo_root=repo_root,
+                    cache_path=PlayCatalog.default_cache_path(repo_root),
+                    control_bucket=catalog_authority,
+                    control_error=catalog_control_error,
+                )
+                goal_id, goal_variant_id = catalog.run_goal_variant(
+                    environment_id=wandb_location.project,
+                    run_id=wandb_location.run_id,
+                )
             initial_route = {
                 "level": "runs",
                 "environment_id": wandb_location.project,
@@ -85,17 +133,20 @@ def main(argv: list[str] | None = None) -> int:
         else:
             initial_source = PlaySourceSpec("manifest", str(args.artifact_ref))
 
-    loader = PlaybackLoader(
+    scrub_protected_environment()
+
+    host = IsolatedPlaybackHost(
         args,
         argv=argv_list,
         explicit_seed="seed" in explicit_dests,
-    )
-    host = PlaybackHost(
-        loader,
         initial_route=initial_route,
         initial_source=initial_source,
     )
-    return run_web_player_application(host, args, catalog=catalog)
+    try:
+        return run_web_player_application(host, args, catalog=catalog)
+    finally:
+        if catalog_authority is not None:
+            catalog_authority.close()
 
 
 if __name__ == "__main__":

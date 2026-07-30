@@ -20,7 +20,8 @@ from gradlab.job_queue import (
     register_handler,
     run_flusher,
 )
-from gradlab.manual_evaluation import ManualEvaluationQueue
+from gradlab.manual_evaluation import EvaluationSelectionChanged, ManualEvaluationQueue
+from gradlab.evaluation_fence import evaluation_selection_fence
 
 
 class _SuccessfulHandler:
@@ -267,12 +268,20 @@ class JobQueueTests(unittest.TestCase):
     def test_checkpoint_facade_deduplicates_and_reports_start_failure(self) -> None:
         run_id = "gradlab-" + "a" * 32
         checkpoint_id = "checkpoint-100-" + "b" * 16
+        checkpoint = SimpleNamespace(
+            checkpoint_id=checkpoint_id,
+            to_dict=lambda: {
+                "checkpoint_id": checkpoint_id,
+                "sha256": "b" * 64,
+            },
+        )
         context = SimpleNamespace(
-            checkpoint=SimpleNamespace(checkpoint_id=checkpoint_id),
+            checkpoint=checkpoint,
             intent=SimpleNamespace(idempotency_key="c" * 64),
         )
         planner = SimpleNamespace(
             _contexts=lambda *_args, **_kwargs: [context],
+            _checkpoint_map=lambda _run_id: {checkpoint_id: checkpoint},
             authority=SimpleNamespace(
                 evaluation=SimpleNamespace(
                     get_json_optional=lambda _key: None,
@@ -294,14 +303,29 @@ class JobQueueTests(unittest.TestCase):
                 ),
             ),
         ):
+            selection_fence = evaluation_selection_fence(
+                run_id=run_id,
+                checkpoints=[checkpoint.to_dict()],
+            )
             first = facade.enqueue(
                 run_id=run_id,
                 checkpoint_ids=[checkpoint_id],
+                selection_fence=selection_fence,
             )
             repeated = facade.enqueue(
                 run_id=run_id,
                 checkpoint_ids=[checkpoint_id],
+                selection_fence=selection_fence,
             )
+            with self.assertRaisesRegex(
+                EvaluationSelectionChanged,
+                "catalog changed",
+            ):
+                facade.enqueue(
+                    run_id=run_id,
+                    checkpoint_ids=[checkpoint_id],
+                    selection_fence="0" * 64,
+                )
 
         self.assertEqual(first["items"][0]["state"], "flusher_unavailable")
         self.assertEqual(

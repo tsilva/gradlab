@@ -2,13 +2,17 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
+from urllib.error import HTTPError
 
 import pytest
 
+from gradlab.catalog_generation import CATALOG_POINTER_KEY
 from gradlab.play_catalog import (
     PlayCatalog,
     parse_wandb_location,
 )
+from gradlab.catalog_errors import CatalogIntegrityError, CatalogUnavailable
+from gradlab.catalog_errors import CatalogSnapshotChanged
 from gradlab.play_session import build_parser as build_play_parser
 from gradlab.policy_bundle import build_recipe_document, canonical_json_sha256
 from gradlab.r2_store import BucketConfig, RunStorageConfig
@@ -200,6 +204,45 @@ def test_parse_wandb_location_ignores_query_and_returns_run() -> None:
     )
 
 
+def test_public_recipe_resolution_distinguishes_absent_transient_and_corrupt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    checkpoint = checkpoint_row(step=100, digest="a" * 64, purpose="periodic")
+    index = {
+        "schema_version": 1,
+        "run_id": RUN_ID,
+        "checkpoints": [checkpoint],
+    }
+    catalog = PlayCatalog(public_models_base_url="https://models.example")
+
+    responses: list[Any] = [
+        index,
+        HTTPError(str(checkpoint["recipe_document_url"]), 404, "missing", {}, None),
+    ]
+
+    def absent(_url: str) -> Any:
+        value = responses.pop(0)
+        if isinstance(value, BaseException):
+            raise value
+        return value
+
+    monkeypatch.setattr("gradlab.play_catalog._public_json", absent)
+    assert catalog._public_run_recipe_document(RUN_ID) is None
+
+    responses[:] = [
+        index,
+        HTTPError(str(checkpoint["recipe_document_url"]), 503, "busy", {}, None),
+    ]
+    with pytest.raises(CatalogUnavailable) as transient:
+        catalog._public_run_recipe_document(RUN_ID)
+    assert transient.value.problem.code == "public_catalog_transient"
+    assert transient.value.problem.retryable is True
+
+    responses[:] = [index, {"format_version": 999}]
+    with pytest.raises(CatalogIntegrityError):
+        catalog._public_run_recipe_document(RUN_ID)
+
+
 def test_play_parser_allows_bare_launch_and_rejects_wandb_project_urls() -> None:
     parser = build_play_parser()
 
@@ -235,6 +278,8 @@ def test_goal_variants_use_one_private_index_read_without_wandb(
 
         def get_json_optional(self, key: str):
             self.calls.append(key)
+            if key == CATALOG_POINTER_KEY:
+                return None
             assert key == f"{scope}/index.json"
             return {
                 "schema_version": GOAL_VARIANT_INDEX_SCHEMA_VERSION,
@@ -259,7 +304,7 @@ def test_goal_variants_use_one_private_index_read_without_wandb(
 
     assert [item["variant_id"] for item in page.items] == [descriptor["variant_id"]]
     assert page.items[0]["exact_resolution_run_id"] == RUN_ID
-    assert bucket.calls == [f"{scope}/index.json"]
+    assert bucket.calls == [CATALOG_POINTER_KEY, f"{scope}/index.json"]
 
 
 def test_run_catalog_uses_lifecycle_owned_variant_index_without_wandb(
@@ -281,6 +326,8 @@ def test_run_catalog_uses_lifecycle_owned_variant_index_without_wandb(
 
         def get_json_optional(self, key: str):
             self.calls.append(key)
+            if key == CATALOG_POINTER_KEY:
+                return None
             if key == f"{scope}/index.json":
                 return {
                     "schema_version": GOAL_VARIANT_INDEX_SCHEMA_VERSION,
@@ -347,9 +394,51 @@ def test_run_catalog_uses_lifecycle_owned_variant_index_without_wandb(
     )
     assert [item["run_id"] for item in searched.items] == [RUN_ID]
     assert bucket.calls == [
+        CATALOG_POINTER_KEY,
         f"{scope}/index.json",
         f"{scope}/runs/{descriptor['variant_id']}.json",
     ]
+
+
+def test_missing_control_authority_is_not_reported_as_an_empty_run_catalog(
+    tmp_path: Path,
+) -> None:
+    write_goal_catalog(tmp_path)
+    catalog = PlayCatalog(repo_root=tmp_path)
+
+    with pytest.raises(CatalogUnavailable, match="requires control-catalog authority"):
+        catalog.runs(
+            environment_id="Mario",
+            goal_id="Level1-1",
+        )
+
+
+def test_catalog_cursor_is_bound_to_one_ordered_snapshot(tmp_path: Path) -> None:
+    catalog = PlayCatalog(repo_root=tmp_path)
+    items = [{"run_id": f"run-{index:03d}"} for index in range(75)]
+
+    first = catalog._page(
+        items,
+        None,
+        identity={"route": "runs", "query": ""},
+    )
+
+    assert len(first.items) == 50
+    assert first.next_cursor
+    second = catalog._page(
+        items,
+        first.next_cursor,
+        identity={"route": "runs", "query": ""},
+    )
+    assert [item["run_id"] for item in second.items] == [
+        f"run-{index:03d}" for index in range(50, 75)
+    ]
+    with pytest.raises(CatalogSnapshotChanged):
+        catalog._page(
+            [*items, {"run_id": "run-new"}],
+            first.next_cursor,
+            identity={"route": "runs", "query": ""},
+        )
 
 
 def test_repository_catalog_requires_explicit_namespace_index(tmp_path: Path) -> None:
@@ -572,8 +661,18 @@ def test_run_and_goal_variant_inspection_use_the_verified_v2_control_recipe(
         liveness=default_liveness_policy(),
     )
     authority.create_manifest(manifest)
+    for key in tuple(authority.control.iter_keys("goal-variants/v2/")):
+        authority.control.delete(
+            key,
+            if_match=str(authority.control.head(key)["etag"]),
+        )
     catalog = PlayCatalog(repo_root=repo_root, control_bucket=authority.control)
 
+    run_page = catalog.runs(
+        environment_id="Bandit-v0",
+        goal_id="gradlab__bandit",
+        goal_variant_id=str(resolved.effective["goal_variant"]["variant_id"]),
+    )
     run = catalog.inspect_run(run_id=run_id)
     variant = catalog.inspect_goal_variant(
         environment_id="Bandit-v0",
@@ -581,6 +680,7 @@ def test_run_and_goal_variant_inspection_use_the_verified_v2_control_recipe(
         variant_id=resolved.effective["goal_variant"]["variant_id"],
     )
 
+    assert [item["run_id"] for item in run_page.items] == [run_id]
     assert run["documents"]["goal"]["availability"] == "exact"
     assert run["documents"]["recipe"]["is_variant"] is True
     assert "/train_config/training_backend/config/gamma" in {

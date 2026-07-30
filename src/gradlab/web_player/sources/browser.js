@@ -769,6 +769,11 @@ export class SourceBrowser {
     this.fallbackMetricColumns = [];
     this.sort = { metric: "", direction: "" };
     this.nextCursor = null;
+    this.freshness = "fresh";
+    this.catalogWarnings = [];
+    this.catalogSource = null;
+    this.generatedAt = null;
+    this.selectionFence = "";
     this.loading = false;
     this.error = "";
     this.app = { phase: "selecting" };
@@ -837,6 +842,11 @@ export class SourceBrowser {
       this.fallbackMetricColumns = [];
       this.sort = { metric: "", direction: "" };
       this.nextCursor = null;
+      this.freshness = "fresh";
+      this.catalogWarnings = [];
+      this.catalogSource = null;
+      this.generatedAt = null;
+      this.selectionFence = "";
       this.loadedKey = "";
       this.error = "";
       this.selectedCheckpoints.clear();
@@ -959,10 +969,11 @@ export class SourceBrowser {
     return true;
   }
 
-  endpoint(cursor = null) {
+  endpoint(cursor = null, { force = false } = {}) {
     const query = new URLSearchParams();
     if (this.query.trim()) query.set("q", this.query.trim());
     if (cursor) query.set("cursor", cursor);
+    if (force) query.set("refresh", "1");
     if (this.route.level === "goals") {
       return `/api/catalog/environments/${encodeURIComponent(this.route.environment_id)}/goals?${query}`;
     }
@@ -987,7 +998,7 @@ export class SourceBrowser {
     await this.load();
   }
 
-  async load({ append = false, quiet = false } = {}) {
+  async load({ append = false, quiet = false, force = false } = {}) {
     const key = this.routeKey();
     if (this.loading && this.loadingKey === key) return;
     this.requestController?.abort();
@@ -1005,12 +1016,20 @@ export class SourceBrowser {
     if (!quiet) this.error = "";
     this.renderView();
     try {
-      const response = await fetch(this.endpoint(cursor), {
+      const response = await fetch(this.endpoint(cursor, { force }), {
         headers: { Authorization: `Bearer ${this.token}` },
         cache: "no-store",
         signal: controller.signal,
       });
       const payload = await response.json().catch(() => ({}));
+      if (response.status === 409 && append) {
+        this.items = [];
+        this.nextCursor = null;
+        this.loadedKey = "";
+        this.showToast("Catalog changed; reloading the first page.", false);
+        queueMicrotask(() => this.load({ force: true }));
+        return;
+      }
       if (!response.ok) throw new Error(payload.error || `Catalog request failed (${response.status})`);
       if (serial !== this.requestSerial || key !== this.routeKey()) return;
       const received = Array.isArray(payload.items) ? payload.items : [];
@@ -1026,6 +1045,21 @@ export class SourceBrowser {
         )),
       );
       if (!append) {
+        this.freshness = ["fresh", "stale", "partial"].includes(payload.freshness)
+          ? payload.freshness
+          : "fresh";
+        this.catalogWarnings = Array.isArray(payload.warnings)
+          ? payload.warnings
+          : [];
+        this.catalogSource = payload.source && typeof payload.source === "object"
+          ? payload.source
+          : null;
+        this.generatedAt = Number.isFinite(Number(payload.generated_at))
+          ? Number(payload.generated_at)
+          : null;
+        this.selectionFence = typeof payload.selection_fence === "string"
+          ? payload.selection_fence
+          : "";
         this.metricColumns = Array.isArray(payload.metric_columns)
           ? payload.metric_columns
           : [];
@@ -1250,11 +1284,26 @@ export class SourceBrowser {
       refresh.disabled = this.loading;
       refresh.addEventListener("click", () => {
         this.loadedKey = "";
-        this.load();
+        this.load({ force: true });
       });
       head.append(refresh);
     }
     shell.append(head);
+
+    if (this.freshness !== "fresh" || this.catalogWarnings.length) {
+      const notice = document.createElement("div");
+      notice.className = `source-notice catalog-${this.freshness}`;
+      const label = this.freshness === "stale"
+        ? "Showing stale catalog data."
+        : this.freshness === "partial"
+          ? "Some catalog evidence is unavailable."
+          : "Catalog warning.";
+      const messages = this.catalogWarnings
+        .map((warning) => String(warning?.message || "").trim())
+        .filter(Boolean);
+      notice.textContent = [label, ...messages].join(" ");
+      shell.append(notice);
+    }
 
     if (!this.hasControl()) {
       const observer = document.createElement("p");
@@ -1389,10 +1438,18 @@ export class SourceBrowser {
             "Content-Type": "application/json",
           },
           cache: "no-store",
-          body: JSON.stringify({ checkpoint_ids: checkpointIds }),
+          body: JSON.stringify({
+            checkpoint_ids: checkpointIds,
+            selection_fence: this.selectionFence,
+          }),
         },
       );
       const payload = await response.json().catch(() => ({}));
+      if (response.status === 409 && payload.code === "checkpoint_catalog_changed") {
+        this.selectedCheckpoints.clear();
+        this.loadedKey = "";
+        await this.load({ force: true });
+      }
       if (!response.ok) {
         throw new Error(payload.error || `Evaluation request failed (${response.status})`);
       }

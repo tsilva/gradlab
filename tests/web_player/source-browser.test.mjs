@@ -649,6 +649,7 @@ test("selected checkpoints are admitted together through the evaluation API", as
     { checkpoint_id: "checkpoint-a", evaluation: null },
     { checkpoint_id: "checkpoint-b", evaluation: null },
   ];
+  browser.selectionFence = "f".repeat(64);
   browser.selectedCheckpoints = new Set(["checkpoint-a", "checkpoint-b"]);
 
   await browser.evaluateSelected();
@@ -657,6 +658,7 @@ test("selected checkpoints are admitted together through the evaluation API", as
   assert.equal(requests[0].options.method, "POST");
   assert.deepEqual(JSON.parse(requests[0].options.body), {
     checkpoint_ids: ["checkpoint-a", "checkpoint-b"],
+    selection_fence: "f".repeat(64),
   });
   assert.equal(browser.items[0].evaluation_queue.state, "submitted");
   assert.equal(browser.selectedCheckpoints.size, 0);

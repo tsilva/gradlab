@@ -26,6 +26,7 @@ from gradlab.action_contract import action_contract_payload
 from gradlab.play_session import _PlaybackSession, _PlaybackTransition, render_obs_stack
 from gradlab.play_debug import ANSI_PATTERN, PolicyDecision, model_input_lines
 from gradlab.seeds import validate_playback_seed
+from gradlab.evaluation_fence import evaluation_selection_fence
 
 
 PROTOCOL_VERSION = 4
@@ -1772,6 +1773,20 @@ class PlaybackWebServer:
         ):
             raise web.HTTPUnauthorized(text="catalog token required")
 
+    @staticmethod
+    def _catalog_error_response(exc: Exception) -> web.Response | None:
+        from gradlab.catalog_errors import CatalogError
+
+        if not isinstance(exc, CatalogError):
+            return None
+        return web.json_response(
+            {
+                "error": str(exc),
+                "problem": exc.problem.to_dict(),
+            },
+            status=exc.problem.status,
+        )
+
     async def catalog_environments(self, request: web.Request) -> web.Response:
         self._authorize_api(request)
         if self.catalog is None:
@@ -1785,6 +1800,9 @@ class PlaybackWebServer:
                 cursor=request.query.get("cursor"),
             )
         except Exception as exc:
+            problem = self._catalog_error_response(exc)
+            if problem is not None:
+                return problem
             return web.json_response({"error": str(exc)}, status=502)
         return web.json_response(page.to_dict())
 
@@ -1806,15 +1824,20 @@ class PlaybackWebServer:
         from gradlab.play_catalog import normalize_search_query
 
         try:
-            page = await asyncio.to_thread(
-                self.catalog.runs,
-                environment_id=request.match_info["environment_id"],
-                goal_id=request.match_info.get("goal_id", ""),
-                goal_variant_id=request.match_info.get("goal_variant_id", ""),
-                query=normalize_search_query(request.query.get("q")),
-                cursor=request.query.get("cursor"),
-            )
+            kwargs = {
+                "environment_id": request.match_info["environment_id"],
+                "goal_id": request.match_info.get("goal_id", ""),
+                "goal_variant_id": request.match_info.get("goal_variant_id", ""),
+                "query": normalize_search_query(request.query.get("q")),
+                "cursor": request.query.get("cursor"),
+            }
+            if request.query.get("refresh") == "1":
+                kwargs["refresh"] = True
+            page = await asyncio.to_thread(self.catalog.runs, **kwargs)
         except Exception as exc:
+            problem = self._catalog_error_response(exc)
+            if problem is not None:
+                return problem
             return web.json_response({"error": str(exc)}, status=502)
         return web.json_response(page.to_dict())
 
@@ -1825,14 +1848,19 @@ class PlaybackWebServer:
         from gradlab.play_catalog import normalize_search_query
 
         try:
-            page = await asyncio.to_thread(
-                self.catalog.goal_variants,
-                environment_id=request.match_info["environment_id"],
-                goal_id=request.match_info["goal_id"],
-                query=normalize_search_query(request.query.get("q")),
-                cursor=request.query.get("cursor"),
-            )
+            kwargs = {
+                "environment_id": request.match_info["environment_id"],
+                "goal_id": request.match_info["goal_id"],
+                "query": normalize_search_query(request.query.get("q")),
+                "cursor": request.query.get("cursor"),
+            }
+            if request.query.get("refresh") == "1":
+                kwargs["refresh"] = True
+            page = await asyncio.to_thread(self.catalog.goal_variants, **kwargs)
         except Exception as exc:
+            problem = self._catalog_error_response(exc)
+            if problem is not None:
+                return problem
             return web.json_response({"error": str(exc)}, status=502)
         return web.json_response(page.to_dict())
 
@@ -1850,6 +1878,9 @@ class PlaybackWebServer:
                 cursor=request.query.get("cursor"),
             )
         except Exception as exc:
+            problem = self._catalog_error_response(exc)
+            if problem is not None:
+                return problem
             return web.json_response({"error": str(exc)}, status=502)
         return web.json_response(page.to_dict())
 
@@ -1999,6 +2030,23 @@ class PlaybackWebServer:
                     goal_variant_id=request.query.get("goal_variant_id", ""),
                 )
             )
+            warning_reader = getattr(self.catalog, "checkpoint_warnings", None)
+            warnings = (
+                list(
+                    await asyncio.to_thread(
+                        warning_reader,
+                        run_id=request.match_info["run_id"],
+                    )
+                )
+                if callable(warning_reader)
+                else []
+            )
+        except Exception as exc:
+            problem = self._catalog_error_response(exc)
+            if problem is not None:
+                return problem
+            return web.json_response({"error": str(exc)}, status=502)
+        try:
             queue_service = await asyncio.to_thread(self._manual_evaluations)
             if queue_service is not None:
                 statuses = await asyncio.to_thread(
@@ -2024,12 +2072,47 @@ class PlaybackWebServer:
                     for item in items
                 ]
         except Exception as exc:
-            return web.json_response({"error": str(exc)}, status=502)
+            warnings.append(
+                {
+                    "code": "manual_evaluation_status_unavailable",
+                    "message": f"Manual evaluation status is unavailable: {exc}",
+                    "retryable": True,
+                    "source": "manual-evaluation",
+                }
+            )
+            items = [
+                {
+                    **dict(item),
+                    "evaluation_queue": {
+                        "state": "unavailable",
+                        "message": str(exc),
+                    },
+                }
+                for item in items
+            ]
         return web.json_response(
             {
                 "items": items,
                 "next_cursor": None,
                 "metric_columns": list(checkpoint_training_metric_columns()),
+                "selection_fence": (
+                    self.catalog.checkpoint_selection_fence(
+                        run_id=request.match_info["run_id"]
+                    )
+                    if callable(
+                        getattr(self.catalog, "checkpoint_selection_fence", None)
+                    )
+                    else evaluation_selection_fence(
+                        run_id=request.match_info["run_id"],
+                        checkpoints=[
+                            item
+                            for item in items
+                            if isinstance(item, Mapping)
+                        ],
+                    )
+                ),
+                "freshness": "partial" if warnings else "fresh",
+                "warnings": warnings,
             }
         )
 
@@ -2061,9 +2144,17 @@ class PlaybackWebServer:
         except json.JSONDecodeError, TypeError:
             return web.json_response({"error": "request body must be JSON"}, status=400)
         checkpoint_ids = payload.get("checkpoint_ids") if isinstance(payload, Mapping) else None
+        selection_fence = (
+            payload.get("selection_fence") if isinstance(payload, Mapping) else None
+        )
         if isinstance(checkpoint_ids, str | bytes) or not isinstance(checkpoint_ids, Sequence):
             return web.json_response(
                 {"error": "checkpoint_ids must be a JSON array"},
+                status=400,
+            )
+        if not isinstance(selection_fence, str) or not selection_fence.strip():
+            return web.json_response(
+                {"error": "selection_fence must be a non-empty string"},
                 status=400,
             )
         try:
@@ -2078,10 +2169,21 @@ class PlaybackWebServer:
                 queue_service.enqueue,
                 run_id=request.match_info["run_id"],
                 checkpoint_ids=[str(value) for value in checkpoint_ids],
+                selection_fence=selection_fence,
             )
-        except ValueError as exc:
-            return web.json_response({"error": str(exc)}, status=400)
         except Exception as exc:
+            from gradlab.manual_evaluation import EvaluationSelectionChanged
+
+            if isinstance(exc, EvaluationSelectionChanged):
+                return web.json_response(
+                    {
+                        "error": str(exc),
+                        "code": "checkpoint_catalog_changed",
+                    },
+                    status=409,
+                )
+            if isinstance(exc, ValueError):
+                return web.json_response({"error": str(exc)}, status=400)
             return web.json_response({"error": str(exc)}, status=502)
         if isinstance(result, Mapping):
             response = dict(result)

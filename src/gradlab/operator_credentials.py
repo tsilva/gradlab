@@ -132,12 +132,19 @@ def _keychain_lookup(reference: KeychainReference) -> str | None:
     return value or None
 
 
-def _keychain_references(document: Mapping[str, Any]) -> dict[str, KeychainReference]:
+def _keychain_references(
+    document: Mapping[str, Any],
+    *,
+    selected_names: Collection[str] | None = None,
+) -> dict[str, KeychainReference]:
     raw = document.get("keychain") or {}
     if not isinstance(raw, Mapping):
         raise OperatorConfigurationError("operator config [keychain] must be a mapping")
     references: dict[str, KeychainReference] = {}
     for raw_name, raw_reference in raw.items():
+        candidate_name = str(raw_name or "").strip()
+        if selected_names is not None and candidate_name not in selected_names:
+            continue
         name = _validate_environment_name(
             raw_name,
             label="operator config keychain entry",
@@ -166,12 +173,19 @@ def _keychain_references(document: Mapping[str, Any]) -> dict[str, KeychainRefer
     return references
 
 
-def _plain_environment(document: Mapping[str, Any]) -> dict[str, str]:
+def _plain_environment(
+    document: Mapping[str, Any],
+    *,
+    selected_names: Collection[str] | None = None,
+) -> dict[str, str]:
     raw = document.get("environment") or {}
     if not isinstance(raw, Mapping):
         raise OperatorConfigurationError("operator config [environment] must be a mapping")
     result: dict[str, str] = {}
     for raw_name, raw_value in raw.items():
+        candidate_name = str(raw_name or "").strip()
+        if selected_names is not None and candidate_name not in selected_names:
+            continue
         name = _validate_environment_name(
             raw_name,
             label="operator config environment entry",
@@ -306,17 +320,19 @@ def load_operator_environment(
     )
     loaded_sources: dict[str, str] = {}
     unavailable_sources: dict[str, str] = {}
-    for name, value in _plain_environment(document).items():
-        if selected_names is not None and name not in selected_names:
-            continue
+    for name, value in _plain_environment(
+        document,
+        selected_names=selected_names,
+    ).items():
         if str(values.get(name) or "").strip():
             continue
         values[name] = value
         loaded_sources[name] = "operator-config"
     lookup = _keychain_lookup if keychain_lookup is None else keychain_lookup
-    for name, reference in _keychain_references(document).items():
-        if selected_names is not None and name not in selected_names:
-            continue
+    for name, reference in _keychain_references(
+        document,
+        selected_names=selected_names,
+    ).items():
         if str(values.get(name) or "").strip():
             continue
         value = lookup(reference)

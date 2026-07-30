@@ -19,6 +19,10 @@ from gradlab.evaluation_projection import (
     evaluation_wandb_projection,
     metrics_schema_version_from_recipe_document,
 )
+from gradlab.evaluation_fence import (
+    EVALUATION_SELECTION_FENCE_PATTERN,
+    evaluation_selection_fence,
+)
 from gradlab.job_queue import (
     HandlerResult,
     JobStore,
@@ -82,6 +86,10 @@ class EvaluationContractIneligible(ValueError):
 
 
 class EvaluationProjectionPending(RuntimeError):
+    pass
+
+
+class EvaluationSelectionChanged(ValueError):
     pass
 
 
@@ -1344,8 +1352,24 @@ class ManualEvaluationQueue:
         *,
         run_id: str,
         checkpoint_ids: Sequence[str],
+        selection_fence: str,
     ) -> dict[str, Any]:
         planner = self._planner()
+        normalized_fence = str(selection_fence or "").strip().lower()
+        if EVALUATION_SELECTION_FENCE_PATTERN.fullmatch(normalized_fence) is None:
+            raise ValueError("checkpoint selection fence is required")
+        checkpoint_map = planner._checkpoint_map(run_id)
+        observed_fence = evaluation_selection_fence(
+            run_id=run_id,
+            checkpoints=[
+                checkpoint.to_dict()
+                for checkpoint in checkpoint_map.values()
+            ],
+        )
+        if observed_fence != normalized_fence:
+            raise EvaluationSelectionChanged(
+                "checkpoint catalog changed; refresh before requesting evaluation"
+            )
         contexts = planner._contexts(
             run_id,
             checkpoint_ids,
@@ -1512,6 +1536,7 @@ __all__ = [
     "MAX_MANUAL_EVAL_SELECTION",
     "ManualEvaluationQueue",
     "ManualEvaluationSupervisor",
+    "EvaluationSelectionChanged",
     "build_manual_evaluation_queue",
     "register_job_handler",
 ]
