@@ -210,6 +210,7 @@ def test_vizdoom_goal_has_complete_evaluated_ppo_contract(
     [
         ("VizdoomBasic-v1", 75),
         ("VizdoomBasic-Plus-v1", 75),
+        ("VizdoomDeathmatch-v1", 1050),
         ("VizdoomDefendLine-v1", 512),
         ("VizdoomDefendLine-Plus-v1", 512),
         ("VizdoomDefendCenter-v1", 525),
