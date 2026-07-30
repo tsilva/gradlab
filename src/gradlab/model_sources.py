@@ -20,6 +20,7 @@ from gradlab.policy_bundle import (
     load_policy_bundle,
     load_policy_bundle_from_checkpoint,
 )
+from gradlab.local_paths import default_runs_dir
 from gradlab.r2_store import public_object_request
 from gradlab.run_contracts import CheckpointManifest, RUN_ID_PATTERN
 
@@ -101,8 +102,11 @@ def add_model_source_args(
         model_kwargs["help"] = model_help
     parser.add_argument("--model", **model_kwargs)
     parser.add_argument("--hf-revision", help="Hugging Face revision. Defaults to main.")
-    parser.add_argument("--hf-model-root", default="runs/hf_models")
-    parser.add_argument("--public-model-root", default="runs/public_models")
+    parser.add_argument("--hf-model-root", default=str(default_runs_dir() / "hf_models"))
+    parser.add_argument(
+        "--public-model-root",
+        default=str(default_runs_dir() / "public_models"),
+    )
 
 
 def model_source_ref(args: argparse.Namespace) -> str | None:
@@ -483,14 +487,20 @@ def resolve_single_model_source(
             kind,
             ref,
             public_root=Path(
-                getattr(args, "public_model_root", "runs/public_models")
-            ),
-            hf_root=Path(getattr(args, "hf_model_root", "runs/hf_models")),
+                getattr(args, "public_model_root", default_runs_dir() / "public_models")
+            ).expanduser(),
+            hf_root=Path(
+                getattr(args, "hf_model_root", default_runs_dir() / "hf_models")
+            ).expanduser(),
             revision=getattr(args, "hf_revision", None),
         )
     return resolve_model_source(
         "local",
         str(args.model),
-        public_root=Path(getattr(args, "public_model_root", "runs/public_models")),
-        hf_root=Path(getattr(args, "hf_model_root", "runs/hf_models")),
+        public_root=Path(
+            getattr(args, "public_model_root", default_runs_dir() / "public_models")
+        ).expanduser(),
+        hf_root=Path(
+            getattr(args, "hf_model_root", default_runs_dir() / "hf_models")
+        ).expanduser(),
     )

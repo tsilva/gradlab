@@ -1,12 +1,12 @@
 ---
 name: autoresearch
-description: Tune one checked-in gradlab SB3 PPO or A2C recipe from durable training completion signals without launching checkpoint evaluations. Use when the user points to a recipe and asks to tune, optimize, autoresearch, improve sample efficiency, maximize training return, find the best hyperparameters, or make training behavior stable across seeds. Runs a bounded fixed-rung B3 dstack search, confirms the winner on five untouched training seeds, and patches only the pointed leaf recipe.
+description: Tune one checked-in gradlab SB3 PPO or A2C recipe from durable training completion signals without launching checkpoint evaluations. Use when the user points to a recipe and asks to tune, optimize, autoresearch, improve sample efficiency, maximize training return, find the best hyperparameters, or make training behavior stable across seeds. Runs a bounded fixed-rung local-dstack search, confirms the winner on five untouched training seeds, and patches only the pointed leaf recipe.
 ---
 
 # Autoresearch
 
 Tune the pointed recipe with a training-only fixed-rung study. A direct invocation authorizes at
-most 48 reserved dstack runs on B3; it does not authorize infrastructure repair, capacity
+most 48 reserved dstack runs on the operator-configured local fleet; it does not authorize infrastructure repair, capacity
 changes, runtime builds or deployments, cancellation, commits, pushes, checkpoint promotion, or
 goal-acceptance claims.
 
@@ -15,8 +15,8 @@ goal-acceptance claims.
 Before acting:
 
 1. Read `SPECS.md` with `$specs-author`; do not edit it unless separately authorized.
-2. Read `INSTANCES.md`, the selected goal, the selected leaf recipe, and every composed source in
-   `_composition.source_files`.
+2. Read `COMPUTE.md`, `~/.config/gradlab/instances.md`, the selected goal, the
+   selected leaf recipe, and every composed source in `_composition.source_files`.
 3. Read [search-policy.md](references/search-policy.md) completely.
 4. Use `$launch-experiment` in observe mode for every launch and monitor.
 
@@ -33,12 +33,15 @@ Only current schema-v4 studies can be resumed.
 uv run python .codex/skills/autoresearch/scripts/study.py init \
   --goal <goal-file> \
   --recipe <recipe-file> \
+  [--target <local-fleet>] \
   [--strong-threshold 0.90]
 ```
 
-The helper resumes the sole matching current study, pins committed `HEAD`, all composed source
-hashes, the runtime triplet, rung caps, seeds, and threshold, and stores authoritative state in
-`runs/autoresearch/<study>/study.json`. Never hand-edit it.
+The helper resumes the sole matching current study. A new study resolves
+`GRADLAB_LOCAL_FLEET` (or the explicit `--target` override) once, then pins that
+fleet, committed `HEAD`, all composed source hashes, the runtime triplet, rung
+caps, seeds, and threshold in `~/.config/gradlab/runs/autoresearch/<study>/study.json`. Existing
+studies retain their recorded fleet. Never hand-edit the state.
 
 Ask for exactly one deterministic action at a time:
 
@@ -56,8 +59,9 @@ Before every reservation, read dstack without mutating capacity:
 dstack ps --json
 ```
 
-B3 has one training slot. Pass `1` as `effective_capacity` and the count of active B3 training
-tasks (zero or one) as `active_reservations`. Wait when the slot is occupied.
+Read the pinned fleet's effective capacity from the private inventory. Pass it
+as `effective_capacity` and count active training tasks targeting that same
+fleet as `active_reservations`. Wait when no slot is available.
 
 Baseline screen and pair:
 
@@ -127,8 +131,9 @@ publication, and runtime reconciliation. The baseline captures the exact runtime
 image/input/build-source triplet; later waves must match it. No Modal credentials, readiness,
 runtime build, or deployment is allowed.
 
-Because B3 has one slot, launch returned seed commands as capacity becomes available. Start exactly
-one persistent `gradlab experiment follow --run <id>` monitor per run under `$launch-experiment`.
+Launch returned seed commands only as capacity becomes available on the pinned
+fleet. Start exactly one persistent `gradlab experiment follow --run <id>`
+monitor per run under `$launch-experiment`.
 Stay attached through the attempt terminal, dstack release, and investigator result. Report W&B
 URLs immediately.
 

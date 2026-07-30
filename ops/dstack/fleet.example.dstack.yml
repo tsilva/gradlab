@@ -1,0 +1,9 @@
+type: fleet
+name: local-gpu
+placement: any
+blocks: 1
+ssh_config:
+  user: <ssh-user>
+  identity_file: ~/.ssh/id_ed25519
+  hosts:
+    - gpu-host.example

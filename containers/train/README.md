@@ -67,9 +67,9 @@ environment.
 
 ## dstack operation
 
-Checked-in task and fleet templates live under `ops/dstack/`. v1 schedules one
-training task on one single-GPU host; it does not oversubscribe B3 with multiple
-learner containers.
+Portable task and fleet examples live under `ops/dstack/`; concrete fleet
+configuration belongs outside the repository. v1 schedules one training task
+on one single-GPU host.
 
 ```bash
 gradlab experiment launch \
@@ -77,8 +77,7 @@ gradlab experiment launch \
   --recipe ppo.yaml \
   --seed 123 \
   --run-description "Mario Level1-1 dstack run" \
-  --compute local \
-  --target b3
+  --compute local
 
 gradlab experiment status --run <gradlab-run-id> --json
 gradlab experiment follow --run <gradlab-run-id>

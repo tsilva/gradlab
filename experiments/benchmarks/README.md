@@ -32,7 +32,7 @@ generated result and isolated run evidence under `logs/benchmarks/`.
 
 ## Profile Types
 
-- `local_smoke`: dstack local smoke using `b3`, disabled
+- `local_smoke`: dstack smoke using the operator-configured local fleet, disabled
   checkpoint evaluation, and the same one-attempt container/result contract as
   Beast jobs.
 - `env_throughput`: paired native-provider and gradlab runtime throughput benchmark

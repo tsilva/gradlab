@@ -158,7 +158,7 @@ class RunSupervisorTests(unittest.TestCase):
             compute={
                 "request": {
                     "kind": "local",
-                    "target": "b3",
+                    "target": "local-gpu",
                     "max_price": None,
                     "max_cost_usd": None,
                     "allow_on_demand": False,
@@ -166,7 +166,7 @@ class RunSupervisorTests(unittest.TestCase):
                 },
                 "selected": {
                     "kind": "local",
-                    "target": "b3",
+                    "target": "local-gpu",
                     "max_price": None,
                     "max_cost_usd": None,
                     "allow_on_demand": False,
@@ -282,9 +282,7 @@ class RunSupervisorTests(unittest.TestCase):
             **dict(self.manifest.liveness),
             "startup_timeout_seconds": 3600.0,
         }
-        invalid = RunManifest(
-            **{**self.manifest.to_dict(), "liveness": invalid_policy}
-        )
+        invalid = RunManifest(**{**self.manifest.to_dict(), "liveness": invalid_policy})
         with self.assertRaisesRegex(ValueError, "below the selected max duration"):
             invalid.validate()
 
@@ -348,9 +346,7 @@ class RunSupervisorTests(unittest.TestCase):
         self.assertFalse(
             any(
                 key.endswith("/intent.json")
-                for key in self.authority.evaluation.iter_keys(
-                    f"runs/{self.run_id}/evals"
-                )
+                for key in self.authority.evaluation.iter_keys(f"runs/{self.run_id}/evals")
             )
         )
 
@@ -438,9 +434,7 @@ class RunSupervisorTests(unittest.TestCase):
             }
         )
         self.assertEqual(upgraded["evidence_policy"]["fail_fast"], "disabled")
-        self.assertFalse(
-            upgraded["evidence_policy"]["partial_rejection_metrics"]
-        )
+        self.assertFalse(upgraded["evidence_policy"]["partial_rejection_metrics"])
         ManualEvaluationSupervisor._validate_current_protocol(upgraded)
 
     def test_manual_vizdoom_basic_evaluation_requires_complete_perfect_success(self) -> None:
@@ -629,11 +623,7 @@ class RunSupervisorTests(unittest.TestCase):
         with (
             patch.dict(
                 "os.environ",
-                {
-                    "GRADLAB_SUPERVISION_FAULT_FIXTURE": (
-                        "failed-result-live-process"
-                    )
-                },
+                {"GRADLAB_SUPERVISION_FAULT_FIXTURE": ("failed-result-live-process")},
             ),
             patch.object(
                 supervisor.runtime,

@@ -74,7 +74,7 @@ python3 scripts/upload_youtube_video.py <video.mp4> \
   --tags "reinforcement learning,deep reinforcement learning,AI gameplay,stable-baselines3,Stable Retro,gradlab,PPO,<raw game id>,<Game Display Name>,<raw level/state id>,<Level/State Display Name>" \
   --playlist-title gradlab \
   --privacy-status public \
-  --output runs/<artifact-dir>/youtube_upload_result.json
+  --output ~/.config/gradlab/runs/<artifact-dir>/youtube_upload_result.json
 ```
 
 The script captures and uploads a custom thumbnail from second `10` of the video by default. Override with `--thumbnail-time <seconds>`, provide an explicit `--thumbnail <image.jpg>`, or disable with `--no-thumbnail`.
@@ -99,7 +99,7 @@ python3 scripts/upload_youtube_video.py \
   --model-page $'Model: https://huggingface.co/<owner>/<repo>\ngradlab: https://github.com/tsilva/gradlab' \
   --description "#ReinforcementLearning #PPO #<GameName>" \
   --privacy-status public \
-  --output runs/<artifact-dir>/youtube_upload_result.json \
+  --output ~/.config/gradlab/runs/<artifact-dir>/youtube_upload_result.json \
   --no-browser
 ```
 

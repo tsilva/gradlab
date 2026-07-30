@@ -14,6 +14,7 @@ from gradlab.local_train import (
     build_parser as build_local_train_parser,
     main,
 )
+from gradlab.local_paths import default_runs_dir
 from gradlab.play import main as play_main
 from gradlab.play_runtime import (
     resolve_playback_rom_binding,
@@ -67,6 +68,7 @@ def _write_training_result(
 def test_local_train_parser_exposes_only_rom_path() -> None:
     parser = build_local_train_parser()
 
+    assert parser.parse_args(["goal/recipe"]).runs_dir == default_runs_dir()
     assert parser.parse_args(["goal/recipe", "--rom-path", "/tmp/game.nes"]).rom_path == Path(
         "/tmp/game.nes"
     )

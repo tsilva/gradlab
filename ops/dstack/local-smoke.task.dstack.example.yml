@@ -1,11 +1,8 @@
 type: task
-name: gradlab-b3-smoke
-image: nvidia/cuda@sha256:cfab6d524036220368d0665013dd79ddc8cd3516298dc12f031de62c8481f87e
+name: gradlab-local-smoke
+image: nvidia/cuda@sha256:<immutable-digest>
 commands:
-  - >-
-    nvidia-smi
-    --query-gpu=name,memory.total
-    --format=csv,noheader
+  - nvidia-smi --query-gpu=name,memory.total --format=csv,noheader
   - test "$DSTACK_GPUS_NUM" = "1"
 resources:
   cpu: 1..
@@ -13,7 +10,7 @@ resources:
   gpu: 1
   disk: 10GB..
 fleets:
-  - b3
+  - <local-fleet>
 creation_policy: reuse
 max_duration: 5m
 stop_duration: 1m
@@ -24,4 +21,4 @@ retry:
   duration: 10m
 tags:
   managed-by: gradlab
-  purpose: b3-smoke
+  purpose: local-smoke

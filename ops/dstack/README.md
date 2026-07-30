@@ -1,109 +1,96 @@
-# gradlab dstack control plane
+# dstack control plane
 
-gradlab pins both the CLI and server to `0.20.28`. The server image is pinned to
-the multi-platform digest
+GradLab pins dstack CLI and server `0.20.28`. The server image is pinned to the
+multi-platform digest
 `sha256:86b820cf5f6e0cfc54dd387527493168a4045b362ca9459265ea9828eef0b4af`.
 
-The B3 deployment stores dstack's internal SQLite database and logs beneath
-`/var/lib/gradlab/dstack`. It binds the API only to B3 loopback. Operators connect
-through an SSH tunnel; the dstack API must not be exposed to the public network.
-The checked-in systemd unit runs the pinned image directly, so the host does not
-need Docker Compose.
+Concrete deployment state, endpoint details, fleet membership, hostnames, SSH
+identities, and capacity belong outside source control. Record them in
+`~/.config/gradlab/instances.md` and keep specialized fleet YAML beneath
+`~/.config/gradlab/dstack/`. The tracked fleet and task files are placeholders
+to copy, not shared infrastructure declarations.
 
-Secrets are host-owned and never checked in:
+The dstack API must remain private. The checked-in systemd unit runs the pinned
+image directly, so a host does not need Docker Compose.
 
-- `/etc/gradlab/dstack/server.env` contains `DSTACK_SERVER_ADMIN_TOKEN`.
-- `/var/lib/gradlab/dstack/config.yml` contains dstack's AES-256-GCM encryption key.
-- the local client receives `DSTACK_TOKEN` from the operator's private environment.
-- `gradlab experiment launch` synchronizes workload credentials into encrypted,
-  project-scoped dstack secrets and submits only `${{ secrets.NAME }}`
-  references. It never embeds credential values in the dstack run
+Host-owned configuration and secrets include:
+
+- `/etc/gradlab/dstack/server.env`, which must provide the server admin token,
+  dstack project, and GradLab image repository;
+- the dstack state directory and AES-256-GCM project encryption key;
+- local `DSTACK_TOKEN` and endpoint metadata from private operator
   configuration.
 
-Do not use raw `dstack ps --json` as an operator-facing status interface.
-Use `gradlab experiment status` or `follow`, which return a deliberately small
-allowlist of dstack fields plus the R2 semantic state.
+`gradlab experiment launch` synchronizes workload credentials into encrypted,
+project-scoped dstack secrets and submits only `${{ secrets.NAME }}`
+references. It never embeds credentials in a task configuration.
 
-The B3 fleet deliberately has one unsplit host (`blocks: 1`). A task therefore
-owns the single GPU rather than recreating the former six-container oversubscription.
-B2 is not enrolled until B3 passes the full acceptance gate.
+Do not use raw `dstack ps --json` as the operator-facing status interface. Use
+`gradlab experiment status` or `follow`, which expose a small allowlist of
+dstack fields plus authoritative R2 semantic state.
 
 ## Read-only local ROM cache
 
-Local ROM bytes live under `/var/lib/gradlab/rom-cache-source`. Install
-`gradlab-rom-cache-mount` and `gradlab-rom-cache-readonly.service` to expose that
-directory at `/var/lib/gradlab/rom-cache` as a kernel-enforced read-only bind
-mount. dstack maps only the read-only mount into the container. The pinned
-runner was verified by attempting a container write and receiving
-`Read-only file system`.
+An enrolled local host may keep source ROM bytes in a host-owned directory.
+Install `gradlab-rom-cache-mount` and
+`gradlab-rom-cache-readonly.service` to expose them through a
+kernel-enforced read-only bind mount. Configure the concrete source and mount
+paths on the host and record them only in the private inventory.
 
-## B3 NVIDIA detection
+## NVIDIA detection workaround
 
-dstack 0.20.28 checks `/dev/kfd` before `/dev/nvidiactl`. B3's Ryzen integrated
-GPU exposes `/dev/kfd`, which makes the pinned shim report the iGPU instead of
-the RTX 4090. Install `dstack-shim-override.conf` as
-`/etc/systemd/system/dstack-shim.service.d/gradlab-nvidia-only.conf` before
-enrolling B3. The drop-in removes only the unused AMD compute device node and
-regenerates dstack's host inventory on every shim start; it does not remove
-`/dev/dri` or affect B3's display device.
-
-Use an SSH tunnel such as `ssh -N -L 3000:127.0.0.1:3000 tsilva@beast-3`, then
-point the client at `http://127.0.0.1:3000`.
+dstack 0.20.28 checks `/dev/kfd` before `/dev/nvidiactl`. On a host where an
+unused AMD integrated GPU masks the NVIDIA training GPU, install
+`dstack-shim-override.conf` as a dstack shim drop-in. It removes only the
+unused AMD compute node and regenerates host inventory on shim start; it does
+not remove `/dev/dri`. Do not install it on hosts that schedule AMD compute.
 
 ## Container DNS
 
-B3's Docker daemon uses Cloudflare's `1.1.1.1` and `1.0.0.1` resolvers so
-long-lived containers and newly scheduled training tasks do not retain a stale
-router DNS address after the host changes subnets. The dstack server unit also
-declares those resolvers explicitly. Preserve the host's systemd-resolved and
-Tailscale split-DNS configuration; this setting applies only to Docker
-containers.
+If a host's Docker containers would otherwise retain stale router DNS, configure
+stable resolvers in the Docker daemon and dstack server unit. Preserve the
+host's system resolver and split-DNS configuration; this setting applies only
+to containers.
 
 ## Host image cleanup
 
-The pinned runner removes terminated task containers but does not prune their
-images. Install the isolated Python 3.13 dstack CLI at
-`/opt/gradlab/dstack-cli/bin/dstack`, install `gradlab-dstack-image-cleanup` under
-`/usr/local/libexec`, and enable `gradlab-dstack-image-cleanup.timer`.
+The pinned runner removes terminated task containers but does not prune all
+unused images. Install the isolated pinned dstack CLI at
+`/opt/gradlab/dstack-cli/bin/dstack`, install
+`gradlab-dstack-image-cleanup` under `/usr/local/libexec`, and enable
+`gradlab-dstack-image-cleanup.timer` only after an audit-only run.
 
-The cleanup job fails closed unless it can obtain and validate dstack's current
-run inventory. It preserves images demanded by pending, submitted,
-provisioning, running, or terminating tasks and images used by running
-containers. It considers only immutable images in
-`ghcr.io/tsilva/gradlab/gradlab-train`; it does not prune other images, containers,
-volumes, or build cache. Set `GRADLAB_IMAGE_CLEANUP_DRY_RUN=1` for an audit-only
-invocation.
+The host-owned `/etc/gradlab/dstack/server.env` must explicitly set
+`DSTACK_SERVER_ADMIN_TOKEN`, `DSTACK_PROJECT`, and
+`GRADLAB_IMAGE_REPOSITORY`; the script has no project or repository fallback.
+It fails closed unless it obtains valid run inventory, preserves images demanded
+by pending or active tasks and images used by running containers, and considers
+only immutable images in the configured repository. It does not prune other
+images, containers, volumes, or build cache. Set
+`GRADLAB_IMAGE_CLEANUP_DRY_RUN=1` for an audit-only invocation.
 
 ## R2 metric-journal expiry
 
-The `control-private` bucket must have an object lifecycle rule named
+The control-private bucket must have an object lifecycle rule named
 `expire-delivered-metric-journals` for prefix
-`expiring-metric-journals/`, expiring objects after seven days. Active
-journals stay beneath the run attempt until W&B remote visibility and all
-terminal drain gates pass; only then does the supervisor atomically relocate
-them beneath the expiring prefix. Cloudflare requires a token with Workers R2
-Storage Write permission to install this bucket-level rule.
+`expiring-metric-journals/`, expiring objects after seven days. Active journals
+remain beneath the attempt until W&B remote visibility and terminal drain gates
+pass; only then does the supervisor atomically relocate them.
 
 ## Learner-supervision fault fixture
 
-`gradlab experiment fault-test --mode failed-result-live-process --json` is the
-only supported entry point for the paid B3 fault fixture. It creates a fresh
-training-only logical run with an exact-source schema-7 runtime image, a
-two-minute task cap, and short manifest-bound teardown deadlines. The task sets
-`GRADLAB_SUPERVISION_FAULT_FIXTURE` in dstack's generated plain environment;
-normal recipe fields and launch overrides cannot set this switch.
+`gradlab experiment fault-test --mode failed-result-live-process --json` creates
+a fresh training-only logical run on the configured local fleet with an
+exact-source runtime image, a short task cap, and manifest-bound teardown
+deadlines. An explicit `--target` overrides the private fleet setting.
 
-The fixture learner writes an identity-bound failed result at step zero, leaves
-a child process alive, and waits. The real run supervisor must detect the
-result within one 250 ms poll, close evaluation admission, reap the full process
-group, write an R2 `resumable_failure` receipt with stop reason
-`learner_failure`, project that receipt to W&B, and exit nonzero. dstack must
-terminalize the task without retry because GradLab retries only
-`no-capacity` and `interruption`. Before declaring the fixture passed, verify
-the R2 receipt exists, the W&B run is terminal `failed`, the dstack task is
-terminal, and B3 is idle again.
+The learner writes an identity-bound failed result, leaves a child process
+alive, and waits. The real supervisor must detect it, close evaluation
+admission, reap the process group, write an R2 resumable-failure receipt,
+project it to W&B, and exit nonzero. dstack must terminalize without retry
+unless the failure is `no-capacity` or `interruption`.
 
-The alternate `completed-result-hung-process` mode ignores both graceful stop
-and SIGTERM so the same path must reach SIGKILL and terminalize with
-`teardown_timeout`. Neither fixture mode constructs an environment or performs
-training; the exact-image ViZDoom smoke receipt is the separate provider gate.
+The alternate `completed-result-hung-process` mode ignores graceful stop and
+SIGTERM so teardown must reach SIGKILL and terminalize with
+`teardown_timeout`. Neither fixture constructs an environment or trains a
+policy.

@@ -1256,6 +1256,70 @@ class VizdoomTurboProviderTests(unittest.TestCase):
         self.assertTrue(descriptor.live_snapshots_deterministic)
         self.assertIn("health", descriptor.signal_schema)
 
+    def test_descriptor_accepts_runtime_boundary_but_rejects_missing_provider_signal(
+        self,
+    ) -> None:
+        config = EnvConfig(
+            env_provider="vizdoom-turbo",
+            game="VizdoomHealthGathering-v1",
+            state="",
+            task={
+                "id": "identity",
+                "action": {"set": "native"},
+                "signals": {"native_timeout": "provider_truncated"},
+                "events": {},
+                "termination": {},
+                "reward": {"reward_mode": "native"},
+            },
+        )
+        env = self.FakeVizdoomEnv(
+            "VizdoomHealthGathering-v1",
+            num_envs=2,
+            obs_copy="safe_view",
+        )
+        env.metadata = {**env.metadata, "turbo_api_version": 1}
+        turbo_contract = mock.Mock(
+            observation_ownership="safe_view",
+            observation_buffer_depth=2,
+        )
+
+        with mock.patch(
+            "gradlab.env_providers.validate_turbo_vector_env",
+            return_value=turbo_contract,
+        ):
+            descriptor = provider_descriptor(
+                config,
+                env,
+                state_weight_mapping=lambda _config: {},
+            )
+
+        self.assertNotIn("provider_truncated", descriptor.signal_schema)
+
+        invalid_config = EnvConfig(
+            **{
+                **config.__dict__,
+                "task": {
+                    **config.task,
+                    "signals": {"missing": "missing_provider_signal"},
+                },
+            }
+        )
+        with (
+            mock.patch(
+                "gradlab.env_providers.validate_turbo_vector_env",
+                return_value=turbo_contract,
+            ),
+            self.assertRaisesRegex(
+                ValueError,
+                r"does not declare task signal\(s\) \['missing_provider_signal'\]",
+            ),
+        ):
+            provider_descriptor(
+                invalid_config,
+                env,
+                state_weight_mapping=lambda _config: {},
+            )
+
     def test_closes_native_environment_when_strict_validation_fails(self) -> None:
         constructed = []
 

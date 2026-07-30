@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from gradlab.env import EnvConfig
+from gradlab.local_paths import PORTABLE_DEFAULT_RUNS_DIR
 from gradlab.metric_names import METRICS_SCHEMA_VERSION
 from gradlab.modal_eval_protocol import SEED_PROTOCOL
 from gradlab.seeds import DEFAULT_TRAIN_SEED, EVAL_SEED_START
@@ -459,7 +460,7 @@ TRAIN_CONFIG_FIELDS: tuple[TrainConfigField, ...] = (
     ),
     _field("run_name", default="ppo_retro"),
     _field("run_description", default=""),
-    _field("runs_dir", default="runs"),
+    _field("runs_dir", default=PORTABLE_DEFAULT_RUNS_DIR),
     _field(
         "env_provider",
         env_default="env_provider",

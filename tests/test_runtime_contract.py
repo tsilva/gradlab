@@ -105,7 +105,7 @@ class RuntimeContractTests(unittest.TestCase):
         receipt = validate_config_payload(
             {
                 "attempt_id": "attempt-0123456789abcdef",
-                "compute_target": "b3",
+                "compute_target": "local-gpu",
                 "dstack_task": "gradlab-0123456789abcdef0123456789abcdef",
                 "run_name": "gradlab-0123456789abcdef0123456789abcdef",
                 "runtime_image_ref": RUNTIME_IMAGE_REF,

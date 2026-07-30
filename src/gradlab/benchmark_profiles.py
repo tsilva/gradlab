@@ -65,7 +65,7 @@ class _LocalSmokeProfile(_Profile):
     kind: Literal["local_smoke"]
     goal_file: NonEmptyText
     recipe_file: NonEmptyText
-    target: NonEmptyText
+    target: NonEmptyText | None = None
     seed: NonNegativeInt
     max_duration: NonEmptyText | None = None
     runtime_image_ref_file: NonEmptyText | None = None
@@ -256,7 +256,6 @@ def _command(
 def _local_smoke_commands(profile: Mapping[str, Any]) -> list[BenchmarkCommand]:
     goal_file = str(profile["goal_file"])
     recipe_file = str(profile["recipe_file"])
-    target = str(profile.get("target") or "b3")
     enqueue = [
         "gradlab",
         "experiment",
@@ -271,12 +270,12 @@ def _local_smoke_commands(profile: Mapping[str, Any]) -> list[BenchmarkCommand]:
         str(profile.get("description") or "dstack local integration smoke"),
         "--compute",
         "local",
-        "--target",
-        target,
         "--max-duration",
         str(profile.get("max_duration") or "30m"),
         "--json",
     ]
+    if profile.get("target"):
+        enqueue.extend(["--target", str(profile["target"])])
     if profile.get("runtime_image_ref_file"):
         enqueue.extend(["--runtime-image-ref-file", str(profile["runtime_image_ref_file"])])
     return [_command("train-local-smoke", enqueue)]

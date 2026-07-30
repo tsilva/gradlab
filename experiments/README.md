@@ -5,13 +5,15 @@ profiles, report declarations, and experiment utilities.
 Keep broad repo rules in the top-level runbooks:
 
 - `../AGENTS.md` for repo rules and stable-retro runtime cautions.
-- `../INSTANCES.md` for the human-facing hardware runbook.
+- `../COMPUTE.md` for portable compute policy.
+- `~/.config/gradlab/instances.md` for operator-local hardware inventory.
 
 Use `goals/<env-id>/` for durable goal-family contracts and optional provider-specific
 environment fragments named `_env-<provider>.yaml`. Goal-family report declarations
 live beside those contracts as `_reports.yaml`. Active training recipes live under
 `recipes/`, while benchmark profiles live under `benchmarks/`. Generated local run
-logs and outputs belong under ignored paths such as `runs/`, `logs/`, and `models/`.
+outputs belong under `~/.config/gradlab/runs/`; other generated logs and models
+belong under ignored `logs/` and `models/` paths.
 
 Current research state:
 

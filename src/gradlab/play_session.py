@@ -43,6 +43,7 @@ from gradlab.model_sources import (
     DEFAULT_PUBLIC_MODELS_BASE_URL,
     positional_model_source_arg,
 )
+from gradlab.local_paths import default_runs_dir
 from gradlab.play_attribution import PolicyActionAttributor
 from gradlab.play_debug import PolicyDecision
 from gradlab.policy_observation import (
@@ -238,8 +239,8 @@ def add_play_source_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--runs-dir",
         type=Path,
-        default=Path("runs"),
-        help="Local run root searched by --recipe; defaults to ./runs.",
+        default=default_runs_dir(),
+        help="Local run root searched by --recipe; defaults to ~/.config/gradlab/runs.",
     )
     parser.add_argument(
         "--rom-path",
@@ -264,12 +265,12 @@ def add_play_source_args(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument(
         "--public-model-root",
-        default="runs/public_models",
+        default=str(default_runs_dir() / "public_models"),
         help="Local cache for public run checkpoints.",
     )
     parser.set_defaults(
         hf_revision=None,
-        hf_model_root="runs/hf_models",
+        hf_model_root=str(default_runs_dir() / "hf_models"),
     )
 
 

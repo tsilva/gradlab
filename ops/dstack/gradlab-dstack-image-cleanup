@@ -3,10 +3,16 @@ set -eu
 
 DSTACK_BIN="${DSTACK_BIN:-/opt/gradlab/dstack-cli/bin/dstack}"
 DSTACK_SERVER_URL="${DSTACK_SERVER_URL:-http://127.0.0.1:3000}"
-DSTACK_PROJECT="${DSTACK_PROJECT:-main}"
-GRADLAB_IMAGE_REPOSITORY="${GRADLAB_IMAGE_REPOSITORY:-ghcr.io/tsilva/gradlab/gradlab-train}"
 GRADLAB_IMAGE_CLEANUP_DRY_RUN="${GRADLAB_IMAGE_CLEANUP_DRY_RUN:-0}"
 
+if [ -z "${DSTACK_PROJECT:-}" ]; then
+    echo "DSTACK_PROJECT is required; refusing cleanup" >&2
+    exit 1
+fi
+if [ -z "${GRADLAB_IMAGE_REPOSITORY:-}" ]; then
+    echo "GRADLAB_IMAGE_REPOSITORY is required; refusing cleanup" >&2
+    exit 1
+fi
 if [ -z "${DSTACK_SERVER_ADMIN_TOKEN:-}" ]; then
     echo "DSTACK_SERVER_ADMIN_TOKEN is required; refusing cleanup" >&2
     exit 1
@@ -26,14 +32,13 @@ trap 'rm -r -- "$cleanup_dir"' EXIT HUP INT TERM
 runs_json="$cleanup_dir/runs.json"
 demanded_images="$cleanup_dir/demanded-images.txt"
 running_image_ids="$cleanup_dir/running-image-ids.txt"
-HOME="$cleanup_dir/home"
-export HOME
-mkdir -p "$HOME/.cache/.dstack/cli"
+cleanup_home="$cleanup_dir/home"
+mkdir -p "$cleanup_home/.cache/.dstack/cli"
 # dstack 0.20.28 otherwise performs a daily version check and may print a
 # non-JSON update notice before `ps --json`.
-touch "$HOME/.cache/.dstack/cli/last_check"
+touch "$cleanup_home/.cache/.dstack/cli/last_check"
 
-if ! "$DSTACK_BIN" ps --json >"$runs_json"; then
+if ! HOME="$cleanup_home" "$DSTACK_BIN" ps --json >"$runs_json"; then
     echo "dstack run query failed; refusing cleanup" >&2
     exit 1
 fi

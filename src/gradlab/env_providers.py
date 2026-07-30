@@ -31,6 +31,7 @@ from gradlab.env_registry import (
     resolve_env_provider,
 )
 from gradlab.reward_transform import PROVIDER_REWARD_TRANSFORM_KEYS
+from gradlab.task_kernels import RUNTIME_BOUNDARY_SIGNALS
 from gradlab.turbo_api import validate_turbo_vector_env
 
 
@@ -587,7 +588,7 @@ def provider_descriptor(
         if isinstance(configured_signals, Mapping)
         else set()
     )
-    missing_source_names = configured_source_names - set(signal_schema)
+    missing_source_names = configured_source_names - set(signal_schema) - RUNTIME_BOUNDARY_SIGNALS
     if missing_source_names and turbo_contract is not None:
         raise ValueError(
             f"Turbo API v1 provider {provider.provider_id!r} does not declare "

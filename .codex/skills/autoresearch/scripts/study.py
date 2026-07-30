@@ -22,12 +22,15 @@ from statistics import median
 from typing import Any, Iterator, Mapping
 from urllib.parse import urlparse
 
+from gradlab.dstack_backend import resolve_local_fleet
+from gradlab.local_paths import default_runs_dir
 from gradlab.metric_names import (
     TRAIN_EPISODE_RETURN_SHAPED_ACROSS_ORIGINS_ROLLING_UP_TO_100_MEAN,
     TRAIN_GLOBAL_STEP,
     TRAIN_OUTCOME_SUCCESS_ACROSS_STARTS_WINDOW_100_RATE_MIN,
     train_success_count_metric,
 )
+from gradlab.operator_environment import load_repository_operator_environment
 from gradlab.provider_config import provider_num_envs
 from gradlab.recipe_documents import compose_train_document
 from gradlab.run_contracts import RUN_ID_PATTERN
@@ -65,9 +68,7 @@ GROUPS: dict[str, frozenset[str]] = {
     "entropy": frozenset({"ent_coef", "ent_coef_final", "ent_coef_schedule_timesteps"}),
     "discounting": frozenset({"gamma", "gae_lambda"}),
     "value": frozenset({"vf_coef"}),
-    "ppo_update": frozenset(
-        {"batch_size", "n_epochs", "clip_range", "target_kl", "adam_eps"}
-    ),
+    "ppo_update": frozenset({"batch_size", "n_epochs", "clip_range", "target_kl", "adam_eps"}),
     "a2c_optimizer": frozenset(
         {"learning_rate", "learning_rate_final", "max_grad_norm", "rms_prop_eps", "vf_coef"}
     ),
@@ -252,9 +253,7 @@ def update_work(config: Mapping[str, Any], backend: str, n_envs: int) -> float:
     if backend != "sb3.ppo":
         return 1.0
     rollout = int(config["n_steps"]) * int(n_envs)
-    return float(config.get("n_epochs", 1)) * rollout / float(
-        config.get("batch_size", rollout)
-    )
+    return float(config.get("n_epochs", 1)) * rollout / float(config.get("batch_size", rollout))
 
 
 def validate_delta(
@@ -414,9 +413,7 @@ def return_screen_key(evidence: Mapping[str, Any]) -> tuple[float, float, float]
     )
 
 
-def selected_return_screen(
-    state: Mapping[str, Any], round_number: int
-) -> dict[str, Any] | None:
+def selected_return_screen(state: Mapping[str, Any], round_number: int) -> dict[str, Any] | None:
     screens = [
         wave
         for wave in state["waves"]
@@ -434,9 +431,9 @@ def selected_return_screen(
     return sorted(
         eligible,
         key=lambda wave: (
-            tuple(-value for value in return_screen_key(
-                wave["terminal_runs"][0]["training_evidence"]
-            )),
+            tuple(
+                -value for value in return_screen_key(wave["terminal_runs"][0]["training_evidence"])
+            ),
             wave["candidate_id"],
         ),
     )[0]
@@ -514,8 +511,7 @@ def ranked_candidates(state: Mapping[str, Any]) -> list[dict[str, Any]]:
             if not all(return_evidence_valid(run.get("training_evidence") or {}) for run in runs):
                 continue
         elif not all(
-            bool((run.get("training_evidence") or {}).get("all_starts_succeeded"))
-            for run in runs
+            bool((run.get("training_evidence") or {}).get("all_starts_succeeded")) for run in runs
         ):
             continue
         score = candidate_score(state, candidate)
@@ -613,17 +609,16 @@ def next_action(state: Mapping[str, Any]) -> dict[str, Any]:
     ]
     if evidence_mode(state) == EVIDENCE_RETURN:
         selected = selected_return_screen(state, current_round)
-        if selected is not None and candidate_wave(
-            state, selected["candidate_id"], PAIR_PHASES
-        ) is None:
+        if (
+            selected is not None
+            and candidate_wave(state, selected["candidate_id"], PAIR_PHASES) is None
+        ):
             return {"action": "reserve_search_pair", "candidate_id": selected["candidate_id"]}
     else:
         for screen in screens:
             if not wave_evidence_complete(screen):
                 continue
-            passed = bool(
-                screen["terminal_runs"][0]["training_evidence"]["all_starts_succeeded"]
-            )
+            passed = bool(screen["terminal_runs"][0]["training_evidence"]["all_starts_succeeded"])
             if passed and candidate_wave(state, screen["candidate_id"], PAIR_PHASES) is None:
                 return {"action": "reserve_search_pair", "candidate_id": screen["candidate_id"]}
 
@@ -632,8 +627,7 @@ def next_action(state: Mapping[str, Any]) -> dict[str, Any]:
         for wave in open_waves
         if wave["status"] == "launched"
         for run_id in wave["run_ids"]
-        if str(run_id)
-        not in {str(item["run_id"]) for item in wave.get("terminal_runs") or []}
+        if str(run_id) not in {str(item["run_id"]) for item in wave.get("terminal_runs") or []}
     ]
     if awaiting:
         return {"action": "await_runs", "run_ids": sorted(awaiting)}
@@ -690,7 +684,9 @@ def command_init(args: argparse.Namespace) -> None:
             "strong_threshold": threshold,
         }
     )
-    studies_root = root / "runs" / "autoresearch"
+    studies_root = (
+        Path(getattr(args, "runs_dir", default_runs_dir())).expanduser().resolve() / "autoresearch"
+    )
     with lock(studies_root / ".discovery.lock"):
         matches: list[Path] = []
         current_leaf = file_sha256(recipe)
@@ -705,12 +701,15 @@ def command_init(args: argparse.Namespace) -> None:
                 raw.get("recipe_preimage_sha256"),
                 apply.get("postimage_sha256"),
             }
-            if raw.get("input_hash") == input_hash or (
-                raw.get("source_sha") == head
-                and raw.get("goal_path") == goal_path
-                and raw.get("recipe_path") == recipe_path
-                and float((raw.get("policy") or {}).get("strong_threshold", -1)) == threshold
-                and recognized
+            if raw.get("repo_root") == str(root) and (
+                raw.get("input_hash") == input_hash
+                or (
+                    raw.get("source_sha") == head
+                    and raw.get("goal_path") == goal_path
+                    and raw.get("recipe_path") == recipe_path
+                    and float((raw.get("policy") or {}).get("strong_threshold", -1)) == threshold
+                    and recognized
+                )
             ):
                 matches.append(path)
         if len(matches) > 1:
@@ -721,6 +720,21 @@ def command_init(args: argparse.Namespace) -> None:
             emit({"study": str(matches[0]), "resumed": True, "next": next_action(state)})
             return
 
+        load_repository_operator_environment(
+            root,
+            requested_names={"GRADLAB_LOCAL_FLEET"},
+        )
+        compute_target = resolve_local_fleet(getattr(args, "target", None))
+        input_hash = digest(
+            {
+                "schema_version": SCHEMA_VERSION,
+                "goal": goal_path,
+                "recipe": recipe_path,
+                "source_sha": head,
+                "strong_threshold": threshold,
+                "compute_target": compute_target,
+            }
+        )
         document = compose_train_document(goal, recipe)
         train = document["train_config"]
         backend = training_backend_id(train)
@@ -737,7 +751,10 @@ def command_init(args: argparse.Namespace) -> None:
             sources.append({"path": recipe_path, "sha256": file_sha256(recipe)})
         for item in sources:
             committed_hash = git_blob_sha256(root, head, item["path"])
-            if committed_hash != item["sha256"] or file_sha256(root / item["path"]) != committed_hash:
+            if (
+                committed_hash != item["sha256"]
+                or file_sha256(root / item["path"]) != committed_hash
+            ):
                 raise RuntimeError(
                     "composition source differs from committed HEAD and cannot be launched "
                     f"as exact committed source: {item['path']}"
@@ -783,7 +800,7 @@ def command_init(args: argparse.Namespace) -> None:
             "rung_caps": caps,
             "runtime": None,
             "policy": {
-                "compute_target": "b3",
+                "compute_target": compute_target,
                 "max_reserved_jobs": MAX_RESERVED_JOBS,
                 "stale_round_limit": DEFAULT_STALE_ROUNDS,
                 "confirmation_runs": CONFIRMATION_RUNS,
@@ -987,7 +1004,9 @@ def command_reserve(args: argparse.Namespace) -> None:
             raise RuntimeError(f"state expects {action['action']}, not {phase} reservation")
         free = max(int(args.effective_capacity) - int(args.active_reservations), 0)
         if free <= 0:
-            raise RuntimeError("B3 has no available slot; wait without reserving a wave")
+            raise RuntimeError(
+                "the configured local fleet has no available slot; wait without reserving a wave"
+            )
 
         candidates = parse_candidates(args.candidates_json)
         if phase == "baseline-screen":
@@ -1048,7 +1067,9 @@ def command_reserve(args: argparse.Namespace) -> None:
         needed = len(candidates) * len(seeds)
         reserve_for_confirmation = 0 if phase == "confirmation" else CONFIRMATION_RUNS
         if int(state["reserved_jobs"]) + needed + reserve_for_confirmation > MAX_RESERVED_JOBS:
-            raise RuntimeError("reservation would consume the confirmation reserve or exceed 48 jobs")
+            raise RuntimeError(
+                "reservation would consume the confirmation reserve or exceed 48 jobs"
+            )
         waves = [
             reserve_one(
                 state,
@@ -1082,9 +1103,7 @@ def command_reserve(args: argparse.Namespace) -> None:
                     {
                         "seed": int(seed),
                         "command": launch_command(state, wave, int(seed)),
-                        "shell_command": shlex.join(
-                            launch_command(state, wave, int(seed))
-                        ),
+                        "shell_command": shlex.join(launch_command(state, wave, int(seed))),
                     }
                     for seed in wave["seeds"]
                 ],
@@ -1136,8 +1155,7 @@ def command_record_launch(args: argparse.Namespace) -> None:
             if goal_paths != {state["goal_path"]} or recipe_paths != {state["recipe_path"]}:
                 errors.append("submission rows do not match the pinned goal and recipe paths")
             if any(
-                list(row.get("recipe_overrides") or [])
-                != expected_recipe_overrides(state, wave)
+                list(row.get("recipe_overrides") or []) != expected_recipe_overrides(state, wave)
                 for row in rows
             ):
                 errors.append("submission rows do not match the reserved recipe overrides")
@@ -1147,10 +1165,7 @@ def command_record_launch(args: argparse.Namespace) -> None:
                 for row in rows
             ):
                 errors.append("submission rows do not match the reserved descriptions")
-            if any(
-                str(row.get("checkpoint_eval_backend") or "") != "none"
-                for row in rows
-            ):
+            if any(str(row.get("checkpoint_eval_backend") or "") != "none" for row in rows):
                 errors.append("submission row did not materialize training-only execution")
         row_runtimes = {
             (
@@ -1198,9 +1213,7 @@ def command_record_terminal(args: argparse.Namespace) -> None:
     semantic = payload.get("semantic") or {}
     manifest = semantic.get("manifest") or {}
     submission_key = str(
-        args.submission_key
-        or (manifest.get("compute") or {}).get("submission_key")
-        or ""
+        args.submission_key or (manifest.get("compute") or {}).get("submission_key") or ""
     )
     run_id = str(args.run_id or payload.get("run_id") or "")
     seed = int(args.seed if args.seed is not None else manifest.get("seed"))
@@ -1350,16 +1363,11 @@ def fetch_training_evidence(
             float(row[TRAIN_OUTCOME_SUCCESS_ACROSS_STARTS_WINDOW_100_RATE_MIN]),
         )
         for row in rate_history
-        if row.get(TRAIN_OUTCOME_SUCCESS_ACROSS_STARTS_WINDOW_100_RATE_MIN)
-        is not None
+        if row.get(TRAIN_OUTCOME_SUCCESS_ACROSS_STARTS_WINDOW_100_RATE_MIN) is not None
     ]
     peak = max((value for _step, value in rate_rows), default=None)
     first_strong_step = next(
-        (
-            step
-            for step, value in sorted(rate_rows)
-            if value >= float(strong_threshold)
-        ),
+        (step for step, value in sorted(rate_rows) if value >= float(strong_threshold)),
         None,
     )
     observed_max_step = max(
@@ -1371,16 +1379,9 @@ def fetch_training_evidence(
         TRAIN_EPISODE_RETURN_SHAPED_ACROSS_ORIGINS_ROLLING_UP_TO_100_MEAN,
     )
     returns = [
-        float(
-            row[
-                TRAIN_EPISODE_RETURN_SHAPED_ACROSS_ORIGINS_ROLLING_UP_TO_100_MEAN
-            ]
-        )
+        float(row[TRAIN_EPISODE_RETURN_SHAPED_ACROSS_ORIGINS_ROLLING_UP_TO_100_MEAN])
         for row in return_history
-        if row.get(
-            TRAIN_EPISODE_RETURN_SHAPED_ACROSS_ORIGINS_ROLLING_UP_TO_100_MEAN
-        )
-        is not None
+        if row.get(TRAIN_EPISODE_RETURN_SHAPED_ACROSS_ORIGINS_ROLLING_UP_TO_100_MEAN) is not None
     ]
     tail_count = max(1, math.ceil(len(returns) * float(return_tail_fraction))) if returns else 0
     tail_values = returns[-tail_count:] if tail_count else []
@@ -1388,15 +1389,10 @@ def fetch_training_evidence(
     return_valid = tail_mean_raw is not None and tail_count >= 10
     return_points = len(returns)
     sorted_tail = sorted(tail_values)
-    tail_p05 = (
-        sorted_tail[max(0, math.ceil(len(sorted_tail) * 0.05) - 1)]
-        if sorted_tail
-        else None
-    )
+    tail_p05 = sorted_tail[max(0, math.ceil(len(sorted_tail) * 0.05) - 1)] if sorted_tail else None
     tail_std = (
         math.sqrt(
-            sum((value - float(tail_mean_raw)) ** 2 for value in tail_values)
-            / len(tail_values)
+            sum((value - float(tail_mean_raw)) ** 2 for value in tail_values) / len(tail_values)
         )
         if tail_values
         else None
@@ -1416,9 +1412,7 @@ def fetch_training_evidence(
         "authority": "wandb_history",
         "rank_direction": "maximize",
         "collected_at": utc_now(),
-        "return_metric": (
-            TRAIN_EPISODE_RETURN_SHAPED_ACROSS_ORIGINS_ROLLING_UP_TO_100_MEAN
-        ),
+        "return_metric": (TRAIN_EPISODE_RETURN_SHAPED_ACROSS_ORIGINS_ROLLING_UP_TO_100_MEAN),
         "return_points": return_points,
         "return_tail_fraction": float(return_tail_fraction),
         "return_tail_points": tail_count,
@@ -1530,7 +1524,9 @@ def command_close_round(args: argparse.Namespace) -> None:
         ranked = ranked_candidates(state)
         best = ranked[0] if ranked else None
         prior = state.get("incumbent_evidence")
-        improved = bool(best) and (prior is None or evidence_key(best["score"]) < evidence_key(prior))
+        improved = bool(best) and (
+            prior is None or evidence_key(best["score"]) < evidence_key(prior)
+        )
         if round_number > 0:
             state["search_round"] = round_number
             state["stale_rounds"] = 0 if improved else int(state["stale_rounds"]) + 1
@@ -1606,8 +1602,7 @@ def command_close_confirmation(args: argparse.Namespace) -> None:
         {
             "study": str(path),
             "strong_seed_count": strong,
-            "training_signal_confirmed": strong
-            >= int(state["policy"]["confirmation_required"]),
+            "training_signal_confirmed": strong >= int(state["policy"]["confirmation_required"]),
             "next": next_action(load_state(path)),
         }
     )
@@ -1718,7 +1713,9 @@ def command_complete_apply(args: argparse.Namespace) -> None:
         expected = copy.deepcopy(state["baseline"]["train_config"])
         expected["training_backend"]["config"].update(state["winner"]["delta"])
         if document["train_config"] != expected:
-            raise RuntimeError("recomposition changed frozen fields or did not materialize the winner")
+            raise RuntimeError(
+                "recomposition changed frozen fields or did not materialize the winner"
+            )
         state["status"] = "done"
         state["apply"]["completed_at"] = utc_now()
         report = {
@@ -1771,8 +1768,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     initialize = commands.add_parser("init")
     initialize.add_argument("--root", default=".")
+    initialize.add_argument("--runs-dir", type=Path, default=default_runs_dir())
     initialize.add_argument("--goal", required=True)
     initialize.add_argument("--recipe", required=True)
+    initialize.add_argument(
+        "--target",
+        help="local dstack fleet (defaults to GRADLAB_LOCAL_FLEET)",
+    )
     initialize.add_argument("--strong-threshold", type=float, default=DEFAULT_STRONG_THRESHOLD)
     initialize.set_defaults(handler=command_init)
 

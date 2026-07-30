@@ -147,7 +147,6 @@ gradlab experiment launch \
   --seed 123 \
   --run-description "Mario Level1-1 PPO seed 123" \
   --compute local \
-  --target b3 \
   --max-duration 48h \
   --json
 ```
@@ -190,7 +189,7 @@ drain-only mode and cannot retrain. If acceptance or a training plateau was
 already recorded but the final checkpoint was not published, recovery resumes
 the latest checkpoint only long enough to request a safe finalization boundary.
 
-For a short B3 integration smoke, use the checked-in
+For a short local-fleet integration smoke, use the checked-in
 `experiments/goals/SuperMarioBros-Nes-v0/Level1-1/recipes/dstack-smoke.yaml`
 recipe. Repeatable `--set KEY=VALUE` ablations are composed, validated, and
 included in the immutable portable recipe hash; use a checked-in leaf recipe
@@ -291,7 +290,8 @@ delivery deadline starts only after evaluations have settled.
 - Goal-local launchable recipes: each goal’s `recipes/`
 - Reusable presets: `experiments/recipes/_presets/`
 - Metric contract: `METRICS.md`
-- Hardware and dstack operations: `INSTANCES.md`
+- Portable compute and dstack policy: `COMPUTE.md`
+- Operator-local fleet inventory: `~/.config/gradlab/instances.md`
 - Control-plane units and templates: `ops/dstack/`
 
 Useful commands:
@@ -332,6 +332,7 @@ and re-verifies the complete model closure before deserialization. Playback
 performs these integrity checks automatically without a model pre-approval step.
 
 Published model releases use Hugging Face model cards and include a
-representative `replay.mp4` when the policy has visual behavior. Generated
-artifacts belong under ignored `runs/`, `logs/`, and `models/` directories,
-never source control.
+representative `replay.mp4` when the policy has visual behavior. Local run
+artifacts and downloaded model caches default to `~/.config/gradlab/runs/`;
+other generated artifacts belong under ignored `logs/` and `models/`
+directories, never source control.
