@@ -1317,33 +1317,39 @@ def fetch_training_evidence(
     if str(getattr(run, "id", "") or "") != str(expected_run_id):
         raise RuntimeError("W&B run identity does not match the recorded dstack run")
     count_keys = [train_success_count_metric(start) for start in starts]
-    keys = [
-        TRAIN_GLOBAL_STEP,
-        *count_keys,
-        TRAIN_OUTCOME_SUCCESS_ACROSS_STARTS_WINDOW_100_RATE_MIN,
-        TRAIN_EPISODE_RETURN_SHAPED_ACROSS_ORIGINS_ROLLING_UP_TO_100_MEAN,
-    ]
-    history = [dict(row) for row in run.scan_history(keys=keys)]
-    if not history:
+
+    def scan(*keys: str) -> list[dict[str, Any]]:
+        return [dict(row) for row in run.scan_history(keys=list(keys))]
+
+    step_history = scan(TRAIN_GLOBAL_STEP)
+    if not step_history:
         raise RuntimeError("W&B run has no remotely visible training history")
-    counts = {
-        start: max(
-            (
-                int(row.get(metric) or 0)
-                for row in history
-                if row.get(metric) is not None
-            ),
-            default=0,
+    if mode == EVIDENCE_SUCCESS:
+        counts = {
+            start: max(
+                (
+                    int(row.get(metric) or 0)
+                    for row in scan(TRAIN_GLOBAL_STEP, metric)
+                    if row.get(metric) is not None
+                ),
+                default=0,
+            )
+            for start, metric in zip(starts, count_keys, strict=True)
+        }
+        rate_history = scan(
+            TRAIN_GLOBAL_STEP,
+            TRAIN_OUTCOME_SUCCESS_ACROSS_STARTS_WINDOW_100_RATE_MIN,
         )
-        for start, metric in zip(starts, count_keys, strict=True)
-    }
+    else:
+        counts = {start: 0 for start in starts}
+        rate_history = []
     all_starts_succeeded = all(value > 0 for value in counts.values())
     rate_rows = [
         (
             int(row.get(TRAIN_GLOBAL_STEP) or 0),
             float(row[TRAIN_OUTCOME_SUCCESS_ACROSS_STARTS_WINDOW_100_RATE_MIN]),
         )
-        for row in history
+        for row in rate_history
         if row.get(TRAIN_OUTCOME_SUCCESS_ACROSS_STARTS_WINDOW_100_RATE_MIN)
         is not None
     ]
@@ -1357,8 +1363,12 @@ def fetch_training_evidence(
         None,
     )
     observed_max_step = max(
-        (int(row.get(TRAIN_GLOBAL_STEP) or 0) for row in history),
+        (int(row.get(TRAIN_GLOBAL_STEP) or 0) for row in step_history),
         default=0,
+    )
+    return_history = scan(
+        TRAIN_GLOBAL_STEP,
+        TRAIN_EPISODE_RETURN_SHAPED_ACROSS_ORIGINS_ROLLING_UP_TO_100_MEAN,
     )
     returns = [
         float(
@@ -1366,7 +1376,7 @@ def fetch_training_evidence(
                 TRAIN_EPISODE_RETURN_SHAPED_ACROSS_ORIGINS_ROLLING_UP_TO_100_MEAN
             ]
         )
-        for row in history
+        for row in return_history
         if row.get(
             TRAIN_EPISODE_RETURN_SHAPED_ACROSS_ORIGINS_ROLLING_UP_TO_100_MEAN
         )
