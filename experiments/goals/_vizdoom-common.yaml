@@ -29,7 +29,7 @@ objective:
 # Define family-wide settings used while training a policy.
 train:
   # Set the checkpoint cadence in policy-environment transitions.
-  checkpoint_freq: 250000
+  checkpoint_freq: 1000000
   # Define metric-driven rules that can stop training before its timestep cap.
   early_stop:
     # Address each early-stop rule by a stable condition name.

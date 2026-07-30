@@ -478,6 +478,16 @@ class ConfigValidationTests(unittest.TestCase):
                 self.assertEqual(plateau["outcome"], "failure")
                 self.assertEqual(plateau["action"], "stop")
 
+    def test_every_vizdoom_recipe_uses_one_million_step_checkpoint_cadence(self) -> None:
+        recipes = sorted(Path("experiments/goals").glob("Vizdoom*/recipes/*.yaml"))
+
+        self.assertGreaterEqual(len(recipes), 11)
+        for recipe_path in recipes:
+            with self.subTest(recipe=recipe_path):
+                goal_path = recipe_path.parent.parent / "_goal.yaml"
+                document = compose_train_document(goal_path, recipe_path)
+                self.assertEqual(document["train_config"]["checkpoint_freq"], 1_000_000)
+
     def test_removed_provider_lifecycle_args_are_rejected(self) -> None:
         for provider_id in ("stable-retro-turbo", "supermariobrosnes-turbo"):
             contract = resolve_env_provider(provider_id).constructor_contract
