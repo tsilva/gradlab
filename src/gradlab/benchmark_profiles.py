@@ -336,7 +336,6 @@ def _train_loop_config(
     config["early_stop"] = None
     config["post_train_eval_episodes"] = 0
     config.pop("rom_asset_manifest", None)
-    config["wandb"] = False
     config["wandb_mode"] = "disabled"
     config["seed"] = int(profile.get("seed", 123))
     config["run_name"] = str(

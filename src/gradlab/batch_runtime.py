@@ -80,9 +80,6 @@ class ProviderDescriptor:
     start_probabilities: tuple[float, ...] = ()
     lane_start_ids: tuple[str, ...] = ()
     render_support: tuple[str, ...] = ()
-    autoreset_mode: str = "disabled"
-    turbo_api_version: int | None = None
-    capabilities: Mapping[str, Any] = field(default_factory=dict)
     observation_ownership: str = "unsafe_view"
     # None denotes caller-owned observations; views declare their rotation depth.
     observation_buffer_depth: int | None = 1
@@ -101,8 +98,6 @@ class ProviderDescriptor:
     def __post_init__(self) -> None:
         if not self.provider_id:
             raise ValueError("provider_id must not be empty")
-        if self.autoreset_mode != "disabled":
-            raise ValueError("the batch runtime requires disabled provider autoreset")
         if self.observation_ownership not in {"owned", "safe_view", "unsafe_view"}:
             raise ValueError("provider observation_ownership is invalid")
         expected_depth = {
@@ -112,11 +107,6 @@ class ProviderDescriptor:
         }[self.observation_ownership]
         if self.observation_buffer_depth != expected_depth:
             raise ValueError("provider observation ownership/depth declaration is inconsistent")
-        object.__setattr__(
-            self,
-            "capabilities",
-            MappingProxyType(dict(self.capabilities)),
-        )
         if self.action_table is not None:
             object.__setattr__(self, "action_table", tuple(self.action_table))
         if self.action_meanings is not None:

@@ -159,7 +159,7 @@ def test_vizdoom_goal_has_complete_evaluated_ppo_contract(
     assert document["recipe_id"] == "ppo"
     assert train_config["timesteps"] == expected["timesteps"]
     assert train_config["checkpoint_eval_backend"] == "none"
-    assert train_config["stop_on_acceptance"] is False
+    assert "stop_on_acceptance" not in train_config
     assert train_config["checkpoint_eval_acceptance"] == acceptance
     assert train_config["env_provider"] == "vizdoom-turbo"
     assert train_config["game"] == goal_id
@@ -315,7 +315,7 @@ def test_vizdoom_goal_training_target_remains_valid_when_evaluation_is_enabled()
 
     train_config = document["train_config"]
     assert train_config["checkpoint_eval_backend"] == "modal"
-    assert train_config["stop_on_acceptance"] is True
+    assert "stop_on_acceptance" not in train_config
     target = train_config["early_stop"]["conditions"]["target_reached"]
     assert target["outcome"] == "success"
     assert target["action"] == "observe"

@@ -133,7 +133,7 @@ def validate_materialized_train_recipe(
     validate_and_normalize_train_config(
         train_config,
         label=label_path(label, "train_config"),
-        required_keys=("game", "timesteps", "wandb", "wandb_mode"),
+        required_keys=("game", "timesteps", "wandb_mode"),
     )
     seed_span = provider_num_envs(train_config, explicit_n_envs=train_config.get("n_envs"))
     for index, seed in enumerate(seed_values):

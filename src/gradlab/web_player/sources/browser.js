@@ -56,8 +56,21 @@ function formatBytes(value) {
   return `${(bytes / (1024 ** unit)).toFixed(unit ? 1 : 0)} ${units[unit]}`;
 }
 
-function runStatePresentation(value) {
-  const state = String(value || "").trim().toLowerCase();
+export function runStatePresentation(item) {
+  const state = String(item?.state || "").trim().toLowerCase();
+  const stopReason = String(item?.stop_reason || "").trim();
+  const earlyStopTrigger = String(item?.early_stop?.trigger || "").trim();
+  if (
+    state === "failed"
+    && stopReason.startsWith("early_stop_failure:")
+    && earlyStopTrigger === "no_improvement"
+  ) {
+    return {
+      iconName: "player-pause",
+      tone: "stopped",
+      label: "Training stalled",
+    };
+  }
   if (state === "finished" || state === "succeeded") {
     return { iconName: "check", tone: "finished", label: "Finished" };
   }
@@ -1915,7 +1928,7 @@ export class SourceBrowser {
         if (className.includes("evaluation-cell")) main.className = "evaluation-verdict";
         main.textContent = String(primary);
         if (className.includes("run-cell")) {
-          const presentation = runStatePresentation(item.state);
+          const presentation = runStatePresentation(item);
           const identity = document.createElement("button");
           identity.type = "button";
           identity.className = "run-identity";
@@ -1955,7 +1968,7 @@ export class SourceBrowser {
             cell.append(badges);
           }
         }
-        if (className.includes("recipe-cell") && isEfficiencyLeader) {
+        if (className.includes("run-cell") && isEfficiencyLeader) {
           const badge = document.createElement("span");
           badge.className = "source-leader-badge";
           badge.textContent = efficiency.evidence === "evaluation"

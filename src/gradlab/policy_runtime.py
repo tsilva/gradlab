@@ -302,16 +302,6 @@ def reset_policy_state(model: Any, lanes: Any | None = None) -> None:
         reset() if lanes is None else reset(lanes)
 
 
-def policy_capabilities(
-    model: Any,
-    *,
-    attribution_available: bool = False,
-) -> dict[str, Any]:
-    return PolicyRuntime(model).capabilities.payload(
-        attribution_available=attribution_available,
-    )
-
-
 def policy_action(
     model: Any,
     observation: Any,
@@ -343,6 +333,5 @@ __all__ = [
     "infer_policy_algorithm",
     "normalize_action_selection_mode",
     "policy_action",
-    "policy_capabilities",
     "reset_policy_state",
 ]

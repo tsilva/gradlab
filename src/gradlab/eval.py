@@ -28,13 +28,10 @@ from gradlab.model_sources import (
     model_source_ref,
     resolve_single_model_source,
 )
-from gradlab.policy_models import load_policy_model, resolve_policy_algorithm
-from gradlab.policy_bundle import load_policy_bundle_from_checkpoint
 from gradlab.rom_assets import rom_asset_manifest_for_game
 from gradlab.rom_runtime import ensure_local_rom_binding
 from gradlab.seeds import DEFAULT_EVAL_SEED, validate_eval_seed
 from gradlab.train_config import add_env_config_args, env_config_arg_fields
-from gradlab.trusted_inputs import stage_and_approve_model
 
 
 def json_default(value):
@@ -93,30 +90,6 @@ class ScriptedPolicy:
             action = scripted_action(self.policy, self.step_idx, self.action_names)
         self.step_idx += 1
         return np.asarray([action]), None
-
-
-def load_eval_model(
-    model_path: str | Path,
-    *,
-    device: str,
-    source_identity: str | None = None,
-) -> tuple[object, str]:
-    with stage_and_approve_model(
-        model_path,
-        source_identity=source_identity or str(model_path),
-    ) as approved:
-        bundle = load_policy_bundle_from_checkpoint(approved.model_path)
-        if bundle is None:
-            raise FileNotFoundError(
-                f"{model_path} is missing its current model.json and recipe.json"
-            )
-        algorithm_id = resolve_policy_algorithm(bundle.model["policy"])
-        model = load_policy_model(
-            approved,
-            device=device,
-            algorithm_id=algorithm_id,
-        )
-        return model, algorithm_id
 
 
 def build_parser(*, prog: str = "gradlab eval") -> argparse.ArgumentParser:
@@ -182,7 +155,6 @@ def main(argv: list[str] | None = None) -> int:
     if args.n_envs < 1:
         raise SystemExit("--n-envs must be >= 1")
     ref = model_source_ref(args)
-    source = None
     if ref is not None or args.model:
         if ref is not None:
             print(f"Downloading {ref}", flush=True)
@@ -233,53 +205,24 @@ def main(argv: list[str] | None = None) -> int:
             game=config.game,
         )
     assert_provider_runtime_available(config, rom_binding=rom_binding)
-    if args.model:
-        model, model_policy = load_eval_model(
-            args.model,
-            device=resolve_sb3_device(args.device),
-            source_identity=str(source.artifact_name or ref or args.model),
-        )
-    else:
-        model = None
-        model_policy = None
-
-    if model is not None:
-        summary, _ = evaluate_model_episodes(
-            model=model,
-            config=config,
-            episodes=args.episodes,
-            seed=args.seed,
-            max_steps=args.max_steps,
-            deterministic=False,
-            n_envs=args.n_envs,
-            progress=args.progress,
-            progress_description="eval model",
-            rom_binding=rom_binding,
-            extra={
-                "model": args.model,
-                "policy": model_policy,
-                "obs_crop": args.obs_crop,
-            },
-        )
-    else:
-        policy = ScriptedPolicy(args.policy, ())
-        summary, _ = evaluate_model_episodes(
-            model=policy,
-            config=config,
-            episodes=args.episodes,
-            seed=args.seed,
-            max_steps=args.max_steps,
-            deterministic=False,
-            n_envs=1,
-            progress=args.progress,
-            progress_description=f"eval {args.policy}",
-            rom_binding=rom_binding,
-            extra={
-                "model": args.model,
-                "policy": args.policy,
-                "obs_crop": args.obs_crop,
-            },
-        )
+    policy = ScriptedPolicy(args.policy, ())
+    summary, _ = evaluate_model_episodes(
+        model=policy,
+        config=config,
+        episodes=args.episodes,
+        seed=args.seed,
+        max_steps=args.max_steps,
+        deterministic=False,
+        n_envs=1,
+        progress=args.progress,
+        progress_description=f"eval {args.policy}",
+        rom_binding=rom_binding,
+        extra={
+            "model": args.model,
+            "policy": args.policy,
+            "obs_crop": args.obs_crop,
+        },
+    )
     if args.summary_only:
         summary.pop("episode_results", None)
     print(json.dumps(summary, indent=2, default=json_default))

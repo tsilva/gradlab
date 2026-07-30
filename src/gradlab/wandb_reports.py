@@ -48,6 +48,7 @@ from gradlab.metric_names import (
     TRAIN_PPO_POLICY_ENTROPY,
     TRAIN_PPO_VALUE_LOSS,
     TRAIN_THROUGHPUT_BETWEEN_ROLLOUTS_SECONDS,
+    TRAIN_THROUGHPUT_ENV_STEP_FPS,
     TRAIN_THROUGHPUT_LOOP_FPS,
     TRAIN_THROUGHPUT_ROLLOUT_OVERHEAD_SECONDS,
     leader_metric_for_rank_metric,
@@ -695,6 +696,7 @@ def _goal_section_blocks(wr, section: str, goal: GoalReportSpec, *, entity: str)
                         x=TRAIN_GLOBAL_STEP,
                         y=[
                             TRAIN_THROUGHPUT_LOOP_FPS,
+                            TRAIN_THROUGHPUT_ENV_STEP_FPS,
                         ],
                     ),
                     _line(

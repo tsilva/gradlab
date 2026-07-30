@@ -103,7 +103,6 @@ def test_init_wandb_records_resolved_identity_and_submission_group() -> None:
         return FakeRun()
 
     train_config = {
-        "wandb": True,
         "wandb_tags": "goal_id:alepy__breakout,recipe_id:base",
         "wandb_entity": "entity",
         "wandb_project": None,
@@ -155,7 +154,6 @@ def test_init_wandb_falls_back_to_run_name_for_legacy_config() -> None:
             return None
 
     train_config = {
-        "wandb": True,
         "wandb_tags": "",
         "wandb_entity": "entity",
         "wandb_project": None,

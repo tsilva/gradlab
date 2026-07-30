@@ -314,6 +314,7 @@ unevaluated for future explicit user action. dstack process exit alone is never 
 | `train/algorithm/{algorithm}/rollout/advantage/hist` | Rollout advantage histogram. | histogram | every 64 rollouts | history |
 | `train/algorithm/{algorithm}/hyperparameter/entropy_coefficient` | Current scheduled entropy coefficient. | scalar | rollout | history |
 | `train/throughput/loop_fps` | Policy transitions divided by rollout-start-to-next-rollout-start wall time. | steps/second | rollout | history |
+| `train/throughput/env_step_fps` | Policy transitions divided by native-provider step wall time accumulated during the rollout; emitted only when the provider exposes native step timing. | steps/second | rollout | history |
 | `train/throughput/rollout_seconds` | Wall time spent collecting one rollout. | seconds | rollout | history |
 | `train/throughput/env_step_seconds` | Native-provider step wall time accumulated while collecting one rollout. | seconds | rollout | history |
 | `train/throughput/rollout_overhead_seconds` | Rollout wall time outside native-provider step calls, including policy inference and wrapper, buffer, reset, task, and callback work. | seconds | rollout | history |

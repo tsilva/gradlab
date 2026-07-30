@@ -14,6 +14,7 @@ import {
   metricLabel,
   rankRunItems,
   runFinishPresentation,
+  runStatePresentation,
   SourceBrowser,
   sortRunItems,
   sourceBreadcrumbItems,
@@ -52,6 +53,38 @@ test("catalog list hover highlights the complete row", async () => {
   assert.match(
     styles,
     /\.goal-row-navigation:hover:not\(:disabled\)\s*\{[^}]*background: transparent;/,
+  );
+});
+
+test("run table hover highlights only the complete row", async () => {
+  const styles = await readFile(
+    new URL("../../src/gradlab/web_player/styles.css", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(
+    styles,
+    /\.source-table \.run-identity:hover:not\(:disabled\)\s*\{[^}]*background: transparent;[^}]*color: inherit;/,
+  );
+  assert.match(
+    styles,
+    /\.source-table tbody tr:hover,\s*\.source-table tbody tr:focus-visible\s*\{[^}]*background: rgba\(83, 212, 232, \.07\);/,
+  );
+});
+
+test("run ranking badges render in the run column", async () => {
+  const source = await readFile(
+    new URL("../../src/gradlab/web_player/sources/browser.js", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(
+    source,
+    /className\.includes\("run-cell"\) && isEfficiencyLeader/,
+  );
+  assert.doesNotMatch(
+    source,
+    /className\.includes\("recipe-cell"\) && isEfficiencyLeader/,
   );
 });
 
@@ -407,6 +440,32 @@ test("run finish reasons distinguish resource, training, and evaluation outcomes
       stop_reason: "eval_acceptance",
     }).label,
     "Evaluation criteria met",
+  );
+});
+
+test("stalled training uses a neutral stop icon instead of a failure cross", () => {
+  assert.deepEqual(
+    runStatePresentation({
+      state: "failed",
+      stop_reason: "early_stop_failure:return_plateau",
+      early_stop: { trigger: "no_improvement" },
+    }),
+    {
+      iconName: "player-pause",
+      tone: "stopped",
+      label: "Training stalled",
+    },
+  );
+  assert.deepEqual(
+    runStatePresentation({
+      state: "failed",
+      stop_reason: "learner_failure",
+    }),
+    {
+      iconName: "x",
+      tone: "failed",
+      label: "Failed",
+    },
   );
 });
 

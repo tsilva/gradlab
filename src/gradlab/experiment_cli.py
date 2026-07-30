@@ -27,9 +27,6 @@ from gradlab.dstack_backend import (
 )
 from gradlab.env_registry import resolve_env_provider
 from gradlab.file_utils import file_sha256
-from gradlab.goal_variants import (
-    build_goal_variant_descriptor,
-)
 from gradlab.json_utils import json_safe
 from gradlab.modal_eval_config import load_modal_eval_config
 from gradlab.operator_credentials import (
@@ -41,7 +38,6 @@ from gradlab.r2_store import R2Bucket, RunStorageConfig
 from gradlab.policy_bundle import build_recipe_document, canonical_json_sha256
 from gradlab.recipe_documents import (
     compose_resolved_train_documents,
-    load_goal_contract,
     prepare_checkpoint_eval_mode,
 )
 from gradlab.recipe_variants import recipe_variant_id
@@ -58,6 +54,7 @@ from gradlab.run_contracts import (
     RUN_ID_PATTERN,
     RunManifest,
     TerminalReceipt,
+    default_liveness_policy,
     new_attempt_id,
     new_run_id,
     utc_now,
@@ -138,13 +135,6 @@ def repository_root() -> Path:
 
 def _load_environment(root: Path) -> OperatorEnvironmentReport:
     return load_repository_operator_environment(root)
-
-
-def _default_liveness_policy() -> dict[str, float]:
-    # Keep launch-only schema dependencies out of import-time helper consumers.
-    from gradlab.run_contracts import default_liveness_policy
-
-    return default_liveness_policy()
 
 
 def _tracked_committed_path(root: Path, path: Path, *, label: str) -> Path:
@@ -509,13 +499,7 @@ def cmd_launch(args: argparse.Namespace) -> int:
     dstack_task = _task_name(run_id, attempt_id, initial=True)
     goal_slug = goal_path.parent.relative_to(root / "experiments" / "goals").as_posix()
     recipe_slug = recipe_path.stem
-    goal_variant = build_goal_variant_descriptor(
-        goal_slug=goal_slug,
-        source_sha=source_sha,
-        authored_goal=load_goal_contract(goal_path, root),
-        effective_goal=dict(document["goal"]),
-    )
-    document["goal_variant"] = goal_variant
+    goal_variant = dict(document["goal_variant"])
     variant_id = recipe_variant_id(
         recipe_slug=recipe_slug,
         source_sha=source_sha,
@@ -572,7 +556,7 @@ def cmd_launch(args: argparse.Namespace) -> int:
         "runtime_build_source_sha": release.runtime_build_source_sha,
         "submission_key": str(args.submission_key or ""),
     }
-    liveness = _default_liveness_policy()
+    liveness = default_liveness_policy()
     if fault_fixture:
         if fault_fixture not in {
             "failed-result-live-process",
@@ -1403,15 +1387,9 @@ def cmd_retry(args: argparse.Namespace) -> int:
             raise RuntimeError("repair runtime changed the effective goal contract")
         if str(document["environment_hash"]).removeprefix("sha256:") != manifest.environment_sha256:
             raise RuntimeError("repair runtime changed the environment contract")
-        repaired_goal_variant = None
-        if manifest.goal_variant is not None:
-            repaired_goal_variant = build_goal_variant_descriptor(
-                goal_slug=manifest.goal_slug,
-                source_sha=source_sha,
-                authored_goal=load_goal_contract(goal_path, root),
-                effective_goal=dict(document["goal"]),
-            )
-            document["goal_variant"] = repaired_goal_variant
+        repaired_goal_variant = (
+            dict(document["goal_variant"]) if manifest.goal_variant is not None else None
+        )
         asset = _manifest_rom_asset(manifest.modal)
         contract_document = _bind_launch_contract(
             document,

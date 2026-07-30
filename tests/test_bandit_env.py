@@ -236,7 +236,7 @@ def test_bandit_recipe_materializes_fixed_train_and_eval_contracts() -> None:
     assert train_config["checkpoint_eval_backend"] == "modal"
     assert train_config["post_train_eval_episodes"] == 256
     assert train_config["checkpoint_eval_n_envs"] == 32
-    assert train_config["stop_on_acceptance"] is True
+    assert "stop_on_acceptance" not in train_config
     assert train_config["checkpoint_eval_acceptance"] == [
         {
             "metric": "eval/full/episode/return/shaped/mean",
@@ -265,7 +265,6 @@ def test_bandit_local_demo_runs_to_cap_without_a_declared_success_signal(
             "checkpoint_freq": 0,
             "checkpoint_eval_backend": "none",
             "early_stop": None,
-            "wandb": False,
             "wandb_mode": "disabled",
             "recipe_json_path": str(recipe_path),
         }
@@ -333,7 +332,6 @@ def test_bandit_runs_through_a2c_backend_and_round_trips_checkpoint(
             "checkpoint_freq": 0,
             "checkpoint_eval_backend": "none",
             "early_stop": None,
-            "wandb": False,
             "wandb_mode": "disabled",
             "recipe_json_path": str(recipe_path),
             "training_backend": {

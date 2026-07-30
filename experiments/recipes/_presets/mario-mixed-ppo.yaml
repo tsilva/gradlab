@@ -25,5 +25,4 @@ train:
       policy_net_arch: 512,512
       value_net_arch: 512,512
 logging:
-  wandb: true
   wandb_mode: online

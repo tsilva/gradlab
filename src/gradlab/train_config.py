@@ -18,12 +18,26 @@ from gradlab.validation import normalize_obs_crop, normalize_obs_resize
 
 WANDB_MODE_CHOICES = ("online", "offline", "disabled")
 
-FieldKind = Literal["value", "store_true", "bool_optional"]
+FieldKind = Literal["value", "bool_optional"]
 TypeName = Literal["str", "int", "float", "json", "obs_crop", "obs_resize"]
-SerializeMode = Literal["str", "json", "csv", "rows", "skip_nonpositive_float"]
 SequenceItemKind = Literal["str", "number", "rows"]
 FieldOwner = Literal["runtime", "goal_environment", "goal_objective"]
 SourceSection = Literal["runtime", "train", "goal_train"]
+
+
+def wandb_publication_enabled(train_config: Mapping[str, Any]) -> bool:
+    """Return whether the canonical W&B mode enables metric publication."""
+
+    return str(train_config.get("wandb_mode") or "online") != "disabled"
+
+
+def checkpoint_eval_requires_acceptance(train_config: Mapping[str, Any]) -> bool:
+    """Derive acceptance behavior from the evaluation backend and contract."""
+
+    return (
+        str(train_config.get("checkpoint_eval_backend") or "none") == "modal"
+        and train_config.get("checkpoint_eval_acceptance") is not None
+    )
 
 
 @dataclass(frozen=True)
@@ -37,9 +51,7 @@ class TrainConfigField:
     env_default: str | None = None
     choices: tuple[str, ...] = ()
     help: str | None = None
-    serialize: SerializeMode = "str"
     environment: bool = False
-    recipe_required: bool = False
     non_empty: bool = False
     validation_min: float | None = None
     validation_max: float | None = None
@@ -102,9 +114,7 @@ def _add_config_field_argument(
         kwargs["help"] = field.help
     if field.choices:
         kwargs["choices"] = field.choices
-    if field.kind == "store_true":
-        kwargs["action"] = "store_true"
-    elif field.kind == "bool_optional":
+    if field.kind == "bool_optional":
         kwargs["action"] = argparse.BooleanOptionalAction
     else:
         type_callable = _type_callable(
@@ -291,7 +301,7 @@ def validate_train_config_value(
         if not isinstance(value, Mapping):
             raise ValueError(f"{_label_path(label, key)} must be an object")
         return
-    if field.kind in {"store_true", "bool_optional"}:
+    if field.kind == "bool_optional":
         if not isinstance(value, bool):
             raise ValueError(f"{_label_path(label, key)} must be a boolean")
         return
@@ -394,11 +404,6 @@ def validate_and_normalize_train_config(
         for condition in conditions.values()
         if isinstance(condition, Mapping)
     )
-    if normalized.get("stop_on_acceptance"):
-        if not normalized.get("checkpoint_eval_acceptance"):
-            raise ValueError(
-                f"{label}.checkpoint_eval_acceptance is required when stop_on_acceptance is true"
-            )
     if "training_backend" in normalized:
         from gradlab.training_backend import normalize_training_backend
 
@@ -425,7 +430,6 @@ TRAIN_CONFIG_FIELDS: tuple[TrainConfigField, ...] = (
         "timesteps",
         type_name="int",
         default=1_000_000,
-        recipe_required=True,
         validation_min=1,
         source_section="train",
     ),
@@ -433,7 +437,6 @@ TRAIN_CONFIG_FIELDS: tuple[TrainConfigField, ...] = (
         "state_archive",
         type_name="json",
         default=None,
-        serialize="json",
         mapping_value=True,
         source_section="train",
     ),
@@ -441,9 +444,7 @@ TRAIN_CONFIG_FIELDS: tuple[TrainConfigField, ...] = (
         "training_backend",
         type_name="json",
         default=None,
-        serialize="json",
         mapping_value=True,
-        recipe_required=True,
     ),
     _field(
         "n_envs",
@@ -474,7 +475,6 @@ TRAIN_CONFIG_FIELDS: tuple[TrainConfigField, ...] = (
         "game",
         env_default="game",
         environment=True,
-        recipe_required=True,
         non_empty=True,
         help="Provider game id. Defaults to RETRO_GAME when set.",
     ),
@@ -483,7 +483,6 @@ TRAIN_CONFIG_FIELDS: tuple[TrainConfigField, ...] = (
         type_name="json",
         default={},
         env_default="env_args",
-        serialize="json",
         environment=True,
         mapping_value=True,
         help="Provider-native environment constructor arguments, serialized as a JSON object.",
@@ -494,7 +493,6 @@ TRAIN_CONFIG_FIELDS: tuple[TrainConfigField, ...] = (
         type_name="json",
         default={},
         env_default="task",
-        serialize="json",
         environment=True,
         mapping_value=True,
         help="Canonical bound-task definition as a JSON object.",
@@ -509,7 +507,6 @@ TRAIN_CONFIG_FIELDS: tuple[TrainConfigField, ...] = (
     _field(
         "states",
         default="",
-        serialize="csv",
         environment=True,
         sequence_items="str",
         help="Comma-separated provider states. Without --state-probs, provide exactly one state per env slot in order.",
@@ -517,7 +514,6 @@ TRAIN_CONFIG_FIELDS: tuple[TrainConfigField, ...] = (
     _field(
         "state_probs",
         default="",
-        serialize="csv",
         environment=True,
         sequence_items="number",
         help="Comma-separated non-negative sampling weights for --states. The native vector env normalizes weights and samples independently on each episode reset.",
@@ -548,7 +544,6 @@ TRAIN_CONFIG_FIELDS: tuple[TrainConfigField, ...] = (
         aliases=("--observation-size",),
         type_name="obs_resize",
         env_default="obs_resize",
-        serialize="csv",
         environment=True,
         help=(
             "Policy observation dimensions as height,width. "
@@ -559,7 +554,6 @@ TRAIN_CONFIG_FIELDS: tuple[TrainConfigField, ...] = (
         "obs_crop",
         type_name="obs_crop",
         env_default="obs_crop",
-        serialize="csv",
         environment=True,
         help="Four-sided raw-frame crop as top,right,bottom,left before grayscale resize.",
     ),
@@ -605,7 +599,6 @@ TRAIN_CONFIG_FIELDS: tuple[TrainConfigField, ...] = (
         "checkpoint_eval_environment",
         type_name="json",
         default=None,
-        serialize="json",
         mapping_value=True,
         owner="goal_objective",
         source_section="goal_train",
@@ -622,7 +615,6 @@ TRAIN_CONFIG_FIELDS: tuple[TrainConfigField, ...] = (
         "checkpoint_eval_acceptance",
         type_name="json",
         default=None,
-        serialize="json",
         owner="goal_objective",
         source_section="goal_train",
     ),
@@ -630,14 +622,7 @@ TRAIN_CONFIG_FIELDS: tuple[TrainConfigField, ...] = (
         "checkpoint_eval_contract",
         type_name="json",
         default=None,
-        serialize="json",
         mapping_value=True,
-    ),
-    _field(
-        "stop_on_acceptance",
-        kind="bool_optional",
-        default=False,
-        source_section="runtime",
     ),
     _field(
         "checkpoint_eval_backend",
@@ -650,7 +635,6 @@ TRAIN_CONFIG_FIELDS: tuple[TrainConfigField, ...] = (
         "rom_asset_manifest",
         type_name="json",
         default=None,
-        serialize="json",
         mapping_value=True,
     ),
     _field(
@@ -676,14 +660,12 @@ TRAIN_CONFIG_FIELDS: tuple[TrainConfigField, ...] = (
         "early_stop",
         type_name="json",
         default=None,
-        serialize="json",
         source_section="train",
     ),
     _field(
         "selection_rank",
         type_name="json",
         default=(),
-        serialize="json",
         sequence_items="str",
         owner="goal_objective",
     ),
@@ -694,12 +676,6 @@ TRAIN_CONFIG_FIELDS: tuple[TrainConfigField, ...] = (
         validation_min=METRICS_SCHEMA_VERSION,
         validation_max=METRICS_SCHEMA_VERSION,
     ),
-    _field(
-        "wandb",
-        kind="store_true",
-        default=False,
-        recipe_required=True,
-    ),
     _field("wandb_project", default=None),
     _field("wandb_entity", default=None),
     _field("wandb_display_name", default=None),
@@ -709,7 +685,6 @@ TRAIN_CONFIG_FIELDS: tuple[TrainConfigField, ...] = (
         "wandb_mode",
         default="online",
         choices=WANDB_MODE_CHOICES,
-        recipe_required=True,
         non_empty=True,
     ),
     _field("runtime_image_ref", default=""),
@@ -718,13 +693,6 @@ TRAIN_CONFIG_FIELDS: tuple[TrainConfigField, ...] = (
     _field("source_sha", default=""),
     _field("compute_target", default=""),
     _field("attempt_id", default=""),
-    _field(
-        "supervision_liveness",
-        type_name="json",
-        default={},
-        serialize="json",
-        mapping_value=True,
-    ),
     _field("dstack_task", default=""),
     _field("campaign_id", default=""),
     _field("game_family", default=""),
@@ -750,14 +718,12 @@ TRAIN_CONFIG_FIELDS: tuple[TrainConfigField, ...] = (
         "recipe_composition",
         type_name="json",
         default={},
-        serialize="json",
         mapping_value=True,
     ),
     _field(
         "recipe_overrides",
         type_name="json",
         default=(),
-        serialize="json",
     ),
     _field("recipe_variant_id", default=""),
     _field("wandb_run_id", default=""),

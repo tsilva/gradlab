@@ -19,7 +19,6 @@ from gradlab.config_loader import RECIPE_TEMPLATE_VALUES, render_template_vars
 from gradlab.env import task_termination
 from gradlab.env_config import env_config_from_mapping
 from gradlab.env_registry import resolve_env_provider
-from gradlab.goal_variants import build_goal_variant_descriptor
 from gradlab.policy_bundle import (
     build_recipe_document,
     canonical_json_sha256,
@@ -28,7 +27,6 @@ from gradlab.policy_bundle import (
 from gradlab.recipe_catalog import LOCAL_RUN_RECEIPT, recipe_identity, resolve_recipe_source
 from gradlab.recipe_documents import (
     compose_resolved_train_documents,
-    load_goal_contract,
     prepare_checkpoint_eval_mode,
 )
 from gradlab.rom_assets import (
@@ -276,7 +274,7 @@ def main(argv: list[str] | None = None) -> int:
     source = resolve_recipe_source(args.recipe)
     overrides = list(args.recipe_overrides)
     if not args.wandb:
-        overrides.extend(("logging.wandb=false", "logging.wandb_mode=disabled"))
+        overrides.append("logging.wandb_mode=disabled")
 
     source_commit = _git_commit(source.repository_root) or _installed_source_commit()
     resolved_documents = compose_resolved_train_documents(
@@ -300,16 +298,6 @@ def main(argv: list[str] | None = None) -> int:
     run_name = args.run_name or _default_run_name(goal_id, recipe_id, args.seed)
     run_dir = _safe_run_dir(args.runs_dir, run_name)
 
-    goals_root = source.repository_root / "experiments" / "goals"
-    document["goal_variant"] = build_goal_variant_descriptor(
-        goal_slug=source.goal_path.parent.relative_to(goals_root).as_posix(),
-        source_sha=source_commit or "",
-        authored_goal=load_goal_contract(
-            source.goal_path,
-            source.repository_root,
-        ),
-        effective_goal=dict(document["goal"]),
-    )
     config = dict(document["train_config"])
     config.update(
         {
@@ -329,7 +317,6 @@ def main(argv: list[str] | None = None) -> int:
             "recipe_slug": recipe_id,
             "source_sha": source_commit or "",
             "checkpoint_eval_backend": "none",
-            "stop_on_acceptance": False,
         }
     )
     provider = resolve_env_provider(str(config["env_provider"]))

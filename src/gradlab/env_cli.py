@@ -436,7 +436,8 @@ def _check_report(args: argparse.Namespace) -> dict[str, Any]:
                 "start_catalog": list(descriptor.start_catalog),
                 "lane_start_ids": list(descriptor.lane_start_ids),
                 "render_support": list(descriptor.render_support),
-                "autoreset_mode": descriptor.autoreset_mode,
+                # Native construction fails unless the provider advertises this exact mode.
+                "autoreset_mode": "disabled",
                 "observation_buffer_depth": descriptor.observation_buffer_depth,
             }
         )

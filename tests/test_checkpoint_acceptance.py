@@ -19,6 +19,7 @@ from gradlab.modal_eval_protocol import (
     PROTOCOL_SCHEMA_VERSION,
     SEED_PROTOCOL,
     execution_key,
+    normalize_attempt_result,
     validate_attempt_result,
 )
 
@@ -211,12 +212,45 @@ def test_modal_protocol_accepts_complete_mean_return_rejection() -> None:
         "episode_results": rows,
         "claimed_aggregates": aggregates,
         "metrics": {"eval/full/episode/return/shaped/mean": 0.25},
+        "duration_seconds": 1.25,
+        "evaluation_evidence": {"manifest": "verified"},
     }
 
     validated = validate_attempt_result(result, contract=value, attempt_id=attempt_id)
+    normalized = normalize_attempt_result(result, contract=value, attempt_id=attempt_id)
 
     assert validated["verdict"] == "rejected"
     assert validated["claimed_aggregates"]["episodes_completed"] == 2
+    assert normalized["status"] == "rejected"
+    assert normalized["aggregates"]["episodes_completed"] == 2
+    assert normalized["duration_seconds"] == 1.25
+    assert len(normalized["evidence_sha256"]) == 2
+    assert normalized["error"] is None
+
+
+def test_modal_protocol_normalizes_failed_attempt_identity() -> None:
+    value = contract(episodes=2, n_envs=1)
+    attempt_id = "attempt-2"
+    result = {
+        "status": "expired",
+        "attempt_id": attempt_id,
+        "execution_key": execution_key(value),
+        "duration_seconds": 3.5,
+        "error": "deadline reached",
+    }
+
+    normalized = normalize_attempt_result(result, contract=value, attempt_id=attempt_id)
+
+    assert normalized == {
+        "status": "expired",
+        "episode_results": [],
+        "aggregates": {},
+        "duration_seconds": 3.5,
+        "evidence_sha256": [],
+        "error": "deadline reached",
+    }
+    with pytest.raises(ValueError, match="attempt id mismatch"):
+        normalize_attempt_result(result, contract=value, attempt_id="different-attempt")
 
 
 def test_accepted_evidence_requires_every_identity_once_and_all_successes() -> None:

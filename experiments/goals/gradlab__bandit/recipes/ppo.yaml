@@ -17,5 +17,4 @@ train:
       adam_eps: 1.0e-05
       normalize_advantage: true
 logging:
-  wandb: true
   wandb_mode: online

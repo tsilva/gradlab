@@ -46,5 +46,4 @@ train:
       log_interval_steps: 10000
       compaction_interval_steps: 250000
 logging:
-  wandb: true
   wandb_mode: online

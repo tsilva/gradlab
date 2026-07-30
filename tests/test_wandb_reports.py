@@ -88,6 +88,7 @@ class WandbReportCompilationTests(unittest.TestCase):
         self.assertIn("max(eval/full/episode/return/shaped/mean)", serialized)
         self.assertIn("eval/acceptance/pass", serialized)
         self.assertIn("train/outcome/success/across_starts/window_100/rate/min", serialized)
+        self.assertIn("train/throughput/env_step_fps", serialized)
         self.assertIn("eval/full/by_start", serialized)
         self.assertNotIn("eval/full/outcome/success/from/Level1-1/rate", serialized)
         self.assertNotIn("eval/full/outcome/success/from/Level1-2/rate", serialized)

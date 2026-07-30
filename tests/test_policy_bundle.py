@@ -20,6 +20,7 @@ from gradlab.policy_bundle import (
     build_model_document,
     build_recipe_document,
     canonical_json_bytes,
+    canonical_json_sha256,
     critic_value_contract,
     evaluation_contract,
     playback_contract_sha256,
@@ -130,6 +131,18 @@ def test_wandb_display_name_is_not_part_of_portable_recipe() -> None:
     )
 
     assert "wandb_display_name" not in document["recipe"]["train_config"]
+
+
+def test_legacy_derived_acceptance_flag_remains_readable() -> None:
+    document = level1_1_recipe_document()
+    legacy = deepcopy(document)
+    legacy["recipe"]["train_config"]["stop_on_acceptance"] = True
+    base_recipe = legacy["resolution"]["recipe"]["base"]
+    base_recipe["train_config"]["stop_on_acceptance"] = True
+    legacy["resolution"]["recipe"]["base_sha256"] = canonical_json_sha256(base_recipe)
+    legacy["resolution"]["recipe"]["effective_sha256"] = canonical_json_sha256(legacy["recipe"])
+
+    assert validate_recipe_document(legacy) == legacy
 
 
 @pytest.mark.parametrize("recipe_path", BREAKOUT_RECIPES)

@@ -89,7 +89,7 @@ class RuntimeContractTests(unittest.TestCase):
         self.assertEqual(receipt["runtime_image_ref"], RUNTIME_IMAGE_REF)
         self.assertEqual(len(receipt["train_config_contract_sha256"]), 64)
 
-    def test_runtime_contract_excludes_cli_only_field_metadata(self) -> None:
+    def test_runtime_contract_exposes_only_live_field_metadata(self) -> None:
         fields = train_config_contract_payload()["fields"]
 
         self.assertTrue(fields)
@@ -97,6 +97,9 @@ class RuntimeContractTests(unittest.TestCase):
             self.assertNotIn("aliases", field)
             self.assertNotIn("flag", field)
             self.assertNotIn("help", field)
+            self.assertNotIn("recipe_required", field)
+            self.assertNotIn("serialize", field)
+            self.assertNotEqual(field["kind"], "store_true")
 
     def test_runtime_payload_validation_accepts_dstack_execution_fields(self) -> None:
         receipt = validate_config_payload(
