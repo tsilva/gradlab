@@ -56,14 +56,14 @@ EXPECTED_GOALS = {
         "max_episode_steps": None,
     },
     "VizdoomDeathmatch-v1": {
-        "timesteps": 20_000_000,
+        "timesteps": 2_998_272,
         "event": "monster_killed",
         "training_metric": "train/episode/return/shaped/from/target/window_100/mean",
         "acceptance_metric": "eval/full/episode/return/shaped/mean",
         "acceptance_threshold": 10.0,
         "reward_scale": 1.0,
         "actions": DEATHMATCH_ACTIONS,
-        "max_episode_steps": None,
+        "max_episode_steps": 1050,
     },
     "VizdoomDefendCenter-v1": {
         "timesteps": 10_000_000,
@@ -298,6 +298,7 @@ def test_vizdoom_deathmatch_declares_complete_single_player_combat_semantics() -
     assert train_config["task"]["termination"] == {
         "failure": ["player_died"],
         "timeout": ["episode_ended"],
+        "max_episode_steps": 1050,
     }
     assert (
         eval_environment["env_config"]["env_args"]["use_restricted_actions"]
