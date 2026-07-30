@@ -133,7 +133,7 @@ def test_wandb_display_name_is_not_part_of_portable_recipe() -> None:
     assert "wandb_display_name" not in document["recipe"]["train_config"]
 
 
-def test_legacy_derived_acceptance_flag_remains_readable() -> None:
+def test_legacy_derived_acceptance_flag_is_rejected() -> None:
     document = level1_1_recipe_document()
     legacy = deepcopy(document)
     legacy["recipe"]["train_config"]["stop_on_acceptance"] = True
@@ -142,7 +142,8 @@ def test_legacy_derived_acceptance_flag_remains_readable() -> None:
     legacy["resolution"]["recipe"]["base_sha256"] = canonical_json_sha256(base_recipe)
     legacy["resolution"]["recipe"]["effective_sha256"] = canonical_json_sha256(legacy["recipe"])
 
-    assert validate_recipe_document(legacy) == legacy
+    with pytest.raises(PolicyDocumentError, match="stop_on_acceptance"):
+        validate_recipe_document(legacy)
 
 
 @pytest.mark.parametrize("recipe_path", BREAKOUT_RECIPES)

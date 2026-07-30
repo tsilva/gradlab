@@ -12,7 +12,7 @@ import {
 
 const CUSTOM_ID = "panel-00000000-0000-4000-8000-000000000000";
 
-test("default workspace is a v4 collection of typed panel instances", () => {
+test("default workspace is a v5 collection of typed panel instances", () => {
   const workspace = createDefaultWorkspace({ writer: "main" });
   assert.equal(workspace.version, WORKSPACE_VERSION);
   assert.equal(Object.hasOwn(workspace.panels, "reward"), false);
@@ -66,66 +66,9 @@ test("paired workspace gives every panel in a logical row the same height", () =
   );
 });
 
-test("retired reward summary panels are removed from saved workspaces", () => {
-  const workspace = createDefaultWorkspace();
-  workspace.panels.reward = {
-    type: "telemetry",
-    title: "Reward summary",
-    config: {
-      blocks: [{ kind: "stats", metrics: ["reward/provider"] }],
-    },
-    builtin: true,
-    placement: {
-      x: 4,
-      y: 0,
-      w: 4,
-      h: 8,
-      visible: true,
-      window: "stats",
-    },
-  };
-
-  assert.equal(
-    Object.hasOwn(normalizeWorkspace(workspace).panels, "reward"),
-    false,
-  );
-});
-
-test("legacy default chart rows adopt the compact panel height", () => {
-  for (const paired of [false, true]) {
-    const workspace = createDefaultWorkspace({ paired });
-    const rowTop = workspace.panels.value.placement.y;
-    const rowWindow = workspace.panels.value.placement.window;
-    for (const id of ["value", "step-reward", "episode-return"]) {
-      workspace.panels[id].placement.h = 9;
-    }
-    for (const [id, panel] of Object.entries(workspace.panels)) {
-      if (
-        !["value", "step-reward", "episode-return"].includes(id)
-        && panel.placement.window === rowWindow
-        && panel.placement.y >= rowTop + 7
-      ) {
-        panel.placement.y += 2;
-      }
-    }
-
-    const normalized = normalizeWorkspace(workspace, { paired });
-    assert.deepEqual(
-      ["value", "step-reward", "episode-return"].map(
-        (id) => normalized.panels[id].placement.h,
-      ),
-      [7, 7, 7],
-    );
-    assert.equal(
-      normalized.panels.raw.placement.y,
-      paired ? 23 : 30,
-    );
-  }
-});
-
-test("legacy workspace data is deliberately replaced instead of migrated", () => {
+test("non-current workspace data is replaced instead of interpreted", () => {
   const workspace = normalizeWorkspace({
-    version: 3,
+    version: 4,
     panels: {
       game: { col: 9, row: 99, w: 1, h: 1 },
     },
@@ -133,21 +76,6 @@ test("legacy workspace data is deliberately replaced instead of migrated", () =>
   assert.equal(workspace.version, WORKSPACE_VERSION);
   assert.equal(workspace.panels.game.placement.x, 0);
   assert.equal(workspace.revision.writer, "test");
-});
-
-test("retired value residual copy is removed from saved workspaces", () => {
-  const workspace = createDefaultWorkspace();
-  workspace.panels.value.config.blocks[0].foot =
-    "For a comparable stochastic policy trajectory, selected-step residual is V(s) − G(s): positive overestimates, negative underestimates. This single-trajectory diagnostic is not the critic training loss.";
-  workspace.panels["episode-return"].config.blocks[0].foot = "Keep this note.";
-
-  const normalized = normalizeWorkspace(workspace);
-
-  assert.equal(normalized.panels.value.config.blocks[0].foot, undefined);
-  assert.equal(
-    normalized.panels["episode-return"].config.blocks[0].foot,
-    "Keep this note.",
-  );
 });
 
 test("valid custom telemetry instances survive normalization", () => {

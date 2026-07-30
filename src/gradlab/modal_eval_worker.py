@@ -14,6 +14,7 @@ from typing import Any, Mapping
 from urllib.parse import unquote, urlparse
 
 from gradlab.file_utils import file_sha256
+from gradlab.json_utils import canonical_json_line_bytes
 from gradlab.modal_eval_protocol import PROTOCOL_SCHEMA_VERSION, canonical_json, execution_key
 from gradlab.modal_eval_storage import write_downloaded_file
 from gradlab.policy_bundle import (
@@ -22,17 +23,19 @@ from gradlab.policy_bundle import (
     load_policy_bundle,
     load_policy_bundle_from_checkpoint,
 )
+from gradlab.policy_models import load_internal_policy_model, resolve_policy_algorithm
+from gradlab.policy_runtime import PolicyRuntime
 from gradlab.video import PolicyObservationPreview, write_preview_video
 from gradlab.rom_assets import cache_path, validate_rom_asset_manifest, verify_rom_file
 from gradlab.rom_runtime import bind_rom_path
 
 
 def _write_json(path: Path, value: Mapping[str, Any]) -> None:
-    path.write_text(json.dumps(dict(value), sort_keys=True) + "\n", encoding="utf-8")
+    path.write_bytes(canonical_json_line_bytes(dict(value), ensure_ascii=True))
 
 
 def _upload_json(url: str, value: Mapping[str, Any]) -> str:
-    payload = (json.dumps(dict(value), sort_keys=True, separators=(",", ":")) + "\n").encode()
+    payload = canonical_json_line_bytes(dict(value), ensure_ascii=True)
     digest = hashlib.sha256(payload).hexdigest()
     parsed = urlparse(url)
     if parsed.scheme == "file":
@@ -114,7 +117,9 @@ def run_child(input_path: Path, output_path: Path) -> int:
     bundle_root = request.get("bundle_root")
     bundle = load_policy_bundle(Path(bundle_root)) if bundle_root else None
     raw_rom_path = request.get("rom_path")
-    asset = request.get("rom_asset_manifest") or contract.get("asset")
+    asset = request["rom_asset_manifest"]
+    if asset != contract.get("asset"):
+        raise ValueError("child ROM asset manifest does not match the execution contract")
     rom_binding = (
         bind_rom_path(asset, Path(str(raw_rom_path)))
         if raw_rom_path and isinstance(asset, Mapping)
@@ -156,7 +161,6 @@ def run_child(input_path: Path, output_path: Path) -> int:
     else:
         from gradlab.env import resolve_env_config
         from gradlab.env_metadata import env_config_from_config_dict
-        from gradlab.policy_models import load_internal_policy_model
 
         config = env_config_from_config_dict(dict(contract["environment"]))
         if config is None:
@@ -167,8 +171,6 @@ def run_child(input_path: Path, output_path: Path) -> int:
             raise FileNotFoundError(
                 f"{model_path} is missing its current model.json and recipe.json"
             )
-        from gradlab.policy_models import resolve_policy_algorithm
-
         algorithm_id = resolve_policy_algorithm(bundle.model["policy"])
         model = load_internal_policy_model(
             model_path,
@@ -189,6 +191,7 @@ def run_child(input_path: Path, output_path: Path) -> int:
             preview_capture=preview_capture,
             acceptance_contract=acceptance_contract,
             rom_binding=rom_binding,
+            policy_runtime=PolicyRuntime(model, algorithm_id=algorithm_id),
         )
     episode_results = metrics.pop("episode_results")
     evaluation_evidence = metrics.pop("evaluation_evidence", None)

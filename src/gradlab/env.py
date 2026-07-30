@@ -28,6 +28,7 @@ from gradlab.env_registry import (
     env_supports_states,
     qualify_env_id,
     resolve_env_provider,
+    validate_provider_constructor_args,
 )
 from gradlab.env_identity import task_config_from_train_config, validate_task_config
 from gradlab.env_registry import environment_spec
@@ -93,16 +94,14 @@ def _validate_sticky_action_prob(value: float) -> float:
 
 
 def resolve_env_config(config: EnvConfig) -> EnvConfig:
-    if not config.game and isinstance(config.env_args, Mapping) and config.env_args.get("game"):
-        config = replace(config, game=str(config.env_args["game"]))
     if not config.game:
         raise ValueError("game is required; pass --game or set RETRO_GAME")
-    if "action_set" in config.env_args:
-        raise ValueError(
-            "env_args.action_set is artifact-only legacy metadata; "
-            "use env_args.use_restricted_actions"
-        )
     qualify_env_id(config.env_provider, config.game)
+    validate_provider_constructor_args(
+        config.env_provider,
+        config.env_args,
+        label="env_args",
+    )
     _validate_sticky_action_prob(config.sticky_action_prob)
     validate_obs_resize(config.obs_resize)
     validate_obs_crop_mode(config.obs_crop_mode)

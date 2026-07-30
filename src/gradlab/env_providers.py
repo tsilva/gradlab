@@ -514,11 +514,6 @@ def provider_native_vec_kwargs(
     """Compile provider mechanics without task events or termination rules."""
     del state_weight_mapping
     native_kwargs = dict(config.env_args)
-    if "action_set" in native_kwargs:
-        raise ValueError(
-            "env_args.action_set is artifact-only legacy metadata; "
-            "use env_args.use_restricted_actions"
-        )
     for key in PROVIDER_REWARD_TRANSFORM_KEYS:
         native_kwargs.pop(key, None)
     return provider_runtime_adapter(config.env_provider).build_native_kwargs(

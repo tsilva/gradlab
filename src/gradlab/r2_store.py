@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote, unquote, urlparse
 
+from gradlab.file_utils import file_sha256
 from gradlab.json_utils import canonical_json_line_bytes as _canonical_json
 
 
@@ -338,7 +339,7 @@ class R2Bucket:
         content_type: str = "application/octet-stream",
         cache_control: str | None = None,
     ) -> str:
-        digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        digest = file_sha256(path)
         if digest != sha256:
             raise ValueError(f"local file hash mismatch for {path}")
         etag = self.put_bytes(

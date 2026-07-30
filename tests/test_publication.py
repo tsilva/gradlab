@@ -311,9 +311,8 @@ def test_policy_variant_accepts_another_registered_action_set() -> None:
     [
         ("ppo", "stable_baselines3.ppo.ppo.PPO"),
         ("a2c", "stable_baselines3.a2c.a2c.A2C"),
-        ("dqn", "stable_baselines3.dqn.dqn.DQN"),
         ("action-program", "gradlab.action_program.ActionProgramPolicy"),
-        ("recurrent-ppo", "sb3_contrib.ppo_recurrent.ppo_recurrent.RecurrentPPO"),
+        ("cell-graph", "gradlab.cell_graph.CellGraphPolicy"),
     ],
 )
 def test_supported_algorithms_are_the_last_axis(algorithm: str, model_class: str) -> None:
@@ -342,7 +341,7 @@ def test_publication_rejects_unknown_family_and_algorithm_mismatch() -> None:
                 )
             ),
         )
-    with pytest.raises(ValueError, match="no registered canonical game family"):
+    with pytest.raises(ValueError, match="unknown environment provider"):
         publication_identity_from_policy_bundle(
             "Level1-1",
             policy_bundle_from_metadata(model_metadata(provider="unregistered-mario-provider")),

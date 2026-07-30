@@ -462,35 +462,34 @@ class DstackBackend:
             ["ps", "--project", self.project, "--all", "--json"],
             timeout=30,
         )
-        parsed = json.loads(result.stdout or "[]")
-        rows = parsed if isinstance(parsed, list) else parsed.get("runs") or []
+        parsed = json.loads(result.stdout or "{}")
+        if not isinstance(parsed, Mapping) or not isinstance(parsed.get("runs"), list):
+            raise ValueError("dstack ps response must contain a runs list")
+        rows = parsed["runs"]
         ordered_rows = sorted(
             (row for row in rows if isinstance(row, Mapping)),
             key=lambda row: str(row.get("submitted_at") or ""),
             reverse=True,
         )
+        if len(ordered_rows) != len(rows):
+            raise ValueError("dstack ps runs must contain objects")
         for row in ordered_rows:
-            if not isinstance(row, Mapping):
-                continue
             run_spec = row.get("run_spec")
             configuration = (
                 run_spec.get("configuration") if isinstance(run_spec, Mapping) else None
             )
-            configured_name = (
-                configuration.get("name")
-                if isinstance(configuration, Mapping)
-                else None
-            )
-            if (
-                str(row.get("name") or row.get("run_name") or configured_name or "")
-                != name
-            ):
+            if not isinstance(configuration, Mapping):
+                raise ValueError("dstack ps run must contain run_spec.configuration")
+            configured_name = str(configuration.get("name") or "")
+            status = row.get("status")
+            if not configured_name or not isinstance(status, str) or not status.strip():
+                raise ValueError("dstack ps run must contain configuration.name and status")
+            if configured_name != name:
                 continue
-            status = str(row.get("status") or row.get("state") or "unknown")
             return DstackTask(
                 project=self.project,
                 name=name,
-                status=status,
+                status=status.strip(),
                 raw=dict(row),
             )
         raise KeyError(f"dstack task not found: {self.project}/{name}")

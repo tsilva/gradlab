@@ -5,7 +5,7 @@ from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from typing import Any
 
-from gradlab.env_registry import environment_spec, resolve_env_id
+from gradlab.env_registry import environment_spec
 from gradlab.json_utils import canonical_json_text
 from gradlab.metric_names import metric_path_segment
 from gradlab.provider_config import provider_env_id, provider_game, semantic_provider_args
@@ -85,26 +85,6 @@ def _copy_present(source: Mapping[str, Any], keys: tuple[str, ...]) -> dict[str,
     return {key: deepcopy(source[key]) for key in keys if key in source and source[key] is not None}
 
 
-def _setdefault_section(
-    environment: dict[str, Any],
-    section: str,
-    values: Mapping[str, Any],
-) -> None:
-    if not values:
-        return
-    existing = environment.get(section)
-    if not isinstance(existing, dict):
-        environment[section] = dict(values)
-        return
-    for key, value in values.items():
-        existing.setdefault(key, value)
-
-
-def _setdefault_top_level(environment: dict[str, Any], values: Mapping[str, Any]) -> None:
-    for key, value in values.items():
-        environment.setdefault(key, value)
-
-
 def task_config_from_train_config(
     train_config: Mapping[str, Any],
     *,
@@ -147,10 +127,7 @@ def validate_task_config(task: Mapping[str, Any], *, label: str = "task") -> Non
     if not isinstance(action_set, str) or not action_set.strip():
         raise ValueError(f"{label}.action.set must be a non-empty string")
     if task_id == "mario" and action_set != "native":
-        raise ValueError(
-            f"{label}.action.set must be 'native'; "
-            "use env_args.use_restricted_actions for provider-owned presets"
-        )
+        raise ValueError(f"{label}.action.set must be 'native'")
     extra_action_keys = sorted(set(action) - {"set", "codec"})
     if extra_action_keys:
         raise ValueError(f"{label}.action has unexpected keys: {extra_action_keys}")
@@ -313,21 +290,8 @@ def validate_task_config(task: Mapping[str, Any], *, label: str = "task") -> Non
                 )
 
 
-def _normalize_state_identity(identity: dict[str, Any]) -> None:
-    state_value = identity.get("state")
-    if not isinstance(state_value, Mapping):
-        return
-    state_section = dict(state_value)
-    identity.pop("state", None)
-    for key in STATE_KEYS:
-        if key in state_section and state_section[key] is not None:
-            identity.setdefault(key, deepcopy(state_section[key]))
-
-
 def environment_identity_from_train_config(
     train_config: Mapping[str, Any],
-    *,
-    environment: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build a canonical, hashable environment identity from launch config.
 
@@ -338,28 +302,14 @@ def environment_identity_from_train_config(
 
     normalized_train_config = deepcopy(dict(train_config))
 
-    identity = deepcopy(dict(environment or {}))
-    identity.pop("env_config", None)
-    identity["schema_version"] = ENVIRONMENT_SCHEMA_VERSION
-    identity.pop("env_provider", None)
-    if "env_id" not in identity:
-        resolved_env_id = provider_env_id(normalized_train_config)
-        if resolved_env_id is not None:
-            identity["env_id"] = resolved_env_id
-    elif isinstance(identity.get("env_id"), str):
-        identity["env_id"] = resolve_env_id(str(identity["env_id"])).qualified_id
-
-    _normalize_state_identity(identity)
-    _setdefault_top_level(identity, _copy_present(normalized_train_config, STATE_KEYS))
-    _setdefault_section(
-        identity,
-        "preprocessing",
-        _copy_present(normalized_train_config, PREPROCESSING_KEYS),
-    )
-    existing_task = identity.pop("task", None)
+    identity: dict[str, Any] = {"schema_version": ENVIRONMENT_SCHEMA_VERSION}
+    resolved_env_id = provider_env_id(normalized_train_config)
+    if resolved_env_id is not None:
+        identity["env_id"] = resolved_env_id
+    identity.update(_copy_present(normalized_train_config, STATE_KEYS))
+    identity["preprocessing"] = _copy_present(normalized_train_config, PREPROCESSING_KEYS)
     identity["task"] = task_config_from_train_config(
         normalized_train_config,
-        task=existing_task if isinstance(existing_task, Mapping) else None,
     )
     provider_args = semantic_provider_args(normalized_train_config)
     if provider_args:
@@ -441,12 +391,7 @@ def attach_environment_identity(document: Mapping[str, Any]) -> dict[str, Any]:
     train_config = materialized.get("train_config")
     if not isinstance(train_config, Mapping):
         return materialized
-    environment = environment_identity_from_train_config(
-        train_config,
-        environment=materialized.get("environment")
-        if isinstance(materialized.get("environment"), Mapping)
-        else None,
-    )
+    environment = environment_identity_from_train_config(train_config)
     materialized["environment"] = environment
     materialized["environment_hash"] = environment_hash(environment)
     materialized["policy_environment_hash"] = policy_environment_hash(train_config)

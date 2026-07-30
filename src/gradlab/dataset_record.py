@@ -48,7 +48,7 @@ from gradlab.dataset_store import (
     preflight_recording_reference,
     validate_tree,
 )
-from gradlab.json_utils import canonical_json_bytes, json_value
+from gradlab.json_utils import canonical_json_bytes, canonical_json_sha256, json_value
 from gradlab.model_sources import (
     download_remote_model_source,
     is_huggingface_model_ref,
@@ -249,7 +249,7 @@ def _collector_artifact(
             "gradlab_policy_adapter_version": 1,
         },
     }
-    contract_id = hashlib.sha256(canonical_json_bytes(document)).hexdigest()
+    contract_id = canonical_json_sha256(document)
     return CollectorArtifact(contract_id, document, files)
 
 

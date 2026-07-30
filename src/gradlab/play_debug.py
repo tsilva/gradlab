@@ -36,9 +36,6 @@ class PolicyDecision:
     component_probabilities: tuple[np.ndarray, ...] = ()
     mean: np.ndarray | None = None
     stddev: np.ndarray | None = None
-    q_values: np.ndarray | None = None
-    exploration_rate: float | None = None
-    exploratory: bool | None = None
     program: Mapping[str, Any] | None = None
     route: Mapping[str, Any] | None = None
     sampled: bool | None = None
@@ -66,21 +63,6 @@ class PolicyDecision:
         if self.probabilities is None or probability is None:
             return None
         return 1 + int(np.count_nonzero(self.probabilities > probability))
-
-    @property
-    def selected_q_value(self) -> float | None:
-        action = self.selected_discrete_action
-        if self.q_values is None or action is None or not 0 <= action < self.q_values.size:
-            return None
-        return float(self.q_values.reshape(-1)[action])
-
-    @property
-    def selected_q_rank(self) -> int | None:
-        value = self.selected_q_value
-        if self.q_values is None or value is None:
-            return None
-        return 1 + int(np.count_nonzero(self.q_values > value))
-
 
 def _as_numpy(value: torch.Tensor) -> np.ndarray:
     return value.detach().cpu().numpy()
@@ -206,46 +188,6 @@ def actor_critic_policy_decisions(
         model,
         model_obs,
         deterministic=deterministic,
-    )
-
-
-def dqn_policy_decisions(
-    model: Any,
-    model_obs: Any,
-    *,
-    epsilon_greedy: bool,
-) -> tuple[PolicyDecision, ...]:
-    """Run the DQN Q-network once and preserve SB3's epsilon-greedy gate."""
-
-    policy = model.policy
-    policy.set_training_mode(False)
-    obs_tensor, _vectorized = policy.obs_to_tensor(model_obs)
-    with torch.no_grad():
-        q_values = _as_numpy(policy.q_net(obs_tensor))
-    greedy_actions = np.argmax(q_values, axis=1).astype(np.int64)
-    exploratory = bool(
-        epsilon_greedy and np.random.rand() < float(getattr(model, "exploration_rate", 0.0))
-    )
-    actions = (
-        np.asarray([model.action_space.sample() for _ in range(q_values.shape[0])], dtype=np.int64)
-        if exploratory
-        else greedy_actions
-    )
-    return tuple(
-        PolicyDecision(
-            raw_action=np.asarray(actions[lane], dtype=np.int64),
-            executed_action=np.asarray(actions[lane], dtype=np.int64),
-            action_selection_mode="epsilon_greedy" if epsilon_greedy else "greedy",
-            distribution_kind=None,
-            mode=np.asarray(greedy_actions[lane], dtype=np.int64),
-            q_values=q_values[lane].copy(),
-            exploration_rate=(
-                float(getattr(model, "exploration_rate", 0.0)) if epsilon_greedy else 0.0
-            ),
-            exploratory=exploratory,
-            sampled=None,
-        )
-        for lane in range(q_values.shape[0])
     )
 
 

@@ -109,7 +109,7 @@ def episode_result_from_record(
     result: dict[str, Any] = {
         "env_index": int(getattr(record, "lane", 0)),
         "episode_index": int(getattr(record, "episode_index", 0)),
-        "start_state": start_id or info.get("start_state") or info.get("state"),
+        "start_state": start_id,
         "return": float(getattr(record, "episode_return", 0.0)),
         "score": int(info.get("score", 0) or 0),
         "lives": int(info.get("lives", 0) or 0),
@@ -159,10 +159,7 @@ def death_location_histogram(death_x_positions: list[int], bin_size: int = 100) 
 
 
 def episode_start_state(episode: dict[str, Any]) -> str | None:
-    state = episode.get("start_state") or episode.get("start_id") or episode.get("state")
-    final_info = episode.get("final_info")
-    if not state and isinstance(final_info, dict):
-        state = final_info.get("start_state") or final_info.get("state")
+    state = episode.get("start_state")
     return str(state) if state else None
 
 

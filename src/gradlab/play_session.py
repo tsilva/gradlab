@@ -74,7 +74,7 @@ ATTRIBUTION_MODES = ("none", "gradcam", "occlusion")
 
 
 def _color(text: str, style: str) -> str:
-    if os.environ.get("NO_COLOR") or os.environ.get("GRADLAB_NO_COLOR"):
+    if os.environ.get("NO_COLOR"):
         return text
     return f"{ANSI_STYLES[style]}{text}{ANSI_RESET}"
 
@@ -218,7 +218,7 @@ def add_play_source_args(parser: argparse.ArgumentParser) -> None:
         nargs="?",
         type=positional_play_source_arg,
         help=(
-            "W&B project/run URL, immutable public checkpoint manifest, or Hugging Face model ref. "
+            "W&B run URL, immutable public checkpoint manifest, or Hugging Face model ref. "
             "Use --model for a local checkpoint or --run for an gradlab public run."
         ),
     )
@@ -262,10 +262,6 @@ def add_play_source_args(parser: argparse.ArgumentParser) -> None:
         "--public-models-base-url",
         default=DEFAULT_PUBLIC_MODELS_BASE_URL,
         help="Public models bucket URL. Defaults to gradlab's checked-in public endpoint.",
-    )
-    parser.add_argument(
-        "--wandb-entity",
-        help="W&B entity containing repository-declared runs. Defaults to WANDB_ENTITY.",
     )
     parser.add_argument(
         "--public-model-root",
@@ -581,15 +577,12 @@ class _PlaybackSession:
         termination_source: str = "training",
     ):
         self.model = model
-        try:
-            self.policy_runtime: PolicyRuntime | None = policy_runtime or PolicyRuntime(model)
-            self._policy_runtime_error: Exception | None = None
-        except (TypeError, ValueError) as exc:
-            # Some non-executing test and human-control sessions intentionally
-            # carry no policy. The first requested policy action still fails
-            # before the environment is stepped.
-            self.policy_runtime = None
-            self._policy_runtime_error = exc
+        self.policy_runtime = policy_runtime
+        self._policy_runtime_error: Exception | None = (
+            None
+            if policy_runtime is not None
+            else RuntimeError("policy runtime identity was not provided")
+        )
         self.env = env
         self.config = config
         self.initial_seed = initial_seed
@@ -723,7 +716,7 @@ class _PlaybackSession:
             return
         if not self.configured_task_states:
             return
-        candidate = info.get("start_id") or info.get("start_state") or info.get("state")
+        candidate = info.get("start_id")
         if isinstance(candidate, str) and candidate in self.configured_task_states:
             self.active_task_state = candidate
             return

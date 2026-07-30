@@ -24,10 +24,10 @@ GOAL_TRAIN_FIELDS = frozenset(
         "checkpoint_freq",
         "early_stop",
         "environment",
-        "policy",
     }
 )
-GOAL_EVAL_FIELDS = frozenset({"acceptance", "env_config", "environment", "episodes", "policy"})
+GOAL_EVAL_FIELDS = frozenset({"acceptance", "environment", "episodes", "policy"})
+GOAL_EVAL_POLICY_FIELDS = frozenset({"stochastic"})
 
 
 def _reject_unknown_fields(
@@ -79,3 +79,10 @@ def validate_goal_document_shape(
         allowed=GOAL_EVAL_FIELDS,
         label=f"{label}.eval",
     )
+    evaluation = document.get("eval")
+    if isinstance(evaluation, Mapping):
+        _reject_unknown_fields(
+            evaluation.get("policy"),
+            allowed=GOAL_EVAL_POLICY_FIELDS,
+            label=f"{label}.eval.policy",
+        )

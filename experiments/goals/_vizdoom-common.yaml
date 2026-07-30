@@ -92,7 +92,7 @@ train:
           <<: &vizdoom_provider_args
             # Select the scenario asset entry resolved by the provider.
             scenario: scenario
-            # Supply the legacy API info selector; task signals are configured separately.
+            # Select the provider info definition; task signals are configured separately.
             info: data
             # Select the provider's restricted discrete action table.
             use_restricted_actions: discrete
@@ -100,7 +100,7 @@ train:
             record: false
             # Set the number of players instantiated in each environment lane.
             players: 1
-            # Supply the legacy integer-interface argument retained for API compatibility.
+            # Select the provider integer interface.
             inttype: stable
             # Request rendered pixels as policy observations.
             obs_type: image

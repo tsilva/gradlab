@@ -7,7 +7,6 @@ import os
 import platform
 import re
 import shlex
-import subprocess
 import sys
 import threading
 from datetime import UTC, datetime
@@ -28,6 +27,7 @@ from gradlab.recipe_catalog import LOCAL_RUN_RECEIPT, recipe_identity, resolve_r
 from gradlab.recipe_documents import (
     compose_resolved_train_documents,
     prepare_checkpoint_eval_mode,
+    repo_git_commit,
 )
 from gradlab.rom_assets import (
     DEFAULT_LOCAL_ROM_CACHE,
@@ -137,21 +137,6 @@ def _safe_run_dir(runs_dir: Path, run_name: str) -> Path:
     if not run_dir.is_relative_to(root):
         raise ValueError("--run-name escapes --runs-dir")
     return run_dir
-
-
-def _git_commit(root: Path) -> str | None:
-    try:
-        completed = subprocess.run(
-            ["git", "rev-parse", "HEAD"],
-            cwd=root,
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-    except OSError, subprocess.CalledProcessError:
-        return None
-    value = completed.stdout.strip().lower()
-    return value if re.fullmatch(r"[0-9a-f]{40}", value) else None
 
 
 def _portable_path(path: Path, *, root: Path) -> str:
@@ -276,7 +261,7 @@ def main(argv: list[str] | None = None) -> int:
     if not args.wandb:
         overrides.append("logging.wandb_mode=disabled")
 
-    source_commit = _git_commit(source.repository_root) or _installed_source_commit()
+    source_commit = repo_git_commit(source.repository_root) or _installed_source_commit()
     resolved_documents = compose_resolved_train_documents(
         source.goal_path,
         source.recipe_path,

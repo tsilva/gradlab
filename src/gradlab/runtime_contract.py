@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import os
 import sys
@@ -9,7 +8,7 @@ from dataclasses import asdict
 from typing import Any
 
 from gradlab.contract_versions import TRAIN_CONFIG_CONTRACT_SCHEMA_VERSION
-from gradlab.json_utils import json_safe
+from gradlab.json_utils import canonical_json_sha256, json_safe
 from gradlab.train_config import (
     TRAIN_CONFIG_FIELDS,
     TrainConfigField,
@@ -19,7 +18,7 @@ from gradlab.training_backend import training_backend_contract_payload
 
 
 RUNTIME_DESCRIPTOR_SCHEMA_VERSION = 7
-_CLI_ONLY_FIELD_METADATA = frozenset({"aliases", "flag", "help"})
+_CLI_ONLY_FIELD_METADATA = frozenset({"flag", "help"})
 
 
 def _runtime_field_payload(field: TrainConfigField) -> dict[str, Any]:
@@ -37,12 +36,10 @@ def train_config_contract_payload() -> dict[str, Any]:
 
 
 def train_config_contract_sha256() -> str:
-    encoded = json.dumps(
+    return canonical_json_sha256(
         train_config_contract_payload(),
-        sort_keys=True,
-        separators=(",", ":"),
-    ).encode("utf-8")
-    return hashlib.sha256(encoded).hexdigest()
+        ensure_ascii=True,
+    )
 
 
 def runtime_contract(*, runtime_image_ref: str | None = None) -> dict[str, Any]:
@@ -71,9 +68,10 @@ def validate_config_payload(payload: Any) -> dict[str, Any]:
         {
             "validated": True,
             "validated_field_count": len(normalized),
-            "validated_fields_sha256": hashlib.sha256(
-                json.dumps(sorted(normalized), separators=(",", ":")).encode("utf-8")
-            ).hexdigest(),
+            "validated_fields_sha256": canonical_json_sha256(
+                sorted(normalized),
+                ensure_ascii=True,
+            ),
         }
     )
     return receipt

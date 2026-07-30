@@ -25,27 +25,63 @@ def canonical_json_text(
     *,
     default: Callable[[Any], Any] | None = None,
     allow_nan: bool = False,
+    ensure_ascii: bool = False,
 ) -> str:
     return json.dumps(
         value,
         sort_keys=True,
         separators=(",", ":"),
-        ensure_ascii=False,
+        ensure_ascii=ensure_ascii,
         allow_nan=allow_nan,
         default=default,
     )
 
 
-def canonical_json_bytes(value: Any) -> bytes:
-    return canonical_json_text(value).encode("utf-8")
+def canonical_json_bytes(
+    value: Any,
+    *,
+    default: Callable[[Any], Any] | None = None,
+    allow_nan: bool = False,
+    ensure_ascii: bool = False,
+) -> bytes:
+    return canonical_json_text(
+        value,
+        default=default,
+        allow_nan=allow_nan,
+        ensure_ascii=ensure_ascii,
+    ).encode("utf-8")
 
 
-def canonical_json_line_bytes(value: Any) -> bytes:
-    return canonical_json_bytes(value) + b"\n"
+def canonical_json_line_bytes(
+    value: Any,
+    *,
+    default: Callable[[Any], Any] | None = None,
+    allow_nan: bool = False,
+    ensure_ascii: bool = False,
+) -> bytes:
+    return canonical_json_bytes(
+        value,
+        default=default,
+        allow_nan=allow_nan,
+        ensure_ascii=ensure_ascii,
+    ) + b"\n"
 
 
-def canonical_json_sha256(value: Any) -> str:
-    return hashlib.sha256(canonical_json_bytes(value)).hexdigest()
+def canonical_json_sha256(
+    value: Any,
+    *,
+    default: Callable[[Any], Any] | None = None,
+    allow_nan: bool = False,
+    ensure_ascii: bool = False,
+) -> str:
+    return hashlib.sha256(
+        canonical_json_bytes(
+            value,
+            default=default,
+            allow_nan=allow_nan,
+            ensure_ascii=ensure_ascii,
+        )
+    ).hexdigest()
 
 
 def json_safe(value: Any) -> Any:

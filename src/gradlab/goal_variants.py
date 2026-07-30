@@ -1,20 +1,19 @@
 from __future__ import annotations
 
-import hashlib
 import json
 import re
 from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from typing import Any
 
-from gradlab.json_utils import canonical_json_bytes
+from gradlab.json_utils import canonical_json_sha256, canonical_json_text
 from gradlab.recipe_documents import goal_contract_sha256
 from gradlab.reward_programs import goal_for_contract_validation
 
 
 GOAL_VARIANT_SCHEMA_VERSION = 1
-GOAL_VARIANT_INDEX_SCHEMA_VERSION = 1
-GOAL_VARIANT_RUN_INDEX_SCHEMA_VERSION = 1
+GOAL_VARIANT_INDEX_SCHEMA_VERSION = 2
+GOAL_VARIANT_RUN_INDEX_SCHEMA_VERSION = 2
 GOAL_VARIANT_ID_PATTERN = re.compile(r"^goal-variant-[0-9a-f]{24}$")
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 MAX_DIFF_ENTRIES = 24
@@ -38,20 +37,16 @@ def goal_variant_id(
     for key in ("goal_contract_sha256", "effective_goal_contract_sha256"):
         if SHA256_PATTERN.fullmatch(identity[key]) is None:
             raise ValueError(f"goal variant {key} must be a lowercase SHA-256")
-    digest = hashlib.sha256(canonical_json_bytes(identity)).hexdigest()
+    digest = canonical_json_sha256(identity)
     return f"goal-variant-{digest[:24]}"
 
 
-def goal_variant_scope_key(*, entity: object, project: object, goal_slug: object) -> str:
-    identity = {
-        "entity": str(entity or "").strip(),
-        "project": str(project or "").strip(),
-        "goal_slug": str(goal_slug or "").strip(),
-    }
-    if not all(identity.values()):
-        raise ValueError("goal variant scope requires entity, project, and goal_slug")
-    digest = hashlib.sha256(canonical_json_bytes(identity)).hexdigest()
-    return f"goal-variants/v1/scopes/{digest}"
+def goal_variant_scope_key(*, goal_slug: object) -> str:
+    canonical_goal_slug = str(goal_slug or "").strip()
+    if not canonical_goal_slug:
+        raise ValueError("goal variant scope requires goal_slug")
+    digest = canonical_json_sha256({"goal_slug": canonical_goal_slug})
+    return f"goal-variants/v2/goals/{digest}"
 
 
 def _path_text(parts: Sequence[str]) -> str:
@@ -185,7 +180,7 @@ def _display_value(value: object) -> str:
         return "on" if value else "off"
     if isinstance(value, str):
         return value
-    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return canonical_json_text(value)
 
 
 def _diff_label(entry: Mapping[str, Any]) -> str:
@@ -322,7 +317,7 @@ def validate_goal_variant_descriptor(value: Mapping[str, Any]) -> dict[str, Any]
 
 def goal_variant_projection(descriptor: Mapping[str, Any]) -> dict[str, Any]:
     validated = validate_goal_variant_descriptor(descriptor)
-    descriptor_sha = hashlib.sha256(canonical_json_bytes(validated)).hexdigest()
+    descriptor_sha = canonical_json_sha256(validated)
     return {
         "goal_variant_id": validated["variant_id"],
         "goal_variant_label": validated["label"],
@@ -337,14 +332,6 @@ def goal_variant_projection(descriptor: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
-def unknown_goal_variant_id(*, goal_slug: object) -> str:
-    slug = str(goal_slug or "").strip()
-    if not slug:
-        raise ValueError("unknown goal variant requires goal_slug")
-    digest = hashlib.sha256(f"unknown-goal-variant-v1:{slug}".encode()).hexdigest()
-    return f"goal-variant-unknown-{digest[:16]}"
-
-
 __all__ = [
     "GOAL_VARIANT_ID_PATTERN",
     "GOAL_VARIANT_INDEX_SCHEMA_VERSION",
@@ -354,6 +341,5 @@ __all__ = [
     "goal_variant_id",
     "goal_variant_projection",
     "goal_variant_scope_key",
-    "unknown_goal_variant_id",
     "validate_goal_variant_descriptor",
 ]

@@ -44,7 +44,6 @@ def checkpoint_eval_requires_acceptance(train_config: Mapping[str, Any]) -> bool
 class TrainConfigField:
     dest: str
     flag: str | None = None
-    aliases: tuple[str, ...] = ()
     kind: FieldKind = "value"
     type_name: TypeName = "str"
     default: Any = None
@@ -124,7 +123,7 @@ def _add_config_field_argument(
         )
         if type_callable is not None:
             kwargs["type"] = type_callable
-    parser.add_argument(field.flag, *field.aliases, **kwargs)
+    parser.add_argument(field.flag, **kwargs)
 
 
 def add_env_config_args(
@@ -541,14 +540,10 @@ TRAIN_CONFIG_FIELDS: tuple[TrainConfigField, ...] = (
     ),
     _field(
         "obs_resize",
-        aliases=("--observation-size",),
         type_name="obs_resize",
         env_default="obs_resize",
         environment=True,
-        help=(
-            "Policy observation dimensions as height,width. "
-            "--observation-size remains a square-size CLI alias."
-        ),
+        help="Policy observation dimensions as height,width.",
     ),
     _field(
         "obs_crop",

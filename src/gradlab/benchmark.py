@@ -23,7 +23,7 @@ from gradlab.benchmark_profiles import (
 from gradlab.env import default_run_dir
 from gradlab.metric_store import MetricStore, metric_store_path
 from gradlab.policy_bundle import build_recipe_document, write_canonical_json
-from gradlab.recipe_documents import compose_resolved_train_documents
+from gradlab.recipe_documents import compose_resolved_train_documents, repo_git_commit
 
 
 def _timestamp() -> str:
@@ -57,7 +57,7 @@ def _execution_commands(
         else:
             variant = "candidate" if command.label.startswith("candidate-") else "baseline"
             recipe_file = str(profile.payload[f"{variant}_recipe_file"])
-        source_commit = _git_commit() or "0" * 40
+        source_commit = repo_git_commit() or "0" * 40
         resolved = compose_resolved_train_documents(
             Path(str(profile.payload["goal_file"])),
             Path(recipe_file),
@@ -86,19 +86,6 @@ def _execution_commands(
         config["recipe_json_path"] = str(recipe_path)
         prepared.append(replace(command, stdin=json.dumps(config, sort_keys=True)))
     return prepared
-
-
-def _git_commit() -> str | None:
-    result = subprocess.run(
-        ["git", "rev-parse", "HEAD"],
-        check=False,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL,
-    )
-    if result.returncode != 0:
-        return None
-    return result.stdout.strip() or None
 
 
 def _git_dirty() -> bool | None:
@@ -137,7 +124,7 @@ def _environment_snapshot(profile: BenchmarkProfile) -> dict[str, Any]:
         "machine": platform.machine(),
         "logical_cpu_count": os.cpu_count(),
         "load_average_1m_5m_15m": _load_average(),
-        "source_commit": _git_commit(),
+        "source_commit": repo_git_commit(),
         "source_dirty": _git_dirty(),
         "versions": versions,
     }

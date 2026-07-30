@@ -18,7 +18,7 @@ COMMANDS: dict[str, tuple[str, str]] = {
     "env": ("list, inspect, and preflight environment providers", "gradlab.env_cli"),
     "rom": ("import, provision, verify, and warm ROM assets", "gradlab.rom_cli"),
     "dataset": (
-        "record, inspect, verify, migrate, and publish gameplay datasets",
+        "record, inspect, verify, and publish gameplay datasets",
         "gradlab.dataset_cli",
     ),
     "jobs": ("inspect and flush durable local background jobs", "gradlab.jobs_cli"),

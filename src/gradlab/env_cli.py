@@ -245,29 +245,26 @@ def _assert_reset_start_info(
 ) -> None:
     import numpy as np
 
-    for key in ("start_id", "start_state", "state"):
-        if key not in infos:
-            continue
-        values = np.asarray(infos[key], dtype=object)
-        if values.shape != (n_envs,):
-            raise ValueError(f"reset {key} must contain one value per lane")
-        presence = infos.get(f"_{key}")
-        if presence is not None:
-            present = np.asarray(presence, dtype=np.bool_)
-            if present.shape != (n_envs,) or np.any(selected & ~present):
-                raise ValueError(f"reset {key} does not identify the selected lane")
-        if any(values[index] is None for index in np.flatnonzero(selected)):
-            raise ValueError(f"reset {key} omits the selected lane start")
-        if expected_starts is not None:
-            for index in np.flatnonzero(selected):
-                expected = expected_starts[index]
-                if expected is not None and str(values[index]) != str(expected):
-                    raise ValueError(
-                        f"reset {key} reported {values[index]!r} for lane {index}; "
-                        f"expected {expected!r}"
-                    )
-        return
-    raise ValueError("masked reset did not report start_id, start_state, or state")
+    if "start_id" not in infos:
+        raise ValueError("masked reset did not report start_id")
+    values = np.asarray(infos["start_id"], dtype=object)
+    if values.shape != (n_envs,):
+        raise ValueError("reset start_id must contain one value per lane")
+    presence = infos.get("_start_id")
+    if presence is not None:
+        present = np.asarray(presence, dtype=np.bool_)
+        if present.shape != (n_envs,) or np.any(selected & ~present):
+            raise ValueError("reset start_id does not identify the selected lane")
+    if any(values[index] is None for index in np.flatnonzero(selected)):
+        raise ValueError("reset start_id omits the selected lane start")
+    if expected_starts is not None:
+        for index in np.flatnonzero(selected):
+            expected = expected_starts[index]
+            if expected is not None and str(values[index]) != str(expected):
+                raise ValueError(
+                    f"reset start_id reported {values[index]!r} for lane {index}; "
+                    f"expected {expected!r}"
+                )
 
 
 def _record(

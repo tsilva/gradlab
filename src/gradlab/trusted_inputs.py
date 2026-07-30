@@ -15,7 +15,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from gradlab.dotenv import load_env_file
-from gradlab.json_utils import canonical_json_bytes
+from gradlab.json_utils import canonical_json_sha256
 
 
 MAX_MODEL_FILES = 64
@@ -108,16 +108,14 @@ class ApprovedModelInput:
 
 
 def _manifest_hash(manifest: tuple[ManifestEntry, ...], *, source_identity: str | None) -> str:
-    return hashlib.sha256(
-        canonical_json_bytes(
-            {
-                "domain": "gradlab.approved-model-input",
-                "version": 1,
-                "source_identity": source_identity,
-                "files": [entry.as_dict() for entry in manifest],
-            }
-        )
-    ).hexdigest()
+    return canonical_json_sha256(
+        {
+            "domain": "gradlab.approved-model-input",
+            "version": 1,
+            "source_identity": source_identity,
+            "files": [entry.as_dict() for entry in manifest],
+        }
+    )
 
 
 def _safe_name(value: str) -> str:

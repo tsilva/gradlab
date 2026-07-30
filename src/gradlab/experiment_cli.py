@@ -27,7 +27,7 @@ from gradlab.dstack_backend import (
 )
 from gradlab.env_registry import resolve_env_provider
 from gradlab.file_utils import file_sha256
-from gradlab.json_utils import json_safe
+from gradlab.json_utils import canonical_json_text, json_safe
 from gradlab.modal_eval_config import load_modal_eval_config
 from gradlab.operator_credentials import (
     OperatorConfigurationError,
@@ -662,16 +662,14 @@ def cmd_operator_preflight(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_catalog_repair(args: argparse.Namespace) -> int:
+def cmd_catalog_rebuild(args: argparse.Namespace) -> int:
     root = repository_root()
     _load_environment(root)
     storage = RunStorageConfig.from_env()
     authority = RunAuthority(storage)
     discovered = 0
-    registered = 0
-    terminal_summaries = 0
+    source_records: list[tuple[str, RunManifest, TerminalReceipt | None]] = []
     failed: list[dict[str, str]] = []
-    terminal_summary_failed: list[dict[str, str]] = []
     for key in sorted(authority.control.iter_keys("runs/")):
         if not re.fullmatch(r"runs/gradlab-[0-9a-f]{32}/manifest\.json", key):
             continue
@@ -680,47 +678,14 @@ def cmd_catalog_repair(args: argparse.Namespace) -> int:
             state = authority.semantic_state(key.split("/")[1])
             manifest = RunManifest(**_latest_attempt(state))
             manifest.validate()
-            authority.register_goal_variant(manifest)
             terminal_document = _latest_attempt_terminal(state)
+            terminal = None
             if terminal_document is not None:
                 terminal = TerminalReceipt(**terminal_document)
                 terminal.validate()
-                if not authority.update_goal_variant_run_best_effort(
-                    manifest,
-                    state=terminal.state,
-                    updated_at=terminal.completed_at,
-                    stop_reason=terminal.stop_reason,
-                    final_step=terminal.final_step,
-                    early_stop=terminal.early_stop,
-                ):
-                    raise RuntimeError("could not project terminal reason into run index")
-                try:
-                    projector = WandbProjector.resume(
-                        {
-                            "wandb_run_id": manifest.run_id,
-                            "wandb_entity": manifest.wandb["entity"],
-                            "wandb_project": manifest.wandb["project"],
-                            "wandb_mode": "online",
-                            "run_name": manifest.wandb.get("display_name"),
-                            "wandb_group": manifest.wandb.get("group"),
-                        },
-                        update_finish_state=False,
-                    )
-                    try:
-                        publish_terminal_summary(projector.run, terminal)
-                    finally:
-                        projector.close(timeout_seconds=300)
-                    terminal_summaries += 1
-                except Exception as exc:
-                    terminal_summary_failed.append(
-                        {
-                            "key": key,
-                            "error_type": type(exc).__name__,
-                            "error": str(exc),
-                        }
-                    )
-            authority.record_goal_variant_registration(manifest)
-            registered += 1
+                if terminal.run_id != manifest.run_id or terminal.attempt_id != manifest.attempt_id:
+                    raise ValueError("latest attempt terminal does not match its manifest")
+            source_records.append((key, manifest, terminal))
         except Exception as exc:
             failed.append(
                 {
@@ -729,35 +694,56 @@ def cmd_catalog_repair(args: argparse.Namespace) -> int:
                     "error": str(exc),
                 }
             )
+    cleared = {"catalog_objects": 0, "projection_receipts": 0}
+    rebuilt = 0
+    if not failed:
+        cleared = authority.clear_goal_variant_catalog()
+        for key, manifest, terminal in source_records:
+            try:
+                authority.register_goal_variant(manifest)
+                if terminal is not None:
+                    authority.update_goal_variant_run(
+                        manifest,
+                        state=terminal.state,
+                        updated_at=terminal.completed_at,
+                        stop_reason=terminal.stop_reason,
+                        final_step=terminal.final_step,
+                        early_stop=terminal.early_stop,
+                    )
+                authority.record_goal_variant_projection(manifest)
+                rebuilt += 1
+            except Exception as exc:
+                failed.append(
+                    {
+                        "key": key,
+                        "error_type": type(exc).__name__,
+                        "error": str(exc),
+                    }
+                )
     report = {
         "schema_version": 1,
         "discovered": discovered,
-        "registered": registered,
-        "terminal_summaries": terminal_summaries,
-        "terminal_summary_failed": terminal_summary_failed,
+        "rebuilt": rebuilt,
+        "cleared": cleared,
         "failed": failed,
     }
     if args.json:
         print(json.dumps(report, sort_keys=True))
     else:
         print(
-            "Goal-variant catalog repair: "
-            f"{registered} registered, "
-            f"{terminal_summaries} terminal summaries projected, "
-            f"{len(terminal_summary_failed)} summary projections failed, "
-            f"{len(failed)} index repairs failed"
+            "Goal-variant catalog rebuild: "
+            f"{rebuilt} current runs indexed, "
+            f"{cleared['catalog_objects']} catalog objects cleared, "
+            f"{len(failed)} current records failed"
         )
-    return 1 if failed or terminal_summary_failed else 0
+    return 1 if failed else 0
 
 
 def _latest_attempt(state: dict[str, Any]) -> dict[str, Any]:
     attempts = list(state.get("attempts") or [])
-    if attempts:
-        return dict(attempts[-1])
-    manifest = state.get("manifest")
-    if isinstance(manifest, dict):
-        return dict(manifest)
-    raise KeyError(f"run not found: {state['run_id']}")
+    if not attempts:
+        raise KeyError(f"current run has no attempt manifest: {state['run_id']}")
+    return dict(attempts[-1])
 
 
 def _latest_attempt_terminal(state: dict[str, Any]) -> dict[str, Any] | None:
@@ -948,7 +934,7 @@ def _follow_fingerprint(value: Mapping[str, Any]) -> str:
     semantic = dict(stable.get("semantic") or {})
     semantic.pop("observed_at", None)
     stable["semantic"] = semantic
-    return json.dumps(json_safe(stable), sort_keys=True, separators=(",", ":"))
+    return canonical_json_text(json_safe(stable), ensure_ascii=True)
 
 
 def _poll_status(
@@ -977,7 +963,7 @@ def cmd_follow(args: argparse.Namespace) -> int:
         timeout=float(args.timeout),
         poll_seconds=float(args.poll_seconds),
     ):
-        encoded = json.dumps(json_safe(value), sort_keys=True, separators=(",", ":"))
+        encoded = canonical_json_text(json_safe(value), ensure_ascii=True)
         fingerprint = _follow_fingerprint(value)
         if fingerprint != previous:
             print(encoded, flush=True)
@@ -1444,7 +1430,7 @@ def cmd_retry(args: argparse.Namespace) -> int:
     task_request = _task_request(manifest, manifest_uri=manifest_uri)
     task_request.validate()
     authority.create_attempt_manifest(manifest)
-    authority.register_goal_variant_best_effort(manifest)
+    authority.project_goal_variant_best_effort(manifest)
     try:
         task = dstack_backend.submit(task_request)
     except Exception:
@@ -1629,12 +1615,12 @@ def build_parser() -> argparse.ArgumentParser:
     operator_preflight.add_argument("--json", action="store_true")
     operator_preflight.set_defaults(func=cmd_operator_preflight)
 
-    catalog_repair = commands.add_parser(
-        "catalog-repair",
-        help="Rebuild run discovery indexes and terminal summary projections.",
+    catalog_rebuild = commands.add_parser(
+        "catalog-rebuild",
+        help="Replace goal-variant discovery indexes from current run records.",
     )
-    catalog_repair.add_argument("--json", action="store_true")
-    catalog_repair.set_defaults(func=cmd_catalog_repair)
+    catalog_rebuild.add_argument("--json", action="store_true")
+    catalog_rebuild.set_defaults(func=cmd_catalog_rebuild)
 
     status = commands.add_parser("status", help="Inspect dstack and R2 run state.")
     status.add_argument("--run", dest="run_id", type=_require_run_id, required=True)

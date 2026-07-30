@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import copy
-import hashlib
 import importlib.metadata
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass, fields
@@ -26,7 +25,7 @@ from gradlab.env_registry import (
     SUPERMARIOBROS_NES_TURBO_PROVIDER,
     resolve_env_provider,
 )
-from gradlab.json_utils import canonical_json_bytes, json_value
+from gradlab.json_utils import canonical_json_sha256, json_value
 from gradlab.rom_assets import (
     DEFAULT_LOCAL_ROM_CACHE,
     portable_rom_asset_identity,
@@ -372,5 +371,5 @@ def build_environment_artifact(
         "control_profile": session.control_profile,
         "fps": float(session.fps),
     }
-    contract_id = hashlib.sha256(canonical_json_bytes(document)).hexdigest()
+    contract_id = canonical_json_sha256(document)
     return EnvironmentArtifact(contract_id, document)

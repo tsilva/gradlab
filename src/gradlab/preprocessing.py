@@ -17,7 +17,6 @@ def _value(source: Mapping[str, Any] | Any, key: str, default: Any) -> Any:
 def _environment_argument(
     source: Mapping[str, Any] | Any,
     key: str,
-    aliases: tuple[str, ...],
     default: Any,
 ) -> Any:
     direct = _value(source, key, None)
@@ -25,9 +24,9 @@ def _environment_argument(
         return direct
     env_args = _value(source, "env_args", {})
     if isinstance(env_args, Mapping):
-        for alias in aliases:
-            if alias in env_args and env_args[alias] is not None:
-                return env_args[alias]
+        value = env_args.get(key)
+        if value is not None:
+            return value
     return default
 
 
@@ -39,10 +38,12 @@ def preprocessing_contract(
 ) -> dict[str, Any]:
     """Return the canonical policy-facing preprocessing contract."""
 
-    provider = str(provider_id or _value(source, "env_provider", "stable-retro-turbo"))
+    provider = str(provider_id or _value(source, "env_provider", "")).strip()
+    if not provider:
+        raise ValueError("preprocessing provider identity is required")
     pipeline = (
         "stable_retro_native_vec_env"
-        if provider in {"", "stable-retro-turbo"}
+        if provider == "stable-retro-turbo"
         else f"{provider.replace('-', '_')}_native_vec_env"
     )
     obs_resize = normalize_obs_resize(_value(source, "obs_resize", (84, 84)))
@@ -50,11 +51,7 @@ def preprocessing_contract(
     crop = normalize_obs_crop(raw_crop, label="environment.preprocessing.obs_crop")
     task_config = task or _value(source, "task", {})
     conditioning = task_config.get("conditioning", {}) if isinstance(task_config, Mapping) else {}
-    max_pool_frames = _value(
-        source,
-        "max_pool_frames",
-        _value(source, "maxpool_last_two", True),
-    )
+    max_pool_frames = _value(source, "max_pool_frames", True)
     return {
         "pipeline": pipeline,
         "obs_resize": list(obs_resize),
@@ -65,7 +62,6 @@ def preprocessing_contract(
             _environment_argument(
                 source,
                 "obs_grayscale",
-                ("obs_grayscale", "grayscale"),
                 True,
             )
         ),
@@ -75,7 +71,6 @@ def preprocessing_contract(
             _environment_argument(
                 source,
                 "frame_stack",
-                ("frame_stack", "stack_num"),
                 4,
             )
         ),

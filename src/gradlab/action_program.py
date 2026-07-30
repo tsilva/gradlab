@@ -11,6 +11,7 @@ import gymnasium as gym
 import numpy as np
 
 from gradlab.action_contract import action_contract_meanings
+from gradlab.json_utils import canonical_json_line_bytes
 
 ACTION_PROGRAM_SCHEMA_VERSION = 2
 ACTION_PROGRAM_MEMBER = "action_program.json"
@@ -169,8 +170,8 @@ class ActionProgramPolicy:
         self._run_remaining[mask] = 0
 
     def predict(self, observation: Any, deterministic: bool = False):
-        # ``deterministic`` is an SB3 compatibility argument, not a semantic
-        # mode for this fixed program. Both values preserve the declared runs.
+        # ``deterministic`` belongs to the current policy runtime protocol, not
+        # to this fixed program's semantics. Both values preserve the declared runs.
         del deterministic
         count = self._batch_size(observation)
         self._ensure_lanes(count)
@@ -284,7 +285,7 @@ class ActionProgramPolicy:
         with zipfile.ZipFile(destination, mode="w", compression=zipfile.ZIP_DEFLATED) as archive:
             archive.writestr(
                 ACTION_PROGRAM_MEMBER,
-                json.dumps(self.payload(), sort_keys=True, separators=(",", ":")) + "\n",
+                canonical_json_line_bytes(self.payload(), ensure_ascii=True),
             )
             if artifact_discriminator is not None:
                 discriminator = str(artifact_discriminator).strip()
@@ -292,15 +293,13 @@ class ActionProgramPolicy:
                     raise ValueError("action-program artifact_discriminator must not be empty")
                 archive.writestr(
                     ACTION_PROGRAM_ARTIFACT_IDENTITY_MEMBER,
-                    json.dumps(
+                    canonical_json_line_bytes(
                         {
                             "schema_version": 1,
                             "artifact_discriminator": discriminator,
                         },
-                        sort_keys=True,
-                        separators=(",", ":"),
-                    )
-                    + "\n",
+                        ensure_ascii=True,
+                    ),
                 )
 
     @classmethod

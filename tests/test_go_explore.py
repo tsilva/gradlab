@@ -91,6 +91,12 @@ class GoExploreSearchTests(unittest.TestCase):
         self.assertEqual(restored.state_document(("lane-a", "lane-b")), document)
         np.testing.assert_array_equal(restored.next_actions(), search.next_actions())
 
+        for field in ("best_incomplete_by_seed", "initial_roots"):
+            incomplete = dict(document)
+            incomplete.pop(field)
+            with self.assertRaisesRegex(ValueError, "fields mismatch"):
+                self.search().restore_state(incomplete)
+
     def test_progress_guidance_restores_best_lineage_until_success(self) -> None:
         search = GoExploreSearch(
             n_envs=1,

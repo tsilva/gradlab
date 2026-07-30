@@ -87,7 +87,7 @@ class TrainConfigFieldSchemaTests(unittest.TestCase):
             self.assertEqual(worker_config[key], invocation_config[key])
         self.assertEqual(execution_mode, TrainingExecutionMode.SUPERVISED)
 
-    def test_obs_resize_is_canonical_and_square_cli_alias_is_boundary_only(self) -> None:
+    def test_obs_resize_is_the_only_cli_flag(self) -> None:
         parser = argparse.ArgumentParser()
         add_env_config_args(
             parser,
@@ -98,7 +98,8 @@ class TrainConfigFieldSchemaTests(unittest.TestCase):
         )
 
         self.assertEqual(parser.parse_args(["--obs-resize", "72,96"]).obs_resize, (72, 96))
-        self.assertEqual(parser.parse_args(["--observation-size", "72"]).obs_resize, (72, 72))
+        with self.assertRaises(SystemExit):
+            parser.parse_args(["--observation-size", "72"])
         normalized = validate_and_normalize_train_config({"obs_resize": [72, 96]})
         self.assertEqual(normalized["obs_resize"], (72, 96))
         with self.assertRaisesRegex(ValueError, "both be zero or both be positive"):

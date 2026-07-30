@@ -379,6 +379,16 @@ class BatchRuntimeTests(unittest.TestCase):
         ):
             runtime.step(np.zeros((runtime.num_envs, 3), dtype=np.int8))
 
+    def test_reset_start_identity_rejects_noncurrent_aliases(self):
+        _provider, runtime = self.make_identity_runtime()
+
+        with self.assertRaisesRegex(ValueError, "must report actual start_id"):
+            runtime._actual_start_ids(
+                {"start_state": np.asarray(["Level1-1", "Level1-2"], dtype=object)},
+                ("Level1-1", "Level1-2"),
+                np.ones(runtime.num_envs, dtype=bool),
+            )
+
     def test_sb3_ppo_passes_native_discrete_action_batches(self):
         provider = StrictDiscreteNativeVectorProvider(num_envs=2)
         descriptor = descriptor_for(provider)
@@ -537,6 +547,56 @@ class BatchRuntimeTests(unittest.TestCase):
         self.assertEqual(records[0].episode_length, 1)
         self.assertEqual(records[0].outcome, Outcome.NEUTRAL)
         self.assertEqual(runtime.drain_records(), [])
+
+    def test_identity_runtime_maps_provider_boundaries_to_exclusive_task_outcomes(self):
+        provider = DeterministicNativeVectorProvider()
+        descriptor = descriptor_for(provider)
+        kernel = IdentityTaskDefinition(
+            signals={
+                "native_termination": "provider_terminated",
+                "native_truncation": "provider_truncated",
+            },
+            events={
+                "player_died": {
+                    "signal": "native_termination",
+                    "operation": "equals_for",
+                    "value": 1,
+                    "steps": 1,
+                },
+                "goal_reached": {
+                    "signal": "native_truncation",
+                    "operation": "equals_for",
+                    "value": 1,
+                    "steps": 1,
+                },
+            },
+            termination={
+                "failure": ["player_died"],
+                "success": ["goal_reached"],
+            },
+        ).bind(descriptor, provider.num_envs)
+        runtime = BatchRuntime(provider, descriptor, kernel, run_seed=17)
+        runtime.reset()
+        provider.queue_step(
+            rewards=[1.0, -1.0],
+            terminated=[False, True],
+            truncated=[True, False],
+        )
+
+        step = runtime.step(np.zeros((2, 3), dtype=np.int8))
+
+        np.testing.assert_array_equal(step.terminated, [True, True])
+        np.testing.assert_array_equal(step.truncated, [False, False])
+        records = [
+            record for record in runtime.drain_records() if isinstance(record, EpisodeRecord)
+        ]
+        self.assertEqual(
+            [(record.events, record.outcome) for record in records],
+            [
+                (("goal_reached",), Outcome.SUCCESS),
+                (("player_died",), Outcome.FAILURE),
+            ],
+        )
 
     def test_double_buffers_protect_the_observation_sb3_is_still_using(self):
         provider, runtime = self.make_identity_runtime()

@@ -30,7 +30,7 @@ DEATHMATCH_ACTIONS = [
 EXPECTED_GOALS = {
     "VizdoomBasic-v1": {
         "timesteps": 2_000_000,
-        "event": "monster_killed",
+        "event": "goal_reached",
         "training_metric": "train/outcome/success/across_starts/window_100/rate/min",
         "acceptance_metric": "eval/full/outcome/success/across_starts/rate/min",
         "acceptance_threshold": 1.0,
@@ -39,7 +39,7 @@ EXPECTED_GOALS = {
     },
     "VizdoomBasic-Plus-v1": {
         "timesteps": 2_000_000,
-        "event": "monster_killed",
+        "event": "goal_reached",
         "training_metric": "train/outcome/success/across_starts/window_100/rate/min",
         "acceptance_metric": "eval/full/outcome/success/across_starts/rate/min",
         "acceptance_threshold": 1.0,
@@ -48,7 +48,7 @@ EXPECTED_GOALS = {
     },
     "VizdoomDeadlyCorridor-v1": {
         "timesteps": 25_000_000,
-        "event": "vest_reached",
+        "event": "goal_reached",
         "training_metric": "train/episode/return/shaped/from/target/window_100/mean",
         "acceptance_metric": "eval/full/episode/return/shaped/mean",
         "acceptance_threshold": 0.80,
@@ -94,7 +94,7 @@ EXPECTED_GOALS = {
     },
     "VizdoomHealthGathering-v1": {
         "timesteps": 10_000_000,
-        "event": "survived",
+        "event": "goal_reached",
         "training_metric": "train/outcome/success/across_starts/window_100/rate/min",
         "acceptance_metric": "eval/full/outcome/success/across_starts/rate/min",
         "acceptance_threshold": 0.95,
@@ -103,7 +103,7 @@ EXPECTED_GOALS = {
     },
     "VizdoomHealthGatheringSupreme-v1": {
         "timesteps": 20_000_000,
-        "event": "survived",
+        "event": "goal_reached",
         "training_metric": "train/outcome/success/across_starts/window_100/rate/min",
         "acceptance_metric": "eval/full/outcome/success/across_starts/rate/min",
         "acceptance_threshold": 0.95,
@@ -112,7 +112,7 @@ EXPECTED_GOALS = {
     },
     "VizdoomMyWayHome-v1": {
         "timesteps": 10_000_000,
-        "event": "vest_reached",
+        "event": "goal_reached",
         "training_metric": "train/outcome/success/across_starts/window_100/rate/min",
         "acceptance_metric": "eval/full/outcome/success/across_starts/rate/min",
         "acceptance_threshold": 0.95,
@@ -121,7 +121,7 @@ EXPECTED_GOALS = {
     },
     "VizdoomPredictPosition-v1": {
         "timesteps": 5_000_000,
-        "event": "monster_killed",
+        "event": "goal_reached",
         "training_metric": "train/outcome/success/across_starts/window_100/rate/min",
         "acceptance_metric": "eval/full/outcome/success/across_starts/rate/min",
         "acceptance_threshold": 0.95,
@@ -130,7 +130,7 @@ EXPECTED_GOALS = {
     },
     "VizdoomTakeCover-v1": {
         "timesteps": 10_000_000,
-        "event": "survived",
+        "event": "goal_reached",
         "training_metric": "train/outcome/success/across_starts/window_100/rate/min",
         "acceptance_metric": "eval/full/outcome/success/across_starts/rate/min",
         "acceptance_threshold": 0.95,
@@ -173,6 +173,8 @@ def test_vizdoom_goal_has_complete_evaluated_ppo_contract(
     assert expected["event"] in train_config["task"]["events"]
     assert train_config["task"]["reward"]["reward_scale"] == expected["reward_scale"]
     termination = train_config["task"]["termination"]
+    if termination.get("success"):
+        assert termination["success"] == ["goal_reached"]
     if expected["max_episode_steps"] is None:
         assert "max_episode_steps" not in termination
     else:
@@ -239,7 +241,7 @@ def test_sequential_vizdoom_goals_materialize_finite_checkpoint_eval_bounds(
     "goal_id",
     ["VizdoomHealthGathering-v1", "VizdoomHealthGatheringSupreme-v1"],
 )
-def test_vizdoom_health_gathering_uses_the_native_provider_boundary_for_survival(
+def test_vizdoom_health_gathering_uses_native_provider_truncation_for_survival(
     goal_id: str,
 ) -> None:
     goal_path = GOALS_ROOT / goal_id / "_goal.yaml"
@@ -249,21 +251,21 @@ def test_vizdoom_health_gathering_uses_the_native_provider_boundary_for_survival
     train_config = document["train_config"]
     assert train_config["env_args"]["info_filter"] == {
         "mode": "all",
-        "keys": ["player_dead", "pending_reset"],
+        "keys": ["player_dead"],
     }
     assert train_config["task"]["signals"] == {
         "player_dead": "player_dead",
-        "episode_done": "pending_reset",
+        "native_timeout": "provider_truncated",
     }
-    assert train_config["task"]["events"]["survived"] == {
-        "signal": "episode_done",
+    assert train_config["task"]["events"]["goal_reached"] == {
+        "signal": "native_timeout",
         "operation": "equals_for",
         "value": 1,
         "steps": 1,
     }
     assert train_config["task"]["termination"] == {
         "failure": ["player_died"],
-        "success": ["survived"],
+        "success": ["goal_reached"],
     }
 
 

@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import difflib
-import json
 from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from typing import Any, Literal
 
 import yaml
+
+from gradlab.json_utils import canonical_json_bytes
 
 
 INSPECTION_SCHEMA_VERSION = 1
@@ -231,13 +232,7 @@ def inspection_document(
             },
         },
     }
-    encoded = json.dumps(
-        document,
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=False,
-        allow_nan=False,
-    ).encode("utf-8")
+    encoded = canonical_json_bytes(document)
     if len(encoded) > MAX_INSPECTION_DOCUMENT_BYTES * 3:
         raise ValueError("inspection response exceeds the supported size")
     return document

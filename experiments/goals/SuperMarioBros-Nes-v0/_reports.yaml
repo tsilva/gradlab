@@ -20,4 +20,3 @@ goal:
   - failure_reasons
   - algorithm_health
   - throughput
-  - historical_contracts

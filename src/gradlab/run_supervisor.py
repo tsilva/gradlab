@@ -771,7 +771,7 @@ class RunSupervisor:
             goal_variant = validate_goal_variant_descriptor(materialized["goal_variant"])
             if goal_variant != validate_goal_variant_descriptor(self.manifest.goal_variant):
                 raise RuntimeError("materialized goal variant does not match the run manifest")
-            self.authority.register_goal_variant_best_effort(self.manifest)
+            self.authority.project_goal_variant_best_effort(self.manifest)
 
         config = dict(materialized["train_config"])
         asset = self.manifest.modal.get("rom_asset_manifest")

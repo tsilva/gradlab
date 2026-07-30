@@ -19,6 +19,7 @@ from gradlab.action_contract import action_contract_meanings
 from gradlab.boundary_schema import BoundaryModel, validate_boundary
 from gradlab.env_registry import game_family_for_environment
 from gradlab.file_utils import file_sha256 as sha256_file
+from gradlab.json_utils import canonical_json_text
 from gradlab.metric_names import (
     EVAL_CHECKPOINT_STEP,
     EVAL_FULL_BY_START,
@@ -345,7 +346,7 @@ def publication_identity_from_policy_bundle(
         recipe.get("environment"), label="recipe.json recipe.environment"
     )
     provider, game = _provider_and_environment(environment.get("env_id"))
-    family = game_family_for_environment(provider, game, strict=True)
+    family = game_family_for_environment(provider, game, require_registered=True)
     preprocessing = _require_mapping(
         environment.get("preprocessing"),
         label="recipe.json recipe.environment.preprocessing",
@@ -804,9 +805,9 @@ def render_model_card(
             "qualified_env_id": qualified_env_id,
             "environment_hash": _markdown_value(model.get("environment_hash")),
             "preprocessing": _markdown_value(
-                json.dumps(preprocessing, sort_keys=True, separators=(",", ":"))
+                canonical_json_text(preprocessing, ensure_ascii=True)
             ),
-            "action": _markdown_value(json.dumps(action, sort_keys=True, separators=(",", ":"))),
+            "action": _markdown_value(canonical_json_text(action, ensure_ascii=True)),
             "run_value": run_value,
             "recipe": _markdown_value(
                 _required_text(source.get("recipe"), label="manifest source.recipe")
@@ -948,7 +949,7 @@ def build_release_manifest(
     return manifest
 
 
-def _validate_release_manifest_v1(document: Mapping[str, Any], source: str) -> dict[str, Any]:
+def _validate_release_manifest(document: Mapping[str, Any], source: str) -> dict[str, Any]:
     manifest = validate_boundary(
         _ReleaseManifest,
         document,
@@ -977,7 +978,8 @@ def validate_release_bundle(root: Path) -> dict[str, Any]:
         manifest_value,
         source=str(manifest_path),
         expected_type=RELEASE_MANIFEST_DOCUMENT_TYPE,
-        handlers={RELEASE_MANIFEST_VERSION: _validate_release_manifest_v1},
+        current_version=RELEASE_MANIFEST_VERSION,
+        validator=_validate_release_manifest,
     )
     bundle = load_policy_bundle(root, source=str(root))
     card_text = (root / "README.md").read_text(encoding="utf-8")

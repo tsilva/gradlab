@@ -7,7 +7,7 @@ import os
 import re
 import threading
 import time
-from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Literal
@@ -20,10 +20,12 @@ from gradlab.goal_variants import (
     GOAL_VARIANT_INDEX_SCHEMA_VERSION,
     GOAL_VARIANT_RUN_INDEX_SCHEMA_VERSION,
     build_goal_variant_descriptor,
-    goal_variant_id as compute_goal_variant_id,
     goal_variant_scope_key,
-    unknown_goal_variant_id,
     validate_goal_variant_descriptor,
+)
+from gradlab.json_utils import (
+    canonical_json_sha256 as compact_json_sha256,
+    canonical_json_text,
 )
 from gradlab.evaluation_projection import validate_evaluation_scientific_metric
 from gradlab.metric_names import (
@@ -40,38 +42,23 @@ from gradlab.model_sources import DEFAULT_PUBLIC_MODELS_BASE_URL, _public_json
 from gradlab.policy_bundle import canonical_json_sha256, validate_recipe_document
 from gradlab.r2_store import BucketConfig, R2Bucket
 from gradlab.ranking import RankCriterion, parse_objective_rank
-from gradlab.recipe_variants import normalize_recipe_overrides, recipe_variant_id
 from gradlab.recipe_documents import (
     compose_resolved_train_documents,
     load_goal_contract,
     load_recipe_source_document,
 )
 from gradlab.reward_programs import goal_for_contract_validation
-from gradlab.run_contracts import (
-    RUN_EARLY_STOP_CONDITION_SUMMARY,
-    RUN_EARLY_STOP_TRIGGER_SUMMARY,
-    RUN_FINAL_STEP_SUMMARY,
-    RUN_ID_PATTERN,
-    RUN_STOP_REASON_SUMMARY,
-    RUN_TERMINAL_STATE_SUMMARY,
-    CheckpointManifest,
-    RunManifest,
-)
+from gradlab.run_contracts import CheckpointManifest, RUN_ID_PATTERN, RunManifest
 from gradlab.run_authority import RunAuthority
-from gradlab.wandb_utils import (
-    load_wandb_env,
-    resolve_wandb_project,
-    wandb_entity_from_env,
-)
+from gradlab.wandb_utils import load_wandb_env
 
 
 WANDB_HOSTS = {"wandb.ai", "www.wandb.ai"}
 CATALOG_PAGE_SIZE = 50
-CATALOG_INDEX_SCHEMA_VERSION = 1
-CATALOG_CACHE_SCHEMA_VERSION = 3
+CATALOG_INDEX_SCHEMA_VERSION = 2
+CATALOG_CACHE_SCHEMA_VERSION = 4
 CATALOG_INDEX_FILENAME = "_catalog.yaml"
 EVALUATION_CACHE_SECONDS = 10.0
-WANDB_CATALOG_PAGE_SIZE = 200
 RUN_CATALOG_CACHE_SECONDS = 60.0
 GOAL_VARIANT_CACHE_SECONDS = 60.0
 LIVE_TRAINING_METRICS = (
@@ -103,10 +90,10 @@ LIVE_TRAINING_METRICS = (
 
 
 @dataclass(frozen=True)
-class WandbLocation:
+class WandbRunLocation:
     entity: str
     project: str
-    run_id: str | None = None
+    run_id: str
 
 
 @dataclass(frozen=True)
@@ -130,7 +117,6 @@ class CatalogPage:
 
 @dataclass(frozen=True)
 class EnvironmentSummary:
-    entity: str
     name: str
     goal_count: int
 
@@ -139,8 +125,7 @@ class EnvironmentSummary:
 
 @dataclass(frozen=True)
 class GoalSummary:
-    entity: str
-    project: str
+    environment_id: str
     goal_id: str
     goal_slug: str
     title: str
@@ -153,8 +138,7 @@ class GoalSummary:
 
 @dataclass(frozen=True)
 class GoalVariantSummary:
-    entity: str
-    project: str
+    environment_id: str
     goal_id: str
     goal_slug: str
     variant_id: str
@@ -174,8 +158,7 @@ class GoalVariantSummary:
 
 @dataclass(frozen=True)
 class RunSummary:
-    entity: str
-    project: str
+    environment_id: str
     run_id: str
     name: str
     state: str
@@ -224,7 +207,7 @@ class CheckpointSummary:
 
 @dataclass(frozen=True)
 class _RepositoryGoal:
-    project: str
+    environment_id: str
     goal_id: str
     goal_slug: str
     title: str
@@ -236,7 +219,7 @@ class _RepositoryGoal:
 @dataclass(frozen=True)
 class _RepositoryNamespace:
     directory: str
-    project: str
+    environment_id: str
     title_template: str
 
 
@@ -252,33 +235,21 @@ class _CheckpointEvaluationData:
     evaluation_rank: tuple[RankCriterion, ...]
 
 
-@dataclass(frozen=True)
-class _WandbCatalogRun:
-    run_id: str
-    name: str
-    state: str
-    config: Mapping[str, Any]
-    summary: Mapping[str, Any]
-    notes: str
-    created_at: str
-    updated_at: str
-    url: str
-
-
-def parse_wandb_location(value: object) -> WandbLocation | None:
+def parse_wandb_location(value: object) -> WandbRunLocation | None:
     parsed = urlparse(str(value or "").strip())
     if parsed.scheme not in {"http", "https"} or parsed.netloc.casefold() not in WANDB_HOSTS:
         return None
     parts = [unquote(part) for part in parsed.path.split("/") if part]
-    if len(parts) < 2:
+    if len(parts) != 4 or parts[2] != "runs":
         return None
-    entity, project = parts[:2]
-    if not entity or not project:
+    entity, project, _runs, run_id = parts
+    if (
+        not entity
+        or not project
+        or RUN_ID_PATTERN.fullmatch(run_id) is None
+    ):
         return None
-    run_id = None
-    if len(parts) >= 4 and parts[2] == "runs":
-        run_id = parts[3]
-    return WandbLocation(entity=entity, project=project, run_id=run_id)
+    return WandbRunLocation(entity=entity, project=project, run_id=run_id)
 
 
 def checkpoint_manifest_url(model_url: object) -> str:
@@ -339,76 +310,6 @@ def _safe_summary_float(value: object) -> float | None:
         if (numeric := _safe_float(getter(reducer))) is not None
     )
     return reduced[0] if len(reduced) == 1 else None
-
-
-def _wandb_json_mapping(value: object, *, label: str) -> dict[str, Any]:
-    if value is None or value == "":
-        return {}
-    if isinstance(value, Mapping):
-        return dict(value)
-    if not isinstance(value, str | bytes | bytearray):
-        raise ValueError(f"W&B {label} must be a JSON mapping")
-    try:
-        decoded = json.loads(value)
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise ValueError(f"W&B {label} is not valid JSON") from exc
-    if not isinstance(decoded, Mapping):
-        raise ValueError(f"W&B {label} must be a JSON mapping")
-    return dict(decoded)
-
-
-def _wandb_user_config(value: object) -> dict[str, Any]:
-    raw = _wandb_json_mapping(value, label="run config")
-    return {
-        str(key): item.get("value") if isinstance(item, Mapping) and "value" in item else item
-        for key, item in raw.items()
-        if key not in {"_wandb", "wandb_version"}
-    }
-
-
-def _first_summary_float(summary: Any, metrics: Iterable[str]) -> float | None:
-    for metric in metrics:
-        value = _safe_summary_float(summary.get(metric))
-        if value is not None:
-            return value
-    return None
-
-
-def _wandb_early_stop_projection(
-    *,
-    config: Mapping[str, Any],
-    summary: Mapping[str, Any],
-    stop_reason: str,
-) -> dict[str, Any] | None:
-    condition_id = str(summary.get(RUN_EARLY_STOP_CONDITION_SUMMARY) or "").strip()
-    if not condition_id and stop_reason.startswith("early_stop_") and ":" in stop_reason:
-        condition_id = stop_reason.split(":", 1)[1].strip()
-    trigger = str(summary.get(RUN_EARLY_STOP_TRIGGER_SUMMARY) or "").strip()
-    if not condition_id and not trigger:
-        return None
-
-    projection: dict[str, Any] = {}
-    if condition_id:
-        projection["condition_id"] = condition_id
-    if trigger:
-        projection["trigger"] = trigger
-
-    configured = config.get("early_stop")
-    conditions = configured.get("conditions") if isinstance(configured, Mapping) else None
-    condition = conditions.get(condition_id) if isinstance(conditions, Mapping) else None
-    if isinstance(condition, Mapping):
-        projected_condition = dict(condition)
-        projection["condition"] = projected_condition
-        metric = str(projected_condition.get("metric") or "").strip()
-        configured_trigger = str(projected_condition.get("trigger") or "").strip()
-        if metric:
-            projection["metric"] = metric
-            value = _safe_summary_float(summary.get(metric))
-            if value is not None:
-                projection["value"] = value
-        if configured_trigger and not trigger:
-            projection["trigger"] = configured_trigger
-    return projection
 
 
 def _run_metric_specs(
@@ -568,7 +469,7 @@ def _page_items(items: list[dict[str, Any]], cursor: str | None) -> CatalogPage:
 
 
 class PlayCatalog:
-    """Repository catalog, W&B run metadata, and public-checkpoint discovery."""
+    """Repository catalog, lifecycle run metadata, and public-checkpoint discovery."""
 
     def __init__(
         self,
@@ -610,7 +511,7 @@ class PlayCatalog:
             tuple[float, tuple[dict[str, Any], ...]],
         ] = {}
         self._goal_variant_refreshing: set[str] = set()
-        self._repository_project_cache: dict[
+        self._repository_environment_cache: dict[
             str,
             tuple[
                 tuple[tuple[str, int, int], ...],
@@ -625,7 +526,6 @@ class PlayCatalog:
             ]
             | None
         ) = None
-        self._default_entity: str | None = None
         self._evaluation_cache: dict[
             tuple[str, str, str],
             tuple[float, _CheckpointEvaluationData],
@@ -638,20 +538,6 @@ class PlayCatalog:
         cache_root = Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache").expanduser()
         return cache_root / "gradlab" / "play-catalog" / f"{identity}.json"
 
-    def default_entity(self, explicit: object = None) -> str:
-        text = str(explicit or "").strip()
-        if text:
-            return text
-        with self._cache_lock:
-            cached = self._default_entity
-        if cached is not None:
-            return cached
-        load_wandb_env()
-        entity = wandb_entity_from_env()
-        with self._cache_lock:
-            self._default_entity = entity
-        return entity
-
     def _wandb_api(self):
         if self._api is None:
             load_wandb_env()
@@ -659,135 +545,6 @@ class PlayCatalog:
 
             self._api = wandb.Api(timeout=15)
         return self._api
-
-    def _wandb_catalog_runs(
-        self,
-        *,
-        entity: str,
-        project: str,
-        filters: Mapping[str, Any] | None,
-    ) -> Iterator[_WandbCatalogRun]:
-        api = self._wandb_api()
-        client = getattr(api, "client", None)
-        if client is None:
-            # Test doubles and older W&B clients may not expose their GraphQL
-            # client. Eager loading is important here: lazy Run objects fetch
-            # config and summary individually when the catalog accesses them.
-            for run in api.runs(
-                f"{entity}/{project}",
-                filters=dict(filters) if filters else None,
-                order="-created_at",
-                per_page=WANDB_CATALOG_PAGE_SIZE,
-                lazy=False,
-            ):
-                yield _WandbCatalogRun(
-                    run_id=str(getattr(run, "id", "") or ""),
-                    name=str(getattr(run, "name", "") or ""),
-                    state=str(getattr(run, "state", "") or ""),
-                    config=dict(getattr(run, "config", {}) or {}),
-                    summary=getattr(run, "summary", {}) or {},
-                    notes=str(getattr(run, "notes", "") or ""),
-                    created_at=str(getattr(run, "created_at", "") or ""),
-                    updated_at=str(getattr(run, "updated_at", "") or ""),
-                    url=str(getattr(run, "url", "") or ""),
-                )
-            return
-
-        # The public Runs lazy fragment omits config and summary, causing one
-        # full-data request per run when the catalog builds its cards. The full
-        # fragment avoids that N+1 pattern but also downloads system metrics and
-        # history metadata that the catalog never uses. Query only the fields
-        # required by RunSummary while retaining server-side filtering.
-        from wandb.apis.public.runs import gql
-
-        query = gql(
-            """
-            query PlayCatalogRuns(
-                $project: String!,
-                $entity: String!,
-                $cursor: String,
-                $perPage: Int!,
-                $order: String,
-                $filters: JSONString
-            ) {
-                project(name: $project, entityName: $entity) {
-                    runs(
-                        filters: $filters,
-                        after: $cursor,
-                        first: $perPage,
-                        order: $order
-                    ) {
-                        edges {
-                            node {
-                                name
-                                displayName
-                                state
-                                config
-                                createdAt
-                                notes
-                                summaryMetrics
-                            }
-                        }
-                        pageInfo {
-                            endCursor
-                            hasNextPage
-                        }
-                    }
-                }
-            }
-            """
-        )
-        cursor: str | None = None
-        while True:
-            response = client.execute(
-                query,
-                variable_values={
-                    "project": project,
-                    "entity": entity,
-                    "cursor": cursor,
-                    "perPage": WANDB_CATALOG_PAGE_SIZE,
-                    "order": "-created_at",
-                    "filters": json.dumps(dict(filters or {}), separators=(",", ":")),
-                },
-            )
-            project_payload = response.get("project") if isinstance(response, Mapping) else None
-            runs_payload = (
-                project_payload.get("runs") if isinstance(project_payload, Mapping) else None
-            )
-            if not isinstance(runs_payload, Mapping):
-                raise ValueError(f"could not find W&B project {entity}/{project}")
-            edges = runs_payload.get("edges")
-            if not isinstance(edges, list):
-                raise ValueError("W&B run catalog response has no run edges")
-            for edge in edges:
-                node = edge.get("node") if isinstance(edge, Mapping) else None
-                if not isinstance(node, Mapping):
-                    raise ValueError("W&B run catalog response has an invalid run edge")
-                run_id = str(node.get("name") or "")
-                yield _WandbCatalogRun(
-                    run_id=run_id,
-                    name=str(node.get("displayName") or run_id),
-                    state=str(node.get("state") or ""),
-                    config=_wandb_user_config(node.get("config")),
-                    summary=_wandb_json_mapping(
-                        node.get("summaryMetrics"),
-                        label=f"run {run_id} summary",
-                    ),
-                    notes=str(node.get("notes") or ""),
-                    created_at=str(node.get("createdAt") or ""),
-                    updated_at="",
-                    url=(
-                        f"{str(getattr(client, 'app_url', 'https://wandb.ai/')).rstrip('/')}"
-                        f"/{entity}/{project}/runs/{run_id}"
-                    ),
-                )
-            page_info = runs_payload.get("pageInfo")
-            if not isinstance(page_info, Mapping) or not page_info.get("hasNextPage"):
-                return
-            next_cursor = str(page_info.get("endCursor") or "")
-            if not next_cursor or next_cursor == cursor:
-                raise ValueError("W&B run catalog pagination did not advance")
-            cursor = next_cursor
 
     def _catalog_fingerprint(
         self,
@@ -818,7 +575,7 @@ class PlayCatalog:
             or payload.get("repo_root") != str(self.repo_root)
         ):
             return None
-        for section in ("projects", "run_catalogs", "goal_variants"):
+        for section in ("environments", "run_catalogs", "goal_variants"):
             value = payload.setdefault(section, {})
             if not isinstance(value, dict):
                 return None
@@ -834,7 +591,7 @@ class PlayCatalog:
             payload = self._read_persistent_cache() or {
                 "schema_version": CATALOG_CACHE_SCHEMA_VERSION,
                 "repo_root": str(self.repo_root),
-                "projects": {},
+                "environments": {},
                 "run_catalogs": {},
                 "goal_variants": {},
             }
@@ -845,7 +602,7 @@ class PlayCatalog:
             try:
                 self.cache_path.parent.mkdir(parents=True, exist_ok=True)
                 temporary.write_text(
-                    json.dumps(payload, sort_keys=True, separators=(",", ":")),
+                    canonical_json_text(payload, ensure_ascii=True),
                     encoding="utf-8",
                 )
                 temporary.chmod(0o600)
@@ -890,16 +647,18 @@ class PlayCatalog:
                 raise ValueError(
                     f"repository goal catalog namespace {directory!r} must be a mapping"
                 )
-            extra = set(raw_metadata) - {"project", "title_template"}
+            extra = set(raw_metadata) - {"environment_id", "title_template"}
             if extra:
                 raise ValueError(
                     f"repository goal catalog namespace {directory!r} has unknown keys: "
                     + ", ".join(sorted(str(key) for key in extra))
                 )
-            project = str(raw_metadata.get("project") or "").strip()
+            environment_id = str(raw_metadata.get("environment_id") or "").strip()
             title_template = str(raw_metadata.get("title_template") or "").strip()
-            if not project:
-                raise ValueError(f"repository goal catalog namespace {directory!r} has no project")
+            if not environment_id:
+                raise ValueError(
+                    f"repository goal catalog namespace {directory!r} has no environment_id"
+                )
             if title_template:
                 try:
                     title_template.format(goal_id="example")
@@ -916,7 +675,7 @@ class PlayCatalog:
             namespaces.append(
                 _RepositoryNamespace(
                     directory=directory,
-                    project=project,
+                    environment_id=environment_id,
                     title_template=title_template,
                 )
             )
@@ -926,14 +685,18 @@ class PlayCatalog:
             self._namespace_cache = (fingerprint, result)
         return result
 
-    def _project_namespaces(
+    def _environment_namespaces(
         self,
-        project: str,
+        environment_id: str,
         namespaces: tuple[_RepositoryNamespace, ...],
     ) -> tuple[_RepositoryNamespace, ...]:
-        return tuple(namespace for namespace in namespaces if namespace.project == project)
+        return tuple(
+            namespace
+            for namespace in namespaces
+            if namespace.environment_id == environment_id
+        )
 
-    def _indexed_project_fingerprint(
+    def _indexed_environment_fingerprint(
         self,
         namespaces: tuple[_RepositoryNamespace, ...],
     ) -> tuple[tuple[str, int, int], ...]:
@@ -944,18 +707,22 @@ class PlayCatalog:
             paths.extend(namespace_root.rglob("*.yml"))
         return self._catalog_fingerprint(paths)
 
-    def _read_persistent_project(
+    def _read_persistent_environment(
         self,
         *,
-        project: str,
+        environment_id: str,
         fingerprint: tuple[tuple[str, int, int], ...],
     ) -> tuple[_RepositoryGoal, ...] | None:
         try:
             payload = self._read_persistent_cache()
             if payload is None:
                 return None
-            projects = payload.get("projects")
-            entry = projects.get(project) if isinstance(projects, Mapping) else None
+            environments = payload.get("environments")
+            entry = (
+                environments.get(environment_id)
+                if isinstance(environments, Mapping)
+                else None
+            )
             if not isinstance(entry, Mapping):
                 return None
             cached_fingerprint = tuple(
@@ -973,7 +740,7 @@ class PlayCatalog:
                 if not isinstance(raw_goal, Mapping):
                     return None
                 goal = _RepositoryGoal(
-                    project=str(raw_goal.get("project") or ""),
+                    environment_id=str(raw_goal.get("environment_id") or ""),
                     goal_id=str(raw_goal.get("goal_id") or ""),
                     goal_slug=str(raw_goal.get("goal_slug") or ""),
                     title=str(raw_goal.get("title") or ""),
@@ -982,7 +749,7 @@ class PlayCatalog:
                     rank=None,
                 )
                 if (
-                    goal.project != project
+                    goal.environment_id != environment_id
                     or not goal.goal_id
                     or not goal.goal_slug
                     or not goal.title
@@ -994,19 +761,19 @@ class PlayCatalog:
         except TypeError, ValueError:
             return None
 
-    def _write_persistent_project(
+    def _write_persistent_environment(
         self,
         *,
-        project: str,
+        environment_id: str,
         fingerprint: tuple[tuple[str, int, int], ...],
         goals: tuple[_RepositoryGoal, ...],
     ) -> None:
         def update(payload: dict[str, Any]) -> None:
-            payload["projects"][project] = {
+            payload["environments"][environment_id] = {
                 "fingerprint": [list(item) for item in fingerprint],
                 "goals": [
                     {
-                        "project": goal.project,
+                        "environment_id": goal.environment_id,
                         "goal_id": goal.goal_id,
                         "goal_slug": goal.goal_slug,
                         "title": goal.title,
@@ -1022,16 +789,14 @@ class PlayCatalog:
     def _run_catalog_cache_key(
         self,
         *,
-        entity: str,
-        project: str,
+        environment_id: str,
         goal_slug: str,
         goal_variant_id: str = "",
         metric_specs: tuple[tuple[RankCriterion, tuple[str, ...]], ...],
         fallback_metric_specs: tuple[tuple[RankCriterion, tuple[str, ...]], ...],
     ) -> str:
         identity = {
-            "entity": entity,
-            "project": project,
+            "environment_id": environment_id,
             "goal_slug": goal_slug,
             "goal_variant_id": goal_variant_id,
             "metrics": [
@@ -1043,16 +808,13 @@ class PlayCatalog:
                 for criterion, sources in (*metric_specs, *fallback_metric_specs)
             ],
         }
-        return hashlib.sha256(
-            json.dumps(identity, sort_keys=True, separators=(",", ":")).encode("utf-8")
-        ).hexdigest()
+        return compact_json_sha256(identity, ensure_ascii=True)
 
     def _read_persistent_run_catalog(
         self,
         *,
         cache_key: str,
-        entity: str,
-        project: str,
+        environment_id: str,
     ) -> tuple[float, tuple[dict[str, Any], ...]] | None:
         try:
             payload = self._read_persistent_cache()
@@ -1074,15 +836,13 @@ class PlayCatalog:
                 metrics = raw_item.get("metrics")
                 if (
                     RUN_ID_PATTERN.fullmatch(run_id) is None
-                    or raw_item.get("entity") != entity
-                    or raw_item.get("project") != project
+                    or raw_item.get("environment_id") != environment_id
                     or not isinstance(metrics, Mapping)
                 ):
                     return None
                 items.append(
                     RunSummary(
-                        entity=entity,
-                        project=project,
+                        environment_id=environment_id,
                         run_id=run_id,
                         name=str(raw_item.get("name") or run_id),
                         state=str(raw_item.get("state") or ""),
@@ -1139,8 +899,7 @@ class PlayCatalog:
         self,
         *,
         cache_key: str,
-        entity: str,
-        project: str,
+        environment_id: str,
     ) -> tuple[float, tuple[dict[str, Any], ...]] | None:
         with self._cache_lock:
             cached = self._run_catalog_cache.get(cache_key)
@@ -1148,8 +907,7 @@ class PlayCatalog:
             return cached
         persisted = self._read_persistent_run_catalog(
             cache_key=cache_key,
-            entity=entity,
-            project=project,
+            environment_id=environment_id,
         )
         if persisted is not None:
             with self._cache_lock:
@@ -1172,28 +930,19 @@ class PlayCatalog:
         )
         return cached
 
-    def _compose_repository_goal(self, path: Path) -> _RepositoryGoal:
+    def _compose_repository_goal(
+        self,
+        path: Path,
+        *,
+        environment_id: str,
+    ) -> _RepositoryGoal:
         document = load_goal_contract(path, self.repo_root, validate=False)
-        train = document.get("train")
-        if not isinstance(train, Mapping):
-            raise ValueError(f"repository goal has no train contract: {path}")
-        environment = train.get("environment")
-        if not isinstance(environment, Mapping):
-            raise ValueError(f"repository goal has no training environment: {path}")
-        env_config = environment.get("env_config", environment)
-        if not isinstance(env_config, Mapping):
-            raise ValueError(f"repository goal has invalid environment config: {path}")
-        project = resolve_wandb_project(
-            None,
-            str(env_config.get("game") or ""),
-            env_provider=environment.get("env_provider") or env_config.get("env_provider"),
-        )
         goal_id = str(document.get("goal_id") or "").strip()
-        if not project or not goal_id:
-            raise ValueError(f"repository goal has no project or goal identity: {path}")
+        if not environment_id or not goal_id:
+            raise ValueError(f"repository goal has no environment or goal identity: {path}")
         objective = document.get("objective")
         return _RepositoryGoal(
-            project=project,
+            environment_id=environment_id,
             goal_id=goal_id,
             goal_slug=path.parent.relative_to(self.goals_root).as_posix(),
             title=str(document.get("title") or goal_id).strip(),
@@ -1207,29 +956,32 @@ class PlayCatalog:
     def _indexed_repository_goals(
         self,
         *,
-        project: str,
+        environment_id: str,
         namespaces: tuple[_RepositoryNamespace, ...],
     ) -> tuple[_RepositoryGoal, ...]:
-        project_namespaces = self._project_namespaces(project, namespaces)
-        if not project_namespaces:
+        environment_namespaces = self._environment_namespaces(environment_id, namespaces)
+        if not environment_namespaces:
             return ()
-        fingerprint = self._indexed_project_fingerprint(project_namespaces)
+        fingerprint = self._indexed_environment_fingerprint(environment_namespaces)
         with self._cache_lock:
-            cached = self._repository_project_cache.get(project)
+            cached = self._repository_environment_cache.get(environment_id)
             if cached is not None and cached[0] == fingerprint:
                 return cached[1]
 
-        persisted = self._read_persistent_project(
-            project=project,
+        persisted = self._read_persistent_environment(
+            environment_id=environment_id,
             fingerprint=fingerprint,
         )
         if persisted is not None:
             with self._cache_lock:
-                self._repository_project_cache[project] = (fingerprint, persisted)
+                self._repository_environment_cache[environment_id] = (
+                    fingerprint,
+                    persisted,
+                )
             return persisted
 
         goals: list[_RepositoryGoal] = []
-        for namespace in project_namespaces:
+        for namespace in environment_namespaces:
             namespace_root = self.goals_root / namespace.directory
             for path in sorted(namespace_root.rglob("_goal.yaml")):
                 goal_id = path.parent.name
@@ -1242,7 +994,7 @@ class PlayCatalog:
                     title = namespace.title_template.format(goal_id=goal_id)
                 goals.append(
                     _RepositoryGoal(
-                        project=project,
+                        environment_id=environment_id,
                         goal_id=goal_id,
                         goal_slug=path.parent.relative_to(self.goals_root).as_posix(),
                         title=title or goal_id,
@@ -1251,59 +1003,75 @@ class PlayCatalog:
                         rank=None,
                     )
                 )
-        identities = [(goal.project, goal.goal_id) for goal in goals]
+        identities = [(goal.environment_id, goal.goal_id) for goal in goals]
         if len(identities) != len(set(identities)):
-            raise ValueError("repository goals contain duplicate project/goal identities")
+            raise ValueError("repository goals contain duplicate environment/goal identities")
         result = tuple(sorted(goals, key=lambda goal: goal.goal_id))
         with self._cache_lock:
-            self._repository_project_cache[project] = (fingerprint, result)
+            self._repository_environment_cache[environment_id] = (fingerprint, result)
             for key in tuple(self._repository_details):
-                if key[0] == project:
+                if key[0] == environment_id:
                     self._repository_details.pop(key, None)
-        self._write_persistent_project(
-            project=project,
+        self._write_persistent_environment(
+            environment_id=environment_id,
             fingerprint=fingerprint,
             goals=result,
         )
         return result
 
-    def _repository_goals(self, *, project: str | None = None) -> tuple[_RepositoryGoal, ...]:
+    def _repository_goals(
+        self,
+        *,
+        environment_id: str | None = None,
+    ) -> tuple[_RepositoryGoal, ...]:
         if not self.goals_root.is_dir():
             raise ValueError(f"repository goals directory does not exist: {self.goals_root}")
         namespaces = self._repository_namespaces()
-        projects = sorted({namespace.project for namespace in namespaces})
-        selected_projects = [project] if project is not None else projects
+        environment_ids = sorted({namespace.environment_id for namespace in namespaces})
+        selected_environment_ids = (
+            [environment_id] if environment_id is not None else environment_ids
+        )
         return tuple(
             goal
-            for selected_project in selected_projects
+            for selected_environment_id in selected_environment_ids
             for goal in self._indexed_repository_goals(
-                project=selected_project,
+                environment_id=selected_environment_id,
                 namespaces=namespaces,
             )
         )
 
-    def _repository_projects(self) -> dict[str, int]:
+    def _repository_environments(self) -> dict[str, int]:
         namespaces = self._repository_namespaces()
         counts: dict[str, int] = {}
         for namespace in namespaces:
             count = sum(1 for _ in (self.goals_root / namespace.directory).rglob("_goal.yaml"))
-            counts[namespace.project] = counts.get(namespace.project, 0) + count
+            counts[namespace.environment_id] = (
+                counts.get(namespace.environment_id, 0) + count
+            )
         return counts
 
-    def _repository_goal(self, *, project: str, goal_id: str) -> _RepositoryGoal:
-        for goal in self._repository_goals(project=project):
-            if goal.project == project and goal.goal_id == goal_id:
+    def _repository_goal(
+        self,
+        *,
+        environment_id: str,
+        goal_id: str,
+    ) -> _RepositoryGoal:
+        for goal in self._repository_goals(environment_id=environment_id):
+            if goal.environment_id == environment_id and goal.goal_id == goal_id:
                 if goal.rank is not None:
                     return goal
-                key = (project, goal_id)
+                key = (environment_id, goal_id)
                 with self._cache_lock:
                     detailed = self._repository_details.get(key)
                 if detailed is not None:
                     return detailed
                 path = self.repo_root / goal.goal_path
-                detailed = self._compose_repository_goal(path)
+                detailed = self._compose_repository_goal(
+                    path,
+                    environment_id=goal.environment_id,
+                )
                 if (
-                    detailed.project != goal.project
+                    detailed.environment_id != goal.environment_id
                     or detailed.goal_id != goal.goal_id
                     or detailed.goal_slug != goal.goal_slug
                     or detailed.title != goal.title
@@ -1315,28 +1083,23 @@ class PlayCatalog:
                 with self._cache_lock:
                     self._repository_details[key] = detailed
                 return detailed
-        raise ValueError(f"repository has no goal {project}/{goal_id}")
+        raise ValueError(f"repository has no goal {environment_id}/{goal_id}")
 
     @staticmethod
-    def _variant_cache_key(*, entity: str, project: str, goal_slug: str) -> str:
-        return hashlib.sha256(
-            json.dumps(
-                {
-                    "entity": entity,
-                    "project": project,
-                    "goal_slug": goal_slug,
-                },
-                sort_keys=True,
-                separators=(",", ":"),
-            ).encode("utf-8")
-        ).hexdigest()
+    def _variant_cache_key(*, environment_id: str, goal_slug: str) -> str:
+        return compact_json_sha256(
+            {
+                "environment_id": environment_id,
+                "goal_slug": goal_slug,
+            },
+            ensure_ascii=True,
+        )
 
     def _read_persistent_goal_variants(
         self,
         *,
         cache_key: str,
-        entity: str,
-        project: str,
+        environment_id: str,
         goal_slug: str,
     ) -> tuple[float, tuple[dict[str, Any], ...]] | None:
         payload = self._read_persistent_cache()
@@ -1352,8 +1115,7 @@ class PlayCatalog:
         for raw in raw_items:
             if (
                 not isinstance(raw, Mapping)
-                or raw.get("entity") != entity
-                or raw.get("project") != project
+                or raw.get("environment_id") != environment_id
                 or raw.get("goal_slug") != goal_slug
                 or not str(raw.get("variant_id") or "").strip()
             ):
@@ -1384,8 +1146,7 @@ class PlayCatalog:
         self,
         *,
         cache_key: str,
-        entity: str,
-        project: str,
+        environment_id: str,
         goal_slug: str,
     ) -> tuple[float, tuple[dict[str, Any], ...]] | None:
         with self._cache_lock:
@@ -1393,8 +1154,7 @@ class PlayCatalog:
         if cached is None:
             cached = self._read_persistent_goal_variants(
                 cache_key=cache_key,
-                entity=entity,
-                project=project,
+                environment_id=environment_id,
                 goal_slug=goal_slug,
             )
             if cached is not None:
@@ -1426,8 +1186,6 @@ class PlayCatalog:
         self,
         *,
         descriptor: Mapping[str, Any],
-        entity: str,
-        project: str,
         repository_goal: _RepositoryGoal,
         current: Mapping[str, Any],
         exact_resolution_run_id: str = "",
@@ -1445,8 +1203,7 @@ class PlayCatalog:
             else "historical"
         )
         return GoalVariantSummary(
-            entity=entity,
-            project=project,
+            environment_id=repository_goal.environment_id,
             goal_id=repository_goal.goal_id,
             goal_slug=repository_goal.goal_slug,
             variant_id=str(validated["variant_id"]),
@@ -1464,28 +1221,18 @@ class PlayCatalog:
     def _control_goal_variants(
         self,
         *,
-        entity: str,
-        project: str,
         repository_goal: _RepositoryGoal,
         current: Mapping[str, Any],
     ) -> tuple[dict[str, Any], ...] | None:
         if self.control_bucket is None:
             return None
-        scope_key = goal_variant_scope_key(
-            entity=entity,
-            project=project,
-            goal_slug=repository_goal.goal_slug,
-        )
+        scope_key = goal_variant_scope_key(goal_slug=repository_goal.goal_slug)
         document = self.control_bucket.get_json_optional(f"{scope_key}/index.json")
         if document is None:
             return ()
         if int(document.get("schema_version") or 0) != GOAL_VARIANT_INDEX_SCHEMA_VERSION:
             raise ValueError("unsupported goal variant index schema")
-        if document.get("scope") != {
-            "entity": entity,
-            "project": project,
-            "goal_slug": repository_goal.goal_slug,
-        }:
+        if document.get("scope") != {"goal_slug": repository_goal.goal_slug}:
             raise ValueError("goal variant index scope mismatch")
         raw_variants = document.get("variants")
         if not isinstance(raw_variants, list):
@@ -1507,8 +1254,6 @@ class PlayCatalog:
             items.append(
                 self._variant_summary(
                     descriptor=descriptor,
-                    entity=entity,
-                    project=project,
                     repository_goal=repository_goal,
                     current=current,
                     exact_resolution_run_id=str(raw.get("exact_resolution_run_id") or ""),
@@ -1516,126 +1261,32 @@ class PlayCatalog:
             )
         return tuple(items)
 
-    def _wandb_goal_variants(
-        self,
-        *,
-        entity: str,
-        project: str,
-        repository_goal: _RepositoryGoal,
-        current: Mapping[str, Any],
-    ) -> tuple[dict[str, Any], ...]:
-        variants: dict[str, dict[str, Any]] = {}
-        found_unknown = False
-        for run in self._wandb_catalog_runs(
-            entity=entity,
-            project=project,
-            filters={"config.goal_slug": repository_goal.goal_slug},
-        ):
-            if RUN_ID_PATTERN.fullmatch(run.run_id) is None:
-                continue
-            config = dict(run.config)
-            if str(config.get("goal_slug") or "") != repository_goal.goal_slug:
-                continue
-            authored_hash = str(config.get("goal_contract_sha256") or "").lower()
-            effective_hash = str(config.get("effective_goal_contract_sha256") or "").lower()
-            if (
-                re.fullmatch(r"[0-9a-f]{64}", authored_hash) is None
-                or re.fullmatch(r"[0-9a-f]{64}", effective_hash) is None
-            ):
-                found_unknown = True
-                continue
-            identifier = compute_goal_variant_id(
-                goal_slug=repository_goal.goal_slug,
-                goal_contract_sha256_value=authored_hash,
-                effective_goal_contract_sha256=effective_hash,
-            )
-            configured = str(config.get("goal_variant_id") or "").strip()
-            if configured and configured != identifier:
-                continue
-            diff: list[Mapping[str, Any]] = []
-            raw_diff = config.get("goal_variant_diff_json")
-            if isinstance(raw_diff, str) and raw_diff:
-                try:
-                    parsed = json.loads(raw_diff)
-                    if isinstance(parsed, list):
-                        diff = [dict(item) for item in parsed if isinstance(item, Mapping)]
-                except json.JSONDecodeError:
-                    pass
-            authored_current = authored_hash == current["goal_contract_sha256"]
-            effective_current = effective_hash == current["effective_goal_contract_sha256"]
-            status = (
-                "current"
-                if authored_current and effective_current
-                else "current changed"
-                if authored_current
-                else "historical"
-            )
-            variants[identifier] = GoalVariantSummary(
-                entity=entity,
-                project=project,
-                goal_id=repository_goal.goal_id,
-                goal_slug=repository_goal.goal_slug,
-                variant_id=identifier,
-                label=str(
-                    config.get("goal_variant_label")
-                    or f"{repository_goal.title} · historical contract {effective_hash[:12]}"
-                ),
-                goal_contract_sha256=authored_hash,
-                effective_goal_contract_sha256=effective_hash,
-                source_sha=str(config.get("source_sha") or ""),
-                source_relation=str(config.get("goal_variant_source_relation") or "changed"),
-                status=status,
-                diff=tuple(diff),
-                diff_truncated=False,
-            ).to_dict()
-        if found_unknown:
-            identifier = unknown_goal_variant_id(goal_slug=repository_goal.goal_slug)
-            variants[identifier] = GoalVariantSummary(
-                entity=entity,
-                project=project,
-                goal_id=repository_goal.goal_id,
-                goal_slug=repository_goal.goal_slug,
-                variant_id=identifier,
-                label=f"{repository_goal.title} · historical contract unknown",
-                goal_contract_sha256="",
-                effective_goal_contract_sha256="",
-                source_sha="",
-                source_relation="unknown",
-                status="unknown",
-                diff=(),
-                diff_truncated=False,
-            ).to_dict()
-        return tuple(variants.values())
-
     def _load_goal_variants(
         self,
         *,
-        entity: str,
-        project: str,
         repository_goal: _RepositoryGoal,
     ) -> tuple[dict[str, Any], ...]:
         current = self._current_goal_variant(repository_goal)
-        try:
-            from_control = self._control_goal_variants(
-                entity=entity,
-                project=project,
-                repository_goal=repository_goal,
-                current=current,
-            )
-        except ValueError:
-            raise
-        except Exception:
-            from_control = None
-        items = (
-            from_control
-            if from_control is not None
-            else self._wandb_goal_variants(
-                entity=entity,
-                project=project,
-                repository_goal=repository_goal,
-                current=current,
-            )
+        current_summary = self._variant_summary(
+            descriptor=current,
+            repository_goal=repository_goal,
+            current=current,
         )
+        history = self._control_goal_variants(
+            repository_goal=repository_goal,
+            current=current,
+        )
+        by_id = {
+            str(item["variant_id"]): item
+            for item in (history or ())
+        }
+        indexed_current = by_id.get(str(current_summary["variant_id"]))
+        if indexed_current is not None:
+            current_summary["exact_resolution_run_id"] = str(
+                indexed_current.get("exact_resolution_run_id") or ""
+            )
+        by_id[str(current_summary["variant_id"])] = current_summary
+        items = tuple(by_id.values())
         return tuple(
             sorted(
                 items,
@@ -1651,14 +1302,10 @@ class PlayCatalog:
         self,
         *,
         cache_key: str,
-        entity: str,
-        project: str,
         repository_goal: _RepositoryGoal,
     ) -> None:
         try:
             items = self._load_goal_variants(
-                entity=entity,
-                project=project,
                 repository_goal=repository_goal,
             )
             self._store_goal_variants(cache_key=cache_key, items=items)
@@ -1672,8 +1319,6 @@ class PlayCatalog:
         self,
         *,
         cache_key: str,
-        entity: str,
-        project: str,
         repository_goal: _RepositoryGoal,
     ) -> None:
         with self._cache_lock:
@@ -1684,8 +1329,6 @@ class PlayCatalog:
             target=self._refresh_goal_variants,
             kwargs={
                 "cache_key": cache_key,
-                "entity": entity,
-                "project": project,
                 "repository_goal": repository_goal,
             },
             name=f"gradlab-goal-variants-{cache_key[:12]}",
@@ -1695,145 +1338,46 @@ class PlayCatalog:
     def environments(
         self,
         *,
-        entity: str,
         query: str = "",
         cursor: str | None = None,
     ) -> CatalogPage:
         normalized = str(query or "").strip().casefold()
-        goal_counts = self._repository_projects()
+        goal_counts = self._repository_environments()
         items = [
             EnvironmentSummary(
-                entity=entity,
-                name=project,
+                name=environment_id,
                 goal_count=goal_count,
             ).to_dict()
-            for project, goal_count in sorted(goal_counts.items())
-            if not normalized or normalized in _search_text(entity, project)
+            for environment_id, goal_count in sorted(goal_counts.items())
+            if not normalized or normalized in _search_text(environment_id)
         ]
         return _page_items(items, cursor)
 
-    def initial_environments(self, explicit_entity: object = None) -> dict[str, Any]:
-        entity = self.default_entity(explicit_entity)
-        page = self.environments(entity=entity)
-        return {"entity": entity, **page.to_dict()}
+    def initial_environments(self) -> dict[str, Any]:
+        return self.environments().to_dict()
 
     def _load_run_catalog(
         self,
         *,
-        entity: str,
-        project: str,
+        environment_id: str,
         selected_goal_slug: str,
         selected_goal_variant_id: str,
         metric_specs: tuple[tuple[RankCriterion, tuple[str, ...]], ...],
         fallback_metric_specs: tuple[tuple[RankCriterion, tuple[str, ...]], ...],
     ) -> tuple[dict[str, Any], ...]:
         control_summaries = self._control_run_catalog(
-            entity=entity,
-            project=project,
+            environment_id=environment_id,
             selected_goal_slug=selected_goal_slug,
             selected_goal_variant_id=selected_goal_variant_id,
             metric_specs=metric_specs,
             fallback_metric_specs=fallback_metric_specs,
         )
-        if control_summaries is not None:
-            return control_summaries
-        filters = {"config.goal_slug": selected_goal_slug} if selected_goal_slug else {}
-        api_runs = self._wandb_catalog_runs(
-            entity=entity,
-            project=project,
-            filters=filters,
-        )
-        summaries: list[dict[str, Any]] = []
-        for run in api_runs:
-            run_id = run.run_id
-            if RUN_ID_PATTERN.fullmatch(run_id) is None:
-                continue
-            config = dict(run.config)
-            goal_slug = str(config.get("goal_slug") or "")
-            if selected_goal_slug and goal_slug != selected_goal_slug:
-                continue
-            authored_goal_hash = str(config.get("goal_contract_sha256") or "").lower()
-            effective_goal_hash = str(config.get("effective_goal_contract_sha256") or "").lower()
-            run_goal_variant_id = (
-                compute_goal_variant_id(
-                    goal_slug=goal_slug,
-                    goal_contract_sha256_value=authored_goal_hash,
-                    effective_goal_contract_sha256=effective_goal_hash,
-                )
-                if (
-                    goal_slug
-                    and re.fullmatch(r"[0-9a-f]{64}", authored_goal_hash)
-                    and re.fullmatch(r"[0-9a-f]{64}", effective_goal_hash)
-                )
-                else unknown_goal_variant_id(goal_slug=goal_slug)
-                if goal_slug
-                else ""
-            )
-            configured_goal_variant_id = str(config.get("goal_variant_id") or "").strip()
-            if configured_goal_variant_id and configured_goal_variant_id != run_goal_variant_id:
-                continue
-            if selected_goal_variant_id and run_goal_variant_id != selected_goal_variant_id:
-                continue
-            run_metrics = run.summary
-            stop_reason = str(run_metrics.get(RUN_STOP_REASON_SUMMARY) or "")
-            early_stop = _wandb_early_stop_projection(
-                config=config,
-                summary=run_metrics,
-                stop_reason=stop_reason,
-            )
-            overrides = normalize_recipe_overrides(config.get("recipe_overrides"))
-            configured_variant_id = str(config.get("recipe_variant_id") or "").strip()
-            variant_id = configured_variant_id or (
-                recipe_variant_id(
-                    recipe_slug=config.get("recipe_slug"),
-                    source_sha=config.get("source_sha"),
-                    recipe_overrides=overrides,
-                )
-                if overrides
-                else ""
-            )
-            summaries.append(
-                RunSummary(
-                    entity=entity,
-                    project=project,
-                    run_id=run_id,
-                    name=run.name or run_id,
-                    state=str(run_metrics.get(RUN_TERMINAL_STATE_SUMMARY) or run.state),
-                    stop_reason=stop_reason,
-                    final_step=_safe_int(run_metrics.get(RUN_FINAL_STEP_SUMMARY)),
-                    early_stop=early_stop,
-                    goal=goal_slug,
-                    recipe=str(config.get("recipe_slug") or ""),
-                    recipe_sha256=str(config.get("recipe_sha256") or ""),
-                    recipe_overrides=overrides,
-                    recipe_variant_id=variant_id,
-                    goal_contract_sha256=authored_goal_hash,
-                    effective_goal_contract_sha256=effective_goal_hash,
-                    goal_variant_id=run_goal_variant_id,
-                    goal_variant_label=str(config.get("goal_variant_label") or ""),
-                    description=str(run.notes or config.get("run_description") or "").strip(),
-                    seed=_safe_int(config.get("seed")),
-                    created_at=run.created_at,
-                    updated_at=run.updated_at,
-                    url=run.url,
-                    metrics={
-                        criterion.metric: _first_summary_float(run_metrics, sources)
-                        for criterion, sources in (*metric_specs, *fallback_metric_specs)
-                    },
-                ).to_dict()
-            )
-        _rank_run_summaries(
-            summaries,
-            primary=metric_specs,
-            fallback=fallback_metric_specs,
-        )
-        return tuple(summaries)
+        return control_summaries or ()
 
     def _control_run_catalog(
         self,
         *,
-        entity: str,
-        project: str,
+        environment_id: str,
         selected_goal_slug: str,
         selected_goal_variant_id: str,
         metric_specs: tuple[tuple[RankCriterion, tuple[str, ...]], ...],
@@ -1841,21 +1385,13 @@ class PlayCatalog:
     ) -> tuple[dict[str, Any], ...] | None:
         if self.control_bucket is None or not selected_goal_slug:
             return None
-        scope_key = goal_variant_scope_key(
-            entity=entity,
-            project=project,
-            goal_slug=selected_goal_slug,
-        )
+        scope_key = goal_variant_scope_key(goal_slug=selected_goal_slug)
         variant_index = self.control_bucket.get_json_optional(f"{scope_key}/index.json")
         if variant_index is None:
             return ()
         if int(variant_index.get("schema_version") or 0) != GOAL_VARIANT_INDEX_SCHEMA_VERSION:
             raise ValueError("unsupported goal variant index schema")
-        if variant_index.get("scope") != {
-            "entity": entity,
-            "project": project,
-            "goal_slug": selected_goal_slug,
-        }:
+        if variant_index.get("scope") != {"goal_slug": selected_goal_slug}:
             raise ValueError("goal variant index scope mismatch")
         raw_variants = variant_index.get("variants")
         if not isinstance(raw_variants, list):
@@ -1877,8 +1413,6 @@ class PlayCatalog:
             if int(document.get("schema_version") or 0) != GOAL_VARIANT_RUN_INDEX_SCHEMA_VERSION:
                 raise ValueError("unsupported goal variant run index schema")
             if document.get("scope") != {
-                "entity": entity,
-                "project": project,
                 "goal_slug": selected_goal_slug,
                 "variant_id": variant_id,
             }:
@@ -1906,8 +1440,7 @@ class PlayCatalog:
                     raise ValueError("goal variant run index contains an invalid run")
                 summaries.append(
                     RunSummary(
-                        entity=entity,
-                        project=project,
+                        environment_id=environment_id,
                         run_id=run_id,
                         name=str(raw.get("name") or run_id),
                         state=str(raw.get("state") or ""),
@@ -1950,8 +1483,7 @@ class PlayCatalog:
         self,
         *,
         cache_key: str,
-        entity: str,
-        project: str,
+        environment_id: str,
         selected_goal_slug: str,
         selected_goal_variant_id: str,
         metric_specs: tuple[tuple[RankCriterion, tuple[str, ...]], ...],
@@ -1959,8 +1491,7 @@ class PlayCatalog:
     ) -> None:
         try:
             items = self._load_run_catalog(
-                entity=entity,
-                project=project,
+                environment_id=environment_id,
                 selected_goal_slug=selected_goal_slug,
                 selected_goal_variant_id=selected_goal_variant_id,
                 metric_specs=metric_specs,
@@ -1968,8 +1499,8 @@ class PlayCatalog:
             )
             self._store_run_catalog(cache_key=cache_key, items=items)
         except Exception:
-            # A stale local catalog is preferable to turning a transient W&B
-            # failure into a blocking playback-selection failure.
+            # A stale local catalog is preferable to turning a transient
+            # control-index failure into a blocking playback-selection failure.
             pass
         finally:
             with self._cache_lock:
@@ -1979,8 +1510,7 @@ class PlayCatalog:
         self,
         *,
         cache_key: str,
-        entity: str,
-        project: str,
+        environment_id: str,
         selected_goal_slug: str,
         selected_goal_variant_id: str,
         metric_specs: tuple[tuple[RankCriterion, tuple[str, ...]], ...],
@@ -1994,8 +1524,7 @@ class PlayCatalog:
             target=self._refresh_run_catalog,
             kwargs={
                 "cache_key": cache_key,
-                "entity": entity,
-                "project": project,
+                "environment_id": environment_id,
                 "selected_goal_slug": selected_goal_slug,
                 "selected_goal_variant_id": selected_goal_variant_id,
                 "metric_specs": metric_specs,
@@ -2008,8 +1537,7 @@ class PlayCatalog:
     def runs(
         self,
         *,
-        entity: str,
-        project: str,
+        environment_id: str,
         goal_id: str = "",
         goal_variant_id: str = "",
         query: str = "",
@@ -2018,17 +1546,18 @@ class PlayCatalog:
         normalized = str(query or "").strip().casefold()
         selected_goal = str(goal_id or "").strip()
         repository_goal = (
-            self._repository_goal(project=project, goal_id=selected_goal) if selected_goal else None
+            self._repository_goal(
+                environment_id=environment_id,
+                goal_id=selected_goal,
+            )
+            if selected_goal
+            else None
         )
         selected_goal_slug = repository_goal.goal_slug if repository_goal else ""
         selected_goal_variant = str(goal_variant_id or "").strip()
         if (
             selected_goal_variant
-            and re.fullmatch(
-                r"goal-variant-(?:[0-9a-f]{24}|unknown-[0-9a-f]{16})",
-                selected_goal_variant,
-            )
-            is None
+            and re.fullmatch(r"goal-variant-[0-9a-f]{24}", selected_goal_variant) is None
         ):
             raise ValueError("invalid goal variant id")
         rank = (repository_goal.rank or ()) if repository_goal else ()
@@ -2043,8 +1572,7 @@ class PlayCatalog:
             for criterion, _sources in fallback_metric_specs
         )
         cache_key = self._run_catalog_cache_key(
-            entity=entity,
-            project=project,
+            environment_id=environment_id,
             goal_slug=selected_goal_slug,
             goal_variant_id=selected_goal_variant,
             metric_specs=metric_specs,
@@ -2052,13 +1580,11 @@ class PlayCatalog:
         )
         cached = self._cached_run_catalog(
             cache_key=cache_key,
-            entity=entity,
-            project=project,
+            environment_id=environment_id,
         )
         if cached is None:
             summaries = self._load_run_catalog(
-                entity=entity,
-                project=project,
+                environment_id=environment_id,
                 selected_goal_slug=selected_goal_slug,
                 selected_goal_variant_id=selected_goal_variant,
                 metric_specs=metric_specs,
@@ -2068,8 +1594,7 @@ class PlayCatalog:
         elif time.time() - cached[0] >= RUN_CATALOG_CACHE_SECONDS:
             self._schedule_run_catalog_refresh(
                 cache_key=cache_key,
-                entity=entity,
-                project=project,
+                environment_id=environment_id,
                 selected_goal_slug=selected_goal_slug,
                 selected_goal_variant_id=selected_goal_variant,
                 metric_specs=metric_specs,
@@ -2110,23 +1635,21 @@ class PlayCatalog:
     def goals(
         self,
         *,
-        entity: str,
-        project: str,
+        environment_id: str,
         query: str = "",
         cursor: str | None = None,
     ) -> CatalogPage:
         normalized = str(query or "").strip().casefold()
         items = [
             GoalSummary(
-                entity=entity,
-                project=project,
+                environment_id=environment_id,
                 goal_id=goal.goal_id,
                 goal_slug=goal.goal_slug,
                 title=goal.title,
                 recipe_count=goal.recipe_count,
                 goal_path=goal.goal_path,
             ).to_dict()
-            for goal in self._repository_goals(project=project)
+            for goal in self._repository_goals(environment_id=environment_id)
             if (
                 not normalized
                 or normalized
@@ -2143,36 +1666,32 @@ class PlayCatalog:
     def goal_variants(
         self,
         *,
-        entity: str,
-        project: str,
+        environment_id: str,
         goal_id: str,
         query: str = "",
         cursor: str | None = None,
     ) -> CatalogPage:
-        repository_goal = self._repository_goal(project=project, goal_id=goal_id)
+        repository_goal = self._repository_goal(
+            environment_id=environment_id,
+            goal_id=goal_id,
+        )
         cache_key = self._variant_cache_key(
-            entity=entity,
-            project=project,
+            environment_id=environment_id,
             goal_slug=repository_goal.goal_slug,
         )
         cached = self._cached_goal_variants(
             cache_key=cache_key,
-            entity=entity,
-            project=project,
+            environment_id=environment_id,
             goal_slug=repository_goal.goal_slug,
         )
         if cached is None:
             items = self._load_goal_variants(
-                entity=entity,
-                project=project,
                 repository_goal=repository_goal,
             )
             cached = self._store_goal_variants(cache_key=cache_key, items=items)
         elif time.time() - cached[0] >= GOAL_VARIANT_CACHE_SECONDS:
             self._schedule_goal_variant_refresh(
                 cache_key=cache_key,
-                entity=entity,
-                project=project,
                 repository_goal=repository_goal,
             )
         normalized = str(query or "").strip().casefold()
@@ -2220,13 +1739,15 @@ class PlayCatalog:
     def recipes(
         self,
         *,
-        entity: str,
-        project: str,
+        environment_id: str,
         goal_id: str,
         query: str = "",
         cursor: str | None = None,
     ) -> CatalogPage:
-        repository_goal = self._repository_goal(project=project, goal_id=goal_id)
+        repository_goal = self._repository_goal(
+            environment_id=environment_id,
+            goal_id=goal_id,
+        )
         recipes_root = (self.repo_root / repository_goal.goal_path).parent / "recipes"
         normalized = str(query or "").strip().casefold()
         items: list[dict[str, Any]] = []
@@ -2235,8 +1756,7 @@ class PlayCatalog:
             recipe_id = str(composed.get("recipe_id") or path.stem).strip()
             description = str(composed.get("description") or "").strip()
             item = {
-                "entity": entity,
-                "project": project,
+                "environment_id": environment_id,
                 "goal_id": goal_id,
                 "goal_slug": repository_goal.goal_slug,
                 "recipe_id": recipe_id,
@@ -2256,11 +1776,13 @@ class PlayCatalog:
     def inspect_goal(
         self,
         *,
-        entity: str,
-        project: str,
+        environment_id: str,
         goal_id: str,
     ) -> dict[str, Any]:
-        repository_goal = self._repository_goal(project=project, goal_id=goal_id)
+        repository_goal = self._repository_goal(
+            environment_id=environment_id,
+            goal_id=goal_id,
+        )
         authored = load_goal_contract(
             self.repo_root / repository_goal.goal_path,
             self.repo_root,
@@ -2283,8 +1805,7 @@ class PlayCatalog:
             base=canonical,
             variant_id=str(descriptor["variant_id"]),
             metadata={
-                "entity": entity,
-                "project": project,
+                "environment_id": environment_id,
                 "goal_id": goal_id,
                 "goal_slug": repository_goal.goal_slug,
                 "goal_contract_sha256": descriptor["goal_contract_sha256"],
@@ -2303,12 +1824,14 @@ class PlayCatalog:
     def inspect_recipe(
         self,
         *,
-        entity: str,
-        project: str,
+        environment_id: str,
         goal_id: str,
         recipe_id: str,
     ) -> dict[str, Any]:
-        repository_goal = self._repository_goal(project=project, goal_id=goal_id)
+        repository_goal = self._repository_goal(
+            environment_id=environment_id,
+            goal_id=goal_id,
+        )
         normalized_recipe_id = str(recipe_id or "").strip()
         if (
             not normalized_recipe_id
@@ -2322,7 +1845,10 @@ class PlayCatalog:
         goal_path = self.repo_root / repository_goal.goal_path
         recipe_path = goal_path.parent / "recipes" / f"{normalized_recipe_id}.yaml"
         if not recipe_path.is_file():
-            raise ValueError(f"repository has no recipe {project}/{goal_id}/{normalized_recipe_id}")
+            raise ValueError(
+                "repository has no recipe "
+                f"{environment_id}/{goal_id}/{normalized_recipe_id}"
+            )
         resolved = compose_resolved_train_documents(goal_path, recipe_path)
         preview = self._preview_recipe(resolved.base)
         recipe = inspection_document(
@@ -2337,8 +1863,7 @@ class PlayCatalog:
                 "its seed, description, assets, and runtime."
             ),
             metadata={
-                "entity": entity,
-                "project": project,
+                "environment_id": environment_id,
                 "goal_id": goal_id,
                 "goal_slug": repository_goal.goal_slug,
                 "recipe_id": normalized_recipe_id,
@@ -2476,8 +2001,6 @@ class PlayCatalog:
     def inspect_run(
         self,
         *,
-        entity: str,
-        project: str,
         run_id: str,
     ) -> dict[str, Any]:
         if RUN_ID_PATTERN.fullmatch(run_id) is None:
@@ -2488,19 +2011,11 @@ class PlayCatalog:
             else None
         )
         document = None
-        metadata: dict[str, Any] = {
-            "entity": entity,
-            "project": project,
-            "run_id": run_id,
-        }
+        metadata: dict[str, Any] = {"run_id": run_id}
         if manifest_document is not None:
             manifest = RunManifest(**dict(manifest_document))
             manifest.validate()
-            if (
-                manifest.run_id != run_id
-                or manifest.wandb.get("entity") != entity
-                or manifest.wandb.get("project") != project
-            ):
+            if manifest.run_id != run_id:
                 raise ValueError("run manifest identity mismatch")
             metadata.update(
                 {
@@ -2541,18 +2056,19 @@ class PlayCatalog:
     def inspect_goal_variant(
         self,
         *,
-        entity: str,
-        project: str,
+        environment_id: str,
         goal_id: str,
         variant_id: str,
     ) -> dict[str, Any]:
-        repository_goal = self._repository_goal(project=project, goal_id=goal_id)
+        repository_goal = self._repository_goal(
+            environment_id=environment_id,
+            goal_id=goal_id,
+        )
         selected = None
         cursor = None
         while selected is None:
             page = self.goal_variants(
-                entity=entity,
-                project=project,
+                environment_id=environment_id,
                 goal_id=goal_id,
                 cursor=cursor,
             )
@@ -2583,8 +2099,6 @@ class PlayCatalog:
                 goal=summary,
             )
         envelope = self.inspect_run(
-            entity=entity,
-            project=project,
             run_id=exact_run_id,
         )
         goal = envelope["documents"].get("goal")
@@ -2600,10 +2114,9 @@ class PlayCatalog:
             "documents": {"goal": dict(goal)},
         }
 
-    def run_goal(self, *, entity: str, project: str, run_id: str) -> str:
+    def run_goal(self, *, environment_id: str, run_id: str) -> str:
         goal_id, _variant_id = self.run_goal_variant(
-            entity=entity,
-            project=project,
+            environment_id=environment_id,
             run_id=run_id,
         )
         return goal_id
@@ -2611,66 +2124,55 @@ class PlayCatalog:
     def run_goal_variant(
         self,
         *,
-        entity: str,
-        project: str,
+        environment_id: str,
         run_id: str,
     ) -> tuple[str, str]:
         if RUN_ID_PATTERN.fullmatch(run_id) is None:
             raise ValueError("run id must match gradlab-<32 lowercase hex>")
+        descriptor: Mapping[str, Any] | None = None
         if self.control_bucket is not None:
             manifest = self.control_bucket.get_json_optional(f"runs/{run_id}/manifest.json")
             if manifest is not None:
-                wandb = manifest.get("wandb")
-                descriptor = manifest.get("goal_variant")
-                if (
-                    not isinstance(wandb, Mapping)
-                    or str(wandb.get("entity") or "") != entity
-                    or str(wandb.get("project") or "") != project
-                ):
-                    raise ValueError("run manifest W&B scope mismatch")
-                if not isinstance(descriptor, Mapping):
+                raw_descriptor = manifest.get("goal_variant")
+                if not isinstance(raw_descriptor, Mapping):
                     raise ValueError("run manifest has no goal variant descriptor")
-                validated = validate_goal_variant_descriptor(descriptor)
-                goal_slug = str(validated["goal_slug"])
-                for goal in self._repository_goals(project=project):
-                    if goal.goal_slug == goal_slug:
-                        return goal.goal_id, str(validated["variant_id"])
-                raise ValueError(
-                    f"run manifest goal is not declared in the repository: {goal_slug}"
-                )
-        run = self._wandb_api().run(f"{entity}/{project}/{run_id}")
-        config = dict(getattr(run, "config", {}) or {})
-        goal_slug = str(config.get("goal_slug") or "").strip()
-        for goal in self._repository_goals(project=project):
+                descriptor = raw_descriptor
+        if descriptor is None:
+            public_document = self._public_run_recipe_document(run_id)
+            recipe = (
+                public_document.get("recipe")
+                if isinstance(public_document, Mapping)
+                else None
+            )
+            raw_descriptor = recipe.get("goal_variant") if isinstance(recipe, Mapping) else None
+            if isinstance(raw_descriptor, Mapping):
+                descriptor = raw_descriptor
+        if descriptor is None:
+            raise ValueError("run has no current goal variant descriptor")
+        validated = validate_goal_variant_descriptor(descriptor)
+        goal_slug = str(validated["goal_slug"])
+        for goal in self._repository_goals(environment_id=environment_id):
             if goal.goal_slug == goal_slug:
-                authored_hash = str(config.get("goal_contract_sha256") or "").lower()
-                effective_hash = str(config.get("effective_goal_contract_sha256") or "").lower()
-                variant_id = (
-                    compute_goal_variant_id(
-                        goal_slug=goal_slug,
-                        goal_contract_sha256_value=authored_hash,
-                        effective_goal_contract_sha256=effective_hash,
-                    )
-                    if (
-                        re.fullmatch(r"[0-9a-f]{64}", authored_hash)
-                        and re.fullmatch(r"[0-9a-f]{64}", effective_hash)
-                    )
-                    else unknown_goal_variant_id(goal_slug=goal_slug)
-                )
-                return goal.goal_id, variant_id
-        if not goal_slug:
-            raise ValueError("W&B run has no goal identity")
-        raise ValueError(f"W&B run goal is not declared in the repository: {goal_slug}")
+                return goal.goal_id, str(validated["variant_id"])
+        raise ValueError(f"run goal is not declared in the repository: {goal_slug}")
 
     def _checkpoint_evaluations(
         self,
         *,
-        entity: str,
-        project: str,
         run_id: str,
     ) -> _CheckpointEvaluationData:
-        entity = str(entity or "").strip()
-        project = str(project or "").strip()
+        manifest = (
+            self.control_bucket.get_json_optional(f"runs/{run_id}/manifest.json")
+            if self.control_bucket is not None
+            else None
+        )
+        wandb = manifest.get("wandb") if isinstance(manifest, Mapping) else None
+        entity = str(wandb.get("entity") or "").strip() if isinstance(wandb, Mapping) else ""
+        project = (
+            str(wandb.get("project") or "").strip()
+            if isinstance(wandb, Mapping)
+            else ""
+        )
         if not entity or not project:
             return _CheckpointEvaluationData({}, None, None, {}, ())
         cache_key = (entity, project, run_id)
@@ -2822,8 +2324,6 @@ class PlayCatalog:
         *,
         run_id: str,
         query: str = "",
-        entity: str = "",
-        project: str = "",
         goal_variant_id: str = "",
     ) -> tuple[dict[str, Any], ...]:
         if RUN_ID_PATTERN.fullmatch(run_id) is None:
@@ -2842,31 +2342,32 @@ class PlayCatalog:
         expected_effective_goal_hash = ""
         selected_variant = str(goal_variant_id or "").strip()
         if selected_variant:
-            if not str(entity or "").strip() or not str(project or "").strip():
-                raise ValueError("goal variant checkpoint validation requires entity and project")
-            run = self._wandb_api().run(f"{entity}/{project}/{run_id}")
-            config = dict(getattr(run, "config", {}) or {})
-            goal_slug = str(config.get("goal_slug") or "").strip()
-            authored_hash = str(config.get("goal_contract_sha256") or "").lower()
-            expected_effective_goal_hash = str(
-                config.get("effective_goal_contract_sha256") or ""
-            ).lower()
-            if (
-                re.fullmatch(r"[0-9a-f]{64}", authored_hash) is None
-                or re.fullmatch(r"[0-9a-f]{64}", expected_effective_goal_hash) is None
-            ):
-                observed_variant = unknown_goal_variant_id(goal_slug=goal_slug) if goal_slug else ""
-            else:
-                observed_variant = compute_goal_variant_id(
-                    goal_slug=goal_slug,
-                    goal_contract_sha256_value=authored_hash,
-                    effective_goal_contract_sha256=expected_effective_goal_hash,
+            manifest = (
+                self.control_bucket.get_json_optional(f"runs/{run_id}/manifest.json")
+                if self.control_bucket is not None
+                else None
+            )
+            raw_descriptor = manifest.get("goal_variant") if isinstance(manifest, Mapping) else None
+            if not isinstance(raw_descriptor, Mapping):
+                public_document = self._public_run_recipe_document(run_id)
+                recipe = (
+                    public_document.get("recipe")
+                    if isinstance(public_document, Mapping)
+                    else None
                 )
+                raw_descriptor = (
+                    recipe.get("goal_variant") if isinstance(recipe, Mapping) else None
+                )
+            if not isinstance(raw_descriptor, Mapping):
+                raise ValueError("run has no current goal variant descriptor")
+            descriptor = validate_goal_variant_descriptor(raw_descriptor)
+            observed_variant = str(descriptor["variant_id"])
+            expected_effective_goal_hash = str(
+                descriptor["effective_goal_contract_sha256"]
+            )
             if observed_variant != selected_variant:
                 raise ValueError("run does not belong to the selected goal variant")
         evaluation_data = self._checkpoint_evaluations(
-            entity=entity,
-            project=project,
             run_id=run_id,
         )
         rows: list[CheckpointSummary] = []
@@ -2967,7 +2468,7 @@ __all__ = [
     "GoalVariantSummary",
     "PlayCatalog",
     "RunSummary",
-    "WandbLocation",
+    "WandbRunLocation",
     "checkpoint_manifest_url",
     "is_wandb_url",
     "normalize_search_query",

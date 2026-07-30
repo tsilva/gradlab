@@ -5,7 +5,7 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 from gradlab.config_loader import dotlist_to_mapping
-from gradlab.json_utils import canonical_json_sha256
+from gradlab.json_utils import canonical_json_sha256, canonical_json_text
 
 
 BASE_RECIPE_VARIANT_ID = "base"
@@ -30,7 +30,7 @@ def normalize_recipe_overrides(value: object) -> tuple[str, ...]:
         return (text,)
     if isinstance(value, Mapping):
         return tuple(
-            f"{str(key)}={json.dumps(item, sort_keys=True, separators=(',', ':'))}"
+            f"{str(key)}={canonical_json_text(item, ensure_ascii=True)}"
             for key, item in sorted(value.items(), key=lambda pair: str(pair[0]))
         )
     if isinstance(value, Sequence) and not isinstance(

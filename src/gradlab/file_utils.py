@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import os
 import uuid
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
+
+from gradlab.json_utils import canonical_json_bytes
 
 
 def file_sha256(path: str | Path) -> str:
@@ -62,10 +63,4 @@ def atomic_write_bytes(
 
 
 def atomic_write_json(path: str | Path, document: Mapping[str, Any]) -> None:
-    payload = json.dumps(
-        document,
-        sort_keys=True,
-        separators=(",", ":"),
-        allow_nan=False,
-    ).encode()
-    atomic_write_bytes(path, payload)
+    atomic_write_bytes(path, canonical_json_bytes(document, ensure_ascii=True))

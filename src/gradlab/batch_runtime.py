@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
@@ -11,7 +10,7 @@ from typing import Any, Protocol
 import gymnasium as gym
 import numpy as np
 from numba import njit
-from gradlab.json_utils import canonical_json_bytes
+from gradlab.json_utils import canonical_json_sha256
 from gradlab.state_archive import (
     ArchiveCellConfig,
     ArchiveCellDetector,
@@ -910,7 +909,7 @@ class BatchRuntime:
             cell_config,
             label="policy.cell_detector",
         )
-        cache_key = hashlib.sha256(canonical_json_bytes(normalized)).hexdigest()
+        cache_key = canonical_json_sha256(normalized)
         detector = self._policy_cell_detectors.get(cache_key)
         if detector is None:
             config = ArchiveCellConfig.from_mapping(
@@ -999,25 +998,15 @@ class BatchRuntime:
     ) -> list[str | None]:
         values = reset_infos.get("start_id")
         if values is None:
-            values = reset_infos.get("start_state")
-        if values is None:
-            values = reset_infos.get("state")
-        if values is None:
             if self.descriptor.start_catalog and any(
                 bool(mask[lane]) and requested[lane] is not None for lane in range(self.num_envs)
             ):
-                raise ValueError(
-                    "provider reset infos must report actual start_id, start_state, or state"
-                )
+                raise ValueError("provider reset infos must report actual start_id")
             return list(requested)
         values = np.asarray(values, dtype=object)
         if values.shape != (self.num_envs,):
             raise ValueError("reset start_id must contain one value per lane")
-        presence = None
-        for key in ("start_id", "start_state", "state"):
-            if key in reset_infos:
-                presence = reset_infos.get(f"_{key}")
-                break
+        presence = reset_infos.get("_start_id")
         if presence is not None:
             present = np.asarray(presence, dtype=bool)
             if present.shape != (self.num_envs,) or np.any(mask & ~present):

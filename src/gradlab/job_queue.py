@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any, Literal, Protocol
 
 from gradlab.clock import Clock, SystemClock
+from gradlab.json_utils import canonical_json_text
 from gradlab.metric_store import SqliteStore
 
 
@@ -118,13 +119,7 @@ def default_queue_root() -> Path:
 
 
 def _canonical_json(value: Mapping[str, Any]) -> str:
-    return json.dumps(
-        dict(value),
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=False,
-        allow_nan=False,
-    )
+    return canonical_json_text(dict(value))
 
 
 def _job_id() -> str:

@@ -45,18 +45,23 @@ def test_checkpoint_identity_rejects_conflicting_metadata() -> None:
 
 def test_checkpoint_identity_rejects_unknown_model_class() -> None:
     with pytest.raises(ValueError, match="unsupported checkpoint model class"):
-        resolve_sb3_algorithm({"model_class": "example.Unknown"})
+        resolve_sb3_algorithm(
+            {
+                "algorithm_id": "ppo",
+                "model_class": "example.Unknown",
+            }
+        )
 
 
-def test_dqn_is_portable_runtime_provenance_but_not_a_launchable_backend() -> None:
-    metadata = {
-        "training_backend_id": "sb3.dqn",
-        "algorithm_id": "dqn",
-        "model_class": "stable_baselines3.dqn.dqn.DQN",
-    }
-
-    assert resolve_policy_algorithm(metadata) == "dqn"
-    assert resolve_sb3_algorithm(metadata) == "dqn"
+def test_retired_dqn_backend_is_not_supported() -> None:
+    with pytest.raises(ValueError, match="unsupported checkpoint algorithm"):
+        resolve_policy_algorithm(
+            {
+                "training_backend_id": "sb3.dqn",
+                "algorithm_id": "dqn",
+                "model_class": "stable_baselines3.dqn.dqn.DQN",
+            }
+        )
     with pytest.raises(ValueError, match="unknown training backend"):
         load_training_backend("sb3.dqn")
 

@@ -236,7 +236,7 @@ def reserve_args(state_path: Path, phase: str, **kwargs) -> SimpleNamespace:
 
 
 class AutoresearchStudyTests(unittest.TestCase):
-    def test_init_ignores_old_schema_and_resumes_v3_with_distinct_rungs(self) -> None:
+    def test_init_ignores_non_current_schema_and_resumes_current_study(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             goal = root / "goal.yaml"
@@ -303,11 +303,11 @@ class AutoresearchStudyTests(unittest.TestCase):
         self.assertLess(state["rung_caps"]["pair"], state["rung_caps"]["confirmation_effective"])
         self.assertEqual(state["baseline"]["train_config"]["checkpoint_eval_backend"], "modal")
 
-    def test_schema_v1_is_explicitly_rejected(self) -> None:
+    def test_non_current_schema_is_explicitly_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary) / "study.json"
             path.write_text(json.dumps({"schema_version": 1}), encoding="utf-8")
-            with self.assertRaisesRegex(ValueError, "v1/v2 studies are historical"):
+            with self.assertRaisesRegex(ValueError, "only schema 4 is current"):
                 study.load_state(path)
 
     def test_candidate_identity_and_validation_remain_bounded(self) -> None:

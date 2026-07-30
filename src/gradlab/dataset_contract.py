@@ -14,7 +14,7 @@ from typing import Any
 import numpy as np
 
 from gradlab.file_utils import file_sha256
-from gradlab.json_utils import canonical_json_bytes
+from gradlab.json_utils import canonical_json_bytes, canonical_json_sha256
 
 
 DATASET_FORMAT_VERSION = 3
@@ -358,7 +358,7 @@ def validate_environment_document(
         or fps <= 0
     ):
         raise ValueError("environment document fps must be positive and finite")
-    actual = hashlib.sha256(canonical_json_bytes(document)).hexdigest()
+    actual = canonical_json_sha256(document)
     if expected_id is not None and actual != expected_id:
         raise ValueError(f"environment contract hash mismatch: {actual} != {expected_id}")
     return actual
@@ -388,7 +388,7 @@ def validate_contract_artifacts(root: Path, summary: DatasetSummary) -> dict[str
             or document.get("format_version") != COLLECTION_FORMAT_VERSION
         ):
             raise ValueError(f"collector {contract_id} has an unsupported document")
-        actual = hashlib.sha256(canonical_json_bytes(document)).hexdigest()
+        actual = canonical_json_sha256(document)
         if actual != contract_id:
             raise ValueError(f"collector contract hash mismatch: {actual} != {contract_id}")
         source = document.get("source")

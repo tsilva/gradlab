@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import json
 import re
 import shutil
@@ -16,6 +15,7 @@ from gradlab.dataset_contract import (
     features_append_compatible,
     grouped_episode_rows,
 )
+from gradlab.file_utils import file_sha256
 
 
 SECRET_PATTERNS = (
@@ -204,9 +204,7 @@ def _artifact_hashes(root: Path) -> dict[str, str]:
         if directory.exists():
             for path in directory.rglob("*"):
                 if path.is_file():
-                    hashes[path.relative_to(root).as_posix()] = hashlib.sha256(
-                        path.read_bytes()
-                    ).hexdigest()
+                    hashes[path.relative_to(root).as_posix()] = file_sha256(path)
     return hashes
 
 
@@ -221,7 +219,7 @@ def _immutable_file_operations(
             continue
         for path in sorted(item for item in directory.rglob("*") if item.is_file()):
             relative = path.relative_to(source).as_posix()
-            digest = hashlib.sha256(path.read_bytes()).hexdigest()
+            digest = file_sha256(path)
             existing = known_hashes.get(relative)
             if existing is not None:
                 if existing != digest:
@@ -367,9 +365,7 @@ class HubAppendSession:
                     raise
                 new_head = recovered_head
             else:
-                new_head = str(
-                    getattr(result, "oid", None) or getattr(result, "commit_id", None) or ""
-                )
+                new_head = str(result.oid or "")
                 if not new_head:
                     _exists, resolved = _remote_head(self.api, self.target, self.revision)
                     new_head = str(resolved or "")
@@ -399,8 +395,7 @@ class HubAppendSession:
             repo_id=self.target, repo_type="dataset", revision=self.revision
         )
         latest = commits[0] if commits else None
-        parents = set(getattr(latest, "parents", None) or getattr(latest, "parent_ids", None) or ())
-        if previous_head not in parents:
+        if latest is None or str(latest.commit_id) != candidate_head:
             return None
         from gradlab.dataset_store import validate_tree
 

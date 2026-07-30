@@ -256,6 +256,7 @@ def evaluate_model_episodes(
     rom_binding: RomRuntimeBinding | None = None,
     action_selection_mode: str | None = None,
     expected_action_contract: Mapping[str, Any] | None = None,
+    policy_runtime: PolicyRuntime | None = None,
 ) -> tuple[dict[str, Any], Path | None]:
     if deterministic:
         raise ValueError("deterministic policy evaluation is unsupported; use stochastic sampling")
@@ -276,12 +277,6 @@ def evaluate_model_episodes(
         == "first_failed_episode"
     )
     rejected = False
-    try:
-        policy_runtime: PolicyRuntime | None = PolicyRuntime(model)
-    except TypeError, ValueError:
-        # Scripted baselines intentionally retain the small ``predict`` adapter;
-        # every supported checkpoint algorithm uses PolicyRuntime.
-        policy_runtime = None
     if policy_runtime is not None and action_selection_mode is None:
         action_selection_mode = policy_runtime.capabilities.default_action_selection_mode
     with tqdm(
@@ -608,6 +603,7 @@ def evaluate_policy_bundle(
         rom_binding=rom_binding,
         action_selection_mode=str(contract["action_sampling"]),
         expected_action_contract=expected_action_contract,
+        policy_runtime=PolicyRuntime(model, algorithm_id=algorithm_id),
     )
     summary["evaluation_evidence"] = evidence
     summary["episode_seeds"] = [

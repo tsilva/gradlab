@@ -48,7 +48,7 @@ test("catalog list hover highlights the complete row", async () => {
 
   assert.match(
     styles,
-    /\.project-row:hover:not\(:disabled\),\s*\.goal-row:hover,\s*\.goal-row:focus-within\s*\{[^}]*background: #1b3b48;/,
+    /\.environment-row:hover:not\(:disabled\),\s*\.goal-row:hover,\s*\.goal-row:focus-within\s*\{[^}]*background: #1b3b48;/,
   );
   assert.match(
     styles,
@@ -116,8 +116,7 @@ test("active-run status icon is available in the shared icon sprite", async () =
 test("playback home is the root environment route", () => {
   assert.deepEqual(sourceRouteFromPath("/"), {
     level: "environments",
-    entity: "",
-    project: "",
+    environment_id: "",
     goal_id: "",
     goal_variant_id: "",
     run_id: "",
@@ -125,8 +124,7 @@ test("playback home is the root environment route", () => {
   });
   assert.equal(sourceRoutePath({
     level: "environments",
-    entity: "research",
-    project: "",
+    environment_id: "",
     goal_id: "",
     goal_variant_id: "",
     run_id: "",
@@ -138,7 +136,7 @@ test("playback home is the root environment route", () => {
 test("active checkpoint breadcrumbs retain the full source hierarchy", () => {
   const items = sourceBreadcrumbItems({
     level: "runs",
-    project: "ViZDoom",
+    environment_id: "ViZDoom",
     goal_id: "DefendTheLine-v1",
     goal_variant_id: "goal-variant-a27a8239",
     run_id: "gradlab-c22f7c7a",
@@ -174,7 +172,7 @@ test("environment breadcrumb remains clickable for a partial active checkpoint r
     current: false,
     route: {
       level: "environments",
-      project: "",
+      environment_id: "",
       goal_id: "",
       goal_variant_id: "",
       run_id: "",
@@ -192,18 +190,18 @@ test("all active checkpoint ancestors remain clickable with stale route levels",
   const routes = [
     {
       level: "goals",
-      project: "ViZDoom",
+      environment_id: "ViZDoom",
       checkpoint_id: "checkpoint-a",
     },
     {
       level: "goal_variants",
-      project: "ViZDoom",
+      environment_id: "ViZDoom",
       goal_id: "DefendTheLine-v1",
       checkpoint_id: "checkpoint-b",
     },
     {
       level: "runs",
-      project: "ViZDoom",
+      environment_id: "ViZDoom",
       goal_id: "DefendTheLine-v1",
       goal_variant_id: "goal-variant-a27a8239",
       checkpoint_id: "checkpoint-c",
@@ -266,7 +264,7 @@ test("unchanged active checkpoint routes do not rebuild breadcrumbs", () => {
       phase: "active",
       route: {
         level: "runs",
-        project: "ViZDoom",
+        environment_id: "ViZDoom",
         goal_id: "DefendTheLine-v1",
         goal_variant_id: "goal-variant-a27a8239",
         run_id: "gradlab-c22f7c7a",
@@ -286,8 +284,7 @@ test("active checkpoint breadcrumb navigation exits playback at the selected anc
   const browser = Object.create(SourceBrowser.prototype);
   browser.route = {
     level: "runs",
-    entity: "research",
-    project: "ViZDoom",
+    environment_id: "ViZDoom",
     goal_id: "DefendTheLine-v1",
     goal_variant_id: "goal-variant-a27a8239",
     run_id: "gradlab-c22f7c7a",
@@ -311,8 +308,7 @@ test("active checkpoint breadcrumb navigation exits playback at the selected anc
 
   const expected = {
     level: "goal_variants",
-    entity: "research",
-    project: "ViZDoom",
+    environment_id: "ViZDoom",
     goal_id: "DefendTheLine-v1",
     goal_variant_id: "",
     run_id: "",
@@ -331,8 +327,7 @@ test("rejected active breadcrumb navigation leaves playback and history unchange
   const browser = Object.create(SourceBrowser.prototype);
   browser.route = {
     level: "runs",
-    entity: "research",
-    project: "ViZDoom",
+    environment_id: "ViZDoom",
     goal_id: "DefendTheLine-v1",
     goal_variant_id: "goal-variant-a27a8239",
     run_id: "gradlab-c22f7c7a",
@@ -668,7 +663,7 @@ test("selected checkpoints are admitted together through the evaluation API", as
   assert.match(toasts[0][0], /2 checkpoints queued/);
 });
 
-test("browser back through checkpoint routes preserves the omitted catalog entity", (context) => {
+test("browser back through checkpoint routes preserves canonical environment identity", (context) => {
   const originalLocation = globalThis.location;
   const originalWindow = globalThis.window;
   let popstate;
@@ -706,8 +701,7 @@ test("browser back through checkpoint routes preserves the omitted catalog entit
   );
   sourceBrowser.route = {
     level: "runs",
-    entity: "research",
-    project: "ViZDoom",
+    environment_id: "ViZDoom",
     goal_id: "DefendTheLine-v1",
     goal_variant_id: "goal-variant-a27a8239",
     run_id: "gradlab-c22f7c7a",
@@ -727,13 +721,13 @@ test("browser back through checkpoint routes preserves the omitted catalog entit
   );
   popstate();
 
-  assert.equal(sourceBrowser.route.entity, "research");
+  assert.equal(sourceBrowser.route.environment_id, "ViZDoom");
   assert.equal(sourceBrowser.endpoint(), (
     "/api/catalog/runs/gradlab-c22f7c7a/checkpoints?"
-    + "entity=research&project=ViZDoom&goal_variant_id=goal-variant-a27a8239"
+    + "goal_variant_id=goal-variant-a27a8239"
   ));
   assert.equal(commands[0].name, "browse_sources");
-  assert.equal(commands[0].payload.route.entity, "research");
+  assert.equal(commands[0].payload.route.environment_id, "ViZDoom");
 
   globalThis.location.pathname = (
     "/environments/ViZDoom/goals/DefendTheLine-v1"
@@ -741,13 +735,13 @@ test("browser back through checkpoint routes preserves the omitted catalog entit
   );
   popstate();
 
-  assert.equal(sourceBrowser.route.entity, "research");
+  assert.equal(sourceBrowser.route.environment_id, "ViZDoom");
   assert.equal(sourceBrowser.endpoint(), (
-    "/api/catalog/environments/research/ViZDoom/goals/DefendTheLine-v1"
+    "/api/catalog/environments/ViZDoom/goals/DefendTheLine-v1"
     + "/variants/goal-variant-a27a8239/runs?"
   ));
   assert.equal(commands[1].name, "browse_sources");
-  assert.equal(commands[1].payload.route.entity, "research");
+  assert.equal(commands[1].payload.route.environment_id, "ViZDoom");
 });
 
 test("late catalog responses cannot populate a newer route", async (context) => {
@@ -779,15 +773,13 @@ test("late catalog responses cannot populate a newer route", async (context) => 
   );
   sourceBrowser.renderView = () => {};
   sourceBrowser.updatePolling = () => {};
-  sourceBrowser.route.entity = "research";
-
   const environmentsRequest = sourceBrowser.load();
   assert.equal(requests.length, 1);
   assert.match(requests[0].url, /^\/api\/catalog\/environments/);
 
   sourceBrowser.applyRoute({
     level: "goals",
-    project: "Mario",
+    environment_id: "Mario",
     goal_id: "",
     goal_variant_id: "",
     run_id: "",
@@ -795,11 +787,11 @@ test("late catalog responses cannot populate a newer route", async (context) => 
   });
   assert.equal(requests.length, 2);
   assert.equal(requests[0].options.signal.aborted, true);
-  assert.match(requests[1].url, /\/environments\/research\/Mario\/goals/);
+  assert.match(requests[1].url, /\/environments\/Mario\/goals/);
   requests[0].resolve({
     ok: true,
     json: async () => ({
-      items: [{ entity: "research", name: "Mario", goal_count: 10 }],
+      items: [{ name: "Mario", goal_count: 10 }],
       next_cursor: null,
     }),
   });
@@ -812,8 +804,7 @@ test("late catalog responses cannot populate a newer route", async (context) => 
     ok: true,
     json: async () => ({
       items: [{
-        entity: "research",
-        project: "Mario",
+        environment_id: "Mario",
         goal_id: "Level1-1",
         goal_slug: "Mario/Level1-1",
         title: "Mario Level 1-1 completion",
@@ -838,8 +829,7 @@ test("goal variants are a first-class canonical route between goals and runs", (
   );
   assert.deepEqual(sourceRouteFromPath(path), {
     level: "runs",
-    entity: "",
-    project: "Mario",
+    environment_id: "Mario",
     goal_id: "Level1-1",
     goal_variant_id: variant,
     run_id: run,

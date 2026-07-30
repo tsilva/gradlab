@@ -20,6 +20,14 @@ if TYPE_CHECKING:
 
 SignalSource = str | tuple[str, ...]
 IMAGE_CHANNEL_COUNTS = frozenset({1, 3, 4})
+PROVIDER_TERMINATED_SIGNAL = "provider_terminated"
+PROVIDER_TRUNCATED_SIGNAL = "provider_truncated"
+RUNTIME_BOUNDARY_SIGNALS = frozenset(
+    {
+        PROVIDER_TERMINATED_SIGNAL,
+        PROVIDER_TRUNCATED_SIGNAL,
+    }
+)
 
 
 def default_task_document(task_id: str) -> dict[str, Any]:
@@ -762,7 +770,7 @@ class SignalBindings:
         self._bindings = dict(bindings)
         self._specs = dict(descriptor.signal_schema)
         self.num_envs = int(num_envs)
-        available = set(descriptor.signal_schema)
+        available = set(descriptor.signal_schema) | RUNTIME_BOUNDARY_SIGNALS
         missing = sorted(
             {
                 name
@@ -781,7 +789,8 @@ class SignalBindings:
                 name
                 for source in self._bindings.values()
                 for name in ((source,) if isinstance(source, str) else source)
-                if not self._specs[name].available_on_step
+                if name not in RUNTIME_BOUNDARY_SIGNALS
+                and not self._specs[name].available_on_step
             }
         )
         if unavailable:
@@ -790,7 +799,10 @@ class SignalBindings:
     def available_on_reset(self, semantic_name: str) -> bool:
         source = self.source(semantic_name)
         names = (source,) if isinstance(source, str) else source
-        return all(self._specs[name].available_on_reset for name in names)
+        return all(
+            name not in RUNTIME_BOUNDARY_SIGNALS and self._specs[name].available_on_reset
+            for name in names
+        )
 
     def source(self, semantic_name: str) -> SignalSource:
         try:
@@ -856,9 +868,17 @@ class SignalBindings:
     def scalar_dtype(self, semantic_name: str) -> np.dtype:
         source = self.source(semantic_name)
         names = (source,) if isinstance(source, str) else source
-        if len(names) != 1 or self._specs[names[0]].shape:
+        if len(names) != 1:
+            raise ValueError(f"semantic signal {semantic_name!r} must be scalar per lane")
+        if names[0] in RUNTIME_BOUNDARY_SIGNALS:
+            return np.dtype(np.bool_)
+        if self._specs[names[0]].shape:
             raise ValueError(f"semantic signal {semantic_name!r} must be scalar per lane")
         return self._specs[names[0]].dtype
+
+    def runtime_boundary_source(self, semantic_name: str) -> str | None:
+        source = self.source(semantic_name)
+        return source if isinstance(source, str) and source in RUNTIME_BOUNDARY_SIGNALS else None
 
     def scalar_source_dtypes(
         self,
@@ -868,13 +888,22 @@ class SignalBindings:
     ) -> tuple[np.dtype, ...]:
         source = self.source(semantic_name)
         names = (source,) if isinstance(source, str) else source
-        if any(self._specs[name].shape for name in names):
+        if any(
+            name not in RUNTIME_BOUNDARY_SIGNALS and self._specs[name].shape
+            for name in names
+        ):
             raise ValueError(f"semantic signal {semantic_name!r} must use scalar provider sources")
-        if require_reset and not all(self._specs[name].available_on_reset for name in names):
+        if require_reset and not all(
+            name not in RUNTIME_BOUNDARY_SIGNALS and self._specs[name].available_on_reset
+            for name in names
+        ):
             raise ValueError(
                 f"semantic signal {semantic_name!r} must be available on reset and step"
             )
-        return tuple(self._specs[name].dtype for name in names)
+        return tuple(
+            np.dtype(np.bool_) if name in RUNTIME_BOUNDARY_SIGNALS else self._specs[name].dtype
+            for name in names
+        )
 
 
 @dataclass(frozen=True)
@@ -1013,6 +1042,10 @@ class IdentityTaskKernel:
         self.event_names = tuple(event.name for event in self._event_configs)
         self.has_events = bool(self._event_configs)
         self._signal_bindings = SignalBindings(descriptor, signals or {}, self.num_envs)
+        self._event_runtime_sources = tuple(
+            self._signal_bindings.runtime_boundary_source(event.signal)
+            for event in self._event_configs
+        )
         self._event_consecutive_steps = tuple(
             np.zeros(self.num_envs, dtype=np.int64) for _event in self._event_configs
         )
@@ -1114,7 +1147,6 @@ class IdentityTaskKernel:
         provider_truncated: np.ndarray,
         signals: Mapping[str, Any],
     ) -> TaskStep:
-        del provider_terminated, provider_truncated
         np.copyto(self._rewards, np.asarray(native_rewards, dtype=np.float32))
         _identity_step_kernel(
             self._episode_steps,
@@ -1126,7 +1158,13 @@ class IdentityTaskKernel:
         )
         if self._event_configs:
             for index, event in enumerate(self._event_configs):
-                values = self._signal_bindings.scalar(event.signal, signals)
+                runtime_source = self._event_runtime_sources[index]
+                if runtime_source == PROVIDER_TERMINATED_SIGNAL:
+                    values = provider_terminated
+                elif runtime_source == PROVIDER_TRUNCATED_SIGNAL:
+                    values = provider_truncated
+                else:
+                    values = self._signal_bindings.scalar(event.signal, signals)
                 if event.operation == "equals_for":
                     _identity_equals_for_event_kernel(
                         values,
