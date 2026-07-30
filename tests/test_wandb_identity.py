@@ -205,6 +205,7 @@ def test_resume_wandb_requires_or_uses_display_name(
         "run_name": "gradlab-0123456789abcdef0123456789abcdef",
         "env_provider": "supermariobrosnes-turbo",
         "game": "SuperMarioBros-Nes-v0",
+        "metrics_schema_version": 14,
     }
     fake_wandb = SimpleNamespace(
         init=lambda **kwargs: captured.update(kwargs) or FakeRun(),
@@ -230,6 +231,33 @@ def test_resume_wandb_requires_or_uses_display_name(
     assert captured["group"] == train_config["wandb_group"]
     assert captured["settings"]["x_update_finish_state"] is True
     assert captured["settings"]["x_server_side_expand_glob_metrics"] is False
+
+
+def test_resume_wandb_requires_current_metrics_schema() -> None:
+    train_config = {
+        "wandb_run_id": "gradlab-0123456789abcdef0123456789abcdef",
+        "wandb_entity": "entity",
+        "wandb_project": "SuperMarioBros-Nes-v0",
+        "wandb_display_name": "Level1-1__ppo__s7__01234567",
+        "wandb_group": "cohort::SuperMarioBros-Nes-v0/Level1-1::ppo::base",
+        "wandb_mode": "offline",
+        "env_provider": "supermariobrosnes-turbo",
+        "game": "SuperMarioBros-Nes-v0",
+    }
+    with (
+        patch("gradlab.wandb_publisher.load_wandb_env"),
+        patch.dict(
+            sys.modules,
+            {
+                "wandb": SimpleNamespace(
+                    init=lambda **_kwargs: object(),
+                    Settings=lambda **kwargs: kwargs,
+                )
+            },
+        ),
+        pytest.raises(ValueError, match="unsupported metrics schema version"),
+    ):
+        WandbProjector.resume(train_config)
 
 
 def test_wandb_finish_has_a_hard_timeout() -> None:

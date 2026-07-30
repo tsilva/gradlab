@@ -18,10 +18,12 @@ from gradlab.goal_variants import (
     build_goal_variant_descriptor,
     goal_variant_scope_key,
 )
+from gradlab.metric_names import METRICS_SCHEMA_VERSION
 from gradlab.recipe_documents import compose_resolved_train_documents, load_goal_contract
 from gradlab.reward_programs import goal_for_contract_validation
 from gradlab.run_authority import RunAuthority
 from gradlab.run_contracts import (
+    SCHEMA_VERSION,
     RunManifest,
     checkpoint_id,
     default_liveness_policy,
@@ -32,6 +34,62 @@ from gradlab.run_contracts import (
 
 
 RUN_ID = "gradlab-" + "a" * 32
+
+
+def current_goal_document(*, goal_id: str, title: str) -> str:
+    return "\n".join(
+        (
+            "defaults:",
+            "- _self_",
+            f"goal_id: {goal_id}",
+            "evaluation_mode: evaluated",
+            f"title: {title}",
+            "objective:",
+            "  rank:",
+            "  - min(leader/checkpoint/step)",
+            "  - max(eval/full/episode/return/shaped/mean)",
+            "train:",
+            "  checkpoint_freq: 128",
+            "  environment:",
+            "    env_provider: gradlab",
+            "    env_config:",
+            "      game: Bandit-v0",
+            "      n_envs: 8",
+            "      env_args:",
+            "        autoreset_mode: disabled",
+            "    preprocessing: &preprocessing",
+            "      frame_skip: 1",
+            "      max_pool_frames: false",
+            "      sticky_action_prob: 0.0",
+            "      obs_resize: [0, 0]",
+            "      obs_crop: [0, 0, 0, 0]",
+            "      obs_crop_mode: remove",
+            "      obs_crop_fill: 0",
+            "      obs_resize_algorithm: area",
+            "    task: &task",
+            "      id: identity",
+            "      action: {set: native}",
+            "      signals: {}",
+            "      events: {}",
+            "      termination: {max_episode_steps: 1}",
+            "      reward:",
+            "        reward_mode: native",
+            "        reward_scale: 1.0",
+            "        reward_clip: false",
+            "eval:",
+            "  episodes: 1",
+            "  environment:",
+            "    env_provider: gradlab",
+            "    env_config:",
+            "      game: Bandit-v0",
+            "      n_envs: 1",
+            "      env_args:",
+            "        autoreset_mode: disabled",
+            "    preprocessing: *preprocessing",
+            "    task: *task",
+            "",
+        )
+    )
 
 
 class WandbRunControlBucket:
@@ -51,23 +109,9 @@ def write_goal_catalog(repo_root: Path) -> None:
     recipes = goal_root / "recipes"
     recipes.mkdir(parents=True)
     (goal_root / "_goal.yaml").write_text(
-        "\n".join(
-            (
-                "defaults:",
-                "- _self_",
-                "goal_id: Level1-1",
-                "title: Mario Level 1-1 completion",
-                "objective:",
-                "  rank:",
-                "  - min(leader/checkpoint/step)",
-                "  - max(eval/full/episode/return/shaped/mean)",
-                "train:",
-                "  environment:",
-                "    env_provider: gymnasium",
-                "    env_config:",
-                "      game: Mario",
-                "",
-            )
+        current_goal_document(
+            goal_id="Level1-1",
+            title="Mario Level 1-1 completion",
         ),
         encoding="utf-8",
     )
@@ -96,23 +140,7 @@ def write_indexed_goal_catalog(repo_root: Path) -> None:
         recipes = goal_root / "recipes"
         recipes.mkdir(parents=True)
         (goal_root / "_goal.yaml").write_text(
-            "\n".join(
-                (
-                    "defaults:",
-                    "- _self_",
-                    f"goal_id: {goal_id}",
-                    f"title: {title}",
-                    "objective:",
-                    "  rank:",
-                    "  - min(leader/checkpoint/step)",
-                    "train:",
-                    "  environment:",
-                    "    env_provider: gymnasium",
-                    "    env_config:",
-                    f"      game: {namespace}",
-                    "",
-                )
-            ),
+            current_goal_document(goal_id=goal_id, title=title),
             encoding="utf-8",
         )
         (recipes / "ppo.yaml").write_text("defaults: [_self_]\n", encoding="utf-8")
@@ -153,7 +181,7 @@ def checkpoint_row(*, step: int, digest: str, purpose: str) -> dict[str, object]
         "evaluation_contract_sha256": "1" * 64,
         "recovery_sidecar_key": "recovery/key",
         "created_at": "2026-01-03T00:00:00Z",
-        "schema_version": 1,
+        "schema_version": SCHEMA_VERSION,
     }
 
 
@@ -176,8 +204,13 @@ def test_play_parser_allows_bare_launch_and_rejects_wandb_project_urls() -> None
     parser = build_play_parser()
 
     assert parser.parse_args([]).artifact_ref is None
+    assert parser.parse_args(["--rom-path", "/tmp/game.nes"]).rom_path == Path(
+        "/tmp/game.nes"
+    )
     with pytest.raises(SystemExit):
         parser.parse_args(["https://wandb.ai/research/Mario"])
+    with pytest.raises(SystemExit):
+        parser.parse_args(["--rom", "/tmp/game.nes"])
 
 
 def test_goal_variants_use_one_private_index_read_without_wandb(
@@ -185,7 +218,7 @@ def test_goal_variants_use_one_private_index_read_without_wandb(
 ) -> None:
     write_goal_catalog(tmp_path)
     goal_path = tmp_path / "experiments" / "goals" / "Mario" / "Level1-1" / "_goal.yaml"
-    authored = load_goal_contract(goal_path, tmp_path, validate=False)
+    authored = load_goal_contract(goal_path, tmp_path)
     descriptor = build_goal_variant_descriptor(
         goal_slug="Mario/Level1-1",
         source_sha="a" * 40,
@@ -234,7 +267,7 @@ def test_run_catalog_uses_lifecycle_owned_variant_index_without_wandb(
 ) -> None:
     write_goal_catalog(tmp_path)
     goal_path = tmp_path / "experiments" / "goals" / "Mario" / "Level1-1" / "_goal.yaml"
-    authored = load_goal_contract(goal_path, tmp_path, validate=False)
+    authored = load_goal_contract(goal_path, tmp_path)
     descriptor = build_goal_variant_descriptor(
         goal_slug="Mario/Level1-1",
         source_sha="a" * 40,
@@ -687,6 +720,7 @@ def test_catalog_attaches_goal_required_eval_results_by_checkpoint(
 
     class EvalRun:
         config = {
+            "metrics_schema_version": METRICS_SCHEMA_VERSION,
             "seed": 7,
             "selection_rank": [
                 f"max({required_metric})",
@@ -789,6 +823,7 @@ def test_catalog_uses_training_seed_when_checkpoint_has_no_eval_result(
 
     class UnevaluatedRun:
         config = {
+            "metrics_schema_version": METRICS_SCHEMA_VERSION,
             "seed": 7,
             "checkpoint_eval_contract": {
                 "seed": 42_000,

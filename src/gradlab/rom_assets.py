@@ -49,7 +49,13 @@ def _read_state(path: Path) -> dict[str, Any]:
     if not path.is_file():
         return {"schema_version": ROM_ASSET_STATE_SCHEMA_VERSION, "games": {}}
     value = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(value, dict) or not isinstance(value.get("games"), dict):
+    if not isinstance(value, dict) or set(value) != {"schema_version", "games"}:
+        raise ValueError(f"invalid ROM asset state: {path}")
+    if value["schema_version"] != ROM_ASSET_STATE_SCHEMA_VERSION:
+        raise ValueError(
+            f"unsupported ROM asset state schema_version: {value['schema_version']!r}"
+        )
+    if not isinstance(value["games"], dict):
         raise ValueError(f"invalid ROM asset state: {path}")
     return value
 
@@ -94,6 +100,10 @@ def validate_rom_asset_manifest(
     unknown = sorted(set(manifest) - _MANIFEST_FIELDS)
     if unknown:
         raise ValueError(f"unknown ROM asset manifest field(s): {', '.join(unknown)}")
+    required_fields = _MANIFEST_FIELDS if require_object_uri else _MANIFEST_FIELDS - {"object_uri"}
+    missing = sorted(required_fields - set(manifest))
+    if missing:
+        raise ValueError(f"ROM asset manifest missing field(s): {', '.join(missing)}")
     game = _safe_game(manifest.get("game"))
     if expected_game is not None and game != _safe_game(expected_game):
         raise ValueError(f"ROM asset game mismatch: expected {expected_game!r}, got {game!r}")
@@ -104,9 +114,7 @@ def validate_rom_asset_manifest(
     provider_identity = str(manifest.get("provider_rom_identity") or "").strip().lower()
     if not _SHA1_RE.fullmatch(provider_identity):
         raise ValueError("ROM asset provider identity must be 40 lowercase hexadecimal characters")
-    algorithm = str(
-        manifest.get("provider_rom_identity_algorithm") or ROM_ASSET_IDENTITY_ALGORITHM
-    ).strip()
+    algorithm = str(manifest["provider_rom_identity_algorithm"]).strip()
     if algorithm != ROM_ASSET_IDENTITY_ALGORITHM:
         raise ValueError(f"unsupported provider ROM identity algorithm: {algorithm}")
     size_value = manifest.get("size_bytes")
@@ -335,7 +343,7 @@ def direct_rom_asset_manifest(game: str, rom_path: Path) -> dict[str, Any]:
 
     requested = rom_path.expanduser()
     if requested.suffix.lower() != ".nes":
-        raise ValueError("--rom must point to a raw .nes file")
+        raise ValueError("--rom-path must point to a raw .nes file")
     source = discover_rom_path(game, rom_path=requested)
     manifest = {
         "schema_version": ROM_ASSET_SCHEMA_VERSION,

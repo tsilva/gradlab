@@ -133,17 +133,19 @@ def test_wandb_display_name_is_not_part_of_portable_recipe() -> None:
     assert "wandb_display_name" not in document["recipe"]["train_config"]
 
 
-def test_legacy_derived_acceptance_flag_is_rejected() -> None:
+def test_noncurrent_derived_acceptance_flag_is_rejected() -> None:
     document = level1_1_recipe_document()
-    legacy = deepcopy(document)
-    legacy["recipe"]["train_config"]["stop_on_acceptance"] = True
-    base_recipe = legacy["resolution"]["recipe"]["base"]
+    noncurrent = deepcopy(document)
+    noncurrent["recipe"]["train_config"]["stop_on_acceptance"] = True
+    base_recipe = noncurrent["resolution"]["recipe"]["base"]
     base_recipe["train_config"]["stop_on_acceptance"] = True
-    legacy["resolution"]["recipe"]["base_sha256"] = canonical_json_sha256(base_recipe)
-    legacy["resolution"]["recipe"]["effective_sha256"] = canonical_json_sha256(legacy["recipe"])
+    noncurrent["resolution"]["recipe"]["base_sha256"] = canonical_json_sha256(base_recipe)
+    noncurrent["resolution"]["recipe"]["effective_sha256"] = canonical_json_sha256(
+        noncurrent["recipe"]
+    )
 
     with pytest.raises(PolicyDocumentError, match="stop_on_acceptance"):
-        validate_recipe_document(legacy)
+        validate_recipe_document(noncurrent)
 
 
 @pytest.mark.parametrize("recipe_path", BREAKOUT_RECIPES)
@@ -655,7 +657,7 @@ def test_model_v2_records_durable_state_archive_summary(tmp_path: Path) -> None:
     assert bundle.model["provenance"]["state_archive_summary"] == metadata["state_archive_summary"]
 
 
-def test_retired_model_v1_is_rejected(tmp_path: Path) -> None:
+def test_noncurrent_model_schema_is_rejected(tmp_path: Path) -> None:
     write_bundle(tmp_path)
     model_path = tmp_path / "model.json"
     model = json.loads(model_path.read_text(encoding="utf-8"))

@@ -5,7 +5,7 @@ import re
 import secrets
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
-from typing import Any, Literal
+from typing import Any, Literal, Self
 
 from gradlab.clock import utc_now as utc_now
 from gradlab.json_utils import canonical_json_sha256 as document_sha256
@@ -70,6 +70,34 @@ def _require_attempt_id(value: object) -> str:
     return attempt_id
 
 
+def _require_current_schema(value: object, *, expected: int, label: str) -> None:
+    if isinstance(value, bool):
+        raise ValueError(f"{label} schema_version must be {expected}")
+    try:
+        version = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{label} schema_version must be {expected}") from exc
+    if version != expected:
+        raise ValueError(f"unsupported {label} schema: {version}")
+
+
+class _CurrentContract:
+    @classmethod
+    def from_dict(cls, document: Mapping[str, Any]) -> Self:
+        """Parse a persisted contract without filling omitted current fields."""
+
+        if not isinstance(document, Mapping):
+            raise ValueError(f"{cls.__name__} document must be an object")
+        if "schema_version" not in document:
+            raise ValueError(f"{cls.__name__} document requires schema_version")
+        try:
+            value = cls(**dict(document))
+        except TypeError as exc:
+            raise ValueError(f"invalid {cls.__name__} document: {exc}") from exc
+        value.validate()
+        return value
+
+
 def checkpoint_id(*, step: int, sha256: str) -> str:
     if int(step) < 0:
         raise ValueError("checkpoint step must be non-negative")
@@ -117,7 +145,7 @@ def validate_liveness_policy(
 
 
 @dataclass(frozen=True)
-class RunManifest:
+class RunManifest(_CurrentContract):
     run_id: str
     attempt_id: str
     created_at: str
@@ -140,6 +168,11 @@ class RunManifest:
     schema_version: int = RUN_MANIFEST_SCHEMA_VERSION
 
     def validate(self) -> None:
+        _require_current_schema(
+            self.schema_version,
+            expected=RUN_MANIFEST_SCHEMA_VERSION,
+            label="run manifest",
+        )
         _require_run_id(self.run_id)
         _require_attempt_id(self.attempt_id)
         _require_text(self.created_at, "created_at")
@@ -163,8 +196,6 @@ class RunManifest:
         if isinstance(self.seed, bool) or int(self.seed) < 0:
             raise ValueError("seed must be a non-negative integer")
         _require_text(self.run_description, "run_description")
-        if int(self.schema_version) != RUN_MANIFEST_SCHEMA_VERSION:
-            raise ValueError(f"unsupported run manifest schema: {self.schema_version}")
         if self.goal_variant is None:
             raise ValueError("run manifest requires goal_variant")
         if self.goal_variant is not None:
@@ -254,7 +285,7 @@ class RunManifest:
 
 
 @dataclass(frozen=True)
-class CheckpointManifest:
+class CheckpointManifest(_CurrentContract):
     run_id: str
     checkpoint_id: str
     step: int
@@ -275,6 +306,11 @@ class CheckpointManifest:
     schema_version: int = SCHEMA_VERSION
 
     def validate(self) -> None:
+        _require_current_schema(
+            self.schema_version,
+            expected=SCHEMA_VERSION,
+            label="checkpoint manifest",
+        )
         _require_run_id(self.run_id)
         digest = _require_sha256(self.sha256, "sha256")
         if self.checkpoint_id != checkpoint_id(step=self.step, sha256=digest):
@@ -306,7 +342,7 @@ class CheckpointManifest:
 
 
 @dataclass(frozen=True)
-class EvalIntent:
+class EvalIntent(_CurrentContract):
     run_id: str
     checkpoint_id: str
     idempotency_key: str
@@ -325,6 +361,11 @@ class EvalIntent:
     schema_version: int = SCHEMA_VERSION
 
     def validate(self) -> None:
+        _require_current_schema(
+            self.schema_version,
+            expected=SCHEMA_VERSION,
+            label="evaluation intent",
+        )
         _require_run_id(self.run_id)
         _require_text(self.checkpoint_id, "checkpoint_id")
         _require_sha256(self.idempotency_key, "idempotency_key")
@@ -380,7 +421,7 @@ def eval_idempotency_key(
 
 
 @dataclass(frozen=True)
-class EvalResult:
+class EvalResult(_CurrentContract):
     run_id: str
     checkpoint_id: str
     idempotency_key: str
@@ -395,6 +436,11 @@ class EvalResult:
     schema_version: int = SCHEMA_VERSION
 
     def validate(self) -> None:
+        _require_current_schema(
+            self.schema_version,
+            expected=SCHEMA_VERSION,
+            label="evaluation result",
+        )
         _require_run_id(self.run_id)
         _require_text(self.checkpoint_id, "checkpoint_id")
         _require_sha256(self.idempotency_key, "idempotency_key")
@@ -413,7 +459,7 @@ class EvalResult:
 
 
 @dataclass(frozen=True)
-class PromotionReceipt:
+class PromotionReceipt(_CurrentContract):
     run_id: str
     checkpoint_id: str
     checkpoint_step: int
@@ -424,6 +470,11 @@ class PromotionReceipt:
     schema_version: int = SCHEMA_VERSION
 
     def validate(self) -> None:
+        _require_current_schema(
+            self.schema_version,
+            expected=SCHEMA_VERSION,
+            label="promotion receipt",
+        )
         _require_run_id(self.run_id)
         _require_text(self.checkpoint_id, "checkpoint_id")
         if int(self.checkpoint_step) < 0:
@@ -440,7 +491,7 @@ class PromotionReceipt:
 
 
 @dataclass(frozen=True)
-class EarlyStopReceipt:
+class EarlyStopReceipt(_CurrentContract):
     run_id: str
     attempt_id: str
     condition_id: str
@@ -460,6 +511,11 @@ class EarlyStopReceipt:
     schema_version: int = SCHEMA_VERSION
 
     def validate(self) -> None:
+        _require_current_schema(
+            self.schema_version,
+            expected=SCHEMA_VERSION,
+            label="early-stop receipt",
+        )
         _require_run_id(self.run_id)
         _require_attempt_id(self.attempt_id)
         condition_id = _require_text(self.condition_id, "condition_id")
@@ -498,7 +554,7 @@ class EarlyStopReceipt:
 
 
 @dataclass(frozen=True)
-class TerminalReceipt:
+class TerminalReceipt(_CurrentContract):
     run_id: str
     attempt_id: str
     state: Literal["succeeded", "failed", "canceled", "interrupted", "resumable_failure"]
@@ -515,6 +571,11 @@ class TerminalReceipt:
     schema_version: int = SCHEMA_VERSION
 
     def validate(self) -> None:
+        _require_current_schema(
+            self.schema_version,
+            expected=SCHEMA_VERSION,
+            label="terminal receipt",
+        )
         _require_run_id(self.run_id)
         _require_attempt_id(self.attempt_id)
         if self.state not in {
@@ -539,7 +600,7 @@ class TerminalReceipt:
             if status not in EVAL_INVENTORY_SETTLED_STATUSES:
                 raise ValueError(f"eval inventory contains unsettled status: {status}")
         if self.early_stop is not None:
-            EarlyStopReceipt(**self.early_stop).validate()
+            EarlyStopReceipt.from_dict(self.early_stop)
         if self.state_archive is not None:
             if not isinstance(self.state_archive, Mapping):
                 raise ValueError("state_archive terminal evidence must be an object")

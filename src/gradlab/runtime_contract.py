@@ -7,6 +7,7 @@ import sys
 from dataclasses import asdict
 from typing import Any
 
+from gradlab.cli_parser import ExactArgumentParser
 from gradlab.contract_versions import TRAIN_CONFIG_CONTRACT_SCHEMA_VERSION
 from gradlab.json_utils import canonical_json_sha256, json_safe
 from gradlab.train_config import (
@@ -78,7 +79,7 @@ def validate_config_payload(payload: Any) -> dict[str, Any]:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
+    parser = ExactArgumentParser(
         description="Report and validate the immutable gradlab train-runtime contract."
     )
     parser.add_argument(

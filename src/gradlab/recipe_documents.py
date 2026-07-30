@@ -276,21 +276,19 @@ def _eval_train_defaults(document: Mapping[str, Any]) -> dict[str, Any]:
     eval_config = _train_environment_section_config(environment)
     if "n_envs" in eval_config:
         defaults["checkpoint_eval_n_envs"] = eval_config.pop("n_envs")
-    task = eval_config.get("task")
-    termination = task.get("termination") if isinstance(task, Mapping) else None
-    max_episode_steps = (
-        termination.get("max_episode_steps") if isinstance(termination, Mapping) else None
-    )
-    if (
-        not isinstance(max_episode_steps, int)
-        or isinstance(max_episode_steps, bool)
-        or max_episode_steps <= 0
-    ):
-        raise ValueError(
-            "goal eval.environment.task.termination.max_episode_steps must be a "
-            "positive integer"
+    if "max_steps" in eval_config:
+        max_steps = eval_config.pop("max_steps")
+    else:
+        task = eval_config.get("task")
+        termination = task.get("termination") if isinstance(task, Mapping) else None
+        max_steps = (
+            termination.get("max_episode_steps") if isinstance(termination, Mapping) else None
         )
-    defaults["post_train_eval_max_steps"] = max_episode_steps
+    if not isinstance(max_steps, int) or isinstance(max_steps, bool) or max_steps <= 0:
+        raise ValueError(
+            "goal eval environment must materialize a positive max_steps boundary"
+        )
+    defaults["post_train_eval_max_steps"] = max_steps
     defaults["checkpoint_eval_environment"] = eval_config
     return defaults
 
@@ -1030,10 +1028,8 @@ def load_goal_contract_document(path: Path, *, label: str | None = None) -> dict
 def load_goal_contract(
     path: Path,
     repo_root: Path | None = None,
-    *,
-    validate: bool = True,
 ) -> dict[str, Any]:
-    """Return a composed goal contract, validating it by default."""
+    """Return a composed, validated goal contract."""
 
     resolved_root = (repo_root or Path(".")).resolve()
     resolved_path = path.resolve()
@@ -1045,6 +1041,5 @@ def load_goal_contract(
         resolved_path,
         label=f"goal file {display_path}",
     )
-    if validate:
-        validate_goal_contract_document(document, resolved_path, resolved_root)
+    validate_goal_contract_document(document, resolved_path, resolved_root)
     return document

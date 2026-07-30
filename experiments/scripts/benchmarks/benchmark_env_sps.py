@@ -10,6 +10,7 @@ from typing import Any
 import numpy as np
 
 from gradlab.action_contract import declared_action_contract
+from gradlab.cli_parser import ExactArgumentParser
 from gradlab.env import (
     EnvConfig,
     make_provider_vec_env,
@@ -23,7 +24,25 @@ from gradlab.env_providers import provider_native_vec_kwargs
 
 def benchmark_config(args: argparse.Namespace) -> EnvConfig:
     env_args = (
-        {"info_filter": "all", "use_restricted_actions": "basic"}
+        {
+            "scenario": "scenario",
+            "info": "data",
+            "use_restricted_actions": "basic",
+            "record": False,
+            "players": 1,
+            "inttype": "stable",
+            "obs_type": "image",
+            "render_mode": "rgb_array",
+            "num_threads": int(args.envs),
+            "rom_path": None,
+            "obs_copy": "safe_view",
+            "obs_grayscale": True,
+            "obs_layout": "chw",
+            "frame_stack": 4,
+            "noop_reset_max": 0,
+            "info_filter": "all",
+            "use_fire_reset": False,
+        }
         if args.env_provider in {"stable-retro-turbo", "supermariobrosnes-turbo"}
         else {}
     )
@@ -176,7 +195,7 @@ def summarize(samples: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(
+    parser = ExactArgumentParser(
         description="Benchmark native provider and consolidated batch-runtime steps/sec."
     )
     parser.add_argument("--env-provider", default="supermariobrosnes-turbo")

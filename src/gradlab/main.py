@@ -4,6 +4,8 @@ import argparse
 import importlib
 import sys
 
+from gradlab.cli_parser import ExactArgumentParser
+
 
 COMMANDS: dict[str, tuple[str, str]] = {
     "train": ("train a checked-in recipe locally", "gradlab.local_train"),
@@ -27,7 +29,7 @@ COMMANDS: dict[str, tuple[str, str]] = {
 }
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
+    parser = ExactArgumentParser(
         prog="gradlab",
         description="Unified command surface for gradlab training, eval, playback, and ops.",
         epilog=(

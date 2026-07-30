@@ -637,6 +637,7 @@ class LedgerCheckpointHelperTests(unittest.TestCase):
                 repo_root=Path.cwd(),
                 source_commit="a" * 40,
                 run_description="Exact SB3 checkpoint path regression.",
+                seed=7,
                 runtime_image_ref="docker:example/runtime@sha256:" + "b" * 64,
                 base_materialized_recipe=resolved.base,
                 canonical_goal=resolved.canonical_goal,

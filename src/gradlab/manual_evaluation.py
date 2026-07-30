@@ -224,7 +224,6 @@ class ManualEvaluationSupervisor:
                         manifest.compute.get("runtime_build_source_sha") or ""
                     ),
                 ),
-                require_current_contract=False,
             )
             app_name = readiness.modal_app_name
         return ModalEvalBackend(
@@ -251,7 +250,7 @@ class ManualEvaluationSupervisor:
                 documents.append(self.authority.control.get_json(key))
         if not documents:
             raise ValueError(f"run manifest was not found: {run_id}")
-        manifests = [RunManifest(**document) for document in documents]
+        manifests = [RunManifest.from_dict(document) for document in documents]
         for manifest in manifests:
             manifest.validate()
             if manifest.run_id != run_id:
@@ -270,8 +269,7 @@ class ManualEvaluationSupervisor:
         for raw in index.get("checkpoints") or ():
             if not isinstance(raw, Mapping):
                 raise ValueError("public checkpoint index contains an invalid checkpoint")
-            checkpoint = CheckpointManifest(**dict(raw))
-            checkpoint.validate()
+            checkpoint = CheckpointManifest.from_dict(raw)
             if checkpoint.run_id != run_id:
                 raise ValueError("public checkpoint belongs to another run")
             result[checkpoint.checkpoint_id] = checkpoint
@@ -371,8 +369,7 @@ class ManualEvaluationSupervisor:
                 raise ValueError(
                     f"evaluation intent conflicts with checkpoint {checkpoint.checkpoint_id}"
                 )
-            intent = EvalIntent(**existing)
-            intent.validate()
+            intent = EvalIntent.from_dict(existing)
         return _EvaluationContext(
             manifest=manifest,
             checkpoint=checkpoint,
@@ -455,8 +452,7 @@ class ManualEvaluationSupervisor:
         )
         if document is None:
             return None
-        receipt = TerminalReceipt(**document)
-        receipt.validate()
+        receipt = TerminalReceipt.from_dict(document)
         if receipt.run_id != manifest.run_id or receipt.attempt_id != manifest.attempt_id:
             raise ValueError("training terminal receipt identity does not match the run")
         if receipt.state in {"interrupted", "resumable_failure"}:
@@ -819,8 +815,7 @@ class ManualEvaluationSupervisor:
             idempotency_key=key,
         )
         if verified_document is not None:
-            result = EvalResult(**verified_document)
-            result.validate()
+            result = EvalResult.from_dict(verified_document)
             return self._terminal_status(
                 context,
                 result,
@@ -961,8 +956,7 @@ class ManualEvaluationSupervisor:
             if not key.endswith("/verified-result.json"):
                 continue
             document = self.authority.evaluation.get_json(key)
-            result = EvalResult(**document)
-            result.validate()
+            result = EvalResult.from_dict(document)
             if result.status != "accepted":
                 continue
             checkpoint = checkpoints.get(result.checkpoint_id)
@@ -1010,8 +1004,7 @@ class ManualEvaluationSupervisor:
         else:
             self._promote(context, result)
             existing = self.authority.control.get_json(f"runs/{manifest.run_id}/promotion.json")
-        receipt = PromotionReceipt(**existing)
-        receipt.validate()
+        receipt = PromotionReceipt.from_dict(existing)
         self._ensure_promotion_projection(context, result, raw, receipt)
         return existing
 
@@ -1367,8 +1360,7 @@ class ManualEvaluationQueue:
             if verified is None:
                 pending_contexts.append(context)
                 continue
-            result = EvalResult(**verified)
-            result.validate()
+            result = EvalResult.from_dict(verified)
             terminal_items[context.checkpoint.checkpoint_id] = {
                 "checkpoint_id": context.checkpoint.checkpoint_id,
                 "job_id": None,

@@ -334,59 +334,48 @@ def _validate_goal_eval(document: Mapping[str, Any], *, label: str) -> None:
         _require_key(eval_section, "environment", label=f"{label}.eval"),
         label=f"{label}.eval.environment",
     )
-    if isinstance(eval_environment, Mapping):
-        eval_environment_keys = {
-            "env_provider",
-            "env_config",
-            "preprocessing",
-            "task",
-        }
-        extra_keys = sorted(set(eval_environment) - eval_environment_keys)
-        if extra_keys:
-            raise ValueError(f"{label}.eval.environment has unexpected keys: {extra_keys}")
-        eval_env_config = _require_mapping(
-            _require_key(eval_environment, "env_config", label=f"{label}.eval.environment"),
+    eval_environment_keys = {
+        "env_provider",
+        "env_config",
+        "preprocessing",
+        "task",
+    }
+    extra_keys = sorted(set(eval_environment) - eval_environment_keys)
+    if extra_keys:
+        raise ValueError(f"{label}.eval.environment has unexpected keys: {extra_keys}")
+    eval_env_config = _require_mapping(
+        _require_key(eval_environment, "env_config", label=f"{label}.eval.environment"),
+        label=f"{label}.eval.environment.env_config",
+    )
+    _validate_environment_env_config(
+        eval_environment,
+        eval_env_config,
+        label=f"{label}.eval.environment",
+        require_game=True,
+        allowed_extra_keys={"seed", "n_envs", "max_steps"},
+    )
+    _validate_explicit_goal_environment_args(
+        eval_environment,
+        eval_env_config,
+        label=f"{label}.eval.environment",
+    )
+    if "seed" in eval_env_config:
+        seed = _require_int(
+            eval_env_config,
+            "seed",
             label=f"{label}.eval.environment.env_config",
         )
-        _validate_environment_env_config(
-            eval_environment,
-            eval_env_config,
-            label=f"{label}.eval.environment",
-            require_game=True,
-            allowed_extra_keys={"seed", "n_envs", "max_steps"},
+        validate_eval_seed(seed, label=f"{label}.eval.environment.env_config.seed")
+    if "n_envs" in eval_env_config:
+        _require_int(
+            eval_env_config, "n_envs", label=f"{label}.eval.environment.env_config", minimum=1
         )
-        _validate_explicit_goal_environment_args(
-            eval_environment,
+    if "max_steps" in eval_env_config:
+        _require_int(
             eval_env_config,
-            label=f"{label}.eval.environment",
-        )
-        if "seed" in eval_env_config:
-            seed = _require_int(
-                eval_env_config,
-                "seed",
-                label=f"{label}.eval.environment.env_config",
-            )
-            validate_eval_seed(seed, label=f"{label}.eval.environment.env_config.seed")
-        if "n_envs" in eval_env_config:
-            _require_int(
-                eval_env_config, "n_envs", label=f"{label}.eval.environment.env_config", minimum=1
-            )
-        if "max_steps" in eval_env_config:
-            _require_int(
-                eval_env_config,
-                "max_steps",
-                label=f"{label}.eval.environment.env_config",
-                minimum=1,
-            )
-    elif "env_config" in eval_section:
-        eval_env_config = _require_mapping(
-            eval_section["env_config"],
-            label=f"{label}.eval.env_config",
-        )
-        _validate_env_config(
-            eval_env_config,
-            label=f"{label}.eval.env_config",
-            require_game=False,
+            "max_steps",
+            label=f"{label}.eval.environment.env_config",
+            minimum=1,
         )
     objective = document.get("objective")
     rank = objective.get("rank") if isinstance(objective, Mapping) else None
@@ -461,21 +450,16 @@ def validate_goal_contract_document(
         )
     environment = _goal_train_environment(document, train, label=label)
     _validate_environment_identity({"environment": environment}, label=f"{label}.train")
-    env_config = (
-        environment.get("env_config")
-        if isinstance(environment.get("env_config"), Mapping)
-        else environment
+    env_config = _require_mapping(
+        environment["env_config"],
+        label=f"{label}.train.environment.env_config",
     )
     _validate_explicit_goal_environment_args(
         environment,
         env_config,
         label=f"{label}.train.environment",
     )
-    env_provider = (
-        str(environment["env_provider"]).strip()
-        if "env_provider" in environment
-        else str(env_config.get("env_provider", "")).strip()
-    )
+    env_provider = str(environment["env_provider"]).strip()
     supports_states = env_supports_states(env_provider, str(env_config.get("game") or ""))
     if "state" in env_config and "states" in env_config:
         raise ValueError(

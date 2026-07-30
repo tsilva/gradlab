@@ -187,7 +187,7 @@ class GoExploreSearchTests(unittest.TestCase):
             backend_config,
         )
 
-    def test_backend_uses_compaction_without_legacy_archive_recovery(self) -> None:
+    def test_backend_uses_compaction_without_noncurrent_archive_recovery(self) -> None:
         config = normalize_config(
             "gradlab.go-explore",
             {"compaction_interval_steps": 500_000, "progress_signal": "x"},

@@ -159,7 +159,7 @@ class MetricsDocumentationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "metric dimension"):
             metric_names.train_success_count_metric("unsafe start")
 
-    def test_registry_rejects_retired_metric_names(self) -> None:
+    def test_registry_rejects_noncurrent_metric_names(self) -> None:
         removed = (
             "global_step",
             "train/episode/count",

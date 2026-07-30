@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
+from gradlab.cli_parser import ExactArgumentParser
 from gradlab.clock import parse_utc_datetime
 from gradlab.dstack_backend import (
     TERMINAL_DSTACK_STATUSES,
@@ -27,6 +28,7 @@ from gradlab.dstack_backend import (
 )
 from gradlab.env_registry import resolve_env_provider
 from gradlab.file_utils import file_sha256
+from gradlab.goal_variants import goal_variant_catalog_contract
 from gradlab.json_utils import canonical_json_text, json_safe
 from gradlab.modal_eval_config import load_modal_eval_config
 from gradlab.operator_credentials import (
@@ -662,6 +664,29 @@ def cmd_operator_preflight(args: argparse.Namespace) -> int:
     return 0
 
 
+def _catalog_rebuild_contract_failures(
+    source_records: list[tuple[str, RunManifest, TerminalReceipt | None]],
+) -> list[dict[str, str]]:
+    failures: list[dict[str, str]] = []
+    variant_contracts: dict[tuple[str, str], dict[str, Any]] = {}
+    for key, manifest, _terminal in source_records:
+        descriptor = dict(manifest.goal_variant or {})
+        identity = (manifest.goal_slug, str(descriptor.get("variant_id") or ""))
+        contract = goal_variant_catalog_contract(descriptor)
+        existing = variant_contracts.get(identity)
+        if existing is not None and existing != contract:
+            failures.append(
+                {
+                    "key": key,
+                    "error_type": "ValueError",
+                    "error": "goal variant descriptor conflicts with another current run",
+                }
+            )
+        else:
+            variant_contracts[identity] = contract
+    return failures
+
+
 def cmd_catalog_rebuild(args: argparse.Namespace) -> int:
     root = repository_root()
     _load_environment(root)
@@ -676,13 +701,11 @@ def cmd_catalog_rebuild(args: argparse.Namespace) -> int:
         discovered += 1
         try:
             state = authority.semantic_state(key.split("/")[1])
-            manifest = RunManifest(**_latest_attempt(state))
-            manifest.validate()
+            manifest = RunManifest.from_dict(_latest_attempt(state))
             terminal_document = _latest_attempt_terminal(state)
             terminal = None
             if terminal_document is not None:
-                terminal = TerminalReceipt(**terminal_document)
-                terminal.validate()
+                terminal = TerminalReceipt.from_dict(terminal_document)
                 if terminal.run_id != manifest.run_id or terminal.attempt_id != manifest.attempt_id:
                     raise ValueError("latest attempt terminal does not match its manifest")
             source_records.append((key, manifest, terminal))
@@ -694,6 +717,7 @@ def cmd_catalog_rebuild(args: argparse.Namespace) -> int:
                     "error": str(exc),
                 }
             )
+    failed.extend(_catalog_rebuild_contract_failures(source_records))
     cleared = {"catalog_objects": 0, "projection_receipts": 0}
     rebuilt = 0
     if not failed:
@@ -1047,8 +1071,7 @@ def cmd_reconcile(args: argparse.Namespace) -> int:
     root = repository_root()
     _storage_config, authority = _storage(root)
     state = authority.semantic_state(args.run_id)
-    manifest = RunManifest(**_latest_attempt(state))
-    manifest.validate()
+    manifest = RunManifest.from_dict(_latest_attempt(state))
     task = DstackBackend().status(str(manifest.compute["dstack_task"]))
     if not task.terminal:
         raise RuntimeError("cannot reconcile while the dstack task is active")
@@ -1082,8 +1105,7 @@ def cmd_reconcile(args: argparse.Namespace) -> int:
             )
             created = True
         else:
-            receipt = TerminalReceipt(**existing)
-            receipt.validate()
+            receipt = TerminalReceipt.from_dict(existing)
             if receipt.attempt_id != manifest.attempt_id:
                 raise RuntimeError("latest attempt terminal belongs to another attempt")
         _project_reconciled_terminal(manifest, receipt)
@@ -1179,8 +1201,7 @@ def _manifest_only_submission(
         )
     ):
         raise RuntimeError("run has progressed beyond a manifest-only launch")
-    manifest = RunManifest(**manifest_document)
-    manifest.validate()
+    manifest = RunManifest.from_dict(manifest_document)
     prefix = authority.run_prefix(run_id)
     allowed_control_keys = {
         f"{prefix}/manifest.json",
@@ -1270,8 +1291,7 @@ def cmd_retry(args: argparse.Namespace) -> int:
     if state.get("terminal") is not None:
         raise RuntimeError("a scientifically successful run must not be retried")
     previous = _latest_attempt(state)
-    previous_manifest = RunManifest(**previous)
-    previous_manifest.validate()
+    previous_manifest = RunManifest.from_dict(previous)
     attempt_terminal = _latest_attempt_terminal(state)
     dstack_backend = DstackBackend()
     try:
@@ -1340,7 +1360,7 @@ def cmd_retry(args: argparse.Namespace) -> int:
     else:
         compute["recovery_mode"] = "resume-training"
     manifest = replace(
-        RunManifest(**previous),
+        RunManifest.from_dict(previous),
         attempt_id=attempt_id,
         created_at=utc_now(),
         compute=compute,
@@ -1529,7 +1549,7 @@ def cmd_certify(args: argparse.Namespace) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
+    parser = ExactArgumentParser(
         prog="gradlab experiment",
         description="Launch and observe dstack-backed training experiments.",
         allow_abbrev=False,

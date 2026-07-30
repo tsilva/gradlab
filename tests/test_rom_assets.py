@@ -16,6 +16,7 @@ from gradlab.rom_assets import (
     direct_rom_asset_manifest,
     discover_rom_path,
     ensure_rom_cache,
+    load_rom_asset_state,
     manifest_from_train_config,
     provider_rom_identity,
     rom_asset_manifest_for_game,
@@ -83,7 +84,29 @@ def test_manifest_rejects_wrong_game(tmp_path: Path) -> None:
         validate_rom_asset_manifest(manifest, expected_game="Other-Nes-v0")
 
 
-def test_manifest_from_train_config_rejects_retired_schema(tmp_path: Path) -> None:
+def test_manifest_requires_current_identity_algorithm_field(tmp_path: Path) -> None:
+    manifest = _manifest(_rom(tmp_path / "rom.nes", b"one"))
+    manifest.pop("provider_rom_identity_algorithm")
+
+    with pytest.raises(ValueError, match="missing field"):
+        validate_rom_asset_manifest(manifest)
+
+
+def test_local_state_requires_explicit_current_schema(tmp_path: Path) -> None:
+    state = tmp_path / "state.json"
+    state.write_text(json.dumps({"games": {}}), encoding="utf-8")
+    with pytest.raises(ValueError, match="invalid ROM asset state"):
+        load_rom_asset_state(state)
+
+    state.write_text(
+        json.dumps({"schema_version": 0, "games": {}}),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="unsupported ROM asset state schema_version"):
+        load_rom_asset_state(state)
+
+
+def test_manifest_from_train_config_rejects_noncurrent_schema(tmp_path: Path) -> None:
     current = _manifest(_rom(tmp_path / "rom.nes", b"one"))
     assert manifest_from_train_config(
         {"rom_asset_manifest": current},

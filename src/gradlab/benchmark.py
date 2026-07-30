@@ -20,6 +20,7 @@ from gradlab.benchmark_profiles import (
     find_benchmark_profile,
     load_benchmark_profiles,
 )
+from gradlab.cli_parser import ExactArgumentParser
 from gradlab.env import default_run_dir
 from gradlab.metric_store import MetricStore, metric_store_path
 from gradlab.policy_bundle import build_recipe_document, write_canonical_json
@@ -372,7 +373,7 @@ def run_profile(args: argparse.Namespace) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
+    parser = ExactArgumentParser(
         prog="gradlab benchmark",
         description="Run named gradlab benchmark profiles.",
     )

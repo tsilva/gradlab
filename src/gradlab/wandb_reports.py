@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from gradlab.cli_parser import ExactArgumentParser
 from gradlab.config_loader import load_mapping_document
 from gradlab.json_utils import canonical_json_sha256
 from gradlab.metric_names import (
@@ -1020,7 +1021,7 @@ def verify_reports(
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
+    parser = ExactArgumentParser(
         prog="gradlab reports",
         description="Plan, synchronize, and verify declarative W&B reports.",
     )

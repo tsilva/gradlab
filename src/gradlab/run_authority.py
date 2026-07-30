@@ -44,6 +44,7 @@ from gradlab.policy_bundle import (
 from gradlab.goal_variants import (
     GOAL_VARIANT_INDEX_SCHEMA_VERSION,
     GOAL_VARIANT_RUN_INDEX_SCHEMA_VERSION,
+    goal_variant_catalog_contract,
     goal_variant_scope_key,
     validate_goal_variant_descriptor,
 )
@@ -206,8 +207,14 @@ class RunAuthority:
         try:
             self.control.put_json(descriptor_key, descriptor, create_only=True)
         except ConditionalWriteConflict:
-            if self.control.get_json(descriptor_key) != descriptor:
+            stored_descriptor = validate_goal_variant_descriptor(
+                self.control.get_json(descriptor_key)
+            )
+            if goal_variant_catalog_contract(
+                stored_descriptor
+            ) != goal_variant_catalog_contract(descriptor):
                 raise ValueError("immutable goal variant descriptor conflicts with storage")
+            descriptor = stored_descriptor
 
         index_key = f"{scope_key}/index.json"
         for _attempt in range(8):
@@ -505,19 +512,19 @@ class RunAuthority:
 
     def clear_goal_variant_catalog(self) -> dict[str, int]:
         catalog_keys = sorted(self.control.iter_keys("goal-variants/"))
-        obsolete_projection_keys = sorted(
+        projection_keys = sorted(
             key
             for key in self.control.iter_keys("runs/")
             if re.fullmatch(
-                r"runs/gradlab-[0-9a-f]{32}/goal-variant-(?:projection|registration)\.json",
+                r"runs/gradlab-[0-9a-f]{32}/goal-variant-projection\.json",
                 key,
             )
         )
-        for key in (*catalog_keys, *obsolete_projection_keys):
+        for key in (*catalog_keys, *projection_keys):
             self.control.delete(key, if_match=str(self.control.head(key)["etag"]))
         return {
             "catalog_objects": len(catalog_keys),
-            "projection_receipts": len(obsolete_projection_keys),
+            "projection_receipts": len(projection_keys),
         }
 
     def acquire_lease(
@@ -1074,8 +1081,7 @@ class RunAuthority:
         document = receipt.to_dict()
         existing = self.control.get_json_optional(key)
         if existing is not None:
-            validated = EarlyStopReceipt(**existing)
-            validated.validate()
+            validated = EarlyStopReceipt.from_dict(existing)
             if validated.to_dict() != document:
                 raise ConditionalWriteConflict(
                     f"early-stop receipt already exists with different content: {key}"
@@ -1186,8 +1192,7 @@ class RunAuthority:
         if document is None:
             return
         try:
-            manifest = RunManifest(**document)
-            manifest.validate()
+            manifest = RunManifest.from_dict(document)
         except TypeError, ValueError:
             return
         if manifest.attempt_id != receipt.attempt_id:

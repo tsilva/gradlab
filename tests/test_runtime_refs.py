@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import importlib.metadata
+import tempfile
 import unittest
 from dataclasses import replace
+from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
@@ -59,6 +61,14 @@ def image_info() -> runtime_refs.RuntimeImageInfo:
 
 
 class RuntimeRefsTests(unittest.TestCase):
+    def test_runtime_image_descriptor_requires_current_json_document(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "runtime-image.json"
+            path.write_text(RUNTIME_IMAGE_REF, encoding="utf-8")
+
+            with self.assertRaisesRegex(ValueError, "must contain a JSON object"):
+                runtime_refs.runtime_image_payload_from_file(path)
+
     def test_failed_workflow_image_receipt_is_still_usable(self) -> None:
         run = {
             "databaseId": 11,
@@ -84,11 +94,11 @@ class RuntimeRefsTests(unittest.TestCase):
         self.assertEqual(release.commit_message, "Publish immutable runtime")
         self.assertEqual(release.published_at, "2026-07-27T12:00:00Z")
 
-    def test_current_schema_rejects_obsolete_descriptive_fields(self) -> None:
+    def test_current_schema_rejects_unexpected_descriptive_fields(self) -> None:
         for field in ("commit_message", "published_at", "created_at", "publishedAt"):
             with self.subTest(field=field):
                 payload = image_payload()
-                payload[field] = "obsolete"
+                payload[field] = "unexpected"
                 with self.assertRaisesRegex(ValueError, "unknown field"):
                     runtime_refs.runtime_release_from_payload(
                         payload,

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import sqlite3
 import tempfile
 import time
 import unittest
@@ -132,6 +133,14 @@ class JobQueueTests(unittest.TestCase):
         self.assertEqual(os.stat(self.root).st_mode & 0o777, 0o700)
         self.assertEqual(os.stat(self.store.path).st_mode & 0o777, 0o600)
         self.assertEqual(os.stat(self.store.lock_path).st_mode & 0o777, 0o600)
+
+    def test_existing_noncurrent_schema_is_rejected(self) -> None:
+        self.root.mkdir(parents=True)
+        with sqlite3.connect(self.store.path) as connection:
+            connection.execute("PRAGMA user_version=0")
+
+        with self.assertRaisesRegex(RuntimeError, "requires 1"):
+            self.store.init()
 
     def test_flusher_claims_updates_subject_and_releases_leadership(self) -> None:
         enqueued = self.enqueue()

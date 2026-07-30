@@ -315,6 +315,14 @@ def validate_goal_variant_descriptor(value: Mapping[str, Any]) -> dict[str, Any]
     return deepcopy(document)
 
 
+def goal_variant_catalog_contract(value: Mapping[str, Any]) -> dict[str, Any]:
+    """Return the variant-owned fields shared by runs from different source commits."""
+
+    document = validate_goal_variant_descriptor(value)
+    document.pop("source_sha")
+    return document
+
+
 def goal_variant_projection(descriptor: Mapping[str, Any]) -> dict[str, Any]:
     validated = validate_goal_variant_descriptor(descriptor)
     descriptor_sha = canonical_json_sha256(validated)
@@ -338,6 +346,7 @@ __all__ = [
     "GOAL_VARIANT_RUN_INDEX_SCHEMA_VERSION",
     "GOAL_VARIANT_SCHEMA_VERSION",
     "build_goal_variant_descriptor",
+    "goal_variant_catalog_contract",
     "goal_variant_id",
     "goal_variant_projection",
     "goal_variant_scope_key",

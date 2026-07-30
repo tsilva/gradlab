@@ -17,6 +17,7 @@ os.environ.setdefault("MPLCONFIGDIR", os.path.abspath(".matplotlib"))
 os.makedirs(os.environ["MPLCONFIGDIR"], exist_ok=True)
 
 from gradlab.artifacts import write_run_description
+from gradlab.cli_parser import ExactArgumentParser
 from gradlab.env import (
     assert_provider_runtime_available,
     default_run_dir,
@@ -76,7 +77,7 @@ class TrainingRuntimeControl:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
+    parser = ExactArgumentParser(
         description="Train a configured backend on a registered provider environment"
     )
     parser.add_argument(

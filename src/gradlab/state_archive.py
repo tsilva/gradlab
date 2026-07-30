@@ -36,6 +36,20 @@ def _immutable_mapping(value: Mapping[str, Any]) -> Mapping[str, Any]:
     return MappingProxyType(dict(json_safe(value)))
 
 
+def _require_exact_fields(
+    value: Mapping[str, Any],
+    expected: frozenset[str],
+    *,
+    label: str,
+) -> None:
+    actual = set(value)
+    if actual != expected:
+        raise ValueError(
+            f"{label} fields disagree; "
+            f"missing={sorted(expected - actual)}, unexpected={sorted(actual - expected)}"
+        )
+
+
 @dataclass(frozen=True)
 class SnapshotRef:
     codec_id: str
@@ -62,6 +76,11 @@ class SnapshotRef:
 
     @classmethod
     def from_dict(cls, value: Mapping[str, Any]) -> SnapshotRef:
+        _require_exact_fields(
+            value,
+            frozenset({"codec_id", "blob_sha256", "size_bytes"}),
+            label="snapshot reference",
+        )
         return cls(
             codec_id=str(value["codec_id"]),
             blob_sha256=str(value["blob_sha256"]),
@@ -88,6 +107,11 @@ class ProviderSnapshot:
 
     @classmethod
     def from_dict(cls, value: Mapping[str, Any]) -> ProviderSnapshot:
+        _require_exact_fields(
+            value,
+            frozenset({"provider_id", "compatibility_id", "ref"}),
+            label="provider snapshot",
+        )
         return cls(
             provider_id=str(value["provider_id"]),
             compatibility_id=str(value["compatibility_id"]),
@@ -110,6 +134,11 @@ class TaskLaneState:
 
     @classmethod
     def from_dict(cls, value: Mapping[str, Any]) -> TaskLaneState:
+        _require_exact_fields(
+            value,
+            frozenset({"schema_id", "values"}),
+            label="task lane state",
+        )
         return cls(schema_id=str(value["schema_id"]), values=dict(value["values"]))
 
 
@@ -142,13 +171,27 @@ class RuntimeLaneState:
 
     @classmethod
     def from_dict(cls, value: Mapping[str, Any]) -> RuntimeLaneState:
-        seed = value.get("episode_seed")
+        _require_exact_fields(
+            value,
+            frozenset(
+                {
+                    "episode_index",
+                    "episode_return",
+                    "episode_length",
+                    "episode_seed",
+                    "start_id",
+                    "start_origin",
+                }
+            ),
+            label="runtime lane state",
+        )
+        seed = value["episode_seed"]
         return cls(
             episode_index=int(value["episode_index"]),
             episode_return=float(value["episode_return"]),
             episode_length=int(value["episode_length"]),
             episode_seed=None if seed is None else int(seed),
-            start_id=None if value.get("start_id") is None else str(value["start_id"]),
+            start_id=None if value["start_id"] is None else str(value["start_id"]),
             start_origin=str(value["start_origin"]),
         )
 
@@ -196,8 +239,25 @@ class StateArchiveEntry:
 
     @classmethod
     def from_dict(cls, value: Mapping[str, Any]) -> StateArchiveEntry:
-        task_state = value.get("task_state")
-        runtime_state = value.get("runtime_state")
+        _require_exact_fields(
+            value,
+            frozenset(
+                {
+                    "entry_id",
+                    "semantic_id",
+                    "schema_version",
+                    "provider_snapshot",
+                    "task_state",
+                    "runtime_state",
+                    "restore_semantics",
+                    "created_step",
+                    "metadata",
+                }
+            ),
+            label="state archive entry",
+        )
+        task_state = value["task_state"]
+        runtime_state = value["runtime_state"]
         entry = cls(
             entry_id=str(value["entry_id"]),
             provider_snapshot=ProviderSnapshot.from_dict(value["provider_snapshot"]),
@@ -207,9 +267,9 @@ class StateArchiveEntry:
             ),
             restore_semantics=str(value["restore_semantics"]),
             created_step=int(value["created_step"]),
-            metadata=dict(value.get("metadata", {})),
-            semantic_id=str(value.get("semantic_id", "")),
-            schema_version=int(value.get("schema_version", 0)),
+            metadata=dict(value["metadata"]),
+            semantic_id=str(value["semantic_id"]),
+            schema_version=int(value["schema_version"]),
         )
         expected = canonical_json_sha256(entry.identity_dict())
         if entry.entry_id != expected:
@@ -571,6 +631,20 @@ class StateArchive:
 
     def _validate_view(self, view_id: str, value: Mapping[str, Any]) -> dict[str, Any]:
         normalized = self._normalized_view_id(view_id)
+        _require_exact_fields(
+            value,
+            frozenset(
+                {
+                    "semantic_id",
+                    "schema_version",
+                    "view_id",
+                    "document_sha256",
+                    "referenced_entry_ids",
+                    "document",
+                }
+            ),
+            label=f"archive view {normalized!r}",
+        )
         if value.get("semantic_id") != STATE_ARCHIVE_SEMANTIC_ID:
             raise ValueError(f"archive view {normalized!r} has an unsupported semantic_id")
         if int(value.get("schema_version", 0)) != 1:

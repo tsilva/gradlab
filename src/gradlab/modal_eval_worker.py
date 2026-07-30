@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, Mapping
 from urllib.parse import unquote, urlparse
 
+from gradlab.cli_parser import ExactArgumentParser
 from gradlab.file_utils import file_sha256
 from gradlab.json_utils import canonical_json_line_bytes
 from gradlab.modal_eval_protocol import PROTOCOL_SCHEMA_VERSION, canonical_json, execution_key
@@ -400,7 +401,7 @@ def execute_attempt(
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser()
+    parser = ExactArgumentParser()
     subparsers = parser.add_subparsers(dest="command", required=True)
     child = subparsers.add_parser("child")
     child.add_argument("--input", type=Path, required=True)

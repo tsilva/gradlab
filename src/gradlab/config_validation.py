@@ -10,6 +10,7 @@ from typing import Any
 import yaml
 
 from gradlab.benchmark_profiles import load_benchmark_profiles
+from gradlab.cli_parser import ExactArgumentParser
 from gradlab.experiment_contracts import validate_env_config_file
 from gradlab.modal_eval_config import load_modal_eval_config
 from gradlab.recipe_documents import compose_train_document, load_goal_contract
@@ -196,7 +197,7 @@ def validate_experiment_tree(repo_root: Path | str = Path(".")) -> ValidationRep
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
+    parser = ExactArgumentParser(
         prog="gradlab validate",
         description="Validate checked-in YAML experiment, goal, recipe, benchmark, and ops configs.",
     )

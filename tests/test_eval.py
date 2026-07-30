@@ -267,7 +267,7 @@ class EvalMetricTests(unittest.TestCase):
             (-5_000_000.0, 1200.0),
         )
 
-    def test_checkpoint_score_rejects_missing_or_legacy_rank(self) -> None:
+    def test_checkpoint_score_rejects_missing_or_noncurrent_rank(self) -> None:
         with self.assertRaisesRegex(ValueError, "objective.rank"):
             eval_checkpoint_score({}, ())
         with self.assertRaisesRegex(ValueError, "objective.rank"):

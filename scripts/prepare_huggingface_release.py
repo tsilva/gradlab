@@ -8,6 +8,7 @@ from copy import deepcopy
 from datetime import UTC, datetime
 from pathlib import Path
 
+from gradlab.cli_parser import ExactArgumentParser
 from gradlab.config_validation import load_goal_contract
 from gradlab.publication import (
     GITATTRIBUTES_TEXT,
@@ -42,7 +43,7 @@ def _load_object(path: Path, *, label: str) -> dict:
 
 
 def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
+    parser = ExactArgumentParser(
         description="Build and validate one deterministic gradlab Hugging Face release bundle."
     )
     parser.add_argument("--goal-file", type=Path, required=True)

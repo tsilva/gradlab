@@ -53,17 +53,17 @@ def test_checkpoint_identity_rejects_unknown_model_class() -> None:
         )
 
 
-def test_retired_dqn_backend_is_not_supported() -> None:
+def test_unknown_backend_and_algorithm_are_not_supported() -> None:
     with pytest.raises(ValueError, match="unsupported checkpoint algorithm"):
         resolve_policy_algorithm(
             {
-                "training_backend_id": "sb3.dqn",
-                "algorithm_id": "dqn",
-                "model_class": "stable_baselines3.dqn.dqn.DQN",
+                "training_backend_id": "sb3.unsupported",
+                "algorithm_id": "unsupported",
+                "model_class": "example.UnsupportedModel",
             }
         )
     with pytest.raises(ValueError, match="unknown training backend"):
-        load_training_backend("sb3.dqn")
+        load_training_backend("sb3.unsupported")
 
 
 def test_algorithm_registry_views_are_derived_from_authoritative_specs() -> None:

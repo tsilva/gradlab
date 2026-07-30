@@ -15,6 +15,7 @@ import numpy as np
 
 from gradlab.action_contract import action_contract_meanings
 from gradlab.cli_args import explicit_arg_dests, parse_json_value
+from gradlab.cli_parser import ExactArgumentParser
 from gradlab.device import resolve_sb3_device
 from gradlab.env import (
     assert_provider_runtime_available,
@@ -93,7 +94,7 @@ class ScriptedPolicy:
 
 
 def build_parser(*, prog: str = "gradlab eval") -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
+    parser = ExactArgumentParser(
         prog=prog,
         description="Evaluate an gradlab policy artifact or scripted provider baseline",
     )

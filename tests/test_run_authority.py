@@ -129,6 +129,16 @@ class RunAuthorityTests(unittest.TestCase):
                 create_only=True,
             )
 
+    def test_persisted_manifest_requires_explicit_current_schema(self) -> None:
+        document = self.manifest(new_run_id(), new_attempt_id()).to_dict()
+        document.pop("schema_version")
+        with self.assertRaisesRegex(ValueError, "requires schema_version"):
+            RunManifest.from_dict(document)
+
+        document["schema_version"] = 4
+        with self.assertRaisesRegex(ValueError, "unsupported run manifest schema"):
+            RunManifest.from_dict(document)
+
     def test_manifest_binds_recipe_overrides(self) -> None:
         run_id = new_run_id()
         manifest = self.manifest(run_id, new_attempt_id())
@@ -212,33 +222,57 @@ class RunAuthorityTests(unittest.TestCase):
         self.assertEqual(updated["final_step"], 100)
         self.assertEqual(updated["metrics"], {"train/global_step": 100.0})
 
-    def test_catalog_clear_removes_current_and_noncurrent_indexes_and_projection_receipts(
-        self,
-    ) -> None:
+    def test_same_goal_variant_from_multiple_source_commits_shares_catalog_entry(self) -> None:
+        first = self.manifest(new_run_id(), new_attempt_id())
+        second_source = "f" * 40
+        second = RunManifest(
+            **{
+                **self.manifest(new_run_id(), new_attempt_id()).to_dict(),
+                "source_sha": second_source,
+                "compute": {
+                    **first.compute,
+                    "dstack_task": "second-source-task",
+                    "runtime_build_source_sha": second_source,
+                },
+                "modal": {
+                    **first.modal,
+                    "deployment_source_sha": second_source,
+                },
+                "goal_variant": {
+                    **dict(first.goal_variant or {}),
+                    "source_sha": second_source,
+                },
+            }
+        )
+        second.validate()
+
+        self.authority.register_goal_variant(first)
+        self.authority.register_goal_variant(second)
+
+        descriptor = dict(first.goal_variant or {})
+        scope = goal_variant_scope_key(goal_slug=first.goal_slug)
+        index = self.authority.control.get_json(f"{scope}/index.json")
+        run_index = self.authority.control.get_json(
+            f"{scope}/runs/{descriptor['variant_id']}.json"
+        )
+        self.assertEqual(len(index["variants"]), 1)
+        self.assertEqual(
+            {row["run_id"] for row in run_index["runs"]},
+            {first.run_id, second.run_id},
+        )
+
+    def test_catalog_clear_removes_current_indexes_and_projection_receipts(self) -> None:
         manifest = self.manifest(new_run_id(), new_attempt_id())
         self.authority.create_manifest(manifest)
-        self.authority.control.put_json(
-            "goal-variants/v1/scopes/obsolete/index.json",
-            {"schema_version": 1},
-        )
-        self.authority.control.put_json(
-            f"runs/{manifest.run_id}/goal-variant-registration.json",
-            {"schema_version": 1},
-        )
 
         cleared = self.authority.clear_goal_variant_catalog()
 
         self.assertGreaterEqual(cleared["catalog_objects"], 3)
-        self.assertEqual(cleared["projection_receipts"], 2)
+        self.assertEqual(cleared["projection_receipts"], 1)
         self.assertEqual(list(self.authority.control.iter_keys("goal-variants/")), [])
         self.assertIsNone(
             self.authority.control.get_json_optional(
                 f"runs/{manifest.run_id}/goal-variant-projection.json"
-            )
-        )
-        self.assertIsNone(
-            self.authority.control.get_json_optional(
-                f"runs/{manifest.run_id}/goal-variant-registration.json"
             )
         )
 

@@ -13,6 +13,8 @@ import webbrowser
 from pathlib import Path
 from typing import Any
 
+from gradlab.cli_parser import ExactArgumentParser
+
 
 YOUTUBE_UPLOAD_SCOPES = (
     "https://www.googleapis.com/auth/youtube.upload",
@@ -535,7 +537,7 @@ def update_video_metadata(
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Upload a local video to YouTube.")
+    parser = ExactArgumentParser(description="Upload a local video to YouTube.")
     parser.add_argument("video", type=Path, nargs="?")
     parser.add_argument("--client-secret", type=Path, default=Path(".secret/youtube_client_secret.json"))
     parser.add_argument("--token", type=Path, default=Path(".secret/youtube_token.json"))

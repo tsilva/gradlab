@@ -81,7 +81,7 @@ uvx --from "gradlab==$GRADLAB_VERSION" gradlab train Breakout-Atari2600-v0/ppo
 uvx --from "gradlab==$GRADLAB_VERSION" gradlab play --recipe Breakout-Atari2600-v0/ppo
 
 uvx "gradlab@$GRADLAB_VERSION" train SuperMarioBros-Nes-v0/Level1-1/turbo-demo \
-  --rom /absolute/path/to/SuperMarioBros.nes
+  --rom-path /absolute/path/to/SuperMarioBros.nes
 
 uvx --from "gradlab==$GRADLAB_VERSION" gradlab train VizdoomBasic-v1/ppo
 uvx --from "gradlab==$GRADLAB_VERSION" gradlab play --recipe VizdoomBasic-v1/ppo
@@ -108,7 +108,7 @@ dashboard remains open until the learner finishes writing its terminal model
 and result. Pass `--no-tui`, redirect output, or use a dumb terminal for stable
 plain progress logs. The dashboard is presentation-only and does not enter
 recipe hashes, training metrics, or run receipts.
-For Mario, `--rom` verifies and uses a lawful raw `.nes` file in place without
+For Mario, `--rom-path` verifies and uses a lawful raw `.nes` file in place without
 copying it or modifying GradLab's ROM registry or cache. The completed run prints
 a version-pinned `uvx ... play` command using the same ROM. The demo targets
 macOS arm64 and Linux x86_64; its 98,304 training steps take about two minutes on

@@ -247,7 +247,7 @@ class TrainConfigFieldSchemaTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "is not a known train config field"):
             validate_and_normalize_train_config({"stop_on_acceptance": True})
 
-    def test_train_config_rejects_retired_stochastic_eval_flag(self) -> None:
+    def test_train_config_rejects_noncurrent_stochastic_eval_flag(self) -> None:
         with self.assertRaisesRegex(ValueError, "is not a known train config field"):
             validate_and_normalize_train_config({"post_train_eval_stochastic": False})
         with self.assertRaisesRegex(ValueError, "is not a known train config field"):
