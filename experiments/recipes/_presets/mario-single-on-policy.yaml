@@ -14,5 +14,4 @@ train:
       vf_coef: 1.0
       normalize_advantage: false
 logging:
-  wandb: true
   wandb_mode: online

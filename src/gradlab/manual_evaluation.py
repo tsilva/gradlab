@@ -36,8 +36,7 @@ from gradlab.modal_eval_backend import ModalEvalBackend
 from gradlab.modal_eval_config import ModalEvalConfig, load_modal_eval_config
 from gradlab.modal_eval_protocol import (
     PROTOCOL_SCHEMA_VERSION,
-    execution_key,
-    validate_attempt_result,
+    normalize_attempt_result,
 )
 from gradlab.operator_environment import load_repository_operator_environment
 from gradlab.policy_bundle import (
@@ -113,51 +112,26 @@ def _verified_result(
     intent = context.intent
     contract = dict(intent.execution_contract)
     attempt_id = f"{intent.idempotency_key[:20]}-a{attempt}"
-    raw_status = str(raw.get("status") or "")
-    if raw_status == "succeeded":
-        validated = validate_attempt_result(
-            raw,
-            contract=contract,
-            attempt_id=attempt_id,
-        )
-        verdict = str(validated.get("verdict") or "")
-        status = "accepted" if verdict == "accepted" else "rejected"
-        episodes = list(validated.get("episode_results") or [])
-        aggregates = dict(validated.get("claimed_aggregates") or {})
-        error = None
-    else:
-        if str(raw.get("attempt_id") or "") != attempt_id:
-            raise ValueError("failed eval result attempt id mismatch")
-        if str(raw.get("execution_key") or "") != execution_key(contract):
-            raise ValueError("failed eval result execution key mismatch")
-        status = "expired" if raw_status == "expired" else "failed"
-        episodes = list(raw.get("episode_results") or [])
-        aggregates = dict(raw.get("claimed_aggregates") or {})
-        error = str(raw.get("error") or f"Modal eval status={raw_status or 'unknown'}")
-    evidence_values = [
-        episodes,
-        raw.get("evaluation_evidence") or {},
-        raw.get("preview") or {},
-    ]
+    normalized = normalize_attempt_result(
+        raw,
+        contract=contract,
+        attempt_id=attempt_id,
+    )
     return EvalResult(
         run_id=context.manifest.run_id,
         checkpoint_id=context.checkpoint.checkpoint_id,
         idempotency_key=intent.idempotency_key,
         modal_call_id=modal_call_id or "not-recorded",
-        status=status,  # type: ignore[arg-type]
-        episode_results=episodes,
-        aggregates=aggregates,
+        status=normalized["status"],  # type: ignore[arg-type]
+        episode_results=normalized["episode_results"],
+        aggregates=normalized["aggregates"],
         timings={
-            "duration_seconds": float(raw.get("duration_seconds") or 0.0),
+            "duration_seconds": normalized["duration_seconds"],
             "result_observed_at": clock.utc_now(),
         },
-        evidence_sha256=[
-            document_sha256({"evidence": value})
-            for value in evidence_values
-            if value not in (None, {}, [])
-        ],
+        evidence_sha256=normalized["evidence_sha256"],
         completed_at=clock.utc_now(),
-        error=error,
+        error=normalized["error"],
     )
 
 

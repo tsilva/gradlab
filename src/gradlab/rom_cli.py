@@ -36,15 +36,6 @@ def add_import_args(parser: argparse.ArgumentParser) -> None:
     )
 
 
-def build_import_parser(*, prog: str = "gradlab rom import") -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        prog=prog,
-        description="Import ROMs into this gradlab runtime.",
-    )
-    add_import_args(parser)
-    return parser
-
-
 def resolve_import_path(
     value: str | Path | None,
     *,

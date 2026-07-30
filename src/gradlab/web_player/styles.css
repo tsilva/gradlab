@@ -453,7 +453,7 @@ h2 { font-size: .9rem; margin: 0; font-weight: 650; }
 .source-table .run-identity:hover:not(:disabled) {
   border-color: transparent;
   background: transparent;
-  color: var(--cyan);
+  color: inherit;
 }
 .source-table .run-identity-text { min-width: 0; }
 .source-table .run-state {

@@ -199,7 +199,7 @@ class ConfigValidationTests(unittest.TestCase):
             {"failure": ["serve_stall"], "max_episode_steps": 54000},
         )
         self.assertEqual(train_config["checkpoint_eval_backend"], "none")
-        self.assertFalse(train_config["stop_on_acceptance"])
+        self.assertNotIn("stop_on_acceptance", train_config)
         self.assertIsNone(train_config.get("early_stop"))
         self.assertNotIn("eval", document["goal"])
         self.assertNotIn("release", document["goal"])
@@ -235,7 +235,7 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertEqual(document["recipe_id"], "ppo")
         self.assertEqual(train_config["timesteps"], 2_000_000)
         self.assertEqual(train_config["checkpoint_eval_backend"], "none")
-        self.assertFalse(train_config["stop_on_acceptance"])
+        self.assertNotIn("stop_on_acceptance", train_config)
         self.assertEqual(train_config["training_backend"]["id"], "sb3.ppo")
         self.assertEqual(train_config["env_provider"], "vizdoom-turbo")
         self.assertEqual(train_config["game"], "VizdoomBasic-v1")
@@ -431,7 +431,7 @@ class ConfigValidationTests(unittest.TestCase):
         train_config = document["train_config"]
         self.assertEqual(document["recipe_id"], "ppo-train-clear-100")
         self.assertEqual(train_config["checkpoint_eval_backend"], "none")
-        self.assertFalse(train_config["stop_on_acceptance"])
+        self.assertNotIn("stop_on_acceptance", train_config)
         self.assertEqual(
             set(train_config["early_stop"]["conditions"]),
             {"clear_100", "return_plateau"},
@@ -474,8 +474,8 @@ class ConfigValidationTests(unittest.TestCase):
                 )
         self.assertEqual(ppo["train_config"]["timesteps"], 50000000)
         self.assertEqual(a2c["train_config"]["timesteps"], 50000000)
-        self.assertTrue(ppo["train_config"]["wandb"])
-        self.assertTrue(a2c["train_config"]["wandb"])
+        self.assertEqual(ppo["train_config"]["wandb_mode"], "online")
+        self.assertEqual(a2c["train_config"]["wandb_mode"], "online")
 
     def test_every_mario_recipe_composes_the_shared_plateau_condition(self) -> None:
         mario_root = Path("experiments/goals/SuperMarioBros-Nes-v0")
@@ -573,7 +573,7 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertEqual(train_config["env_provider"], "stable-retro-turbo")
         self.assertEqual(train_config["game"], "Breakout-Atari2600-v0")
         self.assertEqual(train_config["checkpoint_eval_backend"], "none")
-        self.assertFalse(train_config["stop_on_acceptance"])
+        self.assertNotIn("stop_on_acceptance", train_config)
         self.assertEqual(
             train_config["selection_rank"],
             [

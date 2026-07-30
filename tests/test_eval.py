@@ -1,15 +1,14 @@
 from __future__ import annotations
 
-import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import numpy as np
 
 from gradlab.batch_runtime import EpisodeRecord
 from gradlab.env import EnvConfig
-from gradlab.eval import ScriptedPolicy, load_eval_model
+from gradlab.eval import ScriptedPolicy
 from gradlab.eval_metrics import (
     eval_by_start_rows,
     episode_rank,
@@ -19,7 +18,6 @@ from gradlab.eval_metrics import (
     run_eval_episode,
     summarize_episode_results,
 )
-from gradlab.callbacks import _DoneMetricsReducer
 from gradlab.eval_runner import (
     _acceptance_runtime_config,
     _eval_runtime_config,
@@ -29,6 +27,7 @@ from gradlab.metric_names import metric_path_segment
 from gradlab.modal_eval_protocol import SEED_PROTOCOL
 from gradlab.env_registry import environment_spec
 from gradlab.task_kernels import Outcome
+from gradlab.training_metrics import EpisodeMetricsReducer
 from gradlab.ranking import rank_score, require_objective_rank
 from gradlab.task_kernels import default_task_document
 from gradlab.video import PolicyObservationPreview
@@ -169,37 +168,6 @@ class EvalByStartTableTests(unittest.TestCase):
 
 
 class EvalMetricTests(unittest.TestCase):
-    def test_eval_model_identity_uses_a2c_checkpoint_metadata(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            model_path = Path(tmp_dir) / "model.zip"
-            model_path.write_bytes(b"model")
-            bundle = MagicMock()
-            bundle.model = {
-                "policy": {
-                    "training_backend_id": "sb3.a2c",
-                    "algorithm_id": "a2c",
-                    "model_class": "stable_baselines3.a2c.a2c.A2C",
-                }
-            }
-
-            loaded = object()
-            approved = MagicMock()
-            approved.__enter__.return_value.model_path = model_path
-            approved.__exit__.return_value = None
-            with (
-                patch("gradlab.eval.stage_and_approve_model", return_value=approved),
-                patch(
-                    "gradlab.eval.load_policy_bundle_from_checkpoint",
-                    return_value=bundle,
-                ),
-                patch("gradlab.eval.load_policy_model", return_value=loaded) as load_model,
-            ):
-                model, policy = load_eval_model(model_path, device="cpu")
-
-            self.assertIs(model, loaded)
-            self.assertEqual(policy, "a2c")
-            self.assertEqual(load_model.call_args.kwargs["algorithm_id"], "a2c")
-
     def test_training_and_eval_share_terminal_reason_suffixes(self) -> None:
         record = EpisodeRecord(
             lane=0,
@@ -213,7 +181,7 @@ class EvalMetricTests(unittest.TestCase):
             events=(),
             metrics={},
         )
-        training = _DoneMetricsReducer().consume(record)
+        training = EpisodeMetricsReducer(track_success=False).consume((record,))
         result = episode_result_from_record(
             record,
             semantics=environment_spec("gymnasium", "breakout").eval_semantics,

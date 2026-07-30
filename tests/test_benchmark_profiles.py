@@ -235,7 +235,7 @@ required_metrics: [train/throughput/not_real]
         self.assertNotIn("checkpoint_eval_stages", train_config)
         self.assertIsNone(train_config["early_stop"])
         self.assertEqual(train_config["post_train_eval_episodes"], 0)
-        self.assertFalse(train_config["wandb"])
+        self.assertNotIn("wandb", train_config)
         self.assertEqual(train_config["wandb_mode"], "disabled")
         self.assertEqual(train_config["seed"], 123)
 

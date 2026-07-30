@@ -134,7 +134,6 @@ def base_state(root: Path) -> dict:
             "train_config": {
                 "timesteps": 100_000,
                 "checkpoint_eval_backend": "modal",
-                "stop_on_acceptance": True,
                 "environment": {"env_config": {"state": "Level1-3", "n_envs": 16}},
                 "training_backend": {"id": "sb3.ppo", "config": backend},
             },
@@ -258,7 +257,6 @@ class AutoresearchStudyTests(unittest.TestCase):
                     "timesteps": 100_000,
                     "n_envs": 16,
                     "checkpoint_eval_backend": "modal",
-                    "stop_on_acceptance": True,
                     "environment": {"env_config": {"state": "Level1-3", "n_envs": 16}},
                     "training_backend": {"id": "sb3.ppo", "config": backend},
                 },

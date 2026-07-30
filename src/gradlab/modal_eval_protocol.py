@@ -12,7 +12,7 @@ from gradlab.checkpoint_acceptance import (
     evaluate_acceptance,
     validate_episode_rows,
 )
-from gradlab.json_utils import canonical_json_text
+from gradlab.json_utils import canonical_json_sha256, canonical_json_text
 
 
 PROTOCOL_SCHEMA_VERSION = 4
@@ -197,3 +197,52 @@ def validate_attempt_result(
     validated_result["episode_results"] = validated_rows
     validated_result["claimed_aggregates"] = computed
     return validated_result
+
+
+def normalize_attempt_result(
+    result: Mapping[str, Any],
+    *,
+    contract: Mapping[str, Any],
+    attempt_id: str,
+) -> dict[str, Any]:
+    """Normalize one identity-verified Modal result for durable supervisor storage."""
+
+    raw_status = str(result.get("status") or "")
+    if raw_status == "succeeded":
+        validated = validate_attempt_result(
+            result,
+            contract=contract,
+            attempt_id=attempt_id,
+        )
+        verdict = str(validated.get("verdict") or "")
+        status = "accepted" if verdict == "accepted" else "rejected"
+        episodes = list(validated.get("episode_results") or [])
+        aggregates = dict(validated.get("claimed_aggregates") or {})
+        error = None
+    else:
+        if str(result.get("attempt_id") or "") != attempt_id:
+            raise ValueError("failed eval result attempt id mismatch")
+        if str(result.get("execution_key") or "") != execution_key(contract):
+            raise ValueError("failed eval result execution key mismatch")
+        status = "expired" if raw_status == "expired" else "failed"
+        episodes = list(result.get("episode_results") or [])
+        aggregates = dict(result.get("claimed_aggregates") or {})
+        error = str(result.get("error") or f"Modal eval status={raw_status or 'unknown'}")
+
+    evidence_values = [
+        episodes,
+        result.get("evaluation_evidence") or {},
+        result.get("preview") or {},
+    ]
+    return {
+        "status": status,
+        "episode_results": episodes,
+        "aggregates": aggregates,
+        "duration_seconds": float(result.get("duration_seconds") or 0.0),
+        "evidence_sha256": [
+            canonical_json_sha256({"evidence": value})
+            for value in evidence_values
+            if value not in (None, {}, [])
+        ],
+        "error": error,
+    }

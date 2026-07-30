@@ -25,7 +25,6 @@ from gradlab.early_stop import (
     validate_metric_early_stop_decision,
 )
 from gradlab.eval_backend import EvalHandle, EvalPoll
-from gradlab.goal_variants import build_goal_variant_descriptor
 from gradlab.job_queue import (
     HandlerResult,
     JobStore,
@@ -52,10 +51,7 @@ from gradlab.r2_store import (
     ConditionalWriteConflict,
     RunStorageConfig,
 )
-from gradlab.recipe_documents import (
-    compose_resolved_train_documents,
-    load_goal_contract,
-)
+from gradlab.recipe_documents import compose_resolved_train_documents
 from gradlab.run_authority import LEASE_TTL_SECONDS, LeaseUnavailable, RunAuthority
 from gradlab.run_contracts import (
     EarlyStopReceipt,
@@ -103,10 +99,6 @@ DEFAULT_SCENARIOS = (
     "completed-result-hung-process",
     "local-background-jobs",
 )
-
-
-def _sha256(value: object) -> str:
-    return canonical_json_sha256(value)
 
 
 class DeterministicClock:
@@ -477,12 +469,6 @@ class CertificationFixture:
         config["rom_asset_manifest"] = self.asset
         config["checkpoint_eval_backend"] = "modal"
         contract_document["train_config"] = config
-        contract_document["goal_variant"] = build_goal_variant_descriptor(
-            goal_slug="SuperMarioBros-Nes-v0/Level1-1",
-            source_sha=SOURCE_SHA,
-            authored_goal=load_goal_contract(GOAL_PATH, Path.cwd()),
-            effective_goal=dict(document["goal"]),
-        )
         self.composed = contract_document
         self.recipe_document = build_recipe_document(
             contract_document,
@@ -2287,7 +2273,7 @@ def run_simulated_certification(
             "status": ("passed" if all(row["status"] == "passed" for row in results) else "failed"),
             "scenarios": results,
         }
-        report["report_sha256"] = _sha256(report)
+        report["report_sha256"] = canonical_json_sha256(report)
         (root / "report.json").write_bytes(_canonical_bytes(report))
         (root / "replay.json").write_bytes(
             _canonical_bytes(

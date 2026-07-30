@@ -741,13 +741,9 @@ def provider_descriptor(
     if turbo_contract is None:
         ownership = "unsafe_view"
         buffer_depth = 1
-        api_version = None
-        capabilities: Mapping[str, Any] = {}
     else:
         ownership = turbo_contract.observation_ownership
         buffer_depth = turbo_contract.observation_buffer_depth
-        api_version = turbo_contract.api_version
-        capabilities = turbo_contract.capabilities
     snapshot_codec_id = provider_runtime_adapter(provider.provider_id).snapshot_codec_id
     snapshot_compatibility_id = None
     if snapshot_codec_id is not None:
@@ -768,8 +764,6 @@ def provider_descriptor(
         start_probabilities=start_probabilities,
         lane_start_ids=lane_start_ids,
         render_support=tuple(str(mode) for mode in render_modes),
-        turbo_api_version=api_version,
-        capabilities=capabilities,
         observation_ownership=ownership,
         observation_buffer_depth=buffer_depth,
         action_mode=str(action_mode) if action_mode is not None else None,

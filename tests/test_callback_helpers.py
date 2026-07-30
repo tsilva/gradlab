@@ -755,9 +755,9 @@ class ThroughputHelperTests(unittest.TestCase):
         frame = dict(model.logger.records)
         self.assertEqual(frame["train/throughput/rollout_seconds"], 5.0)
         self.assertEqual(frame["train/throughput/between_rollouts_seconds"], 2.0)
+        self.assertEqual(frame["train/throughput/env_step_fps"], 50.0)
         self.assertEqual(frame["train/throughput/env_step_seconds"], 2.0)
         self.assertEqual(frame["train/throughput/rollout_overhead_seconds"], 3.0)
-        self.assertNotIn("train/throughput/env_step_fps", frame)
         self.assertEqual(
             7.0,
             frame["train/throughput/rollout_seconds"]

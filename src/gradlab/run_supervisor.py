@@ -25,10 +25,7 @@ from gradlab.eval_metrics import eval_by_start_rows
 from gradlab.eval_backend import EvalBackend, EvalHandle
 from gradlab.evaluation_projection import evaluation_wandb_projection
 from gradlab.file_utils import file_sha256
-from gradlab.goal_variants import (
-    build_goal_variant_descriptor,
-    validate_goal_variant_descriptor,
-)
+from gradlab.goal_variants import validate_goal_variant_descriptor
 from gradlab.metric_names import (
     METRICS_SCHEMA_VERSION,
     ORCHESTRATION_CHECKPOINT_BACKLOG,
@@ -53,8 +50,7 @@ from gradlab.modal_eval_backend import ModalEvalBackend
 from gradlab.modal_eval_config import load_modal_eval_config
 from gradlab.modal_eval_protocol import (
     PROTOCOL_SCHEMA_VERSION,
-    execution_key,
-    validate_attempt_result,
+    normalize_attempt_result,
 )
 from gradlab.policy_bundle import (
     build_recipe_document,
@@ -66,7 +62,6 @@ from gradlab.policy_bundle import (
 from gradlab.r2_store import ConditionalWriteConflict, RunStorageConfig
 from gradlab.recipe_documents import (
     compose_resolved_train_documents,
-    load_goal_contract,
     prepare_checkpoint_eval_mode,
     recipe_tags,
 )
@@ -615,10 +610,6 @@ class RunSupervisor:
             raise LearnerStateContractError(f"learner {kind} document is unreadable") from exc
         return self._parse_learner_state(document, kind=kind, live=live)
 
-    def _training_terminal_reason(self) -> str:
-        state = self._learner_state_file(kind="result", live=False)
-        return "" if state is None else str(state.terminal_reason or "")
-
     def _observe_live_learner_state(self, now: float) -> LearnerState | None:
         result = self._learner_state_file(kind="result", live=True)
         if result is not None:
@@ -777,15 +768,9 @@ class RunSupervisor:
             raise RuntimeError("materialized environment hash does not match the run manifest")
         goal_variant = None
         if self.manifest.goal_variant is not None:
-            goal_variant = build_goal_variant_descriptor(
-                goal_slug=self.manifest.goal_slug,
-                source_sha=self.manifest.source_sha,
-                authored_goal=load_goal_contract(goal_path, self.repo_root),
-                effective_goal=dict(materialized["goal"]),
-            )
+            goal_variant = validate_goal_variant_descriptor(materialized["goal_variant"])
             if goal_variant != validate_goal_variant_descriptor(self.manifest.goal_variant):
                 raise RuntimeError("materialized goal variant does not match the run manifest")
-            materialized["goal_variant"] = goal_variant
             self.authority.register_goal_variant_best_effort(self.manifest)
 
         config = dict(materialized["train_config"])
@@ -861,7 +846,6 @@ class RunSupervisor:
                 ),
                 "attempt_id": self.manifest.attempt_id,
                 "dstack_task": str(self.manifest.compute.get("dstack_task") or ""),
-                "wandb": True,
                 "wandb_mode": "online",
                 "wandb_run_id": str(self.manifest.wandb.get("run_id") or self.manifest.run_id),
                 "wandb_entity": str(self.manifest.wandb.get("entity") or ""),
@@ -1738,52 +1722,26 @@ class RunSupervisor:
         attempt = int(row["attempt"])
         attempt_id = f"{intent['idempotency_key'][:20]}-a{attempt}"
         contract = dict(intent["execution_contract"])
-        raw_status = str(raw.get("status") or "")
-        if raw_status == "succeeded":
-            validated = validate_attempt_result(
-                raw,
-                contract=contract,
-                attempt_id=attempt_id,
-            )
-            verdict = str(validated.get("verdict") or "")
-            status = "accepted" if verdict == "accepted" else "rejected"
-            episodes = list(validated.get("episode_results") or [])
-            aggregates = dict(validated.get("claimed_aggregates") or {})
-            error = None
-        else:
-            if str(raw.get("attempt_id") or "") != attempt_id:
-                raise ValueError("failed eval result attempt id mismatch")
-            if str(raw.get("execution_key") or "") != execution_key(contract):
-                raise ValueError("failed eval result execution key mismatch")
-            status = "expired" if raw_status == "expired" else "failed"
-            episodes = list(raw.get("episode_results") or [])
-            aggregates = dict(raw.get("claimed_aggregates") or {})
-            error = str(raw.get("error") or f"Modal eval status={raw_status or 'unknown'}")
-        evidence_values = [
-            episodes,
-            raw.get("evaluation_evidence") or {},
-            raw.get("preview") or {},
-        ]
-        evidence_hashes = [
-            document_sha256({"evidence": value})
-            for value in evidence_values
-            if value not in (None, {}, [])
-        ]
+        normalized = normalize_attempt_result(
+            raw,
+            contract=contract,
+            attempt_id=attempt_id,
+        )
         return EvalResult(
             run_id=self.manifest.run_id,
             checkpoint_id=str(row["checkpoint_id"]),
             idempotency_key=str(row["idempotency_key"]),
             modal_call_id=str(row["modal_call_id"] or "not-recorded"),
-            status=status,  # type: ignore[arg-type]
-            episode_results=episodes,
-            aggregates=aggregates,
+            status=normalized["status"],  # type: ignore[arg-type]
+            episode_results=normalized["episode_results"],
+            aggregates=normalized["aggregates"],
             timings={
-                "duration_seconds": float(raw.get("duration_seconds") or 0.0),
+                "duration_seconds": normalized["duration_seconds"],
                 "result_observed_at": self.clock.utc_now(),
             },
-            evidence_sha256=evidence_hashes,
+            evidence_sha256=normalized["evidence_sha256"],
             completed_at=self.clock.utc_now(),
-            error=error,
+            error=normalized["error"],
         )
 
     def _record_eval_metrics(

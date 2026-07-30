@@ -165,7 +165,6 @@ class MetricsDocumentationTests(unittest.TestCase):
             "train/episode/count",
             "train/episode/return/shaped/mean",
             "train/throughput/rollout_fps",
-            "train/throughput/env_step_fps",
             "train/early_stop/clear_100/would_trigger",
             "train/outcome/success/from/Start/rate/current",
             "eval/checkpoint_step",
@@ -263,8 +262,8 @@ class MetricsDocumentationTests(unittest.TestCase):
                     name = name.replace(f"{{{placeholder}}}", replacement, 1)
                 scalar_names.add(name)
 
-        self.assertEqual(len(metric_names.METRIC_DEFINITIONS), 144)
-        self.assertEqual(len(scalar_names), 155)
+        self.assertEqual(len(metric_names.METRIC_DEFINITIONS), 145)
+        self.assertEqual(len(scalar_names), 156)
         self.assertEqual(
             len(
                 {

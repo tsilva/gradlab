@@ -67,7 +67,9 @@ def _start_wandb(
     config: Any,
     goal_variant: Mapping[str, Any] | None = None,
 ):
-    if not train_config.get("wandb"):
+    from gradlab.train_config import wandb_publication_enabled
+
+    if not wandb_publication_enabled(train_config):
         raise ValueError("supervised training requires W&B metric publication")
     load_wandb_env()
     wandb_dir = os.path.abspath(run_dir)

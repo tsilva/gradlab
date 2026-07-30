@@ -38,6 +38,7 @@ from gradlab.metric_names import (
     TRAIN_ARCHIVE_TRANSITION_SHARE,
     TRAIN_REWARD_ROOT,
     TRAIN_THROUGHPUT_BETWEEN_ROLLOUTS_SECONDS,
+    TRAIN_THROUGHPUT_ENV_STEP_FPS,
     TRAIN_THROUGHPUT_ENV_STEP_SECONDS,
     TRAIN_THROUGHPUT_LOOP_FPS,
     TRAIN_THROUGHPUT_ROLLOUT_OVERHEAD_SECONDS,
@@ -51,6 +52,7 @@ from gradlab.metric_names import (
 )
 from gradlab.metric_store import MetricStore
 from gradlab.state_archive import state_archive_artifact_summary
+from gradlab.train_config import wandb_publication_enabled
 from gradlab.training_lifecycle import LoggerMetricFrameSink
 from gradlab.training_metrics import EpisodeMetricsReducer
 
@@ -167,7 +169,7 @@ class LedgerCheckpointHelper(CallbackHelper):
             {TRAIN_ARTIFACT_SAVE_SECONDS: time.perf_counter() - started},
             step=step,
             source=f"checkpoint-save:{kind}",
-            publish=bool(self.train_config.get("wandb", True)),
+            publish=wandb_publication_enabled(self.train_config),
         )
         print(
             f"checkpoint ready: id={checkpoint_id} step={step} path={final_path}",
@@ -295,6 +297,9 @@ class ThroughputHelper(CallbackHelper):
         if rollout.env_step_seconds is not None:
             payload.update(
                 {
+                    TRAIN_THROUGHPUT_ENV_STEP_FPS: (
+                        rollout.steps / rollout.env_step_seconds
+                    ),
                     TRAIN_THROUGHPUT_ENV_STEP_SECONDS: rollout.env_step_seconds,
                     TRAIN_THROUGHPUT_ROLLOUT_OVERHEAD_SECONDS: max(
                         rollout.rollout_seconds - rollout.env_step_seconds,
@@ -859,21 +864,6 @@ class _RewardStatsAccumulator:
                 }
             )
         return payload
-
-
-class _DoneMetricsReducer:
-    """Compatibility adapter backed by the shared canonical reducer."""
-
-    def __init__(self, event_names: Sequence[str] = ()) -> None:
-        self.reducer = EpisodeMetricsReducer(
-            event_names=event_names,
-            track_success=False,
-        )
-
-    def consume(self, record: Any) -> dict[str, int | float] | None:
-        if not hasattr(record, "episode_return"):
-            return None
-        return self.reducer.consume((record,))
 
 
 class RuntimeMetricsHelper(CallbackHelper):

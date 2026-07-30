@@ -256,12 +256,6 @@ def _goal_train_defaults(document: Mapping[str, Any]) -> dict[str, Any]:
     config = deep_merge(config, _eval_train_defaults(document))
     evaluation_mode = goal_evaluation_mode(document, label="goal")
     config["checkpoint_eval_backend"] = "modal" if evaluation_mode == "evaluated" else "none"
-    eval_section = document.get("eval")
-    config["stop_on_acceptance"] = bool(
-        evaluation_mode == "evaluated"
-        and isinstance(eval_section, Mapping)
-        and "acceptance" in eval_section
-    )
     objective = document.get("objective")
     if isinstance(objective, Mapping) and isinstance(objective.get("rank"), Sequence):
         config["selection_rank"] = copy.deepcopy(objective["rank"])
@@ -578,13 +572,6 @@ def materialize_train_recipe_document(
             and train_config.get("checkpoint_eval_backend") != "none"
         ):
             raise ValueError("training-only goal requires train.checkpoint_eval_backend=none")
-        if train_config.get("checkpoint_eval_backend") == "none":
-            train_config["stop_on_acceptance"] = False
-        else:
-            eval_section = (goal_document or {}).get("eval")
-            train_config["stop_on_acceptance"] = bool(
-                isinstance(eval_section, Mapping) and "acceptance" in eval_section
-            )
     if train_config:
         materialized["train_config"] = train_config
     return materialized
@@ -1008,10 +995,6 @@ def prepare_checkpoint_eval_mode(
     if mode == "modal" and accepts_first_training_success(config):
         raise ValueError("first-training-success backend requires checkpoint_eval_backend=none")
     config["checkpoint_eval_backend"] = mode
-    eval_section = goal.get("eval")
-    config["stop_on_acceptance"] = bool(
-        mode == "modal" and isinstance(eval_section, Mapping) and "acceptance" in eval_section
-    )
     document["train_config"] = config
 
 
@@ -1031,10 +1014,6 @@ def _git_text(args: Sequence[str], *, cwd: Path = Path(".")) -> str | None:
 
 def repo_git_commit(cwd: Path = Path(".")) -> str | None:
     return _git_text(("rev-parse", "HEAD"), cwd=cwd)
-
-
-def recipe_slug(document: Mapping[str, Any]) -> str:
-    return train_recipe_id(document)
 
 
 def validate_launch_event_config(

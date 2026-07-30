@@ -251,15 +251,8 @@ class ProviderContractTests(unittest.TestCase):
 
         kernel.on_reset({}, {}, np.ones(provider.num_envs, dtype=bool))
 
-    def test_descriptor_rejects_autoreset_and_missing_mario_signals(self):
+    def test_descriptor_rejects_invalid_ownership_and_missing_mario_signals(self):
         provider = DeterministicNativeVectorProvider()
-        with self.assertRaisesRegex(ValueError, "disabled provider autoreset"):
-            ProviderDescriptor(
-                provider_id="bad",
-                native_observation_space=provider.single_observation_space,
-                native_action_space=provider.single_action_space,
-                autoreset_mode="same_step",
-            )
         with self.assertRaisesRegex(ValueError, "ownership/depth declaration is inconsistent"):
             ProviderDescriptor(
                 provider_id="bad-buffer-depth",

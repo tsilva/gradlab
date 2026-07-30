@@ -9,11 +9,13 @@ from pathlib import Path
 from gradlab.env import EnvConfig
 from gradlab.train_config import (
     add_env_config_args,
+    checkpoint_eval_requires_acceptance,
     load_materialized_train_config,
     train_config_field_for_key,
     validate_and_normalize_train_config,
     validate_train_config_fields,
     validate_train_config_value,
+    wandb_publication_enabled,
 )
 from gradlab.train import build_parser as build_train_parser, parse_train_invocation
 from gradlab.training_lifecycle import TrainingExecutionMode
@@ -210,7 +212,6 @@ class TrainConfigFieldSchemaTests(unittest.TestCase):
         ]
         config = validate_and_normalize_train_config(
             {
-                "stop_on_acceptance": True,
                 "checkpoint_eval_acceptance": acceptance,
                 "early_stop": {"conditions": {"plateau": failure_condition}},
             }
@@ -231,22 +232,25 @@ class TrainConfigFieldSchemaTests(unittest.TestCase):
         }
         dual_mode = validate_and_normalize_train_config(
             {
-                "stop_on_acceptance": True,
                 "checkpoint_eval_backend": "modal",
                 "checkpoint_eval_acceptance": acceptance,
                 "early_stop": {"conditions": {"clear": success_condition}},
             }
         )
-        self.assertTrue(dual_mode["stop_on_acceptance"])
+        self.assertTrue(checkpoint_eval_requires_acceptance(dual_mode))
         self.assertEqual(dual_mode["checkpoint_eval_backend"], "modal")
         self.assertEqual(
             dual_mode["early_stop"]["conditions"]["clear"]["outcome"],
             "success",
         )
+        with self.assertRaisesRegex(ValueError, "is not a known train config field"):
+            validate_and_normalize_train_config({"stop_on_acceptance": True})
 
     def test_train_config_rejects_retired_stochastic_eval_flag(self) -> None:
         with self.assertRaisesRegex(ValueError, "is not a known train config field"):
             validate_and_normalize_train_config({"post_train_eval_stochastic": False})
+        with self.assertRaisesRegex(ValueError, "is not a known train config field"):
+            validate_and_normalize_train_config({"supervision_liveness": {}})
 
     def test_field_validation_uses_choices_and_numeric_bounds(self) -> None:
         validate_train_config_fields(
@@ -256,6 +260,14 @@ class TrainConfigFieldSchemaTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "wandb_mode.*one of online, offline, disabled"):
             validate_train_config_value("wandb_mode", "maybe")
+
+    def test_wandb_publication_is_derived_from_mode(self) -> None:
+        self.assertTrue(wandb_publication_enabled({}))
+        self.assertTrue(wandb_publication_enabled({"wandb_mode": "online"}))
+        self.assertTrue(wandb_publication_enabled({"wandb_mode": "offline"}))
+        self.assertFalse(wandb_publication_enabled({"wandb_mode": "disabled"}))
+        with self.assertRaisesRegex(ValueError, "is not a known train config field"):
+            validate_and_normalize_train_config({"wandb": True})
         with self.assertRaisesRegex(ValueError, "frame_skip.*>= 1"):
             validate_train_config_value("frame_skip", 0)
 

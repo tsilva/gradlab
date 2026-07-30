@@ -217,8 +217,8 @@ def test_local_train_materializes_credential_free_playable_run(
     receipt = json.loads((run_dir / LOCAL_RUN_RECEIPT).read_text(encoding="utf-8"))
 
     assert config["checkpoint_eval_backend"] == "none"
-    assert config["stop_on_acceptance"] is False
-    assert config["wandb"] is False
+    assert "stop_on_acceptance" not in config
+    assert "wandb" not in config
     assert config["wandb_mode"] == "disabled"
     assert config["timesteps"] == 64
     assert config["run_description"] == (

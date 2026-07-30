@@ -243,7 +243,6 @@ _OPERATIONAL_TRAIN_FIELDS = frozenset(
         "runtime_input_sha256",
         "source_sha",
         "train_config_json",
-        "wandb",
         "wandb_display_name",
         "wandb_entity",
         "wandb_group",
@@ -443,9 +442,13 @@ def _validate_recipe_contract(
     assert isinstance(recipe, Mapping)
     assert isinstance(provenance, Mapping)
     goal = recipe["goal"]
-    train_config = recipe["train_config"]
+    raw_train_config = recipe["train_config"]
     assert isinstance(goal, Mapping)
-    assert isinstance(train_config, Mapping)
+    assert isinstance(raw_train_config, Mapping)
+    train_config = dict(raw_train_config)
+    # Portable contracts written before the canonical acceptance cleanup may
+    # contain this derived flag. Their stored eval contract is authoritative.
+    train_config.pop("stop_on_acceptance", None)
     evaluation_value = recipe.get("eval")
     playback_value = recipe.get("playback")
     evaluation = evaluation_value if isinstance(evaluation_value, Mapping) else None
@@ -1130,7 +1133,9 @@ def _build_recipe_contract(
                 f"training={training_policy_environment_hash} "
                 f"evaluation={evaluation_policy_environment_hash}"
             )
-    stop_on_acceptance = bool(train_config.get("stop_on_acceptance"))
+    from gradlab.train_config import checkpoint_eval_requires_acceptance
+
+    require_acceptance = checkpoint_eval_requires_acceptance(train_config)
     for key in _OPERATIONAL_TRAIN_FIELDS:
         train_config.pop(key, None)
     train_config.pop("rom_asset_manifest", None)
@@ -1156,7 +1161,7 @@ def _build_recipe_contract(
     else:
         assert eval_compiler is not None
         recipe.pop("playback", None)
-        recipe["eval"] = eval_compiler.contract(require_acceptance=stop_on_acceptance)
+        recipe["eval"] = eval_compiler.contract(require_acceptance=require_acceptance)
     source_files = []
     if isinstance(composition, Mapping):
         for item in composition.get("source_files") or []:

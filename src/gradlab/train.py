@@ -235,20 +235,23 @@ def main(
 
     stop_flag = runtime_control.stop_flag if runtime_control is not None else None
     stop_flag = stop_flag or GracefulStopFlag()
+    from gradlab.train_config import wandb_publication_enabled
+
+    wandb_enabled = wandb_publication_enabled(train_config)
     context = BackendContext(
         train_config=train_config,
         environment=environment,
         run_dir=run_dir,
         checkpoint_dir=checkpoint_dir,
         metric_store=store,
-        wandb_enabled=bool(train_config["wandb"]),
+        wandb_enabled=wandb_enabled,
         stop_flag=stop_flag,
         rom_binding=rom_binding,
         session=TrainingSession(
             run_dir=run_dir,
             backend_id=backend_id,
             metric_store=store,
-            wandb_enabled=bool(train_config["wandb"]),
+            wandb_enabled=wandb_enabled,
             stop_flag=stop_flag,
             early_stop_config=train_config.get("early_stop"),
             attempt_id=str(train_config["attempt_id"]),

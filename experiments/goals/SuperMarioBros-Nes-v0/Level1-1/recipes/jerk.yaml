@@ -17,5 +17,4 @@ train:
       fallback_action: noop
       log_interval_steps: 10000
 logging:
-  wandb: true
   wandb_mode: online
