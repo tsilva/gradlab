@@ -11,6 +11,7 @@ from containers.train.environment_contract import Distribution, validate_distrib
 from containers.train.gpu_key import gpu_key
 from containers.train.lock_projection import projection_contents, train_plan_sha256
 from containers.train.runtime_key import RUNTIME_INPUT_PATHS, overlay_key, runtime_key
+from containers.train.vizdoom_smoke import _config as vizdoom_smoke_config
 
 
 DIGEST_A = "sha256:" + "a" * 64
@@ -18,6 +19,14 @@ DIGEST_B = "sha256:" + "b" * 64
 
 
 class TrainImageTests(unittest.TestCase):
+    def test_vizdoom_smoke_declares_the_strict_constructor_contract(self) -> None:
+        for game in ("VizdoomBasic-v1", "VizdoomDeathmatch-v1"):
+            with self.subTest(game=game):
+                config = vizdoom_smoke_config(game)
+                for key in ("doom_map", "doom_skill", "game_args", "vizdoom_config"):
+                    self.assertIn(key, config.env_args)
+                    self.assertIsNone(config.env_args[key])
+
     def test_runtime_key_covers_overlay_inputs_not_dependency_contracts(self) -> None:
         root = Path(".").resolve()
         overlay = overlay_key(repo_root=root)

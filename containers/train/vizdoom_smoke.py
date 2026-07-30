@@ -83,6 +83,10 @@ def _config(game: str) -> EnvConfig:
                 "use_fire_reset": False,
                 "game_variables": ["KILLCOUNT"] if deathmatch else [],
                 "treat_episode_timeout_as_truncation": True,
+                "doom_map": None,
+                "doom_skill": None,
+                "game_args": None,
+                "vizdoom_config": None,
             },
         )
     )
