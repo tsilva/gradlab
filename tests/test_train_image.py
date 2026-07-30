@@ -305,7 +305,7 @@ class TrainImageTests(unittest.TestCase):
             encoding="utf-8"
         )
 
-        self.assertIn("vizdoom-turbo==1.3.0.post17", dependencies)
+        self.assertIn("vizdoom-turbo==1.3.0.post18", dependencies)
         self.assertNotIn("wandb-workspaces==", gpu + dependencies)
         self.assertIn("torch==2.12.0", gpu)
         gpu_lines = set(gpu.splitlines())
@@ -313,7 +313,7 @@ class TrainImageTests(unittest.TestCase):
         self.assertFalse(gpu_lines & dependency_lines)
         self.assertEqual(
             train_plan_sha256(root),
-            "437f353f5b7cc66ad536cbf6c53fb88c3235e83a1d2fcdce1eb717ebf06e1f55",
+            "d38ebab906c307e038fb2df2cb3e8c3f4477e11cc13af0442772429a73828eb3",
         )
         for line in gpu.splitlines():
             name = line.split("==", maxsplit=1)[0]
