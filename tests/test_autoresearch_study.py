@@ -758,6 +758,62 @@ class AutoresearchStudyTests(unittest.TestCase):
         self.assertTrue(evidence["strong"])
         self.assertEqual(evidence["authority"], "wandb_history")
 
+    def test_return_evidence_does_not_query_absent_success_metrics(self) -> None:
+        queried_keys: list[list[str]] = []
+        return_metric = (
+            "train/episode/return/shaped/across_origins/"
+            "rolling_up_to_100/mean"
+        )
+        return_rows = [
+            {
+                "train/global_step": step * 4096,
+                return_metric: float(step),
+            }
+            for step in range(1, 101)
+        ]
+
+        def scan_history(*, keys: list[str]) -> list[dict]:
+            queried_keys.append(keys)
+            if any("outcome/success" in key for key in keys):
+                return []
+            if return_metric in keys:
+                return return_rows
+            return [{"train/global_step": row["train/global_step"]} for row in return_rows]
+
+        run = SimpleNamespace(
+            id="gradlab-43",
+            url="https://wandb.ai/e/p/runs/gradlab-43",
+            state="finished",
+            scan_history=scan_history,
+        )
+        api = SimpleNamespace(run=lambda _path: run)
+        fake_wandb = SimpleNamespace(Api=lambda: api)
+        with (
+            mock.patch.dict("sys.modules", {"wandb": fake_wandb}),
+            mock.patch("gradlab.wandb_utils.load_wandb_env"),
+        ):
+            evidence = study.fetch_training_evidence(
+                url="https://wandb.ai/e/p/runs/gradlab-43",
+                expected_run_id="gradlab-43",
+                starts=["default"],
+                strong_threshold=0.9,
+                mode=study.EVIDENCE_RETURN,
+            )
+
+        self.assertTrue(evidence["return_evidence_valid"])
+        self.assertEqual(evidence["return_points"], 100)
+        self.assertEqual(evidence["return_tail_mean"], 95.5)
+        self.assertEqual(evidence["success_counts_by_start"], {"default": 0})
+        self.assertFalse(evidence["all_starts_succeeded"])
+        self.assertFalse(evidence["strong"])
+        self.assertFalse(
+            any(
+                "outcome/success" in key
+                for keys in queried_keys
+                for key in keys
+            )
+        )
+
     def test_eval_backed_or_unverified_terminal_pauses(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
