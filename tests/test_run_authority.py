@@ -108,6 +108,44 @@ class RunAuthorityTests(unittest.TestCase):
             liveness=DEFAULT_LIVENESS_POLICY,
         )
 
+    def test_incremental_catalog_scope_merge_cannot_regress_a_concurrent_run(
+        self,
+    ) -> None:
+        descriptor = dict(
+            self.manifest(new_run_id(), new_attempt_id()).goal_variant or {}
+        )
+        current = {
+            "goal_slug": "SuperMarioBros-Nes-v0/Level1-1",
+            "variants": [descriptor],
+            "runs": [
+                {
+                    "run_id": "gradlab-" + "1" * 32,
+                    "attempt_id": "attempt-" + "1" * 16,
+                    "updated_at": "2026-07-30T10:00:00Z",
+                    "created_at": "2026-07-30T09:00:00Z",
+                }
+            ],
+        }
+        replacement = {
+            "goal_slug": current["goal_slug"],
+            "variants": [descriptor],
+            "runs": [
+                {
+                    "run_id": "gradlab-" + "2" * 32,
+                    "attempt_id": "attempt-" + "2" * 16,
+                    "updated_at": "2026-07-30T10:01:00Z",
+                    "created_at": "2026-07-30T09:01:00Z",
+                }
+            ],
+        }
+
+        merged = self.authority._merge_catalog_scope(current, replacement)
+
+        self.assertEqual(
+            {item["run_id"] for item in merged["runs"]},
+            {"gradlab-" + "1" * 32, "gradlab-" + "2" * 32},
+        )
+
     def test_identifiers_have_required_shapes(self) -> None:
         self.assertRegex(new_run_id(), r"^gradlab-[0-9a-f]{32}$")
         self.assertRegex(new_attempt_id(), r"^attempt-[0-9a-f]{16}$")
@@ -198,6 +236,13 @@ class RunAuthorityTests(unittest.TestCase):
         self.assertEqual(run_index["runs"][0]["run_id"], manifest.run_id)
         self.assertEqual(run_index["runs"][0]["state"], "running")
         self.assertEqual(run_index["runs"][0]["recipe_variant_id"], "base")
+        generation = self.authority.catalog_generation()
+        self.assertIsNotNone(generation)
+        assert generation is not None
+        self.assertEqual(
+            generation["scopes"][0]["runs"][0]["run_id"],
+            manifest.run_id,
+        )
 
         receipt = TerminalReceipt(
             run_id=manifest.run_id,
@@ -221,6 +266,11 @@ class RunAuthorityTests(unittest.TestCase):
         self.assertEqual(updated["stop_reason"], "training_cap_without_acceptance")
         self.assertEqual(updated["final_step"], 100)
         self.assertEqual(updated["metrics"], {"train/global_step": 100.0})
+        terminal_generation = self.authority.catalog_generation()
+        assert terminal_generation is not None
+        terminal_run = terminal_generation["scopes"][0]["runs"][0]
+        self.assertEqual(terminal_run["state"], "failed")
+        self.assertEqual(terminal_run["metrics"], {"train/global_step": 100.0})
 
     def test_same_goal_variant_from_multiple_source_commits_shares_catalog_entry(self) -> None:
         first = self.manifest(new_run_id(), new_attempt_id())

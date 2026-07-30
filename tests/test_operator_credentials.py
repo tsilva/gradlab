@@ -257,3 +257,49 @@ path = "/does/not/exist"
         "WANDB_API_KEY": "macos-keychain",
         "WANDB_ENTITY": "operator-config",
     }
+
+
+def test_scoped_load_does_not_validate_unrelated_entries(tmp_path: Path) -> None:
+    config_path = _write(
+        tmp_path / "operator.toml",
+        """
+schema_version = 2
+
+[environment]
+WANDB_ENTITY = "research"
+WANDB_API_KEY = "unrelated protected plaintext"
+
+[keychain.GRADLAB_CONTROL_R2_ACCESS_KEY_ID]
+service = "gradlab-control"
+account = "access-key"
+
+[keychain.WANDB_API_KEY]
+unknown = "invalid but unrelated"
+
+[modal]
+path = "/missing/unrelated-modal.toml"
+""".strip()
+        + "\n",
+    )
+    environment: dict[str, str] = {}
+
+    report = load_operator_environment(
+        environment=environment,
+        config_path=config_path,
+        keychain_lookup=lambda reference: (
+            "control-access"
+            if reference
+            == KeychainReference("gradlab-control", "access-key")
+            else None
+        ),
+        requested_names={
+            "GRADLAB_CONTROL_R2_ACCESS_KEY_ID",
+        },
+    )
+
+    assert environment == {
+        "GRADLAB_CONTROL_R2_ACCESS_KEY_ID": "control-access",
+    }
+    assert report.loaded_sources == {
+        "GRADLAB_CONTROL_R2_ACCESS_KEY_ID": "macos-keychain",
+    }

@@ -2,18 +2,33 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import hmac
 import json
 import os
 import re
+import secrets
 import threading
 import time
 from collections.abc import Callable, Iterable, Mapping, Sequence
+from contextlib import nullcontext
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Literal
 from urllib.parse import unquote, urlparse
+from urllib.error import HTTPError, URLError
 
 from gradlab.config_loader import load_mapping_document
+from gradlab.catalog_errors import (
+    CatalogIntegrityError,
+    CatalogSnapshotChanged,
+    CatalogUnavailable,
+)
+from gradlab.catalog_cache import CatalogEntryCache
+from gradlab.catalog_generation import (
+    CATALOG_POINTER_KEY,
+    validate_catalog_generation,
+    validate_catalog_pointer,
+)
 from gradlab.contract_inspection import inspection_document
 from gradlab.early_stop import EARLY_STOP_OPERATORS, normalize_metric_threshold_rules
 from gradlab.goal_variants import (
@@ -28,6 +43,7 @@ from gradlab.json_utils import (
     canonical_json_text,
 )
 from gradlab.evaluation_projection import validate_evaluation_scientific_metric
+from gradlab.evaluation_fence import evaluation_selection_fence
 from gradlab.metric_names import (
     EVAL_ACCEPTANCE_PASS,
     LEADER_CHECKPOINT_STEP,
@@ -39,7 +55,6 @@ from gradlab.metric_names import (
 )
 from gradlab.model_sources import DEFAULT_PUBLIC_MODELS_BASE_URL, _public_json
 from gradlab.policy_bundle import canonical_json_sha256, validate_recipe_document
-from gradlab.r2_store import BucketConfig, R2Bucket
 from gradlab.ranking import RankCriterion, parse_objective_rank
 from gradlab.recipe_documents import (
     compose_resolved_train_documents,
@@ -54,8 +69,9 @@ from gradlab.wandb_utils import load_wandb_env
 
 WANDB_HOSTS = {"wandb.ai", "www.wandb.ai"}
 CATALOG_PAGE_SIZE = 50
+CATALOG_CURSOR_TTL_SECONDS = 300
 CATALOG_INDEX_SCHEMA_VERSION = 2
-CATALOG_CACHE_SCHEMA_VERSION = 4
+CATALOG_CACHE_SCHEMA_VERSION = 5
 CATALOG_INDEX_FILENAME = "_catalog.yaml"
 EVALUATION_CACHE_SECONDS = 10.0
 RUN_CATALOG_CACHE_SECONDS = 60.0
@@ -101,6 +117,10 @@ class CatalogPage:
     next_cursor: str | None
     metric_columns: tuple[dict[str, str], ...] = ()
     fallback_metric_columns: tuple[dict[str, str], ...] = ()
+    source: Mapping[str, Any] | None = None
+    freshness: Literal["fresh", "stale", "partial"] = "fresh"
+    warnings: tuple[Mapping[str, Any], ...] = ()
+    generated_at: float | None = None
 
     def to_dict(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
@@ -111,6 +131,13 @@ class CatalogPage:
             payload["metric_columns"] = list(self.metric_columns)
         if self.fallback_metric_columns:
             payload["fallback_metric_columns"] = list(self.fallback_metric_columns)
+        if self.source is not None:
+            payload["source"] = dict(self.source)
+        payload["freshness"] = self.freshness
+        if self.warnings:
+            payload["warnings"] = [dict(item) for item in self.warnings]
+        if self.generated_at is not None:
+            payload["generated_at"] = self.generated_at
         return payload
 
 
@@ -232,6 +259,7 @@ class _CheckpointEvaluationData:
         Mapping[str, tuple[tuple[int, float], ...]],
     ]
     evaluation_rank: tuple[RankCriterion, ...]
+    warning: Mapping[str, Any] | None = None
 
 
 def parse_wandb_location(value: object) -> WandbRunLocation | None:
@@ -258,10 +286,42 @@ def checkpoint_manifest_url(model_url: object) -> str:
     return f"{value.removesuffix('/model.zip')}/manifest.json"
 
 
-def _cursor_offset(value: object) -> int:
+def _cursor_offset(
+    value: object,
+    *,
+    secret: bytes | None = None,
+    snapshot_id: str = "",
+) -> int:
     text = str(value or "").strip()
     if not text:
         return 0
+    if secret is not None and snapshot_id:
+        try:
+            encoded_payload, encoded_signature = text.split(".", 1)
+            payload_bytes = base64.urlsafe_b64decode(
+                encoded_payload + "=" * (-len(encoded_payload) % 4)
+            )
+            signature = base64.urlsafe_b64decode(
+                encoded_signature + "=" * (-len(encoded_signature) % 4)
+            )
+            expected = hmac.digest(secret, payload_bytes, "sha256")
+            if not hmac.compare_digest(signature, expected):
+                raise ValueError("catalog cursor signature mismatch")
+            payload = json.loads(payload_bytes)
+            if not isinstance(payload, Mapping):
+                raise ValueError("catalog cursor payload is malformed")
+            if payload.get("snapshot") != snapshot_id:
+                raise CatalogSnapshotChanged()
+            if float(payload.get("expires_at") or 0) < time.time():
+                raise CatalogSnapshotChanged("catalog cursor expired; restart pagination")
+            offset = int(payload["offset"])
+        except CatalogSnapshotChanged:
+            raise
+        except Exception as exc:
+            raise ValueError("invalid catalog cursor") from exc
+        if offset < 0:
+            raise ValueError("invalid catalog cursor")
+        return offset
     try:
         decoded = base64.urlsafe_b64decode(text + "=" * (-len(text) % 4)).decode("ascii")
         offset = int(decoded)
@@ -272,7 +332,27 @@ def _cursor_offset(value: object) -> int:
     return offset
 
 
-def _cursor_for(offset: int) -> str:
+def _cursor_for(
+    offset: int,
+    *,
+    secret: bytes | None = None,
+    snapshot_id: str = "",
+) -> str:
+    if secret is not None and snapshot_id:
+        payload = canonical_json_text(
+            {
+                "expires_at": time.time() + CATALOG_CURSOR_TTL_SECONDS,
+                "offset": int(offset),
+                "snapshot": snapshot_id,
+            },
+            ensure_ascii=True,
+        ).encode("utf-8")
+        signature = hmac.digest(secret, payload, "sha256")
+        return (
+            base64.urlsafe_b64encode(payload).decode("ascii").rstrip("=")
+            + "."
+            + base64.urlsafe_b64encode(signature).decode("ascii").rstrip("=")
+        )
     return base64.urlsafe_b64encode(str(int(offset)).encode("ascii")).decode("ascii").rstrip("=")
 
 
@@ -457,13 +537,31 @@ def _rank_run_summaries(
     )
 
 
-def _page_items(items: list[dict[str, Any]], cursor: str | None) -> CatalogPage:
-    offset = _cursor_offset(cursor)
+def _page_items(
+    items: list[dict[str, Any]],
+    cursor: str | None,
+    *,
+    secret: bytes | None = None,
+    snapshot_id: str = "",
+) -> CatalogPage:
+    offset = _cursor_offset(
+        cursor,
+        secret=secret,
+        snapshot_id=snapshot_id,
+    )
     selected = tuple(items[offset : offset + CATALOG_PAGE_SIZE])
     next_offset = offset + CATALOG_PAGE_SIZE
     return CatalogPage(
         items=selected,
-        next_cursor=_cursor_for(next_offset) if next_offset < len(items) else None,
+        next_cursor=(
+            _cursor_for(
+                next_offset,
+                secret=secret,
+                snapshot_id=snapshot_id,
+            )
+            if next_offset < len(items)
+            else None
+        ),
     )
 
 
@@ -476,7 +574,8 @@ class PlayCatalog:
         public_models_base_url: str = DEFAULT_PUBLIC_MODELS_BASE_URL,
         repo_root: Path | str | None = None,
         cache_path: Path | str | None = None,
-        control_bucket: R2Bucket | Any | None = None,
+        control_bucket: Any | None = None,
+        control_error: str = "",
     ) -> None:
         self.public_models_base_url = str(public_models_base_url).rstrip("/")
         self.repo_root = (
@@ -488,16 +587,21 @@ class PlayCatalog:
         self.cache_path = (
             Path(cache_path).expanduser().resolve() if cache_path is not None else None
         )
+        self._entry_cache = (
+            CatalogEntryCache(
+                self.cache_path.with_name(f"{self.cache_path.name}.entries")
+            )
+            if self.cache_path is not None
+            else None
+        )
         self.control_bucket = control_bucket
-        if (
-            self.control_bucket is None
-            and str(os.environ.get("GRADLAB_CONTROL_R2_URI") or "").strip()
-        ):
-            try:
-                self.control_bucket = R2Bucket(BucketConfig.from_env("GRADLAB_CONTROL_R2"))
-            except ValueError:
-                self.control_bucket = None
+        self.control_error = str(control_error or "").strip()
+        self.control_identity = str(
+            getattr(self.control_bucket, "authority_identity", "")
+            or ("explicit-control" if self.control_bucket is not None else "unavailable")
+        )
         self._api: Any | None = None
+        self._cursor_secret = secrets.token_bytes(32)
         self._lock = threading.Lock()
         self._cache_lock = threading.Lock()
         self._run_catalog_cache: dict[
@@ -529,6 +633,34 @@ class PlayCatalog:
             tuple[str, str, str],
             tuple[float, _CheckpointEvaluationData],
         ] = {}
+        self._checkpoint_warnings: dict[str, tuple[dict[str, Any], ...]] = {}
+        self._checkpoint_fences: dict[str, str] = {}
+
+    def _page(
+        self,
+        items: list[dict[str, Any]],
+        cursor: str | None,
+        *,
+        identity: Mapping[str, Any],
+    ) -> CatalogPage:
+        snapshot_id = compact_json_sha256(
+            {
+                **dict(identity),
+                "items": items,
+            },
+            ensure_ascii=True,
+        )
+        page = _page_items(
+            items,
+            cursor,
+            secret=self._cursor_secret,
+            snapshot_id=snapshot_id,
+        )
+        return CatalogPage(
+            items=page.items,
+            next_cursor=page.next_cursor,
+            source={"snapshot_id": snapshot_id},
+        )
 
     @staticmethod
     def default_cache_path(repo_root: Path | str) -> Path:
@@ -795,6 +927,7 @@ class PlayCatalog:
         fallback_metric_specs: tuple[tuple[RankCriterion, tuple[str, ...]], ...],
     ) -> str:
         identity = {
+            "authority": self.control_identity,
             "environment_id": environment_id,
             "goal_slug": goal_slug,
             "goal_variant_id": goal_variant_id,
@@ -816,12 +949,14 @@ class PlayCatalog:
         environment_id: str,
     ) -> tuple[float, tuple[dict[str, Any], ...]] | None:
         try:
-            payload = self._read_persistent_cache()
-            if payload is None:
-                return None
-            catalogs = payload.get("run_catalogs")
-            entry = catalogs.get(cache_key) if isinstance(catalogs, Mapping) else None
+            entry = (
+                self._entry_cache.read("runs", cache_key)
+                if self._entry_cache is not None
+                else None
+            )
             if not isinstance(entry, Mapping):
+                return None
+            if entry.get("authority") != self.control_identity:
                 return None
             generated_at = _safe_float(entry.get("generated_at"))
             raw_items = entry.get("items")
@@ -886,6 +1021,18 @@ class PlayCatalog:
         generated_at: float,
         items: tuple[dict[str, Any], ...],
     ) -> None:
+        if self._entry_cache is not None:
+            self._entry_cache.write(
+                "runs",
+                cache_key,
+                {
+                    "authority": self.control_identity,
+                    "generated_at": generated_at,
+                    "items": list(items),
+                },
+            )
+            return
+
         def update(payload: dict[str, Any]) -> None:
             payload["run_catalogs"][cache_key] = {
                 "generated_at": generated_at,
@@ -1101,10 +1248,14 @@ class PlayCatalog:
         environment_id: str,
         goal_slug: str,
     ) -> tuple[float, tuple[dict[str, Any], ...]] | None:
-        payload = self._read_persistent_cache()
-        entries = payload.get("goal_variants") if payload is not None else None
-        entry = entries.get(cache_key) if isinstance(entries, Mapping) else None
+        entry = (
+            self._entry_cache.read("variants", cache_key)
+            if self._entry_cache is not None
+            else None
+        )
         if not isinstance(entry, Mapping):
+            return None
+        if entry.get("authority") != self.control_identity:
             return None
         generated_at = _safe_float(entry.get("generated_at"))
         raw_items = entry.get("items")
@@ -1132,13 +1283,24 @@ class PlayCatalog:
         with self._cache_lock:
             self._goal_variant_cache[cache_key] = cached
 
-        def update(payload: dict[str, Any]) -> None:
-            payload["goal_variants"][cache_key] = {
-                "generated_at": cached[0],
-                "items": list(items),
-            }
+        if self._entry_cache is not None:
+            self._entry_cache.write(
+                "variants",
+                cache_key,
+                {
+                    "authority": self.control_identity,
+                    "generated_at": cached[0],
+                    "items": list(items),
+                },
+            )
+        else:
+            def update(payload: dict[str, Any]) -> None:
+                payload["goal_variants"][cache_key] = {
+                    "generated_at": cached[0],
+                    "items": list(items),
+                }
 
-        self._update_persistent_cache(update)
+            self._update_persistent_cache(update)
         return cached
 
     def _cached_goal_variants(
@@ -1224,21 +1386,27 @@ class PlayCatalog:
     ) -> tuple[dict[str, Any], ...] | None:
         if self.control_bucket is None:
             return None
-        scope_key = goal_variant_scope_key(goal_slug=repository_goal.goal_slug)
-        document = self.control_bucket.get_json_optional(f"{scope_key}/index.json")
-        if document is None:
-            return ()
-        if int(document.get("schema_version") or 0) != GOAL_VARIANT_INDEX_SCHEMA_VERSION:
-            raise ValueError("unsupported goal variant index schema")
-        if document.get("scope") != {"goal_slug": repository_goal.goal_slug}:
-            raise ValueError("goal variant index scope mismatch")
-        raw_variants = document.get("variants")
+        generation_scope = self._control_generation_scope(
+            goal_slug=repository_goal.goal_slug
+        )
+        if generation_scope is not None:
+            raw_variants = generation_scope["variants"]
+        else:
+            scope_key = goal_variant_scope_key(goal_slug=repository_goal.goal_slug)
+            document = self.control_bucket.get_json_optional(f"{scope_key}/index.json")
+            if document is None:
+                return ()
+            if int(document.get("schema_version") or 0) != GOAL_VARIANT_INDEX_SCHEMA_VERSION:
+                raise CatalogIntegrityError("unsupported goal variant index schema")
+            if document.get("scope") != {"goal_slug": repository_goal.goal_slug}:
+                raise CatalogIntegrityError("goal variant index scope mismatch")
+            raw_variants = document.get("variants")
         if not isinstance(raw_variants, list):
-            raise ValueError("goal variant index variants must be a list")
+            raise CatalogIntegrityError("goal variant index variants must be a list")
         items = []
         for raw in raw_variants:
             if not isinstance(raw, Mapping):
-                raise ValueError("goal variant index contains an invalid entry")
+                raise CatalogIntegrityError("goal variant index contains an invalid entry")
             descriptor = {
                 key: value
                 for key, value in raw.items()
@@ -1258,6 +1426,45 @@ class PlayCatalog:
                 )
             )
         return tuple(items)
+
+    def _control_generation_scope(
+        self,
+        *,
+        goal_slug: str,
+    ) -> dict[str, Any] | None:
+        if self.control_bucket is None:
+            return None
+        pointer_document = self.control_bucket.get_json_optional(CATALOG_POINTER_KEY)
+        if pointer_document is None:
+            return None
+        try:
+            pointer = validate_catalog_pointer(pointer_document)
+            generation_document = self.control_bucket.get_json_optional(
+                pointer["generation_key"]
+            )
+            if generation_document is None:
+                raise ValueError("catalog pointer references a missing generation")
+            generation = validate_catalog_generation(
+                generation_document,
+                expected_digest=pointer["generation_sha256"],
+            )
+            if generation["generated_at"] != pointer["generated_at"]:
+                raise ValueError(
+                    "catalog pointer timestamp disagrees with its generation"
+                )
+        except ValueError as exc:
+            raise CatalogIntegrityError(
+                str(exc),
+                source="control-catalog",
+            ) from exc
+        for scope in generation["scopes"]:
+            if scope["goal_slug"] == goal_slug:
+                return dict(scope)
+        return {
+            "goal_slug": goal_slug,
+            "variants": [],
+            "runs": [],
+        }
 
     def _load_goal_variants(
         self,
@@ -1303,10 +1510,16 @@ class PlayCatalog:
         repository_goal: _RepositoryGoal,
     ) -> None:
         try:
-            items = self._load_goal_variants(
-                repository_goal=repository_goal,
+            slot = (
+                self._entry_cache.slot_lock("variants", cache_key)
+                if self._entry_cache is not None
+                else nullcontext()
             )
-            self._store_goal_variants(cache_key=cache_key, items=items)
+            with slot:
+                items = self._load_goal_variants(
+                    repository_goal=repository_goal,
+                )
+                self._store_goal_variants(cache_key=cache_key, items=items)
         except Exception:
             pass
         finally:
@@ -1349,7 +1562,15 @@ class PlayCatalog:
             for environment_id, goal_count in sorted(goal_counts.items())
             if not normalized or normalized in _search_text(environment_id)
         ]
-        return _page_items(items, cursor)
+        return self._page(
+            items,
+            cursor,
+            identity={
+                "level": "environments",
+                "query": normalized,
+                "repo_root": str(self.repo_root),
+            },
+        )
 
     def initial_environments(self) -> dict[str, Any]:
         return self.environments().to_dict()
@@ -1370,7 +1591,20 @@ class PlayCatalog:
             metric_specs=metric_specs,
             fallback_metric_specs=fallback_metric_specs,
         )
-        return control_summaries or ()
+        if control_summaries is None:
+            raise CatalogUnavailable(
+                self.control_error
+                or (
+                    "Run discovery requires control-catalog authority. Configure "
+                    "GRADLAB_CONTROL_R2 in the private operator configuration and retry."
+                ),
+                code=(
+                    "catalog_configuration"
+                    if self.control_error
+                    else "catalog_unavailable"
+                ),
+            )
+        return control_summaries
 
     def _control_run_catalog(
         self,
@@ -1383,44 +1617,110 @@ class PlayCatalog:
     ) -> tuple[dict[str, Any], ...] | None:
         if self.control_bucket is None or not selected_goal_slug:
             return None
-        scope_key = goal_variant_scope_key(goal_slug=selected_goal_slug)
-        variant_index = self.control_bucket.get_json_optional(f"{scope_key}/index.json")
-        if variant_index is None:
-            return ()
-        if int(variant_index.get("schema_version") or 0) != GOAL_VARIANT_INDEX_SCHEMA_VERSION:
-            raise ValueError("unsupported goal variant index schema")
-        if variant_index.get("scope") != {"goal_slug": selected_goal_slug}:
-            raise ValueError("goal variant index scope mismatch")
-        raw_variants = variant_index.get("variants")
-        if not isinstance(raw_variants, list):
-            raise ValueError("goal variant index variants must be a list")
-        variant_ids = [
-            str(item.get("variant_id") or "")
-            for item in raw_variants
-            if isinstance(item, Mapping)
-            and (not selected_goal_variant_id or item.get("variant_id") == selected_goal_variant_id)
-        ]
-        if any(not value for value in variant_ids):
-            raise ValueError("goal variant index contains an invalid entry")
-
+        generation_scope = self._control_generation_scope(
+            goal_slug=selected_goal_slug
+        )
+        run_groups: list[tuple[str, list[Any]]] = []
+        if generation_scope is not None:
+            raw_variants = generation_scope["variants"]
+            variant_ids = [
+                str(item.get("variant_id") or "")
+                for item in raw_variants
+                if isinstance(item, Mapping)
+                and (
+                    not selected_goal_variant_id
+                    or item.get("variant_id") == selected_goal_variant_id
+                )
+            ]
+            if len(variant_ids) != sum(
+                1
+                for item in raw_variants
+                if isinstance(item, Mapping)
+                and (
+                    not selected_goal_variant_id
+                    or item.get("variant_id") == selected_goal_variant_id
+                )
+            ) or any(not value for value in variant_ids):
+                raise CatalogIntegrityError(
+                    "catalog generation contains an invalid variant"
+                )
+            by_variant: dict[str, list[Any]] = {
+                variant_id: [] for variant_id in variant_ids
+            }
+            for raw in generation_scope["runs"]:
+                if not isinstance(raw, Mapping):
+                    raise CatalogIntegrityError(
+                        "catalog generation contains an invalid run"
+                    )
+                variant_id = str(raw.get("goal_variant_id") or "")
+                if variant_id in by_variant:
+                    by_variant[variant_id].append(raw)
+            run_groups = list(by_variant.items())
+        else:
+            scope_key = goal_variant_scope_key(goal_slug=selected_goal_slug)
+            variant_index = self.control_bucket.get_json_optional(
+                f"{scope_key}/index.json"
+            )
+            if variant_index is None:
+                return ()
+            if (
+                int(variant_index.get("schema_version") or 0)
+                != GOAL_VARIANT_INDEX_SCHEMA_VERSION
+            ):
+                raise CatalogIntegrityError("unsupported goal variant index schema")
+            if variant_index.get("scope") != {"goal_slug": selected_goal_slug}:
+                raise CatalogIntegrityError("goal variant index scope mismatch")
+            raw_variants = variant_index.get("variants")
+            if not isinstance(raw_variants, list):
+                raise CatalogIntegrityError(
+                    "goal variant index variants must be a list"
+                )
+            variant_ids = [
+                str(item.get("variant_id") or "")
+                for item in raw_variants
+                if isinstance(item, Mapping)
+                and (
+                    not selected_goal_variant_id
+                    or item.get("variant_id") == selected_goal_variant_id
+                )
+            ]
+            if any(not value for value in variant_ids):
+                raise CatalogIntegrityError(
+                    "goal variant index contains an invalid entry"
+                )
+            for variant_id in variant_ids:
+                document = self.control_bucket.get_json_optional(
+                    f"{scope_key}/runs/{variant_id}.json"
+                )
+                if document is None:
+                    continue
+                if (
+                    int(document.get("schema_version") or 0)
+                    != GOAL_VARIANT_RUN_INDEX_SCHEMA_VERSION
+                ):
+                    raise CatalogIntegrityError(
+                        "unsupported goal variant run index schema"
+                    )
+                if document.get("scope") != {
+                    "goal_slug": selected_goal_slug,
+                    "variant_id": variant_id,
+                }:
+                    raise CatalogIntegrityError(
+                        "goal variant run index scope mismatch"
+                    )
+                raw_runs = document.get("runs")
+                if not isinstance(raw_runs, list):
+                    raise CatalogIntegrityError(
+                        "goal variant run index runs must be a list"
+                    )
+                run_groups.append((variant_id, raw_runs))
         summaries: list[dict[str, Any]] = []
-        for variant_id in variant_ids:
-            document = self.control_bucket.get_json_optional(f"{scope_key}/runs/{variant_id}.json")
-            if document is None:
-                continue
-            if int(document.get("schema_version") or 0) != GOAL_VARIANT_RUN_INDEX_SCHEMA_VERSION:
-                raise ValueError("unsupported goal variant run index schema")
-            if document.get("scope") != {
-                "goal_slug": selected_goal_slug,
-                "variant_id": variant_id,
-            }:
-                raise ValueError("goal variant run index scope mismatch")
-            raw_runs = document.get("runs")
-            if not isinstance(raw_runs, list):
-                raise ValueError("goal variant run index runs must be a list")
+        for variant_id, raw_runs in run_groups:
             for raw in raw_runs:
                 if not isinstance(raw, Mapping):
-                    raise ValueError("goal variant run index contains an invalid entry")
+                    raise CatalogIntegrityError(
+                        "goal variant run index contains an invalid entry"
+                    )
                 run_id = str(raw.get("run_id") or "")
                 metrics = raw.get("metrics")
                 authored_hash = str(raw.get("goal_contract_sha256") or "")
@@ -1435,7 +1735,9 @@ class PlayCatalog:
                         and not isinstance(raw.get("early_stop"), Mapping)
                     )
                 ):
-                    raise ValueError("goal variant run index contains an invalid run")
+                    raise CatalogIntegrityError(
+                        "goal variant run index contains an invalid run"
+                    )
                 summaries.append(
                     RunSummary(
                         environment_id=environment_id,
@@ -1488,14 +1790,20 @@ class PlayCatalog:
         fallback_metric_specs: tuple[tuple[RankCriterion, tuple[str, ...]], ...],
     ) -> None:
         try:
-            items = self._load_run_catalog(
-                environment_id=environment_id,
-                selected_goal_slug=selected_goal_slug,
-                selected_goal_variant_id=selected_goal_variant_id,
-                metric_specs=metric_specs,
-                fallback_metric_specs=fallback_metric_specs,
+            slot = (
+                self._entry_cache.slot_lock("runs", cache_key)
+                if self._entry_cache is not None
+                else nullcontext()
             )
-            self._store_run_catalog(cache_key=cache_key, items=items)
+            with slot:
+                items = self._load_run_catalog(
+                    environment_id=environment_id,
+                    selected_goal_slug=selected_goal_slug,
+                    selected_goal_variant_id=selected_goal_variant_id,
+                    metric_specs=metric_specs,
+                    fallback_metric_specs=fallback_metric_specs,
+                )
+                self._store_run_catalog(cache_key=cache_key, items=items)
         except Exception:
             # A stale local catalog is preferable to turning a transient
             # control-index failure into a blocking playback-selection failure.
@@ -1540,6 +1848,7 @@ class PlayCatalog:
         goal_variant_id: str = "",
         query: str = "",
         cursor: str | None = None,
+        refresh: bool = False,
     ) -> CatalogPage:
         normalized = str(query or "").strip().casefold()
         selected_goal = str(goal_id or "").strip()
@@ -1580,15 +1889,40 @@ class PlayCatalog:
             cache_key=cache_key,
             environment_id=environment_id,
         )
-        if cached is None:
-            summaries = self._load_run_catalog(
-                environment_id=environment_id,
-                selected_goal_slug=selected_goal_slug,
-                selected_goal_variant_id=selected_goal_variant,
-                metric_specs=metric_specs,
-                fallback_metric_specs=fallback_metric_specs,
+        warnings: tuple[Mapping[str, Any], ...] = ()
+        if cached is None or refresh:
+            slot = (
+                self._entry_cache.slot_lock("runs", cache_key)
+                if self._entry_cache is not None
+                else nullcontext()
             )
-            cached = self._store_run_catalog(cache_key=cache_key, items=summaries)
+            with slot:
+                if cached is None and not refresh:
+                    cached = self._cached_run_catalog(
+                        cache_key=cache_key,
+                        environment_id=environment_id,
+                    )
+                if cached is None or refresh:
+                    try:
+                        summaries = self._load_run_catalog(
+                            environment_id=environment_id,
+                            selected_goal_slug=selected_goal_slug,
+                            selected_goal_variant_id=selected_goal_variant,
+                            metric_specs=metric_specs,
+                            fallback_metric_specs=fallback_metric_specs,
+                        )
+                    except CatalogUnavailable as exc:
+                        if (
+                            cached is None
+                            or exc.problem.code != "catalog_transient"
+                        ):
+                            raise
+                        warnings = (exc.problem.to_dict(),)
+                    else:
+                        cached = self._store_run_catalog(
+                            cache_key=cache_key,
+                            items=summaries,
+                        )
         elif time.time() - cached[0] >= RUN_CATALOG_CACHE_SECONDS:
             self._schedule_run_catalog_refresh(
                 cache_key=cache_key,
@@ -1622,12 +1956,32 @@ class PlayCatalog:
                 summary.get("seed"),
             )
         ]
-        page = _page_items(filtered, cursor)
+        page = self._page(
+            filtered,
+            cursor,
+            identity={
+                "authority": self.control_identity,
+                "environment_id": environment_id,
+                "goal_id": selected_goal,
+                "goal_slug": selected_goal_slug,
+                "goal_variant_id": selected_goal_variant,
+                "query": normalized,
+                "generated_at": cached[0],
+            },
+        )
         return CatalogPage(
             items=page.items,
             next_cursor=page.next_cursor,
             metric_columns=metric_columns,
             fallback_metric_columns=fallback_metric_columns,
+            source=page.source,
+            generated_at=cached[0],
+            freshness=(
+                "stale"
+                if warnings or time.time() - cached[0] >= RUN_CATALOG_CACHE_SECONDS
+                else "fresh"
+            ),
+            warnings=warnings,
         )
 
     def goals(
@@ -1659,7 +2013,15 @@ class PlayCatalog:
                 )
             )
         ]
-        return _page_items(items, cursor)
+        return self._page(
+            items,
+            cursor,
+            identity={
+                "level": "goals",
+                "environment_id": environment_id,
+                "query": normalized,
+            },
+        )
 
     def goal_variants(
         self,
@@ -1668,6 +2030,7 @@ class PlayCatalog:
         goal_id: str,
         query: str = "",
         cursor: str | None = None,
+        refresh: bool = False,
     ) -> CatalogPage:
         repository_goal = self._repository_goal(
             environment_id=environment_id,
@@ -1682,11 +2045,34 @@ class PlayCatalog:
             environment_id=environment_id,
             goal_slug=repository_goal.goal_slug,
         )
-        if cached is None:
-            items = self._load_goal_variants(
-                repository_goal=repository_goal,
+        warnings: tuple[Mapping[str, Any], ...] = ()
+        if cached is None or refresh:
+            slot = (
+                self._entry_cache.slot_lock("variants", cache_key)
+                if self._entry_cache is not None
+                else nullcontext()
             )
-            cached = self._store_goal_variants(cache_key=cache_key, items=items)
+            with slot:
+                if cached is None and not refresh:
+                    cached = self._cached_goal_variants(
+                        cache_key=cache_key,
+                        environment_id=environment_id,
+                        goal_slug=repository_goal.goal_slug,
+                    )
+                if cached is None or refresh:
+                    try:
+                        items = self._load_goal_variants(
+                            repository_goal=repository_goal,
+                        )
+                    except CatalogUnavailable as exc:
+                        if cached is None or exc.problem.code != "catalog_transient":
+                            raise
+                        warnings = (exc.problem.to_dict(),)
+                    else:
+                        cached = self._store_goal_variants(
+                            cache_key=cache_key,
+                            items=items,
+                        )
         elif time.time() - cached[0] >= GOAL_VARIANT_CACHE_SECONDS:
             self._schedule_goal_variant_refresh(
                 cache_key=cache_key,
@@ -1708,7 +2094,49 @@ class PlayCatalog:
                 item.get("effective_goal_contract_sha256"),
             )
         ]
-        return _page_items(filtered, cursor)
+        page = self._page(
+            filtered,
+            cursor,
+            identity={
+                "authority": self.control_identity,
+                "environment_id": environment_id,
+                "goal_id": goal_id,
+                "goal_slug": repository_goal.goal_slug,
+                "query": normalized,
+                "generated_at": cached[0],
+            },
+        )
+        return CatalogPage(
+            items=page.items,
+            next_cursor=page.next_cursor,
+            source=page.source,
+            generated_at=cached[0],
+            freshness=(
+                "stale"
+                if warnings or time.time() - cached[0] >= GOAL_VARIANT_CACHE_SECONDS
+                else "partial"
+                if self.control_bucket is None
+                else "fresh"
+            ),
+            warnings=(
+                warnings
+                or (
+                    (
+                        {
+                            "code": "control_catalog_unavailable",
+                            "message": (
+                                self.control_error
+                                or "Historical goal variants require control-catalog authority."
+                            ),
+                            "retryable": False,
+                            "source": "control-catalog",
+                        },
+                    )
+                    if self.control_bucket is None
+                    else ()
+                )
+            ),
+        )
 
     @staticmethod
     def _inspection_envelope(
@@ -1769,7 +2197,16 @@ class PlayCatalog:
                 item["path"],
             ):
                 items.append(item)
-        return _page_items(items, cursor)
+        return self._page(
+            items,
+            cursor,
+            identity={
+                "level": "recipes",
+                "environment_id": environment_id,
+                "goal_id": goal_id,
+                "query": normalized,
+            },
+        )
 
     def inspect_goal(
         self,
@@ -1971,28 +2408,97 @@ class PlayCatalog:
         index_url = f"{self.public_models_base_url}/runs/{run_id}/index.json"
         try:
             index = _public_json(index_url)
-        except Exception:
-            return None
+        except HTTPError as exc:
+            if exc.code == 404:
+                return None
+            if 500 <= exc.code < 600:
+                raise CatalogUnavailable(
+                    f"public run index is temporarily unavailable: HTTP {exc.code}",
+                    code="public_catalog_transient",
+                    retryable=True,
+                    source="public-models",
+                ) from exc
+            raise CatalogIntegrityError(
+                f"public run index request failed: HTTP {exc.code}",
+                source="public-models",
+            ) from exc
+        except (TimeoutError, URLError, OSError) as exc:
+            raise CatalogUnavailable(
+                f"public run index is temporarily unavailable: {exc}",
+                code="public_catalog_transient",
+                retryable=True,
+                source="public-models",
+            ) from exc
+        except Exception as exc:
+            raise CatalogIntegrityError(
+                f"public run index is malformed: {exc}",
+                source="public-models",
+            ) from exc
         if int(index.get("schema_version") or 0) != 1 or index.get("run_id") != run_id:
-            raise ValueError("public run index identity mismatch")
+            raise CatalogIntegrityError(
+                "public run index identity mismatch",
+                source="public-models",
+            )
         manifests = []
         for raw in index.get("checkpoints") or ():
             if not isinstance(raw, Mapping):
-                raise ValueError("public run index contains an invalid checkpoint")
-            manifest = CheckpointManifest.from_dict(raw)
+                raise CatalogIntegrityError(
+                    "public run index contains an invalid checkpoint",
+                    source="public-models",
+                )
+            try:
+                manifest = CheckpointManifest.from_dict(raw)
+            except Exception as exc:
+                raise CatalogIntegrityError(
+                    f"public checkpoint manifest is invalid: {exc}",
+                    source="public-models",
+                ) from exc
             manifests.append(manifest)
         if not manifests:
             return None
         manifest = max(manifests, key=lambda item: (item.step, item.checkpoint_id))
-        document = validate_recipe_document(
-            _public_json(manifest.recipe_document_url),
-            source=manifest.recipe_document_url,
-        )
+        try:
+            document = validate_recipe_document(
+                _public_json(manifest.recipe_document_url),
+                source=manifest.recipe_document_url,
+            )
+        except HTTPError as exc:
+            if exc.code == 404:
+                return None
+            if 500 <= exc.code < 600:
+                raise CatalogUnavailable(
+                    f"public recipe proof is temporarily unavailable: HTTP {exc.code}",
+                    code="public_catalog_transient",
+                    retryable=True,
+                    source="public-models",
+                ) from exc
+            raise CatalogIntegrityError(
+                f"public recipe proof request failed: HTTP {exc.code}",
+                source="public-models",
+            ) from exc
+        except (TimeoutError, URLError, OSError) as exc:
+            raise CatalogUnavailable(
+                f"public recipe proof is temporarily unavailable: {exc}",
+                code="public_catalog_transient",
+                retryable=True,
+                source="public-models",
+            ) from exc
+        except Exception as exc:
+            raise CatalogIntegrityError(
+                f"public recipe proof is invalid: {exc}",
+                source="public-models",
+            ) from exc
         observed = canonical_json_sha256(document)
         if observed != manifest.recipe_document_sha256 or observed != manifest.recipe_sha256:
-            raise ValueError("public recipe document hash mismatch")
+            raise CatalogIntegrityError(
+                "public recipe document hash mismatch",
+                source="public-models",
+            )
         if manifest.run_id != run_id:
-            raise ValueError("public checkpoint run identity mismatch")
+            raise CatalogIntegrityError(
+                "public checkpoint run identity mismatch",
+                source="public-models",
+            )
         return document
 
     def inspect_run(
@@ -2144,7 +2650,12 @@ class PlayCatalog:
             if isinstance(raw_descriptor, Mapping):
                 descriptor = raw_descriptor
         if descriptor is None:
-            raise ValueError("run has no current goal variant descriptor")
+            raise CatalogUnavailable(
+                "No verified public recipe currently proves this W&B run's goal variant.",
+                code="public_proof_absent",
+                retryable=False,
+                source="public-models",
+            )
         validated = validate_goal_variant_descriptor(descriptor)
         goal_slug = str(validated["goal_slug"])
         for goal in self._repository_goals(environment_id=environment_id):
@@ -2293,24 +2804,52 @@ class PlayCatalog:
                         evaluation = evaluations.get(step) if step is not None else None
                         if evaluation is not None and value is not None:
                             evaluation["metrics"][metric] = value
-        except Exception:
+            training_metric_history = (
+                _checkpoint_training_metric_history(run) if run is not None else {}
+            )
+        except Exception as exc:
             # Public checkpoints remain playable when W&B history is unavailable.
+            if cached is not None and isinstance(exc, (TimeoutError, OSError)):
+                prior = cached[1]
+                return _CheckpointEvaluationData(
+                    evaluations=prior.evaluations,
+                    training_seed=prior.training_seed,
+                    evaluation_seed=prior.evaluation_seed,
+                    training_metric_history=prior.training_metric_history,
+                    evaluation_rank=prior.evaluation_rank,
+                    warning={
+                        "code": "wandb_enrichment_stale",
+                        "message": f"W&B enrichment is temporarily unavailable: {exc}",
+                        "retryable": True,
+                        "source": "wandb",
+                    },
+                )
             evaluations = {}
             training_seed = None
             evaluation_seed = None
             evaluation_rank = ()
-        training_metric_history = (
-            _checkpoint_training_metric_history(run) if run is not None else {}
-        )
+            training_metric_history = (
+                _checkpoint_training_metric_history(run) if run is not None else {}
+            )
+            warning = {
+                "code": "wandb_enrichment_unavailable",
+                "message": f"W&B enrichment is unavailable: {exc}",
+                "retryable": isinstance(exc, (TimeoutError, OSError)),
+                "source": "wandb",
+            }
+        else:
+            warning = None
         data = _CheckpointEvaluationData(
             evaluations=evaluations,
             training_seed=training_seed,
             evaluation_seed=evaluation_seed,
             training_metric_history=training_metric_history,
             evaluation_rank=evaluation_rank,
+            warning=warning,
         )
-        with self._lock:
-            self._evaluation_cache[cache_key] = (now, data)
+        if warning is None:
+            with self._lock:
+                self._evaluation_cache[cache_key] = (now, data)
         return data
 
     def checkpoints(
@@ -2364,7 +2903,13 @@ class PlayCatalog:
         evaluation_data = self._checkpoint_evaluations(
             run_id=run_id,
         )
-        rows: list[CheckpointSummary] = []
+        with self._lock:
+            self._checkpoint_warnings[run_id] = (
+                (dict(evaluation_data.warning),)
+                if isinstance(evaluation_data.warning, Mapping)
+                else ()
+            )
+        manifests: list[CheckpointManifest] = []
         for raw in index.get("checkpoints") or ():
             if not isinstance(raw, Mapping):
                 raise ValueError("public run index contains an invalid checkpoint")
@@ -2378,6 +2923,14 @@ class PlayCatalog:
                 raise ValueError(
                     "checkpoint effective goal contract does not match its run variant"
                 )
+            manifests.append(manifest)
+        with self._lock:
+            self._checkpoint_fences[run_id] = evaluation_selection_fence(
+                run_id=run_id,
+                checkpoints=[manifest.to_dict() for manifest in manifests],
+            )
+        rows: list[CheckpointSummary] = []
+        for manifest in manifests:
             evaluation = evaluation_data.evaluations.get(manifest.step)
             playback_seed = (
                 evaluation_data.evaluation_seed
@@ -2440,6 +2993,20 @@ class PlayCatalog:
                 continue
             result.append(item)
         return tuple(result)
+
+    def checkpoint_warnings(self, *, run_id: str) -> tuple[dict[str, Any], ...]:
+        with self._lock:
+            return tuple(
+                dict(item)
+                for item in self._checkpoint_warnings.get(str(run_id), ())
+            )
+
+    def checkpoint_selection_fence(self, *, run_id: str) -> str:
+        with self._lock:
+            fence = self._checkpoint_fences.get(str(run_id))
+        if fence is None:
+            raise ValueError("checkpoint selection fence is unavailable")
+        return fence
 
 
 def is_wandb_url(value: object) -> bool:

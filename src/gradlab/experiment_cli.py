@@ -720,20 +720,22 @@ def cmd_catalog_rebuild(args: argparse.Namespace) -> int:
     failed.extend(_catalog_rebuild_contract_failures(source_records))
     cleared = {"catalog_objects": 0, "projection_receipts": 0}
     rebuilt = 0
+    published: dict[str, Any] | None = None
     if not failed:
-        cleared = authority.clear_goal_variant_catalog()
-        for key, manifest, terminal in source_records:
+        try:
+            published = authority.replace_goal_variant_catalog(
+                [(manifest, terminal) for _key, manifest, terminal in source_records]
+            )
+        except Exception as exc:
+            failed.append(
+                {
+                    "key": "goal-variants/v3/current.json",
+                    "error_type": type(exc).__name__,
+                    "error": str(exc),
+                }
+            )
+        for key, manifest, _terminal in source_records if published is not None else ():
             try:
-                authority.register_goal_variant(manifest)
-                if terminal is not None:
-                    authority.update_goal_variant_run(
-                        manifest,
-                        state=terminal.state,
-                        updated_at=terminal.completed_at,
-                        stop_reason=terminal.stop_reason,
-                        final_step=terminal.final_step,
-                        early_stop=terminal.early_stop,
-                    )
                 authority.record_goal_variant_projection(manifest)
                 rebuilt += 1
             except Exception as exc:
@@ -749,6 +751,7 @@ def cmd_catalog_rebuild(args: argparse.Namespace) -> int:
         "discovered": discovered,
         "rebuilt": rebuilt,
         "cleared": cleared,
+        "published": published,
         "failed": failed,
     }
     if args.json:
@@ -757,7 +760,7 @@ def cmd_catalog_rebuild(args: argparse.Namespace) -> int:
         print(
             "Goal-variant catalog rebuild: "
             f"{rebuilt} current runs indexed, "
-            f"{cleared['catalog_objects']} catalog objects cleared, "
+            f"{'one immutable generation published' if published else 'no generation published'}, "
             f"{len(failed)} current records failed"
         )
     return 1 if failed else 0

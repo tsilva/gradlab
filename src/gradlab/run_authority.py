@@ -4,6 +4,7 @@ import hashlib
 import json
 import re
 from collections.abc import Mapping, Sequence
+from copy import deepcopy
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -14,6 +15,15 @@ from gradlab.clock import (
     SystemClock,
     format_utc_datetime,
     parse_utc_datetime,
+)
+from gradlab.catalog_generation import (
+    CATALOG_POINTER_KEY,
+    CATALOG_POINTER_SCHEMA_VERSION,
+    catalog_generation_digest,
+    catalog_generation_key,
+    empty_catalog_generation,
+    validate_catalog_generation,
+    validate_catalog_pointer,
 )
 from gradlab.file_utils import atomic_write_bytes, atomic_write_json, file_sha256
 from gradlab.json_utils import canonical_json_sha256
@@ -198,6 +208,402 @@ class RunAuthority:
             return None
         return self.recipe_document(recipe_sha256)
 
+    def catalog_generation(self) -> dict[str, Any] | None:
+        pointer_document = self.control.get_json_optional(CATALOG_POINTER_KEY)
+        if pointer_document is None:
+            return None
+        pointer = validate_catalog_pointer(pointer_document)
+        generation = validate_catalog_generation(
+            self.control.get_json(pointer["generation_key"]),
+            expected_digest=pointer["generation_sha256"],
+        )
+        if generation["generated_at"] != pointer["generated_at"]:
+            raise ValueError("catalog pointer timestamp disagrees with its generation")
+        return generation
+
+    @staticmethod
+    def _merge_catalog_scope(
+        current: Mapping[str, Any] | None,
+        replacement: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Monotonically merge an incremental scope after a pointer CAS race."""
+
+        if current is None:
+            return deepcopy(dict(replacement))
+        variants = {
+            str(item.get("variant_id") or ""): deepcopy(dict(item))
+            for item in current.get("variants", ())
+            if isinstance(item, Mapping)
+        }
+        for item in replacement.get("variants", ()):
+            if isinstance(item, Mapping):
+                variants[str(item.get("variant_id") or "")] = deepcopy(dict(item))
+        runs = {
+            str(item.get("run_id") or ""): deepcopy(dict(item))
+            for item in current.get("runs", ())
+            if isinstance(item, Mapping)
+        }
+        for item in replacement.get("runs", ()):
+            if not isinstance(item, Mapping):
+                continue
+            run_id = str(item.get("run_id") or "")
+            existing = runs.get(run_id)
+            if existing is None or (
+                str(item.get("updated_at") or ""),
+                str(item.get("attempt_id") or ""),
+            ) >= (
+                str(existing.get("updated_at") or ""),
+                str(existing.get("attempt_id") or ""),
+            ):
+                runs[run_id] = deepcopy(dict(item))
+        return {
+            "goal_slug": str(replacement.get("goal_slug") or ""),
+            "variants": sorted(
+                variants.values(),
+                key=lambda item: (
+                    str(item.get("label") or "").casefold(),
+                    str(item.get("variant_id") or ""),
+                ),
+            ),
+            "runs": sorted(
+                runs.values(),
+                key=lambda item: (
+                    str(item.get("created_at") or ""),
+                    str(item.get("run_id") or ""),
+                ),
+                reverse=True,
+            ),
+        }
+
+    def _publish_catalog_generation(
+        self,
+        *,
+        replace_scope: Mapping[str, Any] | None = None,
+        replace_all_scopes: Sequence[Mapping[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        if (replace_scope is None) == (replace_all_scopes is None):
+            raise ValueError("catalog publication requires exactly one replacement mode")
+        for _attempt in range(8):
+            pointer_document = self.control.get_json_optional(CATALOG_POINTER_KEY)
+            pointer_etag = (
+                str(self.control.head(CATALOG_POINTER_KEY)["etag"])
+                if pointer_document is not None
+                else None
+            )
+            if pointer_document is None:
+                current = empty_catalog_generation(generated_at=self.clock.utc_now())
+            else:
+                pointer = validate_catalog_pointer(pointer_document)
+                current = validate_catalog_generation(
+                    self.control.get_json(pointer["generation_key"]),
+                    expected_digest=pointer["generation_sha256"],
+                )
+                if current["generated_at"] != pointer["generated_at"]:
+                    raise ValueError(
+                        "catalog pointer timestamp disagrees with its generation"
+                    )
+            if replace_all_scopes is not None:
+                scopes = [deepcopy(dict(scope)) for scope in replace_all_scopes]
+            else:
+                assert replace_scope is not None
+                replacement = deepcopy(dict(replace_scope))
+                replacement_slug = str(replacement.get("goal_slug") or "")
+                current_scope = next(
+                    (
+                        scope
+                        for scope in current["scopes"]
+                        if str(scope.get("goal_slug") or "") == replacement_slug
+                    ),
+                    None,
+                )
+                scopes = [
+                    deepcopy(dict(scope))
+                    for scope in current["scopes"]
+                    if str(scope.get("goal_slug") or "") != replacement_slug
+                ]
+                scopes.append(
+                    self._merge_catalog_scope(current_scope, replacement)
+                )
+            generation = validate_catalog_generation(
+                {
+                    "schema_version": 1,
+                    "generated_at": self.clock.utc_now(),
+                    "scopes": sorted(
+                        scopes,
+                        key=lambda scope: str(scope.get("goal_slug") or ""),
+                    ),
+                }
+            )
+            digest = catalog_generation_digest(generation)
+            generation_key = catalog_generation_key(digest)
+            try:
+                self.control.put_json(
+                    generation_key,
+                    generation,
+                    create_only=True,
+                )
+            except ConditionalWriteConflict:
+                stored = validate_catalog_generation(
+                    self.control.get_json(generation_key),
+                    expected_digest=digest,
+                )
+                if stored != generation:
+                    raise ValueError("immutable catalog generation conflicts with storage")
+            pointer = {
+                "schema_version": CATALOG_POINTER_SCHEMA_VERSION,
+                "generation_sha256": digest,
+                "generation_key": generation_key,
+                "generated_at": generation["generated_at"],
+            }
+            try:
+                self.control.put_json(
+                    CATALOG_POINTER_KEY,
+                    pointer,
+                    create_only=pointer_document is None,
+                    if_match=pointer_etag,
+                )
+                return pointer
+            except ConditionalWriteConflict:
+                continue
+        raise ConditionalWriteConflict("catalog pointer changed during every CAS attempt")
+
+    def _publish_catalog_scope_from_v2(self, *, goal_slug: str) -> dict[str, Any]:
+        scope_key = goal_variant_scope_key(goal_slug=goal_slug)
+        index = self.control.get_json(f"{scope_key}/index.json")
+        if int(index.get("schema_version") or 0) != GOAL_VARIANT_INDEX_SCHEMA_VERSION:
+            raise ValueError("unsupported goal variant index schema")
+        if index.get("scope") != {"goal_slug": goal_slug}:
+            raise ValueError("goal variant index scope mismatch")
+        variants = index.get("variants")
+        if not isinstance(variants, list):
+            raise ValueError("goal variant index variants must be a list")
+        runs: list[dict[str, Any]] = []
+        for variant in variants:
+            if not isinstance(variant, Mapping):
+                raise ValueError("goal variant index contains an invalid entry")
+            variant_id = str(variant.get("variant_id") or "")
+            run_index = self.control.get_json_optional(
+                f"{scope_key}/runs/{variant_id}.json"
+            )
+            if run_index is None:
+                continue
+            raw_runs = run_index.get("runs")
+            if (
+                int(run_index.get("schema_version") or 0)
+                != GOAL_VARIANT_RUN_INDEX_SCHEMA_VERSION
+                or run_index.get("scope")
+                != {"goal_slug": goal_slug, "variant_id": variant_id}
+                or not isinstance(raw_runs, list)
+            ):
+                raise ValueError("goal variant run index is malformed")
+            if any(not isinstance(item, Mapping) for item in raw_runs):
+                raise ValueError("goal variant run index contains an invalid entry")
+            runs.extend(dict(item) for item in raw_runs)
+        return self._publish_catalog_generation(
+            replace_scope={
+                "goal_slug": goal_slug,
+                "variants": [dict(item) for item in variants],
+                "runs": runs,
+            }
+        )
+
+    @staticmethod
+    def _catalog_run_record(
+        manifest: RunManifest,
+        *,
+        descriptor: Mapping[str, Any],
+        state: str,
+        existing: Mapping[str, Any] | None = None,
+        updated_at: str | None = None,
+        metrics: Mapping[str, Any] | None = None,
+        stop_reason: str | None = None,
+        final_step: int | None = None,
+        early_stop: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        normalized_metrics = {
+            str(name): float(value)
+            for name, value in dict(metrics or {}).items()
+            if not isinstance(value, bool) and isinstance(value, int | float)
+        }
+        return {
+            "run_id": manifest.run_id,
+            "attempt_id": manifest.attempt_id,
+            "name": str(manifest.wandb.get("display_name") or manifest.run_id),
+            "state": (
+                str(existing.get("state") or state)
+                if (
+                    existing
+                    and existing.get("attempt_id") == manifest.attempt_id
+                    and existing.get("stop_reason")
+                    and state == "running"
+                    and stop_reason is None
+                )
+                else str(state)
+            ),
+            "goal_slug": manifest.goal_slug,
+            "recipe_slug": manifest.recipe_slug,
+            "recipe_sha256": manifest.recipe_sha256,
+            "recipe_overrides": list(manifest.recipe_overrides),
+            "recipe_variant_id": recipe_variant_id(
+                recipe_slug=manifest.recipe_slug,
+                source_sha=manifest.source_sha,
+                recipe_overrides=manifest.recipe_overrides,
+            ),
+            "goal_contract_sha256": str(descriptor["goal_contract_sha256"]),
+            "effective_goal_contract_sha256": str(
+                descriptor["effective_goal_contract_sha256"]
+            ),
+            "goal_variant_id": str(descriptor["variant_id"]),
+            "goal_variant_label": str(descriptor["label"]),
+            "description": manifest.run_description,
+            "seed": manifest.seed,
+            "created_at": (
+                str(existing.get("created_at") or manifest.created_at)
+                if existing
+                else manifest.created_at
+            ),
+            "updated_at": (
+                str(existing.get("updated_at") or manifest.created_at)
+                if (
+                    existing
+                    and existing.get("attempt_id") == manifest.attempt_id
+                    and existing.get("stop_reason")
+                    and updated_at is None
+                    and stop_reason is None
+                )
+                else str(updated_at or manifest.created_at)
+            ),
+            "url": str(manifest.wandb.get("url") or ""),
+            "metrics": (
+                normalized_metrics
+                if metrics is not None
+                else dict(existing.get("metrics") or {})
+                if existing
+                else {}
+            ),
+            "stop_reason": (
+                str(stop_reason)
+                if stop_reason is not None
+                else str(existing.get("stop_reason") or "")
+                if existing and existing.get("attempt_id") == manifest.attempt_id
+                else ""
+            ),
+            "final_step": (
+                int(final_step)
+                if final_step is not None
+                else int(existing["final_step"])
+                if (
+                    existing
+                    and existing.get("attempt_id") == manifest.attempt_id
+                    and existing.get("final_step") is not None
+                )
+                else None
+            ),
+            "early_stop": (
+                dict(early_stop)
+                if early_stop is not None
+                else dict(existing["early_stop"])
+                if (
+                    existing
+                    and existing.get("attempt_id") == manifest.attempt_id
+                    and isinstance(existing.get("early_stop"), Mapping)
+                )
+                else None
+            ),
+        }
+
+    def replace_goal_variant_catalog(
+        self,
+        records: Sequence[tuple[RunManifest, TerminalReceipt | None]],
+    ) -> dict[str, Any]:
+        """Publish a complete immutable generation, then advance one CAS pointer."""
+
+        scopes: dict[str, dict[str, Any]] = {}
+        for manifest, terminal in records:
+            if manifest.goal_variant is None:
+                raise ValueError(f"run {manifest.run_id} has no goal variant descriptor")
+            descriptor = validate_goal_variant_descriptor(manifest.goal_variant)
+            scope = scopes.setdefault(
+                manifest.goal_slug,
+                {
+                    "goal_slug": manifest.goal_slug,
+                    "variants": {},
+                    "runs": {},
+                },
+            )
+            variants = scope["variants"]
+            runs = scope["runs"]
+            variant_id = str(descriptor["variant_id"])
+            existing_variant = variants.get(variant_id)
+            if existing_variant is not None and goal_variant_catalog_contract(
+                existing_variant
+            ) != goal_variant_catalog_contract(descriptor):
+                raise ValueError("goal variant descriptor conflicts during rebuild")
+            exact_resolution_run_id = (
+                str(existing_variant.get("exact_resolution_run_id") or "")
+                if existing_variant
+                else ""
+            )
+            if not exact_resolution_run_id:
+                try:
+                    stored_recipe = self.recipe_document(manifest.recipe_sha256)
+                except FileNotFoundError, KeyError, ValueError:
+                    stored_recipe = None
+                if stored_recipe is not None:
+                    exact_resolution_run_id = manifest.run_id
+            variants[variant_id] = {
+                **descriptor,
+                "descriptor_key": (
+                    f"{goal_variant_scope_key(goal_slug=manifest.goal_slug)}"
+                    f"/descriptors/{variant_id}.json"
+                ),
+                "first_run_id": (
+                    str(existing_variant.get("first_run_id") or manifest.run_id)
+                    if existing_variant
+                    else manifest.run_id
+                ),
+                **(
+                    {"exact_resolution_run_id": exact_resolution_run_id}
+                    if exact_resolution_run_id
+                    else {}
+                ),
+            }
+            runs[manifest.run_id] = self._catalog_run_record(
+                manifest,
+                descriptor=descriptor,
+                state=terminal.state if terminal is not None else "running",
+                updated_at=(
+                    terminal.completed_at if terminal is not None else manifest.created_at
+                ),
+                stop_reason=terminal.stop_reason if terminal is not None else None,
+                final_step=terminal.final_step if terminal is not None else None,
+                early_stop=terminal.early_stop if terminal is not None else None,
+            )
+        normalized_scopes = [
+            {
+                "goal_slug": goal_slug,
+                "variants": sorted(
+                    scope["variants"].values(),
+                    key=lambda item: (
+                        str(item.get("label") or "").casefold(),
+                        str(item.get("variant_id") or ""),
+                    ),
+                ),
+                "runs": sorted(
+                    scope["runs"].values(),
+                    key=lambda item: (
+                        str(item.get("created_at") or ""),
+                        str(item.get("run_id") or ""),
+                    ),
+                    reverse=True,
+                ),
+            }
+            for goal_slug, scope in sorted(scopes.items())
+        ]
+        return self._publish_catalog_generation(
+            replace_all_scopes=normalized_scopes,
+        )
+
     def register_goal_variant(self, manifest: RunManifest) -> dict[str, Any]:
         if manifest.goal_variant is None:
             raise ValueError("run manifest has no goal variant descriptor")
@@ -330,95 +736,17 @@ class RunAuthority:
 
             by_id = {str(item.get("run_id") or ""): item for item in entries}
             existing = by_id.get(manifest.run_id)
-            normalized_metrics = {
-                str(name): float(value)
-                for name, value in dict(metrics or {}).items()
-                if not isinstance(value, bool) and isinstance(value, int | float)
-            }
-            by_id[manifest.run_id] = {
-                "run_id": manifest.run_id,
-                "attempt_id": manifest.attempt_id,
-                "name": str(manifest.wandb.get("display_name") or manifest.run_id),
-                "state": (
-                    str(existing.get("state") or state)
-                    if (
-                        existing
-                        and existing.get("attempt_id") == manifest.attempt_id
-                        and existing.get("stop_reason")
-                        and state == "running"
-                        and stop_reason is None
-                    )
-                    else str(state)
-                ),
-                "goal_slug": manifest.goal_slug,
-                "recipe_slug": manifest.recipe_slug,
-                "recipe_sha256": manifest.recipe_sha256,
-                "recipe_overrides": list(manifest.recipe_overrides),
-                "recipe_variant_id": recipe_variant_id(
-                    recipe_slug=manifest.recipe_slug,
-                    source_sha=manifest.source_sha,
-                    recipe_overrides=manifest.recipe_overrides,
-                ),
-                "goal_contract_sha256": str(descriptor["goal_contract_sha256"]),
-                "effective_goal_contract_sha256": str(descriptor["effective_goal_contract_sha256"]),
-                "goal_variant_id": variant_id,
-                "goal_variant_label": str(descriptor["label"]),
-                "description": manifest.run_description,
-                "seed": manifest.seed,
-                "created_at": (
-                    str(existing.get("created_at") or manifest.created_at)
-                    if existing
-                    else manifest.created_at
-                ),
-                "updated_at": (
-                    str(existing.get("updated_at") or manifest.created_at)
-                    if (
-                        existing
-                        and existing.get("attempt_id") == manifest.attempt_id
-                        and existing.get("stop_reason")
-                        and updated_at is None
-                        and stop_reason is None
-                    )
-                    else str(updated_at or manifest.created_at)
-                ),
-                "url": str(manifest.wandb.get("url") or ""),
-                "metrics": (
-                    normalized_metrics
-                    if metrics is not None
-                    else dict(existing.get("metrics") or {})
-                    if existing
-                    else {}
-                ),
-                "stop_reason": (
-                    str(stop_reason)
-                    if stop_reason is not None
-                    else str(existing.get("stop_reason") or "")
-                    if existing and existing.get("attempt_id") == manifest.attempt_id
-                    else ""
-                ),
-                "final_step": (
-                    int(final_step)
-                    if final_step is not None
-                    else int(existing["final_step"])
-                    if (
-                        existing
-                        and existing.get("attempt_id") == manifest.attempt_id
-                        and existing.get("final_step") is not None
-                    )
-                    else None
-                ),
-                "early_stop": (
-                    dict(early_stop)
-                    if early_stop is not None
-                    else dict(existing["early_stop"])
-                    if (
-                        existing
-                        and existing.get("attempt_id") == manifest.attempt_id
-                        and isinstance(existing.get("early_stop"), Mapping)
-                    )
-                    else None
-                ),
-            }
+            by_id[manifest.run_id] = self._catalog_run_record(
+                manifest,
+                descriptor=descriptor,
+                state=state,
+                existing=existing,
+                updated_at=updated_at,
+                metrics=metrics,
+                stop_reason=stop_reason,
+                final_step=final_step,
+                early_stop=early_stop,
+            )
             document = {
                 "schema_version": GOAL_VARIANT_RUN_INDEX_SCHEMA_VERSION,
                 "scope": {
@@ -440,6 +768,9 @@ class RunAuthority:
                     document,
                     create_only=current is None,
                     if_match=current_etag,
+                )
+                self._publish_catalog_scope_from_v2(
+                    goal_slug=manifest.goal_slug,
                 )
                 return document
             except ConditionalWriteConflict:
@@ -469,8 +800,16 @@ class RunAuthority:
                 final_step=final_step,
                 early_stop=early_stop,
             )
-        except Exception:
+        except Exception as exc:
+            try:
+                self.record_goal_variant_projection(manifest, error=exc)
+            except Exception:
+                pass
             return False
+        try:
+            self.record_goal_variant_projection(manifest)
+        except Exception:
+            pass
         return True
 
     def record_goal_variant_projection(

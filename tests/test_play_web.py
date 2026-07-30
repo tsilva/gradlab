@@ -1366,6 +1366,7 @@ def test_catalog_http_api_requires_the_fragment_session_token() -> None:
                 {
                     "run_id": run_id,
                     "checkpoint_id": "checkpoint-1-" + "b" * 16,
+                    "sha256": "b" * 64,
                     "evaluation": {
                         "status": "accepted",
                         "pass": True,
@@ -1381,7 +1382,8 @@ def test_catalog_http_api_requires_the_fragment_session_token() -> None:
         def __init__(self):
             self.requests = []
 
-        def enqueue(self, *, run_id, checkpoint_ids):
+        def enqueue(self, *, run_id, checkpoint_ids, selection_fence):
+            assert len(selection_fence) == 64
             self.requests.append((run_id, list(checkpoint_ids)))
             return {
                 "items": (
@@ -1508,6 +1510,7 @@ def test_catalog_http_api_requires_the_fragment_session_token() -> None:
                 assert checkpoints.status == 200
                 checkpoint_payload = await checkpoints.json()
                 assert checkpoint_payload["items"][0]["evaluation"]["pass"] is True
+                selection_fence = checkpoint_payload["selection_fence"]
                 assert checkpoint_payload["metric_columns"] == [
                     {
                         "metric": "train/outcome/success/across_starts/window_100/rate/min",
@@ -1537,7 +1540,10 @@ def test_catalog_http_api_requires_the_fragment_session_token() -> None:
                 evaluation = await client.post(
                     (f"{server.origin}/api/catalog/runs/gradlab-{'a' * 32}/evaluations"),
                     headers={"Authorization": f"Bearer {server.token}"},
-                    json={"checkpoint_ids": ["checkpoint-1-" + "b" * 16]},
+                    json={
+                        "checkpoint_ids": ["checkpoint-1-" + "b" * 16],
+                        "selection_fence": selection_fence,
+                    },
                 )
                 assert evaluation.status == 202
                 evaluation_payload = await evaluation.json()
