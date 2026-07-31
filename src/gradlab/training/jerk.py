@@ -406,6 +406,8 @@ class JerkBackend:
         common_config: Mapping[str, Any],
         backend_config: Mapping[str, Any],
     ) -> None:
+        if common_config.get("policy_model") is not None:
+            raise ValueError("gradlab.jerk does not support train_config.policy_model")
         normalized = backend_config
         if (
             normalized["acceptance_mode"] == FIRST_TRAINING_SUCCESS_ACCEPTANCE

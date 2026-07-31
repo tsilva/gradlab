@@ -24,10 +24,6 @@ def compile_policy_execution_contract(model: Any, env: Any) -> dict[str, Any] | 
         return None
     policy_model = normalize_policy_model(raw_policy_model)
     model_inputs = runtime_model_input_contract(env)
-    if model_inputs is None:
-        raise ValueError(
-            "routed policy execution requires a provider-resolved model-input contract"
-        )
     role_inputs = {
         role: [
             "observation",
@@ -99,7 +95,7 @@ def verify_policy_execution_contract(
         saved = candidate if isinstance(candidate, Mapping) else None
     if saved is None:
         if routed:
-            raise ValueError("routed policy artifact is missing its execution contract")
+            raise ValueError("configured policy artifact is missing its execution contract")
         return None
     normalized_saved = normalize_policy_execution_contract(saved)
     runtime = compile_policy_execution_contract(model, env)

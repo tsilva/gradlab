@@ -566,6 +566,8 @@ class GoExploreBackend:
         common_config: Mapping[str, Any],
         backend_config: Mapping[str, Any],
     ) -> None:
+        if common_config.get("policy_model") is not None:
+            raise ValueError("gradlab.go-explore does not support train_config.policy_model")
         task = common_config.get("task")
         signals = task.get("signals") if isinstance(task, Mapping) else None
         progress_signal = str(backend_config.get("progress_signal") or "")

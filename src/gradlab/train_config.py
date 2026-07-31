@@ -365,6 +365,7 @@ def validate_and_normalize_train_config(
     *,
     label: str = "train_config",
     required_keys: Sequence[str] = (),
+    validate_backend_config: bool = True,
 ) -> dict[str, Any]:
     """Validate one flat train config and normalize its structured rule fields."""
 
@@ -433,23 +434,35 @@ def validate_and_normalize_train_config(
         if isinstance(condition, Mapping)
     )
     if "training_backend" in normalized:
-        from gradlab.training_backend import normalize_training_backend
-
         common_config = {
             key: value for key, value in normalized.items() if key != "training_backend"
         }
-        normalized["training_backend"] = normalize_training_backend(
-            normalized["training_backend"],
-            common_config=common_config,
-            label=f"{label}.training_backend",
-        )
-        from gradlab.training_backend import accepts_first_training_success
+        if validate_backend_config:
+            from gradlab.training_backend import normalize_training_backend
 
-        if accepts_first_training_success(normalized) and has_training_success_condition:
-            raise ValueError(
-                f"{label}.early_stop success conditions are incompatible with "
-                "first-training-success backend acceptance"
+            normalized["training_backend"] = normalize_training_backend(
+                normalized["training_backend"],
+                common_config=common_config,
+                label=f"{label}.training_backend",
             )
+            from gradlab.training_backend import accepts_first_training_success
+
+            if accepts_first_training_success(normalized) and has_training_success_condition:
+                raise ValueError(
+                    f"{label}.early_stop success conditions are incompatible with "
+                    "first-training-success backend acceptance"
+                )
+        else:
+            from gradlab.training_backend import validate_training_backend_envelope
+
+            backend_id, backend_config = validate_training_backend_envelope(
+                normalized["training_backend"],
+                label=f"{label}.training_backend",
+            )
+            normalized["training_backend"] = {
+                "id": backend_id,
+                "config": backend_config,
+            }
     return normalized
 
 

@@ -144,20 +144,10 @@ def normalize_training_backend(
     common_config: Mapping[str, Any],
     label: str,
 ) -> dict[str, Any]:
-    if not isinstance(value, Mapping):
-        raise ValueError(f"{label} must be an object")
-    unexpected = sorted(set(value) - {"id", "config"})
-    if unexpected:
-        raise ValueError(f"{label} has unexpected fields: {unexpected}")
-    backend_id = str(value.get("id") or "").strip()
-    if not backend_id:
-        raise ValueError(f"{label}.id must be a non-empty string")
-    backend_config = value.get("config", {})
-    if not isinstance(backend_config, Mapping):
-        raise ValueError(f"{label}.config must be an object")
+    backend_id, backend_config = validate_training_backend_envelope(value, label=label)
     backend = load_training_backend(backend_id)
     normalized = backend.normalize_config(
-        dict(backend_config),
+        backend_config,
         label=f"{label}.config",
     )
     backend.validate(common_config, normalized)
@@ -169,6 +159,28 @@ def normalize_training_backend(
         supported_priority_metrics=backend.state_archive_priority_metrics(),
     )
     return {"id": backend_id, "config": normalized}
+
+
+def validate_training_backend_envelope(
+    value: Any,
+    *,
+    label: str,
+) -> tuple[str, dict[str, Any]]:
+    """Validate the stable backend envelope without interpreting versioned options."""
+
+    if not isinstance(value, Mapping):
+        raise ValueError(f"{label} must be an object")
+    unexpected = sorted(set(value) - {"id", "config"})
+    if unexpected:
+        raise ValueError(f"{label} has unexpected fields: {unexpected}")
+    backend_id = str(value.get("id") or "").strip()
+    if not backend_id:
+        raise ValueError(f"{label}.id must be a non-empty string")
+    backend_config = value.get("config", {})
+    if not isinstance(backend_config, Mapping):
+        raise ValueError(f"{label}.config must be an object")
+    load_training_backend(backend_id)
+    return backend_id, dict(backend_config)
 
 
 def training_backend_contract_payload() -> dict[str, Any]:

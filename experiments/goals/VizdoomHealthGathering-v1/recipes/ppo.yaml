@@ -23,7 +23,7 @@ train:
       remaining_time: [state_value]
     heads:
       action: {hidden_sizes: [], activation: tanh}
-      state_value: {hidden_sizes: [], activation: tanh}
+      state_value: {hidden_sizes: [256], activation: tanh}
     normalize_images: true
     orthogonal_init: true
   backend:

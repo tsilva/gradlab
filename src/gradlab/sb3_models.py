@@ -92,5 +92,5 @@ def load_sb3_model(
         if env is not None:
             verify_policy_execution_contract(model, env)
     elif isinstance(getattr(model.policy, "policy_model", None), Mapping):
-        raise ValueError("routed policy artifact is missing its execution contract")
+        raise ValueError("configured policy artifact is missing its execution contract")
     return model

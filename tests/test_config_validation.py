@@ -425,6 +425,22 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertEqual(ppo["train_config"]["wandb_mode"], "online")
         self.assertEqual(a2c["train_config"]["wandb_mode"], "online")
 
+    def test_every_sb3_on_policy_recipe_declares_explicit_policy_model(self) -> None:
+        recipes = sorted(Path("experiments/goals").glob("**/recipes/*.yaml"))
+        actor_critic_recipes = 0
+
+        for recipe_path in recipes:
+            goal_path = recipe_path.parent.parent / "_goal.yaml"
+            document = compose_train_document(goal_path, recipe_path)
+            backend_id = document["train_config"]["training_backend"]["id"]
+            if backend_id not in {"sb3.ppo", "sb3.a2c"}:
+                continue
+            actor_critic_recipes += 1
+            with self.subTest(recipe=recipe_path):
+                self.assertIn("policy_model", document["train_config"])
+
+        self.assertEqual(actor_critic_recipes, 41)
+
     def test_every_mario_recipe_composes_the_shared_plateau_condition(self) -> None:
         mario_root = Path("experiments/goals/SuperMarioBros-Nes-v0")
         recipes = sorted(mario_root.glob("*/recipes/*.yaml"))

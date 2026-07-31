@@ -23,7 +23,7 @@ def _activation(name: str) -> type[nn.Module]:
 class RoutedObservationEncoder(BaseFeaturesExtractor):
     def __init__(
         self,
-        observation_space: gym.spaces.Dict,
+        observation_space: gym.Space,
         *,
         base_space: gym.spaces.Box,
         encoder: Mapping[str, Any],
@@ -44,6 +44,23 @@ class RoutedObservationEncoder(BaseFeaturesExtractor):
         return self.encoder(observations)
 
 
+def build_configured_head(
+    input_dim: int,
+    config: Mapping[str, Any],
+    *,
+    device: th.device,
+) -> tuple[nn.Sequential, int]:
+    """Build one role-specific hidden stack and return its latent width."""
+
+    layers: list[nn.Module] = []
+    previous = int(input_dim)
+    activation = _activation(str(config["activation"]))
+    for width in config["hidden_sizes"]:
+        layers.extend((nn.Linear(previous, int(width)), activation()))
+        previous = int(width)
+    return nn.Sequential(*layers).to(device), previous
+
+
 class RoutedMlpExtractor(nn.Module):
     def __init__(
         self,
@@ -54,31 +71,16 @@ class RoutedMlpExtractor(nn.Module):
         device: th.device,
     ) -> None:
         super().__init__()
-        self.policy_net, self.latent_dim_pi = self._head(
+        self.policy_net, self.latent_dim_pi = build_configured_head(
             action_input_dim,
             heads["action"],
             device=device,
         )
-        self.value_net, self.latent_dim_vf = self._head(
+        self.value_net, self.latent_dim_vf = build_configured_head(
             value_input_dim,
             heads["state_value"],
             device=device,
         )
-
-    @staticmethod
-    def _head(
-        input_dim: int,
-        config: Mapping[str, Any],
-        *,
-        device: th.device,
-    ) -> tuple[nn.Sequential, int]:
-        layers: list[nn.Module] = []
-        previous = int(input_dim)
-        activation = _activation(str(config["activation"]))
-        for width in config["hidden_sizes"]:
-            layers.extend((nn.Linear(previous, int(width)), activation()))
-            previous = int(width)
-        return nn.Sequential(*layers).to(device), previous
 
     def forward_actor(self, features: th.Tensor) -> th.Tensor:
         return self.policy_net(features)
@@ -99,13 +101,25 @@ class RoutedActorCriticPolicy(ActorCriticPolicy):
         policy_model: Mapping[str, Any],
         **kwargs: Any,
     ) -> None:
-        if not isinstance(observation_space, gym.spaces.Dict):
-            raise ValueError("routed actor-critic policy requires a Dict observation space")
-        spaces = observation_space.spaces
-        base_space = spaces.get("observation")
-        if not isinstance(base_space, gym.spaces.Box):
-            raise ValueError("routed actor-critic policy requires Box 'observation'")
         self.policy_model = normalize_policy_model(policy_model)
+        if isinstance(observation_space, gym.spaces.Dict):
+            spaces = observation_space.spaces
+            base_space = spaces.get("observation")
+            if not isinstance(base_space, gym.spaces.Box):
+                raise ValueError("configured actor-critic policy requires Box 'observation'")
+        elif isinstance(observation_space, gym.spaces.Box):
+            spaces = {}
+            base_space = observation_space
+            if self.policy_model["context_encoders"] or self.policy_model["routes"]:
+                raise ValueError(
+                    "configured actor-critic policy requires Dict observations when context "
+                    "is declared"
+                )
+        else:
+            raise ValueError(
+                "configured actor-critic policy requires a Box observation or a Dict with "
+                "Box 'observation'"
+            )
         self.base_observation_space = base_space
         self._role_contexts = {
             role: tuple(
@@ -131,14 +145,15 @@ class RoutedActorCriticPolicy(ActorCriticPolicy):
                 if not isinstance(context_space, gym.spaces.Discrete):
                     raise ValueError(f"one_hot context {name!r} requires a Discrete space")
                 self._context_dimensions[name] = int(context_space.n)
-        expected_keys = {"observation"} | {
-            f"context/{name}" for name in self.policy_model["context_encoders"]
-        }
-        if set(spaces) != expected_keys:
-            raise ValueError(
-                "routed policy observation keys disagree with policy_model: "
-                f"expected {sorted(expected_keys)}, got {sorted(spaces)}"
-            )
+        if isinstance(observation_space, gym.spaces.Dict):
+            expected_keys = {"observation"} | {
+                f"context/{name}" for name in self.policy_model["context_encoders"]
+            }
+            if set(spaces) != expected_keys:
+                raise ValueError(
+                    "configured policy observation keys disagree with policy_model: "
+                    f"expected {sorted(expected_keys)}, got {sorted(spaces)}"
+                )
         topology = self.policy_model["topology"]
         self._encoder_specs = (
             {"action": topology["encoder"], "state_value": topology["encoder"]}
@@ -191,22 +206,28 @@ class RoutedActorCriticPolicy(ActorCriticPolicy):
             device=self.device,
         )
 
-    def _base_tensor(self, obs: Mapping[str, th.Tensor]) -> th.Tensor:
-        if "observation" not in obs:
-            raise ValueError("routed policy input is missing 'observation'")
+    def _base_tensor(self, obs: Mapping[str, th.Tensor] | th.Tensor) -> th.Tensor:
+        if isinstance(obs, Mapping):
+            if "observation" not in obs:
+                raise ValueError("configured policy input is missing 'observation'")
+            base = obs["observation"]
+        else:
+            base = obs
         return preprocess_obs(
-            obs["observation"],
+            base,
             self.base_observation_space,
             normalize_images=self.normalize_images,
         )
 
     def _context_tensor(
         self,
-        obs: Mapping[str, th.Tensor],
+        obs: Mapping[str, th.Tensor] | th.Tensor,
         name: str,
         *,
         batch_size: int,
     ) -> th.Tensor:
+        if not isinstance(obs, Mapping):
+            raise ValueError("configured policy context requires Dict observations")
         key = f"context/{name}"
         if key not in obs:
             raise ValueError(f"routed policy input is missing {key!r}")
@@ -225,7 +246,7 @@ class RoutedActorCriticPolicy(ActorCriticPolicy):
     def _append_context(
         self,
         features: th.Tensor,
-        obs: Mapping[str, th.Tensor],
+        obs: Mapping[str, th.Tensor] | th.Tensor,
         role: str,
     ) -> th.Tensor:
         values = [features]
@@ -238,7 +259,7 @@ class RoutedActorCriticPolicy(ActorCriticPolicy):
 
     def _role_features(
         self,
-        obs: Mapping[str, th.Tensor],
+        obs: Mapping[str, th.Tensor] | th.Tensor,
         role: str,
     ) -> th.Tensor:
         base = self._base_tensor(obs)
@@ -251,7 +272,7 @@ class RoutedActorCriticPolicy(ActorCriticPolicy):
 
     def _joint_features(
         self,
-        obs: Mapping[str, th.Tensor],
+        obs: Mapping[str, th.Tensor] | th.Tensor,
     ) -> tuple[th.Tensor, th.Tensor]:
         base = self._base_tensor(obs)
         if self.share_features_extractor:
@@ -267,7 +288,7 @@ class RoutedActorCriticPolicy(ActorCriticPolicy):
 
     def forward(
         self,
-        obs: Mapping[str, th.Tensor],
+        obs: Mapping[str, th.Tensor] | th.Tensor,
         deterministic: bool = False,
     ) -> tuple[th.Tensor, th.Tensor, th.Tensor]:
         action_features, value_features = self._joint_features(obs)
@@ -280,19 +301,19 @@ class RoutedActorCriticPolicy(ActorCriticPolicy):
         actions = actions.reshape((-1, *self.action_space.shape))
         return actions, values, log_prob
 
-    def get_distribution(self, obs: Mapping[str, th.Tensor]):
+    def get_distribution(self, obs: Mapping[str, th.Tensor] | th.Tensor):
         features = self._role_features(obs, "action")
         latent = self.mlp_extractor.forward_actor(features)
         return self._get_action_dist_from_latent(latent)
 
-    def predict_values(self, obs: Mapping[str, th.Tensor]) -> th.Tensor:
+    def predict_values(self, obs: Mapping[str, th.Tensor] | th.Tensor) -> th.Tensor:
         features = self._role_features(obs, "state_value")
         latent = self.mlp_extractor.forward_critic(features)
         return self.value_net(latent)
 
     def evaluate_actions(
         self,
-        obs: Mapping[str, th.Tensor],
+        obs: Mapping[str, th.Tensor] | th.Tensor,
         actions: th.Tensor,
     ) -> tuple[th.Tensor, th.Tensor, th.Tensor | None]:
         action_features, value_features = self._joint_features(obs)
@@ -305,15 +326,15 @@ class RoutedActorCriticPolicy(ActorCriticPolicy):
             distribution.entropy(),
         )
 
-    def action_distribution(self, obs: Mapping[str, th.Tensor]):
+    def action_distribution(self, obs: Mapping[str, th.Tensor] | th.Tensor):
         return self.get_distribution(obs)
 
-    def state_value(self, obs: Mapping[str, th.Tensor]) -> th.Tensor:
+    def state_value(self, obs: Mapping[str, th.Tensor] | th.Tensor) -> th.Tensor:
         return self.predict_values(obs)
 
     def decision_distribution_and_value(
         self,
-        obs: Mapping[str, th.Tensor],
+        obs: Mapping[str, th.Tensor] | th.Tensor,
     ) -> tuple[Any, th.Tensor]:
         action_features, value_features = self._joint_features(obs)
         latent_pi = self.mlp_extractor.forward_actor(action_features)
@@ -325,7 +346,7 @@ class RoutedActorCriticPolicy(ActorCriticPolicy):
 
     def actor_log_probability(
         self,
-        obs: Mapping[str, th.Tensor],
+        obs: Mapping[str, th.Tensor] | th.Tensor,
         actions: th.Tensor,
     ) -> th.Tensor:
         return self.get_distribution(obs).log_prob(actions)

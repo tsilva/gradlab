@@ -474,6 +474,7 @@ def _validate_recipe_contract(
             validate_and_normalize_train_config(
                 train_config,
                 label=f"{source}.recipe.train_config",
+                validate_backend_config=False,
             )
         else:
             raise ValueError(f"unknown training backend {backend_id!r}")

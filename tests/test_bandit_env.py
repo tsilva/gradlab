@@ -247,6 +247,11 @@ def test_bandit_recipe_materializes_fixed_train_and_eval_contracts() -> None:
     ]
     assert train_config["env_args"] == {"autoreset_mode": "disabled"}
     assert train_config["training_backend"]["id"] == "sb3.ppo"
+    assert train_config["policy_model"]["topology"]["encoder"] == {"kind": "flatten"}
+    assert train_config["policy_model"]["heads"] == {
+        "action": {"hidden_sizes": [64, 64], "activation": "tanh"},
+        "state_value": {"hidden_sizes": [64, 64], "activation": "tanh"},
+    }
 
 
 def test_bandit_local_demo_runs_to_cap_without_a_declared_success_signal(

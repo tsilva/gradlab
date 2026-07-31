@@ -21,6 +21,19 @@ RUNTIME_IMAGE_REF = "docker:ghcr.io/tsilva/gradlab/gradlab-train@sha256:" + "a" 
 SOURCE_SHA = "1" * 40
 BUILD_SOURCE_SHA = "2" * 40
 VIZDOOM_PROVIDER_VERSION = importlib.metadata.version("vizdoom-turbo")
+POLICY_MODEL = {
+    "schema_version": 1,
+    "topology": {"kind": "shared_encoder", "encoder": {"kind": "flatten"}},
+    "fusion": "post_encoder_concat",
+    "context_encoders": {},
+    "routes": {},
+    "heads": {
+        "action": {"hidden_sizes": [8], "activation": "tanh"},
+        "state_value": {"hidden_sizes": [8], "activation": "tanh"},
+    },
+    "normalize_images": False,
+    "orthogonal_init": True,
+}
 
 
 def release_payload(*, source_sha: str = SOURCE_SHA) -> dict:
@@ -110,6 +123,7 @@ class RuntimeContractTests(unittest.TestCase):
                 "run_name": "gradlab-0123456789abcdef0123456789abcdef",
                 "runtime_image_ref": RUNTIME_IMAGE_REF,
                 "seed": 123,
+                "policy_model": POLICY_MODEL,
                 "training_backend": {"id": "sb3.ppo", "config": {}},
                 "wandb_display_name": "Level1-1__ppo__s123__01234567",
                 "wandb_group": "gradlab-0123456789abcdef0123456789abcdef",
@@ -118,7 +132,7 @@ class RuntimeContractTests(unittest.TestCase):
         )
 
         self.assertTrue(receipt["validated"])
-        self.assertEqual(receipt["validated_field_count"], 10)
+        self.assertEqual(receipt["validated_field_count"], 11)
 
     def test_image_receipt_rejects_noncurrent_schema_and_digest_mismatch(self) -> None:
         with self.assertRaisesRegex(ValueError, "schema_version must be 7"):
