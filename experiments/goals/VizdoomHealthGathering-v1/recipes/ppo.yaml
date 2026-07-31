@@ -1,36 +1,5 @@
 defaults:
-- ../../../recipes/_presets/atari-ppo@_global_
+- ../../../recipes/_presets/vizdoom-health-gathering-ppo@_global_
 - _self_
 recipe_id: ppo
 description: Training-only pixel PPO for gathering health in {{ goal_id }}.
-train:
-  checkpoint_eval_backend: none
-  timesteps: 10000000
-  # Preserve the standard pixel actor while giving normalized health only to V(s).
-  policy_model:
-    schema_version: 1
-    topology:
-      kind: shared_encoder
-      encoder:
-        kind: nature_cnn
-        features_dim: 512
-    fusion: post_encoder_concat
-    context_encoders:
-      health: {kind: identity}
-      remaining_time: {kind: identity}
-    routes:
-      health: [state_value]
-      remaining_time: [state_value]
-    heads:
-      action: {hidden_sizes: [], activation: tanh}
-      state_value: {hidden_sizes: [256], activation: tanh}
-    normalize_images: true
-    orthogonal_init: true
-  backend:
-    config:
-      n_steps: 256
-  early_stop:
-    conditions:
-      return_plateau:
-        start_after_steps: 2500000
-        patience_steps: 2500000

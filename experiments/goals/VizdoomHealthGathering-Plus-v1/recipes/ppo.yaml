@@ -1,0 +1,16 @@
+defaults:
+# Reuse the confirmed Health Gathering PPO preset.
+- ../../../recipes/_presets/vizdoom-health-gathering-ppo@_global_
+# Remove the inherited remaining-time encoder and route before restoring health only.
+- ../../../recipes/_presets/vizdoom-health-gathering-without-time@_global_
+- _self_
+
+recipe_id: ppo
+description: Training-only time-unaware pixel PPO for indefinite survival in {{ goal_id }}.
+
+train:
+  policy_model:
+    context_encoders:
+      health: {kind: identity}
+    routes:
+      health: [state_value]

@@ -19,6 +19,8 @@ namespaces:
     environment_id: VizdoomDefendLine-v1
   VizdoomDefendLine-Plus-v1:
     environment_id: VizdoomDefendLine-Plus-v1
+  VizdoomHealthGathering-Plus-v1:
+    environment_id: VizdoomHealthGathering-v1
   VizdoomHealthGathering-v1:
     environment_id: VizdoomHealthGathering-v1
   VizdoomHealthGatheringSupreme-v1:

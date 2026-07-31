@@ -101,6 +101,16 @@ EXPECTED_GOALS = {
         "reward_scale": 100.0,
         "max_episode_steps": None,
     },
+    "VizdoomHealthGathering-Plus-v1": {
+        "game": "VizdoomHealthGathering-v1",
+        "timesteps": 10_000_000,
+        "event": "goal_reached",
+        "training_metric": "train/episode/return/shaped/from/target/window_100/mean",
+        "acceptance_metric": "eval/full/episode/return/shaped/mean",
+        "acceptance_threshold": 200.0,
+        "reward_scale": 100.0,
+        "max_episode_steps": 5250,
+    },
     "VizdoomHealthGatheringSupreme-v1": {
         "timesteps": 20_000_000,
         "event": "goal_reached",
@@ -162,7 +172,7 @@ def test_vizdoom_goal_has_complete_evaluated_ppo_contract(
     assert "stop_on_acceptance" not in train_config
     assert train_config["checkpoint_eval_acceptance"] == acceptance
     assert train_config["env_provider"] == "vizdoom-turbo"
-    assert train_config["game"] == goal_id
+    assert train_config["game"] == expected.get("game", goal_id)
     assert train_config["state"] == "default"
     assert train_config["n_envs"] == 32
     assert train_config["env_args"]["num_threads"] == 32
@@ -217,6 +227,7 @@ def test_vizdoom_goal_has_complete_evaluated_ppo_contract(
         ("VizdoomDefendLine-Plus-v1", 512),
         ("VizdoomDefendCenter-v1", 525),
         ("VizdoomHealthGathering-v1", 525),
+        ("VizdoomHealthGathering-Plus-v1", 5250),
         ("VizdoomHealthGatheringSupreme-v1", 525),
     ],
 )
@@ -271,9 +282,48 @@ def test_vizdoom_health_gathering_uses_native_provider_truncation_for_survival(
     }
 
 
+def test_vizdoom_health_gathering_plus_is_long_horizon_and_time_unaware() -> None:
+    goal_path = GOALS_ROOT / "VizdoomHealthGathering-Plus-v1" / "_goal.yaml"
+    recipe_path = goal_path.parent / "recipes/ppo.yaml"
+    document = compose_train_document(goal_path, recipe_path)
+
+    train_config = document["train_config"]
+    goal = document["goal"]
+    assert train_config["game"] == "VizdoomHealthGathering-v1"
+    assert train_config["env_args"]["vizdoom_config"] == {"episode_timeout": 0}
+    assert train_config["task"]["termination"]["max_episode_steps"] == 5250
+    assert goal["eval"]["environment"]["env_config"]["env_args"][
+        "vizdoom_config"
+    ] == {"episode_timeout": 0}
+    assert set(train_config["task"]["model_inputs"]["context"]) == {"health"}
+    assert train_config["policy_model"]["context_encoders"] == {
+        "health": {"kind": "identity"},
+    }
+    assert train_config["policy_model"]["routes"] == {"health": ["state_value"]}
+    assert "remaining_time" not in str(train_config)
+    assert goal["eval"]["environment"]["env_config"]["max_steps"] == 5250
+    assert goal["eval"]["environment"]["task"]["termination"][
+        "max_episode_steps"
+    ] == 5250
+    assert goal["eval"]["acceptance"] == [
+        {
+            "metric": "eval/full/episode/return/shaped/mean",
+            "operator": ">=",
+            "threshold": 200.0,
+        }
+    ]
+    assert set(goal["eval"]["environment"]["task"]["model_inputs"]["context"]) == {
+        "health"
+    }
+
+
 @pytest.mark.parametrize(
     "goal_id",
-    ["VizdoomHealthGathering-v1", "VizdoomHealthGatheringSupreme-v1"],
+    [
+        "VizdoomHealthGathering-v1",
+        "VizdoomHealthGathering-Plus-v1",
+        "VizdoomHealthGatheringSupreme-v1",
+    ],
 )
 def test_vizdoom_health_gathering_ppo_uses_confirmed_training_defaults(
     goal_id: str,
@@ -297,6 +347,14 @@ def test_vizdoom_health_gathering_ppo_uses_confirmed_training_defaults(
             "high": 2.0,
         },
     }
+    if goal_id == "VizdoomHealthGathering-Plus-v1":
+        assert set(document["train_config"]["task"]["model_inputs"]["context"]) == {
+            "health"
+        }
+        assert document["train_config"]["policy_model"]["routes"] == {
+            "health": ["state_value"],
+        }
+        return
     assert document["train_config"]["task"]["model_inputs"]["context"]["remaining_time"] == {
         "signal": "episode_step",
         "update": "transition",
