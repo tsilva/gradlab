@@ -249,21 +249,15 @@ def test_vizdoom_health_gathering_uses_native_provider_truncation_for_survival(
     document = compose_train_document(goal_path, recipe_path)
 
     train_config = document["train_config"]
-    expected_info_keys = (
-        ["player_dead", "health"]
-        if goal_id == "VizdoomHealthGathering-v1"
-        else ["player_dead"]
-    )
     assert train_config["env_args"]["info_filter"] == {
         "mode": "all",
-        "keys": expected_info_keys,
+        "keys": ["player_dead", "health"],
     }
     expected_signals = {
         "player_dead": "player_dead",
+        "health": "health",
         "native_timeout": "provider_truncated",
     }
-    if goal_id == "VizdoomHealthGathering-v1":
-        expected_signals["health"] = "health"
     assert train_config["task"]["signals"] == expected_signals
     assert train_config["task"]["events"]["goal_reached"] == {
         "signal": "native_timeout",
@@ -277,8 +271,14 @@ def test_vizdoom_health_gathering_uses_native_provider_truncation_for_survival(
     }
 
 
-def test_vizdoom_health_gathering_ppo_uses_confirmed_training_defaults() -> None:
-    goal_path = GOALS_ROOT / "VizdoomHealthGathering-v1" / "_goal.yaml"
+@pytest.mark.parametrize(
+    "goal_id",
+    ["VizdoomHealthGathering-v1", "VizdoomHealthGatheringSupreme-v1"],
+)
+def test_vizdoom_health_gathering_ppo_uses_confirmed_training_defaults(
+    goal_id: str,
+) -> None:
+    goal_path = GOALS_ROOT / goal_id / "_goal.yaml"
     recipe_path = goal_path.parent / "recipes/ppo.yaml"
     document = compose_train_document(goal_path, recipe_path)
 
