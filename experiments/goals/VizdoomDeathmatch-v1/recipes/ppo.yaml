@@ -31,6 +31,8 @@ train:
       return_plateau:
         start_after_steps: 749568
         patience_steps: 749568
+        # Preserve plateau telemetry without stopping this bounded Deathmatch run.
+        action: observe
   backend:
     config:
       n_epochs: 2
