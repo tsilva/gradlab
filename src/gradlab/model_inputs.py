@@ -25,6 +25,8 @@ MODEL_INPUTS_SCHEMA_VERSION = 1
 CONTEXT_UPDATES = frozenset({"transition", "episode"})
 CONTEXT_ENCODINGS = frozenset({"continuous", "categorical"})
 CONTEXT_OBSERVATION_LAYOUT = "dict_observation_context_v1"
+EPISODE_STEP_SIGNAL = "episode_step"
+RUNTIME_CONTEXT_SIGNALS = frozenset({EPISODE_STEP_SIGNAL})
 
 
 def _finite_number(value: Any, *, label: str) -> float:
@@ -112,6 +114,10 @@ def normalize_model_inputs(value: Any, *, label: str = "task.model_inputs") -> d
         if update not in CONTEXT_UPDATES:
             raise ValueError(
                 f"{field_label}.update must be one of {sorted(CONTEXT_UPDATES)}"
+            )
+        if signal.strip() in RUNTIME_CONTEXT_SIGNALS and update != "transition":
+            raise ValueError(
+                f"{field_label} uses a runtime context signal and must update on every transition"
             )
         encoding = raw_field.get("encoding")
         if not isinstance(encoding, Mapping):
@@ -251,6 +257,14 @@ class CompiledContextField:
     categories: tuple[int | str | tuple[int | str, ...], ...] = ()
 
 
+@dataclass(frozen=True)
+class RuntimeContextSignalSpec:
+    dtype: np.dtype
+    shape: tuple[int, ...] = ()
+    available_on_reset: bool = True
+    available_on_step: bool = True
+
+
 class ContextTaskKernel:
     """Add typed task context to any provider-neutral bound task kernel."""
 
@@ -271,6 +285,16 @@ class ContextTaskKernel:
         context_bindings: dict[str, Any] = {}
         for name, declaration in declarations.items():
             signal = declaration["signal"]
+            if signal in RUNTIME_CONTEXT_SIGNALS:
+                if signal in signals:
+                    raise ValueError(
+                        f"task signal {signal!r} is reserved for model-input runtime context"
+                    )
+                if declaration["update"] != "transition":
+                    raise ValueError(
+                        f"runtime context field {name!r} must update on every transition"
+                    )
+                continue
             if signal not in signals:
                 raise ValueError(
                     f"task.model_inputs.context.{name}.signal references unknown "
@@ -289,12 +313,24 @@ class ContextTaskKernel:
             [("observation", kernel.observation_space)]
         )
         contract_fields: dict[str, Any] = {}
+        self._episode_steps = np.zeros(self.num_envs, dtype=np.int64)
+        self._uses_episode_steps = any(
+            declaration["signal"] == EPISODE_STEP_SIGNAL for declaration in declarations.values()
+        )
         for name in sorted(declarations):
             declaration = declarations[name]
             signal = str(declaration["signal"])
-            source = self._bindings.source(signal)
-            source_names = (source,) if isinstance(source, str) else tuple(source)
-            specs = self._bindings.source_specs(signal)
+            if signal == EPISODE_STEP_SIGNAL:
+                source_names = (EPISODE_STEP_SIGNAL,)
+                specs = (
+                    RuntimeContextSignalSpec(
+                        dtype=np.dtype(np.int64),
+                    ),
+                )
+            else:
+                source = self._bindings.source(signal)
+                source_names = (source,) if isinstance(source, str) else tuple(source)
+                specs = self._bindings.source_specs(signal)
             if any(source_name in RUNTIME_BOUNDARY_SIGNALS for source_name in source_names):
                 raise ValueError(
                     f"context field {name!r} cannot use a runtime boundary signal"
@@ -389,6 +425,7 @@ class ContextTaskKernel:
                         "shape": list(spec.shape),
                         "available_on_reset": bool(spec.available_on_reset),
                         "available_on_step": bool(spec.available_on_step),
+                        **({"origin": "runtime"} if signal == EPISODE_STEP_SIGNAL else {}),
                     }
                     for source_name, spec in zip(source_names, specs, strict=True)
                 ],
@@ -445,6 +482,8 @@ class ContextTaskKernel:
         *,
         mask: np.ndarray,
     ) -> np.ndarray:
+        if field.signal == EPISODE_STEP_SIGNAL:
+            return self._episode_steps.reshape(self.num_envs, 1)
         columns = self._bindings.columns(field.signal, signals, mask=mask)
         flattened = [np.asarray(column).reshape(self.num_envs, -1) for column in columns]
         return flattened[0] if len(flattened) == 1 else np.concatenate(flattened, axis=1)
@@ -455,6 +494,8 @@ class ContextTaskKernel:
         signals: Mapping[str, Any],
         mask: np.ndarray,
     ) -> bool:
+        if field.signal == EPISODE_STEP_SIGNAL:
+            return True
         for source_name in field.source_names:
             if source_name not in signals:
                 return False
@@ -530,6 +571,7 @@ class ContextTaskKernel:
     ) -> None:
         self.kernel.on_reset(reset_observations, reset_signals, mask)
         selected = np.asarray(mask, dtype=np.bool_)
+        self._episode_steps[selected] = 0
         for field in self.fields:
             self._update_field(field, reset_signals, selected)
 
@@ -546,6 +588,7 @@ class ContextTaskKernel:
             provider_truncated,
             signals,
         )
+        self._episode_steps += 1
         all_lanes = np.ones(self.num_envs, dtype=np.bool_)
         boundary = (
             np.asarray(provider_terminated, dtype=np.bool_)
@@ -626,6 +669,11 @@ class ContextTaskKernel:
                             )
                             for field in episode_fields
                         },
+                        **(
+                            {"runtime_episode_step": int(self._episode_steps[lane])}
+                            if self._uses_episode_steps
+                            else {}
+                        ),
                     },
                 )
             )
@@ -685,7 +733,19 @@ class ContextTaskKernel:
                         )
                     self._buffers[field_name][lane_index] = value
                 self._initialized[field_name][lane_index] = True
+            if self._uses_episode_steps:
+                episode_step = values.get("runtime_episode_step")
+                if (
+                    not isinstance(episode_step, int)
+                    or isinstance(episode_step, bool)
+                    or episode_step < 0
+                ):
+                    raise ValueError(f"archive lane {lane_index} has invalid runtime episode step")
+                self._episode_steps[lane_index] = episode_step
         self.kernel.restore_lane_states(inner_states, selected)
+        for field in self.fields:
+            if field.signal == EPISODE_STEP_SIGNAL:
+                self._update_field(field, {}, selected)
 
 
 def with_model_inputs(

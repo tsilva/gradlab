@@ -17,8 +17,10 @@ train:
     fusion: post_encoder_concat
     context_encoders:
       health: {kind: identity}
+      remaining_time: {kind: identity}
     routes:
       health: [state_value]
+      remaining_time: [state_value]
     heads:
       action: {hidden_sizes: [], activation: tanh}
       state_value: {hidden_sizes: [], activation: tanh}

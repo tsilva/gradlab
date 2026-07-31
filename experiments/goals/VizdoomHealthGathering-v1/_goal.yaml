@@ -46,6 +46,17 @@ train:
               # Preserve negative fatal-transition health and any provider over-health.
               low: -1.0
               high: 2.0
+          # Expose the task runtime's lane-local episode clock as normalized time remaining.
+          remaining_time:
+            signal: episode_step
+            update: transition
+            encoding:
+              kind: continuous
+              # The native 2,100-tic horizon is 525 policy steps at four-frame skipping.
+              scale: -0.0019047619047619048
+              offset: 1.0
+              low: 0.0
+              high: 1.0
       # Define discrete task events derived from changes in the declared signals.
       events:
         # Detect death when the provider's death flag is asserted for a step.
