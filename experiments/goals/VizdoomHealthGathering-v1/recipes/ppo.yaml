@@ -6,6 +6,9 @@ description: Training-only pixel PPO for gathering health in {{ goal_id }}.
 train:
   checkpoint_eval_backend: none
   timesteps: 10000000
+  backend:
+    config:
+      n_steps: 256
   early_stop:
     conditions:
       return_plateau:

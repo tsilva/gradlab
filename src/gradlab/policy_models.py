@@ -5,8 +5,8 @@ from pathlib import Path
 from typing import Any
 
 from gradlab.policy_registry import (
+    PolicyAlgorithmId,
     RUNTIME_POLICY_ALGORITHMS,
-    RuntimePolicyAlgorithmId,
     resolve_policy_algorithm as resolve_registered_policy_algorithm,
 )
 from gradlab.trusted_inputs import (
@@ -14,10 +14,6 @@ from gradlab.trusted_inputs import (
     approve_internal_model,
     stage_and_approve_model,
 )
-
-
-PolicyAlgorithmId = RuntimePolicyAlgorithmId
-
 
 def resolve_policy_algorithm(metadata: Mapping[str, Any] | None) -> PolicyAlgorithmId:
     return resolve_registered_policy_algorithm(

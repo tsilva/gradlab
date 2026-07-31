@@ -376,21 +376,6 @@ def _safe_float(value: object) -> float | None:
     return numeric if numeric == numeric and abs(numeric) != float("inf") else None
 
 
-def _safe_summary_float(value: object) -> float | None:
-    numeric = _safe_float(value)
-    if numeric is not None:
-        return numeric
-    getter = getattr(value, "get", None)
-    if not callable(getter):
-        return None
-    reduced = tuple(
-        numeric
-        for reducer in ("last", "max", "min", "mean", "best")
-        if (numeric := _safe_float(getter(reducer))) is not None
-    )
-    return reduced[0] if len(reduced) == 1 else None
-
-
 def _run_metric_specs(
     rank: tuple[RankCriterion, ...],
 ) -> tuple[tuple[RankCriterion, tuple[str, ...]], ...]:

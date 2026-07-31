@@ -8,6 +8,12 @@ from pathlib import Path
 PORTABLE_DEFAULT_RUNS_DIR = "~/.config/gradlab/runs"
 
 
+def configure_matplotlib_cache() -> str:
+    path = os.environ.setdefault("MPLCONFIGDIR", os.path.abspath(".matplotlib"))
+    os.makedirs(path, exist_ok=True)
+    return path
+
+
 def default_gradlab_config_dir(
     environment: Mapping[str, str] | None = None,
 ) -> Path:

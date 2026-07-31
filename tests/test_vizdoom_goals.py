@@ -269,6 +269,16 @@ def test_vizdoom_health_gathering_uses_native_provider_truncation_for_survival(
     }
 
 
+def test_vizdoom_health_gathering_ppo_uses_confirmed_training_defaults() -> None:
+    goal_path = GOALS_ROOT / "VizdoomHealthGathering-v1" / "_goal.yaml"
+    recipe_path = goal_path.parent / "recipes/ppo.yaml"
+    document = compose_train_document(goal_path, recipe_path)
+
+    backend_config = document["train_config"]["training_backend"]["config"]
+    assert backend_config["n_steps"] == 256
+    assert backend_config["learning_rate"] == 2.5e-4
+
+
 def test_vizdoom_deathmatch_declares_complete_single_player_combat_semantics() -> None:
     goal_path = GOALS_ROOT / "VizdoomDeathmatch-v1" / "_goal.yaml"
     recipe_path = goal_path.parent / "recipes/ppo.yaml"
