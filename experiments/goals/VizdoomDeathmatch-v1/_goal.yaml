@@ -96,9 +96,10 @@ train:
               kind: continuous
               scale: 0.01
               offset: 0.0
-              # Preserve fatal-transition health and possible Doom over-health.
-              low: -1.0
+              # Saturate fatal overkill at zero and possible Doom over-health at two.
+              low: 0.0
               high: 2.0
+              clip: true
       # Define discrete task events derived from changes in the declared signals.
       events:
         # Detect each monster elimination from an increase in the kill counter.

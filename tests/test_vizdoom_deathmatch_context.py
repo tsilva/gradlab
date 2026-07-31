@@ -19,8 +19,9 @@ def test_deathmatch_routes_normalized_health_only_to_nonlinear_critic() -> None:
             "kind": "continuous",
             "scale": 0.01,
             "offset": 0.0,
-            "low": -1.0,
+            "low": 0.0,
             "high": 2.0,
+            "clip": True,
         },
     }
     assert train_config["policy_model"]["routes"] == {
