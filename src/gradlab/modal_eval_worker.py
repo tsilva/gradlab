@@ -15,8 +15,8 @@ from urllib.parse import unquote, urlparse
 
 from gradlab.cli_parser import ExactArgumentParser
 from gradlab.file_utils import file_sha256
-from gradlab.json_utils import canonical_json_line_bytes
-from gradlab.modal_eval_protocol import PROTOCOL_SCHEMA_VERSION, canonical_json, execution_key
+from gradlab.json_utils import canonical_json_line_bytes, canonical_json_text
+from gradlab.modal_eval_protocol import PROTOCOL_SCHEMA_VERSION, execution_key
 from gradlab.modal_eval_storage import write_downloaded_file
 from gradlab.policy_bundle import (
     evaluation_contract,
@@ -24,7 +24,8 @@ from gradlab.policy_bundle import (
     load_policy_bundle,
     load_policy_bundle_from_checkpoint,
 )
-from gradlab.policy_models import load_internal_policy_model, resolve_policy_algorithm
+from gradlab.policy_models import load_internal_policy_model
+from gradlab.policy_registry import resolve_policy_algorithm
 from gradlab.policy_runtime import PolicyRuntime
 from gradlab.video import PolicyObservationPreview, write_preview_video
 from gradlab.rom_assets import cache_path, validate_rom_asset_manifest, verify_rom_file
@@ -140,9 +141,11 @@ def run_child(input_path: Path, output_path: Path) -> int:
     )
     if bundle is not None:
         recipe_eval = evaluation_contract(bundle.recipe)
-        if canonical_json(recipe_eval["environment"]) != canonical_json(
-            contract["environment"]
-        ):
+        if canonical_json_text(
+            recipe_eval["environment"],
+            default=str,
+            allow_nan=True,
+        ) != canonical_json_text(contract["environment"], default=str, allow_nan=True):
             raise ValueError("remote eval environment differs from recipe contract")
         if int(recipe_eval["seed"]) != int(contract["seed"]):
             raise ValueError("remote eval seed differs from recipe contract")

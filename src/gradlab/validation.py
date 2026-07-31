@@ -5,6 +5,22 @@ from pathlib import Path
 from typing import Any
 
 
+SECRET_KEY_FRAGMENTS = (
+    "api_key",
+    "access_key",
+    "secret",
+    "token",
+    "password",
+    "credential",
+    "database_url",
+)
+
+
+def is_secret_like_key(value: object) -> bool:
+    key = str(value).casefold()
+    return any(fragment in key for fragment in SECRET_KEY_FRAGMENTS)
+
+
 def display_path(path: Path, repo_root: Path) -> str:
     try:
         return str(path.relative_to(repo_root))

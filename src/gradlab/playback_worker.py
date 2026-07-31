@@ -11,6 +11,7 @@ from typing import Any
 
 from gradlab.operator_credentials import PROTECTED_ENV_NAMES
 from gradlab.play_runtime import PlaySourceSpec
+from gradlab.play_web import idle_playback_snapshot
 
 
 PLAYBACK_RPC_TIMEOUT_SECONDS = 30.0
@@ -272,35 +273,8 @@ class IsolatedPlaybackHost:
     def snapshot(self) -> dict[str, Any]:
         if self._process is None:
             return {
-                "type": "snapshot",
-                "protocol": 3,
-                "revision": 0,
-                "sequence": 0,
-                "run_state": "paused",
-                "driver": "policy",
-                "interactive": False,
-                "policy": None,
-                "status_message": None,
+                **idle_playback_snapshot(),
                 "session_epoch": 0,
-                "session": {
-                    "episode": 0,
-                    "step": 0,
-                    "seed": None,
-                    "task": None,
-                    "total_reward": 0.0,
-                    "max_x_pos": 0,
-                    "action_names": [],
-                    "event_names": [],
-                    "env_id": None,
-                    "sampling_mode": "stochastic",
-                    "target_fps": 0.0,
-                    "episodes_limit": 0,
-                    "awaiting_next_episode": False,
-                    "can_start_next_episode": False,
-                    "history_size": 0,
-                    "config": "",
-                },
-                "transition": None,
                 "app": {
                     "phase": "selecting",
                     "message": "",

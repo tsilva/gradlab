@@ -56,7 +56,7 @@ from gradlab.model_sources import (
 )
 from gradlab.policy_models import load_policy_model
 from gradlab.policy_bundle import load_policy_bundle_from_checkpoint, load_recipe_document
-from gradlab.policy_models import resolve_policy_algorithm
+from gradlab.policy_registry import resolve_policy_algorithm
 from gradlab.trusted_inputs import ApprovedModelInput, stage_and_approve_model
 
 

@@ -1,26 +1,17 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
 from gradlab.policy_registry import (
     PolicyAlgorithmId,
-    RUNTIME_POLICY_ALGORITHMS,
-    resolve_policy_algorithm as resolve_registered_policy_algorithm,
+    resolve_policy_algorithm,
 )
 from gradlab.trusted_inputs import (
     ApprovedModelInput,
     approve_internal_model,
     stage_and_approve_model,
 )
-
-def resolve_policy_algorithm(metadata: Mapping[str, Any] | None) -> PolicyAlgorithmId:
-    return resolve_registered_policy_algorithm(
-        metadata,
-        allowed=RUNTIME_POLICY_ALGORITHMS,
-    )
-
 
 def load_policy_model(
     model_input: ApprovedModelInput,

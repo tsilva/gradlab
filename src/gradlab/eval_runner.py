@@ -42,8 +42,8 @@ from gradlab.rom_runtime import (
 from gradlab.policy_models import (
     load_external_policy_model,
     load_internal_policy_model,
-    resolve_policy_algorithm,
 )
+from gradlab.policy_registry import resolve_policy_algorithm
 from gradlab.policy_runtime import PolicyRuntime, bind_policy_action_space, reset_policy_state
 from gradlab.env_registry import EvalSemantics, environment_spec
 from gradlab.video import PolicyObservationPreview, write_video

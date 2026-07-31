@@ -14,6 +14,7 @@ from gradlab.play_runtime import (
     PlaybackCandidate,
     PlaybackLoader,
 )
+from gradlab.play_web import idle_playback_snapshot
 from gradlab.run_contracts import checkpoint_id
 
 
@@ -187,42 +188,14 @@ class PlaybackHost:
         }
 
     def snapshot(self) -> dict[str, Any]:
-        from gradlab.play_web import PROTOCOL_VERSION
-
         with self._lock:
             if self._active is not None and self._phase == "active":
                 snapshot = self._active.runner.snapshot()
             else:
-                snapshot = {
-                    "type": "snapshot",
-                    "protocol": PROTOCOL_VERSION,
-                    "revision": self._revision,
-                    "sequence": 0,
-                    "run_state": "paused",
-                    "driver": "policy",
-                    "interactive": False,
-                    "policy": None,
-                    "status_message": self._message or self._error or None,
-                    "session": {
-                        "episode": 0,
-                        "step": 0,
-                        "seed": None,
-                        "task": None,
-                        "total_reward": 0.0,
-                        "max_x_pos": 0,
-                        "action_names": [],
-                        "event_names": [],
-                        "env_id": None,
-                        "sampling_mode": "stochastic",
-                        "target_fps": 0.0,
-                        "episodes_limit": 0,
-                        "awaiting_next_episode": False,
-                        "can_start_next_episode": False,
-                        "history_size": 0,
-                        "config": "",
-                    },
-                    "transition": None,
-                }
+                snapshot = idle_playback_snapshot(
+                    revision=self._revision,
+                    status_message=self._message or self._error or None,
+                )
             return {
                 **snapshot,
                 "session_epoch": self._session_epoch,

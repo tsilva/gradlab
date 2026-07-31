@@ -5,7 +5,7 @@ recipe_id: ppo
 description: Single-player ViZDoom Deathmatch pixel PPO tuned for stable policy updates.
 train:
   checkpoint_eval_backend: none
-  timesteps: 2998272
+  timesteps: 100000000
   # Blend privileged health and armor with image features only in the nonlinear critic head.
   policy_model:
     schema_version: 1
@@ -29,8 +29,8 @@ train:
   early_stop:
     conditions:
       return_plateau:
-        start_after_steps: 749568
-        patience_steps: 749568
+        start_after_steps: 25000000
+        patience_steps: 25000000
         # Preserve plateau telemetry without stopping this bounded Deathmatch run.
         action: observe
   backend:

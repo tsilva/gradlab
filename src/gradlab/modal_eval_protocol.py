@@ -11,7 +11,7 @@ from gradlab.checkpoint_acceptance import (
     evaluate_acceptance,
     validate_episode_rows,
 )
-from gradlab.json_utils import canonical_json_sha256, canonical_json_text
+from gradlab.json_utils import canonical_json_sha256
 
 
 PROTOCOL_SCHEMA_VERSION = 4
@@ -22,14 +22,6 @@ def _sha256(value: object, *, label: str) -> str:
     if len(text) != 64 or any(character not in "0123456789abcdef" for character in text):
         raise ValueError(f"{label} must be a SHA-256 hex digest")
     return text
-
-
-def canonical_json(value: object) -> str:
-    return canonical_json_text(value, default=str, allow_nan=True)
-
-
-def stable_hash(value: object) -> str:
-    return canonical_json_sha256(value, default=str, allow_nan=True)
 
 
 def build_execution_contract(
@@ -89,7 +81,7 @@ def build_execution_contract(
 
 
 def execution_key(contract: Mapping[str, Any]) -> str:
-    return stable_hash(dict(contract))
+    return canonical_json_sha256(dict(contract), default=str, allow_nan=True)
 
 
 def _validate_finite(value: object, *, label: str) -> None:

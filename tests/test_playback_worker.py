@@ -5,6 +5,7 @@ from argparse import Namespace
 import pytest
 
 from gradlab.playback_worker import IsolatedPlaybackHost
+from gradlab.play_web import PROTOCOL_VERSION
 
 
 def test_isolated_playback_worker_starts_without_a_source() -> None:
@@ -16,6 +17,7 @@ def test_isolated_playback_worker_starts_without_a_source() -> None:
     try:
         host.start()
         snapshot = host.snapshot()
+        assert snapshot["protocol"] == PROTOCOL_VERSION
         assert snapshot["app"]["phase"] == "selecting"
         assert snapshot["app"]["source"] is None
     finally:

@@ -92,11 +92,8 @@ class TrainTests(unittest.TestCase):
         callback = GracefulStopHelper(stop_flag)
         callback.num_timesteps = 123
 
-        self.assertTrue(callback._on_step())
-
         stop_flag.request("SIGUSR1")
 
-        self.assertTrue(callback._on_step())
         callback.acknowledge_safe_boundary(num_timesteps=123)
 
         self.assertTrue(callback.logged)

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from copy import deepcopy
 from typing import Any
 
 from gradlab.metric_names import metric_path_segment
@@ -227,7 +226,3 @@ def validate_policy_model_context(
                 f"{label}.context_encoders.{name}.kind must be {expected_encoder!r} "
                 f"for {source_kind} context"
             )
-
-
-def policy_model_copy(value: Mapping[str, Any]) -> dict[str, Any]:
-    return deepcopy(dict(value))

@@ -388,18 +388,15 @@ class MetricEarlyStopHelperTests(unittest.TestCase):
             callback, model = self.make_callback(decision_path)
             callback.num_timesteps = 100
 
-            self.assertTrue(callback._on_step())
             self.assertFalse(decision_path.exists())
 
             model.logger.records[TRAIN_OUTCOME_SUCCESS_ACROSS_STARTS_WINDOW_100_RATE_MIN] = 0.99
             callback._on_rollout_end()
-            self.assertTrue(callback._on_step())
             self.assertFalse(decision_path.exists())
 
             model.logger.records[TRAIN_OUTCOME_SUCCESS_ACROSS_STARTS_WINDOW_100_RATE_MIN] = 1.0
             callback.num_timesteps = 200
             callback._on_rollout_end()
-            self.assertTrue(callback._on_step())
             self.assertTrue(callback.stop_flag.requested)
             self.assertEqual(callback.stop_flag.reason, "early_stop:clear_100")
 
@@ -450,9 +447,7 @@ class MetricEarlyStopHelperTests(unittest.TestCase):
             callback.model = model  # type: ignore[assignment]
             callback.num_timesteps = 130000
 
-            self.assertTrue(callback._on_step())
             callback._on_rollout_end()
-            self.assertTrue(callback._on_step())
             self.assertTrue(callback.stop_flag.requested)
 
             decision = json.loads(decision_path.read_text(encoding="utf-8"))

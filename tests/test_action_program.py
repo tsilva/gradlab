@@ -17,7 +17,8 @@ from gradlab.action_program import (
     ActionProgramPolicy,
     ActionRun,
 )
-from gradlab.policy_models import load_policy_model, resolve_policy_algorithm
+from gradlab.policy_models import load_policy_model
+from gradlab.policy_registry import resolve_policy_algorithm
 
 
 ACTIONS = ("noop", "right", "right_b", "right_a", "right_a_b", "a", "left")

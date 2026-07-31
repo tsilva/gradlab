@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import pytest
 
-from gradlab.policy_models import resolve_policy_algorithm
 from gradlab.policy_registry import (
     ALGORITHM_MODEL_CLASSES,
     MODEL_CLASS_ALGORITHMS,
@@ -10,6 +9,7 @@ from gradlab.policy_registry import (
     RUNTIME_POLICY_ALGORITHMS,
     SB3_ALGORITHMS,
     default_action_selection_mode,
+    resolve_policy_algorithm,
 )
 from gradlab.sb3_models import resolve_sb3_algorithm
 from gradlab.training_backend import load_training_backend

@@ -19,6 +19,7 @@ from gradlab.model_sources import (
     resolve_model_source,
 )
 from gradlab.policy_bundle import (
+    STATE_ARCHIVE_SUMMARY_FIELDS,
     critic_value_contract,
     playback_contract,
     playback_contract_audit,
@@ -361,7 +362,8 @@ class PlaybackLoader:
         *,
         progress: ProgressCallback,
     ) -> ActivePlayback:
-        from gradlab.policy_models import load_policy_model, resolve_policy_algorithm
+        from gradlab.policy_models import load_policy_model
+        from gradlab.policy_registry import resolve_policy_algorithm
         from gradlab.policy_runtime import PolicyRuntime
 
         args = candidate.args
@@ -494,22 +496,10 @@ class PlaybackLoader:
                 policy_provenance["cell_graph"] = deepcopy(dict(graph_value))
             summary_value = provenance.get("state_archive_summary")
             if isinstance(summary_value, Mapping):
-                safe_summary_fields = {
-                    "semantic_id",
-                    "schema_version",
-                    "persistence",
-                    "provider_id",
-                    "codec_id",
-                    "compatibility_id",
-                    "entry_count",
-                    "blob_count",
-                    "blob_bytes",
-                    "view_ids",
-                }
                 policy_provenance["state_archive_summary"] = {
                     str(key): deepcopy(value)
                     for key, value in summary_value.items()
-                    if key in safe_summary_fields
+                    if key in STATE_ARCHIVE_SUMMARY_FIELDS
                 }
             session = _PlaybackSession(
                 model=model,

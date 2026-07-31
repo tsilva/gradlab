@@ -10,6 +10,7 @@ from gradlab.json_utils import canonical_json_text
 from gradlab.metric_names import metric_path_segment
 from gradlab.provider_config import provider_env_id, provider_game, semantic_provider_args
 from gradlab.preprocessing import preprocessing_contract
+from gradlab.reward_programs import MARIO_REWARD_FIELD_SET
 from gradlab.reward_transform import (
     COMMON_REWARD_KEYS,
     normalize_task_reward,
@@ -34,25 +35,6 @@ PREPROCESSING_KEYS = (
     "obs_resize_algorithm",
 )
 IDENTITY_REWARD_KEYS = frozenset({"reward_mode"}) | COMMON_REWARD_KEYS
-MARIO_REWARD_KEYS = (
-    frozenset(
-        {
-            "reward_mode",
-            "use_native_reward",
-            "progress_reward_cap",
-            "progress_reward_scale",
-            "progress_reward_boost_start_x",
-            "progress_reward_boost_scale",
-            "terminal_reward",
-            "reward_scale",
-            "time_penalty",
-            "death_penalty",
-            "completion_reward",
-            "score_progress_clipped",
-        }
-    )
-    | COMMON_REWARD_KEYS
-)
 
 
 def _normalize_preprocessing(identity: dict[str, Any]) -> None:
@@ -71,12 +53,11 @@ def _normalize_preprocessing(identity: dict[str, Any]) -> None:
     preprocessing.update(canonical)
 
 
-def canonical_json(value: Any) -> str:
-    return canonical_json_text(value, default=str, allow_nan=True)
-
-
 def environment_hash(environment: Mapping[str, Any]) -> str:
-    payload = f"{ENVIRONMENT_HASH_ALGORITHM}\n{canonical_json(environment)}"
+    payload = (
+        f"{ENVIRONMENT_HASH_ALGORITHM}\n"
+        f"{canonical_json_text(environment, default=str, allow_nan=True)}"
+    )
     digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()
     return f"sha256:{digest}"
 
@@ -273,7 +254,9 @@ def validate_task_config(task: Mapping[str, Any], *, label: str = "task") -> Non
         if not isinstance(value, int) or isinstance(value, bool) or value < 0:
             raise ValueError(f"{label}.termination.{key} must be a non-negative integer")
     reward = task["reward"]
-    allowed_reward_keys = IDENTITY_REWARD_KEYS if task_id == "identity" else MARIO_REWARD_KEYS
+    allowed_reward_keys = (
+        IDENTITY_REWARD_KEYS if task_id == "identity" else MARIO_REWARD_FIELD_SET
+    )
     extra_reward_keys = sorted(set(reward) - allowed_reward_keys)
     if extra_reward_keys:
         raise ValueError(f"{label}.reward has unexpected keys: {extra_reward_keys}")
