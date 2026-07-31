@@ -85,7 +85,7 @@ train:
         selected_weapon_ammo: selected_weapon_ammo
         player_dead: player_dead
         episode_done: pending_reset
-      # Expose health as privileged critic state without changing the actor's inputs.
+      # Expose health and armor without changing the actor's inputs.
       model_inputs:
         schema_version: 1
         context:
@@ -99,6 +99,17 @@ train:
               # Saturate fatal overkill at zero and possible Doom over-health at two.
               low: 0.0
               high: 2.0
+              clip: true
+          armor:
+            signal: armor
+            update: transition
+            encoding:
+              kind: continuous
+              # Normalize standard Doom armor and saturate any custom over-armor.
+              scale: 0.005
+              offset: 0.0
+              low: 0.0
+              high: 1.0
               clip: true
       # Define discrete task events derived from changes in the declared signals.
       events:
