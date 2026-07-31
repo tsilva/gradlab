@@ -129,7 +129,7 @@ def normalize_model_inputs(value: Any, *, label: str = "task.model_inputs") -> d
             )
         if kind == "continuous":
             unexpected_encoding = sorted(
-                set(encoding) - {"kind", "scale", "offset", "low", "high"}
+                set(encoding) - {"kind", "scale", "offset", "low", "high", "clip"}
             )
             if unexpected_encoding:
                 raise ValueError(
@@ -142,6 +142,9 @@ def normalize_model_inputs(value: Any, *, label: str = "task.model_inputs") -> d
             scale_values = scale if isinstance(scale, list) else [scale]
             if any(value == 0.0 for value in scale_values):
                 raise ValueError(f"{field_label}.encoding.scale must be non-zero")
+            clip = encoding.get("clip", False)
+            if not isinstance(clip, bool):
+                raise ValueError(f"{field_label}.encoding.clip must be a boolean")
             normalized_encoding = {
                 "kind": kind,
                 "scale": scale,
@@ -160,6 +163,8 @@ def normalize_model_inputs(value: Any, *, label: str = "task.model_inputs") -> d
                     allow_null=True,
                 ),
             }
+            if clip:
+                normalized_encoding["clip"] = True
         else:
             unexpected_encoding = sorted(set(encoding) - {"kind", "values"})
             if unexpected_encoding:
@@ -254,6 +259,7 @@ class CompiledContextField:
     offset: np.ndarray | None = None
     low: np.ndarray | None = None
     high: np.ndarray | None = None
+    clip: bool = False
     categories: tuple[int | str | tuple[int | str, ...], ...] = ()
 
 
@@ -380,6 +386,7 @@ class ContextTaskKernel:
                 space = gym.spaces.Box(low=low, high=high, dtype=np.float32)
                 buffers[name] = np.zeros((self.num_envs, width), dtype=np.float32)
                 categories: tuple[Any, ...] = ()
+                clip = bool(encoding.get("clip", False))
             else:
                 categories = tuple(
                     canonical_category(
@@ -395,6 +402,7 @@ class ContextTaskKernel:
                         f"source values, provider exposes {width}"
                     )
                 scale = offset = low = high = None
+                clip = False
                 space = gym.spaces.Discrete(len(categories))
                 buffers[name] = np.zeros(self.num_envs, dtype=np.int64)
             spaces[f"context/{name}"] = space
@@ -411,6 +419,7 @@ class ContextTaskKernel:
                 offset=offset,
                 low=low,
                 high=high,
+                clip=clip,
                 categories=categories,
             )
             compiled.append(field)
@@ -522,8 +531,21 @@ class ContextTaskKernel:
             selected = encoded[mask]
             if np.any(~np.isfinite(selected)):
                 raise ValueError(f"context field {field.name!r} produced non-finite values")
-            if np.any(selected < field.low) or np.any(selected > field.high):
-                raise ValueError(f"context field {field.name!r} is outside encoded bounds")
+            if field.clip:
+                return np.clip(encoded, field.low, field.high)
+            outside = (selected < field.low) | (selected > field.high)
+            if np.any(outside):
+                selected_row, column = np.argwhere(outside)[0]
+                lane = int(np.flatnonzero(mask)[selected_row])
+                raw = matrix[lane, column].item()
+                value = encoded[lane, column].item()
+                low = field.low[column].item()
+                high = field.high[column].item()
+                raise ValueError(
+                    f"context field {field.name!r} is outside encoded bounds in "
+                    f"lane {lane}, column {column}: raw={raw!r}, encoded={value!r}, "
+                    f"bounds=[{low!r}, {high!r}]"
+                )
             return encoded
 
         category_index = {value: index for index, value in enumerate(field.categories)}

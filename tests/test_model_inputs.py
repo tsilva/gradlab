@@ -115,6 +115,63 @@ def test_context_kernel_emits_typed_flat_dict_and_updates_transition_context() -
     )
 
 
+def test_continuous_context_may_explicitly_clip_encoded_bounds() -> None:
+    descriptor = _descriptor()
+    task = _task()
+    encoding = task["model_inputs"]["context"]["health"]["encoding"]
+    encoding.update({"low": 0.0, "clip": True})
+    normalized = normalize_model_inputs(task["model_inputs"])
+    assert normalized["context"]["health"]["encoding"]["clip"] is True
+
+    base = IdentityTaskDefinition(signals=task["signals"]).bind(descriptor, 2)
+    kernel = ContextTaskKernel(base, descriptor, task)
+    observations = np.zeros((2, 4, 84, 84), dtype=np.uint8)
+    kernel.on_reset(
+        observations,
+        _signals((100.0, 250.0), ((1, 1), (1, 2))),
+        np.ones(2, dtype=np.bool_),
+    )
+    np.testing.assert_array_equal(
+        kernel.encode_observations(observations)["context/health"],
+        [[1.0], [2.0]],
+    )
+
+    kernel.process(
+        np.zeros(2, dtype=np.float32),
+        np.asarray([True, False]),
+        np.zeros(2, dtype=np.bool_),
+        _signals((-450.0, 25.0), ((1, 1), (1, 2))),
+    )
+    np.testing.assert_array_equal(
+        kernel.encode_observations(observations)["context/health"],
+        [[0.0], [0.25]],
+    )
+
+
+def test_continuous_context_clip_must_be_boolean() -> None:
+    model_inputs = _task()["model_inputs"]
+    model_inputs["context"]["health"]["encoding"]["clip"] = "yes"
+    with pytest.raises(ValueError, match="clip must be a boolean"):
+        normalize_model_inputs(model_inputs)
+
+
+def test_strict_continuous_context_bound_error_identifies_the_value() -> None:
+    kernel = _kernel()
+    observations = np.zeros((2, 4, 84, 84), dtype=np.uint8)
+    with pytest.raises(
+        ValueError,
+        match=(
+            r"health.*lane 1, column 0: raw=-450.0, encoded=-4.5, "
+            r"bounds=\[-1.0, 2.0\]"
+        ),
+    ):
+        kernel.on_reset(
+            observations,
+            _signals((100.0, -450.0), ((1, 1), (1, 2))),
+            np.ones(2, dtype=np.bool_),
+        )
+
+
 def test_episode_context_rejects_mid_episode_changes_but_keeps_terminal_identity() -> None:
     kernel = _kernel()
     observations = np.zeros((2, 4, 84, 84), dtype=np.uint8)

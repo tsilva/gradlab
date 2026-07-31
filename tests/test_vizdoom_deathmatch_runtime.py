@@ -25,7 +25,7 @@ def test_deathmatch_recipe_runs_through_the_real_single_player_vector_runtime() 
         assert observations["context/health"].shape == (2, 1)
         assert observations["context/health"].dtype == np.float32
         assert np.all(
-            (-1.0 <= observations["context/health"])
+            (0.0 <= observations["context/health"])
             & (observations["context/health"] <= 2.0)
         )
         assert env.action_space.n == 17
