@@ -297,8 +297,20 @@ def test_vizdoom_health_gathering_ppo_uses_confirmed_training_defaults() -> None
             "high": 2.0,
         },
     }
+    assert document["train_config"]["task"]["model_inputs"]["context"]["remaining_time"] == {
+        "signal": "episode_step",
+        "update": "transition",
+        "encoding": {
+            "kind": "continuous",
+            "scale": -1.0 / 525.0,
+            "offset": 1.0,
+            "low": 0.0,
+            "high": 1.0,
+        },
+    }
     assert document["train_config"]["policy_model"]["routes"] == {
-        "health": ["state_value"]
+        "health": ["state_value"],
+        "remaining_time": ["state_value"],
     }
 
 

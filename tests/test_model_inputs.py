@@ -5,7 +5,7 @@ import numpy as np
 import pytest
 
 from gradlab.batch_runtime import ProviderDescriptor, SignalSpec
-from gradlab.model_inputs import ContextTaskKernel
+from gradlab.model_inputs import ContextTaskKernel, normalize_model_inputs
 from gradlab.task_kernels import IdentityTaskDefinition
 
 
@@ -209,3 +209,114 @@ def test_episode_context_may_come_from_a_reset_only_provider_signal() -> None:
         kernel.encode_observations(observations)["context/task_id"],
         [0, 1],
     )
+
+
+def _episode_clock_task() -> dict:
+    return {
+        "signals": {},
+        "model_inputs": {
+            "schema_version": 1,
+            "context": {
+                "remaining_time": {
+                    "signal": "episode_step",
+                    "update": "transition",
+                    "encoding": {
+                        "kind": "continuous",
+                        "scale": -0.25,
+                        "offset": 1.0,
+                        "low": 0.0,
+                        "high": 1.0,
+                    },
+                }
+            },
+        },
+    }
+
+
+def test_runtime_episode_step_supports_lane_local_remaining_time_context() -> None:
+    descriptor = _descriptor()
+    task = _episode_clock_task()
+    base = IdentityTaskDefinition().bind(descriptor, 2)
+    kernel = ContextTaskKernel(base, descriptor, task)
+    observations = np.zeros((2, 4, 84, 84), dtype=np.uint8)
+    all_lanes = np.ones(2, dtype=np.bool_)
+
+    kernel.on_reset(observations, {}, all_lanes)
+    np.testing.assert_array_equal(
+        kernel.encode_observations(observations)["context/remaining_time"],
+        [[1.0], [1.0]],
+    )
+    kernel.process(
+        np.zeros(2, dtype=np.float32),
+        np.zeros(2, dtype=np.bool_),
+        np.zeros(2, dtype=np.bool_),
+        {},
+    )
+    np.testing.assert_array_equal(
+        kernel.encode_observations(observations)["context/remaining_time"],
+        [[0.75], [0.75]],
+    )
+
+    kernel.on_reset(observations, {}, np.asarray([True, False]))
+    np.testing.assert_array_equal(
+        kernel.encode_observations(observations)["context/remaining_time"],
+        [[1.0], [0.75]],
+    )
+    source = kernel.model_input_contract["context"]["remaining_time"]["source"][0]
+    assert source["name"] == "episode_step"
+    assert source["origin"] == "runtime"
+
+    for _ in range(3):
+        kernel.process(
+            np.zeros(2, dtype=np.float32),
+            np.zeros(2, dtype=np.bool_),
+            np.zeros(2, dtype=np.bool_),
+            {},
+        )
+    assert kernel.encode_observations(observations)["context/remaining_time"][0, 0] == 0.25
+    assert kernel.encode_observations(observations)["context/remaining_time"][1, 0] == 0.0
+    with pytest.raises(ValueError, match="outside encoded bounds"):
+        kernel.process(
+            np.zeros(2, dtype=np.float32),
+            np.zeros(2, dtype=np.bool_),
+            np.zeros(2, dtype=np.bool_),
+            {},
+        )
+
+
+def test_runtime_episode_step_round_trips_through_task_lane_state() -> None:
+    descriptor = _descriptor()
+    task = _episode_clock_task()
+    base = IdentityTaskDefinition().bind(descriptor, 2)
+    kernel = ContextTaskKernel(base, descriptor, task)
+    observations = np.zeros((2, 4, 84, 84), dtype=np.uint8)
+    all_lanes = np.ones(2, dtype=np.bool_)
+    selected = np.asarray([True, False])
+
+    kernel.on_reset(observations, {}, all_lanes)
+    for _ in range(2):
+        kernel.process(
+            np.zeros(2, dtype=np.float32),
+            np.zeros(2, dtype=np.bool_),
+            np.zeros(2, dtype=np.bool_),
+            {},
+        )
+    states = kernel.capture_lane_states(selected)
+    kernel.on_reset(observations, {}, selected)
+    kernel.restore_lane_states(states, selected)
+
+    assert kernel.encode_observations(observations)["context/remaining_time"][0, 0] == 0.5
+
+
+def test_runtime_context_signals_are_reserved_and_transition_updated() -> None:
+    task = _episode_clock_task()
+    task["signals"]["episode_step"] = "health"
+    descriptor = _descriptor()
+    base = IdentityTaskDefinition(signals=task["signals"]).bind(descriptor, 2)
+    with pytest.raises(ValueError, match="reserved"):
+        ContextTaskKernel(base, descriptor, task)
+
+    model_inputs = _episode_clock_task()["model_inputs"]
+    model_inputs["context"]["remaining_time"]["update"] = "episode"
+    with pytest.raises(ValueError, match="must update on every transition"):
+        normalize_model_inputs(model_inputs)

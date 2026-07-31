@@ -302,7 +302,7 @@ def validate_task_config(task: Mapping[str, Any], *, label: str = "task") -> Non
                 )
     model_inputs = task.get("model_inputs")
     if model_inputs is not None:
-        from gradlab.model_inputs import normalize_model_inputs
+        from gradlab.model_inputs import RUNTIME_CONTEXT_SIGNALS, normalize_model_inputs
 
         normalized_inputs = normalize_model_inputs(
             model_inputs,
@@ -314,6 +314,12 @@ def validate_task_config(task: Mapping[str, Any], *, label: str = "task") -> Non
             )
         for name, field in normalized_inputs["context"].items():
             signal = field["signal"]
+            if signal in RUNTIME_CONTEXT_SIGNALS:
+                if signal in signals:
+                    raise ValueError(
+                        f"{label}.signals.{signal} is reserved for model-input runtime context"
+                    )
+                continue
             if signal not in signals:
                 raise ValueError(
                     f"{label}.model_inputs.context.{name}.signal references "
