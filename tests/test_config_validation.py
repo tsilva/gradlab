@@ -492,7 +492,12 @@ class ConfigValidationTests(unittest.TestCase):
                 self.assertEqual(plateau["start_after_steps"], calibration_steps)
                 self.assertEqual(plateau["patience_steps"], calibration_steps)
                 self.assertEqual(plateau["outcome"], "failure")
-                self.assertEqual(plateau["action"], "stop")
+                expected_action = (
+                    "observe"
+                    if goal_path.parent.name == "VizdoomDeathmatch-v1"
+                    else "stop"
+                )
+                self.assertEqual(plateau["action"], expected_action)
 
     def test_every_vizdoom_recipe_uses_one_million_step_checkpoint_cadence(self) -> None:
         recipes = sorted(Path("experiments/goals").glob("Vizdoom*/recipes/*.yaml"))
