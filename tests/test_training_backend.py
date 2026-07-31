@@ -19,11 +19,36 @@ from gradlab.task_kernels import IdentityTaskDefinition
 from gradlab.train import main as train_main
 from gradlab.train_config import load_materialized_train_config, validate_and_normalize_train_config
 from gradlab.local_paths import PORTABLE_DEFAULT_RUNS_DIR
-from gradlab.training_backend import BackendContext, training_backend_runtime_metadata
+from gradlab.training_backend import (
+    BackendContext,
+    load_training_backend,
+    training_backend_runtime_metadata,
+)
+
+
+def configured_policy_model() -> dict[str, object]:
+    return {
+        "schema_version": 1,
+        "topology": {"kind": "shared_encoder", "encoder": {"kind": "flatten"}},
+        "fusion": "post_encoder_concat",
+        "context_encoders": {},
+        "routes": {},
+        "heads": {
+            "action": {"hidden_sizes": [8], "activation": "tanh"},
+            "state_value": {"hidden_sizes": [8], "activation": "tanh"},
+        },
+        "normalize_images": False,
+        "orthogonal_init": True,
+    }
 
 
 def backend_config(backend_id: str = "sb3.ppo", **config) -> dict[str, object]:
-    return {"training_backend": {"id": backend_id, "config": config}}
+    result: dict[str, object] = {
+        "training_backend": {"id": backend_id, "config": config}
+    }
+    if backend_id in {"sb3.ppo", "sb3.a2c"}:
+        result["policy_model"] = configured_policy_model()
+    return result
 
 
 def test_core_backend_contract_does_not_import_sb3() -> None:
@@ -105,7 +130,6 @@ def test_sb3_a2c_schema_is_strict_and_rejects_ppo_only_fields() -> None:
         ),
         ("learning_rate", "fast", "learning_rate must be a number or null"),
         ("device", "tpu", "device must be one of auto, cpu, cuda, mps"),
-        ("policy_net_arch", [], "policy_net_arch must be a string"),
         ("normalize_advantage", 1, "normalize_advantage must be a boolean"),
         ("resume", 1, "resume must be a string or null"),
     ],
@@ -118,6 +142,29 @@ def test_sb3_on_policy_backends_share_common_field_validation(
 ) -> None:
     with pytest.raises(ValueError, match=message):
         validate_and_normalize_train_config(backend_config(backend_id, **{field: value}))
+
+
+@pytest.mark.parametrize("backend_id", ["sb3.ppo", "sb3.a2c"])
+def test_sb3_on_policy_backends_require_explicit_policy_model(backend_id: str) -> None:
+    with pytest.raises(ValueError, match="requires train_config.policy_model"):
+        validate_and_normalize_train_config(
+            {"training_backend": {"id": backend_id, "config": {}}}
+        )
+
+
+@pytest.mark.parametrize("field", ["policy_net_arch", "value_net_arch"])
+def test_sb3_on_policy_backends_reject_retired_architecture_fields(field: str) -> None:
+    with pytest.raises(ValueError, match=f"unexpected fields.*{field}"):
+        validate_and_normalize_train_config(backend_config(**{field: "64,64"}))
+
+
+@pytest.mark.parametrize("backend_id", ["gradlab.jerk", "gradlab.go-explore"])
+def test_non_actor_critic_backends_reject_policy_model(backend_id: str) -> None:
+    with pytest.raises(ValueError, match="does not support train_config.policy_model"):
+        load_training_backend(backend_id).validate(
+            {"policy_model": configured_policy_model()},
+            {},
+        )
 
 
 def test_jerk_backend_schema_is_strict_and_available() -> None:

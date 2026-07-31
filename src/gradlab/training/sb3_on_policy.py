@@ -41,7 +41,9 @@ class OnPolicyBackend:
         common_config: Mapping[str, Any],
         backend_config: Mapping[str, Any],
     ) -> None:
-        del common_config, backend_config
+        del backend_config
+        if common_config.get("policy_model") is None:
+            raise ValueError(f"{self.backend_id} requires train_config.policy_model")
 
     def run(self, context: BackendContext) -> TrainingResult:
         return run_sb3_on_policy(
@@ -129,9 +131,6 @@ def normalize_on_policy_config(
             raise ValueError(f"{label}.{key} must be a number or null")
     if normalized["device"] not in {"auto", "cpu", "cuda", "mps"}:
         raise ValueError(f"{label}.device must be one of auto, cpu, cuda, mps")
-    for key in ("policy_net_arch", "value_net_arch"):
-        if not isinstance(normalized[key], str):
-            raise ValueError(f"{label}.{key} must be a string")
     if not isinstance(normalized["normalize_advantage"], bool):
         raise ValueError(f"{label}.normalize_advantage must be a boolean")
     resume = normalized["resume"]
@@ -184,14 +183,6 @@ def active_reward_signals(task: Mapping[str, object]) -> tuple[str, ...]:
     return tuple(name for name in ("progress", "score") if name in components)
 
 
-def policy_name_for_observation_space(observation_space) -> str:
-    if isinstance(observation_space, spaces.Dict):
-        return "MultiInputPolicy"
-    if isinstance(observation_space, spaces.Box) and len(observation_space.shape) == 3:
-        return "CnnPolicy"
-    return "MlpPolicy"
-
-
 def validate_action_space(action_space, *, algorithm_id: str) -> None:
     supported = (spaces.Box, spaces.Discrete, spaces.MultiBinary, spaces.MultiDiscrete)
     if not isinstance(action_space, supported):
@@ -206,13 +197,6 @@ def checkpoint_prefix(game: str, *, algorithm_id: str) -> str:
     return f"{algorithm_id}_{slug or 'retro'}"
 
 
-def parse_net_arch(value: str) -> list[int]:
-    layers = [int(part.strip()) for part in str(value).split(",") if part.strip()]
-    if any(size <= 0 for size in layers):
-        raise ValueError("policy/value network layer sizes must be positive")
-    return layers
-
-
 def policy_kwargs_from_config(
     backend_config: Mapping[str, Any],
     *,
@@ -223,13 +207,9 @@ def policy_kwargs_from_config(
     if optimizer_eps is not None:
         policy_kwargs["optimizer_kwargs"] = {"eps": optimizer_eps}
     policy_model = (common_config or {}).get("policy_model")
-    if policy_model is not None:
-        policy_kwargs["policy_model"] = dict(policy_model)
-    else:
-        pi_arch = parse_net_arch(str(backend_config["policy_net_arch"]))
-        vf_arch = parse_net_arch(str(backend_config["value_net_arch"]))
-        if pi_arch or vf_arch:
-            policy_kwargs["net_arch"] = {"pi": pi_arch, "vf": vf_arch}
+    if not isinstance(policy_model, Mapping):
+        raise ValueError("SB3 on-policy training requires train_config.policy_model")
+    policy_kwargs["policy_model"] = dict(policy_model)
     return policy_kwargs
 
 
@@ -237,11 +217,25 @@ def policy_type_for_config(
     observation_space: Any,
     common_config: Mapping[str, Any],
 ) -> str | type:
-    if common_config.get("policy_model") is None:
-        return policy_name_for_observation_space(observation_space)
+    del observation_space
+    if not isinstance(common_config.get("policy_model"), Mapping):
+        raise ValueError("SB3 on-policy training requires train_config.policy_model")
     from gradlab.routed_policy import RoutedActorCriticPolicy
 
     return RoutedActorCriticPolicy
+
+
+def validate_resumed_policy_model(model: Any, common_config: Mapping[str, Any]) -> None:
+    from gradlab.policy_model_config import normalize_policy_model
+
+    requested = common_config.get("policy_model")
+    loaded = getattr(getattr(model, "policy", None), "policy_model", None)
+    if not isinstance(requested, Mapping) or not isinstance(loaded, Mapping):
+        raise ValueError(
+            "resume checkpoint and train_config must both declare an explicit policy_model"
+        )
+    if normalize_policy_model(loaded) != normalize_policy_model(requested):
+        raise ValueError("resume checkpoint policy_model does not match train_config.policy_model")
 
 
 def checkpoint_save_frequency(checkpoint_freq: int, n_envs: int) -> int | None:

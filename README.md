@@ -294,6 +294,32 @@ delivery deadline starts only after evaluations have settled.
 - Operator-local fleet inventory: `~/.config/gradlab/instances.md`
 - Control-plane units and templates: `ops/dstack/`
 
+PPO and A2C recipes declare their actor–critic architecture under
+`train.policy_model`. Each role owns an independent hidden stack; an empty list
+connects encoded features directly to SB3's final output projection:
+
+```yaml
+train:
+  policy_model:
+    schema_version: 1
+    topology:
+      kind: shared_encoder
+      encoder: {kind: nature_cnn, features_dim: 512}
+    fusion: post_encoder_concat
+    context_encoders: {}
+    routes: {}
+    heads:
+      action: {hidden_sizes: [], activation: tanh}
+      state_value: {hidden_sizes: [256], activation: tanh}
+    normalize_images: true
+    orthogonal_init: true
+```
+
+Context is concatenated after image encoding and only into the roles named in
+`routes`. The supported head activations are `tanh` and `relu`; every hidden
+width must be positive. Backend fields `policy_net_arch` and `value_net_arch`
+are unsupported.
+
 Useful commands:
 
 ```bash

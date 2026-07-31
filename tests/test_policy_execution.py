@@ -105,6 +105,42 @@ def test_policy_execution_contract_binds_provider_schema_model_and_routes() -> N
     assert verify_policy_execution_contract(model, env, contract) == contract
 
 
+def test_policy_execution_contract_supports_configured_policy_without_context() -> None:
+    policy = RoutedActorCriticPolicy(
+        gym.spaces.Box(-1.0, 1.0, shape=(4,), dtype=np.float32),
+        gym.spaces.Discrete(2),
+        lambda _: 1e-3,
+        policy_model={
+            "schema_version": 1,
+            "topology": {
+                "kind": "shared_encoder",
+                "encoder": {"kind": "flatten"},
+            },
+            "fusion": "post_encoder_concat",
+            "context_encoders": {},
+            "routes": {},
+            "heads": {
+                "action": {"hidden_sizes": [8], "activation": "tanh"},
+                "state_value": {"hidden_sizes": [8], "activation": "tanh"},
+            },
+            "normalize_images": False,
+            "orthogonal_init": True,
+        },
+    )
+    model = SimpleNamespace(policy=policy)
+    env = SimpleNamespace(runtime=SimpleNamespace(kernel=SimpleNamespace()))
+
+    contract = compile_policy_execution_contract(model, env)
+
+    assert contract is not None
+    assert contract["model_inputs"] is None
+    assert contract["role_inputs"] == {
+        "action": ["observation"],
+        "state_value": ["observation"],
+    }
+    assert verify_policy_execution_contract(model, env, contract) == contract
+
+
 def test_policy_execution_contract_rejects_runtime_drift() -> None:
     model, env = _model_and_env()
     contract = compile_policy_execution_contract(model, env)

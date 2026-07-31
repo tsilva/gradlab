@@ -29,8 +29,6 @@ PPO_DEFAULT_CONFIG: dict[str, Any] = {
     "vf_coef": 1.0,
     "clip_range": 0.2,
     "clip_range_vf": None,
-    "policy_net_arch": "",
-    "value_net_arch": "",
     "normalize_advantage": False,
     "advantage_normalization": "auto",
     "adam_eps": 1e-8,
@@ -54,8 +52,6 @@ A2C_DEFAULT_CONFIG: dict[str, Any] = {
     "max_grad_norm": 0.5,
     "rms_prop_eps": 1e-5,
     "use_rms_prop": True,
-    "policy_net_arch": "",
-    "value_net_arch": "",
     "normalize_advantage": False,
     "resume": None,
     "resume_approval_hash": None,
@@ -109,6 +105,7 @@ def _ppo_model_factory(context: BackendContext, env: Any, config: Any, device: s
     from gradlab.policy_models import load_pinned_remote_policy_model
     from gradlab.schedules import apply_resume_hyperparameters, learning_rate_schedule
     from gradlab.task_advantage import GroupedAdvantagePPO, resolve_advantage_normalization_mode
+    from gradlab.training.sb3_on_policy import validate_resumed_policy_model
 
     common_config = context.train_config
     backend_config = context.backend_config
@@ -140,6 +137,7 @@ def _ppo_model_factory(context: BackendContext, env: Any, config: Any, device: s
             tensorboard_log=str(context.run_dir),
             device=device,
         )
+        validate_resumed_policy_model(model, common_config)
         if advantage_normalization == "grouped":
             if not isinstance(model, GroupedAdvantagePPO):
                 raise ValueError(
@@ -194,6 +192,7 @@ def _a2c_model_factory(context: BackendContext, env: Any, config: Any, device: s
     del config
     from gradlab.policy_models import load_pinned_remote_policy_model
     from gradlab.schedules import apply_a2c_resume_hyperparameters, learning_rate_schedule
+    from gradlab.training.sb3_on_policy import validate_resumed_policy_model
 
     common_config = context.train_config
     backend_config = context.backend_config
@@ -208,6 +207,7 @@ def _a2c_model_factory(context: BackendContext, env: Any, config: Any, device: s
             tensorboard_log=str(context.run_dir),
             device=device,
         )
+        validate_resumed_policy_model(model, common_config)
         apply_a2c_resume_hyperparameters(model, common_config, backend_config)
         return model
 

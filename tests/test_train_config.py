@@ -21,6 +21,21 @@ from gradlab.train import build_parser as build_train_parser, parse_train_invoca
 from gradlab.training_lifecycle import TrainingExecutionMode
 
 
+POLICY_MODEL = {
+    "schema_version": 1,
+    "topology": {"kind": "shared_encoder", "encoder": {"kind": "flatten"}},
+    "fusion": "post_encoder_concat",
+    "context_encoders": {},
+    "routes": {},
+    "heads": {
+        "action": {"hidden_sizes": [8], "activation": "tanh"},
+        "state_value": {"hidden_sizes": [8], "activation": "tanh"},
+    },
+    "normalize_images": False,
+    "orthogonal_init": True,
+}
+
+
 class TrainConfigFieldSchemaTests(unittest.TestCase):
     def test_internal_train_cli_requires_one_materialized_json_input(self) -> None:
         parser = build_train_parser()
@@ -65,6 +80,7 @@ class TrainConfigFieldSchemaTests(unittest.TestCase):
                 json.dumps(
                     {
                         "game": "SuperMarioBros-Nes-v0",
+                        "policy_model": POLICY_MODEL,
                         "seed": 7,
                         "wandb_tags": "one",
                         "training_backend": {"id": "sb3.ppo", "config": {}},

@@ -312,6 +312,10 @@ def test_vizdoom_health_gathering_ppo_uses_confirmed_training_defaults() -> None
         "health": ["state_value"],
         "remaining_time": ["state_value"],
     }
+    assert document["train_config"]["policy_model"]["heads"] == {
+        "action": {"hidden_sizes": [], "activation": "tanh"},
+        "state_value": {"hidden_sizes": [256], "activation": "tanh"},
+    }
 
 
 def test_vizdoom_deathmatch_declares_complete_single_player_combat_semantics() -> None:

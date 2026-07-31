@@ -115,6 +115,25 @@ def test_recipe_v2_embeds_verified_goal_and_recipe_bases() -> None:
         validate_recipe_document(tampered)
 
 
+def test_portable_recipe_reader_preserves_source_bound_retired_backend_options() -> None:
+    document = level1_1_recipe_document()
+    base_recipe = document["resolution"]["recipe"]["base"]
+
+    for recipe in (document["recipe"], base_recipe):
+        train_config = recipe["train_config"]
+        train_config.pop("policy_model")
+        backend_config = train_config["training_backend"]["config"]
+        backend_config["policy_net_arch"] = ""
+        backend_config["value_net_arch"] = ""
+
+    document["resolution"]["recipe"]["base_sha256"] = canonical_json_sha256(base_recipe)
+    document["resolution"]["recipe"]["effective_sha256"] = canonical_json_sha256(
+        document["recipe"]
+    )
+
+    assert validate_recipe_document(document) == document
+
+
 def test_wandb_display_name_is_not_part_of_portable_recipe() -> None:
     resolved = compose_resolved_train_documents(GOAL, RECIPE, source_sha="a" * 40)
     resolved.effective["train_config"]["wandb_display_name"] = "Level1-1__ppo__s7__01234567"
