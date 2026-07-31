@@ -439,7 +439,7 @@ class ConfigValidationTests(unittest.TestCase):
             with self.subTest(recipe=recipe_path):
                 self.assertIn("policy_model", document["train_config"])
 
-        self.assertEqual(actor_critic_recipes, 41)
+        self.assertEqual(actor_critic_recipes, 42)
 
     def test_every_mario_recipe_composes_the_shared_plateau_condition(self) -> None:
         mario_root = Path("experiments/goals/SuperMarioBros-Nes-v0")
@@ -528,7 +528,7 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertEqual(report.counts["json_files"], 0)
         self.assertGreaterEqual(report.counts["yaml_files"], 15)
         self.assertGreaterEqual(report.counts["goals"], 1)
-        self.assertEqual(report.counts["train_recipes"], 44)
+        self.assertEqual(report.counts["train_recipes"], 45)
         self.assertGreaterEqual(report.counts["env_configs"], 0)
         self.assertEqual(report.counts["benchmark_profiles"], 4)
 
