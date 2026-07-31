@@ -17,6 +17,8 @@ from gradlab.metric_names import (
     LEADER_CHECKPOINT_STEP,
     LEADER_CHECKPOINT_UPDATED_AT,
     METRICS_SCHEMA_VERSION,
+    ORCHESTRATION_EVENT_ID,
+    ORCHESTRATION_EVENT_SEQ,
     evaluation_metric_schema,
     leader_metric_for_rank_metric,
     validate_metric_payload,
@@ -295,8 +297,8 @@ def _publish_frame(
             )
         else:
             validate_metric_payload(payload)
-        payload["orchestration/event_seq"] = event_seq
-        payload["orchestration/event_id"] = event_id
+        payload[ORCHESTRATION_EVENT_SEQ] = event_seq
+        payload[ORCHESTRATION_EVENT_ID] = event_id
         if source.startswith("eval"):
             payload[evaluation_metric_schema(metrics_schema_version).checkpoint_step] = step
         elif not source.startswith("orchestration"):
@@ -318,8 +320,8 @@ def _publish_frame(
 
         converted: dict[str, object] = {
             "train/global_step": step,
-            "orchestration/event_seq": event_seq,
-            "orchestration/event_id": event_id,
+            ORCHESTRATION_EVENT_SEQ: event_seq,
+            ORCHESTRATION_EVENT_ID: event_id,
         }
         for name, values in payload.get("histograms", {}).items():
             converted[str(name)] = wandb.Histogram(values)
@@ -341,8 +343,8 @@ def _publish_frame(
         schema = evaluation_metric_schema(metrics_schema_version)
         converted = {
             schema.checkpoint_step: step,
-            "orchestration/event_seq": event_seq,
-            "orchestration/event_id": event_id,
+            ORCHESTRATION_EVENT_SEQ: event_seq,
+            ORCHESTRATION_EVENT_ID: event_id,
             EVAL_FULL_BY_START: wandb.Table(
                 columns=list(schema.table_columns),
                 data=[[step, *list(result)] for result in rows],

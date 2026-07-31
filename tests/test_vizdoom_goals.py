@@ -249,14 +249,22 @@ def test_vizdoom_health_gathering_uses_native_provider_truncation_for_survival(
     document = compose_train_document(goal_path, recipe_path)
 
     train_config = document["train_config"]
+    expected_info_keys = (
+        ["player_dead", "health"]
+        if goal_id == "VizdoomHealthGathering-v1"
+        else ["player_dead"]
+    )
     assert train_config["env_args"]["info_filter"] == {
         "mode": "all",
-        "keys": ["player_dead"],
+        "keys": expected_info_keys,
     }
-    assert train_config["task"]["signals"] == {
+    expected_signals = {
         "player_dead": "player_dead",
         "native_timeout": "provider_truncated",
     }
+    if goal_id == "VizdoomHealthGathering-v1":
+        expected_signals["health"] = "health"
+    assert train_config["task"]["signals"] == expected_signals
     assert train_config["task"]["events"]["goal_reached"] == {
         "signal": "native_timeout",
         "operation": "equals_for",
@@ -277,6 +285,21 @@ def test_vizdoom_health_gathering_ppo_uses_confirmed_training_defaults() -> None
     backend_config = document["train_config"]["training_backend"]["config"]
     assert backend_config["n_steps"] == 256
     assert backend_config["learning_rate"] == 2.5e-4
+    assert document["train_config"]["env_args"]["game_variables"] == ["HEALTH"]
+    assert document["train_config"]["task"]["model_inputs"]["context"]["health"] == {
+        "signal": "health",
+        "update": "transition",
+        "encoding": {
+            "kind": "continuous",
+            "scale": 0.01,
+            "offset": 0.0,
+            "low": -1.0,
+            "high": 2.0,
+        },
+    }
+    assert document["train_config"]["policy_model"]["routes"] == {
+        "health": ["state_value"]
+    }
 
 
 def test_vizdoom_deathmatch_declares_complete_single_player_combat_semantics() -> None:

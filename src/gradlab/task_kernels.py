@@ -766,6 +766,8 @@ class SignalBindings:
         descriptor: ProviderDescriptor,
         bindings: Mapping[str, SignalSource],
         num_envs: int,
+        *,
+        require_step: bool = True,
     ):
         self._bindings = dict(bindings)
         self._specs = dict(descriptor.signal_schema)
@@ -784,17 +786,20 @@ class SignalBindings:
                 f"provider {descriptor.provider_id!r} does not expose task signals: "
                 + ", ".join(missing)
             )
-        unavailable = sorted(
-            {
-                name
-                for source in self._bindings.values()
-                for name in ((source,) if isinstance(source, str) else source)
-                if name not in RUNTIME_BOUNDARY_SIGNALS
-                and not self._specs[name].available_on_step
-            }
-        )
-        if unavailable:
-            raise ValueError("task signals must be available on step: " + ", ".join(unavailable))
+        if require_step:
+            unavailable = sorted(
+                {
+                    name
+                    for source in self._bindings.values()
+                    for name in ((source,) if isinstance(source, str) else source)
+                    if name not in RUNTIME_BOUNDARY_SIGNALS
+                    and not self._specs[name].available_on_step
+                }
+            )
+            if unavailable:
+                raise ValueError(
+                    "task signals must be available on step: " + ", ".join(unavailable)
+                )
 
     def available_on_reset(self, semantic_name: str) -> bool:
         source = self.source(semantic_name)
@@ -804,11 +809,27 @@ class SignalBindings:
             for name in names
         )
 
+    def available_on_step(self, semantic_name: str) -> bool:
+        source = self.source(semantic_name)
+        names = (source,) if isinstance(source, str) else source
+        return all(
+            name in RUNTIME_BOUNDARY_SIGNALS or self._specs[name].available_on_step
+            for name in names
+        )
+
     def source(self, semantic_name: str) -> SignalSource:
         try:
             return self._bindings[semantic_name]
         except KeyError as exc:
             raise KeyError(f"unknown semantic signal {semantic_name!r}") from exc
+
+    def source_specs(self, semantic_name: str) -> tuple[Any, ...]:
+        source = self.source(semantic_name)
+        names = (source,) if isinstance(source, str) else source
+        return tuple(
+            None if name in RUNTIME_BOUNDARY_SIGNALS else self._specs[name]
+            for name in names
+        )
 
     def columns(
         self,
@@ -1041,7 +1062,24 @@ class IdentityTaskKernel:
         self._event_configs = tuple(events)
         self.event_names = tuple(event.name for event in self._event_configs)
         self.has_events = bool(self._event_configs)
-        self._signal_bindings = SignalBindings(descriptor, signals or {}, self.num_envs)
+        self._signal_bindings = SignalBindings(
+            descriptor,
+            signals or {},
+            self.num_envs,
+            require_step=False,
+        )
+        unavailable_event_signals = sorted(
+            {
+                event.signal
+                for event in self._event_configs
+                if not self._signal_bindings.available_on_step(event.signal)
+            }
+        )
+        if unavailable_event_signals:
+            raise ValueError(
+                "identity event signals must be available on step: "
+                + ", ".join(unavailable_event_signals)
+            )
         self._event_runtime_sources = tuple(
             self._signal_bindings.runtime_boundary_source(event.signal)
             for event in self._event_configs

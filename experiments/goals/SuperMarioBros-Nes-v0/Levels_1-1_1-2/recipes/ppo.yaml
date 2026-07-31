@@ -3,4 +3,4 @@ defaults:
 - _self_
 reward_shape: speedrun-v1
 recipe_id: ppo
-description: Task-conditioned PPO for {{ goal_id }} with per-task advantage normalization.
+description: Routed task-ID PPO for {{ goal_id }} with task-grouped advantage normalization.

@@ -105,11 +105,23 @@ def task_config_from_train_config(
     if isinstance(task, Mapping) and task:
         canonical = deepcopy(dict(task))
     validate_task_config(canonical)
+    from gradlab.model_inputs import normalize_task_model_inputs
+
+    canonical = normalize_task_model_inputs(canonical)
     return normalize_task_reward(canonical)
 
 
 def validate_task_config(task: Mapping[str, Any], *, label: str = "task") -> None:
-    allowed = {"id", "action", "signals", "events", "termination", "reward", "conditioning"}
+    allowed = {
+        "id",
+        "action",
+        "signals",
+        "events",
+        "termination",
+        "reward",
+        "conditioning",
+        "model_inputs",
+    }
     extra = sorted(set(task) - allowed)
     if extra:
         raise ValueError(f"{label} has unexpected keys: {extra}")
@@ -287,6 +299,25 @@ def validate_task_config(task: Mapping[str, Any], *, label: str = "task") -> Non
             if signal not in signals:
                 raise ValueError(
                     f"{label}.conditioning.signal references unknown signal {signal!r}"
+                )
+    model_inputs = task.get("model_inputs")
+    if model_inputs is not None:
+        from gradlab.model_inputs import normalize_model_inputs
+
+        normalized_inputs = normalize_model_inputs(
+            model_inputs,
+            label=f"{label}.model_inputs",
+        )
+        if conditioning is not None and conditioning.get("enabled"):
+            raise ValueError(
+                f"{label} cannot combine conditioning with model_inputs"
+            )
+        for name, field in normalized_inputs["context"].items():
+            signal = field["signal"]
+            if signal not in signals:
+                raise ValueError(
+                    f"{label}.model_inputs.context.{name}.signal references "
+                    f"unknown signal {signal!r}"
                 )
 
 

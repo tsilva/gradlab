@@ -37,6 +37,7 @@ def build_model_provenance(
     checkpoint_step_value: int | None = None,
     state_archive_summary: Mapping[str, Any] | None = None,
     action_contract: Mapping[str, Any] | None = None,
+    policy_execution_contract: Mapping[str, Any] | None = None,
     checkpoint_source_path: Path | None = None,
 ) -> dict[str, Any]:
     del config
@@ -44,6 +45,12 @@ def build_model_provenance(
         from gradlab.action_contract import validate_runtime_action_contract
 
         validate_runtime_action_contract(action_contract)
+    if policy_execution_contract is not None:
+        from gradlab.policy_execution import normalize_policy_execution_contract
+
+        policy_execution_contract = normalize_policy_execution_contract(
+            policy_execution_contract
+        )
     provenance = {
         "kind": kind,
         "filename": model_path.name,
@@ -89,6 +96,15 @@ def build_model_provenance(
             **(
                 {"action_contract": deepcopy(dict(action_contract))}
                 if action_contract is not None
+                else {}
+            ),
+            **(
+                {
+                    "policy_execution_contract": deepcopy(
+                        dict(policy_execution_contract)
+                    )
+                }
+                if policy_execution_contract is not None
                 else {}
             ),
         },
@@ -144,6 +160,7 @@ def install_model_bundle(
     checkpoint_step_value: int | None,
     state_archive_summary: Mapping[str, Any] | None = None,
     action_contract: Mapping[str, Any] | None = None,
+    policy_execution_contract: Mapping[str, Any] | None = None,
 ) -> Path:
     """Atomically install checkpoint bytes and their reproducible policy sidecars."""
 
@@ -164,6 +181,7 @@ def install_model_bundle(
             checkpoint_step_value=checkpoint_step_value,
             state_archive_summary=state_archive_summary,
             action_contract=action_contract,
+            policy_execution_contract=policy_execution_contract,
             checkpoint_source_path=staged_checkpoint,
         )
         recipe_source = Path(str(train_config.get("recipe_json_path") or ""))

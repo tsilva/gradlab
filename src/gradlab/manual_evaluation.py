@@ -35,6 +35,7 @@ from gradlab.job_queue import (
 from gradlab.metric_names import (
     EVAL_FULL_EPISODE_RETURN_SHAPED_MEAN,
     EVAL_FULL_SUCCESS_ACROSS_STARTS_RATE_MIN,
+    ORCHESTRATION_EVENT_SEQ,
 )
 from gradlab.modal_eval_backend import ModalEvalBackend
 from gradlab.modal_eval_config import ModalEvalConfig, load_modal_eval_config
@@ -655,7 +656,7 @@ class ManualEvaluationSupervisor:
             row = connection.execute("SELECT COALESCE(MAX(id), 0) FROM metric_frames").fetchone()
         high_water = event_seq_offset + int(row[0] if row else 0)
         remote = self.runtime.remote_summary(self._wandb_run_path(context.manifest))
-        if int(remote.get("orchestration/event_seq") or 0) < high_water:
+        if int(remote.get(ORCHESTRATION_EVENT_SEQ) or 0) < high_water:
             return False
         self.authority.control.put_json(
             projection_key,

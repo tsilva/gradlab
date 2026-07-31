@@ -25,12 +25,17 @@ train:
       - 0.5
       - 0.5
     task:
-      conditioning:
-        enabled: true
-        signal: level
-        values:
-        - [0, 0]
-        - [0, 1]
+      model_inputs: &mixed_level_model_inputs
+        schema_version: 1
+        context:
+          task_id:
+            signal: level
+            update: episode
+            encoding:
+              kind: categorical
+              values:
+              - [0, 0]
+              - [0, 1]
 eval:
   environment:
     env_config:
@@ -43,9 +48,4 @@ eval:
       # Promotion eval remains vectorized; the lane count is part of its reproducible protocol.
       n_envs: 16
     task:
-      conditioning:
-        enabled: true
-        signal: level
-        values:
-        - [0, 0]
-        - [0, 1]
+      model_inputs: *mixed_level_model_inputs

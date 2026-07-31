@@ -39,6 +39,7 @@ from gradlab.task_kernels import (
     MarioTaskDefinition,
     with_reward_transform,
 )
+from gradlab.model_inputs import with_model_inputs
 from gradlab.validation import (
     normalize_obs_crop as validate_obs_crop,
     normalize_obs_resize as validate_obs_resize,
@@ -384,7 +385,8 @@ def _bound_task_kernel(config: EnvConfig, descriptor: ProviderDescriptor, n_envs
             descriptor,
             n_envs,
         )
-        return with_reward_transform(kernel, task_reward(config))
+        kernel = with_reward_transform(kernel, task_reward(config))
+        return with_model_inputs(kernel, descriptor, config.task)
     if task_id != "identity":
         raise ValueError(f"unknown task kernel {task_id!r}")
     action_values = task_action_values(config)
@@ -412,7 +414,8 @@ def _bound_task_kernel(config: EnvConfig, descriptor: ProviderDescriptor, n_envs
         events=config.task.get("events", {}),
         termination=task_termination(config),
     ).bind(descriptor, n_envs)
-    return with_reward_transform(kernel, task_reward(config))
+    kernel = with_reward_transform(kernel, task_reward(config))
+    return with_model_inputs(kernel, descriptor, config.task)
 
 
 def make_vec_envs(

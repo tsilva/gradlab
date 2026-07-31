@@ -10,6 +10,7 @@ from gymnasium import spaces
 
 from gradlab.action_contract import runtime_action_contract
 from gradlab.artifacts import install_model_bundle
+from gradlab.policy_execution import compile_policy_execution_contract
 from gradlab.state_archive import state_archive_artifact_summary
 from gradlab.training_backend import BackendContext
 from gradlab.training_lifecycle import ProgressField, TrainingExecutionMode, TrainingResult
@@ -215,16 +216,32 @@ def parse_net_arch(value: str) -> list[int]:
 def policy_kwargs_from_config(
     backend_config: Mapping[str, Any],
     *,
+    common_config: Mapping[str, Any] | None = None,
     optimizer_eps: float | None = None,
 ) -> dict[str, object]:
     policy_kwargs: dict[str, object] = {}
     if optimizer_eps is not None:
         policy_kwargs["optimizer_kwargs"] = {"eps": optimizer_eps}
-    pi_arch = parse_net_arch(str(backend_config["policy_net_arch"]))
-    vf_arch = parse_net_arch(str(backend_config["value_net_arch"]))
-    if pi_arch or vf_arch:
-        policy_kwargs["net_arch"] = {"pi": pi_arch, "vf": vf_arch}
+    policy_model = (common_config or {}).get("policy_model")
+    if policy_model is not None:
+        policy_kwargs["policy_model"] = dict(policy_model)
+    else:
+        pi_arch = parse_net_arch(str(backend_config["policy_net_arch"]))
+        vf_arch = parse_net_arch(str(backend_config["value_net_arch"]))
+        if pi_arch or vf_arch:
+            policy_kwargs["net_arch"] = {"pi": pi_arch, "vf": vf_arch}
     return policy_kwargs
+
+
+def policy_type_for_config(
+    observation_space: Any,
+    common_config: Mapping[str, Any],
+) -> str | type:
+    if common_config.get("policy_model") is None:
+        return policy_name_for_observation_space(observation_space)
+    from gradlab.routed_policy import RoutedActorCriticPolicy
+
+    return RoutedActorCriticPolicy
 
 
 def checkpoint_save_frequency(checkpoint_freq: int, n_envs: int) -> int | None:
@@ -257,6 +274,10 @@ def save_model_bundle(
             checkpoint_step_value=saved_step,
             state_archive_summary=state_archive_artifact_summary(getattr(model, "env", None)),
             action_contract=runtime_action_contract(getattr(model, "env", None)),
+            policy_execution_contract=compile_policy_execution_contract(
+                model,
+                getattr(model, "env", None),
+            ),
         ),
     )
 

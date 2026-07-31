@@ -25,6 +25,7 @@ from gradlab.train_config import (
     validate_train_config_fields,
 )
 from gradlab.validation import (
+    display_path,
     is_int as _is_int,
     label_path as _label_path,
     require_int as _require_int,
@@ -51,13 +52,6 @@ GOAL_REQUIRED_ENV_CONFIG_KEYS = frozenset(
         "sticky_action_prob",
     }
 )
-
-
-def _display_path(path: Path, repo_root: Path) -> str:
-    try:
-        return str(path.relative_to(repo_root))
-    except ValueError:
-        return str(path)
 
 
 def _require_bool(document: Mapping[str, Any], key: str, *, label: str) -> bool:
@@ -424,7 +418,7 @@ def validate_goal_contract_document(
     path: Path,
     repo_root: Path,
 ) -> None:
-    label = f"goal file {_display_path(path, repo_root)}"
+    label = f"goal file {display_path(path, repo_root)}"
     authored_document = document
     validate_goal_document_shape(authored_document, label=label)
     validate_reward_shape_catalog(document, label=label)
