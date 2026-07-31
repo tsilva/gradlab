@@ -20,13 +20,27 @@ def test_deathmatch_recipe_runs_through_the_real_single_player_vector_runtime() 
 
     try:
         observations = env.reset()
-        assert set(observations) == {"observation", "context/health"}
+        assert set(observations) == {
+            "observation",
+            "context/armor",
+            "context/health",
+        }
         assert observations["observation"].shape == (2, 4, 84, 84)
+        assert observations["context/armor"].shape == (2, 1)
         assert observations["context/health"].shape == (2, 1)
+        assert observations["context/armor"].dtype == np.float32
         assert observations["context/health"].dtype == np.float32
+        assert np.all(
+            (0.0 <= observations["context/armor"])
+            & (observations["context/armor"] <= 1.0)
+        )
         assert np.all(
             (0.0 <= observations["context/health"])
             & (observations["context/health"] <= 2.0)
+        )
+        np.testing.assert_array_equal(
+            observations["context/armor"],
+            np.zeros((2, 1), dtype=np.float32),
         )
         assert env.action_space.n == 17
         assert {
@@ -42,8 +56,17 @@ def test_deathmatch_recipe_runs_through_the_real_single_player_vector_runtime() 
         next_observations, rewards, dones, infos = env.step(
             np.asarray([0, 9], dtype=np.int64)
         )
-        assert set(next_observations) == {"observation", "context/health"}
+        assert set(next_observations) == {
+            "observation",
+            "context/armor",
+            "context/health",
+        }
+        assert next_observations["context/armor"].shape == (2, 1)
         assert next_observations["context/health"].shape == (2, 1)
+        assert np.all(
+            (0.0 <= next_observations["context/armor"])
+            & (next_observations["context/armor"] <= 1.0)
+        )
         assert rewards.shape == (2,)
         assert dones.shape == (2,)
         assert len(infos) == 2
