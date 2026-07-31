@@ -263,9 +263,6 @@ class ThroughputHelper(CallbackHelper):
                     env_step_seconds=self._native_step_seconds(),
                 )
 
-    def _on_step(self) -> bool:
-        return True
-
     def _on_training_end(self) -> None:
         if self.completed_rollout is not None:
             self._publish_completed_iteration(
@@ -350,12 +347,6 @@ class MetricEarlyStopHelper(CallbackHelper):
         self.metric_store = (
             MetricStore(metric_store_path, timeout=0.05) if metric_store_path else None
         )
-
-    def _on_step(self) -> bool:
-        # The stop-aware on-policy model reads the shared flag before starting
-        # its next rollout. Returning False here would discard the first
-        # transition of that rollout instead of stopping at the safe boundary.
-        return True
 
     def _on_rollout_end(self) -> None:
         if self.stop_requested:
@@ -520,9 +511,6 @@ class MetricStoreLoggerHelper(CallbackHelper):
         if self.output_format not in output_formats:
             output_formats.append(self.output_format)
 
-    def _on_step(self) -> bool:
-        return True
-
     def _on_training_end(self) -> None:
         pending = getattr(self.logger, "name_to_value", None)
         if isinstance(pending, Mapping) and pending:
@@ -579,9 +567,6 @@ class RolloutDiagnosticsHelper(CallbackHelper):
             )
         if self.rollout_count % self.histogram_interval == 0:
             self._log_histograms(value_predictions, advantages, discrete_actions)
-
-    def _on_step(self) -> bool:
-        return True
 
     @staticmethod
     def _finite_values(values: Any) -> np.ndarray:

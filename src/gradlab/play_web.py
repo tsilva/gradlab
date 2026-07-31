@@ -48,6 +48,43 @@ LAST_CLIENT_GRACE_SECONDS = 30.0
 PAIRED_START_GRACE_SECONDS = 2.0
 
 
+def idle_playback_snapshot(
+    *,
+    revision: int = 0,
+    status_message: str | None = None,
+) -> dict[str, Any]:
+    return {
+        "type": "snapshot",
+        "protocol": PROTOCOL_VERSION,
+        "revision": int(revision),
+        "sequence": 0,
+        "run_state": "paused",
+        "driver": "policy",
+        "interactive": False,
+        "policy": None,
+        "status_message": status_message,
+        "session": {
+            "episode": 0,
+            "step": 0,
+            "seed": None,
+            "task": None,
+            "total_reward": 0.0,
+            "max_x_pos": 0,
+            "action_names": [],
+            "event_names": [],
+            "env_id": None,
+            "sampling_mode": "stochastic",
+            "target_fps": 0.0,
+            "episodes_limit": 0,
+            "awaiting_next_episode": False,
+            "can_start_next_episode": False,
+            "history_size": 0,
+            "config": "",
+        },
+        "transition": None,
+    }
+
+
 def source_browser_path(route: Mapping[str, Any] | None) -> str:
     route = route or {}
     environment_id = str(route.get("environment_id") or "").strip()

@@ -108,10 +108,6 @@ class Sb3HumanOutputFormatHelper(CallbackHelper):
             suppress=self.suppress,
         )
 
-    def _on_step(self) -> bool:
-        return True
-
-
 class GracefulStopHelper(CallbackHelper):
     def __init__(
         self,
@@ -125,12 +121,6 @@ class GracefulStopHelper(CallbackHelper):
         self.marker_path = marker_path
         self.event = event
         self.logged = False
-
-    def _on_step(self) -> bool:
-        # Returning False here would interrupt SB3 before the current transition
-        # is added to the rollout buffer. The supervisor may request a stop at
-        # any time, so acknowledge it here but let the on-policy rollout finish.
-        return True
 
     def acknowledge_safe_boundary(self, *, num_timesteps: int) -> None:
         if not self.stop_flag.requested or self.logged:

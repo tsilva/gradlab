@@ -36,17 +36,9 @@ from gradlab.recipe_schema import (
 )
 from gradlab.reward_programs import MARIO_REWARD_FIELD_SET, select_goal_reward_shape
 from gradlab.train_config import train_config_keys_in_source_section, train_config_keys_owned_by
+from gradlab.validation import is_secret_like_key
 
 
-SECRET_KEY_FRAGMENTS = (
-    "api_key",
-    "access_key",
-    "secret",
-    "token",
-    "password",
-    "credential",
-    "database_url",
-)
 TRAIN_CONFIG_SECTION_KEYS = ("train", "logging")
 TRAIN_NESTED_SECTION_KEYS = frozenset({"backend"})
 COMMON_TRAIN_CONFIG_KEYS = train_config_keys_in_source_section("train")
@@ -205,9 +197,8 @@ def _partition_policy_environment_overrides(
 def _contains_secret_key(value: Any, path: str = "") -> str | None:
     if isinstance(value, Mapping):
         for key, nested in value.items():
-            key_text = str(key).lower()
             nested_path = f"{path}.{key}" if path else str(key)
-            if any(fragment in key_text for fragment in SECRET_KEY_FRAGMENTS):
+            if is_secret_like_key(key):
                 return nested_path
             found = _contains_secret_key(nested, nested_path)
             if found:

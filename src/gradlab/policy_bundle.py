@@ -15,6 +15,7 @@ from pydantic import Field, StringConstraints, model_validator
 from gradlab.boundary_schema import BoundaryModel, validate_boundary
 from gradlab.file_utils import file_sha256 as sha256_file
 from gradlab.json_utils import canonical_json_line_bytes
+from gradlab.validation import is_secret_like_key
 
 
 RECIPE_DOCUMENT_TYPE = "gradlab.recipe"
@@ -26,14 +27,19 @@ RECIPE_FILENAME = "recipe.json"
 MODEL_FILENAME = "model.json"
 CHECKPOINT_FILENAME = "model.zip"
 
-_SECRET_FRAGMENTS = (
-    "api_key",
-    "access_key",
-    "secret",
-    "token",
-    "password",
-    "credential",
-    "database_url",
+STATE_ARCHIVE_SUMMARY_FIELDS = frozenset(
+    {
+        "semantic_id",
+        "schema_version",
+        "persistence",
+        "provider_id",
+        "codec_id",
+        "compatibility_id",
+        "entry_count",
+        "blob_count",
+        "blob_bytes",
+        "view_ids",
+    }
 )
 
 NonEmptyText = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
@@ -352,9 +358,8 @@ def _reject_unknown(mapping: Mapping[str, Any], allowed: frozenset[str], *, labe
 def _assert_portable(value: object, *, label: str = "recipe") -> None:
     if isinstance(value, Mapping):
         for key, nested in value.items():
-            key_text = str(key).lower()
             nested_label = f"{label}.{key}"
-            if any(fragment in key_text for fragment in _SECRET_FRAGMENTS):
+            if is_secret_like_key(key):
                 raise PolicyDocumentError(f"{nested_label} is secret-like and is not portable")
             if key == "defaults":
                 raise PolicyDocumentError(f"{nested_label} contains uncomposed defaults")
@@ -817,21 +822,7 @@ def validate_recipe_document(
 
 def _validate_state_archive_summary(value: object, *, label: str) -> None:
     summary = _required_mapping(value, label=label)
-    allowed = frozenset(
-        {
-            "semantic_id",
-            "schema_version",
-            "persistence",
-            "provider_id",
-            "codec_id",
-            "compatibility_id",
-            "entry_count",
-            "blob_count",
-            "blob_bytes",
-            "view_ids",
-            "curriculum",
-        }
-    )
+    allowed = STATE_ARCHIVE_SUMMARY_FIELDS | {"curriculum"}
     _reject_unknown(summary, allowed, label=label)
     if summary.get("semantic_id") != "state-archive-v1":
         raise PolicyDocumentError(f"{label}.semantic_id must be 'state-archive-v1'")

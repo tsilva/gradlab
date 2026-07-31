@@ -8,22 +8,12 @@ from typing import Any, Literal
 import yaml
 
 from gradlab.json_utils import canonical_json_bytes
+from gradlab.validation import is_secret_like_key
 
 
 INSPECTION_SCHEMA_VERSION = 1
 MAX_INSPECTION_DOCUMENT_BYTES = 1024 * 1024
 Availability = Literal["exact", "static-preview", "summary-only", "unavailable"]
-
-_SECRET_FRAGMENTS = (
-    "api_key",
-    "access_key",
-    "secret",
-    "token",
-    "password",
-    "credential",
-    "database_url",
-)
-
 
 def _json_pointer(parts: Sequence[str]) -> str:
     if not parts:
@@ -120,8 +110,7 @@ def _assert_safe_value(
 ) -> None:
     if isinstance(value, Mapping):
         for key, nested in value.items():
-            key_text = str(key).casefold()
-            if any(fragment in key_text for fragment in _SECRET_FRAGMENTS):
+            if is_secret_like_key(key):
                 raise ValueError(f"{label}.{key} is secret-like and cannot be inspected")
             _assert_safe_value(
                 nested,
