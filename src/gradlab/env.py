@@ -30,7 +30,7 @@ from gradlab.env_registry import (
     resolve_env_provider,
     validate_provider_constructor_args,
 )
-from gradlab.local_paths import PORTABLE_DEFAULT_RUNS_DIR
+from gradlab.local_paths import PORTABLE_DEFAULT_RUNS_DIR, configure_matplotlib_cache
 from gradlab.env_identity import task_config_from_train_config, validate_task_config
 from gradlab.env_registry import environment_spec
 from gradlab.task_kernels import (
@@ -45,8 +45,7 @@ from gradlab.validation import (
 )
 from gradlab.rom_runtime import RomRuntimeBinding
 
-os.environ.setdefault("MPLCONFIGDIR", os.path.abspath(".matplotlib"))
-os.makedirs(os.environ["MPLCONFIGDIR"], exist_ok=True)
+configure_matplotlib_cache()
 
 GAME = os.environ.get("RETRO_GAME", "")
 DEFAULT_OBS_RESIZE_ALGORITHM = "area"

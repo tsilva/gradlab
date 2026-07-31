@@ -7,18 +7,16 @@ from typing import Any
 import numpy as np
 
 from gradlab.policy_registry import (
+    ACTOR_DISTRIBUTION,
+    ATTRIBUTION,
+    ENTROPY,
+    POLICY_ALGORITHM_SPECS,
+    PROGRAM,
+    ROUTE as ROUTE,
+    SELECTED_ACTION_LOG_PROBABILITY,
+    STATE_VALUE,
     PolicyAlgorithmId,
-    default_action_selection_mode as registered_default_action_selection_mode,
 )
-
-
-ACTOR_DISTRIBUTION = "actor_distribution"
-STATE_VALUE = "state_value"
-PROGRAM = "program"
-ROUTE = "route"
-SELECTED_ACTION_LOG_PROBABILITY = "selected_action_log_probability"
-ENTROPY = "entropy"
-ATTRIBUTION = "attribution"
 
 
 @dataclass(frozen=True)
@@ -43,48 +41,14 @@ class PolicyCapabilities:
 
 
 POLICY_CAPABILITIES: dict[PolicyAlgorithmId, PolicyCapabilities] = {
-    "ppo": PolicyCapabilities(
-        algorithm_id="ppo",
-        action_selection_modes=("stochastic", "deterministic"),
-        default_action_selection_mode=registered_default_action_selection_mode("ppo"),
-        introspection=frozenset(
-            {
-                ACTOR_DISTRIBUTION,
-                STATE_VALUE,
-                SELECTED_ACTION_LOG_PROBABILITY,
-                ENTROPY,
-            }
-        ),
-    ),
-    "a2c": PolicyCapabilities(
-        algorithm_id="a2c",
-        action_selection_modes=("stochastic", "deterministic"),
-        default_action_selection_mode=registered_default_action_selection_mode("a2c"),
-        introspection=frozenset(
-            {
-                ACTOR_DISTRIBUTION,
-                STATE_VALUE,
-                SELECTED_ACTION_LOG_PROBABILITY,
-                ENTROPY,
-            }
-        ),
-    ),
-    "action-program": PolicyCapabilities(
-        algorithm_id="action-program",
-        action_selection_modes=("program",),
-        default_action_selection_mode=registered_default_action_selection_mode(
-            "action-program"
-        ),
-        introspection=frozenset({PROGRAM}),
-    ),
-    "cell-graph": PolicyCapabilities(
-        algorithm_id="cell-graph",
-        action_selection_modes=("route",),
-        default_action_selection_mode=registered_default_action_selection_mode(
-            "cell-graph"
-        ),
-        introspection=frozenset({ROUTE}),
-    ),
+    algorithm_id: PolicyCapabilities(
+        algorithm_id=algorithm_id,
+        action_selection_modes=spec.action_selection_modes,
+        default_action_selection_mode=spec.default_action_selection_mode,
+        introspection=spec.introspection,
+    )
+    for algorithm_id, spec in POLICY_ALGORITHM_SPECS.items()
+    if spec.runtime_family is not None
 }
 
 
@@ -129,27 +93,10 @@ class PolicyRuntime:
         action_space: Any,
         action_contract: Mapping[str, Any] | None = None,
     ) -> None:
-        bind_contract = getattr(self.model, "bind_action_contract", None)
-        if callable(bind_contract) and action_contract is not None:
-            bind_contract(action_contract)
-        bind = getattr(self.model, "bind_action_space", None)
-        if callable(bind):
-            bind(action_space)
-        model_action_space = getattr(self.model, "action_space", None)
-        if model_action_space is None:
-            try:
-                self.model.action_space = action_space
-            except Exception:
-                pass
+        bind_policy_action_space(self.model, action_space, action_contract)
 
     def reset(self, lanes: Any | None = None) -> None:
-        reset = getattr(
-            self.model,
-            "reset_episode" if lanes is None else "reset_lanes",
-            None,
-        )
-        if callable(reset):
-            reset() if lanes is None else reset(lanes)
+        reset_policy_state(self.model, lanes)
 
     def decide(
         self,

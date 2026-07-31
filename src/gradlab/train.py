@@ -13,8 +13,9 @@ from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 from pathlib import Path
 
-os.environ.setdefault("MPLCONFIGDIR", os.path.abspath(".matplotlib"))
-os.makedirs(os.environ["MPLCONFIGDIR"], exist_ok=True)
+from gradlab.local_paths import configure_matplotlib_cache
+
+configure_matplotlib_cache()
 
 from gradlab.artifacts import write_run_description
 from gradlab.cli_parser import ExactArgumentParser

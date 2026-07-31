@@ -10,8 +10,9 @@ from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
 
-os.environ.setdefault("MPLCONFIGDIR", os.path.abspath(".matplotlib"))
-os.makedirs(os.environ["MPLCONFIGDIR"], exist_ok=True)
+from gradlab.local_paths import configure_matplotlib_cache, default_runs_dir
+
+configure_matplotlib_cache()
 
 import numpy as np
 import torch
@@ -43,7 +44,6 @@ from gradlab.model_sources import (
     DEFAULT_PUBLIC_MODELS_BASE_URL,
     positional_model_source_arg,
 )
-from gradlab.local_paths import default_runs_dir
 from gradlab.play_attribution import PolicyActionAttributor
 from gradlab.play_debug import PolicyDecision
 from gradlab.policy_observation import (

@@ -11,14 +11,16 @@ PolicyAlgorithmId: TypeAlias = Literal[
     "action-program",
     "cell-graph",
 ]
-RuntimePolicyAlgorithmId: TypeAlias = Literal[
-    "ppo",
-    "a2c",
-    "action-program",
-    "cell-graph",
-]
 Sb3AlgorithmId: TypeAlias = Literal["ppo", "a2c"]
 PolicyRuntimeFamily: TypeAlias = Literal["sb3", "action-program", "cell-graph"]
+
+ACTOR_DISTRIBUTION = "actor_distribution"
+STATE_VALUE = "state_value"
+PROGRAM = "program"
+ROUTE = "route"
+SELECTED_ACTION_LOG_PROBABILITY = "selected_action_log_probability"
+ENTROPY = "entropy"
+ATTRIBUTION = "attribution"
 
 
 @dataclass(frozen=True)
@@ -26,12 +28,14 @@ class PolicyAlgorithmSpec:
     model_classes: tuple[str, ...]
     runtime_family: PolicyRuntimeFamily | None
     default_action_selection_mode: str
+    action_selection_modes: tuple[str, ...] = ()
+    introspection: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True)
 class TrainingBackendSpec:
     module_name: str
-    algorithm_id: RuntimePolicyAlgorithmId
+    algorithm_id: PolicyAlgorithmId
 
 
 POLICY_ALGORITHM_SPECS: dict[PolicyAlgorithmId, PolicyAlgorithmSpec] = {
@@ -42,21 +46,43 @@ POLICY_ALGORITHM_SPECS: dict[PolicyAlgorithmId, PolicyAlgorithmSpec] = {
         ),
         "sb3",
         "stochastic",
+        ("stochastic", "deterministic"),
+        frozenset(
+            {
+                ACTOR_DISTRIBUTION,
+                STATE_VALUE,
+                SELECTED_ACTION_LOG_PROBABILITY,
+                ENTROPY,
+            }
+        ),
     ),
     "a2c": PolicyAlgorithmSpec(
         ("stable_baselines3.a2c.a2c.A2C",),
         "sb3",
         "stochastic",
+        ("stochastic", "deterministic"),
+        frozenset(
+            {
+                ACTOR_DISTRIBUTION,
+                STATE_VALUE,
+                SELECTED_ACTION_LOG_PROBABILITY,
+                ENTROPY,
+            }
+        ),
     ),
     "action-program": PolicyAlgorithmSpec(
         ("gradlab.action_program.ActionProgramPolicy",),
         "action-program",
         "program",
+        ("program",),
+        frozenset({PROGRAM}),
     ),
     "cell-graph": PolicyAlgorithmSpec(
         ("gradlab.cell_graph.CellGraphPolicy",),
         "cell-graph",
         "route",
+        ("route",),
+        frozenset({ROUTE}),
     ),
 }
 
