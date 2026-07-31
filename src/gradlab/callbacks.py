@@ -50,6 +50,7 @@ from gradlab.metric_names import (
     train_reward_signal_metric,
     validate_metric_payload,
 )
+from gradlab.policy_execution import compile_policy_execution_contract
 from gradlab.metric_store import MetricStore
 from gradlab.state_archive import state_archive_artifact_summary
 from gradlab.train_config import wandb_publication_enabled
@@ -144,6 +145,10 @@ class LedgerCheckpointHelper(CallbackHelper):
                     action_contract=runtime_action_contract(
                         getattr(self.model, "env", None)
                     ),
+                    policy_execution_contract=compile_policy_execution_contract(
+                        self.model,
+                        getattr(self.model, "env", None),
+                    ),
                 ),
             )
         started = time.perf_counter()
@@ -156,6 +161,10 @@ class LedgerCheckpointHelper(CallbackHelper):
             checkpoint_step_value=step,
             state_archive_summary=state_archive_artifact_summary(getattr(self.model, "env", None)),
             action_contract=runtime_action_contract(getattr(self.model, "env", None)),
+            policy_execution_contract=compile_policy_execution_contract(
+                self.model,
+                getattr(self.model, "env", None),
+            ),
         )
         checkpoint_id = self.metric_store.record_checkpoint(
             run_name=str(self.train_config.get("run_name") or ""),

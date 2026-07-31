@@ -41,6 +41,7 @@ class TrainingBackendSpec:
 POLICY_ALGORITHM_SPECS: dict[PolicyAlgorithmId, PolicyAlgorithmSpec] = {
     "ppo": PolicyAlgorithmSpec(
         (
+            "gradlab.task_advantage.GroupedAdvantagePPO",
             "gradlab.task_advantage.PerTaskAdvantagePPO",
             "stable_baselines3.ppo.ppo.PPO",
         ),

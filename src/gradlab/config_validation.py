@@ -14,6 +14,7 @@ from gradlab.cli_parser import ExactArgumentParser
 from gradlab.experiment_contracts import validate_env_config_file
 from gradlab.modal_eval_config import load_modal_eval_config
 from gradlab.recipe_documents import compose_train_document, load_goal_contract
+from gradlab.validation import display_path
 
 
 @dataclass(frozen=True)
@@ -42,13 +43,6 @@ class ValidationReport:
         }
 
 
-def _display_path(path: Path, repo_root: Path) -> str:
-    try:
-        return str(path.relative_to(repo_root))
-    except ValueError:
-        return str(path)
-
-
 def _capture_issue(
     issues: list[ValidationIssue],
     path: Path,
@@ -58,7 +52,7 @@ def _capture_issue(
     try:
         action()
     except Exception as exc:  # noqa: BLE001 - validation aggregates schema failures.
-        issues.append(ValidationIssue(path=_display_path(path, repo_root), message=str(exc)))
+        issues.append(ValidationIssue(path=display_path(path, repo_root), message=str(exc)))
 
 
 def validate_experiment_tree(repo_root: Path | str = Path(".")) -> ValidationReport:
@@ -84,7 +78,7 @@ def validate_experiment_tree(repo_root: Path | str = Path(".")) -> ValidationRep
     for path in json_files:
         issues.append(
             ValidationIssue(
-                path=_display_path(path, repo_root),
+                path=display_path(path, repo_root),
                 message="experiments configs must be YAML",
             )
         )
@@ -119,7 +113,7 @@ def validate_experiment_tree(repo_root: Path | str = Path(".")) -> ValidationRep
         if goal_path.parent.resolve() not in recipes_by_goal:
             issues.append(
                 ValidationIssue(
-                    path=_display_path(goal_path, repo_root),
+                    path=display_path(goal_path, repo_root),
                     message="active goal has no launchable recipe under its recipes directory",
                 )
             )
@@ -128,7 +122,7 @@ def validate_experiment_tree(repo_root: Path | str = Path(".")) -> ValidationRep
         if not goal_path.is_file():
             issues.append(
                 ValidationIssue(
-                    path=_display_path(path, repo_root),
+                    path=display_path(path, repo_root),
                     message="goal-local recipe has no sibling _goal.yaml owner",
                 )
             )
@@ -149,7 +143,7 @@ def validate_experiment_tree(repo_root: Path | str = Path(".")) -> ValidationRep
     for path in shared_recipe_leaves:
         issues.append(
             ValidationIssue(
-                path=_display_path(path, repo_root),
+                path=display_path(path, repo_root),
                 message=(
                     "shared recipe directories may contain only reusable _presets; "
                     "launchable recipes belong under their goal"

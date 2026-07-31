@@ -2,6 +2,23 @@ defaults:
 - _self_
 train:
   timesteps: 50000000
+  policy_model:
+    schema_version: 1
+    topology:
+      kind: shared_encoder
+      encoder:
+        kind: nature_cnn
+        features_dim: 256
+    fusion: post_encoder_concat
+    context_encoders:
+      task_id: {kind: one_hot}
+    routes:
+      task_id: [action, state_value]
+    heads:
+      action: {hidden_sizes: [512, 512], activation: tanh}
+      state_value: {hidden_sizes: [512, 512], activation: tanh}
+    normalize_images: true
+    orthogonal_init: true
   backend:
     id: sb3.ppo
     config:
@@ -21,8 +38,8 @@ train:
       vf_coef: 1.0
       adam_eps: 1.0e-08
       normalize_advantage: false
-      advantage_normalization: per-task
-      policy_net_arch: 512,512
-      value_net_arch: 512,512
+      advantage_normalization:
+        mode: grouped
+        context: task_id
 logging:
   wandb_mode: online

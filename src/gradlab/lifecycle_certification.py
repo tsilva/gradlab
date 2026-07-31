@@ -35,7 +35,11 @@ from gradlab.job_queue import (
     run_flusher,
 )
 from gradlab.manual_evaluation import ManualEvaluationSupervisor
-from gradlab.metric_names import METRICS_SCHEMA_VERSION
+from gradlab.metric_names import (
+    METRICS_SCHEMA_VERSION,
+    ORCHESTRATION_EVENT_ID,
+    ORCHESTRATION_EVENT_SEQ,
+)
 from gradlab.modal_eval_protocol import execution_key
 from gradlab.policy_bundle import (
     build_recipe_document,
@@ -69,6 +73,7 @@ from gradlab.run_supervisor import (
     _terminal_outcome,
 )
 from gradlab.supervisor_runtime import LifecycleObserver, SupervisorRuntime
+from gradlab.training_lifecycle import LEARNER_STATE_FORMAT_VERSION
 from gradlab.wandb_publisher import WandbProjector
 
 
@@ -290,8 +295,8 @@ class CertificationRuntime(SupervisorRuntime):
                 "payload": payload,
             }
             if event["kind"] == "history":
-                event["payload"]["orchestration/event_seq"] = event_seq
-                event["payload"]["orchestration/event_id"] = event["event_id"]
+                event["payload"][ORCHESTRATION_EVENT_SEQ] = event_seq
+                event["payload"][ORCHESTRATION_EVENT_ID] = event["event_id"]
                 if event["source"].startswith("eval"):
                     event["payload"]["eval/checkpoint/step"] = event["step"]
                 elif not event["source"].startswith("orchestration"):
@@ -300,7 +305,7 @@ class CertificationRuntime(SupervisorRuntime):
             if self.evidence_path is not None:
                 self.evidence_path.parent.mkdir(parents=True, exist_ok=True)
                 self.evidence_path.write_bytes(_canonical_bytes({"events": self.wandb_events}))
-            self.summary["orchestration/event_seq"] = event_seq
+            self.summary[ORCHESTRATION_EVENT_SEQ] = event_seq
             store.mark_metric_frame_published(frame_id, step=row["step"])
             published += 1
         return published
@@ -939,7 +944,7 @@ def _finalize_success(prepared: PreparedSupervisor) -> TerminalReceipt:
             .isoformat()
             .replace("+00:00", "Z"),
             "wandb_remote_high_water_mark": int(
-                prepared.runtime.summary.get("orchestration/event_seq") or 0
+                prepared.runtime.summary.get(ORCHESTRATION_EVENT_SEQ) or 0
             ),
             "publication_capacity_ratio": None,
             "failure": None,
@@ -1212,7 +1217,7 @@ def _scenario_wandb_visibility_gating(root: Path) -> dict[str, Any]:
     fixture.clock.advance(5)
     supervisor.active_iteration()
     high_water = supervisor._finish_wandb()
-    prepared.runtime.summary["orchestration/event_seq"] = 0
+    prepared.runtime.summary[ORCHESTRATION_EVENT_SEQ] = 0
     timed_out = False
     try:
         supervisor._wait_for_remote_delivery(high_water)
@@ -1792,7 +1797,7 @@ def _scripted_learner_result(
     failed = status == "failed"
     return {
         "document_type": "gradlab.training-result",
-        "format_version": 3,
+        "format_version": LEARNER_STATE_FORMAT_VERSION,
         "run_id": prepared.supervisor.manifest.run_id,
         "attempt_id": prepared.supervisor.manifest.attempt_id,
         "learner_pid": process.pid,
@@ -2064,7 +2069,7 @@ def _scenario_local_background_jobs(root: Path) -> dict[str, Any]:
         writer_id="manual-eval-writer-81",
         evidence_path=root / "evaluation" / "evidence" / "manual-wandb-events.json",
     )
-    manual_runtime.summary["orchestration/event_seq"] = training_terminal.wandb_high_water_mark
+    manual_runtime.summary[ORCHESTRATION_EVENT_SEQ] = training_terminal.wandb_high_water_mark
 
     def manual_supervisor() -> ManualEvaluationSupervisor:
         return ManualEvaluationSupervisor(

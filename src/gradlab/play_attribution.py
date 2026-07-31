@@ -27,6 +27,11 @@ def find_last_conv2d(module: nn.Module) -> nn.Conv2d:
 
 
 def actor_image_feature_extractor(policy: Any) -> nn.Module:
+    routed = getattr(policy, "actor_image_feature_extractor", None)
+    if callable(routed):
+        extractor = routed()
+        if isinstance(extractor, nn.Module):
+            return extractor
     extractor = getattr(policy, "pi_features_extractor", None)
     if extractor is None:
         extractor = getattr(policy, "features_extractor", None)
@@ -69,16 +74,25 @@ class ActionLogProbForward(nn.Module):
         obs_tensor, _vectorized = policy.obs_to_tensor(model_obs)
         self.image_key: str | None = None
         if isinstance(obs_tensor, Mapping):
-            if "image" not in obs_tensor:
-                raise AttributionError("dict observation is missing required 'image' key")
-            image_tensor = obs_tensor["image"]
+            image_key = (
+                "observation"
+                if "observation" in obs_tensor
+                else "image"
+                if "image" in obs_tensor
+                else None
+            )
+            if image_key is None:
+                raise AttributionError(
+                    "dict observation is missing an image-bearing 'observation' or 'image' key"
+                )
+            image_tensor = obs_tensor[image_key]
             fixed: dict[str, torch.Tensor] = {}
             for key, value in obs_tensor.items():
-                if key == "image":
+                if key == image_key:
                     continue
                 fixed[key] = value.detach()
             self.fixed_obs = fixed
-            self.image_key = "image"
+            self.image_key = image_key
         elif isinstance(obs_tensor, torch.Tensor):
             image_tensor = obs_tensor
             self.fixed_obs = None
@@ -105,8 +119,16 @@ class ActionLogProbForward(nn.Module):
             obs: torch.Tensor | dict[str, torch.Tensor] = image_tensor
         else:
             obs = dict(self.fixed_obs)
-            obs["image"] = image_tensor
-        _values, log_prob, _entropy = self.policy.evaluate_actions(obs, self.action_tensor)
+            assert self.image_key is not None
+            obs[self.image_key] = image_tensor
+        actor_log_probability = getattr(self.policy, "actor_log_probability", None)
+        if callable(actor_log_probability):
+            log_prob = actor_log_probability(obs, self.action_tensor)
+        else:
+            _values, log_prob, _entropy = self.policy.evaluate_actions(
+                obs,
+                self.action_tensor,
+            )
         return log_prob.reshape(-1)
 
 

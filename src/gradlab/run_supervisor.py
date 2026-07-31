@@ -30,6 +30,7 @@ from gradlab.goal_variants import validate_goal_variant_descriptor
 from gradlab.metric_names import (
     METRICS_SCHEMA_VERSION,
     ORCHESTRATION_CHECKPOINT_BACKLOG,
+    ORCHESTRATION_EVENT_SEQ,
     ORCHESTRATION_IDLE_GPU_TAIL_SECONDS,
     ORCHESTRATION_INGRESS_RATE,
     ORCHESTRATION_LOCAL_HIGH_WATER,
@@ -1919,7 +1920,7 @@ class RunSupervisor:
         self.last_remote_probe = now
         try:
             summary_value = self.runtime.remote_summary(self.wandb_run_path).get(
-                "orchestration/event_seq"
+                ORCHESTRATION_EVENT_SEQ
             )
             summary_value = _summary_scalar(summary_value)
             remote_high_water = int(summary_value or 0)

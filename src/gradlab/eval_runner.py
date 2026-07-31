@@ -163,6 +163,9 @@ def _evaluate_model_episodes_vector(
             getattr(eval_env, "action_space", None),
             getattr(getattr(eval_env, "runtime", None), "action_contract", None),
         )
+        from gradlab.policy_execution import verify_policy_execution_contract
+
+        verify_policy_execution_contract(model, eval_env)
         reset_policy_state(model)
         torch.manual_seed(seed)
         np.random.seed(seed)
@@ -315,6 +318,9 @@ def evaluate_model_episodes(
                     getattr(eval_env, "action_space", None),
                     getattr(getattr(eval_env, "runtime", None), "action_contract", None),
                 )
+                from gradlab.policy_execution import verify_policy_execution_contract
+
+                verify_policy_execution_contract(model, eval_env)
                 for episode_idx in range(episodes):
                     manifest_entry = planned.get((0, episode_idx)) if planned is not None else None
                     if planned is not None and manifest_entry is None:

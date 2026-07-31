@@ -95,9 +95,13 @@ def _format_sequence(value) -> str:
 
 def fast_env_image_obs(obs) -> np.ndarray:
     if isinstance(obs, Mapping):
-        if "image" not in obs:
-            raise ValueError(f"dict fast env obs is missing 'image'; keys={tuple(obs)}")
-        obs = obs["image"]
+        key = "observation" if "observation" in obs else "image"
+        if key not in obs:
+            raise ValueError(
+                "dict fast env obs is missing 'observation' or 'image'; "
+                f"keys={tuple(obs)}"
+            )
+        obs = obs[key]
     return np.asarray(obs)
 
 
@@ -599,6 +603,9 @@ class _PlaybackSession:
         self.configured_task_states = task_state_names(config) if self.conditioning_enabled else ()
         self.action_contract: Mapping[str, object] | None = None
         self._refresh_action_contract()
+        from gradlab.policy_execution import verify_policy_execution_contract
+
+        verify_policy_execution_contract(self.model, self.env)
 
         self.policy_obs = None
         self.current_frame: np.ndarray | None = None
@@ -660,6 +667,9 @@ class _PlaybackSession:
                 next_env.action_space,
                 getattr(getattr(next_env, "runtime", None), "action_contract", None),
             )
+            from gradlab.policy_execution import verify_policy_execution_contract
+
+            verify_policy_execution_contract(self.model, next_env)
             self.env = next_env
             self.config = next_config
             self._refresh_action_contract()

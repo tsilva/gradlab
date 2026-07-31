@@ -51,6 +51,10 @@ def preprocessing_contract(
     crop = normalize_obs_crop(raw_crop, label="environment.preprocessing.obs_crop")
     task_config = task or _value(source, "task", {})
     conditioning = task_config.get("conditioning", {}) if isinstance(task_config, Mapping) else {}
+    model_inputs = (
+        task_config.get("model_inputs", {}) if isinstance(task_config, Mapping) else {}
+    )
+    context = model_inputs.get("context", {}) if isinstance(model_inputs, Mapping) else {}
     max_pool_frames = _value(source, "max_pool_frames", True)
     return {
         "pipeline": pipeline,
@@ -78,6 +82,10 @@ def preprocessing_contract(
         "sticky_action_prob": float(_value(source, "sticky_action_prob", 0.0)),
         "obs_copy": str(_value(source, "obs_copy", "safe_view")),
         "policy_observation_layout": (
-            "dict_image_task" if bool(conditioning.get("enabled")) else "channel_first"
+            "dict_observation_context_v1"
+            if bool(context)
+            else "dict_image_task"
+            if bool(conditioning.get("enabled"))
+            else "channel_first"
         ),
     }

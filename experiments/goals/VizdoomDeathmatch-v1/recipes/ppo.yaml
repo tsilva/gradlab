@@ -1,10 +1,16 @@
 defaults:
-- ../../../recipes/_presets/vizdoom-deathmatch-ppo@_global_
+- ../../../recipes/_presets/atari-ppo@_global_
 - _self_
 recipe_id: ppo
 description: Single-player ViZDoom Deathmatch pixel PPO tuned for stable policy updates.
 train:
+  checkpoint_eval_backend: none
   timesteps: 2998272
+  early_stop:
+    conditions:
+      return_plateau:
+        start_after_steps: 749568
+        patience_steps: 749568
   backend:
     config:
       n_epochs: 2

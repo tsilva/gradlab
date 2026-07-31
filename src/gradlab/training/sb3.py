@@ -7,7 +7,7 @@ from gradlab.training.sb3_on_policy import (
     OnPolicyBackend,
     normalize_on_policy_config,
     policy_kwargs_from_config,
-    policy_name_for_observation_space,
+    policy_type_for_config,
 )
 from gradlab.training_backend import BackendContext
 from gradlab.training_lifecycle import ProgressField
@@ -84,10 +84,12 @@ def _normalize_ppo(config: Mapping[str, Any], *, label: str) -> dict[str, Any]:
         value = normalized[key]
         if value is not None and (not isinstance(value, int | float) or isinstance(value, bool)):
             raise ValueError(f"{label}.{key} must be a number or null")
-    if normalized["advantage_normalization"] not in {"auto", "none", "global", "per-task"}:
-        raise ValueError(
-            f"{label}.advantage_normalization must be one of auto, none, global, per-task"
-        )
+    from gradlab.task_advantage import normalize_advantage_normalization
+
+    normalized["advantage_normalization"] = normalize_advantage_normalization(
+        normalized["advantage_normalization"],
+        label=f"{label}.advantage_normalization",
+    )
     return normalized
 
 
@@ -103,16 +105,29 @@ def _normalize_a2c(config: Mapping[str, Any], *, label: str) -> dict[str, Any]:
 
 
 def _ppo_model_factory(context: BackendContext, env: Any, config: Any, device: str):
-    from gradlab.env import task_conditioning
+    from gradlab.model_inputs import model_input_fields
     from gradlab.policy_models import load_pinned_remote_policy_model
     from gradlab.schedules import apply_resume_hyperparameters, learning_rate_schedule
-    from gradlab.task_advantage import PerTaskAdvantagePPO, resolve_advantage_normalization_mode
+    from gradlab.task_advantage import GroupedAdvantagePPO, resolve_advantage_normalization_mode
 
     common_config = context.train_config
     backend_config = context.backend_config
-    advantage_normalization = resolve_advantage_normalization_mode(backend_config)
-    if advantage_normalization == "per-task" and not task_conditioning(config).get("enabled"):
-        raise ValueError("per-task advantage normalization requires task conditioning")
+    advantage_normalization, advantage_context = resolve_advantage_normalization_mode(
+        backend_config
+    )
+    if advantage_normalization == "grouped":
+        fields = model_input_fields(config.task)
+        field = fields.get(str(advantage_context))
+        if field is None:
+            raise ValueError(
+                "grouped advantage normalization references undeclared context "
+                f"{advantage_context!r}"
+            )
+        if field["encoding"]["kind"] != "categorical":
+            raise ValueError(
+                "grouped advantage normalization requires categorical context, got "
+                f"{advantage_context!r}"
+            )
     sb3_normalize_advantage = advantage_normalization == "global"
     if backend_config["resume"]:
         model = load_pinned_remote_policy_model(
@@ -125,17 +140,31 @@ def _ppo_model_factory(context: BackendContext, env: Any, config: Any, device: s
             tensorboard_log=str(context.run_dir),
             device=device,
         )
-        if advantage_normalization == "per-task":
-            raise ValueError("per-task advantage normalization is not supported with resume")
+        if advantage_normalization == "grouped":
+            if not isinstance(model, GroupedAdvantagePPO):
+                raise ValueError(
+                    "resume artifact does not use grouped advantage normalization"
+                )
+            if model.advantage_context != advantage_context:
+                raise ValueError(
+                    "resume artifact grouped advantage context does not match the recipe"
+                )
+        elif isinstance(model, GroupedAdvantagePPO):
+            raise ValueError(
+                "resume artifact uses grouped advantage normalization but the recipe does not"
+            )
         apply_resume_hyperparameters(model, common_config, backend_config)
         model.normalize_advantage = sb3_normalize_advantage
         return model
 
     from stable_baselines3 import PPO
 
-    model_cls = PerTaskAdvantagePPO if advantage_normalization == "per-task" else PPO
+    model_cls = GroupedAdvantagePPO if advantage_normalization == "grouped" else PPO
+    model_kwargs: dict[str, Any] = {}
+    if advantage_context is not None:
+        model_kwargs["advantage_context"] = advantage_context
     return model_cls(
-        policy_name_for_observation_space(env.observation_space),
+        policy_type_for_config(env.observation_space, common_config),
         env,
         learning_rate=learning_rate_schedule(common_config, backend_config),
         n_steps=backend_config["n_steps"],
@@ -151,11 +180,13 @@ def _ppo_model_factory(context: BackendContext, env: Any, config: Any, device: s
         target_kl=backend_config["target_kl"],
         policy_kwargs=policy_kwargs_from_config(
             backend_config,
+            common_config=common_config,
             optimizer_eps=backend_config["adam_eps"],
         ),
         tensorboard_log=str(context.run_dir),
         device=device,
         verbose=0,
+        **model_kwargs,
     )
 
 
@@ -183,7 +214,7 @@ def _a2c_model_factory(context: BackendContext, env: Any, config: Any, device: s
     from stable_baselines3 import A2C
 
     return A2C(
-        policy_name_for_observation_space(env.observation_space),
+        policy_type_for_config(env.observation_space, common_config),
         env,
         learning_rate=learning_rate_schedule(common_config, backend_config),
         n_steps=backend_config["n_steps"],
@@ -195,7 +226,10 @@ def _a2c_model_factory(context: BackendContext, env: Any, config: Any, device: s
         rms_prop_eps=backend_config["rms_prop_eps"],
         use_rms_prop=backend_config["use_rms_prop"],
         normalize_advantage=backend_config["normalize_advantage"],
-        policy_kwargs=policy_kwargs_from_config(backend_config),
+        policy_kwargs=policy_kwargs_from_config(
+            backend_config,
+            common_config=common_config,
+        ),
         tensorboard_log=str(context.run_dir),
         device=device,
         verbose=0,
@@ -203,9 +237,10 @@ def _a2c_model_factory(context: BackendContext, env: Any, config: Any, device: s
 
 
 def _ppo_model_class(config: Mapping[str, Any]) -> str:
+    value = config.get("advantage_normalization")
     return (
-        "gradlab.task_advantage.PerTaskAdvantagePPO"
-        if config.get("advantage_normalization") == "per-task"
+        "gradlab.task_advantage.GroupedAdvantagePPO"
+        if isinstance(value, Mapping) and value.get("mode") == "grouped"
         else "stable_baselines3.ppo.ppo.PPO"
     )
 

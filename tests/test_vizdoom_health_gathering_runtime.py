@@ -28,9 +28,20 @@ def test_health_gathering_recipe_runs_through_the_real_vector_runtime(
 
     try:
         observations = env.reset()
-        assert observations.shape == (2, 4, 84, 84)
+        if goal_id == "VizdoomHealthGathering-v1":
+            assert set(observations) == {"observation", "context/health"}
+            assert observations["observation"].shape == (2, 4, 84, 84)
+            assert observations["context/health"].shape == (2, 1)
+            assert observations["context/health"].dtype == np.float32
+            assert np.all((-1.0 <= observations["context/health"]) & (
+                observations["context/health"] <= 2.0
+            ))
+        else:
+            assert observations.shape == (2, 4, 84, 84)
 
-        _next_observations, rewards, dones, infos = env.step(np.zeros(2, dtype=np.int64))
+        next_observations, rewards, dones, infos = env.step(np.zeros(2, dtype=np.int64))
+        if goal_id == "VizdoomHealthGathering-v1":
+            assert set(next_observations) == {"observation", "context/health"}
         assert rewards.shape == (2,)
         assert dones.shape == (2,)
         assert len(infos) == 2

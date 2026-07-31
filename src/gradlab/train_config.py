@@ -397,6 +397,34 @@ def validate_and_normalize_train_config(
             label=f"{label}.state_archive",
             n_envs=int(n_envs) if n_envs is not None else None,
         )
+    policy_model = normalized.get("policy_model")
+    if policy_model is not None:
+        from gradlab.policy_model_config import (
+            normalize_policy_model,
+            validate_policy_model_context,
+        )
+
+        normalized["policy_model"] = normalize_policy_model(
+            policy_model,
+            label=f"{label}.policy_model",
+        )
+        task = normalized.get("task")
+        if isinstance(task, Mapping):
+            validate_policy_model_context(
+                normalized["policy_model"],
+                task,
+                label=f"{label}.policy_model",
+            )
+    else:
+        task = normalized.get("task")
+        if isinstance(task, Mapping):
+            from gradlab.policy_model_config import validate_policy_model_context
+
+            validate_policy_model_context(
+                None,
+                task,
+                label=f"{label}.policy_model",
+            )
     early_stop = normalized.get("early_stop")
     conditions = early_stop.get("conditions") if isinstance(early_stop, Mapping) else None
     has_training_success_condition = isinstance(conditions, Mapping) and any(
@@ -445,6 +473,12 @@ TRAIN_CONFIG_FIELDS: tuple[TrainConfigField, ...] = (
         type_name="json",
         default=None,
         mapping_value=True,
+    ),
+    _field(
+        "policy_model",
+        type_name="json",
+        default=None,
+        source_section="train",
     ),
     _field(
         "n_envs",
