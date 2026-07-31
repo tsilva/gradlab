@@ -6,6 +6,24 @@ description: Single-player ViZDoom Deathmatch pixel PPO tuned for stable policy 
 train:
   checkpoint_eval_backend: none
   timesteps: 2998272
+  # Blend privileged health with image features only in the nonlinear critic head.
+  policy_model:
+    schema_version: 1
+    topology:
+      kind: shared_encoder
+      encoder:
+        kind: nature_cnn
+        features_dim: 512
+    fusion: post_encoder_concat
+    context_encoders:
+      health: {kind: identity}
+    routes:
+      health: [state_value]
+    heads:
+      action: {hidden_sizes: [], activation: tanh}
+      state_value: {hidden_sizes: [256], activation: tanh}
+    normalize_images: true
+    orthogonal_init: true
   early_stop:
     conditions:
       return_plateau:

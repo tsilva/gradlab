@@ -20,7 +20,14 @@ def test_deathmatch_recipe_runs_through_the_real_single_player_vector_runtime() 
 
     try:
         observations = env.reset()
-        assert observations.shape == (2, 4, 84, 84)
+        assert set(observations) == {"observation", "context/health"}
+        assert observations["observation"].shape == (2, 4, 84, 84)
+        assert observations["context/health"].shape == (2, 1)
+        assert observations["context/health"].dtype == np.float32
+        assert np.all(
+            (-1.0 <= observations["context/health"])
+            & (observations["context/health"] <= 2.0)
+        )
         assert env.action_space.n == 17
         assert {
             "killcount",
@@ -32,9 +39,11 @@ def test_deathmatch_recipe_runs_through_the_real_single_player_vector_runtime() 
             "pending_reset",
         } <= set(env.reset_infos[0])
 
-        _next_observations, rewards, dones, infos = env.step(
+        next_observations, rewards, dones, infos = env.step(
             np.asarray([0, 9], dtype=np.int64)
         )
+        assert set(next_observations) == {"observation", "context/health"}
+        assert next_observations["context/health"].shape == (2, 1)
         assert rewards.shape == (2,)
         assert dones.shape == (2,)
         assert len(infos) == 2
