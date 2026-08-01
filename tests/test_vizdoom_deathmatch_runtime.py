@@ -27,21 +27,35 @@ def test_deathmatch_recipe_runs_through_the_real_single_player_vector_runtime() 
             "context/health",
             "context/selected_weapon",
             "context/selected_weapon_ammo",
+            "context/weapon_ammo",
+            "context/weapons_owned",
         }
         assert observations["observation"].shape == (2, 4, 84, 84)
         assert observations["context/armor"].shape == (2, 1)
         assert observations["context/health"].shape == (2, 1)
         assert observations["context/selected_weapon"].shape == (2,)
         assert observations["context/selected_weapon_ammo"].shape == (2, 1)
+        assert observations["context/weapon_ammo"].shape == (2, 6)
+        assert observations["context/weapons_owned"].shape == (2, 6)
         assert observations["context/armor"].dtype == np.float32
         assert observations["context/health"].dtype == np.float32
         assert observations["context/selected_weapon"].dtype == np.int64
         assert observations["context/selected_weapon_ammo"].dtype == np.float32
+        assert observations["context/weapon_ammo"].dtype == np.float32
+        assert observations["context/weapons_owned"].dtype == np.float32
         assert np.all(
             (0.0 <= observations["context/armor"]) & (observations["context/armor"] <= 1.0)
         )
         assert np.all(
             (0.0 <= observations["context/health"]) & (observations["context/health"] <= 2.0)
+        )
+        assert np.all(
+            (0.0 <= observations["context/weapon_ammo"])
+            & (observations["context/weapon_ammo"] <= 1.0)
+        )
+        assert np.all(
+            (0.0 <= observations["context/weapons_owned"])
+            & (observations["context/weapons_owned"] <= 1.0)
         )
         np.testing.assert_array_equal(
             observations["context/armor"],
@@ -55,6 +69,14 @@ def test_deathmatch_recipe_runs_through_the_real_single_player_vector_runtime() 
             observations["context/selected_weapon_ammo"],
             np.full((2, 1), 1.0 / 6.0, dtype=np.float32),
         )
+        np.testing.assert_array_equal(
+            observations["context/weapons_owned"],
+            np.asarray([[1.0, 1.0, 0.0, 0.0, 0.0, 0.0]] * 2, dtype=np.float32),
+        )
+        np.testing.assert_array_equal(
+            observations["context/weapon_ammo"],
+            np.asarray([[0.0, 0.25, 0.0, 0.25, 0.0, 0.0]] * 2, dtype=np.float32),
+        )
         assert env.action_space.n == 17
         assert {
             "killcount",
@@ -62,6 +84,18 @@ def test_deathmatch_recipe_runs_through_the_real_single_player_vector_runtime() 
             "armor",
             "selected_weapon",
             "selected_weapon_ammo",
+            "weapon1",
+            "weapon2",
+            "weapon3",
+            "weapon4",
+            "weapon5",
+            "weapon6",
+            "ammo1",
+            "ammo2",
+            "ammo3",
+            "ammo4",
+            "ammo5",
+            "ammo6",
             "player_dead",
             "pending_reset",
         } <= set(env.reset_infos[0])
@@ -73,14 +107,26 @@ def test_deathmatch_recipe_runs_through_the_real_single_player_vector_runtime() 
             "context/health",
             "context/selected_weapon",
             "context/selected_weapon_ammo",
+            "context/weapon_ammo",
+            "context/weapons_owned",
         }
         assert next_observations["context/armor"].shape == (2, 1)
         assert next_observations["context/health"].shape == (2, 1)
         assert next_observations["context/selected_weapon"].shape == (2,)
         assert next_observations["context/selected_weapon_ammo"].shape == (2, 1)
+        assert next_observations["context/weapon_ammo"].shape == (2, 6)
+        assert next_observations["context/weapons_owned"].shape == (2, 6)
         assert np.all(
             (0.0 <= next_observations["context/armor"])
             & (next_observations["context/armor"] <= 1.0)
+        )
+        assert np.all(
+            (0.0 <= next_observations["context/weapon_ammo"])
+            & (next_observations["context/weapon_ammo"] <= 1.0)
+        )
+        assert np.all(
+            (0.0 <= next_observations["context/weapons_owned"])
+            & (next_observations["context/weapons_owned"] <= 1.0)
         )
         assert rewards.shape == (2,)
         assert dones.shape == (2,)
