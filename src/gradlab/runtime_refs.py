@@ -17,7 +17,7 @@ from typing import Annotated, Any, Literal
 
 from pydantic import StringConstraints
 
-from gradlab.boundary_schema import BoundaryModel, validate_boundary
+from gradlab.boundary_schema import BoundaryModel, NonEmptyText, Sha256, validate_boundary
 from gradlab.runtime_contract import (
     RUNTIME_DESCRIPTOR_SCHEMA_VERSION,
     train_config_contract_sha256,
@@ -37,11 +37,6 @@ DEFAULT_RUNTIME_READINESS_TIMEOUT_SECONDS = 20 * 60
 DIGEST_IMAGE_REF_RE = re.compile(r"^docker:[^\s@]+@sha256:(?P<digest>[0-9a-fA-F]{64})$")
 ACTIVE_WORKFLOW_STATUSES = frozenset({"queued", "in_progress", "pending", "requested", "waiting"})
 
-NonEmptyText = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
-Sha256 = Annotated[
-    str,
-    StringConstraints(strip_whitespace=True, to_lower=True, pattern=r"^[0-9a-f]{64}$"),
-]
 BuildSourceSha = Annotated[
     str,
     StringConstraints(strip_whitespace=True, pattern=r"^[0-9a-fA-F]{40,64}$"),

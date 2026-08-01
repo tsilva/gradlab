@@ -8,9 +8,15 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
-from pydantic import Field, StringConstraints, field_validator, model_validator
+from pydantic import Field, field_validator, model_validator
 
-from gradlab.boundary_schema import BoundaryModel, validate_boundary
+from gradlab.boundary_schema import (
+    BoundaryModel,
+    NonEmptyText,
+    NonNegativeInt,
+    PositiveInt,
+    validate_boundary,
+)
 from gradlab.config_loader import load_mapping_document
 from gradlab.metric_names import validate_metric_name
 from gradlab.recipe_documents import compose_train_document
@@ -22,9 +28,6 @@ BENCHMARK_PROFILE_SCHEMA_VERSION = 1
 DEFAULT_PROFILE_DIR = Path("experiments/benchmarks/profiles")
 DEFAULT_RESULT_DIR = Path("logs/benchmarks")
 STATE_NONE_VALUES = {"", "none", "state.none"}
-NonEmptyText = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
-PositiveInt = Annotated[int, Field(strict=True, ge=1)]
-NonNegativeInt = Annotated[int, Field(strict=True, ge=0)]
 NonNegativeNumber = Annotated[int | float, Field(ge=0)]
 
 

@@ -9,13 +9,13 @@ from typing import Any
 from gradlab.json_utils import canonical_json_sha256, canonical_json_text
 from gradlab.recipe_documents import goal_contract_sha256
 from gradlab.reward_programs import goal_for_contract_validation
+from gradlab.run_contracts import SHA256_PATTERN
 
 
 GOAL_VARIANT_SCHEMA_VERSION = 1
 GOAL_VARIANT_INDEX_SCHEMA_VERSION = 2
 GOAL_VARIANT_RUN_INDEX_SCHEMA_VERSION = 2
 GOAL_VARIANT_ID_PATTERN = re.compile(r"^goal-variant-[0-9a-f]{24}$")
-SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 MAX_DIFF_ENTRIES = 24
 
 _PRESENTATION_ROOTS = frozenset({"defaults", "metadata", "notes", "tags", "title"})

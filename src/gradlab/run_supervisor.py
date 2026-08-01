@@ -335,10 +335,8 @@ class RunSupervisor:
         if self.eval_backend is None and self.evaluation_required:
             self.eval_backend = ModalEvalBackend(
                 app_name=str(self.manifest.modal["app_name"]),
-                function_name=str(
-                    self.manifest.modal.get("function_name") or "evaluate_checkpoint"
-                ),
-                environment_name=str(self.manifest.modal.get("environment_name") or "gradlab-eval"),
+                function_name=str(self.manifest.modal["function_name"]),
+                environment_name=str(self.manifest.modal["environment_name"]),
             )
         self.store = SupervisorLedger(metric_store_path(self.run_dir), clock=self.clock)
         self.train_config: dict[str, Any] = {}

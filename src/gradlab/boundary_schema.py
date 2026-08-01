@@ -2,9 +2,18 @@ from __future__ import annotations
 
 from collections import defaultdict
 from collections.abc import Mapping
-from typing import Any, TypeVar
+from typing import Annotated, Any, TypeVar
 
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, ValidationError
+
+
+NonEmptyText = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
+Sha256 = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, to_lower=True, pattern=r"^[0-9a-f]{64}$"),
+]
+PositiveInt = Annotated[int, Field(strict=True, ge=1)]
+NonNegativeInt = Annotated[int, Field(strict=True, ge=0)]
 
 
 class BoundaryModel(BaseModel):

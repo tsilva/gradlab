@@ -56,7 +56,7 @@ EXPECTED_GOALS = {
         "max_episode_steps": None,
     },
     "VizdoomDeathmatch-v1": {
-        "timesteps": 2_998_272,
+        "timesteps": 100_000_000,
         "event": "monster_killed",
         "training_metric": "train/episode/return/shaped/from/target/window_100/mean",
         "acceptance_metric": "eval/full/episode/return/shaped/mean",

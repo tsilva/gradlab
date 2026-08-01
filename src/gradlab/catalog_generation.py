@@ -1,25 +1,23 @@
 from __future__ import annotations
 
-import re
 from collections.abc import Mapping
 from copy import deepcopy
 from typing import Any
 
 from gradlab.goal_variants import validate_goal_variant_descriptor
 from gradlab.json_utils import canonical_json_sha256
+from gradlab.run_contracts import RUN_ID_PATTERN, SHA256_PATTERN
 
 
 CATALOG_GENERATION_SCHEMA_VERSION = 1
 CATALOG_POINTER_SCHEMA_VERSION = 1
 CATALOG_V3_ROOT = "goal-variants/v3"
 CATALOG_POINTER_KEY = f"{CATALOG_V3_ROOT}/current.json"
-CATALOG_GENERATION_PATTERN = re.compile(r"^[0-9a-f]{64}$")
-RUN_ID_PATTERN = re.compile(r"^gradlab-[0-9a-f]{32}$")
 
 
 def catalog_generation_key(digest: str) -> str:
     normalized = str(digest or "").strip().lower()
-    if CATALOG_GENERATION_PATTERN.fullmatch(normalized) is None:
+    if SHA256_PATTERN.fullmatch(normalized) is None:
         raise ValueError("catalog generation requires a lowercase SHA-256")
     return f"{CATALOG_V3_ROOT}/generations/{normalized}.json"
 
@@ -117,7 +115,7 @@ def validate_catalog_pointer(document: Mapping[str, Any]) -> dict[str, Any]:
     key = str(document.get("generation_key") or "").strip()
     generated_at = str(document.get("generated_at") or "").strip()
     if (
-        CATALOG_GENERATION_PATTERN.fullmatch(digest) is None
+        SHA256_PATTERN.fullmatch(digest) is None
         or key != catalog_generation_key(digest)
         or not generated_at
     ):

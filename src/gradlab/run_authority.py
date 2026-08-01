@@ -41,6 +41,7 @@ from gradlab.run_contracts import (
     EvalResult,
     PromotionReceipt,
     RunManifest,
+    SHA256_PATTERN,
     TerminalReceipt,
     checkpoint_id,
 )
@@ -149,7 +150,7 @@ class RunAuthority:
     @staticmethod
     def recipe_document_key(recipe_sha256: str) -> str:
         digest = str(recipe_sha256 or "").strip().lower()
-        if not re.fullmatch(r"[0-9a-f]{64}", digest):
+        if SHA256_PATTERN.fullmatch(digest) is None:
             raise ValueError("recipe document key requires a lowercase SHA-256")
         return f"recipes/v2/sha256/{digest[:2]}/{digest}.json"
 
