@@ -431,8 +431,8 @@ def test_vizdoom_deathmatch_declares_complete_single_player_combat_semantics() -
         "selected_weapon_ammo": {"kind": "identity"},
     }
     assert train_config["policy_model"]["routes"] == {
-        "armor": ["state_value"],
-        "health": ["state_value"],
+        "armor": ["action", "state_value"],
+        "health": ["action", "state_value"],
         "selected_weapon": ["action", "state_value"],
         "selected_weapon_ammo": ["action", "state_value"],
     }
