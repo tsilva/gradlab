@@ -85,7 +85,7 @@ train:
         selected_weapon_ammo: selected_weapon_ammo
         player_dead: player_dead
         episode_done: pending_reset
-      # Expose health and armor without changing the actor's inputs.
+      # Expose survivability state to the critic and action-relevant weapon state to both heads.
       model_inputs:
         schema_version: 1
         context:
@@ -107,6 +107,24 @@ train:
               kind: continuous
               # Normalize standard Doom armor and saturate any custom over-armor.
               scale: 0.005
+              offset: 0.0
+              low: 0.0
+              high: 1.0
+              clip: true
+          selected_weapon:
+            signal: selected_weapon
+            update: transition
+            encoding:
+              kind: categorical
+              # The bundled Deathmatch scenario exposes weapon slots one through six.
+              values: [1, 2, 3, 4, 5, 6]
+          selected_weapon_ammo:
+            signal: selected_weapon_ammo
+            update: transition
+            encoding:
+              kind: continuous
+              # Normalize the scenario's largest selected-weapon ammo capacity of 300.
+              scale: 0.0033333333333333335
               offset: 0.0
               low: 0.0
               high: 1.0

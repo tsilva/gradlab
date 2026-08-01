@@ -2,11 +2,11 @@ defaults:
 - ../../../recipes/_presets/atari-ppo@_global_
 - _self_
 recipe_id: ppo
-description: Single-player ViZDoom Deathmatch pixel PPO tuned for stable policy updates.
+description: Single-player ViZDoom Deathmatch pixel PPO with routed combat-state context.
 train:
   checkpoint_eval_backend: none
   timesteps: 100000000
-  # Blend privileged health and armor with image features only in the nonlinear critic head.
+  # Keep health and armor critic-only while routing weapon state to both policy heads.
   policy_model:
     schema_version: 1
     topology:
@@ -18,9 +18,13 @@ train:
     context_encoders:
       armor: {kind: identity}
       health: {kind: identity}
+      selected_weapon: {kind: one_hot}
+      selected_weapon_ammo: {kind: identity}
     routes:
       armor: [state_value]
       health: [state_value]
+      selected_weapon: [action, state_value]
+      selected_weapon_ammo: [action, state_value]
     heads:
       action: {hidden_sizes: [], activation: tanh}
       state_value: {hidden_sizes: [256], activation: tanh}

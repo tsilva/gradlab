@@ -21,6 +21,7 @@ def _descriptor() -> ProviderDescriptor:
         native_action_space=gym.spaces.Discrete(2),
         signal_schema={
             "health": SignalSpec("health", np.float32),
+            "selected_weapon": SignalSpec("selected_weapon", np.float64),
             "level_hi": SignalSpec("level_hi", np.int64),
             "level_lo": SignalSpec("level_lo", np.int64),
             "reset_task": SignalSpec(
@@ -146,6 +147,69 @@ def test_continuous_context_may_explicitly_clip_encoded_bounds() -> None:
         kernel.encode_observations(observations)["context/health"],
         [[0.0], [0.25]],
     )
+
+
+def test_categorical_context_accepts_integral_float_provider_values() -> None:
+    descriptor = _descriptor()
+    task = {
+        "signals": {"selected_weapon": "selected_weapon"},
+        "model_inputs": {
+            "schema_version": 1,
+            "context": {
+                "selected_weapon": {
+                    "signal": "selected_weapon",
+                    "update": "transition",
+                    "encoding": {
+                        "kind": "categorical",
+                        "values": [1, 2, 3, 4, 5, 6],
+                    },
+                }
+            },
+        },
+    }
+    base = IdentityTaskDefinition(signals=task["signals"]).bind(descriptor, 2)
+    kernel = ContextTaskKernel(base, descriptor, task)
+    observations = np.zeros((2, 4, 84, 84), dtype=np.uint8)
+
+    kernel.on_reset(
+        observations,
+        {"selected_weapon": np.asarray([2.0, 6.0], dtype=np.float64)},
+        np.ones(2, dtype=np.bool_),
+    )
+
+    np.testing.assert_array_equal(
+        kernel.encode_observations(observations)["context/selected_weapon"],
+        [1, 5],
+    )
+
+
+@pytest.mark.parametrize("value", [2.5, np.nan, np.inf])
+def test_categorical_context_rejects_non_integral_float_provider_values(
+    value: float,
+) -> None:
+    descriptor = _descriptor()
+    task = {
+        "signals": {"selected_weapon": "selected_weapon"},
+        "model_inputs": {
+            "schema_version": 1,
+            "context": {
+                "selected_weapon": {
+                    "signal": "selected_weapon",
+                    "update": "transition",
+                    "encoding": {"kind": "categorical", "values": [1, 2, 3]},
+                }
+            },
+        },
+    }
+    base = IdentityTaskDefinition(signals=task["signals"]).bind(descriptor, 1)
+    kernel = ContextTaskKernel(base, descriptor, task)
+
+    with pytest.raises(ValueError, match="finite integral categorical value"):
+        kernel.on_reset(
+            np.zeros((1, 4, 84, 84), dtype=np.uint8),
+            {"selected_weapon": np.asarray([value], dtype=np.float64)},
+            np.ones(1, dtype=np.bool_),
+        )
 
 
 def test_continuous_context_clip_must_be_boolean() -> None:
