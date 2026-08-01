@@ -7,8 +7,15 @@ import unittest
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from gradlab.r2_store import BucketConfig, ConditionalWriteConflict, RunStorageConfig
+from gradlab.catalog_generation import (
+    CATALOG_GENERATION_SCHEMA_VERSION,
+    CATALOG_POINTER_KEY,
+    catalog_generation_digest,
+    catalog_generation_key,
+    validate_catalog_generation,
+)
 from gradlab.goal_variants import build_goal_variant_descriptor, goal_variant_scope_key
+from gradlab.r2_store import BucketConfig, ConditionalWriteConflict, RunStorageConfig
 from gradlab.run_authority import LeaseUnavailable, RunAuthority
 from gradlab.run_contracts import (
     DEFAULT_LIVENESS_POLICY,
@@ -143,6 +150,36 @@ class RunAuthorityTests(unittest.TestCase):
             {item["run_id"] for item in merged["runs"]},
             {"gradlab-" + "1" * 32, "gradlab-" + "2" * 32},
         )
+
+    def test_complete_catalog_rebuild_reads_the_current_generation_schema(self) -> None:
+        generated_at = "2026-07-01T00:00:00Z"
+        current_generation = {
+            "schema_version": 1,
+            "generated_at": generated_at,
+            "scopes": [],
+        }
+        digest = catalog_generation_digest(current_generation)
+        key = catalog_generation_key(digest)
+        self.authority.control.put_json(key, current_generation, create_only=True)
+        self.authority.control.put_json(
+            CATALOG_POINTER_KEY,
+            {
+                "schema_version": 1,
+                "generation_sha256": digest,
+                "generation_key": key,
+                "generated_at": generated_at,
+            },
+            create_only=True,
+        )
+        manifest = self.manifest(new_run_id(), new_attempt_id())
+
+        self.authority.replace_goal_variant_catalog([(manifest, None)])
+
+        rebuilt = self.authority.catalog_generation()
+        self.assertIsNotNone(rebuilt)
+        assert rebuilt is not None
+        self.assertEqual(rebuilt["schema_version"], CATALOG_GENERATION_SCHEMA_VERSION)
+        self.assertEqual(rebuilt["scopes"][0]["runs"][0]["run_id"], manifest.run_id)
 
     def test_identifiers_have_required_shapes(self) -> None:
         self.assertRegex(new_run_id(), r"^gradlab-[0-9a-f]{32}$")
@@ -379,6 +416,19 @@ class RunAuthorityTests(unittest.TestCase):
             index["variants"][0]["exact_resolution_run_id"],
             manifest.run_id,
         )
+        self.assertEqual(
+            index["variants"][0]["resolved_goal"],
+            resolved.effective["goal"],
+        )
+        generation = self.authority.catalog_generation()
+        self.assertIsNotNone(generation)
+        assert generation is not None
+        projected = generation["scopes"][0]["variants"][0]
+        self.assertEqual(projected["resolved_goal"], resolved.effective["goal"])
+        tampered = json.loads(json.dumps(generation))
+        tampered["scopes"][0]["variants"][0]["resolved_goal"]["title"] = "Tampered"
+        with self.assertRaisesRegex(ValueError, "resolved goal does not match"):
+            validate_catalog_generation(tampered)
 
     def test_lease_takeover_requires_expiry_and_old_etag_cannot_renew(self) -> None:
         run_id = new_run_id()

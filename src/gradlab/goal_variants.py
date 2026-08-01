@@ -128,6 +128,75 @@ def _contract_diff(
     ]
 
 
+def _comparison_contract_diff(
+    before: object,
+    after: object,
+    *,
+    path: tuple[str, ...] = (),
+) -> list[dict[str, Any]]:
+    """Diff list members when possible so catalog labels avoid opaque JSON blobs."""
+
+    if _excluded_path(path):
+        return []
+    if isinstance(before, Mapping) and isinstance(after, Mapping):
+        rows: list[dict[str, Any]] = []
+        keys = sorted({str(key) for key in before} | {str(key) for key in after})
+        for key in keys:
+            nested_path = (*path, key)
+            if _excluded_path(nested_path):
+                continue
+            if key not in before:
+                rows.append(
+                    {
+                        "path": _path_text(nested_path),
+                        "before": None,
+                        "after": _compact_value(after[key]),
+                        "kind": "added",
+                    }
+                )
+            elif key not in after:
+                rows.append(
+                    {
+                        "path": _path_text(nested_path),
+                        "before": _compact_value(before[key]),
+                        "after": None,
+                        "kind": "removed",
+                    }
+                )
+            else:
+                rows.extend(_comparison_contract_diff(before[key], after[key], path=nested_path))
+        return rows
+    if (
+        isinstance(before, Sequence)
+        and not isinstance(before, str | bytes)
+        and isinstance(after, Sequence)
+        and not isinstance(after, str | bytes)
+    ):
+        if list(before) == list(after):
+            return []
+        if len(before) == len(after):
+            rows = []
+            for index, (before_item, after_item) in enumerate(zip(before, after, strict=True)):
+                rows.extend(
+                    _comparison_contract_diff(
+                        before_item,
+                        after_item,
+                        path=(*path, str(index)),
+                    )
+                )
+            return rows
+    elif before == after:
+        return []
+    return [
+        {
+            "path": _path_text(path),
+            "before": _compact_value(before),
+            "after": _compact_value(after),
+            "kind": "changed",
+        }
+    ]
+
+
 def _display_path(value: object) -> str:
     path = str(value or "")
     replacements = (
@@ -173,6 +242,40 @@ def _collapse_phase_diff(entries: Sequence[Mapping[str, Any]]) -> list[dict[str,
     return collapsed
 
 
+def _collapse_presentation_diff(
+    entries: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    collapsed: list[dict[str, Any]] = []
+    model_input_positions: dict[str, int] = {}
+    for raw_entry in entries:
+        entry = dict(raw_entry)
+        path = str(entry.get("path") or "")
+        match = re.search(r"(?:^|\.)model_inputs\.context\.([^.]+)(?:\..+)?$", path)
+        if match is None:
+            collapsed.append(entry)
+            continue
+        group_path = f"model_inputs.context.{match.group(1)}"
+        position = model_input_positions.get(group_path)
+        if position is None:
+            model_input_positions[group_path] = len(collapsed)
+            collapsed.append(entry)
+            continue
+        existing = collapsed[position]
+        if path == group_path and entry.get("kind") in {"added", "removed"}:
+            collapsed[position] = entry
+        elif str(existing.get("path") or "") != group_path or existing.get("kind") not in {
+            "added",
+            "removed",
+        }:
+            collapsed[position] = {
+                "path": group_path,
+                "before": "configured",
+                "after": "changed",
+                "kind": "changed",
+            }
+    return collapsed
+
+
 def _display_value(value: object) -> str:
     if value is None:
         return "unset"
@@ -191,6 +294,103 @@ def _diff_label(entry: Mapping[str, Any]) -> str:
     if kind == "removed":
         return f"{path} {_display_value(entry.get('before'))} → unset"
     return f"{path} {_display_value(entry.get('before'))} → {_display_value(entry.get('after'))}"
+
+
+def _presentation_path(value: object) -> str:
+    path = _display_path(value)
+    path = re.sub(
+        r"acceptance\.(\d+)\.",
+        lambda match: f"acceptance rule {int(match.group(1)) + 1}.",
+        path,
+    )
+    phase_prefixes = (
+        ("train+eval.", "Training and evaluation "),
+        ("train.", "Training "),
+        ("eval.", "Evaluation "),
+    )
+    for prefix, label in phase_prefixes:
+        if path.startswith(prefix):
+            path = label + path[len(prefix) :]
+            break
+    path = path.replace(".", " ")
+    path = path.replace("action sticky probability", "sticky action probability")
+    path = re.sub(r"\bsticky action prob\b", "sticky action probability", path)
+    replacements = (
+        ("checkpoint freq", "checkpoint frequency"),
+        ("max episode steps", "episode step limit"),
+        ("n envs", "parallel environments"),
+    )
+    for source, replacement in replacements:
+        path = path.replace(source, replacement)
+    return path[:1].upper() + path[1:]
+
+
+def _presentation_value(value: object) -> str:
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
+    return _display_value(value)
+
+
+def _presentation_diff_label(entry: Mapping[str, Any]) -> str:
+    raw_path = str(entry.get("path") or "")
+    kind = str(entry.get("kind") or "")
+    if re.search(r"(?:^|\.)model_inputs$", raw_path):
+        if kind == "added":
+            return "Policy inputs added"
+        if kind == "removed":
+            return "Policy inputs removed"
+        return "Policy inputs changed"
+    model_input = re.search(
+        r"(?:^|\.)model_inputs\.context\.([^.]+)(?:\..+)?$",
+        raw_path,
+    )
+    if model_input is not None:
+        name = model_input.group(1).replace("_", " ")
+        exact_path = bool(re.search(r"(?:^|\.)model_inputs\.context\.[^.]+$", raw_path))
+        if exact_path and kind == "added":
+            return f"Policy input {name} added"
+        if exact_path and kind == "removed":
+            return f"Policy input {name} removed"
+        return f"Policy input {name} definition changed"
+    path = _presentation_path(entry.get("path"))
+    if kind == "added":
+        return f"{path} → {_presentation_value(entry.get('after'))}"
+    if kind == "removed":
+        return f"{path} {_presentation_value(entry.get('before'))} → unset"
+    return (
+        f"{path} {_presentation_value(entry.get('before'))} → "
+        f"{_presentation_value(entry.get('after'))}"
+    )
+
+
+def goal_contract_diff(
+    before: Mapping[str, Any],
+    after: Mapping[str, Any],
+) -> tuple[list[dict[str, Any]], bool]:
+    """Return a bounded semantic diff suitable for catalog presentation."""
+
+    raw_diff = _collapse_presentation_diff(
+        _collapse_phase_diff(_comparison_contract_diff(before, after))
+    )
+    return raw_diff[:MAX_DIFF_ENTRIES], len(raw_diff) > MAX_DIFF_ENTRIES
+
+
+def goal_contract_diff_labels(
+    entries: Sequence[Mapping[str, Any]],
+    *,
+    limit: int = 3,
+    truncated: bool = False,
+) -> list[str]:
+    """Render normalized goal differences without exposing raw contract paths."""
+
+    bounded_limit = max(0, int(limit))
+    labels = [_presentation_diff_label(entry) for entry in entries[:bounded_limit]]
+    hidden = max(0, len(entries) - bounded_limit)
+    if truncated:
+        labels.append("more changes…")
+    elif hidden:
+        labels.append(f"+{hidden} more")
+    return labels
 
 
 def build_goal_variant_descriptor(
@@ -347,6 +547,8 @@ __all__ = [
     "GOAL_VARIANT_SCHEMA_VERSION",
     "build_goal_variant_descriptor",
     "goal_variant_catalog_contract",
+    "goal_contract_diff",
+    "goal_contract_diff_labels",
     "goal_variant_id",
     "goal_variant_projection",
     "goal_variant_scope_key",

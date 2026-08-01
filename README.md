@@ -222,7 +222,8 @@ gradlab play hf://<owner>/<repository>
 
 The player uses shareable hierarchical routes: `/` lists environments,
 `/environments/<environment-id>` lists goals,
-`/environments/<environment-id>/goals/<goal-id>` lists goal variants, and the
+`/environments/<environment-id>/goals/<goal-id>` lists current and previous goal
+configurations with their proven behavioral differences and run activity, and the
 nested `/variants/<goal-variant-id>/runs/<run-id>/checkpoints/<checkpoint-id>`
 route identifies a checkpoint inside the selected run. Checkpoint rows show
 goal-required acceptance results from W&B when available. Browser Back and

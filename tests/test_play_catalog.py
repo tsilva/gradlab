@@ -1,12 +1,19 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError
 
 import pytest
 
-from gradlab.catalog_generation import CATALOG_POINTER_KEY
+from gradlab.catalog_generation import (
+    CATALOG_GENERATION_SCHEMA_VERSION,
+    CATALOG_POINTER_KEY,
+    catalog_generation_digest,
+    catalog_generation_key,
+)
+from gradlab.catalog_cache import CatalogEntryCache
 from gradlab.play_catalog import (
     PlayCatalog,
     parse_wandb_location,
@@ -247,9 +254,7 @@ def test_play_parser_allows_bare_launch_and_rejects_wandb_project_urls() -> None
     parser = build_play_parser()
 
     assert parser.parse_args([]).artifact_ref is None
-    assert parser.parse_args(["--rom-path", "/tmp/game.nes"]).rom_path == Path(
-        "/tmp/game.nes"
-    )
+    assert parser.parse_args(["--rom-path", "/tmp/game.nes"]).rom_path == Path("/tmp/game.nes")
     with pytest.raises(SystemExit):
         parser.parse_args(["https://wandb.ai/research/Mario"])
     with pytest.raises(SystemExit):
@@ -295,7 +300,31 @@ def test_goal_variants_use_one_private_index_read_without_wandb(
             }
 
     bucket = OneReadControlBucket()
-    catalog = PlayCatalog(repo_root=tmp_path, control_bucket=bucket)
+    cache_path = tmp_path / "play-catalog.json"
+    cache_key = PlayCatalog._variant_cache_key(
+        environment_id="Mario",
+        goal_slug="Mario/Level1-1",
+    )
+    CatalogEntryCache(cache_path.with_name(f"{cache_path.name}.entries")).write(
+        "variants-v5",
+        cache_key,
+        {
+            "authority": "explicit-control",
+            "generated_at": 1.0,
+            "items": [
+                {
+                    "environment_id": "Mario",
+                    "goal_slug": "Mario/Level1-1",
+                    "variant_id": "obsolete-cache-entry",
+                }
+            ],
+        },
+    )
+    catalog = PlayCatalog(
+        repo_root=tmp_path,
+        cache_path=cache_path,
+        control_bucket=bucket,
+    )
 
     page = catalog.goal_variants(
         environment_id="Mario",
@@ -304,7 +333,213 @@ def test_goal_variants_use_one_private_index_read_without_wandb(
 
     assert [item["variant_id"] for item in page.items] == [descriptor["variant_id"]]
     assert page.items[0]["exact_resolution_run_id"] == RUN_ID
+    assert page.items[0]["configuration_kind"] == "current_default"
+    assert page.items[0]["display_label"] == "No behavioral changes"
+    assert page.items[0]["run_count"] == 0
     assert bucket.calls == [CATALOG_POINTER_KEY, f"{scope}/index.json"]
+
+
+def test_goal_variants_load_deployed_schema_one_generation_without_new_projection(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    write_goal_catalog(tmp_path)
+    goal_path = tmp_path / "experiments" / "goals" / "Mario" / "Level1-1" / "_goal.yaml"
+    authored = load_goal_contract(goal_path, tmp_path)
+    historical_authored = deepcopy(authored)
+    historical_authored["train"]["checkpoint_freq"] = 64
+    historical_resolved = goal_for_contract_validation(
+        historical_authored,
+        label="deployed historical goal",
+    )
+    descriptor = build_goal_variant_descriptor(
+        goal_slug="Mario/Level1-1",
+        source_sha="a" * 40,
+        authored_goal=historical_authored,
+        effective_goal=historical_resolved,
+    )
+    generated_at = "2026-08-01T10:00:00Z"
+    generation = {
+        "schema_version": 1,
+        "generated_at": generated_at,
+        "scopes": [
+            {
+                "goal_slug": "Mario/Level1-1",
+                "variants": [
+                    {
+                        **descriptor,
+                        "first_run_id": RUN_ID,
+                        "exact_resolution_run_id": RUN_ID,
+                    }
+                ],
+                "runs": [
+                    {
+                        "run_id": RUN_ID,
+                        "goal_slug": "Mario/Level1-1",
+                        "goal_variant_id": descriptor["variant_id"],
+                        "created_at": "2026-07-27T09:00:00Z",
+                        "updated_at": "2026-08-01T09:00:00Z",
+                        "metrics": {},
+                    }
+                ],
+            }
+        ],
+    }
+    digest = catalog_generation_digest(generation)
+    pointer = {
+        "schema_version": 1,
+        "generation_sha256": digest,
+        "generation_key": catalog_generation_key(digest),
+        "generated_at": generated_at,
+    }
+    recipe_document = {
+        "recipe": {
+            "goal_variant": descriptor,
+            "goal": historical_resolved,
+        }
+    }
+    recipe_sha256 = canonical_json_sha256(recipe_document)
+
+    class ExactManifest:
+        pass
+
+    exact_manifest = ExactManifest()
+    exact_manifest.run_id = RUN_ID
+    exact_manifest.goal_slug = "Mario/Level1-1"
+    exact_manifest.recipe_slug = "ppo"
+    exact_manifest.recipe_sha256 = recipe_sha256
+
+    monkeypatch.setattr(
+        "gradlab.play_catalog.RunManifest.from_dict",
+        lambda _document: exact_manifest,
+    )
+
+    class DeployedGenerationBucket:
+        def get_json_optional(self, key: str):
+            if key == CATALOG_POINTER_KEY:
+                return pointer
+            if key == pointer["generation_key"]:
+                return generation
+            if key == f"runs/{RUN_ID}/manifest.json":
+                return {"run_id": RUN_ID}
+            if key == RunAuthority.recipe_document_key(recipe_sha256):
+                return recipe_document
+            raise AssertionError(key)
+
+    catalog = PlayCatalog(repo_root=tmp_path, control_bucket=DeployedGenerationBucket())
+
+    page = catalog.goal_variants(environment_id="Mario", goal_id="Level1-1")
+
+    assert len(page.items) == 2
+    assert page.items[0]["configuration_kind"] == "current_default"
+    historical = page.items[1]
+    assert historical["configuration_kind"] == "previous_default"
+    assert historical["display_label"] == "Training checkpoint frequency 128 → 64"
+    assert historical["comparison_available"] is True
+    assert historical["run_count"] == 1
+    assert historical["first_used_at"] == "2026-07-27T09:00:00Z"
+    assert historical["last_activity_at"] == "2026-08-01T09:00:00Z"
+    inspection = catalog.inspect_goal_variant(
+        environment_id="Mario",
+        goal_id="Level1-1",
+        variant_id=str(descriptor["variant_id"]),
+    )
+    assert inspection["documents"]["goal"]["availability"] == "exact"
+    assert inspection["documents"]["recipe"]["availability"] == "summary-only"
+
+
+def test_goal_variants_explain_previous_defaults_and_aggregate_run_activity(
+    tmp_path: Path,
+) -> None:
+    write_goal_catalog(tmp_path)
+    goal_path = tmp_path / "experiments" / "goals" / "Mario" / "Level1-1" / "_goal.yaml"
+    current_authored = load_goal_contract(goal_path, tmp_path)
+    previous_authored = deepcopy(current_authored)
+    previous_authored["train"]["checkpoint_freq"] = 64
+    previous_resolved = goal_for_contract_validation(
+        previous_authored,
+        label="previous goal",
+    )
+    descriptor = build_goal_variant_descriptor(
+        goal_slug="Mario/Level1-1",
+        source_sha="b" * 40,
+        authored_goal=previous_authored,
+        effective_goal=previous_resolved,
+    )
+    run_one = "gradlab-" + "1" * 32
+    run_two = "gradlab-" + "2" * 32
+    generated_at = "2026-08-01T10:00:00Z"
+    generation = {
+        "schema_version": CATALOG_GENERATION_SCHEMA_VERSION,
+        "generated_at": generated_at,
+        "scopes": [
+            {
+                "goal_slug": "Mario/Level1-1",
+                "variants": [
+                    {
+                        **descriptor,
+                        "first_run_id": run_one,
+                        "exact_resolution_run_id": run_one,
+                        "resolved_goal": previous_resolved,
+                    }
+                ],
+                "runs": [
+                    {
+                        "run_id": run_one,
+                        "goal_slug": "Mario/Level1-1",
+                        "goal_variant_id": descriptor["variant_id"],
+                        "created_at": "2026-06-01T09:00:00Z",
+                        "updated_at": "2026-06-02T09:00:00Z",
+                        "metrics": {},
+                    },
+                    {
+                        "run_id": run_two,
+                        "goal_slug": "Mario/Level1-1",
+                        "goal_variant_id": descriptor["variant_id"],
+                        "created_at": "2026-07-01T09:00:00Z",
+                        "updated_at": "2026-07-03T09:00:00Z",
+                        "metrics": {},
+                    },
+                ],
+            }
+        ],
+    }
+    digest = catalog_generation_digest(generation)
+    pointer = {
+        "schema_version": 1,
+        "generation_sha256": digest,
+        "generation_key": catalog_generation_key(digest),
+        "generated_at": generated_at,
+    }
+
+    class GenerationBucket:
+        def get_json_optional(self, key: str):
+            if key == CATALOG_POINTER_KEY:
+                return pointer
+            if key == pointer["generation_key"]:
+                return generation
+            raise AssertionError(key)
+
+    catalog = PlayCatalog(repo_root=tmp_path, control_bucket=GenerationBucket())
+
+    page = catalog.goal_variants(environment_id="Mario", goal_id="Level1-1")
+
+    assert [item["configuration_kind"] for item in page.items] == [
+        "current_default",
+        "previous_default",
+    ]
+    previous = page.items[1]
+    assert previous["comparison_available"] is True
+    assert previous["display_label"] == "Training checkpoint frequency 128 → 64"
+    assert previous["run_count"] == 2
+    assert previous["first_used_at"] == "2026-06-01T09:00:00Z"
+    assert previous["last_activity_at"] == "2026-07-03T09:00:00Z"
+    search = catalog.goal_variants(
+        environment_id="Mario",
+        goal_id="Level1-1",
+        query="checkpoint freq",
+    )
+    assert [item["variant_id"] for item in search.items] == [descriptor["variant_id"]]
 
 
 def test_run_catalog_uses_lifecycle_owned_variant_index_without_wandb(
@@ -691,6 +926,10 @@ def test_run_and_goal_variant_inspection_use_the_verified_v2_control_recipe(
         variant["documents"]["goal"]["variant_id"]
         == resolved.effective["goal_variant"]["variant_id"]
     )
+    assert "compare this configuration with the current default" in str(
+        variant["documents"]["goal"]["message"]
+    )
+    assert variant["documents"]["recipe"]["availability"] == "exact"
 
 
 def test_catalog_validates_and_orders_public_checkpoints(monkeypatch: pytest.MonkeyPatch) -> None:

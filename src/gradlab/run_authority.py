@@ -17,8 +17,10 @@ from gradlab.clock import (
     parse_utc_datetime,
 )
 from gradlab.catalog_generation import (
+    CATALOG_GENERATION_SCHEMA_VERSION,
     CATALOG_POINTER_KEY,
     CATALOG_POINTER_SCHEMA_VERSION,
+    CATALOG_VARIANT_PROJECTION_FIELDS,
     catalog_generation_digest,
     catalog_generation_key,
     empty_catalog_generation,
@@ -60,6 +62,7 @@ from gradlab.goal_variants import (
     validate_goal_variant_descriptor,
 )
 from gradlab.recipe_variants import recipe_variant_id
+from gradlab.recipe_documents import goal_contract_sha256
 
 
 LEASE_TTL_SECONDS = 60
@@ -300,9 +303,7 @@ class RunAuthority:
                     expected_digest=pointer["generation_sha256"],
                 )
                 if current["generated_at"] != pointer["generated_at"]:
-                    raise ValueError(
-                        "catalog pointer timestamp disagrees with its generation"
-                    )
+                    raise ValueError("catalog pointer timestamp disagrees with its generation")
             if replace_all_scopes is not None:
                 scopes = [deepcopy(dict(scope)) for scope in replace_all_scopes]
             else:
@@ -322,12 +323,10 @@ class RunAuthority:
                     for scope in current["scopes"]
                     if str(scope.get("goal_slug") or "") != replacement_slug
                 ]
-                scopes.append(
-                    self._merge_catalog_scope(current_scope, replacement)
-                )
+                scopes.append(self._merge_catalog_scope(current_scope, replacement))
             generation = validate_catalog_generation(
                 {
-                    "schema_version": 1,
+                    "schema_version": CATALOG_GENERATION_SCHEMA_VERSION,
                     "generated_at": self.clock.utc_now(),
                     "scopes": sorted(
                         scopes,
@@ -383,17 +382,13 @@ class RunAuthority:
             if not isinstance(variant, Mapping):
                 raise ValueError("goal variant index contains an invalid entry")
             variant_id = str(variant.get("variant_id") or "")
-            run_index = self.control.get_json_optional(
-                f"{scope_key}/runs/{variant_id}.json"
-            )
+            run_index = self.control.get_json_optional(f"{scope_key}/runs/{variant_id}.json")
             if run_index is None:
                 continue
             raw_runs = run_index.get("runs")
             if (
-                int(run_index.get("schema_version") or 0)
-                != GOAL_VARIANT_RUN_INDEX_SCHEMA_VERSION
-                or run_index.get("scope")
-                != {"goal_slug": goal_slug, "variant_id": variant_id}
+                int(run_index.get("schema_version") or 0) != GOAL_VARIANT_RUN_INDEX_SCHEMA_VERSION
+                or run_index.get("scope") != {"goal_slug": goal_slug, "variant_id": variant_id}
                 or not isinstance(raw_runs, list)
             ):
                 raise ValueError("goal variant run index is malformed")
@@ -407,6 +402,28 @@ class RunAuthority:
                 "runs": runs,
             }
         )
+
+    @staticmethod
+    def _catalog_resolved_goal(
+        document: Mapping[str, Any],
+        *,
+        descriptor: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        recipe = document.get("recipe")
+        resolved_goal = recipe.get("goal") if isinstance(recipe, Mapping) else None
+        if not isinstance(resolved_goal, Mapping):
+            raise ValueError("stored recipe has no resolved goal contract")
+        if goal_contract_sha256(resolved_goal) != descriptor["effective_goal_contract_sha256"]:
+            raise ValueError("stored recipe resolved goal disagrees with its variant")
+        return deepcopy(dict(resolved_goal))
+
+    @staticmethod
+    def _catalog_variant_descriptor(value: Mapping[str, Any]) -> dict[str, Any]:
+        return {
+            key: deepcopy(item)
+            for key, item in value.items()
+            if key not in CATALOG_VARIANT_PROJECTION_FIELDS
+        }
 
     @staticmethod
     def _catalog_run_record(
@@ -451,9 +468,7 @@ class RunAuthority:
                 recipe_overrides=manifest.recipe_overrides,
             ),
             "goal_contract_sha256": str(descriptor["goal_contract_sha256"]),
-            "effective_goal_contract_sha256": str(
-                descriptor["effective_goal_contract_sha256"]
-            ),
+            "effective_goal_contract_sha256": str(descriptor["effective_goal_contract_sha256"]),
             "goal_variant_id": str(descriptor["variant_id"]),
             "goal_variant_label": str(descriptor["label"]),
             "description": manifest.run_description,
@@ -537,7 +552,7 @@ class RunAuthority:
             variant_id = str(descriptor["variant_id"])
             existing_variant = variants.get(variant_id)
             if existing_variant is not None and goal_variant_catalog_contract(
-                existing_variant
+                self._catalog_variant_descriptor(existing_variant)
             ) != goal_variant_catalog_contract(descriptor):
                 raise ValueError("goal variant descriptor conflicts during rebuild")
             exact_resolution_run_id = (
@@ -552,6 +567,19 @@ class RunAuthority:
                     stored_recipe = None
                 if stored_recipe is not None:
                     exact_resolution_run_id = manifest.run_id
+            else:
+                try:
+                    stored_recipe = self.recipe_document(manifest.recipe_sha256)
+                except FileNotFoundError, KeyError, ValueError:
+                    stored_recipe = None
+            resolved_goal = (
+                self._catalog_resolved_goal(stored_recipe, descriptor=descriptor)
+                if stored_recipe is not None
+                else deepcopy(existing_variant.get("resolved_goal"))
+                if existing_variant is not None
+                and isinstance(existing_variant.get("resolved_goal"), Mapping)
+                else None
+            )
             variants[variant_id] = {
                 **descriptor,
                 "descriptor_key": (
@@ -568,14 +596,13 @@ class RunAuthority:
                     if exact_resolution_run_id
                     else {}
                 ),
+                **({"resolved_goal": resolved_goal} if resolved_goal is not None else {}),
             }
             runs[manifest.run_id] = self._catalog_run_record(
                 manifest,
                 descriptor=descriptor,
                 state=terminal.state if terminal is not None else "running",
-                updated_at=(
-                    terminal.completed_at if terminal is not None else manifest.created_at
-                ),
+                updated_at=(terminal.completed_at if terminal is not None else manifest.created_at),
                 stop_reason=terminal.stop_reason if terminal is not None else None,
                 final_step=terminal.final_step if terminal is not None else None,
                 early_stop=terminal.early_stop if terminal is not None else None,
@@ -617,9 +644,9 @@ class RunAuthority:
             stored_descriptor = validate_goal_variant_descriptor(
                 self.control.get_json(descriptor_key)
             )
-            if goal_variant_catalog_contract(
-                stored_descriptor
-            ) != goal_variant_catalog_contract(descriptor):
+            if goal_variant_catalog_contract(stored_descriptor) != goal_variant_catalog_contract(
+                descriptor
+            ):
                 raise ValueError("immutable goal variant descriptor conflicts with storage")
             descriptor = stored_descriptor
 
@@ -658,6 +685,18 @@ class RunAuthority:
                     stored_recipe = None
                 if stored_recipe is not None:
                     exact_resolution_run_id = manifest.run_id
+            else:
+                try:
+                    stored_recipe = self.recipe_document(manifest.recipe_sha256)
+                except FileNotFoundError, KeyError, ValueError:
+                    stored_recipe = None
+            resolved_goal = (
+                self._catalog_resolved_goal(stored_recipe, descriptor=descriptor)
+                if stored_recipe is not None
+                else deepcopy(existing.get("resolved_goal"))
+                if existing is not None and isinstance(existing.get("resolved_goal"), Mapping)
+                else None
+            )
             by_id[str(descriptor["variant_id"])] = {
                 **descriptor,
                 "descriptor_key": descriptor_key,
@@ -671,6 +710,7 @@ class RunAuthority:
                     if exact_resolution_run_id
                     else {}
                 ),
+                **({"resolved_goal": resolved_goal} if resolved_goal is not None else {}),
             }
             document = {
                 "schema_version": GOAL_VARIANT_INDEX_SCHEMA_VERSION,
