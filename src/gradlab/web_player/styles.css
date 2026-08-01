@@ -228,6 +228,14 @@ h2 { font-size: .9rem; margin: 0; font-weight: 650; }
   background: transparent;
 }
 
+.source-description {
+  max-width: 68rem;
+  margin: -.2rem 0 .8rem;
+  color: #a9bac3;
+  font-size: .75rem;
+  line-height: 1.5;
+}
+
 .source-evaluation-actions {
   display: flex;
   align-items: center;
@@ -271,6 +279,20 @@ h2 { font-size: .9rem; margin: 0; font-weight: 650; }
 
 .environment-list,
 .goal-list { display: grid; }
+.goal-configuration-groups { display: grid; }
+.goal-configuration-group + .goal-configuration-group {
+  border-top: 1px solid #31505e;
+}
+.goal-configuration-group > h3 {
+  margin: 0;
+  padding: .58rem .95rem;
+  background: #0b1921;
+  color: #a9bac3;
+  font-size: .62rem;
+  font-weight: 800;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+}
 .environment-row,
 .goal-row {
   display: grid;
@@ -318,6 +340,46 @@ h2 { font-size: .9rem; margin: 0; font-weight: 650; }
   font-size: .72rem;
 }
 .goal-row-navigation > div { min-width: 0; }
+.goal-configuration-title {
+  display: flex;
+  align-items: center;
+  gap: .55rem;
+  min-width: 0;
+}
+.goal-row .goal-configuration-badge {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  width: max-content;
+  margin: 0;
+  padding: .2rem .42rem;
+  border: 1px solid #547080;
+  border-radius: 99rem;
+  background: rgba(129, 157, 170, .08);
+  color: #b9ccd5;
+  font-size: .56rem;
+  font-weight: 800;
+  letter-spacing: .04em;
+  line-height: 1;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.goal-row .goal-configuration-badge.current_default {
+  border-color: rgba(96, 211, 148, .58);
+  background: rgba(96, 211, 148, .1);
+  color: #78d89f;
+}
+.goal-row .goal-configuration-badge.current_modified {
+  border-color: rgba(83, 212, 232, .58);
+  background: rgba(83, 212, 232, .09);
+  color: #69d9ea;
+}
+.goal-row .goal-configuration-badge.previous_modified {
+  border-color: rgba(240, 195, 106, .58);
+  background: rgba(240, 195, 106, .09);
+  color: #f0c36a;
+}
+.goal-row .goal-configuration-activity { color: #a9bac3; }
 .goal-row small {
   display: block;
   margin-top: .18rem;
@@ -325,6 +387,11 @@ h2 { font-size: .9rem; margin: 0; font-weight: 650; }
   color: var(--muted);
   font: .62rem ui-monospace, SFMono-Regular, Menlo, monospace;
   text-overflow: ellipsis;
+}
+.goal-row small.goal-configuration-warning {
+  color: #d6af67;
+  font-family: inherit;
+  font-size: .67rem;
 }
 
 .source-table-scroll { overflow: auto; }
@@ -1064,6 +1131,13 @@ body.recording #timeline { opacity: .72; }
   .source-head { align-items: flex-start; }
   .environment-row { grid-template-columns: 1fr; gap: .2rem; }
   .environment-row span { white-space: normal; }
+  .goal-variant-row { grid-template-columns: 1fr; gap: 0; }
+  .goal-variant-row .goal-row-inspect {
+    width: calc(100% - 1.3rem);
+    margin: 0 .65rem .65rem;
+    justify-content: center;
+  }
+  .goal-configuration-title { align-items: flex-start; flex-direction: column; gap: .35rem; }
   .source-inline-error { align-items: stretch; flex-direction: column; }
   .source-evaluation-actions { flex-wrap: wrap; }
   .source-evaluation-actions > span { flex: 1 0 100%; text-align: right; }

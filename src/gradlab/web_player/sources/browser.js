@@ -48,6 +48,53 @@ export function formatDate(value, nowValue = Date.now()) {
   return date.toLocaleString();
 }
 
+export function formatCalendarDate(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "—";
+  const months = [
+    "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+    "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+  ];
+  return `${date.getUTCDate()} ${months[date.getUTCMonth()]} ${date.getUTCFullYear()}`;
+}
+
+const GOAL_CONFIGURATION_KINDS = {
+  current_default: { label: "Current default", group: "current" },
+  current_modified: { label: "Current modified", group: "current" },
+  previous_default: { label: "Previous default", group: "previous" },
+  previous_modified: { label: "Previous modified", group: "previous" },
+};
+
+export function goalConfigurationPresentation(item, nowValue = Date.now()) {
+  const kind = String(item?.configuration_kind || "previous_default");
+  const kindPresentation = GOAL_CONFIGURATION_KINDS[kind] || {
+    label: "Previous configuration",
+    group: "previous",
+  };
+  const runCount = Math.max(0, Number(item?.run_count) || 0);
+  const runLabel = `${runCount.toLocaleString()} ${runCount === 1 ? "run" : "runs"}`;
+  const firstUsed = item?.first_used_at ? formatCalendarDate(item.first_used_at) : "—";
+  const lastActivity = item?.last_activity_at
+    ? formatCalendarDate(item.last_activity_at)
+    : "—";
+  const comparisonAvailable = Boolean(item?.comparison_available);
+  const hasExactDefinition = Boolean(item?.exact_resolution_run_id);
+  return {
+    kind,
+    kindLabel: kindPresentation.label,
+    group: kindPresentation.group,
+    displayLabel: String(
+      item?.display_label || "Behavioral difference unavailable — no exact goal proof",
+    ),
+    activity: runCount
+      ? `${runLabel} · First used ${firstUsed} · Last activity ${lastActivity}`
+      : "No runs yet",
+    actionLabel: kind === "current_default" || !comparisonAvailable || !hasExactDefinition
+      ? "View definition"
+      : "Compare",
+  };
+}
+
 function formatBytes(value) {
   const bytes = Number(value);
   if (!Number.isFinite(bytes) || bytes <= 0) return "—";
@@ -1331,6 +1378,15 @@ export class SourceBrowser {
     } else if (["resolving", "verifying", "loading"].includes(this.app.phase)) {
       shell.append(this.renderProgress());
     } else {
+      if (this.route.level === "goal_variants") {
+        const description = document.createElement("p");
+        description.className = "source-description";
+        description.textContent = (
+          "A configuration groups runs that used the same resolved goal behavior. "
+          + "Previous configurations remain available for reproducible playback."
+        );
+        shell.append(description);
+      }
       shell.append(this.renderSearch());
       if (this.route.level === "runs" && this.route.run_id) {
         shell.append(this.renderEvaluationActions());
@@ -1354,7 +1410,7 @@ export class SourceBrowser {
       return "Runs · choose a checkpoint";
     }
     if (this.route.level === "runs") return "Choose a run";
-    if (this.route.level === "goal_variants") return "Choose a goal variant";
+    if (this.route.level === "goal_variants") return "Choose a goal configuration";
     if (this.route.level === "goals") return "Choose a goal";
     return "Choose an environment";
   }
@@ -1385,7 +1441,7 @@ export class SourceBrowser {
       : this.route.level === "goals"
         ? "Search goals"
         : this.route.level === "goal_variants"
-          ? "Search goal variant, diff, status, or contract hash"
+          ? "Search configuration, difference, status, date, or contract hash"
           : this.route.level === "runs" && !this.route.run_id
           ? "Search run, finish reason, description, recipe, variant, override, or seed"
           : "Search checkpoint, step, hash, purpose, or evaluation";
@@ -1628,58 +1684,85 @@ export class SourceBrowser {
   }
 
   renderGoalVariants() {
-    const list = document.createElement("div");
-    list.className = "goal-list goal-variant-list";
-    this.items.forEach((variant) => {
-      const row = document.createElement("div");
-      row.className = "goal-row goal-variant-row";
-      const navigate = document.createElement("button");
-      navigate.type = "button";
-      navigate.className = "goal-row-navigation";
-      navigate.disabled = !this.hasControl();
-      const identity = document.createElement("div");
-      const name = document.createElement("strong");
-      name.textContent = variant.label || variant.variant_id;
-      identity.append(name);
-      const meta = document.createElement("span");
-      meta.textContent = [
-        variant.status || "historical",
-        variant.source_relation || "",
-        String(variant.effective_goal_contract_sha256 || "").slice(0, 12),
-      ].filter(Boolean).join(" · ");
-      identity.append(meta);
-      const diff = Array.isArray(variant.diff) ? variant.diff : [];
-      if (diff.length) {
-        const detail = document.createElement("small");
-        detail.textContent = diff.slice(0, 3).map((entry) => {
-          const before = entry.before === null || entry.before === undefined
-            ? "unset"
-            : String(entry.before);
-          const after = entry.after === null || entry.after === undefined
-            ? "unset"
-            : String(entry.after);
-          return `${entry.path}: ${before} → ${after}`;
-        }).join(" · ");
-        identity.append(detail);
-      }
-      navigate.append(identity);
-      navigate.addEventListener("click", () => this.navigate({
-        level: "runs",
-        goal_variant_id: variant.variant_id,
-        run_id: "",
-        checkpoint_id: "",
-      }));
-      const inspect = button("Inspect", { iconName: "code", quiet: true });
-      inspect.classList.add("goal-row-inspect");
-      inspect.addEventListener("click", () => {
-        void this.inspectGoalVariant(variant).catch(
-          (error) => this.showToast(String(error?.message || error), true),
+    const container = document.createElement("div");
+    container.className = "goal-configuration-groups";
+    [
+      { id: "current", label: "Current" },
+      { id: "previous", label: "Previous configurations" },
+    ].forEach((group) => {
+      const variants = this.items
+        .map((variant) => ({
+          variant,
+          presentation: goalConfigurationPresentation(variant),
+        }))
+        .filter(({ presentation }) => presentation.group === group.id);
+      if (!variants.length) return;
+
+      const section = document.createElement("section");
+      section.className = "goal-configuration-group";
+      const heading = document.createElement("h3");
+      heading.textContent = group.label;
+      const list = document.createElement("div");
+      list.className = "goal-list goal-variant-list";
+
+      variants.forEach(({ variant, presentation }) => {
+        const row = document.createElement("div");
+        row.className = "goal-row goal-variant-row";
+        const navigate = document.createElement("button");
+        navigate.type = "button";
+        navigate.className = "goal-row-navigation";
+        navigate.disabled = !this.hasControl();
+        const identity = document.createElement("div");
+        const title = document.createElement("div");
+        title.className = "goal-configuration-title";
+        const badge = document.createElement("span");
+        badge.className = `goal-configuration-badge ${presentation.kind}`;
+        badge.textContent = presentation.kindLabel;
+        const name = document.createElement("strong");
+        name.textContent = presentation.displayLabel;
+        title.append(badge, name);
+        identity.append(title);
+        const meta = document.createElement("span");
+        meta.className = "goal-configuration-activity";
+        meta.textContent = presentation.activity;
+        identity.append(meta);
+        if (!variant.comparison_available) {
+          const detail = document.createElement("small");
+          detail.className = "goal-configuration-warning";
+          detail.textContent = (
+            "A verified comparison is unavailable; technical identity is in the definition."
+          );
+          identity.append(detail);
+        }
+        navigate.append(identity);
+        navigate.setAttribute(
+          "aria-label",
+          `${presentation.kindLabel}: ${presentation.displayLabel}. ${presentation.activity}`,
         );
+        navigate.addEventListener("click", () => this.navigate({
+          level: "runs",
+          goal_variant_id: variant.variant_id,
+          run_id: "",
+          checkpoint_id: "",
+        }));
+        const inspect = button(presentation.actionLabel, { iconName: "code", quiet: true });
+        inspect.classList.add("goal-row-inspect");
+        inspect.setAttribute(
+          "aria-label",
+          `${presentation.actionLabel} for ${presentation.kindLabel.toLowerCase()}: ${presentation.displayLabel}`,
+        );
+        inspect.addEventListener("click", () => {
+          void this.inspectGoalVariant(variant).catch(
+            (error) => this.showToast(String(error?.message || error), true),
+          );
+        });
+        row.append(navigate, inspect);
+        list.append(row);
       });
-      row.append(navigate, inspect);
-      list.append(row);
+      section.append(heading, list);
+      container.append(section);
     });
-    return list;
+    return container;
   }
 
   activeRunMetricColumns() {

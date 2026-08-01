@@ -6,6 +6,7 @@ from typing import Any
 
 from gradlab.goal_variants import validate_goal_variant_descriptor
 from gradlab.json_utils import canonical_json_sha256
+from gradlab.recipe_documents import goal_contract_sha256
 from gradlab.run_contracts import RUN_ID_PATTERN, SHA256_PATTERN
 
 
@@ -13,6 +14,14 @@ CATALOG_GENERATION_SCHEMA_VERSION = 1
 CATALOG_POINTER_SCHEMA_VERSION = 1
 CATALOG_V3_ROOT = "goal-variants/v3"
 CATALOG_POINTER_KEY = f"{CATALOG_V3_ROOT}/current.json"
+CATALOG_VARIANT_PROJECTION_FIELDS = frozenset(
+    {
+        "descriptor_key",
+        "first_run_id",
+        "exact_resolution_run_id",
+        "resolved_goal",
+    }
+)
 
 
 def catalog_generation_key(digest: str) -> str:
@@ -60,19 +69,25 @@ def validate_catalog_generation(
             descriptor = {
                 key: value
                 for key, value in raw_variant.items()
-                if key
-                not in {
-                    "descriptor_key",
-                    "first_run_id",
-                    "exact_resolution_run_id",
-                }
+                if key not in CATALOG_VARIANT_PROJECTION_FIELDS
             }
             validated = validate_goal_variant_descriptor(descriptor)
             variant_id = str(validated["variant_id"])
             if variant_id in variant_ids:
                 raise ValueError("catalog generation contains a duplicate variant")
+            resolved_goal = raw_variant.get("resolved_goal")
+            if resolved_goal is not None:
+                if not isinstance(resolved_goal, Mapping):
+                    raise ValueError("catalog variant resolved goal must be an object")
+                if (
+                    goal_contract_sha256(resolved_goal)
+                    != validated["effective_goal_contract_sha256"]
+                ):
+                    raise ValueError(
+                        "catalog variant resolved goal does not match its effective contract"
+                    )
             variant_ids.add(variant_id)
-            variants.append(dict(raw_variant))
+            variants.append(deepcopy(dict(raw_variant)))
         runs: list[dict[str, Any]] = []
         run_ids: set[str] = set()
         for raw_run in raw_runs:
@@ -140,6 +155,7 @@ __all__ = [
     "CATALOG_GENERATION_SCHEMA_VERSION",
     "CATALOG_POINTER_KEY",
     "CATALOG_POINTER_SCHEMA_VERSION",
+    "CATALOG_VARIANT_PROJECTION_FIELDS",
     "CATALOG_V3_ROOT",
     "catalog_generation_digest",
     "catalog_generation_key",

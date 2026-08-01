@@ -11,6 +11,7 @@ import threading
 import time
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from contextlib import nullcontext
+from copy import deepcopy
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Literal
@@ -35,6 +36,8 @@ from gradlab.goal_variants import (
     GOAL_VARIANT_INDEX_SCHEMA_VERSION,
     GOAL_VARIANT_RUN_INDEX_SCHEMA_VERSION,
     build_goal_variant_descriptor,
+    goal_contract_diff,
+    goal_contract_diff_labels,
     goal_variant_scope_key,
     validate_goal_variant_descriptor,
 )
@@ -58,6 +61,7 @@ from gradlab.policy_bundle import canonical_json_sha256, validate_recipe_documen
 from gradlab.ranking import RankCriterion, parse_objective_rank
 from gradlab.recipe_documents import (
     compose_resolved_train_documents,
+    goal_contract_sha256,
     load_goal_contract,
     load_recipe_source_document,
 )
@@ -76,6 +80,7 @@ CATALOG_INDEX_FILENAME = "_catalog.yaml"
 EVALUATION_CACHE_SECONDS = 10.0
 RUN_CATALOG_CACHE_SECONDS = 60.0
 GOAL_VARIANT_CACHE_SECONDS = 60.0
+GOAL_VARIANT_CACHE_NAMESPACE = "variants-v6"
 LIVE_TRAINING_METRICS = (
     (
         RankCriterion(
@@ -149,6 +154,7 @@ class EnvironmentSummary:
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
+
 @dataclass(frozen=True)
 class GoalSummary:
     environment_id: str
@@ -176,6 +182,14 @@ class GoalVariantSummary:
     status: str
     diff: tuple[Mapping[str, Any], ...]
     diff_truncated: bool
+    configuration_kind: str
+    display_label: str
+    current_diff: tuple[Mapping[str, Any], ...]
+    current_diff_truncated: bool
+    comparison_available: bool
+    run_count: int
+    first_used_at: str
+    last_activity_at: str
     exact_resolution_run_id: str = ""
 
     def to_dict(self) -> dict[str, Any]:
@@ -270,11 +284,7 @@ def parse_wandb_location(value: object) -> WandbRunLocation | None:
     if len(parts) != 4 or parts[2] != "runs":
         return None
     entity, project, _runs, run_id = parts
-    if (
-        not entity
-        or not project
-        or RUN_ID_PATTERN.fullmatch(run_id) is None
-    ):
+    if not entity or not project or RUN_ID_PATTERN.fullmatch(run_id) is None:
         return None
     return WandbRunLocation(entity=entity, project=project, run_id=run_id)
 
@@ -573,9 +583,7 @@ class PlayCatalog:
             Path(cache_path).expanduser().resolve() if cache_path is not None else None
         )
         self._entry_cache = (
-            CatalogEntryCache(
-                self.cache_path.with_name(f"{self.cache_path.name}.entries")
-            )
+            CatalogEntryCache(self.cache_path.with_name(f"{self.cache_path.name}.entries"))
             if self.cache_path is not None
             else None
         )
@@ -807,9 +815,7 @@ class PlayCatalog:
         namespaces: tuple[_RepositoryNamespace, ...],
     ) -> tuple[_RepositoryNamespace, ...]:
         return tuple(
-            namespace
-            for namespace in namespaces
-            if namespace.environment_id == environment_id
+            namespace for namespace in namespaces if namespace.environment_id == environment_id
         )
 
     def _indexed_environment_fingerprint(
@@ -834,11 +840,7 @@ class PlayCatalog:
             if payload is None:
                 return None
             environments = payload.get("environments")
-            entry = (
-                environments.get(environment_id)
-                if isinstance(environments, Mapping)
-                else None
-            )
+            entry = environments.get(environment_id) if isinstance(environments, Mapping) else None
             if not isinstance(entry, Mapping):
                 return None
             cached_fingerprint = tuple(
@@ -935,9 +937,7 @@ class PlayCatalog:
     ) -> tuple[float, tuple[dict[str, Any], ...]] | None:
         try:
             entry = (
-                self._entry_cache.read("runs", cache_key)
-                if self._entry_cache is not None
-                else None
+                self._entry_cache.read("runs", cache_key) if self._entry_cache is not None else None
             )
             if not isinstance(entry, Mapping):
                 return None
@@ -1176,9 +1176,7 @@ class PlayCatalog:
         counts: dict[str, int] = {}
         for namespace in namespaces:
             count = sum(1 for _ in (self.goals_root / namespace.directory).rglob("_goal.yaml"))
-            counts[namespace.environment_id] = (
-                counts.get(namespace.environment_id, 0) + count
-            )
+            counts[namespace.environment_id] = counts.get(namespace.environment_id, 0) + count
         return counts
 
     def _repository_goal(
@@ -1234,7 +1232,7 @@ class PlayCatalog:
         goal_slug: str,
     ) -> tuple[float, tuple[dict[str, Any], ...]] | None:
         entry = (
-            self._entry_cache.read("variants", cache_key)
+            self._entry_cache.read(GOAL_VARIANT_CACHE_NAMESPACE, cache_key)
             if self._entry_cache is not None
             else None
         )
@@ -1270,7 +1268,7 @@ class PlayCatalog:
 
         if self._entry_cache is not None:
             self._entry_cache.write(
-                "variants",
+                GOAL_VARIANT_CACHE_NAMESPACE,
                 cache_key,
                 {
                     "authority": self.control_identity,
@@ -1279,6 +1277,7 @@ class PlayCatalog:
                 },
             )
         else:
+
             def update(payload: dict[str, Any]) -> None:
                 payload["goal_variants"][cache_key] = {
                     "generated_at": cached[0],
@@ -1311,21 +1310,22 @@ class PlayCatalog:
     def _current_goal_variant(
         self,
         repository_goal: _RepositoryGoal,
-    ) -> dict[str, Any]:
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
         authored = load_goal_contract(
             self.repo_root / repository_goal.goal_path,
             self.repo_root,
+        )
+        resolved = goal_for_contract_validation(
+            authored,
+            label=f"repository goal {repository_goal.goal_slug}",
         )
         descriptor = build_goal_variant_descriptor(
             goal_slug=repository_goal.goal_slug,
             source_sha="",
             authored_goal=authored,
-            effective_goal=goal_for_contract_validation(
-                authored,
-                label=f"repository goal {repository_goal.goal_slug}",
-            ),
+            effective_goal=resolved,
         )
-        return descriptor
+        return descriptor, resolved
 
     def _variant_summary(
         self,
@@ -1333,6 +1333,9 @@ class PlayCatalog:
         descriptor: Mapping[str, Any],
         repository_goal: _RepositoryGoal,
         current: Mapping[str, Any],
+        current_goal: Mapping[str, Any],
+        resolved_goal: Mapping[str, Any] | None = None,
+        runs: Sequence[Mapping[str, Any]] = (),
         exact_resolution_run_id: str = "",
     ) -> dict[str, Any]:
         validated = validate_goal_variant_descriptor(descriptor)
@@ -1347,6 +1350,61 @@ class PlayCatalog:
             if authored_current
             else "historical"
         )
+        configuration_kind = (
+            "current_default"
+            if authored_current and effective_current
+            else "current_modified"
+            if authored_current
+            else "previous_default"
+            if validated["source_relation"] == "canonical"
+            else "previous_modified"
+        )
+        current_diff: list[dict[str, Any]] = []
+        current_diff_truncated = False
+        comparison_available = configuration_kind == "current_default"
+        if resolved_goal is not None:
+            if goal_contract_sha256(resolved_goal) != validated["effective_goal_contract_sha256"]:
+                raise CatalogIntegrityError(
+                    "goal variant resolved contract does not match its descriptor"
+                )
+            current_diff, current_diff_truncated = goal_contract_diff(
+                current_goal,
+                resolved_goal,
+            )
+            comparison_available = True
+        elif configuration_kind == "current_modified":
+            current_diff = [dict(item) for item in validated["diff"]]
+            current_diff_truncated = bool(validated["diff_truncated"])
+            comparison_available = True
+
+        labels = goal_contract_diff_labels(
+            current_diff,
+            limit=2,
+            truncated=current_diff_truncated,
+        )
+        display_label = (
+            " · ".join(labels)
+            if labels
+            else "No behavioral changes"
+            if comparison_available
+            else "Behavioral difference unavailable — no exact goal proof"
+        )
+        variant_runs = {
+            str(run.get("run_id") or ""): dict(run)
+            for run in runs
+            if str(run.get("goal_variant_id") or "") == validated["variant_id"]
+            and str(run.get("run_id") or "")
+        }
+        first_used_values = [
+            str(run.get("created_at") or "")
+            for run in variant_runs.values()
+            if str(run.get("created_at") or "")
+        ]
+        last_activity_values = [
+            str(run.get("updated_at") or run.get("created_at") or "")
+            for run in variant_runs.values()
+            if str(run.get("updated_at") or run.get("created_at") or "")
+        ]
         return GoalVariantSummary(
             environment_id=repository_goal.environment_id,
             goal_id=repository_goal.goal_id,
@@ -1360,6 +1418,14 @@ class PlayCatalog:
             status=status,
             diff=tuple(dict(item) for item in validated["diff"]),
             diff_truncated=bool(validated["diff_truncated"]),
+            configuration_kind=configuration_kind,
+            display_label=display_label,
+            current_diff=tuple(current_diff),
+            current_diff_truncated=current_diff_truncated,
+            comparison_available=comparison_available,
+            run_count=len(variant_runs),
+            first_used_at=min(first_used_values) if first_used_values else "",
+            last_activity_at=max(last_activity_values) if last_activity_values else "",
             exact_resolution_run_id=str(exact_resolution_run_id or ""),
         ).to_dict()
 
@@ -1368,14 +1434,14 @@ class PlayCatalog:
         *,
         repository_goal: _RepositoryGoal,
         current: Mapping[str, Any],
+        current_goal: Mapping[str, Any],
     ) -> tuple[dict[str, Any], ...] | None:
         if self.control_bucket is None:
             return None
-        generation_scope = self._control_generation_scope(
-            goal_slug=repository_goal.goal_slug
-        )
+        generation_scope = self._control_generation_scope(goal_slug=repository_goal.goal_slug)
         if generation_scope is not None:
             raw_variants = generation_scope["variants"]
+            raw_runs = generation_scope["runs"]
         else:
             scope_key = goal_variant_scope_key(goal_slug=repository_goal.goal_slug)
             document = self.control_bucket.get_json_optional(f"{scope_key}/index.json")
@@ -1386,8 +1452,11 @@ class PlayCatalog:
             if document.get("scope") != {"goal_slug": repository_goal.goal_slug}:
                 raise CatalogIntegrityError("goal variant index scope mismatch")
             raw_variants = document.get("variants")
+            raw_runs = []
         if not isinstance(raw_variants, list):
             raise CatalogIntegrityError("goal variant index variants must be a list")
+        if not isinstance(raw_runs, list) or any(not isinstance(run, Mapping) for run in raw_runs):
+            raise CatalogIntegrityError("goal variant catalog runs must be a list")
         items = []
         for raw in raw_variants:
             if not isinstance(raw, Mapping):
@@ -1400,17 +1469,87 @@ class PlayCatalog:
                     "descriptor_key",
                     "first_run_id",
                     "exact_resolution_run_id",
+                    "resolved_goal",
                 }
             }
+            resolved_goal = raw.get("resolved_goal")
+            if resolved_goal is not None and not isinstance(resolved_goal, Mapping):
+                raise CatalogIntegrityError("goal variant resolved goal must be an object")
+            validated_descriptor = validate_goal_variant_descriptor(descriptor)
+            if (
+                resolved_goal is None
+                and validated_descriptor["goal_contract_sha256"] != current["goal_contract_sha256"]
+            ):
+                resolved_goal = self._variant_resolved_goal_from_exact_run(
+                    variant_id=str(validated_descriptor["variant_id"]),
+                    exact_run_id=str(raw.get("exact_resolution_run_id") or ""),
+                )
             items.append(
                 self._variant_summary(
-                    descriptor=descriptor,
+                    descriptor=validated_descriptor,
                     repository_goal=repository_goal,
                     current=current,
+                    current_goal=current_goal,
+                    resolved_goal=resolved_goal,
+                    runs=raw_runs,
                     exact_resolution_run_id=str(raw.get("exact_resolution_run_id") or ""),
                 )
             )
         return tuple(items)
+
+    def _variant_resolved_goal_from_exact_run(
+        self,
+        *,
+        variant_id: str,
+        exact_run_id: str,
+    ) -> dict[str, Any] | None:
+        if not exact_run_id or self.control_bucket is None:
+            return None
+        try:
+            raw_manifest = self.control_bucket.get_json_optional(
+                f"runs/{exact_run_id}/manifest.json"
+            )
+        except TimeoutError, OSError:
+            return None
+        if raw_manifest is None:
+            return None
+        try:
+            manifest = RunManifest.from_dict(raw_manifest)
+        except Exception as exc:
+            raise CatalogIntegrityError(
+                "goal variant resolution run manifest is malformed"
+            ) from exc
+        if manifest.run_id != exact_run_id:
+            raise CatalogIntegrityError("goal variant resolution run identity mismatch")
+        try:
+            document = self.control_bucket.get_json_optional(
+                RunAuthority.recipe_document_key(manifest.recipe_sha256)
+            )
+        except TimeoutError, OSError:
+            return None
+        if document is None:
+            return None
+        if not isinstance(document, Mapping):
+            raise CatalogIntegrityError("goal variant resolution recipe is malformed")
+        if canonical_json_sha256(document) != manifest.recipe_sha256:
+            raise CatalogIntegrityError("goal variant resolution recipe hash mismatch")
+        recipe = document.get("recipe")
+        if not isinstance(recipe, Mapping):
+            raise CatalogIntegrityError("goal variant resolution recipe is malformed")
+        raw_descriptor = recipe.get("goal_variant")
+        if not isinstance(raw_descriptor, Mapping):
+            raise CatalogIntegrityError("goal variant resolution recipe has no descriptor")
+        descriptor = validate_goal_variant_descriptor(raw_descriptor)
+        if descriptor["variant_id"] != variant_id:
+            raise CatalogIntegrityError("goal variant resolution run proves a different variant")
+        resolved_goal = recipe.get("goal")
+        if not isinstance(resolved_goal, Mapping):
+            raise CatalogIntegrityError("goal variant resolution recipe has no resolved goal")
+        if goal_contract_sha256(resolved_goal) != descriptor["effective_goal_contract_sha256"]:
+            raise CatalogIntegrityError(
+                "goal variant resolution recipe goal does not match its descriptor"
+            )
+        return deepcopy(dict(resolved_goal))
 
     def _control_generation_scope(
         self,
@@ -1424,9 +1563,7 @@ class PlayCatalog:
             return None
         try:
             pointer = validate_catalog_pointer(pointer_document)
-            generation_document = self.control_bucket.get_json_optional(
-                pointer["generation_key"]
-            )
+            generation_document = self.control_bucket.get_json_optional(pointer["generation_key"])
             if generation_document is None:
                 raise ValueError("catalog pointer references a missing generation")
             generation = validate_catalog_generation(
@@ -1434,9 +1571,7 @@ class PlayCatalog:
                 expected_digest=pointer["generation_sha256"],
             )
             if generation["generated_at"] != pointer["generated_at"]:
-                raise ValueError(
-                    "catalog pointer timestamp disagrees with its generation"
-                )
+                raise ValueError("catalog pointer timestamp disagrees with its generation")
         except ValueError as exc:
             raise CatalogIntegrityError(
                 str(exc),
@@ -1456,37 +1591,33 @@ class PlayCatalog:
         *,
         repository_goal: _RepositoryGoal,
     ) -> tuple[dict[str, Any], ...]:
-        current = self._current_goal_variant(repository_goal)
+        current, current_goal = self._current_goal_variant(repository_goal)
         current_summary = self._variant_summary(
             descriptor=current,
             repository_goal=repository_goal,
             current=current,
+            current_goal=current_goal,
         )
         history = self._control_goal_variants(
             repository_goal=repository_goal,
             current=current,
+            current_goal=current_goal,
         )
-        by_id = {
-            str(item["variant_id"]): item
-            for item in (history or ())
-        }
+        by_id = {str(item["variant_id"]): item for item in (history or ())}
         indexed_current = by_id.get(str(current_summary["variant_id"]))
-        if indexed_current is not None:
-            current_summary["exact_resolution_run_id"] = str(
-                indexed_current.get("exact_resolution_run_id") or ""
-            )
-        by_id[str(current_summary["variant_id"])] = current_summary
-        items = tuple(by_id.values())
-        return tuple(
-            sorted(
-                items,
-                key=lambda item: (
-                    item.get("status") not in {"current", "current changed"},
-                    str(item.get("label") or "").casefold(),
-                    str(item.get("variant_id") or ""),
-                ),
-            )
-        )
+        if indexed_current is None:
+            by_id[str(current_summary["variant_id"])] = current_summary
+        items = list(by_id.values())
+        items.sort(key=lambda item: str(item.get("variant_id") or ""))
+        items.sort(key=lambda item: str(item.get("last_activity_at") or ""), reverse=True)
+        kind_order = {
+            "current_default": 0,
+            "current_modified": 1,
+            "previous_default": 2,
+            "previous_modified": 3,
+        }
+        items.sort(key=lambda item: kind_order.get(str(item.get("configuration_kind")), 4))
+        return tuple(items)
 
     def _refresh_goal_variants(
         self,
@@ -1496,7 +1627,7 @@ class PlayCatalog:
     ) -> None:
         try:
             slot = (
-                self._entry_cache.slot_lock("variants", cache_key)
+                self._entry_cache.slot_lock(GOAL_VARIANT_CACHE_NAMESPACE, cache_key)
                 if self._entry_cache is not None
                 else nullcontext()
             )
@@ -1583,11 +1714,7 @@ class PlayCatalog:
                     "Run discovery requires control-catalog authority. Configure "
                     "GRADLAB_CONTROL_R2 in the private operator configuration and retry."
                 ),
-                code=(
-                    "catalog_configuration"
-                    if self.control_error
-                    else "catalog_unavailable"
-                ),
+                code=("catalog_configuration" if self.control_error else "catalog_unavailable"),
             )
         return control_summaries
 
@@ -1602,9 +1729,7 @@ class PlayCatalog:
     ) -> tuple[dict[str, Any], ...] | None:
         if self.control_bucket is None or not selected_goal_slug:
             return None
-        generation_scope = self._control_generation_scope(
-            goal_slug=selected_goal_slug
-        )
+        generation_scope = self._control_generation_scope(goal_slug=selected_goal_slug)
         run_groups: list[tuple[str, list[Any]]] = []
         if generation_scope is not None:
             raw_variants = generation_scope["variants"]
@@ -1626,40 +1751,27 @@ class PlayCatalog:
                     or item.get("variant_id") == selected_goal_variant_id
                 )
             ) or any(not value for value in variant_ids):
-                raise CatalogIntegrityError(
-                    "catalog generation contains an invalid variant"
-                )
-            by_variant: dict[str, list[Any]] = {
-                variant_id: [] for variant_id in variant_ids
-            }
+                raise CatalogIntegrityError("catalog generation contains an invalid variant")
+            by_variant: dict[str, list[Any]] = {variant_id: [] for variant_id in variant_ids}
             for raw in generation_scope["runs"]:
                 if not isinstance(raw, Mapping):
-                    raise CatalogIntegrityError(
-                        "catalog generation contains an invalid run"
-                    )
+                    raise CatalogIntegrityError("catalog generation contains an invalid run")
                 variant_id = str(raw.get("goal_variant_id") or "")
                 if variant_id in by_variant:
                     by_variant[variant_id].append(raw)
             run_groups = list(by_variant.items())
         else:
             scope_key = goal_variant_scope_key(goal_slug=selected_goal_slug)
-            variant_index = self.control_bucket.get_json_optional(
-                f"{scope_key}/index.json"
-            )
+            variant_index = self.control_bucket.get_json_optional(f"{scope_key}/index.json")
             if variant_index is None:
                 return ()
-            if (
-                int(variant_index.get("schema_version") or 0)
-                != GOAL_VARIANT_INDEX_SCHEMA_VERSION
-            ):
+            if int(variant_index.get("schema_version") or 0) != GOAL_VARIANT_INDEX_SCHEMA_VERSION:
                 raise CatalogIntegrityError("unsupported goal variant index schema")
             if variant_index.get("scope") != {"goal_slug": selected_goal_slug}:
                 raise CatalogIntegrityError("goal variant index scope mismatch")
             raw_variants = variant_index.get("variants")
             if not isinstance(raw_variants, list):
-                raise CatalogIntegrityError(
-                    "goal variant index variants must be a list"
-                )
+                raise CatalogIntegrityError("goal variant index variants must be a list")
             variant_ids = [
                 str(item.get("variant_id") or "")
                 for item in raw_variants
@@ -1670,9 +1782,7 @@ class PlayCatalog:
                 )
             ]
             if any(not value for value in variant_ids):
-                raise CatalogIntegrityError(
-                    "goal variant index contains an invalid entry"
-                )
+                raise CatalogIntegrityError("goal variant index contains an invalid entry")
             for variant_id in variant_ids:
                 document = self.control_bucket.get_json_optional(
                     f"{scope_key}/runs/{variant_id}.json"
@@ -1683,29 +1793,21 @@ class PlayCatalog:
                     int(document.get("schema_version") or 0)
                     != GOAL_VARIANT_RUN_INDEX_SCHEMA_VERSION
                 ):
-                    raise CatalogIntegrityError(
-                        "unsupported goal variant run index schema"
-                    )
+                    raise CatalogIntegrityError("unsupported goal variant run index schema")
                 if document.get("scope") != {
                     "goal_slug": selected_goal_slug,
                     "variant_id": variant_id,
                 }:
-                    raise CatalogIntegrityError(
-                        "goal variant run index scope mismatch"
-                    )
+                    raise CatalogIntegrityError("goal variant run index scope mismatch")
                 raw_runs = document.get("runs")
                 if not isinstance(raw_runs, list):
-                    raise CatalogIntegrityError(
-                        "goal variant run index runs must be a list"
-                    )
+                    raise CatalogIntegrityError("goal variant run index runs must be a list")
                 run_groups.append((variant_id, raw_runs))
         summaries: list[dict[str, Any]] = []
         for variant_id, raw_runs in run_groups:
             for raw in raw_runs:
                 if not isinstance(raw, Mapping):
-                    raise CatalogIntegrityError(
-                        "goal variant run index contains an invalid entry"
-                    )
+                    raise CatalogIntegrityError("goal variant run index contains an invalid entry")
                 run_id = str(raw.get("run_id") or "")
                 metrics = raw.get("metrics")
                 authored_hash = str(raw.get("goal_contract_sha256") or "")
@@ -1720,9 +1822,7 @@ class PlayCatalog:
                         and not isinstance(raw.get("early_stop"), Mapping)
                     )
                 ):
-                    raise CatalogIntegrityError(
-                        "goal variant run index contains an invalid run"
-                    )
+                    raise CatalogIntegrityError("goal variant run index contains an invalid run")
                 summaries.append(
                     RunSummary(
                         environment_id=environment_id,
@@ -1897,10 +1997,7 @@ class PlayCatalog:
                             fallback_metric_specs=fallback_metric_specs,
                         )
                     except CatalogUnavailable as exc:
-                        if (
-                            cached is None
-                            or exc.problem.code != "catalog_transient"
-                        ):
+                        if cached is None or exc.problem.code != "catalog_transient":
                             raise
                         warnings = (exc.problem.to_dict(),)
                     else:
@@ -2033,7 +2130,7 @@ class PlayCatalog:
         warnings: tuple[Mapping[str, Any], ...] = ()
         if cached is None or refresh:
             slot = (
-                self._entry_cache.slot_lock("variants", cache_key)
+                self._entry_cache.slot_lock(GOAL_VARIANT_CACHE_NAMESPACE, cache_key)
                 if self._entry_cache is not None
                 else nullcontext()
             )
@@ -2070,11 +2167,17 @@ class PlayCatalog:
             if not normalized
             or normalized
             in _search_text(
+                item.get("display_label"),
+                item.get("configuration_kind"),
                 item.get("label"),
                 item.get("variant_id"),
                 item.get("status"),
                 item.get("source_relation"),
+                item.get("current_diff"),
                 item.get("diff"),
+                item.get("first_used_at"),
+                item.get("last_activity_at"),
+                item.get("run_count"),
                 item.get("goal_contract_sha256"),
                 item.get("effective_goal_contract_sha256"),
             )
@@ -2266,8 +2369,7 @@ class PlayCatalog:
         recipe_path = goal_path.parent / "recipes" / f"{normalized_recipe_id}.yaml"
         if not recipe_path.is_file():
             raise ValueError(
-                "repository has no recipe "
-                f"{environment_id}/{goal_id}/{normalized_recipe_id}"
+                f"repository has no recipe {environment_id}/{goal_id}/{normalized_recipe_id}"
             )
         resolved = compose_resolved_train_documents(goal_path, recipe_path)
         preview = self._preview_recipe(resolved.base)
@@ -2326,9 +2428,7 @@ class PlayCatalog:
         recipe = dict(validated["recipe"])
         resolution = validated["resolution"]
         goal_resolution = resolution.get("goal") if isinstance(resolution, Mapping) else None
-        recipe_resolution = (
-            resolution.get("recipe") if isinstance(resolution, Mapping) else None
-        )
+        recipe_resolution = resolution.get("recipe") if isinstance(resolution, Mapping) else None
         if not isinstance(goal_resolution, Mapping) or not isinstance(
             recipe_resolution,
             Mapping,
@@ -2486,13 +2586,10 @@ class PlayCatalog:
             )
         return document
 
-    def inspect_run(
+    def _run_recipe_document(
         self,
-        *,
         run_id: str,
-    ) -> dict[str, Any]:
-        if RUN_ID_PATTERN.fullmatch(run_id) is None:
-            raise ValueError("run id must match gradlab-<32 lowercase hex>")
+    ) -> tuple[dict[str, Any] | None, dict[str, Any]]:
         manifest_document = (
             self.control_bucket.get_json_optional(f"runs/{run_id}/manifest.json")
             if self.control_bucket is not None
@@ -2514,6 +2611,16 @@ class PlayCatalog:
             document = self._control_recipe_document(manifest.recipe_sha256)
         if document is None:
             document = self._public_run_recipe_document(run_id)
+        return document, metadata
+
+    def inspect_run(
+        self,
+        *,
+        run_id: str,
+    ) -> dict[str, Any]:
+        if RUN_ID_PATTERN.fullmatch(run_id) is None:
+            raise ValueError("run id must match gradlab-<32 lowercase hex>")
+        document, metadata = self._run_recipe_document(run_id)
         if document is None:
             unavailable = inspection_document(
                 kind="recipe",
@@ -2585,20 +2692,83 @@ class PlayCatalog:
                 source={"kind": "goal-variant-summary", "variant_id": variant_id},
                 goal=summary,
             )
-        envelope = self.inspect_run(
-            run_id=exact_run_id,
+        metadata: dict[str, Any] = {"run_id": exact_run_id}
+        recipe = None
+        try:
+            document, metadata = self._run_recipe_document(exact_run_id)
+        except ValueError:
+            document = None
+        if document is not None:
+            validated = validate_recipe_document(document, source=exact_run_id)
+            recipe_document = dict(validated["recipe"])
+            raw_descriptor = recipe_document.get("goal_variant")
+            if not isinstance(raw_descriptor, Mapping):
+                raise ValueError("goal variant resolution recipe has no descriptor")
+            descriptor = validate_goal_variant_descriptor(raw_descriptor)
+            if descriptor["variant_id"] != variant_id:
+                raise ValueError("goal variant resolution run does not prove the selected variant")
+            resolved_goal = recipe_document.get("goal")
+            if not isinstance(resolved_goal, Mapping):
+                raise ValueError("goal variant resolution recipe has no resolved goal")
+            _original_goal, recipe = self._recipe_document_inspections(
+                validated,
+                title=exact_run_id,
+                metadata=metadata,
+            )
+        else:
+            resolved_goal = self._variant_resolved_goal_from_exact_run(
+                variant_id=variant_id,
+                exact_run_id=exact_run_id,
+            )
+            if resolved_goal is None:
+                raise ValueError("goal variant resolution run has no verified goal proof")
+            recipe = inspection_document(
+                kind="recipe",
+                title=exact_run_id,
+                availability="summary-only",
+                message=(
+                    "The resolved goal comparison is verified, but the full historical "
+                    "recipe is outside the current inspectable recipe contract."
+                ),
+                metadata=metadata,
+            )
+        _current_descriptor, current_goal = self._current_goal_variant(repository_goal)
+        kind_labels = {
+            "current_default": "Current default",
+            "current_modified": "Current modified",
+            "previous_default": "Previous default",
+            "previous_modified": "Previous modified",
+        }
+        kind_label = kind_labels.get(
+            str(selected.get("configuration_kind") or ""),
+            "Goal configuration",
         )
-        goal = envelope["documents"].get("goal")
-        if not isinstance(goal, Mapping) or goal.get("variant_id") != variant_id:
-            raise ValueError("goal variant resolution run does not prove the selected variant")
+        goal = inspection_document(
+            kind="goal",
+            title=f"{kind_label} · {selected.get('display_label') or repository_goal.title}",
+            availability="exact",
+            resolved=dict(resolved_goal),
+            base=current_goal,
+            variant_id=variant_id,
+            message=(
+                "Goal changes compare this configuration with the current default. "
+                + (
+                    "Recipe changes show its launch-time recipe differences."
+                    if recipe["availability"] == "exact"
+                    else "The full historical recipe is shown as summary-only."
+                )
+            ),
+            metadata={**metadata, **dict(selected)},
+            allow_placeholders=True,
+        )
         return {
-            **envelope,
             "source": {
                 "kind": "goal-variant",
                 "variant_id": variant_id,
                 "exact_resolution_run_id": exact_run_id,
             },
-            "documents": {"goal": dict(goal)},
+            "schema_version": 1,
+            "documents": {"goal": goal, "recipe": recipe},
         }
 
     def run_goal(self, *, environment_id: str, run_id: str) -> str:
@@ -2626,11 +2796,7 @@ class PlayCatalog:
                 descriptor = raw_descriptor
         if descriptor is None:
             public_document = self._public_run_recipe_document(run_id)
-            recipe = (
-                public_document.get("recipe")
-                if isinstance(public_document, Mapping)
-                else None
-            )
+            recipe = public_document.get("recipe") if isinstance(public_document, Mapping) else None
             raw_descriptor = recipe.get("goal_variant") if isinstance(recipe, Mapping) else None
             if isinstance(raw_descriptor, Mapping):
                 descriptor = raw_descriptor
@@ -2660,11 +2826,7 @@ class PlayCatalog:
         )
         wandb = manifest.get("wandb") if isinstance(manifest, Mapping) else None
         entity = str(wandb.get("entity") or "").strip() if isinstance(wandb, Mapping) else ""
-        project = (
-            str(wandb.get("project") or "").strip()
-            if isinstance(wandb, Mapping)
-            else ""
-        )
+        project = str(wandb.get("project") or "").strip() if isinstance(wandb, Mapping) else ""
         if not entity or not project:
             return _CheckpointEvaluationData({}, None, None, {}, ())
         cache_key = (entity, project, run_id)
@@ -2742,9 +2904,7 @@ class PlayCatalog:
                         "criteria": criteria,
                         "metrics": {
                             criterion.metric: (
-                                float(step)
-                                if criterion.metric == LEADER_CHECKPOINT_STEP
-                                else None
+                                float(step) if criterion.metric == LEADER_CHECKPOINT_STEP else None
                             )
                             for criterion in evaluation_rank
                         },
@@ -2869,20 +3029,14 @@ class PlayCatalog:
             if not isinstance(raw_descriptor, Mapping):
                 public_document = self._public_run_recipe_document(run_id)
                 recipe = (
-                    public_document.get("recipe")
-                    if isinstance(public_document, Mapping)
-                    else None
+                    public_document.get("recipe") if isinstance(public_document, Mapping) else None
                 )
-                raw_descriptor = (
-                    recipe.get("goal_variant") if isinstance(recipe, Mapping) else None
-                )
+                raw_descriptor = recipe.get("goal_variant") if isinstance(recipe, Mapping) else None
             if not isinstance(raw_descriptor, Mapping):
                 raise ValueError("run has no current goal variant descriptor")
             descriptor = validate_goal_variant_descriptor(raw_descriptor)
             observed_variant = str(descriptor["variant_id"])
-            expected_effective_goal_hash = str(
-                descriptor["effective_goal_contract_sha256"]
-            )
+            expected_effective_goal_hash = str(descriptor["effective_goal_contract_sha256"])
             if observed_variant != selected_variant:
                 raise ValueError("run does not belong to the selected goal variant")
         evaluation_data = self._checkpoint_evaluations(
@@ -2949,9 +3103,7 @@ class PlayCatalog:
             )
             rows.append(row)
         rows.sort(key=lambda row: (row.step, row.sha256), reverse=True)
-        training_rank = tuple(
-            criterion for criterion, _sources in LIVE_TRAINING_METRICS
-        )
+        training_rank = tuple(criterion for criterion, _sources in LIVE_TRAINING_METRICS)
         best_training_id = _best_checkpoint_id(rows, training_rank)
         best_evaluation_id = _best_checkpoint_id(
             rows,
@@ -2981,10 +3133,7 @@ class PlayCatalog:
 
     def checkpoint_warnings(self, *, run_id: str) -> tuple[dict[str, Any], ...]:
         with self._lock:
-            return tuple(
-                dict(item)
-                for item in self._checkpoint_warnings.get(str(run_id), ())
-            )
+            return tuple(dict(item) for item in self._checkpoint_warnings.get(str(run_id), ()))
 
     def checkpoint_selection_fence(self, *, run_id: str) -> str:
         with self._lock:

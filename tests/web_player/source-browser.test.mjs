@@ -11,6 +11,7 @@ import {
   checkpointPlaybackSeed,
   checkpointRankTags,
   formatMetricValue,
+  goalConfigurationPresentation,
   metricLabel,
   rankRunItems,
   runFinishPresentation,
@@ -54,6 +55,39 @@ test("catalog list hover highlights the complete row", async () => {
     styles,
     /\.goal-row-navigation:hover:not\(:disabled\)\s*\{[^}]*background: transparent;/,
   );
+});
+
+test("goal configurations use plain-language types and run activity", () => {
+  const now = Date.parse("2026-08-01T12:00:00Z");
+  assert.deepEqual(goalConfigurationPresentation({
+    configuration_kind: "current_default",
+    display_label: "No behavioral changes",
+    comparison_available: true,
+    run_count: 0,
+  }, now), {
+    kind: "current_default",
+    kindLabel: "Current default",
+    group: "current",
+    displayLabel: "No behavioral changes",
+    activity: "No runs yet",
+    actionLabel: "View definition",
+  });
+  assert.deepEqual(goalConfigurationPresentation({
+    configuration_kind: "previous_default",
+    display_label: "episode limit 10 → 5",
+    comparison_available: true,
+    exact_resolution_run_id: `gradlab-${"a".repeat(32)}`,
+    run_count: 2,
+    first_used_at: "2026-08-01T10:00:00Z",
+    last_activity_at: "2026-08-01T11:00:00Z",
+  }, now), {
+    kind: "previous_default",
+    kindLabel: "Previous default",
+    group: "previous",
+    displayLabel: "episode limit 10 → 5",
+    activity: "2 runs · First used 1 Aug 2026 · Last activity 1 Aug 2026",
+    actionLabel: "Compare",
+  });
 });
 
 test("run table hover highlights only the complete row", async () => {
