@@ -8,7 +8,7 @@ GOAL_PATH = REPO_ROOT / "experiments/goals/VizdoomDeathmatch-v1/_goal.yaml"
 RECIPE_PATH = GOAL_PATH.parent / "recipes/ppo.yaml"
 
 
-def test_deathmatch_routes_survivability_to_critic_and_weapon_state_to_both_heads() -> None:
+def test_deathmatch_routes_survivability_and_weapon_state_to_both_heads() -> None:
     document = compose_train_document(GOAL_PATH, RECIPE_PATH)
     train_config = document["train_config"]
 
@@ -59,8 +59,8 @@ def test_deathmatch_routes_survivability_to_critic_and_weapon_state_to_both_head
         },
     }
     assert train_config["policy_model"]["routes"] == {
-        "armor": ["state_value"],
-        "health": ["state_value"],
+        "armor": ["action", "state_value"],
+        "health": ["action", "state_value"],
         "selected_weapon": ["action", "state_value"],
         "selected_weapon_ammo": ["action", "state_value"],
     }

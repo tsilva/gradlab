@@ -6,7 +6,7 @@ description: Single-player ViZDoom Deathmatch pixel PPO with routed combat-state
 train:
   checkpoint_eval_backend: none
   timesteps: 100000000
-  # Keep health and armor critic-only while routing weapon state to both policy heads.
+  # Route survivability and weapon state to both the action and value heads.
   policy_model:
     schema_version: 1
     topology:
@@ -21,8 +21,8 @@ train:
       selected_weapon: {kind: one_hot}
       selected_weapon_ammo: {kind: identity}
     routes:
-      armor: [state_value]
-      health: [state_value]
+      armor: [action, state_value]
+      health: [action, state_value]
       selected_weapon: [action, state_value]
       selected_weapon_ammo: [action, state_value]
     heads:

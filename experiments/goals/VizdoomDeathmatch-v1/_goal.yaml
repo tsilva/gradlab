@@ -85,7 +85,7 @@ train:
         selected_weapon_ammo: selected_weapon_ammo
         player_dead: player_dead
         episode_done: pending_reset
-      # Expose survivability state to the critic and action-relevant weapon state to both heads.
+      # Expose action-relevant survivability and weapon state to both policy heads.
       model_inputs:
         schema_version: 1
         context:
