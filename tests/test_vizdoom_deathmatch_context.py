@@ -8,7 +8,7 @@ GOAL_PATH = REPO_ROOT / "experiments/goals/VizdoomDeathmatch-v1/_goal.yaml"
 RECIPE_PATH = GOAL_PATH.parent / "recipes/ppo.yaml"
 
 
-def test_deathmatch_routes_survivability_and_weapon_state_to_both_heads() -> None:
+def test_deathmatch_shares_survivability_and_weapon_state_between_heads() -> None:
     document = compose_train_document(GOAL_PATH, RECIPE_PATH)
     train_config = document["train_config"]
 
@@ -44,9 +44,7 @@ def test_deathmatch_routes_survivability_and_weapon_state_to_both_heads() -> Non
             "values": [1, 2, 3, 4, 5, 6],
         },
     }
-    assert train_config["task"]["model_inputs"]["context"][
-        "selected_weapon_ammo"
-    ] == {
+    assert train_config["task"]["model_inputs"]["context"]["selected_weapon_ammo"] == {
         "signal": "selected_weapon_ammo",
         "update": "transition",
         "encoding": {
@@ -58,13 +56,10 @@ def test_deathmatch_routes_survivability_and_weapon_state_to_both_heads() -> Non
             "clip": True,
         },
     }
-    assert train_config["policy_model"]["routes"] == {
-        "armor": ["action", "state_value"],
-        "health": ["action", "state_value"],
-        "selected_weapon": ["action", "state_value"],
-        "selected_weapon_ammo": ["action", "state_value"],
-    }
-    assert train_config["policy_model"]["heads"] == {
-        "action": {"hidden_sizes": [], "activation": "tanh"},
-        "state_value": {"hidden_sizes": [256], "activation": "tanh"},
+    assert train_config["policy_model"] == {
+        "schema_version": 2,
+        "encoder": {"kind": "nature_cnn", "features_dim": 512},
+        "fusion": {"hidden_sizes": [256], "activation": "tanh"},
+        "normalize_images": True,
+        "orthogonal_init": True,
     }

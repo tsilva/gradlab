@@ -295,30 +295,28 @@ delivery deadline starts only after evaluations have settled.
 - Control-plane units and templates: `ops/dstack/`
 
 PPO and A2C recipes declare their actor–critic architecture under
-`train.policy_model`. Each role owns an independent hidden stack; an empty list
-connects encoded features directly to SB3's final output projection:
+`train.policy_model`. The actor and critic share the observation encoder, every
+declared task-context input, and one fusion MLP. Only SB3's final action and
+scalar-value projections are separate; an empty fusion list connects the shared
+encoded inputs directly to those projections:
 
 ```yaml
 train:
   policy_model:
-    schema_version: 1
-    topology:
-      kind: shared_encoder
-      encoder: {kind: nature_cnn, features_dim: 512}
-    fusion: post_encoder_concat
-    context_encoders: {}
-    routes: {}
-    heads:
-      action: {hidden_sizes: [], activation: tanh}
-      state_value: {hidden_sizes: [256], activation: tanh}
+    schema_version: 2
+    encoder: {kind: nature_cnn, features_dim: 512}
+    fusion: {hidden_sizes: [256], activation: tanh}
     normalize_images: true
     orthogonal_init: true
 ```
 
-Context is concatenated after image encoding and only into the roles named in
-`routes`. The supported head activations are `tanh` and `relu`; every hidden
-width must be positive. Backend fields `policy_net_arch` and `value_net_arch`
-are unsupported.
+Every field declared by `task.model_inputs` is concatenated after image encoding
+and consumed by the shared fusion MLP. Continuous context is flattened and
+categorical context is one-hot encoded from its materialized observation space.
+The supported fusion activations are `tanh` and `relu`; every hidden width must
+be positive. Backend fields `policy_net_arch` and `value_net_arch` are
+unsupported. A genuinely asymmetric actor and critic belongs in a separate
+policy/backend rather than a routing option on this shared model.
 
 Useful commands:
 

@@ -13,7 +13,7 @@ from stable_baselines3.common.policies import ActorCriticPolicy
 from stable_baselines3.common.preprocessing import preprocess_obs
 from stable_baselines3.common.torch_layers import BaseFeaturesExtractor, NatureCNN
 
-from gradlab.policy_model_config import POLICY_ROLES, normalize_policy_model
+from gradlab.policy_model_config import POLICY_ROLES, normalize_legacy_policy_model
 
 
 def _activation(name: str) -> type[nn.Module]:
@@ -101,7 +101,7 @@ class RoutedActorCriticPolicy(ActorCriticPolicy):
         policy_model: Mapping[str, Any],
         **kwargs: Any,
     ) -> None:
-        self.policy_model = normalize_policy_model(policy_model)
+        self.policy_model = normalize_legacy_policy_model(policy_model)
         if isinstance(observation_space, gym.spaces.Dict):
             spaces = observation_space.spaces
             base_space = spaces.get("observation")
@@ -123,9 +123,7 @@ class RoutedActorCriticPolicy(ActorCriticPolicy):
         self.base_observation_space = base_space
         self._role_contexts = {
             role: tuple(
-                name
-                for name, roles in self.policy_model["routes"].items()
-                if role in roles
+                name for name, roles in self.policy_model["routes"].items() if role in roles
             )
             for role in POLICY_ROLES
         }
@@ -138,9 +136,7 @@ class RoutedActorCriticPolicy(ActorCriticPolicy):
             if encoder["kind"] == "identity":
                 if not isinstance(context_space, gym.spaces.Box):
                     raise ValueError(f"identity context {name!r} requires a Box space")
-                self._context_dimensions[name] = int(
-                    np.prod(context_space.shape, dtype=np.int64)
-                )
+                self._context_dimensions[name] = int(np.prod(context_space.shape, dtype=np.int64))
             else:
                 if not isinstance(context_space, gym.spaces.Discrete):
                     raise ValueError(f"one_hot context {name!r} requires a Discrete space")
@@ -263,11 +259,7 @@ class RoutedActorCriticPolicy(ActorCriticPolicy):
         role: str,
     ) -> th.Tensor:
         base = self._base_tensor(obs)
-        extractor = (
-            self.pi_features_extractor
-            if role == "action"
-            else self.vf_features_extractor
-        )
+        extractor = self.pi_features_extractor if role == "action" else self.vf_features_extractor
         return self._append_context(extractor(base), obs, role)
 
     def _joint_features(

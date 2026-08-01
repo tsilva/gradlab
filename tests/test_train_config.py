@@ -22,15 +22,9 @@ from gradlab.training_lifecycle import TrainingExecutionMode
 
 
 POLICY_MODEL = {
-    "schema_version": 1,
-    "topology": {"kind": "shared_encoder", "encoder": {"kind": "flatten"}},
-    "fusion": "post_encoder_concat",
-    "context_encoders": {},
-    "routes": {},
-    "heads": {
-        "action": {"hidden_sizes": [8], "activation": "tanh"},
-        "state_value": {"hidden_sizes": [8], "activation": "tanh"},
-    },
+    "schema_version": 2,
+    "encoder": {"kind": "flatten"},
+    "fusion": {"hidden_sizes": [8], "activation": "tanh"},
     "normalize_images": False,
     "orthogonal_init": True,
 }

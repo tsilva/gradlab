@@ -9,27 +9,20 @@ import pytest
 
 from gradlab.artifacts import build_model_provenance
 from gradlab.env import EnvConfig
+from gradlab.json_utils import canonical_json_sha256
 from gradlab.policy_execution import (
     compile_policy_execution_contract,
+    normalize_policy_execution_contract,
     verify_policy_execution_contract,
 )
-from gradlab.routed_policy import RoutedActorCriticPolicy
+from gradlab.actor_critic_policy import SharedActorCriticPolicy
 
 
 def _model_and_env():
     policy_model = {
-        "schema_version": 1,
-        "topology": {
-            "kind": "shared_encoder",
-            "encoder": {"kind": "flatten"},
-        },
-        "fusion": "post_encoder_concat",
-        "context_encoders": {"health": {"kind": "identity"}},
-        "routes": {"health": ["state_value"]},
-        "heads": {
-            "action": {"hidden_sizes": [], "activation": "tanh"},
-            "state_value": {"hidden_sizes": [], "activation": "tanh"},
-        },
+        "schema_version": 2,
+        "encoder": {"kind": "flatten"},
+        "fusion": {"hidden_sizes": [], "activation": "tanh"},
         "normalize_images": False,
         "orthogonal_init": True,
     }
@@ -43,7 +36,7 @@ def _model_and_env():
             ),
         }
     )
-    policy = RoutedActorCriticPolicy(
+    policy = SharedActorCriticPolicy(
         observation_space,
         gym.spaces.Discrete(2),
         lambda _: 1e-3,
@@ -83,21 +76,19 @@ def _model_and_env():
         },
     }
     env = SimpleNamespace(
-        runtime=SimpleNamespace(
-            kernel=SimpleNamespace(model_input_contract=model_input_contract)
-        )
+        runtime=SimpleNamespace(kernel=SimpleNamespace(model_input_contract=model_input_contract))
     )
     return model, env
 
 
-def test_policy_execution_contract_binds_provider_schema_model_and_routes() -> None:
+def test_policy_execution_contract_binds_shared_provider_inputs() -> None:
     model, env = _model_and_env()
 
     contract = compile_policy_execution_contract(model, env)
 
     assert contract is not None
     assert contract["role_inputs"] == {
-        "action": ["observation"],
+        "action": ["observation", "context/health"],
         "state_value": ["observation", "context/health"],
     }
     assert contract["model_inputs"]["context"]["health"]["source"][0]["name"] == "health"
@@ -106,23 +97,14 @@ def test_policy_execution_contract_binds_provider_schema_model_and_routes() -> N
 
 
 def test_policy_execution_contract_supports_configured_policy_without_context() -> None:
-    policy = RoutedActorCriticPolicy(
+    policy = SharedActorCriticPolicy(
         gym.spaces.Box(-1.0, 1.0, shape=(4,), dtype=np.float32),
         gym.spaces.Discrete(2),
         lambda _: 1e-3,
         policy_model={
-            "schema_version": 1,
-            "topology": {
-                "kind": "shared_encoder",
-                "encoder": {"kind": "flatten"},
-            },
-            "fusion": "post_encoder_concat",
-            "context_encoders": {},
-            "routes": {},
-            "heads": {
-                "action": {"hidden_sizes": [8], "activation": "tanh"},
-                "state_value": {"hidden_sizes": [8], "activation": "tanh"},
-            },
+            "schema_version": 2,
+            "encoder": {"kind": "flatten"},
+            "fusion": {"hidden_sizes": [8], "activation": "tanh"},
             "normalize_images": False,
             "orthogonal_init": True,
         },
@@ -139,6 +121,43 @@ def test_policy_execution_contract_supports_configured_policy_without_context() 
         "state_value": ["observation"],
     }
     assert verify_policy_execution_contract(model, env, contract) == contract
+
+
+def test_policy_execution_contract_rejects_asymmetric_v2_role_inputs() -> None:
+    model, env = _model_and_env()
+    contract = compile_policy_execution_contract(model, env)
+    assert contract is not None
+    contract["role_inputs"]["action"] = ["observation"]
+    payload = {key: value for key, value in contract.items() if key != "sha256"}
+
+    contract["sha256"] = canonical_json_sha256(
+        payload,
+        default=str,
+        ensure_ascii=True,
+    )
+
+    with pytest.raises(ValueError, match="must be identical"):
+        normalize_policy_execution_contract(contract)
+
+
+def test_policy_execution_contract_rejects_shared_inputs_missing_from_roles() -> None:
+    model, env = _model_and_env()
+    contract = compile_policy_execution_contract(model, env)
+    assert contract is not None
+    contract["role_inputs"] = {
+        "action": ["observation"],
+        "state_value": ["observation"],
+    }
+    payload = {key: value for key, value in contract.items() if key != "sha256"}
+
+    contract["sha256"] = canonical_json_sha256(
+        payload,
+        default=str,
+        ensure_ascii=True,
+    )
+
+    with pytest.raises(ValueError, match="must match model_inputs"):
+        normalize_policy_execution_contract(contract)
 
 
 def test_policy_execution_contract_rejects_runtime_drift() -> None:

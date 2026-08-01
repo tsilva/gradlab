@@ -247,10 +247,12 @@ def test_bandit_recipe_materializes_fixed_train_and_eval_contracts() -> None:
     ]
     assert train_config["env_args"] == {"autoreset_mode": "disabled"}
     assert train_config["training_backend"]["id"] == "sb3.ppo"
-    assert train_config["policy_model"]["topology"]["encoder"] == {"kind": "flatten"}
-    assert train_config["policy_model"]["heads"] == {
-        "action": {"hidden_sizes": [64, 64], "activation": "tanh"},
-        "state_value": {"hidden_sizes": [64, 64], "activation": "tanh"},
+    assert train_config["policy_model"] == {
+        "schema_version": 2,
+        "encoder": {"kind": "flatten"},
+        "fusion": {"hidden_sizes": [64, 64], "activation": "tanh"},
+        "normalize_images": True,
+        "orthogonal_init": True,
     }
 
 

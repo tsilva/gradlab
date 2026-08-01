@@ -3,16 +3,9 @@ description: PPO smoke test for the ROM-free native-vector {{ goal_id }} target.
 train:
   timesteps: 256
   policy_model:
-    schema_version: 1
-    topology:
-      kind: shared_encoder
-      encoder: {kind: flatten}
-    fusion: post_encoder_concat
-    context_encoders: {}
-    routes: {}
-    heads:
-      action: {hidden_sizes: [64, 64], activation: tanh}
-      state_value: {hidden_sizes: [64, 64], activation: tanh}
+    schema_version: 2
+    encoder: {kind: flatten}
+    fusion: {hidden_sizes: [64, 64], activation: tanh}
     normalize_images: true
     orthogonal_init: true
   backend:

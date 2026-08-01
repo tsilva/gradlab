@@ -1,5 +1,0 @@
-# Clear finite-horizon critic context before a consuming recipe restores health only.
-train:
-  policy_model:
-    context_encoders: null
-    routes: null

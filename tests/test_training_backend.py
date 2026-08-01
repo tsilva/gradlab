@@ -28,24 +28,16 @@ from gradlab.training_backend import (
 
 def configured_policy_model() -> dict[str, object]:
     return {
-        "schema_version": 1,
-        "topology": {"kind": "shared_encoder", "encoder": {"kind": "flatten"}},
-        "fusion": "post_encoder_concat",
-        "context_encoders": {},
-        "routes": {},
-        "heads": {
-            "action": {"hidden_sizes": [8], "activation": "tanh"},
-            "state_value": {"hidden_sizes": [8], "activation": "tanh"},
-        },
+        "schema_version": 2,
+        "encoder": {"kind": "flatten"},
+        "fusion": {"hidden_sizes": [8], "activation": "tanh"},
         "normalize_images": False,
         "orthogonal_init": True,
     }
 
 
 def backend_config(backend_id: str = "sb3.ppo", **config) -> dict[str, object]:
-    result: dict[str, object] = {
-        "training_backend": {"id": backend_id, "config": config}
-    }
+    result: dict[str, object] = {"training_backend": {"id": backend_id, "config": config}}
     if backend_id in {"sb3.ppo", "sb3.a2c"}:
         result["policy_model"] = configured_policy_model()
     return result
@@ -147,9 +139,7 @@ def test_sb3_on_policy_backends_share_common_field_validation(
 @pytest.mark.parametrize("backend_id", ["sb3.ppo", "sb3.a2c"])
 def test_sb3_on_policy_backends_require_explicit_policy_model(backend_id: str) -> None:
     with pytest.raises(ValueError, match="requires train_config.policy_model"):
-        validate_and_normalize_train_config(
-            {"training_backend": {"id": backend_id, "config": {}}}
-        )
+        validate_and_normalize_train_config({"training_backend": {"id": backend_id, "config": {}}})
 
 
 @pytest.mark.parametrize("field", ["policy_net_arch", "value_net_arch"])

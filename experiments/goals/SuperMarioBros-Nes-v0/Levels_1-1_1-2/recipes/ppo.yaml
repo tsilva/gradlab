@@ -3,4 +3,4 @@ defaults:
 - _self_
 reward_shape: speedrun-v1
 recipe_id: ppo
-description: Routed task-ID PPO for {{ goal_id }} with task-grouped advantage normalization.
+description: Shared task-ID PPO for {{ goal_id }} with task-grouped advantage normalization.

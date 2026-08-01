@@ -437,7 +437,18 @@ class ConfigValidationTests(unittest.TestCase):
                 continue
             actor_critic_recipes += 1
             with self.subTest(recipe=recipe_path):
-                self.assertIn("policy_model", document["train_config"])
+                policy_model = document["train_config"]["policy_model"]
+                self.assertEqual(policy_model["schema_version"], 2)
+                self.assertEqual(
+                    set(policy_model),
+                    {
+                        "schema_version",
+                        "encoder",
+                        "fusion",
+                        "normalize_images",
+                        "orthogonal_init",
+                    },
+                )
 
         self.assertEqual(actor_critic_recipes, 42)
 
@@ -493,9 +504,7 @@ class ConfigValidationTests(unittest.TestCase):
                 self.assertEqual(plateau["patience_steps"], calibration_steps)
                 self.assertEqual(plateau["outcome"], "failure")
                 expected_action = (
-                    "observe"
-                    if goal_path.parent.name == "VizdoomDeathmatch-v1"
-                    else "stop"
+                    "observe" if goal_path.parent.name == "VizdoomDeathmatch-v1" else "stop"
                 )
                 self.assertEqual(plateau["action"], expected_action)
 

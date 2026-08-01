@@ -5,24 +5,13 @@ defaults:
 train:
   checkpoint_eval_backend: none
   timesteps: 10000000
-  # Preserve the standard pixel actor while giving normalized state only to V(s).
+  # Fuse normalized health and horizon state with pixels for both output heads.
   policy_model:
-    schema_version: 1
-    topology:
-      kind: shared_encoder
-      encoder:
-        kind: nature_cnn
-        features_dim: 512
-    fusion: post_encoder_concat
-    context_encoders:
-      health: {kind: identity}
-      remaining_time: {kind: identity}
-    routes:
-      health: [state_value]
-      remaining_time: [state_value]
-    heads:
-      action: {hidden_sizes: [], activation: tanh}
-      state_value: {hidden_sizes: [256], activation: tanh}
+    schema_version: 2
+    encoder:
+      kind: nature_cnn
+      features_dim: 512
+    fusion: {hidden_sizes: [256], activation: tanh}
     normalize_images: true
     orthogonal_init: true
   backend:

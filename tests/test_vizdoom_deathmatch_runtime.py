@@ -5,7 +5,7 @@ import numpy as np
 from gradlab.env import make_training_vec_env, resolve_env_config
 from gradlab.env_config import env_config_from_mapping
 from gradlab.recipe_documents import compose_train_document
-from gradlab.routed_policy import RoutedActorCriticPolicy
+from gradlab.actor_critic_policy import SharedActorCriticPolicy
 
 
 GOAL_ROOT = Path("experiments/goals/VizdoomDeathmatch-v1")
@@ -38,12 +38,10 @@ def test_deathmatch_recipe_runs_through_the_real_single_player_vector_runtime() 
         assert observations["context/selected_weapon"].dtype == np.int64
         assert observations["context/selected_weapon_ammo"].dtype == np.float32
         assert np.all(
-            (0.0 <= observations["context/armor"])
-            & (observations["context/armor"] <= 1.0)
+            (0.0 <= observations["context/armor"]) & (observations["context/armor"] <= 1.0)
         )
         assert np.all(
-            (0.0 <= observations["context/health"])
-            & (observations["context/health"] <= 2.0)
+            (0.0 <= observations["context/health"]) & (observations["context/health"] <= 2.0)
         )
         np.testing.assert_array_equal(
             observations["context/armor"],
@@ -68,9 +66,7 @@ def test_deathmatch_recipe_runs_through_the_real_single_player_vector_runtime() 
             "pending_reset",
         } <= set(env.reset_infos[0])
 
-        next_observations, rewards, dones, infos = env.step(
-            np.asarray([0, 9], dtype=np.int64)
-        )
+        next_observations, rewards, dones, infos = env.step(np.asarray([0, 9], dtype=np.int64))
         assert set(next_observations) == {
             "observation",
             "context/armor",
@@ -91,7 +87,7 @@ def test_deathmatch_recipe_runs_through_the_real_single_player_vector_runtime() 
         assert len(infos) == 2
         assert all(isinstance(info, dict) for info in infos)
 
-        policy = RoutedActorCriticPolicy(
+        policy = SharedActorCriticPolicy(
             env.observation_space,
             env.action_space,
             lambda _: 1e-3,
