@@ -402,6 +402,40 @@ def test_vizdoom_deathmatch_declares_complete_single_player_combat_semantics() -
         "player_dead": "player_dead",
         "episode_done": "pending_reset",
     }
+    assert train_config["task"]["model_inputs"]["context"]["selected_weapon"] == {
+        "signal": "selected_weapon",
+        "update": "transition",
+        "encoding": {
+            "kind": "categorical",
+            "values": [1, 2, 3, 4, 5, 6],
+        },
+    }
+    assert train_config["task"]["model_inputs"]["context"][
+        "selected_weapon_ammo"
+    ] == {
+        "signal": "selected_weapon_ammo",
+        "update": "transition",
+        "encoding": {
+            "kind": "continuous",
+            "scale": 1.0 / 300.0,
+            "offset": 0.0,
+            "low": 0.0,
+            "high": 1.0,
+            "clip": True,
+        },
+    }
+    assert train_config["policy_model"]["context_encoders"] == {
+        "armor": {"kind": "identity"},
+        "health": {"kind": "identity"},
+        "selected_weapon": {"kind": "one_hot"},
+        "selected_weapon_ammo": {"kind": "identity"},
+    }
+    assert train_config["policy_model"]["routes"] == {
+        "armor": ["state_value"],
+        "health": ["state_value"],
+        "selected_weapon": ["action", "state_value"],
+        "selected_weapon_ammo": ["action", "state_value"],
+    }
     assert train_config["task"]["termination"] == {
         "failure": ["player_died"],
         "timeout": ["episode_ended"],

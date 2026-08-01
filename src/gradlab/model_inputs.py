@@ -70,6 +70,34 @@ def canonical_category(value: Any, *, label: str) -> int | str | tuple[int | str
     raise ValueError(f"{label} must be an integer, string, or flat list")
 
 
+def _canonical_runtime_category(
+    value: Any,
+    *,
+    label: str,
+) -> int | str | tuple[int | str, ...]:
+    """Canonicalize categorical provider values without weakening config syntax."""
+
+    def normalize_scalar(item: Any, *, item_label: str) -> Any:
+        if isinstance(item, np.generic):
+            item = item.item()
+        if isinstance(item, float):
+            if not math.isfinite(item) or not item.is_integer():
+                raise ValueError(
+                    f"{item_label} must be a finite integral categorical value"
+                )
+            return int(item)
+        return item
+
+    if isinstance(value, Sequence) and not isinstance(value, str | bytes):
+        value = [
+            normalize_scalar(item, item_label=f"{label}[{index}]")
+            for index, item in enumerate(value)
+        ]
+    else:
+        value = normalize_scalar(value, item_label=label)
+    return canonical_category(value, label=label)
+
+
 def _category_shape(value: int | str | tuple[int | str, ...]) -> tuple[str, ...]:
     if isinstance(value, tuple):
         return tuple("int" if isinstance(item, int) else "str" for item in value)
@@ -563,7 +591,7 @@ class ContextTaskKernel:
                     item.item() if isinstance(item, np.generic) else item
                     for item in row.reshape(-1)
                 )
-            identity = canonical_category(
+            identity = _canonical_runtime_category(
                 raw,
                 label=f"context field {field.name!r} lane {lane_index}",
             )

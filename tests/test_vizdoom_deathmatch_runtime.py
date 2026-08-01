@@ -5,6 +5,7 @@ import numpy as np
 from gradlab.env import make_training_vec_env, resolve_env_config
 from gradlab.env_config import env_config_from_mapping
 from gradlab.recipe_documents import compose_train_document
+from gradlab.routed_policy import RoutedActorCriticPolicy
 
 
 GOAL_ROOT = Path("experiments/goals/VizdoomDeathmatch-v1")
@@ -24,12 +25,18 @@ def test_deathmatch_recipe_runs_through_the_real_single_player_vector_runtime() 
             "observation",
             "context/armor",
             "context/health",
+            "context/selected_weapon",
+            "context/selected_weapon_ammo",
         }
         assert observations["observation"].shape == (2, 4, 84, 84)
         assert observations["context/armor"].shape == (2, 1)
         assert observations["context/health"].shape == (2, 1)
+        assert observations["context/selected_weapon"].shape == (2,)
+        assert observations["context/selected_weapon_ammo"].shape == (2, 1)
         assert observations["context/armor"].dtype == np.float32
         assert observations["context/health"].dtype == np.float32
+        assert observations["context/selected_weapon"].dtype == np.int64
+        assert observations["context/selected_weapon_ammo"].dtype == np.float32
         assert np.all(
             (0.0 <= observations["context/armor"])
             & (observations["context/armor"] <= 1.0)
@@ -41,6 +48,14 @@ def test_deathmatch_recipe_runs_through_the_real_single_player_vector_runtime() 
         np.testing.assert_array_equal(
             observations["context/armor"],
             np.zeros((2, 1), dtype=np.float32),
+        )
+        np.testing.assert_array_equal(
+            observations["context/selected_weapon"],
+            np.ones(2, dtype=np.int64),
+        )
+        np.testing.assert_allclose(
+            observations["context/selected_weapon_ammo"],
+            np.full((2, 1), 1.0 / 6.0, dtype=np.float32),
         )
         assert env.action_space.n == 17
         assert {
@@ -60,9 +75,13 @@ def test_deathmatch_recipe_runs_through_the_real_single_player_vector_runtime() 
             "observation",
             "context/armor",
             "context/health",
+            "context/selected_weapon",
+            "context/selected_weapon_ammo",
         }
         assert next_observations["context/armor"].shape == (2, 1)
         assert next_observations["context/health"].shape == (2, 1)
+        assert next_observations["context/selected_weapon"].shape == (2,)
+        assert next_observations["context/selected_weapon_ammo"].shape == (2, 1)
         assert np.all(
             (0.0 <= next_observations["context/armor"])
             & (next_observations["context/armor"] <= 1.0)
@@ -71,6 +90,18 @@ def test_deathmatch_recipe_runs_through_the_real_single_player_vector_runtime() 
         assert dones.shape == (2,)
         assert len(infos) == 2
         assert all(isinstance(info, dict) for info in infos)
+
+        policy = RoutedActorCriticPolicy(
+            env.observation_space,
+            env.action_space,
+            lambda _: 1e-3,
+            policy_model=document["train_config"]["policy_model"],
+        )
+        observation_tensor, _ = policy.obs_to_tensor(next_observations)
+        actions, values, log_prob = policy(observation_tensor)
+        assert tuple(actions.shape) == (2,)
+        assert tuple(values.shape) == (2, 1)
+        assert tuple(log_prob.shape) == (2,)
 
         contract = env.runtime.action_contract
         assert contract["provider"]["mode"] == "custom_discrete"
