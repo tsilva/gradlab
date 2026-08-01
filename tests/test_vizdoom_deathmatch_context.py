@@ -8,7 +8,7 @@ GOAL_PATH = REPO_ROOT / "experiments/goals/VizdoomDeathmatch-v1/_goal.yaml"
 RECIPE_PATH = GOAL_PATH.parent / "recipes/ppo.yaml"
 
 
-def test_deathmatch_shares_survivability_and_weapon_state_between_heads() -> None:
+def test_deathmatch_shares_survivability_and_complete_weapon_state_between_heads() -> None:
     document = compose_train_document(GOAL_PATH, RECIPE_PATH)
     train_config = document["train_config"]
 
@@ -50,6 +50,30 @@ def test_deathmatch_shares_survivability_and_weapon_state_between_heads() -> Non
         "encoding": {
             "kind": "continuous",
             "scale": 1.0 / 300.0,
+            "offset": 0.0,
+            "low": 0.0,
+            "high": 1.0,
+            "clip": True,
+        },
+    }
+    assert train_config["task"]["model_inputs"]["context"]["weapons_owned"] == {
+        "signal": "weapons_owned",
+        "update": "transition",
+        "encoding": {
+            "kind": "continuous",
+            "scale": 1.0,
+            "offset": 0.0,
+            "low": 0.0,
+            "high": 1.0,
+            "clip": True,
+        },
+    }
+    assert train_config["task"]["model_inputs"]["context"]["weapon_ammo"] == {
+        "signal": "weapon_ammo",
+        "update": "transition",
+        "encoding": {
+            "kind": "continuous",
+            "scale": [1.0, 1.0 / 200.0, 1.0 / 50.0, 1.0 / 200.0, 1.0 / 50.0, 1.0 / 300.0],
             "offset": 0.0,
             "low": 0.0,
             "high": 1.0,
