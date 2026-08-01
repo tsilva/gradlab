@@ -8,11 +8,18 @@ from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path, PureWindowsPath
-from typing import Annotated, Any, Callable, Literal
+from typing import Any, Callable, Literal
 
-from pydantic import Field, StringConstraints, model_validator
+from pydantic import model_validator
 
-from gradlab.boundary_schema import BoundaryModel, validate_boundary
+from gradlab.boundary_schema import (
+    BoundaryModel,
+    NonEmptyText,
+    NonNegativeInt,
+    PositiveInt,
+    Sha256,
+    validate_boundary,
+)
 from gradlab.file_utils import file_sha256 as sha256_file
 from gradlab.json_utils import canonical_json_line_bytes
 from gradlab.validation import is_secret_like_key
@@ -41,15 +48,6 @@ STATE_ARCHIVE_SUMMARY_FIELDS = frozenset(
         "view_ids",
     }
 )
-
-NonEmptyText = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
-Sha256 = Annotated[
-    str,
-    StringConstraints(strip_whitespace=True, to_lower=True, pattern=r"^[0-9a-f]{64}$"),
-]
-PositiveInt = Annotated[int, Field(strict=True, ge=1)]
-NonNegativeInt = Annotated[int, Field(strict=True, ge=0)]
-
 
 class _EvaluationDocument(BoundaryModel):
     environment: dict[str, Any]

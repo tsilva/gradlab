@@ -8,15 +8,19 @@ from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from dataclasses import asdict, dataclass
 from pathlib import Path, PureWindowsPath
-from typing import Annotated, Any, Literal
+from typing import Any, Literal
 
 from huggingface_hub import ModelCard
 from huggingface_hub.utils import validate_repo_id
 from jinja2 import Environment, FileSystemLoader, StrictUndefined
-from pydantic import Field, StringConstraints
-
 from gradlab.action_contract import action_contract_meanings
-from gradlab.boundary_schema import BoundaryModel, validate_boundary
+from gradlab.boundary_schema import (
+    BoundaryModel,
+    NonEmptyText,
+    PositiveInt,
+    Sha256,
+    validate_boundary,
+)
 from gradlab.env_registry import game_family_for_environment
 from gradlab.file_utils import file_sha256 as sha256_file
 from gradlab.json_utils import canonical_json_text
@@ -83,14 +87,6 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 """
-
-NonEmptyText = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
-Sha256 = Annotated[
-    str,
-    StringConstraints(strip_whitespace=True, to_lower=True, pattern=r"^[0-9a-f]{64}$"),
-]
-PositiveInt = Annotated[int, Field(strict=True, ge=1)]
-
 
 class _ReleaseRepository(BoundaryModel):
     repo_id: NonEmptyText

@@ -3,18 +3,21 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Annotated
 
-from pydantic import Field, StringConstraints, model_validator
+from pydantic import Field, model_validator
 
-from gradlab.boundary_schema import BoundaryModel, validate_boundary
+from gradlab.boundary_schema import (
+    BoundaryModel,
+    NonEmptyText,
+    NonNegativeInt,
+    PositiveInt,
+    validate_boundary,
+)
 from gradlab.config_loader import load_mapping_document
 
 
 DEFAULT_MODAL_EVAL_CONFIG = Path(__file__).resolve().parents[2] / "experiments" / "modal_eval.yaml"
 
 
-NonEmptyText = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
-PositiveInt = Annotated[int, Field(strict=True, ge=1)]
-NonNegativeInt = Annotated[int, Field(strict=True, ge=0)]
 PositiveFloat = Annotated[float, Field(strict=True, gt=0)]
 
 

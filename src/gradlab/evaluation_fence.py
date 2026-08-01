@@ -19,7 +19,10 @@ def evaluation_selection_fence(
     for checkpoint in checkpoints:
         checkpoint_id = str(checkpoint.get("checkpoint_id") or "")
         sha256 = str(checkpoint.get("sha256") or "").strip().lower()
-        if not checkpoint_id or re.fullmatch(r"[0-9a-f]{64}", sha256) is None:
+        if (
+            not checkpoint_id
+            or EVALUATION_SELECTION_FENCE_PATTERN.fullmatch(sha256) is None
+        ):
             raise ValueError("checkpoint selection contains an invalid identity")
         identities.append(
             {
