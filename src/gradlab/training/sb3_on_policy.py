@@ -220,9 +220,9 @@ def policy_type_for_config(
     del observation_space
     if not isinstance(common_config.get("policy_model"), Mapping):
         raise ValueError("SB3 on-policy training requires train_config.policy_model")
-    from gradlab.routed_policy import RoutedActorCriticPolicy
+    from gradlab.actor_critic_policy import SharedActorCriticPolicy
 
-    return RoutedActorCriticPolicy
+    return SharedActorCriticPolicy
 
 
 def validate_resumed_policy_model(model: Any, common_config: Mapping[str, Any]) -> None:

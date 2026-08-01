@@ -27,9 +27,9 @@ def find_last_conv2d(module: nn.Module) -> nn.Conv2d:
 
 
 def actor_image_feature_extractor(policy: Any) -> nn.Module:
-    routed = getattr(policy, "actor_image_feature_extractor", None)
-    if callable(routed):
-        extractor = routed()
+    custom = getattr(policy, "actor_image_feature_extractor", None)
+    if callable(custom):
+        extractor = custom()
         if isinstance(extractor, nn.Module):
             return extractor
     extractor = getattr(policy, "pi_features_extractor", None)

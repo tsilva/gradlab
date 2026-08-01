@@ -2,32 +2,17 @@ defaults:
 - ../../../recipes/_presets/atari-ppo@_global_
 - _self_
 recipe_id: ppo
-description: Single-player ViZDoom Deathmatch pixel PPO with routed combat-state context.
+description: Single-player ViZDoom Deathmatch pixel PPO with shared combat-state context.
 train:
   checkpoint_eval_backend: none
   timesteps: 100000000
-  # Route survivability and weapon state to both the action and value heads.
+  # Share survivability and weapon state through one actor-critic fusion trunk.
   policy_model:
-    schema_version: 1
-    topology:
-      kind: shared_encoder
-      encoder:
-        kind: nature_cnn
-        features_dim: 512
-    fusion: post_encoder_concat
-    context_encoders:
-      armor: {kind: identity}
-      health: {kind: identity}
-      selected_weapon: {kind: one_hot}
-      selected_weapon_ammo: {kind: identity}
-    routes:
-      armor: [action, state_value]
-      health: [action, state_value]
-      selected_weapon: [action, state_value]
-      selected_weapon_ammo: [action, state_value]
-    heads:
-      action: {hidden_sizes: [], activation: tanh}
-      state_value: {hidden_sizes: [256], activation: tanh}
+    schema_version: 2
+    encoder:
+      kind: nature_cnn
+      features_dim: 512
+    fusion: {hidden_sizes: [256], activation: tanh}
     normalize_images: true
     orthogonal_init: true
   early_stop:

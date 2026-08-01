@@ -176,9 +176,7 @@ def test_vizdoom_goal_has_complete_evaluated_ppo_contract(
     assert train_config["state"] == "default"
     assert train_config["n_envs"] == 32
     assert train_config["env_args"]["num_threads"] == 32
-    assert train_config["env_args"]["use_restricted_actions"] == expected.get(
-        "actions", "discrete"
-    )
+    assert train_config["env_args"]["use_restricted_actions"] == expected.get("actions", "discrete")
     assert train_config["task"]["id"] == "identity"
     assert expected["event"] in train_config["task"]["events"]
     assert train_config["task"]["reward"]["reward_scale"] == expected["reward_scale"]
@@ -292,19 +290,18 @@ def test_vizdoom_health_gathering_plus_is_long_horizon_and_time_unaware() -> Non
     assert train_config["game"] == "VizdoomHealthGathering-v1"
     assert train_config["env_args"]["vizdoom_config"] == {"episode_timeout": 0}
     assert train_config["task"]["termination"]["max_episode_steps"] == 5250
-    assert goal["eval"]["environment"]["env_config"]["env_args"][
-        "vizdoom_config"
-    ] == {"episode_timeout": 0}
-    assert set(train_config["task"]["model_inputs"]["context"]) == {"health"}
-    assert train_config["policy_model"]["context_encoders"] == {
-        "health": {"kind": "identity"},
+    assert goal["eval"]["environment"]["env_config"]["env_args"]["vizdoom_config"] == {
+        "episode_timeout": 0
     }
-    assert train_config["policy_model"]["routes"] == {"health": ["state_value"]}
+    assert set(train_config["task"]["model_inputs"]["context"]) == {"health"}
+    assert train_config["policy_model"]["schema_version"] == 2
+    assert train_config["policy_model"]["fusion"] == {
+        "hidden_sizes": [256],
+        "activation": "tanh",
+    }
     assert "remaining_time" not in str(train_config)
     assert goal["eval"]["environment"]["env_config"]["max_steps"] == 5250
-    assert goal["eval"]["environment"]["task"]["termination"][
-        "max_episode_steps"
-    ] == 5250
+    assert goal["eval"]["environment"]["task"]["termination"]["max_episode_steps"] == 5250
     assert goal["eval"]["acceptance"] == [
         {
             "metric": "eval/full/episode/return/shaped/mean",
@@ -312,9 +309,7 @@ def test_vizdoom_health_gathering_plus_is_long_horizon_and_time_unaware() -> Non
             "threshold": 200.0,
         }
     ]
-    assert set(goal["eval"]["environment"]["task"]["model_inputs"]["context"]) == {
-        "health"
-    }
+    assert set(goal["eval"]["environment"]["task"]["model_inputs"]["context"]) == {"health"}
 
 
 @pytest.mark.parametrize(
@@ -348,12 +343,7 @@ def test_vizdoom_health_gathering_ppo_uses_confirmed_training_defaults(
         },
     }
     if goal_id == "VizdoomHealthGathering-Plus-v1":
-        assert set(document["train_config"]["task"]["model_inputs"]["context"]) == {
-            "health"
-        }
-        assert document["train_config"]["policy_model"]["routes"] == {
-            "health": ["state_value"],
-        }
+        assert set(document["train_config"]["task"]["model_inputs"]["context"]) == {"health"}
         return
     assert document["train_config"]["task"]["model_inputs"]["context"]["remaining_time"] == {
         "signal": "episode_step",
@@ -366,13 +356,9 @@ def test_vizdoom_health_gathering_ppo_uses_confirmed_training_defaults(
             "high": 1.0,
         },
     }
-    assert document["train_config"]["policy_model"]["routes"] == {
-        "health": ["state_value"],
-        "remaining_time": ["state_value"],
-    }
-    assert document["train_config"]["policy_model"]["heads"] == {
-        "action": {"hidden_sizes": [], "activation": "tanh"},
-        "state_value": {"hidden_sizes": [256], "activation": "tanh"},
+    assert document["train_config"]["policy_model"]["fusion"] == {
+        "hidden_sizes": [256],
+        "activation": "tanh",
     }
 
 
@@ -410,9 +396,7 @@ def test_vizdoom_deathmatch_declares_complete_single_player_combat_semantics() -
             "values": [1, 2, 3, 4, 5, 6],
         },
     }
-    assert train_config["task"]["model_inputs"]["context"][
-        "selected_weapon_ammo"
-    ] == {
+    assert train_config["task"]["model_inputs"]["context"]["selected_weapon_ammo"] == {
         "signal": "selected_weapon_ammo",
         "update": "transition",
         "encoding": {
@@ -424,17 +408,12 @@ def test_vizdoom_deathmatch_declares_complete_single_player_combat_semantics() -
             "clip": True,
         },
     }
-    assert train_config["policy_model"]["context_encoders"] == {
-        "armor": {"kind": "identity"},
-        "health": {"kind": "identity"},
-        "selected_weapon": {"kind": "one_hot"},
-        "selected_weapon_ammo": {"kind": "identity"},
-    }
-    assert train_config["policy_model"]["routes"] == {
-        "armor": ["action", "state_value"],
-        "health": ["action", "state_value"],
-        "selected_weapon": ["action", "state_value"],
-        "selected_weapon_ammo": ["action", "state_value"],
+    assert train_config["policy_model"] == {
+        "schema_version": 2,
+        "encoder": {"kind": "nature_cnn", "features_dim": 512},
+        "fusion": {"hidden_sizes": [256], "activation": "tanh"},
+        "normalize_images": True,
+        "orthogonal_init": True,
     }
     assert train_config["task"]["termination"] == {
         "failure": ["player_died"],
@@ -442,8 +421,7 @@ def test_vizdoom_deathmatch_declares_complete_single_player_combat_semantics() -
         "max_episode_steps": 1050,
     }
     assert (
-        eval_environment["env_config"]["env_args"]["use_restricted_actions"]
-        == DEATHMATCH_ACTIONS
+        eval_environment["env_config"]["env_args"]["use_restricted_actions"] == DEATHMATCH_ACTIONS
     )
     assert eval_environment["task"] == train_config["task"]
 
@@ -475,12 +453,12 @@ def test_vizdoom_defend_line_plus_differs_only_by_environment_identity() -> None
     normalized_plus_goal = deepcopy(plus["goal"])
     normalized_plus_goal["goal_id"] = base["goal"]["goal_id"]
     normalized_plus_goal["tags"] = base["goal"]["tags"]
-    normalized_plus_goal["train"]["environment"]["env_config"]["game"] = (
-        base["goal"]["train"]["environment"]["env_config"]["game"]
-    )
-    normalized_plus_goal["eval"]["environment"]["env_config"]["game"] = (
-        base["goal"]["eval"]["environment"]["env_config"]["game"]
-    )
+    normalized_plus_goal["train"]["environment"]["env_config"]["game"] = base["goal"]["train"][
+        "environment"
+    ]["env_config"]["game"]
+    normalized_plus_goal["eval"]["environment"]["env_config"]["game"] = base["goal"]["eval"][
+        "environment"
+    ]["env_config"]["game"]
 
     assert normalized_plus_goal == base["goal"]
     assert plus["train_config"]["game"] == "VizdoomDefendLine-Plus-v1"
@@ -497,12 +475,12 @@ def test_vizdoom_basic_plus_differs_only_by_environment_identity() -> None:
     normalized_plus_goal = deepcopy(plus["goal"])
     normalized_plus_goal["goal_id"] = base["goal"]["goal_id"]
     normalized_plus_goal["tags"] = base["goal"]["tags"]
-    normalized_plus_goal["train"]["environment"]["env_config"]["game"] = (
-        base["goal"]["train"]["environment"]["env_config"]["game"]
-    )
-    normalized_plus_goal["eval"]["environment"]["env_config"]["game"] = (
-        base["goal"]["eval"]["environment"]["env_config"]["game"]
-    )
+    normalized_plus_goal["train"]["environment"]["env_config"]["game"] = base["goal"]["train"][
+        "environment"
+    ]["env_config"]["game"]
+    normalized_plus_goal["eval"]["environment"]["env_config"]["game"] = base["goal"]["eval"][
+        "environment"
+    ]["env_config"]["game"]
 
     assert normalized_plus_goal == base["goal"]
     assert plus["train_config"]["game"] == "VizdoomBasic-Plus-v1"

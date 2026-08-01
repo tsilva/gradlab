@@ -40,7 +40,7 @@ train:
       termination:
         # Close even a perfectly surviving training episode after the long safety horizon.
         max_episode_steps: &survival_cap 5250
-      # Preserve health as privileged critic state without exposing elapsed time.
+      # Preserve health as shared policy state without exposing elapsed time.
       model_inputs: &health_only_model_inputs
         schema_version: 1
         context:

@@ -14,7 +14,7 @@ train:
     env_config:
       # Reuse these scenario-specific provider arguments in evaluation via the YAML anchor.
       env_args: &health_gathering_supreme_env_args
-        # Collect health as a provider-owned game variable for critic context.
+        # Collect health as a provider-owned game variable for policy context.
         game_variables: [HEALTH]
         # Configure which per-step information the provider exposes to GradLab.
         info_filter:
@@ -32,7 +32,7 @@ train:
         health: health
         # Map the provider's native timeout boundary to the survival signal.
         native_timeout: provider_truncated
-      # Add critic-only state needed to predict survival returns without changing actor inputs.
+      # Add shared state that helps choose actions and predict survival returns.
       model_inputs:
         schema_version: 1
         context:
