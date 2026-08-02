@@ -57,6 +57,8 @@ EXPECTED_GOALS = {
     },
     "VizdoomDeathmatch-v1": {
         "timesteps": 100_000_000,
+        "n_envs": 128,
+        "n_steps": 32,
         "event": "monster_killed",
         "training_metric": "train/episode/return/shaped/from/target/window_100/mean",
         "acceptance_metric": "eval/full/episode/return/shaped/mean",
@@ -174,8 +176,11 @@ def test_vizdoom_goal_has_complete_evaluated_ppo_contract(
     assert train_config["env_provider"] == "vizdoom-turbo"
     assert train_config["game"] == expected.get("game", goal_id)
     assert train_config["state"] == "default"
-    assert train_config["n_envs"] == 32
-    assert train_config["env_args"]["num_threads"] == 32
+    expected_n_envs = expected.get("n_envs", 32)
+    assert train_config["n_envs"] == expected_n_envs
+    assert train_config["env_args"]["num_threads"] == expected_n_envs
+    if "n_steps" in expected:
+        assert train_config["training_backend"]["config"]["n_steps"] == expected["n_steps"]
     assert train_config["env_args"]["use_restricted_actions"] == expected.get("actions", "discrete")
     assert train_config["task"]["id"] == "identity"
     assert expected["event"] in train_config["task"]["events"]

@@ -2,7 +2,7 @@ defaults:
 - ../../../recipes/_presets/atari-ppo@_global_
 - _self_
 recipe_id: ppo
-description: Single-player ViZDoom Deathmatch pixel PPO with shared combat-state context.
+description: Single-player ViZDoom Deathmatch pixel PPO with 128-environment, 32-step rollouts and shared combat-state context.
 train:
   checkpoint_eval_backend: none
   timesteps: 100000000
@@ -24,5 +24,7 @@ train:
         action: observe
   backend:
     config:
+      # Pair 32-step rollout fragments with the goal's 128 training environments.
+      n_steps: 32
       n_epochs: 2
       learning_rate: 6.25e-5
