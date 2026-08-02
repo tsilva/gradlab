@@ -36,8 +36,8 @@ train:
       n_envs: 128
       # Reuse these Deathmatch provider arguments in evaluation via the YAML anchor.
       env_args: &deathmatch_env_args
-        # Match native worker concurrency to the training lane count.
-        num_threads: 128
+        # Use the measured Beast-3 throughput optimum for native worker concurrency.
+        num_threads: 32
         # Use a compact combat table with simultaneous movement and attack actions.
         use_restricted_actions:
         - []
