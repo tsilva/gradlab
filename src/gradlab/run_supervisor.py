@@ -113,6 +113,12 @@ from gradlab.training_lifecycle import (
 )
 from gradlab.trusted_inputs import stage_model_input
 from gradlab.wandb_publisher import WandbProjector
+from gradlab.vizdoom_assets import (
+    bind_vizdoom_iwad_to_document,
+    validate_vizdoom_iwad_binding,
+    verify_vizdoom_iwad_file,
+    vizdoom_iwad_cache_path,
+)
 
 
 METRIC_SEGMENT_SECONDS = 5.0
@@ -797,6 +803,14 @@ class RunSupervisor:
             base_config = dict(base_materialized["train_config"])
             base_config["rom_asset_manifest"] = normalized_asset
             base_materialized["train_config"] = base_config
+        iwad = self.manifest.modal.get("vizdoom_iwad_binding")
+        if isinstance(iwad, Mapping):
+            normalized_iwad = validate_vizdoom_iwad_binding(iwad)
+            cached_iwad = vizdoom_iwad_cache_path(CONTAINER_ROM_CACHE, normalized_iwad)
+            verify_vizdoom_iwad_file(cached_iwad, normalized_iwad)
+            bind_vizdoom_iwad_to_document(materialized, normalized_iwad)
+            bind_vizdoom_iwad_to_document(base_materialized, normalized_iwad)
+            config = dict(materialized["train_config"])
         materialized["train_config"] = config
         self.recipe_document = build_recipe_document(
             materialized,

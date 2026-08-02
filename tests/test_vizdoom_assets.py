@@ -9,13 +9,18 @@ from gradlab.env_identity import environment_identity_from_train_config
 from gradlab.env_providers import provider_native_vec_kwargs
 from gradlab.vizdoom_assets import (
     apply_optional_local_vizdoom_iwad,
+    bind_vizdoom_iwad_to_document,
+    install_vizdoom_iwad_file,
     portable_vizdoom_iwad_identity,
+    resolve_vizdoom_iwad_path,
     validate_vizdoom_iwad_binding,
+    vizdoom_iwad_cache_path,
     vizdoom_iwad_binding,
 )
 
 
 def _iwad(path: Path, payload: bytes = b"doom") -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(b"IWAD" + payload)
     return path
 
@@ -100,3 +105,32 @@ def test_vizdoom_native_kwargs_resolve_and_verify_iwad_binding(tmp_path: Path) -
     )
 
     assert kwargs["rom_path"] == str(path.resolve())
+
+
+def test_vizdoom_iwad_resolves_from_verified_runtime_cache(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = _iwad(tmp_path / "source" / "doom2.wad")
+    binding = {**vizdoom_iwad_binding(source), "path": "~/roms/vizdoom/doom2.wad"}
+    cache_root = tmp_path / "cache"
+
+    installed = install_vizdoom_iwad_file(source, binding, cache_root=cache_root)
+    source.unlink()
+    monkeypatch.setenv("GRADLAB_ROM_CACHE_DIR", str(cache_root))
+
+    assert installed == vizdoom_iwad_cache_path(cache_root, binding).resolve()
+    assert resolve_vizdoom_iwad_path(binding) == str(installed)
+
+
+def test_vizdoom_iwad_binding_updates_training_and_evaluation_contract(tmp_path: Path) -> None:
+    binding = vizdoom_iwad_binding(_iwad(tmp_path / "doom2.wad"))
+    document = _vizdoom_document()
+    document["train_config"]["checkpoint_eval_environment"] = {"env_args": {"rom_path": None}}
+
+    bind_vizdoom_iwad_to_document(document, binding)
+
+    assert document["train_config"]["env_args"]["rom_path"] == binding
+    assert (
+        document["train_config"]["checkpoint_eval_environment"]["env_args"]["rom_path"] == binding
+    )

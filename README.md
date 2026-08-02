@@ -120,6 +120,9 @@ repeated registered-cache use.
 Local ViZDoom training and environment preflight automatically use
 `~/roms/vizdoom/doom2.wad` when it is present and retain the provider's bundled
 game asset otherwise. GradLab verifies and records the selected IWAD's SHA-256.
+Local-fleet dstack launches can select that IWAD with `--rom-path`; the launch
+binds its digest into the recipe and requires the same bytes in the host's
+private read-only GradLab ROM cache.
 
 Reward transforms belong to the common task contract for every provider.
 `task.reward.reward_scale` is a positive divisor, followed by

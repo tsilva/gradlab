@@ -12,11 +12,13 @@ import pytest
 from gradlab.dstack_backend import DstackTask
 from gradlab.experiment_cli import (
     _bind_launch_contract,
+    _bind_vizdoom_iwad_for_launch,
     _catalog_rebuild_contract_failures,
     _compute,
     _follow_fingerprint,
     _latest_attempt_terminal,
     _manifest_rom_asset,
+    _manifest_vizdoom_iwad,
     _manifest_dstack_project,
     _operator_preflight,
     _poll_status,
@@ -1126,3 +1128,44 @@ def test_repair_runtime_accepts_rom_free_manifest() -> None:
 
     with pytest.raises(ValueError, match="object or null"):
         _manifest_rom_asset({"rom_asset_manifest": "invalid"})
+
+
+def test_local_vizdoom_iwad_contract_is_hash_bound_and_mounts_cache(tmp_path: Path) -> None:
+    iwad = tmp_path / "doom2.wad"
+    iwad.write_bytes(b"IWADdoom")
+    binding = _bind_vizdoom_iwad_for_launch(
+        env_provider="vizdoom-turbo",
+        rom_path=iwad,
+    )
+    assert binding is not None
+    goal = Path("experiments/goals/VizdoomDefendLine-v1/_goal.yaml")
+    resolved = compose_resolved_train_documents(
+        goal,
+        goal.parent / "recipes/ppo.yaml",
+        source_sha="a" * 40,
+    )
+
+    contract = _bind_launch_contract(
+        resolved.effective,
+        asset=None,
+        vizdoom_iwad=binding,
+        checkpoint_eval_backend="none",
+    )
+
+    config = contract["train_config"]
+    assert config["env_args"]["rom_path"] == binding
+    assert config["checkpoint_eval_environment"]["env_args"]["rom_path"] == binding
+    assert _manifest_vizdoom_iwad({"vizdoom_iwad_binding": binding}) == binding
+
+    manifest = _manifest_only_run()
+    manifest = replace(
+        manifest,
+        modal={
+            **manifest.modal,
+            "rom_asset_manifest": None,
+            "vizdoom_iwad_binding": binding,
+        },
+    )
+    manifest.validate()
+    task = _task_request(manifest, manifest_uri="s3://control/run/manifest.json")
+    assert task.rom_mount == "/var/lib/gradlab/rom-cache:/rom-cache"
