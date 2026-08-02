@@ -492,6 +492,53 @@ def test_local_train_rejects_rom_for_rom_free_provider_before_creating_run(
     assert not (tmp_path / "must-not-exist").exists()
 
 
+def test_local_vizdoom_train_auto_binds_and_records_available_iwad(tmp_path: Path) -> None:
+    iwad = tmp_path / "doom2.wad"
+    iwad.write_bytes(b"IWADdoom")
+
+    def fake_learner(argv: list[str], *, runtime_rom_binding=None) -> int:
+        assert runtime_rom_binding is None
+        config_path = Path(argv[argv.index("--train-config-json") + 1])
+        config = json.loads(config_path.read_text(encoding="utf-8"))
+        binding = config["env_args"]["rom_path"]
+        assert binding["filename"] == "doom2.wad"
+        assert binding["path"] == "~/roms/vizdoom/doom2.wad"
+        run_dir = Path(config["runs_dir"]) / config["run_name"]
+        (run_dir / "final_model.zip").write_bytes(b"model")
+        _write_training_result(run_dir)
+        return 0
+
+    with (
+        mock.patch("gradlab.vizdoom_assets.DEFAULT_LOCAL_VIZDOOM_IWAD", iwad),
+        mock.patch(
+            "gradlab.vizdoom_assets._display_path",
+            return_value="~/roms/vizdoom/doom2.wad",
+        ),
+        mock.patch("gradlab.train.main", side_effect=fake_learner),
+    ):
+        assert (
+            main(
+                [
+                    "VizdoomBasic-v1/ppo",
+                    "--runs-dir",
+                    str(tmp_path / "runs"),
+                    "--run-name",
+                    "vizdoom-direct",
+                    "--no-tui",
+                ]
+            )
+            == 0
+        )
+
+    recipe = json.loads(
+        (tmp_path / "runs" / "vizdoom-direct" / "recipe.json").read_text(encoding="utf-8")
+    )
+    recorded_asset = recipe["recipe"]["environment"]["provider_args"]["rom_asset"]
+    assert recorded_asset["filename"] == "doom2.wad"
+    assert len(recorded_asset["sha256"]) == 64
+    assert "path" not in recorded_asset
+
+
 def test_local_mario_direct_rom_failure_precedes_run_creation(tmp_path: Path) -> None:
     rom = tmp_path / "wrong.nes"
     rom.write_bytes(b"rom")

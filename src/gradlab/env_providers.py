@@ -431,6 +431,9 @@ def _vizdoom_native_vec_kwargs(
     runtime_rom_path: str | None,
 ) -> dict[str, Any]:
     del runtime_rom_path
+    from gradlab.vizdoom_assets import resolve_vizdoom_iwad_path
+
+    native_kwargs["rom_path"] = resolve_vizdoom_iwad_path(native_kwargs.get("rom_path"))
     return _turbo_native_vec_kwargs(
         config,
         native_kwargs,

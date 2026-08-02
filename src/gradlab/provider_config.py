@@ -62,8 +62,14 @@ def provider_num_envs(
 
 
 def semantic_provider_args(config: Any) -> dict[str, Any]:
-    return {
+    result = {
         key: value
         for key, value in provider_env_args(config).items()
         if key not in NON_SEMANTIC_ENV_ARG_KEYS and key not in PROVIDER_REWARD_TRANSFORM_KEYS
     }
+    rom_path = provider_env_args(config).get("rom_path")
+    if isinstance(rom_path, Mapping):
+        from gradlab.vizdoom_assets import portable_vizdoom_iwad_identity
+
+        result["rom_asset"] = portable_vizdoom_iwad_identity(rom_path)
+    return result

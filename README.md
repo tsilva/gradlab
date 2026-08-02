@@ -117,6 +117,10 @@ also need time to download GradLab, Torch, and the environment wheels. The
 existing `gradlab rom sync` workflow remains available for queued staging and
 repeated registered-cache use.
 
+Local ViZDoom training and environment preflight automatically use
+`~/roms/vizdoom/doom2.wad` when it is present and retain the provider's bundled
+game asset otherwise. GradLab verifies and records the selected IWAD's SHA-256.
+
 Reward transforms belong to the common task contract for every provider.
 `task.reward.reward_scale` is a positive divisor, followed by
 `task.reward.reward_clip`, which is `false`, `true` for `[-1, 1]`, or an

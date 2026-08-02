@@ -11,6 +11,7 @@ import sys
 import threading
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
+from typing import Any
 from urllib.parse import unquote, urlparse
 
 from gradlab.cli_parser import ExactArgumentParser
@@ -44,6 +45,7 @@ from gradlab.training_lifecycle import (
     TrainingExecutionMode,
     TrainingExecutionPolicy,
 )
+from gradlab.vizdoom_assets import apply_optional_local_vizdoom_iwad
 
 
 LOCAL_ROM_CACHE_ENV = "GRADLAB_ROM_CACHE_DIR"
@@ -262,14 +264,19 @@ def main(argv: list[str] | None = None) -> int:
         overrides.append("logging.wandb_mode=disabled")
 
     source_commit = repo_git_commit(source.repository_root) or _installed_source_commit()
+
+    def prepare_local_document(value: dict[str, Any]) -> None:
+        prepare_checkpoint_eval_mode(
+            value,
+            checkpoint_eval_backend="none",
+        )
+        apply_optional_local_vizdoom_iwad(value)
+
     resolved_documents = compose_resolved_train_documents(
         source.goal_path,
         source.recipe_path,
         recipe_overrides=overrides,
-        prepare_materialized=lambda value: prepare_checkpoint_eval_mode(
-            value,
-            checkpoint_eval_backend="none",
-        ),
+        prepare_materialized=prepare_local_document,
         source_sha=source_commit or "",
     )
     document = resolved_documents.effective

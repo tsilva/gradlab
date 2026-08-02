@@ -338,12 +338,14 @@ def _check_report(args: argparse.Namespace) -> dict[str, Any]:
         from gradlab.provider_config import provider_num_envs
         from gradlab.recipe_documents import compose_train_document
         from gradlab.training.sb3_vec_env import GradLabVecEnv
+        from gradlab.vizdoom_assets import apply_optional_local_vizdoom_iwad
 
         document = compose_train_document(
             args.goal_file,
             args.recipe_file,
             recipe_overrides=args.recipe_overrides,
         )
+        apply_optional_local_vizdoom_iwad(document)
         train_config = document["train_config"]
         provider = resolve_env_provider(str(train_config["env_provider"]))
         config = env_config_from_mapping(train_config)
