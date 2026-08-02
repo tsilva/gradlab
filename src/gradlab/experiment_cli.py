@@ -78,6 +78,11 @@ from gradlab.wandb_utils import (
     wandb_entity_from_env,
 )
 from gradlab.wandb_publisher import WandbProjector, publish_terminal_summary
+from gradlab.vizdoom_assets import (
+    bind_vizdoom_iwad_to_document,
+    validate_vizdoom_iwad_binding,
+    vizdoom_iwad_binding,
+)
 
 
 DEFAULT_MAX_DURATION_SECONDS = 48 * 60 * 60
@@ -344,6 +349,16 @@ def _stage_rom(
     return manifest
 
 
+def _bind_vizdoom_iwad_for_launch(
+    *,
+    env_provider: str,
+    rom_path: Path | None,
+) -> dict[str, Any] | None:
+    if env_provider != "vizdoom-turbo":
+        return None
+    return vizdoom_iwad_binding(rom_path) if rom_path is not None else None
+
+
 def _compute(args: argparse.Namespace) -> ComputeRequest:
     target = (
         resolve_local_fleet(args.target)
@@ -426,7 +441,11 @@ def _task_request(manifest: RunManifest, *, manifest_uri: str) -> TaskRequest:
         ),
         rom_mount=(
             DEFAULT_ROM_MOUNT
-            if local and isinstance(manifest.modal.get("rom_asset_manifest"), dict)
+            if local
+            and (
+                isinstance(manifest.modal.get("rom_asset_manifest"), dict)
+                or isinstance(manifest.modal.get("vizdoom_iwad_binding"), dict)
+            )
             else None
         ),
     )
@@ -478,6 +497,7 @@ def _bind_launch_contract(
     document: dict[str, Any],
     *,
     asset: dict[str, Any] | None,
+    vizdoom_iwad: dict[str, Any] | None = None,
     checkpoint_eval_backend: str,
 ) -> dict[str, Any]:
     contract_document = dict(document)
@@ -488,6 +508,8 @@ def _bind_launch_contract(
         contract_config["rom_asset_manifest"] = asset
     contract_config["checkpoint_eval_backend"] = checkpoint_eval_backend
     contract_document["train_config"] = contract_config
+    if vizdoom_iwad is not None:
+        bind_vizdoom_iwad_to_document(contract_document, vizdoom_iwad)
     return contract_document
 
 
@@ -498,6 +520,15 @@ def _manifest_rom_asset(modal: Mapping[str, Any]) -> dict[str, Any] | None:
     if not isinstance(asset, Mapping):
         raise ValueError("manifest modal ROM asset must be an object or null")
     return dict(asset)
+
+
+def _manifest_vizdoom_iwad(modal: Mapping[str, Any]) -> dict[str, Any] | None:
+    binding = modal.get("vizdoom_iwad_binding")
+    if binding is None:
+        return None
+    if not isinstance(binding, Mapping):
+        raise ValueError("manifest modal ViZDoom IWAD binding must be an object or null")
+    return validate_vizdoom_iwad_binding(binding)
 
 
 def cmd_launch(args: argparse.Namespace) -> int:
@@ -535,12 +566,28 @@ def cmd_launch(args: argparse.Namespace) -> int:
     if release.source_sha != source_sha:
         raise RuntimeError("runtime release source does not match committed HEAD")
     config = dict(document["train_config"])
-    asset = _stage_rom(
-        authority,
-        env_provider=str(config["env_provider"]),
-        game=str(config["game"]),
+    env_provider = str(config["env_provider"])
+    vizdoom_iwad = _bind_vizdoom_iwad_for_launch(
+        env_provider=env_provider,
         rom_path=args.rom_path,
     )
+    asset = (
+        None
+        if vizdoom_iwad is not None
+        else _stage_rom(
+            authority,
+            env_provider=env_provider,
+            game=str(config["game"]),
+            rom_path=args.rom_path,
+        )
+    )
+    if vizdoom_iwad is not None:
+        if selected_compute.kind != "local":
+            raise ValueError("ViZDoom IWAD launches currently require local compute")
+        if checkpoint_eval_backend != "none":
+            raise ValueError(
+                "ViZDoom IWAD launches currently require checkpoint_eval_backend=none"
+            )
     run_id = new_run_id()
     attempt_id = new_attempt_id()
     dstack_task = _task_name(run_id, attempt_id, initial=True)
@@ -567,11 +614,13 @@ def cmd_launch(args: argparse.Namespace) -> int:
     contract_document = _bind_launch_contract(
         document,
         asset=asset,
+        vizdoom_iwad=vizdoom_iwad,
         checkpoint_eval_backend=checkpoint_eval_backend,
     )
     base_contract_document = _bind_launch_contract(
         resolved_documents.base,
         asset=asset,
+        vizdoom_iwad=vizdoom_iwad,
         checkpoint_eval_backend=checkpoint_eval_backend,
     )
     portable_recipe = build_recipe_document(
@@ -642,6 +691,7 @@ def cmd_launch(args: argparse.Namespace) -> int:
             "function_name": modal_config.deployment.function_name,
             "deployment_source_sha": source_sha,
             "rom_asset_manifest": asset,
+            "vizdoom_iwad_binding": vizdoom_iwad,
         },
         storage=storage.manifest_locations(),
         goal_variant=goal_variant,
@@ -1453,14 +1503,17 @@ def cmd_retry(args: argparse.Namespace) -> int:
             dict(document["goal_variant"]) if manifest.goal_variant is not None else None
         )
         asset = _manifest_rom_asset(manifest.modal)
+        vizdoom_iwad = _manifest_vizdoom_iwad(manifest.modal)
         contract_document = _bind_launch_contract(
             document,
             asset=asset,
+            vizdoom_iwad=vizdoom_iwad,
             checkpoint_eval_backend=checkpoint_eval_backend,
         )
         base_contract_document = _bind_launch_contract(
             repaired_documents.base,
             asset=asset,
+            vizdoom_iwad=vizdoom_iwad,
             checkpoint_eval_backend=checkpoint_eval_backend,
         )
         portable_recipe = build_recipe_document(
@@ -1664,7 +1717,11 @@ def build_parser() -> argparse.ArgumentParser:
         type=_parse_duration,
         default=DEFAULT_MAX_DURATION_SECONDS,
     )
-    launch.add_argument("--rom-path", type=Path)
+    launch.add_argument(
+        "--rom-path",
+        type=Path,
+        help="Use a verified external ROM or local-fleet ViZDoom IWAD for this run.",
+    )
     launch.add_argument("--runtime-image-ref-file", type=Path)
     launch.add_argument("--image-workflow", default=DEFAULT_IMAGE_WORKFLOW)
     launch.add_argument("--image-artifact", default=DEFAULT_IMAGE_ARTIFACT)

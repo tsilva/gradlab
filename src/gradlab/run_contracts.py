@@ -268,6 +268,17 @@ class RunManifest(_CurrentContract):
         rom_asset = self.modal.get("rom_asset_manifest")
         if rom_asset is not None and not isinstance(rom_asset, Mapping):
             raise ValueError("modal.rom_asset_manifest must be a mapping or null")
+        vizdoom_iwad = self.modal.get("vizdoom_iwad_binding")
+        if vizdoom_iwad is not None:
+            if not isinstance(vizdoom_iwad, Mapping):
+                raise ValueError("modal.vizdoom_iwad_binding must be a mapping or null")
+            from gradlab.vizdoom_assets import validate_vizdoom_iwad_binding
+
+            validate_vizdoom_iwad_binding(vizdoom_iwad)
+            if rom_asset is not None:
+                raise ValueError(
+                    "run manifest cannot combine ROM and ViZDoom IWAD asset bindings"
+                )
         locations = [
             _require_text(self.storage.get(name), f"storage.{name}")
             for name in ("control", "evaluation", "models")

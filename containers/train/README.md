@@ -48,11 +48,11 @@ digest. dstack submission refuses a dirty or unpublished source revision.
 
 ## Runtime mounts and secrets
 
-A Mario task mounts the content-addressed host ROM cache read-only at
-`/rom-cache`. The ROM bytes must match both the committed SHA-256 and the
-provider identity in the run manifest. Future ephemeral hosts may instead fetch
-the encrypted private asset during task setup, verify it, and remove it with
-task storage.
+An asset-backed Mario or ViZDoom task mounts the content-addressed host ROM
+cache read-only at `/rom-cache`. The ROM or IWAD bytes must match the committed
+identity in the run manifest. Future ephemeral hosts may instead fetch the
+encrypted private asset during task setup, verify it, and remove it with task
+storage.
 
 The task receives scoped credentials at runtime:
 
