@@ -31,15 +31,15 @@ train:
         # Detect death when the provider's death flag is asserted for a step.
         player_died: {signal: player_dead, operation: equals_for, value: 1, steps: 1}
         # Detect reaching the survival goal after remaining alive for the full task horizon.
-        goal_reached: {signal: player_dead, operation: equals_for, value: 0, steps: 512}
+        goal_reached: {signal: player_dead, operation: equals_for, value: 0, steps: 1024}
       # Define which task events end an episode and how each outcome is classified.
       termination:
         # List the events that mark an episode as failed.
         failure: [player_died]
         # List the events that mark an episode as successful.
         success: [goal_reached]
-        # Cap each attempt in policy-environment transitions.
-        max_episode_steps: 512
+        # Preserve the 2,048-tic task horizon at two-frame skipping.
+        max_episode_steps: 1024
       # Configure the reward presented to the policy after the inherited native reward is computed.
       reward:
         # Set the positive divisor applied to native rewards before clipping.

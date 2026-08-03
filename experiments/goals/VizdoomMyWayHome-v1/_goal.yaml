@@ -48,8 +48,8 @@ eval:
   environment:
     # Supply evaluation-time arguments for the native vectorized ViZDoom environment.
     env_config:
-      # Bound evaluation at the scenario's 2,100-tic native horizon after four-frame skipping.
-      max_steps: 525
+      # Bound evaluation at the scenario's 2,100-tic native horizon after two-frame skipping.
+      max_steps: 1050
       # Reuse the navigation-specific provider arguments declared for training.
       env_args: *my_way_home_env_args
     # Merge the same navigation-specific task overrides into the shared evaluation defaults.

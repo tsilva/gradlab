@@ -144,7 +144,7 @@ train:
     # Define and anchor policy-facing observation and action preprocessing.
     preprocessing: &vizdoom_preprocessing
       # Repeat each selected policy action for this many native frames.
-      frame_skip: 4
+      frame_skip: 2
       # Control temporal max pooling across skipped frames.
       max_pool_frames: false
       # Set the probability of repeating the previous action instead of the selected action.

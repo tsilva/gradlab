@@ -112,7 +112,7 @@ EXPECTED_GOALS = {
         "acceptance_metric": "eval/full/episode/return/shaped/mean",
         "acceptance_threshold": 200.0,
         "reward_scale": 100.0,
-        "max_episode_steps": 5250,
+        "max_episode_steps": 10500,
     },
     "VizdoomHealthGatheringSupreme-v1": {
         "timesteps": 20_000_000,
@@ -148,7 +148,7 @@ EXPECTED_GOALS = {
         "acceptance_metric": "eval/full/outcome/success/across_starts/rate/min",
         "acceptance_threshold": 0.95,
         "reward_scale": 100.0,
-        "max_episode_steps": 512,
+        "max_episode_steps": 1024,
     },
 }
 
@@ -177,6 +177,9 @@ def test_vizdoom_goal_has_complete_evaluated_ppo_contract(
     assert train_config["env_provider"] == "vizdoom-turbo"
     assert train_config["game"] == expected.get("game", goal_id)
     assert train_config["state"] == "default"
+    assert train_config["frame_skip"] == 2
+    assert train_environment["preprocessing"]["frame_skip"] == 2
+    assert eval_environment["preprocessing"]["frame_skip"] == 2
     expected_n_envs = expected.get("n_envs", 32)
     assert train_config["n_envs"] == expected_n_envs
     assert train_config["env_args"]["num_threads"] == expected.get(
@@ -244,15 +247,19 @@ def test_vizdoom_defend_line_uses_a_native_tic_horizon(goal_id: str) -> None:
 @pytest.mark.parametrize(
     ("goal_id", "expected_max_steps"),
     [
-        ("VizdoomBasic-v1", 75),
-        ("VizdoomBasic-Plus-v1", 75),
+        ("VizdoomBasic-v1", 150),
+        ("VizdoomBasic-Plus-v1", 150),
+        ("VizdoomDeadlyCorridor-v1", 1050),
         ("VizdoomDeathmatch-v1", 1050),
         ("VizdoomDefendLine-v1", 2100),
         ("VizdoomDefendLine-Plus-v1", 2100),
-        ("VizdoomDefendCenter-v1", 525),
-        ("VizdoomHealthGathering-v1", 525),
-        ("VizdoomHealthGathering-Plus-v1", 5250),
-        ("VizdoomHealthGatheringSupreme-v1", 525),
+        ("VizdoomDefendCenter-v1", 1050),
+        ("VizdoomHealthGathering-v1", 1050),
+        ("VizdoomHealthGathering-Plus-v1", 10500),
+        ("VizdoomHealthGatheringSupreme-v1", 1050),
+        ("VizdoomMyWayHome-v1", 1050),
+        ("VizdoomPredictPosition-v1", 150),
+        ("VizdoomTakeCover-v1", 1024),
     ],
 )
 def test_sequential_vizdoom_goals_materialize_finite_checkpoint_eval_bounds(
@@ -315,7 +322,7 @@ def test_vizdoom_health_gathering_plus_is_long_horizon_and_time_unaware() -> Non
     goal = document["goal"]
     assert train_config["game"] == "VizdoomHealthGathering-v1"
     assert train_config["env_args"]["vizdoom_config"] == {"episode_timeout": 0}
-    assert train_config["task"]["termination"]["max_episode_steps"] == 5250
+    assert train_config["task"]["termination"]["max_episode_steps"] == 10500
     assert goal["eval"]["environment"]["env_config"]["env_args"]["vizdoom_config"] == {
         "episode_timeout": 0
     }
@@ -326,8 +333,8 @@ def test_vizdoom_health_gathering_plus_is_long_horizon_and_time_unaware() -> Non
         "activation": "tanh",
     }
     assert "remaining_time" not in str(train_config)
-    assert goal["eval"]["environment"]["env_config"]["max_steps"] == 5250
-    assert goal["eval"]["environment"]["task"]["termination"]["max_episode_steps"] == 5250
+    assert goal["eval"]["environment"]["env_config"]["max_steps"] == 10500
+    assert goal["eval"]["environment"]["task"]["termination"]["max_episode_steps"] == 10500
     assert goal["eval"]["acceptance"] == [
         {
             "metric": "eval/full/episode/return/shaped/mean",
@@ -376,7 +383,7 @@ def test_vizdoom_health_gathering_ppo_uses_confirmed_training_defaults(
         "update": "transition",
         "encoding": {
             "kind": "continuous",
-            "scale": -1.0 / 525.0,
+            "scale": -1.0 / 1050.0,
             "offset": 1.0,
             "low": 0.0,
             "high": 1.0,
