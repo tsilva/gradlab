@@ -38,8 +38,8 @@ train:
           episode_timeout: 0
     task:
       termination:
-        # Close even a perfectly surviving training episode after the long safety horizon.
-        max_episode_steps: &survival_cap 5250
+        # Preserve the 21,000-tic long safety horizon at two-frame skipping.
+        max_episode_steps: &survival_cap 10500
       # Preserve health as shared policy state without exposing elapsed time.
       model_inputs: &health_only_model_inputs
         schema_version: 1
