@@ -115,8 +115,12 @@ does not read, project, or preserve noncurrent W&B or R2 schemas.
   recipes.
   That evidence is not checkpoint evaluation and cannot establish checkpoint promotion, goal
   acceptance, or release evidence.
-- Failure reasons may overlap, so reason counts and rates need not sum to the terminal count.
-  Successful episodes contribute to success metrics, not the failure-reason families.
+- Failure-reason metrics treat each reason as a per-episode presence flag, not an occurrence count
+  or necessarily the event that ended the episode. For each reason, the window rate is the number
+  of unsuccessful episodes containing that reason divided by all completed episodes in the latest
+  up-to-100-episode window. Multiple reasons may belong to one episode, so reason counts and rates
+  need not sum to the terminal count or one; successful episodes contribute zero to every
+  failure-reason numerator while remaining in the window denominator.
 - Positive PPO policy entropy, dominant-action rate, and the action histogram diagnose discrete
   policy collapse. Value prediction and advantage histograms are sampled every 64 rollouts.
 - Actor-critic explained variance is `1 - Var(value_target - value_prediction) /
@@ -159,6 +163,11 @@ does not read, project, or preserve noncurrent W&B or R2 schemas.
   raw reward appears only when it differs from shaped reward. Mario's `progress` component includes
   both its base new-progress reward and any configured additional new-progress reward above
   `progress_reward_boost_start_x`.
+- Under the current `VizdoomDefendCenter-v1` identity-reward contract, every spawned target has one
+  health point, its death adds `+1`, the player starts with 52 pistol rounds, and the scenario has no
+  ammo replenishment. A normal episode return is therefore `player kills - 1` when the player dies
+  and `player kills` when it reaches the native time limit; 52 is the perfect-accuracy ammunition
+  ceiling, not a score guaranteed by possessing the ammunition.
 - Episode-return means are neither a best-episode metric nor the score of a currently visible lane:
   they reduce the latest 100 completed episodes across all applicable vector lanes. W&B chart
   smoothing, when enabled, is applied on top of that already-rolling value. Under the root Breakout
@@ -249,7 +258,7 @@ unevaluated for future explicit user action. dstack process exit alone is never 
 | `train/episode/length/across_origins/rolling_up_to_100/mean` | Rolling mean length over up to the latest 100 completed training episodes across target and archive origins. | steps | rollout | history |
 | `train/episode/completed/count` | Cumulative completed episode records. | episodes | rollout | history |
 | `train/outcome/failure/reason/{reason}/episode/count` | Cumulative failed episodes containing a reason. | episodes | rollout | history |
-| `train/outcome/failure/reason/{reason}/window_100/rate` | Failure-reason incidence over the latest 100 completed episodes. | fraction | rollout | history |
+| `train/outcome/failure/reason/{reason}/window_100/rate` | Unsuccessful completed episodes containing the reason divided by all completed episodes in the latest up-to-100-episode window; presence is boolean per episode, successful episodes remain in the denominator, and the reason need not be the terminal cause. | fraction | rollout | history |
 | `train/outcome/success/from/{start}/episode/count` | Cumulative successful genuine target-origin episodes from a start; archive-origin episodes are excluded. | episodes | rollout | history |
 | `train/outcome/success/from/{start}/attempt/count` | Cumulative genuine target-origin episode attempts from a start; archive-origin episodes are excluded. | episodes | rollout | history |
 | `train/outcome/success/from/{start}/window_100/rate` | Success rate over the latest 100 genuine target-origin attempts from a start. | fraction | rollout | history |
