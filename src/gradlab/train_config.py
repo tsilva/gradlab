@@ -63,11 +63,7 @@ class TrainConfigField:
 
 
 def _field(dest: str, *, flag: str | None = None, **metadata: Any) -> TrainConfigField:
-    cli_flag = (
-        flag or f"--{dest.replace('_', '-')}"
-        if metadata.get("environment")
-        else None
-    )
+    cli_flag = flag or f"--{dest.replace('_', '-')}" if metadata.get("environment") else None
     return TrainConfigField(dest, flag=cli_flag, **metadata)
 
 
@@ -130,7 +126,7 @@ def _add_config_field_argument(
 def add_env_config_args(
     parser: argparse.ArgumentParser,
     *,
-    max_steps_default: int,
+    watchdog_steps_default: int,
     defaults: EnvConfig | None = None,
     parse_json_value: Callable[[str], Any],
     parse_obs_crop: Callable[[Any], Any],
@@ -147,7 +143,12 @@ def add_env_config_args(
             parse_obs_crop=parse_obs_crop,
             dest=dest,
         )
-    parser.add_argument("--max-steps", type=int, default=max_steps_default)
+    parser.add_argument(
+        "--watchdog-steps",
+        type=int,
+        default=watchdog_steps_default,
+        help="Abort an episode if its scientific boundary fails to produce a record.",
+    )
 
 
 def load_materialized_train_config(path: Path) -> dict[str, Any]:
@@ -159,6 +160,7 @@ def load_materialized_train_config(path: Path) -> dict[str, Any]:
         payload,
         label=f"train config file {path}",
         required_keys=("training_backend",),
+        enforce_early_stop_policy=True,
     )
     return {**defaults, **normalized}
 
@@ -366,12 +368,14 @@ def validate_and_normalize_train_config(
     label: str = "train_config",
     required_keys: Sequence[str] = (),
     validate_backend_config: bool = True,
+    enforce_early_stop_policy: bool = False,
 ) -> dict[str, Any]:
     """Validate one flat train config and normalize its structured rule fields."""
 
     from gradlab.early_stop import (
         normalize_metric_early_stop_config,
         normalize_metric_threshold_rules,
+        validate_metric_early_stop_policy,
     )
     from gradlab.state_archive import normalize_state_archive_config
 
@@ -383,7 +387,12 @@ def validate_and_normalize_train_config(
             label=f"{label}.obs_resize",
         )
     if normalized.get("early_stop") is not None:
-        normalized["early_stop"] = normalize_metric_early_stop_config(
+        early_stop_validator = (
+            validate_metric_early_stop_policy
+            if enforce_early_stop_policy
+            else normalize_metric_early_stop_config
+        )
+        normalized["early_stop"] = early_stop_validator(
             normalized["early_stop"], label=f"{label}.early_stop"
         )
     if normalized.get("checkpoint_eval_acceptance") is not None:
@@ -693,7 +702,7 @@ TRAIN_CONFIG_FIELDS: tuple[TrainConfigField, ...] = (
         validation_min=EVAL_SEED_START,
     ),
     _field(
-        "post_train_eval_max_steps",
+        "checkpoint_eval_watchdog_steps",
         type_name="int",
         default=0,
         owner="goal_objective",

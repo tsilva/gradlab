@@ -26,6 +26,7 @@ from gradlab.env_identity import (
     validate_task_config,
 )
 from gradlab.experiment_contracts import validate_goal_contract_document
+from gradlab.env_registry import evaluation_watchdog_steps
 from gradlab.file_utils import file_sha256
 from gradlab.goal_schema import goal_evaluation_mode
 from gradlab.json_utils import canonical_json_sha256
@@ -83,11 +84,12 @@ _POLICY_ENVIRONMENT_PREFIXES = {
 }
 _PHASE_EXECUTION_ENV_PATHS = frozenset(
     {
-        "env_config.max_steps",
         "env_config.n_envs",
         "env_config.seed",
     }
 )
+
+
 def goal_contract_sha256(document: Mapping[str, Any]) -> str:
     """Hash the fully composed semantic goal contract, excluding source formatting."""
 
@@ -267,19 +269,7 @@ def _eval_train_defaults(document: Mapping[str, Any]) -> dict[str, Any]:
     eval_config = _train_environment_section_config(environment)
     if "n_envs" in eval_config:
         defaults["checkpoint_eval_n_envs"] = eval_config.pop("n_envs")
-    if "max_steps" in eval_config:
-        max_steps = eval_config.pop("max_steps")
-    else:
-        task = eval_config.get("task")
-        termination = task.get("termination") if isinstance(task, Mapping) else None
-        max_steps = (
-            termination.get("max_episode_steps") if isinstance(termination, Mapping) else None
-        )
-    if not isinstance(max_steps, int) or isinstance(max_steps, bool) or max_steps <= 0:
-        raise ValueError(
-            "goal eval environment must materialize a positive max_steps boundary"
-        )
-    defaults["post_train_eval_max_steps"] = max_steps
+    defaults["checkpoint_eval_watchdog_steps"] = evaluation_watchdog_steps(eval_config)
     defaults["checkpoint_eval_environment"] = eval_config
     return defaults
 

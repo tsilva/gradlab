@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -35,6 +36,24 @@ class ProviderConstructorContract:
                 f"provider required values are not explicit env args: {sorted(unknown_required)}"
             )
         object.__setattr__(self, "required_values", MappingProxyType(dict(self.required_values)))
+
+
+@dataclass(frozen=True)
+class NativeEpisodeHorizonContract:
+    """Describe a provider-owned episode horizon in its resolved environment config."""
+
+    env_args_path: tuple[str, ...]
+    unit: str
+    action_repeat_key: str = "frame_skip"
+    truncation_env_arg: str | None = None
+
+    def __post_init__(self) -> None:
+        if not self.env_args_path or any(not str(part).strip() for part in self.env_args_path):
+            raise ValueError("native episode horizon path must not be empty")
+        if not self.unit.strip():
+            raise ValueError("native episode horizon unit must not be empty")
+        if not self.action_repeat_key.strip():
+            raise ValueError("native episode horizon action repeat key must not be empty")
 
 
 @dataclass(frozen=True)
@@ -185,6 +204,7 @@ class EnvProvider:
     allows_unregistered_env_ids: bool = False
     constructor_contract: ProviderConstructorContract | None = None
     turbo_api_version: int | None = None
+    native_episode_horizon: NativeEpisodeHorizonContract | None = None
 
     def __post_init__(self) -> None:
         if self.external_rom_asset_strategy not in EXTERNAL_ROM_ASSET_STRATEGIES:
@@ -217,6 +237,17 @@ class ResolvedEnvId:
     provider_id: str
     provider_env_id: str
     import_name: str
+
+
+@dataclass(frozen=True)
+class ResolvedNativeEpisodeHorizon:
+    value: int
+    unit: str
+    action_repeat: int
+
+    @property
+    def watchdog_steps(self) -> int:
+        return math.ceil(self.value / self.action_repeat)
 
 
 _TURBO_CANONICAL_ARGS = frozenset(
@@ -319,6 +350,11 @@ VIZDOOM_TURBO_PROVIDER = EnvProvider(
     },
     allows_unregistered_env_ids=True,
     turbo_api_version=1,
+    native_episode_horizon=NativeEpisodeHorizonContract(
+        env_args_path=("vizdoom_config", "episode_timeout"),
+        unit="tics",
+        truncation_env_arg="treat_episode_timeout_as_truncation",
+    ),
     constructor_contract=ProviderConstructorContract(
         canonical_args=_TURBO_CANONICAL_ARGS,
         explicit_env_args=_TURBO_EXPLICIT_ENV_ARGS
@@ -451,9 +487,7 @@ def _canonical_environment_identity(
         raise ValueError(f"unknown environment provider: {provider}")
     registration = provider_spec.environments.get(environment)
     if registration is None and not provider_spec.allows_unregistered_env_ids:
-        raise ValueError(
-            f"environment {environment!r} is not registered for provider {provider!r}"
-        )
+        raise ValueError(f"environment {environment!r} is not registered for provider {provider!r}")
     identity = ENVIRONMENT_SPECS[registration.spec_id] if registration is not None else None
     return environment, identity
 
@@ -536,6 +570,72 @@ def resolve_env_provider(provider_id: str) -> EnvProvider:
         known = ", ".join(sorted(ENV_PROVIDERS))
         raise ValueError(f"unknown environment provider {provider_id!r}; known providers: {known}")
     return provider
+
+
+def resolve_native_episode_horizon(
+    environment: Mapping[str, Any],
+) -> ResolvedNativeEpisodeHorizon | None:
+    """Resolve one provider-native horizon from a flattened environment config."""
+
+    provider_id = str(environment.get("env_provider") or "").strip()
+    provider = resolve_env_provider(provider_id)
+    contract = provider.native_episode_horizon
+    if contract is None:
+        return None
+    env_args = environment.get("env_args")
+    if not isinstance(env_args, Mapping):
+        raise ValueError("native episode horizon requires materialized env_args")
+    value: Any = env_args
+    for part in contract.env_args_path:
+        if not isinstance(value, Mapping) or part not in value:
+            return None
+        value = value[part]
+    if not isinstance(value, int) or isinstance(value, bool):
+        path = ".".join(("env_args", *contract.env_args_path))
+        raise ValueError(f"{path} must be an integer")
+    if value < 0:
+        path = ".".join(("env_args", *contract.env_args_path))
+        raise ValueError(f"{path} must be non-negative")
+    if value == 0:
+        return None
+    if (
+        contract.truncation_env_arg is not None
+        and env_args.get(contract.truncation_env_arg) is not True
+    ):
+        raise ValueError(
+            f"env_args.{contract.truncation_env_arg} must be true when a native "
+            "episode horizon is configured"
+        )
+    action_repeat = environment.get(contract.action_repeat_key)
+    if not isinstance(action_repeat, int) or isinstance(action_repeat, bool) or action_repeat < 1:
+        raise ValueError(f"{contract.action_repeat_key} must be a positive integer")
+    return ResolvedNativeEpisodeHorizon(
+        value=int(value),
+        unit=contract.unit,
+        action_repeat=int(action_repeat),
+    )
+
+
+def evaluation_watchdog_steps(environment: Mapping[str, Any]) -> int:
+    """Derive an operational evaluation watchdog from scientific episode boundaries."""
+
+    candidates: list[int] = []
+    native = resolve_native_episode_horizon(environment)
+    if native is not None:
+        candidates.append(native.watchdog_steps)
+    task = environment.get("task")
+    termination = task.get("termination") if isinstance(task, Mapping) else None
+    task_limit = termination.get("max_episode_steps") if isinstance(termination, Mapping) else None
+    if task_limit is not None:
+        if not isinstance(task_limit, int) or isinstance(task_limit, bool) or task_limit < 0:
+            raise ValueError("task.termination.max_episode_steps must be non-negative")
+        if task_limit > 0:
+            candidates.append(int(task_limit))
+    if not candidates:
+        raise ValueError(
+            "evaluated environment must materialize a positive native or task episode boundary"
+        )
+    return min(candidates)
 
 
 def validate_provider_constructor_args(

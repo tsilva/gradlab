@@ -143,7 +143,7 @@ class SupervisorRuntime:
         finally:
             projector.close(
                 timeout_seconds=timeout_seconds,
-                exit_code=0 if receipt.state == "succeeded" else 1,
+                exit_code=0 if receipt.state in {"succeeded", "stopped"} else 1,
             )
 
     def remote_summary(self, run_path: str) -> dict[str, Any]:

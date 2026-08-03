@@ -71,7 +71,7 @@ def level1_1_recipe_document(*, seed: int = 7) -> dict:
     )
 
 
-def test_recipe_v2_embeds_verified_goal_and_recipe_bases() -> None:
+def test_recipe_v3_embeds_verified_goal_and_recipe_bases() -> None:
     resolved = compose_resolved_train_documents(
         BANDIT_GOAL,
         BANDIT_RECIPE,
@@ -82,21 +82,16 @@ def test_recipe_v2_embeds_verified_goal_and_recipe_bases() -> None:
         resolved.effective,
         repo_root=Path.cwd(),
         source_commit="a" * 40,
-        run_description="Bandit recipe v2 proof",
+        run_description="Bandit recipe v3 proof",
         seed=7,
         runtime_packages=("gradlab==0.1.0",),
         base_materialized_recipe=resolved.base,
         canonical_goal=resolved.canonical_goal,
     )
 
-    assert document["format_version"] == 2
-    assert document["recipe"]["train_config"]["metrics_schema_version"] == 14
-    assert (
-        document["resolution"]["recipe"]["base"]["train_config"][
-            "metrics_schema_version"
-        ]
-        == 14
-    )
+    assert document["format_version"] == 3
+    assert document["recipe"]["train_config"]["metrics_schema_version"] == 15
+    assert document["resolution"]["recipe"]["base"]["train_config"]["metrics_schema_version"] == 15
     assert document["resolution"]["goal"]["base"] == resolved.canonical_goal
     assert document["resolution"]["recipe"]["variant_id"].startswith("v-")
     assert (
@@ -127,9 +122,20 @@ def test_portable_recipe_reader_preserves_source_bound_retired_backend_options()
         backend_config["value_net_arch"] = ""
 
     document["resolution"]["recipe"]["base_sha256"] = canonical_json_sha256(base_recipe)
-    document["resolution"]["recipe"]["effective_sha256"] = canonical_json_sha256(
-        document["recipe"]
-    )
+    document["resolution"]["recipe"]["effective_sha256"] = canonical_json_sha256(document["recipe"])
+
+    assert validate_recipe_document(document) == document
+
+
+def test_portable_recipe_reader_preserves_historical_failure_plateau() -> None:
+    document = level1_1_recipe_document()
+    base_recipe = document["resolution"]["recipe"]["base"]
+
+    for recipe in (document["recipe"], base_recipe):
+        recipe["train_config"]["early_stop"]["conditions"]["return_plateau"]["outcome"] = "failure"
+
+    document["resolution"]["recipe"]["base_sha256"] = canonical_json_sha256(base_recipe)
+    document["resolution"]["recipe"]["effective_sha256"] = canonical_json_sha256(document["recipe"])
 
     assert validate_recipe_document(document) == document
 
@@ -478,9 +484,7 @@ def test_recipe_materializes_the_backend_config_executed_by_the_learner() -> Non
     )
 
     recipe_train_config = document["recipe"]["train_config"]
-    executed_train_config = validate_and_normalize_train_config(
-        resolved.effective["train_config"]
-    )
+    executed_train_config = validate_and_normalize_train_config(resolved.effective["train_config"])
 
     assert training_backend_config(recipe_train_config) == training_backend_config(
         executed_train_config
@@ -620,7 +624,7 @@ def test_future_recipe_version_fails_with_source_and_supported_versions(tmp_path
     message = str(error.value)
     assert str(path) in message
     assert "999" in message
-    assert "[2]" in message
+    assert "[3]" in message
     assert "Regenerate the artifact" in message
 
 

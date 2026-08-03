@@ -33,13 +33,14 @@ train:
       # Plus is a goal variant of the original Health Gathering environment.
       game: VizdoomHealthGathering-v1
       env_args:
-        # Keep provider timing out of the task contract; GradLab owns the safety cap.
+        # Interrupt indefinitely surviving policies after a long provider-native horizon.
         vizdoom_config:
-          episode_timeout: 0
+          episode_timeout: 21000
     task:
-      termination:
-        # Close even a perfectly surviving training episode after the long safety horizon.
-        max_episode_steps: &survival_cap 5250
+      termination: &health_plus_termination
+        # This continuing-task safety horizon is not itself scientific success.
+        success: []
+        timeout: [time_limit_reached]
       # Preserve health as shared policy state without exposing elapsed time.
       model_inputs: &health_only_model_inputs
         schema_version: 1
@@ -62,15 +63,11 @@ eval:
     threshold: 200.0
   environment:
     env_config:
-      # Evaluate the same indefinite scenario with a 10x external safety cap.
-      max_steps: *survival_cap
       game: VizdoomHealthGathering-v1
       env_args:
         vizdoom_config:
-          episode_timeout: 0
+          episode_timeout: 21000
     task:
-      termination:
-        # Match the training episode boundary exactly.
-        max_episode_steps: *survival_cap
+      termination: *health_plus_termination
       # Evaluation must use the same time-unaware policy observation contract.
       model_inputs: *health_only_model_inputs

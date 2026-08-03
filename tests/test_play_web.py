@@ -1640,6 +1640,7 @@ def test_web_dashboard_assets_are_packaged_beside_server() -> None:
         root / "vendor" / "gridstack" / "gridstack-all.js",
         root / "vendor" / "gridstack" / "gridstack.min.css",
         root / "sources" / "browser.js",
+        root / "documents" / "diff.js",
         root / "documents" / "viewer.js",
         root / "documents" / "syntax.js",
         panel_root / "catalog.js",
@@ -1662,6 +1663,7 @@ def test_web_dashboard_assets_are_packaged_beside_server() -> None:
     script = (root / "app.js").read_text(encoding="utf-8")
     source_browser = (root / "sources" / "browser.js").read_text(encoding="utf-8")
     contract_viewer = (root / "documents" / "viewer.js").read_text(encoding="utf-8")
+    contract_diff = (root / "documents" / "diff.js").read_text(encoding="utf-8")
     contract_syntax = (root / "documents" / "syntax.js").read_text(encoding="utf-8")
     catalog = (panel_root / "catalog.js").read_text(encoding="utf-8")
     controls = (panel_root / "controls.js").read_text(encoding="utf-8")
@@ -1701,7 +1703,7 @@ def test_web_dashboard_assets_are_packaged_beside_server() -> None:
     assert 'module: "./telemetry-panel.js"' in catalog
     assert '"policy/value"' in catalog
     assert '"reward/shaped"' in catalog
-    assert '"action/executed"' in catalog
+    assert 'title: "Action history"' not in catalog
     assert '"namespace-explorer"' in catalog
     assert 'data-driver-option="human"' not in controls
     assert 'data-driver-option="policy"' not in controls
@@ -1709,7 +1711,7 @@ def test_web_dashboard_assets_are_packaged_beside_server() -> None:
     assert 'data-command="set-fps"' not in controls
     assert 'fps.addEventListener("input"' in controls
     assert 'services.command("set_fps", { fps: Number(fps.value) })' in controls
-    assert "WORKSPACE_VERSION = 5" in workspace
+    assert "WORKSPACE_VERSION = 6" in workspace
     assert "createTelemetryInstance" in workspace
     assert "value.version !== WORKSPACE_VERSION" in workspace
     assert "compareWorkspaceRevisions" in workspace
@@ -1721,6 +1723,7 @@ def test_web_dashboard_assets_are_packaged_beside_server() -> None:
     assert "makeLineBlock" in telemetry_panel
     assert "makeHistogramBlock" in telemetry_panel
     assert "makeDistributionBlock" in telemetry_panel
+    assert "actionComparisonPresentation" in telemetry_panel
     assert "makeNamespaceBlock" in telemetry_panel
     assert '"action/policy"' in telemetry
     assert '"action/executed"' in telemetry
@@ -1731,8 +1734,8 @@ def test_web_dashboard_assets_are_packaged_beside_server() -> None:
     assert 'type: "inspection_frames"' in script
     assert "sequence < (state.receivedFrameSequence" not in script
 
-    assert '"gradlab.player.workspace.v5.paired"' in script
-    assert '"gradlab.player.workspace.v5.single"' in script
+    assert '"gradlab.player.workspace.v6.paired"' in script
+    assert '"gradlab.player.workspace.v6.single"' in script
     assert "createTelemetryPanel" in script
     assert "updateTelemetryPanel" in script
     assert "snapshot.history_point" in script
@@ -1750,6 +1753,13 @@ def test_web_dashboard_assets_are_packaged_beside_server() -> None:
     assert ".panel-editor" in styles
     assert ".syntax-key" in styles
     assert "contractSyntaxTokens(value, this.view)" in contract_viewer
+    assert "buildSideBySideRows" in contract_viewer
+    assert "sideBySideSearchCounts" in contract_viewer
+    assert "export function buildSideBySideRows" in contract_diff
+    assert 'id="contract-diff-base-scroll"' in markup
+    assert 'id="contract-diff-resolved-scroll"' in markup
+    assert ".contract-diff-content" in styles
+    assert ".contract-diff-inline" in styles
     assert "export function contractSyntaxTokens(value, view)" in contract_syntax
     assert "export function contractSearchRanges(value, query)" in contract_syntax
 

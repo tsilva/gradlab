@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 
-METRICS_SCHEMA_VERSION = 14
+METRICS_SCHEMA_VERSION = 15
 TRAIN_GLOBAL_STEP = "train/global_step"
 EVAL_CHECKPOINT_STEP = "eval/checkpoint/step"
 ORCHESTRATION_EVENT_SEQ = "orchestration/event_seq"
@@ -209,6 +209,7 @@ LEADER_CHECKPOINT_ARTIFACT_REF = "leader/checkpoint/artifact/ref"
 LEADER_CHECKPOINT_EVALUATION_SOURCE = "leader/checkpoint/evaluation/source"
 LEADER_CHECKPOINT_UPDATED_AT = "leader/checkpoint/updated_at"
 
+
 @dataclass(frozen=True)
 class MetricDefinition:
     name: str
@@ -269,9 +270,7 @@ def evaluation_metric_schema(version: object) -> EvaluationMetricSchema:
 
 
 def leader_checkpoint_progress_metric(progress: object) -> str:
-    return validate_metric_name(
-        f"leader/checkpoint/progress/{metric_path_segment(progress)}/max"
-    )
+    return validate_metric_name(f"leader/checkpoint/progress/{metric_path_segment(progress)}/max")
 
 
 def leader_metric_for_rank_metric(

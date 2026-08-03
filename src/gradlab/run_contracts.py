@@ -507,7 +507,7 @@ class EarlyStopReceipt(_CurrentContract):
     attempt_id: str
     condition_id: str
     matched_condition_ids: Sequence[str]
-    outcome: Literal["success", "failure"]
+    outcome: Literal["success", "failure", "neutral"]
     trigger: Literal["threshold", "no_improvement"]
     metric: str
     metric_step: int
@@ -535,7 +535,7 @@ class EarlyStopReceipt(_CurrentContract):
             raise ValueError(
                 "matched_condition_ids must be sorted, unique, and contain condition_id"
             )
-        if self.outcome not in {"success", "failure"}:
+        if self.outcome not in {"success", "failure", "neutral"}:
             raise ValueError(f"invalid early-stop outcome: {self.outcome}")
         if self.trigger not in {"threshold", "no_improvement"}:
             raise ValueError(f"invalid early-stop trigger: {self.trigger}")
@@ -568,7 +568,14 @@ class EarlyStopReceipt(_CurrentContract):
 class TerminalReceipt(_CurrentContract):
     run_id: str
     attempt_id: str
-    state: Literal["succeeded", "failed", "canceled", "interrupted", "resumable_failure"]
+    state: Literal[
+        "succeeded",
+        "failed",
+        "stopped",
+        "canceled",
+        "interrupted",
+        "resumable_failure",
+    ]
     acceptance_required: bool
     stop_reason: str
     final_step: int
@@ -592,6 +599,7 @@ class TerminalReceipt(_CurrentContract):
         if self.state not in {
             "succeeded",
             "failed",
+            "stopped",
             "canceled",
             "interrupted",
             "resumable_failure",
@@ -610,8 +618,60 @@ class TerminalReceipt(_CurrentContract):
             status = str(row.get("status") or "")
             if status not in EVAL_INVENTORY_SETTLED_STATUSES:
                 raise ValueError(f"eval inventory contains unsettled status: {status}")
-        if self.early_stop is not None:
+        early_stop = (
             EarlyStopReceipt.from_dict(self.early_stop)
+            if self.early_stop is not None
+            else None
+        )
+        if self.state == "stopped":
+            if early_stop is None or early_stop.outcome != "neutral":
+                raise ValueError("stopped terminal requires a neutral early-stop receipt")
+            if early_stop.run_id != self.run_id:
+                raise ValueError("stopped terminal early-stop run_id mismatch")
+            if early_stop.trigger != "no_improvement":
+                raise ValueError("stopped terminal requires a no_improvement early-stop receipt")
+            condition = dict(early_stop.condition)
+            if (
+                str(condition.get("outcome") or "") != "neutral"
+                or str(condition.get("trigger") or "") != "no_improvement"
+                or str(condition.get("action") or "") != "stop"
+            ):
+                raise ValueError("stopped terminal early-stop condition is not a neutral stop")
+            expected_reason = f"early_stop_neutral:{early_stop.condition_id}"
+            if self.stop_reason != expected_reason:
+                raise ValueError("stopped terminal stop_reason does not match early-stop receipt")
+            drain = self.drain
+            if not isinstance(drain, Mapping) or drain.get("complete") is not True:
+                raise ValueError("stopped terminal requires a complete drain")
+            if int(self.wandb_high_water_mark) <= 0:
+                raise ValueError("stopped terminal requires W&B metric delivery")
+            if int(drain.get("metric_segment_high_water") or 0) != int(
+                self.wandb_high_water_mark
+            ):
+                raise ValueError("stopped terminal R2 and W&B high-water marks do not match")
+            if int(drain.get("wandb_remote_high_water_mark") or 0) < int(
+                self.wandb_high_water_mark
+            ):
+                raise ValueError("stopped terminal W&B delivery is not remotely visible")
+            if self.acceptance_required:
+                checkpoint_ids = [
+                    str(row.get("checkpoint_id") or "")
+                    for row in self.checkpoint_inventory
+                    if isinstance(row, Mapping)
+                ]
+                eval_rows = [dict(row) for row in self.eval_inventory]
+                eval_checkpoint_ids = [str(row.get("checkpoint_id") or "") for row in eval_rows]
+                if (
+                    not checkpoint_ids
+                    or "" in checkpoint_ids
+                    or len(checkpoint_ids) != len(set(checkpoint_ids))
+                    or eval_checkpoint_ids != list(dict.fromkeys(eval_checkpoint_ids))
+                    or set(eval_checkpoint_ids) != set(checkpoint_ids)
+                    or any(str(row.get("status") or "") != "rejected" for row in eval_rows)
+                ):
+                    raise ValueError(
+                        "evaluated stopped terminal requires one valid rejection per checkpoint"
+                    )
         if self.state_archive is not None:
             if not isinstance(self.state_archive, Mapping):
                 raise ValueError("state_archive terminal evidence must be an object")
@@ -641,11 +701,11 @@ class TerminalReceipt(_CurrentContract):
                 raise ValueError("state_archive terminal evidence must contain files")
             if int(archive.get("size_bytes", 0)) < 1:
                 raise ValueError("state_archive terminal evidence must contain bytes")
-            if self.state == "succeeded":
+            if self.state in {"succeeded", "stopped"}:
                 if archive.get("status") != "closed":
-                    raise ValueError("successful terminal state_archive must be closed")
+                    raise ValueError("completed terminal state_archive must be closed")
                 if int(archive["step"]) != int(self.final_step):
-                    raise ValueError("successful terminal state_archive step must match final_step")
+                    raise ValueError("completed terminal state_archive step must match final_step")
         _require_text(self.completed_at, "completed_at")
 
     def to_dict(self) -> dict[str, Any]:

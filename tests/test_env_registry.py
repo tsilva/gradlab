@@ -8,8 +8,10 @@ from gradlab.env_identity import environment_identity_from_train_config
 from gradlab.env_registry import (
     environment_spec,
     env_supports_states,
+    evaluation_watchdog_steps,
     registered_env_ids,
     resolve_env_id,
+    resolve_native_episode_horizon,
     resolve_env_provider,
 )
 
@@ -138,6 +140,53 @@ def test_resolves_vizdoom_turbo_augmented_environment() -> None:
     assert contract is not None
     assert "enemy_variants" in contract.optional_env_args
     assert "surface_variants" in contract.optional_env_args
+
+
+def test_resolves_vizdoom_native_horizon_in_tics_and_derives_watchdog() -> None:
+    environment = {
+        "env_provider": "vizdoom-turbo",
+        "frame_skip": 8,
+        "env_args": {
+            "treat_episode_timeout_as_truncation": True,
+            "vizdoom_config": {"episode_timeout": 300},
+        },
+        "task": {"termination": {}},
+    }
+
+    horizon = resolve_native_episode_horizon(environment)
+
+    assert horizon is not None
+    assert (horizon.value, horizon.unit, horizon.action_repeat) == (300, "tics", 8)
+    assert horizon.watchdog_steps == 38
+    assert evaluation_watchdog_steps(environment) == 38
+
+
+def test_native_horizon_requires_provider_timeout_to_be_a_truncation() -> None:
+    environment = {
+        "env_provider": "vizdoom-turbo",
+        "frame_skip": 2,
+        "env_args": {
+            "treat_episode_timeout_as_truncation": False,
+            "vizdoom_config": {"episode_timeout": 300},
+        },
+    }
+
+    with pytest.raises(ValueError, match="must be true"):
+        resolve_native_episode_horizon(environment)
+
+
+def test_evaluation_watchdog_uses_the_earliest_scientific_boundary() -> None:
+    environment = {
+        "env_provider": "vizdoom-turbo",
+        "frame_skip": 2,
+        "env_args": {
+            "treat_episode_timeout_as_truncation": True,
+            "vizdoom_config": {"episode_timeout": 300},
+        },
+        "task": {"termination": {"max_episode_steps": 100}},
+    }
+
+    assert evaluation_watchdog_steps(environment) == 100
 
 
 def test_resolves_registered_ale_py_env_id() -> None:

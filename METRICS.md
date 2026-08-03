@@ -1,4 +1,4 @@
-# Metrics schema v14
+# Metrics schema v15
 
 This file is the source of truth for gradlab telemetry. The Python registry loads the table below
 and requires every emitted metric to match an exact registry entry or a bounded template.
@@ -16,7 +16,7 @@ and requires every emitted metric to match an exact registry entry or a bounded 
 - Public model R2 contains immutable checkpoint closures and a mutable no-cache run index. Private
   eval R2 contains intents, results, and episode evidence. Private control R2 contains leases,
   journals, promotions, and terminal receipts.
-- W&B config contains run-defining dimensions: `metrics_schema_version: 14`, `training_backend_id`,
+- W&B config contains run-defining dimensions: `metrics_schema_version: 15`, `training_backend_id`,
   `training_backend_config_hash`, `algorithm_id`, goal,
   environment, starts, seed, frame skip, environment count, hyperparameters, eval protocol, and
   runtime versions.
@@ -121,6 +121,9 @@ does not read, project, or preserve noncurrent W&B or R2 schemas.
   up-to-100-episode window. Multiple reasons may belong to one episode, so reason counts and rates
   need not sum to the terminal count or one; successful episodes contribute zero to every
   failure-reason numerator while remaining in the window denominator.
+- ViZDoom's `time_limit_reached` reason is the classified provider-native tic horizon, independent
+  of policy frame skip. An unclassified provider truncation uses the fallback reason `timeout`.
+  An evaluation watchdog expiry is an execution error and emits no episode or outcome metrics.
 - Positive PPO policy entropy, dominant-action rate, and the action histogram diagnose discrete
   policy collapse. Value prediction and advantage histograms are sampled every 64 rollouts.
 - Actor-critic explained variance is `1 - Var(value_target - value_prediction) /
@@ -183,8 +186,11 @@ does not read, project, or preserve noncurrent W&B or R2 schemas.
   condition, not that the task is impossible or that a checkpoint is accepted. Private control-R2
   receipts, never W&B diagnostics, are authoritative for an active early-stop outcome. For an
   evaluated run, the receipt is provisional until already-submitted evaluations settle: acceptance
-  overrides the plateau, complete valid rejections establish scientific non-acceptance, and
-  incomplete evaluation evidence remains resumable.
+  overrides the plateau, complete valid rejections establish a neutral stopped attempt, and
+  incomplete evaluation evidence remains resumable. New plateau receipts use `outcome: neutral`,
+  terminal state `stopped`, and `early_stop_neutral:<condition_id>`; historical immutable
+  `failed`/`early_stop_failure:<condition_id>` plateau receipts retain the same neutral diagnostic
+  interpretation without being rewritten. Threshold-based failure conditions remain failures.
 
 ## Full-evaluation table
 

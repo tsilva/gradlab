@@ -246,7 +246,10 @@ class ConfigValidationTests(unittest.TestCase):
         )
         self.assertEqual(
             train_config["task"]["termination"],
-            {"success": ["goal_reached"]},
+            {
+                "success": ["goal_reached"],
+                "timeout": ["time_limit_reached"],
+            },
         )
         expected_reward = {
             "reward_mode": "native",
@@ -364,7 +367,7 @@ class ConfigValidationTests(unittest.TestCase):
         )
         self.assertEqual(
             train_config["early_stop"]["conditions"]["return_plateau"]["outcome"],
-            "failure",
+            "neutral",
         )
         self.assertNotIn("checkpoint_eval_stages", train_config)
 
@@ -463,7 +466,7 @@ class ConfigValidationTests(unittest.TestCase):
                 document = compose_train_document(goal_path, recipe_path)
                 conditions = document["train_config"]["early_stop"]["conditions"]
                 self.assertIn("return_plateau", conditions)
-                self.assertEqual(conditions["return_plateau"]["outcome"], "failure")
+                self.assertEqual(conditions["return_plateau"]["outcome"], "neutral")
                 self.assertEqual(conditions["return_plateau"]["action"], "stop")
                 if recipe_path.name == "ppo-train-clear-100.yaml":
                     self.assertIn("clear_100", conditions)
@@ -502,7 +505,7 @@ class ConfigValidationTests(unittest.TestCase):
                 self.assertEqual(plateau["delta_mode"], "absolute")
                 self.assertEqual(plateau["start_after_steps"], calibration_steps)
                 self.assertEqual(plateau["patience_steps"], calibration_steps)
-                self.assertEqual(plateau["outcome"], "failure")
+                self.assertEqual(plateau["outcome"], "neutral")
                 expected_action = (
                     "observe" if goal_path.parent.name == "VizdoomDeathmatch-v1" else "stop"
                 )
@@ -845,6 +848,22 @@ class ConfigValidationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "must be an object"):
             validate_goal_contract_document(document, path, Path(".").resolve())
 
+    def test_goal_validator_rejects_new_failure_plateau_authoring(self) -> None:
+        path = self.MARIO_L11_GOAL.resolve()
+        document = load_goal_contract(path)
+        document["train"]["early_stop"]["conditions"]["return_plateau"]["outcome"] = "failure"
+
+        with self.assertRaisesRegex(ValueError, "must be neutral for no_improvement"):
+            validate_goal_contract_document(document, path, Path(".").resolve())
+
+    def test_launch_override_cannot_restore_failure_plateau_policy(self) -> None:
+        with self.assertRaisesRegex(ValueError, "must be neutral for no_improvement"):
+            compose_train_document(
+                self.MARIO_L11_GOAL,
+                self.MARIO_SINGLE_RECIPES / "ppo.yaml",
+                recipe_overrides=("train.early_stop.conditions.return_plateau.outcome=failure",),
+            )
+
     def test_goal_validator_rejects_rank_forms_the_runtime_cannot_parse(self) -> None:
         with self.assertRaisesRegex(ValueError, "max\\(metric\\) or min\\(metric\\)"):
             experiment_contracts._validate_rank_order(
@@ -1027,9 +1046,7 @@ class ConfigValidationTests(unittest.TestCase):
         )
         self.assertEqual(document["eval"]["episodes"], 100)
         self.assertTrue(
-            {"max_episodes", "seed", "max_steps"}.isdisjoint(
-                document["eval"]["environment"]["env_config"]
-            )
+            {"max_episodes", "seed"}.isdisjoint(document["eval"]["environment"]["env_config"])
         )
         self.assertEqual(
             document["eval"]["environment"]["task"]["termination"]["success"],

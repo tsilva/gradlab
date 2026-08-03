@@ -26,7 +26,7 @@ from gradlab.validation import is_secret_like_key
 
 
 RECIPE_DOCUMENT_TYPE = "gradlab.recipe"
-RECIPE_FORMAT_VERSION = 2
+RECIPE_FORMAT_VERSION = 3
 MODEL_DOCUMENT_TYPE = "gradlab.model"
 MODEL_FORMAT_VERSION = 2
 
@@ -49,12 +49,13 @@ STATE_ARCHIVE_SUMMARY_FIELDS = frozenset(
     }
 )
 
+
 class _EvaluationDocument(BoundaryModel):
     environment: dict[str, Any]
     action_sampling: Any = None
     episodes: Any = None
     n_envs: Any = None
-    max_steps: Any = None
+    watchdog_steps: Any = None
     seed: Any = None
     seed_protocol: Any = None
     protocol_version: Any = None
@@ -144,7 +145,7 @@ class _RecipeResolutionDocument(BoundaryModel):
     recipe: _RecipeResolutionBaseDocument
 
 
-class _RecipeDocumentV2(BoundaryModel):
+class _RecipeDocumentV3(BoundaryModel):
     document_type: Literal[RECIPE_DOCUMENT_TYPE]
     format_version: Literal[RECIPE_FORMAT_VERSION]
     recipe: _RecipeValueDocument
@@ -489,9 +490,7 @@ def _validate_recipe_contract(
         raise PolicyDocumentError(str(exc)) from exc
     if recipe.get("goal_variant") is None:
         raise PolicyDocumentError(f"{source}.recipe.goal_variant is required")
-    training_only = (
-        goal_evaluation_mode(goal, label=f"{source}.recipe.goal") == "training_only"
-    )
+    training_only = goal_evaluation_mode(goal, label=f"{source}.recipe.goal") == "training_only"
     if training_only and evaluation is not None:
         raise PolicyDocumentError(f"{source}.recipe training-only contract cannot define eval")
     if not training_only and evaluation is None:
@@ -685,7 +684,7 @@ def _validate_recipe(
     source: str,
 ) -> dict[str, Any]:
     validate_boundary(
-        _RecipeDocumentV2,
+        _RecipeDocumentV3,
         document,
         label=source,
         error_type=PolicyDocumentError,
@@ -848,6 +847,7 @@ def _validate_state_archive_summary(value: object, *, label: str) -> None:
     if curriculum is not None and not isinstance(curriculum, Mapping):
         raise PolicyDocumentError(f"{label}.curriculum must be an object")
 
+
 def _validate_cell_graph_provenance(value: object, *, label: str) -> None:
     graph = _required_mapping(value, label=label)
     _reject_unknown(
@@ -860,9 +860,7 @@ def _validate_cell_graph_provenance(value: object, *, label: str) -> None:
         label=f"{label}.detector_sha256",
     )
     if graph.get("snapshot_mode") not in {"none", "retained"}:
-        raise PolicyDocumentError(
-            f"{label}.snapshot_mode must be 'none' or 'retained'"
-        )
+        raise PolicyDocumentError(f"{label}.snapshot_mode must be 'none' or 'retained'")
     summary = _required_mapping(graph.get("summary"), label=f"{label}.summary")
     expected_summary = frozenset(
         {
@@ -882,9 +880,7 @@ def _validate_cell_graph_provenance(value: object, *, label: str) -> None:
     for key in expected_summary:
         item = summary[key]
         if not isinstance(item, int) or isinstance(item, bool) or item < 0:
-            raise PolicyDocumentError(
-                f"{label}.summary.{key} must be a non-negative integer"
-            )
+            raise PolicyDocumentError(f"{label}.summary.{key} must be a non-negative integer")
 
 
 def _validate_model(

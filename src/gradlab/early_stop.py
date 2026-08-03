@@ -32,7 +32,7 @@ METRIC_EARLY_STOP_COMMON_KEYS = frozenset(
 METRIC_EARLY_STOP_THRESHOLD_KEYS = frozenset({"operator", "progress_baseline", "threshold"})
 METRIC_EARLY_STOP_NO_IMPROVEMENT_KEYS = frozenset({"delta_mode", "direction", "min_delta"})
 METRIC_EARLY_STOP_TRIGGERS = frozenset({"no_improvement", "threshold"})
-METRIC_EARLY_STOP_OUTCOMES = frozenset({"failure", "success"})
+METRIC_EARLY_STOP_OUTCOMES = frozenset({"failure", "neutral", "success"})
 METRIC_EARLY_STOP_ACTIONS = frozenset({"observe", "stop"})
 METRIC_EARLY_STOP_DIRECTIONS = frozenset({"maximize", "minimize"})
 METRIC_EARLY_STOP_DELTA_MODES = frozenset({"absolute", "relative"})
@@ -55,6 +55,10 @@ METRIC_EARLY_STOP_DECISION_KEYS = frozenset(
         "value",
     }
 )
+
+
+def _outcome_precedence(outcome: object) -> int:
+    return {"success": 0, "failure": 1, "neutral": 2}.get(str(outcome), 3)
 
 
 def _require_non_empty_string(document: Mapping[str, Any], key: str, *, label: str) -> str:
@@ -314,6 +318,30 @@ def normalize_metric_early_stop_config(
     return {"conditions": normalized}
 
 
+def validate_metric_early_stop_policy(
+    value: Any,
+    *,
+    label: str = "early_stop",
+) -> dict[str, Any]:
+    """Enforce the current authoring and launch policy over a structural config."""
+
+    normalized = normalize_metric_early_stop_config(value, label=label)
+    for condition_id, condition in normalized["conditions"].items():
+        condition_label = f"{label}.conditions.{condition_id}"
+        trigger = str(condition["trigger"])
+        outcome = str(condition["outcome"])
+        if trigger == "no_improvement" and outcome != "neutral":
+            raise ValueError(
+                f"{condition_label}.outcome must be neutral for no_improvement conditions"
+            )
+        if trigger == "threshold" and outcome not in {"success", "failure"}:
+            raise ValueError(
+                f"{condition_label}.outcome must be one of failure, success "
+                "for threshold conditions"
+            )
+    return normalized
+
+
 def validate_metric_early_stop_decision(
     value: Any,
     config: Any,
@@ -361,12 +389,14 @@ def validate_metric_early_stop_decision(
     expected_selected = sorted(
         matched,
         key=lambda item: (
-            0 if str(conditions[item]["outcome"]) == "success" else 1,
+            _outcome_precedence(conditions[item]["outcome"]),
             item,
         ),
     )[0]
     if condition_id != expected_selected:
-        raise ValueError(f"{label}.condition_id does not follow success-first precedence")
+        raise ValueError(
+            f"{label}.condition_id does not follow success > failure > neutral precedence"
+        )
 
     for key in ("outcome", "trigger", "metric"):
         if str(decision[key]) != str(condition[key]):
@@ -666,7 +696,7 @@ class MetricEarlyStopStateMachine:
         ]
         stop_matches.sort(
             key=lambda condition_id: (
-                0 if str(self.conditions[condition_id]["outcome"]) == "success" else 1,
+                _outcome_precedence(self.conditions[condition_id]["outcome"]),
                 condition_id,
             )
         )

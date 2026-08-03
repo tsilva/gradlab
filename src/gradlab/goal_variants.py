@@ -213,6 +213,8 @@ def _display_path(value: object) -> str:
         if path.startswith(prefix):
             path = replacement + path[len(prefix) :]
             break
+    if path == "env_args.vizdoom_config.episode_timeout":
+        return "native episode horizon (tics)"
     return path.replace("_", " ")
 
 

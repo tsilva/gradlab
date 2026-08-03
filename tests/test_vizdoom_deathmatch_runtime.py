@@ -1,7 +1,9 @@
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
 
+from gradlab.batch_runtime import EpisodeRecord
 from gradlab.env import make_training_vec_env, resolve_env_config
 from gradlab.env_config import env_config_from_mapping
 from gradlab.recipe_documents import compose_train_document
@@ -97,7 +99,6 @@ def test_deathmatch_recipe_runs_through_the_real_single_player_vector_runtime() 
             "ammo5",
             "ammo6",
             "player_dead",
-            "pending_reset",
         } <= set(env.reset_infos[0])
 
         next_observations, rewards, dones, infos = env.step(np.asarray([0, 9], dtype=np.int64))
@@ -157,5 +158,40 @@ def test_deathmatch_recipe_runs_through_the_real_single_player_vector_runtime() 
             "speed_move_forward",
             "attack_move_forward",
         ]
+    finally:
+        env.close()
+
+
+def test_deathmatch_native_horizon_emits_the_shared_timeout_event() -> None:
+    document = compose_train_document(
+        GOAL_ROOT / "_goal.yaml",
+        GOAL_ROOT / "recipes/ppo.yaml",
+    )
+    config = resolve_env_config(env_config_from_mapping(document["train_config"]))
+    env_args = {
+        **config.env_args,
+        "vizdoom_config": {
+            **config.env_args["vizdoom_config"],
+            "episode_timeout": 4,
+        },
+    }
+    config = replace(config, env_args=env_args)
+    env = make_training_vec_env(config, n_envs=1, seed=1701)
+
+    try:
+        env.reset()
+        records = []
+        for _ in range(2):
+            _observations, _rewards, _dones, _infos = env.step(np.asarray([0], dtype=np.int64))
+            records.extend(
+                record for record in env.drain_records() if isinstance(record, EpisodeRecord)
+            )
+
+        assert len(records) == 1
+        assert records[0].episode_length == 2
+        assert records[0].events == ("time_limit_reached",)
+        assert records[0].outcome.name == "TIMEOUT"
+        assert records[0].truncated is True
+        assert records[0].terminated is False
     finally:
         env.close()

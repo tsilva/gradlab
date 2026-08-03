@@ -128,9 +128,7 @@ def _prepare_vizdoom_iwad(
 ) -> dict[str, Any] | None:
     contract_environment = contract.get("environment")
     contract_env_args = (
-        contract_environment.get("env_args")
-        if isinstance(contract_environment, Mapping)
-        else None
+        contract_environment.get("env_args") if isinstance(contract_environment, Mapping) else None
     )
     contract_iwad = (
         contract_env_args.get("rom_path") if isinstance(contract_env_args, Mapping) else None
@@ -139,9 +137,7 @@ def _prepare_vizdoom_iwad(
     if contract_iwad is None and payload_iwad is None:
         return None
     if not isinstance(contract_iwad, Mapping) or not isinstance(payload_iwad, Mapping):
-        raise ValueError(
-            "ViZDoom evaluation requires matching contract and payload IWAD bindings"
-        )
+        raise ValueError("ViZDoom evaluation requires matching contract and payload IWAD bindings")
     contract_binding = validate_vizdoom_iwad_binding(contract_iwad)
     normalized_iwad = validate_vizdoom_iwad_binding(payload_iwad)
     if contract_binding != normalized_iwad:
@@ -149,7 +145,7 @@ def _prepare_vizdoom_iwad(
     cached_iwad = vizdoom_iwad_cache_path(cache_root, normalized_iwad)
     try:
         verify_vizdoom_iwad_file(cached_iwad, normalized_iwad)
-    except (FileNotFoundError, ValueError):
+    except FileNotFoundError, ValueError:
         downloaded_iwad = write_downloaded_file(
             str(payload["vizdoom_iwad_get_url"]),
             root / "downloaded-iwad" / str(normalized_iwad["filename"]),
@@ -198,8 +194,8 @@ def run_child(input_path: Path, output_path: Path) -> int:
             raise ValueError("remote eval environment differs from recipe contract")
         if int(recipe_eval["seed"]) != int(contract["seed"]):
             raise ValueError("remote eval seed differs from recipe contract")
-        if int(recipe_eval["max_steps"]) != int(contract["max_steps"]):
-            raise ValueError("remote eval step limit differs from recipe contract")
+        if int(recipe_eval["watchdog_steps"]) != int(contract["watchdog_steps"]):
+            raise ValueError("remote eval watchdog differs from recipe contract")
         metrics, _video = evaluate_policy_bundle(
             bundle,
             device="cpu",
@@ -236,7 +232,7 @@ def run_child(input_path: Path, output_path: Path) -> int:
             config=resolve_env_config(config),
             episodes=int(contract["episodes"]),
             seed=int(contract["seed"]),
-            max_steps=int(contract["max_steps"]),
+            watchdog_steps=int(contract["watchdog_steps"]),
             deterministic=False,
             n_envs=int(contract["n_envs"]),
             progress=True,
@@ -308,9 +304,7 @@ def execute_attempt(
         "checkpoint_sha256": str(contract["checkpoint_sha256"]),
         "runtime_image_ref": str(contract["runtime_image_ref"]),
         "rom_sha256": (
-            str(contract["asset"]["sha256"])
-            if isinstance(contract.get("asset"), Mapping)
-            else ""
+            str(contract["asset"]["sha256"]) if isinstance(contract.get("asset"), Mapping) else ""
         ),
         "seed_protocol": str(contract["seed_protocol"]),
         "n_envs": int(contract["n_envs"]),
@@ -361,7 +355,7 @@ def execute_attempt(
                 cached_rom = cache_path(cache_root, normalized_asset)
                 try:
                     source_rom = verify_rom_file(cached_rom, normalized_asset)
-                except (FileNotFoundError, ValueError):
+                except FileNotFoundError, ValueError:
                     source_rom = write_downloaded_file(
                         str(payload["rom_get_url"]),
                         root / "downloaded-rom" / str(normalized_asset["filename"]),
@@ -420,14 +414,13 @@ def execute_attempt(
             child_preview = child_result.get("preview")
             preview_request = payload.get("preview")
             if isinstance(child_preview, Mapping) and isinstance(preview_request, Mapping):
-                preview = {
-                    str(key): value
-                    for key, value in child_preview.items()
-                    if key != "path"
-                }
+                preview = {str(key): value for key, value in child_preview.items() if key != "path"}
                 if str(child_preview.get("status")) == "ready":
                     preview_path = Path(str(child_preview.get("path") or "")).resolve()
-                    if not preview_path.is_relative_to(root.resolve()) or not preview_path.is_file():
+                    if (
+                        not preview_path.is_relative_to(root.resolve())
+                        or not preview_path.is_file()
+                    ):
                         preview = {"status": "failed", "error": "preview output path is invalid"}
                     else:
                         try:

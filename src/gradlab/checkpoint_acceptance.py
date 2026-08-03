@@ -24,7 +24,7 @@ from gradlab.seeds import EVAL_SEED_START
 from gradlab.rom_assets import manifest_from_train_config, validate_rom_asset_manifest
 
 
-ACCEPTANCE_PROTOCOL_VERSION = 2
+ACCEPTANCE_PROTOCOL_VERSION = 3
 EPISODE_MANIFEST_VERSION = 1
 EVIDENCE_POLICY_VERSION = 1
 SEED_PROTOCOL = "vector-lane-v1"
@@ -46,11 +46,11 @@ def requires_complete_evaluation(environment: Any) -> bool:
     )
 
 
-def checkpoint_eval_max_steps(config: Mapping[str, Any]) -> int:
-    explicit = int(config.get("post_train_eval_max_steps") or 0)
+def checkpoint_eval_watchdog_steps(config: Mapping[str, Any]) -> int:
+    explicit = int(config.get("checkpoint_eval_watchdog_steps") or 0)
     if explicit > 0:
         return explicit
-    raise ValueError("checkpoint eval max steps are not materialized")
+    raise ValueError("checkpoint eval watchdog steps are not materialized")
 
 
 def portable_asset_from_train_config(
@@ -103,7 +103,7 @@ class CheckpointEvalContractCompiler:
     environment: dict[str, Any]
     episodes: int
     n_envs: int
-    max_steps: int
+    watchdog_steps: int
     seed: int
     seed_protocol: str
     action_sampling: str
@@ -202,7 +202,7 @@ class CheckpointEvalContractCompiler:
             environment=environment,
             episodes=episodes,
             n_envs=n_envs,
-            max_steps=checkpoint_eval_max_steps(train_config),
+            watchdog_steps=checkpoint_eval_watchdog_steps(train_config),
             seed=seed,
             seed_protocol=seed_protocol,
             action_sampling=action_sampling,
@@ -218,7 +218,7 @@ class CheckpointEvalContractCompiler:
                 environment=self.environment,
                 episodes=self.episodes,
                 n_envs=self.n_envs,
-                max_steps=self.max_steps,
+                watchdog_steps=self.watchdog_steps,
                 seed=self.seed,
                 seed_protocol=self.seed_protocol,
                 action_sampling=self.action_sampling,
@@ -230,7 +230,7 @@ class CheckpointEvalContractCompiler:
             "action_sampling": self.action_sampling,
             "episodes": self.episodes,
             "n_envs": self.n_envs,
-            "max_steps": self.max_steps,
+            "watchdog_steps": self.watchdog_steps,
             "seed": self.seed,
             "seed_protocol": self.seed_protocol,
         }
@@ -240,7 +240,7 @@ class CheckpointEvalContractCompiler:
             "environment": deepcopy(self.environment),
             "stages": deepcopy(stages),
             "n_envs": self.n_envs,
-            "max_steps": self.max_steps,
+            "watchdog_steps": self.watchdog_steps,
             "seed": self.seed,
             "seed_protocol": self.seed_protocol,
             "asset": deepcopy(self.asset),
@@ -316,15 +316,15 @@ def build_checkpoint_eval_contract(
     environment: Mapping[str, Any],
     episodes: int,
     n_envs: int,
-    max_steps: int,
+    watchdog_steps: int,
     seed: int,
     seed_protocol: str,
     acceptance: Sequence[Mapping[str, Any]],
     asset: Mapping[str, Any] | None = None,
     action_sampling: str = "stochastic",
 ) -> dict[str, Any]:
-    if int(max_steps) < 1:
-        raise ValueError("acceptance max_steps must be positive")
+    if int(watchdog_steps) < 1:
+        raise ValueError("acceptance watchdog_steps must be positive")
     if int(seed) < 0:
         raise ValueError("acceptance seed must be non-negative")
     if str(seed_protocol) != SEED_PROTOCOL:
@@ -345,7 +345,8 @@ def build_checkpoint_eval_contract(
         "first_failed_episode"
         if not requires_complete_evaluation(environment)
         and all(
-            str(rule["metric"]) in {EVAL_FULL_SUCCESS_ACROSS_STARTS_RATE_MIN, EVAL_FULL_SUCCESS_ACROSS_STARTS_RATE_MEAN}
+            str(rule["metric"])
+            in {EVAL_FULL_SUCCESS_ACROSS_STARTS_RATE_MIN, EVAL_FULL_SUCCESS_ACROSS_STARTS_RATE_MEAN}
             and str(rule["operator"]) == ">="
             and float(rule["threshold"]) >= 1.0
             for rule in rules
@@ -357,7 +358,7 @@ def build_checkpoint_eval_contract(
         "environment": dict(environment),
         "episodes": int(episodes),
         "n_envs": int(n_envs),
-        "max_steps": int(max_steps),
+        "watchdog_steps": int(watchdog_steps),
         "deterministic": False,
         "action_sampling": action_sampling,
         "seed": int(seed),

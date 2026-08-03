@@ -15,7 +15,7 @@ train:
         delta_mode: absolute
         start_after_steps: 1000000
         patience_steps: 1000000
-        outcome: failure
+        outcome: neutral
         action: stop
   state_archive:
     semantic_id: state-archive-v1

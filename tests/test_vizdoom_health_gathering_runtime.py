@@ -40,8 +40,7 @@ def test_health_gathering_recipe_runs_through_the_real_vector_runtime(
         assert observations["context/health"].shape == (2, 1)
         assert observations["context/health"].dtype == np.float32
         assert np.all(
-            (-1.0 <= observations["context/health"])
-            & (observations["context/health"] <= 2.0)
+            (-1.0 <= observations["context/health"]) & (observations["context/health"] <= 2.0)
         )
         if goal_id != "VizdoomHealthGathering-Plus-v1":
             np.testing.assert_array_equal(
@@ -52,9 +51,14 @@ def test_health_gathering_recipe_runs_through_the_real_vector_runtime(
         next_observations, rewards, dones, infos = env.step(np.zeros(2, dtype=np.int64))
         assert set(next_observations) == expected_keys
         if goal_id != "VizdoomHealthGathering-Plus-v1":
+            native_horizon = config.env_args["vizdoom_config"]["episode_timeout"]
             np.testing.assert_allclose(
                 next_observations["context/remaining_time"],
-                np.full((2, 1), 524.0 / 525.0, dtype=np.float32),
+                np.full(
+                    (2, 1),
+                    (native_horizon - config.frame_skip) / native_horizon,
+                    dtype=np.float32,
+                ),
             )
         assert rewards.shape == (2,)
         assert dones.shape == (2,)

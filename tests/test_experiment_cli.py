@@ -692,6 +692,14 @@ def test_designed_early_stop_failure_is_non_resumable() -> None:
         }
     )
 
+    with pytest.raises(RuntimeError, match="non-resumable"):
+        _require_retryable_attempt_terminal(
+            {
+                "state": "stopped",
+                "stop_reason": "early_stop_neutral:return_plateau",
+            }
+        )
+
 
 def test_on_demand_requires_explicit_permission() -> None:
     with pytest.raises(ValueError, match="requires --allow-on-demand"):
@@ -901,6 +909,23 @@ def test_reconciled_failure_closes_wandb_with_nonzero_exit() -> None:
     )
     publish.assert_called_once_with(projector.run, receipt)
     projector.close.assert_called_once_with(timeout_seconds=300, exit_code=1)
+
+
+def test_reconciled_stopped_run_closes_wandb_with_zero_exit() -> None:
+    manifest = _manifest_only_run()
+    projector = mock.MagicMock()
+    receipt = SimpleNamespace(state="stopped")
+
+    with (
+        mock.patch(
+            "gradlab.experiment_cli.WandbProjector.resume",
+            return_value=projector,
+        ),
+        mock.patch("gradlab.experiment_cli.publish_terminal_summary"),
+    ):
+        _project_reconciled_terminal(manifest, receipt)
+
+    projector.close.assert_called_once_with(timeout_seconds=300, exit_code=0)
 
 
 def test_resume_submit_recovers_only_the_original_manifest(

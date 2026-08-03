@@ -19,7 +19,13 @@ from gradlab.metric_names import (
     TRAIN_OUTCOME_SUCCESS_ACROSS_STARTS_WINDOW_100_RATE_MEAN,
 )
 from gradlab.metric_store import MetricStore
-from gradlab.run_contracts import TerminalReceipt, new_attempt_id, new_run_id, utc_now
+from gradlab.run_contracts import (
+    EarlyStopReceipt,
+    TerminalReceipt,
+    new_attempt_id,
+    new_run_id,
+    utc_now,
+)
 from gradlab.wandb_publisher import (
     _publish_frame,
     publish_pending_frames,
@@ -76,6 +82,75 @@ class WandbOfflineMetricIntegrationTests(unittest.TestCase):
             "early_stop_failure:return_plateau",
         )
         self.assertEqual(run.summary["gradlab/run/final_step"], 500_000)
+
+    def test_stopped_terminal_and_neutral_reason_are_projected_into_summary(self) -> None:
+        class FakeRun:
+            summary: dict[str, object] = {}
+
+        run_id = new_run_id()
+        attempt_id = new_attempt_id()
+        condition = {
+            "metric": "train/episode/return/shaped/from/target/rolling_up_to_100/mean",
+            "trigger": "no_improvement",
+            "direction": "maximize",
+            "min_delta": 0.01,
+            "delta_mode": "relative",
+            "start_after_steps": 0,
+            "patience_steps": 10,
+            "outcome": "neutral",
+            "action": "stop",
+        }
+        early_stop = EarlyStopReceipt(
+            run_id=run_id,
+            attempt_id=attempt_id,
+            condition_id="return_plateau",
+            matched_condition_ids=("return_plateau",),
+            outcome="neutral",
+            trigger="no_improvement",
+            metric=str(condition["metric"]),
+            metric_step=500_000,
+            value=1.0,
+            best_value=1.0,
+            elapsed_steps=10,
+            patience_progress=1.0,
+            condition=condition,
+            early_stop_config_sha256="a" * 64,
+            decision_sha256="b" * 64,
+            recorded_at=utc_now(),
+        )
+        receipt = TerminalReceipt(
+            run_id=run_id,
+            attempt_id=attempt_id,
+            state="stopped",
+            acceptance_required=False,
+            stop_reason="early_stop_neutral:return_plateau",
+            final_step=500_000,
+            checkpoint_inventory=(
+                {
+                    "checkpoint_id": "checkpoint-500000-" + "c" * 16,
+                    "step": 500_000,
+                    "purpose": "final",
+                },
+            ),
+            eval_inventory=(),
+            wandb_high_water_mark=10,
+            drain={
+                "complete": True,
+                "metric_segment_high_water": 10,
+                "wandb_remote_high_water_mark": 10,
+            },
+            completed_at=utc_now(),
+            early_stop=early_stop.to_dict(),
+        )
+        run = FakeRun()
+
+        publish_terminal_summary(run, receipt)
+
+        self.assertEqual(run.summary["gradlab/run/terminal_state"], "stopped")
+        self.assertEqual(
+            run.summary["gradlab/run/stop_reason"],
+            "early_stop_neutral:return_plateau",
+        )
 
     def test_configures_scientific_axes_without_overlapping_catchall(self) -> None:
         class FakeRun:

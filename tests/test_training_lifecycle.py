@@ -180,6 +180,49 @@ def test_threshold_target_progress_is_published_and_shown_as_an_outcome(
     assert progress.metrics[-1][metric] == 0.5
 
 
+def test_neutral_plateau_has_a_typed_learner_terminal_reason(tmp_path: Path) -> None:
+    session = TrainingSession(
+        run_dir=tmp_path,
+        backend_id="sb3.ppo",
+        metric_store=FakeMetricStore(),
+        wandb_enabled=False,
+        stop_flag=GracefulStopFlag(),
+        early_stop_config={
+            "conditions": {
+                "return_plateau": {
+                    "metric": TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_WINDOW_100_MEAN,
+                    "trigger": "no_improvement",
+                    "direction": "maximize",
+                    "min_delta": 0.01,
+                    "delta_mode": "relative",
+                    "start_after_steps": 0,
+                    "patience_steps": 1,
+                    "outcome": "neutral",
+                    "action": "stop",
+                }
+            }
+        },
+        attempt_id="attempt-test",
+        run_id="run-test",
+        reducer=EpisodeMetricsReducer(track_success=False),
+        execution_policy=TrainingExecutionPolicy.for_mode(TrainingExecutionMode.SUPERVISED),
+        completion_signal_available=False,
+        progress_sink=MemoryProgressSink(),
+    )
+    session.configure_budget(requested_limit=10, step_quantum=1)
+
+    session.report(
+        step=1,
+        metrics={TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_WINDOW_100_MEAN: 5.0},
+    )
+    session.report(
+        step=2,
+        metrics={TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_WINDOW_100_MEAN: 5.0},
+    )
+
+    assert session.terminal_reason() == TerminalReason.EARLY_STOP_NEUTRAL
+
+
 def test_execution_modes_resolve_to_fixed_lifecycle_policies() -> None:
     local = TrainingExecutionPolicy.for_mode(TrainingExecutionMode.LOCAL_DEMO)
     supervised = TrainingExecutionPolicy.for_mode(TrainingExecutionMode.SUPERVISED)

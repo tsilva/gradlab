@@ -44,7 +44,7 @@ train:
           # Control when the selected information keys are emitted.
           mode: all
           # List the provider information keys retained for task signals.
-          keys: [killcount, player_dead, pending_reset]
+          keys: [killcount, player_dead]
     # Reuse these line-defense task overrides in evaluation via the YAML anchor.
     task: &defend_line_task
       # Map task-level signal names to keys from the provider's per-step information.
@@ -53,22 +53,18 @@ train:
         kills: killcount
         # Map the task-level death signal to its provider information key.
         player_dead: player_dead
-        # Map the task-level episode-boundary signal to its provider information key.
-        episode_done: pending_reset
       # Define discrete task events derived from changes in the declared signals.
       events:
         # Detect each monster elimination from an increase in the kill counter.
         monster_killed: {signal: kills, operation: increase}
         # Detect death when the provider's death flag is asserted for a step.
         player_died: {signal: player_dead, operation: equals_for, value: 1, steps: 1}
-        # Detect the scenario boundary when the pending-reset flag is asserted for a step.
-        episode_ended: {signal: episode_done, operation: equals_for, value: 1, steps: 1}
       # Define which task events end an episode and how each outcome is classified.
       termination:
         # List the events that mark an episode as failed.
         failure: [player_died]
         # List provider boundaries treated as timeouts rather than task outcomes.
-        timeout: [episode_ended]
+        timeout: [time_limit_reached]
 # Override the shared settings used to evaluate checkpoints for this goal.
 eval:
   # Declare every metric threshold a checkpoint must satisfy to be accepted.
@@ -83,8 +79,6 @@ eval:
   environment:
     # Supply evaluation-time arguments for the native vectorized ViZDoom environment.
     env_config:
-      # Keep the evaluation watchdog above the native horizon for frame skip 1 and higher.
-      max_steps: 2100
       # Reuse the line-defense provider arguments declared for training.
       env_args: *defend_line_env_args
     # Merge the same line-defense task overrides into the shared evaluation defaults.

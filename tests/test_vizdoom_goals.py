@@ -27,6 +27,26 @@ DEATHMATCH_ACTIONS = [
     ["SELECT_NEXT_WEAPON"],
     ["SELECT_PREV_WEAPON"],
 ]
+NATIVE_HORIZONS = {
+    "VizdoomBasic-v1": 300,
+    "VizdoomBasic-Plus-v1": 300,
+    "VizdoomDeadlyCorridor-v1": 2100,
+    "VizdoomDeathmatch-v1": 4200,
+    "VizdoomDefendCenter-v1": 2100,
+    "VizdoomDefendLine-v1": 2100,
+    "VizdoomDefendLine-Plus-v1": 2100,
+    "VizdoomHealthGathering-v1": 2100,
+    "VizdoomHealthGathering-Plus-v1": 21000,
+    "VizdoomHealthGatheringSupreme-v1": 2100,
+    "VizdoomMyWayHome-v1": 2100,
+    "VizdoomPredictPosition-v1": 300,
+    "VizdoomTakeCover-v1": 2048,
+}
+SUCCESSFUL_HORIZON_GOALS = {
+    "VizdoomHealthGathering-v1",
+    "VizdoomHealthGatheringSupreme-v1",
+    "VizdoomTakeCover-v1",
+}
 EXPECTED_GOALS = {
     "VizdoomBasic-v1": {
         "timesteps": 2_000_000,
@@ -66,7 +86,7 @@ EXPECTED_GOALS = {
         "acceptance_threshold": 10.0,
         "reward_scale": 1.0,
         "actions": DEATHMATCH_ACTIONS,
-        "max_episode_steps": 1050,
+        "max_episode_steps": None,
     },
     "VizdoomDefendCenter-v1": {
         "timesteps": 10_000_000,
@@ -97,7 +117,7 @@ EXPECTED_GOALS = {
     },
     "VizdoomHealthGathering-v1": {
         "timesteps": 10_000_000,
-        "event": "goal_reached",
+        "event": "time_limit_reached",
         "training_metric": "train/outcome/success/across_starts/window_100/rate/min",
         "acceptance_metric": "eval/full/outcome/success/across_starts/rate/min",
         "acceptance_threshold": 0.95,
@@ -107,16 +127,16 @@ EXPECTED_GOALS = {
     "VizdoomHealthGathering-Plus-v1": {
         "game": "VizdoomHealthGathering-v1",
         "timesteps": 10_000_000,
-        "event": "goal_reached",
+        "event": "time_limit_reached",
         "training_metric": "train/episode/return/shaped/from/target/window_100/mean",
         "acceptance_metric": "eval/full/episode/return/shaped/mean",
         "acceptance_threshold": 200.0,
         "reward_scale": 100.0,
-        "max_episode_steps": 5250,
+        "max_episode_steps": None,
     },
     "VizdoomHealthGatheringSupreme-v1": {
         "timesteps": 20_000_000,
-        "event": "goal_reached",
+        "event": "time_limit_reached",
         "training_metric": "train/outcome/success/across_starts/window_100/rate/min",
         "acceptance_metric": "eval/full/outcome/success/across_starts/rate/min",
         "acceptance_threshold": 0.95,
@@ -143,12 +163,12 @@ EXPECTED_GOALS = {
     },
     "VizdoomTakeCover-v1": {
         "timesteps": 10_000_000,
-        "event": "goal_reached",
+        "event": "time_limit_reached",
         "training_metric": "train/outcome/success/across_starts/window_100/rate/min",
         "acceptance_metric": "eval/full/outcome/success/across_starts/rate/min",
         "acceptance_threshold": 0.95,
         "reward_scale": 100.0,
-        "max_episode_steps": 512,
+        "max_episode_steps": None,
     },
 }
 
@@ -177,11 +197,12 @@ def test_vizdoom_goal_has_complete_evaluated_ppo_contract(
     assert train_config["env_provider"] == "vizdoom-turbo"
     assert train_config["game"] == expected.get("game", goal_id)
     assert train_config["state"] == "default"
+    assert train_config["frame_skip"] == 2
+    assert train_environment["preprocessing"]["frame_skip"] == 2
+    assert eval_environment["preprocessing"]["frame_skip"] == 2
     expected_n_envs = expected.get("n_envs", 32)
     assert train_config["n_envs"] == expected_n_envs
-    assert train_config["env_args"]["num_threads"] == expected.get(
-        "num_threads", expected_n_envs
-    )
+    assert train_config["env_args"]["num_threads"] == expected.get("num_threads", expected_n_envs)
     assert train_config["env_args"]["doom_skill"] == 1
     assert train_environment["env_config"]["env_args"]["doom_skill"] == 1
     assert eval_environment["env_config"]["env_args"]["doom_skill"] == 1
@@ -190,10 +211,19 @@ def test_vizdoom_goal_has_complete_evaluated_ppo_contract(
     assert train_config["env_args"]["use_restricted_actions"] == expected.get("actions", "discrete")
     assert train_config["task"]["id"] == "identity"
     assert expected["event"] in train_config["task"]["events"]
+    assert train_config["task"]["events"]["time_limit_reached"] == {
+        "signal": "native_timeout",
+        "operation": "equals_for",
+        "value": 1,
+        "steps": 1,
+    }
+    assert train_config["env_args"]["vizdoom_config"] == {
+        "episode_timeout": NATIVE_HORIZONS[goal_id]
+    }
     assert train_config["task"]["reward"]["reward_scale"] == expected["reward_scale"]
     termination = train_config["task"]["termination"]
-    if termination.get("success"):
-        assert termination["success"] == ["goal_reached"]
+    expected_horizon_outcome = "success" if goal_id in SUCCESSFUL_HORIZON_GOALS else "timeout"
+    assert "time_limit_reached" in termination[expected_horizon_outcome]
     if expected["max_episode_steps"] is None:
         assert "max_episode_steps" not in termination
     else:
@@ -238,26 +268,30 @@ def test_vizdoom_defend_line_uses_a_native_tic_horizon(goal_id: str) -> None:
     train_config = document["train_config"]
     assert train_config["env_args"]["vizdoom_config"] == {"episode_timeout": 2100}
     assert "max_episode_steps" not in train_config["task"]["termination"]
-    assert document["goal"]["eval"]["environment"]["env_config"]["max_steps"] == 2100
+    assert "max_steps" not in document["goal"]["eval"]["environment"]["env_config"]
 
 
 @pytest.mark.parametrize(
-    ("goal_id", "expected_max_steps"),
+    ("goal_id", "expected_watchdog_steps"),
     [
-        ("VizdoomBasic-v1", 75),
-        ("VizdoomBasic-Plus-v1", 75),
-        ("VizdoomDeathmatch-v1", 1050),
-        ("VizdoomDefendLine-v1", 2100),
-        ("VizdoomDefendLine-Plus-v1", 2100),
-        ("VizdoomDefendCenter-v1", 525),
-        ("VizdoomHealthGathering-v1", 525),
-        ("VizdoomHealthGathering-Plus-v1", 5250),
-        ("VizdoomHealthGatheringSupreme-v1", 525),
+        ("VizdoomBasic-v1", 150),
+        ("VizdoomBasic-Plus-v1", 150),
+        ("VizdoomDeadlyCorridor-v1", 1050),
+        ("VizdoomDeathmatch-v1", 2100),
+        ("VizdoomDefendLine-v1", 1050),
+        ("VizdoomDefendLine-Plus-v1", 1050),
+        ("VizdoomDefendCenter-v1", 1050),
+        ("VizdoomHealthGathering-v1", 1050),
+        ("VizdoomHealthGathering-Plus-v1", 10500),
+        ("VizdoomHealthGatheringSupreme-v1", 1050),
+        ("VizdoomMyWayHome-v1", 1050),
+        ("VizdoomPredictPosition-v1", 150),
+        ("VizdoomTakeCover-v1", 1024),
     ],
 )
 def test_sequential_vizdoom_goals_materialize_finite_checkpoint_eval_bounds(
     goal_id: str,
-    expected_max_steps: int,
+    expected_watchdog_steps: int,
 ) -> None:
     goal_path = GOALS_ROOT / goal_id / "_goal.yaml"
     recipe_path = goal_path.parent / "recipes/ppo.yaml"
@@ -269,7 +303,36 @@ def test_sequential_vizdoom_goals_materialize_finite_checkpoint_eval_bounds(
         materialize_seed_defaults=True,
     )
 
-    assert contract.max_steps == expected_max_steps
+    assert contract.watchdog_steps == expected_watchdog_steps
+    assert "max_episode_steps" not in contract.environment["task"]["termination"]
+
+
+@pytest.mark.parametrize(
+    ("frame_skip", "expected_watchdog_steps"),
+    [(1, 300), (2, 150), (3, 100), (4, 75), (8, 38)],
+)
+def test_vizdoom_watchdog_scales_with_effective_frame_skip(
+    frame_skip: int,
+    expected_watchdog_steps: int,
+) -> None:
+    goal_path = GOALS_ROOT / "VizdoomBasic-v1" / "_goal.yaml"
+    recipe_path = goal_path.parent / "recipes/ppo.yaml"
+    document = compose_train_document(
+        goal_path,
+        recipe_path,
+        recipe_overrides=(f"train.environment.preprocessing.frame_skip={frame_skip}",),
+    )
+
+    contract = CheckpointEvalContractCompiler.from_train_config(
+        document["train_config"],
+        require_asset=False,
+        materialize_seed_defaults=True,
+    )
+
+    assert document["train_config"]["frame_skip"] == frame_skip
+    assert contract.environment["frame_skip"] == frame_skip
+    assert contract.environment["env_args"]["vizdoom_config"] == {"episode_timeout": 300}
+    assert contract.watchdog_steps == expected_watchdog_steps
 
 
 @pytest.mark.parametrize(
@@ -294,7 +357,7 @@ def test_vizdoom_health_gathering_uses_native_provider_truncation_for_survival(
         "native_timeout": "provider_truncated",
     }
     assert train_config["task"]["signals"] == expected_signals
-    assert train_config["task"]["events"]["goal_reached"] == {
+    assert train_config["task"]["events"]["time_limit_reached"] == {
         "signal": "native_timeout",
         "operation": "equals_for",
         "value": 1,
@@ -302,7 +365,7 @@ def test_vizdoom_health_gathering_uses_native_provider_truncation_for_survival(
     }
     assert train_config["task"]["termination"] == {
         "failure": ["player_died"],
-        "success": ["goal_reached"],
+        "success": ["time_limit_reached"],
     }
 
 
@@ -314,10 +377,14 @@ def test_vizdoom_health_gathering_plus_is_long_horizon_and_time_unaware() -> Non
     train_config = document["train_config"]
     goal = document["goal"]
     assert train_config["game"] == "VizdoomHealthGathering-v1"
-    assert train_config["env_args"]["vizdoom_config"] == {"episode_timeout": 0}
-    assert train_config["task"]["termination"]["max_episode_steps"] == 5250
+    assert train_config["env_args"]["vizdoom_config"] == {"episode_timeout": 21000}
+    assert train_config["task"]["termination"] == {
+        "failure": ["player_died"],
+        "success": [],
+        "timeout": ["time_limit_reached"],
+    }
     assert goal["eval"]["environment"]["env_config"]["env_args"]["vizdoom_config"] == {
-        "episode_timeout": 0
+        "episode_timeout": 21000
     }
     assert set(train_config["task"]["model_inputs"]["context"]) == {"health"}
     assert train_config["policy_model"]["schema_version"] == 2
@@ -326,8 +393,8 @@ def test_vizdoom_health_gathering_plus_is_long_horizon_and_time_unaware() -> Non
         "activation": "tanh",
     }
     assert "remaining_time" not in str(train_config)
-    assert goal["eval"]["environment"]["env_config"]["max_steps"] == 5250
-    assert goal["eval"]["environment"]["task"]["termination"]["max_episode_steps"] == 5250
+    assert "max_steps" not in goal["eval"]["environment"]["env_config"]
+    assert "max_episode_steps" not in goal["eval"]["environment"]["task"]["termination"]
     assert goal["eval"]["acceptance"] == [
         {
             "metric": "eval/full/episode/return/shaped/mean",
@@ -372,12 +439,12 @@ def test_vizdoom_health_gathering_ppo_uses_confirmed_training_defaults(
         assert set(document["train_config"]["task"]["model_inputs"]["context"]) == {"health"}
         return
     assert document["train_config"]["task"]["model_inputs"]["context"]["remaining_time"] == {
-        "signal": "episode_step",
+        "signal": "native_time_remaining",
         "update": "transition",
         "encoding": {
             "kind": "continuous",
-            "scale": -1.0 / 525.0,
-            "offset": 1.0,
+            "scale": 1.0,
+            "offset": 0.0,
             "low": 0.0,
             "high": 1.0,
         },
@@ -438,7 +505,6 @@ def test_vizdoom_deathmatch_declares_complete_single_player_combat_semantics() -
             "ammo5",
             "ammo6",
             "player_dead",
-            "pending_reset",
         ],
     }
     assert train_config["task"]["signals"] == {
@@ -450,7 +516,7 @@ def test_vizdoom_deathmatch_declares_complete_single_player_combat_semantics() -
         "weapons_owned": ["weapon1", "weapon2", "weapon3", "weapon4", "weapon5", "weapon6"],
         "weapon_ammo": ["ammo1", "ammo2", "ammo3", "ammo4", "ammo5", "ammo6"],
         "player_dead": "player_dead",
-        "episode_done": "pending_reset",
+        "native_timeout": "provider_truncated",
     }
     assert train_config["task"]["model_inputs"]["context"]["selected_weapon"] == {
         "signal": "selected_weapon",
@@ -505,9 +571,9 @@ def test_vizdoom_deathmatch_declares_complete_single_player_combat_semantics() -
     }
     assert train_config["task"]["termination"] == {
         "failure": ["player_died"],
-        "timeout": ["episode_ended"],
-        "max_episode_steps": 1050,
+        "timeout": ["time_limit_reached"],
     }
+    assert train_config["env_args"]["vizdoom_config"] == {"episode_timeout": 4200}
     assert (
         eval_environment["env_config"]["env_args"]["use_restricted_actions"] == DEATHMATCH_ACTIONS
     )

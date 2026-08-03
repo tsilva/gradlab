@@ -85,7 +85,10 @@ class RuntimeMetricsHelperTests(unittest.TestCase):
         self.assertEqual(logger.records["train/episode/completed/count"], 2)
         self.assertEqual(logger.records["train/outcome/failure/reason/life_loss/episode/count"], 1)
         self.assertEqual(logger.records["train/outcome/failure/reason/stalled/episode/count"], 1)
-        self.assertEqual(logger.records["train/outcome/failure/reason/max_steps/episode/count"], 1)
+        self.assertNotIn(
+            "train/outcome/failure/reason/timeout/episode/count",
+            logger.records,
+        )
         self.assertNotIn("train/outcome/failure/reason/unclassified/episode/count", logger.records)
         self.assertFalse(any("/success/" in key for key in logger.records))
 
@@ -180,8 +183,12 @@ class GradLabCallbackTests(unittest.TestCase):
 
         self.assertEqual(env.drain_calls, 1)
         self.assertEqual(model.logger.records["train/episode/completed/count"], 1)
-        self.assertEqual(model.logger.records["train/outcome/failure/reason/level_change/episode/count"], 0)
-        self.assertNotIn("train/outcome/failure/reason/life_loss/episode/count", model.logger.records)
+        self.assertEqual(
+            model.logger.records["train/outcome/failure/reason/level_change/episode/count"], 0
+        )
+        self.assertNotIn(
+            "train/outcome/failure/reason/life_loss/episode/count", model.logger.records
+        )
         self.assertEqual(
             model.logger.records["train/outcome/success/from/Level1-1/episode/count"],
             1,
@@ -343,8 +350,12 @@ class RuntimeMetricsCompletionTests(unittest.TestCase):
             ]
         )
         callback._on_rollout_end()
-        self.assertEqual(logger.records["train/outcome/success/across_starts/window_100/rate/min"], 0.0)
-        self.assertEqual(logger.records["train/outcome/success/across_starts/window_100/rate/mean"], 0.5)
+        self.assertEqual(
+            logger.records["train/outcome/success/across_starts/window_100/rate/min"], 0.0
+        )
+        self.assertEqual(
+            logger.records["train/outcome/success/across_starts/window_100/rate/mean"], 0.5
+        )
 
 
 class MetricEarlyStopHelperTests(unittest.TestCase):
@@ -475,8 +486,15 @@ class MetricEarlyStopHelperTests(unittest.TestCase):
             )
 
             store = MetricStore(store_path)
-            self.assertEqual(store.latest_metric(TRAIN_OUTCOME_SUCCESS_ACROSS_STARTS_WINDOW_100_RATE_MIN), 0.5)
-            self.assertEqual(store.latest_metric("train/episode/return/shaped/across_origins/rolling_up_to_100/mean"), 4.25)
+            self.assertEqual(
+                store.latest_metric(TRAIN_OUTCOME_SUCCESS_ACROSS_STARTS_WINDOW_100_RATE_MIN), 0.5
+            )
+            self.assertEqual(
+                store.latest_metric(
+                    "train/episode/return/shaped/across_origins/rolling_up_to_100/mean"
+                ),
+                4.25,
+            )
             self.assertEqual(store.latest_metric("train/algorithm/ppo/policy/entropy"), 0.7)
             self.assertIsNone(store.latest_metric("train/clip_range"))
             self.assertIsNone(store.latest_metric("time/iterations"))
@@ -549,8 +567,16 @@ class MetricEarlyStopHelperTests(unittest.TestCase):
                 env.close()
 
             store = MetricStore(store_path)
-            self.assertEqual(store.latest_metric("train/episode/return/shaped/across_origins/rolling_up_to_100/mean"), 2.0)
-            self.assertEqual(store.latest_metric("train/episode/length/across_origins/rolling_up_to_100/mean"), 1.0)
+            self.assertEqual(
+                store.latest_metric(
+                    "train/episode/return/shaped/across_origins/rolling_up_to_100/mean"
+                ),
+                2.0,
+            )
+            self.assertEqual(
+                store.latest_metric("train/episode/length/across_origins/rolling_up_to_100/mean"),
+                1.0,
+            )
             self.assertIsNone(store.latest_metric("time/fps"))
             self.assertIsNone(store.latest_metric("train/loss"))
 

@@ -4,7 +4,7 @@ import {
   defaultPanelInstances,
 } from "./catalog.js";
 
-export const WORKSPACE_VERSION = 5;
+export const WORKSPACE_VERSION = 6;
 export const CUSTOM_PANEL_ID = /^panel-[0-9a-f]{8}-[0-9a-f-]{27}$/;
 const BLOCK_KINDS = new Set([
   "stats",
