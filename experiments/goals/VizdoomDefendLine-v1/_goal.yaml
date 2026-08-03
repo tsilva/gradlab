@@ -34,6 +34,9 @@ train:
     env_config:
       # Reuse these line-defense provider arguments in evaluation via the YAML anchor.
       env_args: &defend_line_env_args
+        # Give every frame-skip variant the same provider-native 2,100-tic horizon.
+        vizdoom_config:
+          episode_timeout: 2100
         # List the native game variables that ViZDoom must collect and expose.
         game_variables: [KILLCOUNT]
         # Configure which per-step information the provider exposes to GradLab.
@@ -66,8 +69,6 @@ train:
         failure: [player_died]
         # List provider boundaries treated as timeouts rather than task outcomes.
         timeout: [episode_ended]
-        # Cap each attempt in policy-environment transitions.
-        max_episode_steps: 512
 # Override the shared settings used to evaluate checkpoints for this goal.
 eval:
   # Declare every metric threshold a checkpoint must satisfy to be accepted.
@@ -82,6 +83,8 @@ eval:
   environment:
     # Supply evaluation-time arguments for the native vectorized ViZDoom environment.
     env_config:
+      # Keep the evaluation watchdog above the native horizon for frame skip 1 and higher.
+      max_steps: 2100
       # Reuse the line-defense provider arguments declared for training.
       env_args: *defend_line_env_args
     # Merge the same line-defense task overrides into the shared evaluation defaults.
