@@ -13,7 +13,7 @@ and bounded trajectory cursor. A panel module owns its DOM and visualization.
   game, controls, observation, events, and raw transition inspection remain
   specialized types.
 
-`workspace.js` owns the v5 persisted shape. Each instance has `type`, `title`,
+`workspace.js` owns the v6 persisted shape. Each instance has `type`, `title`,
 `config`, `builtin`, and a zero-based GridStack `placement`. Custom instances
 are telemetry panels. Only the current schema is read; other versions are
 ignored.
@@ -23,7 +23,8 @@ Telemetry configuration is a list of visualization blocks:
 - `stats`: current or selected-transition values for multiple metrics.
 - `line`: compatible scalar history series sharing one unit.
 - `histogram`: retained categorical history.
-- `distribution`: the current policy distribution.
+- `distribution`: the current policy distribution; discrete policies also compare
+  retained-episode executed-action frequency.
 - `namespace-explorer`: dynamically discovered environment signals or reward
   components.
 

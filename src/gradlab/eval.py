@@ -108,7 +108,7 @@ def build_parser(*, prog: str = "gradlab eval") -> argparse.ArgumentParser:
     parser.add_argument("--episodes", type=int, default=20)
     add_env_config_args(
         parser,
-        max_steps_default=4500,
+        watchdog_steps_default=4500,
         parse_json_value=parse_json_value,
         parse_obs_crop=parse_obs_crop,
     )
@@ -167,8 +167,6 @@ def main(argv: list[str] | None = None) -> int:
         semantic_overrides = {}
         if "seed" in explicit_dests:
             semantic_overrides["seed"] = args.seed
-        if "max_steps" in explicit_dests:
-            semantic_overrides["max_steps"] = args.max_steps
         environment_overrides = {
             field.dest: getattr(args, field.dest)
             for field in env_config_arg_fields()
@@ -181,6 +179,7 @@ def main(argv: list[str] | None = None) -> int:
             device=resolve_sb3_device(args.device),
             episodes=args.episodes if "episodes" in explicit_dests else None,
             n_envs=args.n_envs if "n_envs" in explicit_dests else None,
+            watchdog_steps=(args.watchdog_steps if "watchdog_steps" in explicit_dests else None),
             progress=args.progress,
             semantic_overrides=semantic_overrides,
         )
@@ -213,7 +212,7 @@ def main(argv: list[str] | None = None) -> int:
         config=config,
         episodes=args.episodes,
         seed=args.seed,
-        max_steps=args.max_steps,
+        watchdog_steps=args.watchdog_steps,
         deterministic=False,
         n_envs=1,
         progress=args.progress,

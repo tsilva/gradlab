@@ -77,3 +77,23 @@ def test_failed_terminal_projection_closes_wandb_with_nonzero_exit() -> None:
     )
     publish.assert_called_once_with(projector.run, receipt)
     projector.close.assert_called_once_with(timeout_seconds=12, exit_code=1)
+
+
+def test_stopped_terminal_projection_closes_wandb_with_zero_exit() -> None:
+    projector = MagicMock()
+    receipt = SimpleNamespace(state="stopped")
+
+    with (
+        patch(
+            "gradlab.supervisor_runtime.WandbProjector.resume",
+            return_value=projector,
+        ),
+        patch("gradlab.supervisor_runtime.publish_terminal_summary"),
+    ):
+        SupervisorRuntime().publish_terminal(
+            {"wandb_run_id": "gradlab-" + "0" * 32},
+            receipt,
+            timeout_seconds=12,
+        )
+
+    projector.close.assert_called_once_with(timeout_seconds=12, exit_code=0)

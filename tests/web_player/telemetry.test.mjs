@@ -15,6 +15,7 @@ import {
   seriesForMetric,
 } from "../../src/gradlab/web_player/panels/telemetry.js";
 import {
+  actionComparisonPresentation,
   distributionBlockTitle,
   cursorIndex,
   distributionBlockVisible,
@@ -51,6 +52,8 @@ test("signal selectors leave focus-safe space before the chart", () => {
 test("distribution contents use the panel as their only scroll container", () => {
   const rule = styles.match(/\.action-probabilities \{([^}]*)\}/)?.[1] || "";
   assert.doesNotMatch(rule, /(?:max-height|overflow)\s*:/);
+  const comparisonRule = styles.match(/\.action-comparison \{([^}]*)\}/)?.[1] || "";
+  assert.doesNotMatch(comparisonRule, /(?:max-height|overflow)\s*:/);
 });
 
 test("dynamic metric names round-trip without path ambiguity", () => {
@@ -95,6 +98,99 @@ test("action history normalizes vector scalars and never renders undefined selec
   assert.equal(scalarActionIndex([1]), 1);
   assert.equal(histogramSelectedLabel(["noop", "move left"], null), null);
   assert.equal(histogramSelectedLabel(["noop", "move left"], 1), "move left");
+});
+
+test("action comparison aligns episode frequencies with selected-step probabilities", () => {
+  const entries = ["noop", "left", "right", "attack"].map((label, value) => ({
+    value,
+    semantic_id: label,
+    label,
+  }));
+  const snapshot = {
+    transition: { executed_action: 3 },
+    session: {
+      action_contract: {
+        policy: {
+          space: { type: "discrete", n: 4, start: 0 },
+          semantics: { status: "available", encoding: "explicit", entries },
+        },
+      },
+    },
+  };
+  const history = [
+    { executed_action: 0 },
+    { executed_action: [1] },
+    { executed_action: 1 },
+    { executed_action: 3 },
+  ];
+  const presentation = actionComparisonPresentation(snapshot, history, {
+    probabilities: [0.1, 0.6, 0.2, 0.1],
+    selected_action: 1,
+  });
+
+  assert.equal(presentation.history.status, "available");
+  assert.equal(presentation.history.sampleCount, 4);
+  assert.deepEqual(
+    presentation.rows.map((row) => row.episodeProbability),
+    [0.25, 0.5, 0, 0.25],
+  );
+  assert.deepEqual(
+    presentation.rows.map((row) => row.stepProbability),
+    [0.1, 0.6, 0.2, 0.1],
+  );
+  assert.equal(presentation.rows[1].selected, true);
+  assert.equal(presentation.rows[3].executed, true);
+});
+
+test("action comparison keeps the episode aggregate fixed across inspected steps", () => {
+  const snapshot = {
+    transition: { executed_action: 0 },
+    session: {
+      action_names: ["noop", "move"],
+      action_contract: { policy: { space: { type: "discrete", n: 2, start: 0 } } },
+    },
+  };
+  const history = [{ executed_action: 0 }, { executed_action: 1 }];
+  const first = actionComparisonPresentation(snapshot, history, {
+    probabilities: [0.8, 0.2],
+    selected_action: 0,
+  });
+  const inspected = actionComparisonPresentation(snapshot, history, {
+    probabilities: [0.25, 0.75],
+    selected_action: 1,
+  });
+
+  assert.deepEqual(
+    first.rows.map((row) => row.episodeProbability),
+    inspected.rows.map((row) => row.episodeProbability),
+  );
+  assert.notDeepEqual(
+    first.rows.map((row) => row.stepProbability),
+    inspected.rows.map((row) => row.stepProbability),
+  );
+});
+
+test("action comparison exposes empty and contract-incomparable history", () => {
+  const snapshot = {
+    transition: { executed_action: 1 },
+    session: {
+      action_names: ["noop", "move"],
+      action_contract: { policy: { space: { type: "discrete", n: 2, start: 0 } } },
+    },
+  };
+  const decision = { probabilities: [0.4, 0.6], selected_action: 1 };
+  const empty = actionComparisonPresentation(snapshot, [], decision);
+  assert.equal(empty.history.status, "not-yet-observed");
+  assert.ok(empty.rows.every((row) => row.episodeProbability === null));
+
+  const incomparable = actionComparisonPresentation(
+    snapshot,
+    [{ executed_action: ["A", "RIGHT"] }],
+    decision,
+  );
+  assert.equal(incomparable.history.status, "contract-incomparable");
+  assert.match(incomparable.history.message, /1 of 1 executed actions/);
+  assert.ok(incomparable.rows.every((row) => row.episodeProbability === null));
 });
 
 test("numeric series preserve gaps and unit compatibility is explicit", () => {

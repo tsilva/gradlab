@@ -108,8 +108,10 @@ export function runStatePresentation(item) {
   const stopReason = String(item?.stop_reason || "").trim();
   const earlyStopTrigger = String(item?.early_stop?.trigger || "").trim();
   if (
-    state === "failed"
-    && stopReason.startsWith("early_stop_failure:")
+    (
+      (state === "stopped" && stopReason.startsWith("early_stop_neutral:"))
+      || (state === "failed" && stopReason.startsWith("early_stop_failure:"))
+    )
     && earlyStopTrigger === "no_improvement"
   ) {
     return {
@@ -209,7 +211,7 @@ export function runFinishPresentation(item) {
   ].filter(Boolean).join(" · ");
   if (!reason) {
     const state = String(item?.state || "").trim().toLowerCase();
-    return ["finished", "failed", "crashed", "canceled", "cancelled", "killed"]
+    return ["finished", "failed", "stopped", "crashed", "canceled", "cancelled", "killed"]
       .includes(state)
       ? {
           label: "Reason unavailable",
@@ -266,7 +268,16 @@ export function runFinishPresentation(item) {
       detail: [humanizeMetricPart(reason.split(":", 2)[1]), stepDetail]
         .filter(Boolean)
         .join(" · "),
-      tone: "failure",
+      tone: stalled ? "neutral" : "failure",
+    };
+  }
+  if (reason.startsWith("early_stop_neutral:")) {
+    return {
+      label: "Training stalled",
+      detail: [humanizeMetricPart(reason.split(":", 2)[1]), stepDetail]
+        .filter(Boolean)
+        .join(" · "),
+      tone: "neutral",
     };
   }
   if (reason.startsWith("early_stop_success_without_acceptance:")) {

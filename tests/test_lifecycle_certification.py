@@ -61,18 +61,19 @@ def test_parallel_scenario_interleaves_independent_launches() -> None:
     assert len(scenario["evidence"]["interleaving"]) == 2
 
 
-def test_early_stop_scenario_covers_failure_success_tamper_and_promotion_race() -> None:
+def test_early_stop_scenario_covers_neutral_success_tamper_and_promotion_race() -> None:
     report = run_simulated_certification(scenarios=["early-stop-outcomes"])
     scenario = report["scenarios"][0]
     invariants = {row["name"] for row in scenario["invariants"]}
 
     assert scenario["status"] == "passed"
     assert {
-        "plateau-is-scientific-failure-after-valid-rejection",
+        "plateau-is-neutral-stop-after-valid-rejection",
         "training-target-with-complete-rejection-is-scientific-failure",
-        "training-target-with-incomplete-eval-evidence-is-resumable",
+        "plateau-with-incomplete-eval-evidence-is-resumable",
         "training-only-target-stop-succeeds-attempt",
-        "evaluation-promotion-overrides-training-target-stop",
+        "training-only-plateau-stops-neutrally",
+        "evaluation-promotion-overrides-neutral-plateau",
         "early-stop-receipt-corruption-rejected",
     } <= invariants
 

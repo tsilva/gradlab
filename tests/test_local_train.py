@@ -106,7 +106,7 @@ def test_turbo_demo_uses_the_standard_mario_ppo_contract() -> None:
     assert config["n_envs"] == 16
     assert backend["id"] == "sb3.ppo"
     assert backend["config"]["batch_size"] == 512
-    assert config["early_stop"]["conditions"]["return_plateau"]["outcome"] == "failure"
+    assert config["early_stop"]["conditions"]["return_plateau"]["outcome"] == "neutral"
     assert config["reward_shape"] == "speedrun-v1"
 
 

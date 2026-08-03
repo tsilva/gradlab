@@ -140,9 +140,12 @@ URLs immediately.
 - Record `potential_bug` or `attention_required` and pause later waves.
 - Do not repair, retry, cancel, restart, or mutate infrastructure.
 - Accept remotely published, training-only `completed` terminals and fully drained typed
-  `early_stop_failure:<condition_id>` terminals backed by a matching unsuccessful `action: stop`
-  receipt. Preserve the latter's W&B evidence but censor it as a non-winning trial. Any other
-  eval-backed, canceled, failed, mismatched, or unverified terminal pauses the study.
+  `stopped` / `early_stop_neutral:<condition_id>` terminals backed by a matching neutral
+  `no_improvement` / `action: stop` receipt. Record the latter as `designed_plateau_stop`, preserve
+  its W&B evidence, and censor it as a non-winning trial. Continue recognizing immutable historical
+  `failed` / `early_stop_failure:<condition_id>` plateau receipts as
+  `designed_early_stop_failure` without rewriting them. Any other eval-backed, canceled, failed,
+  mismatched, or unverified terminal pauses the study.
 
 ```bash
 uv run python .codex/skills/autoresearch/scripts/study.py record-terminal \

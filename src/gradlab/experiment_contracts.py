@@ -6,8 +6,8 @@ from typing import Any
 
 from gradlab.config_loader import load_composed_mapping
 from gradlab.early_stop import (
-    normalize_metric_early_stop_config,
     normalize_metric_threshold_rules,
+    validate_metric_early_stop_policy,
 )
 from gradlab.env_identity import validate_task_config
 from gradlab.env_registry import (
@@ -105,9 +105,7 @@ def _validate_environment_identity(
     allowed_environment_keys = {"env_provider", "env_config", "preprocessing", "task"}
     extra_environment_keys = sorted(set(environment) - allowed_environment_keys)
     if extra_environment_keys:
-        raise ValueError(
-            f"{label}.environment has unexpected keys: {extra_environment_keys}"
-        )
+        raise ValueError(f"{label}.environment has unexpected keys: {extra_environment_keys}")
     env_config = _require_mapping(
         _require_key(environment, "env_config", label=f"{label}.environment"),
         label=f"{label}.environment.env_config",
@@ -139,13 +137,10 @@ def _validate_environment_identity(
             "obs_resize_algorithm",
             "sticky_action_prob",
         }
-        extra_preprocessing_keys = sorted(
-            set(preprocessing) - allowed_preprocessing_keys
-        )
+        extra_preprocessing_keys = sorted(set(preprocessing) - allowed_preprocessing_keys)
         if extra_preprocessing_keys:
             raise ValueError(
-                f"{label}.environment.preprocessing has unexpected keys: "
-                f"{extra_preprocessing_keys}"
+                f"{label}.environment.preprocessing has unexpected keys: {extra_preprocessing_keys}"
             )
         _validate_obs_crop(preprocessing, label=f"{label}.environment.preprocessing")
         _validate_obs_resize(preprocessing, label=f"{label}.environment.preprocessing")
@@ -346,7 +341,7 @@ def _validate_goal_eval(document: Mapping[str, Any], *, label: str) -> None:
         eval_env_config,
         label=f"{label}.eval.environment",
         require_game=True,
-        allowed_extra_keys={"seed", "n_envs", "max_steps"},
+        allowed_extra_keys={"seed", "n_envs"},
     )
     _validate_explicit_goal_environment_args(
         eval_environment,
@@ -363,13 +358,6 @@ def _validate_goal_eval(document: Mapping[str, Any], *, label: str) -> None:
     if "n_envs" in eval_env_config:
         _require_int(
             eval_env_config, "n_envs", label=f"{label}.eval.environment.env_config", minimum=1
-        )
-    if "max_steps" in eval_env_config:
-        _require_int(
-            eval_env_config,
-            "max_steps",
-            label=f"{label}.eval.environment.env_config",
-            minimum=1,
         )
     objective = document.get("objective")
     rank = objective.get("rank") if isinstance(objective, Mapping) else None
@@ -438,7 +426,7 @@ def validate_goal_contract_document(
 
     train = _goal_train_section(document, label=label)
     if "early_stop" in train:
-        normalize_metric_early_stop_config(
+        validate_metric_early_stop_policy(
             train["early_stop"],
             label=f"{label}.train.early_stop",
         )

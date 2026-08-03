@@ -63,6 +63,7 @@ def validate_config_payload(payload: Any) -> dict[str, Any]:
         payload,
         label="runtime preflight train config",
         required_keys=("training_backend",),
+        enforce_early_stop_policy=True,
     )
     receipt = runtime_contract()
     receipt.update(

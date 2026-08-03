@@ -101,13 +101,14 @@ class TrainConfigFieldSchemaTests(unittest.TestCase):
         parser = argparse.ArgumentParser()
         add_env_config_args(
             parser,
-            max_steps_default=987,
+            watchdog_steps_default=987,
             defaults=EnvConfig(),
             parse_json_value=json.loads,
             parse_obs_crop=lambda value: tuple(int(item) for item in value.split(",")),
         )
 
         self.assertEqual(parser.parse_args(["--obs-resize", "72,96"]).obs_resize, (72, 96))
+        self.assertEqual(parser.parse_args([]).watchdog_steps, 987)
         with self.assertRaises(SystemExit):
             parser.parse_args(["--observation-size", "72"])
         normalized = validate_and_normalize_train_config({"obs_resize": [72, 96]})
@@ -131,17 +132,17 @@ class TrainConfigFieldSchemaTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "must be one of modal, none"):
             validate_and_normalize_train_config({"checkpoint_eval_backend": "local"})
 
-    def test_metrics_schema_version_accepts_only_active_v14(self) -> None:
+    def test_metrics_schema_version_accepts_only_active_v15(self) -> None:
         self.assertEqual(
-            validate_and_normalize_train_config({"metrics_schema_version": 14})[
+            validate_and_normalize_train_config({"metrics_schema_version": 15})[
                 "metrics_schema_version"
             ],
-            14,
+            15,
         )
-        with self.assertRaisesRegex(ValueError, "must be >= 14"):
-            validate_and_normalize_train_config({"metrics_schema_version": 13})
-        with self.assertRaisesRegex(ValueError, "must be <= 14"):
-            validate_and_normalize_train_config({"metrics_schema_version": 15})
+        with self.assertRaisesRegex(ValueError, "must be >= 15"):
+            validate_and_normalize_train_config({"metrics_schema_version": 14})
+        with self.assertRaisesRegex(ValueError, "must be <= 15"):
+            validate_and_normalize_train_config({"metrics_schema_version": 16})
 
     def test_no_eval_config_rejects_eval_metric_stop_behavior(self) -> None:
         with self.assertRaisesRegex(ValueError, "must use a train/\\* metric"):

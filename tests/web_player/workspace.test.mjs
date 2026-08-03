@@ -12,10 +12,12 @@ import {
 
 const CUSTOM_ID = "panel-00000000-0000-4000-8000-000000000000";
 
-test("default workspace is a v5 collection of typed panel instances", () => {
+test("default workspace is a v6 collection without a standalone action panel", () => {
   const workspace = createDefaultWorkspace({ writer: "main" });
+  assert.equal(workspace.version, 6);
   assert.equal(workspace.version, WORKSPACE_VERSION);
   assert.equal(Object.hasOwn(workspace.panels, "reward"), false);
+  assert.equal(Object.hasOwn(workspace.panels, "actions"), false);
   assert.deepEqual(
     ["value", "step-reward", "episode-return"].map(
       (id) => workspace.panels[id].config.blocks.length,
@@ -50,8 +52,8 @@ test("paired workspace gives every panel in a logical row the same height", () =
   const workspace = createDefaultWorkspace({ paired: true });
   const rows = [
     ["game", "controls"],
-    ["policy", "actions"],
-    ["value", "step-reward", "episode-return"],
+    ["policy", "value"],
+    ["step-reward", "episode-return"],
     ["observation", "signals", "events"],
   ];
   rows.forEach((ids) => {
@@ -61,14 +63,18 @@ test("paired workspace gives every panel in a logical row the same height", () =
     assert.equal(new Set(placements.map(({ window }) => window)).size, 1, `${ids} window`);
   });
   assert.deepEqual(
-    ["policy", "actions"].map((id) => workspace.panels[id].placement.w),
+    ["policy", "value"].map((id) => workspace.panels[id].placement.w),
+    [6, 6],
+  );
+  assert.deepEqual(
+    ["step-reward", "episode-return"].map((id) => workspace.panels[id].placement.w),
     [6, 6],
   );
 });
 
 test("non-current workspace data is replaced instead of interpreted", () => {
   const workspace = normalizeWorkspace({
-    version: 4,
+    version: 5,
     panels: {
       game: { col: 9, row: 99, w: 1, h: 1 },
     },

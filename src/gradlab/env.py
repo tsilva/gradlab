@@ -27,6 +27,7 @@ from gradlab.env_registry import (
     STABLE_RETRO_TURBO_PROVIDER,
     env_supports_states,
     qualify_env_id,
+    resolve_native_episode_horizon,
     resolve_env_provider,
     validate_provider_constructor_args,
 )
@@ -379,6 +380,13 @@ def bind_native_provider(
 
 
 def _bound_task_kernel(config: EnvConfig, descriptor: ProviderDescriptor, n_envs: int):
+    native_horizon = resolve_native_episode_horizon(
+        {
+            "env_provider": config.env_provider,
+            "env_args": config.env_args,
+            "frame_skip": config.frame_skip,
+        }
+    )
     task_id = config.task.get("id")
     if task_id == "mario":
         kernel = MarioTaskDefinition(MarioTaskConfig.from_env_config(config)).bind(
@@ -386,7 +394,12 @@ def _bound_task_kernel(config: EnvConfig, descriptor: ProviderDescriptor, n_envs
             n_envs,
         )
         kernel = with_reward_transform(kernel, task_reward(config))
-        return with_model_inputs(kernel, descriptor, config.task)
+        return with_model_inputs(
+            kernel,
+            descriptor,
+            config.task,
+            native_episode_horizon=native_horizon,
+        )
     if task_id != "identity":
         raise ValueError(f"unknown task kernel {task_id!r}")
     action_values = task_action_values(config)
@@ -415,7 +428,12 @@ def _bound_task_kernel(config: EnvConfig, descriptor: ProviderDescriptor, n_envs
         termination=task_termination(config),
     ).bind(descriptor, n_envs)
     kernel = with_reward_transform(kernel, task_reward(config))
-    return with_model_inputs(kernel, descriptor, config.task)
+    return with_model_inputs(
+        kernel,
+        descriptor,
+        config.task,
+        native_episode_horizon=native_horizon,
+    )
 
 
 def make_vec_envs(
@@ -476,9 +494,7 @@ def make_training_batch_runtime(
             configured_keys: set[str] = set()
             if isinstance(configured_filter, Mapping):
                 if str(configured_filter.get("mode", "all")) != "all":
-                    raise ValueError(
-                        "state archive cell sources require info_filter mode='all'"
-                    )
+                    raise ValueError("state archive cell sources require info_filter mode='all'")
                 keys = configured_filter.get("keys")
                 if keys is not None:
                     if isinstance(keys, str | bytes) or not isinstance(

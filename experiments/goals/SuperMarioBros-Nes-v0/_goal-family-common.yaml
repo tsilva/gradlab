@@ -19,7 +19,7 @@ objective:
 train:
   # Shared checkpoint cadence for Mario training jobs.
   checkpoint_freq: 250000
-  # Calibrated training failure detector; stops sustained task-aligned return plateaus.
+  # Calibrated neutral stop; ends training after a sustained task-aligned return plateau.
   early_stop:
     conditions:
       return_plateau:
@@ -30,7 +30,7 @@ train:
         delta_mode: relative
         start_after_steps: 1000000
         patience_steps: 1000000
-        outcome: failure
+        outcome: neutral
         action: stop
   environment:
     # SuperMarioBros-NES Turbo supplies SuperMarioBrosNesTurboVecEnv.

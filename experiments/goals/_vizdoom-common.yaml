@@ -52,7 +52,7 @@ train:
         outcome: success
         # Record solved-target evidence without stopping further objective optimization.
         action: observe
-      # Stop unsuccessfully when shaped return ceases to improve meaningfully.
+      # Stop neutrally when shaped return ceases to improve meaningfully.
       return_plateau:
         # Select the training metric monitored for improvement.
         metric: train/episode/return/shaped/from/target/rolling_up_to_100/mean
@@ -68,8 +68,8 @@ train:
         start_after_steps: 500000
         # Set how long training may continue without meaningful improvement.
         patience_steps: 500000
-        # Classify a trigger from this condition as an unsuccessful training outcome.
-        outcome: failure
+        # Classify a trigger from this condition as a neutral training plateau.
+        outcome: neutral
         # Stop the learner when this condition triggers.
         action: stop
   # Define the provider, environment, preprocessing, and task contract used for training.
@@ -144,7 +144,7 @@ train:
     # Define and anchor policy-facing observation and action preprocessing.
     preprocessing: &vizdoom_preprocessing
       # Repeat each selected policy action for this many native frames.
-      frame_skip: 4
+      frame_skip: 2
       # Control temporal max pooling across skipped frames.
       max_pool_frames: false
       # Set the probability of repeating the previous action instead of the selected action.
@@ -167,10 +167,16 @@ train:
       action:
         # Preserve the provider's native restricted action set.
         set: native
-      # Provide an empty family default for goal-specific signal mappings.
-      signals: {}
-      # Provide an empty family default for goal-specific event definitions.
-      events: {}
+      # Map the provider's exact native timeout boundary into the shared task vocabulary.
+      signals:
+        native_timeout: provider_truncated
+      # Materialize the native boundary as an ordinary task event for outcome classification.
+      events:
+        time_limit_reached:
+          signal: native_timeout
+          operation: equals_for
+          value: 1
+          steps: 1
       # Define the transformation from provider reward to learner-facing reward.
       reward:
         # Use the provider's native reward as the untransformed reward source.

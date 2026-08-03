@@ -24,6 +24,9 @@ train:
     env_config:
       # Reuse these Basic-specific provider arguments in evaluation via the YAML anchor.
       env_args: &basic_env_args
+        # Preserve the scenario's native horizon independently of policy frame skip.
+        vizdoom_config:
+          episode_timeout: 300
         # Configure which per-step information the provider exposes to GradLab.
         info_filter:
           # Control when the selected information keys are emitted.
@@ -50,6 +53,8 @@ train:
       termination:
         # List the events that mark an episode as successful.
         success: [goal_reached]
+        # Classify reaching the provider-native horizon without a kill as a timeout.
+        timeout: [time_limit_reached]
       # Configure the reward presented to the policy after the inherited native reward is computed.
       reward:
         # Set the positive divisor applied to native rewards before clipping.
@@ -68,8 +73,6 @@ eval:
   environment:
     # Supply evaluation-time arguments for the native vectorized ViZDoom environment.
     env_config:
-      # Bound evaluation at the scenario's 300-tic native horizon after four-frame skipping.
-      max_steps: 75
       # Reuse the Basic provider arguments declared for training.
       env_args: *basic_env_args
     # Merge the same Basic-specific task overrides into the shared evaluation task defaults.

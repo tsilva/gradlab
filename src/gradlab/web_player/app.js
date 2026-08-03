@@ -31,11 +31,11 @@ const workspaceWindowName = location.pathname.startsWith("/workspace/")
   : null;
 const pairedWorkspace = new URLSearchParams(location.search).get("workspace") === "paired";
 const token = new URLSearchParams(location.hash.slice(1)).get("token") || "";
-const WORKSPACE_ID_KEY = "gradlab.player.workspace.v5.id";
+const WORKSPACE_ID_KEY = "gradlab.player.workspace.v6.id";
 const LAYOUT_KEY = pairedWorkspace
-  ? "gradlab.player.workspace.v5.paired"
-  : "gradlab.player.workspace.v5.single";
-const SAVED_LAYOUTS_KEY = "gradlab.player.workspace.saved.v5";
+  ? "gradlab.player.workspace.v6.paired"
+  : "gradlab.player.workspace.v6.single";
+const SAVED_LAYOUTS_KEY = "gradlab.player.workspace.saved.v6";
 const STATS_WINDOW_ID = "stats";
 const workspaceId = localStorage.getItem(WORKSPACE_ID_KEY) || crypto.randomUUID();
 localStorage.setItem(WORKSPACE_ID_KEY, workspaceId);

@@ -14,7 +14,7 @@ from gradlab.checkpoint_acceptance import (
 from gradlab.json_utils import canonical_json_sha256
 
 
-PROTOCOL_SCHEMA_VERSION = 4
+PROTOCOL_SCHEMA_VERSION = 5
 
 
 def _sha256(value: object, *, label: str) -> str:
@@ -31,7 +31,7 @@ def build_execution_contract(
     eval_environment: Mapping[str, Any],
     episodes: int,
     n_envs: int,
-    max_steps: int,
+    watchdog_steps: int,
     seed: int,
     seed_protocol: str,
     asset_manifest: Mapping[str, Any] | None,
@@ -54,7 +54,7 @@ def build_execution_contract(
         "environment": dict(eval_environment),
         "episodes": int(episodes),
         "n_envs": int(n_envs),
-        "max_steps": int(max_steps),
+        "watchdog_steps": int(watchdog_steps),
         "deterministic": False,
         "action_sampling": str(action_sampling),
         "seed": int(seed),
@@ -71,8 +71,8 @@ def build_execution_contract(
             else None
         ),
     }
-    if contract["episodes"] < 1 or contract["n_envs"] < 1 or contract["max_steps"] < 1:
-        raise ValueError("eval episodes, n_envs, and max_steps must be positive")
+    if contract["episodes"] < 1 or contract["n_envs"] < 1 or contract["watchdog_steps"] < 1:
+        raise ValueError("eval episodes, n_envs, and watchdog_steps must be positive")
     if not str(runtime_image_ref).startswith("docker:") or "@sha256:" not in str(runtime_image_ref):
         raise ValueError("eval runtime image must be an immutable docker reference")
     if asset_manifest is not None and not str(asset_manifest.get("sha256") or ""):

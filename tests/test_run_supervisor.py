@@ -817,13 +817,25 @@ class RunSupervisorTests(unittest.TestCase):
         self.assertEqual(state, "resumable_failure")
         self.assertEqual(stop_reason, "learner_failure")
 
+    def test_cancellation_dominates_neutral_plateau(self) -> None:
+        state, stop_reason = _terminal_outcome(
+            cancel_requested=True,
+            failure=None,
+            evaluation_required=True,
+            promotion=None,
+            early_stop=self._early_stop_receipt(outcome="neutral"),
+        )
+
+        self.assertEqual(state, "canceled")
+        self.assertEqual(stop_reason, "canceled")
+
     def test_incomplete_eval_evidence_has_typed_resumable_outcome(self) -> None:
         state, stop_reason = _terminal_outcome(
             cancel_requested=False,
             failure=IncompleteEvaluationEvidence("eval infrastructure failed"),
             evaluation_required=True,
             promotion=None,
-            early_stop=self._early_stop_receipt(),
+            early_stop=self._early_stop_receipt(outcome="neutral"),
         )
 
         self.assertEqual(state, "resumable_failure")
@@ -866,6 +878,34 @@ class RunSupervisorTests(unittest.TestCase):
         self.assertEqual(state, "failed")
         self.assertEqual(stop_reason, "early_stop_failure:return_plateau")
 
+    def test_evaluated_neutral_plateau_stops_without_scientific_outcome(self) -> None:
+        receipt = self._early_stop_receipt(outcome="neutral")
+
+        state, stop_reason = _terminal_outcome(
+            cancel_requested=False,
+            failure=None,
+            evaluation_required=True,
+            promotion=None,
+            early_stop=receipt,
+        )
+
+        self.assertEqual(state, "stopped")
+        self.assertEqual(stop_reason, "early_stop_neutral:return_plateau")
+
+    def test_training_only_neutral_plateau_stops_the_attempt(self) -> None:
+        receipt = self._early_stop_receipt(outcome="neutral")
+
+        state, stop_reason = _terminal_outcome(
+            cancel_requested=False,
+            failure=None,
+            evaluation_required=False,
+            promotion=None,
+            early_stop=receipt,
+        )
+
+        self.assertEqual(state, "stopped")
+        self.assertEqual(stop_reason, "early_stop_neutral:return_plateau")
+
     def test_training_only_success_early_stop_succeeds_the_attempt(self) -> None:
         receipt = self._early_stop_receipt(outcome="success")
 
@@ -897,7 +937,7 @@ class RunSupervisorTests(unittest.TestCase):
             "early_stop_success_without_acceptance:return_plateau",
         )
 
-    def test_evaluation_promotion_overrides_failure_early_stop(self) -> None:
+    def test_evaluation_promotion_overrides_neutral_plateau(self) -> None:
         promotion = PromotionReceipt(
             run_id=self.run_id,
             checkpoint_id="checkpoint-1-" + "a" * 16,
@@ -913,7 +953,7 @@ class RunSupervisorTests(unittest.TestCase):
             failure=None,
             evaluation_required=True,
             promotion=promotion,
-            early_stop=self._early_stop_receipt(),
+            early_stop=self._early_stop_receipt(outcome="neutral"),
         )
 
         self.assertEqual(state, "succeeded")
@@ -931,7 +971,7 @@ class RunSupervisorTests(unittest.TestCase):
                     "delta_mode": "relative",
                     "start_after_steps": 0,
                     "patience_steps": 10,
-                    "outcome": "failure",
+                    "outcome": "neutral",
                     "action": "stop",
                 }
             }
@@ -963,14 +1003,14 @@ class RunSupervisorTests(unittest.TestCase):
         self.assertIsNotNone(receipt)
         assert receipt is not None
         self.assertEqual(receipt.condition_id, "return_plateau")
-        self.assertEqual(receipt.outcome, "failure")
+        self.assertEqual(receipt.outcome, "neutral")
         stored = self.authority.early_stop_receipt(
             run_id=self.run_id,
             attempt_id=self.manifest.attempt_id,
         )
         self.assertEqual(stored["decision_sha256"], receipt.decision_sha256)
         tampered = dict(stored)
-        tampered["outcome"] = "success"
+        tampered["outcome"] = "failure"
         self.authority.control.put_json(
             (f"runs/{self.run_id}/attempts/{self.manifest.attempt_id}/early-stop.json"),
             tampered,
@@ -1027,7 +1067,7 @@ class RunSupervisorTests(unittest.TestCase):
                     "delta_mode": "relative",
                     "start_after_steps": 0,
                     "patience_steps": 10,
-                    "outcome": "failure",
+                    "outcome": "neutral",
                     "action": "stop",
                 }
             }
@@ -1090,8 +1130,8 @@ class RunSupervisorTests(unittest.TestCase):
             promotion=None,
             early_stop=recovered,
         )
-        self.assertEqual(state, "failed")
-        self.assertEqual(stop_reason, "early_stop_failure:return_plateau")
+        self.assertEqual(state, "stopped")
+        self.assertEqual(stop_reason, "early_stop_neutral:return_plateau")
 
     def test_wandb_remote_probe_survives_sdk_finish(self) -> None:
         class RemoteRun:

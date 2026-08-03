@@ -244,7 +244,7 @@ def _phase_semantic_projection(environment: Mapping[str, Any]) -> dict[str, Any]
     projection = copy.deepcopy(dict(environment))
     env_config = projection.get("env_config")
     if isinstance(env_config, dict):
-        for key in ("n_envs", "seed", "max_steps"):
+        for key in ("n_envs", "seed"):
             env_config.pop(key, None)
     task = projection.get("task")
     if isinstance(task, dict):

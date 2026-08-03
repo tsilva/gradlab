@@ -20,7 +20,6 @@ from gradlab.eval_metrics import (
 )
 from gradlab.eval_runner import (
     _acceptance_runtime_config,
-    _eval_runtime_config,
     evaluate_model_episodes,
 )
 from gradlab.metric_names import metric_path_segment
@@ -108,7 +107,7 @@ class EvalPreviewEquivalenceTests(unittest.TestCase):
                 config=config,
                 episodes=2,
                 seed=7,
-                max_steps=10,
+                watchdog_steps=10,
                 deterministic=False,
                 n_envs=2,
             )
@@ -118,7 +117,7 @@ class EvalPreviewEquivalenceTests(unittest.TestCase):
                 config=config,
                 episodes=2,
                 seed=7,
-                max_steps=10,
+                watchdog_steps=10,
                 deterministic=False,
                 n_envs=2,
                 preview_capture=capture,
@@ -164,7 +163,7 @@ class EvalByStartTableTests(unittest.TestCase):
         self.assertEqual(indexed[("A", "level_change")][1:7], [2, 1, 0.5, 5.0, 4.0, 5.0])
         self.assertEqual(indexed[("A", "level_change")][8:], [1, 0.5])
         self.assertEqual(indexed[("A", "life_loss")][8:], [1, 0.5])
-        self.assertEqual(indexed[("B", "max_steps")][1:7], [1, 0, 0.0, 100.0, 0.0, 100.0])
+        self.assertEqual(indexed[("B", "timeout")][1:7], [1, 0, 0.0, 100.0, 0.0, 100.0])
 
 
 class EvalMetricTests(unittest.TestCase):
@@ -197,7 +196,7 @@ class EvalMetricTests(unittest.TestCase):
                 config=EnvConfig(game="SuperMarioBros-Nes-v0"),
                 episodes=1,
                 seed=10_000,
-                max_steps=10,
+                watchdog_steps=10,
                 deterministic=True,
             )
 
@@ -487,7 +486,7 @@ class EvalMetricTests(unittest.TestCase):
         self.assertNotIn("eval/full/outcome/reason/max_steps/count", summary)
         self.assertFalse(any("/from/Start" in name and "/reason/" in name for name in summary))
 
-    def test_eval_runtime_preserves_non_life_loss_failures(self) -> None:
+    def test_evaluation_passes_the_exact_task_contract_to_the_runtime(self) -> None:
         config = EnvConfig(
             game="Breakout-Atari2600-v0",
             task={
@@ -498,33 +497,40 @@ class EvalMetricTests(unittest.TestCase):
             },
         )
 
-        runtime_config = _eval_runtime_config(
-            config,
-            max_steps=54000,
-            semantics=environment_spec("gymnasium", "breakout").eval_semantics,
+        class FakeEnv:
+            def close(self) -> None:
+                pass
+
+        fake_env = FakeEnv()
+        result = {
+            "actions": [],
+            "start_state": "default",
+            "return": 0.0,
+            "steps": 1,
+            "outcome": "failure",
+            "terminated": True,
+            "truncated": False,
+            "final_info": {},
+        }
+
+        with (
+            patch("gradlab.eval_runner.make_eval_vec_env", return_value=fake_env) as make_env,
+            patch("gradlab.eval_runner.run_eval_episode", return_value=result),
+        ):
+            evaluate_model_episodes(
+                model=object(),
+                config=config,
+                episodes=1,
+                seed=10_000,
+                watchdog_steps=54000,
+                deterministic=False,
+            )
+
+        self.assertIs(make_env.call_args.kwargs["config"], config)
+        self.assertEqual(
+            make_env.call_args.kwargs["config"].task["termination"],
+            config.task["termination"],
         )
-
-        self.assertEqual(runtime_config.task["termination"]["failure"], ["serve_stall"])
-
-    def test_eval_runtime_preserves_explicit_game_completion_success(self) -> None:
-        config = EnvConfig(
-            game="SuperMarioBros-Nes-v0",
-            task={
-                "termination": {
-                    "failure": [],
-                    "success": ["game_complete"],
-                    "max_episode_steps": 144000,
-                }
-            },
-        )
-
-        runtime_config = _eval_runtime_config(
-            config,
-            max_steps=144000,
-            semantics=environment_spec(config.env_provider, config.game).eval_semantics,
-        )
-
-        self.assertEqual(runtime_config.task["termination"]["success"], ["game_complete"])
 
     def test_checkpoint_score_prefers_fewer_timesteps_after_completion_goal(self) -> None:
         slower_higher_reward = {
@@ -654,7 +660,7 @@ class EvalMetricTests(unittest.TestCase):
         result = run_eval_episode(
             FakeEnv(),
             FakeModel(),
-            max_steps=2,
+            watchdog_steps=2,
             deterministic=False,
             seed=7,
             default_start_state="Level1-1",
@@ -677,7 +683,7 @@ class EvalMetricTests(unittest.TestCase):
             },
             episodes=4,
             n_envs=2,
-            max_steps=10,
+            watchdog_steps=10,
             seed=10_000,
             seed_protocol=SEED_PROTOCOL,
             acceptance=[
@@ -707,7 +713,7 @@ class EvalMetricTests(unittest.TestCase):
             environment={"game": "Breakout-Atari2600-v0", "state": "full"},
             episodes=2,
             n_envs=2,
-            max_steps=10,
+            watchdog_steps=10,
             seed=10_000,
             seed_protocol=SEED_PROTOCOL,
             acceptance=contract["acceptance"],
@@ -733,7 +739,7 @@ class EvalMetricTests(unittest.TestCase):
             environment={"game": "SuperMarioBros-Nes-v0", "state": "Level1-1"},
             episodes=3,
             n_envs=1,
-            max_steps=10,
+            watchdog_steps=10,
             seed=10_000,
             seed_protocol=SEED_PROTOCOL,
             acceptance=[
@@ -768,7 +774,7 @@ class EvalMetricTests(unittest.TestCase):
                 config=EnvConfig(game="SuperMarioBros-Nes-v0", state="Level1-1"),
                 episodes=3,
                 seed=10_000,
-                max_steps=10,
+                watchdog_steps=10,
                 deterministic=False,
                 n_envs=1,
                 acceptance_contract=contract,
@@ -889,7 +895,7 @@ class EvalMetricTests(unittest.TestCase):
                 config=config,
                 episodes=2,
                 seed=7,
-                max_steps=10,
+                watchdog_steps=10,
                 deterministic=False,
                 n_envs=2,
             )
@@ -983,7 +989,7 @@ class EvalMetricTests(unittest.TestCase):
                 ),
                 episodes=2,
                 seed=7,
-                max_steps=10,
+                watchdog_steps=10,
                 deterministic=False,
                 n_envs=2,
             )
@@ -994,6 +1000,60 @@ class EvalMetricTests(unittest.TestCase):
         self.assertEqual(metrics["best_episode"]["outcome"], "success")
         self.assertTrue(metrics["episode_results"][0]["level_complete"])
         self.assertFalse(metrics["episode_results"][1]["level_complete"])
+
+    def test_vector_eval_watchdog_aborts_a_lane_without_episode_records(self) -> None:
+        class FakeModel:
+            def predict(self, obs, deterministic):
+                return np.zeros(obs.shape[0], dtype=np.int64), None
+
+        class FakeVecEnv:
+            num_envs = 2
+
+            def __init__(self) -> None:
+                self.step_count = 0
+                self.closed = False
+
+            def reset(self):
+                return np.zeros((2, 4, 84, 84), dtype=np.uint8)
+
+            def step(self, action):
+                self.step_count += 1
+                return (
+                    np.zeros((2, 4, 84, 84), dtype=np.uint8),
+                    np.zeros(2, dtype=np.float32),
+                    np.zeros(2, dtype=bool),
+                    [{}, {}],
+                )
+
+            def drain_records(self):
+                return []
+
+            def close(self) -> None:
+                self.closed = True
+
+        fake_env = FakeVecEnv()
+        with (
+            patch("gradlab.eval_runner.make_eval_vec_env", return_value=fake_env),
+            self.assertRaisesRegex(
+                RuntimeError,
+                r"watchdog expired.*lanes \[0, 1\]",
+            ),
+        ):
+            evaluate_model_episodes(
+                model=FakeModel(),
+                config=EnvConfig(
+                    game="SuperMarioBros-Nes-v0",
+                    task=default_task_document("mario"),
+                ),
+                episodes=2,
+                seed=7,
+                watchdog_steps=2,
+                deterministic=False,
+                n_envs=2,
+            )
+
+        self.assertEqual(fake_env.step_count, 2)
+        self.assertTrue(fake_env.closed)
 
     def test_vector_eval_does_not_stop_on_completion(self) -> None:
         class FakeModel:
@@ -1091,7 +1151,7 @@ class EvalMetricTests(unittest.TestCase):
                 config=config,
                 episodes=1,
                 seed=7,
-                max_steps=2,
+                watchdog_steps=2,
                 deterministic=False,
                 n_envs=2,
             )
@@ -1165,7 +1225,7 @@ class EvalMetricTests(unittest.TestCase):
                 config=EnvConfig(game="SuperMarioBros-Nes-v0"),
                 episodes=3,
                 seed=7,
-                max_steps=10,
+                watchdog_steps=10,
                 deterministic=False,
                 progress=True,
                 progress_description="eval checkpoint 4100000",
@@ -1231,6 +1291,10 @@ class EvalMetricTests(unittest.TestCase):
         }
         video_env = FakeVideoEnv()
         output = Path("/tmp/gradlab-eval-video.mp4")
+        config = EnvConfig(
+            game="SuperMarioBros-Nes-v0",
+            task={"termination": {"success": ["goal_reached"]}},
+        )
         with (
             patch(
                 "gradlab.eval_runner.make_eval_vec_env",
@@ -1241,10 +1305,10 @@ class EvalMetricTests(unittest.TestCase):
         ):
             metrics, video_path = evaluate_model_episodes(
                 model=object(),
-                config=EnvConfig(game="SuperMarioBros-Nes-v0"),
+                config=config,
                 episodes=1,
                 seed=10_007,
-                max_steps=10,
+                watchdog_steps=10,
                 deterministic=False,
                 capture_best_video=True,
                 video_path=output,
@@ -1253,10 +1317,8 @@ class EvalMetricTests(unittest.TestCase):
         self.assertEqual(video_path, output)
         self.assertEqual(metrics["best_episode_video"], str(output))
         self.assertEqual(make_env.call_count, 2)
-        self.assertEqual(
-            make_env.call_args_list[1].kwargs["config"].task["termination"]["success"],
-            [],
-        )
+        self.assertIs(make_env.call_args_list[1].kwargs["config"], config)
+        self.assertEqual(config.task["termination"]["success"], ["goal_reached"])
         self.assertEqual(len(video_env.actions), 2)
         written_frames = write_video.call_args.args[0]
         self.assertEqual(len(written_frames), 3)

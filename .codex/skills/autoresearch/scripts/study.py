@@ -55,6 +55,10 @@ EVIDENCE_SUCCESS = "success"
 EVIDENCE_RETURN = "return"
 EVIDENCE_MODES = frozenset({EVIDENCE_SUCCESS, EVIDENCE_RETURN})
 DESIGNED_EARLY_STOP_FAILURE = "designed_early_stop_failure"
+DESIGNED_PLATEAU_STOP = "designed_plateau_stop"
+DESIGNED_PLATEAU_CLASSIFICATIONS = frozenset(
+    {DESIGNED_PLATEAU_STOP, DESIGNED_EARLY_STOP_FAILURE}
+)
 
 SCREEN_PHASES = frozenset({"baseline-screen", "search-screen"})
 PAIR_PHASES = frozenset({"baseline-pair", "search-pair"})
@@ -1238,6 +1242,16 @@ def command_record_terminal(args: argparse.Namespace) -> None:
         early_stop = terminal.get("early_stop") or {}
         condition = early_stop.get("condition") or {}
         condition_id = str(early_stop.get("condition_id") or "")
+        designed_plateau_stop = (
+            str(terminal.get("state") or "") == "stopped"
+            and stop_reason == f"early_stop_neutral:{condition_id}"
+            and bool(condition_id)
+            and str(early_stop.get("outcome") or "") == "neutral"
+            and str(early_stop.get("trigger") or condition.get("trigger") or "")
+            == "no_improvement"
+            and str(condition.get("outcome") or "") == "neutral"
+            and str(condition.get("action") or "") == "stop"
+        )
         designed_failure = (
             str(terminal.get("state") or "") == "failed"
             and stop_reason == f"early_stop_failure:{condition_id}"
@@ -1249,6 +1263,8 @@ def command_record_terminal(args: argparse.Namespace) -> None:
         classification = (
             "completed"
             if str(terminal.get("state") or "") == "succeeded"
+            else DESIGNED_PLATEAU_STOP
+            if designed_plateau_stop
             else DESIGNED_EARLY_STOP_FAILURE
             if designed_failure
             else "failed"
@@ -1256,7 +1272,7 @@ def command_record_terminal(args: argparse.Namespace) -> None:
         high_water = int(terminal.get("wandb_high_water_mark") or 0)
         remote_high_water = int(drain.get("wandb_remote_high_water_mark") or 0)
         valid = (
-            classification in {"completed", DESIGNED_EARLY_STOP_FAILURE}
+            classification in {"completed", *DESIGNED_PLATEAU_CLASSIFICATIONS}
             and terminal.get("acceptance_required") is False
             and drain.get("complete") is True
             and high_water > 0
@@ -1272,7 +1288,11 @@ def command_record_terminal(args: argparse.Namespace) -> None:
             "seed": seed,
             "classification": classification,
             "stop_reason": stop_reason,
-            "early_stop": copy.deepcopy(early_stop) if designed_failure else None,
+            "early_stop": (
+                copy.deepcopy(early_stop)
+                if designed_plateau_stop or designed_failure
+                else None
+            ),
             "wandb_run_id": wandb.get("run_id"),
             "wandb_url": wandb.get("url"),
             "training_evidence": None,
@@ -1461,7 +1481,7 @@ def command_collect_training_evidence(args: argparse.Namespace) -> None:
             state["policy"].get("return_tail_fraction", RETURN_TAIL_FRACTION)
         ),
     )
-    if record.get("classification") == DESIGNED_EARLY_STOP_FAILURE:
+    if record.get("classification") in DESIGNED_PLATEAU_CLASSIFICATIONS:
         evidence["observed_all_starts_succeeded"] = evidence["all_starts_succeeded"]
         evidence["observed_strong"] = evidence["strong"]
         evidence["observed_first_strong_step"] = evidence["first_strong_step"]

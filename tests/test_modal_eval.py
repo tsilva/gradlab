@@ -34,7 +34,7 @@ def _contract(model: Path) -> dict:
         eval_environment={"env_provider": "gradlab", "game": "Bandit-v0", "task": {}},
         episodes=2,
         n_envs=2,
-        max_steps=100,
+        watchdog_steps=100,
         seed=10_000,
         seed_protocol=SEED_PROTOCOL,
         asset_manifest=None,

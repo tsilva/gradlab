@@ -46,6 +46,7 @@ class TerminalReason(StrEnum):
     TRAINING_ACCEPTANCE = "deterministic_training_acceptance"
     RESOURCE_EXHAUSTION = "resource_exhaustion"
     EARLY_STOP_FAILURE = "early_stop_failure"
+    EARLY_STOP_NEUTRAL = "early_stop_neutral"
     EARLY_STOP_SUCCESS = "early_stop_success"
     LOCAL_INTERRUPTION = "local_interruption"
     EXTERNAL_SIGNAL = "external_signal"
@@ -796,11 +797,12 @@ class TrainingSession:
             return TerminalReason.FIRST_COMPLETION
         decision = self.stop_controller.decision
         if decision is not None:
-            return (
-                TerminalReason.EARLY_STOP_SUCCESS
-                if str(decision.get("outcome")) == "success"
-                else TerminalReason.EARLY_STOP_FAILURE
-            )
+            outcome = str(decision.get("outcome"))
+            if outcome == "success":
+                return TerminalReason.EARLY_STOP_SUCCESS
+            if outcome == "neutral":
+                return TerminalReason.EARLY_STOP_NEUTRAL
+            return TerminalReason.EARLY_STOP_FAILURE
         if self.stop_flag.requested:
             if self.execution_policy.mode == TrainingExecutionMode.SUPERVISED:
                 return TerminalReason.EXTERNAL_SIGNAL

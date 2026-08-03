@@ -10,7 +10,7 @@ GradLab is a reproducible reinforcement-learning workbench that carries game-age
 - Evaluated goals must define their environment, success criteria, ranking, evaluation, and release rules.
 - Training-only goals must remain ineligible for acceptance, completion, checkpoint promotion, or release.
 - Every launchable training configuration must belong to one goal, declare a finite resource limit and meaningful description, and resolve all execution choices.
-- Launchable training recipes must configure an unsuccessful early-stop condition for sustained lack of improvement in a task-aligned training metric by default; an explicit goal-scoped recipe configuration or launch-time override may disable it for a bounded run, and neither the condition nor its absence may establish goal acceptance or checkpoint promotion.
+- Launchable training recipes must configure a neutral early-stop condition for sustained lack of improvement in a task-aligned training metric by default; an explicit goal-scoped recipe configuration or launch-time override may disable it for a bounded run; a plateau stop must not mark the run failed, establish goal acceptance, or promote a checkpoint.
 - Invalid or inconsistent goals, run configurations, benchmarks, capacity rules, and execution settings must be rejected before execution or external mutation.
 - Each run must declare one complete observation, action, reward, discount, event, start-state, and episode-boundary contract and preserve its policy-facing semantics.
 - Training-only curricula and phase-specific behavior must be declared, and evidence outside the final evaluation contract must not establish acceptance or promotion.

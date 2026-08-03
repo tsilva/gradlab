@@ -14,6 +14,9 @@ train:
     env_config:
       # Reuse these scenario-specific provider arguments in evaluation via the YAML anchor.
       env_args: &take_cover_env_args
+        # Preserve the survival horizon independently of policy frame skip.
+        vizdoom_config:
+          episode_timeout: 2048
         # Configure which per-step information the provider exposes to GradLab.
         info_filter:
           # Control when the selected information keys are emitted.
@@ -30,16 +33,12 @@ train:
       events:
         # Detect death when the provider's death flag is asserted for a step.
         player_died: {signal: player_dead, operation: equals_for, value: 1, steps: 1}
-        # Detect reaching the survival goal after remaining alive for the full task horizon.
-        goal_reached: {signal: player_dead, operation: equals_for, value: 0, steps: 512}
       # Define which task events end an episode and how each outcome is classified.
       termination:
         # List the events that mark an episode as failed.
         failure: [player_died]
         # List the events that mark an episode as successful.
-        success: [goal_reached]
-        # Cap each attempt in policy-environment transitions.
-        max_episode_steps: 512
+        success: [time_limit_reached]
       # Configure the reward presented to the policy after the inherited native reward is computed.
       reward:
         # Set the positive divisor applied to native rewards before clipping.

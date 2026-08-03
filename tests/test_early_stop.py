@@ -9,6 +9,7 @@ from gradlab.early_stop import (
     MetricSample,
     normalize_metric_early_stop_config,
     validate_metric_early_stop_decision,
+    validate_metric_early_stop_policy,
 )
 from gradlab.metric_names import (
     TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_ROLLING_UP_TO_100_MEAN,
@@ -23,7 +24,7 @@ def plateau_condition(
     min_delta: float = 0.01,
     start_after_steps: int = 100,
     patience_steps: int = 100,
-    outcome: str = "failure",
+    outcome: str = "neutral",
     action: str = "stop",
 ) -> dict:
     return {
@@ -167,7 +168,7 @@ def test_plateau_tracks_relative_improvement_after_warmup() -> None:
     )
 
     assert result.stop_decision is not None
-    assert result.stop_decision["outcome"] == "failure"
+    assert result.stop_decision["outcome"] == "neutral"
 
 
 def test_minimize_plateau_uses_absolute_improvement() -> None:
@@ -285,6 +286,52 @@ def test_success_wins_when_success_and_failure_stop_together() -> None:
     assert result.stop_decision is not None
     assert result.stop_decision["condition_id"] == "success"
     assert result.stop_decision["matched_condition_ids"] == ["failure", "success"]
+
+
+def test_stop_precedence_is_success_then_failure_then_neutral_then_condition_id() -> None:
+    conditions = {
+        "neutral_z": threshold_condition(outcome="neutral"),
+        "neutral_a": threshold_condition(outcome="neutral"),
+        "failure": threshold_condition(outcome="failure"),
+        "success": threshold_condition(outcome="success"),
+    }
+    metric = TRAIN_OUTCOME_SUCCESS_ACROSS_STARTS_WINDOW_100_RATE_MIN
+
+    all_outcomes = MetricEarlyStopStateMachine({"conditions": conditions})
+    assert update(all_outcomes, metric, 1.0, 10).stop_decision["condition_id"] == "success"
+
+    no_success = MetricEarlyStopStateMachine(
+        {"conditions": {key: value for key, value in conditions.items() if key != "success"}}
+    )
+    assert update(no_success, metric, 1.0, 10).stop_decision["condition_id"] == "failure"
+
+    neutral_only = MetricEarlyStopStateMachine(
+        {"conditions": {key: value for key, value in conditions.items() if key.startswith("neutral")}}
+    )
+    assert update(neutral_only, metric, 1.0, 10).stop_decision["condition_id"] == "neutral_a"
+
+
+def test_current_policy_accepts_neutral_plateau_and_rejects_historical_authoring() -> None:
+    neutral = {"conditions": {"plateau": plateau_condition()}}
+    historical = {
+        "conditions": {"plateau": plateau_condition(outcome="failure")}
+    }
+
+    assert validate_metric_early_stop_policy(neutral) == normalize_metric_early_stop_config(
+        neutral
+    )
+    assert normalize_metric_early_stop_config(historical)["conditions"]["plateau"][
+        "outcome"
+    ] == "failure"
+    with pytest.raises(ValueError, match="must be neutral for no_improvement"):
+        validate_metric_early_stop_policy(historical)
+
+
+def test_current_policy_rejects_neutral_threshold() -> None:
+    with pytest.raises(ValueError, match="must be one of failure, success"):
+        validate_metric_early_stop_policy(
+            {"conditions": {"target": threshold_condition(outcome="neutral")}}
+        )
 
 
 def test_decision_validation_rejects_tampering() -> None:

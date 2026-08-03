@@ -10,7 +10,7 @@ import torch
 from tqdm.auto import tqdm
 
 from gradlab.action_contract import assert_action_contract_compatible
-from gradlab.env import EnvConfig, make_eval_vec_env, task_termination, with_task_termination
+from gradlab.env import EnvConfig, make_eval_vec_env, task_termination
 from gradlab.env import assert_provider_runtime_available, resolve_env_config
 from gradlab.env_metadata import env_config_from_config_dict
 from gradlab.eval_metrics import (
@@ -47,28 +47,6 @@ from gradlab.policy_registry import resolve_policy_algorithm
 from gradlab.policy_runtime import PolicyRuntime, bind_policy_action_space, reset_policy_state
 from gradlab.env_registry import EvalSemantics, environment_spec
 from gradlab.video import PolicyObservationPreview, write_video
-
-
-def _eval_runtime_config(
-    config: EnvConfig,
-    *,
-    max_steps: int,
-    semantics: EvalSemantics,
-    exact_task_contract: bool = False,
-) -> EnvConfig:
-    if exact_task_contract:
-        return with_task_termination(config, max_episode_steps=max_steps)
-    termination = task_termination(config)
-    success = list(termination.get("success", ()))
-    failure = [name for name in termination.get("failure", ()) if name != "life_loss"]
-    if semantics.completion_reason == "level_change" and not success:
-        success = list(dict.fromkeys((*success, "level_change")))
-    return with_task_termination(
-        config,
-        max_episode_steps=max_steps,
-        success=success,
-        failure=failure,
-    )
 
 
 def _acceptance_runtime_config(
@@ -108,12 +86,11 @@ def _evaluate_model_episodes_vector(
     episodes: int,
     seed: int,
     n_envs: int,
-    max_steps: int,
+    watchdog_steps: int,
     deterministic: bool,
     semantics: EvalSemantics,
     progress_bar: Any | None = None,
     preview_capture: PolicyObservationPreview | None = None,
-    exact_task_contract: bool = False,
     acceptance_contract: dict[str, Any] | None = None,
     rom_binding: RomRuntimeBinding | None = None,
     policy_runtime: PolicyRuntime | None = None,
@@ -125,14 +102,8 @@ def _evaluate_model_episodes_vector(
         and acceptance_contract.get("evidence_policy", {}).get("fail_fast")
         == "first_failed_episode"
     )
-    vec_config = _eval_runtime_config(
-        config,
-        max_steps=max_steps,
-        semantics=semantics,
-        exact_task_contract=exact_task_contract,
-    )
     vec_config = _acceptance_runtime_config(
-        vec_config,
+        config,
         acceptance_contract=acceptance_contract,
         n_envs=n_envs,
     )
@@ -170,6 +141,7 @@ def _evaluate_model_episodes_vector(
         torch.manual_seed(seed)
         np.random.seed(seed)
         obs = eval_env.reset()
+        lane_watchdog_steps = np.zeros(n_envs, dtype=np.int64)
         while len(episode_results) < episodes and not rejected:
             if policy_runtime is None:
                 action, _ = model.predict(obs, deterministic=deterministic)
@@ -179,13 +151,12 @@ def _evaluate_model_episodes_vector(
                     action_selection_mode=action_selection_mode,
                     execution_context=(
                         eval_env.policy_execution_context(model)
-                        if callable(
-                            getattr(eval_env, "policy_execution_context", None)
-                        )
+                        if callable(getattr(eval_env, "policy_execution_context", None))
                         else None
                     ),
                 ).actions
             obs, _step_rewards, dones, infos = eval_env.step(action)
+            lane_watchdog_steps += 1
             reset_policy_state(model, dones)
             if preview_capture is not None:
                 preview_capture.capture(obs)
@@ -194,6 +165,7 @@ def _evaluate_model_episodes_vector(
             }
             for record in drain_episode_records(eval_env):
                 lane = int(record.lane)
+                lane_watchdog_steps[lane] = 0
                 lane_ordinal = lane_episode_ordinals.get(lane, 0)
                 lane_episode_ordinals[lane] = lane_ordinal + 1
                 manifest_entry = planned.get((lane, lane_ordinal)) if planned is not None else None
@@ -231,6 +203,14 @@ def _evaluate_model_episodes_vector(
                     break
                 if len(episode_results) >= episodes:
                     break
+            if len(episode_results) >= episodes or rejected:
+                break
+            expired = np.flatnonzero(lane_watchdog_steps >= watchdog_steps)
+            if expired.size:
+                raise RuntimeError(
+                    "evaluation watchdog expired without a scientific episode-boundary "
+                    f"record in lanes {expired.tolist()}"
+                )
     finally:
         eval_env.close()
 
@@ -243,7 +223,7 @@ def evaluate_model_episodes(
     config: EnvConfig,
     episodes: int,
     seed: int,
-    max_steps: int,
+    watchdog_steps: int,
     deterministic: bool,
     n_envs: int = 1,
     capture_best_video: bool = False,
@@ -254,7 +234,6 @@ def evaluate_model_episodes(
     progress: bool = False,
     progress_description: str = "eval episodes",
     preview_capture: PolicyObservationPreview | None = None,
-    exact_task_contract: bool = False,
     acceptance_contract: dict[str, Any] | None = None,
     rom_binding: RomRuntimeBinding | None = None,
     action_selection_mode: str | None = None,
@@ -270,6 +249,8 @@ def evaluate_model_episodes(
 
     if n_envs < 1:
         raise ValueError("n_envs must be >= 1")
+    if watchdog_steps < 1:
+        raise ValueError("watchdog_steps must be >= 1")
     if n_envs > 1 and capture_best_video:
         raise ValueError("capture_best_video requires n_envs=1")
     semantics = environment_spec(config.env_provider, config.game).eval_semantics
@@ -290,12 +271,7 @@ def evaluate_model_episodes(
         leave=True,
     ) as progress_bar:
         if n_envs == 1:
-            eval_config = _eval_runtime_config(
-                config,
-                max_steps=max_steps,
-                semantics=semantics,
-                exact_task_contract=exact_task_contract,
-            )
+            eval_config = config
             eval_env = make_eval_vec_env(
                 config=eval_config,
                 n_envs=1,
@@ -335,7 +311,7 @@ def evaluate_model_episodes(
                     result = run_eval_episode(
                         eval_env,
                         model,
-                        max_steps=max_steps,
+                        watchdog_steps=watchdog_steps,
                         deterministic=deterministic,
                         seed=episode_seed,
                         capture_actions=capture_best_video,
@@ -385,12 +361,11 @@ def evaluate_model_episodes(
                 episodes=episodes,
                 seed=seed,
                 n_envs=n_envs,
-                max_steps=max_steps,
+                watchdog_steps=watchdog_steps,
                 deterministic=deterministic,
                 progress_bar=progress_bar,
                 semantics=semantics,
                 preview_capture=preview_capture,
-                exact_task_contract=exact_task_contract,
                 acceptance_contract=acceptance_contract,
                 rom_binding=rom_binding,
                 policy_runtime=policy_runtime,
@@ -432,14 +407,8 @@ def evaluate_model_episodes(
         and best_episode_actions
         and best_episode_seed is not None
     ):
-        video_config = with_task_termination(
-            config,
-            max_episode_steps=max_steps,
-            failure=[],
-            success=[],
-        )
         video_env = make_eval_vec_env(
-            config=video_config,
+            config=config,
             n_envs=1,
             seed=best_episode_seed,
             rom_binding=rom_binding,
@@ -477,6 +446,7 @@ def evaluate_policy_bundle(
     device: str = "auto",
     episodes: int | None = None,
     n_envs: int | None = None,
+    watchdog_steps: int | None = None,
     progress: bool = False,
     capture_best_video: bool = False,
     video_path: Path | None = None,
@@ -491,6 +461,7 @@ def evaluate_policy_bundle(
         bundle,
         episodes=episodes,
         n_envs=n_envs,
+        watchdog_steps=watchdog_steps,
         semantic_overrides=semantic_overrides,
     )
     contract = evaluation_contract(bundle.recipe)
@@ -545,32 +516,36 @@ def evaluate_policy_bundle(
     requested_episodes = int(request["episodes"])
     requested_n_envs = int(request["n_envs"])
     requested_seed = int(request["seed"])
-    requested_max_steps = int(request["max_steps"])
+    requested_watchdog_steps = int(request["watchdog_steps"])
     effective_acceptance_contract = acceptance_contract
+    if effective_acceptance_contract is not None and requested_watchdog_steps != int(
+        effective_acceptance_contract["watchdog_steps"]
+    ):
+        raise ValueError("acceptance evaluation watchdog differs from its contract")
     if effective_acceptance_contract is None and "manifest" in contract:
         if (
             requested_episodes == int(contract["episodes"])
             and requested_n_envs == int(contract["n_envs"])
             and requested_seed == int(contract["seed"])
-            and requested_max_steps == int(contract["max_steps"])
+            and requested_watchdog_steps == int(contract["watchdog_steps"])
             and request["environment"] == contract["environment"]
         ):
             effective_acceptance_contract = contract
-        else:
+        elif requested_watchdog_steps == int(contract["watchdog_steps"]):
             from gradlab.checkpoint_acceptance import build_checkpoint_eval_contract
 
             effective_acceptance_contract = build_checkpoint_eval_contract(
                 environment=request["environment"],
                 episodes=requested_episodes,
                 n_envs=requested_n_envs,
-                max_steps=requested_max_steps,
+                watchdog_steps=requested_watchdog_steps,
                 seed=requested_seed,
                 seed_protocol=str(contract["seed_protocol"]),
                 acceptance=contract["acceptance"],
                 asset=contract.get("asset"),
                 action_sampling=str(contract["action_sampling"]),
             )
-    exact_contract = not overrides
+    exact_contract = not overrides and requested_watchdog_steps == int(contract["watchdog_steps"])
     evidence = {
         "source": bundle.source,
         "source_revision": bundle.revision,
@@ -584,6 +559,7 @@ def evaluate_policy_bundle(
         "operational_overrides": {
             "episodes": requested_episodes,
             "n_envs": requested_n_envs,
+            "watchdog_steps": requested_watchdog_steps,
             "progress": bool(progress),
             "capture_best_video": bool(capture_best_video),
         },
@@ -595,14 +571,13 @@ def evaluate_policy_bundle(
         config=config,
         episodes=requested_episodes,
         seed=requested_seed,
-        max_steps=requested_max_steps,
+        watchdog_steps=requested_watchdog_steps,
         deterministic=False,
         n_envs=requested_n_envs,
         capture_best_video=capture_best_video,
         video_path=video_path,
         progress=progress,
         progress_description="eval policy bundle",
-        exact_task_contract=True,
         acceptance_contract=effective_acceptance_contract,
         extra=evidence,
         preview_capture=preview_capture,
@@ -629,6 +604,7 @@ def normalized_evaluation_request(
     *,
     episodes: int | None = None,
     n_envs: int | None = None,
+    watchdog_steps: int | None = None,
     semantic_overrides: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     contract = evaluation_contract(bundle.recipe)
@@ -638,7 +614,7 @@ def normalized_evaluation_request(
             f"{contract['seed_protocol']!r}; supported protocol is {SEED_PROTOCOL!r}"
         )
     overrides = dict(semantic_overrides or {})
-    allowed_semantic_overrides = {"seed", "max_steps", "environment"}
+    allowed_semantic_overrides = {"seed", "environment"}
     unknown_overrides = sorted(set(overrides) - allowed_semantic_overrides)
     if unknown_overrides:
         raise PolicyDocumentError(
@@ -646,8 +622,13 @@ def normalized_evaluation_request(
         )
     requested_episodes = int(episodes if episodes is not None else contract["episodes"])
     requested_n_envs = int(n_envs if n_envs is not None else contract["n_envs"])
-    if requested_episodes < 1 or requested_n_envs < 1:
-        raise PolicyDocumentError("evaluation episodes and n_envs must be positive")
+    requested_watchdog_steps = int(
+        watchdog_steps if watchdog_steps is not None else contract["watchdog_steps"]
+    )
+    if requested_episodes < 1 or requested_n_envs < 1 or requested_watchdog_steps < 1:
+        raise PolicyDocumentError(
+            "evaluation episodes, n_envs, and watchdog_steps must be positive"
+        )
     seed = int(overrides.get("seed", contract["seed"]))
     environment = dict(contract["environment"])
     environment_overrides = overrides.get("environment")
@@ -667,7 +648,6 @@ def normalized_evaluation_request(
         requested_episodes != int(contract["episodes"])
         or requested_n_envs != int(contract["n_envs"])
         or seed != int(contract["seed"])
-        or int(overrides.get("max_steps", contract["max_steps"])) != int(contract["max_steps"])
         or environment != contract["environment"]
     ):
         from gradlab.checkpoint_acceptance import build_checkpoint_eval_contract
@@ -676,7 +656,7 @@ def normalized_evaluation_request(
             environment=environment,
             episodes=requested_episodes,
             n_envs=requested_n_envs,
-            max_steps=int(overrides.get("max_steps", contract["max_steps"])),
+            watchdog_steps=int(contract["watchdog_steps"]),
             seed=seed,
             seed_protocol=str(contract["seed_protocol"]),
             acceptance=contract["acceptance"],
@@ -691,7 +671,7 @@ def normalized_evaluation_request(
         "action_sampling": contract["action_sampling"],
         "episodes": requested_episodes,
         "n_envs": requested_n_envs,
-        "max_steps": int(overrides.get("max_steps", contract["max_steps"])),
+        "watchdog_steps": requested_watchdog_steps,
         "seed": seed,
         "seed_protocol": contract["seed_protocol"],
         "semantic_overrides": overrides,

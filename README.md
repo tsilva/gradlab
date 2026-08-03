@@ -243,7 +243,7 @@ policy distributions, and dynamic metric explorers. Panels can be edited,
 duplicated, hidden, resized, rearranged, or moved to a synchronized window.
 The reward summary, value estimate, step reward, and episode return each have
 their own built-in panel so history graphs never force the summary panel to
-scroll. The player reads and writes only the current workspace v5 schema;
+scroll. The player reads and writes only the current workspace v6 schema;
 noncurrent saved layouts are ignored.
 
 Policy diagnostics are capability-driven. PPO and A2C expose their actor
@@ -286,9 +286,11 @@ after acceptance; it is not sent to Modal.
 
 For an evaluated goal, a training plateau is provisional until evaluation
 drain settles. Acceptance wins even if the learner reached the plateau first.
-Without acceptance, the plateau becomes a scientific failure only when every
-published checkpoint has a valid rejected evaluation. Failed, expired, or
-otherwise incomplete evaluation evidence produces a resumable attempt instead.
+Without acceptance, complete valid rejections produce a neutral `stopped`
+attempt with `early_stop_neutral:<condition_id>` rather than scientific failure.
+Failed, expired, or otherwise incomplete evaluation evidence produces a resumable
+attempt instead. A stopped run cannot resume under the same logical run, but its
+published checkpoints remain eligible for explicit post-training evaluation.
 Evaluation attempts retain their own expiry windows; the 300-second terminal
 delivery deadline starts only after evaluations have settled.
 

@@ -5,6 +5,7 @@ import numpy as np
 import pytest
 
 from gradlab.batch_runtime import ProviderDescriptor, SignalSpec
+from gradlab.env_registry import ResolvedNativeEpisodeHorizon
 from gradlab.model_inputs import ContextTaskKernel, normalize_model_inputs
 from gradlab.task_kernels import IdentityTaskDefinition
 
@@ -427,6 +428,60 @@ def test_runtime_episode_step_round_trips_through_task_lane_state() -> None:
     kernel.restore_lane_states(states, selected)
 
     assert kernel.encode_observations(observations)["context/remaining_time"][0, 0] == 0.5
+
+
+def test_native_time_remaining_uses_provider_tics_and_clamps_at_zero() -> None:
+    descriptor = _descriptor()
+    task = _episode_clock_task()
+    remaining_time = task["model_inputs"]["context"]["remaining_time"]
+    remaining_time["signal"] = "native_time_remaining"
+    remaining_time["encoding"].update({"scale": 1.0, "offset": 0.0})
+    base = IdentityTaskDefinition().bind(descriptor, 2)
+    kernel = ContextTaskKernel(
+        base,
+        descriptor,
+        task,
+        native_episode_horizon=ResolvedNativeEpisodeHorizon(
+            value=30,
+            unit="tics",
+            action_repeat=8,
+        ),
+    )
+    observations = np.zeros((2, 4, 84, 84), dtype=np.uint8)
+    all_lanes = np.ones(2, dtype=np.bool_)
+
+    kernel.on_reset(observations, {}, all_lanes)
+    expected = (1.0, 22 / 30, 14 / 30, 6 / 30, 0.0)
+    for index, value in enumerate(expected):
+        if index:
+            kernel.process(
+                np.zeros(2, dtype=np.float32),
+                np.zeros(2, dtype=np.bool_),
+                np.zeros(2, dtype=np.bool_),
+                {},
+            )
+        encoded = kernel.encode_observations(observations)["context/remaining_time"]
+        np.testing.assert_allclose(encoded, [[value], [value]], rtol=1e-6)
+
+    source = kernel.model_input_contract["context"]["remaining_time"]["source"][0]
+    assert source == {
+        "name": "native_time_remaining",
+        "dtype": np.dtype(np.float32).str,
+        "shape": [],
+        "available_on_reset": True,
+        "available_on_step": True,
+        "origin": "runtime",
+    }
+
+
+def test_native_time_remaining_requires_a_native_horizon() -> None:
+    descriptor = _descriptor()
+    task = _episode_clock_task()
+    task["model_inputs"]["context"]["remaining_time"]["signal"] = "native_time_remaining"
+    base = IdentityTaskDefinition().bind(descriptor, 2)
+
+    with pytest.raises(ValueError, match="requires a provider-native episode horizon"):
+        ContextTaskKernel(base, descriptor, task)
 
 
 def test_runtime_context_signals_are_reserved_and_transition_updated() -> None:

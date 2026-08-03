@@ -420,6 +420,19 @@ test("run finish reasons distinguish resource, training, and evaluation outcomes
   assert.deepEqual(
     runFinishPresentation({
       state: "failed",
+      stop_reason: "early_stop_failure:loss_limit",
+      final_step: 250_000,
+      early_stop: { trigger: "threshold" },
+    }),
+    {
+      label: "Training stop criterion met",
+      detail: "Loss Limit · Stopped at 250,000 steps",
+      tone: "failure",
+    },
+  );
+  assert.deepEqual(
+    runFinishPresentation({
+      state: "failed",
       stop_reason: "early_stop_failure:return_plateau",
       final_step: 500_000,
       early_stop: { trigger: "no_improvement" },
@@ -427,7 +440,20 @@ test("run finish reasons distinguish resource, training, and evaluation outcomes
     {
       label: "Training stalled",
       detail: "Return Plateau · Stopped at 500,000 steps",
-      tone: "failure",
+      tone: "neutral",
+    },
+  );
+  assert.deepEqual(
+    runFinishPresentation({
+      state: "stopped",
+      stop_reason: "early_stop_neutral:return_plateau",
+      final_step: 500_000,
+      early_stop: { trigger: "no_improvement" },
+    }),
+    {
+      label: "Training stalled",
+      detail: "Return Plateau · Stopped at 500,000 steps",
+      tone: "neutral",
     },
   );
   assert.deepEqual(
@@ -473,6 +499,18 @@ test("run finish reasons distinguish resource, training, and evaluation outcomes
 });
 
 test("stalled training uses a neutral stop icon instead of a failure cross", () => {
+  assert.deepEqual(
+    runStatePresentation({
+      state: "stopped",
+      stop_reason: "early_stop_neutral:return_plateau",
+      early_stop: { trigger: "no_improvement" },
+    }),
+    {
+      iconName: "player-pause",
+      tone: "stopped",
+      label: "Training stalled",
+    },
+  );
   assert.deepEqual(
     runStatePresentation({
       state: "failed",

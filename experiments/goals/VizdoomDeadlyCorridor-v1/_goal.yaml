@@ -24,6 +24,9 @@ train:
     env_config:
       # Reuse these corridor-specific provider arguments in evaluation via the YAML anchor.
       env_args: &deadly_corridor_env_args
+        # Preserve the scenario's native horizon independently of policy frame skip.
+        vizdoom_config:
+          episode_timeout: 2100
         # List the native game variables that ViZDoom must collect and expose.
         game_variables: [ARMOR]
         # Configure which per-step information the provider exposes to GradLab.
@@ -31,7 +34,7 @@ train:
           # Control when the selected information keys are emitted.
           mode: all
           # List the provider information keys retained for task signals.
-          keys: [armor, player_dead, pending_reset]
+          keys: [armor, player_dead]
     # Reuse these corridor-specific task overrides in evaluation via the YAML anchor.
     task: &deadly_corridor_task
       # Map task-level signal names to keys from the provider's per-step information.
@@ -40,16 +43,12 @@ train:
         armor: armor
         # Map the task-level death signal to its provider information key.
         player_dead: player_dead
-        # Map the task-level episode-boundary signal to its provider information key.
-        episode_done: pending_reset
       # Define discrete task events derived from changes in the declared signals.
       events:
         # Detect reaching the goal vest from an increase in armor.
         goal_reached: {signal: armor, operation: increase}
         # Detect death when the provider's death flag is asserted for a step.
         player_died: {signal: player_dead, operation: equals_for, value: 1, steps: 1}
-        # Detect the scenario boundary when the pending-reset flag is asserted for a step.
-        episode_ended: {signal: episode_done, operation: equals_for, value: 1, steps: 1}
       # Define which task events end an episode and how each outcome is classified.
       termination:
         # List the events that mark an episode as failed.
@@ -57,7 +56,7 @@ train:
         # List the events that mark an episode as successful.
         success: [goal_reached]
         # List provider boundaries treated as timeouts rather than task outcomes.
-        timeout: [episode_ended]
+        timeout: [time_limit_reached]
       # Configure the reward presented to the policy after the inherited native reward is computed.
       reward:
         # Set the positive divisor applied to native rewards before clipping.
@@ -76,8 +75,6 @@ eval:
   environment:
     # Supply evaluation-time arguments for the native vectorized ViZDoom environment.
     env_config:
-      # Bound evaluation at the scenario's 2,100-tic native horizon after four-frame skipping.
-      max_steps: 525
       # Reuse the corridor-specific provider arguments declared for training.
       env_args: *deadly_corridor_env_args
     # Merge the same corridor-specific task overrides into the shared evaluation defaults.

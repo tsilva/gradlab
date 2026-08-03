@@ -254,6 +254,8 @@ def _terminal_outcome(
                     f"early_stop_success_without_acceptance:{early_stop.condition_id}",
                 )
             return "succeeded", f"early_stop_success:{early_stop.condition_id}"
+        if early_stop.outcome == "neutral":
+            return "stopped", f"early_stop_neutral:{early_stop.condition_id}"
         return "failed", f"early_stop_failure:{early_stop.condition_id}"
     if evaluation_required:
         return "failed", "training_cap_without_acceptance"
@@ -920,6 +922,7 @@ class RunSupervisor:
             config,
             label="dstack run train_config",
             required_keys=("training_backend",),
+            enforce_early_stop_policy=True,
         )
         write_canonical_json(self.config_path, self.train_config)
 
@@ -2822,6 +2825,13 @@ class RunSupervisor:
         if state == "failed":
             print(
                 f"run completed without acceptance: run_id={self.manifest.run_id} "
+                f"final_step={final_step} dstack={DSTACK_VERSION}",
+                flush=True,
+            )
+            return 0
+        if state == "stopped":
+            print(
+                f"training stalled: run_id={self.manifest.run_id} "
                 f"final_step={final_step} dstack={DSTACK_VERSION}",
                 flush=True,
             )

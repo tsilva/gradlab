@@ -579,8 +579,8 @@ class BatchRuntimeTests(unittest.TestCase):
         runtime.reset()
         provider.queue_step(
             rewards=[1.0, -1.0],
-            terminated=[False, True],
-            truncated=[True, False],
+            terminated=[True, False],
+            truncated=[True, True],
         )
 
         step = runtime.step(np.zeros((2, 3), dtype=np.int8))
@@ -593,8 +593,8 @@ class BatchRuntimeTests(unittest.TestCase):
         self.assertEqual(
             [(record.events, record.outcome) for record in records],
             [
+                (("player_died", "goal_reached"), Outcome.FAILURE),
                 (("goal_reached",), Outcome.SUCCESS),
-                (("player_died",), Outcome.FAILURE),
             ],
         )
 
@@ -1217,12 +1217,8 @@ class GradLabVecEnvTests(unittest.TestCase):
         provider.queue_step(terminated=[False, True])
         provider.queue_step(terminated=[True, False])
 
-        _observations, _rewards, first_dones, _infos = env.step(
-            np.zeros((2, 3), dtype=np.int8)
-        )
-        _observations, _rewards, second_dones, _infos = env.step(
-            np.zeros((2, 3), dtype=np.int8)
-        )
+        _observations, _rewards, first_dones, _infos = env.step(np.zeros((2, 3), dtype=np.int8))
+        _observations, _rewards, second_dones, _infos = env.step(np.zeros((2, 3), dtype=np.int8))
 
         np.testing.assert_array_equal(first_dones, [False, True])
         np.testing.assert_array_equal(second_dones, [True, False])

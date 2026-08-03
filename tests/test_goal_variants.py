@@ -192,6 +192,25 @@ def test_goal_contract_comparison_summarizes_policy_input_definitions() -> None:
     ]
 
 
+def test_goal_contract_labels_vizdoom_native_horizon_in_tics() -> None:
+    current = {
+        "train": {
+            "environment": {
+                "env_config": {"env_args": {"vizdoom_config": {"episode_timeout": 300}}}
+            }
+        }
+    }
+    previous = deepcopy(current)
+    previous["train"]["environment"]["env_config"]["env_args"]["vizdoom_config"][  # type: ignore[index]
+        "episode_timeout"
+    ] = 600
+
+    diff, truncated = goal_contract_diff(current, previous)
+
+    assert truncated is False
+    assert goal_contract_diff_labels(diff) == ["Native episode horizon (tics) 300 → 600"]
+
+
 def test_descriptor_rejects_identity_tampering() -> None:
     authored = goal_document()
     descriptor = build_goal_variant_descriptor(

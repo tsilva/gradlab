@@ -997,6 +997,11 @@ def _require_retryable_attempt_terminal(
     stop_reason = str(attempt_terminal.get("stop_reason") or "")
     if state == "succeeded":
         raise RuntimeError("a successfully drained training-only run must not be retried")
+    if state == "stopped":
+        raise RuntimeError(
+            "a neutral plateau stop is non-resumable; launch a new recipe/run or "
+            "evaluate a published checkpoint explicitly"
+        )
     if state == "failed" and stop_reason.startswith("early_stop_failure:"):
         raise RuntimeError(
             "a designed early-stop failure is non-resumable; launch a new recipe/run"
@@ -1190,7 +1195,7 @@ def _project_reconciled_terminal(
     finally:
         projector.close(
             timeout_seconds=300,
-            exit_code=0 if receipt.state == "succeeded" else 1,
+            exit_code=0 if receipt.state in {"succeeded", "stopped"} else 1,
         )
 
 

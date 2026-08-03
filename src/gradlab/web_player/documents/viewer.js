@@ -2,6 +2,10 @@ import {
   contractSearchRanges,
   contractSyntaxTokens,
 } from "./syntax.js";
+import {
+  buildSideBySideRows,
+  sideBySideSearchCounts,
+} from "./diff.js";
 
 function makeTab(label, value, group, onSelect) {
   const tab = document.createElement("button");
@@ -38,7 +42,16 @@ export class ContractViewer {
     this.message = dialog.querySelector("#contract-viewer-message");
     this.loading = dialog.querySelector("#contract-viewer-loading");
     this.content = dialog.querySelector("#contract-viewer-content");
-    this.code = this.content.querySelector("code");
+    this.singleContent = dialog.querySelector("#contract-single-content");
+    this.code = this.singleContent.querySelector("code");
+    this.diffContent = dialog.querySelector("#contract-diff-content");
+    this.diffError = dialog.querySelector("#contract-diff-error");
+    this.diffBaseName = dialog.querySelector("#contract-diff-base-name");
+    this.diffResolvedName = dialog.querySelector("#contract-diff-resolved-name");
+    this.diffBaseScroll = dialog.querySelector("#contract-diff-base-scroll");
+    this.diffResolvedScroll = dialog.querySelector("#contract-diff-resolved-scroll");
+    this.diffBaseLines = dialog.querySelector("#contract-diff-base-lines");
+    this.diffResolvedLines = dialog.querySelector("#contract-diff-resolved-lines");
     this.search = dialog.querySelector("#contract-search-input");
     this.searchCount = dialog.querySelector("#contract-search-count");
     this.copy = dialog.querySelector("#contract-copy");
@@ -56,6 +69,7 @@ export class ContractViewer {
     this.recipeDocuments = new Map();
     this.documentTabButtons = new Map();
     this.viewTabButtons = new Map();
+    this.diffScrollSyncPending = false;
 
     ["goal", "recipe"].forEach((kind) => {
       this.documentTabButtons.set(
@@ -92,6 +106,19 @@ export class ContractViewer {
         this.showToast(String(error?.message || error), true);
       });
     });
+    [
+      [this.diffBaseScroll, this.diffResolvedScroll],
+      [this.diffResolvedScroll, this.diffBaseScroll],
+    ].forEach(([source, target]) => {
+      source.addEventListener("scroll", () => {
+        if (this.diffScrollSyncPending) return;
+        this.diffScrollSyncPending = true;
+        target.scrollTop = source.scrollTop;
+        requestAnimationFrame(() => {
+          this.diffScrollSyncPending = false;
+        });
+      });
+    });
     dialog.addEventListener("cancel", (event) => {
       event.preventDefault();
       this.close();
@@ -124,6 +151,11 @@ export class ContractViewer {
     this.message.hidden = true;
     this.message.textContent = "";
     this.code.textContent = "";
+    this.diffBaseLines.replaceChildren();
+    this.diffResolvedLines.replaceChildren();
+    this.diffContent.hidden = true;
+    this.diffError.hidden = true;
+    this.diffError.textContent = "";
     this.content.hidden = true;
     this.setLoading(true);
     if (!this.dialog.open) this.dialog.showModal();
@@ -197,7 +229,7 @@ export class ContractViewer {
     const document = this.currentDocument();
     if (!document && this.payload?.documents?.recipe) this.documentKind = "recipe";
     const selected = this.currentDocument();
-    this.view = selected?.is_variant && selected?.views?.base
+    this.view = selected?.is_variant && this.hasChanges(selected)
       ? "changes"
       : "resolved";
   }
@@ -207,7 +239,7 @@ export class ContractViewer {
     this.documentKind = kind;
     const document = this.currentDocument();
     if (this.view === "base" && !document?.views?.base) this.view = "resolved";
-    if (this.view === "changes" && !document?.views?.changes?.unified_diff) {
+    if (this.view === "changes" && !this.hasChanges(document)) {
       this.view = "resolved";
     }
     this.render();
@@ -215,6 +247,14 @@ export class ContractViewer {
 
   currentDocument() {
     return this.payload?.documents?.[this.documentKind] || null;
+  }
+
+  hasChanges(document = this.currentDocument()) {
+    return Boolean(
+      document?.views?.base
+      && document?.views?.resolved
+      && document?.views?.changes?.unified_diff,
+    );
   }
 
   currentText() {
@@ -241,7 +281,7 @@ export class ContractViewer {
       tab.tabIndex = kind === this.documentKind ? 0 : -1;
     });
     const hasBase = Boolean(current?.views?.base);
-    const hasChanges = Boolean(current?.views?.changes?.unified_diff);
+    const hasChanges = this.hasChanges(current);
     this.viewTabButtons.forEach((tab, view) => {
       const available = view === "resolved"
         ? Boolean(current?.views?.resolved)
@@ -254,46 +294,32 @@ export class ContractViewer {
     });
     this.message.hidden = !current?.message;
     this.message.textContent = current?.message || "";
-    this.content.hidden = !this.currentText();
+    this.content.hidden = this.view === "changes"
+      ? !hasChanges
+      : !this.currentText();
     this.copy.disabled = !this.currentText();
     this.renderContent();
   }
 
   renderContent() {
+    this.diffError.hidden = true;
+    this.diffError.textContent = "";
+    if (this.view === "changes") {
+      this.renderDiffContent();
+      return;
+    }
+    this.renderSingleContent();
+  }
+
+  renderSingleContent() {
     const value = this.currentText();
     const query = this.search.value;
     const matches = contractSearchRanges(value, query);
     const tokens = contractSyntaxTokens(value, this.view);
+    this.singleContent.hidden = false;
+    this.diffContent.hidden = true;
     this.code.replaceChildren();
-    let offset = 0;
-    let matchIndex = 0;
-    tokens.forEach((token) => {
-      const tokenEnd = offset + token.text.length;
-      let cursor = offset;
-      while (cursor < tokenEnd) {
-        while (matches[matchIndex]?.end <= cursor) matchIndex += 1;
-        const match = matches[matchIndex];
-        const nextBoundary = match && match.start < tokenEnd
-          ? Math.max(cursor, Math.min(tokenEnd, match.start))
-          : tokenEnd;
-        if (nextBoundary > cursor) {
-          this.appendSyntaxText(
-            token.text.slice(cursor - offset, nextBoundary - offset),
-            token.className,
-          );
-          cursor = nextBoundary;
-          continue;
-        }
-        const markedEnd = Math.min(tokenEnd, match.end);
-        this.appendSyntaxText(
-          token.text.slice(cursor - offset, markedEnd - offset),
-          token.className,
-          true,
-        );
-        cursor = markedEnd;
-      }
-      offset = tokenEnd;
-    });
+    this.appendDecoratedText(this.code, value, tokens, matches);
     this.searchCount.textContent = query
       ? (
         matches.length
@@ -304,19 +330,115 @@ export class ContractViewer {
     if (query) this.code.querySelector("mark")?.scrollIntoView({ block: "center" });
   }
 
-  appendSyntaxText(value, className, marked = false) {
-    if (!value) return;
-    const syntax = className ? document.createElement("span") : null;
-    const textParent = syntax || document.createDocumentFragment();
-    textParent.append(document.createTextNode(value));
-    if (syntax) syntax.className = className;
-    if (!marked) {
-      this.code.append(textParent);
+  renderDiffContent() {
+    const current = this.currentDocument();
+    this.singleContent.hidden = true;
+    this.diffContent.hidden = false;
+    const kind = current?.kind === "recipe" ? "recipe" : "goal";
+    const baseName = `${kind}-base.yaml`;
+    const resolvedName = `${kind}-resolved.yaml`;
+    this.diffBaseName.textContent = baseName;
+    this.diffResolvedName.textContent = resolvedName;
+    this.diffBaseScroll.setAttribute("aria-label", `Base YAML, ${baseName}`);
+    this.diffResolvedScroll.setAttribute("aria-label", `Resolved YAML, ${resolvedName}`);
+
+    let rows;
+    try {
+      rows = buildSideBySideRows({
+        baseText: current?.views?.base || "",
+        resolvedText: current?.views?.resolved || "",
+        unifiedDiff: current?.views?.changes?.unified_diff || "",
+      });
+    } catch {
+      this.diffContent.hidden = true;
+      this.diffError.hidden = false;
+      this.diffError.textContent = (
+        "Could not render this comparison because the diff does not match "
+        + "the supplied Base and Resolved YAML."
+      );
+      this.searchCount.textContent = "";
       return;
     }
-    const mark = document.createElement("mark");
-    mark.append(textParent);
-    this.code.append(mark);
+
+    const query = this.search.value;
+    const counts = sideBySideSearchCounts(rows, query);
+    const baseFragment = document.createDocumentFragment();
+    const resolvedFragment = document.createDocumentFragment();
+    rows.forEach((row) => {
+      baseFragment.append(this.diffRow(row.base, query));
+      resolvedFragment.append(this.diffRow(row.resolved, query));
+    });
+    this.diffBaseLines.replaceChildren(baseFragment);
+    this.diffResolvedLines.replaceChildren(resolvedFragment);
+    const totalMatches = counts.base + counts.resolved;
+    this.searchCount.textContent = query
+      ? (
+        totalMatches
+          ? `Base ${counts.base.toLocaleString()} · Resolved ${counts.resolved.toLocaleString()}`
+          : "No matches"
+      )
+      : "";
+    if (query) {
+      const first = this.diffBaseLines.querySelector("mark")
+        || this.diffResolvedLines.querySelector("mark");
+      first?.scrollIntoView({ block: "center", inline: "center" });
+    }
+  }
+
+  diffRow(item, query) {
+    const row = document.createElement("div");
+    row.className = `contract-diff-row contract-diff-${item?.change || "spacer"}`;
+    const number = document.createElement("span");
+    number.className = "contract-diff-line-number";
+    number.setAttribute("aria-hidden", "true");
+    number.textContent = item ? String(item.number) : "";
+    const code = document.createElement("code");
+    code.className = "contract-diff-line-code";
+    if (item) {
+      const matches = contractSearchRanges(item.text, query);
+      const tokens = contractSyntaxTokens(item.text, "base");
+      this.appendDecoratedText(code, item.text, tokens, matches, item.emphasis);
+    }
+    row.append(number, code);
+    return row;
+  }
+
+  appendDecoratedText(parent, value, tokens, matches = [], emphasis = []) {
+    let offset = 0;
+    tokens.forEach((token) => {
+      const tokenEnd = offset + token.text.length;
+      const boundaries = new Set([offset, tokenEnd]);
+      [...matches, ...emphasis].forEach((range) => {
+        if (range.start > offset && range.start < tokenEnd) boundaries.add(range.start);
+        if (range.end > offset && range.end < tokenEnd) boundaries.add(range.end);
+      });
+      const ordered = [...boundaries].sort((left, right) => left - right);
+      for (let index = 0; index < ordered.length - 1; index += 1) {
+        const start = ordered[index];
+        const end = ordered[index + 1];
+        if (end <= start) continue;
+        let node = document.createTextNode(value.slice(start, end));
+        if (token.className) {
+          const syntax = document.createElement("span");
+          syntax.className = token.className;
+          syntax.append(node);
+          node = syntax;
+        }
+        if (emphasis.some((range) => range.start < end && range.end > start)) {
+          const inline = document.createElement("span");
+          inline.className = "contract-diff-inline";
+          inline.append(node);
+          node = inline;
+        }
+        if (matches.some((range) => range.start < end && range.end > start)) {
+          const mark = document.createElement("mark");
+          mark.append(node);
+          node = mark;
+        }
+        parent.append(node);
+      }
+      offset = tokenEnd;
+    });
   }
 
   setLoading(loading) {

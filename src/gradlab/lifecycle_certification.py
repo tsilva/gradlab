@@ -1632,7 +1632,7 @@ def _scenario_early_stop_outcomes(root: Path) -> dict[str, Any]:
                 "delta_mode": "relative",
                 "start_after_steps": 0,
                 "patience_steps": 10,
-                "outcome": "failure",
+                "outcome": "neutral",
                 "action": "stop",
             }
         }
@@ -1642,12 +1642,12 @@ def _scenario_early_stop_outcomes(root: Path) -> dict[str, Any]:
     machine.update({metric: MetricSample(value=100.0, step=0)})
     update = machine.update({metric: MetricSample(value=100.0, step=10)})
     decision = validate_metric_early_stop_decision(update.stop_decision, config)
-    failure_receipt = EarlyStopReceipt(
+    neutral_receipt = EarlyStopReceipt(
         run_id=manifest.run_id,
         attempt_id=manifest.attempt_id,
         condition_id=str(decision["condition_id"]),
         matched_condition_ids=tuple(decision["matched_condition_ids"]),
-        outcome="failure",
+        outcome="neutral",
         trigger="no_improvement",
         metric=metric,
         metric_step=int(decision["metric_step"]),
@@ -1660,7 +1660,7 @@ def _scenario_early_stop_outcomes(root: Path) -> dict[str, Any]:
         decision_sha256=canonical_json_sha256(decision),
         recorded_at=fixture.clock.utc_now(),
     )
-    fixture.authority.create_early_stop(failure_receipt)
+    fixture.authority.create_early_stop(neutral_receipt)
     fixture.record_checkpoint(prepared, step=10, kind="final")
     fixture.clock.advance(5)
     prepared.supervisor.active_iteration()
@@ -1673,11 +1673,11 @@ def _scenario_early_stop_outcomes(root: Path) -> dict[str, Any]:
         failure=None,
         evaluation_required=True,
         promotion=None,
-        early_stop=failure_receipt,
+        early_stop=neutral_receipt,
     )
     recorder.require(
-        "plateau-is-scientific-failure-after-valid-rejection",
-        state == "failed" and reason == "early_stop_failure:return_plateau",
+        "plateau-is-neutral-stop-after-valid-rejection",
+        state == "stopped" and reason == "early_stop_neutral:return_plateau",
         evidence={
             "state": state,
             "reason": reason,
@@ -1699,7 +1699,14 @@ def _scenario_early_stop_outcomes(root: Path) -> dict[str, Any]:
     )
 
     incomplete = fixture.prepare(run_number=77)
-    incomplete_success_receipt = success_receipt_for(incomplete.supervisor.manifest)
+    incomplete_neutral_receipt = EarlyStopReceipt(
+        **{
+            **neutral_receipt.to_dict(),
+            "run_id": incomplete.supervisor.manifest.run_id,
+            "attempt_id": incomplete.supervisor.manifest.attempt_id,
+            "recorded_at": fixture.clock.utc_now(),
+        }
+    )
     fixture.record_checkpoint(incomplete, step=10, kind="final")
     fixture.clock.advance(5)
     incomplete.supervisor.active_iteration()
@@ -1717,10 +1724,10 @@ def _scenario_early_stop_outcomes(root: Path) -> dict[str, Any]:
         failure=incomplete_failure,
         evaluation_required=True,
         promotion=None,
-        early_stop=incomplete_success_receipt,
+        early_stop=incomplete_neutral_receipt,
     )
     recorder.require(
-        "training-target-with-incomplete-eval-evidence-is-resumable",
+        "plateau-with-incomplete-eval-evidence-is-resumable",
         isinstance(incomplete_failure, IncompleteEvaluationEvidence)
         and incomplete_state == "resumable_failure"
         and incomplete_reason == "evaluation_evidence_incomplete",
@@ -1744,6 +1751,20 @@ def _scenario_early_stop_outcomes(root: Path) -> dict[str, Any]:
         evidence={"state": success_state, "reason": success_reason},
     )
 
+    plateau_state, plateau_reason = _terminal_outcome(
+        cancel_requested=False,
+        failure=None,
+        evaluation_required=False,
+        promotion=None,
+        early_stop=neutral_receipt,
+    )
+    recorder.require(
+        "training-only-plateau-stops-neutrally",
+        plateau_state == "stopped"
+        and plateau_reason == "early_stop_neutral:return_plateau",
+        evidence={"state": plateau_state, "reason": plateau_reason},
+    )
+
     promotion = PromotionReceipt(
         run_id=manifest.run_id,
         checkpoint_id="checkpoint-accepted",
@@ -1758,15 +1779,15 @@ def _scenario_early_stop_outcomes(root: Path) -> dict[str, Any]:
         failure=None,
         evaluation_required=True,
         promotion=promotion,
-        early_stop=success_receipt,
+        early_stop=neutral_receipt,
     )
     recorder.require(
-        "evaluation-promotion-overrides-training-target-stop",
+        "evaluation-promotion-overrides-neutral-plateau",
         promoted_state == "succeeded" and promoted_reason == "completed_after_eval_acceptance",
         evidence={"state": promoted_state, "reason": promoted_reason},
     )
 
-    tampered = failure_receipt.to_dict()
+    tampered = neutral_receipt.to_dict()
     tampered["decision_sha256"] = "corrupted"
     corruption_rejected = False
     try:
@@ -1781,9 +1802,9 @@ def _scenario_early_stop_outcomes(root: Path) -> dict[str, Any]:
     return {
         "invariants": recorder.invariants,
         "evidence": {
-            "failure_condition_id": failure_receipt.condition_id,
+            "neutral_condition_id": neutral_receipt.condition_id,
             "success_condition_id": success_receipt.condition_id,
-            "metric_step": failure_receipt.metric_step,
+            "metric_step": neutral_receipt.metric_step,
         },
     }
 

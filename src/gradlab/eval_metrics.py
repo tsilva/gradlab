@@ -187,10 +187,11 @@ def episode_reason_names(
 ) -> set[str]:
     """Return the shared train/eval terminal-reason taxonomy."""
     reasons = {str(event) for event in events if str(event) != "timeout"}
-    if truncated:
-        reasons.add("max_steps")
     if not reasons:
-        reasons.add("terminated" if terminated else "unclassified")
+        if truncated:
+            reasons.add("timeout")
+        else:
+            reasons.add("terminated" if terminated else "unclassified")
     return reasons
 
 
@@ -386,7 +387,7 @@ def summarize_episode_results(
 def run_eval_episode(
     env,
     model,
-    max_steps: int,
+    watchdog_steps: int,
     deterministic: bool,
     seed: int,
     capture_actions: bool = False,
@@ -402,7 +403,7 @@ def run_eval_episode(
     obs = env.reset()
     actions: list[Any] = []
 
-    for _step_idx in range(max_steps):
+    for _step_idx in range(watchdog_steps):
         if policy_runtime is None:
             action, _ = model.predict(obs, deterministic=deterministic)
         else:
@@ -435,4 +436,4 @@ def run_eval_episode(
             return result
         if bool(dones[0]):
             raise RuntimeError("GradLabVecEnv returned done without an episode record")
-    raise RuntimeError("task runtime reached max_steps without a timeout episode record")
+    raise RuntimeError("evaluation watchdog expired without a scientific episode-boundary record")

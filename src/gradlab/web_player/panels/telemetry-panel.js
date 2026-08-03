@@ -240,6 +240,145 @@ export function distributionBlockTitle(block, descriptor) {
   return block.title || descriptor?.label || "Distribution";
 }
 
+function discreteActionOffset(value, start, count) {
+  const action = scalarActionIndex(value);
+  const offset = action === null ? null : action - start;
+  return Number.isInteger(offset) && offset >= 0 && offset < count
+    ? offset
+    : null;
+}
+
+function probabilityValue(value) {
+  if (value === null || value === undefined || value === "") return null;
+  const probability = Number(value);
+  return Number.isFinite(probability) && probability >= 0 && probability <= 1
+    ? probability
+    : null;
+}
+
+export function actionComparisonPresentation(snapshot, history, decision) {
+  if (!Array.isArray(decision?.probabilities)) return null;
+  const count = decision.probabilities.length;
+  const start = Number(snapshot?.session?.action_contract?.policy?.space?.start || 0);
+  const names = discreteActionLabels(snapshot, count);
+  const stepProbabilities = decision.probabilities.map(probabilityValue);
+  const invalidStepValues = stepProbabilities.filter((value) => value === null).length;
+  const executedActions = (history || [])
+    .map((point) => point?.executed_action)
+    .filter((value) => value !== null && value !== undefined);
+  const counts = Array.from({ length: count }, () => 0);
+  let unmappable = 0;
+  executedActions.forEach((value) => {
+    const offset = discreteActionOffset(value, start, count);
+    if (offset === null) unmappable += 1;
+    else counts[offset] += 1;
+  });
+  const historyStatus = !executedActions.length
+    ? "not-yet-observed"
+    : unmappable
+      ? "contract-incomparable"
+      : "available";
+  const historyMessage = historyStatus === "not-yet-observed"
+    ? "No executed actions have been retained for this episode yet."
+    : historyStatus === "contract-incomparable"
+      ? `Episode action history is contract-incomparable: ${unmappable} of ${
+        executedActions.length
+      } executed actions do not map to this discrete policy distribution.`
+      : "";
+  const episodeProbabilities = historyStatus === "available"
+    ? counts.map((value) => value / executedActions.length)
+    : counts.map(() => null);
+  const selectedIndex = discreteActionOffset(decision.selected_action, start, count);
+  const executedIndex = discreteActionOffset(
+    snapshot?.transition?.executed_action,
+    start,
+    count,
+  );
+  return {
+    history: {
+      sampleCount: executedActions.length,
+      status: historyStatus,
+      message: historyMessage,
+    },
+    step: {
+      status: invalidStepValues ? "protocol-error" : "available",
+      message: invalidStepValues
+        ? `Protocol error: ${invalidStepValues} policy probabilities are outside 0–100%.`
+        : "",
+    },
+    rows: names.map((name, index) => ({
+      name,
+      episodeProbability: episodeProbabilities[index],
+      stepProbability: stepProbabilities[index],
+      selected: index === selectedIndex,
+      executed: index === executedIndex,
+    })),
+  };
+}
+
+function formatProbability(value) {
+  return value === null ? "—" : `${(value * 100).toFixed(1)}%`;
+}
+
+function actionComparisonBar(name, series, value) {
+  const item = document.createElement("div");
+  item.className = `action-comparison-bar ${series}`;
+  const track = document.createElement("div");
+  track.className = "action-comparison-track";
+  track.setAttribute("role", "progressbar");
+  track.setAttribute("aria-label", `${name} ${
+    series === "episode" ? "episode executed frequency" : "selected-step probability"
+  }`);
+  track.setAttribute("aria-valuemin", "0");
+  track.setAttribute("aria-valuemax", "100");
+  const fill = document.createElement("div");
+  fill.className = "action-comparison-fill";
+  fill.style.width = `${value === null ? 0 : value * 100}%`;
+  track.append(fill);
+  const amount = document.createElement("span");
+  amount.className = "action-comparison-amount";
+  amount.textContent = formatProbability(value);
+  if (value === null) track.setAttribute("aria-valuetext", "Unavailable");
+  else track.setAttribute("aria-valuenow", String(value * 100));
+  item.append(track, amount);
+  return item;
+}
+
+function actionComparisonRow(row) {
+  const item = document.createElement("div");
+  item.className = [
+    "action-comparison-row",
+    row.selected ? "selected" : "",
+    row.executed ? "executed" : "",
+  ].filter(Boolean).join(" ");
+  const label = document.createElement("span");
+  label.className = "action-comparison-label";
+  label.textContent = row.name;
+  const bars = document.createElement("div");
+  bars.className = "action-comparison-bars";
+  bars.append(
+    actionComparisonBar(row.name, "episode", row.episodeProbability),
+    actionComparisonBar(row.name, "step", row.stepProbability),
+  );
+  item.append(label, bars);
+  return item;
+}
+
+function setActionComparisonCaption(target, presentation, decision, snapshot) {
+  const count = presentation.history.sampleCount;
+  const facts = [
+    `${count.toLocaleString()} executed action${count === 1 ? "" : "s"} in the retained episode`,
+  ];
+  if (decision.selected_action !== null && decision.selected_action !== undefined) {
+    facts.push(`policy selected ${formatActionValue(decision.selected_action, snapshot)}`);
+  }
+  const executed = snapshot?.transition?.executed_action;
+  if (executed !== null && executed !== undefined) {
+    facts.push(`executed ${formatActionValue(executed, snapshot)}`);
+  }
+  target.textContent = `${facts.join(" · ")}.`;
+}
+
 export function histogramSelectedLabel(names, highlightIndex) {
   return Number.isInteger(highlightIndex)
     && highlightIndex >= 0
@@ -315,21 +454,31 @@ function makeDistributionBlock(block) {
   if (title) appendHeading(section, title);
   const target = document.createElement("div");
   target.className = "action-probabilities empty-state";
-  section.append(target);
+  const legend = document.createElement("div");
+  legend.className = "action-comparison-legend";
+  legend.innerHTML = `
+    <span class="episode">Episode executed frequency</span>
+    <span class="step">Selected-step policy probability</span>
+  `;
+  const caption = document.createElement("p");
+  caption.className = "panel-foot";
+  section.append(legend, target, caption);
   const foot = appendFoot(section, block.foot, { force: true });
   return {
     element: section,
-    render({ snapshot }) {
+    render({ snapshot, history }) {
       const availability = descriptorAvailability(descriptor, { snapshot });
       const semantics = snapshot?.session?.action_contract?.policy?.semantics;
+      const footMessages = [];
+      if (block.foot) footMessages.push(block.foot);
       if (semantics?.status === "unavailable") {
-        foot.textContent = `Action semantics unavailable: ${
+        footMessages.push(`Action semantics unavailable: ${
           semantics.reason || "the provider did not declare them"
-        }.`;
-      } else {
-        foot.textContent = block.foot || "";
+        }.`);
       }
-      foot.hidden = !foot.textContent;
+      legend.hidden = true;
+      caption.hidden = true;
+      foot.classList.remove("warning");
       section.hidden = !distributionBlockVisible(availability.status);
       if (
         availability.status !== "available"
@@ -338,6 +487,8 @@ function makeDistributionBlock(block) {
         target.className = `action-probabilities empty-state ${availability.status}`;
         target.textContent = availability.message;
         section.dataset.telemetryStatus = availability.status;
+        foot.textContent = footMessages.join(" ");
+        foot.hidden = !foot.textContent;
         return;
       }
       const decision = descriptorValue(descriptor, { snapshot });
@@ -345,6 +496,8 @@ function makeDistributionBlock(block) {
         target.className = "action-probabilities empty-state";
         target.textContent = availability.message || "N/A";
         section.dataset.telemetryStatus = "not-yet-observed";
+        foot.textContent = footMessages.join(" ");
+        foot.hidden = !foot.textContent;
         return;
       }
       if (!Array.isArray(decision.probabilities)) {
@@ -355,30 +508,24 @@ function makeDistributionBlock(block) {
           `std ${JSON.stringify(decision.stddev)}`,
         ].join(" · ");
         section.dataset.telemetryStatus = "available";
+        foot.textContent = footMessages.join(" ");
+        foot.hidden = !foot.textContent;
         return;
       }
-      const names = discreteActionLabels(snapshot, decision.probabilities.length);
-      target.className = "action-probabilities";
-      target.replaceChildren(...decision.probabilities.map((probability, index) => {
-        const row = document.createElement("div");
-        row.className = `action-row ${
-          index === decision.selected_action ? "selected" : ""
-        }`;
-        const label = document.createElement("span");
-        label.textContent = names[index] || formatActionValue(index, snapshot);
-        const track = document.createElement("div");
-        track.className = "probability-track";
-        const fill = document.createElement("div");
-        fill.className = "probability-fill";
-        fill.style.width = `${
-          Math.max(0, Math.min(100, Number(probability) * 100))
-        }%`;
-        track.append(fill);
-        const amount = document.createElement("span");
-        amount.textContent = `${(Number(probability) * 100).toFixed(1)}%`;
-        row.append(label, track, amount);
-        return row;
-      }));
+      const presentation = actionComparisonPresentation(snapshot, history, decision);
+      target.className = "action-comparison";
+      target.replaceChildren(...presentation.rows.map(actionComparisonRow));
+      legend.hidden = false;
+      caption.hidden = false;
+      setActionComparisonCaption(caption, presentation, decision, snapshot);
+      for (const state of [presentation.history, presentation.step]) {
+        if (state.message) footMessages.push(state.message);
+        if (["contract-incomparable", "protocol-error"].includes(state.status)) {
+          foot.classList.add("warning");
+        }
+      }
+      foot.textContent = footMessages.join(" ");
+      foot.hidden = !foot.textContent;
       section.dataset.telemetryStatus = "available";
     },
   };

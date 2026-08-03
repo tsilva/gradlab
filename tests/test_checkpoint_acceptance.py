@@ -9,7 +9,7 @@ from gradlab.checkpoint_acceptance import (
     acceptance_aggregates,
     aggregates_match,
     build_checkpoint_eval_contract,
-    checkpoint_eval_max_steps,
+    checkpoint_eval_watchdog_steps,
     evaluate_acceptance,
     manifest_index,
     requires_complete_evaluation,
@@ -34,7 +34,7 @@ def contract(
         environment={"game": "SuperMarioBros-Nes-v0", "state": "Level1-1"},
         episodes=episodes,
         n_envs=n_envs,
-        max_steps=4500,
+        watchdog_steps=4500,
         seed=10_000,
         seed_protocol="vector-lane-v1",
         acceptance=acceptance
@@ -132,7 +132,7 @@ def test_vizdoom_basic_perfect_success_acceptance_requires_every_episode() -> No
         environment={"game": "VizdoomBasic-v1", "state": "default"},
         episodes=4,
         n_envs=2,
-        max_steps=72,
+        watchdog_steps=72,
         seed=10_000,
         seed_protocol="vector-lane-v1",
         acceptance=[
@@ -161,9 +161,7 @@ def test_vizdoom_basic_perfect_success_acceptance_requires_every_episode() -> No
 
 
 def test_vizdoom_deathmatch_requires_complete_evaluation() -> None:
-    assert requires_complete_evaluation(
-        {"game": "VizdoomDeathmatch-v1", "state": "default"}
-    )
+    assert requires_complete_evaluation({"game": "VizdoomDeathmatch-v1", "state": "default"})
 
 
 def test_modal_protocol_accepts_complete_mean_return_rejection() -> None:
@@ -290,20 +288,20 @@ def test_execution_key_changes_for_acceptance_or_evidence_changes(mutation) -> N
     assert execution_key(changed) != execution_key(baseline)
 
 
-def test_checkpoint_eval_max_steps_requires_materialized_value() -> None:
+def test_checkpoint_eval_watchdog_steps_requires_materialized_value() -> None:
     assert (
-        checkpoint_eval_max_steps(
+        checkpoint_eval_watchdog_steps(
             {
-                "post_train_eval_max_steps": 40,
+                "checkpoint_eval_watchdog_steps": 40,
             }
         )
         == 40
     )
 
     with pytest.raises(ValueError, match="not materialized"):
-        checkpoint_eval_max_steps({"checkpoint_eval_environment": {}})
+        checkpoint_eval_watchdog_steps({"checkpoint_eval_environment": {}})
     with pytest.raises(ValueError, match="not materialized"):
-        checkpoint_eval_max_steps({"post_train_eval_max_steps": 0})
+        checkpoint_eval_watchdog_steps({"checkpoint_eval_watchdog_steps": 0})
 
 
 @pytest.mark.parametrize(
@@ -328,6 +326,7 @@ def test_checkpoint_eval_compiler_rejects_missing_materialized_fields(
         "checkpoint_eval_n_envs": 2,
         "checkpoint_eval_seed": 10_000,
         "checkpoint_eval_seed_protocol": SEED_PROTOCOL,
+        "checkpoint_eval_watchdog_steps": 50,
     }
     config.pop(field)
 
@@ -348,5 +347,6 @@ def test_checkpoint_eval_compiler_rejects_more_lanes_than_episodes() -> None:
                 "checkpoint_eval_n_envs": 2,
                 "checkpoint_eval_seed": 10_000,
                 "checkpoint_eval_seed_protocol": SEED_PROTOCOL,
+                "checkpoint_eval_watchdog_steps": 50,
             }
         )
