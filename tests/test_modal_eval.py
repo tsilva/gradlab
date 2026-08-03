@@ -15,8 +15,13 @@ from gradlab.modal_eval_backend import ModalEvalBackend
 from gradlab.modal_eval_config import load_modal_eval_config, modal_app_name
 from gradlab.modal_eval_protocol import SEED_PROTOCOL, build_execution_contract
 from gradlab.modal_eval_storage import write_downloaded_file
-from gradlab.modal_eval_worker import execute_attempt
+from gradlab.modal_eval_worker import _prepare_vizdoom_iwad, execute_attempt
 from gradlab.r2_store import PUBLIC_OBJECT_USER_AGENT
+from gradlab.vizdoom_assets import (
+    verify_vizdoom_iwad_file,
+    vizdoom_iwad_binding,
+    vizdoom_iwad_cache_path,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -99,6 +104,46 @@ def test_modal_download_uses_explicit_gradlab_user_agent(
 
     assert target.read_bytes() == b"checkpoint"
     assert observed == [PUBLIC_OBJECT_USER_AGENT]
+
+
+def test_modal_eval_installs_the_contract_bound_vizdoom_iwad(tmp_path: Path) -> None:
+    source = tmp_path / "source" / "doom2.wad"
+    source.parent.mkdir()
+    source.write_bytes(b"IWADdoom")
+    binding = vizdoom_iwad_binding(source)
+    contract = {
+        "environment": {
+            "env_provider": "vizdoom-turbo",
+            "game": "VizdoomBasic-v1",
+            "env_args": {"rom_path": binding},
+        }
+    }
+    cache_root = tmp_path / "cache"
+
+    normalized = _prepare_vizdoom_iwad(
+        {
+            "vizdoom_iwad_binding": binding,
+            "vizdoom_iwad_get_url": source.as_uri(),
+        },
+        contract,
+        cache_root=cache_root,
+        root=tmp_path / "attempt",
+    )
+
+    assert normalized == binding
+    cached = vizdoom_iwad_cache_path(cache_root, binding)
+    assert verify_vizdoom_iwad_file(cached, binding) == cached.resolve()
+
+    with pytest.raises(ValueError, match="differs from the evaluation contract"):
+        _prepare_vizdoom_iwad(
+            {
+                "vizdoom_iwad_binding": {**binding, "sha256": "0" * 64},
+                "vizdoom_iwad_get_url": source.as_uri(),
+            },
+            contract,
+            cache_root=cache_root,
+            root=tmp_path / "mismatch",
+        )
 
 
 def test_backend_uses_spawn_poll_and_cancel(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -37,6 +37,7 @@ from gradlab.metric_names import (
     EVAL_FULL_SUCCESS_ACROSS_STARTS_RATE_MIN,
     ORCHESTRATION_EVENT_SEQ,
 )
+from gradlab.vizdoom_assets import validate_vizdoom_iwad_binding
 from gradlab.modal_eval_backend import ModalEvalBackend
 from gradlab.modal_eval_config import ModalEvalConfig, load_modal_eval_config
 from gradlab.modal_eval_protocol import (
@@ -524,6 +525,19 @@ class ManualEvaluationSupervisor:
             rom_key = self.authority.evaluation.key_from_uri(str(asset["object_uri"]))
             payload["rom_get_url"] = self.authority.evaluation.presign_get(
                 rom_key,
+                expires_seconds=(timeout + int(self.modal_config.timeouts.expiry_margin_seconds)),
+            )
+        iwad = context.manifest.modal.get("vizdoom_iwad_binding")
+        if isinstance(iwad, Mapping):
+            normalized_iwad = validate_vizdoom_iwad_binding(iwad)
+            iwad_key = self.authority.evaluation.key_from_uri(
+                str(normalized_iwad["object_uri"])
+            )
+            payload["vizdoom_iwad_binding"] = {
+                key: value for key, value in normalized_iwad.items() if key != "object_uri"
+            }
+            payload["vizdoom_iwad_get_url"] = self.authority.evaluation.presign_get(
+                iwad_key,
                 expires_seconds=(timeout + int(self.modal_config.timeouts.expiry_margin_seconds)),
             )
         return payload

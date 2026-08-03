@@ -30,6 +30,12 @@ from gradlab.policy_runtime import PolicyRuntime
 from gradlab.video import PolicyObservationPreview, write_preview_video
 from gradlab.rom_assets import cache_path, validate_rom_asset_manifest, verify_rom_file
 from gradlab.rom_runtime import bind_rom_path
+from gradlab.vizdoom_assets import (
+    install_vizdoom_iwad_file,
+    validate_vizdoom_iwad_binding,
+    verify_vizdoom_iwad_file,
+    vizdoom_iwad_cache_path,
+)
 
 
 def _write_json(path: Path, value: Mapping[str, Any]) -> None:
@@ -111,6 +117,49 @@ def _upload_preview(url: str, path: Path, request: Mapping[str, Any]) -> None:
     ) as response:
         if int(response.status) >= 300:
             raise RuntimeError(f"preview upload failed with HTTP {response.status}")
+
+
+def _prepare_vizdoom_iwad(
+    payload: Mapping[str, Any],
+    contract: Mapping[str, Any],
+    *,
+    cache_root: Path,
+    root: Path,
+) -> dict[str, Any] | None:
+    contract_environment = contract.get("environment")
+    contract_env_args = (
+        contract_environment.get("env_args")
+        if isinstance(contract_environment, Mapping)
+        else None
+    )
+    contract_iwad = (
+        contract_env_args.get("rom_path") if isinstance(contract_env_args, Mapping) else None
+    )
+    payload_iwad = payload.get("vizdoom_iwad_binding")
+    if contract_iwad is None and payload_iwad is None:
+        return None
+    if not isinstance(contract_iwad, Mapping) or not isinstance(payload_iwad, Mapping):
+        raise ValueError(
+            "ViZDoom evaluation requires matching contract and payload IWAD bindings"
+        )
+    contract_binding = validate_vizdoom_iwad_binding(contract_iwad)
+    normalized_iwad = validate_vizdoom_iwad_binding(payload_iwad)
+    if contract_binding != normalized_iwad:
+        raise ValueError("ViZDoom payload IWAD binding differs from the evaluation contract")
+    cached_iwad = vizdoom_iwad_cache_path(cache_root, normalized_iwad)
+    try:
+        verify_vizdoom_iwad_file(cached_iwad, normalized_iwad)
+    except (FileNotFoundError, ValueError):
+        downloaded_iwad = write_downloaded_file(
+            str(payload["vizdoom_iwad_get_url"]),
+            root / "downloaded-iwad" / str(normalized_iwad["filename"]),
+        )
+        install_vizdoom_iwad_file(
+            downloaded_iwad,
+            normalized_iwad,
+            cache_root=cache_root,
+        )
+    return normalized_iwad
 
 
 def run_child(input_path: Path, output_path: Path) -> int:
@@ -322,6 +371,12 @@ def execute_attempt(
                 rom_path.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copyfile(source_rom, rom_path)
                 verify_rom_file(rom_path, normalized_asset)
+            normalized_iwad = _prepare_vizdoom_iwad(
+                payload,
+                contract,
+                cache_root=cache_root,
+                root=root,
+            )
             child_input = root / "child-input.json"
             child_output = root / "child-output.json"
             _write_json(
@@ -337,6 +392,9 @@ def execute_attempt(
                     "preview": payload.get("preview"),
                 },
             )
+            child_environment = os.environ.copy()
+            if normalized_iwad is not None:
+                child_environment["GRADLAB_ROM_CACHE_DIR"] = str(cache_root)
             completed = subprocess.run(
                 [
                     sys.executable,
@@ -351,6 +409,7 @@ def execute_attempt(
                 stdout=None,
                 stderr=None,
                 text=True,
+                env=child_environment,
                 timeout=float(payload["child_timeout_seconds"]),
             )
             if completed.returncode != 0:

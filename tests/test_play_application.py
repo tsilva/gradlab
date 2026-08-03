@@ -9,10 +9,12 @@ from unittest.mock import MagicMock
 import pytest
 
 from gradlab.play_application import PlaybackHost
+from gradlab.model_sources import NoDefaultPublicRunCheckpointError
 from gradlab.play_runtime import (
     ActivePlayback,
     PlaybackLoader,
     PlaySourceSpec,
+    apply_vizdoom_playback_iwad_override,
     _implicit_playback_seed,
 )
 from gradlab.play_web import PlaybackCommand
@@ -188,6 +190,21 @@ def test_implicit_playback_seed_prefers_evaluation_then_policy_then_training() -
     )
 
 
+def test_vizdoom_playback_iwad_override_is_counterfactual_only_when_bytes_change(
+    tmp_path,
+) -> None:
+    iwad = tmp_path / "doom2.wad"
+    iwad.write_bytes(b"IWADdoom")
+    environment = {
+        "env_provider": "vizdoom-turbo",
+        "env_args": {"rom_path": None},
+    }
+
+    assert apply_vizdoom_playback_iwad_override(environment, rom_path=iwad) is True
+    assert environment["env_args"]["rom_path"]["filename"] == "doom2.wad"
+    assert apply_vizdoom_playback_iwad_override(environment, rom_path=iwad) is False
+
+
 def test_playback_loader_passes_bundle_algorithm_to_model_loader(monkeypatch) -> None:
     class ActivationComplete(Exception):
         pass
@@ -344,6 +361,83 @@ def test_direct_public_run_resolves_active_checkpoint_breadcrumb_route() -> None
         "goal_variant_id": "goal-variant-" + "c" * 24,
         "run_id": run_id,
         "checkpoint_id": "checkpoint-10002432-" + "b" * 16,
+    }
+    host.stop()
+
+
+def test_active_public_run_falls_back_to_checkpoint_selection() -> None:
+    class ActivePublicRunLoader(FakeLoader):
+        def prepare(self, spec, progress):
+            raise NoDefaultPublicRunCheckpointError(
+                f"run {spec.run_id} has no promoted or final checkpoint"
+            )
+
+    run_id = "gradlab-" + "a" * 32
+    route = {
+        "level": "runs",
+        "environment_id": "ViZDoom",
+        "goal_id": "DefendTheLine-v1",
+        "goal_variant_id": "goal-variant-" + "c" * 24,
+        "run_id": run_id,
+        "checkpoint_id": "",
+    }
+    host = PlaybackHost(
+        ActivePublicRunLoader(),
+        initial_route=route,
+        initial_source=PlaySourceSpec("public_run", run_id, run_id=run_id),
+    )
+    host.start()
+
+    snapshot = wait_for_phase(host, "selecting")
+
+    assert snapshot["app"]["route"] == route
+    assert snapshot["app"]["error"] == ""
+    assert snapshot["app"]["message"] == (
+        "This run has no promoted or final checkpoint yet. "
+        "Choose one of its published checkpoints to play now."
+    )
+    host.stop()
+
+
+def test_direct_public_run_resolves_top_level_goal_breadcrumb_route() -> None:
+    class PublicRunLoader(FakeLoader):
+        def prepare(self, spec, progress):
+            candidate = super().prepare(spec, progress)
+            candidate.source = SimpleNamespace(
+                bundle=SimpleNamespace(
+                    recipe={
+                        "recipe": {
+                            "goal_variant": {
+                                "goal_id": "VizdoomDeathmatch-v1",
+                                "goal_slug": "VizdoomDeathmatch-v1",
+                                "variant_id": "goal-variant-" + "d" * 24,
+                            },
+                        },
+                    },
+                    model={
+                        "checkpoint": {"step": 23_998_464, "sha256": "e" * 64},
+                    },
+                ),
+            )
+            return candidate
+
+    loader = PublicRunLoader()
+    run_id = "gradlab-" + "e" * 32
+    host = PlaybackHost(
+        loader,
+        initial_source=PlaySourceSpec("public_run", run_id, run_id=run_id),
+    )
+    host.start()
+
+    snapshot = wait_for_phase(host, "active")
+
+    assert snapshot["app"]["route"] == {
+        "level": "runs",
+        "environment_id": "VizdoomDeathmatch-v1",
+        "goal_id": "VizdoomDeathmatch-v1",
+        "goal_variant_id": "goal-variant-" + "d" * 24,
+        "run_id": run_id,
+        "checkpoint_id": "checkpoint-23998464-" + "e" * 16,
     }
     host.stop()
 

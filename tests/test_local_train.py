@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -511,6 +512,14 @@ def test_local_vizdoom_train_auto_binds_and_records_available_iwad(tmp_path: Pat
     with (
         mock.patch("gradlab.vizdoom_assets.DEFAULT_LOCAL_VIZDOOM_IWAD", iwad),
         mock.patch(
+            "gradlab.vizdoom_assets.REQUIRED_VIZDOOM_IWAD_SIZE_BYTES",
+            iwad.stat().st_size,
+        ),
+        mock.patch(
+            "gradlab.vizdoom_assets.REQUIRED_VIZDOOM_IWAD_SHA256",
+            hashlib.sha256(iwad.read_bytes()).hexdigest(),
+        ),
+        mock.patch(
             "gradlab.vizdoom_assets._display_path",
             return_value="~/roms/vizdoom/doom2.wad",
         ),
@@ -537,6 +546,29 @@ def test_local_vizdoom_train_auto_binds_and_records_available_iwad(tmp_path: Pat
     assert recorded_asset["filename"] == "doom2.wad"
     assert len(recorded_asset["sha256"]) == 64
     assert "path" not in recorded_asset
+
+
+def test_local_vizdoom_train_fails_before_run_creation_without_doom2(
+    tmp_path: Path,
+) -> None:
+    runs_dir = tmp_path / "runs"
+    with mock.patch(
+        "gradlab.vizdoom_assets.DEFAULT_LOCAL_VIZDOOM_IWAD",
+        tmp_path / "missing-doom2.wad",
+    ):
+        with pytest.raises(FileNotFoundError, match="IWAD path does not exist"):
+            main(
+                [
+                    "VizdoomBasic-v1/ppo",
+                    "--runs-dir",
+                    str(runs_dir),
+                    "--run-name",
+                    "must-not-exist",
+                    "--no-tui",
+                ]
+            )
+
+    assert not (runs_dir / "must-not-exist").exists()
 
 
 def test_local_mario_direct_rom_failure_precedes_run_creation(tmp_path: Path) -> None:
@@ -780,3 +812,34 @@ def test_play_recipe_selects_latest_local_model(tmp_path: Path) -> None:
     assert args.model == str(model_path)
     assert host.snapshot()["app"]["source"]["kind"] == "local"
     assert host.snapshot()["app"]["source"]["value"] == str(model_path)
+
+
+def test_play_active_public_run_starts_at_its_checkpoint_route() -> None:
+    run_id = "gradlab-" + "a" * 32
+    route = {
+        "level": "runs",
+        "environment_id": "VizdoomDeathmatch-v1",
+        "goal_id": "VizdoomDeathmatch-v1",
+        "goal_variant_id": "goal-variant-" + "b" * 24,
+        "run_id": run_id,
+        "checkpoint_id": "",
+    }
+
+    with (
+        mock.patch(
+            "gradlab.play_catalog.PlayCatalog.public_run_route",
+            return_value=route,
+        ),
+        mock.patch(
+            "gradlab.play_web.run_web_player_application",
+            return_value=23,
+        ) as run_application,
+    ):
+        assert play_main(["--run", run_id, "--no-open"]) == 23
+
+    host = run_application.call_args.args[0]
+    snapshot = host.snapshot()
+    assert snapshot["app"]["route"] == route
+    assert snapshot["app"]["source"]["kind"] == "public_run"
+    assert snapshot["app"]["source"]["run_id"] == run_id
+    host.stop()

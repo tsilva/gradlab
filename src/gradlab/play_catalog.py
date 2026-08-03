@@ -2778,6 +2778,39 @@ class PlayCatalog:
         )
         return goal_id
 
+    def public_run_route(self, *, run_id: str) -> dict[str, str]:
+        """Return the hierarchical checkpoint-browser route proven by a public run."""
+        if RUN_ID_PATTERN.fullmatch(run_id) is None:
+            raise ValueError("run id must match gradlab-<32 lowercase hex>")
+        public_document = self._public_run_recipe_document(run_id)
+        recipe = public_document.get("recipe") if isinstance(public_document, Mapping) else None
+        raw_descriptor = recipe.get("goal_variant") if isinstance(recipe, Mapping) else None
+        if not isinstance(raw_descriptor, Mapping):
+            raise CatalogUnavailable(
+                "No verified public recipe currently proves this run's goal variant.",
+                code="public_proof_absent",
+                retryable=False,
+                source="public-models",
+            )
+        descriptor = validate_goal_variant_descriptor(raw_descriptor)
+        goal_slug = str(descriptor["goal_slug"])
+        environment_id, separator, _goal_path = goal_slug.partition("/")
+        if not separator:
+            environment_id = goal_slug
+        if not environment_id:
+            raise ValueError("public run goal slug is empty")
+        for goal in self._repository_goals(environment_id=environment_id):
+            if goal.goal_slug == goal_slug:
+                return {
+                    "level": "runs",
+                    "environment_id": environment_id,
+                    "goal_id": goal.goal_id,
+                    "goal_variant_id": str(descriptor["variant_id"]),
+                    "run_id": run_id,
+                    "checkpoint_id": "",
+                }
+        raise ValueError(f"run goal is not declared in the repository: {goal_slug}")
+
     def run_goal_variant(
         self,
         *,
