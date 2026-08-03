@@ -182,6 +182,9 @@ def test_vizdoom_goal_has_complete_evaluated_ppo_contract(
     assert train_config["env_args"]["num_threads"] == expected.get(
         "num_threads", expected_n_envs
     )
+    assert train_config["env_args"]["doom_skill"] == 1
+    assert train_environment["env_config"]["env_args"]["doom_skill"] == 1
+    assert eval_environment["env_config"]["env_args"]["doom_skill"] == 1
     if "n_steps" in expected:
         assert train_config["training_backend"]["config"]["n_steps"] == expected["n_steps"]
     assert train_config["env_args"]["use_restricted_actions"] == expected.get("actions", "discrete")

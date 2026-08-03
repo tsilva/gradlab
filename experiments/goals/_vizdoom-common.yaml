@@ -131,8 +131,8 @@ train:
             use_fire_reset: false
             # Optionally override the map selected by the scenario definition.
             doom_map: null
-            # Optionally override the difficulty selected by the scenario definition.
-            doom_skill: null
+            # Force every ViZDoom goal to the easiest Doom difficulty for now.
+            doom_skill: 1
             # Optionally pass additional command-line arguments to the Doom engine.
             game_args: null
             # Provide an empty family default for goal-specific native game variables.
