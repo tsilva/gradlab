@@ -12,7 +12,13 @@ from gradlab.file_utils import file_sha256
 
 VIZDOOM_IWAD_BINDING_SCHEMA_VERSION = 1
 DEFAULT_LOCAL_VIZDOOM_IWAD = Path("~/roms/vizdoom/doom2.wad")
+REQUIRED_VIZDOOM_IWAD_FILENAME = "doom2.wad"
+REQUIRED_VIZDOOM_IWAD_SIZE_BYTES = 14_604_584
+REQUIRED_VIZDOOM_IWAD_SHA256 = (
+    "10d67824b11025ddd9198e8cfc87ca335ee6e2d3e63af4180fa9b8a471893255"
+)
 VIZDOOM_IWAD_CACHE_PREFIX = Path("vizdoom-iwad/sha256")
+VIZDOOM_IWAD_OBJECT_PREFIX = "vizdoom-iwad/v1"
 
 _SHA256_RE = re.compile(r"[0-9a-f]{64}")
 _BINDING_FIELDS = frozenset(
@@ -24,6 +30,7 @@ _BINDING_FIELDS = frozenset(
         "sha256",
     }
 )
+_OPTIONAL_BINDING_FIELDS = frozenset({"object_uri"})
 
 
 def _display_path(path: Path) -> str:
@@ -75,7 +82,7 @@ def validate_vizdoom_iwad_binding(
     verify_file: bool = False,
 ) -> dict[str, Any]:
     binding = dict(value)
-    unknown = sorted(set(binding) - _BINDING_FIELDS)
+    unknown = sorted(set(binding) - _BINDING_FIELDS - _OPTIONAL_BINDING_FIELDS)
     if unknown:
         raise ValueError(f"unknown ViZDoom IWAD binding field(s): {', '.join(unknown)}")
     missing = sorted(_BINDING_FIELDS - set(binding))
@@ -104,9 +111,36 @@ def validate_vizdoom_iwad_binding(
         "size_bytes": size_bytes,
         "sha256": sha256,
     }
+    if "object_uri" in binding:
+        object_uri = str(binding["object_uri"] or "").strip()
+        if not object_uri:
+            raise ValueError("ViZDoom IWAD binding object_uri must be non-empty")
+        normalized["object_uri"] = object_uri
     if verify_file:
         verify_vizdoom_iwad_file(Path(path), normalized)
     return normalized
+
+
+def required_vizdoom_iwad_binding(
+    path: Path | None = None,
+) -> dict[str, Any]:
+    binding = vizdoom_iwad_binding(path or DEFAULT_LOCAL_VIZDOOM_IWAD)
+    expected = {
+        "filename": REQUIRED_VIZDOOM_IWAD_FILENAME,
+        "size_bytes": REQUIRED_VIZDOOM_IWAD_SIZE_BYTES,
+        "sha256": REQUIRED_VIZDOOM_IWAD_SHA256,
+    }
+    actual = {key: binding[key] for key in expected}
+    if actual != expected:
+        raise ValueError(
+            "ViZDoom requires the pinned Doom II IWAD "
+            f"{REQUIRED_VIZDOOM_IWAD_FILENAME} "
+            f"(size={REQUIRED_VIZDOOM_IWAD_SIZE_BYTES}, "
+            f"sha256={REQUIRED_VIZDOOM_IWAD_SHA256}); got "
+            f"filename={actual['filename']}, size={actual['size_bytes']}, "
+            f"sha256={actual['sha256']}"
+        )
+    return binding
 
 
 def portable_vizdoom_iwad_identity(value: Mapping[str, Any]) -> dict[str, Any]:
@@ -173,6 +207,13 @@ def bind_vizdoom_iwad_to_document(
     binding: Mapping[str, Any],
 ) -> None:
     normalized = validate_vizdoom_iwad_binding(binding)
+    runtime_binding = {
+        "schema_version": normalized["schema_version"],
+        "path": normalized["path"],
+        "filename": normalized["filename"],
+        "size_bytes": normalized["size_bytes"],
+        "sha256": normalized["sha256"],
+    }
     train_config = document.get("train_config")
     if not isinstance(train_config, MutableMapping):
         raise ValueError("ViZDoom IWAD binding requires a materialized train_config")
@@ -181,16 +222,16 @@ def bind_vizdoom_iwad_to_document(
     env_args = train_config.get("env_args")
     if not isinstance(env_args, Mapping):
         raise ValueError("ViZDoom IWAD binding requires train_config.env_args")
-    train_config["env_args"] = {**env_args, "rom_path": normalized}
+    train_config["env_args"] = {**env_args, "rom_path": runtime_binding}
     evaluation = train_config.get("checkpoint_eval_environment")
     if isinstance(evaluation, MutableMapping):
         evaluation_args = evaluation.get("env_args")
         if not isinstance(evaluation_args, Mapping):
             raise ValueError("ViZDoom checkpoint evaluation requires env_args")
-        evaluation["env_args"] = {**evaluation_args, "rom_path": normalized}
+        evaluation["env_args"] = {**evaluation_args, "rom_path": runtime_binding}
 
 
-def apply_optional_local_vizdoom_iwad(
+def bind_required_local_vizdoom_iwad(
     document: MutableMapping[str, Any],
     *,
     requested_path: Path | None = None,
@@ -204,10 +245,14 @@ def apply_optional_local_vizdoom_iwad(
     env_args = train_config.get("env_args")
     if not isinstance(env_args, Mapping):
         return False
-    if env_args.get("rom_path") is not None and requested_path is None:
-        return False
+    configured = env_args.get("rom_path")
+    if isinstance(configured, Mapping) and requested_path is None:
+        normalized = validate_vizdoom_iwad_binding(configured)
+        resolved = resolve_vizdoom_iwad_path(normalized)
+        assert resolved is not None
+        required = required_vizdoom_iwad_binding(Path(resolved))
+        bind_vizdoom_iwad_to_document(document, required)
+        return True
     candidate = requested_path or default_path or DEFAULT_LOCAL_VIZDOOM_IWAD
-    if requested_path is None and not candidate.expanduser().is_file():
-        return False
-    bind_vizdoom_iwad_to_document(document, vizdoom_iwad_binding(candidate))
+    bind_vizdoom_iwad_to_document(document, required_vizdoom_iwad_binding(candidate))
     return True

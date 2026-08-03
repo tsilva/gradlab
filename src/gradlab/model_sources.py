@@ -37,6 +37,10 @@ DEFAULT_PUBLIC_MODELS_BASE_URL = (
 ModelSourceKind: TypeAlias = Literal["manifest", "huggingface", "local", "public_run"]
 
 
+class NoDefaultPublicRunCheckpointError(ValueError):
+    """A public run has no promoted or final default playback target."""
+
+
 def _safe_stem(value: str, fallback: str = "model") -> str:
     stem = re.sub(r"[^A-Za-z0-9_.-]+", "-", str(value)).strip("-._")
     return stem or fallback
@@ -241,7 +245,9 @@ def public_run_checkpoint_manifest_url(
     else:
         finals = [row for row in checkpoints if row.purpose == "final"]
         if not finals:
-            raise ValueError(f"run {value} has no promoted or final checkpoint")
+            raise NoDefaultPublicRunCheckpointError(
+                f"run {value} has no promoted or final checkpoint"
+            )
         checkpoint = max(finals, key=lambda row: (row.step, row.sha256))
     model_url = checkpoint.public_url
     if not model_url.endswith("/model.zip"):

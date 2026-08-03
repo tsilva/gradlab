@@ -108,8 +108,8 @@ train:
             render_mode: rgb_array
             # Set the number of native worker threads used by the vector environment.
             num_threads: 32
-            # Use a verified ~/roms/vizdoom/doom2.wad for local runs when present;
-            # otherwise use the provider's bundled game asset.
+            # Materialization must replace this sentinel with the pinned, verified
+            # ~/roms/vizdoom/doom2.wad binding before any new run executes.
             rom_path: null
             # Select how observation buffers are exposed without unsafe reuse.
             obs_copy: safe_view

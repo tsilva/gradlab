@@ -45,7 +45,7 @@ from gradlab.training_lifecycle import (
     TrainingExecutionMode,
     TrainingExecutionPolicy,
 )
-from gradlab.vizdoom_assets import apply_optional_local_vizdoom_iwad
+from gradlab.vizdoom_assets import bind_required_local_vizdoom_iwad
 
 
 LOCAL_ROM_CACHE_ENV = "GRADLAB_ROM_CACHE_DIR"
@@ -100,8 +100,8 @@ def build_parser() -> argparse.ArgumentParser:
         "--rom-path",
         type=Path,
         help=(
-            "Use a provider-compatible raw .nes ROM in place for this run without "
-            "registering or copying it."
+            "Use a provider-compatible raw .nes ROM or the pinned Doom II IWAD in "
+            "place for this run without registering or copying it."
         ),
     )
     parser.add_argument(
@@ -270,7 +270,7 @@ def main(argv: list[str] | None = None) -> int:
             value,
             checkpoint_eval_backend="none",
         )
-        apply_optional_local_vizdoom_iwad(value)
+        bind_required_local_vizdoom_iwad(value, requested_path=args.rom_path)
 
     resolved_documents = compose_resolved_train_documents(
         source.goal_path,
@@ -314,7 +314,11 @@ def main(argv: list[str] | None = None) -> int:
     provider = resolve_env_provider(str(config["env_provider"]))
     uses_local_rom_cache = provider.requires_external_rom_asset
     runtime_rom_binding: RomRuntimeBinding | None = None
-    if args.rom_path is not None and not uses_local_rom_cache:
+    if (
+        args.rom_path is not None
+        and not uses_local_rom_cache
+        and provider.provider_id != "vizdoom-turbo"
+    ):
         raise ValueError(
             f"--rom-path is not valid for ROM-free provider {provider.provider_id!r}"
         )

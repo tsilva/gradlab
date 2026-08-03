@@ -79,9 +79,11 @@ from gradlab.wandb_utils import (
 )
 from gradlab.wandb_publisher import WandbProjector, publish_terminal_summary
 from gradlab.vizdoom_assets import (
+    VIZDOOM_IWAD_OBJECT_PREFIX,
     bind_vizdoom_iwad_to_document,
+    required_vizdoom_iwad_binding,
     validate_vizdoom_iwad_binding,
-    vizdoom_iwad_binding,
+    verify_vizdoom_iwad_file,
 )
 
 
@@ -356,7 +358,38 @@ def _bind_vizdoom_iwad_for_launch(
 ) -> dict[str, Any] | None:
     if env_provider != "vizdoom-turbo":
         return None
-    return vizdoom_iwad_binding(rom_path) if rom_path is not None else None
+    return required_vizdoom_iwad_binding(rom_path)
+
+
+def _stage_vizdoom_iwad(
+    authority: RunAuthority,
+    binding: Mapping[str, Any],
+) -> dict[str, Any]:
+    normalized = validate_vizdoom_iwad_binding(binding, verify_file=True)
+    source = verify_vizdoom_iwad_file(Path(normalized["path"]), normalized)
+    key = (
+        f"{VIZDOOM_IWAD_OBJECT_PREFIX}/objects/sha256/"
+        f"{normalized['sha256']}/{normalized['filename']}"
+    )
+    staged = {
+        **normalized,
+        "object_uri": authority.evaluation.uri(key),
+    }
+    authority.evaluation.put_file(
+        key,
+        source,
+        sha256=str(normalized["sha256"]),
+        content_type="application/octet-stream",
+    )
+    authority.evaluation.put_json(
+        (
+            f"{VIZDOOM_IWAD_OBJECT_PREFIX}/manifests/sha256/"
+            f"{normalized['sha256']}.json"
+        ),
+        staged,
+        create_only=True,
+    )
+    return validate_vizdoom_iwad_binding(staged)
 
 
 def _compute(args: argparse.Namespace) -> ComputeRequest:
@@ -551,6 +584,12 @@ def cmd_launch(args: argparse.Namespace) -> int:
     )
     document = resolved_documents.effective
     checkpoint_eval_backend = str(document["train_config"]["checkpoint_eval_backend"])
+    config = dict(document["train_config"])
+    env_provider = str(config["env_provider"])
+    vizdoom_iwad = _bind_vizdoom_iwad_for_launch(
+        env_provider=env_provider,
+        rom_path=args.rom_path,
+    )
     storage, authority, dstack_backend, _preflight_report = _operator_preflight(
         root,
         checkpoint_eval_backend=checkpoint_eval_backend,
@@ -565,12 +604,8 @@ def cmd_launch(args: argparse.Namespace) -> int:
     )
     if release.source_sha != source_sha:
         raise RuntimeError("runtime release source does not match committed HEAD")
-    config = dict(document["train_config"])
-    env_provider = str(config["env_provider"])
-    vizdoom_iwad = _bind_vizdoom_iwad_for_launch(
-        env_provider=env_provider,
-        rom_path=args.rom_path,
-    )
+    if vizdoom_iwad is not None:
+        vizdoom_iwad = _stage_vizdoom_iwad(authority, vizdoom_iwad)
     asset = (
         None
         if vizdoom_iwad is not None
@@ -581,13 +616,6 @@ def cmd_launch(args: argparse.Namespace) -> int:
             rom_path=args.rom_path,
         )
     )
-    if vizdoom_iwad is not None:
-        if selected_compute.kind != "local":
-            raise ValueError("ViZDoom IWAD launches currently require local compute")
-        if checkpoint_eval_backend != "none":
-            raise ValueError(
-                "ViZDoom IWAD launches currently require checkpoint_eval_backend=none"
-            )
     run_id = new_run_id()
     attempt_id = new_attempt_id()
     dstack_task = _task_name(run_id, attempt_id, initial=True)

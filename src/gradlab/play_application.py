@@ -14,6 +14,7 @@ from gradlab.play_runtime import (
     PlaybackCandidate,
     PlaybackLoader,
 )
+from gradlab.model_sources import NoDefaultPublicRunCheckpointError
 from gradlab.play_web import idle_playback_snapshot
 from gradlab.run_contracts import checkpoint_id
 
@@ -37,10 +38,12 @@ def _resolved_public_run_route(
         return None
     goal_slug = str(goal_variant.get("goal_slug") or "").strip()
     environment_id, separator, _goal_path = goal_slug.partition("/")
+    if not separator:
+        environment_id = goal_slug
     goal_id = str(goal_variant.get("goal_id") or "").strip()
     goal_variant_id = str(goal_variant.get("variant_id") or "").strip()
     run_id = str(spec.run_id).strip()
-    if not separator or not all((environment_id, goal_id, goal_variant_id, run_id)):
+    if not all((environment_id, goal_id, goal_variant_id, run_id)):
         return None
     try:
         resolved_checkpoint_id = checkpoint_id(
@@ -346,7 +349,16 @@ class PlaybackHost:
             with self._lock:
                 current = generation == self._generation and not self._stopped
             if current:
-                self._set_state("error", error=str(exc))
+                if isinstance(exc, NoDefaultPublicRunCheckpointError):
+                    self._set_state(
+                        "selecting",
+                        message=(
+                            "This run has no promoted or final checkpoint yet. "
+                            "Choose one of its published checkpoints to play now."
+                        ),
+                    )
+                else:
+                    self._set_state("error", error=str(exc))
 
     def _begin_prepare(self, source: PlaySourceSpec) -> None:
         with self._lock:

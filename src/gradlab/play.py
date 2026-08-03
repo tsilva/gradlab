@@ -82,6 +82,16 @@ def main(argv: list[str] | None = None) -> int:
     initial_route: dict[str, object] = {"level": "environments"}
     initial_source: PlaySourceSpec | None = None
     if args.run:
+        initial_route = {
+            "level": "runs",
+            "run_id": str(args.run),
+        }
+        try:
+            initial_route = catalog.public_run_route(run_id=str(args.run))
+        except CatalogError:
+            pass
+        except ValueError:
+            pass
         initial_source = PlaySourceSpec("public_run", str(args.run), run_id=str(args.run))
     elif args.model:
         initial_source = PlaySourceSpec("local", str(Path(args.model).expanduser()))

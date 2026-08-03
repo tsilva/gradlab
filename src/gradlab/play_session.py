@@ -250,8 +250,8 @@ def add_play_source_args(parser: argparse.ArgumentParser) -> None:
         "--rom-path",
         type=Path,
         help=(
-            "Use a provider-compatible raw .nes ROM in place for playback without "
-            "registering or copying it."
+            "Use a provider-compatible raw .nes ROM, or a local ViZDoom IWAD as a "
+            "visible counterfactual when it differs from training."
         ),
     )
     parser.add_argument(

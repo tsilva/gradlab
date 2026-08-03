@@ -4,14 +4,16 @@ from pathlib import Path
 
 import pytest
 
+import gradlab.vizdoom_assets as vizdoom_assets
 from gradlab.env import EnvConfig
 from gradlab.env_identity import environment_identity_from_train_config
 from gradlab.env_providers import provider_native_vec_kwargs
 from gradlab.vizdoom_assets import (
-    apply_optional_local_vizdoom_iwad,
+    bind_required_local_vizdoom_iwad,
     bind_vizdoom_iwad_to_document,
     install_vizdoom_iwad_file,
     portable_vizdoom_iwad_identity,
+    required_vizdoom_iwad_binding,
     resolve_vizdoom_iwad_path,
     validate_vizdoom_iwad_binding,
     vizdoom_iwad_cache_path,
@@ -25,6 +27,25 @@ def _iwad(path: Path, payload: bytes = b"doom") -> Path:
     return path
 
 
+def _pin_test_iwad(monkeypatch: pytest.MonkeyPatch, path: Path) -> None:
+    binding = vizdoom_iwad_binding(path)
+    monkeypatch.setattr(
+        vizdoom_assets,
+        "REQUIRED_VIZDOOM_IWAD_FILENAME",
+        str(binding["filename"]),
+    )
+    monkeypatch.setattr(
+        vizdoom_assets,
+        "REQUIRED_VIZDOOM_IWAD_SIZE_BYTES",
+        int(binding["size_bytes"]),
+    )
+    monkeypatch.setattr(
+        vizdoom_assets,
+        "REQUIRED_VIZDOOM_IWAD_SHA256",
+        str(binding["sha256"]),
+    )
+
+
 def _vizdoom_document() -> dict:
     return {
         "train_config": {
@@ -35,20 +56,32 @@ def _vizdoom_document() -> dict:
     }
 
 
-def test_local_vizdoom_document_uses_default_iwad_only_when_available(tmp_path: Path) -> None:
+def test_local_vizdoom_document_requires_pinned_default_iwad(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     document = _vizdoom_document()
 
-    assert not apply_optional_local_vizdoom_iwad(
-        document,
-        default_path=tmp_path / "missing.wad",
-    )
+    with pytest.raises(FileNotFoundError, match="IWAD path does not exist"):
+        bind_required_local_vizdoom_iwad(
+            document,
+            default_path=tmp_path / "missing.wad",
+        )
     assert document["train_config"]["env_args"]["rom_path"] is None
 
     path = _iwad(tmp_path / "doom2.wad")
-    assert apply_optional_local_vizdoom_iwad(document, default_path=path)
+    _pin_test_iwad(monkeypatch, path)
+    assert bind_required_local_vizdoom_iwad(document, default_path=path)
     binding = document["train_config"]["env_args"]["rom_path"]
     assert binding["filename"] == "doom2.wad"
     assert binding["size_bytes"] == path.stat().st_size
+
+
+def test_required_vizdoom_iwad_rejects_different_bytes(tmp_path: Path) -> None:
+    path = _iwad(tmp_path / "doom2.wad")
+
+    with pytest.raises(ValueError, match="requires the pinned Doom II IWAD"):
+        required_vizdoom_iwad_binding(path)
 
 
 def test_vizdoom_iwad_binding_verifies_header_size_and_digest(tmp_path: Path) -> None:
@@ -124,13 +157,18 @@ def test_vizdoom_iwad_resolves_from_verified_runtime_cache(
 
 
 def test_vizdoom_iwad_binding_updates_training_and_evaluation_contract(tmp_path: Path) -> None:
-    binding = vizdoom_iwad_binding(_iwad(tmp_path / "doom2.wad"))
+    binding = {
+        **vizdoom_iwad_binding(_iwad(tmp_path / "doom2.wad")),
+        "object_uri": "s3://private/vizdoom/doom2.wad",
+    }
     document = _vizdoom_document()
     document["train_config"]["checkpoint_eval_environment"] = {"env_args": {"rom_path": None}}
 
     bind_vizdoom_iwad_to_document(document, binding)
 
-    assert document["train_config"]["env_args"]["rom_path"] == binding
+    runtime_binding = {key: value for key, value in binding.items() if key != "object_uri"}
+    assert document["train_config"]["env_args"]["rom_path"] == runtime_binding
     assert (
-        document["train_config"]["checkpoint_eval_environment"]["env_args"]["rom_path"] == binding
+        document["train_config"]["checkpoint_eval_environment"]["env_args"]["rom_path"]
+        == runtime_binding
     )

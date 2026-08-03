@@ -338,14 +338,14 @@ def _check_report(args: argparse.Namespace) -> dict[str, Any]:
         from gradlab.provider_config import provider_num_envs
         from gradlab.recipe_documents import compose_train_document
         from gradlab.training.sb3_vec_env import GradLabVecEnv
-        from gradlab.vizdoom_assets import apply_optional_local_vizdoom_iwad
+        from gradlab.vizdoom_assets import bind_required_local_vizdoom_iwad
 
         document = compose_train_document(
             args.goal_file,
             args.recipe_file,
             recipe_overrides=args.recipe_overrides,
         )
-        apply_optional_local_vizdoom_iwad(document)
+        bind_required_local_vizdoom_iwad(document, requested_path=args.rom_path)
         train_config = document["train_config"]
         provider = resolve_env_provider(str(train_config["env_provider"]))
         config = env_config_from_mapping(train_config)
@@ -662,6 +662,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     preflight_parser.add_argument("--set", dest="recipe_overrides", action="append", default=[])
     preflight_parser.add_argument("--seed", type=int, default=0)
+    preflight_parser.add_argument(
+        "--rom-path",
+        type=Path,
+        help="Use the pinned Doom II IWAD for a ViZDoom preflight.",
+    )
     preflight_parser.add_argument("--json", action="store_true")
     preflight_parser.set_defaults(handler=_cmd_preflight)
     return parser

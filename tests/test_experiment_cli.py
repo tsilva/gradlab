@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
@@ -31,6 +32,7 @@ from gradlab.experiment_cli import (
     _required_operator_environment,
     _run_completed,
     _stage_rom,
+    _stage_vizdoom_iwad,
     _task_name,
     _task_request,
     _wandb_identity,
@@ -55,6 +57,7 @@ from gradlab.run_contracts import (
     new_attempt_id,
     new_run_id,
 )
+from gradlab.vizdoom_assets import vizdoom_iwad_binding
 
 
 @pytest.mark.parametrize(
@@ -469,6 +472,7 @@ def test_launch_operator_preflight_runs_before_runtime_readiness(
         max_cost_usd=None,
         allow_on_demand=False,
         max_duration=3600,
+        rom_path=None,
     )
 
     with (
@@ -482,7 +486,12 @@ def test_launch_operator_preflight_runs_before_runtime_readiness(
         mock.patch(
             "gradlab.experiment_cli.compose_resolved_train_documents",
             return_value=SimpleNamespace(
-                effective={"train_config": {"checkpoint_eval_backend": "modal"}},
+                effective={
+                    "train_config": {
+                        "checkpoint_eval_backend": "modal",
+                        "env_provider": "gradlab",
+                    }
+                },
             ),
         ),
         mock.patch(
@@ -1089,6 +1098,40 @@ def test_rom_free_provider_does_not_require_or_stage_an_asset() -> None:
     )
 
 
+def test_vizdoom_iwad_is_staged_by_digest_in_private_evaluation_storage(
+    tmp_path: Path,
+) -> None:
+    iwad = tmp_path / "doom2.wad"
+    iwad.write_bytes(b"IWADdoom")
+
+    writes: list[tuple[str, object]] = []
+
+    class EvaluationBucket:
+        @staticmethod
+        def uri(key: str) -> str:
+            return f"s3://private-evaluation/{key}"
+
+        @staticmethod
+        def put_file(key: str, path: Path, **kwargs) -> None:
+            writes.append((key, (path.read_bytes(), kwargs)))
+
+        @staticmethod
+        def put_json(key: str, value: object, **kwargs) -> None:
+            writes.append((key, (value, kwargs)))
+
+    staged = _stage_vizdoom_iwad(
+        SimpleNamespace(evaluation=EvaluationBucket()),
+        vizdoom_iwad_binding(iwad),
+    )
+
+    assert staged["object_uri"].startswith(
+        "s3://private-evaluation/vizdoom-iwad/v1/objects/sha256/"
+    )
+    assert staged["sha256"] in staged["object_uri"]
+    assert writes[0][1][0] == iwad.read_bytes()
+    assert writes[1][0] == f"vizdoom-iwad/v1/manifests/sha256/{staged['sha256']}.json"
+
+
 def test_rom_free_launch_contract_omits_null_asset() -> None:
     goal = Path("experiments/goals/gradlab__bandit/_goal.yaml")
     resolved = compose_resolved_train_documents(
@@ -1130,9 +1173,20 @@ def test_repair_runtime_accepts_rom_free_manifest() -> None:
         _manifest_rom_asset({"rom_asset_manifest": "invalid"})
 
 
-def test_local_vizdoom_iwad_contract_is_hash_bound_and_mounts_cache(tmp_path: Path) -> None:
+def test_local_vizdoom_iwad_contract_is_hash_bound_and_mounts_cache(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     iwad = tmp_path / "doom2.wad"
     iwad.write_bytes(b"IWADdoom")
+    monkeypatch.setattr(
+        "gradlab.vizdoom_assets.REQUIRED_VIZDOOM_IWAD_SIZE_BYTES",
+        iwad.stat().st_size,
+    )
+    monkeypatch.setattr(
+        "gradlab.vizdoom_assets.REQUIRED_VIZDOOM_IWAD_SHA256",
+        hashlib.sha256(iwad.read_bytes()).hexdigest(),
+    )
     binding = _bind_vizdoom_iwad_for_launch(
         env_provider="vizdoom-turbo",
         rom_path=iwad,

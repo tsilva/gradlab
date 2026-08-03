@@ -30,7 +30,7 @@ export function mount({ definition, services }) {
           <select id="playback-contract-mode" data-contract-mode aria-describedby="playback-contract-hint">
             <option value="training">Training contract</option>
             <option value="evaluation">Published evaluation</option>
-            <option value="counterfactual">Counterfactual · clipping off</option>
+            <option value="counterfactual">Counterfactual overrides</option>
           </select>
           <button data-command="set-contract-mode" class="quiet icon-only" aria-label="Apply environment contract" title="Apply environment contract and start a new shared session"><svg class="icon" aria-hidden="true"><use href="/assets/tabler-icons.svg#ti-check"></use></svg></button>
         </div>

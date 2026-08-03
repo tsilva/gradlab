@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import argparse
 import tempfile
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, MutableMapping
 from copy import deepcopy
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -47,6 +47,7 @@ from gradlab.trusted_inputs import (
     stage_model_input,
     verify_staged_model,
 )
+from gradlab.vizdoom_assets import portable_vizdoom_iwad_identity, vizdoom_iwad_binding
 
 
 ProgressCallback = Callable[[str, str], None]
@@ -132,6 +133,28 @@ def resolve_shared_playback_rom_binding(
         asset=asset,
         rom_path=compatible_rom_path,
     )
+
+
+def apply_vizdoom_playback_iwad_override(
+    environment: MutableMapping[str, Any],
+    *,
+    rom_path: Path | None,
+) -> bool:
+    """Bind a local IWAD and report whether it changes the recorded environment."""
+    if rom_path is None or str(environment.get("env_provider") or "") != "vizdoom-turbo":
+        return False
+    env_args = environment.get("env_args")
+    if not isinstance(env_args, MutableMapping):
+        raise ValueError("ViZDoom playback environment has no mutable env_args")
+    binding = vizdoom_iwad_binding(rom_path)
+    recorded = env_args.get("rom_path")
+    changed = (
+        not isinstance(recorded, Mapping)
+        or portable_vizdoom_iwad_identity(recorded)
+        != portable_vizdoom_iwad_identity(binding)
+    )
+    env_args["rom_path"] = binding
+    return changed
 
 
 def _implicit_playback_seed(
@@ -243,6 +266,10 @@ class PlaybackLoader:
         value_contract = critic_value_contract(source.bundle.recipe)
         contract_audit = playback_contract_audit(source.bundle.recipe)
         active_environment = deepcopy(dict(contract["environment"]))
+        vizdoom_iwad_changed = apply_vizdoom_playback_iwad_override(
+            active_environment,
+            rom_path=getattr(args, "rom_path", None),
+        )
         if requested_mode == "counterfactual":
             if spec.reward_clip_override is None:
                 raise ValueError(
@@ -275,13 +302,19 @@ class PlaybackLoader:
         if evaluation_available:
             available_modes.append("evaluation")
         available_modes.append("counterfactual")
-        comparison_reasons = (
-            []
-            if active_hash == training_hash
-            else ["active policy environment differs from training"]
-        )
+        comparison_reasons = []
+        if active_hash != training_hash:
+            comparison_reasons.append(
+                "ViZDoom IWAD override differs from training"
+                if vizdoom_iwad_changed
+                else "active policy environment differs from training"
+            )
+        effective_mode = "counterfactual" if vizdoom_iwad_changed else requested_mode
+        requested_override_paths = list(contract_audit["requested_policy_override_paths"])
+        if vizdoom_iwad_changed:
+            requested_override_paths.append("/env_args/rom_path")
         contract_details: dict[str, Any] = {
-            "mode": requested_mode,
+            "mode": effective_mode,
             "available_modes": available_modes,
             "reward_clip_override": spec.reward_clip_override,
             "policy_environment_hash": active_hash,
@@ -290,11 +323,9 @@ class PlaybackLoader:
             "comparison_reasons": comparison_reasons,
             "evaluation_matches_training": evaluation_matches_training,
             "mismatch_paths": list(contract_audit["mismatch_paths"]),
-            "requested_policy_override_paths": list(
-                contract_audit["requested_policy_override_paths"]
-            ),
+            "requested_policy_override_paths": requested_override_paths,
         }
-        termination_source = requested_mode
+        termination_source = effective_mode
         if not self.explicit_seed:
             if not isinstance(recipe, Mapping):
                 raise ValueError("policy bundle recipe is invalid")

@@ -115,6 +115,7 @@ from gradlab.trusted_inputs import stage_model_input
 from gradlab.wandb_publisher import WandbProjector
 from gradlab.vizdoom_assets import (
     bind_vizdoom_iwad_to_document,
+    install_vizdoom_iwad_file,
     validate_vizdoom_iwad_binding,
     verify_vizdoom_iwad_file,
     vizdoom_iwad_cache_path,
@@ -807,7 +808,29 @@ class RunSupervisor:
         if isinstance(iwad, Mapping):
             normalized_iwad = validate_vizdoom_iwad_binding(iwad)
             cached_iwad = vizdoom_iwad_cache_path(CONTAINER_ROM_CACHE, normalized_iwad)
-            verify_vizdoom_iwad_file(cached_iwad, normalized_iwad)
+            try:
+                verify_vizdoom_iwad_file(cached_iwad, normalized_iwad)
+            except (FileNotFoundError, ValueError):
+                if str(os.environ.get("GRADLAB_ROM_CACHE_READ_ONLY") or "") == "1":
+                    raise
+                object_uri = str(normalized_iwad.get("object_uri") or "")
+                if not object_uri:
+                    raise FileNotFoundError(
+                        "verified ViZDoom IWAD is absent from the runtime cache and the "
+                        "run manifest has no private object URI"
+                    )
+                object_key = self.authority.evaluation.key_from_uri(object_uri)
+                with tempfile.TemporaryDirectory(
+                    prefix="gradlab-vizdoom-iwad-",
+                    dir=self.output_root,
+                ) as temporary:
+                    staged = Path(temporary) / str(normalized_iwad["filename"])
+                    staged.write_bytes(self.authority.evaluation.get_bytes(object_key))
+                    install_vizdoom_iwad_file(
+                        staged,
+                        normalized_iwad,
+                        cache_root=CONTAINER_ROM_CACHE,
+                    )
             bind_vizdoom_iwad_to_document(materialized, normalized_iwad)
             bind_vizdoom_iwad_to_document(base_materialized, normalized_iwad)
             config = dict(materialized["train_config"])
@@ -1580,6 +1603,19 @@ class RunSupervisor:
             rom_key = self.authority.evaluation.key_from_uri(str(asset["object_uri"]))
             payload["rom_get_url"] = self.authority.evaluation.presign_get(
                 rom_key,
+                expires_seconds=timeout + int(self.modal_config.timeouts.expiry_margin_seconds),
+            )
+        iwad = self.manifest.modal.get("vizdoom_iwad_binding")
+        if isinstance(iwad, Mapping):
+            normalized_iwad = validate_vizdoom_iwad_binding(iwad)
+            iwad_key = self.authority.evaluation.key_from_uri(
+                str(normalized_iwad["object_uri"])
+            )
+            payload["vizdoom_iwad_binding"] = {
+                key: value for key, value in normalized_iwad.items() if key != "object_uri"
+            }
+            payload["vizdoom_iwad_get_url"] = self.authority.evaluation.presign_get(
+                iwad_key,
                 expires_seconds=timeout + int(self.modal_config.timeouts.expiry_margin_seconds),
             )
         return payload
