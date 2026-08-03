@@ -84,7 +84,7 @@ EXPECTED_GOALS = {
         "acceptance_metric": "eval/full/episode/return/shaped/mean",
         "acceptance_threshold": 5.0,
         "reward_scale": 1.0,
-        "max_episode_steps": 512,
+        "max_episode_steps": None,
     },
     "VizdoomDefendLine-Plus-v1": {
         "timesteps": 10_000_000,
@@ -93,7 +93,7 @@ EXPECTED_GOALS = {
         "acceptance_metric": "eval/full/episode/return/shaped/mean",
         "acceptance_threshold": 5.0,
         "reward_scale": 1.0,
-        "max_episode_steps": 512,
+        "max_episode_steps": None,
     },
     "VizdoomHealthGathering-v1": {
         "timesteps": 10_000_000,
@@ -227,13 +227,28 @@ def test_vizdoom_goal_has_complete_evaluated_ppo_contract(
 
 
 @pytest.mark.parametrize(
+    "goal_id",
+    ["VizdoomDefendLine-v1", "VizdoomDefendLine-Plus-v1"],
+)
+def test_vizdoom_defend_line_uses_a_native_tic_horizon(goal_id: str) -> None:
+    goal_path = GOALS_ROOT / goal_id / "_goal.yaml"
+    recipe_path = goal_path.parent / "recipes/ppo.yaml"
+    document = compose_train_document(goal_path, recipe_path)
+
+    train_config = document["train_config"]
+    assert train_config["env_args"]["vizdoom_config"] == {"episode_timeout": 2100}
+    assert "max_episode_steps" not in train_config["task"]["termination"]
+    assert document["goal"]["eval"]["environment"]["env_config"]["max_steps"] == 2100
+
+
+@pytest.mark.parametrize(
     ("goal_id", "expected_max_steps"),
     [
         ("VizdoomBasic-v1", 75),
         ("VizdoomBasic-Plus-v1", 75),
         ("VizdoomDeathmatch-v1", 1050),
-        ("VizdoomDefendLine-v1", 512),
-        ("VizdoomDefendLine-Plus-v1", 512),
+        ("VizdoomDefendLine-v1", 2100),
+        ("VizdoomDefendLine-Plus-v1", 2100),
         ("VizdoomDefendCenter-v1", 525),
         ("VizdoomHealthGathering-v1", 525),
         ("VizdoomHealthGathering-Plus-v1", 5250),
