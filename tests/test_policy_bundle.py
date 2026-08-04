@@ -403,8 +403,10 @@ def test_level1_1_recipe_fixture_preserves_aligned_train_and_eval_contracts() ->
     eval_contract = evaluation_contract(document)
     eval_task = eval_contract["environment"]["task"]
 
-    assert train_task["termination"]["failure"] == ["life_loss", "stalled"]
-    assert eval_task["termination"]["failure"] == ["life_loss", "stalled"]
+    assert train_task["termination"]["failure"] == ["life_loss"]
+    assert train_task["termination"]["timeout"] == ["stalled"]
+    assert eval_task["termination"]["failure"] == ["life_loss"]
+    assert eval_task["termination"]["timeout"] == ["stalled"]
     assert playback_contract(document)["environment"]["task"] == eval_task
     assert document["recipe"]["train_config"]["obs_crop"] == [32, 0, 0, 0]
     assert eval_contract["action_sampling"] == "stochastic"

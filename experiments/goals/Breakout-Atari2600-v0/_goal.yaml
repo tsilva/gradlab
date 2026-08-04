@@ -74,7 +74,9 @@ train:
           # One policy step is four native frames; 256 steps is roughly 17 seconds.
           steps: 256
       termination:
-        failure: [serve_stall]
+        # Waiting to serve remains recoverable with FIRE; truncate so
+        # actor-critic backends bootstrap from the final waiting state.
+        timeout: [serve_stall]
         max_episode_steps: 54000
       reward:
         reward_mode: native

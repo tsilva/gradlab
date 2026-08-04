@@ -284,8 +284,9 @@ def _validate_mario_level_termination(
     if train_termination.get("success") != ["level_change"]:
         return
 
-    expected_failure = ["life_loss", "stalled"]
+    expected_failure = ["life_loss"]
     expected_success = ["level_change"]
+    expected_timeout = ["stalled"]
     expected_stalled = {"signal": "x", "operation": "unchanged_for", "steps": 300}
     for phase in ("train", "eval"):
         task = document[phase]["environment"]["task"]
@@ -300,6 +301,10 @@ def _validate_mario_level_termination(
         if termination.get("success") != expected_success:
             raise ValueError(
                 f"{label}.{phase} Mario level task termination.success must be {expected_success!r}"
+            )
+        if termination.get("timeout") != expected_timeout:
+            raise ValueError(
+                f"{label}.{phase} Mario level task termination.timeout must be {expected_timeout!r}"
             )
         stalled = events.get("stalled") if isinstance(events, Mapping) else None
         if stalled != expected_stalled:

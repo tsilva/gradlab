@@ -105,8 +105,11 @@ train:
         level_change: {signal: level, operation: change}
         stalled: {signal: x, operation: unchanged_for, steps: 300}
       termination:
-        failure: [life_loss, stalled]
+        failure: [life_loss]
         success: [level_change]
+        # A stalled Mario state remains recoverable; truncate so actor-critic
+        # backends bootstrap from the final pre-reset observation.
+        timeout: [stalled]
         max_episode_steps: 4500
 # Goal-owned checkpoint eval protocol.
 eval:
@@ -126,8 +129,9 @@ eval:
       <<: *mario_task
       # Evaluation preserves the training episode boundary contract.
       termination:
-        failure: [life_loss, stalled]
+        failure: [life_loss]
         success: [level_change]
+        timeout: [stalled]
         max_episode_steps: 4500
 # Goal-level release target; winner identity is resolved from `gradlab leaders checkpoints`.
 release:
