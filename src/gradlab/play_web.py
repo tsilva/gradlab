@@ -1901,6 +1901,36 @@ class PlaybackWebServer:
             return web.json_response({"error": str(exc)}, status=502)
         return web.json_response(page.to_dict())
 
+    async def catalog_goal_activity(self, request: web.Request) -> web.Response:
+        self._authorize_api(request)
+        if self.catalog is None:
+            raise web.HTTPNotFound()
+        from gradlab.play_catalog import normalize_search_query
+
+        try:
+            payload = await asyncio.to_thread(
+                self.catalog.goal_activity,
+                environment_id=request.match_info["environment_id"],
+                goal_id=request.match_info["goal_id"],
+                query=normalize_search_query(request.query.get("q")),
+                refresh=request.query.get("refresh") == "1",
+            )
+        except Exception as exc:
+            problem = self._catalog_error_response(exc)
+            if problem is not None:
+                return problem
+            return web.json_response({"error": str(exc)}, status=502)
+        etag = f'"{payload["revision"]}"'
+        if request.headers.get("If-None-Match") == etag:
+            return web.Response(status=304, headers={"ETag": etag})
+        return web.json_response(
+            payload,
+            headers={
+                "ETag": etag,
+                "Cache-Control": "private, no-cache",
+            },
+        )
+
     async def catalog_goals(self, request: web.Request) -> web.Response:
         self._authorize_api(request)
         if self.catalog is None:
@@ -2733,6 +2763,13 @@ class PlaybackWebServer:
                         "/goals/{goal_id}/variants"
                     ),
                     self.catalog_goal_variants,
+                ),
+                web.get(
+                    (
+                        "/api/catalog/environments/{environment_id}"
+                        "/goals/{goal_id}/activity"
+                    ),
+                    self.catalog_goal_activity,
                 ),
                 web.get(
                     (

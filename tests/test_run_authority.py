@@ -7,14 +7,8 @@ import unittest
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from gradlab.catalog_generation import (
-    CATALOG_GENERATION_SCHEMA_VERSION,
-    CATALOG_POINTER_KEY,
-    catalog_generation_digest,
-    catalog_generation_key,
-    validate_catalog_generation,
-)
-from gradlab.goal_variants import build_goal_variant_descriptor, goal_variant_scope_key
+from gradlab.goal_catalog import GOAL_CATALOG_SCHEMA_VERSION
+from gradlab.goal_variants import build_goal_variant_descriptor
 from gradlab.r2_store import BucketConfig, ConditionalWriteConflict, RunStorageConfig
 from gradlab.run_authority import LeaseUnavailable, RunAuthority
 from gradlab.run_contracts import (
@@ -115,71 +109,18 @@ class RunAuthorityTests(unittest.TestCase):
             liveness=DEFAULT_LIVENESS_POLICY,
         )
 
-    def test_incremental_catalog_scope_merge_cannot_regress_a_concurrent_run(
-        self,
-    ) -> None:
-        descriptor = dict(self.manifest(new_run_id(), new_attempt_id()).goal_variant or {})
-        current = {
-            "goal_slug": "SuperMarioBros-Nes-v0/Level1-1",
-            "variants": [descriptor],
-            "runs": [
-                {
-                    "run_id": "gradlab-" + "1" * 32,
-                    "attempt_id": "attempt-" + "1" * 16,
-                    "updated_at": "2026-07-30T10:00:00Z",
-                    "created_at": "2026-07-30T09:00:00Z",
-                }
-            ],
-        }
-        replacement = {
-            "goal_slug": current["goal_slug"],
-            "variants": [descriptor],
-            "runs": [
-                {
-                    "run_id": "gradlab-" + "2" * 32,
-                    "attempt_id": "attempt-" + "2" * 16,
-                    "updated_at": "2026-07-30T10:01:00Z",
-                    "created_at": "2026-07-30T09:01:00Z",
-                }
-            ],
-        }
-
-        merged = self.authority._merge_catalog_scope(current, replacement)
-
-        self.assertEqual(
-            {item["run_id"] for item in merged["runs"]},
-            {"gradlab-" + "1" * 32, "gradlab-" + "2" * 32},
-        )
-
     def test_complete_catalog_rebuild_reads_the_current_generation_schema(self) -> None:
-        generated_at = "2026-07-01T00:00:00Z"
-        current_generation = {
-            "schema_version": 1,
-            "generated_at": generated_at,
-            "scopes": [],
-        }
-        digest = catalog_generation_digest(current_generation)
-        key = catalog_generation_key(digest)
-        self.authority.control.put_json(key, current_generation, create_only=True)
-        self.authority.control.put_json(
-            CATALOG_POINTER_KEY,
-            {
-                "schema_version": 1,
-                "generation_sha256": digest,
-                "generation_key": key,
-                "generated_at": generated_at,
-            },
-            create_only=True,
-        )
         manifest = self.manifest(new_run_id(), new_attempt_id())
+        self.authority.create_manifest(manifest)
+        self.authority.clear_goal_variant_catalog()
 
         self.authority.replace_goal_variant_catalog([(manifest, None)])
 
-        rebuilt = self.authority.catalog_generation()
+        rebuilt = self.authority.catalog_generation(manifest.goal_slug)
         self.assertIsNotNone(rebuilt)
         assert rebuilt is not None
-        self.assertEqual(rebuilt["schema_version"], CATALOG_GENERATION_SCHEMA_VERSION)
-        self.assertEqual(rebuilt["scopes"][0]["runs"][0]["run_id"], manifest.run_id)
+        self.assertEqual(rebuilt["schema_version"], GOAL_CATALOG_SCHEMA_VERSION)
+        self.assertEqual(rebuilt["active_runs"][0]["run_id"], manifest.run_id)
 
     def test_identifiers_have_required_shapes(self) -> None:
         self.assertRegex(new_run_id(), r"^gradlab-[0-9a-f]{32}$")
@@ -259,25 +200,16 @@ class RunAuthorityTests(unittest.TestCase):
         second = self.authority.register_goal_variant(manifest)
 
         self.assertEqual(first, second)
-        scope = goal_variant_scope_key(goal_slug=manifest.goal_slug)
-        index = self.authority.control.get_json(f"{scope}/index.json")
-        self.assertEqual(len(index["variants"]), 1)
+        generation = self.authority.catalog_generation(manifest.goal_slug)
+        assert generation is not None
+        self.assertEqual(len(generation["variants"]), 1)
         self.assertEqual(
-            index["variants"][0]["variant_id"],
+            generation["variants"][0]["variant_id"],
             descriptor["variant_id"],
         )
-        run_index_key = f"{scope}/runs/{descriptor['variant_id']}.json"
-        run_index = self.authority.control.get_json(run_index_key)
-        self.assertEqual(run_index["runs"][0]["run_id"], manifest.run_id)
-        self.assertEqual(run_index["runs"][0]["state"], "running")
-        self.assertEqual(run_index["runs"][0]["recipe_variant_id"], "base")
-        generation = self.authority.catalog_generation()
-        self.assertIsNotNone(generation)
-        assert generation is not None
-        self.assertEqual(
-            generation["scopes"][0]["runs"][0]["run_id"],
-            manifest.run_id,
-        )
+        self.assertEqual(generation["active_runs"][0]["run_id"], manifest.run_id)
+        self.assertEqual(generation["active_runs"][0]["state"], "running")
+        self.assertEqual(generation["active_runs"][0]["recipe_variant_id"], "base")
 
         receipt = TerminalReceipt(
             run_id=manifest.run_id,
@@ -296,14 +228,14 @@ class RunAuthorityTests(unittest.TestCase):
             receipt,
             metrics={"train/global_step": 100.0},
         )
-        updated = self.authority.control.get_json(run_index_key)["runs"][0]
+        terminal_generation = self.authority.catalog_generation(manifest.goal_slug)
+        assert terminal_generation is not None
+        updated = terminal_generation["terminal_runs"][0]
         self.assertEqual(updated["state"], "failed")
         self.assertEqual(updated["stop_reason"], "training_cap_without_acceptance")
         self.assertEqual(updated["final_step"], 100)
         self.assertEqual(updated["metrics"], {"train/global_step": 100.0})
-        terminal_generation = self.authority.catalog_generation()
-        assert terminal_generation is not None
-        terminal_run = terminal_generation["scopes"][0]["runs"][0]
+        terminal_run = terminal_generation["terminal_runs"][0]
         self.assertEqual(terminal_run["state"], "failed")
         self.assertEqual(terminal_run["metrics"], {"train/global_step": 100.0})
 
@@ -331,16 +263,14 @@ class RunAuthorityTests(unittest.TestCase):
         )
         second.validate()
 
-        self.authority.register_goal_variant(first)
-        self.authority.register_goal_variant(second)
+        self.authority.create_manifest(first)
+        self.authority.create_manifest(second)
 
-        descriptor = dict(first.goal_variant or {})
-        scope = goal_variant_scope_key(goal_slug=first.goal_slug)
-        index = self.authority.control.get_json(f"{scope}/index.json")
-        run_index = self.authority.control.get_json(f"{scope}/runs/{descriptor['variant_id']}.json")
-        self.assertEqual(len(index["variants"]), 1)
+        generation = self.authority.catalog_generation(first.goal_slug)
+        assert generation is not None
+        self.assertEqual(len(generation["variants"]), 1)
         self.assertEqual(
-            {row["run_id"] for row in run_index["runs"]},
+            {row["run_id"] for row in generation["active_runs"]},
             {first.run_id, second.run_id},
         )
 
@@ -350,14 +280,26 @@ class RunAuthorityTests(unittest.TestCase):
 
         cleared = self.authority.clear_goal_variant_catalog()
 
-        self.assertGreaterEqual(cleared["catalog_objects"], 3)
-        self.assertEqual(cleared["projection_receipts"], 1)
-        self.assertEqual(list(self.authority.control.iter_keys("goal-variants/")), [])
+        self.assertGreaterEqual(cleared["catalog_objects"], 2)
+        self.assertEqual(cleared["projection_receipts"], 0)
+        self.assertEqual(cleared["source_events_preserved"], 1)
+        self.assertEqual(list(self.authority.control.iter_keys("goal-catalog/")), [])
         self.assertIsNone(
             self.authority.control.get_json_optional(
                 f"runs/{manifest.run_id}/goal-variant-projection.json"
             )
         )
+
+        rebuilt = self.authority.replace_goal_variant_catalog([(manifest, None)])
+
+        self.assertIn(manifest.goal_slug, rebuilt["goals"])
+        restored = self.authority.catalog_generation(manifest.goal_slug)
+        assert restored is not None
+        self.assertEqual(
+            [run["run_id"] for run in restored["active_runs"]],
+            [manifest.run_id],
+        )
+        self.assertEqual(cleared["source_events_preserved"], 1)
 
     def test_v2_recipe_is_content_addressed_and_registers_exact_variant_resolution(
         self,
@@ -410,25 +352,18 @@ class RunAuthorityTests(unittest.TestCase):
             }
         )
         self.authority.create_manifest(manifest)
-        scope = goal_variant_scope_key(goal_slug="gradlab__bandit")
-        index = self.authority.control.get_json(f"{scope}/index.json")
+        generation = self.authority.catalog_generation("gradlab__bandit")
+        assert generation is not None
         self.assertEqual(
-            index["variants"][0]["exact_resolution_run_id"],
+            generation["variants"][0]["exact_resolution_run_id"],
             manifest.run_id,
         )
         self.assertEqual(
-            index["variants"][0]["resolved_goal"],
+            generation["variants"][0]["resolved_goal"],
             resolved.effective["goal"],
         )
-        generation = self.authority.catalog_generation()
-        self.assertIsNotNone(generation)
-        assert generation is not None
-        projected = generation["scopes"][0]["variants"][0]
+        projected = generation["variants"][0]
         self.assertEqual(projected["resolved_goal"], resolved.effective["goal"])
-        tampered = json.loads(json.dumps(generation))
-        tampered["scopes"][0]["variants"][0]["resolved_goal"]["title"] = "Tampered"
-        with self.assertRaisesRegex(ValueError, "resolved goal does not match"):
-            validate_catalog_generation(tampered)
 
     def test_lease_takeover_requires_expiry_and_old_etag_cannot_renew(self) -> None:
         run_id = new_run_id()

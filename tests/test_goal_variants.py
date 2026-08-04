@@ -8,6 +8,7 @@ from gradlab.goal_variants import (
     build_goal_variant_descriptor,
     goal_contract_diff,
     goal_contract_diff_labels,
+    goal_contract_structural_diff,
     goal_variant_id,
     goal_variant_projection,
     validate_goal_variant_descriptor,
@@ -124,6 +125,53 @@ def test_goal_contract_comparison_labels_historical_behavior_in_plain_language()
         }
     ]
     assert goal_contract_diff_labels(diff) == ["Sticky action probability 0 → 0.25"]
+
+
+def test_goal_contract_structural_diff_preserves_exact_paths_and_typed_values() -> None:
+    current = goal_document()
+    previous = deepcopy(current)
+    previous["title"] = "Presentation-only rename"
+    previous["train"]["environment"]["task"]["action"][  # type: ignore[index]
+        "sticky_probability"
+    ] = 0.25
+    previous["eval"]["environment"]["task"]["action"][  # type: ignore[index]
+        "sticky_probability"
+    ] = 0.25
+
+    assert goal_contract_structural_diff(current, previous) == [
+        {
+            "path": "/eval/environment/task/action/sticky_probability",
+            "kind": "changed",
+            "before": 0,
+            "after": 0.25,
+        },
+        {
+            "path": "/train/environment/task/action/sticky_probability",
+            "kind": "changed",
+            "before": 0,
+            "after": 0.25,
+        },
+    ]
+
+
+def test_goal_contract_structural_diff_keeps_large_diffs_complete() -> None:
+    current = {
+        "train": {
+            "settings": {f"option_{index}": index for index in range(30)},
+        }
+    }
+    previous = deepcopy(current)
+    previous_settings = previous["train"]["settings"]  # type: ignore[index]
+    for index in range(30):
+        previous_settings[f"option_{index}"] = index + 100
+
+    exact_diff = goal_contract_structural_diff(current, previous)
+    summary_diff, summary_truncated = goal_contract_diff(current, previous)
+
+    assert len(exact_diff) == 30
+    assert exact_diff[0]["path"].startswith("/train/settings/option_")
+    assert len(summary_diff) == 24
+    assert summary_truncated is True
 
 
 def test_goal_contract_comparison_expands_acceptance_rules_instead_of_json_blobs() -> None:
