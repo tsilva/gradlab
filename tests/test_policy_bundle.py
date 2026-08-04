@@ -51,6 +51,21 @@ BANDIT_GOAL = Path("experiments/goals/gradlab__bandit/_goal.yaml")
 BANDIT_RECIPE = BANDIT_GOAL.parent / "recipes/ppo.yaml"
 VIZDOOM_GOAL = Path("experiments/goals/VizdoomBasic-v1/_goal.yaml")
 VIZDOOM_RECIPE = VIZDOOM_GOAL.parent / "recipes/ppo.yaml"
+MARIO_ASSET = {
+    "schema_version": 2,
+    "game": "SuperMarioBros-Nes-v0",
+    "filename": "mario.nes",
+    "size_bytes": 1024,
+    "sha256": "c" * 64,
+    "provider_rom_identity": "d" * 40,
+    "provider_rom_identity_algorithm": "sha1-provider-body-v1",
+    "object_uri": "s3://private-bucket/mario.nes",
+}
+
+
+def bind_mario_asset(resolved) -> None:
+    resolved.effective["train_config"]["rom_asset_manifest"] = deepcopy(MARIO_ASSET)
+    resolved.base["train_config"]["rom_asset_manifest"] = deepcopy(MARIO_ASSET)
 
 
 def level1_1_recipe_document(*, seed: int = 7) -> dict:
@@ -59,6 +74,7 @@ def level1_1_recipe_document(*, seed: int = 7) -> dict:
         RECIPE,
         source_sha="a" * 40,
     )
+    bind_mario_asset(resolved)
     return build_recipe_document(
         resolved.effective,
         repo_root=Path.cwd(),
@@ -132,7 +148,17 @@ def test_portable_recipe_reader_preserves_historical_failure_plateau() -> None:
     base_recipe = document["resolution"]["recipe"]["base"]
 
     for recipe in (document["recipe"], base_recipe):
-        recipe["train_config"]["early_stop"]["conditions"]["return_plateau"]["outcome"] = "failure"
+        recipe["train_config"]["early_stop"]["conditions"]["return_plateau"] = {
+            "metric": "train/episode/return/shaped/from/target/rolling_up_to_100/mean",
+            "trigger": "no_improvement",
+            "direction": "maximize",
+            "min_delta": 0.01,
+            "delta_mode": "relative",
+            "start_after_steps": 1_000_000,
+            "patience_steps": 1_000_000,
+            "outcome": "failure",
+            "action": "stop",
+        }
 
     document["resolution"]["recipe"]["base_sha256"] = canonical_json_sha256(base_recipe)
     document["resolution"]["recipe"]["effective_sha256"] = canonical_json_sha256(document["recipe"])
@@ -142,6 +168,7 @@ def test_portable_recipe_reader_preserves_historical_failure_plateau() -> None:
 
 def test_wandb_display_name_is_not_part_of_portable_recipe() -> None:
     resolved = compose_resolved_train_documents(GOAL, RECIPE, source_sha="a" * 40)
+    bind_mario_asset(resolved)
     resolved.effective["train_config"]["wandb_display_name"] = "Level1-1__ppo__s7__01234567"
 
     document = build_recipe_document(
@@ -235,7 +262,6 @@ def test_level1_3_training_clear_bundle_omits_eval_and_preserves_early_stop() ->
     assert recipe["train_config"]["checkpoint_eval_backend"] == "none"
     assert set(recipe["train_config"]["early_stop"]["conditions"]) == {
         "clear_100",
-        "return_plateau",
     }
     assert recipe["train_config"]["early_stop"]["conditions"]["clear_100"] == {
         "metric": "train/outcome/success/across_starts/window_100/rate/min",
@@ -333,6 +359,8 @@ def test_bundle_metadata_reconstructs_provider_action_contract(
         recipe_path,
         source_sha="a" * 40,
     )
+    if goal_path == GOAL:
+        bind_mario_asset(resolved)
     recipe_document = build_recipe_document(
         resolved.effective,
         repo_root=Path.cwd(),
@@ -474,6 +502,7 @@ def test_evaluated_goal_preserves_manual_eval_when_automatic_eval_is_disabled() 
 
 def test_recipe_materializes_the_backend_config_executed_by_the_learner() -> None:
     resolved = compose_resolved_train_documents(GOAL, RECIPE, source_sha="a" * 40)
+    bind_mario_asset(resolved)
     document = build_recipe_document(
         resolved.effective,
         repo_root=Path.cwd(),
@@ -528,7 +557,8 @@ def test_recipe_materializes_the_environment_identity_executed_by_the_learner() 
     document = level1_1_recipe_document()
     recipe = document["recipe"]
     effective_training_metadata = training_metadata(
-        resolve_env_config(env_config_from_mapping(recipe["train_config"]))
+        resolve_env_config(env_config_from_mapping(recipe["train_config"])),
+        rom_asset_manifest=MARIO_ASSET,
     )
 
     assert recipe["environment"] == effective_training_metadata["environment"]
@@ -584,6 +614,7 @@ def test_recipe_provider_is_exact_and_never_falls_back() -> None:
         env_provider=provider,
         source_sha="a" * 40,
     )
+    bind_mario_asset(resolved)
     validated = build_recipe_document(
         resolved.effective,
         repo_root=Path.cwd(),

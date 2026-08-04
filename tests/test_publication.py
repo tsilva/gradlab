@@ -453,6 +453,18 @@ def test_release_bundle_has_exact_files_hashes_and_portable_identity() -> None:
             Path("experiments/goals/SuperMarioBros-Nes-v0/Level1-1/recipes/ppo.yaml"),
             source_sha="a" * 40,
         )
+        asset = {
+            "schema_version": 2,
+            "game": "SuperMarioBros-Nes-v0",
+            "filename": "mario.nes",
+            "size_bytes": 1024,
+            "sha256": "c" * 64,
+            "provider_rom_identity": "d" * 40,
+            "provider_rom_identity_algorithm": "sha1-provider-body-v1",
+            "object_uri": "s3://private-bucket/mario.nes",
+        }
+        resolved.effective["train_config"]["rom_asset_manifest"] = asset
+        resolved.base["train_config"]["rom_asset_manifest"] = deepcopy(asset)
         recipe_document = build_recipe_document(
             resolved.effective,
             repo_root=Path.cwd(),

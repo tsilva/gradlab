@@ -101,7 +101,11 @@ does not read, project, or preserve noncurrent W&B or R2 schemas.
   critic, which can amplify the terminal-horizon discrepancy. Learner explained variance uses its
   rollout value targets and is not the same statistic as a single playback trajectory's
   `V(s) - G(s)`.
-- Mario ranks checkpoints only after acceptance: earliest `leader/checkpoint/step`, then highest
+- Mario recipes disable automatic checkpoint evaluation and stop when
+  `train/outcome/success/across_starts/window_100/rate/min` first reaches one. For a single start,
+  that means 100 consecutive genuine target-origin clears; for multiple starts, every configured
+  start's latest 100 attempts must all clear. This training stop is not acceptance or promotion;
+  explicitly evaluated Mario checkpoints rank by earliest `leader/checkpoint/step`, then highest
   `eval/full/episode/return/shaped/mean`. Breakout is training-only and ranks current-contract seeded
   recipe cohorts using `train/episode/return/shaped/from/target/rolling_up_to_100/mean`, which
   excludes archive-curriculum origins and non-episode control boundaries; tied cohorts prefer fewer

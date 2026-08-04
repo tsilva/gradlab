@@ -4,11 +4,12 @@ reward_shape: speedrun-v1
 recipe_id: jerk
 description: Vectorized deterministic JERK search for a level-clearing {{ goal_id }} action sequence.
 train:
+  checkpoint_eval_backend: none
   timesteps: 10000000
   backend:
     id: gradlab.jerk
     config:
-      acceptance_mode: first_training_success
+      acceptance_mode: checkpoint_eval
       archive_replay_probability_initial: 0.25
       archive_replay_probability_max: 0.9
       protected_prefix_steps: 128
