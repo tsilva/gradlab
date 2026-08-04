@@ -347,7 +347,7 @@ class ConfigValidationTests(unittest.TestCase):
             ["life_loss"],
         )
         self.assertEqual(train_config["task"]["termination"]["timeout"], ["stalled"])
-        self.assertEqual(train_config["checkpoint_eval_backend"], "modal")
+        self.assertEqual(train_config["checkpoint_eval_backend"], "none")
 
     def test_level1_1_jerk_recipe_is_playable_native_policy_search(self) -> None:
         document = compose_train_document(
@@ -362,16 +362,16 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertEqual(backend["config"]["archive_replay_probability_max"], 0.9)
         self.assertEqual(backend["config"]["protected_prefix_steps"], 128)
         self.assertEqual(backend["config"]["max_prefix_shorten_steps"], 128)
-        self.assertEqual(backend["config"]["acceptance_mode"], "first_training_success")
+        self.assertEqual(backend["config"]["acceptance_mode"], "checkpoint_eval")
         self.assertEqual(train_config["timesteps"], 10000000)
         self.assertEqual(train_config["checkpoint_eval_backend"], "none")
         self.assertEqual(
-            train_config["early_stop"]["conditions"]["return_plateau"]["action"],
+            train_config["early_stop"]["conditions"]["clear_100"]["action"],
             "stop",
         )
         self.assertEqual(
-            train_config["early_stop"]["conditions"]["return_plateau"]["outcome"],
-            "neutral",
+            train_config["early_stop"]["conditions"]["clear_100"]["outcome"],
+            "success",
         )
         self.assertNotIn("checkpoint_eval_stages", train_config)
 
@@ -389,7 +389,7 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertNotIn("stop_on_acceptance", train_config)
         self.assertEqual(
             set(train_config["early_stop"]["conditions"]),
-            {"clear_100", "return_plateau"},
+            {"clear_100"},
         )
         self.assertEqual(
             train_config["early_stop"]["conditions"]["clear_100"],
@@ -459,7 +459,7 @@ class ConfigValidationTests(unittest.TestCase):
 
         self.assertEqual(actor_critic_recipes, 43)
 
-    def test_every_mario_recipe_composes_the_shared_plateau_condition(self) -> None:
+    def test_every_mario_recipe_disables_eval_and_stops_at_perfect_clear_window(self) -> None:
         mario_root = Path("experiments/goals/SuperMarioBros-Nes-v0")
         recipes = sorted(mario_root.glob("*/recipes/*.yaml"))
 
@@ -468,16 +468,28 @@ class ConfigValidationTests(unittest.TestCase):
             with self.subTest(recipe=recipe_path):
                 goal_path = recipe_path.parent.parent / "_goal.yaml"
                 document = compose_train_document(goal_path, recipe_path)
-                conditions = document["train_config"]["early_stop"]["conditions"]
-                self.assertIn("return_plateau", conditions)
-                self.assertEqual(conditions["return_plateau"]["outcome"], "neutral")
-                self.assertEqual(conditions["return_plateau"]["action"], "stop")
-                if recipe_path.name == "ppo-train-clear-100.yaml":
-                    self.assertIn("clear_100", conditions)
-                if recipe_path.name == "dstack-smoke.yaml":
-                    self.assertLess(
-                        document["train_config"]["timesteps"],
-                        conditions["return_plateau"]["start_after_steps"],
+                train_config = document["train_config"]
+                self.assertEqual(train_config["checkpoint_eval_backend"], "none")
+                self.assertNotIn("stop_on_acceptance", train_config)
+                conditions = train_config["early_stop"]["conditions"]
+                self.assertEqual(set(conditions), {"clear_100"})
+                self.assertEqual(
+                    conditions["clear_100"],
+                    {
+                        "metric": "train/outcome/success/across_starts/window_100/rate/min",
+                        "trigger": "threshold",
+                        "outcome": "success",
+                        "action": "stop",
+                        "patience_steps": 0,
+                        "operator": ">=",
+                        "progress_baseline": 0.0,
+                        "threshold": 1.0,
+                    },
+                )
+                if train_config["training_backend"]["id"] == "gradlab.jerk":
+                    self.assertEqual(
+                        train_config["training_backend"]["config"]["acceptance_mode"],
+                        "checkpoint_eval",
                     )
 
     def test_every_vizdoom_recipe_composes_shared_success_and_plateau_conditions(self) -> None:
@@ -864,17 +876,27 @@ class ConfigValidationTests(unittest.TestCase):
     def test_goal_validator_rejects_new_failure_plateau_authoring(self) -> None:
         path = self.MARIO_L11_GOAL.resolve()
         document = load_goal_contract(path)
-        document["train"]["early_stop"]["conditions"]["return_plateau"]["outcome"] = "failure"
+        document["train"]["early_stop"]["conditions"]["return_plateau"] = {
+            "metric": "train/episode/return/shaped/from/target/rolling_up_to_100/mean",
+            "trigger": "no_improvement",
+            "direction": "maximize",
+            "min_delta": 0.01,
+            "delta_mode": "relative",
+            "start_after_steps": 1_000_000,
+            "patience_steps": 1_000_000,
+            "outcome": "failure",
+            "action": "stop",
+        }
 
         with self.assertRaisesRegex(ValueError, "must be neutral for no_improvement"):
             validate_goal_contract_document(document, path, Path(".").resolve())
 
-    def test_launch_override_cannot_restore_failure_plateau_policy(self) -> None:
-        with self.assertRaisesRegex(ValueError, "must be neutral for no_improvement"):
+    def test_launch_override_cannot_make_clear_threshold_neutral(self) -> None:
+        with self.assertRaisesRegex(ValueError, "must be one of failure, success"):
             compose_train_document(
                 self.MARIO_L11_GOAL,
                 self.MARIO_SINGLE_RECIPES / "ppo.yaml",
-                recipe_overrides=("train.early_stop.conditions.return_plateau.outcome=failure",),
+                recipe_overrides=("train.early_stop.conditions.clear_100.outcome=neutral",),
             )
 
     def test_goal_validator_rejects_rank_forms_the_runtime_cannot_parse(self) -> None:
@@ -1011,7 +1033,7 @@ class ConfigValidationTests(unittest.TestCase):
                     self.assertNotIn(field, mapping)
         self.assertEqual(document["evaluation_mode"], "evaluated")
         self.assertEqual(
-            document["train"]["early_stop"]["conditions"]["return_plateau"]["action"],
+            document["train"]["early_stop"]["conditions"]["clear_100"]["action"],
             "stop",
         )
         self.assertEqual(

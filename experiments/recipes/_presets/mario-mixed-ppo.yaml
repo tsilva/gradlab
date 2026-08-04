@@ -1,6 +1,9 @@
 defaults:
 - _self_
 train:
+  # SMB recipes stop from training clearance; evaluation remains an explicit
+  # post-training operation rather than an automatic checkpoint workflow.
+  checkpoint_eval_backend: none
   timesteps: 50000000
   policy_model:
     schema_version: 2

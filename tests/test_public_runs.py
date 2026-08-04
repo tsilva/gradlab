@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import urllib.request
+from copy import deepcopy
 from pathlib import Path
 
 from gradlab.model_sources import _public_json, download_public_run_source
@@ -22,6 +23,16 @@ from gradlab.training_backend import training_backend_config_hash
 GOAL = Path("experiments/goals/SuperMarioBros-Nes-v0/Level1-1/_goal.yaml")
 RECIPE = GOAL.parent / "recipes" / "ppo.yaml"
 RUNTIME = "docker:ghcr.io/tsilva/gradlab/gradlab-train@sha256:" + "b" * 64
+MARIO_ASSET = {
+    "schema_version": 2,
+    "game": "SuperMarioBros-Nes-v0",
+    "filename": "mario.nes",
+    "size_bytes": 1024,
+    "sha256": "c" * 64,
+    "provider_rom_identity": "d" * 40,
+    "provider_rom_identity_algorithm": "sha1-provider-body-v1",
+    "object_uri": "s3://private-bucket/mario.nes",
+}
 
 
 class _HttpResponse:
@@ -62,6 +73,8 @@ def _policy_checkpoint(root: Path) -> Path:
         RECIPE,
         source_sha="a" * 40,
     )
+    resolved.effective["train_config"]["rom_asset_manifest"] = deepcopy(MARIO_ASSET)
+    resolved.base["train_config"]["rom_asset_manifest"] = deepcopy(MARIO_ASSET)
     recipe = build_recipe_document(
         resolved.effective,
         repo_root=Path.cwd(),
