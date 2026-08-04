@@ -139,8 +139,10 @@ train:
             game_variables: []
             # Classify provider time-limit boundaries as truncations rather than terminations.
             treat_episode_timeout_as_truncation: true
-            # Optionally apply additional native ViZDoom configuration values.
-            vizdoom_config: null
+            # Apply family-wide native ViZDoom rendering configuration.
+            vizdoom_config:
+              # Keep the native 32-pixel status bar visible in rendered frames.
+              render_hud: true
     # Define and anchor policy-facing observation and action preprocessing.
     preprocessing: &vizdoom_preprocessing
       # Repeat each selected policy action for this many native frames.
@@ -151,11 +153,11 @@ train:
       sticky_action_prob: 0.0
       # Set the spatial dimensions of policy-facing observations.
       obs_resize: [84, 84]
-      # Set how many pixels are cropped from each observation edge.
-      obs_crop: [0, 0, 0, 0]
-      # Select how the configured crop is applied.
-      obs_crop_mode: remove
-      # Set the fill value used by crop modes that create padded regions.
+      # Mask the bottom 32 pixels occupied by the HUD in raw 320x240 frames.
+      obs_crop: [0, 32, 0, 0]
+      # Preserve raw frame geometry by replacing the HUD band instead of removing it.
+      obs_crop_mode: mask
+      # Fill the masked HUD band with black pixels.
       obs_crop_fill: 0
       # Select the interpolation algorithm used to resize observations.
       obs_resize_algorithm: area
