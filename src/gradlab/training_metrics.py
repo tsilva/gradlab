@@ -20,6 +20,7 @@ from gradlab.metric_names import (
     TRAIN_OUTCOME_SUCCESS_ACROSS_STARTS_WINDOW_100_RATE_MEAN,
     TRAIN_OUTCOME_SUCCESS_ACROSS_STARTS_WINDOW_100_RATE_MIN,
     TRAIN_EPISODE_COMPLETED_COUNT,
+    TRAIN_EXPLORATION_CELL_UNIQUE_FROM_TARGET_ROLLING_UP_TO_100_MEAN,
     metric_value_segment,
     train_outcome_reason_count_metric,
     train_outcome_reason_window_rate_metric,
@@ -27,6 +28,7 @@ from gradlab.metric_names import (
     train_success_count_metric,
     train_success_window_rate_metric,
 )
+from gradlab.task_kernels import CELL_NOVELTY_EPISODE_UNIQUE_CELLS
 
 
 def _outcome_name(record: Any) -> str:
@@ -60,6 +62,7 @@ class EpisodeMetricsReducer:
         self.track_success = bool(track_success)
         self.returns: deque[float] = deque(maxlen=self.window_size)
         self.target_returns: deque[float] = deque(maxlen=self.window_size)
+        self.target_unique_cells: deque[int] = deque(maxlen=self.window_size)
         self.lengths: deque[int] = deque(maxlen=self.window_size)
         self.terminal_count = 0
         self.reason_counts: dict[str, int] = {name: 0 for name in self.event_names}
@@ -83,6 +86,17 @@ class EpisodeMetricsReducer:
         target_origin = str(getattr(record, "start_origin", "target")) == "target"
         if target_origin:
             self.target_returns.append(float(record.episode_return))
+            metrics = getattr(record, "metrics", None)
+            if isinstance(metrics, Mapping):
+                unique_cells = metrics.get(CELL_NOVELTY_EPISODE_UNIQUE_CELLS)
+                if (
+                    isinstance(unique_cells, int | float | np.number)
+                    and not isinstance(unique_cells, bool | np.bool_)
+                    and np.isfinite(float(unique_cells))
+                    and float(unique_cells) >= 1.0
+                    and float(unique_cells).is_integer()
+                ):
+                    self.target_unique_cells.append(int(unique_cells))
 
         succeeded = episode_succeeded(record)
         reasons = (
@@ -139,6 +153,10 @@ class EpisodeMetricsReducer:
                 payload[TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_WINDOW_100_MEAN] = float(
                     np.mean(self.target_returns)
                 )
+        if self.target_unique_cells:
+            payload[
+                TRAIN_EXPLORATION_CELL_UNIQUE_FROM_TARGET_ROLLING_UP_TO_100_MEAN
+            ] = float(np.mean(self.target_unique_cells))
         for reason, count in sorted(self.reason_counts.items()):
             window = self.reason_windows[reason]
             payload[train_outcome_reason_count_metric(reason)] = count

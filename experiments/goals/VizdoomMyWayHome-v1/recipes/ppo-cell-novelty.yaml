@@ -1,0 +1,44 @@
+defaults:
+- ../../../recipes/_presets/atari-ppo@_global_
+- _self_
+
+recipe_id: ppo-cell-novelty
+description: Training-only pixel PPO for navigating {{ goal_id }} with episodic position-cell novelty.
+seeds: [123]
+
+train:
+  checkpoint_eval_backend: none
+  timesteps: 10000000
+  environment:
+    env_config:
+      env_args:
+        game_variables:
+        - ARMOR
+        - POSITION_X
+        - POSITION_Y
+        info_filter:
+          mode: all
+          keys:
+          - armor
+          - position_x
+          - position_y
+    task:
+      signals:
+        position_x: position_x
+        position_y: position_y
+      reward:
+        cell_novelty:
+          cell:
+            dimensions:
+            - signal: position_x
+              bucket_size: 64
+            - signal: position_y
+              bucket_size: 64
+          first_visit_bonus: 0.005
+          episode_bonus_cap: 0.2
+  early_stop:
+    conditions:
+      return_plateau:
+        start_after_steps: 2500000
+        patience_steps: 2500000
+        action: observe

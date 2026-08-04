@@ -11,8 +11,14 @@ import gymnasium as gym
 import numpy as np
 from numba import njit
 
+from gradlab.json_utils import canonical_json_sha256
 from gradlab.reward_transform import RewardTransform, reward_transform_from_reward
-from gradlab.state_archive import TaskLaneState
+from gradlab.state_archive import (
+    ArchiveCellConfig,
+    ArchiveCellDetector,
+    TaskLaneState,
+    normalize_archive_cell_config,
+)
 
 if TYPE_CHECKING:
     from gradlab.batch_runtime import ProviderDescriptor
@@ -601,6 +607,69 @@ class TaskStep:
     event_transitions: Mapping[str, tuple[np.ndarray, np.ndarray]] = field(default_factory=dict)
 
 
+CELL_NOVELTY_REWARD_KEY = "cell_novelty"
+CELL_NOVELTY_EPISODE_UNIQUE_CELLS = "cell_novelty_episode_unique_cells"
+_CELL_NOVELTY_KEYS = frozenset({"cell", "first_visit_bonus", "episode_bonus_cap"})
+
+
+def normalize_cell_novelty_config(value: Any, *, label: str) -> dict[str, Any]:
+    if not isinstance(value, Mapping):
+        raise ValueError(f"{label} must be an object")
+    unexpected = sorted(set(value) - _CELL_NOVELTY_KEYS)
+    if unexpected:
+        raise ValueError(f"{label} has unexpected fields: {unexpected}")
+    missing = sorted(_CELL_NOVELTY_KEYS - set(value))
+    if missing:
+        raise ValueError(f"{label} is missing required fields: {missing}")
+    normalized_cell = normalize_archive_cell_config(
+        value["cell"],
+        label=f"{label}.cell",
+    )
+    if any("source" in dimension for dimension in normalized_cell["dimensions"]):
+        raise ValueError(f"{label}.cell dimensions must use semantic signals")
+
+    numbers: dict[str, float] = {}
+    for key in ("first_visit_bonus", "episode_bonus_cap"):
+        raw = value[key]
+        if (
+            not isinstance(raw, int | float | np.number)
+            or isinstance(raw, bool | np.bool_)
+            or not math.isfinite(float(raw))
+            or float(raw) <= 0.0
+        ):
+            raise ValueError(f"{label}.{key} must be a positive finite number")
+        numbers[key] = float(raw)
+    if numbers["episode_bonus_cap"] < numbers["first_visit_bonus"]:
+        raise ValueError(
+            f"{label}.episode_bonus_cap must be at least first_visit_bonus"
+        )
+    return {
+        "cell": normalized_cell,
+        **numbers,
+    }
+
+
+@dataclass(frozen=True)
+class CellNoveltyConfig:
+    cell: ArchiveCellConfig
+    first_visit_bonus: float
+    episode_bonus_cap: float
+    contract_sha256: str
+
+    @classmethod
+    def from_mapping(cls, value: Mapping[str, Any], *, label: str) -> CellNoveltyConfig:
+        normalized = normalize_cell_novelty_config(value, label=label)
+        return cls(
+            cell=ArchiveCellConfig.from_mapping(
+                normalized["cell"],
+                label=f"{label}.cell",
+            ),
+            first_visit_bonus=float(normalized["first_visit_bonus"]),
+            episode_bonus_cap=float(normalized["episode_bonus_cap"]),
+            contract_sha256=canonical_json_sha256(normalized),
+        )
+
+
 class BoundTaskKernel(Protocol):
     num_envs: int
     observation_space: gym.Space
@@ -756,6 +825,262 @@ def with_reward_transform(
 ) -> BoundTaskKernel:
     transform = reward_transform_from_reward(reward)
     return kernel if not transform.active else RewardTransformTaskKernel(kernel, transform)
+
+
+class CellNoveltyTaskKernel:
+    """Add a bounded first-visit bonus for semantic cells within each episode."""
+
+    def __init__(
+        self,
+        kernel: BoundTaskKernel,
+        config: CellNoveltyConfig,
+    ) -> None:
+        self.kernel = kernel
+        self.config = config
+        self.num_envs = int(kernel.num_envs)
+        for signal in config.cell.signals:
+            kernel.validate_archive_signal(signal)
+        if config.cell.sources:
+            raise ValueError("cell novelty dimensions must use semantic signals")
+        self.detector = ArchiveCellDetector(config.cell)
+        self._all_lanes = np.ones(self.num_envs, dtype=np.bool_)
+        self._seen_cells: list[set[bytes]] = [set() for _ in range(self.num_envs)]
+        self._initialized = np.zeros(self.num_envs, dtype=np.bool_)
+        self._paid_bonus = np.zeros(self.num_envs, dtype=np.float64)
+        self._episode_unique_cells = np.zeros(self.num_envs, dtype=np.int64)
+        self._native_reward_component = np.zeros(self.num_envs, dtype=np.float32)
+        self._novelty_reward_component = np.zeros(self.num_envs, dtype=np.float32)
+        self._rewards = np.zeros(self.num_envs, dtype=np.float32)
+        self._metrics: dict[str, np.ndarray] | None = None
+        self._task_step: TaskStep | None = None
+
+    def __getattr__(self, name: str) -> Any:
+        if name == "kernel":
+            raise AttributeError(name)
+        return getattr(self.kernel, name)
+
+    def map_actions(self, actions: Any) -> Any:
+        return self.kernel.map_actions(actions)
+
+    def encode_observations(self, observations: Any) -> Any:
+        return self.kernel.encode_observations(observations)
+
+    def _cell_keys(
+        self,
+        signals: Mapping[str, Any],
+        *,
+        mask: np.ndarray,
+    ) -> tuple[bytes, ...]:
+        values: dict[tuple[str, str], np.ndarray] = {}
+        for dimension in self.detector.config.dimensions:
+            resolved = np.asarray(
+                self.kernel.archive_signal_values(
+                    str(dimension.signal),
+                    signals,
+                    mask=mask,
+                )
+            ).copy()
+            resolved[~mask] = 0
+            values[dimension.selector] = resolved
+        return self.detector.keys(values, n_envs=self.num_envs)
+
+    def process(
+        self,
+        native_rewards: np.ndarray,
+        provider_terminated: np.ndarray,
+        provider_truncated: np.ndarray,
+        signals: Mapping[str, Any],
+    ) -> TaskStep:
+        task_step = self.kernel.process(
+            native_rewards,
+            provider_terminated,
+            provider_truncated,
+            signals,
+        )
+        if np.any(~self._initialized):
+            lanes = np.flatnonzero(~self._initialized).tolist()
+            raise RuntimeError(f"cell novelty is not initialized for lanes {lanes}")
+        np.copyto(
+            self._native_reward_component,
+            np.asarray(task_step.rewards, dtype=np.float32),
+        )
+        np.copyto(self._rewards, self._native_reward_component)
+        self._novelty_reward_component.fill(0.0)
+        cell_keys = self._cell_keys(signals, mask=self._all_lanes)
+        for lane, cell_key in enumerate(cell_keys):
+            if cell_key in self._seen_cells[lane]:
+                continue
+            self._seen_cells[lane].add(cell_key)
+            self._episode_unique_cells[lane] += 1
+            remaining = max(
+                0.0,
+                self.config.episode_bonus_cap - self._paid_bonus[lane],
+            )
+            bonus = min(self.config.first_visit_bonus, remaining)
+            if bonus > 0.0:
+                self._novelty_reward_component[lane] = bonus
+                self._paid_bonus[lane] += bonus
+        np.add(self._rewards, self._novelty_reward_component, out=self._rewards)
+
+        if self._metrics is None:
+            self._metrics = dict(task_step.metrics)
+            self._metrics["native_reward_component"] = self._native_reward_component
+            self._metrics["cell_novelty_reward_component"] = (
+                self._novelty_reward_component
+            )
+            self._metrics[CELL_NOVELTY_EPISODE_UNIQUE_CELLS] = (
+                self._episode_unique_cells
+            )
+            self._metrics["raw_reward"] = self._rewards
+            self._metrics["shaped_reward"] = self._rewards
+            self._task_step = TaskStep(
+                self._rewards,
+                task_step.terminated,
+                task_step.truncated,
+                task_step.outcomes,
+                task_step.event_bits,
+                self._metrics,
+                task_step.event_transitions,
+            )
+        assert self._task_step is not None
+        return self._task_step
+
+    def on_reset(
+        self,
+        reset_observations: Any,
+        reset_signals: Mapping[str, Any],
+        mask: np.ndarray,
+    ) -> None:
+        selected = np.asarray(mask, dtype=np.bool_)
+        if selected.shape != (self.num_envs,):
+            raise ValueError(f"cell novelty reset mask must have shape ({self.num_envs},)")
+        self.kernel.on_reset(reset_observations, reset_signals, selected)
+        cell_keys = self._cell_keys(reset_signals, mask=selected)
+        for lane in np.flatnonzero(selected):
+            lane_index = int(lane)
+            self._seen_cells[lane_index] = {cell_keys[lane_index]}
+            self._initialized[lane_index] = True
+            self._paid_bonus[lane_index] = 0.0
+            self._episode_unique_cells[lane_index] = 1
+
+    def validate_archive_signal(self, semantic_name: str) -> None:
+        self.kernel.validate_archive_signal(semantic_name)
+
+    def archive_signal_values(
+        self,
+        semantic_name: str,
+        signals: Mapping[str, Any],
+        *,
+        mask: np.ndarray,
+    ) -> np.ndarray:
+        return self.kernel.archive_signal_values(semantic_name, signals, mask=mask)
+
+    def capture_lane_states(
+        self,
+        mask: np.ndarray,
+    ) -> tuple[TaskLaneState | None, ...]:
+        selected = np.asarray(mask, dtype=np.bool_)
+        if selected.shape != (self.num_envs,):
+            raise ValueError(f"cell novelty capture mask must have shape ({self.num_envs},)")
+        inner_states = self.kernel.capture_lane_states(selected)
+        states: list[TaskLaneState | None] = []
+        for lane in range(self.num_envs):
+            if not bool(selected[lane]):
+                states.append(None)
+                continue
+            if not bool(self._initialized[lane]):
+                raise RuntimeError(f"cell novelty is not initialized for lane {lane}")
+            inner = inner_states[lane]
+            states.append(
+                TaskLaneState(
+                    schema_id="gradlab.cell-novelty-task-lane-v1",
+                    values={
+                        "contract_sha256": self.config.contract_sha256,
+                        "inner": None if inner is None else inner.to_dict(),
+                        "seen_cells": sorted(
+                            cell_key.decode("ascii") for cell_key in self._seen_cells[lane]
+                        ),
+                        "paid_bonus": float(self._paid_bonus[lane]),
+                        "episode_unique_cells": int(self._episode_unique_cells[lane]),
+                    },
+                )
+            )
+        return tuple(states)
+
+    def restore_lane_states(
+        self,
+        states: Sequence[TaskLaneState | None],
+        mask: np.ndarray,
+    ) -> None:
+        selected = np.asarray(mask, dtype=np.bool_)
+        if len(states) != self.num_envs or selected.shape != (self.num_envs,):
+            raise ValueError("cell novelty restore must contain one state per lane")
+        inner_states: list[TaskLaneState | None] = [None for _ in range(self.num_envs)]
+        for lane in np.flatnonzero(selected):
+            lane_index = int(lane)
+            state = states[lane_index]
+            if state is None or state.schema_id != "gradlab.cell-novelty-task-lane-v1":
+                raise ValueError(
+                    f"archive lane {lane_index} has incompatible cell novelty task state"
+                )
+            values = state.values
+            if values.get("contract_sha256") != self.config.contract_sha256:
+                raise ValueError(
+                    f"archive lane {lane_index} cell novelty contract does not match runtime"
+                )
+            inner = values.get("inner")
+            inner_states[lane_index] = (
+                None if inner is None else TaskLaneState.from_dict(inner)
+            )
+            raw_cells = values.get("seen_cells")
+            if (
+                isinstance(raw_cells, str | bytes)
+                or not isinstance(raw_cells, Sequence)
+                or any(not isinstance(cell, str) for cell in raw_cells)
+            ):
+                raise ValueError(
+                    f"archive lane {lane_index} has invalid cell novelty visited cells"
+                )
+            seen_cells = {cell.encode("ascii") for cell in raw_cells}
+            unique_cells = values.get("episode_unique_cells")
+            if (
+                not isinstance(unique_cells, int)
+                or isinstance(unique_cells, bool)
+                or unique_cells != len(seen_cells)
+                or unique_cells < 1
+            ):
+                raise ValueError(
+                    f"archive lane {lane_index} has invalid cell novelty unique-cell count"
+                )
+            paid_bonus = values.get("paid_bonus")
+            if (
+                not isinstance(paid_bonus, int | float)
+                or isinstance(paid_bonus, bool)
+                or not math.isfinite(float(paid_bonus))
+                or not 0.0 <= float(paid_bonus) <= self.config.episode_bonus_cap
+            ):
+                raise ValueError(
+                    f"archive lane {lane_index} has invalid cell novelty paid bonus"
+                )
+            self._seen_cells[lane_index] = seen_cells
+            self._initialized[lane_index] = True
+            self._paid_bonus[lane_index] = float(paid_bonus)
+            self._episode_unique_cells[lane_index] = unique_cells
+        self.kernel.restore_lane_states(inner_states, selected)
+
+
+def with_cell_novelty(
+    kernel: BoundTaskKernel,
+    value: Mapping[str, Any] | None,
+    *,
+    label: str = "task.reward.cell_novelty",
+) -> BoundTaskKernel:
+    if value is None:
+        return kernel
+    return CellNoveltyTaskKernel(
+        kernel,
+        CellNoveltyConfig.from_mapping(value, label=label),
+    )
 
 
 class SignalBindings:

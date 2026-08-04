@@ -17,7 +17,11 @@ from gradlab.reward_transform import (
     reward_transform_from_reward,
 )
 from gradlab.rom_assets import manifest_from_train_config, portable_rom_asset_identity
-from gradlab.task_kernels import default_task_document
+from gradlab.task_kernels import (
+    CELL_NOVELTY_REWARD_KEY,
+    default_task_document,
+    normalize_cell_novelty_config,
+)
 
 
 ENVIRONMENT_HASH_ALGORITHM = "gradlab.environment.v4"
@@ -34,7 +38,9 @@ PREPROCESSING_KEYS = (
     "obs_crop_fill",
     "obs_resize_algorithm",
 )
-IDENTITY_REWARD_KEYS = frozenset({"reward_mode"}) | COMMON_REWARD_KEYS
+IDENTITY_REWARD_KEYS = (
+    frozenset({"reward_mode", CELL_NOVELTY_REWARD_KEY}) | COMMON_REWARD_KEYS
+)
 
 
 def _normalize_preprocessing(identity: dict[str, Any]) -> None:
@@ -89,7 +95,14 @@ def task_config_from_train_config(
     from gradlab.model_inputs import normalize_task_model_inputs
 
     canonical = normalize_task_model_inputs(canonical)
-    return normalize_task_reward(canonical)
+    normalized = normalize_task_reward(canonical)
+    cell_novelty = normalized["reward"].get(CELL_NOVELTY_REWARD_KEY)
+    if cell_novelty is not None:
+        normalized["reward"][CELL_NOVELTY_REWARD_KEY] = normalize_cell_novelty_config(
+            cell_novelty,
+            label=f"task.reward.{CELL_NOVELTY_REWARD_KEY}",
+        )
+    return normalized
 
 
 def validate_task_config(task: Mapping[str, Any], *, label: str = "task") -> None:
@@ -264,6 +277,22 @@ def validate_task_config(task: Mapping[str, Any], *, label: str = "task") -> Non
     reward_mode = reward.get("reward_mode")
     if task_id == "identity" and reward_mode not in {None, "native"}:
         raise ValueError(f"{label}.reward.reward_mode must be 'native' for the identity task")
+    cell_novelty = reward.get(CELL_NOVELTY_REWARD_KEY)
+    if cell_novelty is not None:
+        normalized_novelty = normalize_cell_novelty_config(
+            cell_novelty,
+            label=f"{label}.reward.{CELL_NOVELTY_REWARD_KEY}",
+        )
+        required_signals = {
+            str(dimension["signal"])
+            for dimension in normalized_novelty["cell"]["dimensions"]
+        }
+        missing_signals = sorted(required_signals - set(signals))
+        if missing_signals:
+            raise ValueError(
+                f"{label}.reward.{CELL_NOVELTY_REWARD_KEY} requires declared task "
+                f"signal(s): {', '.join(missing_signals)}"
+            )
     if task_id == "mario" and reward_mode not in {
         None,
         "native",
@@ -419,7 +448,8 @@ def attach_environment_identity(document: Mapping[str, Any]) -> dict[str, Any]:
     if isinstance(evaluation, Mapping):
         evaluation_hash = policy_environment_hash(evaluation)
         materialized["evaluation_environment_hash"] = evaluation_hash
-        if evaluation_hash != materialized["policy_environment_hash"]:
+        evaluation_enabled = train_config.get("checkpoint_eval_backend") != "none"
+        if evaluation_enabled and evaluation_hash != materialized["policy_environment_hash"]:
             raise ValueError(
                 "training and evaluation policy environment semantics disagree: "
                 f"training={materialized['policy_environment_hash']} "
