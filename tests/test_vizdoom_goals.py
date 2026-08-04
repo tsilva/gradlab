@@ -200,6 +200,13 @@ def test_vizdoom_goal_has_complete_evaluated_ppo_contract(
     assert train_config["frame_skip"] == 2
     assert train_environment["preprocessing"]["frame_skip"] == 2
     assert eval_environment["preprocessing"]["frame_skip"] == 2
+    assert train_config["obs_crop"] == [0, 32, 0, 0]
+    assert train_config["obs_crop_mode"] == "mask"
+    assert train_config["obs_crop_fill"] == 0
+    for environment in (train_environment, eval_environment):
+        assert environment["preprocessing"]["obs_crop"] == [0, 32, 0, 0]
+        assert environment["preprocessing"]["obs_crop_mode"] == "mask"
+        assert environment["preprocessing"]["obs_crop_fill"] == 0
     expected_n_envs = expected.get("n_envs", 32)
     assert train_config["n_envs"] == expected_n_envs
     assert train_config["env_args"]["num_threads"] == expected.get("num_threads", expected_n_envs)
@@ -218,8 +225,7 @@ def test_vizdoom_goal_has_complete_evaluated_ppo_contract(
         "steps": 1,
     }
     expected_vizdoom_config = {"episode_timeout": NATIVE_HORIZONS[goal_id]}
-    if goal_id in {"VizdoomBasic-v1", "VizdoomBasic-Plus-v1"}:
-        expected_vizdoom_config["render_hud"] = True
+    expected_vizdoom_config["render_hud"] = True
     assert train_config["env_args"]["vizdoom_config"] == expected_vizdoom_config
     assert train_config["task"]["reward"]["reward_scale"] == expected["reward_scale"]
     termination = train_config["task"]["termination"]
@@ -270,7 +276,10 @@ def test_vizdoom_defend_line_uses_a_native_tic_horizon(goal_id: str) -> None:
     document = compose_train_document(goal_path, recipe_path)
 
     train_config = document["train_config"]
-    assert train_config["env_args"]["vizdoom_config"] == {"episode_timeout": 2100}
+    assert train_config["env_args"]["vizdoom_config"] == {
+        "episode_timeout": 2100,
+        "render_hud": True,
+    }
     assert "max_episode_steps" not in train_config["task"]["termination"]
     assert "max_steps" not in document["goal"]["eval"]["environment"]["env_config"]
 
@@ -384,14 +393,18 @@ def test_vizdoom_health_gathering_plus_is_long_horizon_and_time_unaware() -> Non
     train_config = document["train_config"]
     goal = document["goal"]
     assert train_config["game"] == "VizdoomHealthGathering-v1"
-    assert train_config["env_args"]["vizdoom_config"] == {"episode_timeout": 21000}
+    assert train_config["env_args"]["vizdoom_config"] == {
+        "episode_timeout": 21000,
+        "render_hud": True,
+    }
     assert train_config["task"]["termination"] == {
         "failure": ["player_died"],
         "success": [],
         "timeout": ["time_limit_reached"],
     }
     assert goal["eval"]["environment"]["env_config"]["env_args"]["vizdoom_config"] == {
-        "episode_timeout": 21000
+        "episode_timeout": 21000,
+        "render_hud": True,
     }
     assert set(train_config["task"]["model_inputs"]["context"]) == {"health"}
     assert train_config["policy_model"]["schema_version"] == 2
@@ -580,7 +593,10 @@ def test_vizdoom_deathmatch_declares_complete_single_player_combat_semantics() -
         "failure": ["player_died"],
         "timeout": ["time_limit_reached"],
     }
-    assert train_config["env_args"]["vizdoom_config"] == {"episode_timeout": 4200}
+    assert train_config["env_args"]["vizdoom_config"] == {
+        "episode_timeout": 4200,
+        "render_hud": True,
+    }
     assert (
         eval_environment["env_config"]["env_args"]["use_restricted_actions"] == DEATHMATCH_ACTIONS
     )
