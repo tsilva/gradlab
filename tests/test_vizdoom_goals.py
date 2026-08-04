@@ -217,9 +217,10 @@ def test_vizdoom_goal_has_complete_evaluated_ppo_contract(
         "value": 1,
         "steps": 1,
     }
-    assert train_config["env_args"]["vizdoom_config"] == {
-        "episode_timeout": NATIVE_HORIZONS[goal_id]
-    }
+    expected_vizdoom_config = {"episode_timeout": NATIVE_HORIZONS[goal_id]}
+    if goal_id in {"VizdoomBasic-v1", "VizdoomBasic-Plus-v1"}:
+        expected_vizdoom_config["render_hud"] = True
+    assert train_config["env_args"]["vizdoom_config"] == expected_vizdoom_config
     assert train_config["task"]["reward"]["reward_scale"] == expected["reward_scale"]
     termination = train_config["task"]["termination"]
     expected_horizon_outcome = "success" if goal_id in SUCCESSFUL_HORIZON_GOALS else "timeout"
@@ -334,7 +335,10 @@ def test_vizdoom_watchdog_scales_with_effective_frame_skip(
 
     assert document["train_config"]["frame_skip"] == frame_skip
     assert contract.environment["frame_skip"] == frame_skip
-    assert contract.environment["env_args"]["vizdoom_config"] == {"episode_timeout": 300}
+    assert contract.environment["env_args"]["vizdoom_config"] == {
+        "episode_timeout": 300,
+        "render_hud": True,
+    }
     assert contract.watchdog_steps == expected_watchdog_steps
 
 
@@ -621,6 +625,17 @@ def test_vizdoom_basic_exposes_ammo_for_training_and_evaluation() -> None:
         "mode": "all",
         "keys": ["killcount", "ammo2"],
     }
+    assert document["train_config"]["env_args"]["vizdoom_config"] == {
+        "episode_timeout": 300,
+        "render_hud": True,
+    }
+    assert document["train_config"]["obs_crop"] == [0, 32, 0, 0]
+    assert document["train_config"]["obs_crop_mode"] == "mask"
+    assert document["train_config"]["obs_crop_fill"] == 0
+    eval_preprocessing = document["goal"]["eval"]["environment"]["preprocessing"]
+    assert eval_preprocessing["obs_crop"] == [0, 32, 0, 0]
+    assert eval_preprocessing["obs_crop_mode"] == "mask"
+    assert eval_preprocessing["obs_crop_fill"] == 0
 
 
 def test_vizdoom_defend_line_plus_differs_only_by_environment_identity() -> None:
