@@ -25,6 +25,10 @@ GOAL_CATALOG_PHASES = (
     "verified-evaluation",
     "promotion",
 )
+GOAL_CATALOG_SUCCESS_BADGES = (
+    "train/success",
+    "eval/success",
+)
 GOAL_CATALOG_TERMINAL_STATES = frozenset(
     {
         "succeeded",
@@ -38,6 +42,58 @@ GOAL_CATALOG_TERMINAL_STATES = frozenset(
         "expired",
     }
 )
+
+
+def goal_catalog_run_success_badges(run: Mapping[str, Any]) -> tuple[str, ...]:
+    """Return success facts proved by one projected lifecycle run record."""
+
+    stop_reason = str(run.get("stop_reason") or "").strip()
+    early_stop = run.get("early_stop")
+    training_success = (
+        isinstance(early_stop, Mapping)
+        and str(early_stop.get("outcome") or "").strip().lower() == "success"
+    ) or stop_reason.startswith("early_stop_success") or stop_reason in {
+        "deterministic_training_acceptance",
+        "first_completion",
+    }
+
+    evaluation = run.get("evaluation")
+    evaluations = run.get("evaluations")
+    evaluation_success = (
+        isinstance(evaluation, Mapping)
+        and str(evaluation.get("status") or "").strip().lower() == "accepted"
+    ) or (
+        isinstance(evaluations, Mapping)
+        and any(
+            isinstance(result, Mapping)
+            and str(result.get("status") or "").strip().lower() == "accepted"
+            for result in evaluations.values()
+        )
+    ) or isinstance(run.get("promotion"), Mapping) or stop_reason in {
+        "completed_after_eval_acceptance",
+        "eval_acceptance",
+    }
+
+    return tuple(
+        badge
+        for badge, present in (
+            ("train/success", training_success),
+            ("eval/success", evaluation_success),
+        )
+        if present
+    )
+
+
+def _validate_success_badges(value: object) -> tuple[str, ...]:
+    if not isinstance(value, list | tuple):
+        raise ValueError("goal catalog success badges must be a list")
+    badges = tuple(str(item) for item in value)
+    normalized = tuple(
+        badge for badge in GOAL_CATALOG_SUCCESS_BADGES if badge in set(badges)
+    )
+    if badges != normalized:
+        raise ValueError("goal catalog success badges are invalid or out of order")
+    return normalized
 
 
 def goal_catalog_scope(goal_slug: object) -> str:
@@ -132,6 +188,11 @@ def _validate_run(run: Mapping[str, Any], *, goal_slug: str) -> dict[str, Any]:
         for name, value in metrics.items()
         if not isinstance(value, bool) and isinstance(value, int | float)
     }
+    if "success_badges" in run:
+        badges = _validate_success_badges(run["success_badges"])
+        if badges != goal_catalog_run_success_badges(run):
+            raise ValueError("goal catalog run success badges disagree with lifecycle evidence")
+        normalized["success_badges"] = list(badges)
     return normalized
 
 
@@ -313,6 +374,7 @@ def validate_goal_catalog_generation(
                 "terminal_run_count",
                 "first_used_at",
                 "last_activity_at",
+                "success_badges",
             }
         }
         validated = validate_goal_variant_descriptor(descriptor)
@@ -329,7 +391,12 @@ def validate_goal_catalog_generation(
         ):
             raise ValueError("goal catalog variant resolved goal is invalid")
         variant_ids.add(variant_id)
-        variants.append(deepcopy(dict(raw)))
+        normalized_variant = deepcopy(dict(raw))
+        if "success_badges" in raw:
+            normalized_variant["success_badges"] = list(
+                _validate_success_badges(raw["success_badges"])
+            )
+        variants.append(normalized_variant)
     active_runs = [_validate_run(run, goal_slug=goal_slug) for run in raw_active if isinstance(run, Mapping)]
     terminal_runs = [_validate_run(run, goal_slug=goal_slug) for run in raw_terminal if isinstance(run, Mapping)]
     if (
@@ -503,6 +570,7 @@ def merge_goal_catalog_events(
                         candidate["evaluations"] = evaluations
             candidate["event_created_at"] = event["created_at"]
             candidate["event_id"] = event["event_id"]
+            candidate["success_badges"] = list(goal_catalog_run_success_badges(candidate))
             runs[event["run_id"]] = candidate
         applied[event["event_id"]] = event["source_sha256"]
 
@@ -552,6 +620,14 @@ def merge_goal_catalog_events(
                 "terminal_run_count": len(variant_runs) - active_count,
                 "first_used_at": min(str(run["created_at"]) for run in variant_runs),
                 "last_activity_at": max(str(run["updated_at"]) for run in variant_runs),
+                "success_badges": [
+                    badge
+                    for badge in GOAL_CATALOG_SUCCESS_BADGES
+                    if any(
+                        badge in goal_catalog_run_success_badges(run)
+                        for run in variant_runs
+                    )
+                ],
             }
         )
     projected_variants.sort(
@@ -583,6 +659,7 @@ __all__ = [
     "GOAL_CATALOG_PHASES",
     "GOAL_CATALOG_ROOT",
     "GOAL_CATALOG_SCHEMA_VERSION",
+    "GOAL_CATALOG_SUCCESS_BADGES",
     "GOAL_CATALOG_TERMINAL_STATES",
     "build_goal_catalog_event",
     "goal_catalog_ack_key",
@@ -593,6 +670,7 @@ __all__ = [
     "goal_catalog_page_digest",
     "goal_catalog_page_key",
     "goal_catalog_pointer_key",
+    "goal_catalog_run_success_badges",
     "goal_catalog_scope",
     "merge_goal_catalog_events",
     "validate_goal_catalog_event",

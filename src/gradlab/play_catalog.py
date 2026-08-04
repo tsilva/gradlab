@@ -26,8 +26,10 @@ from gradlab.catalog_errors import (
 )
 from gradlab.catalog_cache import CatalogEntryCache
 from gradlab.goal_catalog import (
+    GOAL_CATALOG_SUCCESS_BADGES,
     GOAL_CATALOG_TERMINAL_STATES,
     goal_catalog_pointer_key,
+    goal_catalog_run_success_badges,
     validate_goal_catalog_generation,
     validate_goal_catalog_page,
     validate_goal_catalog_pointer,
@@ -49,11 +51,14 @@ from gradlab.evaluation_projection import validate_evaluation_scientific_metric
 from gradlab.evaluation_fence import evaluation_selection_fence
 from gradlab.metric_names import (
     EVAL_ACCEPTANCE_PASS,
+    EVAL_FULL_EPISODE_RETURN_SHAPED_MEAN,
+    EVAL_FULL_SUCCESS_ACROSS_STARTS_RATE_MEAN,
     LEADER_CHECKPOINT_STEP,
     TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_ROLLING_UP_TO_100_MEAN,
     TRAIN_EPISODE_RETURN_SHAPED_ACROSS_ORIGINS_ROLLING_UP_TO_100_MEAN,
     TRAIN_GLOBAL_STEP,
     TRAIN_OUTCOME_SUCCESS_ACROSS_STARTS_WINDOW_100_RATE_MIN,
+    TRAIN_OUTCOME_SUCCESS_ACROSS_STARTS_WINDOW_100_RATE_MEAN,
     evaluation_metric_schema,
 )
 from gradlab.model_sources import DEFAULT_PUBLIC_MODELS_BASE_URL, _public_json
@@ -81,6 +86,7 @@ EVALUATION_CACHE_SECONDS = 10.0
 RUN_CATALOG_CACHE_SECONDS = 60.0
 GOAL_VARIANT_CACHE_SECONDS = 60.0
 GOAL_VARIANT_CACHE_NAMESPACE = "variants-v7"
+_CONTROL_DOCUMENT_UNSET = object()
 LIVE_TRAINING_METRICS = (
     (
         RankCriterion(
@@ -106,6 +112,36 @@ LIVE_TRAINING_METRICS = (
         ),
         (TRAIN_GLOBAL_STEP,),
     ),
+)
+CHECKPOINT_TRAINING_METRICS = (
+    (
+        RankCriterion(
+            direction="max",
+            metric=TRAIN_OUTCOME_SUCCESS_ACROSS_STARTS_WINDOW_100_RATE_MEAN,
+        ),
+        (TRAIN_OUTCOME_SUCCESS_ACROSS_STARTS_WINDOW_100_RATE_MEAN,),
+    ),
+    (
+        RankCriterion(
+            direction="max",
+            metric=TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_ROLLING_UP_TO_100_MEAN,
+        ),
+        (
+            TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_ROLLING_UP_TO_100_MEAN,
+            TRAIN_EPISODE_RETURN_SHAPED_ACROSS_ORIGINS_ROLLING_UP_TO_100_MEAN,
+        ),
+    ),
+    (
+        RankCriterion(
+            direction="min",
+            metric=TRAIN_GLOBAL_STEP,
+        ),
+        (TRAIN_GLOBAL_STEP,),
+    ),
+)
+CHECKPOINT_EVALUATION_METRICS = (
+    EVAL_FULL_SUCCESS_ACROSS_STARTS_RATE_MEAN,
+    EVAL_FULL_EPISODE_RETURN_SHAPED_MEAN,
 )
 
 
@@ -150,6 +186,7 @@ class CatalogPage:
 class EnvironmentSummary:
     name: str
     goal_count: int
+    success_badges: tuple[str, ...]
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -163,6 +200,7 @@ class GoalSummary:
     title: str
     recipe_count: int
     goal_path: str
+    success_badges: tuple[str, ...]
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -192,6 +230,7 @@ class GoalVariantSummary:
     run_count: int
     first_used_at: str
     last_activity_at: str
+    success_badges: tuple[str, ...]
     exact_resolution_run_id: str = ""
 
     def to_dict(self) -> dict[str, Any]:
@@ -222,6 +261,7 @@ class RunSummary:
     updated_at: str
     url: str
     metrics: Mapping[str, float | None]
+    success_badges: tuple[str, ...]
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -372,6 +412,38 @@ def _search_text(*values: object) -> str:
     return " ".join(str(value or "") for value in values).casefold()
 
 
+def _projected_run_success_badges(run: Mapping[str, Any]) -> tuple[str, ...]:
+    explicit = run.get("success_badges")
+    explicit_badges = (
+        {str(item) for item in explicit}
+        if isinstance(explicit, list | tuple)
+        else set()
+    )
+    evidenced = set(goal_catalog_run_success_badges(run))
+    return tuple(
+        badge
+        for badge in GOAL_CATALOG_SUCCESS_BADGES
+        if badge in explicit_badges or badge in evidenced
+    )
+
+
+def _projected_variant_success_badges(
+    variant: Mapping[str, Any],
+    runs: Sequence[Mapping[str, Any]],
+) -> tuple[str, ...]:
+    explicit = variant.get("success_badges")
+    badges = (
+        {str(item) for item in explicit}
+        if isinstance(explicit, list | tuple)
+        else set()
+    )
+    variant_id = str(variant.get("variant_id") or "")
+    for run in runs:
+        if str(run.get("goal_variant_id") or "") == variant_id:
+            badges.update(_projected_run_success_badges(run))
+    return tuple(badge for badge in GOAL_CATALOG_SUCCESS_BADGES if badge in badges)
+
+
 def _safe_int(value: object) -> int | None:
     if value in {None, ""}:
         return None
@@ -402,11 +474,28 @@ def _run_fallback_metric_specs(
     return LIVE_TRAINING_METRICS
 
 
-def checkpoint_training_metric_columns() -> tuple[dict[str, str], ...]:
-    return tuple(
-        {"metric": criterion.metric, "direction": criterion.direction}
-        for criterion, _sources in LIVE_TRAINING_METRICS
-        if criterion.metric != TRAIN_GLOBAL_STEP
+def checkpoint_metric_columns() -> tuple[dict[str, str], ...]:
+    return (
+        {
+            "metric": TRAIN_OUTCOME_SUCCESS_ACROSS_STARTS_WINDOW_100_RATE_MEAN,
+            "direction": "max",
+            "label": "Train success",
+        },
+        {
+            "metric": TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_ROLLING_UP_TO_100_MEAN,
+            "direction": "max",
+            "label": "Train return",
+        },
+        {
+            "metric": EVAL_FULL_SUCCESS_ACROSS_STARTS_RATE_MEAN,
+            "direction": "max",
+            "label": "Eval success",
+        },
+        {
+            "metric": EVAL_FULL_EPISODE_RETURN_SHAPED_MEAN,
+            "direction": "max",
+            "label": "Eval return",
+        },
     )
 
 
@@ -414,7 +503,7 @@ def _checkpoint_training_metric_history(
     run: Any,
 ) -> dict[str, dict[str, tuple[tuple[int, float], ...]]]:
     history: dict[str, dict[str, tuple[tuple[int, float], ...]]] = {}
-    for criterion, sources in LIVE_TRAINING_METRICS:
+    for criterion, sources in CHECKPOINT_TRAINING_METRICS:
         if criterion.metric == TRAIN_GLOBAL_STEP:
             continue
         source_history: dict[str, tuple[tuple[int, float], ...]] = {}
@@ -447,7 +536,7 @@ def _checkpoint_training_metrics(
     checkpoint_step: int,
 ) -> dict[str, float | None]:
     metrics: dict[str, float | None] = {TRAIN_GLOBAL_STEP: float(checkpoint_step)}
-    for criterion, sources in LIVE_TRAINING_METRICS:
+    for criterion, sources in CHECKPOINT_TRAINING_METRICS:
         if criterion.metric == TRAIN_GLOBAL_STEP:
             continue
         value = None
@@ -460,6 +549,26 @@ def _checkpoint_training_metrics(
                 value = latest[1]
                 break
         metrics[criterion.metric] = value
+    return metrics
+
+
+def checkpoint_metric_values(
+    training_metrics: Mapping[str, Any],
+    evaluation: Mapping[str, Any] | None,
+) -> dict[str, float | None]:
+    metrics = {
+        str(name): _safe_float(value)
+        for name, value in training_metrics.items()
+    }
+    evaluation_metrics = (
+        evaluation.get("metrics") if isinstance(evaluation, Mapping) else None
+    )
+    for name in CHECKPOINT_EVALUATION_METRICS:
+        metrics[name] = (
+            _safe_float(evaluation_metrics.get(name))
+            if isinstance(evaluation_metrics, Mapping)
+            else None
+        )
     return metrics
 
 
@@ -999,6 +1108,7 @@ class PlayCatalog:
                         updated_at=str(raw_item.get("updated_at") or ""),
                         url=str(raw_item.get("url") or ""),
                         metrics=dict(metrics),
+                        success_badges=_projected_run_success_badges(raw_item),
                     ).to_dict()
                 )
             return generated_at, tuple(items)
@@ -1444,6 +1554,14 @@ class PlayCatalog:
             run_count=len(variant_runs),
             first_used_at=min(first_used_values) if first_used_values else "",
             last_activity_at=max(last_activity_values) if last_activity_values else "",
+            success_badges=tuple(
+                badge
+                for badge in GOAL_CATALOG_SUCCESS_BADGES
+                if any(
+                    badge in _projected_run_success_badges(run)
+                    for run in variant_runs.values()
+                )
+            ),
             exact_resolution_run_id=str(exact_resolution_run_id or ""),
         ).to_dict()
 
@@ -1487,6 +1605,7 @@ class PlayCatalog:
                     "terminal_run_count",
                     "first_used_at",
                     "last_activity_at",
+                    "success_badges",
                 }
             }
             resolved_goal = raw.get("resolved_goal")
@@ -1517,6 +1636,9 @@ class PlayCatalog:
                     "terminal_run_count": int(raw.get("terminal_run_count") or 0),
                     "first_used_at": str(raw.get("first_used_at") or ""),
                     "last_activity_at": str(raw.get("last_activity_at") or ""),
+                    "success_badges": list(
+                        _projected_variant_success_badges(raw, raw_runs)
+                    ),
                     "recent_runs": [
                         dict(run)
                         for run in raw_runs
@@ -1586,17 +1708,22 @@ class PlayCatalog:
         *,
         goal_slug: str,
         include_archives: bool = False,
+        pointer_document: object = _CONTROL_DOCUMENT_UNSET,
+        generation_document: object = _CONTROL_DOCUMENT_UNSET,
     ) -> dict[str, Any] | None:
         if self.control_bucket is None:
             return None
         digest = ""
         try:
-            pointer_document = self.control_bucket.get_json_optional(
-                goal_catalog_pointer_key(goal_slug)
-            )
+            if pointer_document is _CONTROL_DOCUMENT_UNSET:
+                pointer_document = self.control_bucket.get_json_optional(
+                    goal_catalog_pointer_key(goal_slug)
+                )
             if pointer_document is None:
                 self._goal_catalog_freshness[goal_slug] = "fresh"
                 return None
+            if not isinstance(pointer_document, Mapping):
+                raise ValueError("goal catalog pointer is malformed")
             pointer = validate_goal_catalog_pointer(
                 pointer_document,
                 expected_goal_slug=goal_slug,
@@ -1615,11 +1742,14 @@ class PlayCatalog:
                     except ValueError:
                         generation = None
             if generation is None:
-                generation_document = self.control_bucket.get_json_optional(
-                    pointer["generation_key"]
-                )
+                if generation_document is _CONTROL_DOCUMENT_UNSET:
+                    generation_document = self.control_bucket.get_json_optional(
+                        pointer["generation_key"]
+                    )
                 if generation_document is None:
                     raise ValueError("catalog pointer references a missing generation")
+                if not isinstance(generation_document, Mapping):
+                    raise ValueError("goal catalog generation is malformed")
                 generation = validate_goal_catalog_generation(
                     generation_document,
                     expected_digest=digest,
@@ -1647,10 +1777,11 @@ class PlayCatalog:
                     f"Goal activity is temporarily unavailable: {exc}",
                     code="catalog_transient",
                 ) from exc
-        runs = [
-            dict(run)
-            for run in (*generation["active_runs"], *generation["terminal_runs"])
-        ]
+        runs = []
+        for raw in (*generation["active_runs"], *generation["terminal_runs"]):
+            run = dict(raw)
+            run["success_badges"] = list(_projected_run_success_badges(run))
+            runs.append(run)
         if include_archives:
             for reference in generation["archive_pages"]:
                 page_document = self.control_bucket.get_json_optional(
@@ -1666,7 +1797,10 @@ class PlayCatalog:
                     raise CatalogIntegrityError(
                         "catalog archive page belongs to another goal"
                     )
-                runs.extend(dict(run) for run in page["runs"])
+                for raw in page["runs"]:
+                    run = dict(raw)
+                    run["success_badges"] = list(_projected_run_success_badges(run))
+                    runs.append(run)
         return {
             "goal_slug": goal_slug,
             "variants": [dict(item) for item in generation["variants"]],
@@ -1675,6 +1809,84 @@ class PlayCatalog:
             "generated_at": str(generation["generated_at"]),
             "archive_pages": [dict(item) for item in generation["archive_pages"]],
         }
+
+    def _control_generation_scopes(
+        self,
+        repository_goals: Sequence[_RepositoryGoal],
+    ) -> tuple[dict[str, Any] | None, ...]:
+        if self.control_bucket is None or not repository_goals:
+            return tuple(None for _goal in repository_goals)
+        bulk_reader = getattr(self.control_bucket, "get_json_many_optional", None)
+        if not callable(bulk_reader):
+            return tuple(
+                self._control_generation_scope(goal_slug=goal.goal_slug)
+                for goal in repository_goals
+            )
+        pointer_keys = tuple(
+            goal_catalog_pointer_key(goal.goal_slug) for goal in repository_goals
+        )
+        try:
+            pointer_documents = bulk_reader(pointer_keys)
+            generation_keys: list[str] = []
+            for goal, pointer_key in zip(repository_goals, pointer_keys, strict=True):
+                pointer_document = pointer_documents[pointer_key]
+                if pointer_document is None:
+                    continue
+                pointer = validate_goal_catalog_pointer(
+                    pointer_document,
+                    expected_goal_slug=goal.goal_slug,
+                )
+                digest = str(pointer["generation_sha256"])
+                with self._cache_lock:
+                    cached_generation = self._goal_generation_cache.get(digest)
+                if cached_generation is None and self._entry_cache is not None:
+                    cached_document = self._entry_cache.read("goal-catalog-v1", digest)
+                    if isinstance(cached_document, Mapping):
+                        try:
+                            cached_generation = validate_goal_catalog_generation(
+                                cached_document,
+                                expected_digest=digest,
+                            )
+                        except ValueError:
+                            cached_generation = None
+                        else:
+                            with self._cache_lock:
+                                self._goal_generation_cache[digest] = dict(
+                                    cached_generation
+                                )
+                if cached_generation is None:
+                    generation_keys.append(str(pointer["generation_key"]))
+            generation_documents = (
+                bulk_reader(dict.fromkeys(generation_keys))
+                if generation_keys
+                else {}
+            )
+        except CatalogUnavailable:
+            return tuple(
+                self._control_generation_scope(goal_slug=goal.goal_slug)
+                for goal in repository_goals
+            )
+        scopes: list[dict[str, Any] | None] = []
+        for goal, pointer_key in zip(repository_goals, pointer_keys, strict=True):
+            pointer_document = pointer_documents[pointer_key]
+            generation_document: object = _CONTROL_DOCUMENT_UNSET
+            if pointer_document is not None:
+                pointer = validate_goal_catalog_pointer(
+                    pointer_document,
+                    expected_goal_slug=goal.goal_slug,
+                )
+                generation_document = generation_documents.get(
+                    str(pointer["generation_key"]),
+                    _CONTROL_DOCUMENT_UNSET,
+                )
+            scopes.append(
+                self._control_generation_scope(
+                    goal_slug=goal.goal_slug,
+                    pointer_document=pointer_document,
+                    generation_document=generation_document,
+                )
+            )
+        return tuple(scopes)
 
     def _load_goal_variants(
         self,
@@ -1710,6 +1922,41 @@ class PlayCatalog:
         }
         items.sort(key=lambda item: kind_order.get(str(item.get("configuration_kind")), 4))
         return tuple(items)
+
+    def _current_goal_success_badges(
+        self,
+        repository_goal: _RepositoryGoal,
+        *,
+        generation_scope: object = _CONTROL_DOCUMENT_UNSET,
+    ) -> tuple[str, ...]:
+        if self.control_bucket is None:
+            return ()
+        try:
+            scope = (
+                self._control_generation_scope(goal_slug=repository_goal.goal_slug)
+                if generation_scope is _CONTROL_DOCUMENT_UNSET
+                else generation_scope
+            )
+        except CatalogUnavailable:
+            return ()
+        if scope is None:
+            return ()
+        if not isinstance(scope, Mapping):
+            raise CatalogIntegrityError("goal catalog scope is malformed")
+        current, _current_goal = self._current_goal_variant(repository_goal)
+        current_variant_id = str(current["variant_id"])
+        runs = [
+            run
+            for run in scope.get("runs", ())
+            if isinstance(run, Mapping)
+        ]
+        for raw in scope.get("variants", ()):
+            if (
+                isinstance(raw, Mapping)
+                and str(raw.get("variant_id") or "") == current_variant_id
+            ):
+                return _projected_variant_success_badges(raw, runs)
+        return ()
 
     def _refresh_goal_variants(
         self,
@@ -1762,14 +2009,39 @@ class PlayCatalog:
     ) -> CatalogPage:
         normalized = str(query or "").strip().casefold()
         goal_counts = self._repository_environments()
-        items = [
-            EnvironmentSummary(
-                name=environment_id,
-                goal_count=goal_count,
-            ).to_dict()
-            for environment_id, goal_count in sorted(goal_counts.items())
-            if not normalized or normalized in _search_text(environment_id)
-        ]
+        environment_badges: dict[str, tuple[str, ...]] = {}
+        if self.control_bucket is not None:
+            badges_by_environment: dict[str, list[tuple[str, ...]]] = {}
+            repository_goals = self._repository_goals()
+            generation_scopes = self._control_generation_scopes(repository_goals)
+            for goal, scope in zip(repository_goals, generation_scopes, strict=True):
+                badges = self._current_goal_success_badges(
+                    goal,
+                    generation_scope=scope,
+                )
+                badges_by_environment.setdefault(goal.environment_id, []).append(
+                    badges
+                )
+            for environment_id, goal_badges in badges_by_environment.items():
+                if not goal_badges:
+                    continue
+                environment_badges[environment_id] = tuple(
+                    badge
+                    for badge in GOAL_CATALOG_SUCCESS_BADGES
+                    if all(badge in badges for badges in goal_badges)
+                )
+        items = []
+        for environment_id, goal_count in sorted(goal_counts.items()):
+            badges = environment_badges.get(environment_id, ())
+            if normalized and normalized not in _search_text(environment_id, badges):
+                continue
+            items.append(
+                EnvironmentSummary(
+                    name=environment_id,
+                    goal_count=goal_count,
+                    success_badges=badges,
+                ).to_dict()
+            )
         return self._page(
             items,
             cursor,
@@ -1933,6 +2205,7 @@ class PlayCatalog:
                         updated_at=str(raw.get("updated_at") or ""),
                         url=str(raw.get("url") or ""),
                         metrics={str(name): _safe_float(value) for name, value in metrics.items()},
+                        success_badges=_projected_run_success_badges(raw),
                     ).to_dict()
                 )
         summaries.sort(
@@ -2116,6 +2389,7 @@ class PlayCatalog:
                 summary.get("goal_variant_label"),
                 summary.get("description"),
                 summary.get("seed"),
+                summary.get("success_badges"),
             )
         ]
         page = self._page(
@@ -2155,27 +2429,33 @@ class PlayCatalog:
         cursor: str | None = None,
     ) -> CatalogPage:
         normalized = str(query or "").strip().casefold()
-        items = [
-            GoalSummary(
-                environment_id=environment_id,
-                goal_id=goal.goal_id,
-                goal_slug=goal.goal_slug,
-                title=goal.title,
-                recipe_count=goal.recipe_count,
-                goal_path=goal.goal_path,
-            ).to_dict()
-            for goal in self._repository_goals(environment_id=environment_id)
-            if (
-                not normalized
-                or normalized
-                in _search_text(
-                    goal.goal_id,
-                    goal.goal_slug,
-                    goal.title,
-                    goal.goal_path,
-                )
+        items = []
+        repository_goals = self._repository_goals(environment_id=environment_id)
+        generation_scopes = self._control_generation_scopes(repository_goals)
+        for goal, scope in zip(repository_goals, generation_scopes, strict=True):
+            badges = self._current_goal_success_badges(
+                goal,
+                generation_scope=scope,
             )
-        ]
+            if normalized and normalized not in _search_text(
+                goal.goal_id,
+                goal.goal_slug,
+                goal.title,
+                goal.goal_path,
+                badges,
+            ):
+                continue
+            items.append(
+                GoalSummary(
+                    environment_id=environment_id,
+                    goal_id=goal.goal_id,
+                    goal_slug=goal.goal_slug,
+                    title=goal.title,
+                    recipe_count=goal.recipe_count,
+                    goal_path=goal.goal_path,
+                    success_badges=badges,
+                ).to_dict()
+            )
         return self._page(
             items,
             cursor,
@@ -2263,6 +2543,7 @@ class PlayCatalog:
                 item.get("run_count"),
                 item.get("goal_contract_sha256"),
                 item.get("effective_goal_contract_sha256"),
+                item.get("success_badges"),
             )
         ]
         page = self._page(
@@ -2377,6 +2658,7 @@ class PlayCatalog:
                     variant.get("label"),
                     variant.get("variant_id"),
                     variant.get("recent_runs"),
+                    variant.get("success_badges"),
                 )
             ]
         rank = repository_goal.rank or ()
@@ -3314,12 +3596,7 @@ class PlayCatalog:
                             raw.get(metric_schema.acceptance_episode_completed_count)
                         ),
                         "criteria": criteria,
-                        "metrics": {
-                            criterion.metric: (
-                                float(step) if criterion.metric == LEADER_CHECKPOINT_STEP else None
-                            )
-                            for criterion in evaluation_rank
-                        },
+                        "metrics": {LEADER_CHECKPOINT_STEP: float(step)},
                     }
                 # Fail-fast rejections intentionally omit completed eval/full metrics.
                 # W&B returns no rows when scan_history requests a key that is absent
@@ -3346,10 +3623,14 @@ class PlayCatalog:
                                 float(rule["threshold"]),
                             )
                         )
-                for criterion in evaluation_rank:
-                    metric = criterion.metric
-                    if metric == LEADER_CHECKPOINT_STEP:
-                        continue
+                evaluation_metric_names = dict.fromkeys(
+                    (
+                        *CHECKPOINT_EVALUATION_METRICS,
+                        *(criterion.metric for criterion in evaluation_rank),
+                    )
+                )
+                evaluation_metric_names.pop(LEADER_CHECKPOINT_STEP, None)
+                for metric in evaluation_metric_names:
                     for raw in run.scan_history(
                         keys=[metric_schema.checkpoint_step, metric],
                         page_size=10_000,
@@ -3495,6 +3776,10 @@ class PlayCatalog:
                 if playback_seed is not None
                 else None
             )
+            training_metrics = _checkpoint_training_metrics(
+                evaluation_data.training_metric_history,
+                checkpoint_step=manifest.step,
+            )
             row = CheckpointSummary(
                 run_id=run_id,
                 checkpoint_id=manifest.checkpoint_id,
@@ -3507,15 +3792,12 @@ class PlayCatalog:
                 promoted=manifest.checkpoint_id == promoted_id,
                 playback_seed=playback_seed,
                 playback_seed_source=playback_seed_source,
-                metrics=_checkpoint_training_metrics(
-                    evaluation_data.training_metric_history,
-                    checkpoint_step=manifest.step,
-                ),
+                metrics=checkpoint_metric_values(training_metrics, evaluation),
                 evaluation=evaluation,
             )
             rows.append(row)
         rows.sort(key=lambda row: (row.step, row.sha256), reverse=True)
-        training_rank = tuple(criterion for criterion, _sources in LIVE_TRAINING_METRICS)
+        training_rank = tuple(criterion for criterion, _sources in CHECKPOINT_TRAINING_METRICS)
         best_training_id = _best_checkpoint_id(rows, training_rank)
         best_evaluation_id = _best_checkpoint_id(
             rows,
@@ -3568,7 +3850,8 @@ __all__ = [
     "CATALOG_PAGE_SIZE",
     "CatalogPage",
     "CheckpointSummary",
-    "checkpoint_training_metric_columns",
+    "checkpoint_metric_columns",
+    "checkpoint_metric_values",
     "EnvironmentSummary",
     "GoalSummary",
     "GoalVariantSummary",

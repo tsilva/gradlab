@@ -9,7 +9,8 @@ import socket
 import subprocess
 import sys
 import threading
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
@@ -28,6 +29,9 @@ CONTROL_R2_ENV_NAMES = frozenset(
 )
 MAX_REQUEST_BYTES = 16 * 1024
 MAX_RESPONSE_BYTES = 8 * 1024 * 1024
+MAX_BULK_READ_KEYS = 256
+MAX_BULK_REQUEST_KEYS = 64
+MAX_BULK_READ_WORKERS = 16
 
 _ALLOWED_CONTROL_KEYS = (
     re.compile(r"goal-catalog/v1/goals/[0-9a-f]{64}/current\.json"),
@@ -153,6 +157,48 @@ class CatalogAuthorityClient:
                 source="control-catalog",
             )
         return value
+
+    def get_json_many_optional(
+        self,
+        keys: Iterable[str],
+    ) -> dict[str, dict[str, Any] | None]:
+        try:
+            validated_keys = tuple(_allowed_control_key(key) for key in keys)
+        except ValueError as exc:
+            raise CatalogIntegrityError(
+                str(exc),
+                source="control-catalog",
+            ) from exc
+        if len(validated_keys) > MAX_BULK_READ_KEYS:
+            raise CatalogIntegrityError(
+                "catalog helper bulk read exceeds the key limit",
+                source="control-catalog",
+            )
+        if len(validated_keys) != len(set(validated_keys)):
+            raise CatalogIntegrityError(
+                "catalog helper bulk read contains duplicate keys",
+                source="control-catalog",
+            )
+        if not validated_keys:
+            return {}
+        documents: dict[str, dict[str, Any] | None] = {}
+        for offset in range(0, len(validated_keys), MAX_BULK_REQUEST_KEYS):
+            chunk = validated_keys[offset : offset + MAX_BULK_REQUEST_KEYS]
+            value = self._request("get_json_many_optional", keys=list(chunk))
+            if not isinstance(value, Mapping) or set(value) != set(chunk):
+                raise CatalogIntegrityError(
+                    "control catalog returned a malformed bulk response",
+                    source="control-catalog",
+                )
+            for key in chunk:
+                document = value[key]
+                if document is not None and not isinstance(document, dict):
+                    raise CatalogIntegrityError(
+                        "control catalog returned a non-object document",
+                        source="control-catalog",
+                    )
+                documents[key] = document
+        return documents
 
     def close(self) -> None:
         with self._lock:
@@ -299,7 +345,7 @@ def _serve(sock: socket.socket, repo_root: Path) -> int:
                 },
             )
             continue
-        if operation != "get_json_optional":
+        if operation not in {"get_json_optional", "get_json_many_optional"}:
             _send_json(
                 sock,
                 {
@@ -310,9 +356,28 @@ def _serve(sock: socket.socket, repo_root: Path) -> int:
             )
             continue
         try:
-            key = _allowed_control_key(request.get("key"))
             assert bucket is not None
-            value = bucket.get_json_optional(key)
+            if operation == "get_json_optional":
+                key = _allowed_control_key(request.get("key"))
+                value = bucket.get_json_optional(key)
+            else:
+                raw_keys = request.get("keys")
+                if not isinstance(raw_keys, list):
+                    raise ValueError("catalog helper bulk keys must be a list")
+                keys = tuple(_allowed_control_key(key) for key in raw_keys)
+                if len(keys) > MAX_BULK_REQUEST_KEYS:
+                    raise ValueError("catalog helper bulk read exceeds the key limit")
+                if len(keys) != len(set(keys)):
+                    raise ValueError("catalog helper bulk read contains duplicate keys")
+                if not keys:
+                    value = {}
+                else:
+                    with ThreadPoolExecutor(
+                        max_workers=min(MAX_BULK_READ_WORKERS, len(keys)),
+                        thread_name_prefix="gradlab-catalog-read",
+                    ) as pool:
+                        documents = tuple(pool.map(bucket.get_json_optional, keys))
+                    value = dict(zip(keys, documents, strict=True))
         except ValueError as exc:
             _send_json(
                 sock,

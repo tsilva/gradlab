@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
@@ -82,6 +83,21 @@ def goal_catalog_documents(
                 "updated_at": str(raw.get("updated_at") or generated_at),
                 "url": str(raw.get("url") or ""),
                 "metrics": dict(raw.get("metrics") or {}),
+                **(
+                    {"evaluation": deepcopy(raw["evaluation"])}
+                    if isinstance(raw.get("evaluation"), dict)
+                    else {}
+                ),
+                **(
+                    {"evaluations": deepcopy(raw["evaluations"])}
+                    if isinstance(raw.get("evaluations"), dict)
+                    else {}
+                ),
+                **(
+                    {"promotion": deepcopy(raw["promotion"])}
+                    if isinstance(raw.get("promotion"), dict)
+                    else {}
+                ),
             }
         )
     active = [run for run in normalized_runs if run["state"] == "running"]
@@ -601,6 +617,8 @@ def test_goal_variants_explain_previous_defaults_and_aggregate_run_activity(
                 "run_id": run_one,
                 "created_at": "2026-06-01T09:00:00Z",
                 "updated_at": "2026-06-02T09:00:00Z",
+                "stop_reason": "early_stop_success:target_reached",
+                "early_stop": {"outcome": "success"},
             },
             {
                 "run_id": run_two,
@@ -637,6 +655,9 @@ def test_goal_variants_explain_previous_defaults_and_aggregate_run_activity(
     assert previous["run_count"] == 2
     assert previous["first_used_at"] == "2026-06-01T09:00:00Z"
     assert previous["last_activity_at"] == "2026-07-03T09:00:00Z"
+    assert previous["success_badges"] == ["train/success"]
+    assert catalog.goals(environment_id="Mario").items[0]["success_badges"] == ()
+    assert catalog.environments().items[0]["success_badges"] == ()
     search = catalog.goal_variants(
         environment_id="Mario",
         goal_id="Level1-1",
@@ -713,6 +734,108 @@ def test_run_catalog_uses_lifecycle_owned_variant_index_without_wandb(
     assert [item["run_id"] for item in searched.items] == [RUN_ID]
     assert bucket.calls.count(pointer_key) >= 1
     assert bucket.calls.count(pointer["generation_key"]) == 1
+
+
+def test_success_badges_propagate_from_runs_through_current_goals_and_environment(
+    tmp_path: Path,
+) -> None:
+    write_goal_catalog(tmp_path)
+    second_root = tmp_path / "experiments" / "goals" / "Mario" / "Level1-2"
+    (second_root / "recipes").mkdir(parents=True)
+    (second_root / "_goal.yaml").write_text(
+        current_goal_document(
+            goal_id="Level1-2",
+            title="Mario Level 1-2 completion",
+        ),
+        encoding="utf-8",
+    )
+    (second_root / "recipes" / "ppo.yaml").write_text(
+        "defaults: [_self_]\n",
+        encoding="utf-8",
+    )
+
+    documents: dict[str, dict[str, Any]] = {}
+    descriptors: dict[str, dict[str, Any]] = {}
+    for index, goal_id in enumerate(("Level1-1", "Level1-2"), start=1):
+        goal_slug = f"Mario/{goal_id}"
+        goal_path = tmp_path / "experiments" / "goals" / goal_slug / "_goal.yaml"
+        authored = load_goal_contract(goal_path, tmp_path)
+        descriptor = build_goal_variant_descriptor(
+            goal_slug=goal_slug,
+            source_sha="a" * 40,
+            authored_goal=authored,
+            effective_goal=goal_for_contract_validation(authored, label=f"{goal_id} goal"),
+        )
+        descriptors[goal_id] = descriptor
+        run = {
+            "run_id": f"gradlab-{index:032x}",
+            "state": "succeeded",
+            "stop_reason": "early_stop_success:target_reached",
+            "early_stop": {"outcome": "success"},
+            "created_at": "2026-08-01T09:00:00Z",
+            "updated_at": "2026-08-01T10:00:00Z",
+            **(
+                {
+                    "evaluation": {
+                        "checkpoint_id": "checkpoint-10-" + "c" * 16,
+                        "status": "accepted",
+                    }
+                }
+                if goal_id == "Level1-1"
+                else {}
+            ),
+        }
+        generation, pointer = goal_catalog_documents(descriptor, [run])
+        documents[goal_catalog_pointer_key(goal_slug)] = pointer
+        documents[pointer["generation_key"]] = generation
+
+    class SuccessCatalogBucket:
+        bulk_calls: list[tuple[str, ...]] = []
+
+        def get_json_optional(self, key: str):
+            return documents.get(key)
+
+        def get_json_many_optional(self, keys: Iterable[str]):
+            selected = tuple(keys)
+            self.bulk_calls.append(selected)
+            return {key: documents.get(key) for key in selected}
+
+    bucket = SuccessCatalogBucket()
+    catalog = PlayCatalog(repo_root=tmp_path, control_bucket=bucket)
+    environments = catalog.environments()
+    environment_bulk_calls = tuple(bucket.bulk_calls)
+
+    runs = catalog.runs(environment_id="Mario", goal_id="Level1-1")
+    assert runs.items[0]["success_badges"] == ("train/success", "eval/success")
+
+    variants = catalog.goal_variants(environment_id="Mario", goal_id="Level1-1")
+    current_variant = next(
+        item
+        for item in variants.items
+        if item["variant_id"] == descriptors["Level1-1"]["variant_id"]
+    )
+    assert current_variant["success_badges"] == ["train/success", "eval/success"]
+    activity = catalog.goal_activity(environment_id="Mario", goal_id="Level1-1")
+    assert activity["items"][0]["recent_runs"][0]["success_badges"] == [
+        "train/success",
+        "eval/success",
+    ]
+
+    goals = catalog.goals(environment_id="Mario")
+    assert {item["goal_id"]: item["success_badges"] for item in goals.items} == {
+        "Level1-1": ("train/success", "eval/success"),
+        "Level1-2": ("train/success",),
+    }
+    assert environments.items[0]["success_badges"] == ("train/success",)
+    assert len(environment_bulk_calls) == 2
+    assert set(environment_bulk_calls[0]) == {
+        goal_catalog_pointer_key("Mario/Level1-1"),
+        goal_catalog_pointer_key("Mario/Level1-2"),
+    }
+    assert set(environment_bulk_calls[1]) == {
+        documents[goal_catalog_pointer_key("Mario/Level1-1")]["generation_key"],
+        documents[goal_catalog_pointer_key("Mario/Level1-2")]["generation_key"],
+    }
 
 
 def test_missing_control_authority_is_not_reported_as_an_empty_run_catalog(
@@ -1054,16 +1177,16 @@ def test_catalog_attaches_latest_training_metrics_at_each_checkpoint(
             assert page_size == 10_000
             if keys == [
                 "train/global_step",
-                "train/outcome/success/across_starts/window_100/rate/min",
+                "train/outcome/success/across_starts/window_100/rate/mean",
             ]:
                 return [
                     {
                         "train/global_step": 200_000,
-                        "train/outcome/success/across_starts/window_100/rate/min": 0.25,
+                        "train/outcome/success/across_starts/window_100/rate/mean": 0.25,
                     },
                     {
                         "train/global_step": 490_000,
-                        "train/outcome/success/across_starts/window_100/rate/min": 0.9,
+                        "train/outcome/success/across_starts/window_100/rate/mean": 0.9,
                     },
                 ]
             if keys == [
@@ -1098,13 +1221,17 @@ def test_catalog_attaches_latest_training_metrics_at_each_checkpoint(
 
     assert periodic_row["metrics"] == {
         "train/global_step": 250_000.0,
-        "train/outcome/success/across_starts/window_100/rate/min": 0.25,
+        "train/outcome/success/across_starts/window_100/rate/mean": 0.25,
         "train/episode/return/shaped/from/target/rolling_up_to_100/mean": 11.5,
+        "eval/full/outcome/success/across_starts/rate/mean": None,
+        "eval/full/episode/return/shaped/mean": None,
     }
     assert final_row["metrics"] == {
         "train/global_step": 500_000.0,
-        "train/outcome/success/across_starts/window_100/rate/min": 0.9,
+        "train/outcome/success/across_starts/window_100/rate/mean": 0.9,
         "train/episode/return/shaped/from/target/rolling_up_to_100/mean": 22.0,
+        "eval/full/outcome/success/across_starts/rate/mean": None,
+        "eval/full/episode/return/shaped/mean": None,
     }
     assert final_row["best_training"] is True
     assert periodic_row["best_training"] is False
@@ -1170,6 +1297,7 @@ def test_catalog_attaches_goal_required_eval_results_by_checkpoint(
             ],
             "metrics": {
                 required_metric: 1.0,
+                "eval/full/outcome/success/across_starts/rate/mean": 1.0,
                 "eval/full/episode/return/shaped/mean": 1.0,
             },
         },
@@ -1248,9 +1376,14 @@ def test_catalog_attaches_goal_required_eval_results_by_checkpoint(
     assert accepted_row["playback_seed_source"] == "evaluation"
     assert accepted["metrics"] == {
         required_metric: 1.0,
+        "eval/full/outcome/success/across_starts/rate/mean": 1.0,
         "eval/full/episode/return/shaped/mean": 1.0,
         "leader/checkpoint/step": 250_000.0,
     }
+    assert accepted_row["metrics"][
+        "eval/full/outcome/success/across_starts/rate/mean"
+    ] == 1.0
+    assert accepted_row["metrics"]["eval/full/episode/return/shaped/mean"] == 1.0
     assert accepted_row["best_evaluation"] is True
     rejected = rejected_row["evaluation"]
     assert rejected["status"] == "rejected"

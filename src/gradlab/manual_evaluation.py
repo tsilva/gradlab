@@ -35,6 +35,7 @@ from gradlab.job_queue import (
 from gradlab.metric_names import (
     EVAL_FULL_EPISODE_RETURN_SHAPED_MEAN,
     EVAL_FULL_SUCCESS_ACROSS_STARTS_RATE_MIN,
+    EVAL_FULL_SUCCESS_ACROSS_STARTS_RATE_MEAN,
     ORCHESTRATION_EVENT_SEQ,
 )
 from gradlab.vizdoom_assets import validate_vizdoom_iwad_binding
@@ -174,6 +175,15 @@ def _evaluation_summary(
                 ),
             }
         )
+    metrics = {
+        metric: float(result.aggregates[metric])
+        for metric in (
+            EVAL_FULL_SUCCESS_ACROSS_STARTS_RATE_MEAN,
+            EVAL_FULL_EPISODE_RETURN_SHAPED_MEAN,
+        )
+        if not isinstance(result.aggregates.get(metric), bool)
+        and isinstance(result.aggregates.get(metric), int | float)
+    }
     return {
         "status": result.status,
         "pass": result.status == "accepted",
@@ -181,6 +191,7 @@ def _evaluation_summary(
         "episodes_completed": len(result.episode_results),
         "failure_count": int(result.aggregates.get("failure_count") or 0),
         "criteria": criteria,
+        "metrics": metrics,
         "manual": True,
     }
 
