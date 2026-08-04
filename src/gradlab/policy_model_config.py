@@ -64,6 +64,7 @@ def normalize_policy_model(value: Any, *, label: str = "policy_model") -> dict[s
         "schema_version",
         "encoder",
         "fusion",
+        "share_features_extractor",
         "normalize_images",
         "orthogonal_init",
     }
@@ -72,11 +73,14 @@ def normalize_policy_model(value: Any, *, label: str = "policy_model") -> dict[s
         raise ValueError(f"{label} has unexpected fields: {unexpected}")
     normalize_images = value.get("normalize_images", True)
     orthogonal_init = value.get("orthogonal_init", True)
+    share_features_extractor = value.get("share_features_extractor", True)
     if not isinstance(normalize_images, bool):
         raise ValueError(f"{label}.normalize_images must be a boolean")
     if not isinstance(orthogonal_init, bool):
         raise ValueError(f"{label}.orthogonal_init must be a boolean")
-    return {
+    if not isinstance(share_features_extractor, bool):
+        raise ValueError(f"{label}.share_features_extractor must be a boolean")
+    normalized = {
         "schema_version": POLICY_MODEL_SCHEMA_VERSION,
         "encoder": _normalize_encoder(
             value.get("encoder"),
@@ -89,6 +93,12 @@ def normalize_policy_model(value: Any, *, label: str = "policy_model") -> dict[s
         "normalize_images": normalize_images,
         "orthogonal_init": orthogonal_init,
     }
+    # Preserve the existing canonical shared-policy representation so active
+    # v2 artifacts remain byte-for-byte normalized. Only the non-default split
+    # topology needs an explicit serialized field.
+    if not share_features_extractor:
+        normalized["share_features_extractor"] = False
+    return normalized
 
 
 def normalize_legacy_policy_model(
