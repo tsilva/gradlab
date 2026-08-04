@@ -41,7 +41,7 @@ from gradlab.validation import is_secret_like_key
 
 
 TRAIN_CONFIG_SECTION_KEYS = ("train", "logging")
-TRAIN_NESTED_SECTION_KEYS = frozenset({"backend"})
+TRAIN_NESTED_SECTION_KEYS = frozenset({"backend", "environment"})
 COMMON_TRAIN_CONFIG_KEYS = train_config_keys_in_source_section("train")
 GOAL_TRAIN_CONFIG_KEYS = train_config_keys_in_source_section("goal_train")
 SOURCE_RECIPE_FIELDS = frozenset(

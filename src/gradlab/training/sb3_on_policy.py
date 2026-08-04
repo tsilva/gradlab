@@ -159,6 +159,8 @@ def active_reward_components(task: Mapping[str, object]) -> tuple[str, ...]:
     reward_mode = str(reward.get("reward_mode") or "")
     if reward_mode == "native" or bool(reward.get("use_native_reward")):
         components.append("native")
+    if isinstance(reward.get("cell_novelty"), Mapping):
+        components.append("cell_novelty")
     if (
         float(reward.get("progress_reward_scale") or 0.0) != 0.0
         or float(reward.get("progress_reward_boost_scale") or 0.0) != 0.0

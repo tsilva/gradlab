@@ -49,6 +49,9 @@ TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_WINDOW_100_MEAN = (
 TRAIN_EPISODE_LENGTH_ACROSS_ORIGINS_ROLLING_UP_TO_100_MEAN = (
     "train/episode/length/across_origins/rolling_up_to_100/mean"
 )
+TRAIN_EXPLORATION_CELL_UNIQUE_FROM_TARGET_ROLLING_UP_TO_100_MEAN = (
+    "train/exploration/cell/unique/from/target/rolling_up_to_100/mean"
+)
 
 TRAIN_ARCHIVE_CURRICULUM_ROOT = "train/curriculum/archive"
 TRAIN_ARCHIVE_CURRICULUM_CELL_COUNT = f"{TRAIN_ARCHIVE_CURRICULUM_ROOT}/cell/count"
@@ -525,6 +528,7 @@ SB3_IGNORED_SCALARS = {
 
 _GRADLAB_OWNED_PREFIXES = (
     "train/episode/",
+    "train/exploration/",
     "train/outcome/",
     "train/reward/",
     "train/algorithm/",

@@ -35,9 +35,11 @@ from gradlab.local_paths import PORTABLE_DEFAULT_RUNS_DIR, configure_matplotlib_
 from gradlab.env_identity import task_config_from_train_config, validate_task_config
 from gradlab.env_registry import environment_spec
 from gradlab.task_kernels import (
+    CELL_NOVELTY_REWARD_KEY,
     IdentityTaskDefinition,
     MarioTaskConfig,
     MarioTaskDefinition,
+    with_cell_novelty,
     with_reward_transform,
 )
 from gradlab.model_inputs import with_model_inputs
@@ -402,12 +404,13 @@ def _bound_task_kernel(config: EnvConfig, descriptor: ProviderDescriptor, n_envs
         )
     if task_id != "identity":
         raise ValueError(f"unknown task kernel {task_id!r}")
+    reward = task_reward(config)
     action_values = task_action_values(config)
     if task_action_set(config) != "native" and action_values is None:
         raise ValueError(
             "generic native-vector tasks require native actions or a discrete lookup codec"
         )
-    if task_reward(config).get("reward_mode") != "native":
+    if reward.get("reward_mode") != "native":
         raise ValueError("generic native-vector tasks require native rewards")
     if task_conditioning(config).get("enabled"):
         raise ValueError("generic native-vector tasks do not support task conditioning")
@@ -427,7 +430,8 @@ def _bound_task_kernel(config: EnvConfig, descriptor: ProviderDescriptor, n_envs
         events=config.task.get("events", {}),
         termination=task_termination(config),
     ).bind(descriptor, n_envs)
-    kernel = with_reward_transform(kernel, task_reward(config))
+    kernel = with_cell_novelty(kernel, reward.get(CELL_NOVELTY_REWARD_KEY))
+    kernel = with_reward_transform(kernel, reward)
     return with_model_inputs(
         kernel,
         descriptor,

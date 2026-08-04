@@ -764,6 +764,7 @@ class _BufferedStats:
 class _RewardStatsAccumulator:
     component_info_keys = {
         "native": "native_reward_component",
+        "cell_novelty": "cell_novelty_reward_component",
         "progress": "progress_reward_component",
         "score": "score_reward_component",
         "completion": "completion_reward_component",

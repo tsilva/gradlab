@@ -3,6 +3,7 @@ from types import SimpleNamespace
 import pytest
 
 from gradlab.metric_names import (
+    TRAIN_EXPLORATION_CELL_UNIQUE_FROM_TARGET_ROLLING_UP_TO_100_MEAN,
     TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_ROLLING_UP_TO_100_MEAN,
     TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_WINDOW_100_MEAN,
     validate_metric_name,
@@ -10,7 +11,12 @@ from gradlab.metric_names import (
 from gradlab.training_metrics import EpisodeMetricsReducer
 
 
-def _episode(episode_return: float, *, origin: str = "target") -> SimpleNamespace:
+def _episode(
+    episode_return: float,
+    *,
+    origin: str = "target",
+    unique_cells: int | None = None,
+) -> SimpleNamespace:
     return SimpleNamespace(
         episode_return=episode_return,
         episode_length=1,
@@ -20,7 +26,11 @@ def _episode(episode_return: float, *, origin: str = "target") -> SimpleNamespac
         events=(),
         terminated=True,
         truncated=False,
-        metrics={},
+        metrics=(
+            {}
+            if unique_cells is None
+            else {"cell_novelty_episode_unique_cells": unique_cells}
+        ),
     )
 
 
@@ -52,4 +62,27 @@ def test_mature_target_return_mean_is_registered() -> None:
     assert (
         validate_metric_name(TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_WINDOW_100_MEAN)
         == TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_WINDOW_100_MEAN
+    )
+
+
+def test_unique_cell_mean_uses_only_completed_target_origin_episodes() -> None:
+    reducer = EpisodeMetricsReducer(track_success=False)
+
+    payload = reducer.consume(
+        (
+            _episode(0.0, unique_cells=2),
+            _episode(0.0, unique_cells=6),
+            _episode(0.0, origin="curriculum", unique_cells=100),
+            _episode(0.0),
+        )
+    )
+
+    assert payload[
+        TRAIN_EXPLORATION_CELL_UNIQUE_FROM_TARGET_ROLLING_UP_TO_100_MEAN
+    ] == 4.0
+    assert (
+        validate_metric_name(
+            TRAIN_EXPLORATION_CELL_UNIQUE_FROM_TARGET_ROLLING_UP_TO_100_MEAN
+        )
+        == TRAIN_EXPLORATION_CELL_UNIQUE_FROM_TARGET_ROLLING_UP_TO_100_MEAN
     )
