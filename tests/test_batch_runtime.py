@@ -1038,6 +1038,9 @@ class MarioKernelTests(unittest.TestCase):
         provider.queue_step(level_hi=[7, 6], level_lo=[3, 3], game_mode=[2, 1], x=[100, 100])
         final = runtime.step(np.asarray([0, 0]))
         records = runtime.drain_records()
+        metric_record = next(
+            record for record in records if isinstance(record, BatchMetricRecord)
+        )
         episodes = [record for record in records if isinstance(record, EpisodeRecord)]
         final_events = [record for record in records if isinstance(record, TaskEventRecord)]
 
@@ -1048,6 +1051,7 @@ class MarioKernelTests(unittest.TestCase):
         self.assertTrue(episodes[0].metrics["game_complete"])
         self.assertEqual(episodes[0].metrics["completed_level_count"], 2)
         self.assertEqual(episodes[0].metrics["global_max_x_pos"], 100)
+        self.assertEqual(metric_record.metrics["global_max_x_pos"][0], 100)
         self.assertTrue(any("game_complete" in record.events for record in final_events))
 
     def test_reward_component_batches_avoid_step_info_materialization(self):
