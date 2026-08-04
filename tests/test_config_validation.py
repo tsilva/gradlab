@@ -188,7 +188,7 @@ class ConfigValidationTests(unittest.TestCase):
         )
         self.assertEqual(
             train_config["task"]["termination"],
-            {"failure": ["serve_stall"], "max_episode_steps": 54000},
+            {"timeout": ["serve_stall"], "max_episode_steps": 54000},
         )
         self.assertEqual(train_config["checkpoint_eval_backend"], "none")
         self.assertNotIn("stop_on_acceptance", train_config)
@@ -344,8 +344,9 @@ class ConfigValidationTests(unittest.TestCase):
         )
         self.assertEqual(
             train_config["task"]["termination"]["failure"],
-            ["life_loss", "stalled"],
+            ["life_loss"],
         )
+        self.assertEqual(train_config["task"]["termination"]["timeout"], ["stalled"])
         self.assertEqual(train_config["checkpoint_eval_backend"], "modal")
 
     def test_level1_1_jerk_recipe_is_playable_native_policy_search(self) -> None:
@@ -665,7 +666,7 @@ class ConfigValidationTests(unittest.TestCase):
         )
         self.assertEqual(
             train_config["task"]["termination"],
-            {"failure": ["serve_stall"], "max_episode_steps": 54000},
+            {"timeout": ["serve_stall"], "max_episode_steps": 54000},
         )
         self.assertNotIn("reward_clip", train_config["env_args"])
         self.assertEqual(train_config["obs_crop"], [17, 0, 0, 0])
@@ -1049,12 +1050,20 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertEqual(train_config["sticky_action_prob"], 0.0)
         self.assertEqual(
             document["train"]["environment"]["task"]["termination"]["failure"],
-            ["life_loss", "stalled"],
+            ["life_loss"],
+        )
+        self.assertEqual(
+            document["train"]["environment"]["task"]["termination"]["timeout"],
+            ["stalled"],
         )
         self.assertTrue({"policy", "schema_version"}.isdisjoint(document["eval"]))
         self.assertEqual(
             document["eval"]["environment"]["task"]["termination"]["failure"],
-            ["life_loss", "stalled"],
+            ["life_loss"],
+        )
+        self.assertEqual(
+            document["eval"]["environment"]["task"]["termination"]["timeout"],
+            ["stalled"],
         )
         self.assertEqual(document["eval"]["episodes"], 100)
         self.assertTrue(
@@ -1080,14 +1089,19 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertEqual(document["train_config"]["task"]["events"]["stalled"], stalled_event)
         self.assertEqual(
             document["train_config"]["task"]["termination"]["failure"],
-            ["life_loss", "stalled"],
+            ["life_loss"],
+        )
+        self.assertEqual(
+            document["train_config"]["task"]["termination"]["timeout"],
+            ["stalled"],
         )
         eval_task = document["goal"]["eval"]["environment"]["task"]
         self.assertEqual(eval_task["events"]["stalled"], stalled_event)
-        self.assertEqual(eval_task["termination"]["failure"], ["life_loss", "stalled"])
+        self.assertEqual(eval_task["termination"]["failure"], ["life_loss"])
         self.assertEqual(eval_task["termination"]["success"], ["level_change"])
+        self.assertEqual(eval_task["termination"]["timeout"], ["stalled"])
 
-    def test_end_to_end_mario_goal_only_terminates_successfully_after_level_8_4(self) -> None:
+    def test_end_to_end_mario_goal_truncates_stalls_and_succeeds_after_level_8_4(self) -> None:
         document = load_goal_contract(self.MARIO_END_TO_END_GOAL)
 
         self.assertEqual(
@@ -1107,6 +1121,7 @@ class ConfigValidationTests(unittest.TestCase):
             )
             self.assertEqual(task["termination"]["failure"], [])
             self.assertEqual(task["termination"]["success"], ["game_complete"])
+            self.assertEqual(task["termination"]["timeout"], ["stalled"])
             self.assertEqual(task["termination"]["max_episode_steps"], 144000)
 
     def test_all_mario_level_goals_share_attempt_termination_contract(self) -> None:
@@ -1125,12 +1140,43 @@ class ConfigValidationTests(unittest.TestCase):
                     self.assertEqual(task["events"]["stalled"], expected_stalled)
                     self.assertEqual(
                         task["termination"]["failure"],
-                        ["life_loss", "stalled"],
+                        ["life_loss"],
                     )
                     self.assertEqual(
                         task["termination"]["success"],
                         ["level_change"],
                     )
+                    self.assertEqual(task["termination"]["timeout"], ["stalled"])
+
+    def test_all_smb_and_breakout_recipes_classify_stalls_as_timeouts(self) -> None:
+        recipe_roots = (
+            self.MARIO_L11_GOAL.parent.parent,
+            self.BREAKOUT_GOAL.parent,
+        )
+        recipes = sorted(
+            recipe
+            for root in recipe_roots
+            for recipe in root.glob("**/recipes/*.yaml")
+        )
+        self.assertTrue(recipes)
+
+        for recipe in recipes:
+            goal = recipe.parent.parent / "_goal.yaml"
+            document = compose_train_document(goal, recipe)
+            event = (
+                "serve_stall"
+                if goal.parent.name == "Breakout-Atari2600-v0"
+                else "stalled"
+            )
+            tasks = [("train", document["train_config"]["task"])]
+            evaluation = document["goal"].get("eval")
+            if evaluation is not None:
+                tasks.append(("eval", evaluation["environment"]["task"]))
+            for phase, task in tasks:
+                termination = task["termination"]
+                with self.subTest(recipe=recipe, phase=phase):
+                    self.assertIn(event, termination["timeout"])
+                    self.assertNotIn(event, termination.get("failure", []))
 
     def test_validate_is_registered_on_unified_cli(self) -> None:
         self.assertIn("validate", COMMANDS)

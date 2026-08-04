@@ -1301,6 +1301,38 @@ class GradLabVecEnvTests(unittest.TestCase):
         fifth = runtime.step(np.zeros((2, 3), dtype=np.int8))
         np.testing.assert_array_equal(fifth.terminated, [True, False])
 
+    def test_identity_equals_for_timeout_truncates_only_the_stalled_lane(self):
+        provider = DeterministicNativeVectorProvider()
+        descriptor = descriptor_for(provider)
+        kernel = IdentityTaskDefinition(
+            signals={"ball_y": "ball_y"},
+            events={
+                "serve_stall": {
+                    "signal": "ball_y",
+                    "operation": "equals_for",
+                    "value": 0,
+                    "steps": 2,
+                }
+            },
+            termination={"timeout": ["serve_stall"]},
+        ).bind(descriptor, provider.num_envs)
+        runtime = BatchRuntime(provider, descriptor, kernel, run_seed=11)
+        runtime.reset()
+
+        provider.queue_step(ball_y=[5, 0], rewards=[0.0, 0.0])
+        first = runtime.step(np.zeros((2, 3), dtype=np.int8))
+        self.assertFalse(done_flags(first).any())
+        provider.queue_step(ball_y=[5, 0], rewards=[0.0, 0.0])
+        second = runtime.step(np.zeros((2, 3), dtype=np.int8))
+
+        np.testing.assert_array_equal(second.terminated, [False, False])
+        np.testing.assert_array_equal(second.truncated, [False, True])
+        record = next(
+            record for record in runtime.drain_records() if isinstance(record, EpisodeRecord)
+        )
+        self.assertEqual(record.events, ("serve_stall",))
+        self.assertEqual(record.outcome, Outcome.TIMEOUT)
+
     def test_identity_decrease_failure_resets_only_the_life_lost_lane(self):
         provider = DeterministicNativeVectorProvider()
         descriptor = descriptor_for(provider)
