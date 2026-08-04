@@ -1433,6 +1433,13 @@ class BatchRuntime:
             self._episode_returns,
             self._episode_lengths,
         )
+        if any_done and self._latest_metric_record is not None:
+            # Reset hooks may reuse and mutate the task kernel's metric arrays.
+            # Preserve the terminal transition before any completed lanes reset.
+            self._latest_metric_record = BatchMetricRecord(
+                num_envs=self.num_envs,
+                metrics=_copy_tree(task_step.metrics),
+            )
         forced_reset_mask = self._pending_reset_mask
         forced_only_mask = self._pending_reset_mask
         if self._has_pending_resets:
