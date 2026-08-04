@@ -18,6 +18,7 @@ from gradlab.goal_catalog import (
 from gradlab.catalog_cache import CatalogEntryCache
 from gradlab.play_catalog import (
     PlayCatalog,
+    checkpoint_metric_leaders,
     parse_wandb_location,
 )
 from gradlab.catalog_errors import CatalogIntegrityError, CatalogUnavailable
@@ -1154,6 +1155,46 @@ def test_catalog_validates_and_orders_public_checkpoints(monkeypatch: pytest.Mon
     assert rows[1]["manifest_url"].endswith("/manifest.json")
 
 
+def test_checkpoint_metric_leaders_marks_each_best_value_and_ties() -> None:
+    train_success = "train/outcome/success/across_starts/window_100/rate/mean"
+    train_return = (
+        "train/episode/return/shaped/from/target/rolling_up_to_100/mean"
+    )
+    eval_success = "eval/full/outcome/success/across_starts/rate/mean"
+    eval_return = "eval/full/episode/return/shaped/mean"
+
+    first, second, third = checkpoint_metric_leaders(
+        [
+            {
+                "checkpoint_id": "first",
+                "metrics": {train_success: 0.9, train_return: 10.0},
+            },
+            {
+                "checkpoint_id": "second",
+                "metrics": {
+                    train_success: 0.9,
+                    train_return: 9.0,
+                    eval_success: 0.8,
+                    eval_return: 5.0,
+                },
+            },
+            {
+                "checkpoint_id": "third",
+                "metrics": {
+                    train_success: 0.7,
+                    train_return: 11.0,
+                    eval_success: 0.9,
+                    eval_return: 4.0,
+                },
+            },
+        ]
+    )
+
+    assert first["best_metrics"] == [train_success]
+    assert second["best_metrics"] == [train_success, eval_return]
+    assert third["best_metrics"] == [train_return, eval_success]
+
+
 def test_catalog_attaches_latest_training_metrics_at_each_checkpoint(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1233,14 +1274,15 @@ def test_catalog_attaches_latest_training_metrics_at_each_checkpoint(
         "eval/full/outcome/success/across_starts/rate/mean": None,
         "eval/full/episode/return/shaped/mean": None,
     }
-    assert final_row["best_training"] is True
-    assert periodic_row["best_training"] is False
-    assert final_row["best_evaluation"] is False
-    assert periodic_row["best_evaluation"] is False
+    assert final_row["best_metrics"] == [
+        "train/outcome/success/across_starts/window_100/rate/mean",
+        "train/episode/return/shaped/from/target/rolling_up_to_100/mean",
+    ]
+    assert periodic_row["best_metrics"] == []
     filtered = catalog.checkpoints(run_id=RUN_ID, query=periodic["checkpoint_id"])
     assert len(filtered) == 1
     assert filtered[0]["checkpoint_id"] == periodic["checkpoint_id"]
-    assert filtered[0]["best_training"] is False
+    assert filtered[0]["best_metrics"] == []
 
 
 def test_catalog_attaches_goal_required_eval_results_by_checkpoint(
@@ -1384,7 +1426,10 @@ def test_catalog_attaches_goal_required_eval_results_by_checkpoint(
         "eval/full/outcome/success/across_starts/rate/mean"
     ] == 1.0
     assert accepted_row["metrics"]["eval/full/episode/return/shaped/mean"] == 1.0
-    assert accepted_row["best_evaluation"] is True
+    assert accepted_row["best_metrics"] == [
+        "eval/full/outcome/success/across_starts/rate/mean",
+        "eval/full/episode/return/shaped/mean",
+    ]
     rejected = rejected_row["evaluation"]
     assert rejected["status"] == "rejected"
     assert rejected["episodes_completed"] == 1
@@ -1392,7 +1437,7 @@ def test_catalog_attaches_goal_required_eval_results_by_checkpoint(
     assert rejected["criteria"][0]["value"] is None
     assert rejected_row["playback_seed"] == 42_000
     assert rejected_row["playback_seed_source"] == "evaluation"
-    assert rejected_row["best_evaluation"] is False
+    assert rejected_row["best_metrics"] == []
     assert catalog.checkpoint_warnings(run_id=RUN_ID)[0]["code"] == (
         "wandb_enrichment_unavailable"
     )

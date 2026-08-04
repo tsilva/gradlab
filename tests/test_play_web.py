@@ -4,6 +4,7 @@ import argparse
 import asyncio
 import io
 import time
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import AsyncMock, Mock, patch
 
@@ -32,6 +33,7 @@ from gradlab.play_web import (
     _session_environment_id,
     annotate_realized_returns,
     history_point_payload,
+    reward_accounting_contract,
     run_web_playback,
     source_browser_path,
     transition_payload,
@@ -116,9 +118,16 @@ def test_web_playback_retains_step_zero_snapshot_and_frame() -> None:
 
     snapshot, frames = runner.episode_start_payload()
     assert snapshot["sequence"] == 0
+    assert snapshot["protocol"] == 5
     assert snapshot["session"]["step"] == 0
     assert snapshot["session"]["default_seed"] == 42
     assert snapshot["session"]["value_discount"] is None
+    assert snapshot["session"]["reward_accounting"] == {
+        "status": "available",
+        "reason": None,
+        "scale_divisor": 1.0,
+        "clip_bounds": None,
+    }
     assert snapshot["transition"] is None
     sequence, packet = frames[FRAME_GAME]
     assert sequence == 0
@@ -594,6 +603,7 @@ def test_dataset_playback_uses_web_runner_and_preserves_recorded_telemetry() -> 
     runner._publish()
     assert runner.snapshot()["mode"] == "dataset"
     assert runner.snapshot()["session"]["env_id"] == "fixture-v0"
+    assert runner.snapshot()["session"]["reward_accounting"]["status"] == "unavailable"
 
     runner._step_once()
 
@@ -603,6 +613,7 @@ def test_dataset_playback_uses_web_runner_and_preserves_recorded_telemetry() -> 
     assert snapshot["transition"]["action_source"] == "recorded"
     assert snapshot["transition"]["signals"] == {"lives": 2.0, "x_pos": 12.0}
     assert snapshot["transition"]["boundary"] is True
+    assert snapshot["transition"]["reward"]["raw"] is None
 
 
 def test_run_web_playback_requests_paired_browser_windows() -> None:
@@ -973,6 +984,129 @@ def test_transition_payload_keeps_before_decision_after_alignment() -> None:
     assert payload["info"]["credential_token"] == "<redacted>"
 
 
+def test_reward_accounting_contract_uses_scale_then_clip_from_materialized_config() -> None:
+    contract = reward_accounting_contract(
+        argparse.Namespace(task={"reward": {"reward_scale": 2.5, "reward_clip": [-1, 1]}})
+    )
+
+    assert contract == {
+        "status": "available",
+        "reason": None,
+        "scale_divisor": 2.5,
+        "clip_bounds": [-1.0, 1.0],
+    }
+
+
+def test_transition_reward_accounting_uses_only_declared_reward_components() -> None:
+    base = _PlaybackTransition(
+        sequence=3,
+        episode=1,
+        step=3,
+        seed=40_000,
+        start_id="Level1-1",
+        model_obs=np.zeros((1, 4, 84, 84), dtype=np.uint8),
+        decision=None,
+        action_source="policy",
+        executed_action=2,
+        diagnostics=None,
+        info={},
+        before_frame=None,
+        after_frame=None,
+        before_frames=(),
+        after_frames=(),
+        attribution=None,
+        pre_task="Level1-1",
+        next_task="Level1-1",
+        reward=1.0,
+        total_reward=4.0,
+        max_x_pos=12,
+        terminated=False,
+        truncated=False,
+        completed=False,
+        boundary=False,
+    )
+    diagnostics = argparse.Namespace(
+        provider_reward=0.0,
+        reward=1.0,
+        outcome=argparse.Namespace(name="continuing"),
+        task_metrics={
+            "raw_reward": 4.0,
+            "progress_component": 99.0,
+            "native_reward_component": 1.0,
+            "progress_reward_component": 4.0,
+            "death_penalty_component": -1.0,
+            "unknown_reward_component": 500.0,
+        },
+        event_transitions={},
+        provider_terminated=False,
+        provider_truncated=False,
+        task_terminated=False,
+        task_truncated=False,
+        events=(),
+    )
+
+    payload = transition_payload(
+        replace(base, diagnostics=diagnostics),
+        reward_accounting={
+            "status": "available",
+            "reason": None,
+            "scale_divisor": 2.0,
+            "clip_bounds": [-1.0, 1.0],
+        },
+    )
+
+    assert payload["reward"]["raw"] == 4.0
+    assert payload["reward"]["components"] == {
+        "native_reward": 1.0,
+        "progress_reward": 4.0,
+        "death_penalty": -1.0,
+    }
+    assert payload["reward"]["accounting_error"] is None
+
+
+def test_active_reward_transform_fails_closed_without_raw_reward() -> None:
+    transition = _PlaybackTransition(
+        sequence=1,
+        episode=1,
+        step=1,
+        seed=1,
+        start_id=None,
+        model_obs=np.zeros((1, 1), dtype=np.uint8),
+        decision=None,
+        action_source="policy",
+        executed_action=0,
+        diagnostics=None,
+        info={},
+        before_frame=None,
+        after_frame=None,
+        before_frames=(),
+        after_frames=(),
+        attribution=None,
+        pre_task=None,
+        next_task=None,
+        reward=1.0,
+        total_reward=1.0,
+        max_x_pos=0,
+        terminated=False,
+        truncated=False,
+        completed=False,
+        boundary=False,
+    )
+
+    payload = transition_payload(
+        transition,
+        reward_accounting={
+            "status": "available",
+            "reason": None,
+            "scale_divisor": 2.0,
+            "clip_bounds": None,
+        },
+    )
+
+    assert payload["reward"]["raw"] is None
+    assert "raw_reward is missing" in payload["reward"]["accounting_error"]
+
+
 def test_history_point_keeps_policy_and_executed_actions_distinct() -> None:
     point = history_point_payload(
         {
@@ -1032,7 +1166,9 @@ def test_human_recording_runner_requires_fresh_focus_and_streams_transition_stat
     assert snapshot["mode"] == "recording"
     assert snapshot["interactive"] is True
     assert snapshot["session"]["env_id"] == "Game-v0"
+    assert snapshot["session"]["reward_accounting"]["status"] == "unavailable"
     assert snapshot["transition"]["reward"]["return"] == 2.5
+    assert snapshot["transition"]["reward"]["raw"] is None
     assert snapshot["transition"]["signals"] == {"x_pos": 11.0}
     assert snapshot["history_point"]["executed_action"] == ["A", "RIGHT"]
     assert snapshot["history_point"]["policy_action"] is None
@@ -1607,6 +1743,12 @@ def test_catalog_http_api_requires_the_fragment_session_token() -> None:
                     "eval/full/outcome/success/across_starts/rate/mean": 0.95,
                     "eval/full/episode/return/shaped/mean": 10.5,
                 }
+                assert checkpoint_payload["items"][0]["best_metrics"] == [
+                    "train/outcome/success/across_starts/window_100/rate/mean",
+                    "train/episode/return/shaped/from/target/rolling_up_to_100/mean",
+                    "eval/full/outcome/success/across_starts/rate/mean",
+                    "eval/full/episode/return/shaped/mean",
+                ]
                 run_inspection = await client.get(
                     f"{server.origin}/api/catalog/runs/gradlab-{'a' * 32}/inspection",
                     headers={"Authorization": f"Bearer {server.token}"},

@@ -152,6 +152,16 @@ export function lineCursorX(plot, cursorIndex, pointCount) {
   return Math.max(plot.left + 1, Math.min(plot.right - 1, rawX));
 }
 
+export function lineCursorIndex(plot, x, pointCount) {
+  if (!plot || !Number.isFinite(x) || !Number.isInteger(pointCount) || pointCount <= 0) {
+    return null;
+  }
+  const span = plot.right - plot.left;
+  if (!(span > 0)) return null;
+  const fraction = Math.max(0, Math.min(1, (x - plot.left) / span));
+  return Math.round(fraction * Math.max(0, pointCount - 1));
+}
+
 export function drawLines(canvas, series, { cursorIndex = null } = {}) {
   const { context, ratio, width, height } = resizeCanvas(canvas);
   context.setTransform(ratio, 0, 0, ratio, 0, 0);
@@ -165,7 +175,7 @@ export function drawLines(canvas, series, { cursorIndex = null } = {}) {
     context.textAlign = "left";
     context.textBaseline = "alphabetic";
     context.fillText("No history yet", 12, 22);
-    return;
+    return null;
   }
   const scale = lineChartScale(values);
   const labels = scale.ticks.map((value) => formatAxisValue(value, scale.step));
@@ -225,6 +235,7 @@ export function drawLines(canvas, series, { cursorIndex = null } = {}) {
     context.stroke();
     context.restore();
   }
+  return { plot, pointCount };
 }
 
 function fitCanvasLabel(context, value, maxWidth) {

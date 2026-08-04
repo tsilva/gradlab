@@ -27,9 +27,10 @@ from gradlab.play_session import _PlaybackSession, _PlaybackTransition, render_o
 from gradlab.play_debug import ANSI_PATTERN, PolicyDecision, model_input_lines
 from gradlab.seeds import validate_playback_seed
 from gradlab.evaluation_fence import evaluation_selection_fence
+from gradlab.reward_transform import reward_transform_from_reward
 
 
-PROTOCOL_VERSION = 4
+PROTOCOL_VERSION = 5
 HISTORY_LIMIT = 4096
 COMMAND_QUEUE_LIMIT = 64
 CLIENT_QUEUE_LIMIT = 64
@@ -46,6 +47,88 @@ MAX_JSON_TEXT = 4096
 INPUT_HEARTBEAT_SECONDS = 0.25
 LAST_CLIENT_GRACE_SECONDS = 30.0
 PAIRED_START_GRACE_SECONDS = 2.0
+
+REWARD_COMPONENT_INFO_KEYS = {
+    "native_reward_component": "native_reward",
+    "cell_novelty_reward_component": "cell_novelty_reward",
+    "progress_reward_component": "progress_reward",
+    "score_reward_component": "score_reward",
+    "completion_reward_component": "completion_reward",
+    "death_penalty_component": "death_penalty",
+    "time_penalty_component": "time_penalty",
+}
+
+
+def unavailable_reward_accounting(reason: str) -> dict[str, Any]:
+    return {
+        "status": "unavailable",
+        "reason": str(reason),
+        "scale_divisor": None,
+        "clip_bounds": None,
+    }
+
+
+def reward_accounting_contract(config: Any) -> dict[str, Any]:
+    task = config.get("task", {}) if isinstance(config, Mapping) else getattr(config, "task", {})
+    reward = task.get("reward", {}) if isinstance(task, Mapping) else {}
+    if not isinstance(reward, Mapping):
+        return unavailable_reward_accounting("the materialized task reward contract is invalid")
+    try:
+        transform = reward_transform_from_reward(reward)
+    except ValueError as exc:
+        return unavailable_reward_accounting(str(exc))
+    return {
+        "status": "available",
+        "reason": None,
+        "scale_divisor": transform.scale,
+        "clip_bounds": (
+            list(transform.clip_bounds) if transform.clip_bounds is not None else None
+        ),
+    }
+
+
+def _finite_scalar(value: Any) -> float | None:
+    try:
+        array = np.asarray(value)
+        if array.size != 1:
+            return None
+        numeric = float(array.reshape(-1)[0])
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return numeric if np.isfinite(numeric) else None
+
+
+def _reward_accounting_payload(
+    *,
+    final_reward: Any,
+    task_metrics: Mapping[str, Any],
+    accounting: Mapping[str, Any],
+) -> tuple[float | None, dict[str, float], str | None]:
+    if accounting.get("status") != "available":
+        return None, {}, None
+    errors: list[str] = []
+    components: dict[str, float] = {}
+    for info_key, component_id in REWARD_COMPONENT_INFO_KEYS.items():
+        if info_key not in task_metrics:
+            continue
+        value = _finite_scalar(task_metrics[info_key])
+        if value is None:
+            errors.append(f"{info_key} is not a finite scalar")
+        else:
+            components[component_id] = value
+
+    raw_reward: float | None = None
+    if "raw_reward" in task_metrics:
+        raw_reward = _finite_scalar(task_metrics["raw_reward"])
+        if raw_reward is None:
+            errors.append("raw_reward is not a finite scalar")
+    elif accounting.get("scale_divisor") == 1.0 and accounting.get("clip_bounds") is None:
+        raw_reward = _finite_scalar(final_reward)
+        if raw_reward is None:
+            errors.append("final reward is not a finite scalar")
+    else:
+        errors.append("raw_reward is missing while reward scaling or clipping is active")
+    return raw_reward, components, "; ".join(errors) or None
 
 
 def idle_playback_snapshot(
@@ -80,6 +163,9 @@ def idle_playback_snapshot(
             "can_start_next_episode": False,
             "history_size": 0,
             "config": "",
+            "reward_accounting": unavailable_reward_accounting(
+                "no playback environment is active"
+            ),
         },
         "transition": None,
     }
@@ -215,7 +301,11 @@ def _numeric_signals(value: Mapping[str, Any]) -> dict[str, float]:
     return dict(sorted(signals.items())[:MAX_JSON_ITEMS])
 
 
-def transition_payload(transition: _PlaybackTransition) -> dict[str, Any]:
+def transition_payload(
+    transition: _PlaybackTransition,
+    *,
+    reward_accounting: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
     diagnostics = transition.diagnostics
     provider_reward = transition.reward
     task_reward = transition.reward
@@ -237,11 +327,17 @@ def transition_payload(transition: _PlaybackTransition) -> dict[str, Any]:
             boundary_reasons.append("task_terminated")
         if diagnostics.task_truncated:
             boundary_reasons.append("task_truncated")
-    components = {
-        name.removesuffix("_component"): float(np.asarray(value).reshape(-1)[0])
-        for name, value in task_metrics.items()
-        if name.endswith("_component") and np.asarray(value).size == 1
-    }
+    accounting = dict(reward_accounting or {
+        "status": "available",
+        "reason": None,
+        "scale_divisor": 1.0,
+        "clip_bounds": None,
+    })
+    raw_reward, components, accounting_error = _reward_accounting_payload(
+        final_reward=task_reward,
+        task_metrics=task_metrics,
+        accounting=accounting,
+    )
     return {
         "sequence": transition.sequence,
         "episode": transition.episode,
@@ -268,7 +364,9 @@ def transition_payload(transition: _PlaybackTransition) -> dict[str, Any]:
             "shaped": task_reward,
             "step": transition.reward,
             "return": transition.total_reward,
+            "raw": raw_reward,
             "components": components,
+            "accounting_error": accounting_error,
         },
         "events": list(transition.events),
         "event_transitions": _json_value(event_transitions),
@@ -285,8 +383,14 @@ def transition_payload(transition: _PlaybackTransition) -> dict[str, Any]:
     }
 
 
-def history_point(transition: _PlaybackTransition) -> dict[str, Any]:
-    return history_point_payload(transition_payload(transition))
+def history_point(
+    transition: _PlaybackTransition,
+    *,
+    reward_accounting: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    return history_point_payload(
+        transition_payload(transition, reward_accounting=reward_accounting)
+    )
 
 
 def history_point_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
@@ -302,6 +406,8 @@ def history_point_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
         "policy_sampled": decision.get("sampled"),
         "reward_provider": reward["provider"],
         "reward_shaped": reward["shaped"],
+        "reward_raw": reward.get("raw"),
+        "reward_accounting_error": reward.get("accounting_error"),
         "return": reward["return"],
         "value": decision.get("value"),
         "entropy": decision.get("entropy"),
@@ -614,6 +720,7 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
         self.session = session
         self.args = args
         self.config_text = ANSI_PATTERN.sub("", config_text)
+        self.reward_accounting = reward_accounting_contract(session.config)
         self.run_state = "paused"
         self.driver = "policy"
         capabilities_value = getattr(session, "policy_capabilities", {})
@@ -730,7 +837,11 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
             self._input_updated_at = 0.0
 
     def _snapshot_payload(self, transition: _PlaybackTransition | None) -> dict[str, Any]:
-        current = transition_payload(transition) if transition is not None else None
+        current = (
+            transition_payload(transition, reward_accounting=self.reward_accounting)
+            if transition is not None
+            else None
+        )
         current_history = (
             dict(self.history[-1])
             if transition is not None
@@ -800,6 +911,7 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
                 "can_start_next_episode": self._can_start_next_episode(),
                 "history_size": len(self.history),
                 "config": self.config_text,
+                "reward_accounting": dict(self.reward_accounting),
                 "termination_source": getattr(
                     self.session,
                     "termination_source",
@@ -821,7 +933,9 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
         if transition is not None and (
             not self.history or int(self.history[-1]["sequence"]) != transition.sequence
         ):
-            self.history.append(history_point(transition))
+            self.history.append(
+                history_point(transition, reward_accounting=self.reward_accounting)
+            )
             if transition.boundary:
                 annotate_realized_returns(
                     self.history,
@@ -1148,6 +1262,9 @@ class DatasetPlaybackRunner(_PlaybackRunnerProtocol):
             dict(action_contract) if isinstance(action_contract, Mapping) else None
         )
         self.action_contract_payload = action_contract_payload(self.action_contract)
+        self.reward_accounting = unavailable_reward_accounting(
+            "recorded datasets do not preserve pre-transform reward accounting"
+        )
         self._transition: dict[str, Any] | None = None
 
     def update_input(self, _labels: Sequence[str], *, focused: bool) -> None:
@@ -1196,6 +1313,7 @@ class DatasetPlaybackRunner(_PlaybackRunnerProtocol):
                     f"Gymrec v3 episode {self.episode_id}\n"
                     "Recorded dataset playback is never checkpoint-promotion evidence."
                 ),
+                "reward_accounting": dict(self.reward_accounting),
             },
             "transition": self._transition,
             "history_point": current_history,
@@ -1328,7 +1446,9 @@ class DatasetPlaybackRunner(_PlaybackRunnerProtocol):
                 "shaped": reward,
                 "step": reward,
                 "return": self.total_reward,
+                "raw": None,
                 "components": {},
+                "accounting_error": None,
             },
             "events": events,
             "event_transitions": {},
@@ -1439,6 +1559,9 @@ class HumanRecordingRunner(_PlaybackRunnerProtocol):
         self._status_message = "Focus the game view, then press Play to begin recording"
         self.environment_id = _session_environment_id(session, args)
         self.action_contract_payload = _session_action_contract_payload(session)
+        self.reward_accounting = unavailable_reward_accounting(
+            "human recordings do not preserve pre-transform reward accounting"
+        )
 
     def stop(self) -> None:
         self._stop.set()
@@ -1538,6 +1661,7 @@ class HumanRecordingRunner(_PlaybackRunnerProtocol):
                         "Human dataset recording. Browser input is translated through the "
                         "provider's declared control labels. This session is never promotion evidence."
                     ),
+                    "reward_accounting": dict(self.reward_accounting),
                 },
                 "transition": self._transition,
                 "history_point": current_history,
@@ -1604,7 +1728,9 @@ class HumanRecordingRunner(_PlaybackRunnerProtocol):
                 "shaped": float(reward),
                 "step": float(reward),
                 "return": self.total_reward,
+                "raw": None,
                 "components": {},
+                "accounting_error": None,
             },
             "events": [],
             "event_transitions": {},
@@ -2085,16 +2211,19 @@ class PlaybackWebServer:
             raise web.HTTPNotFound()
         from gradlab.play_catalog import (
             checkpoint_metric_columns,
+            checkpoint_metric_leaders,
             checkpoint_metric_values,
+            filter_checkpoint_summaries,
             normalize_search_query,
         )
 
+        query = normalize_search_query(request.query.get("q"))
         try:
             items = list(
                 await asyncio.to_thread(
                     self.catalog.checkpoints,
                     run_id=request.match_info["run_id"],
-                    query=normalize_search_query(request.query.get("q")),
+                    query="",
                     goal_variant_id=request.query.get("goal_variant_id", ""),
                 )
             )
@@ -2165,6 +2294,9 @@ class PlaybackWebServer:
                 }
                 for item in items
             ]
+        items = list(checkpoint_metric_leaders(items))
+        selection_items = items
+        items = list(filter_checkpoint_summaries(items, query=query))
         return web.json_response(
             {
                 "items": items,
@@ -2181,7 +2313,7 @@ class PlaybackWebServer:
                         run_id=request.match_info["run_id"],
                         checkpoints=[
                             item
-                            for item in items
+                            for item in selection_items
                             if isinstance(item, Mapping)
                         ],
                     )
@@ -2977,6 +3109,7 @@ __all__ = [
     "WebHumanController",
     "history_point",
     "history_point_payload",
+    "reward_accounting_contract",
     "run_web_dataset_playback",
     "run_web_player_application",
     "run_web_playback",

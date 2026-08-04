@@ -46,6 +46,39 @@ test("default workspace is a v6 collection without a standalone action panel", (
     visible: true,
     window: "main",
   });
+  assert.deepEqual(workspace.panels["reward-analysis"].config.blocks, [
+    { kind: "reward-breakdown", scope: "step" },
+  ]);
+  assert.deepEqual(workspace.panels["reward-analysis"].placement, {
+    x: 0,
+    y: 37,
+    w: 12,
+    h: 15,
+    visible: true,
+    window: "main",
+  });
+});
+
+test("existing v6 workspaces receive reward analysis hidden on the shelf", () => {
+  const workspace = createDefaultWorkspace();
+  delete workspace.panels["reward-analysis"];
+
+  const normalized = normalizeWorkspace(workspace);
+
+  assert.equal(normalized.panels["reward-analysis"].placement.visible, false);
+  assert.equal(normalized.panels["reward-analysis"].builtin, true);
+});
+
+test("reward breakdown scope persists through workspace normalization", () => {
+  const workspace = createDefaultWorkspace();
+  workspace.panels["reward-analysis"].config.blocks[0].scope = "episode";
+
+  const normalized = normalizeWorkspace(workspace);
+
+  assert.equal(
+    normalized.panels["reward-analysis"].config.blocks[0].scope,
+    "episode",
+  );
 });
 
 test("paired workspace gives every panel in a logical row the same height", () => {

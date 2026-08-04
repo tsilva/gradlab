@@ -38,7 +38,7 @@ train:
         vizdoom_config:
           episode_timeout: 2100
         # List the native game variables that ViZDoom must collect and expose.
-        game_variables: [KILLCOUNT]
+        game_variables: [killcount]
         # Configure which per-step information the provider exposes to GradLab.
         info_filter:
           # Control when the selected information keys are emitted.

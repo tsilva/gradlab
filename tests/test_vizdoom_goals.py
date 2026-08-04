@@ -217,9 +217,10 @@ def test_vizdoom_goal_has_complete_evaluated_ppo_contract(
         "value": 1,
         "steps": 1,
     }
-    assert train_config["env_args"]["vizdoom_config"] == {
-        "episode_timeout": NATIVE_HORIZONS[goal_id]
-    }
+    expected_vizdoom_config = {"episode_timeout": NATIVE_HORIZONS[goal_id]}
+    if goal_id in {"VizdoomBasic-v1", "VizdoomBasic-Plus-v1"}:
+        expected_vizdoom_config["render_hud"] = True
+    assert train_config["env_args"]["vizdoom_config"] == expected_vizdoom_config
     assert train_config["task"]["reward"]["reward_scale"] == expected["reward_scale"]
     termination = train_config["task"]["termination"]
     expected_horizon_outcome = "success" if goal_id in SUCCESSFUL_HORIZON_GOALS else "timeout"
@@ -334,7 +335,10 @@ def test_vizdoom_watchdog_scales_with_effective_frame_skip(
 
     assert document["train_config"]["frame_skip"] == frame_skip
     assert contract.environment["frame_skip"] == frame_skip
-    assert contract.environment["env_args"]["vizdoom_config"] == {"episode_timeout": 300}
+    assert contract.environment["env_args"]["vizdoom_config"] == {
+        "episode_timeout": 300,
+        "render_hud": True,
+    }
     assert contract.watchdog_steps == expected_watchdog_steps
 
 
@@ -426,7 +430,7 @@ def test_vizdoom_health_gathering_ppo_uses_confirmed_training_defaults(
     backend_config = document["train_config"]["training_backend"]["config"]
     assert backend_config["n_steps"] == 256
     assert backend_config["learning_rate"] == 2.5e-4
-    assert document["train_config"]["env_args"]["game_variables"] == ["HEALTH"]
+    assert document["train_config"]["env_args"]["game_variables"] == ["health"]
     assert document["train_config"]["task"]["model_inputs"]["context"]["health"] == {
         "signal": "health",
         "update": "transition",
@@ -469,23 +473,23 @@ def test_vizdoom_deathmatch_declares_complete_single_player_combat_semantics() -
     assert train_config["env_args"]["players"] == 1
     assert train_config["env_args"]["use_restricted_actions"] == DEATHMATCH_ACTIONS
     assert train_config["env_args"]["game_variables"] == [
-        "KILLCOUNT",
-        "HEALTH",
-        "ARMOR",
-        "SELECTED_WEAPON",
-        "SELECTED_WEAPON_AMMO",
-        "WEAPON1",
-        "WEAPON2",
-        "WEAPON3",
-        "WEAPON4",
-        "WEAPON5",
-        "WEAPON6",
-        "AMMO1",
-        "AMMO2",
-        "AMMO3",
-        "AMMO4",
-        "AMMO5",
-        "AMMO6",
+        "killcount",
+        "health",
+        "armor",
+        "selected_weapon",
+        "selected_weapon_ammo",
+        "weapon1",
+        "weapon2",
+        "weapon3",
+        "weapon4",
+        "weapon5",
+        "weapon6",
+        "ammo1",
+        "ammo2",
+        "ammo3",
+        "ammo4",
+        "ammo5",
+        "ammo6",
     ]
     assert train_config["env_args"]["info_filter"] == {
         "mode": "all",
@@ -611,16 +615,30 @@ def test_vizdoom_basic_exposes_ammo_for_training_and_evaluation() -> None:
         document["goal"]["eval"]["environment"],
     ):
         env_args = environment["env_config"]["env_args"]
-        assert env_args["game_variables"] == ["KILLCOUNT", "AMMO2"]
+        assert env_args["game_variables"] == ["killcount", "ammo2"]
         assert env_args["info_filter"] == {
             "mode": "all",
             "keys": ["killcount", "ammo2"],
         }
-    assert document["train_config"]["env_args"]["game_variables"] == ["KILLCOUNT", "AMMO2"]
+    assert document["train_config"]["env_args"]["game_variables"] == [
+        "killcount",
+        "ammo2",
+    ]
     assert document["train_config"]["env_args"]["info_filter"] == {
         "mode": "all",
         "keys": ["killcount", "ammo2"],
     }
+    assert document["train_config"]["env_args"]["vizdoom_config"] == {
+        "episode_timeout": 300,
+        "render_hud": True,
+    }
+    assert document["train_config"]["obs_crop"] == [0, 32, 0, 0]
+    assert document["train_config"]["obs_crop_mode"] == "mask"
+    assert document["train_config"]["obs_crop_fill"] == 0
+    eval_preprocessing = document["goal"]["eval"]["environment"]["preprocessing"]
+    assert eval_preprocessing["obs_crop"] == [0, 32, 0, 0]
+    assert eval_preprocessing["obs_crop_mode"] == "mask"
+    assert eval_preprocessing["obs_crop_fill"] == 0
 
 
 def test_vizdoom_defend_line_plus_differs_only_by_environment_identity() -> None:

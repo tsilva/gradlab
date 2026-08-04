@@ -499,6 +499,61 @@ def checkpoint_metric_columns() -> tuple[dict[str, str], ...]:
     )
 
 
+def checkpoint_metric_leaders(
+    items: Sequence[Mapping[str, Any]],
+) -> tuple[dict[str, Any], ...]:
+    copied = [dict(item) for item in items]
+    best_values: dict[str, float] = {}
+    for column in checkpoint_metric_columns():
+        metric = column["metric"]
+        values = [
+            value
+            for item in copied
+            if isinstance(item.get("metrics"), Mapping)
+            and (value := _safe_float(item["metrics"].get(metric))) is not None
+        ]
+        if values:
+            best_values[metric] = min(values) if column["direction"] == "min" else max(values)
+    return tuple(
+        {
+            **item,
+            "best_metrics": [
+                column["metric"]
+                for column in checkpoint_metric_columns()
+                if column["metric"] in best_values
+                and isinstance(item.get("metrics"), Mapping)
+                and _safe_float(item["metrics"].get(column["metric"]))
+                == best_values[column["metric"]]
+            ],
+        }
+        for item in copied
+    )
+
+
+def filter_checkpoint_summaries(
+    items: Sequence[Mapping[str, Any]],
+    *,
+    query: str = "",
+) -> tuple[dict[str, Any], ...]:
+    normalized = str(query or "").strip().casefold()
+    return tuple(
+        dict(item)
+        for item in items
+        if not normalized
+        or normalized
+        in _search_text(
+            item.get("checkpoint_id"),
+            item.get("step"),
+            item.get("purpose"),
+            item.get("sha256"),
+            item.get("created_at"),
+            "promoted" if item.get("promoted") else "",
+            item.get("metrics"),
+            item.get("evaluation"),
+        )
+    )
+
+
 def _checkpoint_training_metric_history(
     run: Any,
 ) -> dict[str, dict[str, tuple[tuple[int, float], ...]]]:
@@ -570,38 +625,6 @@ def checkpoint_metric_values(
             else None
         )
     return metrics
-
-
-def _best_checkpoint_id(
-    rows: Sequence[CheckpointSummary],
-    rank: Sequence[RankCriterion],
-    *,
-    evaluation: bool = False,
-) -> str:
-    if not rank:
-        return ""
-    best_id = ""
-    best_score: tuple[float, ...] | None = None
-    for row in rows:
-        if evaluation:
-            result = row.evaluation
-            metrics = result.get("metrics") if isinstance(result, Mapping) else None
-        else:
-            metrics = row.metrics
-        if not isinstance(metrics, Mapping):
-            continue
-        score: list[float] = []
-        for criterion in rank:
-            value = _safe_float(metrics.get(criterion.metric))
-            if value is None:
-                break
-            score.append(value if criterion.direction == "max" else -value)
-        else:
-            candidate = tuple(score)
-            if best_score is None or candidate > best_score:
-                best_id = row.checkpoint_id
-                best_score = candidate
-    return best_id
 
 
 def _complete_run_rank(
@@ -3709,7 +3732,6 @@ class PlayCatalog:
         promoted_id = (
             str(promotion.get("checkpoint_id") or "") if isinstance(promotion, Mapping) else ""
         )
-        normalized = str(query or "").strip().casefold()
         expected_effective_goal_hash = ""
         selected_variant = str(goal_variant_id or "").strip()
         if selected_variant:
@@ -3797,33 +3819,10 @@ class PlayCatalog:
             )
             rows.append(row)
         rows.sort(key=lambda row: (row.step, row.sha256), reverse=True)
-        training_rank = tuple(criterion for criterion, _sources in CHECKPOINT_TRAINING_METRICS)
-        best_training_id = _best_checkpoint_id(rows, training_rank)
-        best_evaluation_id = _best_checkpoint_id(
-            rows,
-            evaluation_data.evaluation_rank,
-            evaluation=True,
+        return filter_checkpoint_summaries(
+            checkpoint_metric_leaders([row.to_dict() for row in rows]),
+            query=query,
         )
-        result: list[dict[str, Any]] = []
-        for row in rows:
-            item = {
-                **row.to_dict(),
-                "best_training": row.checkpoint_id == best_training_id,
-                "best_evaluation": row.checkpoint_id == best_evaluation_id,
-            }
-            if normalized and normalized not in _search_text(
-                row.checkpoint_id,
-                row.step,
-                row.purpose,
-                row.sha256,
-                row.created_at,
-                "promoted" if row.promoted else "",
-                row.metrics,
-                row.evaluation,
-            ):
-                continue
-            result.append(item)
-        return tuple(result)
 
     def checkpoint_warnings(self, *, run_id: str) -> tuple[dict[str, Any], ...]:
         with self._lock:
@@ -3851,10 +3850,12 @@ __all__ = [
     "CatalogPage",
     "CheckpointSummary",
     "checkpoint_metric_columns",
+    "checkpoint_metric_leaders",
     "checkpoint_metric_values",
     "EnvironmentSummary",
     "GoalSummary",
     "GoalVariantSummary",
+    "filter_checkpoint_summaries",
     "PlayCatalog",
     "RunSummary",
     "WandbRunLocation",
