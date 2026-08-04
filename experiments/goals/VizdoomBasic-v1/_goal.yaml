@@ -30,6 +30,8 @@ train:
         # Preserve the scenario's native horizon independently of policy frame skip.
         vizdoom_config:
           episode_timeout: 300
+          # Keep the native ViZDoom status bar visible in rendered frames.
+          render_hud: true
         # Configure which per-step information the provider exposes to GradLab.
         info_filter:
           # Control when the selected information keys are emitted.
@@ -37,7 +39,15 @@ train:
           # List the provider information keys retained for task logic and telemetry.
           keys: [killcount, ammo2]
         # List the native game variables that ViZDoom must collect and expose.
-        game_variables: [KILLCOUNT, AMMO2]
+        game_variables: [killcount, ammo2]
+    # Keep the HUD out of policy observations without changing raw frame geometry.
+    preprocessing: &basic_preprocessing
+      # The 320x240 Basic status bar occupies the bottom 32 raw-screen pixels.
+      obs_crop: [0, 32, 0, 0]
+      # Replace the HUD band before resize instead of removing those rows.
+      obs_crop_mode: mask
+      # Fill the masked HUD band with black pixels.
+      obs_crop_fill: 0
     # Reuse these Basic-specific task overrides in evaluation via the YAML anchor.
     task: &basic_task
       # Map task-level signal names to keys from the provider's per-step information.
@@ -74,6 +84,8 @@ eval:
     threshold: 1.0
   # Override the shared ViZDoom environment contract used during evaluation.
   environment:
+    # Preserve the same HUD-masked policy observation contract during evaluation.
+    preprocessing: *basic_preprocessing
     # Supply evaluation-time arguments for the native vectorized ViZDoom environment.
     env_config:
       # Reuse the Basic provider arguments declared for training.

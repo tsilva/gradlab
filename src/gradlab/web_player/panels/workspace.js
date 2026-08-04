@@ -12,6 +12,7 @@ const BLOCK_KINDS = new Set([
   "histogram",
   "distribution",
   "namespace-explorer",
+  "reward-breakdown",
 ]);
 
 function clone(value) {
@@ -53,11 +54,13 @@ function normalizeBlock(value) {
     const metric = cleanMetric(value.metric);
     if (!metric) return null;
     block.metric = metric;
-  } else {
+  } else if (value.kind === "namespace-explorer") {
     const namespace = String(value.namespace || "").trim();
     if (!["signal", "reward-component"].includes(namespace)) return null;
     block.namespace = namespace;
     block.metric = cleanMetric(value.metric) || "";
+  } else {
+    block.scope = value.scope === "episode" ? "episode" : "step";
   }
   return block;
 }
@@ -131,6 +134,9 @@ export function normalizeWorkspace(value, { paired = false, writer = "" } = {}) 
   const panels = {};
   Object.entries(fallback.panels).forEach(([id, panel]) => {
     panels[id] = normalizePanel(id, value.panels?.[id], panel);
+    if (id === "reward-analysis" && value.panels?.[id] === undefined) {
+      panels[id].placement.visible = false;
+    }
   });
   Object.entries(value.panels || {}).forEach(([id, panel]) => {
     if (Object.hasOwn(panels, id)) return;

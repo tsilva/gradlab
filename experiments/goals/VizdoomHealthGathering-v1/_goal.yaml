@@ -18,7 +18,7 @@ train:
         vizdoom_config:
           episode_timeout: 2100
         # Collect health as a provider-owned game variable for policy context.
-        game_variables: [HEALTH]
+        game_variables: [health]
         # Configure which per-step information the provider exposes to GradLab.
         info_filter:
           # Control when the selected information keys are emitted.

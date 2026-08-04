@@ -57,6 +57,7 @@ const SINGLE_LAYOUT = Object.freeze({
   signals: { x: 9, y: 22, w: 3, h: 8, visible: false, window: "main" },
   events: { x: 0, y: 30, w: 4, h: 7, visible: false, window: "main" },
   raw: { x: 4, y: 30, w: 8, h: 7, visible: false, window: "main" },
+  "reward-analysis": { x: 0, y: 37, w: 12, h: 15, visible: true, window: "main" },
 });
 
 const PAIRED_LAYOUT = Object.freeze({
@@ -70,6 +71,7 @@ const PAIRED_LAYOUT = Object.freeze({
   signals: { x: 6, y: 15, w: 3, h: 8, visible: true, window: "stats" },
   events: { x: 9, y: 15, w: 3, h: 8, visible: true, window: "stats" },
   raw: { x: 0, y: 23, w: 12, h: 7, visible: true, window: "stats" },
+  "reward-analysis": { x: 0, y: 30, w: 12, h: 15, visible: true, window: "stats" },
 });
 
 export const BUILTIN_PANEL_PRESETS = Object.freeze({
@@ -140,6 +142,15 @@ export const BUILTIN_PANEL_PRESETS = Object.freeze({
           title: "Episode return",
           metrics: ["reward/return"],
         },
+      ],
+    },
+  },
+  "reward-analysis": {
+    type: "telemetry",
+    title: "Reward analysis",
+    config: {
+      blocks: [
+        { kind: "reward-breakdown", scope: "step" },
       ],
     },
   },

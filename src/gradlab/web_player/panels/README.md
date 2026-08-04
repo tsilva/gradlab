@@ -27,11 +27,37 @@ Telemetry configuration is a list of visualization blocks:
   retained-episode executed-action frequency.
 - `namespace-explorer`: dynamically discovered environment signals or reward
   components.
+- `reward-breakdown`: a signed, reconciling reward ledger at the selected step
+  or from episode step 1 through the selected cursor. It has a persisted `scope`
+  (`step` or `episode`) and no metric selector.
 
 `telemetry.js` is the descriptor registry for the live playback protocol. These
 keys are local visualization descriptors, not W&B metric names. A descriptor
 defines its label, value type, unit, transition phase, formatting, and accessors
 for snapshots and history points.
+
+Playback protocol v5 supplies reward-accounting data separately from general
+telemetry. `session.reward_accounting` declares availability, the positive
+`scale_divisor`, and optional `clip_bounds`; each transition supplies
+`reward.raw`, `reward.components`, and `reward.accounting_error`, with matching
+`reward_raw` and `reward_accounting_error` history fields. Components use the
+explicit player wire IDs `native_reward`, `cell_novelty_reward`,
+`progress_reward`, `score_reward`, `completion_reward`, `death_penalty`, and
+`time_penalty`. Other task signals are not inferred as reward components.
+
+For each transition the ledger converts a raw component `c` to final-reward
+units as `c / scale_divisor`, attributes any raw residual separately, and adds
+the clip adjustment `final - raw / scale_divisor`. Signed contribution is
+`100 * impact / abs(final)` and can be negative or exceed 100%; activity share
+uses absolute per-transition impact. Episode scope sums those per-transition
+quantities and applies clipping per transition. It fails closed when retained
+history does not begin at episode step 1 or any point is malformed, while step
+scope remains usable. Recorded dataset and human-recording sessions explicitly
+report accounting as unavailable.
+
+The built-in Reward analysis panel is visible in newly created workspaces.
+Normalization adds it hidden on the shelf when an existing v6 workspace does
+not contain it, preserving the existing layout without a schema-version reset.
 
 A panel module exports:
 

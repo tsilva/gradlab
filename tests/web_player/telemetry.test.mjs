@@ -22,12 +22,14 @@ import {
   histogramSelectedLabel,
   lineLegendPrefix,
   lineLegendPresentation,
+  lineLegendPresentationAtIndex,
   lineBlockFootPresentation,
   selectedPoint,
   statsBlockFoot,
 } from "../../src/gradlab/web_player/panels/telemetry-panel.js";
 import {
   displayedStep,
+  lineCursorIndex,
   lineCursorX,
   timelineLabel,
 } from "../../src/gradlab/web_player/panels/shared.js";
@@ -259,6 +261,24 @@ test("line legends show each series value at the chart cursor", () => {
   );
 });
 
+test("hovered line-chart samples drive every legend value", () => {
+  const descriptors = [
+    descriptorFor("reward/provider"),
+    descriptorFor("reward/shaped"),
+  ];
+  const history = [
+    { reward_provider: 0.25, reward_shaped: 0.5 },
+    { reward_provider: 1, reward_shaped: -1 },
+  ];
+  assert.deepEqual(
+    lineLegendPresentationAtIndex(descriptors, history, 0),
+    [
+      { key: "reward/provider", value: "0.250" },
+      { key: "reward/shaped", value: "0.500" },
+    ],
+  );
+});
+
 test("line legends place the label and equals sign before the value", () => {
   assert.equal(
     lineLegendPrefix(descriptorFor("reward/provider")),
@@ -301,6 +321,15 @@ test("the final chart cursor stays inside the canvas clipping edge", () => {
   const plot = { left: 20, right: 200 };
   assert.equal(lineCursorX(plot, 0, 5), 21);
   assert.equal(lineCursorX(plot, 4, 5), 199);
+});
+
+test("line-chart pointer positions select the nearest sample", () => {
+  const plot = { left: 20, right: 200 };
+  assert.equal(lineCursorIndex(plot, 20, 5), 0);
+  assert.equal(lineCursorIndex(plot, 66, 5), 1);
+  assert.equal(lineCursorIndex(plot, 110, 5), 2);
+  assert.equal(lineCursorIndex(plot, 200, 5), 4);
+  assert.equal(lineCursorIndex(plot, 500, 5), 4);
 });
 
 test("the timeline shows the displayed transition step across a boundary", () => {

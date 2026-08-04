@@ -7,8 +7,8 @@ import {
   availableRunMetricColumns,
   bestRunEfficiency,
   checkpointCanEvaluate,
+  checkpointMetricIsBest,
   checkpointPlaybackSeed,
-  checkpointRankTags,
   formatGoalDiffValue,
   formatMetricValue,
   goalConfigurationPresentation,
@@ -769,16 +769,27 @@ test("unevaluated and unsuccessfully evaluated checkpoints are selectable", () =
   );
 });
 
-test("checkpoint rank tags distinguish training and evaluation leaders", () => {
-  assert.deepEqual(checkpointRankTags({}), []);
-  assert.deepEqual(
-    checkpointRankTags({ best_training: true }),
-    ["Best training"],
+test("checkpoint metric cells identify their own leaders", async () => {
+  const trainSuccess = "train/outcome/success/across_starts/window_100/rate/mean";
+  const evalReturn = "eval/full/episode/return/shaped/mean";
+  const checkpoint = { best_metrics: [trainSuccess, evalReturn] };
+
+  assert.equal(checkpointMetricIsBest(checkpoint, trainSuccess), true);
+  assert.equal(checkpointMetricIsBest(checkpoint, evalReturn), true);
+  assert.equal(
+    checkpointMetricIsBest(checkpoint, "eval/full/outcome/success/across_starts/rate/mean"),
+    false,
   );
-  assert.deepEqual(
-    checkpointRankTags({ best_training: true, best_evaluation: true }),
-    ["Best training", "Best eval"],
+  assert.equal(checkpointMetricIsBest({}, trainSuccess), false);
+
+  const source = await readFile(
+    new URL("../../src/gradlab/web_player/sources/browser.js", import.meta.url),
+    "utf8",
   );
+  assert.match(source, /"checkpoint-metric-cell"/);
+  assert.match(source, /badge\.className = "checkpoint-best-badge"/);
+  assert.match(source, /badge\.textContent = "Best"/);
+  assert.doesNotMatch(source, /Best training|Best eval/);
 });
 
 test("selected checkpoints are admitted together through the evaluation API", async (context) => {

@@ -10,6 +10,7 @@ const BLOCK_LABELS = Object.freeze({
   histogram: "Histogram",
   distribution: "Distribution",
   "namespace-explorer": "Metric explorer",
+  "reward-breakdown": "Reward breakdown",
 });
 
 function clone(value) {
@@ -22,6 +23,28 @@ function option(value, label, selected = false) {
   item.textContent = label;
   item.selected = selected;
   return item;
+}
+
+export function defaultBlockForKind(kind) {
+  if (kind === "stats" || kind === "line") {
+    return { kind, metrics: ["reward/shaped"] };
+  }
+  if (kind === "namespace-explorer") {
+    return { kind, namespace: "signal", metric: "" };
+  }
+  if (kind === "reward-breakdown") return { kind, scope: "step" };
+  return {
+    kind,
+    metric: kind === "distribution" ? "policy/distribution" : "action/executed",
+  };
+}
+
+export function editorFieldsForBlock(block) {
+  return {
+    metric: block?.kind !== "reward-breakdown",
+    namespace: block?.kind === "namespace-explorer",
+    scope: block?.kind === "reward-breakdown",
+  };
 }
 
 export class PanelManager {
@@ -164,17 +187,7 @@ export class PanelManager {
         option(value, label, value === block.kind)
       )));
       kind.addEventListener("change", () => {
-        const next = kind.value;
-        this.draftBlocks[index] = next === "stats" || next === "line"
-          ? { kind: next, metrics: ["reward/shaped"] }
-          : next === "namespace-explorer"
-            ? { kind: next, namespace: "signal", metric: "" }
-            : {
-              kind: next,
-              metric: next === "distribution"
-                ? "policy/distribution"
-                : "action/executed",
-            };
+        this.draftBlocks[index] = defaultBlockForKind(kind.value);
         this.renderEditorBlocks();
       });
       kindLabel.append(kind);
@@ -231,6 +244,18 @@ export class PanelManager {
       });
       namespaceLabel.append(namespace);
 
+      const scopeLabel = document.createElement("label");
+      scopeLabel.textContent = "Scope";
+      const scope = document.createElement("select");
+      scope.append(
+        option("step", "Selected step", block.scope !== "episode"),
+        option("episode", "Episode to cursor", block.scope === "episode"),
+      );
+      scope.addEventListener("change", () => {
+        this.draftBlocks[index].scope = scope.value;
+      });
+      scopeLabel.append(scope);
+
       if (block.kind === "namespace-explorer") {
         const namespaceOptions = [...metrics.options];
         namespaceOptions.forEach((item) => {
@@ -250,9 +275,12 @@ export class PanelManager {
         this.renderEditorBlocks();
       });
 
+      const fields = editorFieldsForBlock(block);
       row.append(legend, kindLabel, titleLabel);
-      if (block.kind === "namespace-explorer") row.append(namespaceLabel);
-      row.append(metricLabel, remove);
+      if (fields.namespace) row.append(namespaceLabel);
+      if (fields.scope) row.append(scopeLabel);
+      if (fields.metric) row.append(metricLabel);
+      row.append(remove);
       return row;
     }));
   }
@@ -276,6 +304,9 @@ export class PanelManager {
           || !compatibleMetricKeys(block.metrics, catalog);
       }
       if (block.kind === "namespace-explorer") return !block.namespace;
+      if (block.kind === "reward-breakdown") {
+        return !["step", "episode"].includes(block.scope);
+      }
       return !block.metric;
     });
     if (invalid?.kind === "line") {

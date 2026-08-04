@@ -2,6 +2,7 @@ import {
   createPanel,
   drawHistogram,
   drawLines,
+  lineCursorIndex,
   setStats,
 } from "./shared.js";
 import {
@@ -17,6 +18,11 @@ import {
   discreteActionLabels,
   formatActionValue,
 } from "./action-contract.js";
+import {
+  magnitudeShareLabel,
+  rewardBreakdownPresentation,
+  signedContributionLabel,
+} from "./reward-breakdown.js";
 
 const VALUE_COMPARISON_FOOT =
   "V(s) is expected discounted future policy reward; G(s) is this trajectory’s realized discounted future reward—not its success flag or cumulative episode return.";
@@ -42,7 +48,14 @@ export function cursorIndex(history, view) {
 }
 
 export function lineLegendPresentation(descriptors, history, view) {
-  const index = cursorIndex(history, view);
+  return lineLegendPresentationAtIndex(
+    descriptors,
+    history,
+    cursorIndex(history, view),
+  );
+}
+
+export function lineLegendPresentationAtIndex(descriptors, history, index) {
   return descriptors.map((descriptor) => ({
     key: descriptor.key,
     value: index === null
@@ -191,9 +204,50 @@ function makeLineBlock(block) {
   section.append(canvas, legend);
   const foot = appendFoot(section, block.foot, { force: true });
   const legendValues = setLegend(legend, descriptors);
+  let currentContext = { snapshot: null, history: [], view: {} };
+  let chartGeometry = null;
+  let hoverX = null;
+
+  const renderChart = ({ history, view }) => {
+    const series = descriptors.map((descriptor) => ({
+      values: seriesForMetric(descriptor.key, history),
+      color: descriptor.color || "#53d4e8",
+    }));
+    const defaultIndex = cursorIndex(history, view);
+    const hoveredIndex = hoverX === null
+      ? null
+      : lineCursorIndex(chartGeometry?.plot, hoverX, chartGeometry?.pointCount);
+    let displayedIndex = hoveredIndex ?? defaultIndex;
+    chartGeometry = drawLines(canvas, series, { cursorIndex: displayedIndex });
+    const correctedIndex = hoverX === null
+      ? null
+      : lineCursorIndex(chartGeometry?.plot, hoverX, chartGeometry?.pointCount);
+    if (correctedIndex !== null && correctedIndex !== displayedIndex) {
+      displayedIndex = correctedIndex;
+      chartGeometry = drawLines(canvas, series, { cursorIndex: displayedIndex });
+    }
+    lineLegendPresentationAtIndex(descriptors, history, displayedIndex)
+      .forEach(({ key, value }) => {
+        const target = legendValues.get(key);
+        if (target) target.textContent = value;
+      });
+  };
+
+  canvas.addEventListener("pointermove", (event) => {
+    const bounds = canvas.getBoundingClientRect();
+    if (!(bounds.width > 0)) return;
+    hoverX = (event.clientX - bounds.left) * (canvas.clientWidth / bounds.width);
+    renderChart(currentContext);
+  });
+  canvas.addEventListener("pointerleave", () => {
+    hoverX = null;
+    renderChart(currentContext);
+  });
+
   return {
     element: section,
     render({ snapshot, history, view }) {
+      currentContext = { snapshot, history, view };
       const availabilities = descriptors.map((descriptor) => (
         descriptorAvailability(descriptor, { snapshot })
       ));
@@ -208,18 +262,7 @@ function makeLineBlock(block) {
         foot.classList.toggle("warning", presentation.warning);
       }
       section.dataset.telemetryStatus = unavailable?.status || "available";
-      lineLegendPresentation(descriptors, history, view).forEach(({ key, value }) => {
-        const target = legendValues.get(key);
-        if (target) target.textContent = value;
-      });
-      drawLines(
-        canvas,
-        descriptors.map((descriptor) => ({
-          values: seriesForMetric(descriptor.key, history),
-          color: descriptor.color || "#53d4e8",
-        })),
-        { cursorIndex: cursorIndex(history, view) },
-      );
+      renderChart(currentContext);
     },
   };
 }
@@ -632,11 +675,189 @@ function makeNamespaceBlock(block, definition, services) {
   return { element: section, render };
 }
 
+function rewardNumber(value, { signed = false } = {}) {
+  if (value === null || value === undefined || !Number.isFinite(Number(value))) return "—";
+  const number = Number(value);
+  const prefix = signed && number > 0 ? "+" : "";
+  return `${prefix}${number.toLocaleString(undefined, {
+    maximumFractionDigits: 4,
+    minimumFractionDigits: Math.abs(number) > 0 && Math.abs(number) < 0.001 ? 4 : 0,
+  })}`;
+}
+
+function rewardLedgerRow(row, maxMagnitude) {
+  const tr = document.createElement("tr");
+  const component = document.createElement("th");
+  component.scope = "row";
+  const identity = document.createElement("div");
+  identity.className = "reward-ledger-identity";
+  const sign = document.createElement("span");
+  const signName = row.impact > 0 ? "positive" : row.impact < 0 ? "negative" : "zero";
+  sign.className = `reward-sign ${signName}`;
+  sign.textContent = row.impact > 0 ? "+" : row.impact < 0 ? "−" : "0";
+  sign.setAttribute("aria-label", `${signName} impact`);
+  const label = document.createElement("span");
+  label.textContent = row.label;
+  identity.append(sign, label);
+  const bar = document.createElement("div");
+  bar.className = "reward-zero-bar";
+  bar.setAttribute("aria-hidden", "true");
+  const fill = document.createElement("span");
+  fill.className = row.impact > 0 ? "positive" : row.impact < 0 ? "negative" : "zero";
+  fill.style.setProperty(
+    "--reward-bar-size",
+    `${maxMagnitude > 0 ? (50 * Math.abs(row.impact)) / maxMagnitude : 0}%`,
+  );
+  bar.append(fill);
+  component.append(identity, bar);
+  const raw = document.createElement("td");
+  raw.textContent = rewardNumber(row.raw, { signed: true });
+  const impact = document.createElement("td");
+  impact.textContent = rewardNumber(row.impact, { signed: true });
+  const contribution = document.createElement("td");
+  contribution.textContent = signedContributionLabel(row.signedContribution);
+  const activity = document.createElement("td");
+  activity.textContent = magnitudeShareLabel(row.magnitudeShare);
+  tr.className = `reward-ledger-row ${row.kind}`;
+  tr.append(component, raw, impact, contribution, activity);
+  return tr;
+}
+
+function makeRewardBreakdownBlock(block, definition, services) {
+  const section = document.createElement("section");
+  section.className = "telemetry-block telemetry-reward-breakdown";
+  const toolbar = document.createElement("div");
+  toolbar.className = "reward-analysis-toolbar";
+  const heading = document.createElement("span");
+  heading.className = "chart-heading";
+  heading.textContent = block.title || "Reward ledger";
+  const scopeLabel = document.createElement("label");
+  scopeLabel.append("Scope ");
+  const scope = document.createElement("select");
+  scope.setAttribute("aria-label", "Reward analysis scope");
+  scope.append(
+    Object.assign(document.createElement("option"), { value: "step", textContent: "Selected step" }),
+    Object.assign(document.createElement("option"), { value: "episode", textContent: "Episode to cursor" }),
+  );
+  scope.value = block.scope === "episode" ? "episode" : "step";
+  scopeLabel.append(scope);
+  toolbar.append(heading, scopeLabel);
+
+  const state = document.createElement("div");
+  state.className = "reward-analysis-state empty-state";
+  const content = document.createElement("div");
+  content.className = "reward-analysis-content";
+  const transform = document.createElement("div");
+  transform.className = "reward-transform-strip";
+  const scroll = document.createElement("div");
+  scroll.className = "table-scroll reward-ledger-scroll";
+  const table = document.createElement("table");
+  table.className = "reward-ledger-table";
+  const head = document.createElement("thead");
+  const header = document.createElement("tr");
+  ["Component", "Raw", "Final impact", "Signed contribution", "Activity share"]
+    .forEach((value) => {
+      const cell = document.createElement("th");
+      cell.scope = "col";
+      cell.textContent = value;
+      header.append(cell);
+    });
+  head.append(header);
+  const body = document.createElement("tbody");
+  table.append(head, body);
+  scroll.append(table);
+  const summary = document.createElement("div");
+  summary.className = "reward-ledger-summary";
+  content.append(transform, scroll, summary);
+  const foot = appendFoot(
+    section,
+    block.foot || "Signed contribution uses |final reward|; activity share uses absolute per-step impacts, so penalties remain negative and cancellation stays visible.",
+  );
+  section.prepend(toolbar);
+  section.insertBefore(state, foot);
+  section.insertBefore(content, foot);
+  let currentContext = { snapshot: null, history: [], view: {} };
+
+  const render = ({ snapshot, history, view }) => {
+    currentContext = { snapshot, history, view };
+    const presentation = rewardBreakdownPresentation({
+      snapshot,
+      history,
+      view,
+      scope: scope.value,
+    });
+    section.dataset.telemetryStatus = presentation.status;
+    const available = presentation.status === "available";
+    state.hidden = available;
+    content.hidden = !available;
+    foot.classList.toggle(
+      "warning",
+      ["protocol-error", "partial-history"].includes(presentation.status),
+    );
+    if (!available) {
+      state.className = `reward-analysis-state empty-state ${presentation.status}`;
+      state.textContent = presentation.message;
+      return;
+    }
+    const clip = presentation.contract.clipBounds;
+    transform.replaceChildren();
+    const parts = [
+      `${presentation.scope === "episode" ? "Σ raw" : "Raw"} ${rewardNumber(presentation.raw, { signed: true })}`,
+      `÷ ${rewardNumber(presentation.contract.scaleDivisor)}`,
+      `= ${rewardNumber(presentation.preclip, { signed: true })} pre-clip`,
+      clip
+        ? `clip each step to [${rewardNumber(clip[0])}, ${rewardNumber(clip[1])}]`
+        : "no clipping",
+      `final ${rewardNumber(presentation.final, { signed: true })}`,
+    ];
+    parts.forEach((value, index) => {
+      const item = document.createElement("span");
+      item.textContent = value;
+      if (index === parts.length - 1) item.className = "final";
+      transform.append(item);
+    });
+    const maxMagnitude = Math.max(
+      0,
+      ...presentation.rows.map((row) => Math.abs(row.impact)),
+    );
+    body.replaceChildren(...presentation.rows.map(
+      (row) => rewardLedgerRow(row, maxMagnitude),
+    ));
+    const cards = [
+      ["Bonuses", presentation.positive, "positive"],
+      ["Penalties", presentation.negative, "negative"],
+      [presentation.scope === "episode" ? "Episode return" : "Final reward", presentation.final, "final"],
+    ].map(([label, value, kind]) => {
+      const card = document.createElement("div");
+      card.className = kind;
+      const name = document.createElement("span");
+      name.textContent = label;
+      const number = document.createElement("strong");
+      number.textContent = rewardNumber(value, { signed: true });
+      card.append(name, number);
+      return card;
+    });
+    summary.replaceChildren(...cards);
+  };
+
+  scope.addEventListener("change", () => {
+    const blocks = definition.config.blocks.map((candidate) => (
+      candidate === block ? { ...candidate, scope: scope.value } : candidate
+    ));
+    services.updatePanelConfig?.(definition.id, { blocks });
+    render(currentContext);
+  });
+  return { element: section, render };
+}
+
 function makeBlock(block, definition, services) {
   if (block.kind === "stats") return makeStatsBlock(block);
   if (block.kind === "line") return makeLineBlock(block);
   if (block.kind === "histogram") return makeHistogramBlock(block);
   if (block.kind === "distribution") return makeDistributionBlock(block);
+  if (block.kind === "reward-breakdown") {
+    return makeRewardBreakdownBlock(block, definition, services);
+  }
   return makeNamespaceBlock(block, definition, services);
 }
 

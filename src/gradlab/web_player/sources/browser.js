@@ -612,11 +612,11 @@ export function checkpointCanEvaluate(item) {
   );
 }
 
-export function checkpointRankTags(item) {
-  const tags = [];
-  if (item?.best_training) tags.push("Best training");
-  if (item?.best_evaluation) tags.push("Best eval");
-  return tags;
+export function checkpointMetricIsBest(item, metric) {
+  return (
+    Array.isArray(item?.best_metrics)
+    && item.best_metrics.includes(metric)
+  );
 }
 
 function decodePathPart(value) {
@@ -2393,11 +2393,24 @@ export class SourceBrowser {
             [Number(item.step).toLocaleString()],
             ...checkpointMetricColumns.map((column) => [
               formatMetricValue(column.metric, item.metrics?.[column.metric]),
+              "",
+              "checkpoint-metric-cell",
+              null,
+              {
+                isBest: checkpointMetricIsBest(item, column.metric),
+                label: column.label || metricLabel(column.metric),
+              },
             ]),
             [formatBytes(item.size_bytes)],
             [formatDate(item.created_at)],
           ];
-      values.forEach(([primary, secondary = "", className = "", evidence = null]) => {
+      values.forEach(([
+        primary,
+        secondary = "",
+        className = "",
+        evidence = null,
+        metadata = null,
+      ]) => {
         const cell = document.createElement("td");
         if (className) cell.className = className;
         if (className.includes("source-selection-cell")) {
@@ -2499,21 +2512,14 @@ export class SourceBrowser {
         } else {
           cell.append(main);
         }
-        if (className.includes("checkpoint-cell")) {
-          const tags = checkpointRankTags(item);
-          if (tags.length) {
-            const badges = document.createElement("div");
-            badges.className = "checkpoint-rank-badges";
-            tags.forEach((label) => {
-              const badge = document.createElement("span");
-              badge.className = label === "Best eval"
-                ? "checkpoint-rank-badge evaluation"
-                : "checkpoint-rank-badge training";
-              badge.textContent = label;
-              badges.append(badge);
-            });
-            cell.append(badges);
-          }
+        if (className.includes("checkpoint-metric-cell") && metadata?.isBest) {
+          const badge = document.createElement("span");
+          const description = `Best ${String(metadata.label).toLowerCase()} value`;
+          badge.className = "checkpoint-best-badge";
+          badge.textContent = "Best";
+          badge.title = description;
+          badge.setAttribute("aria-label", description);
+          cell.append(badge);
         }
         if (className.includes("run-cell") && isEfficiencyLeader) {
           const badge = document.createElement("span");

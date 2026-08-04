@@ -237,7 +237,7 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertEqual(train_config["env_args"]["use_restricted_actions"], "discrete")
         self.assertEqual(
             train_config["env_args"]["game_variables"],
-            ["KILLCOUNT", "AMMO2"],
+            ["killcount", "ammo2"],
         )
         self.assertEqual(
             train_config["env_args"]["info_filter"],
@@ -501,6 +501,11 @@ class ConfigValidationTests(unittest.TestCase):
                 goal_path = recipe_path.parent.parent / "_goal.yaml"
                 document = compose_train_document(goal_path, recipe_path)
                 train_config = document["train_config"]
+                game_variables = train_config["env_args"]["game_variables"]
+                self.assertEqual(
+                    game_variables,
+                    [str(name).lower() for name in game_variables],
+                )
                 conditions = train_config["early_stop"]["conditions"]
                 self.assertEqual(set(conditions), {"return_plateau", "target_reached"})
                 self.assertEqual(conditions["target_reached"]["outcome"], "success")

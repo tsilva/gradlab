@@ -19,9 +19,9 @@ def test_cell_novelty_recipe_shapes_training_without_changing_evaluation() -> No
     assert train["timesteps"] == 10_000_000
     assert document["seeds"] == [123]
     assert train["env_args"]["game_variables"] == [
-        "ARMOR",
-        "POSITION_X",
-        "POSITION_Y",
+        "armor",
+        "position_x",
+        "position_y",
     ]
     assert train["env_args"]["info_filter"] == {
         "mode": "all",
@@ -52,7 +52,7 @@ def test_cell_novelty_recipe_shapes_training_without_changing_evaluation() -> No
     assert active_reward_components(train["task"]) == ("native", "cell_novelty")
     assert "model_inputs" not in train["task"]
 
-    assert evaluation["env_args"]["game_variables"] == ["ARMOR"]
+    assert evaluation["env_args"]["game_variables"] == ["armor"]
     assert evaluation["env_args"]["info_filter"] == {
         "mode": "all",
         "keys": ["armor"],
@@ -76,6 +76,6 @@ def test_existing_my_way_home_ppo_recipe_remains_unshaped() -> None:
     )
     train = document["train_config"]
 
-    assert train["env_args"]["game_variables"] == ["ARMOR"]
+    assert train["env_args"]["game_variables"] == ["armor"]
     assert "cell_novelty" not in train["task"]["reward"]
     assert document["policy_environment_hash"] == document["evaluation_environment_hash"]

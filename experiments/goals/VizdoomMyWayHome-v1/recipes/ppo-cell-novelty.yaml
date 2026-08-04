@@ -13,9 +13,9 @@ train:
     env_config:
       env_args:
         game_variables:
-        - ARMOR
-        - POSITION_X
-        - POSITION_Y
+        - armor
+        - position_x
+        - position_y
         info_filter:
           mode: all
           keys:

@@ -170,6 +170,12 @@ does not read, project, or preserve noncurrent W&B or R2 schemas.
   raw reward appears only when it differs from shaped reward. Mario's `progress` component includes
   both its base new-progress reward and any configured additional new-progress reward above
   `progress_reward_boost_start_x`.
+- The player's protocol-v5 Reward analysis ledger is local playback telemetry, not a W&B metric.
+  It shows raw component values, converts each impact through the positive reward-scale divisor,
+  accounts for unattributed raw reward and per-transition clipping, and reports both signed
+  contribution (`impact / abs(final reward)`) and absolute transformed activity share. Signed
+  contributions preserve penalties, can exceed 100%, and are unavailable at zero final reward;
+  this is intentionally different from `train/reward/component/{component}/share` below.
 - Under the current `VizdoomDefendCenter-v1` identity-reward contract, every spawned target has one
   health point, its death adds `+1`, the player starts with 52 pistol rounds, and the scenario has no
   ammo replenishment. A normal episode return is therefore `player kills - 1` when the player dies
@@ -292,7 +298,7 @@ unevaluated for future explicit user action. dstack process exit alone is never 
 | `train/reward/raw/std` | Distribution of completed task reward immediately before gradlab-owned scaling and clipping, emitted when distinct from shaped reward. For an identity task this is the untransformed provider reward. | scalar | rollout | history |
 | `train/reward/component/{component}/mean` | Active reward-component attribution in pre-transform task-reward units. | scalar | rollout | history |
 | `train/reward/component/{component}/nonzero_rate` | Fraction of active reward-component values that are nonzero. | fraction | rollout | history |
-| `train/reward/component/{component}/share` | Absolute contribution share computed from components in pre-transform task-reward units. | fraction | rollout | history |
+| `train/reward/component/{component}/share` | Absolute contribution share computed from components in pre-transform task-reward units. This W&B rollout aggregate is not the player's signed contribution percentage or its post-scale activity share. | fraction | rollout | history |
 | `train/reward/signal/{signal}/mean` | Configured reward-source signal. | scalar | rollout | history |
 | `train/reward/signal/{signal}/max` | Configured reward-source signal. | scalar | rollout | history |
 | `train/reward/signal/{signal}/nonzero_rate` | Fraction of configured reward-source signal values that are nonzero. | fraction | rollout | history |

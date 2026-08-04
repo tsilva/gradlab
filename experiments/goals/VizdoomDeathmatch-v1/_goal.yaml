@@ -62,23 +62,23 @@ train:
         - [SELECT_PREV_WEAPON]
         # List the native game variables that ViZDoom must collect and expose.
         game_variables:
-        - KILLCOUNT
-        - HEALTH
-        - ARMOR
-        - SELECTED_WEAPON
-        - SELECTED_WEAPON_AMMO
-        - WEAPON1
-        - WEAPON2
-        - WEAPON3
-        - WEAPON4
-        - WEAPON5
-        - WEAPON6
-        - AMMO1
-        - AMMO2
-        - AMMO3
-        - AMMO4
-        - AMMO5
-        - AMMO6
+        - killcount
+        - health
+        - armor
+        - selected_weapon
+        - selected_weapon_ammo
+        - weapon1
+        - weapon2
+        - weapon3
+        - weapon4
+        - weapon5
+        - weapon6
+        - ammo1
+        - ammo2
+        - ammo3
+        - ammo4
+        - ammo5
+        - ammo6
         # Configure which per-step information the provider exposes to GradLab.
         info_filter:
           # Control when the selected information keys are emitted.
