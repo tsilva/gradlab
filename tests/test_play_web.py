@@ -1390,6 +1390,10 @@ def test_catalog_http_api_requires_the_fragment_session_token() -> None:
                     "run_id": run_id,
                     "checkpoint_id": "checkpoint-1-" + "b" * 16,
                     "sha256": "b" * 64,
+                    "metrics": {
+                        "train/outcome/success/across_starts/window_100/rate/mean": 0.75,
+                        "train/episode/return/shaped/from/target/rolling_up_to_100/mean": 8.5,
+                    },
                     "evaluation": {
                         "status": "accepted",
                         "pass": True,
@@ -1397,6 +1401,10 @@ def test_catalog_http_api_requires_the_fragment_session_token() -> None:
                         "episodes_completed": 100,
                         "failure_count": 0,
                         "criteria": [],
+                        "metrics": {
+                            "eval/full/outcome/success/across_starts/rate/mean": 0.9,
+                            "eval/full/episode/return/shaped/mean": 9.5,
+                        },
                     },
                 },
             )
@@ -1424,8 +1432,25 @@ def test_catalog_http_api_requires_the_fragment_session_token() -> None:
 
         @staticmethod
         def statuses(*, run_id, checkpoint_ids):
-            del run_id, checkpoint_ids
-            return {}
+            assert run_id == "gradlab-" + "a" * 32
+            assert checkpoint_ids == ["checkpoint-1-" + "b" * 16]
+            return {
+                checkpoint_ids[0]: {
+                    "state": "accepted",
+                    "evaluation": {
+                        "status": "accepted",
+                        "pass": True,
+                        "episodes_planned": 100,
+                        "episodes_completed": 100,
+                        "failure_count": 0,
+                        "criteria": [],
+                        "metrics": {
+                            "eval/full/outcome/success/across_starts/rate/mean": 0.95,
+                            "eval/full/episode/return/shaped/mean": 10.5,
+                        },
+                    },
+                }
+            }
 
     async def scenario() -> None:
         runner = HumanRecordingRunner(FakeHumanSession(), human_args())
@@ -1556,14 +1581,32 @@ def test_catalog_http_api_requires_the_fragment_session_token() -> None:
                 selection_fence = checkpoint_payload["selection_fence"]
                 assert checkpoint_payload["metric_columns"] == [
                     {
-                        "metric": "train/outcome/success/across_starts/window_100/rate/min",
+                        "metric": "train/outcome/success/across_starts/window_100/rate/mean",
                         "direction": "max",
+                        "label": "Train success",
                     },
                     {
                         "metric": "train/episode/return/shaped/from/target/rolling_up_to_100/mean",
                         "direction": "max",
+                        "label": "Train return",
+                    },
+                    {
+                        "metric": "eval/full/outcome/success/across_starts/rate/mean",
+                        "direction": "max",
+                        "label": "Eval success",
+                    },
+                    {
+                        "metric": "eval/full/episode/return/shaped/mean",
+                        "direction": "max",
+                        "label": "Eval return",
                     },
                 ]
+                assert checkpoint_payload["items"][0]["metrics"] == {
+                    "train/outcome/success/across_starts/window_100/rate/mean": 0.75,
+                    "train/episode/return/shaped/from/target/rolling_up_to_100/mean": 8.5,
+                    "eval/full/outcome/success/across_starts/rate/mean": 0.95,
+                    "eval/full/episode/return/shaped/mean": 10.5,
+                }
                 run_inspection = await client.get(
                     f"{server.origin}/api/catalog/runs/gradlab-{'a' * 32}/inspection",
                     headers={"Authorization": f"Bearer {server.token}"},

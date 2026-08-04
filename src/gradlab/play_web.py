@@ -2084,7 +2084,8 @@ class PlaybackWebServer:
         if self.catalog is None:
             raise web.HTTPNotFound()
         from gradlab.play_catalog import (
-            checkpoint_training_metric_columns,
+            checkpoint_metric_columns,
+            checkpoint_metric_values,
             normalize_search_query,
         )
 
@@ -2125,19 +2126,26 @@ class PlaybackWebServer:
                         if isinstance(item, Mapping)
                     ],
                 )
-                items = [
-                    {
-                        **dict(item),
-                        "evaluation": (
-                            statuses[str(item["checkpoint_id"])]["evaluation"]
-                            if statuses.get(str(item["checkpoint_id"]), {}).get("evaluation")
-                            is not None
-                            else item.get("evaluation")
-                        ),
-                        "evaluation_queue": statuses.get(str(item["checkpoint_id"])),
-                    }
-                    for item in items
-                ]
+                enriched_items = []
+                for item in items:
+                    status = statuses.get(str(item["checkpoint_id"]), {})
+                    evaluation = (
+                        status["evaluation"]
+                        if status.get("evaluation") is not None
+                        else item.get("evaluation")
+                    )
+                    enriched_items.append(
+                        {
+                            **dict(item),
+                            "metrics": checkpoint_metric_values(
+                                dict(item.get("metrics") or {}),
+                                evaluation,
+                            ),
+                            "evaluation": evaluation,
+                            "evaluation_queue": status or None,
+                        }
+                    )
+                items = enriched_items
         except Exception as exc:
             warnings.append(
                 {
@@ -2161,7 +2169,7 @@ class PlaybackWebServer:
             {
                 "items": items,
                 "next_cursor": None,
-                "metric_columns": list(checkpoint_training_metric_columns()),
+                "metric_columns": list(checkpoint_metric_columns()),
                 "selection_fence": (
                     self.catalog.checkpoint_selection_fence(
                         run_id=request.match_info["run_id"]

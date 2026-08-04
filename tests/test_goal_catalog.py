@@ -266,6 +266,91 @@ def test_hot_generation_and_archive_pages_are_bounded() -> None:
     assert generation["variants"][0]["run_count"] == 451
 
 
+def test_success_badges_are_derived_from_training_and_evaluation_evidence() -> None:
+    goal_slug = "Mario/Level1-1"
+    descriptor = _descriptor(goal_slug)
+    terminal = _run(
+        goal_slug=goal_slug,
+        descriptor=descriptor,
+        run_index=1,
+        state="succeeded",
+    )
+    terminal["stop_reason"] = "early_stop_success:target_reached"
+    terminal["early_stop"] = {"outcome": "success"}
+    evaluation = _run(
+        goal_slug=goal_slug,
+        descriptor=descriptor,
+        run_index=1,
+        state="running",
+        updated_index=20,
+    )
+    evaluation["evaluation"] = {
+        "checkpoint_id": "checkpoint-10-" + "c" * 16,
+        "status": "accepted",
+    }
+
+    generation, _pages = merge_goal_catalog_events(
+        [
+            _event(
+                goal_slug=goal_slug,
+                descriptor=descriptor,
+                run=terminal,
+                phase="attempt-terminal",
+                source_key="terminal.json",
+                source_document={"kind": "terminal"},
+            ),
+            _event(
+                goal_slug=goal_slug,
+                descriptor=descriptor,
+                run=evaluation,
+                phase="verified-evaluation",
+                source_key="evaluation.json",
+                source_document={"kind": "evaluation"},
+            ),
+        ],
+        goal_slug=goal_slug,
+        generated_at=_timestamp(999),
+    )
+
+    assert generation["terminal_runs"][0]["success_badges"] == [
+        "train/success",
+        "eval/success",
+    ]
+    assert generation["variants"][0]["success_badges"] == [
+        "train/success",
+        "eval/success",
+    ]
+
+
+def test_generic_run_success_does_not_guess_scientific_success() -> None:
+    goal_slug = "Mario/Level1-1"
+    descriptor = _descriptor(goal_slug)
+    run = _run(
+        goal_slug=goal_slug,
+        descriptor=descriptor,
+        run_index=1,
+        state="succeeded",
+    )
+
+    generation, _pages = merge_goal_catalog_events(
+        [
+            _event(
+                goal_slug=goal_slug,
+                descriptor=descriptor,
+                run=run,
+                phase="attempt-terminal",
+                source_key="terminal.json",
+                source_document={"kind": "terminal"},
+            )
+        ],
+        goal_slug=goal_slug,
+        generated_at=_timestamp(999),
+    )
+
+    assert generation["terminal_runs"][0]["success_badges"] == []
+    assert generation["variants"][0]["success_badges"] == []
+
+
 def test_concurrent_same_goal_reconciliation_converges_without_lost_events() -> None:
     with tempfile.TemporaryDirectory() as temporary:
         root = Path(temporary)

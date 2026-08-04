@@ -7,7 +7,6 @@ import {
   availableRunMetricColumns,
   bestRunEfficiency,
   checkpointCanEvaluate,
-  checkpointEvaluationCell,
   checkpointPlaybackSeed,
   checkpointRankTags,
   formatGoalDiffValue,
@@ -18,6 +17,7 @@ import {
   runFinishPresentation,
   runStatePresentation,
   SourceBrowser,
+  successBadgeLabels,
   sortRunItems,
   sourceBreadcrumbItems,
   sourceRouteFromPath,
@@ -42,6 +42,16 @@ test("checkpoint selection boxes are centered within their rows", async () => {
   );
 });
 
+test("checkpoint table uses compact API metric labels without a verdict column", async () => {
+  const source = await readFile(
+    new URL("../../src/gradlab/web_player/sources/browser.js", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(source, /label: column\.label \|\| metricLabel\(column\.metric\)/);
+  assert.doesNotMatch(source, /\{ label: "Evaluation" \}/);
+});
+
 test("catalog list hover highlights the complete row", async () => {
   const styles = await readFile(
     new URL("../../src/gradlab/web_player/styles.css", import.meta.url),
@@ -56,6 +66,31 @@ test("catalog list hover highlights the complete row", async () => {
     styles,
     /\.goal-row-navigation:hover:not\(:disabled\)\s*\{[^}]*background: transparent;/,
   );
+});
+
+test("scientific success badges are ordered, independent, and evidence-labelled", async () => {
+  assert.deepEqual(successBadgeLabels({
+    success_badges: ["eval/success", "train/success", "unknown"],
+  }), ["train/success", "eval/success"]);
+  assert.deepEqual(successBadgeLabels({ success_badges: ["train/success"] }), [
+    "train/success",
+  ]);
+  assert.deepEqual(successBadgeLabels({}), []);
+
+  const source = await readFile(
+    new URL("../../src/gradlab/web_player/sources/browser.js", import.meta.url),
+    "utf8",
+  );
+  const styles = await readFile(
+    new URL("../../src/gradlab/web_player/styles.css", import.meta.url),
+    "utf8",
+  );
+  assert.match(source, /renderSuccessBadges\(environment\)/);
+  assert.match(source, /renderSuccessBadges\(goal\)/);
+  assert.match(source, /renderSuccessBadges\(variant\)/);
+  assert.match(source, /renderSuccessBadges\(run\)/);
+  assert.match(source, /renderSuccessBadges\(item\)/);
+  assert.match(styles, /\.success-badge\.evaluation/);
 });
 
 test("goal configurations expose exact diff counts and date columns", () => {
@@ -182,12 +217,56 @@ test("goal activity unifies variants with recent and best runs", async () => {
   assert.match(source, /this\.activityHasActiveRuns = Boolean\(payload\.has_active_runs\)/);
   assert.match(
     source,
-    /this\.route\.level === "goal_variants" && this\.activityHasActiveRuns/,
+    /this\.route\.level === "goal_variants"\s*&& this\.activityHasActiveRuns/,
   );
   assert.match(source, /heading\.textContent = "Runs using this configuration"/);
   assert.match(source, /\["recent", "Recent"\]/);
   assert.match(source, /\["best", "Best"\]/);
   assert.match(source, /page\?\.nextCursor \? "Load more" : "Load older runs"/);
+});
+
+test("run checkpoint pages refresh only on explicit request", (context) => {
+  const originalLocation = globalThis.location;
+  const originalWindow = globalThis.window;
+  let intervalStarts = 0;
+  globalThis.location = { pathname: "/embedded-player", search: "", hash: "" };
+  globalThis.window = {
+    setInterval() {
+      intervalStarts += 1;
+      return 73;
+    },
+  };
+  context.after(() => {
+    if (originalLocation === undefined) delete globalThis.location;
+    else globalThis.location = originalLocation;
+    if (originalWindow === undefined) delete globalThis.window;
+    else globalThis.window = originalWindow;
+  });
+
+  const browser = new SourceBrowser(
+    {},
+    { replaceChildren() {}, hidden: false },
+    {
+      token: "token",
+      command() {},
+      getState: () => ({ hasControl: true }),
+      showToast() {},
+    },
+  );
+  browser.app = { phase: "selecting" };
+  browser.route = { level: "runs", run_id: "gradlab-run" };
+  browser.activityHasActiveRuns = true;
+
+  browser.updatePolling();
+
+  assert.equal(intervalStarts, 0);
+  assert.equal(browser.pollTimer, null);
+
+  browser.route = { level: "goal_variants" };
+  browser.updatePolling();
+
+  assert.equal(intervalStarts, 1);
+  assert.equal(browser.pollTimer, 73);
 });
 
 test("run table hover highlights only the complete row", async () => {
@@ -494,6 +573,10 @@ test("run metrics use compact labels and values", () => {
     "Min success (last 100)",
   );
   assert.equal(
+    metricLabel("train/outcome/success/across_starts/window_100/rate/mean"),
+    "Mean success (last 100)",
+  );
+  assert.equal(
     metricLabel("train/episode/return/shaped/from/target/rolling_up_to_100/mean"),
     "Mean target-start return (up to 100)",
   );
@@ -683,77 +766,6 @@ test("unevaluated and unsuccessfully evaluated checkpoints are selectable", () =
       evaluation_queue: { state: "waiting_for_training_terminal" },
     }),
     false,
-  );
-});
-
-test("checkpoint evaluation cells distinguish queued work from terminal evidence", () => {
-  assert.deepEqual(
-    checkpointEvaluationCell({
-      evaluation: null,
-      evaluation_queue: { state: "submitted" },
-    }),
-    [
-      "Running",
-      "Submitted to the evaluation worker",
-      "evaluation-cell submitted",
-    ],
-  );
-  assert.deepEqual(
-    checkpointEvaluationCell({
-      evaluation: {
-        status: "rejected",
-        pass: false,
-        episodes_completed: 1,
-        episodes_planned: 100,
-      },
-      evaluation_queue: { state: "queued" },
-    }),
-    [
-      "Queued",
-      "Waiting to be submitted",
-      "evaluation-cell queued",
-    ],
-  );
-  assert.deepEqual(
-    checkpointEvaluationCell({
-      evaluation: null,
-      evaluation_queue: {
-        state: "flusher_unavailable",
-        message: "worker startup timed out",
-      },
-    }),
-    [
-      "Flusher unavailable",
-      "worker startup timed out",
-      "evaluation-cell flusher_unavailable",
-    ],
-  );
-  assert.deepEqual(
-    checkpointEvaluationCell({
-      evaluation: null,
-      evaluation_queue: {
-        state: "waiting_for_run_lease",
-        message: "writer is still draining",
-      },
-    }),
-    [
-      "Waiting for writer",
-      "writer is still draining",
-      "evaluation-cell waiting_for_run_lease",
-    ],
-  );
-  assert.equal(
-    checkpointEvaluationCell({
-      evaluation: {
-        status: "rejected",
-        pass: false,
-        episodes_completed: 1,
-        episodes_planned: 100,
-        failure_count: 1,
-        criteria: [],
-      },
-    })[0],
-    "Failed",
   );
 });
 

@@ -96,6 +96,31 @@ const GOAL_CONFIGURATION_KINDS = {
   },
 };
 
+const SUCCESS_BADGES = ["train/success", "eval/success"];
+
+export function successBadgeLabels(item) {
+  const badges = Array.isArray(item?.success_badges) ? item.success_badges : [];
+  const present = new Set(badges.map((badge) => String(badge)));
+  return SUCCESS_BADGES.filter((badge) => present.has(badge));
+}
+
+function renderSuccessBadges(item) {
+  const labels = successBadgeLabels(item);
+  if (!labels.length) return null;
+  const badges = document.createElement("span");
+  badges.className = "success-badges";
+  labels.forEach((label) => {
+    const badge = document.createElement("span");
+    badge.className = `success-badge ${label.startsWith("train/") ? "training" : "evaluation"}`;
+    badge.textContent = label;
+    badge.title = label === "train/success"
+      ? "A run reached this training goal's success condition"
+      : "A verified evaluation reached this goal's acceptance condition";
+    badges.append(badge);
+  });
+  return badges;
+}
+
 export function goalConfigurationPresentation(item, nowValue = Date.now()) {
   const kind = String(item?.configuration_kind || "previous_default");
   const kindPresentation = GOAL_CONFIGURATION_KINDS[kind] || {
@@ -378,6 +403,7 @@ export function metricLabel(metric) {
     "train/episode/return/shaped/from/target/rolling_up_to_100/mean": "Mean target-start return (up to 100)",
     "train/episode/return/shaped/from/target/window_100/mean": "Mean target-start return (last 100)",
     "train/outcome/success/across_starts/window_100/rate/min": "Min success (last 100)",
+    "train/outcome/success/across_starts/window_100/rate/mean": "Mean success (last 100)",
     "eval/full/outcome/success/across_starts/rate/min": "Min success",
     "eval/full/outcome/success/across_starts/rate/mean": "Mean success",
     "eval/full/episode/return/shaped/mean": "Mean return",
@@ -584,70 +610,6 @@ export function checkpointCanEvaluate(item) {
       "canceled",
     ].includes(queueState)
   );
-}
-
-export function checkpointEvaluationCell(item) {
-  const evaluation = item?.evaluation;
-  const queue = item?.evaluation_queue;
-  const state = String(queue?.state || "");
-  const presentation = {
-    queued: ["Queued", "Waiting to be submitted"],
-    running: ["Starting", "The local evaluation supervisor is preparing this checkpoint"],
-    retry_wait: ["Retrying", queue?.message || "Waiting for the next safe retry"],
-    waiting_for_training_terminal: [
-      "Waiting for training",
-      queue?.message || "Evaluation starts after training is terminal",
-    ],
-    waiting_for_run_lease: [
-      "Waiting for writer",
-      queue?.message || "Waiting for exclusive run-writer authority",
-    ],
-    submitted: ["Running", "Submitted to the evaluation worker"],
-    submission_uncertain: ["Reconciling", queue?.message || "Checking submission state"],
-    awaiting_projection: ["Syncing", queue?.message || "Publishing verified evidence"],
-    flusher_unavailable: [
-      "Flusher unavailable",
-      queue?.message || "The durable request will resume on the next startup attempt",
-    ],
-    blocked: ["Blocked", queue?.message || "Operator action is required"],
-    failed: ["Failed", queue?.message || "Evaluation could not be completed"],
-    expired: ["Expired", queue?.message || "Evaluation did not complete"],
-    canceled: ["Canceled", queue?.message || "Canceled by the operator"],
-  }[state];
-  if (presentation) {
-    return [presentation[0], presentation[1], `evaluation-cell ${state}`];
-  }
-  if (!evaluation || typeof evaluation !== "object") return ["—"];
-  const details = [];
-  const completed = Number(evaluation.episodes_completed);
-  const planned = Number(evaluation.episodes_planned);
-  if (Number.isFinite(completed) && Number.isFinite(planned)) {
-    details.push(`${completed.toLocaleString()} / ${planned.toLocaleString()} episodes`);
-  }
-  (Array.isArray(evaluation.criteria) ? evaluation.criteria : []).forEach((criterion) => {
-    const label = metricLabel(criterion.metric);
-    const threshold = formatMetricValue(criterion.metric, criterion.threshold);
-    if (
-      criterion.value !== null
-      && criterion.value !== undefined
-      && criterion.value !== ""
-      && Number.isFinite(Number(criterion.value))
-    ) {
-      const value = formatMetricValue(criterion.metric, criterion.value);
-      details.push(`${label}: ${value} ${criterion.operator} ${threshold}`);
-    } else {
-      details.push(`${label} ${criterion.operator} ${threshold}`);
-    }
-  });
-  const failureCount = Number(evaluation.failure_count);
-  if (Number.isFinite(failureCount) && failureCount > 0) {
-    details.push(`${failureCount.toLocaleString()} failed`);
-  }
-  return [
-    evaluation.pass ? "Passed" : "Failed",
-    details.join(" · "),
-    `evaluation-cell ${evaluation.pass ? "accepted" : "rejected"}`,
-  ];
 }
 
 export function checkpointRankTags(item) {
@@ -1343,10 +1305,8 @@ export class SourceBrowser {
   updatePolling() {
     const shouldPoll = (
       this.app.phase === "selecting"
-      && (
-        (this.route.level === "runs" && Boolean(this.route.run_id))
-        || (this.route.level === "goal_variants" && this.activityHasActiveRuns)
-      )
+      && this.route.level === "goal_variants"
+      && this.activityHasActiveRuns
     );
     if (shouldPoll && this.pollTimer === null) {
       this.pollTimer = window.setInterval(() => {
@@ -1805,12 +1765,17 @@ export class SourceBrowser {
       row.type = "button";
       row.className = "environment-row";
       row.disabled = !this.hasControl();
+      const identity = document.createElement("span");
+      identity.className = "environment-row-identity";
       const name = document.createElement("strong");
       name.textContent = environment.name;
+      identity.append(name);
+      const success = renderSuccessBadges(environment);
+      if (success) identity.append(success);
       const meta = document.createElement("span");
       const goalLabel = Number(environment.goal_count) === 1 ? "goal" : "goals";
       meta.textContent = `${Number(environment.goal_count).toLocaleString()} ${goalLabel}`;
-      row.append(name, meta);
+      row.append(identity, meta);
       row.addEventListener("click", () => this.navigate({
         level: "goals",
         environment_id: environment.name,
@@ -1838,6 +1803,8 @@ export class SourceBrowser {
       const name = document.createElement("strong");
       name.textContent = goal.goal_id;
       identity.append(name);
+      const success = renderSuccessBadges(goal);
+      if (success) identity.append(success);
       const meta = document.createElement("span");
       const recipeLabel = Number(goal.recipe_count) === 1 ? "recipe" : "recipes";
       meta.textContent = `${goal.title || goal.goal_slug} · ${Number(goal.recipe_count).toLocaleString()} ${recipeLabel}`;
@@ -1927,6 +1894,8 @@ export class SourceBrowser {
       behaviorBadge.className = "goal-configuration-badge behavior";
       behaviorBadge.textContent = presentation.behaviorLabel;
       badges.append(sourceBadge, behaviorBadge);
+      const success = renderSuccessBadges(variant);
+      if (success) badges.append(success);
       choice.append(radio, badges);
       configuration.append(choice);
 
@@ -2203,6 +2172,8 @@ export class SourceBrowser {
       const description = document.createElement("small");
       description.textContent = String(run?.description || run?.run_id || "");
       identity.append(name, description);
+      const success = renderSuccessBadges(run);
+      if (success) identity.append(success);
       const state = document.createElement("span");
       state.className = `goal-configuration-run-state ${String(run?.state || "unknown")}`;
       state.textContent = String(run?.state || "unknown");
@@ -2303,9 +2274,8 @@ export class SourceBrowser {
           { label: "Step" },
           ...checkpointMetricColumns.map((column) => ({
             ...column,
-            label: metricLabel(column.metric),
+            label: column.label || metricLabel(column.metric),
           })),
-          { label: "Evaluation" },
           { label: "Size" },
           { label: "Created" },
         ];
@@ -2424,7 +2394,6 @@ export class SourceBrowser {
             ...checkpointMetricColumns.map((column) => [
               formatMetricValue(column.metric, item.metrics?.[column.metric]),
             ]),
-            checkpointEvaluationCell(item),
             [formatBytes(item.size_bytes)],
             [formatDate(item.created_at)],
           ];
@@ -2502,7 +2471,6 @@ export class SourceBrowser {
           return;
         }
         const main = document.createElement("span");
-        if (className.includes("evaluation-cell")) main.className = "evaluation-verdict";
         main.textContent = String(primary);
         if (className.includes("run-cell")) {
           const presentation = runStatePresentation(item);
@@ -2526,6 +2494,8 @@ export class SourceBrowser {
           }
           identity.append(state, text);
           cell.append(identity);
+          const success = renderSuccessBadges(item);
+          if (success) cell.append(success);
         } else {
           cell.append(main);
         }

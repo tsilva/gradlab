@@ -277,6 +277,32 @@ h2 { font-size: .9rem; margin: 0; font-weight: 650; }
   color: var(--yellow);
 }
 
+.success-badges {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: .28rem;
+  width: max-content;
+}
+.success-badge {
+  display: inline-flex;
+  align-items: center;
+  width: max-content;
+  padding: .2rem .38rem;
+  border: 1px solid rgba(83, 212, 232, .52);
+  border-radius: 99rem;
+  background: rgba(83, 212, 232, .09);
+  color: var(--cyan);
+  font: 800 .56rem/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+  letter-spacing: .025em;
+  white-space: nowrap;
+}
+.success-badge.evaluation {
+  border-color: rgba(96, 211, 148, .52);
+  background: rgba(96, 211, 148, .09);
+  color: var(--green);
+}
+
 .environment-list,
 .goal-list { display: grid; }
 .goal-configuration-browser { display: grid; min-width: 0; }
@@ -491,6 +517,7 @@ h2 { font-size: .9rem; margin: 0; font-weight: 650; }
 .goal-configuration-run-row:last-child { border-bottom: 0; }
 .goal-configuration-run-row:hover { background: rgba(83, 212, 232, .08); }
 .goal-configuration-run-identity { display: flex; min-width: 0; flex-direction: column; }
+.goal-configuration-run-identity .success-badges { margin-top: .32rem; }
 .goal-configuration-run-identity small,
 .goal-configuration-run-updated { color: var(--muted); }
 .goal-configuration-run-state {
@@ -543,6 +570,35 @@ h2 { font-size: .9rem; margin: 0; font-weight: 650; }
 .environment-row strong,
 .goal-row strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .environment-row span { color: var(--muted); font-size: .72rem; white-space: nowrap; }
+.environment-row .environment-row-identity {
+  display: flex;
+  align-items: center;
+  gap: .5rem;
+  min-width: 0;
+}
+.environment-row .success-badges,
+.goal-row .success-badges {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: .28rem;
+  width: max-content;
+  margin-top: .3rem;
+  color: inherit;
+  font-size: inherit;
+  white-space: normal;
+}
+.environment-row .success-badges { margin-top: 0; }
+.environment-row .success-badge,
+.goal-row .success-badge {
+  display: inline-flex;
+  margin-top: 0;
+  color: var(--cyan);
+  font-size: .56rem;
+  white-space: nowrap;
+}
+.environment-row .success-badge.evaluation,
+.goal-row .success-badge.evaluation { color: var(--green); }
 .goal-row span {
   display: block;
   margin-top: .18rem;
@@ -643,6 +699,13 @@ h2 { font-size: .9rem; margin: 0; font-weight: 650; }
   margin-top: .36rem;
   padding: .2rem .35rem;
 }
+.source-table td .success-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .28rem;
+  margin-top: .38rem;
+}
+.source-table td .success-badge { display: inline-flex; }
 .source-table .checkpoint-rank-badges {
   display: flex;
   flex-wrap: wrap;
@@ -752,25 +815,6 @@ h2 { font-size: .9rem; margin: 0; font-weight: 650; }
 }
 .source-table .finish-evidence-metric { margin-top: .42rem; color: #a7c3cd; }
 .source-table .inspection-cell { width: 1%; white-space: nowrap; }
-.source-table .evaluation-cell { min-width: 18rem; }
-.source-table .evaluation-verdict { font-weight: 700; }
-.source-table .evaluation-cell.accepted .evaluation-verdict { color: var(--green); }
-.source-table .evaluation-cell.rejected .evaluation-verdict { color: var(--red); }
-.source-table .evaluation-cell.queued .evaluation-verdict,
-.source-table .evaluation-cell.running .evaluation-verdict,
-.source-table .evaluation-cell.retry_wait .evaluation-verdict,
-.source-table .evaluation-cell.waiting_for_training_terminal .evaluation-verdict,
-.source-table .evaluation-cell.waiting_for_run_lease .evaluation-verdict,
-.source-table .evaluation-cell.submitted .evaluation-verdict,
-.source-table .evaluation-cell.submission_uncertain .evaluation-verdict,
-.source-table .evaluation-cell.awaiting_projection .evaluation-verdict {
-  color: var(--yellow);
-}
-.source-table .evaluation-cell.blocked .evaluation-verdict,
-.source-table .evaluation-cell.flusher_unavailable .evaluation-verdict,
-.source-table .evaluation-cell.failed .evaluation-verdict,
-.source-table .evaluation-cell.expired .evaluation-verdict,
-.source-table .evaluation-cell.canceled .evaluation-verdict { color: var(--red); }
 .source-table tbody tr { cursor: pointer; transition: background .12s ease; }
 .source-table tbody tr.selected {
   background: rgba(83, 212, 232, .08);

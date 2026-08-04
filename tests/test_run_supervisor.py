@@ -1165,7 +1165,7 @@ class RunSupervisorTests(unittest.TestCase):
         with patch("gradlab.run_supervisor.verify_rom_file"):
             supervisor.materialize()
         self.assertEqual(supervisor.train_config["timesteps"], 50_000_000)
-        self.assertEqual(supervisor.train_config["checkpoint_freq"], 250_000)
+        self.assertEqual(supervisor.train_config["checkpoint_freq"], 500_000)
         self.assertEqual(supervisor.train_config["n_envs"], 16)
         self.assertEqual(supervisor.train_config["run_name"], self.run_id)
         self.assertEqual(

@@ -18,7 +18,7 @@ objective:
 # Training contract for this goal family.
 train:
   # Shared checkpoint cadence for Mario training jobs.
-  checkpoint_freq: 250000
+  checkpoint_freq: 500000
   early_stop:
     conditions:
       clear_100:

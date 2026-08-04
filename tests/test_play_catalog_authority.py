@@ -59,8 +59,27 @@ def test_catalog_authority_helper_reads_only_allowlisted_control_documents(
             ),
             "generated_at": "2026-08-04T12:00:00Z",
         }
+        missing_key = "goal-catalog/v1/goals/" + "c" * 64 + "/current.json"
+        assert helper.get_json_many_optional((key, missing_key)) == {
+            key: {
+                "schema_version": 1,
+                "goal_slug": "Mario/Level1-1",
+                "generation_sha256": "b" * 64,
+                "generation_key": (
+                    "goal-catalog/v1/goals/"
+                    + "a" * 64
+                    + "/generations/"
+                    + "b" * 64
+                    + ".json"
+                ),
+                "generated_at": "2026-08-04T12:00:00Z",
+            },
+            missing_key: None,
+        }
         with pytest.raises(CatalogIntegrityError, match="unsupported control object"):
             helper.get_json_optional("runs/not-a-run/manifest.json")
+        with pytest.raises(CatalogIntegrityError, match="unsupported control object"):
+            helper.get_json_many_optional((key, "runs/not-a-run/manifest.json"))
         with pytest.raises(CatalogIntegrityError, match="unsupported control object"):
             helper.get_json_optional("goal-variants/v3/current.json")
     finally:
