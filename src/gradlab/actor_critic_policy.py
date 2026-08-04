@@ -147,7 +147,7 @@ class SharedActorCriticFeatureExtractor(BaseFeaturesExtractor):
 
 
 class SharedActorCriticPolicy(ActorCriticPolicy):
-    """Actor–critic policy sharing observation, context, encoder, and fusion MLP."""
+    """Actor–critic policy with configurable shared or role-specific feature extractors."""
 
     def __init__(
         self,
@@ -174,7 +174,9 @@ class SharedActorCriticPolicy(ActorCriticPolicy):
             activation_fn=nn.Tanh,
             features_extractor_class=SharedActorCriticFeatureExtractor,
             features_extractor_kwargs={"policy_model": self.policy_model},
-            share_features_extractor=True,
+            share_features_extractor=bool(
+                self.policy_model.get("share_features_extractor", True)
+            ),
             normalize_images=bool(self.policy_model["normalize_images"]),
             ortho_init=bool(self.policy_model["orthogonal_init"]),
             **kwargs,
@@ -185,8 +187,14 @@ class SharedActorCriticPolicy(ActorCriticPolicy):
         obs: th.Tensor | Mapping[str, th.Tensor],
     ) -> tuple[Any, th.Tensor]:
         features = self.extract_features(obs)
-        assert isinstance(features, th.Tensor)
-        latent_pi, latent_vf = self.mlp_extractor(features)
+        if self.share_features_extractor:
+            assert isinstance(features, th.Tensor)
+            latent_pi, latent_vf = self.mlp_extractor(features)
+        else:
+            assert isinstance(features, tuple)
+            pi_features, vf_features = features
+            latent_pi = self.mlp_extractor.forward_actor(pi_features)
+            latent_vf = self.mlp_extractor.forward_critic(vf_features)
         return (
             self._get_action_dist_from_latent(latent_pi),
             self.value_net(latent_vf),

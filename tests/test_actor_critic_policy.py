@@ -31,8 +31,9 @@ def _policy_model(
     *,
     hidden_sizes: list[int] | None = None,
     activation: str = "relu",
+    share_features_extractor: bool = True,
 ) -> dict:
-    return {
+    policy_model = {
         "schema_version": 2,
         "encoder": {"kind": "flatten"},
         "fusion": {
@@ -42,6 +43,9 @@ def _policy_model(
         "normalize_images": False,
         "orthogonal_init": True,
     }
+    if not share_features_extractor:
+        policy_model["share_features_extractor"] = False
+    return policy_model
 
 
 def _plain_policy() -> SharedActorCriticPolicy:
@@ -118,6 +122,43 @@ def test_plain_box_observations_use_one_shared_fusion_stack() -> None:
     assert extractor.fusion[2].out_features == 4
     assert policy.action_net.in_features == 4
     assert policy.value_net.in_features == 4
+
+
+def test_policy_can_use_independent_actor_and_critic_feature_extractors() -> None:
+    policy = SharedActorCriticPolicy(
+        gym.spaces.Box(-1.0, 1.0, shape=(4,), dtype=np.float32),
+        gym.spaces.Discrete(3),
+        lambda _: 1e-3,
+        policy_model=_policy_model(
+            hidden_sizes=[],
+            share_features_extractor=False,
+        ),
+    )
+    observations = torch.zeros((2, 4), dtype=torch.float32)
+
+    distribution, values = policy.decision_distribution_and_value(observations)
+
+    assert policy.features_extractor is policy.pi_features_extractor
+    assert policy.vf_features_extractor is not policy.pi_features_extractor
+    assert policy.policy_model["share_features_extractor"] is False
+    assert distribution.distribution.logits.shape == (2, 3)
+    assert values.shape == (2, 1)
+
+
+def test_shared_policy_model_canonicalizes_explicit_default_topology() -> None:
+    explicit = {**_policy_model(), "share_features_extractor": True}
+
+    normalized = normalize_policy_model(explicit)
+
+    assert "share_features_extractor" not in normalized
+
+
+@pytest.mark.parametrize("value", [None, 0, 1, "false", []])
+def test_policy_model_rejects_non_boolean_feature_sharing(value) -> None:
+    policy_model = {**_policy_model(), "share_features_extractor": value}
+
+    with pytest.raises(ValueError, match="share_features_extractor must be a boolean"):
+        normalize_policy_model(policy_model)
 
 
 def test_continuous_context_changes_both_action_distribution_and_value() -> None:
@@ -498,6 +539,36 @@ def test_grouped_ppo_trains_saves_and_loads_shared_task_context(tmp_path) -> Non
         assert model.num_timesteps == 8
         assert loaded.advantage_context == "task_id"
         assert loaded.policy.policy_model == normalize_policy_model(policy_model)
+    finally:
+        env.close()
+
+
+def test_ppo_trains_saves_and_loads_independent_feature_extractors(tmp_path) -> None:
+    env = DummyVecEnv([_PlainEnv])
+    policy_model = _policy_model(
+        hidden_sizes=[8],
+        activation="tanh",
+        share_features_extractor=False,
+    )
+    try:
+        model = PPO(
+            SharedActorCriticPolicy,
+            env,
+            n_steps=2,
+            batch_size=2,
+            n_epochs=1,
+            policy_kwargs={"policy_model": policy_model},
+            verbose=0,
+        )
+
+        model.learn(total_timesteps=2)
+        checkpoint = tmp_path / "independent-extractors.zip"
+        model.save(checkpoint)
+        loaded = PPO.load(checkpoint, env=env)
+
+        assert loaded.policy.policy_model == normalize_policy_model(policy_model)
+        assert loaded.policy.share_features_extractor is False
+        assert loaded.policy.pi_features_extractor is not loaded.policy.vf_features_extractor
     finally:
         env.close()
 

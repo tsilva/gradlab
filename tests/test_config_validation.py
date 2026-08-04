@@ -77,6 +77,16 @@ class ConfigValidationTests(unittest.TestCase):
         )
         self.assertNotIn("reward_clip", document["train_config"]["env_args"])
 
+    def test_vizdoom_policy_can_select_independent_sb3_feature_extractors(self) -> None:
+        document = compose_train_document(
+            self.VIZDOOM_BASIC_GOAL,
+            self.VIZDOOM_BASIC_RECIPE,
+            recipe_overrides=("train.policy_model.share_features_extractor=false",),
+        )
+
+        policy_model = document["train_config"]["policy_model"]
+        self.assertIs(policy_model["share_features_extractor"], False)
+
     def test_recipe_preset_allowlist_is_independent_of_current_directory(self) -> None:
         goal = self.MARIO_L11_GOAL.resolve()
         recipe = (self.MARIO_SINGLE_RECIPES / "ppo.yaml").resolve()
