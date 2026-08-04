@@ -236,6 +236,9 @@ def test_vizdoom_goal_has_complete_evaluated_ppo_contract(
     assert goal["eval"]["policy"] == {"stochastic": True}
     conditions = train_config["early_stop"]["conditions"]
     assert set(conditions) == {"return_plateau", "target_reached"}
+    expected_target_action = (
+        "stop" if goal_id in {"VizdoomBasic-v1", "VizdoomBasic-Plus-v1"} else "observe"
+    )
     assert conditions["target_reached"] == {
         "metric": expected["training_metric"],
         "trigger": "threshold",
@@ -244,7 +247,7 @@ def test_vizdoom_goal_has_complete_evaluated_ppo_contract(
         "threshold": expected["acceptance_threshold"],
         "patience_steps": 0,
         "outcome": "success",
-        "action": "observe",
+        "action": expected_target_action,
     }
     assert acceptance == [
         {
@@ -580,7 +583,7 @@ def test_vizdoom_deathmatch_declares_complete_single_player_combat_semantics() -
     assert eval_environment["task"] == train_config["task"]
 
 
-def test_vizdoom_goal_training_target_remains_valid_when_evaluation_is_enabled() -> None:
+def test_vizdoom_basic_training_target_still_stops_when_evaluation_is_enabled() -> None:
     goal_path = GOALS_ROOT / "VizdoomBasic-v1" / "_goal.yaml"
     recipe_path = goal_path.parent / "recipes/ppo.yaml"
     document = compose_train_document(
@@ -594,8 +597,30 @@ def test_vizdoom_goal_training_target_remains_valid_when_evaluation_is_enabled()
     assert "stop_on_acceptance" not in train_config
     target = train_config["early_stop"]["conditions"]["target_reached"]
     assert target["outcome"] == "success"
-    assert target["action"] == "observe"
+    assert target["action"] == "stop"
     assert train_config["checkpoint_eval_acceptance"] == document["goal"]["eval"]["acceptance"]
+
+
+def test_vizdoom_basic_exposes_ammo_for_training_and_evaluation() -> None:
+    goal_path = GOALS_ROOT / "VizdoomBasic-v1" / "_goal.yaml"
+    recipe_path = goal_path.parent / "recipes/ppo.yaml"
+    document = compose_train_document(goal_path, recipe_path)
+
+    for environment in (
+        document["goal"]["train"]["environment"],
+        document["goal"]["eval"]["environment"],
+    ):
+        env_args = environment["env_config"]["env_args"]
+        assert env_args["game_variables"] == ["KILLCOUNT", "AMMO2"]
+        assert env_args["info_filter"] == {
+            "mode": "all",
+            "keys": ["killcount", "ammo2"],
+        }
+    assert document["train_config"]["env_args"]["game_variables"] == ["KILLCOUNT", "AMMO2"]
+    assert document["train_config"]["env_args"]["info_filter"] == {
+        "mode": "all",
+        "keys": ["killcount", "ammo2"],
+    }
 
 
 def test_vizdoom_defend_line_plus_differs_only_by_environment_identity() -> None:

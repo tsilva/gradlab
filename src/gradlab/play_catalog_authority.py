@@ -30,13 +30,11 @@ MAX_REQUEST_BYTES = 16 * 1024
 MAX_RESPONSE_BYTES = 8 * 1024 * 1024
 
 _ALLOWED_CONTROL_KEYS = (
-    re.compile(r"goal-variants/v3/current\.json"),
-    re.compile(r"goal-variants/v3/generations/[0-9a-f]{64}\.json"),
-    re.compile(r"goal-variants/v2/goals/[0-9a-f]{64}/index\.json"),
+    re.compile(r"goal-catalog/v1/goals/[0-9a-f]{64}/current\.json"),
     re.compile(
-        r"goal-variants/v2/goals/[0-9a-f]{64}/runs/"
-        r"goal-variant-[0-9a-f]{24}\.json"
+        r"goal-catalog/v1/goals/[0-9a-f]{64}/generations/[0-9a-f]{64}\.json"
     ),
+    re.compile(r"goal-catalog/v1/goals/[0-9a-f]{64}/pages/[0-9a-f]{64}\.json"),
     re.compile(r"runs/gradlab-[0-9a-f]{32}/manifest\.json"),
     re.compile(r"recipes/v2/sha256/[0-9a-f]{2}/[0-9a-f]{64}\.json"),
 )

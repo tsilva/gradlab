@@ -10,6 +10,7 @@ import {
   checkpointEvaluationCell,
   checkpointPlaybackSeed,
   checkpointRankTags,
+  formatGoalDiffValue,
   formatMetricValue,
   goalConfigurationPresentation,
   metricLabel,
@@ -57,37 +58,136 @@ test("catalog list hover highlights the complete row", async () => {
   );
 });
 
-test("goal configurations use plain-language types and run activity", () => {
+test("goal configurations expose exact diff counts and date columns", () => {
   const now = Date.parse("2026-08-01T12:00:00Z");
   assert.deepEqual(goalConfigurationPresentation({
     configuration_kind: "current_default",
-    display_label: "No behavioral changes",
     comparison_available: true,
+    current_diff_count: 0,
+    current_diff_count_exact: true,
     run_count: 0,
   }, now), {
     kind: "current_default",
     kindLabel: "Current default",
-    group: "current",
-    displayLabel: "No behavioral changes",
-    activity: "No runs yet",
-    actionLabel: "View definition",
+    sourceLabel: "Current goal",
+    behaviorLabel: "Default",
+    differenceCount: 0,
+    differenceCountExact: true,
+    differenceLabel: "0 changes",
+    comparisonAvailable: true,
+    runCount: 0,
+    runLabel: "0 runs",
+    firstUsedDate: "—",
+    lastActivityDate: "—",
   });
   assert.deepEqual(goalConfigurationPresentation({
     configuration_kind: "previous_default",
-    display_label: "episode limit 10 → 5",
     comparison_available: true,
-    exact_resolution_run_id: `gradlab-${"a".repeat(32)}`,
+    current_diff_count: 1,
+    current_diff_count_exact: true,
     run_count: 2,
     first_used_at: "2026-08-01T10:00:00Z",
     last_activity_at: "2026-08-01T11:00:00Z",
   }, now), {
     kind: "previous_default",
     kindLabel: "Previous default",
-    group: "previous",
-    displayLabel: "episode limit 10 → 5",
-    activity: "2 runs · First used 1 Aug 2026 · Last activity 1 Aug 2026",
-    actionLabel: "Compare",
+    sourceLabel: "Older goal",
+    behaviorLabel: "Default",
+    differenceCount: 1,
+    differenceCountExact: true,
+    differenceLabel: "1 change",
+    comparisonAvailable: true,
+    runCount: 2,
+    runLabel: "2 runs",
+    firstUsedDate: "2 hours ago",
+    lastActivityDate: "1 hour ago",
   });
+  const older = goalConfigurationPresentation({
+    run_count: 1,
+    first_used_at: "2026-07-29T10:00:00Z",
+    last_activity_at: "2026-07-30T11:00:00Z",
+  }, now);
+  assert.equal(older.firstUsedDate, "29 Jul 2026");
+  assert.equal(older.lastActivityDate, "30 Jul 2026");
+  assert.equal(older.differenceLabel, "Exact diff unavailable");
+});
+
+test("goal diff values preserve JSON types", () => {
+  assert.equal(formatGoalDiffValue(false), "false");
+  assert.equal(formatGoalDiffValue("discrete"), '"discrete"');
+  assert.equal(formatGoalDiffValue({ threshold: 10 }), '{"threshold":10}');
+  assert.equal(formatGoalDiffValue(null), "null");
+  assert.equal(formatGoalDiffValue(null, { unavailable: true }), "—");
+});
+
+test("goal configuration metadata and exact changes render as tables", async () => {
+  const source = await readFile(
+    new URL("../../src/gradlab/web_player/sources/browser.js", import.meta.url),
+    "utf8",
+  );
+  const styles = await readFile(
+    new URL("../../src/gradlab/web_player/styles.css", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(
+    source,
+    /\["Configuration", "Differences", "Runs", "First used", "Last activity"\]/,
+  );
+  assert.match(
+    styles,
+    /\.goal-configuration-table \{ min-width: 64rem; table-layout: fixed; \}/,
+  );
+  assert.match(
+    source,
+    /\["configuration", "differences", "runs", "first-used", "last-activity"\]/,
+  );
+  assert.match(styles, /\.goal-configuration-column\.differences \{ width: 18rem; \}/);
+  assert.match(styles, /\.goal-configuration-column\.runs \{ width: 6rem; \}/);
+  assert.match(
+    styles,
+    /\.goal-configuration-column\.first-used,\s*\.goal-configuration-column\.last-activity \{ width: 11rem; \}/,
+  );
+  assert.match(
+    styles,
+    /\.goal-configuration-table-scroll,\s*\.goal-configuration-diff-scroll \{ min-width: 0; overflow: auto; \}/,
+  );
+  assert.match(source, /\["Operation", "Exact contract path", "Before", "After"\]/);
+  assert.match(
+    source,
+    /goal-configuration-value goal-configuration-after \$\{kind\}/,
+  );
+  assert.match(
+    styles,
+    /\.goal-configuration-operation\.added,\s*\.goal-configuration-after\.added \{ color: #78d89f; \}/,
+  );
+  assert.match(
+    styles,
+    /\.goal-configuration-operation\.removed,\s*\.goal-configuration-after\.removed \{ color: #ff8990; \}/,
+  );
+  assert.match(
+    styles,
+    /\.goal-configuration-operation\.changed,\s*\.goal-configuration-after\.changed \{ color: #69d9ea; \}/,
+  );
+});
+
+test("goal activity unifies variants with recent and best runs", async () => {
+  const source = await readFile(
+    new URL("../../src/gradlab/web_player/sources/browser.js", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(source, /\/goals\/\$\{encodeURIComponent\(this\.route\.goal_id\)\}\/activity/);
+  assert.match(source, /headers\["If-None-Match"\] = `"\$\{this\.activityRevision\}"`/);
+  assert.match(source, /this\.activityHasActiveRuns = Boolean\(payload\.has_active_runs\)/);
+  assert.match(
+    source,
+    /this\.route\.level === "goal_variants" && this\.activityHasActiveRuns/,
+  );
+  assert.match(source, /heading\.textContent = "Runs using this configuration"/);
+  assert.match(source, /\["recent", "Recent"\]/);
+  assert.match(source, /\["best", "Best"\]/);
+  assert.match(source, /page\?\.nextCursor \? "Load more" : "Load older runs"/);
 });
 
 test("run table hover highlights only the complete row", async () => {

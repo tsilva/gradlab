@@ -200,9 +200,10 @@ def register_handler(
 
 def load_builtin_handlers() -> None:
     # Closed, explicit imports prevent queue rows from selecting executable code.
-    from gradlab import manual_evaluation
+    from gradlab import catalog_jobs, manual_evaluation
 
     manual_evaluation.register_job_handler()
+    catalog_jobs.register_job_handler()
 
 
 def handler_for(job_type: str, version: int) -> JobHandler:

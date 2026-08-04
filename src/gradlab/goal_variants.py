@@ -6,6 +6,7 @@ from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from typing import Any
 
+from gradlab.contract_inspection import structural_changes
 from gradlab.json_utils import canonical_json_sha256, canonical_json_text
 from gradlab.recipe_documents import goal_contract_sha256
 from gradlab.reward_programs import goal_for_contract_validation
@@ -13,8 +14,6 @@ from gradlab.run_contracts import SHA256_PATTERN
 
 
 GOAL_VARIANT_SCHEMA_VERSION = 1
-GOAL_VARIANT_INDEX_SCHEMA_VERSION = 2
-GOAL_VARIANT_RUN_INDEX_SCHEMA_VERSION = 2
 GOAL_VARIANT_ID_PATTERN = re.compile(r"^goal-variant-[0-9a-f]{24}$")
 MAX_DIFF_ENTRIES = 24
 
@@ -39,14 +38,6 @@ def goal_variant_id(
             raise ValueError(f"goal variant {key} must be a lowercase SHA-256")
     digest = canonical_json_sha256(identity)
     return f"goal-variant-{digest[:24]}"
-
-
-def goal_variant_scope_key(*, goal_slug: object) -> str:
-    canonical_goal_slug = str(goal_slug or "").strip()
-    if not canonical_goal_slug:
-        raise ValueError("goal variant scope requires goal_slug")
-    digest = canonical_json_sha256({"goal_slug": canonical_goal_slug})
-    return f"goal-variants/v2/goals/{digest}"
 
 
 def _path_text(parts: Sequence[str]) -> str:
@@ -377,6 +368,21 @@ def goal_contract_diff(
     return raw_diff[:MAX_DIFF_ENTRIES], len(raw_diff) > MAX_DIFF_ENTRIES
 
 
+def goal_contract_structural_diff(
+    before: Mapping[str, Any],
+    after: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    """Return complete typed behavioral changes at exact JSON-Pointer paths."""
+
+    changes = structural_changes(before, after)
+    return [
+        dict(entry)
+        for entry in changes
+        if str(entry.get("path") or "").split("/", 2)[1:2]
+        and str(entry.get("path") or "").split("/", 2)[1] not in _PRESENTATION_ROOTS
+    ]
+
+
 def goal_contract_diff_labels(
     entries: Sequence[Mapping[str, Any]],
     *,
@@ -544,15 +550,13 @@ def goal_variant_projection(descriptor: Mapping[str, Any]) -> dict[str, Any]:
 
 __all__ = [
     "GOAL_VARIANT_ID_PATTERN",
-    "GOAL_VARIANT_INDEX_SCHEMA_VERSION",
-    "GOAL_VARIANT_RUN_INDEX_SCHEMA_VERSION",
     "GOAL_VARIANT_SCHEMA_VERSION",
     "build_goal_variant_descriptor",
     "goal_variant_catalog_contract",
     "goal_contract_diff",
     "goal_contract_diff_labels",
+    "goal_contract_structural_diff",
     "goal_variant_id",
     "goal_variant_projection",
-    "goal_variant_scope_key",
     "validate_goal_variant_descriptor",
 ]

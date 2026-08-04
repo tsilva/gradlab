@@ -45,6 +45,73 @@ final result: passed
 
 ---
 
+# Structured goal-configuration diff design QA
+
+**Comparison target**
+
+- Selected source visual: `/Users/tsilva/.codex/visualizations/2026/08/04/019fcc5d-f269-7570-abe5-745ff3a0088c/goal-configuration-master-detail.html`
+- Captured source reference: `/Users/tsilva/.codex/visualizations/2026/08/04/019fcc5d-f269-7570-abe5-745ff3a0088c/goal-configuration-reference.png`
+- Browser-rendered implementation: `/Users/tsilva/.codex/visualizations/2026/08/04/019fcc5d-f269-7570-abe5-745ff3a0088c/goal-configuration-implementation.png`
+- Full-view comparison input: `/Users/tsilva/.codex/visualizations/2026/08/04/019fcc5d-f269-7570-abe5-745ff3a0088c/goal-configuration-comparison.png`
+- Viewport: 1440 × 900 CSS px.
+- State: dark desktop goal-configuration browser with a launch override selected and its complete exact contract diff visible.
+- Data note: the reference demonstrates 10 synthetic changed keys; the live checked-in VizDoom data exposes six proven changes for the selected historical launch override. This is an intentional content difference rather than a fidelity mismatch.
+
+**Full-view comparison evidence**
+
+- The implementation matches the selected master/detail structure: selectable configuration rows first, followed by one exact before/after diff table for the selected row.
+- Configuration provenance and behavior are separate badges (`Current goal` or `Older goal`, plus `Default` or `Launch override`) instead of inferred friendly labels.
+- The master table exposes exact change count, run count, first-used date, and last activity. Unproven historical comparisons remain explicitly unavailable.
+- The detail table uses complete JSON-Pointer paths, typed JSON values, and explicit added/removed/changed operations; no friendly-name inference is performed.
+- The live product shell retains its existing breadcrumb, refresh, search, stale-data notice, and YAML/run actions around the selected design.
+
+**Focused comparison evidence**
+
+- The combined input keeps configuration badges, selected-row treatment, change counts, date columns, detail heading, operation column, exact path column, and before/after values simultaneously legible.
+- The implementation is denser because the live catalog contains seven configurations, while the synthetic reference contains three.
+
+**Required fidelity surfaces**
+
+- Fonts and typography: existing GradLab sans-serif and monospace families, weights, sizes, and uppercase table-heading treatment are preserved.
+- Spacing and layout rhythm: table row height, selected-row fill, badge spacing, detail-header spacing, and column alignment follow the selected visual within the existing product shell.
+- Colors and visual tokens: current selection, neutral provenance, unavailable comparison, added, removed, and changed states use the existing dark-player palette and semantic colors.
+- Image quality and asset fidelity: no image assets were introduced; existing sprite icons are reused for refresh, YAML, and run actions.
+- Copy and content: headings and columns describe exact contract evidence. Paths and values are generated from the structural diff rather than copied presentation labels.
+
+**Findings**
+
+- No remaining actionable P0, P1, or P2 mismatch.
+
+**Comparison history**
+
+- Initial P1: at 720px, the nested exact-diff table expanded its grid item instead of owning horizontal overflow.
+- Fix: constrained the goal-configuration grid, its detail section, and both table scroll containers with `min-width: 0`.
+- Post-fix evidence: the master and detail tables each own horizontal overflow, the detail header stacks, and the document has no horizontal overflow at 720px.
+
+**Primary interactions and runtime verification**
+
+- Navigated Environment → Goal, selected a historical launch override, and verified the lazy inspection request rendered six complete field-level changes.
+- Verified typed scalar and string values, added/removed placeholders, selected-row state, current-default empty state, and exact-diff-unavailable state.
+- Verified the desktop layout at 1440 × 900 and responsive containment at 720 × 900.
+- Browser console warnings/errors: none.
+- Automated checks: 77 focused Python tests and all 92 JavaScript web-player tests passed; Ruff and JavaScript syntax checks passed.
+
+**Implementation checklist**
+
+- [x] Replace summary-label rows with a structured configuration table.
+- [x] Show complete exact paths and typed before/after values for the selected configuration.
+- [x] Keep large exact diffs complete while allowing only the legacy summary descriptor to truncate.
+- [x] Preserve an explicit unavailable state when exact historical proof is absent.
+- [x] Keep the master and detail tables usable on narrow screens.
+
+**Follow-up polish**
+
+- None required for this change.
+
+final result: passed
+
+---
+
 # Local training TUI dashboard design QA
 
 **Comparison target**
@@ -466,6 +533,120 @@ final result: passed
 - [x] Remove the redundant breadcrumb row above search.
 - [x] Preserve breadcrumb navigation and browser-history behavior.
 - [x] Verify desktop and compact toolbar layouts.
+
+**Follow-up polish**
+
+- None required for this change.
+
+final result: passed
+
+---
+
+# Goal diff “After” semantic-color design QA
+
+**Comparison target**
+
+- Source visual truth: `/var/folders/wz/x29jb7_x5rdc_5dcjr4qnhg00000gn/T/codex-clipboard-7640e8f3-f114-419f-9ab4-06fbb2466cde.png`
+- Normalized source: `/Users/tsilva/repos/tsilva/gradlab/runs/design-qa/goal-diff-before-semantic-colors-normalized.png`
+- Browser-rendered implementation: `/Users/tsilva/repos/tsilva/gradlab/runs/design-qa/goal-diff-after-semantic-colors-focused.png`
+- Full-view comparison input: `/Users/tsilva/repos/tsilva/gradlab/runs/design-qa/goal-diff-semantic-colors-full-comparison.png`
+- Focused comparison input: `/Users/tsilva/repos/tsilva/gradlab/runs/design-qa/goal-diff-semantic-colors-focused-comparison.png`
+- Viewport: 1458 × 786 CSS px.
+- Source pixels: 2916 × 1572 at 2× density, normalized to 1458 × 786. Implementation capture: 1443 × 777 visible pixels, padded to 1458 × 786 only for comparison alignment.
+- State: dark desktop player on the VizdoomDeathmatch-v1 goal-configuration screen with the 21-change historical default selected.
+
+**Full-view comparison evidence**
+
+- The configuration table, selected row, diff header, columns, paths, values, spacing, and actions remain unchanged.
+- Only the requested semantic color treatment changes: each value in the `After` column now matches its row operation.
+
+**Focused comparison evidence**
+
+- Changed `After` values use the same cyan as `Changed`.
+- Added `After` values use the same green as `Added`.
+- Removed `After` placeholders use the same red as `Removed`; computed browser colors confirm the match even though the supplied source crop ends before its first removed row.
+
+**Required fidelity surfaces**
+
+- Fonts and typography: unchanged.
+- Spacing and layout rhythm: unchanged.
+- Colors and visual tokens: reused the existing operation colors exactly—added `rgb(120, 216, 159)`, removed `rgb(255, 137, 144)`, changed `rgb(105, 217, 234)`.
+- Image quality and asset fidelity: no images or icons changed.
+- Copy and content: unchanged.
+
+**Findings**
+
+- No remaining actionable P0, P1, or P2 mismatch.
+
+**Comparison history**
+
+- The first comparison passed; no layout or visual correction beyond the requested semantic coloring was needed.
+
+**Primary interactions and runtime verification**
+
+- Selected the 21-change historical default and loaded its complete exact diff.
+- Browser-computed colors match between operation labels and `After` values for added, removed, and changed rows.
+- Browser console warnings/errors: none.
+- Automated checks: JavaScript syntax check and all 92 web-player tests passed.
+
+**Implementation checklist**
+
+- [x] Attach the row operation kind to the `After` cell.
+- [x] Share the existing semantic operation colors with the `After` value.
+- [x] Leave `Before` values and all layout unchanged.
+- [x] Verify added, removed, and changed states in the in-app browser.
+
+**Follow-up polish**
+
+- None required for this change.
+
+final result: passed
+
+---
+
+# Goal-configuration fixed-column design QA
+
+**Comparison target**
+
+- Source visual truth: `/var/folders/wz/x29jb7_x5rdc_5dcjr4qnhg00000gn/T/codex-clipboard-f5c80bf0-13ee-44c1-a882-598e662e37e3.png`
+- Browser-rendered implementation: `/Users/tsilva/repos/tsilva/gradlab/runs/design-qa/goal-configuration-fixed-columns.png`
+- Combined comparison input: `/Users/tsilva/repos/tsilva/gradlab/runs/design-qa/goal-configuration-fixed-columns-comparison.png`
+- Desktop viewport: 1280 × 786 CSS px. Compact verification viewport: 720 × 786 CSS px.
+- State: dark desktop player on the VizdoomDeathmatch-v1 goal-configuration screen.
+
+**Comparison evidence**
+
+- `Configuration` now absorbs the remaining table width instead of surrendering space to sparse metadata.
+- `Differences` is fixed at 18rem, `Runs` at 6rem, and both date columns at 11rem.
+- The date values remain fully legible and aligned while the compact runs column no longer creates a large visual gap.
+- At 720px, horizontal overflow remains contained by the table scroller rather than widening the document.
+
+**Required fidelity surfaces**
+
+- Fonts and typography: unchanged.
+- Spacing and layout rhythm: denser and more purposeful without reducing row height or touch targets.
+- Colors and visual tokens: unchanged.
+- Image quality and asset fidelity: no images or icons changed.
+- Copy and content: unchanged.
+
+**Findings**
+
+- No remaining actionable P0, P1, or P2 mismatch.
+
+**Primary interactions and runtime verification**
+
+- Loaded the goal-configuration screen and verified measured column widths of approximately 450px, 288px, 96px, 176px, and 176px at desktop width.
+- Verified no document-level horizontal overflow at desktop or 720px compact width.
+- Verified the compact table scroller owns the intentional 1024px table overflow at 720px.
+- Automated checks: JavaScript syntax check, all 92 web-player tests, and `git diff --check` passed.
+
+**Implementation checklist**
+
+- [x] Keep configuration flexible.
+- [x] Give differences a stable readable width.
+- [x] Make runs compact.
+- [x] Fix first-used and last-activity widths.
+- [x] Preserve compact-screen horizontal scrolling.
 
 **Follow-up polish**
 

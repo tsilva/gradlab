@@ -235,10 +235,13 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertEqual(train_config["n_envs"], 32)
         self.assertEqual(train_config["env_args"]["num_threads"], 32)
         self.assertEqual(train_config["env_args"]["use_restricted_actions"], "discrete")
-        self.assertEqual(train_config["env_args"]["game_variables"], ["KILLCOUNT"])
+        self.assertEqual(
+            train_config["env_args"]["game_variables"],
+            ["KILLCOUNT", "AMMO2"],
+        )
         self.assertEqual(
             train_config["env_args"]["info_filter"],
-            {"mode": "all", "keys": ["killcount"]},
+            {"mode": "all", "keys": ["killcount", "ammo2"]},
         )
         self.assertEqual(
             train_config["task"]["events"]["goal_reached"],
@@ -267,7 +270,7 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertEqual(eval_config["env_args"]["num_threads"], 16)
         self.assertEqual(
             eval_config["env_args"]["info_filter"],
-            {"mode": "all", "keys": ["killcount"]},
+            {"mode": "all", "keys": ["killcount", "ammo2"]},
         )
         self.assertEqual(
             document["goal"]["eval"]["acceptance"],
@@ -488,9 +491,15 @@ class ConfigValidationTests(unittest.TestCase):
                 conditions = train_config["early_stop"]["conditions"]
                 self.assertEqual(set(conditions), {"return_plateau", "target_reached"})
                 self.assertEqual(conditions["target_reached"]["outcome"], "success")
+                expected_target_action = (
+                    "stop"
+                    if goal_path.parent.name
+                    in {"VizdoomBasic-v1", "VizdoomBasic-Plus-v1"}
+                    else "observe"
+                )
                 self.assertEqual(
                     conditions["target_reached"]["action"],
-                    "observe",
+                    expected_target_action,
                 )
                 plateau = conditions["return_plateau"]
                 calibration_steps = train_config["timesteps"] // 4

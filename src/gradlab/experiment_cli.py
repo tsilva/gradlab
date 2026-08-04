@@ -846,35 +846,40 @@ def cmd_catalog_rebuild(args: argparse.Namespace) -> int:
     published: dict[str, Any] | None = None
     if not failed:
         try:
-            published = authority.replace_goal_variant_catalog(
-                [(manifest, terminal) for _key, manifest, terminal in source_records]
-            )
+            if args.check_only:
+                goals = sorted({manifest.goal_slug for _key, manifest, _terminal in source_records})
+                published = {
+                    "schema_version": 1,
+                    "check_only": True,
+                    "goals": {
+                        goal_slug: authority._goal_catalog_projector().reconcile(
+                            goal_slug,
+                            publish=False,
+                        ).to_dict()
+                        for goal_slug in goals
+                    },
+                }
+            else:
+                published = authority.replace_goal_variant_catalog(
+                    [(manifest, terminal) for _key, manifest, terminal in source_records]
+                )
         except Exception as exc:
             failed.append(
                 {
-                    "key": "goal-variants/v3/current.json",
+                    "key": "goal-catalog/v1",
                     "error_type": type(exc).__name__,
                     "error": str(exc),
                 }
             )
-        for key, manifest, _terminal in source_records if published is not None else ():
-            try:
-                authority.record_goal_variant_projection(manifest)
-                rebuilt += 1
-            except Exception as exc:
-                failed.append(
-                    {
-                        "key": key,
-                        "error_type": type(exc).__name__,
-                        "error": str(exc),
-                    }
-                )
+        if published is not None:
+            rebuilt = len(source_records)
     report = {
         "schema_version": 1,
         "discovered": discovered,
         "rebuilt": rebuilt,
         "cleared": cleared,
         "published": published,
+        "check_only": bool(args.check_only),
         "failed": failed,
     }
     if args.json:
@@ -883,7 +888,7 @@ def cmd_catalog_rebuild(args: argparse.Namespace) -> int:
         print(
             "Goal-variant catalog rebuild: "
             f"{rebuilt} current runs indexed, "
-            f"{'one immutable generation published' if published else 'no generation published'}, "
+            f"{'catalog checked' if args.check_only else 'per-goal immutable generations published' if published else 'no generation published'}, "
             f"{len(failed)} current records failed"
         )
     return 1 if failed else 0
@@ -1790,7 +1795,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     catalog_rebuild = commands.add_parser(
         "catalog-rebuild",
-        help="Replace goal-variant discovery indexes from current run records.",
+        help="Check or rebuild disposable per-goal activity catalogs from durable evidence.",
+    )
+    catalog_rebuild.add_argument(
+        "--check-only",
+        action="store_true",
+        help="Validate and compare without advancing any catalog pointer.",
     )
     catalog_rebuild.add_argument("--json", action="store_true")
     catalog_rebuild.set_defaults(func=cmd_catalog_rebuild)

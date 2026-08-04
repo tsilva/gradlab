@@ -58,41 +58,91 @@ export function formatCalendarDate(value) {
   return `${date.getUTCDate()} ${months[date.getUTCMonth()]} ${date.getUTCFullYear()}`;
 }
 
+function formatGoalConfigurationDate(value, nowValue = Date.now()) {
+  const date = new Date(value);
+  const now = new Date(nowValue);
+  if (Number.isNaN(date.getTime())) return "—";
+  if (
+    !Number.isNaN(now.getTime())
+    && date.getFullYear() === now.getFullYear()
+    && date.getMonth() === now.getMonth()
+    && date.getDate() === now.getDate()
+  ) {
+    return formatDate(value, nowValue);
+  }
+  return formatCalendarDate(value);
+}
+
 const GOAL_CONFIGURATION_KINDS = {
-  current_default: { label: "Current default", group: "current" },
-  current_modified: { label: "Current modified", group: "current" },
-  previous_default: { label: "Previous default", group: "previous" },
-  previous_modified: { label: "Previous modified", group: "previous" },
+  current_default: {
+    label: "Current default",
+    sourceLabel: "Current goal",
+    behaviorLabel: "Default",
+  },
+  current_modified: {
+    label: "Current modified",
+    sourceLabel: "Current goal",
+    behaviorLabel: "Launch override",
+  },
+  previous_default: {
+    label: "Previous default",
+    sourceLabel: "Older goal",
+    behaviorLabel: "Default",
+  },
+  previous_modified: {
+    label: "Previous modified",
+    sourceLabel: "Older goal",
+    behaviorLabel: "Launch override",
+  },
 };
 
 export function goalConfigurationPresentation(item, nowValue = Date.now()) {
   const kind = String(item?.configuration_kind || "previous_default");
   const kindPresentation = GOAL_CONFIGURATION_KINDS[kind] || {
     label: "Previous configuration",
-    group: "previous",
+    sourceLabel: "Older goal",
+    behaviorLabel: "Configuration",
   };
   const runCount = Math.max(0, Number(item?.run_count) || 0);
   const runLabel = `${runCount.toLocaleString()} ${runCount === 1 ? "run" : "runs"}`;
-  const firstUsed = item?.first_used_at ? formatCalendarDate(item.first_used_at) : "—";
+  const firstUsed = item?.first_used_at
+    ? formatGoalConfigurationDate(item.first_used_at, nowValue)
+    : "—";
   const lastActivity = item?.last_activity_at
-    ? formatCalendarDate(item.last_activity_at)
+    ? formatGoalConfigurationDate(item.last_activity_at, nowValue)
     : "—";
   const comparisonAvailable = Boolean(item?.comparison_available);
-  const hasExactDefinition = Boolean(item?.exact_resolution_run_id);
+  const rawDifferenceCount = item?.current_diff_count;
+  const differenceCount = rawDifferenceCount === null || rawDifferenceCount === undefined
+    ? null
+    : Math.max(0, Number(rawDifferenceCount) || 0);
+  const differenceCountExact = Boolean(item?.current_diff_count_exact);
+  const differenceLabel = !comparisonAvailable
+    ? "Exact diff unavailable"
+    : differenceCount === null
+      ? "Exact count unavailable"
+      : `${differenceCount.toLocaleString()}${differenceCountExact ? "" : "+"} ${differenceCount === 1 ? "change" : "changes"}`;
   return {
     kind,
     kindLabel: kindPresentation.label,
-    group: kindPresentation.group,
-    displayLabel: String(
-      item?.display_label || "Behavioral difference unavailable — no exact goal proof",
-    ),
-    activity: runCount
-      ? `${runLabel} · First used ${firstUsed} · Last activity ${lastActivity}`
-      : "No runs yet",
-    actionLabel: kind === "current_default" || !comparisonAvailable || !hasExactDefinition
-      ? "View definition"
-      : "Compare",
+    sourceLabel: kindPresentation.sourceLabel,
+    behaviorLabel: kindPresentation.behaviorLabel,
+    differenceCount,
+    differenceCountExact,
+    differenceLabel,
+    comparisonAvailable,
+    runCount,
+    runLabel,
+    firstUsedDate: firstUsed,
+    lastActivityDate: lastActivity,
   };
+}
+
+export function formatGoalDiffValue(value, { unavailable = false } = {}) {
+  if (unavailable) return "—";
+  if (value === undefined) return "—";
+  const rendered = JSON.stringify(value);
+  return rendered === undefined ? String(value) : rendered;
 }
 
 function formatBytes(value) {
@@ -845,6 +895,14 @@ export class SourceBrowser {
     this.pollTimer = null;
     this.selectedCheckpoints = new Set();
     this.evaluating = false;
+    this.selectedGoalVariantId = "";
+    this.goalVariantDiff = null;
+    this.goalVariantDiffController = null;
+    this.goalVariantDiffSerial = 0;
+    this.goalVariantRunPages = new Map();
+    this.goalVariantRunSort = new Map();
+    this.activityRevision = "";
+    this.activityHasActiveRuns = false;
     this.autoSelectedRoute = "";
     this.activeBreadcrumbRoute = "";
     this.initialEnvironmentCatalog = null;
@@ -908,6 +966,7 @@ export class SourceBrowser {
       this.loadedKey = "";
       this.error = "";
       this.selectedCheckpoints.clear();
+      this.resetGoalVariantDetail();
       this.autoSelectedRoute = "";
       this.syncUrl("replace");
     }
@@ -924,6 +983,9 @@ export class SourceBrowser {
     this.requestController?.abort();
     this.requestController = null;
     this.requestSerial += 1;
+    this.goalVariantDiffController?.abort();
+    this.goalVariantDiffController = null;
+    this.goalVariantDiffSerial += 1;
     this.loading = false;
     this.loadingKey = "";
     if (!preserveBreadcrumbs) {
@@ -970,6 +1032,18 @@ export class SourceBrowser {
     return Boolean(this.getState()?.hasControl);
   }
 
+  resetGoalVariantDetail() {
+    this.goalVariantDiffController?.abort();
+    this.goalVariantDiffController = null;
+    this.goalVariantDiffSerial += 1;
+    this.selectedGoalVariantId = "";
+    this.goalVariantDiff = null;
+    this.goalVariantRunPages.clear();
+    this.goalVariantRunSort.clear();
+    this.activityRevision = "";
+    this.activityHasActiveRuns = false;
+  }
+
   inspectGoal(goal) {
     const base = (
       `/api/catalog/environments/${encodeURIComponent(this.route.environment_id)}`
@@ -991,6 +1065,87 @@ export class SourceBrowser {
       + `/variants/${encodeURIComponent(variant.variant_id)}/inspection`,
       { preferredDocument: "goal" },
     );
+  }
+
+  goalVariantInspectionEndpoint(variant) {
+    return (
+      `/api/catalog/environments/${encodeURIComponent(this.route.environment_id)}`
+      + `/goals/${encodeURIComponent(this.route.goal_id)}`
+      + `/variants/${encodeURIComponent(variant.variant_id)}/inspection`
+    );
+  }
+
+  selectGoalVariant(variant) {
+    const variantId = String(variant?.variant_id || "");
+    if (!variantId) return;
+    if (this.selectedGoalVariantId !== variantId) {
+      this.goalVariantDiffController?.abort();
+      this.goalVariantDiffController = null;
+      this.goalVariantDiffSerial += 1;
+      this.selectedGoalVariantId = variantId;
+      this.goalVariantDiff = null;
+    }
+    this.renderView();
+    const presentation = goalConfigurationPresentation(variant);
+    if (presentation.kind !== "current_default" && presentation.comparisonAvailable) {
+      void this.loadGoalVariantDiff(variant);
+    }
+  }
+
+  async loadGoalVariantDiff(variant, { force = false } = {}) {
+    const variantId = String(variant?.variant_id || "");
+    if (!variantId || variantId !== this.selectedGoalVariantId) return;
+    if (
+      !force
+      && this.goalVariantDiff?.variantId === variantId
+      && ["loading", "ready"].includes(this.goalVariantDiff.state)
+    ) {
+      return;
+    }
+    this.goalVariantDiffController?.abort();
+    const controller = new AbortController();
+    this.goalVariantDiffController = controller;
+    const serial = ++this.goalVariantDiffSerial;
+    this.goalVariantDiff = { variantId, state: "loading" };
+    this.renderView();
+    try {
+      const response = await fetch(this.goalVariantInspectionEndpoint(variant), {
+        headers: { Authorization: `Bearer ${this.token}` },
+        cache: "no-store",
+        signal: controller.signal,
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(payload.error || `Goal diff request failed (${response.status})`);
+      }
+      if (serial !== this.goalVariantDiffSerial || variantId !== this.selectedGoalVariantId) {
+        return;
+      }
+      const goalDiff = payload?.goal_diff;
+      const entries = Array.isArray(goalDiff?.entries) ? goalDiff.entries : [];
+      this.goalVariantDiff = {
+        variantId,
+        state: "ready",
+        availability: goalDiff?.availability === "exact" ? "exact" : "unavailable",
+        changeCount: Number.isFinite(Number(goalDiff?.change_count))
+          ? Math.max(0, Number(goalDiff.change_count))
+          : null,
+        entries,
+        message: String(goalDiff?.message || ""),
+      };
+    } catch (error) {
+      if (controller.signal.aborted || serial !== this.goalVariantDiffSerial) return;
+      this.goalVariantDiff = {
+        variantId,
+        state: "error",
+        message: String(error?.message || error),
+      };
+    } finally {
+      if (serial === this.goalVariantDiffSerial) {
+        this.goalVariantDiffController = null;
+        this.renderView();
+      }
+    }
   }
 
   inspectRun(runId = this.route.run_id) {
@@ -1036,7 +1191,7 @@ export class SourceBrowser {
       return `/api/catalog/environments/${encodeURIComponent(this.route.environment_id)}/goals?${query}`;
     }
     if (this.route.level === "goal_variants") {
-      return `/api/catalog/environments/${encodeURIComponent(this.route.environment_id)}/goals/${encodeURIComponent(this.route.goal_id)}/variants?${query}`;
+      return `/api/catalog/environments/${encodeURIComponent(this.route.environment_id)}/goals/${encodeURIComponent(this.route.goal_id)}/activity?${query}`;
     }
     if (this.route.level === "runs" && this.route.run_id) {
       if (this.route.goal_variant_id) {
@@ -1074,11 +1229,20 @@ export class SourceBrowser {
     if (!quiet) this.error = "";
     this.renderView();
     try {
+      const headers = { Authorization: `Bearer ${this.token}` };
+      if (this.route.level === "goal_variants" && this.activityRevision && !force && !append) {
+        headers["If-None-Match"] = `"${this.activityRevision}"`;
+      }
       const response = await fetch(this.endpoint(cursor, { force }), {
-        headers: { Authorization: `Bearer ${this.token}` },
+        headers,
         cache: "no-store",
         signal: controller.signal,
       });
+      if (response.status === 304) {
+        this.loadedKey = this.routeKey();
+        this.error = "";
+        return;
+      }
       const payload = await response.json().catch(() => ({}));
       if (response.status === 409 && append) {
         this.items = [];
@@ -1118,6 +1282,10 @@ export class SourceBrowser {
         this.selectionFence = typeof payload.selection_fence === "string"
           ? payload.selection_fence
           : "";
+        if (this.route.level === "goal_variants") {
+          this.activityRevision = String(payload.revision || "");
+          this.activityHasActiveRuns = Boolean(payload.has_active_runs);
+        }
         this.metricColumns = Array.isArray(payload.metric_columns)
           ? payload.metric_columns
           : [];
@@ -1132,7 +1300,7 @@ export class SourceBrowser {
           this.sort = { metric: "", direction: "" };
         }
       }
-      this.nextCursor = payload.next_cursor || null;
+        this.nextCursor = payload.next_cursor || null;
       this.loadedKey = this.routeKey();
       this.error = "";
       if (this.route.checkpoint_id && !append) {
@@ -1160,6 +1328,7 @@ export class SourceBrowser {
         this.loading = false;
         this.loadingKey = "";
         this.renderView();
+        this.updatePolling();
         if (
           key !== this.routeKey()
           && this.loadedKey !== this.routeKey()
@@ -1174,8 +1343,10 @@ export class SourceBrowser {
   updatePolling() {
     const shouldPoll = (
       this.app.phase === "selecting"
-      && this.route.level === "runs"
-      && Boolean(this.route.run_id)
+      && (
+        (this.route.level === "runs" && Boolean(this.route.run_id))
+        || (this.route.level === "goal_variants" && this.activityHasActiveRuns)
+      )
     );
     if (shouldPoll && this.pollTimer === null) {
       this.pollTimer = window.setInterval(() => {
@@ -1199,6 +1370,7 @@ export class SourceBrowser {
     this.loadedKey = "";
     this.error = "";
     this.selectedCheckpoints.clear();
+    this.resetGoalVariantDetail();
     this.autoSelectedRoute = "";
     this.hydrateInitialEnvironments();
     this.renderView();
@@ -1393,8 +1565,8 @@ export class SourceBrowser {
         const description = document.createElement("p");
         description.className = "source-description";
         description.textContent = (
-          "A configuration groups runs that used the same resolved goal behavior. "
-          + "Previous configurations remain available for reproducible playback."
+          "Each configuration groups runs with the same resolved goal behavior. "
+          + "Select one to inspect its exact differences from the current checked-in goal."
         );
         shell.append(description);
       }
@@ -1421,7 +1593,9 @@ export class SourceBrowser {
       return "Runs · choose a checkpoint";
     }
     if (this.route.level === "runs") return "Choose a run";
-    if (this.route.level === "goal_variants") return "Choose a goal configuration";
+    if (this.route.level === "goal_variants") {
+      return "Choose the goal configuration used by the run";
+    }
     if (this.route.level === "goals") return "Choose a goal";
     return "Choose an environment";
   }
@@ -1696,84 +1870,380 @@ export class SourceBrowser {
 
   renderGoalVariants() {
     const container = document.createElement("div");
-    container.className = "goal-configuration-groups";
-    [
-      { id: "current", label: "Current" },
-      { id: "previous", label: "Previous configurations" },
-    ].forEach((group) => {
-      const variants = this.items
-        .map((variant) => ({
-          variant,
-          presentation: goalConfigurationPresentation(variant),
-        }))
-        .filter(({ presentation }) => presentation.group === group.id);
-      if (!variants.length) return;
+    container.className = "goal-configuration-browser";
+    const variants = this.items.map((variant) => ({
+      variant,
+      presentation: goalConfigurationPresentation(variant),
+    }));
+    const selected = variants.find(
+      ({ variant }) => variant.variant_id === this.selectedGoalVariantId,
+    ) || variants.find(({ presentation }) => presentation.kind === "current_default")
+      || variants[0];
+    if (!selected) return container;
+    this.selectedGoalVariantId = String(selected.variant.variant_id || "");
 
-      const section = document.createElement("section");
-      section.className = "goal-configuration-group";
-      const heading = document.createElement("h3");
-      heading.textContent = group.label;
-      const list = document.createElement("div");
-      list.className = "goal-list goal-variant-list";
-
-      variants.forEach(({ variant, presentation }) => {
-        const row = document.createElement("div");
-        row.className = "goal-row goal-variant-row";
-        const navigate = document.createElement("button");
-        navigate.type = "button";
-        navigate.className = "goal-row-navigation";
-        navigate.disabled = !this.hasControl();
-        const identity = document.createElement("div");
-        const title = document.createElement("div");
-        title.className = "goal-configuration-title";
-        const badge = document.createElement("span");
-        badge.className = `goal-configuration-badge ${presentation.kind}`;
-        badge.textContent = presentation.kindLabel;
-        const name = document.createElement("strong");
-        name.textContent = presentation.displayLabel;
-        title.append(badge, name);
-        identity.append(title);
-        const meta = document.createElement("span");
-        meta.className = "goal-configuration-activity";
-        meta.textContent = presentation.activity;
-        identity.append(meta);
-        if (!variant.comparison_available) {
-          const detail = document.createElement("small");
-          detail.className = "goal-configuration-warning";
-          detail.textContent = (
-            "A verified comparison is unavailable; technical identity is in the definition."
-          );
-          identity.append(detail);
-        }
-        navigate.append(identity);
-        navigate.setAttribute(
-          "aria-label",
-          `${presentation.kindLabel}: ${presentation.displayLabel}. ${presentation.activity}`,
-        );
-        navigate.addEventListener("click", () => this.navigate({
-          level: "runs",
-          goal_variant_id: variant.variant_id,
-          run_id: "",
-          checkpoint_id: "",
-        }));
-        const inspect = button(presentation.actionLabel, { iconName: "code", quiet: true });
-        inspect.classList.add("goal-row-inspect");
-        inspect.setAttribute(
-          "aria-label",
-          `${presentation.actionLabel} for ${presentation.kindLabel.toLowerCase()}: ${presentation.displayLabel}`,
-        );
-        inspect.addEventListener("click", () => {
-          void this.inspectGoalVariant(variant).catch(
-            (error) => this.showToast(String(error?.message || error), true),
-          );
-        });
-        row.append(navigate, inspect);
-        list.append(row);
-      });
-      section.append(heading, list);
-      container.append(section);
+    const tableScroll = document.createElement("div");
+    tableScroll.className = "goal-configuration-table-scroll";
+    const table = document.createElement("table");
+    table.className = "goal-configuration-table";
+    const columns = document.createElement("colgroup");
+    ["configuration", "differences", "runs", "first-used", "last-activity"].forEach((name) => {
+      const column = document.createElement("col");
+      column.className = `goal-configuration-column ${name}`;
+      columns.append(column);
     });
+    const head = document.createElement("thead");
+    const headerRow = document.createElement("tr");
+    ["Configuration", "Differences", "Runs", "First used", "Last activity"].forEach((label) => {
+      const cell = document.createElement("th");
+      cell.scope = "col";
+      cell.textContent = label;
+      headerRow.append(cell);
+    });
+    head.append(headerRow);
+    const body = document.createElement("tbody");
+
+    variants.forEach(({ variant, presentation }) => {
+      const row = document.createElement("tr");
+      const isSelected = variant.variant_id === selected.variant.variant_id;
+      row.className = `goal-configuration-row${isSelected ? " selected" : ""}`;
+      const configuration = document.createElement("td");
+      const choice = document.createElement("label");
+      choice.className = "goal-configuration-choice";
+      const radio = document.createElement("input");
+      radio.type = "radio";
+      radio.name = "goal-configuration";
+      radio.value = String(variant.variant_id || "");
+      radio.checked = isSelected;
+      radio.addEventListener("change", () => this.selectGoalVariant(variant));
+      const badges = document.createElement("span");
+      badges.className = "goal-configuration-badges";
+      const sourceBadge = document.createElement("span");
+      sourceBadge.className = (
+        `goal-configuration-badge ${presentation.kind.startsWith("current_") ? "current" : "previous"}`
+      );
+      sourceBadge.textContent = presentation.sourceLabel;
+      const behaviorBadge = document.createElement("span");
+      behaviorBadge.className = "goal-configuration-badge behavior";
+      behaviorBadge.textContent = presentation.behaviorLabel;
+      badges.append(sourceBadge, behaviorBadge);
+      choice.append(radio, badges);
+      configuration.append(choice);
+
+      const differences = document.createElement("td");
+      differences.className = `goal-configuration-difference${presentation.comparisonAvailable ? "" : " unavailable"}`;
+      differences.textContent = presentation.differenceLabel;
+      const runs = document.createElement("td");
+      runs.className = "goal-configuration-number";
+      runs.textContent = presentation.runCount.toLocaleString();
+      const firstUsed = document.createElement("td");
+      firstUsed.className = "goal-configuration-date";
+      firstUsed.textContent = presentation.firstUsedDate;
+      const lastActivity = document.createElement("td");
+      lastActivity.className = "goal-configuration-date";
+      lastActivity.textContent = presentation.lastActivityDate;
+      row.append(configuration, differences, runs, firstUsed, lastActivity);
+      body.append(row);
+    });
+    table.append(columns, head, body);
+    tableScroll.append(table);
+    container.append(tableScroll, this.renderGoalVariantDetail(selected));
+
+    const detailState = this.goalVariantDiff;
+    if (
+      selected.presentation.kind !== "current_default"
+      && selected.presentation.comparisonAvailable
+      && (
+        detailState?.variantId !== selected.variant.variant_id
+        || !["loading", "ready", "error"].includes(detailState.state)
+      )
+    ) {
+      queueMicrotask(() => this.loadGoalVariantDiff(selected.variant));
+    }
     return container;
+  }
+
+  renderGoalVariantDetail({ variant, presentation }) {
+    const section = document.createElement("section");
+    section.className = "goal-configuration-detail";
+    const header = document.createElement("div");
+    header.className = "goal-configuration-detail-header";
+    const identity = document.createElement("div");
+    const heading = document.createElement("h3");
+    heading.textContent = "Exact contract differences";
+    const baseline = document.createElement("p");
+    baseline.textContent = (
+      "Baseline: current checked-in goal · Exact JSON-Pointer paths and typed values."
+    );
+    identity.append(heading, baseline);
+    const actions = document.createElement("div");
+    actions.className = "goal-configuration-detail-actions";
+    const inspect = button("View YAML", { iconName: "code", quiet: true });
+    inspect.addEventListener("click", () => {
+      const inspection = presentation.kind === "current_default"
+        ? this.inspectGoal({ goal_id: this.route.goal_id })
+        : this.inspectGoalVariant(variant);
+      void inspection.catch(
+        (error) => this.showToast(String(error?.message || error), true),
+      );
+    });
+    const viewRuns = button(
+      presentation.runCount === 1 ? "View run" : `View ${presentation.runCount.toLocaleString()} runs`,
+      { iconName: "external-link", primary: true },
+    );
+    viewRuns.disabled = !this.hasControl() || presentation.runCount === 0;
+    viewRuns.addEventListener("click", () => this.navigate({
+      level: "runs",
+      goal_variant_id: variant.variant_id,
+      run_id: "",
+      checkpoint_id: "",
+    }));
+    actions.append(inspect, viewRuns);
+    header.append(identity, actions);
+    section.append(header, this.renderEmbeddedGoalRuns(variant));
+
+    if (presentation.kind === "current_default") {
+      section.append(this.goalVariantDiffEmpty(
+        "This configuration exactly matches the current checked-in goal.",
+      ));
+      return section;
+    }
+    if (!presentation.comparisonAvailable) {
+      section.append(this.goalVariantDiffEmpty(
+        "The exact historical contract is not sufficiently proven, so no field-level comparison is shown.",
+        { warning: true },
+      ));
+      return section;
+    }
+
+    const state = this.goalVariantDiff?.variantId === variant.variant_id
+      ? this.goalVariantDiff
+      : null;
+    if (!state || state.state === "loading") {
+      section.append(this.loadingState("Loading exact contract differences…"));
+      return section;
+    }
+    if (state.state === "error") {
+      const error = document.createElement("div");
+      error.className = "source-inline-error goal-configuration-diff-error";
+      const message = document.createElement("p");
+      message.textContent = state.message;
+      const retry = button("Retry", { iconName: "refresh" });
+      retry.addEventListener("click", () => this.loadGoalVariantDiff(variant, { force: true }));
+      error.append(message, retry);
+      section.append(error);
+      return section;
+    }
+    if (state.availability !== "exact") {
+      section.append(this.goalVariantDiffEmpty(
+        state.message || "An exact field-level comparison is unavailable.",
+        { warning: true },
+      ));
+      return section;
+    }
+    if (!state.entries.length) {
+      section.append(this.goalVariantDiffEmpty(
+        "This configuration has no behavioral differences from the current checked-in goal.",
+      ));
+      return section;
+    }
+
+    const count = document.createElement("span");
+    count.className = "goal-configuration-detail-count";
+    const changeCount = state.changeCount ?? state.entries.length;
+    count.textContent = `${changeCount.toLocaleString()} ${changeCount === 1 ? "changed key" : "changed keys"}`;
+    identity.append(count);
+    const scroll = document.createElement("div");
+    scroll.className = "goal-configuration-diff-scroll";
+    const table = document.createElement("table");
+    table.className = "goal-configuration-diff-table";
+    const head = document.createElement("thead");
+    const headerRow = document.createElement("tr");
+    ["Operation", "Exact contract path", "Before", "After"].forEach((label) => {
+      const cell = document.createElement("th");
+      cell.scope = "col";
+      cell.textContent = label;
+      headerRow.append(cell);
+    });
+    head.append(headerRow);
+    const body = document.createElement("tbody");
+    state.entries.forEach((entry) => {
+      const row = document.createElement("tr");
+      const kind = ["added", "removed", "changed"].includes(String(entry?.kind))
+        ? String(entry.kind)
+        : "changed";
+      const operation = document.createElement("td");
+      operation.className = `goal-configuration-operation ${kind}`;
+      operation.textContent = kind[0].toUpperCase() + kind.slice(1);
+      const path = document.createElement("td");
+      path.className = "goal-configuration-path";
+      const pathCode = document.createElement("code");
+      pathCode.textContent = String(entry?.path || "");
+      path.append(pathCode);
+      const before = document.createElement("td");
+      before.className = "goal-configuration-value";
+      const beforeCode = document.createElement("code");
+      beforeCode.textContent = formatGoalDiffValue(entry?.before, { unavailable: kind === "added" });
+      before.append(beforeCode);
+      const after = document.createElement("td");
+      after.className = `goal-configuration-value goal-configuration-after ${kind}`;
+      const afterCode = document.createElement("code");
+      afterCode.textContent = formatGoalDiffValue(entry?.after, { unavailable: kind === "removed" });
+      after.append(afterCode);
+      row.append(operation, path, before, after);
+      body.append(row);
+    });
+    table.append(head, body);
+    scroll.append(table);
+    section.append(scroll);
+    return section;
+  }
+
+  async loadEmbeddedGoalRuns(variant, { append = false } = {}) {
+    const variantId = String(variant?.variant_id || "");
+    if (!variantId) return;
+    const current = this.goalVariantRunPages.get(variantId) || {
+      items: [],
+      nextCursor: null,
+      loading: false,
+      error: "",
+    };
+    if (current.loading || (append && !current.nextCursor)) return;
+    const next = { ...current, loading: true, error: "" };
+    this.goalVariantRunPages.set(variantId, next);
+    this.renderView();
+    const query = new URLSearchParams();
+    if (append && current.nextCursor) query.set("cursor", current.nextCursor);
+    try {
+      const endpoint = (
+        `/api/catalog/environments/${encodeURIComponent(this.route.environment_id)}`
+        + `/goals/${encodeURIComponent(this.route.goal_id)}`
+        + `/variants/${encodeURIComponent(variantId)}/runs?${query}`
+      );
+      const response = await fetch(endpoint, {
+        headers: { Authorization: `Bearer ${this.token}` },
+        cache: "no-store",
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (response.status === 409) {
+        this.goalVariantRunPages.delete(variantId);
+        this.loadedKey = "";
+        await this.load({ force: true });
+        return;
+      }
+      if (!response.ok) throw new Error(payload.error || `Run request failed (${response.status})`);
+      const received = Array.isArray(payload.items) ? payload.items : [];
+      this.goalVariantRunPages.set(variantId, {
+        items: append ? [...current.items, ...received] : received,
+        nextCursor: payload.next_cursor || null,
+        loading: false,
+        error: "",
+      });
+    } catch (error) {
+      this.goalVariantRunPages.set(variantId, {
+        ...current,
+        loading: false,
+        error: String(error?.message || error),
+      });
+    } finally {
+      this.renderView();
+    }
+  }
+
+  renderEmbeddedGoalRuns(variant) {
+    const section = document.createElement("section");
+    section.className = "goal-configuration-runs";
+    const header = document.createElement("div");
+    header.className = "goal-configuration-runs-header";
+    const heading = document.createElement("h3");
+    heading.textContent = "Runs using this configuration";
+    const sort = document.createElement("div");
+    sort.className = "goal-configuration-run-sort";
+    const variantId = String(variant?.variant_id || "");
+    const sortMode = this.goalVariantRunSort.get(variantId) || "recent";
+    [
+      ["recent", "Recent"],
+      ["best", "Best"],
+    ].forEach(([mode, label]) => {
+      const control = button(label, { quiet: mode !== sortMode });
+      control.classList.toggle("active", mode === sortMode);
+      control.addEventListener("click", () => {
+        this.goalVariantRunSort.set(variantId, mode);
+        this.renderView();
+      });
+      sort.append(control);
+    });
+    header.append(heading, sort);
+    section.append(header);
+
+    const page = this.goalVariantRunPages.get(variantId);
+    const baseItems = page?.items?.length
+      ? page.items
+      : sortMode === "best"
+        ? variant.best_runs
+        : variant.recent_runs;
+    const items = Array.isArray(baseItems) ? baseItems : [];
+    if (!items.length) {
+      const empty = document.createElement("p");
+      empty.className = "goal-configuration-runs-empty";
+      empty.textContent = "No runs use this configuration yet.";
+      section.append(empty);
+      return section;
+    }
+    const list = document.createElement("div");
+    list.className = "goal-configuration-run-list";
+    items.forEach((run) => {
+      const row = document.createElement("button");
+      row.type = "button";
+      row.className = "goal-configuration-run-row";
+      const identity = document.createElement("span");
+      identity.className = "goal-configuration-run-identity";
+      const name = document.createElement("strong");
+      name.textContent = String(run?.name || run?.run_id || "Run");
+      const description = document.createElement("small");
+      description.textContent = String(run?.description || run?.run_id || "");
+      identity.append(name, description);
+      const state = document.createElement("span");
+      state.className = `goal-configuration-run-state ${String(run?.state || "unknown")}`;
+      state.textContent = String(run?.state || "unknown");
+      const updated = document.createElement("span");
+      updated.className = "goal-configuration-run-updated";
+      updated.textContent = run?.updated_at ? formatDate(run.updated_at) : "—";
+      row.append(identity, state, updated);
+      row.addEventListener("click", () => this.navigate({
+        level: "runs",
+        goal_variant_id: variantId,
+        run_id: String(run.run_id || ""),
+        checkpoint_id: "",
+      }));
+      list.append(row);
+    });
+    section.append(list);
+    if (page?.error) {
+      const error = document.createElement("p");
+      error.className = "source-inline-error";
+      error.textContent = page.error;
+      section.append(error);
+    }
+    if (variant.has_more_runs || page?.nextCursor) {
+      const load = button(page?.nextCursor ? "Load more" : "Load older runs", {
+        iconName: "refresh",
+        quiet: true,
+      });
+      load.disabled = Boolean(page?.loading);
+      load.addEventListener("click", () => this.loadEmbeddedGoalRuns(variant, {
+        append: Boolean(page?.items?.length),
+      }));
+      section.append(load);
+    }
+    return section;
+  }
+
+  goalVariantDiffEmpty(message, { warning = false } = {}) {
+    const empty = document.createElement("div");
+    empty.className = `goal-configuration-diff-empty${warning ? " warning" : ""}`;
+    empty.textContent = message;
+    return empty;
   }
 
   activeRunMetricColumns() {

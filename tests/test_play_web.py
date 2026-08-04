@@ -1258,6 +1258,29 @@ def test_catalog_http_api_requires_the_fragment_session_token() -> None:
             )
 
         @staticmethod
+        def goal_activity(*, environment_id, goal_id, query, refresh):
+            assert (environment_id, goal_id, query, refresh) == (
+                "Mario",
+                "Level1-1",
+                "",
+                False,
+            )
+            return {
+                "schema_version": 1,
+                "items": [
+                    {
+                        "variant_id": "goal-variant-" + "c" * 24,
+                        "recent_runs": [],
+                    }
+                ],
+                "next_cursor": None,
+                "revision": "f" * 64,
+                "generation_sha256": "e" * 64,
+                "freshness": "fresh",
+                "has_active_runs": False,
+            }
+
+        @staticmethod
         def recipes(*, environment_id, goal_id, query, cursor):
             assert (environment_id, goal_id, query, cursor) == (
                 "Mario",
@@ -1483,6 +1506,26 @@ def test_catalog_http_api_requires_the_fragment_session_token() -> None:
                 )
                 assert variants.status == 200
                 variant_id = (await variants.json())["items"][0]["variant_id"]
+                activity = await client.get(
+                    (
+                        f"{server.origin}/api/catalog/environments/Mario"
+                        "/goals/Level1-1/activity"
+                    ),
+                    headers={"Authorization": f"Bearer {server.token}"},
+                )
+                assert activity.status == 200
+                assert activity.headers["ETag"] == f'"{"f" * 64}"'
+                unchanged = await client.get(
+                    (
+                        f"{server.origin}/api/catalog/environments/Mario"
+                        "/goals/Level1-1/activity"
+                    ),
+                    headers={
+                        "Authorization": f"Bearer {server.token}",
+                        "If-None-Match": f'"{"f" * 64}"',
+                    },
+                )
+                assert unchanged.status == 304
                 variant_inspection = await client.get(
                     (
                         f"{server.origin}/api/catalog/environments/Mario"

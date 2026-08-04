@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import threading
 from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from dataclasses import dataclass
@@ -16,18 +17,8 @@ from gradlab.clock import (
     format_utc_datetime,
     parse_utc_datetime,
 )
-from gradlab.catalog_generation import (
-    CATALOG_GENERATION_SCHEMA_VERSION,
-    CATALOG_POINTER_KEY,
-    CATALOG_POINTER_SCHEMA_VERSION,
-    CATALOG_VARIANT_PROJECTION_FIELDS,
-    catalog_generation_digest,
-    catalog_generation_key,
-    empty_catalog_generation,
-    validate_catalog_generation,
-    validate_catalog_pointer,
-)
 from gradlab.file_utils import atomic_write_bytes, atomic_write_json, file_sha256
+from gradlab.early_stop import EARLY_STOP_OPERATORS
 from gradlab.json_utils import canonical_json_sha256
 from gradlab.r2_store import (
     BucketConfig,
@@ -54,13 +45,13 @@ from gradlab.policy_bundle import (
     recipe_document_path,
     validate_recipe_document,
 )
-from gradlab.goal_variants import (
-    GOAL_VARIANT_INDEX_SCHEMA_VERSION,
-    GOAL_VARIANT_RUN_INDEX_SCHEMA_VERSION,
-    goal_variant_catalog_contract,
-    goal_variant_scope_key,
-    validate_goal_variant_descriptor,
+from gradlab.goal_variants import validate_goal_variant_descriptor
+from gradlab.goal_catalog import (
+    GOAL_CATALOG_ROOT,
+    build_goal_catalog_event,
+    goal_catalog_event_key,
 )
+from gradlab.goal_catalog_projection import GoalCatalogProjector
 from gradlab.recipe_variants import recipe_variant_id
 from gradlab.recipe_documents import goal_contract_sha256
 
@@ -131,21 +122,37 @@ class RunAuthority:
         return f"runs/{run_id}"
 
     def create_manifest(self, manifest: RunManifest) -> str:
+        event = self._goal_catalog_event_for_manifest(manifest)
+        self._goal_catalog_projector().put_event(event)
         etag = self.control.put_json(
             f"{self.run_prefix(manifest.run_id)}/manifest.json",
             manifest.to_dict(),
             create_only=True,
         )
-        self.create_attempt_manifest(manifest)
-        self.project_goal_variant_best_effort(manifest)
-        return etag
-
-    def create_attempt_manifest(self, manifest: RunManifest) -> str:
-        return self.control.put_json(
+        self.control.put_json(
             f"{self.run_prefix(manifest.run_id)}/attempts/{manifest.attempt_id}/manifest.json",
             manifest.to_dict(),
             create_only=True,
         )
+        self._project_goal_catalog_best_effort(
+            manifest.goal_slug,
+            event_id=str(event["event_id"]),
+        )
+        return etag
+
+    def create_attempt_manifest(self, manifest: RunManifest) -> str:
+        event = self._goal_catalog_event_for_manifest(manifest)
+        self._goal_catalog_projector().put_event(event)
+        etag = self.control.put_json(
+            f"{self.run_prefix(manifest.run_id)}/attempts/{manifest.attempt_id}/manifest.json",
+            manifest.to_dict(),
+            create_only=True,
+        )
+        self._project_goal_catalog_best_effort(
+            manifest.goal_slug,
+            event_id=str(event["event_id"]),
+        )
+        return etag
 
     def manifest(self, run_id: str) -> dict[str, Any] | None:
         return self.control.get_json_optional(f"{self.run_prefix(run_id)}/manifest.json")
@@ -212,196 +219,209 @@ class RunAuthority:
             return None
         return self.recipe_document(recipe_sha256)
 
-    def catalog_generation(self) -> dict[str, Any] | None:
-        pointer_document = self.control.get_json_optional(CATALOG_POINTER_KEY)
-        if pointer_document is None:
-            return None
-        pointer = validate_catalog_pointer(pointer_document)
-        generation = validate_catalog_generation(
-            self.control.get_json(pointer["generation_key"]),
-            expected_digest=pointer["generation_sha256"],
+    def _goal_catalog_projector(self) -> GoalCatalogProjector:
+        return GoalCatalogProjector(
+            control=self.control,
+            evaluation=self.evaluation,
+            clock=self.clock,
         )
-        if generation["generated_at"] != pointer["generated_at"]:
-            raise ValueError("catalog pointer timestamp disagrees with its generation")
-        return generation
 
-    @staticmethod
-    def _merge_catalog_scope(
-        current: Mapping[str, Any] | None,
-        replacement: Mapping[str, Any],
+    def _goal_catalog_event_for_manifest(self, manifest: RunManifest) -> dict[str, Any]:
+        if manifest.goal_variant is None:
+            raise ValueError("run manifest has no goal variant descriptor")
+        descriptor = validate_goal_variant_descriptor(manifest.goal_variant)
+        resolved_goal = None
+        try:
+            recipe = self.recipe_document(manifest.recipe_sha256)
+            resolved_goal = self._catalog_resolved_goal(recipe, descriptor=descriptor)
+        except (FileNotFoundError, KeyError, ValueError):
+            pass
+        source_key = (
+            f"{self.run_prefix(manifest.run_id)}/attempts/{manifest.attempt_id}/manifest.json"
+        )
+        return build_goal_catalog_event(
+            phase="manifest",
+            goal_slug=manifest.goal_slug,
+            run_id=manifest.run_id,
+            attempt_id=manifest.attempt_id,
+            source_bucket="control",
+            source_key=source_key,
+            source_document=manifest.to_dict(),
+            created_at=manifest.created_at,
+            variant=descriptor,
+            run=self._catalog_run_record(
+                manifest,
+                descriptor=descriptor,
+                state="running",
+                updated_at=manifest.created_at,
+            ),
+            resolved_goal=resolved_goal,
+        )
+
+    def _manifest_for_attempt(self, run_id: str, attempt_id: str | None = None) -> RunManifest:
+        document = None
+        if attempt_id:
+            document = self.control.get_json_optional(
+                f"{self.run_prefix(run_id)}/attempts/{attempt_id}/manifest.json"
+            )
+        else:
+            candidates = [
+                self.control.get_json(key)
+                for key in self.control.iter_keys(f"{self.run_prefix(run_id)}/attempts/")
+                if key.endswith("/manifest.json")
+            ]
+            if candidates:
+                document = max(
+                    candidates,
+                    key=lambda item: (
+                        str(item.get("created_at") or ""),
+                        str(item.get("attempt_id") or ""),
+                    ),
+                )
+        if document is None:
+            document = self.manifest(run_id)
+        if document is None:
+            raise ValueError(f"run has no authoritative manifest: {run_id}")
+        return RunManifest.from_dict(document)
+
+    def _goal_catalog_event_for_terminal(
+        self,
+        manifest: RunManifest,
+        receipt: TerminalReceipt,
+        *,
+        source_key: str,
+        metrics: Mapping[str, Any] | None,
     ) -> dict[str, Any]:
-        """Monotonically merge an incremental scope after a pointer CAS race."""
-
-        if current is None:
-            return deepcopy(dict(replacement))
-        variants = {
-            str(item.get("variant_id") or ""): deepcopy(dict(item))
-            for item in current.get("variants", ())
-            if isinstance(item, Mapping)
-        }
-        for item in replacement.get("variants", ()):
-            if isinstance(item, Mapping):
-                variants[str(item.get("variant_id") or "")] = deepcopy(dict(item))
-        runs = {
-            str(item.get("run_id") or ""): deepcopy(dict(item))
-            for item in current.get("runs", ())
-            if isinstance(item, Mapping)
-        }
-        for item in replacement.get("runs", ()):
-            if not isinstance(item, Mapping):
-                continue
-            run_id = str(item.get("run_id") or "")
-            existing = runs.get(run_id)
-            if existing is None or (
-                str(item.get("updated_at") or ""),
-                str(item.get("attempt_id") or ""),
-            ) >= (
-                str(existing.get("updated_at") or ""),
-                str(existing.get("attempt_id") or ""),
-            ):
-                runs[run_id] = deepcopy(dict(item))
-        return {
-            "goal_slug": str(replacement.get("goal_slug") or ""),
-            "variants": sorted(
-                variants.values(),
-                key=lambda item: (
-                    str(item.get("label") or "").casefold(),
-                    str(item.get("variant_id") or ""),
-                ),
+        if manifest.goal_variant is None:
+            raise ValueError("run manifest has no goal variant descriptor")
+        descriptor = validate_goal_variant_descriptor(manifest.goal_variant)
+        return build_goal_catalog_event(
+            phase="attempt-terminal",
+            goal_slug=manifest.goal_slug,
+            run_id=manifest.run_id,
+            attempt_id=manifest.attempt_id,
+            source_bucket="control",
+            source_key=source_key,
+            source_document=receipt.to_dict(),
+            created_at=receipt.completed_at,
+            variant=descriptor,
+            run=self._catalog_run_record(
+                manifest,
+                descriptor=descriptor,
+                state=receipt.state,
+                updated_at=receipt.completed_at,
+                metrics=metrics,
+                stop_reason=receipt.stop_reason,
+                final_step=receipt.final_step,
+                early_stop=receipt.early_stop,
             ),
-            "runs": sorted(
-                runs.values(),
-                key=lambda item: (
-                    str(item.get("created_at") or ""),
-                    str(item.get("run_id") or ""),
-                ),
-                reverse=True,
-            ),
-        }
+        )
 
-    def _publish_catalog_generation(
+    def _goal_catalog_enrichment_event(
         self,
         *,
-        replace_scope: Mapping[str, Any] | None = None,
-        replace_all_scopes: Sequence[Mapping[str, Any]] | None = None,
+        manifest: RunManifest,
+        phase: str,
+        source_bucket: str,
+        source_key: str,
+        source_document: Mapping[str, Any],
+        created_at: str,
+        metrics: Mapping[str, Any] | None = None,
+        evaluation: Mapping[str, Any] | None = None,
+        promotion: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
-        if (replace_scope is None) == (replace_all_scopes is None):
-            raise ValueError("catalog publication requires exactly one replacement mode")
-        for _attempt in range(8):
-            pointer_document = self.control.get_json_optional(CATALOG_POINTER_KEY)
-            pointer_etag = (
-                str(self.control.head(CATALOG_POINTER_KEY)["etag"])
-                if pointer_document is not None
-                else None
-            )
-            if pointer_document is None:
-                current = empty_catalog_generation(generated_at=self.clock.utc_now())
-            else:
-                pointer = validate_catalog_pointer(pointer_document)
-                current = validate_catalog_generation(
-                    self.control.get_json(pointer["generation_key"]),
-                    expected_digest=pointer["generation_sha256"],
-                )
-                if current["generated_at"] != pointer["generated_at"]:
-                    raise ValueError("catalog pointer timestamp disagrees with its generation")
-            if replace_all_scopes is not None:
-                scopes = [deepcopy(dict(scope)) for scope in replace_all_scopes]
-            else:
-                assert replace_scope is not None
-                replacement = deepcopy(dict(replace_scope))
-                replacement_slug = str(replacement.get("goal_slug") or "")
-                current_scope = next(
-                    (
-                        scope
-                        for scope in current["scopes"]
-                        if str(scope.get("goal_slug") or "") == replacement_slug
-                    ),
-                    None,
-                )
-                scopes = [
-                    deepcopy(dict(scope))
-                    for scope in current["scopes"]
-                    if str(scope.get("goal_slug") or "") != replacement_slug
-                ]
-                scopes.append(self._merge_catalog_scope(current_scope, replacement))
-            generation = validate_catalog_generation(
-                {
-                    "schema_version": CATALOG_GENERATION_SCHEMA_VERSION,
-                    "generated_at": self.clock.utc_now(),
-                    "scopes": sorted(
-                        scopes,
-                        key=lambda scope: str(scope.get("goal_slug") or ""),
-                    ),
-                }
-            )
-            digest = catalog_generation_digest(generation)
-            generation_key = catalog_generation_key(digest)
-            try:
-                self.control.put_json(
-                    generation_key,
-                    generation,
-                    create_only=True,
-                )
-            except ConditionalWriteConflict:
-                stored = validate_catalog_generation(
-                    self.control.get_json(generation_key),
-                    expected_digest=digest,
-                )
-                if stored != generation:
-                    raise ValueError("immutable catalog generation conflicts with storage")
-            pointer = {
-                "schema_version": CATALOG_POINTER_SCHEMA_VERSION,
-                "generation_sha256": digest,
-                "generation_key": generation_key,
-                "generated_at": generation["generated_at"],
-            }
-            try:
-                self.control.put_json(
-                    CATALOG_POINTER_KEY,
-                    pointer,
-                    create_only=pointer_document is None,
-                    if_match=pointer_etag,
-                )
-                return pointer
-            except ConditionalWriteConflict:
-                continue
-        raise ConditionalWriteConflict("catalog pointer changed during every CAS attempt")
-
-    def _publish_catalog_scope_from_v2(self, *, goal_slug: str) -> dict[str, Any]:
-        scope_key = goal_variant_scope_key(goal_slug=goal_slug)
-        index = self.control.get_json(f"{scope_key}/index.json")
-        if int(index.get("schema_version") or 0) != GOAL_VARIANT_INDEX_SCHEMA_VERSION:
-            raise ValueError("unsupported goal variant index schema")
-        if index.get("scope") != {"goal_slug": goal_slug}:
-            raise ValueError("goal variant index scope mismatch")
-        variants = index.get("variants")
-        if not isinstance(variants, list):
-            raise ValueError("goal variant index variants must be a list")
-        runs: list[dict[str, Any]] = []
-        for variant in variants:
-            if not isinstance(variant, Mapping):
-                raise ValueError("goal variant index contains an invalid entry")
-            variant_id = str(variant.get("variant_id") or "")
-            run_index = self.control.get_json_optional(f"{scope_key}/runs/{variant_id}.json")
-            if run_index is None:
-                continue
-            raw_runs = run_index.get("runs")
-            if (
-                int(run_index.get("schema_version") or 0) != GOAL_VARIANT_RUN_INDEX_SCHEMA_VERSION
-                or run_index.get("scope") != {"goal_slug": goal_slug, "variant_id": variant_id}
-                or not isinstance(raw_runs, list)
-            ):
-                raise ValueError("goal variant run index is malformed")
-            if any(not isinstance(item, Mapping) for item in raw_runs):
-                raise ValueError("goal variant run index contains an invalid entry")
-            runs.extend(dict(item) for item in raw_runs)
-        return self._publish_catalog_generation(
-            replace_scope={
-                "goal_slug": goal_slug,
-                "variants": [dict(item) for item in variants],
-                "runs": runs,
-            }
+        if manifest.goal_variant is None:
+            raise ValueError("run manifest has no goal variant descriptor")
+        descriptor = validate_goal_variant_descriptor(manifest.goal_variant)
+        run = self._catalog_run_record(
+            manifest,
+            descriptor=descriptor,
+            state="running",
+            updated_at=created_at,
+            metrics=metrics,
         )
+        if evaluation is not None:
+            run["evaluation"] = deepcopy(dict(evaluation))
+        if promotion is not None:
+            run["promotion"] = deepcopy(dict(promotion))
+        return build_goal_catalog_event(
+            phase=phase,
+            goal_slug=manifest.goal_slug,
+            run_id=manifest.run_id,
+            attempt_id=manifest.attempt_id,
+            source_bucket=source_bucket,  # type: ignore[arg-type]
+            source_key=source_key,
+            source_document=source_document,
+            created_at=created_at,
+            variant=descriptor,
+            run=run,
+        )
+
+    def _put_goal_catalog_event(self, event: Mapping[str, Any]) -> dict[str, Any]:
+        validated = self._goal_catalog_projector().put_event(event)
+        if not validated:
+            raise RuntimeError("goal catalog event write returned no ETag")
+        return dict(event)
+
+    def _project_goal_catalog_best_effort(
+        self,
+        goal_slug: str,
+        *,
+        event_id: str,
+    ) -> bool:
+        outcome: dict[str, Any] = {}
+
+        def project() -> None:
+            try:
+                self._goal_catalog_projector().reconcile(goal_slug)
+                outcome["succeeded"] = True
+            except Exception as exc:
+                outcome["error"] = exc
+
+        worker = threading.Thread(
+            target=project,
+            name=f"gradlab-immediate-catalog-{event_id[:12]}",
+            daemon=True,
+        )
+        worker.start()
+        worker.join(timeout=2.0)
+        if outcome.get("succeeded") is True:
+            return True
+
+        def queue_repair() -> None:
+            try:
+                from gradlab.catalog_jobs import enqueue_catalog_projection
+
+                enqueue_catalog_projection(
+                    repo_root=Path(__file__).resolve().parents[2],
+                    goal_slug=goal_slug,
+                    request_id=event_id,
+                )
+            except Exception:
+                pass
+
+        threading.Thread(
+            target=queue_repair,
+            name=f"gradlab-queue-catalog-{event_id[:12]}",
+            daemon=True,
+        ).start()
+        return False
+
+    def catalog_generation(self, goal_slug: str | None = None) -> dict[str, Any] | None:
+        selected_goal = str(goal_slug or "").strip()
+        if not selected_goal:
+            pointer_keys = sorted(
+                key
+                for key in self.control.iter_keys(f"{GOAL_CATALOG_ROOT}/goals/")
+                if key.endswith("/current.json")
+            )
+            if not pointer_keys:
+                return None
+            if len(pointer_keys) != 1:
+                raise ValueError("catalog_generation requires goal_slug when multiple goals exist")
+            pointer_document = self.control.get_json(pointer_keys[0])
+            selected_goal = str(pointer_document.get("goal_slug") or "")
+        return self._goal_catalog_projector().generation(selected_goal)
 
     @staticmethod
     def _catalog_resolved_goal(
@@ -416,14 +436,6 @@ class RunAuthority:
         if goal_contract_sha256(resolved_goal) != descriptor["effective_goal_contract_sha256"]:
             raise ValueError("stored recipe resolved goal disagrees with its variant")
         return deepcopy(dict(resolved_goal))
-
-    @staticmethod
-    def _catalog_variant_descriptor(value: Mapping[str, Any]) -> dict[str, Any]:
-        return {
-            key: deepcopy(item)
-            for key, item in value.items()
-            if key not in CATALOG_VARIANT_PROJECTION_FIELDS
-        }
 
     @staticmethod
     def _catalog_run_record(
@@ -478,6 +490,7 @@ class RunAuthority:
                 if existing
                 else manifest.created_at
             ),
+            "attempt_created_at": manifest.created_at,
             "updated_at": (
                 str(existing.get("updated_at") or manifest.created_at)
                 if (
@@ -534,207 +547,81 @@ class RunAuthority:
     ) -> dict[str, Any]:
         """Publish a complete immutable generation, then advance one CAS pointer."""
 
-        scopes: dict[str, dict[str, Any]] = {}
+        goal_slugs: set[str] = set()
         for manifest, terminal in records:
-            if manifest.goal_variant is None:
-                raise ValueError(f"run {manifest.run_id} has no goal variant descriptor")
-            descriptor = validate_goal_variant_descriptor(manifest.goal_variant)
-            scope = scopes.setdefault(
-                manifest.goal_slug,
-                {
-                    "goal_slug": manifest.goal_slug,
-                    "variants": {},
-                    "runs": {},
-                },
+            manifest_event = self._goal_catalog_event_for_manifest(manifest)
+            self._goal_catalog_projector().put_event(manifest_event)
+            goal_slugs.add(manifest.goal_slug)
+            if terminal is not None:
+                terminal_key = (
+                    f"{self.run_prefix(manifest.run_id)}/attempts/"
+                    f"{manifest.attempt_id}/terminal.json"
+                )
+                terminal_event = self._goal_catalog_event_for_terminal(
+                    manifest,
+                    terminal,
+                    source_key=terminal_key,
+                    metrics=None,
+                )
+                self._goal_catalog_projector().put_event(terminal_event)
+            for eval_key in self.evaluation.iter_keys(
+                f"{self.run_prefix(manifest.run_id)}/evals/"
+            ):
+                if not eval_key.endswith("/verified-result.json"):
+                    continue
+                result = EvalResult.from_dict(self.evaluation.get_json(eval_key))
+                metrics = {
+                    str(name): float(value)
+                    for name, value in result.aggregates.items()
+                    if not isinstance(value, bool) and isinstance(value, int | float)
+                }
+                eval_event = self._goal_catalog_enrichment_event(
+                    manifest=manifest,
+                    phase="verified-evaluation",
+                    source_bucket="evaluation",
+                    source_key=eval_key,
+                    source_document=result.to_dict(),
+                    created_at=result.completed_at,
+                    metrics=metrics,
+                    evaluation={
+                        "status": result.status,
+                        "checkpoint_id": result.checkpoint_id,
+                        "idempotency_key": result.idempotency_key,
+                        "completed_at": result.completed_at,
+                        "metrics": metrics,
+                    },
+                )
+                self._goal_catalog_projector().put_event(eval_event)
+            promotion_document = self.control.get_json_optional(
+                f"{self.run_prefix(manifest.run_id)}/promotion.json"
             )
-            variants = scope["variants"]
-            runs = scope["runs"]
-            variant_id = str(descriptor["variant_id"])
-            existing_variant = variants.get(variant_id)
-            if existing_variant is not None and goal_variant_catalog_contract(
-                self._catalog_variant_descriptor(existing_variant)
-            ) != goal_variant_catalog_contract(descriptor):
-                raise ValueError("goal variant descriptor conflicts during rebuild")
-            exact_resolution_run_id = (
-                str(existing_variant.get("exact_resolution_run_id") or "")
-                if existing_variant
-                else ""
-            )
-            if not exact_resolution_run_id:
-                try:
-                    stored_recipe = self.recipe_document(manifest.recipe_sha256)
-                except FileNotFoundError, KeyError, ValueError:
-                    stored_recipe = None
-                if stored_recipe is not None:
-                    exact_resolution_run_id = manifest.run_id
-            else:
-                try:
-                    stored_recipe = self.recipe_document(manifest.recipe_sha256)
-                except FileNotFoundError, KeyError, ValueError:
-                    stored_recipe = None
-            resolved_goal = (
-                self._catalog_resolved_goal(stored_recipe, descriptor=descriptor)
-                if stored_recipe is not None
-                else deepcopy(existing_variant.get("resolved_goal"))
-                if existing_variant is not None
-                and isinstance(existing_variant.get("resolved_goal"), Mapping)
-                else None
-            )
-            variants[variant_id] = {
-                **descriptor,
-                "descriptor_key": (
-                    f"{goal_variant_scope_key(goal_slug=manifest.goal_slug)}"
-                    f"/descriptors/{variant_id}.json"
-                ),
-                "first_run_id": (
-                    str(existing_variant.get("first_run_id") or manifest.run_id)
-                    if existing_variant
-                    else manifest.run_id
-                ),
-                **(
-                    {"exact_resolution_run_id": exact_resolution_run_id}
-                    if exact_resolution_run_id
-                    else {}
-                ),
-                **({"resolved_goal": resolved_goal} if resolved_goal is not None else {}),
-            }
-            runs[manifest.run_id] = self._catalog_run_record(
-                manifest,
-                descriptor=descriptor,
-                state=terminal.state if terminal is not None else "running",
-                updated_at=(terminal.completed_at if terminal is not None else manifest.created_at),
-                stop_reason=terminal.stop_reason if terminal is not None else None,
-                final_step=terminal.final_step if terminal is not None else None,
-                early_stop=terminal.early_stop if terminal is not None else None,
-            )
-        normalized_scopes = [
-            {
-                "goal_slug": goal_slug,
-                "variants": sorted(
-                    scope["variants"].values(),
-                    key=lambda item: (
-                        str(item.get("label") or "").casefold(),
-                        str(item.get("variant_id") or ""),
-                    ),
-                ),
-                "runs": sorted(
-                    scope["runs"].values(),
-                    key=lambda item: (
-                        str(item.get("created_at") or ""),
-                        str(item.get("run_id") or ""),
-                    ),
-                    reverse=True,
-                ),
-            }
-            for goal_slug, scope in sorted(scopes.items())
-        ]
-        return self._publish_catalog_generation(
-            replace_all_scopes=normalized_scopes,
-        )
+            if promotion_document is not None:
+                promotion = PromotionReceipt.from_dict(promotion_document)
+                promotion_event = self._goal_catalog_enrichment_event(
+                    manifest=manifest,
+                    phase="promotion",
+                    source_bucket="control",
+                    source_key=f"{self.run_prefix(manifest.run_id)}/promotion.json",
+                    source_document=promotion.to_dict(),
+                    created_at=promotion.promoted_at,
+                    promotion=promotion.to_dict(),
+                )
+                self._goal_catalog_projector().put_event(promotion_event)
+        results = {
+            goal_slug: self._goal_catalog_projector().reconcile(goal_slug).to_dict()
+            for goal_slug in sorted(goal_slugs)
+        }
+        return {"schema_version": 1, "goals": results}
 
     def register_goal_variant(self, manifest: RunManifest) -> dict[str, Any]:
-        if manifest.goal_variant is None:
-            raise ValueError("run manifest has no goal variant descriptor")
-        descriptor = validate_goal_variant_descriptor(manifest.goal_variant)
-        scope_key = goal_variant_scope_key(goal_slug=manifest.goal_slug)
-        descriptor_key = f"{scope_key}/descriptors/{descriptor['variant_id']}.json"
-        try:
-            self.control.put_json(descriptor_key, descriptor, create_only=True)
-        except ConditionalWriteConflict:
-            stored_descriptor = validate_goal_variant_descriptor(
-                self.control.get_json(descriptor_key)
-            )
-            if goal_variant_catalog_contract(stored_descriptor) != goal_variant_catalog_contract(
-                descriptor
-            ):
-                raise ValueError("immutable goal variant descriptor conflicts with storage")
-            descriptor = stored_descriptor
-
-        index_key = f"{scope_key}/index.json"
-        for _attempt in range(8):
-            current = self.control.get_json_optional(index_key)
-            current_etag = (
-                str(self.control.head(index_key)["etag"]) if current is not None else None
-            )
-            if current is None:
-                entries: list[dict[str, Any]] = []
-            else:
-                if int(current.get("schema_version") or 0) != GOAL_VARIANT_INDEX_SCHEMA_VERSION:
-                    raise ValueError("unsupported goal variant index schema")
-                identity = current.get("scope")
-                if not isinstance(identity, Mapping) or dict(identity) != {
-                    "goal_slug": manifest.goal_slug,
-                }:
-                    raise ValueError("goal variant index scope mismatch")
-                raw_entries = current.get("variants")
-                if not isinstance(raw_entries, list):
-                    raise ValueError("goal variant index variants must be a list")
-                entries = [dict(item) for item in raw_entries if isinstance(item, Mapping)]
-                if len(entries) != len(raw_entries):
-                    raise ValueError("goal variant index contains an invalid entry")
-
-            by_id = {str(item.get("variant_id") or ""): item for item in entries}
-            existing = by_id.get(str(descriptor["variant_id"]))
-            exact_resolution_run_id = (
-                str(existing.get("exact_resolution_run_id") or "") if existing else ""
-            )
-            if not exact_resolution_run_id:
-                try:
-                    stored_recipe = self.recipe_document(manifest.recipe_sha256)
-                except FileNotFoundError, KeyError, ValueError:
-                    stored_recipe = None
-                if stored_recipe is not None:
-                    exact_resolution_run_id = manifest.run_id
-            else:
-                try:
-                    stored_recipe = self.recipe_document(manifest.recipe_sha256)
-                except FileNotFoundError, KeyError, ValueError:
-                    stored_recipe = None
-            resolved_goal = (
-                self._catalog_resolved_goal(stored_recipe, descriptor=descriptor)
-                if stored_recipe is not None
-                else deepcopy(existing.get("resolved_goal"))
-                if existing is not None and isinstance(existing.get("resolved_goal"), Mapping)
-                else None
-            )
-            by_id[str(descriptor["variant_id"])] = {
-                **descriptor,
-                "descriptor_key": descriptor_key,
-                "first_run_id": (
-                    str(existing.get("first_run_id") or manifest.run_id)
-                    if existing
-                    else manifest.run_id
-                ),
-                **(
-                    {"exact_resolution_run_id": exact_resolution_run_id}
-                    if exact_resolution_run_id
-                    else {}
-                ),
-                **({"resolved_goal": resolved_goal} if resolved_goal is not None else {}),
-            }
-            document = {
-                "schema_version": GOAL_VARIANT_INDEX_SCHEMA_VERSION,
-                "scope": {"goal_slug": manifest.goal_slug},
-                "variants": sorted(
-                    by_id.values(),
-                    key=lambda item: (
-                        str(item.get("label") or "").casefold(),
-                        str(item.get("variant_id") or ""),
-                    ),
-                ),
-            }
-            try:
-                self.control.put_json(
-                    index_key,
-                    document,
-                    create_only=current is None,
-                    if_match=current_etag,
-                )
-                self.update_goal_variant_run(manifest, state="running")
-                return document
-            except ConditionalWriteConflict:
-                continue
-        raise ConditionalWriteConflict("goal variant index changed during every CAS attempt")
+        event = self._goal_catalog_event_for_manifest(manifest)
+        self._goal_catalog_projector().put_event(event)
+        self._project_goal_catalog_best_effort(
+            manifest.goal_slug,
+            event_id=str(event["event_id"]),
+        )
+        pointer = self._goal_catalog_projector().pointer(manifest.goal_slug)
+        return dict(pointer or {"event_key": goal_catalog_event_key(event)})
 
     def update_goal_variant_run(
         self,
@@ -747,77 +634,11 @@ class RunAuthority:
         final_step: int | None = None,
         early_stop: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
-        if manifest.goal_variant is None:
-            raise ValueError("run manifest has no goal variant descriptor")
-        descriptor = validate_goal_variant_descriptor(manifest.goal_variant)
-        scope_key = goal_variant_scope_key(goal_slug=manifest.goal_slug)
-        variant_id = str(descriptor["variant_id"])
-        index_key = f"{scope_key}/runs/{variant_id}.json"
-        for _attempt in range(8):
-            current = self.control.get_json_optional(index_key)
-            current_etag = (
-                str(self.control.head(index_key)["etag"]) if current is not None else None
-            )
-            if current is None:
-                entries: list[dict[str, Any]] = []
-            else:
-                if int(current.get("schema_version") or 0) != GOAL_VARIANT_RUN_INDEX_SCHEMA_VERSION:
-                    raise ValueError("unsupported goal variant run index schema")
-                if current.get("scope") != {
-                    "goal_slug": manifest.goal_slug,
-                    "variant_id": variant_id,
-                }:
-                    raise ValueError("goal variant run index scope mismatch")
-                raw_entries = current.get("runs")
-                if not isinstance(raw_entries, list):
-                    raise ValueError("goal variant run index runs must be a list")
-                entries = [dict(item) for item in raw_entries if isinstance(item, Mapping)]
-                if len(entries) != len(raw_entries):
-                    raise ValueError("goal variant run index contains an invalid entry")
-
-            by_id = {str(item.get("run_id") or ""): item for item in entries}
-            existing = by_id.get(manifest.run_id)
-            by_id[manifest.run_id] = self._catalog_run_record(
-                manifest,
-                descriptor=descriptor,
-                state=state,
-                existing=existing,
-                updated_at=updated_at,
-                metrics=metrics,
-                stop_reason=stop_reason,
-                final_step=final_step,
-                early_stop=early_stop,
-            )
-            document = {
-                "schema_version": GOAL_VARIANT_RUN_INDEX_SCHEMA_VERSION,
-                "scope": {
-                    "goal_slug": manifest.goal_slug,
-                    "variant_id": variant_id,
-                },
-                "runs": sorted(
-                    by_id.values(),
-                    key=lambda item: (
-                        str(item.get("created_at") or ""),
-                        str(item.get("run_id") or ""),
-                    ),
-                    reverse=True,
-                ),
-            }
-            try:
-                self.control.put_json(
-                    index_key,
-                    document,
-                    create_only=current is None,
-                    if_match=current_etag,
-                )
-                self._publish_catalog_scope_from_v2(
-                    goal_slug=manifest.goal_slug,
-                )
-                return document
-            except ConditionalWriteConflict:
-                continue
-        raise ConditionalWriteConflict("goal variant run index changed during every CAS attempt")
-
+        if state == "running" and stop_reason is None:
+            return self.register_goal_variant(manifest)
+        raise ValueError(
+            "terminal goal catalog updates require an authoritative terminal receipt"
+        )
     def update_goal_variant_run_best_effort(
         self,
         manifest: RunManifest,
@@ -880,18 +701,17 @@ class RunAuthority:
         if manifest.goal_variant is None:
             return False
         try:
-            self.register_goal_variant(manifest)
-        except Exception as exc:
-            try:
-                self.record_goal_variant_projection(manifest, error=exc)
-            except Exception:
-                pass
+            event = self._goal_catalog_event_for_manifest(manifest)
+            self._goal_catalog_projector().put_event(event)
+        except Exception:
             return False
-        self.record_goal_variant_projection(manifest)
-        return True
+        return self._project_goal_catalog_best_effort(
+            manifest.goal_slug,
+            event_id=str(event["event_id"]),
+        )
 
     def clear_goal_variant_catalog(self) -> dict[str, int]:
-        catalog_keys = sorted(self.control.iter_keys("goal-variants/"))
+        catalog_keys = sorted(self.control.iter_keys(f"{GOAL_CATALOG_ROOT}/"))
         projection_keys = sorted(
             key
             for key in self.control.iter_keys("runs/")
@@ -905,6 +725,9 @@ class RunAuthority:
         return {
             "catalog_objects": len(catalog_keys),
             "projection_receipts": len(projection_keys),
+            "source_events_preserved": sum(
+                1 for _ in self.control.iter_keys("run-index-events/v1/goals/")
+            ),
         }
 
     def acquire_lease(
@@ -1431,19 +1254,146 @@ class RunAuthority:
         )
 
     def put_verified_eval_result(self, result: EvalResult) -> str:
-        return self.evaluation.put_json(
-            f"{self.run_prefix(result.run_id)}/evals/{result.idempotency_key}/verified-result.json",
+        key = (
+            f"{self.run_prefix(result.run_id)}/evals/"
+            f"{result.idempotency_key}/verified-result.json"
+        )
+        try:
+            manifest = self._manifest_for_attempt(result.run_id)
+        except ValueError:
+            manifest = None
+        aggregate_metrics = {
+            str(name): float(value)
+            for name, value in result.aggregates.items()
+            if not isinstance(value, bool) and isinstance(value, int | float)
+        }
+        intent_document = self.eval_intent(
+            run_id=result.run_id,
+            idempotency_key=result.idempotency_key,
+        )
+        execution_contract = (
+            intent_document.get("execution_contract")
+            if isinstance(intent_document, Mapping)
+            else None
+        )
+        criteria: list[dict[str, Any]] = []
+        for raw_rule in (
+            execution_contract.get("acceptance", ())
+            if isinstance(execution_contract, Mapping)
+            else ()
+        ):
+            if not isinstance(raw_rule, Mapping):
+                continue
+            metric = str(raw_rule.get("metric") or "")
+            operator = str(raw_rule.get("operator") or "")
+            threshold = raw_rule.get("threshold")
+            value = aggregate_metrics.get(metric)
+            if (
+                not metric
+                or operator not in EARLY_STOP_OPERATORS
+                or isinstance(threshold, bool)
+                or not isinstance(threshold, int | float)
+            ):
+                continue
+            criteria.append(
+                {
+                    "metric": metric,
+                    "operator": operator,
+                    "threshold": float(threshold),
+                    "value": value,
+                    "passed": (
+                        None
+                        if value is None
+                        else bool(EARLY_STOP_OPERATORS[operator](value, float(threshold)))
+                    ),
+                }
+            )
+        event = (
+            self._goal_catalog_enrichment_event(
+                manifest=manifest,
+                phase="verified-evaluation",
+                source_bucket="evaluation",
+                source_key=key,
+                source_document=result.to_dict(),
+                created_at=result.completed_at,
+                metrics=aggregate_metrics,
+                evaluation={
+                    "status": result.status,
+                    "checkpoint_id": result.checkpoint_id,
+                    "idempotency_key": result.idempotency_key,
+                    "completed_at": result.completed_at,
+                    "metrics": aggregate_metrics,
+                    "criteria": criteria,
+                    "episodes_planned": (
+                        int(execution_contract.get("episodes") or 0)
+                        if isinstance(execution_contract, Mapping)
+                        else None
+                    ),
+                    "episodes_completed": int(
+                        aggregate_metrics.get("episodes_completed") or len(result.episode_results)
+                    ),
+                    "failure_count": (
+                        int(aggregate_metrics["failure_count"])
+                        if "failure_count" in aggregate_metrics
+                        else None
+                    ),
+                    "seed": (
+                        int(execution_contract["seed"])
+                        if isinstance(execution_contract, Mapping)
+                        and isinstance(execution_contract.get("seed"), int)
+                        else None
+                    ),
+                },
+            )
+            if manifest is not None
+            else None
+        )
+        if event is not None:
+            self._goal_catalog_projector().put_event(event)
+        etag = self.evaluation.put_json(
+            key,
             result.to_dict(),
             create_only=True,
         )
+        if manifest is not None and event is not None:
+            self._project_goal_catalog_best_effort(
+                manifest.goal_slug,
+                event_id=str(event["event_id"]),
+            )
+        return etag
 
     def create_promotion(self, receipt: PromotionReceipt) -> str:
+        key = f"{self.run_prefix(receipt.run_id)}/promotion.json"
+        try:
+            manifest = self._manifest_for_attempt(receipt.run_id)
+        except ValueError:
+            manifest = None
+        event = (
+            self._goal_catalog_enrichment_event(
+                manifest=manifest,
+                phase="promotion",
+                source_bucket="control",
+                source_key=key,
+                source_document=receipt.to_dict(),
+                created_at=receipt.promoted_at,
+                promotion=receipt.to_dict(),
+            )
+            if manifest is not None
+            else None
+        )
+        if event is not None:
+            self._goal_catalog_projector().put_event(event)
         etag = self.control.put_json(
-            f"{self.run_prefix(receipt.run_id)}/promotion.json",
+            key,
             receipt.to_dict(),
             create_only=True,
         )
         self._update_public_index(receipt.run_id, promotion=receipt)
+        if manifest is not None and event is not None:
+            self._project_goal_catalog_best_effort(
+                manifest.goal_slug,
+                event_id=str(event["event_id"]),
+            )
         return etag
 
     def early_stop_receipt(
@@ -1536,12 +1486,43 @@ class RunAuthority:
             != int(selected.get("checkpoint_step") or 0)
         ):
             raise ValueError("promotion is not the lowest-step accepted checkpoint")
+        terminal_key = f"{self.run_prefix(receipt.run_id)}/terminal.json"
+        attempt_terminal_key = (
+            f"{self.run_prefix(receipt.run_id)}/attempts/{receipt.attempt_id}/terminal.json"
+        )
+        try:
+            manifest = self._manifest_for_attempt(receipt.run_id, receipt.attempt_id)
+        except ValueError:
+            manifest = None
+        attempt_terminal_exists = (
+            self.control.get_json_optional(attempt_terminal_key) is not None
+        )
+        event = (
+            self._goal_catalog_event_for_terminal(
+                manifest,
+                receipt,
+                source_key=terminal_key,
+                metrics=None,
+            )
+            if manifest is not None and not attempt_terminal_exists
+            else None
+        )
+        if event is not None:
+            self._goal_catalog_projector().put_event(event)
         etag = self.control.put_json(
-            f"{self.run_prefix(receipt.run_id)}/terminal.json",
+            terminal_key,
             receipt.to_dict(),
             create_only=True,
         )
-        self._update_run_index_from_terminal(receipt, metrics=None)
+        if manifest is not None:
+            self._project_goal_catalog_best_effort(
+                manifest.goal_slug,
+                event_id=(
+                    str(event["event_id"])
+                    if event is not None
+                    else canonical_json_sha256(receipt.to_dict())
+                ),
+            )
         return etag
 
     def create_attempt_terminal(
@@ -1550,12 +1531,35 @@ class RunAuthority:
         *,
         metrics: Mapping[str, Any] | None = None,
     ) -> str:
+        terminal_key = (
+            f"{self.run_prefix(receipt.run_id)}/attempts/{receipt.attempt_id}/terminal.json"
+        )
+        try:
+            manifest = self._manifest_for_attempt(receipt.run_id, receipt.attempt_id)
+        except ValueError:
+            manifest = None
+        event = (
+            self._goal_catalog_event_for_terminal(
+                manifest,
+                receipt,
+                source_key=terminal_key,
+                metrics=metrics,
+            )
+            if manifest is not None
+            else None
+        )
+        if event is not None:
+            self._goal_catalog_projector().put_event(event)
         etag = self.control.put_json(
-            f"{self.run_prefix(receipt.run_id)}/attempts/{receipt.attempt_id}/terminal.json",
+            terminal_key,
             receipt.to_dict(),
             create_only=True,
         )
-        self._update_run_index_from_terminal(receipt, metrics=metrics)
+        if manifest is not None and event is not None:
+            self._project_goal_catalog_best_effort(
+                manifest.goal_slug,
+                event_id=str(event["event_id"]),
+            )
         return etag
 
     def _update_run_index_from_terminal(
@@ -1577,14 +1581,19 @@ class RunAuthority:
             return
         if manifest.attempt_id != receipt.attempt_id:
             return
-        self.update_goal_variant_run_best_effort(
+        event = self._goal_catalog_event_for_terminal(
             manifest,
-            state=receipt.state,
-            updated_at=receipt.completed_at,
+            receipt,
+            source_key=(
+                f"{self.run_prefix(receipt.run_id)}/attempts/"
+                f"{receipt.attempt_id}/terminal.json"
+            ),
             metrics=metrics,
-            stop_reason=receipt.stop_reason,
-            final_step=receipt.final_step,
-            early_stop=receipt.early_stop,
+        )
+        self._goal_catalog_projector().put_event(event)
+        self._project_goal_catalog_best_effort(
+            manifest.goal_slug,
+            event_id=str(event["event_id"]),
         )
 
     def has_accepted_eval(self, run_id: str) -> bool:

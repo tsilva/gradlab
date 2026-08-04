@@ -16,15 +16,23 @@ def test_catalog_authority_helper_reads_only_allowlisted_control_documents(
     tmp_path: Path,
 ) -> None:
     control = tmp_path / "control"
-    key = "goal-variants/v2/goals/" + "a" * 64 + "/index.json"
+    key = "goal-catalog/v1/goals/" + "a" * 64 + "/current.json"
     target = control / key
     target.parent.mkdir(parents=True)
     target.write_text(
         json.dumps(
             {
-                "schema_version": 2,
-                "scope": {"goal_slug": "Mario/Level1-1"},
-                "variants": [],
+                "schema_version": 1,
+                "goal_slug": "Mario/Level1-1",
+                "generation_sha256": "b" * 64,
+                "generation_key": (
+                    "goal-catalog/v1/goals/"
+                    + "a" * 64
+                    + "/generations/"
+                    + "b" * 64
+                    + ".json"
+                ),
+                "generated_at": "2026-08-04T12:00:00Z",
             }
         ),
         encoding="utf-8",
@@ -39,11 +47,21 @@ def test_catalog_authority_helper_reads_only_allowlisted_control_documents(
     helper = start_catalog_authority_helper(tmp_path)
     try:
         assert helper.get_json_optional(key) == {
-            "schema_version": 2,
-            "scope": {"goal_slug": "Mario/Level1-1"},
-            "variants": [],
+            "schema_version": 1,
+            "goal_slug": "Mario/Level1-1",
+            "generation_sha256": "b" * 64,
+            "generation_key": (
+                "goal-catalog/v1/goals/"
+                + "a" * 64
+                + "/generations/"
+                + "b" * 64
+                + ".json"
+            ),
+            "generated_at": "2026-08-04T12:00:00Z",
         }
         with pytest.raises(CatalogIntegrityError, match="unsupported control object"):
             helper.get_json_optional("runs/not-a-run/manifest.json")
+        with pytest.raises(CatalogIntegrityError, match="unsupported control object"):
+            helper.get_json_optional("goal-variants/v3/current.json")
     finally:
         helper.close()
