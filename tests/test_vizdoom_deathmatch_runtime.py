@@ -13,6 +13,25 @@ from gradlab.actor_critic_policy import SharedActorCriticPolicy
 GOAL_ROOT = Path("experiments/goals/VizdoomDeathmatch-v1")
 
 
+def test_deathmatch_recipe_defaults_to_the_sample_efficient_custom_ppo_profile() -> None:
+    document = compose_train_document(
+        GOAL_ROOT / "_goal.yaml",
+        GOAL_ROOT / "recipes/ppo.yaml",
+    )
+    train_config = document["train_config"]
+
+    assert train_config["timesteps"] == 500_000_000
+    assert train_config["frame_skip"] == 2
+    assert train_config["obs_crop"] == [0, 32, 0, 0]
+    assert train_config["obs_crop_mode"] == "mask"
+    assert train_config["obs_crop_fill"] == 0
+    backend = train_config["training_backend"]
+    assert backend["id"] == "gradlab.ppo"
+    assert backend["config"]["execution_profile"] == "sb3-parity"
+    assert backend["config"]["gamma"] == 0.995
+    assert backend["config"]["gae_lambda"] == 0.95
+
+
 def test_deathmatch_recipe_runs_through_the_real_single_player_vector_runtime() -> None:
     document = compose_train_document(
         GOAL_ROOT / "_goal.yaml",

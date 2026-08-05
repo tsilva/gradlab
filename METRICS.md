@@ -135,6 +135,10 @@ does not read, project, or preserve noncurrent W&B or R2 schemas.
 - ViZDoom's `time_limit_reached` reason is the classified provider-native tic horizon, independent
   of policy frame skip. An unclassified provider truncation uses the fallback reason `timeout`.
   An evaluation watchdog expiry is an execution error and emits no episode or outcome metrics.
+- `VizdoomBasic-v1` and `VizdoomBasic-Plus-v1` end on the first physical pistol shot, identified by
+  decreasing `ammo2`. A simultaneous `hitcount` increase classifies that episode as success;
+  otherwise `shot_fired` classifies it as failure. A requested attack that consumes no ammunition
+  is not a shot, and an episode that never fires reaches the ordinary `time_limit_reached` timeout.
 - `VizdoomDefendLine-v1` and `VizdoomDefendLine-Plus-v1` classify reaching their 2,100-native-tic
   horizon as success and stop training when
   `train/outcome/success/across_starts/window_100/rate/min` reaches one. Each has one configured

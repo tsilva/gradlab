@@ -979,6 +979,42 @@ def _resolve_recipe_templates(value: object, replacements: Mapping[str, object])
     return rendered
 
 
+def _derive_critic_value_contract(
+    train_config: Mapping[str, Any],
+    *,
+    policy_environment_hash: str,
+) -> dict[str, Any] | None:
+    backend_value = train_config.get("training_backend")
+    backend = backend_value if isinstance(backend_value, Mapping) else {}
+    backend_config_value = backend.get("config")
+    backend_config = backend_config_value if isinstance(backend_config_value, Mapping) else {}
+    gamma = backend_config.get("gamma")
+    discount = (
+        float(gamma)
+        if not isinstance(gamma, bool)
+        and isinstance(gamma, int | float)
+        and math.isfinite(float(gamma))
+        and 0.0 <= float(gamma) <= 1.0
+        else None
+    )
+    from gradlab.policy_registry import (
+        backend_provenance_algorithm,
+        default_action_selection_mode,
+    )
+
+    algorithm_id = backend_provenance_algorithm(str(backend.get("id") or ""))
+    if algorithm_id not in {"ppo", "a2c"}:
+        return None
+    return {
+        "schema_version": 1,
+        "policy_environment_hash": policy_environment_hash,
+        "reward_stream": "task",
+        "discount": discount,
+        "action_sampling": default_action_selection_mode(algorithm_id),
+        "truncation_bootstrap": "terminal-value",
+    }
+
+
 def _build_recipe_contract(
     materialized_recipe: Mapping[str, Any],
     *,
@@ -1025,36 +1061,12 @@ def _build_recipe_contract(
         effective_training_metadata["env_config"]
     )
     recipe["policy_environment_hash"] = training_policy_environment_hash
-    backend_value = train_config.get("training_backend")
-    backend = backend_value if isinstance(backend_value, Mapping) else {}
-    backend_config_value = backend.get("config")
-    backend_config = backend_config_value if isinstance(backend_config_value, Mapping) else {}
-    gamma_value = backend_config.get("gamma")
-    discount = (
-        float(gamma_value)
-        if not isinstance(gamma_value, bool)
-        and isinstance(gamma_value, int | float)
-        and math.isfinite(float(gamma_value))
-        and 0.0 <= float(gamma_value) <= 1.0
-        else None
+    value_contract = _derive_critic_value_contract(
+        train_config,
+        policy_environment_hash=training_policy_environment_hash,
     )
-    backend_id = str(backend.get("id") or "")
-    from gradlab.policy_registry import (
-        backend_provenance_algorithm,
-        default_action_selection_mode,
-    )
-
-    algorithm_id = backend_provenance_algorithm(backend_id)
-    action_sampling = default_action_selection_mode(algorithm_id)
-    if algorithm_id in {"ppo", "a2c"}:
-        recipe["value_contract"] = {
-            "schema_version": 1,
-            "policy_environment_hash": training_policy_environment_hash,
-            "reward_stream": "task",
-            "discount": discount,
-            "action_sampling": action_sampling,
-            "truncation_bootstrap": "terminal-value",
-        }
+    if value_contract is not None:
+        recipe["value_contract"] = value_contract
     else:
         recipe.pop("value_contract", None)
     from gradlab.checkpoint_acceptance import (
@@ -1572,34 +1584,12 @@ def critic_value_contract(recipe_document: Mapping[str, Any]) -> dict[str, Any] 
         recipe.get("train_config"),
         label="recipe.json critic training config",
     )
-    backend_value = train_config.get("training_backend")
-    backend = backend_value if isinstance(backend_value, Mapping) else {}
-    from gradlab.policy_registry import backend_provenance_algorithm
-
-    algorithm_id = backend_provenance_algorithm(str(backend.get("id") or ""))
-    if algorithm_id not in {"ppo", "a2c"}:
-        return None
-    backend_config_value = backend.get("config")
-    backend_config = backend_config_value if isinstance(backend_config_value, Mapping) else {}
-    gamma = backend_config.get("gamma")
-    discount = (
-        float(gamma)
-        if not isinstance(gamma, bool)
-        and isinstance(gamma, int | float)
-        and math.isfinite(float(gamma))
-        and 0.0 <= float(gamma) <= 1.0
-        else None
+    expected = _derive_critic_value_contract(
+        train_config,
+        policy_environment_hash=derived_hash,
     )
-    expected = {
-        "schema_version": 1,
-        "policy_environment_hash": derived_hash,
-        "reward_stream": "task",
-        "discount": discount,
-        "action_sampling": "stochastic",
-        "truncation_bootstrap": (
-            "terminal-value" if str(backend.get("id") or "").startswith("sb3.") else "unknown"
-        ),
-    }
+    if expected is None:
+        return None
     if stored:
         for key, value in expected.items():
             if stored.get(key) != value:

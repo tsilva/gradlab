@@ -226,7 +226,7 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertEqual(document["goal"]["objective"], stable_retro["goal"]["objective"])
         self.assertNotIn("eval", stable_retro["goal"])
 
-    def test_vizdoom_basic_ppo_recipe_has_evaluated_kill_contract(self) -> None:
+    def test_vizdoom_basic_ppo_recipe_has_evaluated_first_shot_contract(self) -> None:
         document = compose_train_document(
             self.VIZDOOM_BASIC_GOAL,
             self.VIZDOOM_BASIC_RECIPE,
@@ -247,20 +247,26 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertEqual(train_config["env_args"]["use_restricted_actions"], "discrete")
         self.assertEqual(
             train_config["env_args"]["game_variables"],
-            ["killcount", "ammo2"],
+            ["hitcount", "ammo2"],
         )
         self.assertEqual(
             train_config["env_args"]["info_filter"],
-            {"mode": "all", "keys": ["killcount", "ammo2"]},
+            {"mode": "all", "keys": ["hitcount", "ammo2"]},
         )
         self.assertEqual(
-            train_config["task"]["events"]["goal_reached"],
-            {"signal": "kills", "operation": "increase"},
+            train_config["task"]["events"]["monster_hit"],
+            {"signal": "hits", "operation": "increase"},
+        )
+        self.assertEqual(
+            train_config["task"]["events"]["shot_fired"],
+            {"signal": "ammo", "operation": "decrease"},
         )
         self.assertEqual(
             train_config["task"]["termination"],
             {
-                "success": ["goal_reached"],
+                "success": ["monster_hit"],
+                "failure": ["shot_fired"],
+                "outcome_precedence": ["success", "failure", "timeout"],
                 "timeout": ["time_limit_reached"],
             },
         )
@@ -280,7 +286,7 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertEqual(eval_config["env_args"]["num_threads"], 16)
         self.assertEqual(
             eval_config["env_args"]["info_filter"],
-            {"mode": "all", "keys": ["killcount", "ammo2"]},
+            {"mode": "all", "keys": ["hitcount", "ammo2"]},
         )
         self.assertEqual(
             document["goal"]["eval"]["acceptance"],
@@ -442,7 +448,7 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertEqual(ppo["train_config"]["wandb_mode"], "online")
         self.assertEqual(a2c["train_config"]["wandb_mode"], "online")
 
-    def test_every_sb3_on_policy_recipe_declares_explicit_policy_model(self) -> None:
+    def test_every_actor_critic_recipe_declares_explicit_policy_model(self) -> None:
         recipes = sorted(Path("experiments/goals").glob("**/recipes/*.yaml"))
         actor_critic_recipes = 0
 
@@ -450,7 +456,7 @@ class ConfigValidationTests(unittest.TestCase):
             goal_path = recipe_path.parent.parent / "_goal.yaml"
             document = compose_train_document(goal_path, recipe_path)
             backend_id = document["train_config"]["training_backend"]["id"]
-            if backend_id not in {"sb3.ppo", "sb3.a2c"}:
+            if backend_id not in {"gradlab.ppo", "sb3.ppo", "sb3.a2c"}:
                 continue
             actor_critic_recipes += 1
             with self.subTest(recipe=recipe_path):

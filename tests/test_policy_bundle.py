@@ -494,6 +494,29 @@ def test_evaluated_bundle_defaults_to_training_contract_and_exposes_eval_explici
     assert critic_value_contract(document)["discount"] == 0.99
 
 
+def test_gradlab_ppo_recipe_value_contract_round_trips_for_checkpoint_playback() -> None:
+    resolved = compose_resolved_train_documents(
+        VIZDOOM_GOAL,
+        VIZDOOM_RECIPE,
+        recipe_overrides=("train.backend.id=gradlab.ppo",),
+        source_sha="a" * 40,
+    )
+    document = build_recipe_document(
+        resolved.effective,
+        repo_root=Path.cwd(),
+        source_commit="a" * 40,
+        run_description="GradLab PPO checkpoint playback regression",
+        seed=7,
+        runtime_image_ref=RUNTIME,
+        base_materialized_recipe=resolved.base,
+        canonical_goal=resolved.canonical_goal,
+    )
+
+    stored = document["recipe"]["value_contract"]
+    assert stored["truncation_bootstrap"] == "terminal-value"
+    assert critic_value_contract(document) == stored
+
+
 def test_evaluated_goal_preserves_manual_eval_when_automatic_eval_is_disabled() -> None:
     resolved = compose_resolved_train_documents(
         VIZDOOM_GOAL,
