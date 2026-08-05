@@ -199,6 +199,28 @@ def _identity_step_kernel(
         event_bits[lane] = 0
 
 
+@njit(cache=True, nogil=True, inline="always")
+def _identity_apply_event_outcome(
+    event_outcome,
+    outcome_priorities,
+    lane,
+    terminated,
+    truncated,
+    outcomes,
+):
+    if event_outcome == 0 or (
+        outcome_priorities[event_outcome] <= outcome_priorities[outcomes[lane]]
+    ):
+        return
+    outcomes[lane] = event_outcome
+    if event_outcome == 3:
+        terminated[lane] = False
+        truncated[lane] = True
+    else:
+        terminated[lane] = True
+        truncated[lane] = False
+
+
 @njit(cache=True, nogil=True)
 def _identity_equals_for_event_kernel(
     values,
@@ -207,6 +229,7 @@ def _identity_equals_for_event_kernel(
     consecutive_steps,
     event_bit,
     event_outcome,
+    outcome_priorities,
     terminated,
     truncated,
     outcomes,
@@ -221,17 +244,14 @@ def _identity_equals_for_event_kernel(
             continue
 
         event_bits[lane] |= event_bit
-        if event_outcome == 2:
-            terminated[lane] = True
-            truncated[lane] = False
-            outcomes[lane] = 2
-        elif event_outcome == 1 and outcomes[lane] != 2:
-            terminated[lane] = True
-            truncated[lane] = False
-            outcomes[lane] = 1
-        elif event_outcome == 3 and not terminated[lane]:
-            truncated[lane] = True
-            outcomes[lane] = 3
+        _identity_apply_event_outcome(
+            event_outcome,
+            outcome_priorities,
+            lane,
+            terminated,
+            truncated,
+            outcomes,
+        )
 
 
 @njit(cache=True, nogil=True)
@@ -243,6 +263,7 @@ def _identity_decrease_event_kernel(
     transition_targets,
     event_bit,
     event_outcome,
+    outcome_priorities,
     terminated,
     truncated,
     outcomes,
@@ -259,17 +280,14 @@ def _identity_decrease_event_kernel(
             continue
 
         event_bits[lane] |= event_bit
-        if event_outcome == 2:
-            terminated[lane] = True
-            truncated[lane] = False
-            outcomes[lane] = 2
-        elif event_outcome == 1 and outcomes[lane] != 2:
-            terminated[lane] = True
-            truncated[lane] = False
-            outcomes[lane] = 1
-        elif event_outcome == 3 and not terminated[lane]:
-            truncated[lane] = True
-            outcomes[lane] = 3
+        _identity_apply_event_outcome(
+            event_outcome,
+            outcome_priorities,
+            lane,
+            terminated,
+            truncated,
+            outcomes,
+        )
 
 
 @njit(cache=True, nogil=True)
@@ -281,6 +299,7 @@ def _identity_increase_event_kernel(
     transition_targets,
     event_bit,
     event_outcome,
+    outcome_priorities,
     terminated,
     truncated,
     outcomes,
@@ -297,17 +316,14 @@ def _identity_increase_event_kernel(
             continue
 
         event_bits[lane] |= event_bit
-        if event_outcome == 2:
-            terminated[lane] = True
-            truncated[lane] = False
-            outcomes[lane] = 2
-        elif event_outcome == 1 and outcomes[lane] != 2:
-            terminated[lane] = True
-            truncated[lane] = False
-            outcomes[lane] = 1
-        elif event_outcome == 3 and not terminated[lane]:
-            truncated[lane] = True
-            outcomes[lane] = 3
+        _identity_apply_event_outcome(
+            event_outcome,
+            outcome_priorities,
+            lane,
+            terminated,
+            truncated,
+            outcomes,
+        )
 
 
 @njit(cache=True, nogil=True)
@@ -594,6 +610,38 @@ class Outcome(IntEnum):
     SUCCESS = 1
     FAILURE = 2
     TIMEOUT = 3
+
+
+IDENTITY_TERMINAL_OUTCOME_NAMES = ("success", "failure", "timeout")
+DEFAULT_IDENTITY_OUTCOME_PRECEDENCE = ("failure", "success", "timeout")
+_IDENTITY_OUTCOME_BY_NAME = {
+    "success": Outcome.SUCCESS,
+    "failure": Outcome.FAILURE,
+    "timeout": Outcome.TIMEOUT,
+}
+
+
+def normalize_identity_outcome_precedence(
+    value: Any,
+    *,
+    label: str = "identity task termination.outcome_precedence",
+) -> tuple[str, ...]:
+    if value is None:
+        return DEFAULT_IDENTITY_OUTCOME_PRECEDENCE
+    if not isinstance(value, list | tuple) or not all(
+        isinstance(item, str) for item in value
+    ):
+        raise ValueError(
+            f"{label} must list success, failure, and timeout in descending priority order"
+        )
+    normalized = tuple(value)
+    if len(normalized) != len(IDENTITY_TERMINAL_OUTCOME_NAMES) or set(normalized) != set(
+        IDENTITY_TERMINAL_OUTCOME_NAMES
+    ):
+        raise ValueError(
+            f"{label} must list success, failure, and timeout exactly once"
+        )
+    return normalized
 
 
 @dataclass(frozen=True)
@@ -1289,6 +1337,9 @@ class IdentityTaskDefinition:
             raise ValueError("identity task supports at most 64 events")
         event_outcomes: dict[str, Outcome] = {}
         termination = dict(termination or {})
+        self.outcome_precedence = normalize_identity_outcome_precedence(
+            termination.get("outcome_precedence")
+        )
         for outcome_name, outcome in (
             ("success", Outcome.SUCCESS),
             ("failure", Outcome.FAILURE),
@@ -1340,6 +1391,7 @@ class IdentityTaskDefinition:
             action_values=self.action_values,
             signals=self.signals,
             events=self.events,
+            outcome_precedence=self.outcome_precedence,
         )
 
 
@@ -1356,6 +1408,7 @@ class IdentityTaskKernel:
         action_values: Sequence[Any] | None = None,
         signals: Mapping[str, SignalSource] | None = None,
         events: Sequence[IdentityEvent] = (),
+        outcome_precedence: Sequence[str] = DEFAULT_IDENTITY_OUTCOME_PRECEDENCE,
     ):
         self.num_envs = int(num_envs)
         self._native_observation_space = descriptor.native_observation_space
@@ -1384,6 +1437,10 @@ class IdentityTaskKernel:
         self._events = np.zeros(self.num_envs, dtype=np.uint64)
         self._episode_steps = np.zeros(self.num_envs, dtype=np.int64)
         self._max_episode_steps = int(max_episode_steps)
+        normalized_precedence = normalize_identity_outcome_precedence(outcome_precedence)
+        self._outcome_priorities = np.zeros(len(Outcome), dtype=np.uint8)
+        for priority, outcome_name in enumerate(reversed(normalized_precedence), start=1):
+            self._outcome_priorities[int(_IDENTITY_OUTCOME_BY_NAME[outcome_name])] = priority
         self._event_configs = tuple(events)
         self.event_names = tuple(event.name for event in self._event_configs)
         self.has_events = bool(self._event_configs)
@@ -1536,6 +1593,7 @@ class IdentityTaskKernel:
                         self._event_consecutive_steps[index],
                         np.uint64(1 << index),
                         int(event.outcome),
+                        self._outcome_priorities,
                         self._terminated,
                         self._truncated,
                         self._outcomes,
@@ -1550,6 +1608,7 @@ class IdentityTaskKernel:
                         self._event_transition_targets[index],
                         np.uint64(1 << index),
                         int(event.outcome),
+                        self._outcome_priorities,
                         self._terminated,
                         self._truncated,
                         self._outcomes,
@@ -1564,6 +1623,7 @@ class IdentityTaskKernel:
                         self._event_transition_targets[index],
                         np.uint64(1 << index),
                         int(event.outcome),
+                        self._outcome_priorities,
                         self._terminated,
                         self._truncated,
                         self._outcomes,

@@ -5,7 +5,7 @@ defaults:
 # Apply this file last so the Basic-specific values below override the shared defaults.
 - _self_
 # Give the goal a human-readable name for reports and operator-facing views.
-title: ViZDoom Basic monster elimination
+title: ViZDoom Basic first-shot accuracy
 # Override the shared settings used while training a policy for this goal.
 train:
   # Refine the family-wide rules that can stop training before its timestep cap.
@@ -35,28 +35,40 @@ train:
           # Control when the selected information keys are emitted.
           mode: all
           # List the provider information keys retained for task logic and telemetry.
-          keys: [killcount, ammo2]
+          keys: [hitcount, ammo2]
         # List the native game variables that ViZDoom must collect and expose.
-        game_variables: [killcount, ammo2]
+        game_variables: [hitcount, ammo2]
     # Reuse these Basic-specific task overrides in evaluation via the YAML anchor.
     task: &basic_task
       # Map task-level signal names to keys from the provider's per-step information.
       signals:
-        # Map the task-level `kills` signal to its provider information key.
-        kills: killcount
+        # Track confirmed hits independently of the scenario's kill reward.
+        hits: hitcount
+        # Track physical shots through ammunition consumption.
+        ammo: ammo2
       # Define discrete task events derived from changes in the declared signals.
       events:
-        # Name the standardized event that represents reaching this scenario's goal.
-        goal_reached:
-          # Select the task signal observed by this event.
-          signal: kills
-          # Select the signal transition that fires this event.
+        # Record a confirmed hit on the monster.
+        monster_hit:
+          # Select the hit-count signal observed by this event.
+          signal: hits
+          # Fire whenever the cumulative hit count increases.
           operation: increase
+        # Record the first physical shot rather than the first requested attack action.
+        shot_fired:
+          # Select the ammunition signal observed by this event.
+          signal: ammo
+          # Fire whenever the pistol consumes ammunition.
+          operation: decrease
       # Define which task events and limits end an episode.
       termination:
         # List the events that mark an episode as successful.
-        success: [goal_reached]
-        # Classify reaching the provider-native horizon without a kill as a timeout.
+        success: [monster_hit]
+        # End the episode as a failure when the first physical shot misses.
+        failure: [shot_fired]
+        # Let a simultaneous hit and shot resolve as success while preserving ordinary timeouts.
+        outcome_precedence: [success, failure, timeout]
+        # Classify reaching the provider-native horizon without firing as a timeout.
         timeout: [time_limit_reached]
       # Configure the reward presented to the policy after the inherited native reward is computed.
       reward:

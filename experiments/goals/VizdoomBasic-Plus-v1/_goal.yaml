@@ -5,4 +5,4 @@ defaults:
 # Apply this file last so variant-specific values can override the inherited contract.
 - _self_
 # Give the variant its operator-facing title while retaining the inherited task semantics.
-title: ViZDoom Basic monster elimination
+title: ViZDoom Basic first-shot accuracy
