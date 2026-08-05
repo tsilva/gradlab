@@ -31,7 +31,7 @@ DEFAULT_MODAL_WORKFLOW = "gradlab Modal eval deployment"
 DEFAULT_MODAL_ARTIFACT = "gradlab-modal-eval-readiness"
 DEFAULT_MODAL_ARTIFACT_FILE = "gradlab-modal-eval-readiness.json"
 MODAL_READINESS_SCHEMA_VERSION = 3
-VIZDOOM_SMOKE_CONTRACT_VERSION = 2
+VIZDOOM_SMOKE_CONTRACT_VERSION = 3
 DEFAULT_RUNTIME_READINESS_TIMEOUT_SECONDS = 20 * 60
 
 DIGEST_IMAGE_REF_RE = re.compile(r"^docker:[^\s@]+@sha256:(?P<digest>[0-9a-fA-F]{64})$")

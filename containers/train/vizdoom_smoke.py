@@ -12,7 +12,7 @@ from gradlab.env import EnvConfig, native_obs_crop, resolve_env_config
 from gradlab.env_providers import make_provider_vec_env, provider_native_vec_kwargs
 
 
-SMOKE_CONTRACT_VERSION = 2
+SMOKE_CONTRACT_VERSION = 3
 PROVIDER_DISTRIBUTION = "vizdoom-turbo"
 DEATHMATCH_ACTIONS = [
     [],
@@ -42,6 +42,23 @@ def _canonical_sha256(document: Mapping[str, object]) -> str:
         separators=(",", ":"),
     ).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
+
+
+def _torch_compile_smoke() -> dict[str, object]:
+    import torch
+
+    def kernel(values: torch.Tensor) -> torch.Tensor:
+        return torch.relu(values * 1.5 + 0.25)
+
+    compiled = torch.compile(kernel, dynamic=False, fullgraph=True)
+    values = torch.linspace(-2.0, 2.0, steps=4096)
+    actual = compiled(values)
+    torch.testing.assert_close(actual, kernel(values))
+    return {
+        "backend": "inductor",
+        "device": "cpu",
+        "succeeded": True,
+    }
 
 
 def _config(game: str) -> EnvConfig:
@@ -157,6 +174,7 @@ def main() -> None:
         "smoke_contract_version": SMOKE_CONTRACT_VERSION,
         "provider_distribution": PROVIDER_DISTRIBUTION,
         "provider_version": importlib.metadata.version(PROVIDER_DISTRIBUTION),
+        "torch_compile": _torch_compile_smoke(),
         "scenarios": [
             _smoke(_config("VizdoomBasic-v1")),
             _smoke(_config("VizdoomDeathmatch-v1")),
