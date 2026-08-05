@@ -699,3 +699,52 @@ No new wrapping, clipping, overlap, or page overflow was observed. Viewport and 
 - Full Python suite: 1314 passed, 3 skipped, 1 unrelated existing configuration failure in `test_every_vizdoom_recipe_composes_shared_success_and_plateau_conditions`. The failing recipes expect `target_reached.action: observe` but currently compose `stop`; no experiment or recipe files were changed by this theme work.
 
 final result: passed
+
+---
+
+# Scientific Editorial dark-theme design QA
+
+**Comparison target**
+
+- Selected visual truth: `/Users/tsilva/.codex/generated_images/019fd2bc-1cdf-7070-89a5-9ca84d76f0ab/exec-3c8e4eff-c131-4118-9cad-6ebe752af984.png`
+- Browser-rendered implementation: `/Users/tsilva/.codex/visualizations/2026/08/05/019fd2bc-1cdf-7070-89a5-9ca84d76f0ab/dark-option-1-final-frame-1440x900.png`
+- Live telemetry implementation: `/Users/tsilva/.codex/visualizations/2026/08/05/019fd2bc-1cdf-7070-89a5-9ca84d76f0ab/dark-option-1-stats-live-1440x900.png`
+- Combined visual comparison: `/Users/tsilva/.codex/visualizations/2026/08/05/019fd2bc-1cdf-7070-89a5-9ca84d76f0ab/dark-option-1-comparison.png`
+- Source pixels: 1586 × 992, normalized to 1440 × 900 for comparison.
+- Implementation viewport and pixels: 1440 × 900 CSS px at 1× density.
+- State: completed Mario Level1-1 episode, final retained game frame, training contract, paired player and controls workspace.
+
+**Findings**
+
+- No actionable P0, P1, or P2 mismatch remains for the selected theme-only scope.
+- The generated concept enlarged the game region and compressed the controls column. The implementation intentionally retains the product's existing geometry, as required by the theme-only constraint.
+- The generated concept introduced a slight primary-button luminance ramp. The implementation uses the selected lavender color as a flat semantic token, preserving the no-gradient product rule.
+
+**Required fidelity surfaces**
+
+- Fonts and typography: the bundled Chivo, Inter, and JetBrains Mono families remain loaded and unchanged; browser font checks passed for all three.
+- Spacing and layout rhythm: no DOM, size, grid, padding, gap, radius, or responsive-rule changes were made. The rendered body and viewport both measure 1440 × 900 with no document overflow.
+- Colors and visual tokens: warm ink canvas, plum-black surfaces, lavender interactions, restrained violet borders, and mint/amber/coral semantic states match the selected direction. Canvas telemetry resolves the same CSS tokens.
+- Image quality and asset fidelity: the live game framebuffer remains unchanged and pixel-sharp. Favicon and chevron geometry are preserved with dark-theme recoloring only.
+- Copy and content: routes, labels, values, evidence semantics, and controls are unchanged.
+
+**Primary interactions and runtime verification**
+
+- Loaded the real checkpoint, completed a new episode, inspected the final retained transition, and opened the synchronized telemetry workspace.
+- Verified the dark palette in live player, terminal and after-action observations, controls, semantic statuses, native inputs, timeline, chart surfaces, series, and protocol-warning states.
+- Confirmed exact runtime tokens `#121015`, `#1B181F`, `#F7F2F8`, and `#B978FF`, all three bundled fonts, and unchanged 1440 × 900 geometry.
+- Automated checks: 128 JavaScript player tests, 49 focused Python player tests, and Ruff passed.
+
+**Implementation checklist**
+
+- [x] Make option 1 the only default theme.
+- [x] Remove the light palette without adding a theme selector.
+- [x] Preserve all bundled editorial fonts.
+- [x] Retheme canvas telemetry and static assets.
+- [x] Verify the real player and telemetry workspaces against the selected visual.
+
+**Follow-up polish**
+
+- None required for the theme-only conversion.
+
+final result: passed

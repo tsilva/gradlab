@@ -21,6 +21,7 @@ from gradlab.task_kernels import (
     CELL_NOVELTY_REWARD_KEY,
     default_task_document,
     normalize_cell_novelty_config,
+    normalize_identity_outcome_precedence,
 )
 
 
@@ -240,6 +241,13 @@ def validate_task_config(task: Mapping[str, Any], *, label: str = "task") -> Non
                     f"{label}.events.game_complete.when.value must be a pair of integers"
                 )
     termination = task["termination"]
+    if "outcome_precedence" in termination:
+        if task_id != "identity":
+            raise ValueError(f"{label}.termination.outcome_precedence is identity-task-only")
+        normalize_identity_outcome_precedence(
+            termination["outcome_precedence"],
+            label=f"{label}.termination.outcome_precedence",
+        )
     event_outcomes: dict[str, str] = {}
     for outcome in ("success", "failure", "timeout", "neutral"):
         if outcome not in termination:

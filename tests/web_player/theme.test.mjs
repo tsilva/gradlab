@@ -20,6 +20,7 @@ function contrast(foreground, background) {
 
 test("scientific editorial dark-theme tokens are the single CSS color source", async () => {
   const styles = await readFile(new URL("styles.css", ROOT), "utf8");
+  assert.match(styles, /color-scheme: dark;/);
   const expected = new Map([
     ["color-canvas", "#121015"],
     ["color-surface-primary", "#1B181F"],
@@ -44,6 +45,10 @@ test("scientific editorial dark-theme tokens are the single CSS color source", a
   for (const [name, value] of expected) {
     assert.match(styles, new RegExp(`--${name}: ${value};`, "i"));
   }
+  assert.doesNotMatch(
+    styles,
+    /#FCF9F8|#FFFFFF|#F6F3F2|#F0EDED|#EAE7E7|#1C1B1B|#4B4356|#CDC2DA|#7C7388|#6100C5|#7F00FF/i,
+  );
 
   const withoutRootTokens = styles.replace(/:root \{[\s\S]*?\n\}/, "");
   assert.doesNotMatch(withoutRootTokens, /#[0-9a-f]{3,8}|rgba?\(/i);
@@ -52,6 +57,16 @@ test("scientific editorial dark-theme tokens are the single CSS color source", a
     styles,
     /button:disabled \{[^}]*color: var\(--color-text-muted\);[^}]*background: var\(--color-surface-quaternary\);[^}]*opacity: 1;/,
   );
+});
+
+test("the dark theme retains all three bundled editorial font families", async () => {
+  const styles = await readFile(new URL("styles.css", ROOT), "utf8");
+  for (const family of ["Chivo", "Inter", "JetBrains Mono"]) {
+    assert.match(styles, new RegExp(`font-family: "${family}"`));
+  }
+  assert.match(styles, /ChivoVariable\.woff2/);
+  assert.match(styles, /InterVariable\.woff2/);
+  assert.match(styles, /JetBrainsMonoVariable\.woff2/);
 });
 
 test("canvas colors resolve the same CSS theme properties", async () => {
