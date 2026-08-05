@@ -20,6 +20,7 @@ def load_policy_model(
     env: Any | None = None,
     tensorboard_log: str | None = None,
     algorithm_id: PolicyAlgorithmId,
+    ppo_model_class: type | None = None,
 ):
     if not isinstance(model_input, ApprovedModelInput):
         raise TypeError("load_policy_model requires an ApprovedModelInput")
@@ -41,6 +42,7 @@ def load_policy_model(
         env=env,
         tensorboard_log=tensorboard_log,
         algorithm_id=algorithm_id,
+        ppo_model_class=ppo_model_class,
     )
 
 
@@ -97,6 +99,7 @@ def load_pinned_remote_policy_model(
     env: Any | None = None,
     tensorboard_log: str | None = None,
     expected_algorithm_id: PolicyAlgorithmId,
+    ppo_model_class: type | None = None,
 ):
     from gradlab.model_sources import download_remote_model_source
     from gradlab.trusted_inputs import approve_staged_model, stage_model_input
@@ -125,6 +128,7 @@ def load_pinned_remote_policy_model(
                 env=env,
                 tensorboard_log=tensorboard_log,
                 algorithm_id=algorithm_id,
+                ppo_model_class=ppo_model_class,
             )
     except Exception:
         staged.cleanup()

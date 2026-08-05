@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import re
 import sys
 from collections.abc import Mapping, Sequence
@@ -114,9 +115,43 @@ class _TrainLoopComparisonProfile(_MetricProfile):
         return values
 
 
+class _PPOBackendCase(BoundaryModel):
+    name: NonEmptyText
+    goal_file: NonEmptyText
+    recipe_file: NonEmptyText
+    recipe_overrides: list[NonEmptyText] = []
+
+
+class _PPOBackendComparisonProfile(_Profile):
+    kind: Literal["ppo_backend_comparison"]
+    baseline_backend: Literal["sb3.ppo"] = "sb3.ppo"
+    candidate_backend: Literal["gradlab.ppo"] = "gradlab.ppo"
+    cases: Annotated[list[_PPOBackendCase], Field(min_length=1)]
+    recipe_overrides: list[NonEmptyText] = []
+    required_metrics: list[NonEmptyText]
+    seed: NonNegativeInt
+    repeats: Literal[5] = 5
+    warmup_iterations: PositiveInt = 1
+    min_case_speedup: Annotated[int | float, Field(ge=1)] = 1.0
+    min_geomean_speedup: Annotated[int | float, Field(gt=1)]
+    run_description: str = ""
+    require_clean_source: Literal[True] = True
+    required_cuda_device_name: NonEmptyText
+
+    @field_validator("required_metrics")
+    @classmethod
+    def validate_required_metrics(cls, values: list[str]) -> list[str]:
+        if "train/throughput/loop_fps" not in values:
+            raise ValueError("must include train/throughput/loop_fps")
+        for metric_name in values:
+            validate_metric_name(metric_name)
+        return values
+
+
 _PROFILE_MODELS = {
     "env_throughput": _EnvironmentThroughputProfile,
     "local_smoke": _LocalSmokeProfile,
+    "ppo_backend_comparison": _PPOBackendComparisonProfile,
     "train_loop_comparison": _TrainLoopComparisonProfile,
     "train_loop_throughput": _TrainLoopThroughputProfile,
 }
@@ -212,6 +247,39 @@ def validate_benchmark_profile(payload: Mapping[str, Any], *, label: str = "prof
             _train_loop_config(payload, recipe_file=str(payload[recipe_field]))
         if isinstance(validated, _TrainLoopComparisonProfile) and validated.seed is None:
             raise ValueError(f"{label}.seed must be an integer")
+
+    if kind == "ppo_backend_comparison":
+        assert isinstance(validated, _PPOBackendComparisonProfile)
+        case_slugs = [_slug(case.name) for case in validated.cases]
+        if len(case_slugs) != len(set(case_slugs)):
+            raise ValueError(f"{label}.cases must have unique slugged names")
+        for case in validated.cases:
+            baseline = _ppo_backend_config(
+                payload,
+                case.model_dump(),
+                variant="baseline",
+                run_name="benchmark_validation_baseline",
+            )
+            candidate = _ppo_backend_config(
+                payload,
+                case.model_dump(),
+                variant="candidate",
+                run_name="benchmark_validation_candidate",
+            )
+            _assert_ppo_backend_equivalence(baseline, candidate, label=f"{label}.{case.name}")
+            backend = baseline["training_backend"]["config"]
+            iterations = math.ceil(
+                int(baseline["timesteps"])
+                / (
+                    int(baseline["n_envs"])
+                    * int(backend["n_steps"])
+                )
+            )
+            if iterations <= validated.warmup_iterations:
+                raise ValueError(
+                    f"{label}.{case.name} must execute more rollout iterations than "
+                    "warmup_iterations"
+                )
 
 
 def load_benchmark_profile(path: Path) -> BenchmarkProfile:
@@ -405,6 +473,134 @@ def _train_loop_comparison_commands(profile: Mapping[str, Any]) -> list[Benchmar
     return commands
 
 
+def _ppo_backend_overrides(
+    profile: Mapping[str, Any],
+    case: Mapping[str, Any],
+    *,
+    variant: str,
+) -> tuple[str, ...]:
+    if variant not in {"baseline", "candidate"}:
+        raise ValueError(f"unknown PPO backend benchmark variant {variant!r}")
+    backend = str(profile[f"{variant}_backend"])
+    return (
+        *tuple(str(value) for value in profile.get("recipe_overrides", ())),
+        *tuple(str(value) for value in case.get("recipe_overrides", ())),
+        f"train.backend.id={backend}",
+    )
+
+
+def _ppo_backend_config(
+    profile: Mapping[str, Any],
+    case: Mapping[str, Any],
+    *,
+    variant: str,
+    run_name: str,
+) -> dict[str, Any]:
+    scoped = {
+        **dict(profile),
+        "goal_file": str(case["goal_file"]),
+        "recipe_file": str(case["recipe_file"]),
+        "recipe_overrides": _ppo_backend_overrides(profile, case, variant=variant),
+        "run_name": run_name,
+    }
+    return _train_loop_config(scoped)
+
+
+def _assert_ppo_backend_equivalence(
+    baseline: Mapping[str, Any],
+    candidate: Mapping[str, Any],
+    *,
+    label: str,
+) -> None:
+    def comparable(value: Mapping[str, Any]) -> dict[str, Any]:
+        result = dict(value)
+        result.pop("run_name", None)
+        result.pop("run_description", None)
+        backend = dict(result["training_backend"])
+        backend.pop("id", None)
+        backend_config = dict(backend["config"])
+        backend_config.pop("precision", None)
+        backend["config"] = backend_config
+        result["training_backend"] = backend
+        return result
+
+    if comparable(baseline) != comparable(candidate):
+        raise ValueError(
+            f"{label} baseline and candidate differ beyond backend identity and precision"
+        )
+
+
+def _ppo_backend_comparison_commands(profile: Mapping[str, Any]) -> list[BenchmarkCommand]:
+    commands: list[BenchmarkCommand] = []
+    for case_value in profile["cases"]:
+        case = require_mapping(case_value, label="ppo_backend_comparison.cases[]")
+        case_name = _slug(str(case["name"]))
+        for repeat in range(int(profile.get("repeats", 5))):
+            order = ("baseline", "candidate") if repeat % 2 == 0 else (
+                "candidate",
+                "baseline",
+            )
+            configs = {
+                variant: _ppo_backend_config(
+                    profile,
+                    case,
+                    variant=variant,
+                    run_name=(
+                        f"benchmark_{_slug(str(profile['name']))}_{case_name}_"
+                        f"{variant}_{repeat + 1}"
+                    ),
+                )
+                for variant in ("baseline", "candidate")
+            }
+            _assert_ppo_backend_equivalence(
+                configs["baseline"],
+                configs["candidate"],
+                label=f"ppo_backend_comparison.{case_name}",
+            )
+            for variant in order:
+                commands.append(
+                    _command(
+                        f"{case_name}-{variant}-{repeat + 1}",
+                        [
+                            sys.executable,
+                            "-m",
+                            "gradlab.train",
+                            "--train-config-json",
+                            "/dev/stdin",
+                            "--execution-mode",
+                            "supervised",
+                        ],
+                        env={
+                            "GRADLAB_INTERNAL_LEARNER": "1",
+                            "STABLE_RETRO_DISABLE_AUDIO": "1",
+                        },
+                        stdin=json.dumps(configs[variant], sort_keys=True),
+                    )
+                )
+    return commands
+
+
+def ppo_backend_command_contract(
+    profile: Mapping[str, Any],
+    label: str,
+) -> tuple[str, str, tuple[str, ...]]:
+    for case_value in profile["cases"]:
+        case = require_mapping(case_value, label="ppo_backend_comparison.cases[]")
+        prefix = f"{_slug(str(case['name']))}-"
+        if not label.startswith(prefix):
+            continue
+        remainder = label[len(prefix) :]
+        variant = remainder.split("-", 1)[0]
+        if variant not in {"baseline", "candidate"}:
+            break
+        return (
+            str(case["goal_file"]),
+            str(case["recipe_file"]),
+            _ppo_backend_overrides(profile, case, variant=variant),
+        )
+    raise ValueError(f"unknown PPO backend benchmark command label {label!r}")
+
+
 def build_benchmark_commands(profile: BenchmarkProfile) -> list[BenchmarkCommand]:
     payload = profile.payload
     kind = profile.kind
@@ -416,4 +612,6 @@ def build_benchmark_commands(profile: BenchmarkProfile) -> list[BenchmarkCommand
         return _train_loop_commands(payload)
     if kind == "train_loop_comparison":
         return _train_loop_comparison_commands(payload)
+    if kind == "ppo_backend_comparison":
+        return _ppo_backend_comparison_commands(payload)
     raise ValueError(f"unsupported benchmark profile kind {kind!r}")

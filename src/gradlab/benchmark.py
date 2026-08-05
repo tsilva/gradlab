@@ -5,8 +5,11 @@ from dataclasses import replace
 from datetime import UTC, datetime
 from importlib import metadata
 import json
+import math
 import os
 import platform
+import re
+import statistics
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -19,6 +22,7 @@ from gradlab.benchmark_profiles import (
     build_benchmark_commands,
     find_benchmark_profile,
     load_benchmark_profiles,
+    ppo_backend_command_contract,
 )
 from gradlab.cli_parser import ExactArgumentParser
 from gradlab.env import default_run_dir
@@ -46,23 +50,36 @@ def _execution_commands(
     execution_id: str,
     output_dir: Path,
 ) -> list[BenchmarkCommand]:
-    if profile.kind not in {"train_loop_throughput", "train_loop_comparison"}:
+    if profile.kind not in {
+        "ppo_backend_comparison",
+        "train_loop_throughput",
+        "train_loop_comparison",
+    }:
         return commands
     prepared: list[BenchmarkCommand] = []
     runs_dir = str(output_dir / "runs" / f"{execution_id}-{profile.name}")
     for command in commands:
         config = json.loads(command.stdin or "{}")
         config["runs_dir"] = runs_dir
-        if profile.kind == "train_loop_throughput":
+        if profile.kind == "ppo_backend_comparison":
+            goal_file, recipe_file, recipe_overrides = ppo_backend_command_contract(
+                profile.payload,
+                command.label,
+            )
+        elif profile.kind == "train_loop_throughput":
+            goal_file = str(profile.payload["goal_file"])
             recipe_file = str(profile.payload["recipe_file"])
+            recipe_overrides = tuple(profile.payload.get("recipe_overrides", ()))
         else:
+            goal_file = str(profile.payload["goal_file"])
             variant = "candidate" if command.label.startswith("candidate-") else "baseline"
             recipe_file = str(profile.payload[f"{variant}_recipe_file"])
+            recipe_overrides = tuple(profile.payload.get("recipe_overrides", ()))
         source_commit = repo_git_commit() or "0" * 40
         resolved = compose_resolved_train_documents(
-            Path(str(profile.payload["goal_file"])),
+            Path(goal_file),
             Path(recipe_file),
-            recipe_overrides=profile.payload.get("recipe_overrides", ()),
+            recipe_overrides=recipe_overrides,
             source_sha=source_commit,
         )
         recipe_document = build_recipe_document(
@@ -118,6 +135,16 @@ def _environment_snapshot(profile: BenchmarkProfile) -> dict[str, Any]:
             versions[distribution] = metadata.version(distribution)
         except metadata.PackageNotFoundError:
             versions[distribution] = None
+    cuda_devices: list[str] = []
+    try:
+        import torch
+
+        cuda_devices = [
+            torch.cuda.get_device_name(index)
+            for index in range(torch.cuda.device_count())
+        ]
+    except (ImportError, RuntimeError):
+        pass
     return {
         "captured_at": datetime.now(UTC).isoformat(),
         "hostname": platform.node(),
@@ -125,6 +152,7 @@ def _environment_snapshot(profile: BenchmarkProfile) -> dict[str, Any]:
         "machine": platform.machine(),
         "logical_cpu_count": os.cpu_count(),
         "load_average_1m_5m_15m": _load_average(),
+        "cuda_devices": cuda_devices,
         "source_commit": repo_git_commit(),
         "source_dirty": _git_dirty(),
         "versions": versions,
@@ -264,6 +292,121 @@ def validate_benchmark_results(
                     f"{slowdown:.6f} > {maximum:.6f}"
                 )
 
+    if profile.kind == "ppo_backend_comparison" and successful:
+        required_metrics = tuple(profile.payload.get("required_metrics", ()))
+        warmup = int(profile.payload["warmup_iterations"])
+        run_samples: list[dict[str, Any]] = []
+        paired: dict[str, dict[int, dict[str, float]]] = {}
+        for command, result in zip(commands, results, strict=False):
+            if int(result["returncode"]) != 0:
+                continue
+            goal_file, _recipe_file, _overrides = ppo_backend_command_contract(
+                profile.payload,
+                command.label,
+            )
+            case_name = next(
+                str(case["name"])
+                for case in profile.payload["cases"]
+                if str(case["goal_file"]) == goal_file
+                and command.label.startswith(
+                    re.sub(
+                        r"[^A-Za-z0-9_.-]+",
+                        "-",
+                        str(case["name"]).strip().lower(),
+                    ).strip("-")
+                    + "-"
+                )
+            )
+            remainder = command.label.rsplit("-", 2)
+            if len(remainder) != 3:
+                issues.append(f"invalid PPO comparison command label: {command.label}")
+                continue
+            _prefix, variant, repeat_text = remainder
+            repeat = int(repeat_text)
+            config = json.loads(command.stdin or "{}")
+            base_dir = command.cwd or Path.cwd()
+            run_dir = base_dir / default_run_dir(
+                str(config["run_name"]),
+                str(config.get("runs_dir") or "runs"),
+            )
+            store_path = metric_store_path(run_dir)
+            if not store_path.is_file():
+                issues.append(f"{command.label} metric store is missing: {store_path}")
+                continue
+            store = MetricStore(store_path)
+            latest = {name: store.latest_metric(name) for name in required_metrics}
+            missing = sorted(name for name, value in latest.items() if value is None)
+            if missing:
+                issues.append(f"{command.label} metrics are missing: {', '.join(missing)}")
+            history = store.metric_history("train/throughput/loop_fps")
+            measured = [float(sample["value"]) for sample in history[warmup:]]
+            if not measured:
+                issues.append(
+                    f"{command.label} has no loop_fps samples after {warmup} warmups"
+                )
+                continue
+            if any(value <= 0.0 or not math.isfinite(value) for value in measured):
+                issues.append(f"{command.label} has invalid loop_fps history")
+                continue
+            run_median = float(statistics.median(measured))
+            paired.setdefault(case_name, {}).setdefault(repeat, {})[variant] = run_median
+            run_samples.append(
+                {
+                    "label": command.label,
+                    "case": case_name,
+                    "variant": variant,
+                    "repeat": repeat,
+                    "metric_store": str(store_path),
+                    "warmup_iterations": warmup,
+                    "loop_fps_history": history,
+                    "loop_fps_measured_median": run_median,
+                    "metrics": latest,
+                }
+            )
+        evidence["samples"] = run_samples
+        case_results: dict[str, Any] = {}
+        case_speedups: list[float] = []
+        expected_repeats = int(profile.payload["repeats"])
+        minimum_case = float(profile.payload["min_case_speedup"])
+        for case in profile.payload["cases"]:
+            case_name = str(case["name"])
+            ratios: list[float] = []
+            for repeat in range(1, expected_repeats + 1):
+                variants = paired.get(case_name, {}).get(repeat, {})
+                if set(variants) != {"baseline", "candidate"}:
+                    issues.append(f"{case_name} repeat {repeat} lacks a complete AB/BA pair")
+                    continue
+                ratios.append(variants["candidate"] / variants["baseline"])
+            if not ratios:
+                continue
+            speedup = math.prod(ratios) ** (1.0 / len(ratios))
+            case_speedups.append(speedup)
+            case_results[case_name] = {
+                "paired_speedups": ratios,
+                "geometric_mean_speedup": speedup,
+                "minimum_required_speedup": minimum_case,
+            }
+            if speedup < minimum_case:
+                issues.append(
+                    f"{case_name} candidate regressed: {speedup:.6f} < {minimum_case:.6f}"
+                )
+        minimum_geomean = float(profile.payload["min_geomean_speedup"])
+        if len(case_speedups) != len(profile.payload["cases"]):
+            issues.append("PPO backend comparison lacks a valid speedup for every case")
+        else:
+            geomean = math.prod(case_speedups) ** (1.0 / len(case_speedups))
+            if geomean < minimum_geomean:
+                issues.append(
+                    "PPO backend geometric-mean speedup missed gate: "
+                    f"{geomean:.6f} < {minimum_geomean:.6f}"
+                )
+            evidence["comparison"] = {
+                "cases": case_results,
+                "geometric_mean_speedup": geomean,
+                "minimum_geometric_mean_speedup": minimum_geomean,
+                "minimum_case_speedup": minimum_case,
+            }
+
     return {"passed": not issues, "issues": issues, "evidence": evidence}
 
 
@@ -304,6 +447,7 @@ def run_command(command: BenchmarkCommand) -> dict[str, Any]:
     if command.env:
         env.update(command.env)
     started_at = datetime.now(UTC)
+    load_before = _load_average()
     result = subprocess.run(
         command.argv,
         check=False,
@@ -315,12 +459,15 @@ def run_command(command: BenchmarkCommand) -> dict[str, Any]:
         stderr=subprocess.PIPE,
     )
     finished_at = datetime.now(UTC)
+    load_after = _load_average()
     return {
         "label": command.label,
         "argv": list(command.argv),
         "cwd": str(command.cwd) if command.cwd else None,
         "started_at": started_at.isoformat(),
         "finished_at": finished_at.isoformat(),
+        "load_average_before": load_before,
+        "load_average_after": load_after,
         "returncode": result.returncode,
         "stdout": result.stdout,
         "stderr": result.stderr,
@@ -345,6 +492,22 @@ def run_profile(args: argparse.Namespace) -> int:
     )
     plan = _command_plan(commands)
     environment_before = _environment_snapshot(profile)
+    if profile.kind == "ppo_backend_comparison":
+        preflight_issues: list[str] = []
+        if profile.payload.get("require_clean_source") is True and environment_before.get(
+            "source_dirty"
+        ) is not False:
+            preflight_issues.append("PPO backend comparison requires a clean source checkout")
+        required_device = str(profile.payload["required_cuda_device_name"])
+        if required_device not in environment_before.get("cuda_devices", []):
+            preflight_issues.append(
+                "PPO backend comparison requires CUDA device "
+                f"{required_device!r}; found {environment_before.get('cuda_devices', [])}"
+            )
+        if preflight_issues:
+            for issue in preflight_issues:
+                print(f"benchmark preflight failed: {issue}")
+            return 1
     results = []
     for command in commands:
         print(f"running benchmark command: {command.label}", flush=True)

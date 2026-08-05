@@ -660,10 +660,7 @@ class RolloutDiagnosticsHelper(CallbackHelper):
             )
 
 
-class ArchiveCurriculumFeedbackHelper(CallbackHelper):
-    """Attribute raw rollout GAE to true archive-origin episodes."""
-
-    _METRIC_MAP = {
+ARCHIVE_CURRICULUM_METRIC_MAP = {
         "archive_cell_count": TRAIN_ARCHIVE_CURRICULUM_CELL_COUNT,
         "archive_entry_count": TRAIN_ARCHIVE_CURRICULUM_ENTRY_COUNT,
         "admission_candidate_count": TRAIN_ARCHIVE_ADMISSION_CANDIDATE_COUNT,
@@ -678,7 +675,13 @@ class ArchiveCurriculumFeedbackHelper(CallbackHelper):
         "sampling_effective_cell_count": TRAIN_ARCHIVE_SAMPLING_EFFECTIVE_CELL_COUNT,
         "capture_seconds": TRAIN_ARCHIVE_CAPTURE_SECONDS,
         "reset_seconds": TRAIN_ARCHIVE_RESTORE_SECONDS,
-    }
+}
+
+
+class ArchiveCurriculumFeedbackHelper(CallbackHelper):
+    """Attribute raw rollout GAE to true archive-origin episodes."""
+
+    _METRIC_MAP = ARCHIVE_CURRICULUM_METRIC_MAP
 
     def __init__(self) -> None:
         super().__init__()
@@ -789,7 +792,7 @@ class _BufferedStats:
         return values
 
 
-class _RewardStatsAccumulator:
+class RewardStatsAccumulator:
     component_info_keys = {
         "native": "native_reward_component",
         "cell_novelty": "cell_novelty_reward_component",
@@ -904,7 +907,7 @@ class RuntimeMetricsHelper(CallbackHelper):
     ) -> None:
         super().__init__()
         self.session = session
-        self.reward_stats = _RewardStatsAccumulator(
+        self.reward_stats = RewardStatsAccumulator(
             active_components=active_reward_components,
             active_signals=active_reward_signals,
         )

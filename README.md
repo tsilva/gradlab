@@ -99,6 +99,12 @@ explicitly authorized. See [COMPUTE.md](COMPUTE.md) and the
 - Local `gradlab train` runs disable W&B and checkpoint evaluation by default.
   They are training-only and cannot establish goal acceptance or checkpoint
   promotion.
+- `gradlab.ppo` is the opt-in tensor-native PPO backend. It accepts the
+  `sb3.ppo` configuration surface plus `precision` (`fp32`, `amp-fp16`, or
+  `amp-bf16`), keeps PPO artifacts mutually resumable with SB3, compiles its
+  CUDA policy calls, and uses eager execution on CPU or MPS. Checked-in
+  training recipes remain on `sb3.ppo` until the dedicated RTX 4090 throughput
+  gate passes.
 - NES recipes require a lawfully obtained ROM supplied with `--rom-path` or
   registered with `gradlab rom sync`. ROMs and credentials must remain outside
   source control.

@@ -587,7 +587,7 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertGreaterEqual(report.counts["goals"], 1)
         self.assertEqual(report.counts["train_recipes"], 46)
         self.assertGreaterEqual(report.counts["env_configs"], 0)
-        self.assertEqual(report.counts["benchmark_profiles"], 4)
+        self.assertEqual(report.counts["benchmark_profiles"], 5)
         self.assertEqual(report.counts["workspace_manifests"], 1)
         self.assertEqual(report.counts["workspace_projects"], 16)
 

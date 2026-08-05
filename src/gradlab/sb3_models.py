@@ -37,9 +37,15 @@ def load_sb3_model(
     env: Any | None = None,
     tensorboard_log: str | None = None,
     algorithm_id: Sb3AlgorithmId,
+    ppo_model_class: type | None = None,
 ):
     if not isinstance(model_input, ApprovedModelInput):
         raise TypeError("load_sb3_model requires an ApprovedModelInput")
+    if ppo_model_class is not None:
+        from stable_baselines3 import PPO
+
+        if algorithm_id != "ppo" or not issubclass(ppo_model_class, PPO):
+            raise TypeError("ppo_model_class must be a stable-baselines3 PPO subclass")
     model_input.verify()
     path = model_input.model_path
     if algorithm_id == "a2c":
@@ -51,7 +57,13 @@ def load_sb3_model(
 
         document = _approved_model_document(model_input)
         artifact_model_class = str(document["policy"]["model_class"])
-        if artifact_model_class == "gradlab.task_advantage.GroupedAdvantagePPO":
+        if ppo_model_class is not None:
+            model_class = ppo_model_class
+        elif artifact_model_class == "gradlab.ppo.GradLabPPO":
+            from gradlab.ppo import GradLabPPO
+
+            model_class = GradLabPPO
+        elif artifact_model_class == "gradlab.task_advantage.GroupedAdvantagePPO":
             from gradlab.task_advantage import GroupedAdvantagePPO
 
             model_class = GroupedAdvantagePPO
@@ -67,6 +79,17 @@ def load_sb3_model(
     if tensorboard_log is not None:
         kwargs["tensorboard_log"] = tensorboard_log
     model = model_class.load(str(path), **kwargs)
+    policy = getattr(model, "policy", None)
+    optimizer = getattr(policy, "optimizer", None)
+    parameters = tuple(policy.parameters()) if policy is not None else ()
+    if optimizer is not None and parameters and parameters[0].device.type != "cuda":
+        optimizer.defaults["fused"] = False
+        optimizer.defaults["capturable"] = False
+        optimizer.defaults["foreach"] = None
+        for group in optimizer.param_groups:
+            group["fused"] = False
+            group["capturable"] = False
+            group["foreach"] = None
     if algorithm_id == "a2c":
         document = _approved_model_document(model_input)
     provenance = document.get("provenance")

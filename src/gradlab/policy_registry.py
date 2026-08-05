@@ -41,6 +41,7 @@ class TrainingBackendSpec:
 POLICY_ALGORITHM_SPECS: dict[PolicyAlgorithmId, PolicyAlgorithmSpec] = {
     "ppo": PolicyAlgorithmSpec(
         (
+            "gradlab.ppo.GradLabPPO",
             "gradlab.task_advantage.GroupedAdvantagePPO",
             "gradlab.task_advantage.PerTaskAdvantagePPO",
             "stable_baselines3.ppo.ppo.PPO",
@@ -89,6 +90,7 @@ POLICY_ALGORITHM_SPECS: dict[PolicyAlgorithmId, PolicyAlgorithmSpec] = {
 
 
 TRAINING_BACKEND_SPECS: dict[str, TrainingBackendSpec] = {
+    "gradlab.ppo": TrainingBackendSpec("gradlab.training.ppo", "ppo"),
     "gradlab.go-explore": TrainingBackendSpec("gradlab.training.go_explore", "cell-graph"),
     "gradlab.jerk": TrainingBackendSpec("gradlab.training.jerk", "action-program"),
     "sb3.a2c": TrainingBackendSpec("gradlab.training.sb3", "a2c"),

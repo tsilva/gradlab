@@ -126,6 +126,9 @@ def _ppo_model_factory(context: BackendContext, env: Any, config: Any, device: s
                 f"{advantage_context!r}"
             )
     sb3_normalize_advantage = advantage_normalization == "global"
+    from stable_baselines3 import PPO
+
+    model_cls = GroupedAdvantagePPO if advantage_normalization == "grouped" else PPO
     if backend_config["resume"]:
         model = load_pinned_remote_policy_model(
             backend_config["resume"],
@@ -136,6 +139,7 @@ def _ppo_model_factory(context: BackendContext, env: Any, config: Any, device: s
             env=env,
             tensorboard_log=str(context.run_dir),
             device=device,
+            ppo_model_class=model_cls,
         )
         validate_resumed_policy_model(model, common_config)
         if advantage_normalization == "grouped":
@@ -155,9 +159,6 @@ def _ppo_model_factory(context: BackendContext, env: Any, config: Any, device: s
         model.normalize_advantage = sb3_normalize_advantage
         return model
 
-    from stable_baselines3 import PPO
-
-    model_cls = GroupedAdvantagePPO if advantage_normalization == "grouped" else PPO
     model_kwargs: dict[str, Any] = {}
     if advantage_context is not None:
         model_kwargs["advantage_context"] = advantage_context
