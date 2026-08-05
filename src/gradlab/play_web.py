@@ -2228,7 +2228,7 @@ class PlaybackWebServer:
         if (
             relative.is_absolute()
             or ".." in relative.parts
-            or candidate.suffix not in {".js", ".css", ".svg"}
+            or candidate.suffix not in {".js", ".css", ".svg", ".woff2"}
             or not candidate.is_relative_to(root)
             or not candidate.is_file()
         ):

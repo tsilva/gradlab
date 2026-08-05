@@ -1416,6 +1416,14 @@ def test_loopback_server_requires_exact_origin_and_fragment_token() -> None:
                 favicon_response = await client.get(f"{server.origin}/assets/favicon.svg")
                 assert favicon_response.status == 200
                 assert "image/svg+xml" in favicon_response.headers["Content-Type"]
+                font_response = await client.get(
+                    f"{server.origin}/assets/fonts/InterVariable.woff2"
+                )
+                assert font_response.status == 200
+                assert font_response.headers["Content-Type"] == "font/woff2"
+                assert "default-src 'self'" in font_response.headers[
+                    "Content-Security-Policy"
+                ]
                 panel_response = await client.get(f"{server.origin}/assets/panels/catalog.js")
                 assert panel_response.status == 200
                 assert "javascript" in panel_response.headers["Content-Type"]
@@ -2061,6 +2069,7 @@ def test_initial_environment_catalog_is_embedded_in_selection_snapshots() -> Non
 def test_web_dashboard_assets_are_packaged_beside_server() -> None:
     root = Path(__file__).parents[1] / "src" / "gradlab" / "web_player"
     panel_root = root / "panels"
+    font_root = root / "fonts"
     expected_assets = (
         root / "index.html",
         root / "favicon.svg",
@@ -2073,6 +2082,11 @@ def test_web_dashboard_assets_are_packaged_beside_server() -> None:
         root / "documents" / "diff.js",
         root / "documents" / "viewer.js",
         root / "documents" / "syntax.js",
+        font_root / "ChivoVariable.woff2",
+        font_root / "InterVariable.woff2",
+        font_root / "InterVariable-Italic.woff2",
+        font_root / "JetBrainsMonoVariable.woff2",
+        font_root / "JetBrainsMonoVariable-Italic.woff2",
         panel_root / "catalog.js",
         panel_root / "layout-sizing.js",
         panel_root / "manager.js",
@@ -2090,6 +2104,14 @@ def test_web_dashboard_assets_are_packaged_beside_server() -> None:
 
     markup = (root / "index.html").read_text(encoding="utf-8")
     styles = (root / "styles.css").read_text(encoding="utf-8")
+    for name in (
+        "ChivoVariable.woff2",
+        "InterVariable.woff2",
+        "InterVariable-Italic.woff2",
+        "JetBrainsMonoVariable.woff2",
+        "JetBrainsMonoVariable-Italic.woff2",
+    ):
+        assert f'url("/assets/fonts/{name}") format("woff2")' in styles
     script = (root / "app.js").read_text(encoding="utf-8")
     source_browser = (root / "sources" / "browser.js").read_text(encoding="utf-8")
     contract_viewer = (root / "documents" / "viewer.js").read_text(encoding="utf-8")

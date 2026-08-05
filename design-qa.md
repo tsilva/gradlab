@@ -42,7 +42,6 @@
 - [x] Verify both directions in the actual browser-rendered player.
 
 final result: passed
-
 ---
 
 # Structured goal-configuration diff design QA
@@ -651,5 +650,52 @@ final result: passed
 **Follow-up polish**
 
 - None required for this change.
+
+final result: passed
+
+---
+
+# Scientific Editorial player-theme design QA
+
+## Result
+
+Passed for the theme-only scope. The player now uses the Scientific Editorial color and typography system while preserving its existing content, DOM structure, geometry, routes, controls, state behavior, and evidence semantics.
+
+## References
+
+- Stitch design system: `assets/62dcfebef0074a8698a08cf3ddcbc721`
+- Environment reference: `/Users/tsilva/.codex/visualizations/2026/08/04/019fcd50-b3d9-74c1-85b7-02bb1d32e4b4/stitch-gradlab-player/refined/01-environment-library.png`
+- Checkpoint reference: `/Users/tsilva/.codex/visualizations/2026/08/04/019fcd50-b3d9-74c1-85b7-02bb1d32e4b4/stitch-gradlab-player/refined/05-public-checkpoints.png`
+- Live-player reference: `/Users/tsilva/.codex/visualizations/2026/08/04/019fcd50-b3d9-74c1-85b7-02bb1d32e4b4/stitch-gradlab-player/refined/06-live-player.png`
+
+The references were used only for palette and typography. Their layout concepts were intentionally not transferred.
+
+## Browser coverage
+
+Native in-app Browser checks ran at 1440 × 900 for Environment, Goal, Goal Variant, contract viewer, Run, Checkpoint, live playback, terminal episode result, layout and panel menus, controls, human-control focus, protocol warnings, and live telemetry.
+
+- Final player: `/Users/tsilva/.codex/visualizations/2026/08/05/019fd2bc-1cdf-7070-89a5-9ca84d76f0ab/final-live-player-1440x900.png`
+- Final telemetry: `/Users/tsilva/.codex/visualizations/2026/08/05/019fd2bc-1cdf-7070-89a5-9ca84d76f0ab/final-stats-1440x900.png`
+- Before/after catalog comparison: `/Users/tsilva/.codex/visualizations/2026/08/05/019fd2bc-1cdf-7070-89a5-9ca84d76f0ab/compare-before-after-environments.png`
+- Stitch/player catalog comparison: `/Users/tsilva/.codex/visualizations/2026/08/05/019fd2bc-1cdf-7070-89a5-9ca84d76f0ab/compare-stitch-environments.png`
+- Stitch/player live comparison: `/Users/tsilva/.codex/visualizations/2026/08/05/019fd2bc-1cdf-7070-89a5-9ca84d76f0ab/compare-stitch-live-player.png`
+
+No new wrapping, clipping, overlap, or page overflow was observed. Viewport and container geometry remained unchanged; only expected subpixel text-metric differences from the required local Inter font accumulated across long lists.
+
+## Theme and accessibility checks
+
+- Exact semantic CSS tokens and canvas-token parity are covered by automated tests.
+- All bundled font families loaded successfully through `@font-face`; packaged assets returned `font/woff2` under the existing self-only CSP.
+- Game-frame black remains isolated to the framebuffer/media surface.
+- Normal text, large text, focus indicators, disabled controls, evidence chips, status treatments, and syntax/telemetry colors meet their tested WCAG AA targets.
+- Player and telemetry tabs produced no browser console warnings or errors.
+
+## Verification
+
+- JavaScript player suite: 127 passed.
+- Focused Python player suite: 49 passed.
+- Ruff: passed.
+- Wheel asset audit: passed; all five WOFF2 files and themed assets are packaged.
+- Full Python suite: 1314 passed, 3 skipped, 1 unrelated existing configuration failure in `test_every_vizdoom_recipe_composes_shared_success_and_plateau_conditions`. The failing recipes expect `target_reached.action: observe` but currently compose `stop`; no experiment or recipe files were changed by this theme work.
 
 final result: passed
