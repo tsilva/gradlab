@@ -235,11 +235,11 @@ export function rewardBreakdownPresentation({
       message: `Reward accounting unavailable: ${contract.reason || "the source did not provide it"}.`,
     };
   }
-  if (Number(snapshot?.protocol) !== 5 || contract?.status !== "available") {
+  if (Number(snapshot?.protocol) < 5 || contract?.status !== "available") {
     return {
       status: "protocol-error",
       scope: normalizedScope,
-      message: "Reward accounting requires playback protocol v5 and an available transform contract.",
+      message: "Reward accounting requires playback protocol v5+ and an available transform contract.",
     };
   }
   const selected = selectedPoint(history, snapshot, view);

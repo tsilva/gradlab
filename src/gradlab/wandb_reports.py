@@ -32,6 +32,8 @@ from gradlab.metric_names import (
     TRAIN_A2C_EXPLAINED_VARIANCE,
     TRAIN_A2C_LEARNING_RATE,
     TRAIN_A2C_POLICY_ENTROPY,
+    TRAIN_A2C_POLICY_ENTROPY_BOUND_LOWER,
+    TRAIN_A2C_POLICY_ENTROPY_BOUND_UPPER,
     TRAIN_A2C_VALUE_LOSS,
     TRAIN_ARTIFACT_SAVE_SECONDS,
     TRAIN_ARTIFACT_UPLOAD_SECONDS,
@@ -46,6 +48,8 @@ from gradlab.metric_names import (
     TRAIN_PPO_EXPLAINED_VARIANCE,
     TRAIN_PPO_LEARNING_RATE,
     TRAIN_PPO_POLICY_ENTROPY,
+    TRAIN_PPO_POLICY_ENTROPY_BOUND_LOWER,
+    TRAIN_PPO_POLICY_ENTROPY_BOUND_UPPER,
     TRAIN_PPO_VALUE_LOSS,
     TRAIN_THROUGHPUT_BETWEEN_ROLLOUTS_SECONDS,
     TRAIN_THROUGHPUT_ENV_STEP_FPS,
@@ -655,11 +659,50 @@ def _goal_section_blocks(wr, section: str, goal: GoalReportSpec, *, entity: str)
                         x=TRAIN_GLOBAL_STEP,
                         y=[TRAIN_PPO_LEARNING_RATE, TRAIN_A2C_LEARNING_RATE],
                     ),
-                    _line(
-                        wr,
+                    wr.LinePlot(
                         title="Policy entropy",
                         x=TRAIN_GLOBAL_STEP,
-                        y=[TRAIN_PPO_POLICY_ENTROPY, TRAIN_A2C_POLICY_ENTROPY],
+                        y=[
+                            TRAIN_PPO_POLICY_ENTROPY,
+                            TRAIN_A2C_POLICY_ENTROPY,
+                            TRAIN_PPO_POLICY_ENTROPY_BOUND_LOWER,
+                            TRAIN_A2C_POLICY_ENTROPY_BOUND_LOWER,
+                            TRAIN_PPO_POLICY_ENTROPY_BOUND_UPPER,
+                            TRAIN_A2C_POLICY_ENTROPY_BOUND_UPPER,
+                        ],
+                        title_y="nats",
+                        layout=wr.Layout(w=12, h=8),
+                        smoothing_type="none",
+                        line_titles={
+                            TRAIN_PPO_POLICY_ENTROPY: "PPO entropy",
+                            TRAIN_A2C_POLICY_ENTROPY: "A2C entropy",
+                            TRAIN_PPO_POLICY_ENTROPY_BOUND_LOWER: (
+                                "PPO theoretical lower bound"
+                            ),
+                            TRAIN_A2C_POLICY_ENTROPY_BOUND_LOWER: (
+                                "A2C theoretical lower bound"
+                            ),
+                            TRAIN_PPO_POLICY_ENTROPY_BOUND_UPPER: (
+                                "PPO theoretical upper bound"
+                            ),
+                            TRAIN_A2C_POLICY_ENTROPY_BOUND_UPPER: (
+                                "A2C theoretical upper bound"
+                            ),
+                        },
+                        line_colors={
+                            TRAIN_PPO_POLICY_ENTROPY_BOUND_LOWER: "#94A3B8",
+                            TRAIN_A2C_POLICY_ENTROPY_BOUND_LOWER: "#94A3B8",
+                            TRAIN_PPO_POLICY_ENTROPY_BOUND_UPPER: "#475569",
+                            TRAIN_A2C_POLICY_ENTROPY_BOUND_UPPER: "#475569",
+                        },
+                        line_marks={
+                            TRAIN_PPO_POLICY_ENTROPY: "solid",
+                            TRAIN_A2C_POLICY_ENTROPY: "solid",
+                            TRAIN_PPO_POLICY_ENTROPY_BOUND_LOWER: "dotted",
+                            TRAIN_A2C_POLICY_ENTROPY_BOUND_LOWER: "dotted",
+                            TRAIN_PPO_POLICY_ENTROPY_BOUND_UPPER: "dashed",
+                            TRAIN_A2C_POLICY_ENTROPY_BOUND_UPPER: "dashed",
+                        },
                     ),
                     _line(
                         wr,

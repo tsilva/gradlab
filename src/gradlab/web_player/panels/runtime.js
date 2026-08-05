@@ -50,13 +50,15 @@ export class PanelRuntime {
     if (generation !== this.generation) return;
     this.instances.forEach((instance, id) => {
       const panel = workspace.panels[id];
-      if (!panel || !this.desired.has(id)) return;
+      const definition = this.desired.get(id);
+      if (!panel || !definition) return;
+      instance.definition = definition;
       this.onLayout?.(
         instance.element,
         id,
         panel.placement,
         instance.gridItem,
-        instance.definition,
+        definition,
       );
     });
   }
@@ -119,14 +121,16 @@ export class PanelRuntime {
       });
       this.instances.set(id, instance);
       this.onMount?.(instance.element, id, definition, gridItem);
-      this.safeCall(id, "render", this.view.snapshot, this.view);
-      this.safeCall(
-        id,
-        "renderHistory",
-        this.view.history,
-        this.view.snapshot,
-        this.view,
-      );
+      if (definition.enabled) {
+        this.safeCall(id, "render", this.view.snapshot, this.view);
+        this.safeCall(
+          id,
+          "renderHistory",
+          this.view.history,
+          this.view.snapshot,
+          this.view,
+        );
+      }
       return instance;
     } catch (error) {
       this.onError?.(id, error);
@@ -157,24 +161,25 @@ export class PanelRuntime {
 
   renderSnapshot(snapshot, view = {}) {
     this.view = { ...this.view, ...view, snapshot };
-    this.instances.forEach((_, id) => this.safeCall(id, "render", snapshot, this.view));
+    this.instances.forEach((instance, id) => {
+      if (instance.definition.enabled) this.safeCall(id, "render", snapshot, this.view);
+    });
   }
 
   renderHistory(history, snapshot = this.view.snapshot, view = {}) {
     this.view = { ...this.view, ...view, history, snapshot };
-    this.instances.forEach((_, id) => this.safeCall(
-      id,
-      "renderHistory",
-      history,
-      snapshot,
-      this.view,
-    ));
+    this.instances.forEach((instance, id) => {
+      if (!instance.definition.enabled) return;
+      this.safeCall(id, "renderHistory", history, snapshot, this.view);
+    });
   }
 
-  async renderFrame(kind, blob) {
+  async renderFrame(kind, blob, metadata = {}) {
     const tasks = [...this.instances.entries()]
-      .filter(([, instance]) => instance.definition.frameKinds.includes(kind))
-      .map(([id]) => Promise.resolve(this.safeCall(id, "renderFrame", kind, blob))
+      .filter(([, instance]) => (
+        instance.definition.enabled && instance.definition.frameKinds.includes(kind)
+      ))
+      .map(([id]) => Promise.resolve(this.safeCall(id, "renderFrame", kind, blob, metadata))
         .catch((error) => {
           this.onError?.(id, error);
           return false;
@@ -188,6 +193,8 @@ export class PanelRuntime {
   }
 
   resize() {
-    this.instances.forEach((_, id) => this.safeCall(id, "resize"));
+    this.instances.forEach((instance, id) => {
+      if (instance.definition.enabled) this.safeCall(id, "resize");
+    });
   }
 }

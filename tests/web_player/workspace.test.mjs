@@ -9,6 +9,10 @@ import {
   createTelemetryInstance,
   normalizeWorkspace,
 } from "../../src/gradlab/web_player/panels/workspace.js";
+import {
+  panelProcessing,
+  telemetryPanelProcessing,
+} from "../../src/gradlab/web_player/panels/catalog.js";
 
 const CUSTOM_ID = "panel-00000000-0000-4000-8000-000000000000";
 
@@ -57,6 +61,44 @@ test("default workspace is a v6 collection without a standalone action panel", (
     visible: true,
     window: "main",
   });
+  assert.equal(workspace.panels.cnn.type, "cnn");
+  assert.equal(workspace.panels.cnn.placement.visible, false);
+  assert.ok(Object.values(workspace.panels).every((panel) => panel.enabled === true));
+});
+
+test("panel processing demand excludes disabled panels and follows telemetry metrics", () => {
+  const workspace = createDefaultWorkspace();
+  workspace.panels.policy.enabled = false;
+
+  assert.deepEqual(
+    new Set(panelProcessing(workspace, ["policy", "value", "step-reward"])),
+    new Set(["policy", "critic-calibration", "rewards", "history"]),
+  );
+  workspace.panels.value.enabled = false;
+  assert.deepEqual(
+    new Set(panelProcessing(workspace, ["policy", "value", "step-reward"])),
+    new Set(["rewards", "history"]),
+  );
+  assert.deepEqual(
+    new Set(telemetryPanelProcessing({
+      blocks: [
+        { kind: "stats", metrics: ["signal/ammo", "action/policy"] },
+        { kind: "reward-breakdown", scope: "episode" },
+      ],
+    })),
+    new Set(["signals", "actions", "reward-accounting", "history"]),
+  );
+});
+
+test("workspace normalization preserves explicit disabled processing state", () => {
+  const workspace = createDefaultWorkspace();
+  workspace.panels.value.enabled = false;
+
+  const normalized = normalizeWorkspace(workspace);
+
+  assert.equal(normalized.panels.value.enabled, false);
+  delete workspace.panels.value.enabled;
+  assert.equal(normalizeWorkspace(workspace).panels.value.enabled, true);
 });
 
 test("existing v6 workspaces receive reward analysis hidden on the shelf", () => {
@@ -67,6 +109,17 @@ test("existing v6 workspaces receive reward analysis hidden on the shelf", () =>
 
   assert.equal(normalized.panels["reward-analysis"].placement.visible, false);
   assert.equal(normalized.panels["reward-analysis"].builtin, true);
+});
+
+test("existing workspaces receive the CNN explorer hidden while new paired workspaces show it", () => {
+  const workspace = createDefaultWorkspace({ paired: true });
+  assert.equal(workspace.panels.cnn.placement.visible, true);
+  delete workspace.panels.cnn;
+
+  const normalized = normalizeWorkspace(workspace, { paired: true });
+
+  assert.equal(normalized.panels.cnn.placement.visible, false);
+  assert.equal(normalized.panels.cnn.builtin, true);
 });
 
 test("reward breakdown scope persists through workspace normalization", () => {

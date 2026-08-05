@@ -1,9 +1,12 @@
 import {
+  FRAME_ATTRIBUTION,
+  FRAME_CNN_INSPECTION,
   FRAME_GAME,
   FRAME_OBSERVATION,
   PANEL_TYPES,
   panelDefinition,
   panelLabels,
+  panelProcessing,
   panelSubscriptions,
 } from "./panels/catalog.js";
 import { PanelManager } from "./panels/manager.js";
@@ -22,7 +25,7 @@ import {
   normalizeWorkspace,
 } from "./panels/workspace.js";
 
-const FRAME_HEADER_BYTES = 24;
+const FRAME_HEADER_BYTES = 32;
 const panelName = location.pathname.startsWith("/panel/")
   ? location.pathname.slice("/panel/".length)
   : null;
@@ -52,7 +55,12 @@ const state = {
   snapshot: null,
   liveSnapshot: null,
   snapshots: new Map(),
-  frameBlobs: new Map([[FRAME_GAME, new Map()], [FRAME_OBSERVATION, new Map()]]),
+  frameBlobs: new Map([
+    [FRAME_GAME, new Map()],
+    [FRAME_OBSERVATION, new Map()],
+    [FRAME_ATTRIBUTION, new Map()],
+    [FRAME_CNN_INSPECTION, new Map()],
+  ]),
   inspectionSequence: null,
   replayingInspection: false,
   inspectionReplayTimer: null,
@@ -121,6 +129,16 @@ function panelsInThisWindow() {
 
 function subscriptions() {
   return panelSubscriptions(state.layout, panelsInThisWindow());
+}
+
+function processing() {
+  return panelProcessing(state.layout, panelsInThisWindow());
+}
+
+function enabledPanelDefinitions() {
+  return panelsInThisWindow()
+    .map((id) => panelDefinition(state.layout, id))
+    .filter((definition) => definition?.enabled);
 }
 
 function setDetachedLayout() {
@@ -274,6 +292,7 @@ function connect() {
       type: "hello",
       token,
       subscriptions: subscriptions(),
+      processing: processing(),
       panel: panelName || "workspace",
       workspace_id: state.workspaceId,
       window_id: state.windowId,
@@ -343,16 +362,27 @@ function handleMessage(message) {
   if (message.type === "error") showToast(message.error || "Player error", true);
 }
 
-function rememberFrame(kind, sequence, blob, preserveSequence = null) {
+function frameKey(sequence, generation = 0) {
+  return `${Number(sequence)}:${Number(generation)}`;
+}
+
+function frameKeySequence(key) {
+  return Number(String(key).split(":", 1)[0]);
+}
+
+function rememberFrame(kind, sequence, generation, blob, preserveSequence = null) {
   const frames = state.frameBlobs.get(kind);
-  frames.set(sequence, blob);
+  if (!frames) return;
+  frames.set(frameKey(sequence, generation), blob);
   while (frames.size > state.historyLimit) {
     const candidates = [...frames.keys()].filter(
       (candidate) => preserveSequence === null
-        || Number(candidate) !== Number(preserveSequence),
+        || frameKeySequence(candidate) !== Number(preserveSequence),
     );
     if (!candidates.length) break;
-    const oldest = Math.min(...candidates);
+    const oldest = candidates.sort((left, right) => (
+      frameKeySequence(left) - frameKeySequence(right)
+    ))[0];
     frames.delete(oldest);
   }
 }
@@ -361,25 +391,35 @@ async function handleFrame(buffer) {
   const view = new DataView(buffer);
   if (buffer.byteLength <= FRAME_HEADER_BYTES) return;
   const magic = String.fromCharCode(...new Uint8Array(buffer, 0, 4));
-  if (magic !== "RLP2") return;
+  if (magic !== "RLP3") return;
   const kind = view.getUint8(4);
   const epoch = Number(view.getBigUint64(8));
   const sequence = Number(view.getBigUint64(16));
+  const generation = Number(view.getBigUint64(24));
   if (epoch !== state.sessionEpoch) return;
   state.receivedFrameSequence.set(
     kind,
     Math.max(sequence, state.receivedFrameSequence.get(kind) ?? -1),
   );
   const blob = new Blob([buffer.slice(FRAME_HEADER_BYTES)], { type: "image/png" });
-  rememberFrame(kind, sequence, blob, state.inspectionSequence);
+  rememberFrame(kind, sequence, generation, blob, state.inspectionSequence);
+  const selectedSnapshot = state.inspectionSequence === null
+    ? state.liveSnapshot
+    : state.snapshot;
+  const expectedGeneration = frameGeneration(kind, selectedSnapshot);
+  const exactGeneration = !isGeneratedFrame(kind)
+    || (expectedGeneration > 0 && expectedGeneration === generation);
   if (
-    state.inspectionSequence === sequence
-    || (
-      state.inspectionSequence === null
-      && Number(state.liveSnapshot?.sequence) === sequence
+    exactGeneration
+    && (
+      state.inspectionSequence === sequence
+      || (
+        state.inspectionSequence === null
+        && Number(state.liveSnapshot?.sequence) === sequence
+      )
     )
   ) {
-    await panelRuntime.renderFrame(kind, blob);
+    await panelRuntime.renderFrame(kind, blob, { sequence, generation });
   }
   state.frameSequence.set(kind, sequence);
   flushPendingSnapshot();
@@ -387,9 +427,7 @@ async function handleFrame(buffer) {
 
 function requiredFrameKinds(snapshot) {
   const visible = new Set(
-    panelsInThisWindow().flatMap(
-      (id) => panelDefinition(state.layout, id)?.frameKinds || [],
-    ),
+    enabledPanelDefinitions().flatMap((definition) => definition.frameKinds),
   );
   const required = [];
   if (visible.has(FRAME_GAME) && snapshot.transition?.after?.game_frame) {
@@ -399,13 +437,13 @@ function requiredFrameKinds(snapshot) {
     visible.has(FRAME_OBSERVATION)
     && Number(snapshot.transition?.before?.observation_frames || 0) > 0
   ) required.push(FRAME_OBSERVATION);
-  return required;
+  return required.filter((kind) => !isGeneratedFrame(kind));
 }
 
 function requiredFramesAvailable(snapshot) {
   const sequence = Number(snapshot?.sequence);
   return requiredFrameKinds(snapshot).every(
-    (kind) => state.frameBlobs.get(kind)?.has(sequence),
+    (kind) => exactFrameBlob(kind, sequence) !== null,
   );
 }
 
@@ -468,7 +506,11 @@ function pruneRetainedTrace(preserveSequence = null) {
     .slice(0, Math.max(0, sequences.length - state.historyLimit));
   remove.forEach((sequence) => {
     state.snapshots.delete(sequence);
-    state.frameBlobs.forEach((frames) => frames.delete(sequence));
+    state.frameBlobs.forEach((frames) => {
+      [...frames.keys()]
+        .filter((key) => frameKeySequence(key) === Number(sequence))
+        .forEach((key) => frames.delete(key));
+    });
   });
   if (
     state.inspectionSequence !== null
@@ -715,28 +757,59 @@ function renderHistory() {
   renderTimeline();
 }
 
-function exactFrameBlob(kind, sequence) {
-  return state.frameBlobs.get(kind)?.get(Number(sequence)) || null;
+function attributionGeneration(snapshot) {
+  const attribution = snapshot?.transition?.attribution;
+  return attribution?.status === "available" ? Number(attribution.generation || 0) : 0;
+}
+
+function cnnInspectionGeneration(snapshot) {
+  const cnn = snapshot?.transition?.cnn;
+  return cnn?.status === "available" ? Number(cnn.generation || 0) : 0;
+}
+
+function isGeneratedFrame(kind) {
+  return [FRAME_ATTRIBUTION, FRAME_CNN_INSPECTION].includes(Number(kind));
+}
+
+function frameGeneration(kind, snapshot) {
+  if (Number(kind) === FRAME_ATTRIBUTION) return attributionGeneration(snapshot);
+  if (Number(kind) === FRAME_CNN_INSPECTION) return cnnInspectionGeneration(snapshot);
+  return 0;
+}
+
+function exactFrameBlob(kind, sequence, generation = 0) {
+  return state.frameBlobs.get(kind)?.get(frameKey(sequence, generation)) || null;
 }
 
 async function showFramesForSequence(sequence) {
+  const snapshot = state.snapshots.get(Number(sequence)) || state.snapshot;
   const kinds = [...new Set(
-    panelsInThisWindow().flatMap(
-      (id) => panelDefinition(state.layout, id)?.frameKinds || [],
-    ),
+    enabledPanelDefinitions().flatMap((definition) => definition.frameKinds),
   )];
   const missing = [];
   await Promise.all(kinds.map(async (kind) => {
-    const blob = exactFrameBlob(kind, sequence);
-    if (!blob) missing.push(kind);
-    await panelRuntime.renderFrame(kind, blob);
+    const generation = frameGeneration(kind, snapshot);
+    const expected = !isGeneratedFrame(kind) || generation > 0;
+    const blob = expected ? exactFrameBlob(kind, sequence, generation) : null;
+    if (expected && !blob) missing.push(kind);
+    await panelRuntime.renderFrame(kind, blob, { sequence, generation });
   }));
   return missing;
 }
 
 function inspectionFrames(sequence) {
-  return [FRAME_GAME, FRAME_OBSERVATION]
-    .map((kind) => ({ kind, blob: exactFrameBlob(kind, sequence) }))
+  const snapshot = state.snapshots.get(Number(sequence)) || state.snapshot;
+  return [FRAME_GAME, FRAME_OBSERVATION, FRAME_ATTRIBUTION, FRAME_CNN_INSPECTION]
+    .map((kind) => {
+      const generation = frameGeneration(kind, snapshot);
+      return {
+        kind,
+        generation,
+        blob: generation || !isGeneratedFrame(kind)
+          ? exactFrameBlob(kind, sequence, generation)
+          : null,
+      };
+    })
     .filter((item) => item.blob);
 }
 
@@ -818,9 +891,15 @@ function setInspectionCursor(
       && episodeForSnapshot(snapshot) !== state.retainedEpisode
     )
   ) return;
-  frames.forEach(({ kind, blob }) => {
-    if ([FRAME_GAME, FRAME_OBSERVATION].includes(Number(kind)) && blob instanceof Blob) {
-      rememberFrame(Number(kind), numericSequence, blob, numericSequence);
+  frames.forEach(({ kind, generation = 0, blob }) => {
+    if ([FRAME_GAME, FRAME_OBSERVATION, FRAME_ATTRIBUTION, FRAME_CNN_INSPECTION].includes(Number(kind)) && blob instanceof Blob) {
+      rememberFrame(
+        Number(kind),
+        numericSequence,
+        Number(generation),
+        blob,
+        numericSequence,
+      );
     }
   });
   state.snapshots.set(numericSequence, snapshot);
@@ -976,7 +1055,11 @@ async function applyLayout() {
   updateLayoutTitle();
   panelManager?.renderShelf();
   renderSavedLayouts();
-  send({ type: "subscribe", subscriptions: subscriptions() });
+  send({
+    type: "subscribe",
+    subscriptions: subscriptions(),
+    processing: processing(),
+  });
   syncingGrid = true;
   gridStack.batchUpdate();
   try {
@@ -991,16 +1074,37 @@ async function applyLayout() {
     panelRuntime.renderSnapshot(state.snapshot, panelView());
     panelRuntime.renderHistory(currentEpisodeHistory(), state.snapshot, panelView());
     const sequence = Number(state.snapshot.sequence);
-    const visibleKinds = new Set(visibleHere.flatMap(
-      (id) => panelDefinition(state.layout, id)?.frameKinds || [],
-    ));
+    const visibleKinds = new Set(
+      enabledPanelDefinitions().flatMap((definition) => definition.frameKinds),
+    );
     if (visibleKinds.has(FRAME_GAME)) {
-      panelRuntime.renderFrame(FRAME_GAME, exactFrameBlob(FRAME_GAME, sequence));
+      panelRuntime.renderFrame(
+        FRAME_GAME,
+        exactFrameBlob(FRAME_GAME, sequence),
+        { sequence, generation: 0 },
+      );
     }
     if (visibleKinds.has(FRAME_OBSERVATION)) {
       panelRuntime.renderFrame(
         FRAME_OBSERVATION,
         exactFrameBlob(FRAME_OBSERVATION, sequence),
+        { sequence, generation: 0 },
+      );
+    }
+    if (visibleKinds.has(FRAME_ATTRIBUTION)) {
+      const generation = attributionGeneration(state.snapshot);
+      panelRuntime.renderFrame(
+        FRAME_ATTRIBUTION,
+        generation ? exactFrameBlob(FRAME_ATTRIBUTION, sequence, generation) : null,
+        { sequence, generation },
+      );
+    }
+    if (visibleKinds.has(FRAME_CNN_INSPECTION)) {
+      const generation = cnnInspectionGeneration(state.snapshot);
+      panelRuntime.renderFrame(
+        FRAME_CNN_INSPECTION,
+        generation ? exactFrameBlob(FRAME_CNN_INSPECTION, sequence, generation) : null,
+        { sequence, generation },
       );
     }
   }
@@ -1065,6 +1169,32 @@ function renderPanelShelf() {
 }
 
 function bindPanelElement(panel, name) {
+  const definition = panelDefinition(state.layout, name);
+  if (definition?.switchable) {
+    const toggle = document.createElement("label");
+    toggle.className = "panel-processing-toggle";
+    toggle.title = `Enable or disable ${panelLabel(name)} data processing`;
+    const input = document.createElement("input");
+    input.type = "checkbox";
+    input.checked = definition.enabled;
+    input.dataset.panelEnabled = name;
+    input.setAttribute("aria-label", `Process data for ${panelLabel(name)}`);
+    input.addEventListener("change", () => {
+      const instance = state.layout.panels[name];
+      if (!instance) return;
+      instance.enabled = input.checked;
+      persistLayout();
+      void applyLayout();
+      showToast(
+        `${panelLabel(name)} processing ${input.checked ? "enabled" : "disabled"}.`,
+      );
+    });
+    const label = document.createElement("span");
+    label.textContent = "Enabled";
+    toggle.append(input, label);
+    const menu = panel.querySelector("[data-panel-menu]");
+    menu?.before(toggle);
+  }
   const handle = panel.querySelector("[data-drag-handle]");
   if (handle) {
     handle.draggable = false;
@@ -1397,13 +1527,20 @@ function bindWorkspaceSync() {
       ) {
         (Array.isArray(message.kinds) ? message.kinds : []).forEach((kind) => {
           const numericKind = Number(kind);
-          const blob = exactFrameBlob(numericKind, Number(message.sequence));
+          const snapshot = state.snapshots.get(Number(message.sequence));
+          const generation = frameGeneration(numericKind, snapshot);
+          const blob = exactFrameBlob(
+            numericKind,
+            Number(message.sequence),
+            generation,
+          );
           if (!blob) return;
           workspaceChannel.postMessage({
             type: "inspection-frame",
             session_epoch: state.sessionEpoch,
             sequence: Number(message.sequence),
             kind: numericKind,
+            generation,
             blob,
             source: state.windowId,
             target: message.source,
@@ -1414,16 +1551,24 @@ function bindWorkspaceSync() {
         && message.target === state.windowId
         && Number(message.session_epoch || 0) === state.sessionEpoch
         && Number(message.sequence) === Number(state.inspectionSequence)
-        && [FRAME_GAME, FRAME_OBSERVATION].includes(Number(message.kind))
+        && [FRAME_GAME, FRAME_OBSERVATION, FRAME_ATTRIBUTION, FRAME_CNN_INSPECTION].includes(Number(message.kind))
         && message.blob instanceof Blob
       ) {
         rememberFrame(
           Number(message.kind),
           Number(message.sequence),
+          Number(message.generation || 0),
           message.blob,
           Number(message.sequence),
         );
-        void panelRuntime.renderFrame(Number(message.kind), message.blob);
+        void panelRuntime.renderFrame(
+          Number(message.kind),
+          message.blob,
+          {
+            sequence: Number(message.sequence),
+            generation: Number(message.generation || 0),
+          },
+        );
       } else if (message.type === "window-closing" && state.windowId === "main") {
         setTimeout(() => {
           const lastSeen = state.activeWindows.get(message.window) || 0;
@@ -1547,8 +1692,15 @@ panelRuntime = new PanelRuntime({
     }
     bindPanelElement(panel, name);
   },
-  onLayout: (_panel, name, placement, gridItem) => {
+  onLayout: (panel, name, placement, gridItem, definition) => {
     gridStack.update(gridItem, gridWidgetFor(name, placement));
+    panel.classList.toggle("panel-disabled", !definition.enabled);
+    const enabled = panel.querySelector("[data-panel-enabled]");
+    if (enabled) {
+      enabled.checked = definition.enabled;
+      const label = enabled.parentElement?.querySelector("span");
+      if (label) label.textContent = definition.enabled ? "Enabled" : "Disabled";
+    }
   },
   onUnmount: (_panel, _name, gridItem) => {
     gridStack.removeWidget(gridItem, false, false);

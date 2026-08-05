@@ -1,48 +1,71 @@
 export const FRAME_GAME = 1;
 export const FRAME_OBSERVATION = 2;
+export const FRAME_ATTRIBUTION = 3;
+export const FRAME_CNN_INSPECTION = 4;
 
 export const PANEL_TYPES = Object.freeze({
   game: {
     module: "./game.js",
     minimum: { w: 4, h: 8 },
     subscriptions: ["game"],
+    processing: ["game"],
     frameKinds: [FRAME_GAME],
     singleton: true,
+    switchable: false,
   },
   controls: {
     module: "./controls.js",
     minimum: { w: 2, h: 4 },
     subscriptions: [],
+    processing: [],
     frameKinds: [],
     singleton: true,
+    switchable: false,
   },
   observation: {
     module: "./observation.js",
     minimum: { w: 2, h: 4 },
-    subscriptions: ["observation"],
-    frameKinds: [FRAME_OBSERVATION],
+    subscriptions: ["observation", "attribution"],
+    processing: ["observation", "attribution"],
+    frameKinds: [FRAME_OBSERVATION, FRAME_ATTRIBUTION],
     singleton: true,
+    switchable: true,
+  },
+  cnn: {
+    module: "./cnn.js",
+    minimum: { w: 4, h: 8 },
+    subscriptions: ["observation", "cnn-inspection"],
+    processing: ["observation", "cnn-inspection"],
+    frameKinds: [FRAME_OBSERVATION, FRAME_CNN_INSPECTION],
+    singleton: true,
+    switchable: true,
   },
   telemetry: {
     module: "./telemetry-panel.js",
     minimum: { w: 2, h: 4 },
     subscriptions: [],
+    processing: [],
     frameKinds: [],
     singleton: false,
+    switchable: true,
   },
   events: {
     module: "./events.js",
     minimum: { w: 2, h: 4 },
     subscriptions: [],
+    processing: ["events", "history"],
     frameKinds: [],
     singleton: true,
+    switchable: true,
   },
   raw: {
     module: "./raw.js",
     minimum: { w: 2, h: 4 },
     subscriptions: [],
+    processing: ["raw"],
     frameKinds: [],
     singleton: true,
+    switchable: true,
   },
 });
 
@@ -58,6 +81,7 @@ const SINGLE_LAYOUT = Object.freeze({
   events: { x: 0, y: 30, w: 4, h: 7, visible: false, window: "main" },
   raw: { x: 4, y: 30, w: 8, h: 7, visible: false, window: "main" },
   "reward-analysis": { x: 0, y: 37, w: 12, h: 15, visible: true, window: "main" },
+  cnn: { x: 0, y: 52, w: 8, h: 15, visible: false, window: "main" },
 });
 
 const PAIRED_LAYOUT = Object.freeze({
@@ -72,6 +96,7 @@ const PAIRED_LAYOUT = Object.freeze({
   events: { x: 9, y: 15, w: 3, h: 8, visible: true, window: "stats" },
   raw: { x: 0, y: 23, w: 12, h: 7, visible: true, window: "stats" },
   "reward-analysis": { x: 0, y: 30, w: 12, h: 15, visible: true, window: "stats" },
+  cnn: { x: 0, y: 45, w: 12, h: 15, visible: true, window: "stats" },
 });
 
 export const BUILTIN_PANEL_PRESETS = Object.freeze({
@@ -159,6 +184,11 @@ export const BUILTIN_PANEL_PRESETS = Object.freeze({
     title: "Observation and attribution",
     config: {},
   },
+  cnn: {
+    type: "cnn",
+    title: "CNN feature explorer",
+    config: {},
+  },
   signals: {
     type: "telemetry",
     title: "Live signals",
@@ -184,6 +214,45 @@ function clone(value) {
   return JSON.parse(JSON.stringify(value));
 }
 
+function metricProcessing(metric) {
+  const key = String(metric || "");
+  const processing = new Set();
+  if (key.startsWith("policy/")) processing.add("policy");
+  if (key === "policy/realized-return" || key === "policy/value-error") {
+    processing.add("critic-calibration");
+    processing.add("rewards");
+  }
+  if (key === "action/policy") processing.add("actions");
+  if (key.startsWith("reward/")) processing.add("rewards");
+  if (key.startsWith("reward-component/")) processing.add("reward-accounting");
+  if (key.startsWith("signal/")) processing.add("signals");
+  if (key === "transition/outcome") processing.add("events");
+  return processing;
+}
+
+export function telemetryPanelProcessing(config) {
+  const processing = new Set();
+  (Array.isArray(config?.blocks) ? config.blocks : []).forEach((block) => {
+    if (["line", "histogram", "distribution", "namespace-explorer"].includes(block.kind)) {
+      processing.add("history");
+    }
+    if (block.kind === "reward-breakdown") {
+      processing.add("reward-accounting");
+      if (block.scope === "episode") processing.add("history");
+    }
+    if (block.kind === "namespace-explorer") {
+      processing.add(block.namespace === "reward-component" ? "reward-accounting" : "signals");
+    }
+    const metrics = block.kind === "stats" || block.kind === "line"
+      ? block.metrics
+      : [block.metric];
+    (Array.isArray(metrics) ? metrics : []).forEach((metric) => {
+      metricProcessing(metric).forEach((feature) => processing.add(feature));
+    });
+  });
+  return [...processing];
+}
+
 export function defaultPanelInstances({ paired = false } = {}) {
   const layout = paired ? PAIRED_LAYOUT : SINGLE_LAYOUT;
   return Object.fromEntries(
@@ -191,6 +260,7 @@ export function defaultPanelInstances({ paired = false } = {}) {
       id,
       {
         ...clone(preset),
+        enabled: true,
         builtin: true,
         placement: clone(layout[id]),
       },
@@ -209,7 +279,12 @@ export function panelDefinition(workspace, id) {
     title: instance.title,
     type: instance.type,
     config: instance.config,
+    enabled: instance.enabled !== false,
     builtin: Boolean(instance.builtin),
+    switchable: Boolean(type.switchable),
+    processing: instance.type === "telemetry"
+      ? telemetryPanelProcessing(instance.config)
+      : type.processing,
   };
 }
 
@@ -222,9 +297,21 @@ export function panelLabels(workspace) {
 export function panelSubscriptions(workspace, names) {
   const values = new Set(["telemetry"]);
   names.forEach((id) => {
-    panelDefinition(workspace, id)?.subscriptions.forEach((subscription) => {
+    const definition = panelDefinition(workspace, id);
+    if (!definition?.enabled) return;
+    definition.subscriptions.forEach((subscription) => {
       values.add(subscription);
     });
+  });
+  return [...values];
+}
+
+export function panelProcessing(workspace, names) {
+  const values = new Set();
+  names.forEach((id) => {
+    const definition = panelDefinition(workspace, id);
+    if (!definition?.enabled) return;
+    definition.processing.forEach((feature) => values.add(feature));
   });
   return [...values];
 }

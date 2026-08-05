@@ -50,6 +50,29 @@ def test_actor_critic_runtime_is_batched_and_uses_one_feature_pass(monkeypatch) 
     ]
 
 
+def test_actor_critic_runtime_skips_critic_and_diagnostics_when_not_requested(
+    monkeypatch,
+) -> None:
+    runtime, observation = _actor_critic_runtime(gym.spaces.Discrete(3))
+
+    def unexpected_critic(*_args, **_kwargs):
+        raise AssertionError("disabled player stats must not run the critic")
+
+    monkeypatch.setattr(runtime.model.policy.value_net, "forward", unexpected_critic)
+    result = runtime.decide(
+        observation,
+        action_selection_mode="stochastic",
+        include_diagnostics=False,
+    )
+
+    assert result.actions.shape == (2,)
+    assert all(decision.value is None for decision in result.decisions)
+    assert all(decision.log_probability is None for decision in result.decisions)
+    assert all(decision.entropy is None for decision in result.decisions)
+    assert all(decision.probabilities is None for decision in result.decisions)
+    assert all(decision.sampled is True for decision in result.decisions)
+
+
 def test_action_program_runtime_exposes_cursor_without_fabricated_distribution() -> None:
     model = ActionProgramPolicy(
         action_names=("noop", "right"),

@@ -106,8 +106,8 @@ def test_recipe_v3_embeds_verified_goal_and_recipe_bases() -> None:
     )
 
     assert document["format_version"] == 3
-    assert document["recipe"]["train_config"]["metrics_schema_version"] == 15
-    assert document["resolution"]["recipe"]["base"]["train_config"]["metrics_schema_version"] == 15
+    assert document["recipe"]["train_config"]["metrics_schema_version"] == 16
+    assert document["resolution"]["recipe"]["base"]["train_config"]["metrics_schema_version"] == 16
     assert document["resolution"]["goal"]["base"] == resolved.canonical_goal
     assert document["resolution"]["recipe"]["variant_id"].startswith("v-")
     assert (
@@ -164,6 +164,28 @@ def test_portable_recipe_reader_preserves_historical_failure_plateau() -> None:
     document["resolution"]["recipe"]["effective_sha256"] = canonical_json_sha256(document["recipe"])
 
     assert validate_recipe_document(document) == document
+
+
+def test_portable_recipe_reader_preserves_source_bound_metrics_schema() -> None:
+    document = level1_1_recipe_document()
+    base_recipe = document["resolution"]["recipe"]["base"]
+
+    for recipe in (document["recipe"], base_recipe):
+        recipe["train_config"]["metrics_schema_version"] = 15
+
+    document["resolution"]["recipe"]["base_sha256"] = canonical_json_sha256(base_recipe)
+    document["resolution"]["recipe"]["effective_sha256"] = canonical_json_sha256(document["recipe"])
+
+    assert validate_recipe_document(document) == document
+
+
+@pytest.mark.parametrize("invalid", [0, -1, True, "15"])
+def test_portable_recipe_reader_rejects_invalid_metrics_schema(invalid: object) -> None:
+    document = level1_1_recipe_document()
+    document["recipe"]["train_config"]["metrics_schema_version"] = invalid
+
+    with pytest.raises(PolicyDocumentError, match="must be a positive integer"):
+        validate_recipe_document(document)
 
 
 def test_wandb_display_name_is_not_part_of_portable_recipe() -> None:

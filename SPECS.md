@@ -68,6 +68,7 @@ GradLab is a reproducible reinforcement-learning workbench that carries game-age
 - Interactive playback must provide independently arranged, synchronized views of frames, policy inputs and decisions, transition facts, and bounded histories.
 - Inspection must not alter the trajectory or policy randomness.
 - Playback must expose only semantically applicable actor, critic, action-value, program, attribution, and calibration diagnostics.
+- Supported live-policy attribution must be disabled by default and enableable or disableable from the web player without restarting or changing the shared trajectory.
 - Unsupported, unobserved, and contract-incomparable diagnostics must remain visibly distinct without fabricated values.
 - Critic calibration may compare values with realized returns only when environment, reward, discount, action sampling, and episode-boundary semantics match training.
 - Human control must preserve declared action semantics and fail safely when focus or control is lost.

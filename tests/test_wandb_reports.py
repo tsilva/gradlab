@@ -9,7 +9,15 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from gradlab.metric_names import validate_metric_name
+from gradlab.metric_names import (
+    TRAIN_A2C_POLICY_ENTROPY,
+    TRAIN_A2C_POLICY_ENTROPY_BOUND_LOWER,
+    TRAIN_A2C_POLICY_ENTROPY_BOUND_UPPER,
+    TRAIN_PPO_POLICY_ENTROPY,
+    TRAIN_PPO_POLICY_ENTROPY_BOUND_LOWER,
+    TRAIN_PPO_POLICY_ENTROPY_BOUND_UPPER,
+    validate_metric_name,
+)
 from gradlab.recipe_documents import (
     compose_train_document,
     goal_contract_sha256,
@@ -77,6 +85,13 @@ class WandbReportCompilationTests(unittest.TestCase):
         self.assertEqual(first[-1]["kind"], "portfolio")
         self.assertTrue(first[-1]["goals"])
 
+    def test_goal_report_title_materializes_goal_identity(self) -> None:
+        spec = goal_spec("Level1-1")
+
+        self.assertTrue(spec.title.startswith("Level1-1: "))
+        self.assertNotIn("{goal_id}", spec.title)
+        self.assertNotIn("{goal_title}", spec.title)
+
     def test_mixed_goal_exposes_balanced_metrics_and_both_starts(self) -> None:
         spec = goal_spec("Levels_1-1_1-2")
         report = build_wandb_report(spec, entity="entity", source_sha="a" * 40)
@@ -107,6 +122,47 @@ class WandbReportCompilationTests(unittest.TestCase):
                 table_name = getattr(panel, "table_name", None)
                 if table_name:
                     validate_metric_name(table_name)
+
+    def test_policy_entropy_panel_overlays_styled_theoretical_bounds(self) -> None:
+        report = build_wandb_report(
+            goal_spec("Level1-1"), entity="entity", source_sha="a" * 40
+        )
+        panel = next(
+            panel
+            for block in report.blocks
+            for panel in getattr(block, "panels", ())
+            if getattr(panel, "title", None) == "Policy entropy"
+        )
+
+        self.assertEqual(
+            panel.y,
+            [
+                TRAIN_PPO_POLICY_ENTROPY,
+                TRAIN_A2C_POLICY_ENTROPY,
+                TRAIN_PPO_POLICY_ENTROPY_BOUND_LOWER,
+                TRAIN_A2C_POLICY_ENTROPY_BOUND_LOWER,
+                TRAIN_PPO_POLICY_ENTROPY_BOUND_UPPER,
+                TRAIN_A2C_POLICY_ENTROPY_BOUND_UPPER,
+            ],
+        )
+        self.assertEqual(panel.title_y, "nats")
+        for metric in (
+            TRAIN_PPO_POLICY_ENTROPY,
+            TRAIN_A2C_POLICY_ENTROPY,
+        ):
+            self.assertEqual(panel.line_marks[metric], "solid")
+        for metric in (
+            TRAIN_PPO_POLICY_ENTROPY_BOUND_LOWER,
+            TRAIN_A2C_POLICY_ENTROPY_BOUND_LOWER,
+        ):
+            self.assertEqual(panel.line_marks[metric], "dotted")
+            self.assertIn("theoretical lower bound", panel.line_titles[metric])
+        for metric in (
+            TRAIN_PPO_POLICY_ENTROPY_BOUND_UPPER,
+            TRAIN_A2C_POLICY_ENTROPY_BOUND_UPPER,
+        ):
+            self.assertEqual(panel.line_marks[metric], "dashed")
+            self.assertIn("theoretical upper bound", panel.line_titles[metric])
 
     def test_goal_fingerprint_is_semantic_and_reaches_train_config(self) -> None:
         document = load_goal_contract(LEVEL1_1_GOAL, ROOT)

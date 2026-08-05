@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import re
 import tempfile
 import unittest
@@ -26,6 +27,7 @@ from gradlab.callbacks import (
     RuntimeMetricsHelper,
     ArchiveCurriculumFeedbackHelper,
     ThroughputHelper,
+    policy_entropy_bounds,
     task_metric_source,
 )
 from gradlab.env import EnvConfig, resolve_env_config
@@ -817,6 +819,25 @@ class ThroughputHelperTests(unittest.TestCase):
 
 
 class RolloutDiagnosticsHelperTests(unittest.TestCase):
+    def test_policy_entropy_bounds_match_supported_discrete_spaces(self) -> None:
+        cases = (
+            (gym.spaces.Discrete(7), math.log(7)),
+            (gym.spaces.MultiDiscrete([[2, 3], [4, 5]]), math.log(2 * 3 * 4 * 5)),
+            (gym.spaces.MultiBinary((2, 3)), 6 * math.log(2)),
+        )
+        for action_space, expected_upper in cases:
+            with self.subTest(action_space=action_space):
+                bounds = policy_entropy_bounds(action_space)
+                self.assertIsNotNone(bounds)
+                lower, upper = bounds  # type: ignore[misc]
+                self.assertEqual(lower, 0.0)
+                self.assertAlmostEqual(upper, expected_upper)
+
+    def test_policy_entropy_bounds_are_unavailable_for_continuous_spaces(self) -> None:
+        action_space = gym.spaces.Box(-1.0, 1.0, shape=(3,), dtype=np.float32)
+
+        self.assertIsNone(policy_entropy_bounds(action_space))
+
     def test_logs_value_prediction_and_advantage_stats(self) -> None:
         class Logger:
             def __init__(self) -> None:
@@ -876,6 +897,35 @@ class RolloutDiagnosticsHelperTests(unittest.TestCase):
         callback._on_rollout_end()
 
         self.assertEqual(logger.records["train/algorithm/ppo/policy/dominant_action_rate"], 0.75)
+        self.assertEqual(logger.records["train/algorithm/ppo/policy/entropy_bound/lower"], 0.0)
+        self.assertAlmostEqual(
+            logger.records["train/algorithm/ppo/policy/entropy_bound/upper"],
+            math.log(2),
+        )
+
+    def test_logs_entropy_bounds_in_the_a2c_namespace(self) -> None:
+        logger = SimpleNamespace(records={})
+        logger.record = lambda key, value: logger.records.__setitem__(key, value)
+        model = SimpleNamespace(
+            logger=logger,
+            rollout_buffer=SimpleNamespace(
+                values=np.asarray([0.0]),
+                advantages=np.asarray([0.0]),
+                actions=np.asarray([[0, 1], [1, 2]]),
+            ),
+            action_space=gym.spaces.MultiDiscrete([2, 3]),
+        )
+        callback = RolloutDiagnosticsHelper(algorithm_id="a2c", log_histograms=False)
+        callback.model = model  # type: ignore[assignment]
+
+        callback._on_rollout_end()
+
+        self.assertEqual(logger.records["train/algorithm/a2c/policy/entropy_bound/lower"], 0.0)
+        self.assertAlmostEqual(
+            logger.records["train/algorithm/a2c/policy/entropy_bound/upper"],
+            math.log(6),
+        )
+        self.assertFalse(any("/ppo/" in name for name in logger.records))
 
     def test_logs_action_histogram_on_the_configured_rollout_cadence(self) -> None:
         logger = SimpleNamespace(record=lambda *_args: None)

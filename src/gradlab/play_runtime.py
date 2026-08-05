@@ -24,7 +24,6 @@ from gradlab.policy_bundle import (
     playback_contract,
     playback_contract_audit,
 )
-from gradlab.play_attribution import PolicyActionAttributor
 from gradlab.play_session import (
     _PlaybackSession,
     resolved_play_launch_lines,
@@ -457,17 +456,6 @@ class PlaybackLoader:
             )
             candidate.contract_details["playback_seed"] = args.seed
 
-        if args.attribution != "none":
-            if policy_runtime.capabilities.algorithm_id not in {"ppo", "a2c"}:
-                raise ValueError(
-                    "selected-action log-probability attribution is unavailable for "
-                    f"{policy_runtime.capabilities.algorithm_id} policies"
-                )
-            progress("loading", "Preparing policy attribution")
-            attributor = PolicyActionAttributor(model)
-        else:
-            attributor = None
-
         progress("loading", "Creating policy environment")
 
         def make_policy_env(config, seed):
@@ -537,10 +525,6 @@ class PlaybackLoader:
                 env=policy_env,
                 config=candidate.config,
                 initial_seed=args.seed,
-                attributor=attributor,
-                attribution_mode=args.attribution,
-                attribution_interval=args.attribution_interval,
-                attribution_opacity=args.attribution_opacity,
                 policy_runtime=policy_runtime,
                 policy_provenance=policy_provenance,
                 env_factory=make_policy_env,

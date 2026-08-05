@@ -3,7 +3,7 @@ from __future__ import annotations
 import queue
 import threading
 import uuid
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from copy import deepcopy
 from dataclasses import replace
 from typing import Any
@@ -16,6 +16,10 @@ from gradlab.play_runtime import (
 )
 from gradlab.model_sources import NoDefaultPublicRunCheckpointError
 from gradlab.play_web import idle_playback_snapshot
+from gradlab.play_processing import (
+    PLAYER_PROCESSING_FEATURES,
+    normalize_player_processing,
+)
 from gradlab.run_contracts import checkpoint_id
 
 
@@ -66,6 +70,17 @@ class _EmptyEncoder:
     def latest(self) -> dict[int, tuple[int, bytes]]:
         return {}
 
+    def retained(
+        self,
+        sequence: int,
+        *,
+        epoch: int | None = None,
+        timeout: float = 0.0,
+        kinds: Iterable[int] | None = None,
+    ) -> dict[int, tuple[int, bytes]]:
+        del sequence, epoch, timeout, kinds
+        return {}
+
 
 class PlaybackHost:
     """Stable web-server facade for zero or one replaceable playback runner."""
@@ -102,6 +117,7 @@ class PlaybackHost:
         self._route = dict(initial_route or {"level": "environments"})
         self._last_source = initial_source
         self._session_change = 0
+        self._processing_features = PLAYER_PROCESSING_FEATURES
 
     @property
     def encoder(self):
@@ -179,6 +195,16 @@ class PlaybackHost:
             active = self._active if self._phase == "active" else None
         if active is not None:
             active.runner.update_input(labels, focused=focused)
+
+    def set_processing(self, features: Iterable[object]) -> None:
+        normalized = normalize_player_processing(features)
+        with self._lock:
+            self._processing_features = normalized
+            active = self._active if self._phase == "active" else None
+        if active is not None:
+            configure = getattr(active.runner, "set_processing", None)
+            if callable(configure):
+                configure(normalized)
 
     def _app_payload(self) -> dict[str, Any]:
         return {
@@ -302,6 +328,9 @@ class PlaybackHost:
                 set_epoch = getattr(active.runner.encoder, "set_epoch", None)
                 if callable(set_epoch):
                     set_epoch(self._session_epoch)
+                configure = getattr(active.runner, "set_processing", None)
+                if callable(configure):
+                    configure(self._processing_features)
                 active.runner.start()
                 self._active = active
                 self._candidate = None

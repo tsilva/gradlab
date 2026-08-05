@@ -5,7 +5,7 @@ import os
 import signal
 import threading
 import traceback
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from multiprocessing.connection import Connection
 from typing import Any
 
@@ -70,6 +70,7 @@ def _worker_main(
                     int(request["sequence"]),
                     epoch=int(request["epoch"]),
                     timeout=float(request["timeout"]),
+                    kinds=request.get("kinds"),
                 )
             elif operation == "property":
                 name = str(request.get("name") or "")
@@ -90,6 +91,8 @@ def _worker_main(
                     tuple(str(item) for item in request.get("labels") or ()),
                     focused=bool(request.get("focused")),
                 )
+            elif operation == "set_processing":
+                value = host.set_processing(request.get("features") or ())
             elif operation == "submit":
                 value = host.submit(request["command"])
             else:
@@ -132,12 +135,14 @@ class _RemoteEncoder:
         *,
         epoch: int,
         timeout: float,
+        kinds: Iterable[int] | None = None,
     ) -> dict[int, tuple[int, bytes]]:
         value = self._host._rpc(
             "encoder_retained",
             sequence=int(sequence),
             epoch=int(epoch),
             timeout=float(timeout),
+            kinds=[int(kind) for kind in kinds or ()],
             timeout_seconds=max(
                 PLAYBACK_RPC_TIMEOUT_SECONDS,
                 float(timeout) + 5.0,
@@ -310,6 +315,9 @@ class IsolatedPlaybackHost:
 
     def update_input(self, labels: Sequence[str], *, focused: bool) -> None:
         self._rpc("update_input", labels=list(labels), focused=bool(focused))
+
+    def set_processing(self, features: Iterable[object]) -> None:
+        self._rpc("set_processing", features=[str(feature) for feature in features])
 
     def submit(self, command: Any) -> None:
         self._rpc("submit", command=command)

@@ -64,6 +64,7 @@ class PolicyDecision:
             return None
         return 1 + int(np.count_nonzero(self.probabilities > probability))
 
+
 def _as_numpy(value: torch.Tensor) -> np.ndarray:
     return value.detach().cpu().numpy()
 
@@ -192,6 +193,34 @@ def actor_critic_policy_decisions(
         model,
         model_obs,
         deterministic=deterministic,
+    )
+
+
+def actor_critic_policy_actions(
+    model: Any,
+    model_obs: Any,
+    *,
+    deterministic: bool,
+) -> tuple[PolicyDecision, ...]:
+    """Choose actor actions without running critic or distribution diagnostics."""
+
+    policy = model.policy
+    policy.set_training_mode(False)
+    obs_tensor, _vectorized = policy.obs_to_tensor(model_obs)
+    with torch.no_grad():
+        distribution = policy.get_distribution(obs_tensor)
+        raw_tensor = distribution.get_actions(deterministic=deterministic)
+    raw_actions = _as_numpy(raw_tensor).reshape((-1, *policy.action_space.shape))
+    executed_actions = _postprocess_action(policy, raw_actions)
+    mode = "deterministic" if deterministic else "stochastic"
+    return tuple(
+        PolicyDecision(
+            raw_action=raw_actions[lane].copy(),
+            executed_action=executed_actions[lane].copy(),
+            action_selection_mode=mode,
+            sampled=not deterministic,
+        )
+        for lane in range(raw_actions.shape[0])
     )
 
 

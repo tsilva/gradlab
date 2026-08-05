@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 
-METRICS_SCHEMA_VERSION = 15
+METRICS_SCHEMA_VERSION = 16
 TRAIN_GLOBAL_STEP = "train/global_step"
 EVAL_CHECKPOINT_STEP = "eval/checkpoint/step"
 ORCHESTRATION_EVENT_SEQ = "orchestration/event_seq"
@@ -163,11 +163,23 @@ TRAIN_PPO_EXPLAINED_VARIANCE = f"{TRAIN_ALGORITHM_PPO_ROOT}/value/explained_vari
 TRAIN_PPO_VALUE_LOSS = f"{TRAIN_ALGORITHM_PPO_ROOT}/update/value_loss"
 TRAIN_PPO_LEARNING_RATE = f"{TRAIN_ALGORITHM_PPO_ROOT}/update/learning_rate"
 TRAIN_PPO_POLICY_ENTROPY = f"{TRAIN_ALGORITHM_PPO_ROOT}/policy/entropy"
+TRAIN_PPO_POLICY_ENTROPY_BOUND_LOWER = (
+    f"{TRAIN_ALGORITHM_PPO_ROOT}/policy/entropy_bound/lower"
+)
+TRAIN_PPO_POLICY_ENTROPY_BOUND_UPPER = (
+    f"{TRAIN_ALGORITHM_PPO_ROOT}/policy/entropy_bound/upper"
+)
 
 TRAIN_A2C_EXPLAINED_VARIANCE = f"{TRAIN_ALGORITHM_A2C_ROOT}/value/explained_variance"
 TRAIN_A2C_VALUE_LOSS = f"{TRAIN_ALGORITHM_A2C_ROOT}/update/value_loss"
 TRAIN_A2C_LEARNING_RATE = f"{TRAIN_ALGORITHM_A2C_ROOT}/update/learning_rate"
 TRAIN_A2C_POLICY_ENTROPY = f"{TRAIN_ALGORITHM_A2C_ROOT}/policy/entropy"
+TRAIN_A2C_POLICY_ENTROPY_BOUND_LOWER = (
+    f"{TRAIN_ALGORITHM_A2C_ROOT}/policy/entropy_bound/lower"
+)
+TRAIN_A2C_POLICY_ENTROPY_BOUND_UPPER = (
+    f"{TRAIN_ALGORITHM_A2C_ROOT}/policy/entropy_bound/upper"
+)
 
 TRAIN_THROUGHPUT_ROOT = "train/throughput"
 TRAIN_THROUGHPUT_LOOP_FPS = f"{TRAIN_THROUGHPUT_ROOT}/loop_fps"

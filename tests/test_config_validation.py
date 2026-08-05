@@ -588,6 +588,8 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertEqual(report.counts["train_recipes"], 46)
         self.assertGreaterEqual(report.counts["env_configs"], 0)
         self.assertEqual(report.counts["benchmark_profiles"], 4)
+        self.assertEqual(report.counts["workspace_manifests"], 1)
+        self.assertEqual(report.counts["workspace_projects"], 16)
 
     def test_recipe_cannot_be_launched_for_a_different_goal(self) -> None:
         with self.assertRaisesRegex(ValueError, "does not belong to goal"):

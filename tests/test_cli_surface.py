@@ -84,6 +84,7 @@ for name in sorted(sys.modules):
             (("dataset", "verify", "--help"), "usage: gradlab dataset verify"),
             (("leaders", "runs", "--help"), "usage: gradlab leaders runs"),
             (("reports", "plan", "--help"), "usage: gradlab reports plan"),
+            (("workspaces", "plan", "--help"), "usage: gradlab workspaces plan"),
         )
         for argv, expected_usage in cases:
             with self.subTest(command=" ".join(argv)):

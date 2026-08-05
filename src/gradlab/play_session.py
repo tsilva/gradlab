@@ -7,7 +7,7 @@ import os
 from collections import deque
 from collections.abc import Mapping
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from gradlab.local_paths import configure_matplotlib_cache, default_runs_dir
@@ -44,8 +44,26 @@ from gradlab.model_sources import (
     DEFAULT_PUBLIC_MODELS_BASE_URL,
     positional_model_source_arg,
 )
-from gradlab.play_attribution import PolicyActionAttributor
+from gradlab.play_attribution import (
+    ATTRIBUTION_MODES,
+    AttributionError,
+    PolicyActionAttributor,
+    attribution_capability,
+)
+from gradlab.play_cnn import (
+    CNN_INTERVAL_DEFAULT,
+    CNN_TOP_K_DEFAULT,
+    CNN_TOP_K_MAX,
+    CNNInspection,
+    CNNInspectionError,
+    PolicyCNNInspector,
+    cnn_inspection_capability,
+)
 from gradlab.play_debug import PolicyDecision
+from gradlab.play_processing import (
+    PLAYER_PROCESSING_FEATURES,
+    normalize_player_processing,
+)
 from gradlab.policy_observation import (
     model_observation,
     task_info_value_from_info,
@@ -72,7 +90,7 @@ ANSI_STYLES = {
     "yellow": "\033[33m",
     "magenta": "\033[35m",
 }
-ATTRIBUTION_MODES = ("none", "gradcam", "occlusion")
+ATTRIBUTION_INTERVAL_DEFAULTS = {"gradcam": 1, "occlusion": 8}
 
 
 def _color(text: str, style: str) -> str:
@@ -98,8 +116,7 @@ def fast_env_image_obs(obs) -> np.ndarray:
         key = "observation" if "observation" in obs else "image"
         if key not in obs:
             raise ValueError(
-                "dict fast env obs is missing 'observation' or 'image'; "
-                f"keys={tuple(obs)}"
+                f"dict fast env obs is missing 'observation' or 'image'; keys={tuple(obs)}"
             )
         obs = obs[key]
     return np.asarray(obs)
@@ -179,36 +196,48 @@ def _heatmap_color(heatmap: np.ndarray) -> np.ndarray:
 def render_obs_stack(
     frames: deque[np.ndarray],
     scale: int,
-    heatmap: np.ndarray | None = None,
-    heatmap_opacity: float = 0.45,
 ) -> np.ndarray:
     if scale < 1:
         raise ValueError("obs viewer scale must be >= 1")
-    scaled_heatmap = None
-    if heatmap is not None:
-        scaled_heatmap = np.asarray(heatmap, dtype=np.float32)
-        if scaled_heatmap.ndim != 2:
-            raise ValueError(f"attribution heatmap must be 2D, got shape {scaled_heatmap.shape}")
-        if scale != 1:
-            scaled_heatmap = np.repeat(np.repeat(scaled_heatmap, scale, axis=0), scale, axis=1)
-        scaled_heatmap = np.clip(scaled_heatmap, 0.0, 1.0)
-        heat_color = _heatmap_color(scaled_heatmap)
-        alpha = (float(heatmap_opacity) * scaled_heatmap)[..., None]
     panels = []
     for frame in frames:
         gray = frame[..., 0]
         panel = np.repeat(gray[..., None], 3, axis=2)
         if scale != 1:
             panel = np.repeat(np.repeat(panel, scale, axis=0), scale, axis=1)
-        if scaled_heatmap is not None:
-            if scaled_heatmap.shape != panel.shape[:2]:
-                raise ValueError(
-                    "attribution heatmap shape does not match observation frame: "
-                    f"{scaled_heatmap.shape} vs {panel.shape[:2]}"
-                )
-            panel = ((1.0 - alpha) * panel.astype(np.float32) + alpha * heat_color).astype(np.uint8)
         panels.append(panel)
     return np.concatenate(panels, axis=1)
+
+
+def render_attribution_stack(
+    frames: tuple[np.ndarray, ...] | deque[np.ndarray],
+    heatmap: np.ndarray,
+    scale: int = 1,
+) -> np.ndarray:
+    """Render an opacity-independent RGBA map aligned with the observation stack."""
+
+    if scale < 1:
+        raise ValueError("obs viewer scale must be >= 1")
+    values = np.asarray(heatmap, dtype=np.float32)
+    if values.ndim != 2:
+        raise ValueError(f"attribution heatmap must be 2D, got shape {values.shape}")
+    if scale != 1:
+        values = np.repeat(np.repeat(values, scale, axis=0), scale, axis=1)
+    values = np.clip(values, 0.0, 1.0)
+    color = _heatmap_color(values).astype(np.uint8)
+    alpha = np.rint(values * 255.0).astype(np.uint8)[..., None]
+    panel = np.concatenate([color, alpha], axis=2)
+    rendered = []
+    for frame in frames:
+        height, width = np.asarray(frame).shape[:2]
+        expected = (height * scale, width * scale)
+        if values.shape != expected:
+            raise ValueError(
+                "attribution heatmap shape does not match observation frame: "
+                f"{values.shape} vs {expected}"
+            )
+        rendered.append(panel.copy())
+    return np.concatenate(rendered, axis=1)
 
 
 def add_play_source_args(parser: argparse.ArgumentParser) -> None:
@@ -278,24 +307,10 @@ def add_play_source_args(parser: argparse.ArgumentParser) -> None:
     )
 
 
-def positive_int_arg(value: str) -> int:
-    parsed = int(value)
-    if parsed < 1:
-        raise argparse.ArgumentTypeError("must be >= 1")
-    return parsed
-
-
 def nonnegative_int_arg(value: str) -> int:
     parsed = int(value)
     if parsed < 0 or parsed > 65535:
         raise argparse.ArgumentTypeError("must be in [0, 65535]")
-    return parsed
-
-
-def attribution_opacity_arg(value: str) -> float:
-    parsed = float(value)
-    if not 0.0 <= parsed <= 1.0:
-        raise argparse.ArgumentTypeError("must be in [0, 1]")
     return parsed
 
 
@@ -365,30 +380,6 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Disable model-download and player-startup progress bars.",
     )
-    parser.add_argument(
-        "--attribution",
-        choices=ATTRIBUTION_MODES,
-        default="none",
-        help=(
-            "Overlay policy-input attribution in the observation panel. "
-            "Grad-CAM is fast; occlusion is slower but perturbation-based."
-        ),
-    )
-    parser.add_argument(
-        "--attribution-interval",
-        type=positive_int_arg,
-        default=None,
-        help=(
-            "Compute attribution every N policy steps. Defaults to 1 for Grad-CAM "
-            "and 8 for occlusion."
-        ),
-    )
-    parser.add_argument(
-        "--attribution-opacity",
-        type=attribution_opacity_arg,
-        default=0.45,
-        help="Heatmap opacity for --attribution overlays, in [0, 1].",
-    )
     return parser
 
 
@@ -431,14 +422,6 @@ def resolved_play_launch_lines(
             "interface=web "
             f"respect_task_termination={getattr(args, 'respect_task_termination', False)}",
             "green",
-        ),
-        _summary_line(
-            "◎",
-            "attribution",
-            f"mode={getattr(args, 'attribution', 'none')} "
-            f"interval={getattr(args, 'attribution_interval', None) or '-'} "
-            f"opacity={getattr(args, 'attribution_opacity', 0.45):.2f}",
-            "magenta",
         ),
         _summary_line(
             "▤",
@@ -554,6 +537,15 @@ class _PlaybackTransition:
     completed: bool
     boundary: bool
     after_frame_role: str = "after_action_observation"
+    attribution_status: str = "off"
+    attribution_mode: str = "none"
+    attribution_generation: int = 0
+    attribution_reason: str | None = "disabled"
+    cnn_inspection: CNNInspection | None = None
+    cnn_status: str = "off"
+    cnn_layer_id: str | None = None
+    cnn_generation: int = 0
+    cnn_reason: str | None = "disabled"
 
     @property
     def events(self) -> tuple[str, ...]:
@@ -570,15 +562,13 @@ class _PlaybackSession:
         env,
         config,
         initial_seed: int,
-        attributor: PolicyActionAttributor | None,
-        attribution_mode: str,
-        attribution_interval: int,
-        attribution_opacity: float,
         policy_runtime: PolicyRuntime | None = None,
         policy_provenance: Mapping[str, object] | None = None,
         env_factory=None,
         termination_base_config=None,
         termination_source: str = "training",
+        attributor_factory=PolicyActionAttributor,
+        cnn_inspector_factory=PolicyCNNInspector,
     ):
         self.model = model
         self.policy_runtime = policy_runtime
@@ -590,10 +580,30 @@ class _PlaybackSession:
         self.env = env
         self.config = config
         self.initial_seed = initial_seed
-        self.attributor = attributor
-        self.attribution_mode = attribution_mode
-        self.attribution_interval = attribution_interval
-        self.attribution_opacity = attribution_opacity
+        self.attributor: PolicyActionAttributor | None = None
+        self._attributor_factory = attributor_factory
+        algorithm_id = (
+            None if policy_runtime is None else str(policy_runtime.capabilities.algorithm_id)
+        )
+        self.attribution_capability = attribution_capability(model, algorithm_id)
+        self.attribution_mode = "none"
+        self.attribution_interval = ATTRIBUTION_INTERVAL_DEFAULTS["gradcam"]
+        self.attribution_status = "off"
+        self.attribution_error: str | None = None
+        self.attribution_generation = 0
+        self.attribution_last_computed_sequence: int | None = None
+        self.cnn_inspector: PolicyCNNInspector | None = None
+        self._cnn_inspector_factory = cnn_inspector_factory
+        self.cnn_capability = cnn_inspection_capability(model)
+        self.cnn_enabled = False
+        self.cnn_layer_id = self.cnn_capability.get("default_layer_id")
+        self.cnn_interval = CNN_INTERVAL_DEFAULT
+        self.cnn_top_k = CNN_TOP_K_DEFAULT
+        self.cnn_status = "off"
+        self.cnn_error: str | None = None
+        self.cnn_generation = 0
+        self.cnn_last_computed_sequence: int | None = None
+        self.processing_features = PLAYER_PROCESSING_FEATURES
         self.policy_provenance = dict(policy_provenance or {})
         self.env_factory = env_factory
         self.termination_base_config = termination_base_config or config
@@ -798,15 +808,9 @@ class _PlaybackSession:
             if runtime_state is None or runtime_state.episode_seed is None
             else runtime_state.episode_seed
         )
-        self.episode = (
-            self.episode
-            if runtime_state is None
-            else runtime_state.episode_index + 1
-        )
+        self.episode = self.episode if runtime_state is None else runtime_state.episode_index + 1
         self.step_index = 0 if runtime_state is None else runtime_state.episode_length
-        self.total_reward = (
-            0.0 if runtime_state is None else runtime_state.episode_return
-        )
+        self.total_reward = 0.0 if runtime_state is None else runtime_state.episode_return
         self.max_x_pos = 0
         self.interactive = False
         self.last_transition = None
@@ -833,8 +837,260 @@ class _PlaybackSession:
                 "introspection": [],
             }
         return self.policy_runtime.capabilities.payload(
-            attribution_available=self.attributor is not None,
+            attribution_available=bool(self.attribution_capability.get("supported_modes")),
         )
+
+    def set_processing(self, features: tuple[str, ...] | frozenset[str]) -> None:
+        self.processing_features = normalize_player_processing(features)
+
+    @property
+    def attribution_state(self) -> dict[str, object]:
+        return {
+            "mode": self.attribution_mode,
+            "interval": self.attribution_interval,
+            "status": self.attribution_status,
+            "error": self.attribution_error,
+            "generation": self.attribution_generation,
+            "last_computed_sequence": self.attribution_last_computed_sequence,
+        }
+
+    @property
+    def cnn_state(self) -> dict[str, object]:
+        return {
+            "enabled": self.cnn_enabled,
+            "layer_id": self.cnn_layer_id,
+            "interval": self.cnn_interval,
+            "top_k": self.cnn_top_k,
+            "status": self.cnn_status,
+            "error": self.cnn_error,
+            "generation": self.cnn_generation,
+            "last_computed_sequence": self.cnn_last_computed_sequence,
+        }
+
+    def _cnn_for_transition(
+        self,
+        transition: _PlaybackTransition,
+    ) -> _PlaybackTransition:
+        if not transition.before_frames:
+            return replace(
+                transition,
+                cnn_inspection=None,
+                cnn_status="not_computed",
+                cnn_layer_id=self.cnn_layer_id,
+                cnn_generation=0,
+                cnn_reason="no_image_observation",
+            )
+        self.cnn_generation += 1
+        generation = self.cnn_generation
+        try:
+            if self.cnn_inspector is None:
+                self.cnn_inspector = self._cnn_inspector_factory(self.model)
+            inspection = self.cnn_inspector.inspect(
+                transition.model_obs,
+                layer_id=str(self.cnn_layer_id),
+                top_k=self.cnn_top_k,
+                generation=generation,
+            )
+        except Exception as exc:
+            message = f"CNN inspection failed: {exc}"
+            self.cnn_status = "error"
+            self.cnn_error = message
+            return replace(
+                transition,
+                cnn_inspection=None,
+                cnn_status="error",
+                cnn_layer_id=self.cnn_layer_id,
+                cnn_generation=generation,
+                cnn_reason=message,
+            )
+        self.cnn_last_computed_sequence = transition.sequence
+        return replace(
+            transition,
+            cnn_inspection=inspection,
+            cnn_status="available",
+            cnn_layer_id=self.cnn_layer_id,
+            cnn_generation=generation,
+            cnn_reason=None,
+        )
+
+    def configure_cnn_inspection(
+        self,
+        *,
+        enabled: bool,
+        layer_id: str | None = None,
+        interval: int | None = None,
+        top_k: int | None = None,
+    ) -> _PlaybackTransition | None:
+        if not isinstance(enabled, bool):
+            raise ValueError("CNN inspection enabled must be a boolean")
+        if not enabled:
+            self.cnn_enabled = False
+            self.cnn_status = "off"
+            self.cnn_error = None
+            if self.last_transition is not None:
+                self.last_transition = replace(
+                    self.last_transition,
+                    cnn_inspection=None,
+                    cnn_status="off",
+                    cnn_layer_id=self.cnn_layer_id,
+                    cnn_generation=0,
+                    cnn_reason="disabled",
+                )
+            return self.last_transition
+
+        layers = {
+            str(item.get("id"))
+            for item in self.cnn_capability.get("layers", ())
+            if isinstance(item, Mapping) and item.get("id") is not None
+        }
+        if not layers:
+            reason = self.cnn_capability.get("unavailable_reason")
+            raise ValueError(str(reason or "CNN inspection is unavailable"))
+        resolved_layer = str(layer_id or self.cnn_layer_id or "")
+        if resolved_layer not in layers:
+            raise ValueError(f"unknown convolutional layer {resolved_layer!r}")
+        if isinstance(interval, bool):
+            raise ValueError("CNN inspection interval must be a positive integer")
+        if isinstance(interval, float) and not interval.is_integer():
+            raise ValueError("CNN inspection interval must be a positive integer")
+        resolved_interval = self.cnn_interval if interval is None else int(interval)
+        if resolved_interval < 1:
+            raise ValueError("CNN inspection interval must be >= 1")
+        if isinstance(top_k, bool):
+            raise ValueError(f"CNN inspection top_k must be in [1, {CNN_TOP_K_MAX}]")
+        if isinstance(top_k, float) and not top_k.is_integer():
+            raise ValueError(f"CNN inspection top_k must be in [1, {CNN_TOP_K_MAX}]")
+        resolved_top_k = self.cnn_top_k if top_k is None else int(top_k)
+        if not 1 <= resolved_top_k <= CNN_TOP_K_MAX:
+            raise ValueError(f"CNN inspection top_k must be in [1, {CNN_TOP_K_MAX}]")
+
+        self.cnn_enabled = True
+        self.cnn_layer_id = resolved_layer
+        self.cnn_interval = resolved_interval
+        self.cnn_top_k = resolved_top_k
+        self.cnn_status = "active"
+        self.cnn_error = None
+        try:
+            if self.cnn_inspector is None:
+                self.cnn_inspector = self._cnn_inspector_factory(self.model)
+        except Exception as exc:
+            self.cnn_status = "error"
+            self.cnn_error = f"CNN inspection failed to initialize: {exc}"
+            raise CNNInspectionError(self.cnn_error) from exc
+
+        if self.last_transition is not None:
+            self.last_transition = self._cnn_for_transition(self.last_transition)
+            if self.cnn_status == "error":
+                raise CNNInspectionError(self.cnn_error or "CNN inspection failed")
+        return self.last_transition
+
+    def _attribution_for_transition(
+        self,
+        transition: _PlaybackTransition,
+    ) -> _PlaybackTransition:
+        if transition.decision is None:
+            return replace(
+                transition,
+                attribution=None,
+                attribution_status="not_computed",
+                attribution_mode=self.attribution_mode,
+                attribution_generation=0,
+                attribution_reason="no_policy_decision",
+            )
+        if not transition.before_frames:
+            return replace(
+                transition,
+                attribution=None,
+                attribution_status="not_computed",
+                attribution_mode=self.attribution_mode,
+                attribution_generation=0,
+                attribution_reason="no_image_observation",
+            )
+        self.attribution_generation += 1
+        generation = self.attribution_generation
+        try:
+            if self.attributor is None:
+                self.attributor = self._attributor_factory(self.model)
+            heatmap = self.attributor.attribute(
+                self.attribution_mode,
+                transition.model_obs,
+                transition.decision.raw_action,
+            )
+        except Exception as exc:
+            message = f"{self.attribution_mode} attribution failed: {exc}"
+            self.attribution_status = "error"
+            self.attribution_error = message
+            return replace(
+                transition,
+                attribution=None,
+                attribution_status="error",
+                attribution_mode=self.attribution_mode,
+                attribution_generation=generation,
+                attribution_reason=message,
+            )
+        self.attribution_last_computed_sequence = transition.sequence
+        return replace(
+            transition,
+            attribution=np.asarray(heatmap).copy(),
+            attribution_status="available",
+            attribution_mode=self.attribution_mode,
+            attribution_generation=generation,
+            attribution_reason=None,
+        )
+
+    def configure_attribution(
+        self,
+        mode: str,
+        interval: int | None = None,
+    ) -> _PlaybackTransition | None:
+        normalized = str(mode).strip().casefold()
+        if normalized == "none":
+            self.attribution_mode = "none"
+            self.attribution_status = "off"
+            self.attribution_error = None
+            if self.last_transition is not None:
+                self.last_transition = replace(
+                    self.last_transition,
+                    attribution=None,
+                    attribution_status="off",
+                    attribution_mode="none",
+                    attribution_generation=0,
+                    attribution_reason="disabled",
+                )
+            return self.last_transition
+        if normalized not in ATTRIBUTION_MODES:
+            raise ValueError(f"unknown attribution mode {mode!r}")
+        supported = tuple(self.attribution_capability.get("supported_modes") or ())
+        if normalized not in supported:
+            reason = self.attribution_capability.get("unavailable_reason")
+            raise ValueError(str(reason or f"{normalized} attribution is unavailable"))
+        if isinstance(interval, bool):
+            raise ValueError("attribution interval must be a positive integer")
+        if isinstance(interval, float) and not interval.is_integer():
+            raise ValueError("attribution interval must be a positive integer")
+        resolved_interval = (
+            ATTRIBUTION_INTERVAL_DEFAULTS[normalized] if interval is None else int(interval)
+        )
+        if resolved_interval < 1:
+            raise ValueError("attribution interval must be >= 1")
+
+        self.attribution_mode = normalized
+        self.attribution_interval = resolved_interval
+        self.attribution_status = "active"
+        self.attribution_error = None
+        try:
+            if self.attributor is None:
+                self.attributor = self._attributor_factory(self.model)
+        except Exception as exc:
+            self.attribution_status = "error"
+            self.attribution_error = f"{normalized} attribution failed to initialize: {exc}"
+            raise AttributionError(self.attribution_error) from exc
+
+        if self.last_transition is not None:
+            self.last_transition = self._attribution_for_transition(self.last_transition)
+            if self.attribution_status == "error":
+                raise AttributionError(self.attribution_error or "attribution failed")
+        return self.last_transition
 
     def step(
         self,
@@ -850,6 +1106,7 @@ class _PlaybackSession:
         batch = self.policy_runtime.decide(
             self.model_obs,
             action_selection_mode=requested_mode,
+            include_diagnostics=bool(self.processing_features & {"policy", "raw"}),
             execution_context=(
                 self.env.policy_execution_context(self.model)
                 if callable(getattr(self.env, "policy_execution_context", None))
@@ -857,9 +1114,7 @@ class _PlaybackSession:
             ),
         )
         if len(batch.decisions) != 1:
-            raise RuntimeError(
-                "interactive playback requires exactly one policy decision per step"
-            )
+            raise RuntimeError("interactive playback requires exactly one policy decision per step")
         decision = batch.decisions[0]
         return self._advance(
             decision=decision,
@@ -910,23 +1165,20 @@ class _PlaybackSession:
         executed_action: object,
         action_source: str,
     ) -> _PlaybackTransition:
+        processing = self.processing_features
+        needs_raw = "raw" in processing
+        needs_observation = bool(processing & {"observation", "attribution", "cnn-inspection"})
         model_obs = self.model_obs
-        model_obs_snapshot = deepcopy(model_obs)
-        pre_task = deepcopy(self.active_task)
-        before_frame = None if self.current_frame is None else self.current_frame.copy()
-        before_frames = self._frame_tuple(self.frames)
-        heatmap = None
-        if (
-            decision is not None
-            and self.attributor is not None
-            and self.frames is not None
-            and self.step_index % self.attribution_interval == 0
-        ):
-            heatmap = self.attributor.attribute(
-                self.attribution_mode,
-                model_obs,
-                decision.raw_action,
-            )
+        model_obs_snapshot = (
+            deepcopy(model_obs)
+            if needs_raw or "attribution" in processing or "cnn-inspection" in processing
+            else None
+        )
+        pre_task = deepcopy(self.active_task) if needs_raw else None
+        before_frame = (
+            None if not needs_raw or self.current_frame is None else self.current_frame.copy()
+        )
+        before_frames = self._frame_tuple(self.frames) if needs_observation else ()
 
         batched_action = np.expand_dims(np.asarray(executed_action), axis=0)
         policy_obs, rewards, dones, infos = self.env.step(batched_action)
@@ -975,7 +1227,7 @@ class _PlaybackSession:
 
         next_conditioning_info = dict(info.get("reset_info", {})) if boundary else info
         self._update_conditioning(next_conditioning_info)
-        next_task = deepcopy(self.active_task)
+        next_task = deepcopy(self.active_task) if needs_raw else None
         self.policy_obs = policy_obs
         self.current_frame = optional_vector_env_frame(self.env)
         self.frames = optional_fast_env_frames(policy_obs)
@@ -1011,7 +1263,7 @@ class _PlaybackSession:
             after_frame=None if after_frame is None else np.asarray(after_frame).copy(),
             before_frames=before_frames,
             after_frames=self._frame_tuple(after_frames),
-            attribution=None if heatmap is None else np.asarray(heatmap).copy(),
+            attribution=None,
             pre_task=pre_task,
             next_task=next_task,
             reward=reward,
@@ -1022,7 +1274,63 @@ class _PlaybackSession:
             completed=completed,
             boundary=boundary,
             after_frame_role=after_frame_role,
+            attribution_status=(
+                "off"
+                if self.attribution_mode == "none"
+                else "error"
+                if self.attribution_status == "error"
+                else "not_computed"
+            ),
+            attribution_mode=self.attribution_mode,
+            attribution_generation=(
+                self.attribution_generation if self.attribution_status == "error" else 0
+            ),
+            attribution_reason=(
+                "disabled"
+                if self.attribution_mode == "none"
+                else self.attribution_error
+                if self.attribution_status == "error"
+                else "no_policy_decision"
+                if decision is None
+                else "no_image_observation"
+                if not before_frames
+                else "cadence"
+            ),
+            cnn_inspection=None,
+            cnn_status=(
+                "off"
+                if not self.cnn_enabled
+                else "error"
+                if self.cnn_status == "error"
+                else "not_computed"
+            ),
+            cnn_layer_id=self.cnn_layer_id,
+            cnn_generation=self.cnn_generation if self.cnn_status == "error" else 0,
+            cnn_reason=(
+                "disabled"
+                if not self.cnn_enabled
+                else self.cnn_error
+                if self.cnn_status == "error"
+                else "no_image_observation"
+                if not before_frames
+                else "cadence"
+            ),
         )
+        if (
+            "attribution" in processing
+            and self.attribution_status == "active"
+            and decision is not None
+            and before_frames
+            and self.step_index % self.attribution_interval == 0
+        ):
+            transition = self._attribution_for_transition(transition)
+        if (
+            "cnn-inspection" in processing
+            and self.cnn_status == "active"
+            and before_frames
+            and self.step_index % self.cnn_interval == 0
+        ):
+            transition = self._cnn_for_transition(transition)
         self.last_transition = transition
         if boundary:
             reset_policy_state(self.model, [True])

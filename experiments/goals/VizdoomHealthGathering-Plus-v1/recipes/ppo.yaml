@@ -4,4 +4,4 @@ defaults:
 - _self_
 
 recipe_id: ppo
-description: Training-only time-unaware pixel PPO for indefinite survival in {{ goal_id }}.
+description: Training-only pixel PPO for gathering health with swappable surface textures in {{ goal_id }}.
