@@ -279,10 +279,16 @@ def test_gradlab_ppo_schema_matches_sb3_and_adds_explicit_precision() -> None:
     assert config["n_steps"] == 4
     assert config["batch_size"] == 256
     assert config["precision"] == "fp32"
+    assert config["execution_profile"] == "max-throughput"
 
     with pytest.raises(ValueError, match="precision must be one of"):
         validate_and_normalize_train_config(
             backend_config("gradlab.ppo", precision="int8")
+        )
+
+    with pytest.raises(ValueError, match="execution_profile must be one of"):
+        validate_and_normalize_train_config(
+            backend_config("gradlab.ppo", execution_profile="unknown")
         )
 
 

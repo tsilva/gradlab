@@ -93,10 +93,21 @@ def _take_observation_lanes(observations: Any, lanes: np.ndarray) -> Any:
     return _tree_map(observations, lambda value: np.asarray(value)[lanes])
 
 
-def _flatten_observations(observations: Any) -> Any:
+def _flatten_observations(observations: Any, *, env_major: bool = False) -> Any:
     if isinstance(observations, Mapping):
-        return {key: _flatten_observations(value) for key, value in observations.items()}
+        return {
+            key: _flatten_observations(value, env_major=env_major)
+            for key, value in observations.items()
+        }
+    if env_major:
+        return observations.transpose(0, 1).flatten(0, 1)
     return observations.flatten(0, 1)
+
+
+def _flatten_rollout_tensor(value: torch.Tensor, *, env_major: bool) -> torch.Tensor:
+    if env_major:
+        return value.transpose(0, 1).flatten(0, 1)
+    return value.flatten(0, 1)
 
 
 def _index_observations(observations: Any, indices: torch.Tensor) -> Any:
@@ -229,9 +240,15 @@ class TensorRolloutBuffer:
 
 
 class _CompiledPolicyCalls:
-    def __init__(self, policy: Any, device: torch.device) -> None:
+    def __init__(
+        self,
+        policy: Any,
+        device: torch.device,
+        *,
+        compile_policy: bool = True,
+    ) -> None:
         self.device = device
-        if device.type == "cuda":
+        if device.type == "cuda" and compile_policy:
             self.forward = torch.compile(policy.forward, dynamic=False, fullgraph=False)
             self.evaluate_actions = torch.compile(
                 policy.evaluate_actions,
@@ -447,15 +464,35 @@ def _validate_grouped_context(config: Any, backend_config: Mapping[str, Any]) ->
     return mode, context
 
 
-def _configure_optimizer_for_device(optimizer: Any, device: torch.device) -> None:
-    cuda = device.type == "cuda"
-    optimizer.defaults["fused"] = cuda
+def _configure_optimizer_for_device(
+    optimizer: Any,
+    device: torch.device,
+    *,
+    fused: bool = True,
+) -> None:
+    use_fused = device.type == "cuda" and fused
+    optimizer.defaults["fused"] = use_fused
     optimizer.defaults["capturable"] = False
-    optimizer.defaults["foreach"] = False if cuda else None
+    optimizer.defaults["foreach"] = False if use_fused else None
     for group in optimizer.param_groups:
-        group["fused"] = cuda
+        group["fused"] = use_fused
         group["capturable"] = False
-        group["foreach"] = False if cuda else None
+        group["foreach"] = False if use_fused else None
+
+
+@dataclass(frozen=True)
+class _ExecutionProfile:
+    compile_policy: bool
+    fused_optimizer: bool
+    torch_permutation: bool
+
+
+_EXECUTION_PROFILES = {
+    "sb3-parity": _ExecutionProfile(False, False, False),
+    "compiled-parity": _ExecutionProfile(True, False, False),
+    "compiled-fused-parity": _ExecutionProfile(True, True, False),
+    "max-throughput": _ExecutionProfile(True, True, True),
+}
 
 
 def _make_model(
@@ -463,6 +500,8 @@ def _make_model(
     env: Any,
     config: Any,
     device_name: str,
+    *,
+    fused_optimizer: bool = True,
 ) -> tuple[GradLabPPO, str, str | None]:
     from gradlab.policy_models import load_pinned_remote_policy_model
     from gradlab.schedules import apply_resume_hyperparameters, learning_rate_schedule
@@ -531,7 +570,11 @@ def _make_model(
     model.n_epochs = int(backend_config["n_epochs"])
     model.normalize_advantage = normalization_mode == "global"
     model.advantage_context = advantage_context or ""
-    _configure_optimizer_for_device(model.policy.optimizer, torch.device(device_name))
+    _configure_optimizer_for_device(
+        model.policy.optimizer,
+        torch.device(device_name),
+        fused=fused_optimizer,
+    )
     return model, normalization_mode, advantage_context
 
 
@@ -648,6 +691,7 @@ def _ppo_update(
     normalization_mode: str,
     advantage_context: str | None,
     ent_coef: float,
+    torch_permutation: bool = True,
 ) -> dict[str, float]:
     model.policy.set_training_mode(True)
     learning_rate = float(model.lr_schedule(progress_remaining))
@@ -663,12 +707,16 @@ def _ppo_update(
         assert advantage_context is not None
         _normalize_grouped_advantages(buffer, advantage_context)
 
-    flat_observations = _flatten_observations(buffer.observations)
-    flat_actions = buffer.actions.flatten(0, 1)
-    flat_values = buffer.values.flatten()
-    flat_log_probs = buffer.log_probs.flatten()
-    flat_advantages = buffer.advantages.flatten()
-    flat_returns = buffer.returns.flatten()
+    env_major = not torch_permutation
+    flat_observations = _flatten_observations(
+        buffer.observations,
+        env_major=env_major,
+    )
+    flat_actions = _flatten_rollout_tensor(buffer.actions, env_major=env_major)
+    flat_values = _flatten_rollout_tensor(buffer.values, env_major=env_major).flatten()
+    flat_log_probs = _flatten_rollout_tensor(buffer.log_probs, env_major=env_major).flatten()
+    flat_advantages = _flatten_rollout_tensor(buffer.advantages, env_major=env_major).flatten()
+    flat_returns = _flatten_rollout_tensor(buffer.returns, env_major=env_major).flatten()
     policy_losses: list[float] = []
     value_losses: list[float] = []
     entropy_losses: list[float] = []
@@ -679,7 +727,14 @@ def _ppo_update(
 
     for _epoch in range(int(model.n_epochs)):
         last_epoch_kls = []
-        indices = torch.randperm(buffer.size, device=buffer.rewards.device)
+        if torch_permutation:
+            indices = torch.randperm(buffer.size, device=buffer.rewards.device)
+        else:
+            indices = torch.as_tensor(
+                np.random.permutation(buffer.size),
+                dtype=torch.int64,
+                device=buffer.rewards.device,
+            )
         for start in range(0, buffer.size, int(model.batch_size)):
             batch_indices = indices[start : start + int(model.batch_size)]
             observations = _index_observations(flat_observations, batch_indices)
@@ -854,11 +909,21 @@ def run_gradlab_ppo(
         device_name = resolve_sb3_device(str(backend_config["device"]))
         device = torch.device(device_name)
         context.session.event(f"using torch device: {device}")
+        execution_profile_name = str(backend_config["execution_profile"])
+        execution_profile = _EXECUTION_PROFILES[execution_profile_name]
+        context.session.event(
+            "gradlab.ppo execution profile: "
+            f"{execution_profile_name} "
+            f"compile={execution_profile.compile_policy} "
+            f"fused_optimizer={execution_profile.fused_optimizer} "
+            f"torch_permutation={execution_profile.torch_permutation}"
+        )
         model, normalization_mode, advantage_context = _make_model(
             context,
             env,
             config,
             device_name,
+            fused_optimizer=execution_profile.fused_optimizer,
         )
         rollout_quantum = n_envs * int(backend_config["n_steps"])
         budget = context.session.configure_budget(
@@ -901,7 +966,11 @@ def run_gradlab_ppo(
             n_envs=n_envs,
             device=device,
         )
-        calls = _CompiledPolicyCalls(model.policy, device)
+        calls = _CompiledPolicyCalls(
+            model.policy,
+            device,
+            compile_policy=execution_profile.compile_policy,
+        )
         precision = _Precision(str(backend_config["precision"]), device)
         reward_stats = RewardStatsAccumulator(
             active_components=active_reward_components(config.task),
@@ -1039,6 +1108,7 @@ def run_gradlab_ppo(
                 normalization_mode=normalization_mode,
                 advantage_context=advantage_context,
                 ent_coef=ent_coef,
+                torch_permutation=execution_profile.torch_permutation,
             )
             rollout_metrics.update(curriculum_metrics)
             rollout_metrics.update(reward_stats.flush())

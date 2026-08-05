@@ -101,8 +101,12 @@ explicitly authorized. See [COMPUTE.md](COMPUTE.md) and the
   promotion.
 - `gradlab.ppo` is the opt-in tensor-native PPO backend. It accepts the
   `sb3.ppo` configuration surface plus `precision` (`fp32`, `amp-fp16`, or
-  `amp-bf16`), keeps PPO artifacts mutually resumable with SB3, compiles its
-  CUDA policy calls, and uses eager execution on CPU or MPS. Checked-in
+  `amp-bf16`) and an `execution_profile`. `sb3-parity` preserves SB3's eager,
+  unfused, environment-major minibatch path; `compiled-parity` and
+  `compiled-fused-parity` isolate the CUDA optimizations; `max-throughput`
+  additionally uses GPU-native permutation and is the default. The backend
+  keeps PPO artifacts mutually resumable with SB3 and uses eager execution on
+  CPU or MPS. Checked-in
   training recipes remain on `sb3.ppo` until the dedicated RTX 4090 throughput
   gate passes.
 - NES recipes require a lawfully obtained ROM supplied with `--rom-path` or
