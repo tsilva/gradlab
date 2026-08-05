@@ -18,27 +18,27 @@ function contrast(foreground, background) {
   return (lighter + 0.05) / (darker + 0.05);
 }
 
-test("scientific editorial theme tokens are the single CSS color source", async () => {
+test("scientific editorial dark-theme tokens are the single CSS color source", async () => {
   const styles = await readFile(new URL("styles.css", ROOT), "utf8");
   const expected = new Map([
-    ["color-canvas", "#FCF9F8"],
-    ["color-surface-primary", "#FFFFFF"],
-    ["color-surface-secondary", "#F6F3F2"],
-    ["color-surface-tertiary", "#F0EDED"],
-    ["color-surface-quaternary", "#EAE7E7"],
-    ["color-text", "#1C1B1B"],
-    ["color-text-muted", "#4B4356"],
-    ["color-border", "#CDC2DA"],
-    ["color-outline-strong", "#7C7388"],
-    ["color-interaction", "#6100C5"],
-    ["color-interaction-active", "#7F00FF"],
-    ["color-evaluation-surface", "#8DF5E4"],
-    ["color-evaluation-text", "#006B5F"],
-    ["color-training-surface", "#FFDCC6"],
-    ["color-training-text", "#743800"],
-    ["color-error-surface", "#FFDAD6"],
-    ["color-error-text", "#BA1A1A"],
-    ["color-inverse-surface", "#313030"],
+    ["color-canvas", "#121015"],
+    ["color-surface-primary", "#1B181F"],
+    ["color-surface-secondary", "#24202A"],
+    ["color-surface-tertiary", "#2D2833"],
+    ["color-surface-quaternary", "#37313E"],
+    ["color-text", "#F7F2F8"],
+    ["color-text-muted", "#C9BFCE"],
+    ["color-border", "#51475B"],
+    ["color-outline-strong", "#83748F"],
+    ["color-interaction", "#B978FF"],
+    ["color-interaction-active", "#D2A8FF"],
+    ["color-evaluation-surface", "#275B53"],
+    ["color-evaluation-text", "#8DF5E4"],
+    ["color-training-surface", "#5A3829"],
+    ["color-training-text", "#FFDCC6"],
+    ["color-error-surface", "#5A302F"],
+    ["color-error-text", "#FFDAD6"],
+    ["color-inverse-surface", "#09090A"],
     ["color-inverse-text", "#F3F0EF"],
   ]);
   for (const [name, value] of expected) {
@@ -103,21 +103,21 @@ test("telemetry descriptors retain a fixed eight-color sequence", async () => {
 
 test("theme text, evidence, syntax, disabled, and focus colors meet contrast targets", () => {
   const normalTextPairs = [
-    ["#1C1B1B", "#FCF9F8"],
-    ["#4B4356", "#FCF9F8"],
-    ["#4B4356", "#EAE7E7"],
-    ["#006B5F", "#8DF5E4"],
-    ["#743800", "#FFDCC6"],
-    ["#BA1A1A", "#FFDAD6"],
-    ["#F3F0EF", "#313030"],
-    ["#6100C5", "#FFFFFF"],
-    ["#00796B", "#FFFFFF"],
-    ["#B14E00", "#FFFFFF"],
-    ["#BA1A1A", "#FFFFFF"],
-    ["#8A5BB7", "#FFFFFF"],
-    ["#007C91", "#FFFFFF"],
-    ["#3F006E", "#FFFFFF"],
-    ["#934200", "#FFFFFF"],
+    ["#F7F2F8", "#121015"],
+    ["#C9BFCE", "#121015"],
+    ["#C9BFCE", "#37313E"],
+    ["#8DF5E4", "#275B53"],
+    ["#FFDCC6", "#5A3829"],
+    ["#FFDAD6", "#5A302F"],
+    ["#F3F0EF", "#09090A"],
+    ["#B978FF", "#1B181F"],
+    ["#5FD6C7", "#1B181F"],
+    ["#F3A35B", "#1B181F"],
+    ["#FF8A86", "#1B181F"],
+    ["#D2A8FF", "#1B181F"],
+    ["#68CFE3", "#1B181F"],
+    ["#9A6CFF", "#1B181F"],
+    ["#E8793E", "#1B181F"],
   ];
   for (const [foreground, background] of normalTextPairs) {
     assert.ok(
@@ -125,6 +125,6 @@ test("theme text, evidence, syntax, disabled, and focus colors meet contrast tar
       `${foreground} on ${background} must meet WCAG AA`,
     );
   }
-  assert.ok(contrast("#7F00FF", "#FCF9F8") >= 3, "focus indicator must meet 3:1");
-  assert.ok(contrast("#7C7388", "#FCF9F8") >= 3, "strong outline must meet 3:1");
+  assert.ok(contrast("#D2A8FF", "#121015") >= 3, "focus indicator must meet 3:1");
+  assert.ok(contrast("#83748F", "#121015") >= 3, "strong outline must meet 3:1");
 });
