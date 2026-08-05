@@ -10,13 +10,16 @@ and bounded trajectory cursor. A panel module owns its DOM and visualization.
   and singleton behavior for reusable panel types.
 - `BUILTIN_PANEL_PRESETS` instantiates the default research workspace. Policy,
   reward, action, and signal views are presets of the same `telemetry` type;
-  game, controls, observation, events, and raw transition inspection remain
+  game, controls, observation, CNN feature inspection, events, and raw transition inspection remain
   specialized types.
 
 `workspace.js` owns the v6 persisted shape. Each instance has `type`, `title`,
-`config`, `builtin`, and a zero-based GridStack `placement`. Custom instances
-are telemetry panels. Only the current schema is read; other versions are
-ignored.
+`config`, `enabled`, `builtin`, and a zero-based GridStack `placement`. Custom
+instances are telemetry panels. Only the current schema is read; other versions
+are ignored. Visibility controls placement; the standardized Enabled switch
+controls processing. A disabled panel stays in its workspace position but is
+excluded from browser rendering, frame subscriptions, retained-history demand,
+inspection work, and policy-diagnostic demand.
 
 Telemetry configuration is a list of visualization blocks:
 
@@ -36,7 +39,7 @@ keys are local visualization descriptors, not W&B metric names. A descriptor
 defines its label, value type, unit, transition phase, formatting, and accessors
 for snapshots and history points.
 
-Playback protocol v5 supplies reward-accounting data separately from general
+Playback protocol v5 and newer supply reward-accounting data separately from general
 telemetry. `session.reward_accounting` declares availability, the positive
 `scale_divisor`, and optional `clip_bounds`; each transition supplies
 `reward.raw`, `reward.components`, and `reward.accounting_error`, with matching
@@ -58,6 +61,17 @@ report accounting as unavailable.
 The built-in Reward analysis panel is visible in newly created workspaces.
 Normalization adds it hidden on the shelf when an existing v6 workspace does
 not contain it, preserving the existing layout without a schema-version reset.
+
+The built-in CNN feature explorer is an opt-in specialized panel for a live
+policy's actor image encoder. Its shared controls select one discovered Conv2d
+layer, capture cadence, and top-filter count; opening the panel alone does not
+run an extra model forward pass. Each exact transition ranks filters by peak
+raw positive post-activation response. The generation-tagged binary atlas holds
+a categorical winner map, a signed per-group-input-channel kernel mosaic, and a
+per-filter activation map. Snapshot metadata supplies unnormalized peak and
+mean-positive responses, positive coverage, and the peak cell's receptive-field
+region in policy-input pixels. The winner map compares only the displayed
+filters and is an activation diagnostic, not selected-action attribution.
 
 A panel module exports:
 

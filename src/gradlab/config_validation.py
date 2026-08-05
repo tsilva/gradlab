@@ -106,6 +106,29 @@ def validate_experiment_tree(repo_root: Path | str = Path(".")) -> ValidationRep
             lambda: validate_report_declarations(repo_root),
         )
 
+    workspace_manifest = goals_dir / "_workspaces.yaml"
+    counts["workspace_manifests"] = int(workspace_manifest.is_file())
+    counts["workspace_projects"] = 0
+    if workspace_manifest.is_file():
+        from gradlab.wandb_workspace_declarations import validate_workspace_declarations
+
+        try:
+            counts["workspace_projects"] = validate_workspace_declarations(repo_root)
+        except Exception as exc:  # noqa: BLE001 - validation aggregates schema failures.
+            issues.append(
+                ValidationIssue(
+                    path=display_path(workspace_manifest, repo_root),
+                    message=str(exc),
+                )
+            )
+    else:
+        issues.append(
+            ValidationIssue(
+                path=display_path(workspace_manifest, repo_root),
+                message="global W&B workspace declaration is required",
+            )
+        )
+
     recipes = sorted(goals_dir.rglob("recipes/*.yaml"))
     counts["train_recipes"] = len(recipes)
     recipes_by_goal = {path.parent.parent.resolve() for path in recipes}

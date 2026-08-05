@@ -7,6 +7,7 @@ from numbers import Integral
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, Sequence
 
+import gymnasium as gym
 import numpy as np
 from stable_baselines3.common.callbacks import BaseCallback
 from stable_baselines3.common.logger import KVWriter
@@ -61,6 +62,22 @@ from gradlab.training_metrics import EpisodeMetricsReducer
 def task_metric_source(start_id: Any) -> Any:
     """Keep the same readable start identifier in training and evaluation."""
     return start_id
+
+
+def policy_entropy_bounds(action_space: Any) -> tuple[float, float] | None:
+    """Return finite theoretical entropy bounds for an SB3 discrete policy."""
+    if isinstance(action_space, gym.spaces.Discrete):
+        upper = math.log(int(action_space.n))
+    elif isinstance(action_space, gym.spaces.MultiDiscrete):
+        upper = math.fsum(
+            math.log(int(cardinality))
+            for cardinality in np.asarray(action_space.nvec).reshape(-1)
+        )
+    elif isinstance(action_space, gym.spaces.MultiBinary):
+        upper = math.prod(int(size) for size in action_space.shape) * math.log(2)
+    else:
+        return None
+    return 0.0, float(upper)
 
 
 class CallbackHelper:
@@ -551,6 +568,17 @@ class RolloutDiagnosticsHelper(CallbackHelper):
             getattr(rollout_buffer, "actions", None),
             getattr(self.model, "action_space", None),
         )
+        entropy_bounds = policy_entropy_bounds(getattr(self.model, "action_space", None))
+        if entropy_bounds is not None:
+            lower, upper = entropy_bounds
+            self.logger.record(
+                train_algorithm_metric(self.algorithm_id, "policy/entropy_bound/lower"),
+                lower,
+            )
+            self.logger.record(
+                train_algorithm_metric(self.algorithm_id, "policy/entropy_bound/upper"),
+                upper,
+            )
         self._record_stats(
             train_algorithm_metric(self.algorithm_id, "rollout/value_prediction"),
             value_predictions,

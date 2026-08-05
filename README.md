@@ -300,6 +300,7 @@ delivery deadline starts only after evaluations have settled.
 - Goal-local launchable recipes: each goal’s `recipes/`
 - Reusable presets: `experiments/recipes/_presets/`
 - Metric contract: `METRICS.md`
+- Declarative W&B project workspaces: `experiments/goals/_workspaces.yaml`
 - Portable compute and dstack policy: `COMPUTE.md`
 - Operator-local fleet inventory: `~/.config/gradlab/instances.md`
 - Control-plane units and templates: `ops/dstack/`
@@ -328,6 +329,12 @@ be positive. Backend fields `policy_net_arch` and `value_net_arch` are
 unsupported. A genuinely asymmetric actor and critic belongs in a separate
 policy/backend rather than a routing option on this shared model.
 
+The W&B workspace declaration applies its default profile to every project resolved from an
+active checked-in goal. `gradlab workspaces sync` creates a missing managed view or updates a
+drifted one; training runs never synchronize workspace configuration. New runs appear in the
+existing view when they match its current metric-schema filter. A project can later select another
+complete profile in `experiments/goals/_workspaces.yaml` without changing the managed view identity.
+
 Useful commands:
 
 ```bash
@@ -342,6 +349,9 @@ gradlab leaders checkpoints --goal SuperMarioBros-Nes-v0/Level1-1 --limit 1 --js
 gradlab reports plan --goal SuperMarioBros-Nes-v0/Level1-1
 gradlab reports sync --goal SuperMarioBros-Nes-v0/Level1-1
 gradlab reports verify --goal SuperMarioBros-Nes-v0/Level1-1
+gradlab workspaces plan
+gradlab workspaces sync
+gradlab workspaces verify
 gradlab benchmark list
 ```
 

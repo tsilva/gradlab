@@ -51,8 +51,6 @@ def main(argv: list[str] | None = None) -> int:
         )
     args.respect_task_termination = not args.continuous_play
     explicit_dests = explicit_arg_dests(parser, argv_list)
-    if args.attribution_interval is None:
-        args.attribution_interval = 8 if args.attribution == "occlusion" else 1
 
     repo_root = experiments_root().parent
     catalog_authority = None

@@ -17,6 +17,8 @@ from gradlab.play_catalog import CatalogPage
 from gradlab.play_debug import PolicyDecision
 from gradlab.play_session import _PlaybackSession, _PlaybackTransition
 from gradlab.play_web import (
+    FRAME_ATTRIBUTION,
+    FRAME_CNN_INSPECTION,
     FRAME_CODEC_PNG,
     FRAME_GAME,
     FRAME_HEADER,
@@ -118,7 +120,7 @@ def test_web_playback_retains_step_zero_snapshot_and_frame() -> None:
 
     snapshot, frames = runner.episode_start_payload()
     assert snapshot["sequence"] == 0
-    assert snapshot["protocol"] == 5
+    assert snapshot["protocol"] == 7
     assert snapshot["session"]["step"] == 0
     assert snapshot["session"]["default_seed"] == 42
     assert snapshot["session"]["value_discount"] is None
@@ -128,13 +130,18 @@ def test_web_playback_retains_step_zero_snapshot_and_frame() -> None:
         "scale_divisor": 1.0,
         "clip_bounds": None,
     }
+    assert snapshot["session"]["attribution"]["status"] == "off"
+    assert snapshot["policy"]["attribution"]["supported_modes"] == []
+    assert snapshot["session"]["cnn"]["status"] == "off"
+    assert snapshot["policy"]["cnn"]["layers"] == []
     assert snapshot["transition"] is None
     sequence, packet = frames[FRAME_GAME]
     assert sequence == 0
     assert FRAME_HEADER.unpack_from(packet) == (
-        b"RLP2",
+        b"RLP3",
         FRAME_GAME,
         FRAME_CODEC_PNG,
+        0,
         0,
         0,
         0,
@@ -248,6 +255,85 @@ def test_web_playback_exposes_loaded_models_value_discount() -> None:
     runner._publish(None)
 
     assert runner.snapshot()["session"]["value_discount"] == 0.9
+
+
+def test_invalid_attribution_command_does_not_pause_playback() -> None:
+    class Session:
+        config = {"game": "Game-v0"}
+        model = argparse.Namespace(gamma=0.9)
+        last_transition = None
+        attribution_capability = {
+            "target": "selected_action_log_probability",
+            "supported_modes": [],
+            "unavailable_reason": "not supported",
+        }
+        policy_capabilities = {
+            "algorithm_id": "action-program",
+            "action_selection": {
+                "supported_modes": ["program"],
+                "default_mode": "program",
+            },
+            "introspection": ["program"],
+        }
+
+        def configure_attribution(self, mode, interval):
+            del mode, interval
+            raise ValueError("not supported")
+
+    runner = WebPlaybackRunner(Session(), human_args(), config_text="")
+    runner.run_state = "playing"
+    runner._publish = Mock()
+
+    runner._apply(
+        PlaybackCommand(
+            "attribution",
+            "client",
+            "set_attribution",
+            {"mode": "gradcam", "interval": 1},
+            None,
+        )
+    )
+
+    assert runner.run_state == "playing"
+    assert runner._publish.call_count == 1
+    response = runner.responses.get_nowait().payload
+    assert response["ok"] is False
+    assert response["error"] == "not supported"
+
+
+def test_invalid_cnn_command_does_not_pause_playback() -> None:
+    class Session:
+        config = {"game": "Game-v0"}
+        model = argparse.Namespace(gamma=0.9)
+        last_transition = None
+        cnn_capability = {
+            "layers": [],
+            "default_layer_id": None,
+            "unavailable_reason": "no actor CNN",
+        }
+
+        def configure_cnn_inspection(self, **_configuration):
+            raise ValueError("no actor CNN")
+
+    runner = WebPlaybackRunner(Session(), human_args(), config_text="")
+    runner.run_state = "playing"
+    runner._publish = Mock()
+
+    runner._apply(
+        PlaybackCommand(
+            "cnn",
+            "client",
+            "set_cnn_inspection",
+            {"enabled": True, "layer_id": "cnn.0", "interval": 1, "top_k": 12},
+            None,
+        )
+    )
+
+    assert runner.run_state == "playing"
+    assert runner._publish.call_count == 1
+    response = runner.responses.get_nowait().payload
+    assert response["ok"] is False
+    assert response["error"] == "no actor CNN"
 
 
 def test_next_episode_dispatches_sampling_and_driver_without_restarting() -> None:
@@ -604,6 +690,8 @@ def test_dataset_playback_uses_web_runner_and_preserves_recorded_telemetry() -> 
     assert runner.snapshot()["mode"] == "dataset"
     assert runner.snapshot()["session"]["env_id"] == "fixture-v0"
     assert runner.snapshot()["session"]["reward_accounting"]["status"] == "unavailable"
+    assert runner.snapshot()["session"]["attribution"]["status"] == "off"
+    assert "recorded datasets" in runner.snapshot()["session"]["attribution"]["unavailable_reason"]
 
     runner._step_once()
 
@@ -636,10 +724,7 @@ def test_source_browser_paths_are_hierarchical_and_url_encoded() -> None:
     variant_id = "goal-variant-" + "c" * 24
 
     assert source_browser_path(None) == "/"
-    assert (
-        source_browser_path({"environment_id": "Mario Bros"})
-        == "/environments/Mario%20Bros"
-    )
+    assert source_browser_path({"environment_id": "Mario Bros"}) == "/environments/Mario%20Bros"
     assert (
         source_browser_path({"environment_id": "Mario Bros", "goal_id": "Level 1-1"})
         == "/environments/Mario%20Bros/goals/Level%201-1"
@@ -718,17 +803,18 @@ def test_frame_encoder_emits_versioned_latest_only_png_packet() -> None:
     finally:
         encoder.close()
 
-    magic, kind, codec, flags, session_epoch, header_sequence = FRAME_HEADER.unpack(
+    magic, kind, codec, flags, session_epoch, header_sequence, generation = FRAME_HEADER.unpack(
         packet[: FRAME_HEADER.size]
     )
     image = Image.open(io.BytesIO(packet[FRAME_HEADER.size :]))
-    assert (magic, kind, codec, flags, session_epoch, header_sequence, sequence) == (
+    assert (magic, kind, codec, flags, session_epoch, header_sequence, generation, sequence) == (
         FRAME_MAGIC,
         FRAME_GAME,
         FRAME_CODEC_PNG,
         0,
         0,
         7,
+        0,
         7,
     )
     assert image.size == (4, 3)
@@ -763,6 +849,7 @@ def test_frame_encoder_batches_game_and_observation_at_one_transition() -> None:
             flags,
             session_epoch,
             header_sequence,
+            generation,
         ) = FRAME_HEADER.unpack(packet[: FRAME_HEADER.size])
         assert (
             magic,
@@ -771,8 +858,69 @@ def test_frame_encoder_batches_game_and_observation_at_one_transition() -> None:
             flags,
             session_epoch,
             header_sequence,
+            generation,
             sequence,
-        ) == (FRAME_MAGIC, kind, FRAME_CODEC_PNG, 0, 0, 11, 11)
+        ) == (FRAME_MAGIC, kind, FRAME_CODEC_PNG, 0, 0, 11, 0, 11)
+
+
+def test_frame_encoder_merges_late_generated_frames_and_replaces_same_generation() -> None:
+    encoder = FrameEncoder()
+    encoder.start()
+    try:
+        encoder.submit_batch(
+            4,
+            {
+                FRAME_GAME: np.full((3, 4, 3), 10, dtype=np.uint8),
+                FRAME_OBSERVATION: np.full((3, 4, 3), 20, dtype=np.uint8),
+            },
+        )
+        encoder.submit(
+            FRAME_ATTRIBUTION,
+            4,
+            np.full((3, 4, 4), 30, dtype=np.uint8),
+            generation=1,
+        )
+        encoder.submit(
+            FRAME_ATTRIBUTION,
+            4,
+            np.full((3, 4, 4), 40, dtype=np.uint8),
+            generation=2,
+        )
+        encoder.submit(
+            FRAME_CNN_INSPECTION,
+            4,
+            np.full((6, 8, 4), 50, dtype=np.uint8),
+            generation=3,
+        )
+        retained = encoder.retained(
+            4,
+            timeout=2.0,
+            kinds={
+                FRAME_GAME,
+                FRAME_OBSERVATION,
+                FRAME_ATTRIBUTION,
+                FRAME_CNN_INSPECTION,
+            },
+        )
+    finally:
+        encoder.close()
+
+    assert set(retained) == {
+        FRAME_GAME,
+        FRAME_OBSERVATION,
+        FRAME_ATTRIBUTION,
+        FRAME_CNN_INSPECTION,
+    }
+    attribution_packet = retained[FRAME_ATTRIBUTION][1]
+    header = FRAME_HEADER.unpack(attribution_packet[: FRAME_HEADER.size])
+    assert header[-2:] == (4, 2)
+    image = Image.open(io.BytesIO(attribution_packet[FRAME_HEADER.size :]))
+    assert image.mode == "RGBA"
+    cnn_packet = retained[FRAME_CNN_INSPECTION][1]
+    cnn_header = FRAME_HEADER.unpack(cnn_packet[: FRAME_HEADER.size])
+    assert cnn_header[-2:] == (4, 3)
+    cnn_image = Image.open(io.BytesIO(cnn_packet[FRAME_HEADER.size :]))
+    assert cnn_image.mode == "RGBA"
 
 
 def test_frame_encoder_retains_every_rapidly_submitted_observation() -> None:
@@ -944,6 +1092,23 @@ def test_debug_mode_never_auto_starts_paired_workspace() -> None:
     asyncio.run(scenario())
 
 
+def test_server_aggregates_processing_only_from_connected_windows() -> None:
+    configured = []
+    runner = argparse.Namespace(
+        session_change=0,
+        set_processing=lambda features: configured.append(frozenset(features)),
+    )
+    server = PlaybackWebServer(runner, human_args())
+    server.clients = {
+        "main": argparse.Namespace(processing=frozenset({"game"})),
+        "stats": argparse.Namespace(processing=frozenset({"policy", "history"})),
+    }
+
+    asyncio.run(server._sync_player_processing())
+
+    assert configured == [frozenset({"game", "policy", "history"})]
+
+
 def test_transition_payload_keeps_before_decision_after_alignment() -> None:
     transition = _PlaybackTransition(
         sequence=3,
@@ -982,6 +1147,55 @@ def test_transition_payload_keeps_before_decision_after_alignment() -> None:
     assert payload["after"]["frame_role"] == "after_action_observation"
     assert payload["signals"]["x_pos"] == 12.0
     assert payload["info"]["credential_token"] == "<redacted>"
+
+
+def test_transition_payload_skips_disabled_panel_processors() -> None:
+    transition = _PlaybackTransition(
+        sequence=3,
+        episode=1,
+        step=3,
+        seed=40_000,
+        start_id="Level1-1",
+        model_obs=np.zeros((1, 4, 84, 84), dtype=np.uint8),
+        decision=PolicyDecision(
+            raw_action=np.asarray(1),
+            executed_action=np.asarray(1),
+            action_selection_mode="stochastic",
+        ),
+        action_source="policy",
+        executed_action=1,
+        diagnostics=None,
+        info={"x_pos": 12},
+        before_frame=np.zeros((2, 2, 3), dtype=np.uint8),
+        after_frame=np.ones((2, 2, 3), dtype=np.uint8),
+        before_frames=(np.zeros((2, 2, 1), dtype=np.uint8),),
+        after_frames=(np.ones((2, 2, 1), dtype=np.uint8),),
+        attribution=None,
+        pre_task="Level1-1",
+        next_task="Level1-1",
+        reward=1.5,
+        total_reward=4.0,
+        max_x_pos=12,
+        terminated=False,
+        truncated=False,
+        completed=False,
+        boundary=False,
+    )
+
+    with (
+        patch("gradlab.play_web.model_input_lines", side_effect=AssertionError),
+        patch("gradlab.play_web._numeric_signals", side_effect=AssertionError),
+        patch("gradlab.play_web._reward_accounting_payload", side_effect=AssertionError),
+        patch("gradlab.play_web._decision_payload", side_effect=AssertionError),
+    ):
+        payload = transition_payload(transition, processing=())
+
+    assert payload["decision"] is None
+    assert payload["executed_action"] is None
+    assert payload["before"]["model_input"] == []
+    assert payload["reward"]["shaped"] is None
+    assert payload["signals"] == {}
+    assert payload["info"] == {}
 
 
 def test_reward_accounting_contract_uses_scale_then_clip_from_materialized_config() -> None:
@@ -1167,6 +1381,8 @@ def test_human_recording_runner_requires_fresh_focus_and_streams_transition_stat
     assert snapshot["interactive"] is True
     assert snapshot["session"]["env_id"] == "Game-v0"
     assert snapshot["session"]["reward_accounting"]["status"] == "unavailable"
+    assert snapshot["session"]["attribution"]["status"] == "off"
+    assert "human recording" in snapshot["session"]["attribution"]["unavailable_reason"]
     assert snapshot["transition"]["reward"]["return"] == 2.5
     assert snapshot["transition"]["reward"]["raw"] is None
     assert snapshot["transition"]["signals"] == {"x_pos": 11.0}
@@ -1346,6 +1562,7 @@ def test_catalog_http_api_requires_the_fragment_session_token() -> None:
                 ),
                 next_cursor=None,
             )
+
         @staticmethod
         def goals(*, environment_id, query, cursor):
             assert (environment_id, query, cursor) == (
@@ -1628,10 +1845,7 @@ def test_catalog_http_api_requires_the_fragment_session_token() -> None:
                 assert goals.status == 200
                 assert (await goals.json())["items"][0]["goal_id"] == "Level1-1"
                 goal_inspection = await client.get(
-                    (
-                        f"{server.origin}/api/catalog/environments/Mario"
-                        "/goals/Level1-1/inspection"
-                    ),
+                    (f"{server.origin}/api/catalog/environments/Mario/goals/Level1-1/inspection"),
                     headers={"Authorization": f"Bearer {server.token}"},
                 )
                 assert goal_inspection.status == 200
@@ -1639,10 +1853,7 @@ def test_catalog_http_api_requires_the_fragment_session_token() -> None:
                     "availability"
                 ] == "exact"
                 recipes = await client.get(
-                    (
-                        f"{server.origin}/api/catalog/environments/Mario"
-                        "/goals/Level1-1/recipes"
-                    ),
+                    (f"{server.origin}/api/catalog/environments/Mario/goals/Level1-1/recipes"),
                     headers={"Authorization": f"Bearer {server.token}"},
                 )
                 assert recipes.status == 200
@@ -1659,28 +1870,19 @@ def test_catalog_http_api_requires_the_fragment_session_token() -> None:
                     "availability"
                 ] == "static-preview"
                 variants = await client.get(
-                    (
-                        f"{server.origin}/api/catalog/environments/Mario"
-                        "/goals/Level1-1/variants"
-                    ),
+                    (f"{server.origin}/api/catalog/environments/Mario/goals/Level1-1/variants"),
                     headers={"Authorization": f"Bearer {server.token}"},
                 )
                 assert variants.status == 200
                 variant_id = (await variants.json())["items"][0]["variant_id"]
                 activity = await client.get(
-                    (
-                        f"{server.origin}/api/catalog/environments/Mario"
-                        "/goals/Level1-1/activity"
-                    ),
+                    (f"{server.origin}/api/catalog/environments/Mario/goals/Level1-1/activity"),
                     headers={"Authorization": f"Bearer {server.token}"},
                 )
                 assert activity.status == 200
                 assert activity.headers["ETag"] == f'"{"f" * 64}"'
                 unchanged = await client.get(
-                    (
-                        f"{server.origin}/api/catalog/environments/Mario"
-                        "/goals/Level1-1/activity"
-                    ),
+                    (f"{server.origin}/api/catalog/environments/Mario/goals/Level1-1/activity"),
                     headers={
                         "Authorization": f"Bearer {server.token}",
                         "If-None-Match": f'"{"f" * 64}"',

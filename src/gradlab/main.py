@@ -26,7 +26,12 @@ COMMANDS: dict[str, tuple[str, str]] = {
     "jobs": ("inspect and flush durable local background jobs", "gradlab.jobs_cli"),
     "leaders": ("query accepted runs and promoted checkpoints", "gradlab.wandb_leaders"),
     "reports": ("plan, synchronize, and verify declarative W&B reports", "gradlab.wandb_reports"),
+    "workspaces": (
+        "plan, synchronize, and verify declarative W&B workspace views",
+        "gradlab.wandb_workspaces",
+    ),
 }
+
 
 def build_parser() -> argparse.ArgumentParser:
     parser = ExactArgumentParser(
@@ -34,7 +39,8 @@ def build_parser() -> argparse.ArgumentParser:
         description="Unified command surface for gradlab training, eval, playback, and ops.",
         epilog=(
             "Research: train, experiment, eval, play, validate.  Environments: env, rom, "
-            "benchmark.  Datasets: dataset.  Operations: jobs.  Results: leaders, reports."
+            "benchmark.  Datasets: dataset.  Operations: jobs.  Results: leaders, reports, "
+            "workspaces."
         ),
     )
     subparsers = parser.add_subparsers(dest="command", metavar="<command>")

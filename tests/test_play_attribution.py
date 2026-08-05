@@ -4,6 +4,7 @@ from types import SimpleNamespace
 
 import gymnasium as gym
 import numpy as np
+import pytest
 import torch
 from torch import nn
 
@@ -11,9 +12,16 @@ from gradlab.play_attribution import (
     ActionLogProbForward,
     PolicyActionAttributor,
     actor_image_feature_extractor,
+    attribution_capability,
     find_last_conv2d,
 )
-from gradlab.play_session import render_obs_stack
+from gradlab.play_debug import PolicyDecision
+from gradlab.play_session import (
+    _PlaybackSession,
+    _PlaybackTransition,
+    render_attribution_stack,
+    render_obs_stack,
+)
 
 
 class TinyImageExtractor(nn.Module):
@@ -128,6 +136,41 @@ def test_gradcam_returns_normalized_spatial_heatmap() -> None:
     assert 0.0 <= float(heatmap.min()) <= float(heatmap.max()) <= 1.0
 
 
+def test_support_detection_does_not_activate_attribution() -> None:
+    model = SimpleNamespace(policy=TinyPolicy())
+
+    capability = attribution_capability(model, "ppo")
+
+    assert capability == {
+        "target": "selected_action_log_probability",
+        "supported_modes": ["gradcam", "occlusion"],
+        "unavailable_reason": None,
+    }
+
+
+def test_attribution_preserves_python_numpy_and_torch_rng() -> None:
+    import random
+
+    policy = TinyPolicy()
+    model = SimpleNamespace(policy=policy)
+    attributor = PolicyActionAttributor(model)
+    obs = np.ones((1, 4, 84, 84), dtype=np.uint8)
+    random.seed(7)
+    np.random.seed(8)
+    torch.manual_seed(9)
+    expected = (random.random(), np.random.random(), torch.rand(1))
+    random.seed(7)
+    np.random.seed(8)
+    torch.manual_seed(9)
+
+    attributor.attribute("gradcam", obs, np.array([1]))
+    actual = (random.random(), np.random.random(), torch.rand(1))
+
+    assert actual[0] == expected[0]
+    assert actual[1] == expected[1]
+    assert torch.equal(actual[2], expected[2])
+
+
 def test_occlusion_returns_normalized_spatial_heatmap() -> None:
     policy = TinyPolicy()
     model = SimpleNamespace(policy=policy)
@@ -141,14 +184,120 @@ def test_occlusion_returns_normalized_spatial_heatmap() -> None:
     assert 0.0 <= float(heatmap.min()) <= float(heatmap.max()) <= 1.0
 
 
-def test_render_obs_stack_accepts_optional_heatmap_without_resizing_layout() -> None:
+def test_attribution_stack_is_separate_rgba_and_matches_clean_observation_layout() -> None:
     frames = [np.full((84, 84, 1), value, dtype=np.uint8) for value in (10, 50, 90, 130)]
     plain = render_obs_stack(frames, scale=2)
     heatmap = np.zeros((84, 84), dtype=np.float32)
     heatmap[20:40, 30:50] = 1.0
 
-    overlay = render_obs_stack(frames, scale=2, heatmap=heatmap, heatmap_opacity=0.5)
+    overlay = render_attribution_stack(tuple(frames), heatmap, scale=2)
 
-    assert plain.shape == overlay.shape == (168, 672, 3)
+    assert plain.shape == (168, 672, 3)
+    assert overlay.shape == (168, 672, 4)
     assert plain.dtype == overlay.dtype == np.uint8
-    assert not np.array_equal(plain, overlay)
+    assert overlay[..., 3].max() == 255
+    assert overlay[..., 3].min() == 0
+
+
+def _attribution_transition(sequence: int = 3) -> _PlaybackTransition:
+    return _PlaybackTransition(
+        sequence=sequence,
+        episode=1,
+        step=sequence,
+        seed=1,
+        start_id=None,
+        model_obs=np.ones((1, 4, 8, 8), dtype=np.uint8),
+        decision=PolicyDecision(
+            raw_action=np.asarray([1]),
+            executed_action=np.asarray([1]),
+            action_selection_mode="stochastic",
+        ),
+        action_source="policy",
+        executed_action=1,
+        diagnostics=None,
+        info={},
+        before_frame=None,
+        after_frame=None,
+        before_frames=(np.ones((8, 8, 1), dtype=np.uint8),),
+        after_frames=(),
+        attribution=None,
+        pre_task=None,
+        next_task=None,
+        reward=0.0,
+        total_reward=0.0,
+        max_x_pos=0,
+        terminated=False,
+        truncated=False,
+        completed=False,
+        boundary=False,
+    )
+
+
+def test_live_attribution_is_lazy_reused_and_recomputes_only_latest_transition() -> None:
+    calls = []
+
+    class FakeAttributor:
+        def attribute(self, mode, model_obs, action):
+            calls.append((mode, model_obs, action))
+            return np.full((8, 8), len(calls), dtype=np.float32)
+
+    created = []
+    session = _PlaybackSession.__new__(_PlaybackSession)
+    session.model = object()
+    session._attributor_factory = lambda model: created.append(model) or FakeAttributor()
+    session.attributor = None
+    session.attribution_capability = {
+        "supported_modes": ["gradcam", "occlusion"],
+        "unavailable_reason": None,
+    }
+    session.attribution_mode = "none"
+    session.attribution_interval = 1
+    session.attribution_status = "off"
+    session.attribution_error = None
+    session.attribution_generation = 0
+    session.attribution_last_computed_sequence = None
+    session.last_transition = _attribution_transition()
+
+    session.configure_attribution("gradcam")
+    first = session.last_transition
+    session.configure_attribution("occlusion")
+    second = session.last_transition
+    session.configure_attribution("none")
+
+    assert created == [session.model]
+    assert [call[0] for call in calls] == ["gradcam", "occlusion"]
+    assert first.attribution_generation == 1
+    assert second.attribution_generation == 2
+    assert second.attribution_mode == "occlusion"
+    assert session.attribution_interval == 8
+    assert session.last_transition.attribution_status == "off"
+    assert session.last_transition.attribution is None
+
+
+def test_live_attribution_failure_enters_error_without_fabricating_a_map() -> None:
+    class BrokenAttributor:
+        def attribute(self, mode, model_obs, action):
+            raise RuntimeError("detector exploded")
+
+    session = _PlaybackSession.__new__(_PlaybackSession)
+    session.model = object()
+    session._attributor_factory = lambda _model: BrokenAttributor()
+    session.attributor = None
+    session.attribution_capability = {
+        "supported_modes": ["gradcam"],
+        "unavailable_reason": None,
+    }
+    session.attribution_mode = "none"
+    session.attribution_interval = 1
+    session.attribution_status = "off"
+    session.attribution_error = None
+    session.attribution_generation = 0
+    session.attribution_last_computed_sequence = None
+    session.last_transition = _attribution_transition()
+
+    with pytest.raises(RuntimeError, match="detector exploded"):
+        session.configure_attribution("gradcam")
+
+    assert session.attribution_status == "error"
+    assert session.last_transition.attribution_status == "error"
+    assert session.last_transition.attribution is None

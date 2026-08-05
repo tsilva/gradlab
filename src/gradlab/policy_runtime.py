@@ -104,18 +104,25 @@ class PolicyRuntime:
         *,
         action_selection_mode: str | None = None,
         execution_context: Any | None = None,
+        include_diagnostics: bool = True,
     ) -> PolicyBatchDecision:
         requested, effective = normalize_action_selection_mode(
             self.capabilities,
             action_selection_mode,
         )
         if self.capabilities.algorithm_id in {"ppo", "a2c"}:
-            from gradlab.play_debug import actor_critic_policy_decisions
+            from gradlab.play_debug import (
+                actor_critic_policy_actions,
+                actor_critic_policy_decisions,
+            )
 
-            decisions = actor_critic_policy_decisions(
-                self.model,
-                observation,
-                deterministic=effective == "deterministic",
+            decision_function = (
+                actor_critic_policy_decisions
+                if include_diagnostics
+                else actor_critic_policy_actions
+            )
+            decisions = decision_function(
+                self.model, observation, deterministic=effective == "deterministic"
             )
         else:
             custom = getattr(self.model, "policy_decisions", None)

@@ -472,11 +472,28 @@ def _validate_recipe_contract(
         backend_value = train_config.get("training_backend")
         backend = backend_value if isinstance(backend_value, Mapping) else {}
         backend_id = str(backend.get("id") or "").strip()
+        metrics_schema_version = train_config.get("metrics_schema_version")
+        if (
+            not isinstance(metrics_schema_version, int)
+            or isinstance(metrics_schema_version, bool)
+            or metrics_schema_version <= 0
+        ):
+            raise ValueError(
+                f"{source}.recipe.train_config.metrics_schema_version must be a positive integer"
+            )
         from gradlab.policy_registry import TRAINING_BACKEND_SPECS
 
         if backend_id in TRAINING_BACKEND_SPECS:
+            # The metrics schema is source-bound telemetry provenance, not a policy
+            # execution contract. Preserve its recorded value in the document while
+            # validating the rest of this current-format recipe against current train
+            # config rules. Metric projection independently rejects noncurrent schemas.
+            from gradlab.metric_names import METRICS_SCHEMA_VERSION
+
+            validation_train_config = dict(train_config)
+            validation_train_config["metrics_schema_version"] = METRICS_SCHEMA_VERSION
             validate_and_normalize_train_config(
-                train_config,
+                validation_train_config,
                 label=f"{source}.recipe.train_config",
                 validate_backend_config=False,
             )

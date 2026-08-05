@@ -109,6 +109,9 @@ function normalizePanel(id, value, fallback) {
   return {
     type: requestedType,
     title: cleanTitle(value.title, fallback?.title || "Telemetry"),
+    enabled: value.enabled === undefined
+      ? fallback?.enabled !== false
+      : Boolean(value.enabled),
     config: requestedType === "telemetry"
       ? normalizePanelConfig(value.config)
       : {},
@@ -134,7 +137,7 @@ export function normalizeWorkspace(value, { paired = false, writer = "" } = {}) 
   const panels = {};
   Object.entries(fallback.panels).forEach(([id, panel]) => {
     panels[id] = normalizePanel(id, value.panels?.[id], panel);
-    if (id === "reward-analysis" && value.panels?.[id] === undefined) {
+    if (["reward-analysis", "cnn"].includes(id) && value.panels?.[id] === undefined) {
       panels[id].placement.visible = false;
     }
   });

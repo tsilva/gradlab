@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import random
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Literal
@@ -10,10 +11,39 @@ import torch.nn.functional as F
 from torch import nn
 
 AttributionMode = Literal["gradcam", "occlusion"]
+ATTRIBUTION_MODES: tuple[AttributionMode, ...] = ("gradcam", "occlusion")
+ATTRIBUTION_TARGET = "selected_action_log_probability"
 
 
 class AttributionError(RuntimeError):
     """Raised when a loaded policy cannot support visual attribution."""
+
+
+def attribution_capability(model: Any, algorithm_id: str | None) -> dict[str, Any]:
+    """Describe visual attribution support without activating Captum."""
+
+    if algorithm_id not in {"ppo", "a2c"}:
+        return {
+            "target": ATTRIBUTION_TARGET,
+            "supported_modes": [],
+            "unavailable_reason": (
+                "selected-action attribution requires a PPO or A2C live policy"
+            ),
+        }
+    try:
+        extractor = actor_image_feature_extractor(model.policy)
+        find_last_conv2d(extractor)
+    except (AttributeError, AttributionError) as exc:
+        return {
+            "target": ATTRIBUTION_TARGET,
+            "supported_modes": [],
+            "unavailable_reason": str(exc),
+        }
+    return {
+        "target": ATTRIBUTION_TARGET,
+        "supported_modes": list(ATTRIBUTION_MODES),
+        "unavailable_reason": None,
+    }
 
 
 def find_last_conv2d(module: nn.Module) -> nn.Conv2d:
@@ -181,6 +211,10 @@ class PolicyActionAttributor:
         image = forward.image_tensor.detach().requires_grad_(mode == "gradcam")
         output_size = tuple(int(dim) for dim in image.shape[-2:])
 
+        python_rng_state = random.getstate()
+        numpy_rng_state = np.random.get_state()
+        torch_rng_state = torch.random.get_rng_state()
+        cuda_rng_state = torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None
         was_training = bool(getattr(self.policy, "training", False))
         self.policy.eval()
         try:
@@ -204,6 +238,10 @@ class PolicyActionAttributor:
             else:
                 raise AttributionError(f"unknown attribution mode {mode!r}")
         finally:
-            if was_training:
-                self.policy.train()
+            self.policy.train(was_training)
+            random.setstate(python_rng_state)
+            np.random.set_state(numpy_rng_state)
+            torch.random.set_rng_state(torch_rng_state)
+            if cuda_rng_state is not None:
+                torch.cuda.set_rng_state_all(cuda_rng_state)
         return _spatial_heatmap(attr, output_size)

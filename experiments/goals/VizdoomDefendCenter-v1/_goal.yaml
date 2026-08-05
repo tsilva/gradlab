@@ -25,9 +25,11 @@ train:
       # Specialize the inherited successful-stop rule for center defense.
       target_reached:
         # Select the training metric compared with this condition's threshold.
-        metric: train/episode/return/shaped/from/target/window_100/mean
-        # Align the training target with this goal's acceptance requirement.
-        threshold: 10.0
+        metric: train/outcome/success/across_starts/window_100/rate/min
+        # Require every episode in the mature rolling window to reach 52 kills.
+        threshold: 1.0
+        # Stop training after the policy sustains a perfect rolling success rate.
+        action: stop
   # Override the shared ViZDoom environment contract used for training.
   environment:
     # Supply arguments for the native vectorized ViZDoom environment.
@@ -57,12 +59,16 @@ train:
       events:
         # Detect each monster elimination from an increase in the kill counter.
         monster_killed: {signal: kills, operation: increase}
+        # Detect the perfect-score ceiling when all 52 starting rounds produce kills.
+        perfect_score_reached: {signal: kills, operation: equals_for, value: 52, steps: 1}
         # Detect death when the provider's death flag is asserted for a step.
         player_died: {signal: player_dead, operation: equals_for, value: 1, steps: 1}
       # Define which task events end an episode and how each outcome is classified.
       termination:
         # List the events that mark an episode as failed.
         failure: [player_died]
+        # Treat reaching the 52-kill ammunition ceiling as successful center defense.
+        success: [perfect_score_reached]
         # List provider boundaries treated as timeouts rather than task outcomes.
         timeout: [time_limit_reached]
 # Override the shared settings used to evaluate checkpoints for this goal.

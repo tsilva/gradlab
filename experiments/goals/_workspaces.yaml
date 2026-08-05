@@ -1,0 +1,96 @@
+schema_version: 1
+view_id: training
+default_profile: training
+
+sections:
+  training_essentials:
+    title: Training essentials
+    pinned: true
+    open: true
+    columns: 2
+    panels:
+    - id: task_success
+      kind: line
+      title: Task success
+      x: train/global_step
+      y:
+      - train/outcome/success/across_starts/window_100/rate/min
+      - train/outcome/success/across_starts/window_100/rate/mean
+    - id: target_return
+      kind: line
+      title: Target-origin return
+      x: train/global_step
+      y:
+      - train/episode/return/shaped/from/target/rolling_up_to_100/mean
+      - train/episode/return/shaped/from/target/rolling_up_to_100/max
+    - id: start_coverage
+      kind: line
+      title: Start coverage
+      x: train/global_step
+      y:
+      - train/outcome/success/across_starts/coverage/rate
+    - id: completed_episodes
+      kind: line
+      title: Completed episodes
+      x: train/global_step
+      y:
+      - train/episode/completed/count
+    - id: early_stop_progress
+      kind: line
+      title: Early-stop progress
+      x: train/global_step
+      metric_templates:
+      - train/early_stop/{condition}/target/progress
+      - train/early_stop/{condition}/patience/progress
+    - id: explained_variance
+      kind: line
+      title: Explained variance
+      x: train/global_step
+      y:
+      - train/algorithm/ppo/value/explained_variance
+      - train/algorithm/a2c/value/explained_variance
+    - id: value_loss
+      kind: line
+      title: Value loss
+      x: train/global_step
+      y:
+      - train/algorithm/ppo/update/value_loss
+      - train/algorithm/a2c/update/value_loss
+    - id: policy_entropy
+      kind: line
+      title: Policy entropy
+      y_title: nats
+      x: train/global_step
+      y:
+      - train/algorithm/ppo/policy/entropy
+      - train/algorithm/a2c/policy/entropy
+      - train/algorithm/ppo/policy/entropy_bound/lower
+      - train/algorithm/a2c/policy/entropy_bound/lower
+      - train/algorithm/ppo/policy/entropy_bound/upper
+      - train/algorithm/a2c/policy/entropy_bound/upper
+    - id: ppo_update_constraints
+      kind: line
+      title: PPO update constraints
+      x: train/global_step
+      y:
+      - train/algorithm/ppo/update/approx_kl
+      - train/algorithm/ppo/update/clip_fraction
+    - id: throughput
+      kind: line
+      title: Training throughput
+      x: train/global_step
+      y:
+      - train/throughput/loop_fps
+      - train/throughput/env_step_fps
+
+profiles:
+  training:
+    display_name: GradLab Training
+    run_scope: current_metrics_schema
+    max_runs: 25
+    sections:
+    - training_essentials
+
+# Every W&B project resolved from a checked-in active goal inherits the default profile.
+# Assign a project to another complete profile here if its workspace later needs to differ.
+projects: {}

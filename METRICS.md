@@ -1,4 +1,4 @@
-# Metrics schema v15
+# Metrics schema v16
 
 This file is the source of truth for gradlab telemetry. The Python registry loads the table below
 and requires every emitted metric to match an exact registry entry or a bounded template.
@@ -16,10 +16,14 @@ and requires every emitted metric to match an exact registry entry or a bounded 
 - Public model R2 contains immutable checkpoint closures and a mutable no-cache run index. Private
   eval R2 contains intents, results, and episode evidence. Private control R2 contains leases,
   journals, promotions, and terminal receipts.
-- W&B config contains run-defining dimensions: `metrics_schema_version: 15`, `training_backend_id`,
+- W&B config contains run-defining dimensions: `metrics_schema_version: 16`, `training_backend_id`,
   `training_backend_config_hash`, `algorithm_id`, goal,
   environment, starts, seed, frame skip, environment count, hyperparameters, eval protocol, and
   runtime versions.
+- `experiments/goals/_workspaces.yaml` is the presentation source for managed W&B project
+  workspace views. It selects registered metrics without emitting aliases or changing their
+  scientific axes or semantics; every project resolved from an active checked-in goal inherits its
+  default profile unless the declaration assigns a complete project-specific profile.
 - `goal_contract_sha256` is the semantic SHA-256 of the fully composed, rendered, validated goal
   contract. Generated goal reports use it with `goal_slug` to keep current-contract leaderboards
   comparable; noncurrent contracts are not queried or rendered.
@@ -85,7 +89,7 @@ Asynchronous evaluations may arrive after later training rows without changing t
 X-axis. Each producer writes only its applicable scientific axis; durable delivery order uses
 `orchestration/event_seq`.
 
-Current runs declare schema v14, and the supervisor validates and emits only v14 names. GradLab
+Current runs declare schema v16, and the supervisor validates and emits only v16 names. GradLab
 does not read, project, or preserve noncurrent W&B or R2 schemas.
 
 ## Research interpretation
@@ -128,8 +132,17 @@ does not read, project, or preserve noncurrent W&B or R2 schemas.
 - ViZDoom's `time_limit_reached` reason is the classified provider-native tic horizon, independent
   of policy frame skip. An unclassified provider truncation uses the fallback reason `timeout`.
   An evaluation watchdog expiry is an execution error and emits no episode or outcome metrics.
-- Positive PPO policy entropy, dominant-action rate, and the action histogram diagnose discrete
-  policy collapse. Value prediction and advantage histograms are sampled every 64 rollouts.
+- `VizdoomDefendLine-v1` and `VizdoomDefendLine-Plus-v1` classify reaching their 2,100-native-tic
+  horizon as success and stop training when
+  `train/outcome/success/across_starts/window_100/rate/min` reaches one. Each has one configured
+  start, so this requires 100 consecutive horizon-reaching training episodes; it is training
+  success evidence, not checkpoint acceptance or promotion.
+- Positive actor-critic policy entropy, dominant-action rate, and the action histogram diagnose
+  discrete policy collapse. For a categorical `Discrete(n)` policy, entropy has infimum zero and
+  maximum `ln(n)` nats at the uniform distribution; a `MultiDiscrete(nvec)` maximum is
+  `sum(ln(nvec))`, and a `MultiBinary(d)` maximum is `d * ln(2)`. Continuous `Box` policies report
+  differential entropy, which has no finite action-space-only minimum or maximum and must not use
+  those discrete bounds. Value prediction and advantage histograms are sampled every 64 rollouts.
 - Actor-critic explained variance is `1 - Var(value_target - value_prediction) /
   Var(value_target)`: one is perfect, zero means the critic explains no more target variance than a
   constant baseline, and negative values are worse than that baseline. A near-zero value is not by
@@ -138,6 +151,11 @@ does not read, project, or preserve noncurrent W&B or R2 schemas.
   state-insensitive baseline, while tiny target variance can make the ratio ill-conditioned.
   Common causes include partially observed return-relevant state, rapidly changing policy state
   occupancy, shared actor-critic feature drift, and bootstrap-heavy rollouts.
+- GradLab does not currently emit separate actor, critic, shared-trunk, pre-clipping, or
+  post-clipping gradient norms for SB3 actor-critic updates. SB3 backpropagates one combined policy,
+  entropy, and value objective and clips the norm over the complete policy parameter set, so
+  `update/policy_gradient_loss` and `update/value_loss` are not proxies for their respective
+  gradient magnitudes.
 - For reward-transform ablations, first compare `train/reward/raw/*` with
   `train/reward/shaped/*`. `task.reward.reward_scale` is a positive divisor, so a value below one
   amplifies the policy-facing reward. If raw rewards match but shaped magnitudes diverge, inspect
@@ -181,6 +199,20 @@ does not read, project, or preserve noncurrent W&B or R2 schemas.
   ammo replenishment. A normal episode return is therefore `player kills - 1` when the player dies
   and `player kills` when it reaches the native time limit; 52 is the perfect-accuracy ammunition
   ceiling, not a score guaranteed by possessing the ammunition.
+- `VizdoomDefendCenter-v1` classifies reaching 52 kills as success and stops training when
+  `train/outcome/success/across_starts/window_100/rate/min` reaches one. With its single configured
+  start, this requires 100 consecutive perfect-score training episodes; it is training success
+  evidence, not checkpoint acceptance or promotion.
+- `VizdoomHealthGathering-Plus-v1` is a surface-variant identity over the regular
+  `VizdoomHealthGathering-v1` task. Both classify the 2,100-native-tic horizon as success, stop at a
+  mature window-100 success rate of one, use the same neutral return-plateau fallback stop, and
+  require an evaluation success rate of at least 0.95 for acceptance.
+- A ViZDoom success-rate target is success-based early stopping only when its `target_reached`
+  condition has `action: stop`. Every ViZDoom goal with a binary success event now stops when
+  `train/outcome/success/across_starts/window_100/rate/min` reaches one. This requires 100
+  consecutive successful training episodes for each configured start. `VizdoomDeathmatch-v1` is
+  the sole exception: it has no binary success outcome, so its return target remains observational
+  and it has no active early-stop condition.
 - Episode-return means are neither a best-episode metric nor the score of a currently visible lane:
   they reduce the latest 100 completed episodes across all applicable vector lanes. W&B chart
   smoothing, when enabled, is applied on top of that already-rolling value. Under the root Breakout
@@ -332,7 +364,9 @@ unevaluated for future explicit user action. dstack process exit alone is never 
 | `train/algorithm/{algorithm}/update/policy_gradient_loss` | Actor-critic policy-gradient loss. | scalar | rollout | history |
 | `train/algorithm/{algorithm}/update/value_loss` | Actor-critic value loss. | scalar | rollout | history |
 | `train/algorithm/{algorithm}/update/learning_rate` | Current actor-critic learning rate. | scalar | rollout | history |
-| `train/algorithm/{algorithm}/policy/entropy` | Positive actor-critic policy entropy. | scalar | rollout | history |
+| `train/algorithm/{algorithm}/policy/entropy` | Positive actor-critic policy entropy. | nats | rollout | history |
+| `train/algorithm/{algorithm}/policy/entropy_bound/lower` | Theoretical lower bound for finite discrete actor-critic policy entropy; always zero and omitted for continuous action spaces. | nats | rollout | history |
+| `train/algorithm/{algorithm}/policy/entropy_bound/upper` | Theoretical maximum finite discrete actor-critic policy entropy at the uniform distribution, derived from the resolved policy-facing action space and omitted for continuous action spaces. | nats | rollout | history |
 | `train/algorithm/{algorithm}/policy/distribution_std` | Continuous-action distribution standard deviation. | scalar | rollout | history |
 | `train/algorithm/{algorithm}/policy/dominant_action_rate` | Fraction assigned to the most frequent sampled discrete action. | fraction | rollout | history |
 | `train/algorithm/{algorithm}/policy/action_hist` | Sampled discrete-action histogram. | histogram | every 64 rollouts | history |

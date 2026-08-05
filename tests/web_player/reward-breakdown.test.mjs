@@ -7,7 +7,7 @@ import {
   signedContributionLabel,
 } from "../../src/gradlab/web_player/panels/reward-breakdown.js";
 
-function snapshot({ scale = 1, clip = null, protocol = 5, status = "available" } = {}) {
+function snapshot({ scale = 1, clip = null, protocol = 6, status = "available" } = {}) {
   return {
     protocol,
     session: {
@@ -243,4 +243,3 @@ test("episode shaped sum must match the authoritative selected return", () => {
   assert.equal(result.status, "protocol-error");
   assert.match(result.message, /authoritative episode return/);
 });
-

@@ -227,10 +227,6 @@ def test_playback_session_rebuilds_environment_for_termination_change() -> None:
         env=initial_env,
         config=base_config,
         initial_seed=1_000_000_000,
-        attributor=None,
-        attribution_mode="none",
-        attribution_interval=1,
-        attribution_opacity=0.45,
         env_factory=env_factory,
         termination_base_config=base_config,
         termination_source="evaluation",
@@ -292,10 +288,6 @@ def test_playback_session_resumes_an_explicit_cell_representative() -> None:
         env=env,
         config=EnvConfig(env_provider="gradlab", game="Bandit-v0"),
         initial_seed=10_000,
-        attributor=None,
-        attribution_mode="none",
-        attribution_interval=1,
-        attribution_opacity=0.45,
     )
 
     session.resume_cell(
@@ -331,6 +323,11 @@ def test_public_source_parsers_exclude_wandb_artifacts() -> None:
     assert "--artifact" not in eval_help
     assert "W&B artifact" not in play_help
     assert "--resume-cell" in play_help
+    assert "--attribution" not in play_help
+    with pytest.raises(SystemExit):
+        build_play_parser().parse_args(
+            ["--model", "/tmp/model.zip", "--attribution", "gradcam"]
+        )
 
 
 def test_huggingface_refs_parse_and_resolve_from_cli_namespace() -> None:

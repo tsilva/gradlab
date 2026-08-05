@@ -1,73 +1,20 @@
-# Compose the indefinite-survival variant from the complete Health Gathering goal.
+# Compose the surface-variant goal from the complete Health Gathering goal.
 defaults:
-# Inherit the scenario, reward, death, evaluation, and publication contracts.
+# Inherit the complete survival, observation, evaluation, and training-stop contracts.
 - ../VizdoomHealthGathering-v1/_goal@_global_
-# Remove the inherited remaining-time model input before installing health-only context.
-- _without-time-context@_global_
-# Apply the Plus-specific continuing-task overrides last.
+# Apply the Plus-specific environment identity overrides last.
 - _self_
 
-title: ViZDoom Health Gathering indefinite survival
-
-# Rank checkpoints by survival return without rewarding a known terminal horizon.
-objective:
-  rank:
-  - max(eval/full/episode/return/shaped/mean)
-  - min(leader/checkpoint/step)
+title: ViZDoom Health Gathering surface-variant survival
 
 train:
-  early_stop:
-    conditions:
-      # Observe when completed training episodes average roughly 5,000 policy steps.
-      target_reached:
-        metric: train/episode/return/shaped/from/target/window_100/mean
-        trigger: threshold
-        operator: '>='
-        progress_baseline: 0.0
-        threshold: 200.0
-        patience_steps: 0
-        outcome: success
-        action: observe
   environment:
     env_config:
-      # Plus is a goal variant of the original Health Gathering environment.
+      # Run surface variants against the original Health Gathering scenario.
       game: VizdoomHealthGathering-v1
-      env_args:
-        # Interrupt indefinitely surviving policies after a long provider-native horizon.
-        vizdoom_config:
-          episode_timeout: 21000
-    task:
-      termination: &health_plus_termination
-        # This continuing-task safety horizon is not itself scientific success.
-        success: []
-        timeout: [time_limit_reached]
-      # Preserve health as shared policy state without exposing elapsed time.
-      model_inputs: &health_only_model_inputs
-        schema_version: 1
-        context:
-          health:
-            signal: health
-            update: transition
-            encoding:
-              kind: continuous
-              scale: 0.01
-              offset: 0.0
-              low: -1.0
-              high: 2.0
 
 eval:
-  # Treat a near-horizon mean survival return as acceptance evidence.
-  acceptance:
-  - metric: eval/full/episode/return/shaped/mean
-    operator: '>='
-    threshold: 200.0
   environment:
     env_config:
+      # Evaluate surface variants against the same original scenario contract.
       game: VizdoomHealthGathering-v1
-      env_args:
-        vizdoom_config:
-          episode_timeout: 21000
-    task:
-      termination: *health_plus_termination
-      # Evaluation must use the same time-unaware policy observation contract.
-      model_inputs: *health_only_model_inputs

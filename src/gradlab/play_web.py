@@ -23,30 +23,76 @@ from aiohttp import WSMsgType, web
 from PIL import Image
 
 from gradlab.action_contract import action_contract_payload
-from gradlab.play_session import _PlaybackSession, _PlaybackTransition, render_obs_stack
+from gradlab.play_session import (
+    _PlaybackSession,
+    _PlaybackTransition,
+    render_attribution_stack,
+    render_obs_stack,
+)
+from gradlab.play_cnn import CNN_TOP_K_DEFAULT
 from gradlab.play_debug import ANSI_PATTERN, PolicyDecision, model_input_lines
+from gradlab.play_processing import (
+    PLAYER_PROCESSING_FEATURES,
+    normalize_player_processing,
+)
 from gradlab.seeds import validate_playback_seed
 from gradlab.evaluation_fence import evaluation_selection_fence
 from gradlab.reward_transform import reward_transform_from_reward
 
 
-PROTOCOL_VERSION = 5
+PROTOCOL_VERSION = 7
 HISTORY_LIMIT = 4096
 COMMAND_QUEUE_LIMIT = 64
 CLIENT_QUEUE_LIMIT = 64
 FRAME_ENCODER_QUEUE_LIMIT = 64
 INSPECTION_FRAME_WAIT_SECONDS = 2.0
-FRAME_HEADER = struct.Struct(">4sBBHQQ")
-FRAME_MAGIC = b"RLP2"
+FRAME_HEADER = struct.Struct(">4sBBHQQQ")
+FRAME_MAGIC = b"RLP3"
 FRAME_CODEC_PNG = 1
 FRAME_GAME = 1
 FRAME_OBSERVATION = 2
+FRAME_ATTRIBUTION = 3
+FRAME_CNN_INSPECTION = 4
 MAX_JSON_DEPTH = 5
 MAX_JSON_ITEMS = 128
 MAX_JSON_TEXT = 4096
 INPUT_HEARTBEAT_SECONDS = 0.25
 LAST_CLIENT_GRACE_SECONDS = 30.0
 PAIRED_START_GRACE_SECONDS = 2.0
+
+FRAME_SUBSCRIPTIONS = {
+    FRAME_GAME: "game",
+    FRAME_OBSERVATION: "observation",
+    FRAME_ATTRIBUTION: "attribution",
+    FRAME_CNN_INSPECTION: "cnn-inspection",
+}
+
+
+def unavailable_attribution(reason: str) -> dict[str, Any]:
+    return {
+        "mode": "none",
+        "interval": 1,
+        "status": "off",
+        "error": None,
+        "generation": 0,
+        "last_computed_sequence": None,
+        "unavailable_reason": str(reason),
+    }
+
+
+def unavailable_cnn_inspection(reason: str) -> dict[str, Any]:
+    return {
+        "enabled": False,
+        "layer_id": None,
+        "interval": 1,
+        "top_k": CNN_TOP_K_DEFAULT,
+        "status": "off",
+        "error": None,
+        "generation": 0,
+        "last_computed_sequence": None,
+        "unavailable_reason": str(reason),
+    }
+
 
 REWARD_COMPONENT_INFO_KEYS = {
     "native_reward_component": "native_reward",
@@ -81,9 +127,7 @@ def reward_accounting_contract(config: Any) -> dict[str, Any]:
         "status": "available",
         "reason": None,
         "scale_divisor": transform.scale,
-        "clip_bounds": (
-            list(transform.clip_bounds) if transform.clip_bounds is not None else None
-        ),
+        "clip_bounds": (list(transform.clip_bounds) if transform.clip_bounds is not None else None),
     }
 
 
@@ -93,7 +137,7 @@ def _finite_scalar(value: Any) -> float | None:
         if array.size != 1:
             return None
         numeric = float(array.reshape(-1)[0])
-    except (TypeError, ValueError, OverflowError):
+    except TypeError, ValueError, OverflowError:
         return None
     return numeric if np.isfinite(numeric) else None
 
@@ -163,9 +207,9 @@ def idle_playback_snapshot(
             "can_start_next_episode": False,
             "history_size": 0,
             "config": "",
-            "reward_accounting": unavailable_reward_accounting(
-                "no playback environment is active"
-            ),
+            "reward_accounting": unavailable_reward_accounting("no playback environment is active"),
+            "attribution": unavailable_attribution("no live policy is active"),
+            "cnn": unavailable_cnn_inspection("no live policy is active"),
         },
         "transition": None,
     }
@@ -305,7 +349,13 @@ def transition_payload(
     transition: _PlaybackTransition,
     *,
     reward_accounting: Mapping[str, Any] | None = None,
+    processing: Iterable[object] = PLAYER_PROCESSING_FEATURES,
 ) -> dict[str, Any]:
+    features = normalize_player_processing(processing)
+    detailed = "raw" in features
+    diagnostics_enabled = bool(
+        features & {"events", "game", "raw", "reward-accounting", "rewards", "signals"}
+    )
     diagnostics = transition.diagnostics
     provider_reward = transition.reward
     task_reward = transition.reward
@@ -313,7 +363,7 @@ def transition_payload(
     task_metrics: Mapping[str, Any] = {}
     event_transitions: Mapping[str, Any] = {}
     boundary_reasons: list[str] = []
-    if diagnostics is not None:
+    if diagnostics_enabled and diagnostics is not None:
         provider_reward = diagnostics.provider_reward
         task_reward = diagnostics.reward
         outcome = diagnostics.outcome.name.lower()
@@ -327,17 +377,38 @@ def transition_payload(
             boundary_reasons.append("task_terminated")
         if diagnostics.task_truncated:
             boundary_reasons.append("task_truncated")
-    accounting = dict(reward_accounting or {
-        "status": "available",
-        "reason": None,
-        "scale_divisor": 1.0,
-        "clip_bounds": None,
-    })
-    raw_reward, components, accounting_error = _reward_accounting_payload(
-        final_reward=task_reward,
-        task_metrics=task_metrics,
-        accounting=accounting,
-    )
+    if "reward-accounting" in features or detailed:
+        accounting = dict(
+            reward_accounting
+            or {
+                "status": "available",
+                "reason": None,
+                "scale_divisor": 1.0,
+                "clip_bounds": None,
+            }
+        )
+        raw_reward, components, accounting_error = _reward_accounting_payload(
+            final_reward=task_reward,
+            task_metrics=task_metrics,
+            accounting=accounting,
+        )
+    else:
+        raw_reward, components, accounting_error = None, {}, None
+    if "policy" in features or detailed:
+        decision = _decision_payload(transition.decision)
+    elif "actions" in features and transition.decision is not None:
+        decision = {
+            "requested_action_selection_mode": (
+                transition.decision.requested_action_selection_mode
+            ),
+            "action_selection_mode": transition.decision.action_selection_mode,
+            "sampled": transition.decision.sampled,
+            "selected_action": transition.decision.selected_discrete_action,
+        }
+    else:
+        decision = None
+    rewards_enabled = bool(features & {"critic-calibration", "raw", "reward-accounting", "rewards"})
+    events_enabled = bool(features & {"events", "game", "raw"})
     return {
         "sequence": transition.sequence,
         "episode": transition.episode,
@@ -345,41 +416,61 @@ def transition_payload(
         "seed": transition.seed,
         "start_id": transition.start_id,
         "action_source": transition.action_source,
-        "executed_action": _json_value(transition.executed_action),
-        "decision": _decision_payload(transition.decision),
+        "executed_action": (
+            _json_value(transition.executed_action) if features & {"actions", "raw"} else None
+        ),
+        "decision": decision,
         "before": {
-            "task": _json_value(transition.pre_task),
-            "model_input": model_input_lines(transition.model_obs),
-            "game_frame": transition.before_frame is not None,
-            "observation_frames": len(transition.before_frames),
+            "task": _json_value(transition.pre_task) if detailed else None,
+            "model_input": model_input_lines(transition.model_obs) if detailed else [],
+            "game_frame": "game" in features and transition.before_frame is not None,
+            "observation_frames": (
+                len(transition.before_frames) if "observation" in features else 0
+            ),
         },
         "after": {
-            "task": _json_value(transition.next_task),
-            "game_frame": transition.after_frame is not None,
-            "observation_frames": len(transition.after_frames),
+            "task": _json_value(transition.next_task) if detailed else None,
+            "game_frame": "game" in features and transition.after_frame is not None,
+            "observation_frames": (
+                len(transition.after_frames) if "observation" in features else 0
+            ),
             "frame_role": transition.after_frame_role,
         },
         "reward": {
-            "provider": provider_reward,
-            "shaped": task_reward,
-            "step": transition.reward,
-            "return": transition.total_reward,
+            "provider": provider_reward if rewards_enabled else None,
+            "shaped": task_reward if rewards_enabled else None,
+            "step": transition.reward if rewards_enabled else None,
+            "return": transition.total_reward if rewards_enabled else None,
             "raw": raw_reward,
             "components": components,
             "accounting_error": accounting_error,
         },
-        "events": list(transition.events),
-        "event_transitions": _json_value(event_transitions),
-        "signals": _numeric_signals(transition.info),
-        "info": _json_value(transition.info),
+        "events": list(transition.events) if events_enabled else [],
+        "event_transitions": _json_value(event_transitions) if events_enabled else {},
+        "signals": _numeric_signals(transition.info) if "signals" in features or detailed else {},
+        "info": _json_value(transition.info) if detailed else {},
         "max_x_pos": transition.max_x_pos,
         "terminated": transition.terminated,
         "truncated": transition.truncated,
         "completed": transition.completed,
         "boundary": transition.boundary,
-        "boundary_reasons": boundary_reasons,
-        "outcome": outcome,
-        "attribution": transition.attribution is not None,
+        "boundary_reasons": boundary_reasons if events_enabled else [],
+        "outcome": outcome if events_enabled else "continuing",
+        "attribution": {
+            "status": transition.attribution_status,
+            "mode": transition.attribution_mode,
+            "generation": transition.attribution_generation,
+            "reason": transition.attribution_reason,
+        },
+        "cnn": {
+            "status": transition.cnn_status,
+            "layer_id": transition.cnn_layer_id,
+            "generation": transition.cnn_generation,
+            "reason": transition.cnn_reason,
+            "inspection": (
+                None if transition.cnn_inspection is None else transition.cnn_inspection.payload()
+            ),
+        },
     }
 
 
@@ -387,9 +478,14 @@ def history_point(
     transition: _PlaybackTransition,
     *,
     reward_accounting: Mapping[str, Any] | None = None,
+    processing: Iterable[object] = PLAYER_PROCESSING_FEATURES,
 ) -> dict[str, Any]:
     return history_point_payload(
-        transition_payload(transition, reward_accounting=reward_accounting)
+        transition_payload(
+            transition,
+            reward_accounting=reward_accounting,
+            processing=processing,
+        )
     )
 
 
@@ -489,9 +585,11 @@ def _frame_packet(
     frame: np.ndarray,
     *,
     session_epoch: int = 0,
+    generation: int = 0,
 ) -> bytes:
     output = io.BytesIO()
-    Image.fromarray(frame, mode="RGB").save(
+    image_mode = "RGBA" if np.asarray(frame).shape[-1] == 4 else "RGB"
+    Image.fromarray(frame, mode=image_mode).save(
         output,
         format="PNG",
         compress_level=1,
@@ -504,6 +602,7 @@ def _frame_packet(
             0,
             session_epoch,
             sequence,
+            generation,
         )
         + output.getvalue()
     )
@@ -512,7 +611,7 @@ def _frame_packet(
 class FrameEncoder:
     def __init__(self) -> None:
         self._condition = threading.Condition()
-        self._pending: deque[tuple[int, int, dict[int, np.ndarray]]] = deque()
+        self._pending: deque[tuple[int, int, dict[int, np.ndarray], dict[int, int]]] = deque()
         self._latest: dict[int, tuple[int, bytes]] = {}
         self._retained: dict[tuple[int, int], dict[int, tuple[int, bytes]]] = {}
         self._epoch = 0
@@ -536,13 +635,22 @@ class FrameEncoder:
     def start(self) -> None:
         self._thread.start()
 
-    def submit(self, kind: int, sequence: int, frame: np.ndarray | None) -> None:
-        self.submit_batch(sequence, {kind: frame})
+    def submit(
+        self,
+        kind: int,
+        sequence: int,
+        frame: np.ndarray | None,
+        *,
+        generation: int = 0,
+    ) -> None:
+        self.submit_batch(sequence, {kind: frame}, generations={kind: generation})
 
     def submit_batch(
         self,
         sequence: int,
         frames: Mapping[int, np.ndarray | None],
+        *,
+        generations: Mapping[int, int] | None = None,
     ) -> None:
         owned = {
             int(kind): np.asarray(frame, dtype=np.uint8).copy()
@@ -551,11 +659,12 @@ class FrameEncoder:
         }
         if not owned:
             return
+        owned_generations = {kind: int((generations or {}).get(kind, 0)) for kind in owned}
         with self._condition:
             while len(self._pending) >= FRAME_ENCODER_QUEUE_LIMIT and not self._closed:
                 self._condition.wait()
             if not self._closed:
-                self._pending.append((self._epoch, int(sequence), owned))
+                self._pending.append((self._epoch, int(sequence), owned, owned_generations))
                 self._condition.notify_all()
 
     def latest(self) -> dict[int, tuple[int, bytes]]:
@@ -568,11 +677,15 @@ class FrameEncoder:
         *,
         epoch: int | None = None,
         timeout: float = 0.0,
+        kinds: Iterable[int] | None = None,
     ) -> dict[int, tuple[int, bytes]]:
         with self._condition:
             key = (self._epoch if epoch is None else int(epoch), int(sequence))
+            requested = {int(kind) for kind in kinds or ()}
             deadline = time.monotonic() + max(0.0, float(timeout))
-            while key not in self._retained and not self._closed:
+            while (
+                key not in self._retained or not requested.issubset(self._retained.get(key, {}))
+            ) and not self._closed:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     break
@@ -595,7 +708,7 @@ class FrameEncoder:
                     return
                 pending = self._pending.popleft()
                 self._condition.notify_all()
-            epoch, sequence, frames = pending
+            epoch, sequence, frames, generations = pending
             encoded: dict[int, tuple[int, bytes]] = {}
             for kind, frame in frames.items():
                 packet = _frame_packet(
@@ -603,12 +716,13 @@ class FrameEncoder:
                     sequence,
                     frame,
                     session_epoch=epoch,
+                    generation=generations[kind],
                 )
                 encoded[kind] = (sequence, packet)
                 with self._condition:
                     self._latest[kind] = (sequence, packet)
             with self._condition:
-                self._retained[(epoch, sequence)] = encoded
+                self._retained.setdefault((epoch, sequence), {}).update(encoded)
                 while len(self._retained) > HISTORY_LIMIT:
                     del self._retained[next(iter(self._retained))]
                 self._condition.notify_all()
@@ -638,11 +752,19 @@ class _PlaybackRunnerProtocol:
         self._latest_snapshot: dict[str, Any] = {}
         self._stop = threading.Event()
         self.revision = 0
+        self.processing_features = PLAYER_PROCESSING_FEATURES
         if thread_name is not None:
             self.commands: queue.Queue[PlaybackCommand] = queue.Queue(COMMAND_QUEUE_LIMIT)
             self._episode_start_snapshot: dict[str, Any] = {}
             self._episode_start_frames: dict[int, tuple[int, bytes]] = {}
             self._thread = threading.Thread(target=self._run, name=thread_name)
+
+    def set_processing(self, features: Iterable[object]) -> None:
+        self.processing_features = normalize_player_processing(features)
+        session = getattr(self, "session", None)
+        configure = getattr(session, "set_processing", None)
+        if callable(configure):
+            configure(self.processing_features)
 
     @property
     def stopped(self) -> bool:
@@ -741,6 +863,27 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
                     "entropy",
                 ],
             }
+        capability_value = getattr(session, "attribution_capability", None)
+        self.attribution_capability = (
+            dict(capability_value)
+            if isinstance(capability_value, Mapping)
+            else {
+                "target": "selected_action_log_probability",
+                "supported_modes": [],
+                "unavailable_reason": "the active playback source does not expose attribution",
+            }
+        )
+        cnn_capability_value = getattr(session, "cnn_capability", None)
+        self.cnn_capability = (
+            dict(cnn_capability_value)
+            if isinstance(cnn_capability_value, Mapping)
+            else {
+                "layers": [],
+                "default_layer_id": None,
+                "rank_basis": "peak_raw_positive_response",
+                "unavailable_reason": ("the active playback source does not expose CNN inspection"),
+            }
+        )
         action_selection = self.policy_capabilities.get("action_selection")
         action_selection = dict(action_selection) if isinstance(action_selection, Mapping) else {}
         self.supported_action_selection_modes = tuple(
@@ -838,7 +981,11 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
 
     def _snapshot_payload(self, transition: _PlaybackTransition | None) -> dict[str, Any]:
         current = (
-            transition_payload(transition, reward_accounting=self.reward_accounting)
+            transition_payload(
+                transition,
+                reward_accounting=self.reward_accounting,
+                processing=self.processing_features,
+            )
             if transition is not None
             else None
         )
@@ -853,6 +1000,11 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
             event_names = list(self.session.env.runtime.kernel.event_names)
         except AttributeError:
             event_names = []
+        comparison_reasons = (
+            self._critic_comparison_reasons(transition)
+            if "critic-calibration" in self.processing_features
+            else ["critic calibration panel processing is disabled"]
+        )
         return {
             "type": "snapshot",
             "protocol": PROTOCOL_VERSION,
@@ -863,6 +1015,8 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
             "interactive": self.session.interactive,
             "policy": {
                 **self.policy_capabilities,
+                "attribution": dict(self.attribution_capability),
+                "cnn": dict(self.cnn_capability),
                 "provenance": dict(getattr(self.session, "policy_provenance", {})),
                 "action_selection": {
                     "supported_modes": list(self.supported_action_selection_modes),
@@ -912,6 +1066,26 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
                 "history_size": len(self.history),
                 "config": self.config_text,
                 "reward_accounting": dict(self.reward_accounting),
+                "attribution": dict(
+                    getattr(
+                        self.session,
+                        "attribution_state",
+                        unavailable_attribution(
+                            self.attribution_capability.get("unavailable_reason")
+                            or "the active playback source does not expose attribution"
+                        ),
+                    )
+                ),
+                "cnn": dict(
+                    getattr(
+                        self.session,
+                        "cnn_state",
+                        unavailable_cnn_inspection(
+                            self.cnn_capability.get("unavailable_reason")
+                            or "the active playback source does not expose CNN inspection"
+                        ),
+                    )
+                ),
                 "termination_source": getattr(
                     self.session,
                     "termination_source",
@@ -920,8 +1094,8 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
                 "termination_conditions": list(getattr(self.session, "termination_conditions", ())),
                 "playback_contract": dict(self.contract_details),
                 "critic_comparison": {
-                    "available": not self._critic_comparison_reasons(transition),
-                    "reasons": self._critic_comparison_reasons(transition),
+                    "available": not comparison_reasons,
+                    "reasons": comparison_reasons,
                     "discount": self.value_discount,
                 },
             },
@@ -930,13 +1104,19 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
         }
 
     def _publish(self, transition: _PlaybackTransition | None = None) -> None:
-        if transition is not None and (
-            not self.history or int(self.history[-1]["sequence"]) != transition.sequence
+        if (
+            "history" in self.processing_features
+            and transition is not None
+            and (not self.history or int(self.history[-1]["sequence"]) != transition.sequence)
         ):
             self.history.append(
-                history_point(transition, reward_accounting=self.reward_accounting)
+                history_point(
+                    transition,
+                    reward_accounting=self.reward_accounting,
+                    processing=self.processing_features,
+                )
             )
-            if transition.boundary:
+            if transition.boundary and "critic-calibration" in self.processing_features:
                 annotate_realized_returns(
                     self.history,
                     episode=transition.episode,
@@ -944,28 +1124,52 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
                     comparison_reasons=self._critic_comparison_reasons(transition),
                 )
         if transition is not None:
-            game_frame = transition.after_frame
+            game_frame = transition.after_frame if "game" in self.processing_features else None
             obs_frames = transition.before_frames
-            attribution = transition.attribution
             sequence = transition.sequence
         else:
-            game_frame = self.session.current_frame
+            game_frame = self.session.current_frame if "game" in self.processing_features else None
             obs_frames = tuple(self.session.frames or ())
-            attribution = None
             sequence = self.session.sequence
         obs_image = None
-        if obs_frames:
+        if "observation" in self.processing_features and obs_frames:
             obs_image = render_obs_stack(
                 deque(obs_frames, maxlen=len(obs_frames)),
                 scale=1,
-                heatmap=attribution,
-                heatmap_opacity=self.session.attribution_opacity,
             )
+        attribution_image = None
+        attribution_generation = 0
+        if (
+            "attribution" in self.processing_features
+            and transition is not None
+            and transition.attribution is not None
+            and obs_frames
+        ):
+            attribution_image = render_attribution_stack(
+                obs_frames,
+                transition.attribution,
+            )
+            attribution_generation = transition.attribution_generation
+        cnn_image = None
+        cnn_generation = 0
+        if (
+            "cnn-inspection" in self.processing_features
+            and transition is not None
+            and transition.cnn_inspection is not None
+        ):
+            cnn_image = transition.cnn_inspection.atlas
+            cnn_generation = transition.cnn_generation
         self.encoder.submit_batch(
             sequence,
             {
                 FRAME_GAME: game_frame,
                 FRAME_OBSERVATION: obs_image,
+                FRAME_ATTRIBUTION: attribution_image,
+                FRAME_CNN_INSPECTION: cnn_image,
+            },
+            generations={
+                FRAME_ATTRIBUTION: attribution_generation,
+                FRAME_CNN_INSPECTION: cnn_generation,
             },
         )
         payload = self._snapshot_payload(transition)
@@ -1029,6 +1233,40 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
                 ok=False,
                 error=f"stale revision {command.expected_revision}; current is {self.revision}",
             )
+            return
+        if command.name == "set_attribution":
+            try:
+                interval_value = command.payload.get("interval")
+                interval = None if interval_value in {None, ""} else interval_value
+                self.session.configure_attribution(
+                    str(command.payload.get("mode") or "none"),
+                    interval,
+                )
+            except Exception as exc:
+                self.revision += 1
+                self._publish(self.session.last_transition)
+                self._response(command, ok=False, error=str(exc))
+                return
+            self.revision += 1
+            self._publish(self.session.last_transition)
+            self._response(command, ok=True)
+            return
+        if command.name == "set_cnn_inspection":
+            try:
+                self.session.configure_cnn_inspection(
+                    enabled=command.payload.get("enabled"),
+                    layer_id=command.payload.get("layer_id"),
+                    interval=command.payload.get("interval"),
+                    top_k=command.payload.get("top_k"),
+                )
+            except Exception as exc:
+                self.revision += 1
+                self._publish(self.session.last_transition)
+                self._response(command, ok=False, error=str(exc))
+                return
+            self.revision += 1
+            self._publish(self.session.last_transition)
+            self._response(command, ok=True)
             return
         try:
             if command.name == "pause":
@@ -1314,6 +1552,12 @@ class DatasetPlaybackRunner(_PlaybackRunnerProtocol):
                     "Recorded dataset playback is never checkpoint-promotion evidence."
                 ),
                 "reward_accounting": dict(self.reward_accounting),
+                "attribution": unavailable_attribution(
+                    "recorded datasets do not contain live-policy attribution"
+                ),
+                "cnn": unavailable_cnn_inspection(
+                    "recorded datasets do not contain live-policy CNN activations"
+                ),
             },
             "transition": self._transition,
             "history_point": current_history,
@@ -1345,6 +1589,20 @@ class DatasetPlaybackRunner(_PlaybackRunnerProtocol):
         self._publish()
 
     def _apply(self, command: PlaybackCommand) -> None:
+        if command.name == "set_attribution":
+            self._response(
+                command,
+                ok=False,
+                error="recorded datasets do not contain live-policy attribution",
+            )
+            return
+        if command.name == "set_cnn_inspection":
+            self._response(
+                command,
+                ok=False,
+                error="recorded datasets do not contain live-policy CNN activations",
+            )
+            return
         try:
             complete = self.transition_index >= len(self.rows) - 1
             if command.name == "pause":
@@ -1469,7 +1727,19 @@ class DatasetPlaybackRunner(_PlaybackRunnerProtocol):
                 if collector_terminated
                 else "continuing"
             ),
-            "attribution": False,
+            "attribution": {
+                "status": "off",
+                "mode": "none",
+                "generation": 0,
+                "reason": "recorded_source",
+            },
+            "cnn": {
+                "status": "off",
+                "layer_id": None,
+                "generation": 0,
+                "reason": "recorded_source",
+                "inspection": None,
+            },
         }
         self.history.append(history_point_payload(self._transition))
         self.revision += 1
@@ -1584,6 +1854,20 @@ class HumanRecordingRunner(_PlaybackRunnerProtocol):
             self._condition.notify_all()
 
     def submit(self, command: PlaybackCommand) -> None:
+        if command.name == "set_attribution":
+            self._response(
+                command,
+                ok=False,
+                error="human recording does not have a live policy to attribute",
+            )
+            return
+        if command.name == "set_cnn_inspection":
+            self._response(
+                command,
+                ok=False,
+                error="human recording does not have a live policy to inspect",
+            )
+            return
         try:
             if command.name == "play":
                 self.run_state = "playing"
@@ -1662,6 +1946,12 @@ class HumanRecordingRunner(_PlaybackRunnerProtocol):
                         "provider's declared control labels. This session is never promotion evidence."
                     ),
                     "reward_accounting": dict(self.reward_accounting),
+                    "attribution": unavailable_attribution(
+                        "human recording does not have a live policy to attribute"
+                    ),
+                    "cnn": unavailable_cnn_inspection(
+                        "human recording does not have a live policy to inspect"
+                    ),
                 },
                 "transition": self._transition,
                 "history_point": current_history,
@@ -1750,7 +2040,19 @@ class HumanRecordingRunner(_PlaybackRunnerProtocol):
                 if active
             ],
             "outcome": "boundary" if boundary else "continuing",
-            "attribution": False,
+            "attribution": {
+                "status": "off",
+                "mode": "none",
+                "generation": 0,
+                "reason": "human_recording",
+            },
+            "cnn": {
+                "status": "off",
+                "layer_id": None,
+                "generation": 0,
+                "reason": "human_recording",
+                "inspection": None,
+            },
         }
         self.history.append(history_point_payload(self._transition))
         self.encoder.submit(FRAME_GAME, self.sequence, next_frame)
@@ -1766,10 +2068,12 @@ class WebClient:
         subscriptions: set[str],
         workspace_id: str,
         window_id: str,
+        processing: frozenset[str] = PLAYER_PROCESSING_FEATURES,
     ) -> None:
         self.client_id = client_id
         self.socket = socket
         self.subscriptions = subscriptions
+        self.processing = normalize_player_processing(processing)
         self.workspace_id = workspace_id
         self.window_id = window_id
         self.reliable: asyncio.Queue[str | bytes] = asyncio.Queue(CLIENT_QUEUE_LIMIT)
@@ -1873,6 +2177,13 @@ class PlaybackWebServer:
         self._initial_environment_catalog: dict[str, Any] | None = None
         self._manual_evaluation_factory = manual_evaluation_factory
         self._manual_evaluation_queue: Any | None = None
+
+    async def _sync_player_processing(self) -> None:
+        configure = getattr(self.runner, "set_processing", None)
+        if not callable(configure):
+            return
+        features = {feature for client in self.clients.values() for feature in client.processing}
+        await asyncio.to_thread(configure, features)
 
     @property
     def asset_root(self) -> Path:
@@ -2303,19 +2614,11 @@ class PlaybackWebServer:
                 "next_cursor": None,
                 "metric_columns": list(checkpoint_metric_columns()),
                 "selection_fence": (
-                    self.catalog.checkpoint_selection_fence(
-                        run_id=request.match_info["run_id"]
-                    )
-                    if callable(
-                        getattr(self.catalog, "checkpoint_selection_fence", None)
-                    )
+                    self.catalog.checkpoint_selection_fence(run_id=request.match_info["run_id"])
+                    if callable(getattr(self.catalog, "checkpoint_selection_fence", None))
                     else evaluation_selection_fence(
                         run_id=request.match_info["run_id"],
-                        checkpoints=[
-                            item
-                            for item in selection_items
-                            if isinstance(item, Mapping)
-                        ],
+                        checkpoints=[item for item in selection_items if isinstance(item, Mapping)],
                     )
                 ),
                 "freshness": "partial" if warnings else "fresh",
@@ -2351,9 +2654,7 @@ class PlaybackWebServer:
         except json.JSONDecodeError, TypeError:
             return web.json_response({"error": "request body must be JSON"}, status=400)
         checkpoint_ids = payload.get("checkpoint_ids") if isinstance(payload, Mapping) else None
-        selection_fence = (
-            payload.get("selection_fence") if isinstance(payload, Mapping) else None
-        )
+        selection_fence = payload.get("selection_fence") if isinstance(payload, Mapping) else None
         if isinstance(checkpoint_ids, str | bytes) or not isinstance(checkpoint_ids, Sequence):
             return web.json_response(
                 {"error": "checkpoint_ids must be a JSON array"},
@@ -2570,8 +2871,11 @@ class PlaybackWebServer:
             subscriptions = {
                 str(value)
                 for value in hello.get("subscriptions", ("telemetry",))
-                if str(value) in {"telemetry", "game", "observation"}
+                if str(value) in {"telemetry", *FRAME_SUBSCRIPTIONS.values()}
             }
+            processing = normalize_player_processing(
+                hello.get("processing", PLAYER_PROCESSING_FEATURES)
+            )
             client_id = uuid.uuid4().hex
             workspace_id = str(hello.get("workspace_id") or client_id)[:128]
             if not workspace_id or any(
@@ -2586,8 +2890,10 @@ class PlaybackWebServer:
                 subscriptions,
                 workspace_id,
                 window_id,
+                processing,
             )
             self.clients[client_id] = client
+            await self._sync_player_processing()
             self.ever_connected = True
             if self.control_holder is None:
                 self.control_holder = workspace_id
@@ -2609,12 +2915,12 @@ class PlaybackWebServer:
                 if episode_start_snapshot:
                     client.offer_reliable(self._snapshot_for(client, episode_start_snapshot))
                 for frame_kind, (_sequence, packet) in episode_start_frames.items():
-                    subscription = "game" if frame_kind == FRAME_GAME else "observation"
+                    subscription = FRAME_SUBSCRIPTIONS.get(frame_kind)
                     if subscription in client.subscriptions:
                         client.offer_reliable(packet)
             client.offer_snapshot(self._snapshot_for(client, self.runner.snapshot()))
             for frame_kind, (sequence, packet) in self.runner.encoder.latest().items():
-                subscription = "game" if frame_kind == FRAME_GAME else "observation"
+                subscription = FRAME_SUBSCRIPTIONS.get(frame_kind)
                 if subscription in client.subscriptions:
                     client.offer_frame(frame_kind, sequence, packet)
             writer = asyncio.create_task(client.write())
@@ -2642,10 +2948,15 @@ class PlaybackWebServer:
                     client.subscriptions = {
                         str(value)
                         for value in payload.get("subscriptions", ())
-                        if str(value) in {"telemetry", "game", "observation"}
+                        if str(value) in {"telemetry", *FRAME_SUBSCRIPTIONS.values()}
                     }
+                    if "processing" in payload:
+                        client.processing = normalize_player_processing(
+                            payload.get("processing") or ()
+                        )
+                        await self._sync_player_processing()
                     for frame_kind, (sequence, packet) in self.runner.encoder.latest().items():
-                        subscription = "game" if frame_kind == FRAME_GAME else "observation"
+                        subscription = FRAME_SUBSCRIPTIONS.get(frame_kind)
                         if subscription in client.subscriptions:
                             client.offer_frame(frame_kind, sequence, packet)
                 elif kind == "history":
@@ -2657,6 +2968,8 @@ class PlaybackWebServer:
                         requested_kinds = {int(value) for value in payload.get("kinds", ())} & {
                             FRAME_GAME,
                             FRAME_OBSERVATION,
+                            FRAME_ATTRIBUTION,
+                            FRAME_CNN_INSPECTION,
                         }
                     except TypeError, ValueError:
                         client.offer_reliable(
@@ -2670,6 +2983,7 @@ class PlaybackWebServer:
                         sequence,
                         epoch=epoch,
                         timeout=INSPECTION_FRAME_WAIT_SECONDS,
+                        kinds=requested_kinds,
                     )
                     for frame_kind in requested_kinds:
                         packet = retained.get(frame_kind)
@@ -2735,6 +3049,7 @@ class PlaybackWebServer:
                 client.closed = True
                 client.event.set()
                 self.clients.pop(client.client_id, None)
+                await self._sync_player_processing()
                 if self.input_holder == client.client_id:
                     self.input_holder = None
                     self.runner.clear_input()
@@ -2800,7 +3115,7 @@ class PlaybackWebServer:
                 if (sequence, packet) == latest_frames.get(kind):
                     continue
                 latest_frames[kind] = (sequence, packet)
-                subscription = "game" if kind == FRAME_GAME else "observation"
+                subscription = FRAME_SUBSCRIPTIONS.get(kind)
                 for client in tuple(self.clients.values()):
                     if subscription in client.subscriptions:
                         client.offer_frame(kind, sequence, packet)
@@ -2846,10 +3161,7 @@ class PlaybackWebServer:
                 web.get("/environments/{environment_id}", self.page),
                 web.get("/environments/{environment_id}/goals/{goal_id}", self.page),
                 web.get(
-                    (
-                        "/environments/{environment_id}/goals/{goal_id}"
-                        "/variants/{goal_variant_id}"
-                    ),
+                    ("/environments/{environment_id}/goals/{goal_id}/variants/{goal_variant_id}"),
                     self.page,
                 ),
                 web.get(
@@ -2877,17 +3189,11 @@ class PlaybackWebServer:
                     self.catalog_goals,
                 ),
                 web.get(
-                    (
-                        "/api/catalog/environments/{environment_id}"
-                        "/goals/{goal_id}/inspection"
-                    ),
+                    ("/api/catalog/environments/{environment_id}/goals/{goal_id}/inspection"),
                     self.inspect_goal,
                 ),
                 web.get(
-                    (
-                        "/api/catalog/environments/{environment_id}"
-                        "/goals/{goal_id}/recipes"
-                    ),
+                    ("/api/catalog/environments/{environment_id}/goals/{goal_id}/recipes"),
                     self.catalog_recipes,
                 ),
                 web.get(
@@ -2898,17 +3204,11 @@ class PlaybackWebServer:
                     self.inspect_recipe,
                 ),
                 web.get(
-                    (
-                        "/api/catalog/environments/{environment_id}"
-                        "/goals/{goal_id}/variants"
-                    ),
+                    ("/api/catalog/environments/{environment_id}/goals/{goal_id}/variants"),
                     self.catalog_goal_variants,
                 ),
                 web.get(
-                    (
-                        "/api/catalog/environments/{environment_id}"
-                        "/goals/{goal_id}/activity"
-                    ),
+                    ("/api/catalog/environments/{environment_id}/goals/{goal_id}/activity"),
                     self.catalog_goal_activity,
                 ),
                 web.get(
@@ -3095,6 +3395,8 @@ class WebHumanController:
 
 
 __all__ = [
+    "FRAME_ATTRIBUTION",
+    "FRAME_CNN_INSPECTION",
     "FRAME_CODEC_PNG",
     "FRAME_GAME",
     "FRAME_HEADER",

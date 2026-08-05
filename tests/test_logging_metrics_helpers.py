@@ -200,6 +200,8 @@ class MetricsDocumentationTests(unittest.TestCase):
                 "train/value_loss": 1.5,
                 "train/entropy_loss": -0.75,
                 "train/learning_rate": 0.0007,
+                "train/algorithm/a2c/policy/entropy_bound/lower": 0.0,
+                "train/algorithm/a2c/policy/entropy_bound/upper": 1.5,
             },
             algorithm_id="a2c",
         )
@@ -211,6 +213,8 @@ class MetricsDocumentationTests(unittest.TestCase):
                 "train/algorithm/a2c/update/value_loss": 1.5,
                 "train/algorithm/a2c/policy/entropy": 0.75,
                 "train/algorithm/a2c/update/learning_rate": 0.0007,
+                "train/algorithm/a2c/policy/entropy_bound/lower": 0.0,
+                "train/algorithm/a2c/policy/entropy_bound/upper": 1.5,
             },
         )
         self.assertFalse(any("/ppo/" in name for name in payload))
@@ -262,8 +266,8 @@ class MetricsDocumentationTests(unittest.TestCase):
                     name = name.replace(f"{{{placeholder}}}", replacement, 1)
                 scalar_names.add(name)
 
-        self.assertEqual(len(metric_names.METRIC_DEFINITIONS), 146)
-        self.assertEqual(len(scalar_names), 157)
+        self.assertEqual(len(metric_names.METRIC_DEFINITIONS), 148)
+        self.assertEqual(len(scalar_names), 161)
         self.assertEqual(
             len(
                 {
@@ -293,6 +297,7 @@ class MetricsDocumentationTests(unittest.TestCase):
             "histogram",
             "improvements",
             "metadata",
+            "nats",
             "progress",
             "ratio",
             "return",

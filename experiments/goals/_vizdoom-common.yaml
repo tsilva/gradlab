@@ -34,7 +34,7 @@ train:
   early_stop:
     # Address each early-stop rule by a stable condition name.
     conditions:
-      # Observe when training behavior reaches the configured solved threshold.
+      # Stop when training behavior sustains perfect task success.
       target_reached:
         # Select the training metric compared with this condition's threshold.
         metric: train/outcome/success/across_starts/window_100/rate/min
@@ -44,14 +44,14 @@ train:
         operator: '>='
         # Set the reference value used to report normalized progress toward the target.
         progress_baseline: 0.0
-        # Set the metric value that satisfies the training target.
-        threshold: 0.95
+        # Require every episode in the mature rolling window to succeed.
+        threshold: 1.0
         # Require the threshold to remain satisfied for this many transitions before triggering.
         patience_steps: 0
         # Classify a trigger from this condition as a successful training outcome.
         outcome: success
-        # Record solved-target evidence without stopping further objective optimization.
-        action: observe
+        # Stop the learner after the mature rolling window reaches perfect success.
+        action: stop
       # Stop neutrally when shaped return ceases to improve meaningfully.
       return_plateau:
         # Select the training metric monitored for improvement.
