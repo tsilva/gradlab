@@ -195,6 +195,24 @@ class EnvironmentTaskConfigTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "support only operations.*equals_for"):
             validate_task_config(invalid)
 
+    def test_identity_task_validates_terminal_outcome_precedence(self) -> None:
+        task = {
+            "id": "identity",
+            "action": {"set": "native"},
+            "signals": {},
+            "events": {},
+            "termination": {
+                "outcome_precedence": ["success", "failure", "timeout"],
+            },
+            "reward": {"reward_mode": "native"},
+        }
+
+        validate_task_config(task)
+
+        task["termination"]["outcome_precedence"] = ["success", "failure", "failure"]
+        with self.assertRaisesRegex(ValueError, "exactly once"):
+            validate_task_config(task)
+
     def test_task_validation_rejects_unimplemented_kernel_and_mario_event_semantics(self) -> None:
         with self.assertRaisesRegex(ValueError, "no registered task kernel"):
             validate_task_config(

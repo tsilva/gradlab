@@ -598,6 +598,46 @@ class BatchRuntimeTests(unittest.TestCase):
             ],
         )
 
+    def test_identity_outcome_precedence_can_make_a_simultaneous_hit_successful(self):
+        provider = DeterministicNativeVectorProvider()
+        descriptor = descriptor_for(provider)
+        kernel = IdentityTaskDefinition(
+            signals={"hits": "score", "ammo": "lives"},
+            events={
+                "monster_hit": {
+                    "signal": "hits",
+                    "operation": "increase",
+                },
+                "shot_fired": {
+                    "signal": "ammo",
+                    "operation": "decrease",
+                },
+            },
+            termination={
+                "success": ["monster_hit"],
+                "failure": ["shot_fired"],
+                "outcome_precedence": ["success", "failure", "timeout"],
+            },
+        ).bind(descriptor, provider.num_envs)
+        runtime = BatchRuntime(provider, descriptor, kernel, run_seed=17)
+        runtime.reset()
+        provider.queue_step(score=[1, 0], lives=[2, 2])
+
+        step = runtime.step(np.zeros((2, 3), dtype=np.int8))
+
+        np.testing.assert_array_equal(step.terminated, [True, True])
+        np.testing.assert_array_equal(step.truncated, [False, False])
+        records = [
+            record for record in runtime.drain_records() if isinstance(record, EpisodeRecord)
+        ]
+        self.assertEqual(
+            [(record.events, record.outcome) for record in records],
+            [
+                (("monster_hit", "shot_fired"), Outcome.SUCCESS),
+                (("shot_fired",), Outcome.FAILURE),
+            ],
+        )
+
     def test_double_buffers_protect_the_observation_sb3_is_still_using(self):
         provider, runtime = self.make_identity_runtime()
         first = runtime.reset()

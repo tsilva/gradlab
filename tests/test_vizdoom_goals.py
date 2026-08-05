@@ -53,7 +53,7 @@ SUCCESSFUL_HORIZON_GOALS = {
 EXPECTED_GOALS = {
     "VizdoomBasic-v1": {
         "timesteps": 2_000_000,
-        "event": "goal_reached",
+        "event": "monster_hit",
         "training_metric": "train/outcome/success/across_starts/window_100/rate/min",
         "acceptance_metric": "eval/full/outcome/success/across_starts/rate/min",
         "acceptance_threshold": 1.0,
@@ -62,7 +62,7 @@ EXPECTED_GOALS = {
     },
     "VizdoomBasic-Plus-v1": {
         "timesteps": 2_000_000,
-        "event": "goal_reached",
+        "event": "monster_hit",
         "training_metric": "train/outcome/success/across_starts/window_100/rate/min",
         "acceptance_metric": "eval/full/outcome/success/across_starts/rate/min",
         "acceptance_threshold": 1.0,
@@ -649,7 +649,7 @@ def test_vizdoom_basic_training_target_still_stops_when_evaluation_is_enabled() 
     assert train_config["checkpoint_eval_acceptance"] == document["goal"]["eval"]["acceptance"]
 
 
-def test_vizdoom_basic_exposes_ammo_for_training_and_evaluation() -> None:
+def test_vizdoom_basic_ends_on_the_first_shot_for_training_and_evaluation() -> None:
     goal_path = GOALS_ROOT / "VizdoomBasic-v1" / "_goal.yaml"
     recipe_path = goal_path.parent / "recipes/ppo.yaml"
     document = compose_train_document(goal_path, recipe_path)
@@ -659,18 +659,37 @@ def test_vizdoom_basic_exposes_ammo_for_training_and_evaluation() -> None:
         document["goal"]["eval"]["environment"],
     ):
         env_args = environment["env_config"]["env_args"]
-        assert env_args["game_variables"] == ["killcount", "ammo2"]
+        assert env_args["game_variables"] == ["hitcount", "ammo2"]
         assert env_args["info_filter"] == {
             "mode": "all",
-            "keys": ["killcount", "ammo2"],
+            "keys": ["hitcount", "ammo2"],
         }
     assert document["train_config"]["env_args"]["game_variables"] == [
-        "killcount",
+        "hitcount",
         "ammo2",
     ]
     assert document["train_config"]["env_args"]["info_filter"] == {
         "mode": "all",
-        "keys": ["killcount", "ammo2"],
+        "keys": ["hitcount", "ammo2"],
+    }
+    assert document["train_config"]["task"]["signals"] == {
+        "native_timeout": "provider_truncated",
+        "hits": "hitcount",
+        "ammo": "ammo2",
+    }
+    assert document["train_config"]["task"]["events"]["monster_hit"] == {
+        "signal": "hits",
+        "operation": "increase",
+    }
+    assert document["train_config"]["task"]["events"]["shot_fired"] == {
+        "signal": "ammo",
+        "operation": "decrease",
+    }
+    assert document["train_config"]["task"]["termination"] == {
+        "success": ["monster_hit"],
+        "failure": ["shot_fired"],
+        "outcome_precedence": ["success", "failure", "timeout"],
+        "timeout": ["time_limit_reached"],
     }
     assert document["train_config"]["env_args"]["vizdoom_config"] == {
         "episode_timeout": 300,
