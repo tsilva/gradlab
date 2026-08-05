@@ -4,136 +4,67 @@
   **Reinforcement-learning workbench for training game agents**
 </div>
 
-gradlab turns checked-in goals and recipes into portable, reproducible training
-runs. Research code sees one container and does not contain provider-specific
-scheduling logic. dstack places that container on a local GPU, spot instance,
-or explicitly authorized on-demand machine; Modal evaluates immutable
-checkpoints independently.
+GradLab is a Python CLI and reproducible reinforcement-learning workbench for
+researchers who train, evaluate, compare, inspect, and publish game agents. It
+turns versioned goal contracts and recipes into traceable local or queued runs,
+with portable policies and evidence-backed results.
 
-## Architecture
+Try the bundled ROM-free smoke recipe without cloning, credentials, or a ROM:
 
-| Concern | Authority |
-| --- | --- |
-| Provisioning, placement, logs, cancellation, interruption retries | dstack |
-| Run, attempt, lease, promotion, and terminal state | private control R2 |
-| Evaluation intents, results, evidence, and videos | private eval R2 |
-| Training and evaluation metrics | one W&B run |
-| Downloadable checkpoints and public run index | public model R2 |
-| Temporary event buffering | SQLite WAL in the training container |
+```bash
+uvx gradlab@0.1.1 train gradlab__bandit/ppo
+```
 
-One supervisor inside the training container is the only W&B process. The
-learner performs no network I/O: it emits local metric and checkpoint events
-and responds to a cooperative stop signal. The supervisor uploads and verifies
-checkpoints, dispatches Modal evaluations, observes accepted results, signals
-the learner at a safe boundary, closes automatic evaluation admission, and
-drains every evaluation submitted before acceptance before the task can succeed.
-
-dstack exit status alone never establishes scientific success. The
-authoritative terminal receipt must prove the complete checkpoint inventory,
-the terminal inventory of automatically submitted evaluations, promotion,
-W&B delivery, and drain.
+The run writes a directly playable policy below `~/.config/gradlab/runs/`.
 
 ## Install
 
+[Install uv](https://docs.astral.sh/uv/getting-started/installation/), then run:
+
 ```bash
-git clone git@github.com:tsilva/gradlab.git
+git clone https://github.com/tsilva/gradlab.git
 cd gradlab
 ./install.sh
 gradlab validate
 ```
 
-The project uses `uv`, a committed `uv.lock`, and a seven-day package-age gate.
-The exact Turbo runtime is `stable-retro-turbo==1.0.1.post37`,
-`supermariobrosnes-turbo==0.6.2`, `breakout-turbo-env==0.5.2`, and
-`vizdoom-turbo==1.3.0.post22`. Their explicit package-age exceptions are
-recorded in `pyproject.toml` and `uv-tool.toml`.
-
-The four Turbo providers must implement Turbo Vector API v1. gradlab validates
-their immutable capability and signal declarations, resolved action semantics,
-observation ownership and buffer depth, read-only active state indices, and
-per-lane rendering surface at construction time. It requires canonical
-`state_catalog`/`state_indices` reset selection, consumes the declared action
-contract directly, and uses `render_lane()`, `get_images()`, and lane-zero
-`render()` without provider-specific probing or fallbacks. Providers that do
-not advertise exactly v1 are rejected.
-
-Register a local ROM without uploading it to source control:
+Run `gradlab --help` to open the command reference, or train and play the
+bundled smoke recipe:
 
 ```bash
-gradlab rom sync --game SuperMarioBros-Nes-v0
-gradlab rom status --json
+gradlab train gradlab__bandit/ppo
+gradlab play --recipe gradlab__bandit/ppo
 ```
 
-Local dstack hosts use the hash-verified read-only ROM cache. Each Modal-backed
-run stages its exact ROM bytes and manifest to eval-private R2. ROMs, R2
-credentials, W&B credentials, and Modal credentials are never embedded in the
-image.
+`gradlab play` starts the local web player and prints its loopback URL.
 
-## Train and play a recipe with uvx
-
-`uvx` can run a built-in recipe without cloning GradLab. Pin the distribution
-version in downstream repositories when exact reproducibility matters:
+## Commands
 
 ```bash
-GRADLAB_VERSION='0.1.1'
-
-uvx --from "gradlab==$GRADLAB_VERSION" gradlab train Breakout-Atari2600-v0/ppo
-uvx --from "gradlab==$GRADLAB_VERSION" gradlab play --recipe Breakout-Atari2600-v0/ppo
-
-uvx "gradlab@$GRADLAB_VERSION" train SuperMarioBros-Nes-v0/Level1-1/turbo-demo \
-  --rom-path /absolute/path/to/SuperMarioBros.nes
-
-uvx --from "gradlab==$GRADLAB_VERSION" gradlab train VizdoomBasic-v1/ppo
-uvx --from "gradlab==$GRADLAB_VERSION" gradlab play --recipe VizdoomBasic-v1/ppo
+gradlab train <goal>/<recipe>       # train a checked-in recipe locally
+gradlab play [artifact]             # browse or inspect local and remote policies
+gradlab validate                    # validate goals, recipes, benchmarks, and ops config
+gradlab env list                    # list available environment providers
+gradlab rom status --json           # inspect registered ROM assets
+gradlab benchmark list              # list reproducible benchmark profiles
+gradlab experiment status --run ID  # inspect an orchestrated run
+uv run pytest                       # run Python tests
+uv run ruff check .                 # lint Python code
+pnpm test:web                       # run web-player tests
 ```
 
-From a source checkout, the YAML-defined Breakout Go-Explore search runs locally with:
+Use `gradlab <command> --help` for full arguments. Gameplay datasets, leader
+queries, W&B reports, and workspace management are also available through the
+`dataset`, `leaders`, `reports`, and `workspaces` commands.
 
-```bash
-uv run gradlab train Breakout-Atari2600-v0/go-explore-20m
-```
+## Queued runs
 
-Training writes a unique run below `./runs`; recipe playback selects the newest
-completed matching model. Local training disables W&B and checkpoint evaluation
-by default, so it needs no orchestration credentials and cannot establish goal
-acceptance or checkpoint promotion. Use repeatable `--set KEY=VALUE` overrides,
-`--seed`, `--runs-dir`, or `--wandb` when needed. A recipe YAML in another
-repository also works when it lives at
-`experiments/goals/<goal>/recipes/<recipe>.yaml` beside its owning `_goal.yaml`.
-On an interactive terminal, local training opens a Textual dashboard with
-in-place progress, rate and ETA, bounded events and histories, and the common
-plus algorithm-specific telemetry declared by the backend. Press `q`, `Ctrl+C`,
-or `Ctrl+Q` to request a graceful stop at the backend's safe boundary; the
-dashboard remains open until the learner finishes writing its terminal model
-and result. Pass `--no-tui`, redirect output, or use a dumb terminal for stable
-plain progress logs. The dashboard is presentation-only and does not enter
-recipe hashes, training metrics, or run receipts.
-For Mario, `--rom-path` verifies and uses a lawful raw `.nes` file in place without
-copying it or modifying GradLab's ROM registry or cache. The completed run prints
-a version-pinned `uvx ... play` command using the same ROM. The demo targets
-macOS arm64 and Linux x86_64; its 98,304 training steps take about two minutes on
-the calibrated M1 Pro, while timing varies by hardware. A first invocation may
-also need time to download GradLab, Torch, and the environment wheels. The
-existing `gradlab rom sync` workflow remains available for queued staging and
-repeated registered-cache use.
+Queued training uses dstack for placement, a single supervisor-controlled
+training container, Modal for separately scheduled checkpoint evaluation, R2
+for run authority and artifacts, and W&B for metrics.
 
-Local ViZDoom training and environment preflight automatically use
-`~/roms/vizdoom/doom2.wad` when it is present and retain the provider's bundled
-game asset otherwise. GradLab verifies and records the selected IWAD's SHA-256.
-Local-fleet dstack launches can select that IWAD with `--rom-path`; the launch
-binds its digest into the recipe and requires the same bytes in the host's
-private read-only GradLab ROM cache.
-
-Reward transforms belong to the common task contract for every provider.
-`task.reward.reward_scale` is a positive divisor, followed by
-`task.reward.reward_clip`, which is `false`, `true` for `[-1, 1]`, or an
-explicit `[low, high]` pair. gradlab disables provider-native reward transforms so
-the same ordered transform is used in training, evaluation, and playback.
-
-## Launch and observe
-
-Keep non-sensitive operator metadata and Keychain references in the private
-user config, using the checked-in example as the schema:
+Copy the portable operator template into private user configuration and run the
+read-only preflight before launching:
 
 ```bash
 mkdir -p ~/.config/gradlab
@@ -141,11 +72,8 @@ install -m 600 ops/operator.example.toml ~/.config/gradlab/operator.toml
 gradlab experiment operator-preflight --json
 ```
 
-Replace the example placeholders and create the referenced generic-password
-items in macOS Keychain Access. Secret values never belong in
-`operator.toml` or the repository `.env`; explicit process environment values
-remain supported for CI and non-macOS operators. Modal tokens remain in
-Modal's active `~/.modal.toml` profile, which must use mode `0600`.
+Then launch a checked-in goal and recipe with a finite duration and a specific
+description:
 
 ```bash
 gradlab experiment launch \
@@ -158,225 +86,36 @@ gradlab experiment launch \
   --json
 ```
 
-`launch` runs the same read-only operator preflight before runtime readiness or
-R2 mutation, then requires a clean, pushed source revision and waits for its
-verified immutable training image and source-specific Modal deployment. It
-returns the gradlab run ID, attempt ID, dstack task, selected compute offer,
-source/image digest, W&B URL, and public run-index URL.
+Local compute requires an enrolled fleet in
+`~/.config/gradlab/instances.md`. Paid cloud compute is always bounded and
+explicitly authorized. See [COMPUTE.md](COMPUTE.md) and the
+[dstack runbook](ops/dstack/README.md) before operating queued runs.
 
-W&B projects remain organized by canonical game family. New orchestrated runs
-keep their immutable `gradlab-…` run ID while using a readable
-`<goal>__<recipe>__s<seed>__<short-run-id>` display name. Runs from a declared
-campaign share a campaign group; otherwise runs sharing a goal, recipe, and
-launch-time recipe variant share a cohort group.
+## Notes
 
-Compute policy:
+- GradLab requires Python 3.14 and uses `uv` with a committed lockfile and a
+  seven-day dependency age gate. Supported binary targets are macOS arm64 and
+  Linux x86_64.
+- Local `gradlab train` runs disable W&B and checkpoint evaluation by default.
+  They are training-only and cannot establish goal acceptance or checkpoint
+  promotion.
+- NES recipes require a lawfully obtained ROM supplied with `--rom-path` or
+  registered with `gradlab rom sync`. ROMs and credentials must remain outside
+  source control.
+- Generated runs default to `~/.config/gradlab/runs/`; other generated logs and
+  models belong in ignored `logs/` and `models/` directories.
+- dstack task success is not scientific success. A queued run succeeds only
+  when its terminal receipt proves checkpoint publication, evaluation drain,
+  promotion state, and metric delivery.
+- [SPECS.md](SPECS.md) defines product requirements, [METRICS.md](METRICS.md)
+  defines metric semantics, and [experiments/README.md](experiments/README.md)
+  explains the checked-in research contracts.
 
-- `auto` uses an idle compatible local host first.
-- `spot` requires finite `--max-price` and `--max-cost-usd`.
-- without a cloud budget, `auto` waits for local capacity.
-- `on-demand` also requires `--allow-on-demand`.
-- every task requires a finite maximum duration.
+## Architecture
 
-Observe or control one logical run:
+![GradLab architecture](./architecture.png)
 
-```bash
-gradlab experiment status --run <gradlab-run-id> --json
-gradlab experiment follow --run <gradlab-run-id>
-gradlab experiment wait --run <gradlab-run-id> --until terminal --timeout 48h
-gradlab experiment logs --run <gradlab-run-id> --tail 200
-gradlab experiment cancel --run <gradlab-run-id>
-gradlab experiment retry --run <gradlab-run-id>
-```
+## License
 
-Retry preserves the logical run ID and creates a new attempt ID. It requires a
-terminal prior dstack attempt, an expired writer lease, and a 30-second
-quiescence interval. A run with a published final checkpoint resumes in
-drain-only mode and cannot retrain. If acceptance or a training plateau was
-already recorded but the final checkpoint was not published, recovery resumes
-the latest checkpoint only long enough to request a safe finalization boundary.
-
-For a short local-fleet integration smoke, use the checked-in
-`experiments/goals/SuperMarioBros-Nes-v0/Level1-1/recipes/dstack-smoke.yaml`
-recipe. Repeatable `--set KEY=VALUE` ablations are composed, validated, and
-included in the immutable portable recipe hash; use a checked-in leaf recipe
-for durable or shared variants.
-
-## Checkpoints and playback
-
-Periodic and final checkpoints are immutable:
-
-```text
-runs/<run-id>/checkpoints/<step>-<sha256>/model.zip
-runs/<run-id>/checkpoints/<step>-<sha256>/manifest.json
-runs/<run-id>/index.json
-```
-
-The public index is mutable through ETag compare-and-swap and served with
-`Cache-Control: no-store`; checkpoint objects are immutable and cacheable.
-Start the web player without a source to browse repository-declared
-environments and goals, automatically indexed goal-contract variants, then
-their control-plane runs and public checkpoints. An exact W&B run URL opens that
-run directly:
-
-```bash
-gradlab play
-gradlab play "https://wandb.ai/<entity>/<project>/runs/<gradlab-run-id>"
-gradlab play --run <gradlab-run-id>
-gradlab play --model <local-checkpoint>
-gradlab play hf://<owner>/<repository>
-```
-
-The player uses shareable hierarchical routes: `/` lists environments,
-`/environments/<environment-id>` lists goals,
-`/environments/<environment-id>/goals/<goal-id>` lists current and previous goal
-configurations with their proven behavioral differences and run activity, and the
-nested `/variants/<goal-variant-id>/runs/<run-id>/checkpoints/<checkpoint-id>`
-route identifies a checkpoint inside the selected run. Checkpoint rows show
-goal-required acceptance results from W&B when available. Browser Back and
-Forward navigation follow the same resource hierarchy.
-
-The playback dashboard is a GridStack workspace. Policy, reward, action, signal,
-and reward-component views are instances of one configurable telemetry panel:
-use **Panels → Add** to combine stats, compatible line series, histograms,
-policy distributions, and dynamic metric explorers. Panels can be edited,
-duplicated, hidden, resized, rearranged, or moved to a synchronized window.
-The reward summary, value estimate, step reward, and episode return each have
-their own built-in panel so history graphs never force the summary panel to
-scroll. The player reads and writes only the current workspace v6 schema;
-noncurrent saved layouts are ignored.
-
-Policy diagnostics are capability-driven. PPO and A2C expose their actor
-distribution and state-value critic; action programs expose their fixed program
-cursor and fallback behavior. Go-Explore checkpoints retain safe search and
-archive summary provenance while playing the resulting action program.
-Unsupported diagnostics remain visibly unavailable instead of being replaced
-with synthetic probabilities, entropy, log-probabilities, or values.
-
-The required `experiments/goals/_catalog.yaml` namespace index supplies
-environments and goals. Launch and supervisor paths register each versioned
-goal-variant descriptor in a rebuildable private-control-R2 per-goal index, so
-the variant panel needs one bounded object read rather than a run or artifact
-scan; `gradlab experiment catalog-rebuild` replaces those indexes from immutable
-current run manifests. The private index supplies run metadata; W&B supplies
-available goal-required acceptance results only after a checkpoint-bearing run
-is selected. Playback downloads model bytes from the public checkpoint store;
-videos, episode evidence, ROMs, and recovery journals remain in R2.
-
-## Evaluation and early stop
-
-Ready periodic checkpoints are evaluated against the immutable goal-owned
-episode manifest until an accepted result closes automatic evaluation
-admission. Modal validates the checkpoint, goal, recipe, environment, protocol,
-and episode-manifest hashes. Acceptance fails fast on the first valid failed
-episode and requires all 100 episodes to pass.
-
-The supervisor polls results every two seconds. An accepted result requests
-learner stop within ten seconds; the learner stops cooperatively at a safe
-on-policy boundary and saves a final checkpoint. Evaluations submitted before
-acceptance finish without retries, while later periodic and final checkpoints
-remain published but unevaluated for future explicit user action. The
-lowest-step accepted checkpoint is then promoted exactly once.
-
-Before submitting any newly ready evaluation, the supervisor reconciles
-durable results for existing attempts. This prevents a result that finished
-concurrently with a training plateau or final checkpoint from being missed.
-An intent that never crossed the submission boundary is recorded as deferred
-after acceptance; it is not sent to Modal.
-
-For an evaluated goal, a training plateau is provisional until evaluation
-drain settles. Acceptance wins even if the learner reached the plateau first.
-Without acceptance, complete valid rejections produce a neutral `stopped`
-attempt with `early_stop_neutral:<condition_id>` rather than scientific failure.
-Failed, expired, or otherwise incomplete evaluation evidence produces a resumable
-attempt instead. A stopped run cannot resume under the same logical run, but its
-published checkpoints remain eligible for explicit post-training evaluation.
-Evaluation attempts retain their own expiry windows; the 300-second terminal
-delivery deadline starts only after evaluations have settled.
-
-## Goals, recipes, metrics, and reports
-
-- Active goals: `experiments/goals/`
-- Goal-local launchable recipes: each goal’s `recipes/`
-- Reusable presets: `experiments/recipes/_presets/`
-- Metric contract: `METRICS.md`
-- Declarative W&B project workspaces: `experiments/goals/_workspaces.yaml`
-- Portable compute and dstack policy: `COMPUTE.md`
-- Operator-local fleet inventory: `~/.config/gradlab/instances.md`
-- Control-plane units and templates: `ops/dstack/`
-
-PPO and A2C recipes declare their actor–critic architecture under
-`train.policy_model`. The actor and critic share the observation encoder, every
-declared task-context input, and one fusion MLP. Only SB3's final action and
-scalar-value projections are separate; an empty fusion list connects the shared
-encoded inputs directly to those projections:
-
-```yaml
-train:
-  policy_model:
-    schema_version: 2
-    encoder: {kind: nature_cnn, features_dim: 512}
-    fusion: {hidden_sizes: [256], activation: tanh}
-    normalize_images: true
-    orthogonal_init: true
-```
-
-Every field declared by `task.model_inputs` is concatenated after image encoding
-and consumed by the shared fusion MLP. Continuous context is flattened and
-categorical context is one-hot encoded from its materialized observation space.
-The supported fusion activations are `tanh` and `relu`; every hidden width must
-be positive. Backend fields `policy_net_arch` and `value_net_arch` are
-unsupported. A genuinely asymmetric actor and critic belongs in a separate
-policy/backend rather than a routing option on this shared model.
-
-The W&B workspace declaration applies its default profile to every project resolved from an
-active checked-in goal. `gradlab workspaces sync` creates a missing managed view or updates a
-drifted one; training runs never synchronize workspace configuration. New runs appear in the
-existing view when they match its current metric-schema filter. A project can later select another
-complete profile in `experiments/goals/_workspaces.yaml` without changing the managed view identity.
-
-Useful commands:
-
-```bash
-gradlab validate
-gradlab env list
-gradlab env inspect supermariobrosnes-turbo:SuperMarioBros-Nes-v0
-gradlab env preflight \
-  --goal-file experiments/goals/SuperMarioBros-Nes-v0/Level1-1/_goal.yaml \
-  --recipe-file experiments/goals/SuperMarioBros-Nes-v0/Level1-1/recipes/ppo.yaml
-gradlab leaders runs --goal SuperMarioBros-Nes-v0/Level1-1 --min-seeds 3
-gradlab leaders checkpoints --goal SuperMarioBros-Nes-v0/Level1-1 --limit 1 --json
-gradlab reports plan --goal SuperMarioBros-Nes-v0/Level1-1
-gradlab reports sync --goal SuperMarioBros-Nes-v0/Level1-1
-gradlab reports verify --goal SuperMarioBros-Nes-v0/Level1-1
-gradlab workspaces plan
-gradlab workspaces sync
-gradlab workspaces verify
-gradlab benchmark list
-```
-
-## Datasets and model release
-
-`gradlab dataset` records and verifies Gymrec v3 gameplay data with provider-native
-actions, rewards, boundaries, seeds, environment contracts, and approved policy
-provenance:
-
-```bash
-gradlab dataset record mario-level1-1 \
-  --env-id SuperMarioBros-Nes-v0 \
-  --provider supermariobrosnes-turbo \
-  --agent human
-gradlab dataset verify mario-level1-1
-gradlab dataset play mario-level1-1 --episode 1
-gradlab dataset upload mario-level1-1 <owner/repository>
-```
-
-External SB3 checkpoints are Python-executable content. gradlab stages, hashes,
-and re-verifies the complete model closure before deserialization. Playback
-performs these integrity checks automatically without a model pre-approval step.
-
-Published model releases use Hugging Face model cards and include a
-representative `replay.mp4` when the policy has visual behavior. Local run
-artifacts and downloaded model caches default to `~/.config/gradlab/runs/`;
-other generated artifacts belong under ignored `logs/` and `models/`
-directories, never source control.
+This repository does not currently include a project license. Third-party
+attributions are listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
