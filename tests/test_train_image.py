@@ -178,6 +178,10 @@ class TrainImageTests(unittest.TestCase):
             self.assertEqual(dockerfile.count(f"# {section}-image-inputs-begin"), 1)
             self.assertEqual(dockerfile.count(f"# {section}-image-inputs-end"), 1)
         self.assertIn("FROM ${PYTHON_IMAGE} AS gpu", dockerfile)
+        gpu = dockerfile.split("FROM ${PYTHON_IMAGE} AS gpu", maxsplit=1)[1].split(
+            "# gpu-image-inputs-end", maxsplit=1
+        )[0]
+        self.assertIn("        g++ \\\n", gpu)
         self.assertIn("FROM ${PYTHON_IMAGE} AS dependency-overlay-build", dockerfile)
         self.assertIn("COPY THIRD_PARTY_NOTICES.md ./", dockerfile)
         self.assertIn("FROM scratch AS dependency-overlay", dockerfile)
@@ -240,9 +244,11 @@ class TrainImageTests(unittest.TestCase):
             encoding="utf-8"
         )
 
-        self.assertIn("Smoke exact ViZDoom runtime image", workflow)
+        self.assertIn("Smoke exact ViZDoom and TorchInductor runtime image", workflow)
         self.assertIn("python /usr/local/bin/gradlab-vizdoom-smoke", workflow)
-        self.assertIn('"smoke_contract_version": 2', workflow)
+        self.assertIn('"smoke_contract_version": 3', workflow)
+        self.assertIn('"backend": "inductor"', workflow)
+        self.assertIn('"succeeded": True', workflow)
         self.assertIn('"VizdoomDeathmatch-v1"', workflow)
         self.assertIn('"schema_version": 7', workflow)
         self.assertIn('"provider_distribution": "vizdoom-turbo"', workflow)

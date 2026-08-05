@@ -146,7 +146,7 @@ jobs:
           test -n "$source_sha"
           echo "runtime_build_source_sha=$source_sha" >> "$GITHUB_OUTPUT"
 
-      - name: Smoke exact ViZDoom runtime image
+      - name: Smoke exact ViZDoom and TorchInductor runtime image
         id: vizdoom_smoke
         if: github.event_name != 'pull_request'
         env:
@@ -184,9 +184,14 @@ jobs:
               raise SystemExit("ViZDoom smoke evidence hash mismatch")
           if payload != {
               **payload,
-              "smoke_contract_version": 2,
+              "smoke_contract_version": 3,
               "provider_distribution": "vizdoom-turbo",
               "provider_version": expected_provider_version,
+              "torch_compile": {
+                  "backend": "inductor",
+                  "device": "cpu",
+                  "succeeded": True,
+              },
           }:
               raise SystemExit("ViZDoom smoke contract mismatch")
           scenarios = payload.get("scenarios")
