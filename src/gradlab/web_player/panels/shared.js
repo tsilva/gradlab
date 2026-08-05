@@ -1,5 +1,29 @@
 const ICONS = "/assets/tabler-icons.svg";
 
+const THEME_COLOR_PROPERTIES = Object.freeze({
+  chartSurface: "--color-chart-surface",
+  chartGrid: "--color-chart-grid",
+  chartAxis: "--color-chart-axis",
+  chartBar: "--color-chart-bar",
+  chartHighlight: "--color-chart-highlight",
+  seriesViolet: "--color-series-violet",
+  seriesTeal: "--color-series-teal",
+  seriesAmber: "--color-series-amber",
+  seriesCoral: "--color-series-coral",
+  seriesLavender: "--color-series-lavender",
+  seriesAqua: "--color-series-aqua",
+  seriesDeepViolet: "--color-series-deep-violet",
+  seriesBurntOrange: "--color-series-burnt-orange",
+});
+
+export function themeColor(name) {
+  const property = THEME_COLOR_PROPERTIES[name];
+  if (!property) throw new Error(`Unknown player theme color: ${name}`);
+  const value = getComputedStyle(document.documentElement).getPropertyValue(property).trim();
+  if (!value) throw new Error(`Missing player theme color: ${property}`);
+  return value;
+}
+
 export function text(value, fallback = "—") {
   return value === null || value === undefined || value === "" ? fallback : String(value);
 }
@@ -164,14 +188,17 @@ export function lineCursorIndex(plot, x, pointCount) {
 
 export function drawLines(canvas, series, { cursorIndex = null } = {}) {
   const { context, ratio, width, height } = resizeCanvas(canvas);
+  const chartSurface = themeColor("chartSurface");
+  const chartGrid = themeColor("chartGrid");
+  const chartAxis = themeColor("chartAxis");
   context.setTransform(ratio, 0, 0, ratio, 0, 0);
   context.clearRect(0, 0, width, height);
-  context.fillStyle = "#071117";
+  context.fillStyle = chartSurface;
   context.fillRect(0, 0, width, height);
   const values = series.flatMap((item) => item.values.filter(Number.isFinite));
   if (!values.length) {
-    context.fillStyle = "#8da6b2";
-    context.font = "12px system-ui";
+    context.fillStyle = chartAxis;
+    context.font = '12px "Inter", system-ui, sans-serif';
     context.textAlign = "left";
     context.textBaseline = "alphabetic";
     context.fillText("No history yet", 12, 22);
@@ -179,7 +206,7 @@ export function drawLines(canvas, series, { cursorIndex = null } = {}) {
   }
   const scale = lineChartScale(values);
   const labels = scale.ticks.map((value) => formatAxisValue(value, scale.step));
-  context.font = "10px ui-monospace, SFMono-Regular, Menlo, monospace";
+  context.font = '10px "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace';
   const labelWidth = Math.max(...labels.map((label) => context.measureText(label).width));
   const plot = {
     left: Math.ceil(labelWidth) + 16,
@@ -187,9 +214,9 @@ export function drawLines(canvas, series, { cursorIndex = null } = {}) {
     top: 10,
     bottom: height - 10,
   };
-  context.strokeStyle = "#1d3541";
+  context.strokeStyle = chartGrid;
   context.lineWidth = 1;
-  context.fillStyle = "#8da6b2";
+  context.fillStyle = chartAxis;
   context.textAlign = "right";
   context.textBaseline = "middle";
   scale.ticks.forEach((tick, index) => {
@@ -226,7 +253,7 @@ export function drawLines(canvas, series, { cursorIndex = null } = {}) {
     // the final sample otherwise sits on the right clipping edge and vanishes.
     const x = lineCursorX(plot, cursorIndex, pointCount);
     context.save();
-    context.strokeStyle = "#f0c36a";
+    context.strokeStyle = themeColor("chartHighlight");
     context.lineWidth = 1.5;
     context.setLineDash([4, 3]);
     context.beginPath();
@@ -253,14 +280,19 @@ export function drawHistogram(
   { highlightIndex = null } = {},
 ) {
   const { context, ratio, width, height } = resizeCanvas(canvas);
+  const chartSurface = themeColor("chartSurface");
+  const chartGrid = themeColor("chartGrid");
+  const chartAxis = themeColor("chartAxis");
+  const chartBar = themeColor("chartBar");
+  const chartHighlight = themeColor("chartHighlight");
   context.setTransform(ratio, 0, 0, ratio, 0, 0);
   context.clearRect(0, 0, width, height);
-  context.fillStyle = "#071117";
+  context.fillStyle = chartSurface;
   context.fillRect(0, 0, width, height);
   const max = Math.max(1, ...counts);
   const scale = lineChartScale([0, max]);
   const labels = scale.ticks.map((value) => formatAxisValue(value, scale.step));
-  context.font = "10px ui-monospace, SFMono-Regular, Menlo, monospace";
+  context.font = '10px "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace';
   const labelWidth = Math.max(...labels.map((label) => context.measureText(label).width));
   const plot = {
     left: Math.ceil(labelWidth) + 16,
@@ -268,9 +300,9 @@ export function drawHistogram(
     top: 10,
     bottom: height - 30,
   };
-  context.strokeStyle = "#1d3541";
+  context.strokeStyle = chartGrid;
   context.lineWidth = 1;
-  context.fillStyle = "#8da6b2";
+  context.fillStyle = chartAxis;
   context.textAlign = "right";
   context.textBaseline = "middle";
   scale.ticks.forEach((tick, index) => {
@@ -290,10 +322,10 @@ export function drawHistogram(
   counts.forEach((count, index) => {
     const barHeight = (count / scale.max) * Math.max(0, plot.bottom - plot.top);
     const x = plot.left + index * (barWidth + gap);
-    context.fillStyle = index === highlightIndex ? "#f0c36a" : "#53d4e8";
+    context.fillStyle = index === highlightIndex ? chartHighlight : chartBar;
     context.fillRect(x, plot.bottom - barHeight, barWidth, barHeight);
-    context.fillStyle = "#d7e5ea";
-    context.font = "600 12px system-ui, sans-serif";
+    context.fillStyle = chartAxis;
+    context.font = '600 12px "Inter", system-ui, sans-serif';
     context.textAlign = "center";
     context.textBaseline = "middle";
     context.fillText(

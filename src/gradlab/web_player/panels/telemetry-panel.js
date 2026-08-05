@@ -4,6 +4,7 @@ import {
   drawLines,
   lineCursorIndex,
   setStats,
+  themeColor,
 } from "./shared.js";
 import {
   descriptorCatalog,
@@ -86,7 +87,10 @@ function setLegend(target, descriptors) {
     value.className = "legend-value";
     value.textContent = "—";
     item.append(lineLegendPrefix(descriptor), value);
-    item.style.setProperty("--legend-color", descriptor.color || "#53d4e8");
+    item.style.setProperty(
+      "--legend-color",
+      themeColor(descriptor.color || "chartBar"),
+    );
     values.set(descriptor.key, value);
     return item;
   }));
@@ -211,7 +215,7 @@ function makeLineBlock(block) {
   const renderChart = ({ history, view }) => {
     const series = descriptors.map((descriptor) => ({
       values: seriesForMetric(descriptor.key, history),
-      color: descriptor.color || "#53d4e8",
+      color: themeColor(descriptor.color || "chartBar"),
     }));
     const defaultIndex = cursorIndex(history, view);
     const hoveredIndex = hoverX === null
@@ -645,7 +649,7 @@ function makeNamespaceBlock(block, definition, services) {
     const descriptor = descriptorFor(selected);
     drawLines(canvas, [{
       values: descriptor ? seriesForMetric(descriptor.key, history) : [],
-      color: descriptor?.color || "#f0c36a",
+      color: themeColor(descriptor?.color || "chartHighlight"),
     }], { cursorIndex: cursorIndex(history, view) });
     const point = selectedPoint(history, snapshot, view);
     body.replaceChildren(...descriptors.map((item) => {

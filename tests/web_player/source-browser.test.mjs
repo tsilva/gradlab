@@ -60,7 +60,7 @@ test("catalog list hover highlights the complete row", async () => {
 
   assert.match(
     styles,
-    /\.environment-row:hover:not\(:disabled\),\s*\.goal-row:hover,\s*\.goal-row:focus-within\s*\{[^}]*background: #1b3b48;/,
+    /\.environment-row:hover:not\(:disabled\),\s*\.goal-row:hover,\s*\.goal-row:focus-within\s*\{[^}]*background: var\(--color-surface-tertiary\);/,
   );
   assert.match(
     styles,
@@ -194,15 +194,15 @@ test("goal configuration metadata and exact changes render as tables", async () 
   );
   assert.match(
     styles,
-    /\.goal-configuration-operation\.added,\s*\.goal-configuration-after\.added \{ color: #78d89f; \}/,
+    /\.goal-configuration-operation\.added,\s*\.goal-configuration-after\.added \{ color: var\(--color-evaluation-text\); \}/,
   );
   assert.match(
     styles,
-    /\.goal-configuration-operation\.removed,\s*\.goal-configuration-after\.removed \{ color: #ff8990; \}/,
+    /\.goal-configuration-operation\.removed,\s*\.goal-configuration-after\.removed \{ color: var\(--color-error-text\); \}/,
   );
   assert.match(
     styles,
-    /\.goal-configuration-operation\.changed,\s*\.goal-configuration-after\.changed \{ color: #69d9ea; \}/,
+    /\.goal-configuration-operation\.changed,\s*\.goal-configuration-after\.changed \{ color: var\(--color-interaction-active\); \}/,
   );
 });
 
@@ -281,7 +281,7 @@ test("run table hover highlights only the complete row", async () => {
   );
   assert.match(
     styles,
-    /\.source-table tbody tr:hover,\s*\.source-table tbody tr:focus-visible\s*\{[^}]*background: rgba\(83, 212, 232, \.07\);/,
+    /\.source-table tbody tr:hover,\s*\.source-table tbody tr:focus-visible\s*\{[^}]*background: var\(--color-interaction-tint\);/,
   );
 });
 
