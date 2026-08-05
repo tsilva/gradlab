@@ -14,10 +14,28 @@ from gradlab.task_advantage import normalize_advantages_by_context
 from gradlab.training.ppo_engine import (
     TensorRolloutBuffer,
     _CompiledPolicyCalls,
+    _EXECUTION_PROFILES,
     _normalize_grouped_advantages,
     _ppo_update,
     _Precision,
 )
+
+
+def test_execution_profiles_add_one_cuda_optimization_at_a_time() -> None:
+    resolved = {
+        name: (
+            profile.compile_policy,
+            profile.fused_optimizer,
+            profile.torch_permutation,
+        )
+        for name, profile in _EXECUTION_PROFILES.items()
+    }
+    assert resolved == {
+        "sb3-parity": (False, False, False),
+        "compiled-parity": (True, False, False),
+        "compiled-fused-parity": (True, True, False),
+        "max-throughput": (True, True, True),
+    }
 
 
 @pytest.mark.parametrize(
@@ -249,8 +267,8 @@ def test_tensor_native_update_matches_one_sb3_ppo_update() -> None:
     env = make_vec_env("CartPole-v1", n_envs=2, seed=11)
     model_kwargs = {
         "n_steps": 2,
-        "batch_size": 4,
-        "n_epochs": 1,
+        "batch_size": 2,
+        "n_epochs": 2,
         "learning_rate": 1e-3,
         "gamma": 0.9,
         "gae_lambda": 0.8,
@@ -333,8 +351,10 @@ def test_tensor_native_update_matches_one_sb3_ppo_update() -> None:
 
         sb3_model.set_logger(configure(format_strings=[]))
         sb3_model._current_progress_remaining = 0.75
+        np.random.seed(29)
         torch.manual_seed(29)
         sb3_model.train()
+        np.random.seed(29)
         torch.manual_seed(29)
         metrics = _ppo_update(
             candidate,
@@ -345,6 +365,7 @@ def test_tensor_native_update_matches_one_sb3_ppo_update() -> None:
             normalization_mode="global",
             advantage_context=None,
             ent_coef=0.01,
+            torch_permutation=False,
         )
 
         for name, expected in sb3_model.policy.state_dict().items():

@@ -298,8 +298,13 @@ required_metrics: [train/throughput/not_real]
             self.assertEqual(baseline_backend["id"], "sb3.ppo")
             self.assertEqual(candidate_backend["id"], "gradlab.ppo")
             self.assertEqual(candidate_backend["config"]["precision"], "fp32")
+            self.assertEqual(
+                candidate_backend["config"]["execution_profile"],
+                "max-throughput",
+            )
             candidate_config = dict(candidate_backend["config"])
             candidate_config.pop("precision")
+            candidate_config.pop("execution_profile")
             self.assertEqual(candidate_config, baseline_backend["config"])
             self.assertEqual(
                 (

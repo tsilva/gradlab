@@ -520,13 +520,15 @@ def _assert_ppo_backend_equivalence(
         backend.pop("id", None)
         backend_config = dict(backend["config"])
         backend_config.pop("precision", None)
+        backend_config.pop("execution_profile", None)
         backend["config"] = backend_config
         result["training_backend"] = backend
         return result
 
     if comparable(baseline) != comparable(candidate):
         raise ValueError(
-            f"{label} baseline and candidate differ beyond backend identity and precision"
+            f"{label} baseline and candidate differ beyond backend identity, precision, "
+            "and execution profile"
         )
 
 

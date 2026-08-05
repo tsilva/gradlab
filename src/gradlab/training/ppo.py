@@ -8,9 +8,16 @@ from gradlab.training_backend import BackendContext, CHECKPOINT_EVAL_ACCEPTANCE
 
 
 PPO_PRECISIONS = ("fp32", "amp-fp16", "amp-bf16")
+PPO_EXECUTION_PROFILES = (
+    "sb3-parity",
+    "compiled-parity",
+    "compiled-fused-parity",
+    "max-throughput",
+)
 GRADLAB_PPO_DEFAULT_CONFIG: dict[str, Any] = {
     **PPO_DEFAULT_CONFIG,
     "precision": "fp32",
+    "execution_profile": "max-throughput",
 }
 
 
@@ -22,11 +29,23 @@ def _normalize_gradlab_ppo(config: Mapping[str, Any], *, label: str) -> dict[str
     if precision not in PPO_PRECISIONS:
         choices = ", ".join(PPO_PRECISIONS)
         raise ValueError(f"{label}.precision must be one of {choices}")
+    execution_profile = config.get(
+        "execution_profile",
+        GRADLAB_PPO_DEFAULT_CONFIG["execution_profile"],
+    )
+    if execution_profile not in PPO_EXECUTION_PROFILES:
+        choices = ", ".join(PPO_EXECUTION_PROFILES)
+        raise ValueError(f"{label}.execution_profile must be one of {choices}")
     normalized = _normalize_ppo(
-        {key: value for key, value in config.items() if key != "precision"},
+        {
+            key: value
+            for key, value in config.items()
+            if key not in {"precision", "execution_profile"}
+        },
         label=label,
     )
     normalized["precision"] = precision
+    normalized["execution_profile"] = execution_profile
     return normalized
 
 
