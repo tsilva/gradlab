@@ -38,7 +38,7 @@ def configured_policy_model() -> dict[str, object]:
 
 def backend_config(backend_id: str = "sb3.ppo", **config) -> dict[str, object]:
     result: dict[str, object] = {"training_backend": {"id": backend_id, "config": config}}
-    if backend_id in {"sb3.ppo", "sb3.a2c"}:
+    if backend_id in {"gradlab.ppo", "sb3.ppo", "sb3.a2c"}:
         result["policy_model"] = configured_policy_model()
     return result
 
@@ -238,7 +238,7 @@ def test_trajectory_search_backends_export_neutral_policy_metadata(
     }
 
 
-def test_unavailable_backend_fails_before_run_resources_are_created() -> None:
+def test_unknown_backend_fails_before_run_resources_are_created() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
         config_path = root / "train.json"
@@ -250,7 +250,7 @@ def test_unavailable_backend_fails_before_run_resources_are_created() -> None:
                     "runs_dir": str(root / "runs"),
                     "run_name": "must-not-exist",
                     "timesteps": 1,
-                    **backend_config("gradlab.ppo"),
+                    **backend_config("gradlab.unknown"),
                 }
             ),
             encoding="utf-8",
@@ -268,6 +268,22 @@ def test_unavailable_backend_fails_before_run_resources_are_created() -> None:
                 ]
             )
         assert not (root / "runs" / "must-not-exist").exists()
+
+
+def test_gradlab_ppo_schema_matches_sb3_and_adds_explicit_precision() -> None:
+    normalized = validate_and_normalize_train_config(
+        {"timesteps": 10, **backend_config("gradlab.ppo", n_steps=4)},
+        required_keys=("training_backend",),
+    )
+    config = normalized["training_backend"]["config"]
+    assert config["n_steps"] == 4
+    assert config["batch_size"] == 256
+    assert config["precision"] == "fp32"
+
+    with pytest.raises(ValueError, match="precision must be one of"):
+        validate_and_normalize_train_config(
+            backend_config("gradlab.ppo", precision="int8")
+        )
 
 
 def test_materialized_config_preserves_nested_backend_ownership() -> None:

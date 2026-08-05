@@ -24,6 +24,7 @@ are intentionally unsupported.
 gradlab benchmark list
 gradlab benchmark show mario-env-throughput-l11
 gradlab benchmark run mario-env-throughput-l11 --dry-run
+gradlab benchmark run ppo-backend-throughput-gate --dry-run
 ```
 
 Run a profile only when its scope is appropriate for the machine. The local smoke
@@ -41,6 +42,9 @@ generated result and isolated run evidence under `logs/benchmarks/`.
 - `train_loop_comparison`: repeated AB/BA baseline-versus-candidate training-loop comparison with
   an executable slowdown gate and optional candidate-only metric requirements
   for rollout/update throughput.
+- `ppo_backend_comparison`: five paired AB/BA runs per declared environment, with warmup iterations
+  excluded, complete offline metric history, a per-environment non-regression gate, and a
+  geometric-mean speedup gate.
 
 Benchmark requests should default to real imported saved states, not `State.NONE`.
 Use `allow_state_none=true` only for explicit emulator hot-path diagnostics.

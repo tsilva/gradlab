@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import math
 import sqlite3
 from collections.abc import Iterator, Mapping
@@ -172,24 +173,31 @@ class MetricStore(SqliteStore):
             payload=payload,
         )
         with self.connection() as connection:
-            if publish:
-                connection.execute(
-                    """
-                    INSERT INTO metric_frames
-                      (event_id, step, source, kind, payload_json, status,
-                       created_at, updated_at)
-                    VALUES (?, ?, ?, 'history', ?, 'pending', ?, ?)
-                    ON CONFLICT(event_id) DO NOTHING
-                    """,
-                    (
-                        event_id,
-                        step,
-                        source,
-                        canonical_json_text(payload, ensure_ascii=True),
-                        now,
-                        now,
-                    ),
-                )
+            connection.execute(
+                """
+                INSERT INTO metric_frames
+                  (event_id, step, source, kind, payload_json, status,
+                   created_at, updated_at)
+                VALUES (?, ?, ?, 'history', ?, ?, ?, ?)
+                ON CONFLICT(event_id) DO UPDATE SET
+                  status = CASE
+                    WHEN metric_frames.status = 'local_only'
+                         AND excluded.status = 'pending'
+                    THEN 'pending'
+                    ELSE metric_frames.status
+                  END,
+                  updated_at = excluded.updated_at
+                """,
+                (
+                    event_id,
+                    step,
+                    source,
+                    canonical_json_text(payload, ensure_ascii=True),
+                    "pending" if publish else "local_only",
+                    now,
+                    now,
+                ),
+            )
             connection.executemany(
                 """
                 INSERT INTO metric_latest (name, value, step, source, updated_at)
@@ -417,6 +425,48 @@ class MetricStore(SqliteStore):
         if row is None or row["step"] is None:
             return None
         return float(row["value"]), int(row["step"])
+
+    def metric_history(
+        self,
+        name: str,
+        *,
+        source: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Return local scalar history across every delivery status.
+
+        Offline runs retain ``local_only`` frames for reproducible benchmarks;
+        those frames never enter the publisher outbox.
+        """
+
+        query = """
+            SELECT id, step, source, status, payload_json, created_at
+            FROM metric_frames
+            WHERE kind = 'history'
+        """
+        parameters: tuple[Any, ...] = ()
+        if source is not None:
+            query += " AND source = ?"
+            parameters = (str(source),)
+        query += " ORDER BY id"
+        samples: list[dict[str, Any]] = []
+        with self.connection() as connection:
+            rows = connection.execute(query, parameters).fetchall()
+        for row in rows:
+            payload = json.loads(str(row["payload_json"]))
+            value = payload.get(str(name)) if isinstance(payload, Mapping) else None
+            if isinstance(value, bool) or not isinstance(value, int | float):
+                continue
+            samples.append(
+                {
+                    "frame_id": int(row["id"]),
+                    "step": None if row["step"] is None else int(row["step"]),
+                    "source": str(row["source"]),
+                    "status": str(row["status"]),
+                    "value": float(value),
+                    "created_at": float(row["created_at"]),
+                }
+            )
+        return samples
 
     def register_recovery_manifest(self, manifest: Mapping[str, object]) -> str:
         forbidden = {

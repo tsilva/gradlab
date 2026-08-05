@@ -37,12 +37,13 @@ class BenchmarkProfileTests(unittest.TestCase):
     def test_checked_in_benchmark_profiles_validate(self) -> None:
         profiles = load_benchmark_profiles()
 
-        self.assertEqual(len(profiles), 4)
+        self.assertEqual(len(profiles), 5)
         self.assertEqual(
             sorted(profile.name for profile in profiles),
             [
                 "local-smoke-mario-l11",
                 "mario-env-throughput-l11",
+                "ppo-backend-throughput-gate",
                 "train-loop-comparison-breakout-archive-curriculum",
                 "train-loop-throughput-mario-l11",
             ],
@@ -258,6 +259,58 @@ required_metrics: [train/throughput/not_real]
         self.assertTrue(candidate["state_archive"]["curriculum"]["restore_entries"])
         self.assertEqual(candidate["state_archive"]["curriculum"]["resolved_archive_lanes"], 3)
 
+    def test_ppo_backend_gate_uses_five_pairs_and_equivalent_production_shapes(self) -> None:
+        profile = find_benchmark_profile("ppo-backend-throughput-gate")
+        commands = build_benchmark_commands(profile)
+
+        self.assertEqual(len(commands), 30)
+        self.assertEqual(
+            [command.label for command in commands[:6]],
+            [
+                "mario-baseline-1",
+                "mario-candidate-1",
+                "mario-candidate-2",
+                "mario-baseline-2",
+                "mario-baseline-3",
+                "mario-candidate-3",
+            ],
+        )
+        expected_shapes = {
+            "mario": (16, 512, 512, 10),
+            "breakout": (128, 64, 256, 4),
+            "vizdoom": (32, 128, 256, 4),
+        }
+        for case_name, shape in expected_shapes.items():
+            baseline_command = next(
+                command
+                for command in commands
+                if command.label == f"{case_name}-baseline-1"
+            )
+            candidate_command = next(
+                command
+                for command in commands
+                if command.label == f"{case_name}-candidate-1"
+            )
+            baseline = json.loads(baseline_command.stdin or "{}")
+            candidate = json.loads(candidate_command.stdin or "{}")
+            baseline_backend = baseline["training_backend"]
+            candidate_backend = candidate["training_backend"]
+            self.assertEqual(baseline_backend["id"], "sb3.ppo")
+            self.assertEqual(candidate_backend["id"], "gradlab.ppo")
+            self.assertEqual(candidate_backend["config"]["precision"], "fp32")
+            candidate_config = dict(candidate_backend["config"])
+            candidate_config.pop("precision")
+            self.assertEqual(candidate_config, baseline_backend["config"])
+            self.assertEqual(
+                (
+                    baseline["n_envs"],
+                    baseline_backend["config"]["n_steps"],
+                    baseline_backend["config"]["batch_size"],
+                    baseline_backend["config"]["n_epochs"],
+                ),
+                shape,
+            )
+
     def test_queue_backed_benchmark_commands_include_goal_and_recipe(self) -> None:
         command = build_benchmark_commands(find_benchmark_profile("local-smoke-mario-l11"))[0]
         self.assertIn("--goal-file", command.argv)
@@ -360,6 +413,49 @@ required_metrics: [train/throughput/not_real]
         self.assertAlmostEqual(
             validation["evidence"]["comparison"]["candidate_slowdown_fraction"],
             0.05,
+        )
+
+    def test_ppo_backend_gate_uses_offline_history_after_warmup(self) -> None:
+        profile = find_benchmark_profile("ppo-backend-throughput-gate")
+        commands = build_benchmark_commands(profile)
+        prepared = []
+        results = []
+        candidate_fps = {"mario": 130.0, "breakout": 125.0, "vizdoom": 125.0}
+        with tempfile.TemporaryDirectory() as tmp:
+            for command in commands:
+                config = json.loads(command.stdin or "{}")
+                config["runs_dir"] = tmp
+                prepared_command = replace(command, stdin=json.dumps(config))
+                prepared.append(prepared_command)
+                store = MetricStore(metric_store_path(Path(tmp) / config["run_name"]))
+                store.init()
+                case_name = command.label.split("-", 1)[0]
+                variant = "candidate" if "-candidate-" in command.label else "baseline"
+                fps = candidate_fps[case_name] if variant == "candidate" else 100.0
+                for step, value in enumerate((1.0, 2.0, fps, fps), start=1):
+                    payload = {
+                        metric: value
+                        for metric in profile.payload["required_metrics"]
+                    }
+                    store.append_metrics(
+                        payload,
+                        step=step,
+                        source="train",
+                        publish=False,
+                    )
+                results.append({"label": command.label, "returncode": 0, "stdout": ""})
+
+            validation = validate_benchmark_results(profile, prepared, results)
+
+        self.assertTrue(validation["passed"], validation["issues"])
+        comparison = validation["evidence"]["comparison"]
+        self.assertGreaterEqual(comparison["geometric_mean_speedup"], 1.25)
+        first = validation["evidence"]["samples"][0]
+        self.assertEqual(first["warmup_iterations"], 2)
+        self.assertEqual(first["loop_fps_measured_median"], 100.0)
+        self.assertEqual(
+            {sample["status"] for sample in first["loop_fps_history"]},
+            {"local_only"},
         )
 
     def test_benchmark_is_registered_on_unified_cli(self) -> None:

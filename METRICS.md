@@ -9,6 +9,9 @@ and requires every emitted metric to match an exact registry entry or a bounded 
   container is the only process allowed to open and write the logical W&B run.
 - The learner writes structured events only to its embedded SQLite WAL outbox. It performs no
   network I/O for metrics, checkpoint publication, or evaluation dispatch.
+- W&B-disabled runs retain history frames in SQLite with `local_only` delivery status so bounded
+  benchmarks can evaluate every rollout rather than only the latest scalar; those frames never
+  enter the publisher retry queue.
 - Modal never receives W&B credentials. The supervisor validates Modal results and appends their
   metrics to the same W&B run.
 - SQLite and private-R2 JSONL metric segments are delivery and recovery transports, not competing

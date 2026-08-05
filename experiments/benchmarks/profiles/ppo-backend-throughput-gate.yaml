@@ -1,0 +1,39 @@
+schema_version: 1
+name: ppo-backend-throughput-gate
+kind: ppo_backend_comparison
+description: >-
+  Five paired AB/BA comparisons of SB3 PPO and the GradLab tensor-native PPO backend on the
+  production Mario, Breakout, and ViZDoom rollout shapes.
+baseline_backend: sb3.ppo
+candidate_backend: gradlab.ppo
+seed: 123
+repeats: 5
+warmup_iterations: 2
+min_case_speedup: 1.0
+min_geomean_speedup: 1.25
+require_clean_source: true
+required_cuda_device_name: NVIDIA GeForce RTX 4090
+recipe_overrides:
+- train.checkpoint_freq=0
+cases:
+- name: mario
+  goal_file: experiments/goals/SuperMarioBros-Nes-v0/Level1-1/_goal.yaml
+  recipe_file: experiments/goals/SuperMarioBros-Nes-v0/Level1-1/recipes/ppo.yaml
+  recipe_overrides:
+  - train.timesteps=65536
+- name: breakout
+  goal_file: experiments/goals/Breakout-Atari2600-v0/_goal.yaml
+  recipe_file: experiments/goals/Breakout-Atari2600-v0/recipes/ppo-128x64.yaml
+  recipe_overrides:
+  - train.timesteps=65536
+- name: vizdoom
+  goal_file: experiments/goals/VizdoomBasic-v1/_goal.yaml
+  recipe_file: experiments/goals/VizdoomBasic-v1/recipes/ppo.yaml
+  recipe_overrides:
+  - train.timesteps=32768
+required_metrics:
+- train/throughput/loop_fps
+- train/throughput/env_step_fps
+- train/throughput/rollout_seconds
+- train/throughput/between_rollouts_seconds
+run_description: Paired SB3-versus-GradLab PPO throughput acceptance gate.

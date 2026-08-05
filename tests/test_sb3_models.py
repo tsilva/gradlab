@@ -33,6 +33,19 @@ def test_a2c_checkpoint_identity_resolves_consistently() -> None:
     )
 
 
+def test_gradlab_ppo_checkpoint_identity_resolves_consistently() -> None:
+    assert (
+        resolve_sb3_algorithm(
+            {
+                "training_backend_id": "gradlab.ppo",
+                "algorithm_id": "ppo",
+                "model_class": "gradlab.ppo.GradLabPPO",
+            }
+        )
+        == "ppo"
+    )
+
+
 def test_checkpoint_identity_rejects_conflicting_metadata() -> None:
     with pytest.raises(ValueError, match="metadata disagree"):
         resolve_sb3_algorithm(

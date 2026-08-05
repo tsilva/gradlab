@@ -29,6 +29,34 @@ def test_metric_outbox_deduplicates_stable_events_and_tracks_latest() -> None:
         assert store.latest_metric("train/episode/return/shaped/across_origins/rolling_up_to_100/mean") == 1.0
 
 
+def test_offline_metrics_retain_history_without_entering_publisher_outbox() -> None:
+    with tempfile.TemporaryDirectory() as temporary:
+        store = MetricStore(Path(temporary) / "gradlab.sqlite")
+        store.init()
+        metric = "train/throughput/loop_fps"
+        store.append_metrics(
+            {metric: 100.0},
+            step=10,
+            source="train",
+            publish=False,
+        )
+        store.append_metrics(
+            {metric: 120.0},
+            step=20,
+            source="train",
+            publish=False,
+        )
+
+        assert store.pending_metric_frames() == []
+        assert store.metric_outbox_stats() == {"frames": 0, "bytes": 0}
+        history = store.metric_history(metric)
+        assert [(sample["step"], sample["value"]) for sample in history] == [
+            (10, 100.0),
+            (20, 120.0),
+        ]
+        assert {sample["status"] for sample in history} == {"local_only"}
+
+
 def test_frame_publish_failure_is_retryable_and_success_drains_outbox() -> None:
     with tempfile.TemporaryDirectory() as temporary:
         store = MetricStore(Path(temporary) / "gradlab.sqlite")

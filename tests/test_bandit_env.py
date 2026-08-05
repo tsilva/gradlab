@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+from contextlib import ExitStack
 from dataclasses import replace
 from pathlib import Path
+from unittest import mock
 
 import gymnasium as gym
 import numpy as np
@@ -256,17 +258,26 @@ def test_bandit_recipe_materializes_fixed_train_and_eval_contracts() -> None:
     }
 
 
+@pytest.mark.parametrize(
+    ("backend_id", "model_class"),
+    [
+        ("sb3.ppo", "stable_baselines3.ppo.ppo.PPO"),
+        ("gradlab.ppo", "gradlab.ppo.GradLabPPO"),
+    ],
+)
 def test_bandit_local_demo_runs_to_cap_without_a_declared_success_signal(
     tmp_path: Path,
     monkeypatch,
     capsys: pytest.CaptureFixture[str],
+    backend_id: str,
+    model_class: str,
 ) -> None:
     document = _bandit_recipe_document()
     recipe_path = tmp_path / "recipe.json"
     config = dict(document["train_config"])
     config.update(
         {
-            "run_name": "backend-smoke",
+            "run_name": f"{backend_id.replace('.', '-')}-backend-smoke",
             "run_description": "ROM-free backend boundary smoke.",
             "runs_dir": str(tmp_path),
             "timesteps": 64,
@@ -278,6 +289,7 @@ def test_bandit_local_demo_runs_to_cap_without_a_declared_success_signal(
         }
     )
     backend = dict(config["training_backend"])
+    backend["id"] = backend_id
     backend_config = dict(backend["config"])
     backend_config.update({"device": "cpu", "n_epochs": 1})
     backend["config"] = backend_config
@@ -288,24 +300,37 @@ def test_bandit_local_demo_runs_to_cap_without_a_declared_success_signal(
     path.write_text(json.dumps(config), encoding="utf-8")
 
     monkeypatch.setenv("GRADLAB_INTERNAL_LEARNER", "1")
-    assert (
-        train_main(
-            [
-                "--train-config-json",
-                str(path),
-                "--execution-mode",
-                "local-demo",
-            ]
-        )
-        == 0
-    )
+    with ExitStack() as stack:
+        if backend_id == "gradlab.ppo":
+            from gradlab.ppo import GradLabPPO
 
-    run_dir = tmp_path / "backend-smoke"
+            for method in ("learn", "collect_rollouts", "train"):
+                stack.enter_context(
+                    mock.patch.object(
+                        GradLabPPO,
+                        method,
+                        side_effect=AssertionError(f"SB3 {method} called"),
+                    )
+                )
+        assert (
+            train_main(
+                [
+                    "--train-config-json",
+                    str(path),
+                    "--execution-mode",
+                    "local-demo",
+                ]
+            )
+            == 0
+        )
+
+    run_dir = tmp_path / f"{backend_id.replace('.', '-')}-backend-smoke"
     assert (run_dir / "learner-ready.json").is_file()
     assert (run_dir / "final_model.zip").is_file()
     bundle = load_policy_bundle_from_checkpoint(run_dir / "final_model.zip")
     assert bundle is not None
-    assert bundle.model["policy"]["training_backend_id"] == "sb3.ppo"
+    assert bundle.model["policy"]["training_backend_id"] == backend_id
+    assert bundle.model["policy"]["model_class"] == model_class
     assert len(bundle.model["policy"]["training_backend_config_hash"]) == 64
     assert bundle.model["provenance"]["training_execution"]["mode"] == "local-demo"
     assert bundle.model["provenance"]["training_terminal"] == {
