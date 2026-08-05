@@ -1,7 +1,7 @@
 <div align="center">
   <img src="./logo.png" alt="gradlab" width="256" />
 
-  **Reinforcement-learning workbench for training game agents**
+  **🤖 RL workbench for training game agents 🎮**
 </div>
 
 GradLab is a Python CLI and reproducible reinforcement-learning workbench for
