@@ -22,6 +22,12 @@ test("stats panels expose one standardized persisted processing switch", () => {
   assert.match(styles, /Disabled — data processing is off/);
 });
 
+test("the CNN processing switch is also the capture switch", () => {
+  assert.match(app, /name === "cnn" \? "Capture CNN features"/);
+  assert.match(app, /function syncCnnCaptureToPanel/);
+  assert.match(app, /command\("set_cnn_inspection", \{ enabled: desired \}\)/);
+});
+
 test("disabled panels receive no snapshot, history, frame, or resize processing", () => {
   assert.match(runtime, /if \(instance\.definition\.enabled\) this\.safeCall\(id, "render"/);
   assert.match(runtime, /if \(!instance\.definition\.enabled\) return;/);

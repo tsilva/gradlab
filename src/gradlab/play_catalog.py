@@ -705,6 +705,7 @@ class PlayCatalog:
         cache_path: Path | str | None = None,
         control_bucket: Any | None = None,
         control_error: str = "",
+        wandb_run_location: WandbRunLocation | None = None,
     ) -> None:
         self.public_models_base_url = str(public_models_base_url).rstrip("/")
         self.repo_root = (
@@ -726,6 +727,11 @@ class PlayCatalog:
         self.control_identity = str(
             getattr(self.control_bucket, "authority_identity", "")
             or ("explicit-control" if self.control_bucket is not None else "unavailable")
+        )
+        self._wandb_run_locations = (
+            {wandb_run_location.run_id: wandb_run_location}
+            if wandb_run_location is not None
+            else {}
         )
         self._api: Any | None = None
         self._cursor_secret = secrets.token_bytes(32)
@@ -3541,9 +3547,9 @@ class PlayCatalog:
                 evaluation_rank=evaluation_rank,
                 warning=warning,
             )
-        wandb = manifest.get("wandb") if isinstance(manifest, Mapping) else None
-        entity = str(wandb.get("entity") or "").strip() if isinstance(wandb, Mapping) else ""
-        project = str(wandb.get("project") or "").strip() if isinstance(wandb, Mapping) else ""
+        wandb_location = self._wandb_run_locations.get(run_id)
+        entity = str(wandb_location.entity or "").strip() if wandb_location else ""
+        project = str(wandb_location.project or "").strip() if wandb_location else ""
         if not entity or not project:
             return _CheckpointEvaluationData({}, None, None, {}, ())
         cache_key = (entity, project, run_id)

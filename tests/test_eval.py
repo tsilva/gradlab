@@ -189,6 +189,36 @@ class EvalMetricTests(unittest.TestCase):
         self.assertIn("train/outcome/failure/reason/terminated/episode/count", training)
         self.assertEqual(episode_reasons(result), {"terminated"})
 
+    def test_deathmatch_projects_and_summarizes_raw_killcount(self) -> None:
+        semantics = environment_spec(
+            "vizdoom-turbo",
+            "VizdoomDeathmatch-v1",
+        ).eval_semantics
+        record = EpisodeRecord(
+            lane=0,
+            episode_index=0,
+            start_id="default",
+            episode_return=99.0,
+            episode_length=10,
+            terminated=True,
+            truncated=False,
+            outcome=Outcome.FAILURE,
+            events=("player_died",),
+            metrics={"kills": 12},
+        )
+        first = episode_result_from_record(record, semantics=semantics)
+        second = {**first, "kills": 8, "return": -100.0}
+
+        self.assertEqual(first["kills"], 12)
+        self.assertEqual(episode_rank(first, semantics), (12.0, 99.0))
+        summary = summarize_episode_results(
+            [first, second],
+            deterministic=False,
+            semantics=semantics,
+        )
+        self.assertEqual(summary["eval/full/progress/kills/mean"], 10.0)
+        self.assertEqual(summary["eval/full/progress/kills/max"], 12)
+
     def test_model_eval_rejects_deterministic_sampling(self) -> None:
         with self.assertRaisesRegex(ValueError, "deterministic policy evaluation is unsupported"):
             evaluate_model_episodes(

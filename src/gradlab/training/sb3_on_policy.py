@@ -157,6 +157,18 @@ def active_reward_components(task: Mapping[str, object]) -> tuple[str, ...]:
         return ()
     components: list[str] = []
     reward_mode = str(reward.get("reward_mode") or "")
+    if reward_mode == "sample-factory-v0":
+        return (
+            "kill",
+            "death",
+            "hit",
+            "damage",
+            "health",
+            "armor",
+            "weapon",
+            "ammo",
+            "weapon_hold",
+        )
     if reward_mode == "native" or bool(reward.get("use_native_reward")):
         components.append("native")
     if isinstance(reward.get("cell_novelty"), Mapping):

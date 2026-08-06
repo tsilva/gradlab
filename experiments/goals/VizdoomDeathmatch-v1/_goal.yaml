@@ -6,15 +6,53 @@ defaults:
 - _self_
 # Give the goal a human-readable name for reports and operator-facing views.
 title: ViZDoom single-player Deathmatch score attack
+# Declare named, provenance-bound reward contracts selectable by recipes and launch overrides.
+reward_shapes:
+  # Compile Deathmatch-specific reward definitions into both training and evaluation tasks.
+  program_kind: vizdoom-deathmatch-v1
+  # Preserve the existing native provider reward unless a run explicitly opts into shaping.
+  default: native-v1
+  definitions:
+    # Retain the provider's native monster-kill reward unchanged.
+    native-v1:
+      reward_mode: native
+      reward_scale: 1.0
+      reward_clip: false
+    # Adapt Sample Factory's Deathmatch V0 shaping to this six-slot monster scenario.
+    sample-factory-v0:
+      reward_mode: sample-factory-v0
+      reward_scale: 1.0
+      reward_clip: false
+      kill_reward: 1.0
+      kill_loss_penalty: 1.5
+      death_penalty: 0.75
+      death_count_decrease_reward: 0.75
+      hit_reward: 0.01
+      hit_count_decrease_penalty: 0.01
+      damage_reward: 0.003
+      damage_count_decrease_penalty: 0.003
+      health_gain_reward: 0.005
+      health_loss_penalty: 0.003
+      armor_gain_reward: 0.005
+      armor_loss_penalty: 0.001
+      weapon_preferences: [1.0, 1.0, 5.0, 5.0, 5.0, 10.0]
+      weapon_gain_reward_scale: 0.02
+      weapon_loss_penalty_scale: 0.01
+      ammo_gain_reward_scale: 0.0002
+      ammo_loss_penalty_scale: 0.0001
+      selected_weapon_hold_reward_scale: 0.0002
+      selected_weapon_hold_steps: 5
+      hit_delta_cap: 5
+      damage_delta_cap: 200
 # Override how accepted checkpoints are ordered for this continuing-combat task.
 objective:
   # Rank candidates lexicographically using the priorities listed below.
   rank:
-  # Prefer the checkpoint with the highest mean shaped evaluation return.
-  - max(eval/full/episode/return/shaped/mean)
-  # Break remaining ties with the highest single-episode shaped return.
-  - max(eval/full/episode/return/shaped/max)
-  # Prefer the earlier checkpoint when return criteria remain tied.
+  # Prefer the checkpoint with the highest mean monster killcount.
+  - max(eval/full/progress/kills/mean)
+  # Break remaining ties with the highest single-episode monster killcount.
+  - max(eval/full/progress/kills/max)
+  # Prefer the earlier checkpoint when kill criteria remain tied.
   - min(leader/checkpoint/step)
 # Override the shared settings used while training a policy for this goal.
 train:
@@ -22,11 +60,11 @@ train:
   early_stop:
     # Address inherited early-stop rules by their stable condition names.
     conditions:
-      # Retain a return target for Deathmatch, which has no binary success event.
+      # Retain a reward-shape-local return diagnostic for Deathmatch, which has no binary success event.
       target_reached:
         # Select the training metric compared with this condition's threshold.
         metric: train/episode/return/shaped/from/target/window_100/mean
-        # Align the training target with this goal's acceptance requirement.
+        # Keep the existing diagnostic threshold without using it as raw-kill acceptance evidence.
         threshold: 10.0
         # Observe the return target without treating it as success-based early stopping.
         action: observe
@@ -202,10 +240,10 @@ eval:
   # Declare every metric threshold a checkpoint must satisfy to be accepted.
   acceptance:
   # Select the evaluation metric tested by this acceptance rule.
-  - metric: eval/full/episode/return/shaped/mean
+  - metric: eval/full/progress/kills/mean
     # Choose how the observed metric is compared with the threshold.
     operator: '>='
-    # Require a substantial mean native score across the complete evaluation manifest.
+    # Require a substantial mean monster killcount across the complete evaluation manifest.
     threshold: 10.0
   # Override the shared ViZDoom environment contract used during evaluation.
   environment:

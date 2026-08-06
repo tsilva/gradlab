@@ -152,6 +152,33 @@ class EnvironmentTaskConfigTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "action has unexpected keys"):
             validate_task_config(task_auto_fire)
 
+    def test_identity_task_accepts_the_vizdoom_deathmatch_multidiscrete_codec(self) -> None:
+        task = {
+            "id": "identity",
+            "action": {
+                "set": "sample-factory-v0",
+                "codec": {"type": "vizdoom_deathmatch_multidiscrete_v1"},
+            },
+            "signals": {},
+            "events": {},
+            "termination": {"max_episode_steps": 1000},
+            "reward": {"reward_mode": "native"},
+        }
+
+        validate_task_config(task)
+        invalid = {
+            **task,
+            "action": {
+                **task["action"],
+                "codec": {
+                    "type": "vizdoom_deathmatch_multidiscrete_v1",
+                    "turn_steps": 11,
+                },
+            },
+        }
+        with self.assertRaisesRegex(ValueError, "unexpected keys"):
+            validate_task_config(invalid)
+
     def test_identity_task_accepts_equals_for_decrease_and_increase_events(self) -> None:
         task = {
             "id": "identity",

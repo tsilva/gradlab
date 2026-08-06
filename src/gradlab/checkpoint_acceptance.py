@@ -12,12 +12,13 @@ from gradlab.early_stop import (
     evaluate_metric_threshold_rules,
     normalize_metric_threshold_rules,
 )
-from gradlab.eval_metrics import episode_is_complete, episode_start_state
-from gradlab.env_registry import resolve_env_provider
+from gradlab.eval_metrics import episode_is_complete, episode_start_state, progress_metric_name
+from gradlab.env_registry import ENVIRONMENT_SPECS, environment_spec, resolve_env_provider
 from gradlab.metric_names import (
     EVAL_FULL_SUCCESS_ACROSS_STARTS_RATE_MEAN,
     EVAL_FULL_SUCCESS_ACROSS_STARTS_RATE_MIN,
     METRICS_SCHEMA_VERSION,
+    eval_progress_metric,
     evaluation_metric_schema,
 )
 from gradlab.seeds import EVAL_SEED_START
@@ -442,6 +443,34 @@ def acceptance_aggregates(
             if not all(math.isfinite(value) for value in returns):
                 raise ValueError("acceptance episode returns must be finite")
             result[metric_schema.return_mean] = sum(returns) / len(returns)
+        environment = contract.get("environment")
+        if isinstance(environment, Mapping):
+            provider_id = environment.get("env_provider")
+            game = str(environment.get("game") or "")
+            spec = (
+                environment_spec(provider_id, game) if provider_id else ENVIRONMENT_SPECS.get(game)
+            )
+            progress_fields = spec.eval_semantics.progress_fields if spec is not None else ()
+            for field in progress_fields:
+                values = [row.get(field.result_key) for row in rows]
+                if all(value is None for value in values):
+                    continue
+                if any(
+                    isinstance(value, bool)
+                    or not isinstance(value, int | float)
+                    or not math.isfinite(float(value))
+                    for value in values
+                ):
+                    raise ValueError(
+                        f"acceptance episode progress {field.result_key!r} must be finite"
+                    )
+                progress_name = progress_metric_name(field.result_key)
+                result[eval_progress_metric("full", progress_name, "mean")] = sum(
+                    float(value) for value in values
+                ) / len(values)
+                result[eval_progress_metric("full", progress_name, "max")] = max(
+                    float(value) for value in values
+                )
     return result
 
 

@@ -1,4 +1,4 @@
-# Metrics schema v16
+# Metrics schema v17
 
 This file is the source of truth for gradlab telemetry. The Python registry loads the table below
 and requires every emitted metric to match an exact registry entry or a bounded template.
@@ -19,7 +19,7 @@ and requires every emitted metric to match an exact registry entry or a bounded 
 - Public model R2 contains immutable checkpoint closures and a mutable no-cache run index. Private
   eval R2 contains intents, results, and episode evidence. Private control R2 contains leases,
   journals, promotions, and terminal receipts.
-- W&B config contains run-defining dimensions: `metrics_schema_version: 16`, `training_backend_id`,
+- W&B config contains run-defining dimensions: `metrics_schema_version: 17`, `training_backend_id`,
   `training_backend_config_hash`, `algorithm_id`, goal,
   environment, starts, seed, frame skip, environment count, hyperparameters, eval protocol, and
   runtime versions.
@@ -92,7 +92,7 @@ Asynchronous evaluations may arrive after later training rows without changing t
 X-axis. Each producer writes only its applicable scientific axis; durable delivery order uses
 `orchestration/event_seq`.
 
-Current runs declare schema v16, and the supervisor validates and emits only v16 names. GradLab
+Current runs declare schema v17, and the supervisor validates and emits only v17 names. GradLab
 does not read, project, or preserve noncurrent W&B or R2 schemas.
 
 ## Research interpretation
@@ -182,6 +182,12 @@ does not read, project, or preserve noncurrent W&B or R2 schemas.
   baseline to its threshold; because it consumes the watched metric, a mature rolling-window target
   has no progress value before its full window exists. Only goal-owned checkpoint evaluation may
   establish acceptance.
+- Training episode reduction currently aggregates return, length, outcome, success, and the
+  explicitly supported target-origin cell-novelty statistic; it does not aggregate arbitrary task
+  progress fields. In particular, ViZDoom Deathmatch exposes `killcount` to episode records and
+  playback but does not emit a rolling training kills-per-episode mean. Its native shaped return is
+  not an exact substitute because different monster kills can contribute different score values.
+  `eval/full/progress/kills/{mean|max}` is emitted only by checkpoint evaluation.
 - Snapshot-curriculum `sampling/probability/max` and `sampling/effective_cell/count` summarize the
   current cell-probability distribution. They do not report realized per-cell selection frequency
   or identify which resident cells were selected.
@@ -194,7 +200,9 @@ does not read, project, or preserve noncurrent W&B or R2 schemas.
 - Reward components are emitted only when active. Each component has mean, nonzero rate, and share;
   raw reward appears only when it differs from shaped reward. Mario's `progress` component includes
   both its base new-progress reward and any configured additional new-progress reward above
-  `progress_reward_boost_start_x`.
+  `progress_reward_boost_start_x`. ViZDoom Deathmatch's optional `sample-factory-v0` shape exposes
+  `kill`, `death`, `hit`, `damage`, `health`, `armor`, `weapon`, `ammo`, and `weapon_hold`
+  components; their sum is the pre-transform task reward and excludes the replaced provider reward.
 - The player's protocol-v5 Reward analysis ledger is local playback telemetry, not a W&B metric.
   It shows raw component values, converts each impact through the positive reward-scale divisor,
   accounts for unattributed raw reward and per-transition clipping, and reports both signed
@@ -415,6 +423,7 @@ unevaluated for future explicit user action. dstack process exit alone is never 
 | `leader/checkpoint/outcome/success/across_starts/rate/mean` | Selected-checkpoint projection of mean success rate across starts. | fraction | selection | summary |
 | `leader/checkpoint/episode/return/shaped/mean` | Selected-checkpoint mean shaped episode return. | return | selection | summary |
 | `leader/checkpoint/episode/return/shaped/max` | Selected-checkpoint maximum shaped episode return. | return | selection | summary |
+| `leader/checkpoint/progress/{progress}/mean` | Selected-checkpoint mean for one named progress dimension. | value | selection | summary |
 | `leader/checkpoint/progress/{progress}/max` | Selected-checkpoint maximum for one named progress dimension. | value | selection | summary |
 | `leader/checkpoint/step` | Selected checkpoint policy step. | steps | selection | summary |
 | `leader/checkpoint/artifact/ref` | Selected checkpoint immutable artifact reference. | metadata | selection | summary |

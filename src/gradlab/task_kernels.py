@@ -11,7 +11,15 @@ import gymnasium as gym
 import numpy as np
 from numba import njit
 
+from gradlab.action_codecs import (
+    VIZDOOM_DEATHMATCH_MULTIDISCRETE_CODEC,
+    VizdoomDeathmatchMultiDiscreteActionCodec,
+)
 from gradlab.json_utils import canonical_json_sha256
+from gradlab.reward_programs import (
+    normalize_vizdoom_deathmatch_reward,
+    vizdoom_deathmatch_reward_semantic_sha256,
+)
 from gradlab.reward_transform import RewardTransform, reward_transform_from_reward
 from gradlab.state_archive import (
     ArchiveCellConfig,
@@ -628,9 +636,7 @@ def normalize_identity_outcome_precedence(
 ) -> tuple[str, ...]:
     if value is None:
         return DEFAULT_IDENTITY_OUTCOME_PRECEDENCE
-    if not isinstance(value, list | tuple) or not all(
-        isinstance(item, str) for item in value
-    ):
+    if not isinstance(value, list | tuple) or not all(isinstance(item, str) for item in value):
         raise ValueError(
             f"{label} must list success, failure, and timeout in descending priority order"
         )
@@ -638,9 +644,7 @@ def normalize_identity_outcome_precedence(
     if len(normalized) != len(IDENTITY_TERMINAL_OUTCOME_NAMES) or set(normalized) != set(
         IDENTITY_TERMINAL_OUTCOME_NAMES
     ):
-        raise ValueError(
-            f"{label} must list success, failure, and timeout exactly once"
-        )
+        raise ValueError(f"{label} must list success, failure, and timeout exactly once")
     return normalized
 
 
@@ -688,9 +692,7 @@ def normalize_cell_novelty_config(value: Any, *, label: str) -> dict[str, Any]:
             raise ValueError(f"{label}.{key} must be a positive finite number")
         numbers[key] = float(raw)
     if numbers["episode_bonus_cap"] < numbers["first_visit_bonus"]:
-        raise ValueError(
-            f"{label}.episode_bonus_cap must be at least first_visit_bonus"
-        )
+        raise ValueError(f"{label}.episode_bonus_cap must be at least first_visit_bonus")
     return {
         "cell": normalized_cell,
         **numbers,
@@ -973,12 +975,8 @@ class CellNoveltyTaskKernel:
         if self._metrics is None:
             self._metrics = dict(task_step.metrics)
             self._metrics["native_reward_component"] = self._native_reward_component
-            self._metrics["cell_novelty_reward_component"] = (
-                self._novelty_reward_component
-            )
-            self._metrics[CELL_NOVELTY_EPISODE_UNIQUE_CELLS] = (
-                self._episode_unique_cells
-            )
+            self._metrics["cell_novelty_reward_component"] = self._novelty_reward_component
+            self._metrics[CELL_NOVELTY_EPISODE_UNIQUE_CELLS] = self._episode_unique_cells
             self._metrics["raw_reward"] = self._rewards
             self._metrics["shaped_reward"] = self._rewards
             self._task_step = TaskStep(
@@ -1077,9 +1075,7 @@ class CellNoveltyTaskKernel:
                     f"archive lane {lane_index} cell novelty contract does not match runtime"
                 )
             inner = values.get("inner")
-            inner_states[lane_index] = (
-                None if inner is None else TaskLaneState.from_dict(inner)
-            )
+            inner_states[lane_index] = None if inner is None else TaskLaneState.from_dict(inner)
             raw_cells = values.get("seen_cells")
             if (
                 isinstance(raw_cells, str | bytes)
@@ -1107,9 +1103,7 @@ class CellNoveltyTaskKernel:
                 or not math.isfinite(float(paid_bonus))
                 or not 0.0 <= float(paid_bonus) <= self.config.episode_bonus_cap
             ):
-                raise ValueError(
-                    f"archive lane {lane_index} has invalid cell novelty paid bonus"
-                )
+                raise ValueError(f"archive lane {lane_index} has invalid cell novelty paid bonus")
             self._seen_cells[lane_index] = seen_cells
             self._initialized[lane_index] = True
             self._paid_bonus[lane_index] = float(paid_bonus)
@@ -1200,8 +1194,7 @@ class SignalBindings:
         source = self.source(semantic_name)
         names = (source,) if isinstance(source, str) else source
         return tuple(
-            None if name in RUNTIME_BOUNDARY_SIGNALS else self._specs[name]
-            for name in names
+            None if name in RUNTIME_BOUNDARY_SIGNALS else self._specs[name] for name in names
         )
 
     def columns(
@@ -1282,10 +1275,7 @@ class SignalBindings:
     ) -> tuple[np.dtype, ...]:
         source = self.source(semantic_name)
         names = (source,) if isinstance(source, str) else source
-        if any(
-            name not in RUNTIME_BOUNDARY_SIGNALS and self._specs[name].shape
-            for name in names
-        ):
+        if any(name not in RUNTIME_BOUNDARY_SIGNALS and self._specs[name].shape for name in names):
             raise ValueError(f"semantic signal {semantic_name!r} must use scalar provider sources")
         if require_reset and not all(
             name not in RUNTIME_BOUNDARY_SIGNALS and self._specs[name].available_on_reset
@@ -1298,6 +1288,514 @@ class SignalBindings:
             np.dtype(np.bool_) if name in RUNTIME_BOUNDARY_SIGNALS else self._specs[name].dtype
             for name in names
         )
+
+
+@dataclass(frozen=True)
+class DeathmatchRewardConfig:
+    kill_reward: float
+    kill_loss_penalty: float
+    death_penalty: float
+    death_count_decrease_reward: float
+    hit_reward: float
+    hit_count_decrease_penalty: float
+    damage_reward: float
+    damage_count_decrease_penalty: float
+    health_gain_reward: float
+    health_loss_penalty: float
+    armor_gain_reward: float
+    armor_loss_penalty: float
+    weapon_preferences: tuple[float, ...]
+    weapon_gain_reward_scale: float
+    weapon_loss_penalty_scale: float
+    ammo_gain_reward_scale: float
+    ammo_loss_penalty_scale: float
+    selected_weapon_hold_reward_scale: float
+    selected_weapon_hold_steps: int
+    hit_delta_cap: int
+    damage_delta_cap: int
+    contract_sha256: str
+
+    @classmethod
+    def from_mapping(
+        cls,
+        value: Mapping[str, Any],
+        *,
+        label: str = "task.reward",
+    ) -> DeathmatchRewardConfig:
+        normalized = normalize_vizdoom_deathmatch_reward(
+            value,
+            label=label,
+            require_complete=True,
+        )
+        if normalized["reward_mode"] != "sample-factory-v0":
+            raise ValueError(f"{label}.reward_mode must be 'sample-factory-v0'")
+        return cls(
+            **{
+                key: tuple(item) if key == "weapon_preferences" else item
+                for key, item in normalized.items()
+                if key not in {"reward_mode", "reward_scale", "reward_clip"}
+            },
+            contract_sha256=vizdoom_deathmatch_reward_semantic_sha256(normalized),
+        )
+
+
+class DeathmatchRewardTaskKernel:
+    """Replace native reward with Sample Factory V0-style Deathmatch shaping."""
+
+    _SCALAR_SIGNALS = (
+        "kills",
+        "deaths",
+        "hits",
+        "damage",
+        "health",
+        "armor",
+        "selected_weapon",
+        "selected_weapon_ammo",
+        "player_dead",
+    )
+    _STATE_SCALARS = ("kills", "deaths", "hits", "damage", "health", "armor")
+
+    def __init__(
+        self,
+        kernel: BoundTaskKernel,
+        descriptor: ProviderDescriptor,
+        signals: Mapping[str, SignalSource],
+        config: DeathmatchRewardConfig,
+    ) -> None:
+        self.kernel = kernel
+        self.config = config
+        self.num_envs = int(kernel.num_envs)
+        required = {*self._SCALAR_SIGNALS, "weapons_owned", "weapon_ammo"}
+        missing = sorted(required - set(signals))
+        if missing:
+            raise ValueError(
+                "Deathmatch reward task is missing semantic signal(s): " + ", ".join(missing)
+            )
+        self.bindings = SignalBindings(
+            descriptor,
+            {name: signals[name] for name in required},
+            self.num_envs,
+        )
+        for name in self._SCALAR_SIGNALS:
+            dtype = self.bindings.scalar_dtype(name)
+            numeric = np.issubdtype(dtype, np.number) and not np.issubdtype(dtype, np.bool_)
+            if not numeric and not (name == "player_dead" and np.issubdtype(dtype, np.bool_)):
+                raise ValueError(f"Deathmatch reward signal {name!r} must be numeric")
+        for name in ("weapons_owned", "weapon_ammo"):
+            dtypes = self.bindings.scalar_source_dtypes(name)
+            if len(dtypes) != 6:
+                raise ValueError(f"Deathmatch reward signal {name!r} must contain six slots")
+            if any(
+                not np.issubdtype(dtype, np.number) or np.issubdtype(dtype, np.bool_)
+                for dtype in dtypes
+            ):
+                raise ValueError(f"Deathmatch reward signal {name!r} must be numeric")
+
+        self._initialized = np.zeros(self.num_envs, dtype=np.bool_)
+        self._previous_dead = np.ones(self.num_envs, dtype=np.bool_)
+        self._previous_scalars = {
+            name: np.zeros(self.num_envs, dtype=np.float64) for name in self._STATE_SCALARS
+        }
+        self._previous_weapons = np.zeros((self.num_envs, 6), dtype=np.float64)
+        self._previous_ammo = np.zeros((self.num_envs, 6), dtype=np.float64)
+        self._held_weapon = np.zeros(self.num_envs, dtype=np.int64)
+        self._held_steps = np.zeros(self.num_envs, dtype=np.int64)
+
+        self._current_scalars = {
+            name: np.zeros(self.num_envs, dtype=np.float64) for name in self._STATE_SCALARS
+        }
+        self._current_weapons = np.zeros((self.num_envs, 6), dtype=np.float64)
+        self._current_ammo = np.zeros((self.num_envs, 6), dtype=np.float64)
+        self._selected_weapon = np.zeros(self.num_envs, dtype=np.int64)
+        self._selected_weapon_ammo = np.zeros(self.num_envs, dtype=np.float64)
+        self._current_dead = np.zeros(self.num_envs, dtype=np.bool_)
+        self._active = np.zeros(self.num_envs, dtype=np.bool_)
+        self._pure_timeout = np.zeros(self.num_envs, dtype=np.bool_)
+        self._scratch_bool = np.zeros(self.num_envs, dtype=np.bool_)
+        self._delta = np.zeros(self.num_envs, dtype=np.float64)
+        self._increase = np.zeros(self.num_envs, dtype=np.float64)
+        self._decrease = np.zeros(self.num_envs, dtype=np.float64)
+        self._inventory_delta_component = np.zeros(self.num_envs, dtype=np.float32)
+        self._preference_lookup = np.zeros(7, dtype=np.float64)
+        self._preference_lookup[1:] = np.asarray(config.weapon_preferences, dtype=np.float64)
+        self._delta_specs = (
+            (
+                "kills",
+                config.kill_reward,
+                -config.kill_loss_penalty,
+                None,
+                "kill_reward_component",
+            ),
+            (
+                "deaths",
+                -config.death_penalty,
+                config.death_count_decrease_reward,
+                None,
+                "death_penalty_component",
+            ),
+            (
+                "hits",
+                config.hit_reward,
+                -config.hit_count_decrease_penalty,
+                config.hit_delta_cap,
+                "hit_reward_component",
+            ),
+            (
+                "damage",
+                config.damage_reward,
+                -config.damage_count_decrease_penalty,
+                config.damage_delta_cap,
+                "damage_reward_component",
+            ),
+            (
+                "health",
+                config.health_gain_reward,
+                -config.health_loss_penalty,
+                None,
+                "health_reward_component",
+            ),
+            (
+                "armor",
+                config.armor_gain_reward,
+                -config.armor_loss_penalty,
+                None,
+                "armor_reward_component",
+            ),
+        )
+
+        self._rewards = np.zeros(self.num_envs, dtype=np.float32)
+        self._components = {
+            "kill_reward_component": np.zeros(self.num_envs, dtype=np.float32),
+            "death_penalty_component": np.zeros(self.num_envs, dtype=np.float32),
+            "hit_reward_component": np.zeros(self.num_envs, dtype=np.float32),
+            "damage_reward_component": np.zeros(self.num_envs, dtype=np.float32),
+            "health_reward_component": np.zeros(self.num_envs, dtype=np.float32),
+            "armor_reward_component": np.zeros(self.num_envs, dtype=np.float32),
+            "weapon_reward_component": np.zeros(self.num_envs, dtype=np.float32),
+            "ammo_reward_component": np.zeros(self.num_envs, dtype=np.float32),
+            "weapon_hold_reward_component": np.zeros(self.num_envs, dtype=np.float32),
+        }
+        self._kills_metric = np.zeros(self.num_envs, dtype=np.int64)
+        self._metrics: dict[str, np.ndarray] | None = None
+        self._task_step: TaskStep | None = None
+
+    def __getattr__(self, name: str) -> Any:
+        if name == "kernel":
+            raise AttributeError(name)
+        return getattr(self.kernel, name)
+
+    def map_actions(self, actions: Any) -> Any:
+        return self.kernel.map_actions(actions)
+
+    def encode_observations(self, observations: Any) -> Any:
+        return self.kernel.encode_observations(observations)
+
+    def _read_signals(self, signals: Mapping[str, Any]) -> None:
+        for name, target in self._current_scalars.items():
+            np.copyto(target, self.bindings.scalar(name, signals), casting="unsafe")
+        weapon_columns = self.bindings.columns("weapons_owned", signals)
+        ammo_columns = self.bindings.columns("weapon_ammo", signals)
+        for index in range(6):
+            np.copyto(self._current_weapons[:, index], weapon_columns[index], casting="unsafe")
+            np.copyto(self._current_ammo[:, index], ammo_columns[index], casting="unsafe")
+        np.copyto(
+            self._selected_weapon,
+            self.bindings.scalar("selected_weapon", signals),
+            casting="unsafe",
+        )
+        np.maximum(self._selected_weapon, 0, out=self._selected_weapon)
+        np.copyto(
+            self._selected_weapon_ammo,
+            self.bindings.scalar("selected_weapon_ammo", signals),
+            casting="unsafe",
+        )
+        np.not_equal(
+            self.bindings.scalar("player_dead", signals),
+            0,
+            out=self._current_dead,
+        )
+        np.copyto(self._kills_metric, self._current_scalars["kills"], casting="unsafe")
+
+    def _write_delta_component(
+        self,
+        current: np.ndarray,
+        previous: np.ndarray,
+        *,
+        increase_coefficient: float,
+        decrease_coefficient: float,
+        target: np.ndarray,
+        increase_cap: int | None = None,
+    ) -> None:
+        np.subtract(current, previous, out=self._delta)
+        np.maximum(self._delta, 0.0, out=self._increase)
+        if increase_cap is not None:
+            np.minimum(self._increase, float(increase_cap), out=self._increase)
+        np.negative(self._delta, out=self._decrease)
+        np.maximum(self._decrease, 0.0, out=self._decrease)
+        np.multiply(self._increase, increase_coefficient, out=self._increase)
+        np.multiply(self._decrease, decrease_coefficient, out=self._decrease)
+        np.add(self._increase, self._decrease, out=self._increase)
+        target[:] = self._increase
+        target[~self._active] = 0.0
+
+    def _write_inventory_components(self) -> None:
+        weapon_component = self._components["weapon_reward_component"]
+        ammo_component = self._components["ammo_reward_component"]
+        weapon_component.fill(0.0)
+        ammo_component.fill(0.0)
+        for slot in range(6):
+            preference = self.config.weapon_preferences[slot]
+            self._write_delta_component(
+                self._current_weapons[:, slot],
+                self._previous_weapons[:, slot],
+                increase_coefficient=self.config.weapon_gain_reward_scale * preference,
+                decrease_coefficient=-self.config.weapon_loss_penalty_scale * preference,
+                target=self._inventory_delta_component,
+            )
+            weapon_component += self._inventory_delta_component
+            self._write_delta_component(
+                self._current_ammo[:, slot],
+                self._previous_ammo[:, slot],
+                increase_coefficient=self.config.ammo_gain_reward_scale * preference,
+                decrease_coefficient=-self.config.ammo_loss_penalty_scale * preference,
+                target=self._inventory_delta_component,
+            )
+            ammo_component += self._inventory_delta_component
+
+    def _write_weapon_hold_component(self) -> None:
+        component = self._components["weapon_hold_reward_component"]
+        component.fill(0.0)
+        np.equal(self._selected_weapon, self._held_weapon, out=self._scratch_bool)
+        self._held_steps[self._scratch_bool] += 1
+        self._held_steps[~self._scratch_bool] = 1
+        np.copyto(self._held_weapon, self._selected_weapon)
+        valid = (
+            self._active
+            & (self._selected_weapon >= 1)
+            & (self._selected_weapon <= 6)
+            & (self._selected_weapon_ammo > 0.0)
+            & (self._held_steps >= self.config.selected_weapon_hold_steps)
+        )
+        indices = np.flatnonzero(valid)
+        if indices.size:
+            component[indices] = (
+                self.config.selected_weapon_hold_reward_scale
+                * self._preference_lookup[self._selected_weapon[indices]]
+            )
+
+    def process(
+        self,
+        native_rewards: np.ndarray,
+        provider_terminated: np.ndarray,
+        provider_truncated: np.ndarray,
+        signals: Mapping[str, Any],
+    ) -> TaskStep:
+        task_step = self.kernel.process(
+            native_rewards,
+            provider_terminated,
+            provider_truncated,
+            signals,
+        )
+        self._read_signals(signals)
+        np.logical_and(task_step.truncated, ~task_step.terminated, out=self._pure_timeout)
+        np.logical_and(self._previous_dead, ~self._current_dead, out=self._scratch_bool)
+        np.logical_and(self._initialized, ~self._scratch_bool, out=self._active)
+        np.logical_and(self._active, ~self._pure_timeout, out=self._active)
+
+        for name, increase, decrease, cap, component_name in self._delta_specs:
+            self._write_delta_component(
+                self._current_scalars[name],
+                self._previous_scalars[name],
+                increase_coefficient=increase,
+                decrease_coefficient=decrease,
+                increase_cap=cap,
+                target=self._components[component_name],
+            )
+        self._write_inventory_components()
+        self._write_weapon_hold_component()
+
+        self._rewards.fill(0.0)
+        for component in self._components.values():
+            np.add(self._rewards, component, out=self._rewards)
+
+        for name in self._STATE_SCALARS:
+            np.copyto(self._previous_scalars[name], self._current_scalars[name])
+        np.copyto(self._previous_weapons, self._current_weapons)
+        np.copyto(self._previous_ammo, self._current_ammo)
+        np.copyto(self._previous_dead, self._current_dead)
+        self._initialized.fill(True)
+
+        if self._metrics is None:
+            self._metrics = dict(task_step.metrics)
+            self._metrics.update(self._components)
+            self._metrics["kills"] = self._kills_metric
+            self._metrics["raw_reward"] = self._rewards
+            self._metrics["shaped_reward"] = self._rewards
+            self._task_step = TaskStep(
+                self._rewards,
+                task_step.terminated,
+                task_step.truncated,
+                task_step.outcomes,
+                task_step.event_bits,
+                self._metrics,
+                task_step.event_transitions,
+            )
+        assert self._task_step is not None
+        return self._task_step
+
+    def on_reset(
+        self,
+        reset_observations: Any,
+        reset_signals: Mapping[str, Any],
+        mask: np.ndarray,
+    ) -> None:
+        selected = np.asarray(mask, dtype=np.bool_)
+        if selected.shape != (self.num_envs,):
+            raise ValueError(f"Deathmatch reward reset mask must have shape ({self.num_envs},)")
+        self.kernel.on_reset(reset_observations, reset_signals, selected)
+        self._initialized[selected] = False
+        self._previous_dead[selected] = True
+        self._held_weapon[selected] = 0
+        self._held_steps[selected] = 0
+        for previous in self._previous_scalars.values():
+            previous[selected] = 0.0
+        self._previous_weapons[selected] = 0.0
+        self._previous_ammo[selected] = 0.0
+
+    def validate_archive_signal(self, semantic_name: str) -> None:
+        self.kernel.validate_archive_signal(semantic_name)
+
+    def archive_signal_values(
+        self,
+        semantic_name: str,
+        signals: Mapping[str, Any],
+        *,
+        mask: np.ndarray,
+    ) -> np.ndarray:
+        return self.kernel.archive_signal_values(semantic_name, signals, mask=mask)
+
+    def capture_lane_states(
+        self,
+        mask: np.ndarray,
+    ) -> tuple[TaskLaneState | None, ...]:
+        selected = np.asarray(mask, dtype=np.bool_)
+        if selected.shape != (self.num_envs,):
+            raise ValueError(f"Deathmatch reward capture mask must have shape ({self.num_envs},)")
+        inner_states = self.kernel.capture_lane_states(selected)
+        states: list[TaskLaneState | None] = []
+        for lane in range(self.num_envs):
+            if not bool(selected[lane]):
+                states.append(None)
+                continue
+            inner = inner_states[lane]
+            states.append(
+                TaskLaneState(
+                    schema_id="gradlab.vizdoom-deathmatch-reward-task-lane-v1",
+                    values={
+                        "contract_sha256": self.config.contract_sha256,
+                        "inner": None if inner is None else inner.to_dict(),
+                        "initialized": bool(self._initialized[lane]),
+                        "previous_dead": bool(self._previous_dead[lane]),
+                        "previous_scalars": [
+                            float(self._previous_scalars[name][lane])
+                            for name in self._STATE_SCALARS
+                        ],
+                        "previous_weapons": self._previous_weapons[lane].tolist(),
+                        "previous_ammo": self._previous_ammo[lane].tolist(),
+                        "held_weapon": int(self._held_weapon[lane]),
+                        "held_steps": int(self._held_steps[lane]),
+                    },
+                )
+            )
+        return tuple(states)
+
+    def restore_lane_states(
+        self,
+        states: Sequence[TaskLaneState | None],
+        mask: np.ndarray,
+    ) -> None:
+        selected = np.asarray(mask, dtype=np.bool_)
+        if len(states) != self.num_envs or selected.shape != (self.num_envs,):
+            raise ValueError("Deathmatch reward restore must contain one state per lane")
+        inner_states: list[TaskLaneState | None] = [None for _ in range(self.num_envs)]
+        for lane in np.flatnonzero(selected):
+            lane_index = int(lane)
+            state = states[lane_index]
+            if state is None or state.schema_id != "gradlab.vizdoom-deathmatch-reward-task-lane-v1":
+                raise ValueError(
+                    f"archive lane {lane_index} has incompatible Deathmatch reward task state"
+                )
+            values = state.values
+            if values.get("contract_sha256") != self.config.contract_sha256:
+                raise ValueError(
+                    f"archive lane {lane_index} Deathmatch reward contract does not match runtime"
+                )
+            initialized = values.get("initialized")
+            previous_dead = values.get("previous_dead")
+            if not isinstance(initialized, bool) or not isinstance(previous_dead, bool):
+                raise ValueError(
+                    f"archive lane {lane_index} has invalid Deathmatch lifecycle state"
+                )
+            inner = values.get("inner")
+            inner_states[lane_index] = None if inner is None else TaskLaneState.from_dict(inner)
+            scalars = values.get("previous_scalars")
+            weapons = values.get("previous_weapons")
+            ammo = values.get("previous_ammo")
+            for field_name, raw, length in (
+                ("previous_scalars", scalars, len(self._STATE_SCALARS)),
+                ("previous_weapons", weapons, 6),
+                ("previous_ammo", ammo, 6),
+            ):
+                if (
+                    isinstance(raw, str | bytes)
+                    or not isinstance(raw, Sequence)
+                    or len(raw) != length
+                    or any(
+                        isinstance(item, bool)
+                        or not isinstance(item, int | float)
+                        or not math.isfinite(float(item))
+                        for item in raw
+                    )
+                ):
+                    raise ValueError(
+                        f"archive lane {lane_index} has invalid Deathmatch {field_name}"
+                    )
+            self._initialized[lane_index] = initialized
+            self._previous_dead[lane_index] = previous_dead
+            for name, item in zip(self._STATE_SCALARS, scalars, strict=True):
+                self._previous_scalars[name][lane_index] = float(item)
+            self._previous_weapons[lane_index] = np.asarray(weapons, dtype=np.float64)
+            self._previous_ammo[lane_index] = np.asarray(ammo, dtype=np.float64)
+            held_weapon = values.get("held_weapon")
+            held_steps = values.get("held_steps")
+            if (
+                not isinstance(held_weapon, int)
+                or isinstance(held_weapon, bool)
+                or held_weapon < 0
+                or not isinstance(held_steps, int)
+                or isinstance(held_steps, bool)
+                or held_steps < 0
+            ):
+                raise ValueError(
+                    f"archive lane {lane_index} has invalid Deathmatch selected-weapon history"
+                )
+            self._held_weapon[lane_index] = held_weapon
+            self._held_steps[lane_index] = held_steps
+        self.kernel.restore_lane_states(inner_states, selected)
+
+
+def with_deathmatch_reward(
+    kernel: BoundTaskKernel,
+    descriptor: ProviderDescriptor,
+    signals: Mapping[str, SignalSource],
+    reward: Mapping[str, Any],
+) -> BoundTaskKernel:
+    return DeathmatchRewardTaskKernel(
+        kernel,
+        descriptor,
+        signals,
+        DeathmatchRewardConfig.from_mapping(reward),
+    )
 
 
 @dataclass(frozen=True)
@@ -1319,6 +1817,7 @@ class IdentityTaskDefinition:
         observation_source_shape: tuple[int, int] | None = None,
         max_episode_steps: int = 0,
         action_values: Sequence[Any] | None = None,
+        action_codec: Mapping[str, Any] | None = None,
         signals: Mapping[str, SignalSource] | None = None,
         events: Mapping[str, Mapping[str, Any]] | None = None,
         termination: Mapping[str, Any] | None = None,
@@ -1327,7 +1826,10 @@ class IdentityTaskDefinition:
         self.observation_mask_fill = int(observation_mask_fill)
         self.observation_source_shape = observation_source_shape
         self.max_episode_steps = int(max_episode_steps)
+        if action_values is not None and action_codec is not None:
+            raise ValueError("identity task accepts only one action codec")
         self.action_values = None if action_values is None else tuple(action_values)
+        self.action_codec = None if action_codec is None else dict(action_codec)
         self.signals = {
             str(name): source if isinstance(source, str) else tuple(source)
             for name, source in (signals or {}).items()
@@ -1389,6 +1891,7 @@ class IdentityTaskDefinition:
             observation_source_shape=self.observation_source_shape,
             max_episode_steps=self.max_episode_steps,
             action_values=self.action_values,
+            action_codec=self.action_codec,
             signals=self.signals,
             events=self.events,
             outcome_precedence=self.outcome_precedence,
@@ -1406,6 +1909,7 @@ class IdentityTaskKernel:
         observation_source_shape: tuple[int, int] | None = None,
         max_episode_steps: int = 0,
         action_values: Sequence[Any] | None = None,
+        action_codec: Mapping[str, Any] | None = None,
         signals: Mapping[str, SignalSource] | None = None,
         events: Sequence[IdentityEvent] = (),
         outcome_precedence: Sequence[str] = DEFAULT_IDENTITY_OUTCOME_PRECEDENCE,
@@ -1416,7 +1920,26 @@ class IdentityTaskKernel:
         self._native_action_space = descriptor.native_action_space
         self._action_lookup = None
         self._action_buffer = None
-        if action_values is None:
+        self._structured_action_codec = None
+        if action_values is not None and action_codec is not None:
+            raise ValueError("identity task accepts only one action codec")
+        if action_codec is not None and action_codec.get("type") == "discrete_lookup":
+            configured_values = action_codec.get("values")
+            action_values = (
+                tuple(configured_values) if isinstance(configured_values, list | tuple) else None
+            )
+        if (
+            action_codec is not None
+            and action_codec.get("type") == VIZDOOM_DEATHMATCH_MULTIDISCRETE_CODEC
+        ):
+            self._structured_action_codec = VizdoomDeathmatchMultiDiscreteActionCodec(
+                descriptor,
+                self.num_envs,
+            )
+            self.action_space = self._structured_action_codec.action_space
+        elif action_codec is not None and action_codec.get("type") != "discrete_lookup":
+            raise ValueError(f"unsupported identity task action codec {action_codec.get('type')!r}")
+        elif action_values is None:
             self.action_space = self._native_action_space
         else:
             if not action_values:
@@ -1506,6 +2029,8 @@ class IdentityTaskKernel:
         self.observation_encoding_is_view = observation_mask is None
 
     def map_actions(self, actions: Any) -> Any:
+        if self._structured_action_codec is not None:
+            return self._structured_action_codec.map_actions(actions)
         if self._action_lookup is None:
             return actions
         indices = np.asarray(actions, dtype=np.int64).reshape(-1)

@@ -63,7 +63,12 @@ test("default workspace is a v6 collection without a standalone action panel", (
   });
   assert.equal(workspace.panels.cnn.type, "cnn");
   assert.equal(workspace.panels.cnn.placement.visible, false);
-  assert.ok(Object.values(workspace.panels).every((panel) => panel.enabled === true));
+  assert.equal(workspace.panels.cnn.enabled, false);
+  assert.ok(
+    Object.entries(workspace.panels)
+      .filter(([id]) => id !== "cnn")
+      .every(([, panel]) => panel.enabled === true),
+  );
 });
 
 test("panel processing demand excludes disabled panels and follows telemetry metrics", () => {
@@ -114,6 +119,7 @@ test("existing v6 workspaces receive reward analysis hidden on the shelf", () =>
 test("existing workspaces receive the CNN explorer hidden while new paired workspaces show it", () => {
   const workspace = createDefaultWorkspace({ paired: true });
   assert.equal(workspace.panels.cnn.placement.visible, true);
+  assert.equal(workspace.panels.cnn.enabled, false);
   delete workspace.panels.cnn;
 
   const normalized = normalizeWorkspace(workspace, { paired: true });

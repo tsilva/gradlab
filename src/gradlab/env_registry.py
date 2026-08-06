@@ -103,6 +103,11 @@ MARIO_EVAL_SEMANTICS = EvalSemantics(
     best_episode_rank=("completion", "progress", "reward"),
 )
 
+VIZDOOM_DEATHMATCH_EVAL_SEMANTICS = EvalSemantics(
+    progress_fields=(EvalProgressField("killcount", "kills", rank=True),),
+    best_episode_rank=("progress", "reward"),
+)
+
 ENVIRONMENT_SPECS: Mapping[str, EnvironmentSpec] = MappingProxyType(
     {
         "Bandit-v0": EnvironmentSpec("Bandit-v0", "Bandit", "Bandit-v0"),
@@ -148,6 +153,7 @@ ENVIRONMENT_SPECS: Mapping[str, EnvironmentSpec] = MappingProxyType(
             "VizdoomDeathmatch-v1",
             "Doom-ViZDoom-Deathmatch",
             "VizdoomDeathmatch-v1",
+            eval_semantics=VIZDOOM_DEATHMATCH_EVAL_SEMANTICS,
         ),
         "VizdoomDefendCenter-v1": EnvironmentSpec(
             "VizdoomDefendCenter-v1",

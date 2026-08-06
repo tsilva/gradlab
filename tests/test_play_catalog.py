@@ -18,6 +18,7 @@ from gradlab.goal_catalog import (
 from gradlab.catalog_cache import CatalogEntryCache
 from gradlab.play_catalog import (
     PlayCatalog,
+    WandbRunLocation,
     checkpoint_metric_leaders,
     parse_wandb_location,
 )
@@ -1195,8 +1196,28 @@ def test_checkpoint_metric_leaders_marks_each_best_value_and_ties() -> None:
     assert third["best_metrics"] == [train_return, eval_success]
 
 
+@pytest.mark.parametrize(
+    "location_kwargs",
+    (
+        pytest.param(
+            {"control_bucket": WandbRunControlBucket()},
+            id="control-manifest",
+        ),
+        pytest.param(
+            {
+                "wandb_run_location": WandbRunLocation(
+                    entity="research",
+                    project="Mario",
+                    run_id=RUN_ID,
+                )
+            },
+            id="explicit-wandb-url",
+        ),
+    ),
+)
 def test_catalog_attaches_latest_training_metrics_at_each_checkpoint(
     monkeypatch: pytest.MonkeyPatch,
+    location_kwargs: dict[str, object],
 ) -> None:
     periodic = checkpoint_row(step=250_000, digest="2" * 64, purpose="periodic")
     final = checkpoint_row(step=500_000, digest="3" * 64, purpose="final")
@@ -1254,7 +1275,7 @@ def test_catalog_attaches_latest_training_metrics_at_each_checkpoint(
 
     catalog = PlayCatalog(
         public_models_base_url="https://models.example",
-        control_bucket=WandbRunControlBucket(),
+        **location_kwargs,
     )
     catalog._api = TrainingApi()
 

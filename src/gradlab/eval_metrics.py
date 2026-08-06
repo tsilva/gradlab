@@ -294,6 +294,14 @@ def progress_summary_fields(result_key: str) -> tuple[str, str]:
     return (f"{result_key}_mean", f"{result_key}_max")
 
 
+def progress_metric_name(result_key: str) -> str:
+    if result_key == "max_x_pos":
+        return "x"
+    if result_key == "max_level_x_pos":
+        return "level_x"
+    return result_key.removeprefix("max_").removesuffix("_pos")
+
+
 def single_env_action(action) -> int | np.ndarray:
     action_array = np.asarray(action)
     if action_array.shape == ():
@@ -328,13 +336,7 @@ def summarize_episode_results(
         mean_key, max_key = progress_summary_fields(field.result_key)
         progress_metrics[mean_key] = float(values.mean())
         progress_metrics[max_key] = int(values.max())
-        progress_name = (
-            "x"
-            if field.result_key == "max_x_pos"
-            else "level_x"
-            if field.result_key == "max_level_x_pos"
-            else field.result_key.removeprefix("max_").removesuffix("_pos")
-        )
+        progress_name = progress_metric_name(field.result_key)
         progress_metrics[eval_progress_metric("full", progress_name, "mean")] = float(values.mean())
         progress_metrics[eval_progress_metric("full", progress_name, "max")] = int(values.max())
     death_x_positions = [

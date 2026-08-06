@@ -6,6 +6,7 @@ import pytest
 
 from gradlab.env_identity import environment_identity_from_train_config
 from gradlab.env_registry import (
+    EvalProgressField,
     environment_spec,
     env_supports_states,
     evaluation_watchdog_steps,
@@ -116,6 +117,9 @@ def test_resolves_vizdoom_turbo_builtin_and_custom_scenarios() -> None:
     deathmatch = environment_spec("vizdoom-turbo", "VizdoomDeathmatch-v1")
     assert deathmatch.game_family == "Doom-ViZDoom-Deathmatch"
     assert deathmatch.wandb_project == "VizdoomDeathmatch-v1"
+    assert deathmatch.eval_semantics.progress_fields == (
+        EvalProgressField("killcount", "kills", rank=True),
+    )
 
     custom = resolve_env_id("vizdoom-turbo:/tmp/custom-scenario.cfg")
     assert custom.provider_env_id == "/tmp/custom-scenario.cfg"

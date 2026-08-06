@@ -62,16 +62,26 @@ The built-in Reward analysis panel is visible in newly created workspaces.
 Normalization adds it hidden on the shelf when an existing v6 workspace does
 not contain it, preserving the existing layout without a schema-version reset.
 
+The built-in Observation panel owns the one canonical policy-input viewport.
+Its local selector displays either exact-transition action attribution or the
+CNN winner map, never both simultaneously; selection and per-diagnostic opacity
+do not change shared computation. The panel subscribes to CNN frames without
+requesting CNN processing, so an enabled explorer in any synchronized workspace
+window can supply its overlay without coupling the panels or triggering work on
+its own. Base observations and generated overlays must match the selected
+transition sequence, and generated overlays must also match its generation.
+
 The built-in CNN feature explorer is an opt-in specialized panel for a live
-policy's actor image encoder. Its shared controls select one discovered Conv2d
-layer, capture cadence, and top-filter count; opening the panel alone does not
-run an extra model forward pass. Each exact transition ranks filters by peak
-raw positive post-activation response. The generation-tagged binary atlas holds
-a categorical winner map, a signed per-group-input-channel kernel mosaic, and a
-per-filter activation map. Snapshot metadata supplies unnormalized peak and
-mean-positive responses, positive coverage, and the peak cell's receptive-field
-region in policy-input pixels. The winner map compares only the displayed
-filters and is an activation diagnostic, not selected-action attribution.
+policy's actor image encoder. It is disabled by default. Its standardized
+Enabled switch controls both panel processing and CNN capture, while its shared
+controls select one discovered Conv2d layer, capture cadence, and top-filter
+count. Each exact transition ranks filters by peak raw positive post-activation
+response. The generation-tagged binary atlas holds a categorical winner map, a
+signed per-group-input-channel kernel mosaic, and a per-filter activation map.
+The explorer renders the kernel, activation, response, and receptive-field
+details; Observation renders the spatial winner map over the policy input.
+Winner colors compare only the displayed filters and describe activation, not
+selected-action attribution.
 
 A panel module exports:
 

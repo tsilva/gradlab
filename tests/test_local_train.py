@@ -17,6 +17,7 @@ from gradlab.local_train import (
 )
 from gradlab.local_paths import default_runs_dir
 from gradlab.play import main as play_main
+from gradlab.play_catalog import WandbRunLocation
 from gradlab.play_runtime import (
     resolve_playback_rom_binding,
     resolve_shared_playback_rom_binding,
@@ -844,3 +845,28 @@ def test_play_active_public_run_starts_at_its_checkpoint_route() -> None:
     assert snapshot["app"]["source"]["kind"] == "public_run"
     assert snapshot["app"]["source"]["run_id"] == run_id
     host.stop()
+
+
+def test_play_wandb_url_passes_run_location_to_catalog() -> None:
+    run_id = "gradlab-" + "a" * 32
+    url = f"https://wandb.ai/research/VizdoomDeathmatch-v1/runs/{run_id}?nw=user"
+
+    with (
+        mock.patch("gradlab.play_catalog.PlayCatalog") as catalog_type,
+        mock.patch(
+            "gradlab.play_web.run_web_player_application",
+            return_value=23,
+        ),
+    ):
+        catalog_type.return_value.run_goal_variant.return_value = (
+            "VizdoomDeathmatch-v1",
+            "goal-variant-" + "b" * 24,
+        )
+
+        assert play_main([url, "--no-open"]) == 23
+
+    assert catalog_type.call_args.kwargs["wandb_run_location"] == WandbRunLocation(
+        entity="research",
+        project="VizdoomDeathmatch-v1",
+        run_id=run_id,
+    )

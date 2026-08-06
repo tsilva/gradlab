@@ -1109,6 +1109,34 @@ def test_server_aggregates_processing_only_from_connected_windows() -> None:
     assert configured == [frozenset({"game", "policy", "history"})]
 
 
+def test_observation_cnn_subscription_does_not_create_cnn_processing_demand() -> None:
+    configured = []
+    runner = argparse.Namespace(
+        session_change=0,
+        set_processing=lambda features: configured.append(frozenset(features)),
+    )
+    server = PlaybackWebServer(runner, human_args())
+    server.clients = {
+        "observation": argparse.Namespace(
+            processing=frozenset({"observation", "attribution"}),
+            subscriptions=frozenset({"observation", "attribution", "cnn-inspection"}),
+        ),
+        "cnn": argparse.Namespace(
+            processing=frozenset({"cnn-inspection"}),
+            subscriptions=frozenset({"cnn-inspection"}),
+        ),
+    }
+
+    asyncio.run(server._sync_player_processing())
+    del server.clients["cnn"]
+    asyncio.run(server._sync_player_processing())
+
+    assert configured == [
+        frozenset({"observation", "attribution", "cnn-inspection"}),
+        frozenset({"observation", "attribution"}),
+    ]
+
+
 def test_transition_payload_keeps_before_decision_after_alignment() -> None:
     transition = _PlaybackTransition(
         sequence=3,
@@ -1249,6 +1277,8 @@ def test_transition_reward_accounting_uses_only_declared_reward_components() -> 
             "native_reward_component": 1.0,
             "progress_reward_component": 4.0,
             "death_penalty_component": -1.0,
+            "kill_reward_component": 2.0,
+            "weapon_hold_reward_component": 0.002,
             "unknown_reward_component": 500.0,
         },
         event_transitions={},
@@ -1274,6 +1304,8 @@ def test_transition_reward_accounting_uses_only_declared_reward_components() -> 
         "native_reward": 1.0,
         "progress_reward": 4.0,
         "death_penalty": -1.0,
+        "kill_reward": 2.0,
+        "weapon_hold_reward": 0.002,
     }
     assert payload["reward"]["accounting_error"] is None
 
@@ -2088,6 +2120,7 @@ def test_web_dashboard_assets_are_packaged_beside_server() -> None:
         font_root / "JetBrainsMonoVariable.woff2",
         font_root / "JetBrainsMonoVariable-Italic.woff2",
         panel_root / "catalog.js",
+        panel_root / "diagnostic-overlays.js",
         panel_root / "layout-sizing.js",
         panel_root / "manager.js",
         panel_root / "runtime.js",

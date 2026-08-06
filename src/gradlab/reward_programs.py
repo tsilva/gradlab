@@ -14,6 +14,8 @@ from gradlab.reward_transform import normalize_reward_mapping
 
 REWARD_PROGRAM_KIND_MARIO_V1 = "mario-v1"
 MARIO_REWARD_KERNEL_REVISION = "mario-kernel-v3"
+REWARD_PROGRAM_KIND_VIZDOOM_DEATHMATCH_V1 = "vizdoom-deathmatch-v1"
+VIZDOOM_DEATHMATCH_REWARD_KERNEL_REVISION = "vizdoom-deathmatch-kernel-v1"
 REWARD_SHAPE_KEY_PATTERN = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$")
 
 MARIO_REWARD_FIELDS = (
@@ -42,6 +44,48 @@ MARIO_NUMBER_FIELDS = frozenset(
 # Reserve headroom for several simultaneously active components before the output cast.
 _FLOAT32_MAX = 3.4028234663852886e38
 _MARIO_SAFE_COEFFICIENT_ABS_MAX = _FLOAT32_MAX / (8.0 * float(2**32))
+
+VIZDOOM_DEATHMATCH_BASE_REWARD_FIELDS = (
+    "reward_mode",
+    "reward_scale",
+    "reward_clip",
+)
+VIZDOOM_DEATHMATCH_SHAPED_REWARD_FIELDS = (
+    "kill_reward",
+    "kill_loss_penalty",
+    "death_penalty",
+    "death_count_decrease_reward",
+    "hit_reward",
+    "hit_count_decrease_penalty",
+    "damage_reward",
+    "damage_count_decrease_penalty",
+    "health_gain_reward",
+    "health_loss_penalty",
+    "armor_gain_reward",
+    "armor_loss_penalty",
+    "weapon_preferences",
+    "weapon_gain_reward_scale",
+    "weapon_loss_penalty_scale",
+    "ammo_gain_reward_scale",
+    "ammo_loss_penalty_scale",
+    "selected_weapon_hold_reward_scale",
+    "selected_weapon_hold_steps",
+    "hit_delta_cap",
+    "damage_delta_cap",
+)
+VIZDOOM_DEATHMATCH_REWARD_FIELDS = (
+    *VIZDOOM_DEATHMATCH_BASE_REWARD_FIELDS,
+    *VIZDOOM_DEATHMATCH_SHAPED_REWARD_FIELDS,
+)
+VIZDOOM_DEATHMATCH_REWARD_FIELD_SET = frozenset(VIZDOOM_DEATHMATCH_REWARD_FIELDS)
+VIZDOOM_DEATHMATCH_REWARD_MODES = frozenset({"native", "sample-factory-v0"})
+VIZDOOM_DEATHMATCH_REQUIRED_SIGNALS = {
+    "deaths": "deathcount",
+    "hits": "hitcount",
+    "damage": "damagecount",
+}
+_VIZDOOM_DEATHMATCH_SAFE_COEFFICIENT_MAX = _FLOAT32_MAX / (32.0 * float(2**32))
+_VIZDOOM_DEATHMATCH_COUNTER_DELTA_MAX = 2**32
 
 
 @dataclass(frozen=True)
@@ -120,6 +164,116 @@ def normalize_mario_reward(
     return {key: normalized[key] for key in MARIO_REWARD_FIELDS if key in normalized}
 
 
+def normalize_vizdoom_deathmatch_reward(
+    value: Mapping[str, Any],
+    *,
+    label: str,
+    require_complete: bool,
+) -> dict[str, Any]:
+    if not isinstance(value, Mapping):
+        raise ValueError(f"{label} must be an object")
+    unknown = sorted(str(key) for key in value if key not in VIZDOOM_DEATHMATCH_REWARD_FIELD_SET)
+    if unknown:
+        raise ValueError(f"{label} has unexpected field(s): {', '.join(unknown)}")
+
+    mode = value.get("reward_mode")
+    if not isinstance(mode, str) or mode not in VIZDOOM_DEATHMATCH_REWARD_MODES:
+        raise ValueError(
+            f"{label}.reward_mode must be one of "
+            f"{sorted(VIZDOOM_DEATHMATCH_REWARD_MODES)}, got {mode!r}"
+        )
+    expected = set(VIZDOOM_DEATHMATCH_BASE_REWARD_FIELDS)
+    if mode == "sample-factory-v0":
+        expected.update(VIZDOOM_DEATHMATCH_SHAPED_REWARD_FIELDS)
+    unexpected_for_mode = sorted(str(key) for key in value if key not in expected)
+    if unexpected_for_mode:
+        raise ValueError(
+            f"{label} reward_mode={mode!r} does not use field(s): " + ", ".join(unexpected_for_mode)
+        )
+    if require_complete:
+        missing = [
+            key for key in VIZDOOM_DEATHMATCH_REWARD_FIELDS if key in expected and key not in value
+        ]
+        if missing:
+            raise ValueError(f"{label} is missing required field(s): {', '.join(missing)}")
+
+    transform = normalize_reward_mapping(
+        {
+            "reward_scale": value.get("reward_scale", 1.0),
+            "reward_clip": value.get("reward_clip", False),
+        },
+        label=label,
+    )
+    normalized: dict[str, Any] = {
+        "reward_mode": mode,
+        "reward_scale": transform["reward_scale"],
+        "reward_clip": transform["reward_clip"],
+    }
+    if mode == "native":
+        return normalized
+
+    preferences = value.get("weapon_preferences")
+    if (
+        isinstance(preferences, str | bytes)
+        or not isinstance(preferences, list | tuple)
+        or len(preferences) != 6
+    ):
+        raise ValueError(f"{label}.weapon_preferences must contain exactly six numbers")
+    normalized_preferences: list[float] = []
+    for index, item in enumerate(preferences):
+        if isinstance(item, bool) or not isinstance(item, Real):
+            raise ValueError(f"{label}.weapon_preferences[{index}] must be a finite number")
+        number = float(item)
+        if not math.isfinite(number) or number <= 0.0:
+            raise ValueError(f"{label}.weapon_preferences[{index}] must be finite and positive")
+        if number > _VIZDOOM_DEATHMATCH_SAFE_COEFFICIENT_MAX:
+            raise ValueError(
+                f"{label}.weapon_preferences[{index}] exceeds the Deathmatch float32 safety bound"
+            )
+        normalized_preferences.append(_normalize_zero(number))
+    normalized["weapon_preferences"] = normalized_preferences
+
+    integer_fields = ("selected_weapon_hold_steps", "hit_delta_cap", "damage_delta_cap")
+    for key in integer_fields:
+        item = value.get(key)
+        if not isinstance(item, int) or isinstance(item, bool) or item <= 0:
+            raise ValueError(f"{label}.{key} must be a positive integer")
+        if key != "selected_weapon_hold_steps" and item > _VIZDOOM_DEATHMATCH_COUNTER_DELTA_MAX:
+            raise ValueError(
+                f"{label}.{key} exceeds the Deathmatch counter-delta safety bound"
+            )
+        normalized[key] = int(item)
+
+    number_fields = set(VIZDOOM_DEATHMATCH_SHAPED_REWARD_FIELDS) - {
+        "weapon_preferences",
+        *integer_fields,
+    }
+    for key in number_fields:
+        item = value.get(key)
+        if isinstance(item, bool) or not isinstance(item, Real):
+            raise ValueError(f"{label}.{key} must be a finite non-negative number")
+        number = float(item)
+        if not math.isfinite(number) or number < 0.0:
+            raise ValueError(f"{label}.{key} must be a finite non-negative number")
+        if number > _VIZDOOM_DEATHMATCH_SAFE_COEFFICIENT_MAX:
+            raise ValueError(f"{label}.{key} exceeds the Deathmatch float32 safety bound")
+        normalized[key] = _normalize_zero(number)
+    max_preference = max(normalized_preferences)
+    for key in (
+        "weapon_gain_reward_scale",
+        "weapon_loss_penalty_scale",
+        "ammo_gain_reward_scale",
+        "ammo_loss_penalty_scale",
+        "selected_weapon_hold_reward_scale",
+    ):
+        if max_preference * normalized[key] > _VIZDOOM_DEATHMATCH_SAFE_COEFFICIENT_MAX:
+            raise ValueError(
+                f"{label}.{key} combined with weapon_preferences exceeds the Deathmatch "
+                "float32 safety bound"
+            )
+    return {key: normalized[key] for key in VIZDOOM_DEATHMATCH_REWARD_FIELDS if key in normalized}
+
+
 def _mario_compiled_semantics(reward: Mapping[str, Any]) -> dict[str, Any]:
     mode = str(reward["reward_mode"])
     semantics: dict[str, Any] = {
@@ -170,6 +324,64 @@ def mario_reward_semantic_sha256(reward: Mapping[str, Any]) -> str:
     )
 
 
+def vizdoom_deathmatch_reward_semantic_sha256(reward: Mapping[str, Any]) -> str:
+    normalized = normalize_vizdoom_deathmatch_reward(
+        reward,
+        label="ViZDoom Deathmatch reward definition",
+        require_complete=True,
+    )
+    return _sha256(
+        {
+            "task_id": "identity",
+            "program_kind": REWARD_PROGRAM_KIND_VIZDOOM_DEATHMATCH_V1,
+            "program_revision": VIZDOOM_DEATHMATCH_REWARD_KERNEL_REVISION,
+            "compiled_semantics": normalized,
+        }
+    )
+
+
+def reward_program_field_set(kind: object) -> frozenset[str]:
+    if kind == REWARD_PROGRAM_KIND_MARIO_V1:
+        return MARIO_REWARD_FIELD_SET
+    if kind == REWARD_PROGRAM_KIND_VIZDOOM_DEATHMATCH_V1:
+        return VIZDOOM_DEATHMATCH_REWARD_FIELD_SET
+    raise ValueError(f"reward program kind has no registered compiler: {kind!r}")
+
+
+def _reward_program_revision(kind: str) -> str:
+    if kind == REWARD_PROGRAM_KIND_MARIO_V1:
+        return MARIO_REWARD_KERNEL_REVISION
+    if kind == REWARD_PROGRAM_KIND_VIZDOOM_DEATHMATCH_V1:
+        return VIZDOOM_DEATHMATCH_REWARD_KERNEL_REVISION
+    raise ValueError(f"reward program kind has no registered compiler: {kind!r}")
+
+
+def _normalize_reward_program(
+    kind: str,
+    value: Mapping[str, Any],
+    *,
+    label: str,
+    require_complete: bool,
+) -> dict[str, Any]:
+    if kind == REWARD_PROGRAM_KIND_MARIO_V1:
+        return normalize_mario_reward(value, label=label, require_complete=require_complete)
+    if kind == REWARD_PROGRAM_KIND_VIZDOOM_DEATHMATCH_V1:
+        return normalize_vizdoom_deathmatch_reward(
+            value,
+            label=label,
+            require_complete=require_complete,
+        )
+    raise ValueError(f"reward program kind has no registered compiler: {kind!r}")
+
+
+def _reward_program_semantic_sha256(kind: str, reward: Mapping[str, Any]) -> str:
+    if kind == REWARD_PROGRAM_KIND_MARIO_V1:
+        return mario_reward_semantic_sha256(reward)
+    if kind == REWARD_PROGRAM_KIND_VIZDOOM_DEATHMATCH_V1:
+        return vizdoom_deathmatch_reward_semantic_sha256(reward)
+    raise ValueError(f"reward program kind has no registered compiler: {kind!r}")
+
+
 def _catalog(document: Mapping[str, Any], *, label: str) -> Mapping[str, Any] | None:
     value = document.get("reward_shapes")
     if value is None:
@@ -193,8 +405,8 @@ def validate_reward_shape_catalog(
     if catalog is None:
         return
     kind = catalog.get("program_kind")
-    if kind != REWARD_PROGRAM_KIND_MARIO_V1:
-        raise ValueError(f"{label}.reward_shapes.program_kind has no registered compiler: {kind!r}")
+    reward_program_field_set(kind)
+    assert isinstance(kind, str)
     default = catalog.get("default")
     if not isinstance(default, str) or not REWARD_SHAPE_KEY_PATTERN.fullmatch(default):
         raise ValueError(f"{label}.reward_shapes.default must be a lowercase kebab key")
@@ -211,12 +423,13 @@ def validate_reward_shape_catalog(
             raise ValueError(
                 f"{label}.reward_shapes.definitions key {key!r} must be 1-64 lowercase kebab characters"
             )
-        reward = normalize_mario_reward(
+        reward = _normalize_reward_program(
+            kind,
             raw_reward,
             label=f"{label}.reward_shapes.definitions.{key}",
             require_complete=True,
         )
-        semantic_hash = mario_reward_semantic_sha256(reward)
+        semantic_hash = _reward_program_semantic_sha256(kind, reward)
         previous = seen_hashes.get(semantic_hash)
         if previous is not None:
             raise ValueError(
@@ -224,20 +437,45 @@ def validate_reward_shape_catalog(
             )
         seen_hashes[semantic_hash] = key
 
+    expected_task_id = "mario" if kind == REWARD_PROGRAM_KIND_MARIO_V1 else "identity"
     for phase in ("train", "eval"):
         section = document.get(phase)
         environment = section.get("environment") if isinstance(section, Mapping) else None
         task = environment.get("task") if isinstance(environment, Mapping) else None
-        if not isinstance(task, Mapping) or task.get("id") != "mario":
+        if not isinstance(task, Mapping) or task.get("id") != expected_task_id:
             raise ValueError(
-                f"{label}.reward_shapes program {kind!r} requires {phase}.environment.task.id='mario'"
+                f"{label}.reward_shapes program {kind!r} requires "
+                f"{phase}.environment.task.id={expected_task_id!r}"
             )
-        if "reward" in task:
+        if kind == REWARD_PROGRAM_KIND_MARIO_V1 and "reward" in task:
             raise ValueError(
                 f"{label}.{phase}.environment.task.reward must be omitted when reward_shapes is declared"
             )
+        if kind == REWARD_PROGRAM_KIND_VIZDOOM_DEATHMATCH_V1:
+            base_reward = task.get("reward")
+            if not isinstance(base_reward, Mapping):
+                raise ValueError(
+                    f"{label}.{phase}.environment.task.reward must declare the inherited native "
+                    "Deathmatch reward when reward_shapes is declared"
+                )
+            normalized_base = normalize_vizdoom_deathmatch_reward(
+                base_reward,
+                label=f"{label}.{phase}.environment.task.reward",
+                require_complete=True,
+            )
+            default_reward = normalize_vizdoom_deathmatch_reward(
+                definitions[default],
+                label=f"{label}.reward_shapes.definitions.{default}",
+                require_complete=True,
+            )
+            if normalized_base != default_reward or normalized_base["reward_mode"] != "native":
+                raise ValueError(
+                    f"{label}.{phase}.environment.task.reward must match the native default "
+                    "Deathmatch reward shape"
+                )
     _validate_catalog_phase_semantics(document, label=label)
-    _validate_mario_level_termination(document, label=label)
+    if kind == REWARD_PROGRAM_KIND_MARIO_V1:
+        _validate_mario_level_termination(document, label=label)
 
 
 def _phase_semantic_projection(environment: Mapping[str, Any]) -> dict[str, Any]:
@@ -246,6 +484,9 @@ def _phase_semantic_projection(environment: Mapping[str, Any]) -> dict[str, Any]
     if isinstance(env_config, dict):
         for key in ("n_envs", "seed"):
             env_config.pop(key, None)
+        env_args = env_config.get("env_args")
+        if isinstance(env_args, dict):
+            env_args.pop("num_threads", None)
     task = projection.get("task")
     if isinstance(task, dict):
         task.pop("reward", None)
@@ -313,6 +554,77 @@ def _validate_mario_level_termination(
             )
 
 
+def _append_unique_string(value: object, item: str, *, label: str) -> None:
+    if not isinstance(value, list) or any(not isinstance(entry, str) for entry in value):
+        raise ValueError(f"{label} must be a list of strings")
+    if item not in value:
+        value.append(item)
+
+
+def _materialize_vizdoom_deathmatch_reward(
+    effective: dict[str, Any],
+    reward: Mapping[str, Any],
+    *,
+    label: str,
+) -> None:
+    shaped = reward["reward_mode"] == "sample-factory-v0"
+    for phase in ("train", "eval"):
+        environment = effective[phase]["environment"]
+        task = environment["task"]
+        task["reward"] = copy.deepcopy(dict(reward))
+        if not shaped:
+            continue
+        env_config = environment.get("env_config")
+        env_args = env_config.get("env_args") if isinstance(env_config, Mapping) else None
+        if not isinstance(env_args, dict):
+            raise ValueError(f"{label}.{phase}.environment.env_config.env_args must be an object")
+        variables = env_args.get("game_variables")
+        info_filter = env_args.get("info_filter")
+        info_keys = info_filter.get("keys") if isinstance(info_filter, Mapping) else None
+        for semantic_name, provider_name in VIZDOOM_DEATHMATCH_REQUIRED_SIGNALS.items():
+            _append_unique_string(
+                variables,
+                provider_name,
+                label=f"{label}.{phase}.environment.env_config.env_args.game_variables",
+            )
+            _append_unique_string(
+                info_keys,
+                provider_name,
+                label=f"{label}.{phase}.environment.env_config.env_args.info_filter.keys",
+            )
+            signals = task.get("signals")
+            if not isinstance(signals, dict):
+                raise ValueError(f"{label}.{phase}.environment.task.signals must be an object")
+            existing = signals.get(semantic_name)
+            if existing is not None and existing != provider_name:
+                raise ValueError(
+                    f"{label}.{phase}.environment.task.signals.{semantic_name} conflicts "
+                    "with the Deathmatch reward program"
+                )
+            signals[semantic_name] = provider_name
+
+
+def _materialize_reward_program(
+    kind: str,
+    effective: dict[str, Any],
+    reward: Mapping[str, Any],
+    *,
+    label: str,
+) -> None:
+    if kind == REWARD_PROGRAM_KIND_MARIO_V1:
+        for phase in ("train", "eval"):
+            effective[phase]["environment"]["task"]["reward"] = copy.deepcopy(dict(reward))
+        return
+    if kind == REWARD_PROGRAM_KIND_VIZDOOM_DEATHMATCH_V1:
+        _materialize_vizdoom_deathmatch_reward(
+            effective,
+            reward,
+            label=label,
+        )
+        return
+    raise ValueError(f"reward program kind has no registered compiler: {kind!r}")
+
+
 def select_goal_reward_shape(
     document: Mapping[str, Any],
     selector: str | None,
@@ -333,22 +645,22 @@ def select_goal_reward_shape(
     if key not in definitions:
         available = ", ".join(sorted(str(item) for item in definitions))
         raise ValueError(f"unknown reward_shape {key!r}; available: {available}")
-    reward = normalize_mario_reward(
+    kind = str(catalog["program_kind"])
+    reward = _normalize_reward_program(
+        kind,
         definitions[key],
         label=f"{label}.reward_shapes.definitions.{key}",
         require_complete=True,
     )
     effective = copy.deepcopy(dict(document))
     effective.pop("reward_shapes", None)
-    for phase in ("train", "eval"):
-        task = effective[phase]["environment"]["task"]
-        task["reward"] = copy.deepcopy(reward)
+    _materialize_reward_program(kind, effective, reward, label=label)
     return RewardShapeSelection(
         goal=effective,
         key=key,
-        program_kind=str(catalog["program_kind"]),
-        program_revision=MARIO_REWARD_KERNEL_REVISION,
-        semantic_sha256=mario_reward_semantic_sha256(reward),
+        program_kind=kind,
+        program_revision=_reward_program_revision(kind),
+        semantic_sha256=_reward_program_semantic_sha256(kind, reward),
         is_default=key == default,
         reward=reward,
     )

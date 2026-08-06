@@ -164,6 +164,36 @@ def test_vizdoom_deathmatch_requires_complete_evaluation() -> None:
     assert requires_complete_evaluation({"game": "VizdoomDeathmatch-v1", "state": "default"})
 
 
+def test_vizdoom_deathmatch_acceptance_aggregates_raw_kills() -> None:
+    value = build_checkpoint_eval_contract(
+        environment={"game": "VizdoomDeathmatch-v1", "state": "default"},
+        episodes=4,
+        n_envs=2,
+        watchdog_steps=4200,
+        seed=10_000,
+        seed_protocol="vector-lane-v1",
+        acceptance=[
+            {
+                "metric": "eval/full/progress/kills/mean",
+                "operator": ">=",
+                "threshold": 10.0,
+            }
+        ],
+    )
+    rows = [
+        {**row(entry, success=False), "kills": kills}
+        for entry, kills in zip(value["manifest"]["episodes"], (8, 10, 12, 20), strict=True)
+    ]
+
+    aggregates = acceptance_aggregates(rows, contract=value)
+
+    assert aggregates["eval/full/progress/kills/mean"] == 12.5
+    assert aggregates["eval/full/progress/kills/max"] == 20.0
+    accepted, observed = evaluate_acceptance(aggregates, contract=value)
+    assert accepted is True
+    assert observed["eval/full/progress/kills/mean"] == 12.5
+
+
 def test_modal_protocol_accepts_complete_mean_return_rejection() -> None:
     value = contract(
         episodes=2,
