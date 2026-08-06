@@ -1588,6 +1588,119 @@ def test_loopback_server_requires_exact_origin_and_fragment_token() -> None:
     asyncio.run(scenario())
 
 
+def test_publication_authority_is_exact_tab_private_and_rotates(tmp_path: Path) -> None:
+    class FakePublicationService:
+        @staticmethod
+        def current():
+            return {"available": True, "capture": {"capture_id": "capture-test"}, "job": None}
+
+    async def receive_type(socket, expected):
+        for _ in range(12):
+            message = await asyncio.wait_for(socket.receive(), timeout=2.0)
+            if message.type == WSMsgType.TEXT and message.json().get("type") == expected:
+                return message.json()
+        raise AssertionError(f"did not receive {expected}")
+
+    async def scenario() -> None:
+        runner = HumanRecordingRunner(FakeHumanSession(), human_args())
+        server = PlaybackWebServer(
+            runner,
+            human_args(),
+            repo_root=tmp_path,
+            publication_factory=lambda **_kwargs: FakePublicationService(),
+        )
+        task = asyncio.create_task(server.run())
+        try:
+            deadline = asyncio.get_running_loop().time() + 3.0
+            while not server.origin and asyncio.get_running_loop().time() < deadline:
+                await asyncio.sleep(0.01)
+            async with ClientSession() as client:
+                first = await client.ws_connect(f"{server.origin}/ws", origin=server.origin)
+                await first.send_json(
+                    {
+                        "type": "hello",
+                        "token": server.token,
+                        "workspace_id": "shared",
+                        "window_id": "main",
+                    }
+                )
+                welcome = await receive_type(first, "welcome")
+                first_authority = await receive_type(first, "publication_authority")
+                assert first_authority["has_authority"] is True
+                assert first_authority["capability"]
+
+                second = await client.ws_connect(f"{server.origin}/ws", origin=server.origin)
+                await second.send_json(
+                    {
+                        "type": "hello",
+                        "token": server.token,
+                        "workspace_id": "shared",
+                        "window_id": "stats",
+                    }
+                )
+                second_welcome = await receive_type(second, "welcome")
+                second_snapshot = await receive_type(second, "snapshot")
+                assert second_snapshot["control"]["has_control"] is True
+                assert second_snapshot["publication"]["has_authority"] is False
+
+                denied = await client.get(
+                    f"{server.origin}/api/publication/current",
+                    headers={
+                        "Origin": server.origin,
+                        "Authorization": f"Bearer {server.token}",
+                        "X-Gradlab-Client": second_welcome["client_id"],
+                        "X-Gradlab-Control-Epoch": str(second_snapshot["control_epoch"]),
+                        "X-Gradlab-Publication-Capability": first_authority["capability"],
+                    },
+                )
+                assert denied.status == 403
+
+                await second.send_json({"type": "acquire_control"})
+                second_authority = await receive_type(second, "publication_authority")
+                assert second_authority["has_authority"] is True
+                assert second_authority["capability"] != first_authority["capability"]
+                allowed = await client.get(
+                    f"{server.origin}/api/publication/current",
+                    headers={
+                        "Origin": server.origin,
+                        "Authorization": f"Bearer {server.token}",
+                        "X-Gradlab-Client": second_welcome["client_id"],
+                        "X-Gradlab-Control-Epoch": str(second_authority["control_epoch"]),
+                        "X-Gradlab-Publication-Capability": second_authority["capability"],
+                    },
+                )
+                assert allowed.status == 200
+                allowed_data = await allowed.json()
+                assert "capture" in allowed_data, allowed_data
+                assert allowed_data["capture"]["capture_id"] == "capture-test", allowed_data
+
+                await second.close()
+                await asyncio.sleep(0.05)
+                stale = await client.get(
+                    f"{server.origin}/api/publication/current",
+                    headers={
+                        "Origin": server.origin,
+                        "Authorization": f"Bearer {server.token}",
+                        "X-Gradlab-Client": welcome["client_id"],
+                        "X-Gradlab-Control-Epoch": str(first_authority["control_epoch"]),
+                        "X-Gradlab-Publication-Capability": first_authority["capability"],
+                    },
+                )
+                assert stale.status == 403
+                await first.send_json(
+                    {"type": "command", "id": "stop", "name": "stop", "payload": {}}
+                )
+                await first.close()
+            await asyncio.wait_for(task, timeout=3.0)
+        finally:
+            runner.stop()
+            if not task.done():
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+
+    asyncio.run(scenario())
+
+
 def test_catalog_http_api_requires_the_fragment_session_token() -> None:
     class FakeCatalog:
         @staticmethod
@@ -2130,7 +2243,14 @@ def test_web_dashboard_assets_are_packaged_beside_server() -> None:
         panel_root / "workspace.js",
     )
     assert all(path.is_file() for path in expected_assets)
-    specialized_panels = {"game", "controls", "observation", "events", "raw"}
+    specialized_panels = {
+        "game",
+        "controls",
+        "observation",
+        "attribution",
+        "events",
+        "raw",
+    }
     assert all((panel_root / f"{name}.js").is_file() for name in specialized_panels)
     removed_metric_panels = {"policy", "reward", "actions", "signals"}
     assert all(not (panel_root / f"{name}.js").exists() for name in removed_metric_panels)

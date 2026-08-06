@@ -37,9 +37,9 @@ from gradlab.env_registry import environment_spec
 from gradlab.policy_bundle import (
     PolicyBundle,
     PolicyDocumentError,
+    UnsupportedPolicyDocumentVersion,
     evaluation_contract_sha256,
     load_policy_bundle,
-    preflight_document,
 )
 from gradlab.policy_registry import ALGORITHM_MODEL_CLASSES
 from gradlab.validation import require_mapping as _require_mapping
@@ -48,7 +48,7 @@ from gradlab.validation import require_mapping as _require_mapping
 HUGGINGFACE_NAMESPACE = "tsilva"
 REPO_NAMING_SCHEMA_VERSION = 1
 RELEASE_MANIFEST_DOCUMENT_TYPE = "gradlab.release_manifest"
-RELEASE_MANIFEST_VERSION = 1
+RELEASE_MANIFEST_VERSION = 2
 HUGGINGFACE_RELEASE_FILES = frozenset(
     {
         ".gitattributes",
@@ -146,15 +146,76 @@ class _ArtifactRecord(BoundaryModel):
     size_bytes: PositiveInt
 
 
-class _ReleaseManifest(BoundaryModel):
+class _ReleaseManifestV1(BoundaryModel):
     document_type: Literal[RELEASE_MANIFEST_DOCUMENT_TYPE]
-    format_version: Literal[RELEASE_MANIFEST_VERSION]
+    format_version: Literal[1]
     repo_naming_schema: Literal[REPO_NAMING_SCHEMA_VERSION]
     repository: _ReleaseRepository
     release: _ReleaseDetails
     model: _ReleaseModel
     source: _ReleaseSource
     evaluation: _ReleaseEvaluation
+    artifacts: dict[str, _ArtifactRecord]
+
+
+class _ReplayExecution(BoundaryModel):
+    source: Any
+    qualified_environment_id: NonEmptyText
+    provider_id: NonEmptyText
+    provider_version: Any
+    environment_hash: NonEmptyText
+    runtime_versions: Any
+    runtime_image_digest: Any
+    asset: Any
+    execution_target: NonEmptyText
+    device_type: NonEmptyText
+    contract_mode: NonEmptyText
+    overrides: Any
+    seed: Any
+
+
+class _ReleaseReplay(BoundaryModel):
+    capture_id: NonEmptyText
+    capture_fence_sha256: Sha256
+    run_id: NonEmptyText
+    checkpoint_id: NonEmptyText
+    checkpoint_sha256: Sha256
+    recipe_sha256: Sha256
+    episode: Any
+    seed: Any
+    start_id: Any
+    sampling_mode: NonEmptyText
+    steps: PositiveInt
+    return_value: Any
+    max_x_pos: Any
+    outcome: NonEmptyText
+    success: bool
+    boundary_role: Literal["terminal_observation"]
+    contract: Any
+    execution: _ReplayExecution
+    media: Any
+
+
+class _ReleasePublisher(BoundaryModel):
+    request_fingerprint: Sha256
+    huggingface_username: NonEmptyText
+    huggingface_namespace: NonEmptyText
+    youtube_channel_id: NonEmptyText
+    youtube_channel_title: NonEmptyText
+    youtube_privacy: Literal["public", "unlisted", "private"]
+
+
+class _ReleaseManifestV2(BoundaryModel):
+    document_type: Literal[RELEASE_MANIFEST_DOCUMENT_TYPE]
+    format_version: Literal[2]
+    repo_naming_schema: Literal[REPO_NAMING_SCHEMA_VERSION]
+    repository: _ReleaseRepository
+    release: _ReleaseDetails
+    model: _ReleaseModel
+    source: _ReleaseSource
+    evaluation: _ReleaseEvaluation
+    replay: _ReleaseReplay
+    publication: _ReleasePublisher
     artifacts: dict[str, _ArtifactRecord]
 
 
@@ -776,7 +837,17 @@ def render_model_card(
     )
     run_name = _required_text(source.get("run_name"), label="manifest source.run_name")
     run_value = f"[{_markdown_value(run_name)}]({wandb_url})" if wandb_url else run_name
-    card = _render_model_card_template(
+    replay_value = manifest.get("replay")
+    replay = replay_value if isinstance(replay_value, Mapping) else None
+    replay_execution = (
+        replay.get("execution") if isinstance(replay, Mapping) else None
+    )
+    template = (
+        "model_card_v2.md.j2"
+        if int(manifest.get("format_version") or 1) == 2
+        else "model_card.md.j2"
+    )
+    card = _MODEL_CARD_TEMPLATE_ENV.get_template(template).render(
         {
             "library_name": library_name,
             "library_tag": library_tag,
@@ -819,6 +890,26 @@ def render_model_card(
             "model_file_description": model_file_description,
             "manifest_purpose": manifest_purpose,
             "status": status,
+            "replay_outcome": (
+                _markdown_value(replay.get("outcome")) if replay is not None else ""
+            ),
+            "replay_success": bool(replay.get("success")) if replay is not None else False,
+            "replay_seed": replay.get("seed") if replay is not None else None,
+            "replay_start_id": (
+                _markdown_value(replay.get("start_id")) if replay is not None else ""
+            ),
+            "replay_steps": replay.get("steps") if replay is not None else None,
+            "replay_return": replay.get("return_value") if replay is not None else None,
+            "replay_contract_mode": (
+                _markdown_value((replay.get("contract") or {}).get("mode"))
+                if replay is not None and isinstance(replay.get("contract"), Mapping)
+                else ""
+            ),
+            "replay_runtime": (
+                _markdown_value(canonical_json_text(replay_execution, ensure_ascii=True))
+                if isinstance(replay_execution, Mapping)
+                else ""
+            ),
         }
     )
     return card.strip() + "\n"
@@ -847,7 +938,7 @@ def verify_replay(path: Path) -> dict[str, object]:
             "-select_streams",
             "v:0",
             "-show_entries",
-            "stream=codec_name,codec_tag_string,pix_fmt,nb_read_frames:format=duration",
+            "stream=codec_name,codec_tag_string,pix_fmt,nb_read_frames,width,height,r_frame_rate:format=duration",
             "-of",
             "json",
             str(path),
@@ -874,7 +965,17 @@ def verify_replay(path: Path) -> dict[str, object]:
     mdat = data.find(b"mdat")
     if moov < 0 or mdat < 0 or moov > mdat:
         raise ValueError("replay video must use faststart with moov before mdat")
-    return {"duration_seconds": duration, "frames": frames, **expected}
+    rate = str(stream.get("r_frame_rate") or "0/1")
+    numerator, separator, denominator = rate.partition("/")
+    fps = float(numerator) / float(denominator) if separator and float(denominator) else 0.0
+    return {
+        "duration_seconds": duration,
+        "frames": frames,
+        "width": int(stream.get("width") or 0),
+        "height": int(stream.get("height") or 0),
+        "fps": fps,
+        **expected,
+    }
 
 
 def release_artifact_records(root: Path) -> dict[str, dict[str, int | str]]:
@@ -918,6 +1019,9 @@ def build_release_manifest(
     evaluation: Mapping[str, Any],
     artifacts: Mapping[str, Any],
     youtube_url: str | None = None,
+    replay: Mapping[str, Any] | None = None,
+    publication: Mapping[str, Any] | None = None,
+    format_version: int = RELEASE_MANIFEST_VERSION,
 ) -> dict[str, Any]:
     if not re.fullmatch(r"v[1-9][0-9]*", release_version):
         raise ValueError("release_version must be a sequential tag such as v1 or v2")
@@ -928,9 +1032,15 @@ def build_release_manifest(
         raise ValueError("action-program releases require program action sampling")
     if identity.algorithm == "cell-graph" and evaluation.get("action_sampling") != "route":
         raise ValueError("cell-graph releases require route action sampling")
+    if format_version not in {1, 2}:
+        raise ValueError("release manifest format_version must be 1 or 2")
+    if format_version == 2 and not isinstance(replay, Mapping):
+        raise ValueError("release manifest v2 requires replay provenance")
+    if format_version == 2 and not isinstance(publication, Mapping):
+        raise ValueError("release manifest v2 requires publication provenance")
     manifest: dict[str, Any] = {
         "document_type": RELEASE_MANIFEST_DOCUMENT_TYPE,
-        "format_version": RELEASE_MANIFEST_VERSION,
+        "format_version": format_version,
         "repo_naming_schema": REPO_NAMING_SCHEMA_VERSION,
         "repository": {"repo_id": build_model_repo_id(identity), **asdict(identity)},
         "release": {"version": release_version, "published_at": published_at},
@@ -939,15 +1049,48 @@ def build_release_manifest(
         "evaluation": dict(evaluation),
         "artifacts": dict(artifacts),
     }
+    if format_version == 2:
+        assert isinstance(replay, Mapping)
+        assert isinstance(publication, Mapping)
+        manifest["replay"] = dict(replay)
+        manifest["publication"] = dict(publication)
     if youtube_url:
         manifest["release"]["youtube_url"] = youtube_url
     _assert_no_absolute_paths(manifest)
     return manifest
 
 
-def _validate_release_manifest(document: Mapping[str, Any], source: str) -> dict[str, Any]:
+def release_replay_from_capture(capture: Mapping[str, Any]) -> dict[str, Any]:
+    from gradlab.play_capture import validate_capture_document
+
+    document = validate_capture_document(capture)
+    replay = _require_mapping(document.get("replay"), label="capture replay")
+    return {
+        "capture_id": document["capture_id"],
+        "capture_fence_sha256": document["capture_fence_sha256"],
+        "run_id": document["run_id"],
+        "checkpoint_id": document["checkpoint_id"],
+        "checkpoint_sha256": document["checkpoint_sha256"],
+        "recipe_sha256": document["recipe_sha256"],
+        "episode": document["episode"],
+        "seed": document["seed"],
+        "start_id": document.get("start_id"),
+        "sampling_mode": document["sampling_mode"],
+        "steps": document["steps"],
+        "return_value": document["return"],
+        "max_x_pos": document["max_x_pos"],
+        "outcome": document["outcome"],
+        "success": document["success"],
+        "boundary_role": document["boundary_role"],
+        "contract": deepcopy(document["contract"]),
+        "execution": deepcopy(document["execution"]),
+        "media": deepcopy(dict(replay)),
+    }
+
+
+def _validate_release_manifest_v1(document: Mapping[str, Any], source: str) -> dict[str, Any]:
     manifest = validate_boundary(
-        _ReleaseManifest,
+        _ReleaseManifestV1,
         document,
         label=source,
         error_type=PolicyDocumentError,
@@ -957,6 +1100,45 @@ def _validate_release_manifest(document: Mapping[str, Any], source: str) -> dict
             f"{source}.artifacts must describe exactly: " + ", ".join(sorted(HASHED_RELEASE_FILES))
         )
     return deepcopy(dict(document))
+
+
+def _validate_release_manifest_v2(document: Mapping[str, Any], source: str) -> dict[str, Any]:
+    manifest = validate_boundary(
+        _ReleaseManifestV2,
+        document,
+        label=source,
+        error_type=PolicyDocumentError,
+    )
+    if set(manifest.artifacts) != HASHED_RELEASE_FILES:
+        raise PolicyDocumentError(
+            f"{source}.artifacts must describe exactly: " + ", ".join(sorted(HASHED_RELEASE_FILES))
+        )
+    if not str(manifest.replay.capture_id).startswith("capture-"):
+        raise PolicyDocumentError(f"{source}.replay.capture_id is invalid")
+    media = manifest.replay.media
+    if not isinstance(media, Mapping) or int(media.get("frames") or 0) != manifest.replay.steps + 1:
+        raise PolicyDocumentError(f"{source}.replay.media frames must equal replay steps + 1")
+    return deepcopy(dict(document))
+
+
+def validate_release_manifest_document(
+    document: Mapping[str, Any],
+    *,
+    source: str = "release manifest",
+) -> dict[str, Any]:
+    if document.get("document_type") != RELEASE_MANIFEST_DOCUMENT_TYPE:
+        raise PolicyDocumentError(f"{source} has an invalid document_type")
+    version = document.get("format_version")
+    if version == 1:
+        return _validate_release_manifest_v1(document, source)
+    if version == 2:
+        return _validate_release_manifest_v2(document, source)
+    raise UnsupportedPolicyDocumentVersion(
+        source=source,
+        document_type=RELEASE_MANIFEST_DOCUMENT_TYPE,
+        format_version=version,
+        supported_versions=[1, 2],
+    )
 
 
 def validate_release_bundle(root: Path) -> dict[str, Any]:
@@ -970,13 +1152,9 @@ def validate_release_bundle(root: Path) -> dict[str, Any]:
         raise ValueError(f"release entries must all be regular files: {non_files}")
     manifest_path = root / "release_manifest.json"
     manifest_value = json.loads(manifest_path.read_text(encoding="utf-8"))
-    manifest = preflight_document(
-        manifest_value,
-        source=str(manifest_path),
-        expected_type=RELEASE_MANIFEST_DOCUMENT_TYPE,
-        current_version=RELEASE_MANIFEST_VERSION,
-        validator=_validate_release_manifest,
-    )
+    if not isinstance(manifest_value, Mapping):
+        raise PolicyDocumentError(f"{manifest_path} must contain a JSON object")
+    manifest = validate_release_manifest_document(manifest_value, source=str(manifest_path))
     bundle = load_policy_bundle(root, source=str(root))
     card_text = (root / "README.md").read_text(encoding="utf-8")
     _assert_no_absolute_paths(manifest)
@@ -1004,5 +1182,22 @@ def validate_release_bundle(root: Path) -> dict[str, Any]:
             raise ValueError(f"release evaluation {key} does not match the policy bundle")
     if evidence.get("exact_contract") is not True:
         raise ValueError("release evaluation evidence is not exact-contract")
+    if int(manifest.get("format_version") or 0) == 2:
+        replay = _require_mapping(manifest.get("replay"), label="manifest replay")
+        media = _require_mapping(replay.get("media"), label="manifest replay.media")
+        replay_record = _require_mapping(
+            expected_records.get("replay.mp4"),
+            label="release replay.mp4 artifact",
+        )
+        if media.get("sha256") != replay_record.get("sha256"):
+            raise ValueError("release replay sha256 does not match replay.mp4")
+        if int(media.get("size_bytes") or 0) != int(replay_record.get("size_bytes") or 0):
+            raise ValueError("release replay size does not match replay.mp4")
+        replay_probe = verify_replay(root / "replay.mp4")
+        for key in ("frames", "width", "height"):
+            if int(media.get(key) or 0) != int(replay_probe.get(key) or 0):
+                raise ValueError(f"release replay {key} does not match replay.mp4")
+        if abs(float(media.get("fps") or 0.0) - float(replay_probe.get("fps") or 0.0)) > 1e-6:
+            raise ValueError("release replay fps does not match replay.mp4")
     validate_model_card(card_text, manifest, bundle)
     return manifest

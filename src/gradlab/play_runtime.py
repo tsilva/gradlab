@@ -12,6 +12,7 @@ from gradlab.action_contract import assert_action_contract_compatible
 from gradlab.device import resolve_sb3_device
 from gradlab.env import assert_provider_runtime_available, make_eval_vec_env, resolve_env_config
 from gradlab.env_metadata import env_config_from_config_dict, env_config_metadata
+from gradlab.env_metadata import runtime_versions_metadata
 from gradlab.env_registry import resolve_env_provider
 from gradlab.model_sources import (
     ModelSourceKind,
@@ -33,6 +34,9 @@ from gradlab.play_termination import (
     with_enabled_termination_conditions,
 )
 from gradlab.play_web import WebPlaybackRunner
+from gradlab.play_capture import player_source_provenance
+from gradlab.file_utils import file_sha256
+from gradlab.run_contracts import checkpoint_id
 from gradlab.rom_assets import (
     direct_rom_asset_manifest,
     portable_rom_asset_identity,
@@ -555,12 +559,85 @@ class PlaybackLoader:
                 f"checkpoint_step={candidate.source.checkpoint_step or '-'} "
                 f"environment_hash={candidate.source.run_config.get('environment_hash', '-')}"
             )
+            recipe_value = candidate.source.bundle.recipe.get("recipe")
+            recipe = recipe_value if isinstance(recipe_value, Mapping) else {}
+            checkpoint_value = candidate.source.bundle.model.get("checkpoint")
+            checkpoint = checkpoint_value if isinstance(checkpoint_value, Mapping) else {}
+            checkpoint_sha256 = str(
+                checkpoint.get("sha256") or file_sha256(candidate.source.bundle.checkpoint_path)
+            )
+            resolved_checkpoint_id = str(candidate.spec.checkpoint_id or "")
+            if not resolved_checkpoint_id:
+                resolved_checkpoint_id = checkpoint_id(
+                    step=int(checkpoint.get("step") or candidate.source.checkpoint_step or 0),
+                    sha256=checkpoint_sha256,
+                )
+            run_id = str(candidate.spec.run_id or "")
+            checkpoint_identity = f"{run_id}:{resolved_checkpoint_id}"
+            playback_value = recipe.get("playback")
+            playback = playback_value if isinstance(playback_value, Mapping) else {}
+            asset_value = playback.get("asset")
+            asset = dict(asset_value) if isinstance(asset_value, Mapping) else None
+            recipe_provenance_value = candidate.source.bundle.recipe.get("provenance")
+            recipe_provenance = (
+                recipe_provenance_value
+                if isinstance(recipe_provenance_value, Mapping)
+                else {}
+            )
+            recipe_runtime_value = recipe_provenance.get("runtime")
+            recipe_runtime = (
+                recipe_runtime_value if isinstance(recipe_runtime_value, Mapping) else {}
+            )
+            capture_context = {
+                "source_kind": candidate.spec.kind,
+                "contract_mode": str(candidate.contract_details.get("mode") or ""),
+                "matches_contract": str(candidate.contract_details.get("mode") or "")
+                in {"training", "evaluation"},
+                "checkpoint_identity": checkpoint_identity,
+                "run_id": run_id,
+                "checkpoint_id": resolved_checkpoint_id,
+                "checkpoint_sha256": checkpoint_sha256,
+                "recipe_sha256": file_sha256(candidate.source.bundle.recipe_path),
+                "goal": deepcopy(recipe.get("goal")),
+                "contract": deepcopy(candidate.contract_details),
+                "source": {
+                    "kind": candidate.spec.kind,
+                    "run_id": run_id,
+                    "checkpoint_id": resolved_checkpoint_id,
+                    "artifact_name": str(candidate.source.artifact_name or ""),
+                    "revision": str(candidate.source.bundle.revision or ""),
+                },
+                "execution": {
+                    "source": player_source_provenance(Path(__file__).resolve().parents[2]),
+                    "qualified_environment_id": (
+                        f"{candidate.config.env_provider}:{candidate.config.game}"
+                    ),
+                    "provider_id": str(candidate.config.env_provider),
+                    "provider_version": runtime_versions_metadata().get(
+                        str(candidate.config.env_provider).replace("-", "_")
+                    ),
+                    "environment_hash": str(
+                        candidate.contract_details.get("policy_environment_hash") or ""
+                    ),
+                    "runtime_versions": runtime_versions_metadata(),
+                    "runtime_image_digest": str(recipe_runtime.get("image_ref") or ""),
+                    "asset": asset,
+                    "execution_target": "local_player",
+                    "device_type": str(getattr(model, "device", None) or args.device or "auto"),
+                    "contract_mode": str(candidate.contract_details.get("mode") or ""),
+                    "overrides": list(
+                        candidate.contract_details.get("requested_policy_override_paths") or ()
+                    ),
+                    "seed": int(args.seed),
+                },
+            }
             runner = WebPlaybackRunner(
                 session,
                 args,
                 config_text=config_text,
                 contract_details=candidate.contract_details,
                 value_contract=candidate.value_contract,
+                capture_context=capture_context,
             )
             return ActivePlayback(
                 runner=runner,

@@ -253,7 +253,7 @@ def test_deathmatch_multidiscrete_codec_is_opt_in_and_runs_through_real_runtime(
         env.close()
 
 
-def test_deathmatch_native_horizon_emits_the_shared_timeout_event() -> None:
+def test_deathmatch_native_horizon_is_successful_and_keeps_bootstrap() -> None:
     document = compose_train_document(
         GOAL_ROOT / "_goal.yaml",
         GOAL_ROOT / "recipes/ppo.yaml",
@@ -281,7 +281,7 @@ def test_deathmatch_native_horizon_emits_the_shared_timeout_event() -> None:
         assert len(records) == 1
         assert records[0].episode_length == 2
         assert records[0].events == ("time_limit_reached",)
-        assert records[0].outcome.name == "TIMEOUT"
+        assert records[0].outcome.name == "SUCCESS"
         assert records[0].truncated is True
         assert records[0].terminated is False
     finally:

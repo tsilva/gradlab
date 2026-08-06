@@ -3,14 +3,13 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import {
-  attributionFrameIdentity,
-  attributionPresentation,
   observationFrameIdentity,
 } from "../../src/gradlab/web_player/panels/observation.js";
 import {
   OVERLAY_ATTRIBUTION,
   OVERLAY_CNN,
   OVERLAY_NONE,
+  attributionFrameIdentity,
   cnnWinnerLegend,
   diagnosticActivity,
   drawCnnWinnerOverlay,
@@ -71,30 +70,13 @@ test("attribution frames require exact transition and generation identity", () =
   );
 });
 
-test("attribution UI distinguishes computing, cadence, no decision, error, and unavailable", () => {
-  assert.equal(attributionPresentation(snapshot(), false).label, "Computing");
-  assert.equal(attributionPresentation(snapshot(), true).label, "Available");
-  assert.equal(attributionPresentation(snapshot({
-    transition: { status: "not_computed", mode: "occlusion", generation: 0, reason: "cadence" },
-  })).label, "Cadence skipped");
-  assert.equal(attributionPresentation(snapshot({
-    transition: { status: "not_computed", mode: "gradcam", generation: 0, reason: "no_policy_decision" },
-  })).label, "No policy decision");
-  assert.equal(attributionPresentation(snapshot({
-    session: { mode: "gradcam", status: "error", interval: 1, error: "boom" },
-  })).label, "Error");
-  assert.equal(attributionPresentation(snapshot({ supported: [] })).label, "Unavailable");
-});
-
-test("method and cadence are shared commands while selection and opacity stay local", () => {
-  assert.match(source, /services\.command\("set_attribution"/);
-  const localControls = source.slice(
-    source.indexOf('overlay.addEventListener("change"'),
-    source.indexOf("return {", source.indexOf('overlay.addEventListener("change"')),
-  );
-  assert.doesNotMatch(localControls, /services\.command/);
-  assert.match(source, /METHOD_DEFAULT_INTERVAL.*gradcam: 1, occlusion: 8/);
-  assert.doesNotMatch(source, /data-attribution-visible/);
+test("observation owns no attribution controls or processing", () => {
+  assert.doesNotMatch(source, /set_attribution/);
+  assert.doesNotMatch(source, /data-attribution-method/);
+  assert.doesNotMatch(source, /data-attribution-interval/);
+  assert.doesNotMatch(source, /data-diagnostic-overlay/);
+  assert.doesNotMatch(source, /data-overlay-opacity/);
+  assert.match(source, /reconcileOverlaySelection/);
 });
 
 test("overlay selection is exclusive, sticky, and follows newly active tools", () => {
@@ -188,7 +170,7 @@ test("observation receives CNN frames without demanding CNN processing", () => {
     PANEL_TYPES.observation.subscriptions,
     ["observation", "attribution", "cnn-inspection"],
   );
-  assert.deepEqual(PANEL_TYPES.observation.processing, ["observation", "attribution"]);
+  assert.deepEqual(PANEL_TYPES.observation.processing, ["observation"]);
   assert.deepEqual(PANEL_TYPES.observation.frameKinds, [2, 3, 4]);
   assert.match(source, /baseIdentity/);
   assert.match(source, /sameFrameIdentity\(baseIdentity, expectedBaseIdentity\(\)\)/);

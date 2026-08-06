@@ -28,16 +28,16 @@ def recipe_document(version: int) -> dict[str, object]:
 
 
 def test_recipe_owned_evaluation_schema_accepts_current_version() -> None:
-    assert metrics_schema_version_from_recipe_document(recipe_document(17)) == 17
+    assert metrics_schema_version_from_recipe_document(recipe_document(18)) == 18
 
 
-@pytest.mark.parametrize("version", [15, 16, 18])
+@pytest.mark.parametrize("version", [16, 17, 19])
 def test_recipe_owned_evaluation_schema_rejects_unknown_versions(version: int) -> None:
     with pytest.raises(ValueError, match="unsupported metrics schema"):
         metrics_schema_version_from_recipe_document(recipe_document(version))
 
 
-def test_v17_projection_keeps_one_bounded_eval_surface() -> None:
+def test_v18_projection_keeps_one_bounded_eval_surface() -> None:
     projection = evaluation_wandb_projection(
         {
             "eval/full/episode/return/shaped/mean": 4.0,
@@ -48,7 +48,7 @@ def test_v17_projection_keeps_one_bounded_eval_surface() -> None:
             "eval/full/duration/seconds": 2.0,
             "failure_count": 1,
         },
-        schema_version=17,
+        schema_version=18,
         checkpoint_step=100,
         accepted=False,
         episodes_planned=2,
@@ -65,7 +65,7 @@ def test_v17_projection_keeps_one_bounded_eval_surface() -> None:
     assert "failure_count" not in projection
 
 
-def test_v17_promotion_projects_only_finite_semantic_leader_fields() -> None:
+def test_v18_promotion_projects_only_finite_semantic_leader_fields() -> None:
     run = SimpleNamespace(summary={})
     publish_promotion_summary(
         run,
@@ -93,7 +93,7 @@ def test_v17_promotion_projects_only_finite_semantic_leader_fields() -> None:
     assert "leader/checkpoint/acceptance_pass" not in run.summary
 
 
-def test_v17_promotion_projects_progress_mean_and_max_for_deathmatch_rank() -> None:
+def test_v18_promotion_projects_progress_mean_and_max_for_deathmatch_rank() -> None:
     run = SimpleNamespace(summary={})
     publish_promotion_summary(
         run,

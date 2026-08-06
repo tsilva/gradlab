@@ -6,6 +6,7 @@ from gradlab.metric_names import (
     TRAIN_EXPLORATION_CELL_UNIQUE_FROM_TARGET_ROLLING_UP_TO_100_MEAN,
     TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_ROLLING_UP_TO_100_MEAN,
     TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_WINDOW_100_MEAN,
+    TRAIN_PROGRESS_KILLS_FROM_TARGET_ROLLING_UP_TO_100_MEAN,
     validate_metric_name,
 )
 from gradlab.training_metrics import EpisodeMetricsReducer
@@ -15,8 +16,14 @@ def _episode(
     episode_return: float,
     *,
     origin: str = "target",
+    kills: float | None = None,
     unique_cells: int | None = None,
 ) -> SimpleNamespace:
+    metrics = {}
+    if unique_cells is not None:
+        metrics["cell_novelty_episode_unique_cells"] = unique_cells
+    if kills is not None:
+        metrics["kills"] = kills
     return SimpleNamespace(
         episode_return=episode_return,
         episode_length=1,
@@ -26,11 +33,7 @@ def _episode(
         events=(),
         terminated=True,
         truncated=False,
-        metrics=(
-            {}
-            if unique_cells is None
-            else {"cell_novelty_episode_unique_cells": unique_cells}
-        ),
+        metrics=metrics,
     )
 
 
@@ -86,3 +89,34 @@ def test_unique_cell_mean_uses_only_completed_target_origin_episodes() -> None:
         )
         == TRAIN_EXPLORATION_CELL_UNIQUE_FROM_TARGET_ROLLING_UP_TO_100_MEAN
     )
+
+
+def test_configured_frag_mean_rolls_over_latest_100_target_episodes() -> None:
+    reducer = EpisodeMetricsReducer(progress_fields=("kills",), track_success=False)
+
+    partial = reducer.consume(_episode(1.0, kills=1) for _ in range(99))
+    assert partial[TRAIN_PROGRESS_KILLS_FROM_TARGET_ROLLING_UP_TO_100_MEAN] == 1.0
+
+    mature = reducer.consume((_episode(3.0, kills=3),))
+    assert mature[TRAIN_PROGRESS_KILLS_FROM_TARGET_ROLLING_UP_TO_100_MEAN] == pytest.approx(
+        1.02
+    )
+
+    archive_only = reducer.consume((_episode(1000.0, origin="curriculum", kills=1000),))
+    assert archive_only[TRAIN_PROGRESS_KILLS_FROM_TARGET_ROLLING_UP_TO_100_MEAN] == pytest.approx(
+        1.02
+    )
+
+    rolled = reducer.consume((_episode(-1.0, kills=-1),))
+    assert rolled[TRAIN_PROGRESS_KILLS_FROM_TARGET_ROLLING_UP_TO_100_MEAN] == 1.0
+    assert (
+        validate_metric_name(TRAIN_PROGRESS_KILLS_FROM_TARGET_ROLLING_UP_TO_100_MEAN)
+        == TRAIN_PROGRESS_KILLS_FROM_TARGET_ROLLING_UP_TO_100_MEAN
+    )
+
+
+def test_configured_progress_field_requires_a_finite_episode_value() -> None:
+    reducer = EpisodeMetricsReducer(progress_fields=("kills",), track_success=False)
+
+    with pytest.raises(ValueError, match="kills.*finite number"):
+        reducer.consume((_episode(0.0),))

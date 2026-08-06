@@ -18,6 +18,7 @@ from gradlab.publication import (
     normalize_publication_evaluation,
     publication_identity_from_policy_bundle,
     publication_source_from_policy_bundle,
+    release_replay_from_capture,
     release_artifact_records,
     render_model_card,
     validate_release_bundle,
@@ -53,6 +54,8 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--recipe", type=Path)
     parser.add_argument("--replay", type=Path)
     parser.add_argument("--evaluation-json", type=Path)
+    parser.add_argument("--capture-json", type=Path)
+    parser.add_argument("--publication-json", type=Path)
     parser.add_argument("--release-version")
     parser.add_argument("--published-at")
     parser.add_argument("--youtube-url")
@@ -90,6 +93,8 @@ def main(argv: list[str] | None = None) -> int:
         "--recipe": args.recipe,
         "--replay": args.replay,
         "--evaluation-json": args.evaluation_json,
+        "--capture-json": args.capture_json,
+        "--publication-json": args.publication_json,
         "--release-version": args.release_version,
         "--youtube-url": args.youtube_url,
         "--output-dir": args.output_dir,
@@ -101,6 +106,8 @@ def main(argv: list[str] | None = None) -> int:
     assert args.recipe is not None
     assert args.replay is not None
     assert args.evaluation_json is not None
+    assert args.capture_json is not None
+    assert args.publication_json is not None
     assert args.release_version is not None
     assert args.youtube_url is not None
     assert args.output_dir is not None
@@ -109,6 +116,8 @@ def main(argv: list[str] | None = None) -> int:
         args.recipe,
         args.replay,
         args.evaluation_json,
+        args.capture_json,
+        args.publication_json,
     ):
         if not path.is_file():
             raise FileNotFoundError(path)
@@ -117,6 +126,9 @@ def main(argv: list[str] | None = None) -> int:
 
     verify_replay(args.replay)
     evaluation_document = _load_object(args.evaluation_json, label="evaluation")
+    capture_document = _load_object(args.capture_json, label="capture")
+    publication_document = _load_object(args.publication_json, label="publication")
+    replay_value = release_replay_from_capture(capture_document)
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
     shutil.copy2(args.model, args.output_dir / "model.zip")
@@ -174,6 +186,8 @@ def main(argv: list[str] | None = None) -> int:
         evaluation=evaluation_value,
         artifacts={},
         youtube_url=args.youtube_url,
+        replay=replay_value,
+        publication=publication_document,
     )
     (args.output_dir / "README.md").write_text(
         render_model_card(provisional_manifest, bundle), encoding="utf-8"
@@ -188,6 +202,8 @@ def main(argv: list[str] | None = None) -> int:
         evaluation=evaluation_value,
         artifacts=artifact_records,
         youtube_url=args.youtube_url,
+        replay=replay_value,
+        publication=publication_document,
     )
     (args.output_dir / "release_manifest.json").write_text(
         json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"

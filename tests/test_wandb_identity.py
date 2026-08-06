@@ -205,7 +205,7 @@ def test_resume_wandb_requires_or_uses_display_name(
         "run_name": "gradlab-0123456789abcdef0123456789abcdef",
         "env_provider": "supermariobrosnes-turbo",
         "game": "SuperMarioBros-Nes-v0",
-        "metrics_schema_version": 17,
+        "metrics_schema_version": 18,
     }
     fake_wandb = SimpleNamespace(
         init=lambda **kwargs: captured.update(kwargs) or FakeRun(),

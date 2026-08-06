@@ -399,6 +399,7 @@ def run_sb3_on_policy(
                     event_names=tuple(task_termination(config).get("failure", ())),
                     active_reward_components=active_reward_components(config.task),
                     active_reward_signals=active_reward_signals(config.task),
+                    progress_fields=tuple(common_config.get("episode_progress_fields", ())),
                     configured_starts=tuple(
                         config.states or ((config.state,) if config.state else ())
                     ),

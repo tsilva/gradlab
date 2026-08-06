@@ -244,6 +244,19 @@ def validate_task_config(task: Mapping[str, Any], *, label: str = "task") -> Non
             termination["outcome_precedence"],
             label=f"{label}.termination.outcome_precedence",
         )
+    bootstrap_events: set[str] = set()
+    if "bootstrap" in termination:
+        if task_id != "identity":
+            raise ValueError(f"{label}.termination.bootstrap is identity-task-only")
+        names = termination["bootstrap"]
+        if not isinstance(names, list | tuple):
+            raise ValueError(f"{label}.termination.bootstrap must be a list")
+        bootstrap_events = {str(name) for name in names}
+        missing = sorted(bootstrap_events - set(events))
+        if missing:
+            raise ValueError(
+                f"{label}.termination.bootstrap references unknown events: {', '.join(missing)}"
+            )
     event_outcomes: dict[str, str] = {}
     for outcome in ("success", "failure", "timeout", "neutral"):
         if outcome not in termination:
@@ -264,6 +277,14 @@ def validate_task_config(task: Mapping[str, Any], *, label: str = "task") -> Non
                     f"{label}.events.{event_name} cannot map to both {previous} and {outcome}"
                 )
             event_outcomes[event_name] = outcome
+    non_success_bootstrap_events = sorted(
+        name for name in bootstrap_events if event_outcomes.get(name) != "success"
+    )
+    if non_success_bootstrap_events:
+        raise ValueError(
+            f"{label}.termination.bootstrap events must also map to success: "
+            + ", ".join(non_success_bootstrap_events)
+        )
     for key in ("max_episode_steps", "no_progress_min_delta"):
         if key not in termination:
             continue

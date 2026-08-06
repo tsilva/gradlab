@@ -548,7 +548,7 @@ class BatchRuntimeTests(unittest.TestCase):
         self.assertEqual(records[0].outcome, Outcome.NEUTRAL)
         self.assertEqual(runtime.drain_records(), [])
 
-    def test_identity_runtime_maps_provider_boundaries_to_exclusive_task_outcomes(self):
+    def test_identity_runtime_bootstraps_success_at_a_provider_truncation(self):
         provider = DeterministicNativeVectorProvider()
         descriptor = descriptor_for(provider)
         kernel = IdentityTaskDefinition(
@@ -573,6 +573,7 @@ class BatchRuntimeTests(unittest.TestCase):
             termination={
                 "failure": ["player_died"],
                 "success": ["goal_reached"],
+                "bootstrap": ["goal_reached"],
             },
         ).bind(descriptor, provider.num_envs)
         runtime = BatchRuntime(provider, descriptor, kernel, run_seed=17)
@@ -585,8 +586,8 @@ class BatchRuntimeTests(unittest.TestCase):
 
         step = runtime.step(np.zeros((2, 3), dtype=np.int8))
 
-        np.testing.assert_array_equal(step.terminated, [True, True])
-        np.testing.assert_array_equal(step.truncated, [False, False])
+        np.testing.assert_array_equal(step.terminated, [True, False])
+        np.testing.assert_array_equal(step.truncated, [False, True])
         records = [
             record for record in runtime.drain_records() if isinstance(record, EpisodeRecord)
         ]

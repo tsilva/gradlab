@@ -22,8 +22,11 @@ test("stats panels expose one standardized persisted processing switch", () => {
   assert.match(styles, /Disabled — data processing is off/);
 });
 
-test("the CNN processing switch is also the capture switch", () => {
-  assert.match(app, /name === "cnn" \? "Capture CNN features"/);
+test("diagnostic processing switches also control their captures", () => {
+  assert.match(app, /name === "attribution"/);
+  assert.match(app, /function syncAttributionToPanel/);
+  assert.match(app, /command\("set_attribution", payload\)/);
+  assert.match(app, /"CNN features"/);
   assert.match(app, /function syncCnnCaptureToPanel/);
   assert.match(app, /command\("set_cnn_inspection", \{ enabled: desired \}\)/);
 });

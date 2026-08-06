@@ -260,6 +260,7 @@ def main(
             run_id=str(train_config.get("wandb_run_id") or train_config["run_name"]),
             reducer=EpisodeMetricsReducer(
                 event_names=tuple(task_termination(environment).get("failure", ())),
+                progress_fields=tuple(train_config.get("episode_progress_fields", ())),
                 configured_starts=tuple(
                     environment.states or ((environment.state,) if environment.state else ())
                 ),

@@ -24,6 +24,7 @@ from gradlab.metric_names import (
     metric_value_segment,
     train_outcome_reason_count_metric,
     train_outcome_reason_window_rate_metric,
+    train_progress_from_target_rolling_mean_metric,
     train_success_attempts_metric,
     train_success_count_metric,
     train_success_window_rate_metric,
@@ -53,6 +54,7 @@ class EpisodeMetricsReducer:
         *,
         event_names: Sequence[str] = (),
         configured_starts: Sequence[str] = (),
+        progress_fields: Sequence[str] = (),
         track_success: bool = True,
     ) -> None:
         self.event_names = tuple(dict.fromkeys(str(name) for name in event_names))
@@ -60,9 +62,15 @@ class EpisodeMetricsReducer:
             dict.fromkeys(metric_value_segment(start) for start in configured_starts)
         )
         self.track_success = bool(track_success)
+        self.progress_fields = tuple(
+            dict.fromkeys(metric_value_segment(field) for field in progress_fields)
+        )
         self.returns: deque[float] = deque(maxlen=self.window_size)
         self.target_returns: deque[float] = deque(maxlen=self.window_size)
         self.target_unique_cells: deque[int] = deque(maxlen=self.window_size)
+        self.target_progress: dict[str, deque[float]] = {
+            field: deque(maxlen=self.window_size) for field in self.progress_fields
+        }
         self.lengths: deque[int] = deque(maxlen=self.window_size)
         self.terminal_count = 0
         self.reason_counts: dict[str, int] = {name: 0 for name in self.event_names}
@@ -97,6 +105,17 @@ class EpisodeMetricsReducer:
                     and float(unique_cells).is_integer()
                 ):
                     self.target_unique_cells.append(int(unique_cells))
+            for field, window in self.target_progress.items():
+                value = metrics.get(field) if isinstance(metrics, Mapping) else None
+                if (
+                    not isinstance(value, int | float | np.number)
+                    or isinstance(value, bool | np.bool_)
+                    or not np.isfinite(float(value))
+                ):
+                    raise ValueError(
+                        f"configured episode progress field {field!r} must be a finite number"
+                    )
+                window.append(float(value))
 
         succeeded = episode_succeeded(record)
         reasons = (
@@ -157,6 +176,11 @@ class EpisodeMetricsReducer:
             payload[
                 TRAIN_EXPLORATION_CELL_UNIQUE_FROM_TARGET_ROLLING_UP_TO_100_MEAN
             ] = float(np.mean(self.target_unique_cells))
+        for field, window in self.target_progress.items():
+            if window:
+                payload[train_progress_from_target_rolling_mean_metric(field)] = float(
+                    np.mean(window)
+                )
         for reason, count in sorted(self.reason_counts.items()):
             window = self.reason_windows[reason]
             payload[train_outcome_reason_count_metric(reason)] = count

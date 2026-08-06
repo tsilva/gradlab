@@ -64,9 +64,12 @@ test("default workspace is a v6 collection without a standalone action panel", (
   assert.equal(workspace.panels.cnn.type, "cnn");
   assert.equal(workspace.panels.cnn.placement.visible, false);
   assert.equal(workspace.panels.cnn.enabled, false);
+  assert.equal(workspace.panels.attribution.type, "attribution");
+  assert.equal(workspace.panels.attribution.placement.visible, false);
+  assert.equal(workspace.panels.attribution.enabled, false);
   assert.ok(
     Object.entries(workspace.panels)
-      .filter(([id]) => id !== "cnn")
+      .filter(([id]) => !["attribution", "cnn"].includes(id))
       .every(([, panel]) => panel.enabled === true),
   );
 });
@@ -126,6 +129,18 @@ test("existing workspaces receive the CNN explorer hidden while new paired works
 
   assert.equal(normalized.panels.cnn.placement.visible, false);
   assert.equal(normalized.panels.cnn.builtin, true);
+});
+
+test("existing workspaces receive attribution hidden while new paired workspaces show it", () => {
+  const workspace = createDefaultWorkspace({ paired: true });
+  assert.equal(workspace.panels.attribution.placement.visible, true);
+  assert.equal(workspace.panels.attribution.enabled, false);
+  delete workspace.panels.attribution;
+
+  const normalized = normalizeWorkspace(workspace, { paired: true });
+
+  assert.equal(normalized.panels.attribution.placement.visible, false);
+  assert.equal(normalized.panels.attribution.builtin, true);
 });
 
 test("reward breakdown scope persists through workspace normalization", () => {

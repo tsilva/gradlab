@@ -153,7 +153,7 @@ def main(argv: list[str] | None = None) -> int:
         initial_source=initial_source,
     )
     try:
-        return run_web_player_application(host, args, catalog=catalog)
+        return run_web_player_application(host, args, catalog=catalog, repo_root=repo_root)
     finally:
         if catalog_authority is not None:
             catalog_authority.close()
