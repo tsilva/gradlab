@@ -19,6 +19,7 @@ from gradlab.catalog_cache import CatalogEntryCache
 from gradlab.play_catalog import (
     PlayCatalog,
     WandbRunLocation,
+    checkpoint_metric_contract,
     checkpoint_metric_leaders,
     parse_wandb_location,
 )
@@ -293,6 +294,63 @@ def checkpoint_row(*, step: int, digest: str, purpose: str) -> dict[str, object]
         "created_at": "2026-01-03T00:00:00Z",
         "schema_version": SCHEMA_VERSION,
     }
+
+
+def deathmatch_checkpoint_train_config() -> dict[str, object]:
+    return {
+        "metrics_schema_version": METRICS_SCHEMA_VERSION,
+        "selection_rank": [
+            "max(eval/full/progress/kills/mean)",
+            "max(eval/full/progress/kills/max)",
+            "min(leader/checkpoint/step)",
+        ],
+        "checkpoint_eval_acceptance": [
+            {
+                "metric": "eval/full/progress/kills/mean",
+                "operator": ">=",
+                "threshold": 10.0,
+            }
+        ],
+        "episode_progress_fields": ["kills"],
+    }
+
+
+def mario_checkpoint_train_config() -> dict[str, object]:
+    return {
+        "metrics_schema_version": METRICS_SCHEMA_VERSION,
+        "selection_rank": [
+            "max(eval/full/outcome/success/across_starts/rate/mean)",
+            "max(eval/full/episode/return/shaped/mean)",
+            "min(leader/checkpoint/step)",
+        ],
+        "checkpoint_eval_acceptance": [
+            {
+                "metric": "eval/full/outcome/success/across_starts/rate/min",
+                "operator": ">=",
+                "threshold": 1.0,
+            }
+        ],
+        "episode_progress_fields": [],
+    }
+
+
+def bind_checkpoint_recipe(
+    catalog: PlayCatalog,
+    monkeypatch: pytest.MonkeyPatch,
+    checkpoints: Iterable[dict[str, object]],
+    train_config: dict[str, object],
+) -> dict[str, object]:
+    document = {"recipe": {"train_config": deepcopy(train_config)}}
+    digest = canonical_json_sha256(document)
+    for checkpoint in checkpoints:
+        checkpoint["recipe_sha256"] = digest
+        checkpoint["recipe_document_sha256"] = digest
+    monkeypatch.setattr(
+        catalog,
+        "_run_recipe_document",
+        lambda _run_id: (document, {"run_id": RUN_ID}),
+    )
+    return document
 
 
 def test_wandb_project_url_is_not_a_run_reference() -> None:
@@ -1146,7 +1204,8 @@ def test_catalog_validates_and_orders_public_checkpoints(monkeypatch: pytest.Mon
     )
     catalog = PlayCatalog(public_models_base_url="https://models.example")
 
-    rows = catalog.checkpoints(run_id=RUN_ID)
+    page = catalog.checkpoints(run_id=RUN_ID)
+    rows = page.items
 
     assert [row["checkpoint_id"] for row in rows] == [
         final["checkpoint_id"],
@@ -1154,6 +1213,62 @@ def test_catalog_validates_and_orders_public_checkpoints(monkeypatch: pytest.Mon
     ]
     assert rows[1]["promoted"] is True
     assert rows[1]["manifest_url"].endswith("/manifest.json")
+    assert page.metric_columns == ()
+    assert page.freshness == "partial"
+    assert page.warnings[0]["code"] == "checkpoint_metric_contract_unavailable"
+
+
+def test_deathmatch_checkpoint_metric_contract_prioritizes_frag_evidence() -> None:
+    repo_root = Path.cwd()
+    goal_root = repo_root / "experiments/goals/VizdoomDeathmatch-v1"
+    resolved = compose_resolved_train_documents(
+        goal_root / "_goal.yaml",
+        goal_root / "recipes/ppo.yaml",
+    )
+    train_config = deepcopy(resolved.base["train_config"])
+    train_config["metrics_schema_version"] = METRICS_SCHEMA_VERSION
+    contract = checkpoint_metric_contract(train_config)
+
+    assert contract.columns == (
+        {
+            "metric": "eval/full/progress/kills/mean",
+            "direction": "max",
+            "label": "Eval mean kills",
+            "evidence": "evaluation",
+            "roles": ["objective", "acceptance"],
+            "rank_index": 0,
+            "acceptance": [
+                {
+                    "metric": "eval/full/progress/kills/mean",
+                    "operator": ">=",
+                    "threshold": 10.0,
+                }
+            ],
+        },
+        {
+            "metric": "train/progress/kills/from/target/rolling_up_to_100/mean",
+            "direction": "max",
+            "label": "Train mean kills (up to 100)",
+            "evidence": "training",
+            "roles": ["training_proxy"],
+            "proxy_for": "eval/full/progress/kills/mean",
+        },
+        {
+            "metric": "eval/full/progress/kills/max",
+            "direction": "max",
+            "label": "Eval max kills",
+            "evidence": "evaluation",
+            "roles": ["tie_breaker"],
+            "rank_index": 1,
+        },
+        {
+            "metric": "train/episode/return/shaped/from/target/rolling_up_to_100/mean",
+            "direction": "max",
+            "label": "Train mean return (up to 100)",
+            "evidence": "training",
+            "roles": ["optimization"],
+        },
+    )
 
 
 def test_checkpoint_metric_leaders_marks_each_best_value_and_ties() -> None:
@@ -1164,6 +1279,10 @@ def test_checkpoint_metric_leaders_marks_each_best_value_and_ties() -> None:
     eval_success = "eval/full/outcome/success/across_starts/rate/mean"
     eval_return = "eval/full/episode/return/shaped/mean"
 
+    columns = tuple(
+        {"metric": metric, "direction": "max"}
+        for metric in (train_success, train_return, eval_success, eval_return)
+    )
     first, second, third = checkpoint_metric_leaders(
         [
             {
@@ -1188,7 +1307,8 @@ def test_checkpoint_metric_leaders_marks_each_best_value_and_ties() -> None:
                     eval_return: 4.0,
                 },
             },
-        ]
+        ],
+        columns,
     )
 
     assert first["best_metrics"] == [train_success]
@@ -1231,40 +1351,51 @@ def test_catalog_attaches_latest_training_metrics_at_each_checkpoint(
         },
     )
 
+    train_config = deathmatch_checkpoint_train_config()
+
     class TrainingRun:
-        config = {"seed": 7}
+        config = {
+            "metrics_schema_version": METRICS_SCHEMA_VERSION,
+            "seed": 7,
+            "selection_rank": train_config["selection_rank"],
+            "checkpoint_eval_contract": {
+                "seed": 42_000,
+                "acceptance": train_config["checkpoint_eval_acceptance"],
+            },
+        }
 
         @staticmethod
         def scan_history(*, keys, page_size):
             assert page_size == 10_000
             if keys == [
                 "train/global_step",
-                "train/outcome/success/across_starts/window_100/rate/mean",
+                "train/progress/kills/from/target/rolling_up_to_100/mean",
             ]:
                 return [
                     {
                         "train/global_step": 200_000,
-                        "train/outcome/success/across_starts/window_100/rate/mean": 0.25,
+                        "train/progress/kills/from/target/rolling_up_to_100/mean": 2.5,
                     },
                     {
                         "train/global_step": 490_000,
-                        "train/outcome/success/across_starts/window_100/rate/mean": 0.9,
+                        "train/progress/kills/from/target/rolling_up_to_100/mean": 9.0,
                     },
                 ]
             if keys == [
                 "train/global_step",
-                "train/episode/return/shaped/across_origins/rolling_up_to_100/mean",
+                "train/episode/return/shaped/from/target/rolling_up_to_100/mean",
             ]:
                 return [
                     {
                         "train/global_step": 220_000,
-                        "train/episode/return/shaped/across_origins/rolling_up_to_100/mean": 11.5,
+                        "train/episode/return/shaped/from/target/rolling_up_to_100/mean": 11.5,
                     },
                     {
                         "train/global_step": 480_000,
-                        "train/episode/return/shaped/across_origins/rolling_up_to_100/mean": 22.0,
+                        "train/episode/return/shaped/from/target/rolling_up_to_100/mean": 22.0,
                     },
                 ]
+            assert "across_origins" not in " ".join(keys)
             return []
 
     class TrainingApi:
@@ -1277,30 +1408,33 @@ def test_catalog_attaches_latest_training_metrics_at_each_checkpoint(
         public_models_base_url="https://models.example",
         **location_kwargs,
     )
+    bind_checkpoint_recipe(catalog, monkeypatch, (periodic, final), train_config)
     catalog._api = TrainingApi()
 
-    final_row, periodic_row = catalog.checkpoints(run_id=RUN_ID)
+    page = catalog.checkpoints(run_id=RUN_ID)
+    final_row, periodic_row = page.items
 
     assert periodic_row["metrics"] == {
-        "train/global_step": 250_000.0,
-        "train/outcome/success/across_starts/window_100/rate/mean": 0.25,
+        "eval/full/progress/kills/mean": None,
+        "train/progress/kills/from/target/rolling_up_to_100/mean": 2.5,
+        "eval/full/progress/kills/max": None,
         "train/episode/return/shaped/from/target/rolling_up_to_100/mean": 11.5,
-        "eval/full/outcome/success/across_starts/rate/mean": None,
-        "eval/full/episode/return/shaped/mean": None,
     }
     assert final_row["metrics"] == {
-        "train/global_step": 500_000.0,
-        "train/outcome/success/across_starts/window_100/rate/mean": 0.9,
+        "eval/full/progress/kills/mean": None,
+        "train/progress/kills/from/target/rolling_up_to_100/mean": 9.0,
+        "eval/full/progress/kills/max": None,
         "train/episode/return/shaped/from/target/rolling_up_to_100/mean": 22.0,
-        "eval/full/outcome/success/across_starts/rate/mean": None,
-        "eval/full/episode/return/shaped/mean": None,
     }
     assert final_row["best_metrics"] == [
-        "train/outcome/success/across_starts/window_100/rate/mean",
+        "train/progress/kills/from/target/rolling_up_to_100/mean",
         "train/episode/return/shaped/from/target/rolling_up_to_100/mean",
     ]
     assert periodic_row["best_metrics"] == []
-    filtered = catalog.checkpoints(run_id=RUN_ID, query=periodic["checkpoint_id"])
+    filtered = catalog.checkpoints(
+        run_id=RUN_ID,
+        query=periodic["checkpoint_id"],
+    ).items
     assert len(filtered) == 1
     assert filtered[0]["checkpoint_id"] == periodic["checkpoint_id"]
     assert filtered[0]["best_metrics"] == []
@@ -1411,6 +1545,12 @@ def test_catalog_attaches_goal_required_eval_results_by_checkpoint(
         repo_root=repo_root,
         control_bucket=EvalControlBucket(),
     )
+    bind_checkpoint_recipe(
+        catalog,
+        monkeypatch,
+        (periodic, final),
+        mario_checkpoint_train_config(),
+    )
 
     class UnavailableWandb:
         @staticmethod
@@ -1419,7 +1559,8 @@ def test_catalog_attaches_goal_required_eval_results_by_checkpoint(
 
     catalog._api = UnavailableWandb()
 
-    rows = catalog.checkpoints(run_id=RUN_ID)
+    page = catalog.checkpoints(run_id=RUN_ID)
+    rows = page.items
 
     assert [row["step"] for row in rows] == [500_000, 250_000]
     rejected_row, accepted_row = rows
@@ -1450,6 +1591,7 @@ def test_catalog_attaches_goal_required_eval_results_by_checkpoint(
     assert accepted_row["best_metrics"] == [
         "eval/full/outcome/success/across_starts/rate/mean",
         "eval/full/episode/return/shaped/mean",
+        required_metric,
     ]
     rejected = rejected_row["evaluation"]
     assert rejected["status"] == "rejected"
@@ -1459,9 +1601,7 @@ def test_catalog_attaches_goal_required_eval_results_by_checkpoint(
     assert rejected_row["playback_seed"] == 42_000
     assert rejected_row["playback_seed_source"] == "evaluation"
     assert rejected_row["best_metrics"] == []
-    assert catalog.checkpoint_warnings(run_id=RUN_ID)[0]["code"] == (
-        "wandb_enrichment_unavailable"
-    )
+    assert page.warnings[-1]["code"] == "wandb_enrichment_unavailable"
 
 
 def test_catalog_uses_training_seed_when_checkpoint_has_no_eval_result(
@@ -1478,19 +1618,16 @@ def test_catalog_uses_training_seed_when_checkpoint_has_no_eval_result(
         },
     )
 
+    train_config = mario_checkpoint_train_config()
+
     class UnevaluatedRun:
         config = {
             "metrics_schema_version": METRICS_SCHEMA_VERSION,
             "seed": 7,
+            "selection_rank": train_config["selection_rank"],
             "checkpoint_eval_contract": {
                 "seed": 42_000,
-                "acceptance": [
-                    {
-                        "metric": "eval/full/outcome/success/across_starts/rate/min",
-                        "operator": ">=",
-                        "threshold": 1.0,
-                    }
-                ],
+                "acceptance": train_config["checkpoint_eval_acceptance"],
             },
         }
 
@@ -1507,9 +1644,10 @@ def test_catalog_uses_training_seed_when_checkpoint_has_no_eval_result(
         public_models_base_url="https://models.example",
         control_bucket=WandbRunControlBucket(),
     )
+    bind_checkpoint_recipe(catalog, monkeypatch, (periodic,), train_config)
     catalog._api = UnevaluatedApi()
 
-    row = catalog.checkpoints(run_id=RUN_ID)[0]
+    row = catalog.checkpoints(run_id=RUN_ID).items[0]
 
     assert row["evaluation"] is None
     assert row["playback_seed"] == 7

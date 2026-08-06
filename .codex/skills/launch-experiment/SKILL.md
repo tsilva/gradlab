@@ -1,6 +1,6 @@
 ---
 name: launch-experiment
-description: Launch, continuously monitor, and when explicitly authorized repair dstack-backed gradlab training from a checked-in goal and recipe. Use when the user asks to launch, run, start, execute, follow, watch, monitor, diagnose, fix, or harden an gradlab training recipe, run, or research goal. Stay attached through the authoritative R2 terminal receipt, report the W&B URL immediately, preserve failed-attempt evidence, and return the promoted public checkpoint and exact playback command.
+description: Launch, continuously monitor, and when explicitly authorized repair dstack-backed gradlab training, or run operator-requested Modal evaluations of published checkpoints. Use when the user asks to launch, run, start, execute, follow, watch, monitor, diagnose, fix, or harden a gradlab training recipe, run, research goal, or checkpoint evaluation. Keep live manual evaluation separate from training monitoring, defer its W&B projection and promotion until the run-writer lease is available, and use the request's evidence-backed completion gate.
 ---
 
 # Launch Experiment
@@ -78,9 +78,39 @@ Immediately report the returned run ID, attempt ID, dstack task, selected
 compute/offer and maximum cost, source/image digest, W&B URL, and public R2 run
 index.
 
+## Evaluate selected checkpoints
+
+Treat a request to evaluate already-published checkpoints as an evaluation task,
+not an implicit request to monitor training. Do not start the training monitor
+solely because the selected run is active.
+
+1. Read the public checkpoint catalog and freeze the exact requested checkpoint
+   IDs with its selection fence. Never substitute checkpoints published later.
+2. Admit the selection once through the player checkpoint-evaluation endpoint or
+   the equivalent `ManualEvaluationQueue` path. Preserve one durable intent and
+   one idempotent Modal dispatch per checkpoint.
+3. Dispatch and verify the Modal evaluations immediately on their separately
+   scheduled compute, even while training is active. Inspect durable queue state
+   and eval-private raw plus verified evidence when diagnosing stalled work.
+4. Preserve the single-writer contract: while training holds the run-writer
+   lease, defer only W&B projection, promotion, and the manual-evaluation terminal
+   receipt. Do not defer Modal dispatch, result verification, or checkpoint-list
+   visibility.
+5. When the active run's immutable source uses an older current contract than the
+   checkout, execute through that exact-source runtime. Backport only an
+   evidence-proven operational repair; never weaken current-contract readers with
+   legacy probing or fallback parsing.
+
+For a request whose completion gate is the checkpoint list, finish only after
+every selected checkpoint has raw and verified evaluation evidence and its
+evaluation result renders in the actual list. `awaiting_projection` is expected
+while an active training run owns W&B; keep the durable worker queued to reconcile
+later, but do not turn that deferred projection into training monitoring.
+
 ## Monitor
 
-Start one yielded long-lived monitor per run and retain its session handle:
+For a training launch, follow, or monitoring request, start one yielded
+long-lived monitor per run and retain its session handle:
 
 ```bash
 gradlab experiment follow --run <run-id>
@@ -131,7 +161,7 @@ investigator to return. Reproduce narrowly, patch the root cause, add a
 deterministic regression, run the affected tests, publish the exact-source
 runtime, then retry or launch fresh as the durable state requires.
 
-## Completion
+## Training completion
 
 Launching, seeing W&B, observing an accepted eval, or seeing dstack exit is not
 completion. A successful accepted run requires all of:

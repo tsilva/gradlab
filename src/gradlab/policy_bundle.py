@@ -195,6 +195,10 @@ class _ModelProvenanceDocument(BoundaryModel):
     goal_variant_label: Any = None
     goal_variant_source_relation: Any = None
     goal_variant_descriptor_sha256: Any = None
+    action_profile: Any = None
+    action_profile_revision: Any = None
+    action_profile_sha256: Any = None
+    action_profile_source_table_sha256: Any = None
     reward_program_kind: Any = None
     reward_program_revision: Any = None
     reward_shape: Any = None
@@ -1343,6 +1347,10 @@ def _validate_cross_document_contract(model: Mapping[str, Any], recipe: Mapping[
     for key in (
         "goal_contract_sha256",
         "effective_goal_contract_sha256",
+        "action_profile",
+        "action_profile_revision",
+        "action_profile_sha256",
+        "action_profile_source_table_sha256",
         "reward_program_kind",
         "reward_program_revision",
         "reward_shape",

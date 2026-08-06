@@ -416,6 +416,12 @@ export function metricLabel(metric) {
   if (progress) {
     return `${humanizeMetricPart(progress[1])} ${progress[2]}`;
   }
+  const trainingProgress = name.match(
+    /^train\/progress\/([^/]+)\/from\/target\/rolling_up_to_100\/mean$/,
+  );
+  if (trainingProgress) {
+    return `Mean ${humanizeMetricPart(trainingProgress[1])} (up to 100)`;
+  }
   return name
     .replace(/^(eval\/full|leader|train)\//, "")
     .split("/")
@@ -617,6 +623,40 @@ export function checkpointMetricIsBest(item, metric) {
     Array.isArray(item?.best_metrics)
     && item.best_metrics.includes(metric)
   );
+}
+
+export function checkpointMetricRoleLabel(column) {
+  const roles = new Set(Array.isArray(column?.roles) ? column.roles : []);
+  if (roles.has("objective") && roles.has("acceptance")) return "Objective · gate";
+  if (roles.has("objective")) return "Objective";
+  if (roles.has("tie_breaker")) return "Tie-breaker";
+  if (roles.has("acceptance")) return "Acceptance";
+  if (roles.has("training_proxy")) return "Training proxy";
+  if (roles.has("optimization")) return "Optimization";
+  return "";
+}
+
+export function checkpointMetricDescription(column) {
+  const role = checkpointMetricRoleLabel(column);
+  const evidence = column?.evidence === "evaluation"
+    ? "Frozen checkpoint-evaluation evidence"
+    : Array.isArray(column?.roles) && column.roles.includes("training_proxy")
+      ? "Diagnostic online training proxy; checkpoint evaluation remains authoritative"
+      : "Diagnostic online training evidence";
+  const direction = column?.direction === "min"
+    ? "Lower is better"
+    : column?.direction === "max"
+      ? "Higher is better"
+      : "No single better direction";
+  return [role, evidence, direction].filter(Boolean).join(" · ");
+}
+
+export function checkpointMetricBestBadge(column) {
+  const roles = new Set(Array.isArray(column?.roles) ? column.roles : []);
+  if (roles.has("objective")) return "Best objective";
+  if (roles.has("tie_breaker")) return "Best tie-break";
+  if (roles.has("acceptance")) return "Best gate";
+  return "Best observed";
 }
 
 function decodePathPart(value) {
@@ -1394,7 +1434,7 @@ export class SourceBrowser {
     this.syncUrl(historyMode);
     this.command("select_source", {
       source: {
-        kind: "manifest",
+        kind: "public_run",
         value: item.manifest_url,
         run_id: item.run_id,
         checkpoint_id: item.checkpoint_id,
@@ -2316,21 +2356,33 @@ export class SourceBrowser {
         sortButton.type = "button";
         sortButton.className = "source-sort";
         sortButton.title = `${column.label} · ${
-          column.direction === "min" ? "lower is better" : "higher is better"
+          showingCheckpoints
+            ? checkpointMetricDescription(column)
+            : column.direction === "min" ? "Lower is better" : "Higher is better"
         }`;
         sortButton.setAttribute(
           "aria-label",
           `Sort by ${column.label}, ${nextDirection}`,
         );
+        const labelGroup = document.createElement("span");
+        labelGroup.className = "source-sort-label";
         const label = document.createElement("span");
         label.textContent = column.label;
+        labelGroup.append(label);
+        const role = checkpointMetricRoleLabel(column);
+        if (showingCheckpoints && role) {
+          const roleLabel = document.createElement("small");
+          roleLabel.className = `checkpoint-metric-role ${column.evidence || "training"}`;
+          roleLabel.textContent = role;
+          labelGroup.append(roleLabel);
+        }
         const indicator = document.createElement("span");
         indicator.className = "source-sort-indicator";
         indicator.setAttribute("aria-hidden", "true");
         indicator.textContent = active
           ? this.sort.direction === "ascending" ? "↑" : "↓"
           : "↕";
-        sortButton.append(label, indicator);
+        sortButton.append(labelGroup, indicator);
         sortButton.addEventListener("click", () => {
           this.sort = { metric: column.metric, direction: nextDirection };
           this.renderView();
@@ -2399,6 +2451,7 @@ export class SourceBrowser {
               {
                 isBest: checkpointMetricIsBest(item, column.metric),
                 label: column.label || metricLabel(column.metric),
+                column,
               },
             ]),
             [formatBytes(item.size_bytes)],
@@ -2514,9 +2567,10 @@ export class SourceBrowser {
         }
         if (className.includes("checkpoint-metric-cell") && metadata?.isBest) {
           const badge = document.createElement("span");
-          const description = `Best ${String(metadata.label).toLowerCase()} value`;
-          badge.className = "checkpoint-best-badge";
-          badge.textContent = "Best";
+          const badgeLabel = checkpointMetricBestBadge(metadata.column);
+          const description = `${badgeLabel}: ${String(metadata.label).toLowerCase()}`;
+          badge.className = `checkpoint-best-badge ${metadata.column?.evidence || "training"}`;
+          badge.textContent = badgeLabel;
           badge.title = description;
           badge.setAttribute("aria-label", description);
           cell.append(badge);

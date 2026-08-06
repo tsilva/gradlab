@@ -382,13 +382,21 @@ def policy_variant_from_contract(
         action_contract.get("provider"),
         label="publication runtime action contract provider",
     )
+    policy_contract = _require_mapping(
+        action_contract.get("policy"),
+        label="publication runtime action contract policy",
+    )
+    raw_codec = policy_contract.get("codec")
+    codec = dict(raw_codec) if isinstance(raw_codec, Mapping) else {}
     action_set = str(
         provider_contract.get("preset") or provider_contract.get("mode") or action_set
     ).strip()
+    if codec.get("type") == "vizdoom_shared_multidiscrete_v1":
+        action_set = "vizdoom-shared-multidiscrete-v1"
     if not action_contract_meanings(action_contract):
         raise ValueError(
             "publication runtime action contract requires semantic IDs "
-            "for every discrete action"
+            "for every legal policy action"
         )
     components.append(normalize_publication_component(action_set, label="publication action set"))
     return "-".join(components)

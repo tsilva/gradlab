@@ -11,6 +11,7 @@ DEFAULT_TRAIN_N_ENVS = 8
 NON_SEMANTIC_ENV_ARG_KEYS = frozenset(
     {
         "batch_size",
+        "compile_engine",
         "game",
         "num_envs",
         "num_threads",

@@ -247,6 +247,26 @@ class EvalMetricTests(unittest.TestCase):
         action, _ = random.predict(None, deterministic=False)
         self.assertEqual(action.tolist(), [7])
 
+    def test_scripted_noop_resolves_a_legal_tuple_action(self) -> None:
+        contract = {
+            "policy": {
+                "space": {"type": "multi_discrete"},
+                "semantics": {
+                    "status": "available",
+                    "legal_entries": [
+                        {"value": [0, 0, 0, 0, 0, 0], "semantic_id": "noop"},
+                        {"value": [1, 0, 0, 0, 0, 0], "semantic_id": "move_forward"},
+                    ],
+                },
+            }
+        }
+        policy = ScriptedPolicy("noop", ())
+        policy.bind_action_contract(contract)
+
+        action, _state = policy.predict(None, deterministic=False)
+
+        self.assertEqual(action.tolist(), [[0, 0, 0, 0, 0, 0]])
+
     def test_episode_record_clean_completion_precedence(self) -> None:
         success = EpisodeRecord(
             lane=0,

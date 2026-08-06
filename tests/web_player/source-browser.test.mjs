@@ -7,7 +7,10 @@ import {
   availableRunMetricColumns,
   bestRunEfficiency,
   checkpointCanEvaluate,
+  checkpointMetricBestBadge,
+  checkpointMetricDescription,
   checkpointMetricIsBest,
+  checkpointMetricRoleLabel,
   checkpointPlaybackSeed,
   formatGoalDiffValue,
   formatMetricValue,
@@ -49,6 +52,7 @@ test("checkpoint table uses compact API metric labels without a verdict column",
   );
 
   assert.match(source, /label: column\.label \|\| metricLabel\(column\.metric\)/);
+  assert.match(source, /checkpointMetricRoleLabel\(column\)/);
   assert.doesNotMatch(source, /\{ label: "Evaluation" \}/);
 });
 
@@ -581,6 +585,10 @@ test("run metrics use compact labels and values", () => {
     "Mean target-start return (up to 100)",
   );
   assert.equal(
+    metricLabel("train/progress/kills/from/target/rolling_up_to_100/mean"),
+    "Mean Kills (up to 100)",
+  );
+  assert.equal(
     formatMetricValue("eval/full/outcome/success/across_starts/rate/min", 0.875),
     "87.5%",
   );
@@ -782,14 +790,32 @@ test("checkpoint metric cells identify their own leaders", async () => {
   );
   assert.equal(checkpointMetricIsBest({}, trainSuccess), false);
 
+  const objective = {
+    evidence: "evaluation",
+    direction: "max",
+    roles: ["objective", "acceptance"],
+  };
+  const proxy = {
+    evidence: "training",
+    direction: "max",
+    roles: ["training_proxy"],
+  };
+  assert.equal(checkpointMetricRoleLabel(objective), "Objective · gate");
+  assert.equal(checkpointMetricRoleLabel(proxy), "Training proxy");
+  assert.equal(checkpointMetricBestBadge(objective), "Best objective");
+  assert.equal(checkpointMetricBestBadge(proxy), "Best observed");
+  assert.match(checkpointMetricDescription(objective), /Frozen checkpoint-evaluation evidence/);
+  assert.match(checkpointMetricDescription(proxy), /Diagnostic online training proxy/);
+
   const source = await readFile(
     new URL("../../src/gradlab/web_player/sources/browser.js", import.meta.url),
     "utf8",
   );
   assert.match(source, /"checkpoint-metric-cell"/);
-  assert.match(source, /badge\.className = "checkpoint-best-badge"/);
-  assert.match(source, /badge\.textContent = "Best"/);
-  assert.doesNotMatch(source, /Best training|Best eval/);
+  assert.match(source, /badge\.className = `checkpoint-best-badge \$\{/);
+  assert.match(source, /badge\.textContent = badgeLabel/);
+  assert.match(source, /Best objective/);
+  assert.match(source, /Best observed/);
 });
 
 test("selected checkpoints are admitted together through the evaluation API", async (context) => {
@@ -858,6 +884,17 @@ test("selected checkpoints are admitted together through the evaluation API", as
   assert.equal(browser.items[0].evaluation_queue.state, "submitted");
   assert.equal(browser.selectedCheckpoints.size, 0);
   assert.match(toasts[0][0], /2 checkpoints queued/);
+});
+
+test("catalog checkpoint playback preserves public-run publication identity", async () => {
+  const source = await readFile(
+    new URL("../../src/gradlab/web_player/sources/browser.js", import.meta.url),
+    "utf8",
+  );
+  assert.match(
+    source,
+    /selectCheckpoint[\s\S]*?kind: "public_run",[\s\S]*?value: item\.manifest_url/,
+  );
 });
 
 test("browser back through checkpoint routes preserves canonical environment identity", (context) => {

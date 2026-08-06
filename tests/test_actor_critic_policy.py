@@ -110,6 +110,7 @@ def test_plain_box_observations_use_one_shared_fusion_stack() -> None:
     assert isinstance(extractor, SharedActorCriticFeatureExtractor)
     assert policy.pi_features_extractor is extractor
     assert policy.vf_features_extractor is extractor
+    assert extractor.info_history_encoder is None
     assert len(policy.mlp_extractor.policy_net) == 0
     assert len(policy.mlp_extractor.value_net) == 0
     assert len(extractor.fusion) == 4

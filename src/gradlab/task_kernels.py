@@ -13,7 +13,9 @@ from numba import njit
 
 from gradlab.action_codecs import (
     VIZDOOM_DEATHMATCH_MULTIDISCRETE_CODEC,
+    VIZDOOM_SHARED_MULTIDISCRETE_CODEC,
     VizdoomDeathmatchMultiDiscreteActionCodec,
+    VizdoomSharedMultiDiscreteActionCodec,
 )
 from gradlab.json_utils import canonical_json_sha256
 from gradlab.reward_programs import (
@@ -1964,6 +1966,16 @@ class IdentityTaskKernel:
             self._structured_action_codec = VizdoomDeathmatchMultiDiscreteActionCodec(
                 descriptor,
                 self.num_envs,
+            )
+            self.action_space = self._structured_action_codec.action_space
+        elif (
+            action_codec is not None
+            and action_codec.get("type") == VIZDOOM_SHARED_MULTIDISCRETE_CODEC
+        ):
+            self._structured_action_codec = VizdoomSharedMultiDiscreteActionCodec(
+                descriptor,
+                self.num_envs,
+                action_codec,
             )
             self.action_space = self._structured_action_codec.action_space
         elif action_codec is not None and action_codec.get("type") != "discrete_lookup":

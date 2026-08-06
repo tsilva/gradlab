@@ -5,12 +5,24 @@ import numpy as np
 import pytest
 
 from gradlab.action_codecs import (
+    LEGAL_TUPLE_DISTRIBUTION,
+    LEGAL_TUPLE_SCORING,
+    LegalTupleMultiDiscrete,
     VIZDOOM_DEATHMATCH_MULTIDISCRETE_BUTTONS,
     VIZDOOM_DEATHMATCH_MULTIDISCRETE_CODEC,
     VIZDOOM_DEATHMATCH_MULTIDISCRETE_NVEC,
+    VIZDOOM_SHARED_MULTIDISCRETE_BUTTONS,
+    VIZDOOM_SHARED_MULTIDISCRETE_CODEC,
+    VIZDOOM_SHARED_MULTIDISCRETE_NVEC,
     VizdoomDeathmatchMultiDiscreteActionCodec,
+    VizdoomSharedMultiDiscreteActionCodec,
+    vizdoom_shared_legal_tuples,
 )
-from gradlab.action_contract import compile_runtime_action_contract
+from gradlab.action_contract import (
+    action_contract_meanings,
+    action_value_for_controls,
+    compile_runtime_action_contract,
+)
 from gradlab.batch_runtime import ProviderDescriptor
 
 
@@ -134,3 +146,70 @@ def test_deathmatch_multidiscrete_runtime_contract_is_exact_and_componentized() 
     ]
     assert components[2]["values"][7]["semantic_id"] == "select_weapon7"
     assert components[5]["values"][10]["semantic_id"] == "noop"
+
+
+def test_shared_vizdoom_codec_preserves_legal_native_button_rows() -> None:
+    table = [
+        [],
+        ["ATTACK"],
+        ["MOVE_FORWARD"],
+        ["ATTACK", "TURN_LEFT"],
+        ["SELECT_NEXT_WEAPON"],
+    ]
+    configured = {
+        "type": VIZDOOM_SHARED_MULTIDISCRETE_CODEC,
+        "legal_tuples": [list(row) for row in vizdoom_shared_legal_tuples(table)],
+        "source_table": table,
+        "source_table_hash": "a" * 64,
+    }
+    descriptor = _descriptor(buttons=tuple(reversed(VIZDOOM_SHARED_MULTIDISCRETE_BUTTONS)))
+    codec = VizdoomSharedMultiDiscreteActionCodec(descriptor, len(table), configured)
+
+    assert isinstance(codec.action_space, LegalTupleMultiDiscrete)
+    assert tuple(codec.action_space.nvec) == VIZDOOM_SHARED_MULTIDISCRETE_NVEC
+    native = codec.map_actions(np.asarray(configured["legal_tuples"], dtype=np.int64))
+    buttons = tuple(descriptor.action_buttons)
+    for row, expected in zip(native, table, strict=True):
+        active = {button for button, value in zip(buttons, row, strict=True) if value != 0}
+        assert active == set(expected)
+
+    with pytest.raises(ValueError, match="not legal"):
+        codec.map_actions(np.asarray([[0, 0, 3, 0, 0, 0]] * len(table), dtype=np.int64))
+
+
+def test_shared_vizdoom_runtime_contract_binds_joint_distribution_and_semantics() -> None:
+    table = [[], ["MOVE_LEFT"], ["ATTACK", "TURN_RIGHT"]]
+    configured = {
+        "type": VIZDOOM_SHARED_MULTIDISCRETE_CODEC,
+        "legal_tuples": [list(row) for row in vizdoom_shared_legal_tuples(table)],
+        "source_table": table,
+        "source_table_hash": "b" * 64,
+    }
+    descriptor = _descriptor(buttons=VIZDOOM_SHARED_MULTIDISCRETE_BUTTONS)
+    codec = VizdoomSharedMultiDiscreteActionCodec(descriptor, 1, configured)
+    config = SimpleNamespace(
+        env_provider="vizdoom-turbo",
+        game="VizdoomBasic-v1",
+        env_args={"use_restricted_actions": "filtered"},
+        task={"action": {"set": "vizdoom-shared-multidiscrete-v1", "codec": configured}},
+    )
+
+    contract = compile_runtime_action_contract(
+        config,
+        descriptor,
+        codec.action_space,
+        policy_action_codec=configured,
+    )
+
+    assert contract["policy"]["space"]["legal_tuples"] == configured["legal_tuples"]
+    assert contract["policy"]["space"]["distribution"] == {
+        "type": LEGAL_TUPLE_DISTRIBUTION,
+        "scoring": LEGAL_TUPLE_SCORING,
+    }
+    assert contract["policy"]["codec"]["source_table"] == table
+    assert action_contract_meanings(contract) == (
+        "noop",
+        "move_left",
+        "attack_turn_right",
+    )
+    assert action_value_for_controls(contract, ["left"]) == (0, 2, 0, 0, 0, 0)

@@ -6,7 +6,7 @@ from copy import deepcopy
 from typing import Any
 
 from gradlab.action_codecs import validate_task_action_codec
-from gradlab.env_registry import environment_spec
+from gradlab.env_registry import environment_spec, policy_environment_compatibility_id
 from gradlab.json_utils import canonical_json_text
 from gradlab.metric_names import metric_path_segment
 from gradlab.provider_config import provider_env_id, provider_game, semantic_provider_args
@@ -431,6 +431,14 @@ def policy_environment_identity(config: Mapping[str, Any]) -> dict[str, Any]:
     """Return normalized policy-facing environment semantics."""
 
     identity = environment_identity_from_train_config(config)
+    provider_id = str(config.get("env_provider") or "")
+    game = str(provider_game(config) or config.get("game") or "")
+    compatibility_id = policy_environment_compatibility_id(provider_id, game)
+    if compatibility_id is not None:
+        identity["env_id"] = f"policy-compatible:{compatibility_id}"
+        preprocessing = identity.get("preprocessing")
+        if isinstance(preprocessing, dict):
+            preprocessing["pipeline"] = f"policy-compatible:{compatibility_id}"
     if identity.get("state") == "":
         identity.pop("state", None)
     for key in ("states", "state_probs"):

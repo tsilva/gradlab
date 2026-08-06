@@ -17,6 +17,7 @@ from gradlab.batch_runtime import BatchMetricRecord, CurriculumStepAttribution
 from gradlab.callbacks import (
     ARCHIVE_CURRICULUM_METRIC_MAP,
     RewardStatsAccumulator,
+    policy_discrete_action_indices,
     policy_entropy_bounds,
 )
 from gradlab.metric_names import (
@@ -65,6 +66,12 @@ def _tree_map(value: Any, function: Callable[[Any], Any]) -> Any:
 
 def _allocate_observations(observations: Any, n_steps: int, device: torch.device) -> Any:
     def allocate(value: Any) -> torch.Tensor:
+        if isinstance(value, torch.Tensor):
+            return torch.empty(
+                (n_steps, *value.shape),
+                dtype=value.dtype,
+                device=device,
+            )
         array = np.asarray(value)
         return torch.empty(
             (n_steps, *array.shape),
@@ -119,6 +126,8 @@ def _index_observations(observations: Any, indices: torch.Tensor) -> Any:
 def _tree_nbytes(observations: Any) -> int:
     if isinstance(observations, Mapping):
         return sum(_tree_nbytes(value) for value in observations.values())
+    if isinstance(observations, torch.Tensor):
+        return observations.numel() * observations.element_size()
     return int(np.asarray(observations).nbytes)
 
 
@@ -139,6 +148,8 @@ class TensorRolloutBuffer:
     log_probs: torch.Tensor
     advantages: torch.Tensor
     returns: torch.Tensor
+    final_observations: Any | None = None
+    truncated: torch.Tensor | None = None
     position: int = 0
 
     @classmethod
@@ -150,6 +161,7 @@ class TensorRolloutBuffer:
         n_steps: int,
         n_envs: int,
         device: torch.device,
+        store_final_observations: bool = False,
     ) -> TensorRolloutBuffer:
         action_shape = (get_action_dim(action_space),)
         if isinstance(action_space, spaces.Discrete):
@@ -172,6 +184,16 @@ class TensorRolloutBuffer:
             log_probs=torch.empty(batch_shape, dtype=torch.float32, device=device),
             advantages=torch.empty(batch_shape, dtype=torch.float32, device=device),
             returns=torch.empty(batch_shape, dtype=torch.float32, device=device),
+            final_observations=(
+                _allocate_observations(observations, n_steps, device)
+                if store_final_observations
+                else None
+            ),
+            truncated=(
+                torch.empty(batch_shape, dtype=torch.bool, device=device)
+                if store_final_observations
+                else None
+            ),
         )
 
     @property
@@ -194,6 +216,8 @@ class TensorRolloutBuffer:
         episode_starts: torch.Tensor,
         values: torch.Tensor,
         log_probs: torch.Tensor,
+        final_observations: Any | None = None,
+        truncated: torch.Tensor | None = None,
     ) -> None:
         if self.position >= self.n_steps:
             raise RuntimeError("rollout buffer overflow")
@@ -203,6 +227,11 @@ class TensorRolloutBuffer:
         self.episode_starts[self.position].copy_(episode_starts)
         self.values[self.position].copy_(values.flatten().float())
         self.log_probs[self.position].copy_(log_probs.flatten().float())
+        if self.final_observations is not None:
+            if final_observations is None or truncated is None or self.truncated is None:
+                raise ValueError("device rollout requires final observations and truncation flags")
+            _copy_observation_slot(self.final_observations, final_observations, self.position)
+            self.truncated[self.position].copy_(truncated)
         self.position += 1
 
     def finish(
@@ -229,14 +258,31 @@ class TensorRolloutBuffer:
                 - self.values[step]
             )
             last_gae = (
-                delta
-                + float(gamma)
-                * float(gae_lambda)
-                * next_non_terminal.float()
-                * last_gae
+                delta + float(gamma) * float(gae_lambda) * next_non_terminal.float() * last_gae
             )
             self.advantages[step].copy_(last_gae)
         self.returns.copy_(self.advantages + self.values)
+
+
+def _bootstrap_device_time_limits(
+    buffer: TensorRolloutBuffer,
+    *,
+    calls: _CompiledPolicyCalls,
+    precision: _Precision,
+    gamma: float,
+) -> None:
+    if buffer.final_observations is None or buffer.truncated is None:
+        return
+    flat_truncated = buffer.truncated.flatten()
+    indices = torch.nonzero(flat_truncated, as_tuple=False).flatten()
+    safe_indices = torch.cat((indices, torch.zeros(1, device=indices.device, dtype=torch.int64)))
+    flat_final = _flatten_observations(buffer.final_observations)
+    selected = _index_observations(flat_final, safe_indices)
+    with torch.no_grad(), precision.autocast():
+        selected_values = calls.predict_values(selected).flatten().float()
+    bootstrap = torch.zeros_like(flat_truncated, dtype=torch.float32)
+    bootstrap.index_copy_(0, indices, selected_values[:-1])
+    buffer.rewards.add_(bootstrap.view_as(buffer.rewards) * float(gamma))
 
 
 class _CompiledPolicyCalls:
@@ -327,9 +373,7 @@ class _ThroughputTracker:
         native_seconds: float | None = None
         if self.native_start is not None:
             calls = int(native_end["calls_total"]) - int(self.native_start["calls_total"])
-            elapsed = float(native_end["seconds_total"]) - float(
-                self.native_start["seconds_total"]
-            )
+            elapsed = float(native_end["seconds_total"]) - float(self.native_start["seconds_total"])
             if calls > 0 and elapsed > 0.0:
                 native_seconds = elapsed
         self.completed = _CompletedRollout(
@@ -443,7 +487,9 @@ class _CurriculumFeedback:
         }
 
 
-def _validate_grouped_context(config: Any, backend_config: Mapping[str, Any]) -> tuple[str, str | None]:
+def _validate_grouped_context(
+    config: Any, backend_config: Mapping[str, Any]
+) -> tuple[str, str | None]:
     from gradlab.model_inputs import model_input_fields
     from gradlab.task_advantage import resolve_advantage_normalization_mode
 
@@ -453,13 +499,11 @@ def _validate_grouped_context(config: Any, backend_config: Mapping[str, Any]) ->
         field = fields.get(str(context))
         if field is None:
             raise ValueError(
-                "grouped advantage normalization references undeclared context "
-                f"{context!r}"
+                f"grouped advantage normalization references undeclared context {context!r}"
             )
         if field["encoding"]["kind"] != "categorical":
             raise ValueError(
-                "grouped advantage normalization requires categorical context, got "
-                f"{context!r}"
+                f"grouped advantage normalization requires categorical context, got {context!r}"
             )
     return mode, context
 
@@ -524,9 +568,7 @@ def _make_model(
         validate_resumed_policy_model(model, common_config)
         loaded_context = str(getattr(model, "advantage_context", "") or "")
         if normalization_mode == "grouped" and loaded_context != advantage_context:
-            raise ValueError(
-                "resume artifact grouped advantage context does not match the recipe"
-            )
+            raise ValueError("resume artifact grouped advantage context does not match the recipe")
         if normalization_mode != "grouped" and loaded_context:
             raise ValueError(
                 "resume artifact uses grouped advantage normalization but the recipe does not"
@@ -586,22 +628,28 @@ def _preflight_cuda_memory(
     n_envs: int,
     action_space: spaces.Space,
     device: torch.device,
+    store_final_observations: bool = False,
 ) -> None:
     if device.type != "cuda":
         return
-    observation_bytes = _tree_nbytes(observations) * n_steps
+    observation_bytes = (
+        _tree_nbytes(observations) * n_steps * (2 if store_final_observations else 1)
+    )
     action_width = get_action_dim(action_space)
-    action_bytes = 8 if isinstance(
-        action_space,
-        spaces.Discrete | spaces.MultiDiscrete,
-    ) else 4
+    action_bytes = (
+        8
+        if isinstance(
+            action_space,
+            spaces.Discrete | spaces.MultiDiscrete,
+        )
+        else 4
+    )
     scalar_bytes = 6 * 4 + 1
     rollout_bytes = observation_bytes + n_steps * n_envs * (
         action_width * action_bytes + scalar_bytes
     )
     parameter_bytes = sum(
-        parameter.numel() * parameter.element_size()
-        for parameter in model.policy.parameters()
+        parameter.numel() * parameter.element_size() for parameter in model.policy.parameters()
     )
     # Gradients plus Adam's two moment tensors are allocated lazily. Reserve
     # another parameter copy and 512 MiB for compiled graphs/activations.
@@ -645,12 +693,12 @@ def _normalize_grouped_advantages(
         mask = task_ids == task_id
         values = buffer.advantages[mask]
         if values.numel() > 1:
-            buffer.advantages[mask] = (
-                values - values.mean()
-            ) / (values.std(correction=0) + 1e-8)
+            buffer.advantages[mask] = (values - values.mean()) / (values.std(correction=0) + 1e-8)
 
 
-def _rollout_diagnostics(buffer: TensorRolloutBuffer, action_space: spaces.Space) -> dict[str, float]:
+def _rollout_diagnostics(
+    buffer: TensorRolloutBuffer, action_space: spaces.Space
+) -> dict[str, float]:
     payload: dict[str, float] = {}
     for suffix, values in (
         ("rollout/value_prediction", buffer.values),
@@ -668,11 +716,15 @@ def _rollout_diagnostics(buffer: TensorRolloutBuffer, action_space: spaces.Space
                 stat_metric(prefix, "max"): float(finite.max().item()),
             }
         )
-    if isinstance(action_space, spaces.Discrete):
-        counts = torch.bincount(buffer.actions.flatten().long())
-        if counts.numel() > 0:
+    discrete_actions = policy_discrete_action_indices(
+        buffer.actions.detach().cpu().numpy(),
+        action_space,
+    )
+    if discrete_actions.size:
+        counts = np.bincount(discrete_actions)
+        if counts.size:
             payload[train_algorithm_metric("ppo", "policy/dominant_action_rate")] = float(
-                counts.max().item() / buffer.actions.numel()
+                counts.max() / discrete_actions.size
             )
     bounds = policy_entropy_bounds(action_space)
     if bounds is not None:
@@ -699,9 +751,7 @@ def _ppo_update(
         group["lr"] = learning_rate
     clip_range = float(model.clip_range(progress_remaining))
     clip_range_vf = (
-        None
-        if model.clip_range_vf is None
-        else float(model.clip_range_vf(progress_remaining))
+        None if model.clip_range_vf is None else float(model.clip_range_vf(progress_remaining))
     )
     if normalization_mode == "grouped":
         assert advantage_context is not None
@@ -746,9 +796,7 @@ def _ppo_update(
             advantages = flat_advantages.index_select(0, batch_indices)
             returns = flat_returns.index_select(0, batch_indices)
             if normalization_mode == "global" and advantages.numel() > 1:
-                advantages = (advantages - advantages.mean()) / (
-                    advantages.std() + 1e-8
-                )
+                advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
 
             with precision.autocast():
                 values, log_prob, entropy = calls.evaluate_actions(observations, actions)
@@ -767,13 +815,9 @@ def _ppo_update(
                         clip_range_vf,
                     )
                 value_loss = F.mse_loss(returns, values_pred)
-                entropy_loss = (
-                    log_prob.mean() if entropy is None else -entropy.mean()
-                )
+                entropy_loss = log_prob.mean() if entropy is None else -entropy.mean()
                 final_loss = (
-                    policy_loss
-                    + float(ent_coef) * entropy_loss
-                    + float(model.vf_coef) * value_loss
+                    policy_loss + float(ent_coef) * entropy_loss + float(model.vf_coef) * value_loss
                 )
 
             with torch.no_grad():
@@ -811,10 +855,7 @@ def _ppo_update(
         float("nan")
         if float(returns_variance.item()) == 0.0
         else float(
-            (
-                1.0
-                - torch.var(flat_returns - flat_values, correction=0) / returns_variance
-            ).item()
+            (1.0 - torch.var(flat_returns - flat_values, correction=0) / returns_variance).item()
         )
     )
     payload: dict[str, float] = {
@@ -870,6 +911,7 @@ def run_gradlab_ppo(
 
     from gradlab.device import resolve_sb3_device
     from gradlab.env import make_training_vec_env, preflight_state_archive_provider
+    from gradlab.env_registry import GRADOOM_PROVIDER
     from gradlab.file_utils import file_sha256
     from gradlab.policy_bundle import write_canonical_json
     from gradlab.training.sb3_helpers import GracefulStopHelper
@@ -894,20 +936,38 @@ def run_gradlab_ppo(
             f"provider={preflight['provider_id']} codec={preflight['codec_id']} "
             f"lanes={preflight['preflight_lanes']}"
         )
-    env = make_training_vec_env(
-        config=config,
-        n_envs=n_envs,
-        seed=int(common_config["seed"]),
-        rom_binding=getattr(context, "rom_binding", None),
-        state_archive=common_config.get("state_archive"),
-        state_archive_root=context.run_dir / "state-archive",
-    )
+    device_resident = config.env_provider == GRADOOM_PROVIDER.provider_id
+    if device_resident:
+        from gradlab.gradoom_device_runtime import make_gradoom_device_vec_env
+
+        env = make_gradoom_device_vec_env(
+            config,
+            n_envs=n_envs,
+            seed=int(common_config["seed"]),
+            rom_binding=getattr(context, "rom_binding", None),
+            state_archive=common_config.get("state_archive"),
+        )
+    else:
+        env = make_training_vec_env(
+            config=config,
+            n_envs=n_envs,
+            seed=int(common_config["seed"]),
+            rom_binding=getattr(context, "rom_binding", None),
+            state_archive=common_config.get("state_archive"),
+            state_archive_root=context.run_dir / "state-archive",
+        )
     runtime = env.runtime
     try:
         set_random_seed(int(common_config["seed"]))
         validate_action_space(env.action_space, algorithm_id="ppo")
         device_name = resolve_sb3_device(str(backend_config["device"]))
         device = torch.device(device_name)
+        if device_resident and device.type != "cuda":
+            raise ValueError("GraDOOM device training requires backend device='cuda'")
+        if device_resident and runtime.device != device:
+            raise ValueError(
+                f"GraDOOM simulator device {runtime.device} differs from learner device {device}"
+            )
         context.session.event(f"using torch device: {device}")
         execution_profile_name = str(backend_config["execution_profile"])
         execution_profile = _EXECUTION_PROFILES[execution_profile_name]
@@ -924,6 +984,14 @@ def run_gradlab_ppo(
             config,
             device_name,
             fused_optimizer=execution_profile.fused_optimizer,
+        )
+        from gradlab.action_contract import runtime_action_contract
+        from gradlab.policy_runtime import bind_policy_action_space
+
+        bind_policy_action_space(
+            model,
+            env.action_space,
+            runtime_action_contract(env),
         )
         rollout_quantum = n_envs * int(backend_config["n_steps"])
         budget = context.session.configure_budget(
@@ -958,6 +1026,7 @@ def run_gradlab_ppo(
             n_envs=n_envs,
             action_space=env.action_space,
             device=device,
+            store_final_observations=device_resident,
         )
         buffer = TensorRolloutBuffer.allocate(
             observations,
@@ -965,6 +1034,7 @@ def run_gradlab_ppo(
             n_steps=int(backend_config["n_steps"]),
             n_envs=n_envs,
             device=device,
+            store_final_observations=device_resident,
         )
         calls = _CompiledPolicyCalls(
             model.policy,
@@ -990,9 +1060,7 @@ def run_gradlab_ppo(
 
         while int(model.num_timesteps) < budget.execution_total:
             if context.stop_flag.requested:
-                graceful_stop.acknowledge_safe_boundary(
-                    num_timesteps=int(model.num_timesteps)
-                )
+                graceful_stop.acknowledge_safe_boundary(num_timesteps=int(model.num_timesteps))
                 break
             buffer.position = 0
             curriculum.begin()
@@ -1002,34 +1070,43 @@ def run_gradlab_ppo(
                 obs_tensor = _observation_tensor(observations, device)
                 with torch.no_grad(), precision.autocast():
                     actions, values, log_probs = calls.forward(obs_tensor)
-                environment_actions = _environment_actions(
-                    actions,
-                    env.action_space,
-                    model.policy,
+                environment_actions = (
+                    actions
+                    if device_resident
+                    else _environment_actions(
+                        actions,
+                        env.action_space,
+                        model.policy,
+                    )
                 )
                 batch_step = runtime.step(environment_actions)
-                reward_tensor = torch.as_tensor(
-                    batch_step.rewards,
-                    device=device,
-                    dtype=torch.float32,
-                ).clone()
-                truncated_lanes = np.flatnonzero(batch_step.truncated)
-                if truncated_lanes.size:
-                    if batch_step.final_observations is None:
-                        raise RuntimeError("truncated batch is missing final observations")
-                    terminal_observations = _take_observation_lanes(
-                        batch_step.final_observations,
-                        truncated_lanes,
-                    )
-                    terminal_tensor = _observation_tensor(terminal_observations, device)
-                    with torch.no_grad(), precision.autocast():
-                        terminal_values = calls.predict_values(terminal_tensor).flatten().float()
-                    lane_tensor = torch.as_tensor(
-                        truncated_lanes,
-                        dtype=torch.int64,
+                if device_resident:
+                    reward_tensor = batch_step.rewards.clone()
+                else:
+                    reward_tensor = torch.as_tensor(
+                        batch_step.rewards,
                         device=device,
-                    )
-                    reward_tensor[lane_tensor] += float(model.gamma) * terminal_values
+                        dtype=torch.float32,
+                    ).clone()
+                    truncated_lanes = np.flatnonzero(batch_step.truncated)
+                    if truncated_lanes.size:
+                        if batch_step.final_observations is None:
+                            raise RuntimeError("truncated batch is missing final observations")
+                        terminal_observations = _take_observation_lanes(
+                            batch_step.final_observations,
+                            truncated_lanes,
+                        )
+                        terminal_tensor = _observation_tensor(terminal_observations, device)
+                        with torch.no_grad(), precision.autocast():
+                            terminal_values = (
+                                calls.predict_values(terminal_tensor).flatten().float()
+                            )
+                        lane_tensor = torch.as_tensor(
+                            truncated_lanes,
+                            dtype=torch.int64,
+                            device=device,
+                        )
+                        reward_tensor[lane_tensor] += float(model.gamma) * terminal_values
                 buffer.add(
                     obs_tensor,
                     actions,
@@ -1037,15 +1114,20 @@ def run_gradlab_ppo(
                     episode_starts,
                     values,
                     log_probs,
+                    final_observations=(batch_step.final_observations if device_resident else None),
+                    truncated=(batch_step.truncated if device_resident else None),
                 )
                 curriculum.capture(batch_step)
                 observations = batch_step.observations
-                done_array = np.logical_or(batch_step.terminated, batch_step.truncated)
-                dones = torch.as_tensor(done_array, device=device).clone()
+                if device_resident:
+                    dones = (batch_step.terminated | batch_step.truncated).clone()
+                else:
+                    done_array = np.logical_or(batch_step.terminated, batch_step.truncated)
+                    dones = torch.as_tensor(done_array, device=device).clone()
                 episode_starts = dones
                 model.num_timesteps += n_envs
                 calls_since_start += 1
-                records = runtime.drain_records()
+                records = [] if device_resident else runtime.drain_records()
                 episodes: list[Any] = []
                 for record in records:
                     if isinstance(record, BatchMetricRecord):
@@ -1075,9 +1157,24 @@ def run_gradlab_ppo(
                         step=step,
                     )
 
+            if device_resident:
+                episodes = runtime.drain_records()
+                context.session.advance(int(model.num_timesteps), episodes)
+                context.session.observe_episode_completions(
+                    step=int(model.num_timesteps),
+                    records=episodes,
+                )
+
             next_observations = _observation_tensor(observations, device)
             with torch.no_grad(), precision.autocast():
                 last_values = calls.predict_values(next_observations)
+            if device_resident:
+                _bootstrap_device_time_limits(
+                    buffer,
+                    calls=calls,
+                    precision=precision,
+                    gamma=float(model.gamma),
+                )
             buffer.finish(
                 last_values=last_values,
                 dones=dones,
@@ -1131,25 +1228,30 @@ def run_gradlab_ppo(
             )
             rollout_count += 1
             if rollout_count % 64 == 0 and context.wandb_enabled:
+                histograms = {
+                    train_algorithm_metric(
+                        "ppo", "rollout/value_prediction/hist"
+                    ): buffer.values.detach().float().cpu().flatten().tolist(),
+                    train_algorithm_metric(
+                        "ppo", "rollout/advantage/hist"
+                    ): buffer.advantages.detach().float().cpu().flatten().tolist(),
+                }
+                discrete_actions = policy_discrete_action_indices(
+                    buffer.actions.detach().cpu().numpy(),
+                    env.action_space,
+                )
+                if discrete_actions.size:
+                    histograms[train_algorithm_metric("ppo", "policy/action_hist")] = (
+                        discrete_actions.astype(float).tolist()
+                    )
                 context.metric_store.enqueue_event(
                     kind="histogram",
-                    payload={
-                        "histograms": {
-                            train_algorithm_metric(
-                                "ppo", "rollout/value_prediction/hist"
-                            ): buffer.values.detach().float().cpu().flatten().tolist(),
-                            train_algorithm_metric(
-                                "ppo", "rollout/advantage/hist"
-                            ): buffer.advantages.detach().float().cpu().flatten().tolist(),
-                        }
-                    },
+                    payload={"histograms": histograms},
                     step=int(model.num_timesteps),
                     source="train",
                 )
             if context.stop_flag.requested:
-                graceful_stop.acknowledge_safe_boundary(
-                    num_timesteps=int(model.num_timesteps)
-                )
+                graceful_stop.acknowledge_safe_boundary(num_timesteps=int(model.num_timesteps))
                 break
 
         throughput.flush()

@@ -10,6 +10,7 @@ from gradlab.env_registry import (
     environment_spec,
     env_supports_states,
     evaluation_watchdog_steps,
+    policy_environment_compatibility_id,
     registered_env_ids,
     resolve_env_id,
     resolve_native_episode_horizon,
@@ -123,6 +124,29 @@ def test_resolves_vizdoom_turbo_builtin_and_custom_scenarios() -> None:
 
     custom = resolve_env_id("vizdoom-turbo:/tmp/custom-scenario.cfg")
     assert custom.provider_env_id == "/tmp/custom-scenario.cfg"
+
+
+def test_resolves_gradoom_only_for_the_certified_deathmatch_profile() -> None:
+    env_id = "gradoom:VizdoomDeathmatch-v1"
+
+    resolved = resolve_env_id(env_id)
+
+    assert env_id in registered_env_ids()
+    assert resolved.provider_id == "gradoom"
+    assert resolved.provider_env_id == "VizdoomDeathmatch-v1"
+    assert resolved.import_name == "gradoom"
+    assert environment_spec("gradoom", resolved.provider_env_id) is environment_spec(
+        "vizdoom-turbo", resolved.provider_env_id
+    )
+    provider = resolve_env_provider("gradoom")
+    assert provider.turbo_api_version == 1
+    assert provider.native_episode_horizon is not None
+    assert policy_environment_compatibility_id(
+        "gradoom", "VizdoomDeathmatch-v1"
+    ) == policy_environment_compatibility_id("vizdoom-turbo", "VizdoomDeathmatch-v1")
+    assert policy_environment_compatibility_id("vizdoom-turbo", "VizdoomBasic-v1") is None
+    with pytest.raises(ValueError, match="does not register environment"):
+        resolve_env_id("gradoom:VizdoomBasic-v1")
 
 
 def test_resolves_vizdoom_turbo_augmented_environment() -> None:

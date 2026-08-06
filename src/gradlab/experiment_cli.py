@@ -356,7 +356,7 @@ def _bind_vizdoom_iwad_for_launch(
     env_provider: str,
     rom_path: Path | None,
 ) -> dict[str, Any] | None:
-    if env_provider != "vizdoom-turbo":
+    if env_provider not in {"gradoom", "vizdoom-turbo"}:
         return None
     return required_vizdoom_iwad_binding(rom_path)
 
@@ -382,10 +382,7 @@ def _stage_vizdoom_iwad(
         content_type="application/octet-stream",
     )
     authority.evaluation.put_json(
-        (
-            f"{VIZDOOM_IWAD_OBJECT_PREFIX}/manifests/sha256/"
-            f"{normalized['sha256']}.json"
-        ),
+        (f"{VIZDOOM_IWAD_OBJECT_PREFIX}/manifests/sha256/{normalized['sha256']}.json"),
         staged,
         create_only=True,
     )
@@ -852,10 +849,12 @@ def cmd_catalog_rebuild(args: argparse.Namespace) -> int:
                     "schema_version": 1,
                     "check_only": True,
                     "goals": {
-                        goal_slug: authority._goal_catalog_projector().reconcile(
+                        goal_slug: authority._goal_catalog_projector()
+                        .reconcile(
                             goal_slug,
                             publish=False,
-                        ).to_dict()
+                        )
+                        .to_dict()
                         for goal_slug in goals
                     },
                 }

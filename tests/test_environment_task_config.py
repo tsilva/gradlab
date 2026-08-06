@@ -1,17 +1,53 @@
 from __future__ import annotations
 
 import unittest
+from copy import deepcopy
 
 from gradlab.env_identity import (
     ENVIRONMENT_HASH_ALGORITHM,
     environment_hash,
     environment_identity_from_train_config,
+    policy_environment_hash,
     validate_task_config,
 )
 from gradlab.env_metadata import sanitize_env_config_metadata
 
 
 class EnvironmentTaskConfigTests(unittest.TestCase):
+    def test_deathmatch_transfer_providers_share_only_policy_environment_identity(self) -> None:
+        base = {
+            "game": "VizdoomDeathmatch-v1",
+            "frame_skip": 2,
+            "max_pool_frames": False,
+            "sticky_action_prob": 0.0,
+            "obs_resize": (84, 84),
+            "obs_crop": (0, 32, 0, 0),
+            "obs_crop_mode": "mask",
+            "obs_crop_fill": 0,
+            "obs_resize_algorithm": "area",
+        }
+        vizdoom = {**base, "env_provider": "vizdoom-turbo"}
+        gradoom = {**base, "env_provider": "gradoom"}
+
+        vizdoom_identity = environment_identity_from_train_config(vizdoom)
+        gradoom_identity = environment_identity_from_train_config(gradoom)
+
+        self.assertNotEqual(
+            environment_hash(vizdoom_identity),
+            environment_hash(gradoom_identity),
+        )
+        self.assertEqual(
+            policy_environment_hash(vizdoom),
+            policy_environment_hash(gradoom),
+        )
+
+        compiled = deepcopy(gradoom)
+        compiled.setdefault("env_args", {})["compile_engine"] = True
+        self.assertEqual(
+            policy_environment_hash(gradoom),
+            policy_environment_hash(compiled),
+        )
+
     def test_environment_identity_uses_v5_canonical_task(self) -> None:
         identity = environment_identity_from_train_config(
             {

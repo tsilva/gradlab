@@ -1,0 +1,46 @@
+defaults:
+- ../../../recipes/_presets/atari-ppo@_global_
+- _self_
+recipe_id: gradoom-ppo
+description: GPU-resident GraDOOM Deathmatch PPO trained on one RTX 4090 and evaluated zero-shot in reference ViZDoom.
+reward_shape: native-v1
+train:
+  timesteps: 500000000
+  environment:
+    # Training uses GraDOOM; the goal-owned checkpoint evaluator remains vizdoom-turbo.
+    env_provider: gradoom
+    env_config:
+      env_args:
+        # GraDOOM is single-stream GPU execution; this compatibility knob is intentionally inert.
+        num_threads: 1
+        # TorchInductor is the first fused backend; handwritten Triton kernels will replace hot graphs.
+        compile_engine: true
+    preprocessing:
+      frame_skip: 2
+      obs_crop: [0, 32, 0, 0]
+      obs_crop_mode: mask
+      obs_crop_fill: 0
+  policy_model:
+    schema_version: 2
+    encoder:
+      kind: nature_cnn
+      features_dim: 512
+    fusion: {hidden_sizes: [256], activation: tanh}
+    normalize_images: true
+    orthogonal_init: true
+  early_stop:
+    conditions:
+      return_plateau:
+        start_after_steps: 25000000
+        patience_steps: 25000000
+        action: observe
+  backend:
+    id: gradlab.ppo
+    config:
+      execution_profile: max-throughput
+      precision: amp-fp16
+      n_steps: 32
+      n_epochs: 2
+      learning_rate: 6.25e-5
+      gamma: 0.995
+      gae_lambda: 0.95

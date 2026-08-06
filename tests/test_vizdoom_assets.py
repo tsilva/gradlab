@@ -56,6 +56,13 @@ def _vizdoom_document() -> dict:
     }
 
 
+def _gradoom_document() -> dict:
+    document = _vizdoom_document()
+    document["train_config"]["env_provider"] = "gradoom"
+    document["train_config"]["game"] = "VizdoomDeathmatch-v1"
+    return document
+
+
 def test_local_vizdoom_document_requires_pinned_default_iwad(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -171,4 +178,22 @@ def test_vizdoom_iwad_binding_updates_training_and_evaluation_contract(tmp_path:
     assert (
         document["train_config"]["checkpoint_eval_environment"]["env_args"]["rom_path"]
         == runtime_binding
+    )
+
+
+def test_gradoom_uses_the_same_private_iwad_binding_as_reference_evaluation(
+    tmp_path: Path,
+) -> None:
+    binding = vizdoom_iwad_binding(_iwad(tmp_path / "doom2.wad"))
+    document = _gradoom_document()
+    document["train_config"]["checkpoint_eval_environment"] = {
+        "env_provider": "vizdoom-turbo",
+        "env_args": {"rom_path": None},
+    }
+
+    bind_vizdoom_iwad_to_document(document, binding)
+
+    assert document["train_config"]["env_args"]["rom_path"] == binding
+    assert (
+        document["train_config"]["checkpoint_eval_environment"]["env_args"]["rom_path"] == binding
     )

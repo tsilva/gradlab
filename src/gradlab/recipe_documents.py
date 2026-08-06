@@ -20,6 +20,7 @@ from gradlab.config_loader import (
     render_template_vars,
     template_context_from_path,
 )
+from gradlab.action_profiles import select_goal_action_profile
 from gradlab.env_identity import (
     attach_environment_identity,
     train_config_from_source_environment,
@@ -46,6 +47,7 @@ COMMON_TRAIN_CONFIG_KEYS = train_config_keys_in_source_section("train")
 GOAL_TRAIN_CONFIG_KEYS = train_config_keys_in_source_section("goal_train")
 SOURCE_RECIPE_FIELDS = frozenset(
     {
+        "action_profile",
         "campaign_id",
         "defaults",
         "description",
@@ -712,6 +714,12 @@ def compose_train_document(
         source_overrides,
         label=f"recipe overrides for {recipe_path}",
     )
+    action_selector_value = source_document.pop("action_profile", None)
+    action_selector = None
+    if action_selector_value is not None:
+        if not isinstance(action_selector_value, str) or not action_selector_value.strip():
+            raise ValueError("action_profile must be a non-empty string")
+        action_selector = action_selector_value.strip()
     selector_value = source_document.pop("reward_shape", None)
     selector = None
     if selector_value is not None:
@@ -791,6 +799,83 @@ def compose_train_document(
             document=selected_reward.goal,
             sources=goal_composition.sources,
         )
+    selected_action = None
+    if action_selector is not None:
+        raw_action_override = next(
+            (
+                item
+                for item in recipe_override_list
+                if any(
+                    item.split("=", 1)[0].strip().startswith(prefix)
+                    for prefix in (
+                        "train.environment.task.action",
+                        "eval.environment.task.action",
+                        "train.environment.env_config.env_args.use_restricted_actions",
+                        "eval.environment.env_config.env_args.use_restricted_actions",
+                        "train.environment.env_config.env_args.vizdoom_config.available_buttons",
+                        "eval.environment.env_config.env_args.vizdoom_config.available_buttons",
+                    )
+                )
+            ),
+            None,
+        )
+        source_train = source_document.get("train")
+        source_environment = (
+            source_train.get("environment") if isinstance(source_train, Mapping) else None
+        )
+        source_task = (
+            source_environment.get("task") if isinstance(source_environment, Mapping) else None
+        )
+        if isinstance(source_task, Mapping) and "action" in source_task:
+            raise ValueError(
+                "action_profile cannot be combined with recipe-authored task.action"
+            )
+        source_env_config = (
+            source_environment.get("env_config")
+            if isinstance(source_environment, Mapping)
+            else None
+        )
+        source_env_args = (
+            source_env_config.get("env_args") if isinstance(source_env_config, Mapping) else None
+        )
+        source_vizdoom_config = (
+            source_env_args.get("vizdoom_config")
+            if isinstance(source_env_args, Mapping)
+            else None
+        )
+        if isinstance(source_env_args, Mapping) and "use_restricted_actions" in source_env_args:
+            raise ValueError(
+                "action_profile cannot be combined with recipe-authored "
+                "env_args.use_restricted_actions"
+            )
+        if (
+            isinstance(source_vizdoom_config, Mapping)
+            and "available_buttons" in source_vizdoom_config
+        ):
+            raise ValueError(
+                "action_profile cannot be combined with recipe-authored "
+                "vizdoom_config.available_buttons"
+            )
+        if raw_action_override is not None:
+            raise ValueError(
+                "action_profile cannot be combined with raw action overrides: "
+                f"{raw_action_override}"
+            )
+        selected_action = select_goal_action_profile(
+            goal_composition.document,
+            action_selector,
+            label=f"goal file {goal_path}",
+        )
+        assert selected_action is not None
+        goal_composition = ComposedDocument(
+            document=selected_action.goal,
+            sources=goal_composition.sources,
+        )
+        validate_goal_contract_document(
+            goal_composition.document,
+            goal_composition.sources[-1] if goal_composition.sources else goal_path,
+            Path(".").resolve(),
+        )
     recipe_id = train_recipe_id(source_document)
     goal_context = template_context_from_path(goal_path, goal_composition.document)
     document = render_template_vars(
@@ -842,6 +927,15 @@ def compose_train_document(
                 "reward_shape": selected_reward.key,
                 "reward_shape_sha256": selected_reward.semantic_sha256,
                 "reward_shape_is_default": selected_reward.is_default,
+            }
+        )
+    if selected_action is not None:
+        document["train_config"].update(
+            {
+                "action_profile": selected_action.key,
+                "action_profile_revision": selected_action.program_revision,
+                "action_profile_sha256": selected_action.semantic_sha256,
+                "action_profile_source_table_sha256": selected_action.source_table_sha256,
             }
         )
     document = attach_environment_identity(document)

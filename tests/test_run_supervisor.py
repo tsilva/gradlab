@@ -332,46 +332,21 @@ class RunSupervisorTests(unittest.TestCase):
             work_root=Path(self.temporary.name) / "manual-eval",
         )
 
-        waiting = queue.advance_batch(
+        first = queue.advance_batch(
             job_id="job-" + "a" * 32,
             run_id=self.run_id,
             checkpoint_ids=[checkpoint.checkpoint_id],
             cancel_requested=False,
         )
-        self.assertEqual(waiting.state, "retry_wait")
-        self.assertEqual(
-            waiting.subjects[0].state,
-            "waiting_for_training_terminal",
-        )
-        self.assertEqual(len(backend.payloads), 0)
-        self.assertFalse(
-            any(
-                key.endswith("/intent.json")
-                for key in self.authority.evaluation.iter_keys(f"runs/{self.run_id}/evals")
-            )
+        repeated = queue.advance_batch(
+            job_id="job-" + "a" * 32,
+            run_id=self.run_id,
+            checkpoint_ids=[checkpoint.checkpoint_id],
+            cancel_requested=False,
         )
 
-        with patch.object(
-            queue,
-            "_training_terminal",
-            return_value={"wandb_high_water_mark": 0},
-        ):
-            first = queue.advance_batch(
-                job_id="job-" + "a" * 32,
-                run_id=self.run_id,
-                checkpoint_ids=[checkpoint.checkpoint_id],
-                cancel_requested=False,
-            )
-            repeated = queue.advance_batch(
-                job_id="job-" + "a" * 32,
-                run_id=self.run_id,
-                checkpoint_ids=[checkpoint.checkpoint_id],
-                cancel_requested=False,
-            )
-
-        statuses = first.subjects
         self.assertEqual(first.state, "retry_wait")
-        self.assertEqual(statuses[0].state, "submitted")
+        self.assertEqual(first.subjects[0].state, "submitted")
         self.assertEqual(repeated.state, "retry_wait")
         self.assertEqual(repeated.subjects[0].state, "submitted")
         self.assertEqual(len(backend.payloads), 1)

@@ -14,9 +14,15 @@ import gymnasium as gym
 import numpy as np
 
 from gradlab.action_codecs import (
+    LEGAL_TUPLE_DISTRIBUTION,
+    LEGAL_TUPLE_SCORING,
+    LegalTupleMultiDiscrete,
     VIZDOOM_DEATHMATCH_MULTIDISCRETE_CODEC,
+    VIZDOOM_SHARED_MULTIDISCRETE_CODEC,
     vizdoom_deathmatch_multidiscrete_codec_document,
     vizdoom_deathmatch_multidiscrete_semantics,
+    vizdoom_shared_multidiscrete_codec_document,
+    vizdoom_shared_multidiscrete_semantics,
 )
 
 
@@ -102,8 +108,11 @@ def provider_buttons(
     *,
     env_args: Mapping[str, Any] | None = None,
 ) -> tuple[str | None, ...]:
-    if provider_id == "vizdoom-turbo":
-        from vizdoom_turbo import scenario_buttons
+    if provider_id in {"gradoom", "vizdoom-turbo"}:
+        if provider_id == "gradoom":
+            from gradoom import scenario_buttons
+        else:
+            from vizdoom_turbo import scenario_buttons
 
         args = env_args if isinstance(env_args, Mapping) else {}
         vizdoom_config = args.get("vizdoom_config")
@@ -375,6 +384,19 @@ def action_space_document(space: gym.Space) -> dict[str, Any]:
             "start": int(space.start),
             "dtype": str(space.dtype),
         }
+    if isinstance(space, LegalTupleMultiDiscrete):
+        return {
+            "type": "multi_discrete",
+            "nvec": _json_action_value(space.nvec),
+            "start": _json_action_value(space.start),
+            "shape": [int(value) for value in space.shape],
+            "dtype": str(space.dtype),
+            "legal_tuples": _json_action_value(space.legal_tuples),
+            "distribution": {
+                "type": space.distribution_type,
+                "scoring": space.scoring_rule,
+            },
+        }
     if isinstance(space, gym.spaces.MultiDiscrete):
         return {
             "type": "multi_discrete",
@@ -436,7 +458,7 @@ def _display_label(semantic_id: str) -> str:
 
 def _input_atom(provider_id: str, atom: str) -> str:
     semantic = _semantic_id(atom)
-    if provider_id == "vizdoom-turbo":
+    if provider_id in {"gradoom", "vizdoom-turbo"}:
         return {
             "move_left": "left",
             "move_right": "right",
@@ -714,7 +736,7 @@ def _mixed_radix_entry(
 
 
 def action_contract_entry(contract: Mapping[str, Any], value: Any) -> dict[str, Any] | None:
-    """Resolve one scalar policy action without expanding compact encodings."""
+    """Resolve one policy action without expanding compact encodings."""
 
     policy = contract.get("policy")
     if not isinstance(policy, Mapping):
@@ -724,6 +746,17 @@ def action_contract_entry(contract: Mapping[str, Any], value: Any) -> dict[str, 
         return None
     semantics = policy.get("semantics")
     if not isinstance(semantics, Mapping) or semantics.get("status") != "available":
+        return None
+    if space.get("type") == "multi_discrete" and isinstance(
+        semantics.get("legal_entries"), list
+    ):
+        try:
+            selected = tuple(int(item) for item in np.asarray(value).reshape(-1))
+        except TypeError, ValueError:
+            return None
+        for entry in semantics["legal_entries"]:
+            if isinstance(entry, Mapping) and tuple(int(item) for item in entry["value"]) == selected:
+                return dict(entry)
         return None
     try:
         scalar = int(np.asarray(value).reshape(-1)[0])
@@ -743,13 +776,22 @@ def action_contract_entry(contract: Mapping[str, Any], value: Any) -> dict[str, 
 
 
 def action_contract_meanings(contract: Mapping[str, Any]) -> tuple[str, ...]:
-    """Return ordered semantic IDs for a scalar Discrete policy contract."""
+    """Return ordered semantic IDs for a Discrete or legal-tuple policy contract."""
 
     policy = contract.get("policy")
     if not isinstance(policy, Mapping):
         return ()
     space = policy.get("space")
-    if not isinstance(space, Mapping) or space.get("type") != "discrete":
+    if not isinstance(space, Mapping):
+        return ()
+    semantics = policy.get("semantics")
+    if space.get("type") == "multi_discrete" and isinstance(semantics, Mapping):
+        entries = semantics.get("legal_entries")
+        if not isinstance(entries, list):
+            return ()
+        ids = tuple(str(entry.get("semantic_id", "")) for entry in entries)
+        return ids if all(ids) and len(ids) == len(set(ids)) else ()
+    if space.get("type") != "discrete":
         return ()
     start = int(space.get("start", 0))
     count = int(space.get("n", 0))
@@ -797,6 +839,71 @@ def action_index_for_controls(
         f"no configured discrete action matches controls {sorted(requested)!r}; "
         f"available actions: {', '.join(available) or 'none'}"
     )
+
+
+def action_value_for_controls(
+    contract: Mapping[str, Any],
+    labels: list[str] | tuple[str, ...] | set[str],
+) -> int | tuple[int, ...]:
+    """Map browser control inputs to the contract's scalar or tuple policy value."""
+
+    policy = contract.get("policy")
+    space = policy.get("space") if isinstance(policy, Mapping) else None
+    if not isinstance(space, Mapping) or space.get("type") == "discrete":
+        return action_index_for_controls(contract, labels)
+    semantics = policy.get("semantics") if isinstance(policy, Mapping) else None
+    entries = semantics.get("legal_entries") if isinstance(semantics, Mapping) else None
+    if space.get("type") != "multi_discrete" or not isinstance(entries, list):
+        raise ValueError("named browser controls require a Discrete or legal-tuple action contract")
+    requested = {_semantic_id(label) for label in labels if _semantic_id(label)}
+    matches: list[tuple[int, ...]] = []
+    for entry in entries:
+        controls = entry.get("controls") if isinstance(entry, Mapping) else None
+        if not isinstance(controls, list) or len(controls) != 1:
+            continue
+        inputs = {
+            _semantic_id(label)
+            for label in controls[0].get("inputs", ())
+            if _semantic_id(label)
+        }
+        if inputs == requested:
+            matches.append(tuple(int(value) for value in entry["value"]))
+    if len(matches) == 1:
+        return matches[0]
+    if len(matches) > 1:
+        raise ValueError(
+            f"browser controls {sorted(requested)!r} ambiguously match actions {matches!r}"
+        )
+    raise ValueError(
+        f"no configured legal action matches controls {sorted(requested)!r}; "
+        f"available actions: {', '.join(action_contract_meanings(contract)) or 'none'}"
+    )
+
+
+def action_value_for_semantic(
+    contract: Mapping[str, Any],
+    semantic_id: str,
+) -> int | tuple[int, ...]:
+    """Resolve an exact policy action value from its stable semantic ID."""
+
+    requested = _semantic_id(semantic_id)
+    policy = contract.get("policy")
+    space = policy.get("space") if isinstance(policy, Mapping) else None
+    semantics = policy.get("semantics") if isinstance(policy, Mapping) else None
+    if not isinstance(space, Mapping) or not isinstance(semantics, Mapping):
+        raise ValueError("runtime action contract has no policy semantics")
+    if space.get("type") == "discrete":
+        start = int(space.get("start", 0))
+        for offset, name in enumerate(action_contract_meanings(contract)):
+            if _semantic_id(name) == requested:
+                return start + offset
+    elif space.get("type") == "multi_discrete":
+        entries = semantics.get("legal_entries")
+        if isinstance(entries, list):
+            for entry in entries:
+                if _semantic_id(entry.get("semantic_id", "")) == requested:
+                    return tuple(int(value) for value in entry["value"])
+    raise ValueError(f"policy action semantics do not contain {semantic_id!r}")
 
 
 def _native_action_entry(
@@ -854,6 +961,44 @@ def _native_action_entry(
     }
 
 
+def _vizdoom_shared_policy_semantics(
+    configured_codec: Mapping[str, Any],
+) -> dict[str, Any]:
+    semantics = vizdoom_shared_multidiscrete_semantics()
+    table = configured_codec.get("source_table")
+    tuples = configured_codec.get("legal_tuples")
+    if not isinstance(table, list | tuple) or not isinstance(tuples, list | tuple):
+        raise ValueError("shared ViZDoom codec requires source_table and legal_tuples")
+    if len(table) != len(tuples):
+        raise ValueError("shared ViZDoom source table and legal tuples differ in length")
+    entries = []
+    ids: set[str] = set()
+    for native_labels, tuple_value in zip(table, tuples, strict=True):
+        if not isinstance(native_labels, list | tuple):
+            raise ValueError("shared ViZDoom source action must be a button list")
+        semantic_id = (
+            "noop"
+            if not native_labels
+            else "_".join(_semantic_id(label) for label in native_labels)
+        )
+        if semantic_id in ids:
+            raise ValueError(f"shared ViZDoom semantic ID {semantic_id!r} is duplicated")
+        ids.add(semantic_id)
+        entries.append(
+            {
+                "value": _json_action_value(tuple_value),
+                "semantic_id": semantic_id,
+                "label": _display_label(semantic_id),
+                "controls": _entry_controls("vizdoom-turbo", native_labels),
+                "native_buttons": _json_action_value(native_labels),
+            }
+        )
+    return {
+        **semantics,
+        "legal_entries": entries,
+    }
+
+
 def compile_runtime_action_contract(
     config: Any,
     descriptor: Any,
@@ -887,6 +1032,15 @@ def compile_runtime_action_contract(
             policy_action_space,
         )
         policy_semantics = vizdoom_deathmatch_multidiscrete_semantics()
+    elif configured_codec_type == VIZDOOM_SHARED_MULTIDISCRETE_CODEC:
+        if policy_action_values is not None:
+            raise ValueError("a policy action contract cannot combine task codecs")
+        codec = vizdoom_shared_multidiscrete_codec_document(
+            descriptor,
+            policy_action_space,
+            policy_action_codec,
+        )
+        policy_semantics = _vizdoom_shared_policy_semantics(policy_action_codec)
     elif policy_action_values is None and configured_codec_type is None:
         codec: dict[str, Any] = {"type": "identity"}
         policy_semantics = deepcopy(provider_semantics)
@@ -1050,6 +1204,41 @@ def validate_runtime_action_contract(contract: Mapping[str, Any]) -> None:
                 raise ValueError(
                     "MultiDiscrete action semantics must contain one value per category"
                 )
+        legal_tuples = space.get("legal_tuples")
+        if legal_tuples is not None:
+            if not isinstance(legal_tuples, list) or not legal_tuples:
+                raise ValueError("constrained MultiDiscrete space requires legal tuples")
+            expected_width = len(nvec)
+            normalized = []
+            for row in legal_tuples:
+                if not isinstance(row, list) or len(row) != expected_width:
+                    raise ValueError("constrained MultiDiscrete legal tuple width differs")
+                normalized_row = tuple(int(value) for value in row)
+                if any(
+                    value < 0 or value >= int(cardinality)
+                    for value, cardinality in zip(normalized_row, nvec, strict=True)
+                ):
+                    raise ValueError("constrained MultiDiscrete legal tuple is out of bounds")
+                normalized.append(normalized_row)
+            if len(normalized) != len(set(normalized)):
+                raise ValueError("constrained MultiDiscrete legal tuples must be unique")
+            if normalized[0] != tuple(0 for _ in range(expected_width)):
+                raise ValueError("constrained MultiDiscrete legal tuples must begin with noop")
+            distribution = space.get("distribution")
+            if distribution != {
+                "type": LEGAL_TUPLE_DISTRIBUTION,
+                "scoring": LEGAL_TUPLE_SCORING,
+            }:
+                raise ValueError("constrained MultiDiscrete distribution contract is unsupported")
+            legal_entries = semantics.get("legal_entries")
+            if not isinstance(legal_entries, list) or len(legal_entries) != len(normalized):
+                raise ValueError("constrained MultiDiscrete semantics require one legal entry per tuple")
+            entry_values = [tuple(int(value) for value in entry["value"]) for entry in legal_entries]
+            if entry_values != normalized:
+                raise ValueError("constrained MultiDiscrete legal entries are out of order")
+            ids = [str(entry.get("semantic_id", "")) for entry in legal_entries]
+            if any(not value for value in ids) or len(ids) != len(set(ids)):
+                raise ValueError("constrained MultiDiscrete semantic IDs must be unique")
 
 
 def action_contract_payload(
@@ -1130,6 +1319,8 @@ __all__ = [
     "action_contract_meanings",
     "action_contract_payload",
     "action_index_for_controls",
+    "action_value_for_controls",
+    "action_value_for_semantic",
     "action_space_document",
     "assert_action_contract_compatible",
     "compile_runtime_action_contract",

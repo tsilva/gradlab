@@ -1217,6 +1217,13 @@ def test_local_vizdoom_iwad_contract_is_hash_bound_and_mounts_cache(
         rom_path=iwad,
     )
     assert binding is not None
+    assert (
+        _bind_vizdoom_iwad_for_launch(
+            env_provider="gradoom",
+            rom_path=iwad,
+        )
+        == binding
+    )
     goal = Path("experiments/goals/VizdoomDefendLine-v1/_goal.yaml")
     resolved = compose_resolved_train_documents(
         goal,

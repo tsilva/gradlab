@@ -758,6 +758,25 @@ h2 { font-size: .9rem; margin: 0; font-weight: 650; }
   text-transform: inherit;
   cursor: pointer;
 }
+.source-sort-label {
+  display: grid;
+  gap: .14rem;
+  min-width: 0;
+}
+.source-sort-label > span:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.checkpoint-metric-role {
+  color: var(--color-text-muted);
+  font-size: .52rem;
+  font-weight: 650;
+  letter-spacing: .06em;
+  line-height: 1.1;
+  text-transform: uppercase;
+}
+.checkpoint-metric-role.evaluation { color: var(--color-evaluation-text); }
+.checkpoint-metric-role.training { color: var(--color-training-text); }
 .source-sort:hover,
 .source-sort:focus-visible { color: var(--color-text); }
 .source-sort:focus-visible {
@@ -828,6 +847,11 @@ h2 { font-size: .9rem; margin: 0; font-weight: 650; }
   line-height: 1;
   text-transform: uppercase;
   white-space: nowrap;
+}
+.source-table .checkpoint-best-badge.evaluation {
+  border-color: var(--color-evaluation-text);
+  background: var(--color-evaluation-surface);
+  color: var(--color-evaluation-text);
 }
 .source-table .run-identity {
   display: flex;

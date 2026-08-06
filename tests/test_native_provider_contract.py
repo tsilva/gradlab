@@ -1247,6 +1247,7 @@ class VizdoomTurboProviderTests(unittest.TestCase):
         self.assertEqual(env.kwargs["obs_resize"], (84, 84))
         self.assertEqual(env.kwargs["obs_crop"], (12, 0, 0, 0))
         self.assertEqual(env.kwargs["frame_stack"], 4)
+        self.assertNotIn("info_frame_stack_keys", env.kwargs)
         self.assertEqual(env.kwargs["sticky_action_prob"], 0.25)
         self.assertEqual(env.kwargs["state"], None)
         self.assertEqual(env.kwargs["use_restricted_actions"], "discrete")

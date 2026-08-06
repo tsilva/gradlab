@@ -4,7 +4,7 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 from gradlab.metric_names import metric_path_segment
-from gradlab.model_inputs import model_input_fields
+from gradlab.model_inputs import PROVIDER_FRAME_STACK_HISTORY, model_input_fields
 
 
 POLICY_MODEL_SCHEMA_VERSION = 2
@@ -64,6 +64,7 @@ def normalize_policy_model(value: Any, *, label: str = "policy_model") -> dict[s
         "schema_version",
         "encoder",
         "fusion",
+        "info_history_encoder",
         "share_features_extractor",
         "normalize_images",
         "orthogonal_init",
@@ -98,6 +99,11 @@ def normalize_policy_model(value: Any, *, label: str = "policy_model") -> dict[s
     # topology needs an explicit serialized field.
     if not share_features_extractor:
         normalized["share_features_extractor"] = False
+    if "info_history_encoder" in value:
+        normalized["info_history_encoder"] = _normalize_mlp(
+            value["info_history_encoder"],
+            label=f"{label}.info_history_encoder",
+        )
     return normalized
 
 
@@ -258,3 +264,14 @@ def validate_policy_model_context(
     fields = model_input_fields(task)
     if fields and policy_model is None:
         raise ValueError(f"{label} is required when task.model_inputs declares context")
+    has_provider_history = any(
+        field.get("history") == PROVIDER_FRAME_STACK_HISTORY for field in fields.values()
+    )
+    if (
+        policy_model is not None
+        and "info_history_encoder" in policy_model
+        and not has_provider_history
+    ):
+        raise ValueError(
+            f"{label}.info_history_encoder requires a provider frame-stack model input"
+        )

@@ -88,6 +88,7 @@ class EnvironmentSpec:
 @dataclass(frozen=True)
 class EnvRegistration:
     spec_id: str
+    policy_compatibility_id: str | None = None
 
 
 MARIO_EVAL_SEMANTICS = EvalSemantics(
@@ -338,7 +339,12 @@ VIZDOOM_TURBO_PROVIDER = EnvProvider(
     import_name="vizdoom_turbo",
     distribution_name="vizdoom-turbo",
     environments={
-        spec_id: EnvRegistration(spec_id)
+        spec_id: EnvRegistration(
+            spec_id,
+            policy_compatibility_id=(
+                "doom-deathmatch-p1-v1" if spec_id == "VizdoomDeathmatch-v1" else None
+            ),
+        )
         for spec_id in (
             "VizdoomBasic-v1",
             "VizdoomBasic-Plus-v1",
@@ -374,6 +380,38 @@ VIZDOOM_TURBO_PROVIDER = EnvProvider(
         },
         required_values={},
         optional_env_args=frozenset({"enemy_variants", "surface_variants"}),
+    ),
+)
+
+GRADOOM_PROVIDER = EnvProvider(
+    provider_id="gradoom",
+    import_name="gradoom",
+    distribution_name="gradoom",
+    environments={
+        "VizdoomDeathmatch-v1": EnvRegistration(
+            "VizdoomDeathmatch-v1",
+            policy_compatibility_id="doom-deathmatch-p1-v1",
+        ),
+    },
+    turbo_api_version=1,
+    native_episode_horizon=NativeEpisodeHorizonContract(
+        env_args_path=("vizdoom_config", "episode_timeout"),
+        unit="tics",
+        truncation_env_arg="treat_episode_timeout_as_truncation",
+    ),
+    constructor_contract=ProviderConstructorContract(
+        canonical_args=_TURBO_CANONICAL_ARGS | {"device", "transport"},
+        explicit_env_args=_TURBO_EXPLICIT_ENV_ARGS
+        | {
+            "doom_map",
+            "doom_skill",
+            "game_args",
+            "game_variables",
+            "treat_episode_timeout_as_truncation",
+            "vizdoom_config",
+        },
+        required_values={},
+        optional_env_args=frozenset({"compile_engine"}),
     ),
 )
 
@@ -464,6 +502,7 @@ ENV_PROVIDERS: dict[str, EnvProvider] = {
     STABLE_RETRO_TURBO_PROVIDER.provider_id: STABLE_RETRO_TURBO_PROVIDER,
     SUPERMARIOBROS_NES_TURBO_PROVIDER.provider_id: SUPERMARIOBROS_NES_TURBO_PROVIDER,
     VIZDOOM_TURBO_PROVIDER.provider_id: VIZDOOM_TURBO_PROVIDER,
+    GRADOOM_PROVIDER.provider_id: GRADOOM_PROVIDER,
     ALE_PY_PROVIDER.provider_id: ALE_PY_PROVIDER,
     GYMNASIUM_PROVIDER.provider_id: GYMNASIUM_PROVIDER,
 }
@@ -509,6 +548,15 @@ def environment_spec(provider_id: object, env_id: object) -> EnvironmentSpec:
         game_family=_fallback_game_family(environment, fallback="environment"),
         wandb_project=environment or "environment",
     )
+
+
+def policy_environment_compatibility_id(provider_id: object, env_id: object) -> str | None:
+    """Return an explicit cross-provider policy-transfer contract, when declared."""
+
+    provider, environment = _environment_identity(provider_id, env_id)
+    resolved = resolve_env_provider(provider)
+    registration = resolved.environments.get(environment)
+    return registration.policy_compatibility_id if registration is not None else None
 
 
 def _fallback_game_family(env_id: str, *, fallback: str) -> str:

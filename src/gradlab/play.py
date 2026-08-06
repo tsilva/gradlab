@@ -8,7 +8,11 @@ from gradlab.play_session import build_parser
 
 
 def main(argv: list[str] | None = None) -> int:
-    from gradlab.model_sources import is_huggingface_model_ref
+    from gradlab.model_sources import (
+        is_huggingface_model_ref,
+        is_public_checkpoint_manifest_ref,
+        public_checkpoint_manifest,
+    )
     from gradlab.play_catalog import PlayCatalog, parse_wandb_location
     from gradlab.play_runtime import PlaySourceSpec
     from gradlab.playback_worker import IsolatedPlaybackHost
@@ -82,17 +86,31 @@ def main(argv: list[str] | None = None) -> int:
     initial_route: dict[str, object] = {"level": "environments"}
     initial_source: PlaySourceSpec | None = None
     if args.run:
+        run_ref = str(args.run)
+        exact_checkpoint = (
+            public_checkpoint_manifest(run_ref)
+            if is_public_checkpoint_manifest_ref(run_ref)
+            else None
+        )
+        run_id = exact_checkpoint.run_id if exact_checkpoint is not None else run_ref
         initial_route = {
             "level": "runs",
-            "run_id": str(args.run),
+            "run_id": run_id,
         }
         try:
-            initial_route = catalog.public_run_route(run_id=str(args.run))
+            initial_route = catalog.public_run_route(run_id=run_id)
         except CatalogError:
             pass
         except ValueError:
             pass
-        initial_source = PlaySourceSpec("public_run", str(args.run), run_id=str(args.run))
+        initial_source = PlaySourceSpec(
+            "public_run",
+            run_ref,
+            run_id=run_id,
+            checkpoint_id=(
+                exact_checkpoint.checkpoint_id if exact_checkpoint is not None else ""
+            ),
+        )
     elif args.model:
         initial_source = PlaySourceSpec("local", str(Path(args.model).expanduser()))
     elif args.artifact_ref:

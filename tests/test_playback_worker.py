@@ -21,6 +21,7 @@ def test_isolated_playback_worker_starts_without_a_source() -> None:
         assert snapshot["session"]["reward_accounting"]["status"] == "unavailable"
         assert snapshot["app"]["phase"] == "selecting"
         assert snapshot["app"]["source"] is None
+        assert host.active_publication_context() is None
         assert (
             host.encoder.retained(
                 0,

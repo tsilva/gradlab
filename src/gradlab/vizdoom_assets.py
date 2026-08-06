@@ -14,9 +14,7 @@ VIZDOOM_IWAD_BINDING_SCHEMA_VERSION = 1
 DEFAULT_LOCAL_VIZDOOM_IWAD = Path("~/roms/vizdoom/doom2.wad")
 REQUIRED_VIZDOOM_IWAD_FILENAME = "doom2.wad"
 REQUIRED_VIZDOOM_IWAD_SIZE_BYTES = 14_604_584
-REQUIRED_VIZDOOM_IWAD_SHA256 = (
-    "10d67824b11025ddd9198e8cfc87ca335ee6e2d3e63af4180fa9b8a471893255"
-)
+REQUIRED_VIZDOOM_IWAD_SHA256 = "10d67824b11025ddd9198e8cfc87ca335ee6e2d3e63af4180fa9b8a471893255"
 VIZDOOM_IWAD_CACHE_PREFIX = Path("vizdoom-iwad/sha256")
 VIZDOOM_IWAD_OBJECT_PREFIX = "vizdoom-iwad/v1"
 
@@ -217,8 +215,9 @@ def bind_vizdoom_iwad_to_document(
     train_config = document.get("train_config")
     if not isinstance(train_config, MutableMapping):
         raise ValueError("ViZDoom IWAD binding requires a materialized train_config")
-    if str(train_config.get("env_provider") or "") != "vizdoom-turbo":
-        raise ValueError("ViZDoom IWAD binding requires env_provider='vizdoom-turbo'")
+    provider_id = str(train_config.get("env_provider") or "")
+    if provider_id not in {"gradoom", "vizdoom-turbo"}:
+        raise ValueError("Doom IWAD binding requires env_provider='gradoom' or 'vizdoom-turbo'")
     env_args = train_config.get("env_args")
     if not isinstance(env_args, Mapping):
         raise ValueError("ViZDoom IWAD binding requires train_config.env_args")
@@ -240,7 +239,7 @@ def bind_required_local_vizdoom_iwad(
     train_config = document.get("train_config")
     if not isinstance(train_config, MutableMapping):
         return False
-    if str(train_config.get("env_provider") or "") != "vizdoom-turbo":
+    if str(train_config.get("env_provider") or "") not in {"gradoom", "vizdoom-turbo"}:
         return False
     env_args = train_config.get("env_args")
     if not isinstance(env_args, Mapping):

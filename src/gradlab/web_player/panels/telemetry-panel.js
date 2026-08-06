@@ -287,7 +287,17 @@ export function distributionBlockTitle(block, descriptor) {
   return block.title || descriptor?.label || "Distribution";
 }
 
-function discreteActionOffset(value, start, count) {
+function discreteActionOffset(value, start, count, snapshot = null) {
+  const legalTuples = snapshot?.session?.action_contract?.policy?.space?.legal_tuples;
+  if (Array.isArray(value) && value.flat(Infinity).length > 1 && Array.isArray(legalTuples)) {
+    const selected = value.flat(Infinity).map(Number);
+    const legalIndex = legalTuples.findIndex((tuple) => {
+      const candidate = Array.isArray(tuple) ? tuple.flat(Infinity).map(Number) : [];
+      return candidate.length === selected.length
+        && candidate.every((item, index) => item === selected[index]);
+    });
+    return legalIndex >= 0 && legalIndex < count ? legalIndex : null;
+  }
   const action = scalarActionIndex(value);
   const offset = action === null ? null : action - start;
   return Number.isInteger(offset) && offset >= 0 && offset < count
@@ -306,7 +316,10 @@ function probabilityValue(value) {
 export function actionComparisonPresentation(snapshot, history, decision) {
   if (!Array.isArray(decision?.probabilities)) return null;
   const count = decision.probabilities.length;
-  const start = Number(snapshot?.session?.action_contract?.policy?.space?.start || 0);
+  const policySpace = snapshot?.session?.action_contract?.policy?.space;
+  const start = Array.isArray(policySpace?.legal_tuples)
+    ? 0
+    : Number(policySpace?.start || 0);
   const names = discreteActionLabels(snapshot, count);
   const stepProbabilities = decision.probabilities.map(probabilityValue);
   const invalidStepValues = stepProbabilities.filter((value) => value === null).length;
@@ -316,7 +329,7 @@ export function actionComparisonPresentation(snapshot, history, decision) {
   const counts = Array.from({ length: count }, () => 0);
   let unmappable = 0;
   executedActions.forEach((value) => {
-    const offset = discreteActionOffset(value, start, count);
+    const offset = discreteActionOffset(value, start, count, snapshot);
     if (offset === null) unmappable += 1;
     else counts[offset] += 1;
   });
@@ -340,6 +353,7 @@ export function actionComparisonPresentation(snapshot, history, decision) {
     snapshot?.transition?.executed_action,
     start,
     count,
+    snapshot,
   );
   return {
     history: {

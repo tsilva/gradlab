@@ -29,6 +29,21 @@ export function scalarActionIndex(value) {
   return null;
 }
 
+function legalTupleEntry(policy, semantics, value) {
+  if (
+    policy?.space?.type !== "multi_discrete"
+    || !Array.isArray(semantics?.legal_entries)
+    || !Array.isArray(value)
+  ) return null;
+  const selected = value.flat(Infinity).map(Number);
+  return semantics.legal_entries.find((entry) => {
+    const candidate = Array.isArray(entry?.value) ? entry.value.flat(Infinity).map(Number) : null;
+    return candidate
+      && candidate.length === selected.length
+      && candidate.every((item, index) => item === selected[index]);
+  }) || null;
+}
+
 function mixedRadixEntry(semantics, value, start = 0) {
   let remaining = Number(value) - Number(start || 0);
   if (!Number.isInteger(remaining) || remaining < 0) return null;
@@ -71,10 +86,12 @@ export function actionEntry(snapshot, value) {
   const contract = sessionContract(snapshot);
   const policy = contract?.policy;
   const semantics = policy?.semantics;
+  if (semantics?.status !== "available") return null;
+  const legalEntry = legalTupleEntry(policy, semantics, value);
+  if (legalEntry) return legalEntry;
   const scalar = scalarActionIndex(value);
   if (
     scalar === null
-    || semantics?.status !== "available"
     || policy?.space?.type !== "discrete"
   ) return null;
   if (semantics.encoding === "explicit") {
@@ -107,13 +124,14 @@ export function actionSemanticsReason(snapshot, value = undefined) {
   }
   if (value === undefined) return null;
   const space = contract?.policy?.space;
-  const resolved = space?.type === "discrete"
-    ? actionEntry(snapshot, value)
+  const resolved = actionEntry(snapshot, value)
+    || (space?.type === "discrete"
+      ? null
     : (
       semantics.encoding === "components"
       && ["multi_binary", "multi_discrete", "box"].includes(space?.type)
       && componentActionLabel(value, semantics, space)
-    );
+    ));
   return resolved ? null : "the declared action semantics do not describe this value";
 }
 
@@ -191,6 +209,18 @@ export function formatActionValue(value, snapshot) {
 export function discreteActionLabels(snapshot, count = null) {
   const contract = sessionContract(snapshot);
   const space = contract?.policy?.space;
+  const legalEntries = contract?.policy?.semantics?.legal_entries;
+  if (
+    space?.type === "multi_discrete"
+    && Array.isArray(legalEntries)
+    && (count === null || Number(count) === legalEntries.length)
+  ) {
+    return legalEntries.map((entry) => (
+      semanticLabel(entry?.label)
+      || semanticLabel(entry?.semantic_id)?.replaceAll("_", " ")
+      || "unknown action"
+    ));
+  }
   const size = count === null ? Number(space?.n || 0) : Number(count);
   const start = Number(space?.start || 0);
   if (Number.isInteger(size) && size > 0) {

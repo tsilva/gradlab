@@ -61,6 +61,7 @@ GradLab is a reproducible reinforcement-learning workbench that carries game-age
 - Playback must support local and remote artifacts, default to training-time policy semantics, and distinguish evaluation reproduction from counterfactual departures.
 - Concurrent viewers must share one trajectory, and mutable references must refresh when their content changes.
 - Bare playback must provide a fast, searchable Environment → Goal → derived Goal Variant → Run → public Checkpoint flow with hierarchical browser-history routes.
+- Checkpoint lists must prominently surface each run’s exact goal-variant acceptance and ranking metrics together with applicable task-aligned training proxies, while distinguishing diagnostic training evidence from authoritative checkpoint-evaluation evidence.
 - Goal-variant selection must distinguish current defaults, current launch-modified variants, and historical goal versions in plain language; every entry must show a normalized, proven behavioral difference, first-used date, last-activity date, and run count.
 - Playback discovery must use a rebuildable precomputed catalog, avoid synchronous storage scans, display only available acceptance evidence, and progressively resolve CLI references.
 - Run selection must distinguish checked-in recipes from searchable launch-time overrides without requiring new recipes.

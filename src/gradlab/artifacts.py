@@ -68,6 +68,12 @@ def build_model_provenance(
         "goal_sha256": train_config.get("goal_sha256", ""),
         "goal_contract_sha256": train_config.get("goal_contract_sha256", ""),
         "effective_goal_contract_sha256": train_config.get("effective_goal_contract_sha256", ""),
+        "action_profile": train_config.get("action_profile", ""),
+        "action_profile_revision": train_config.get("action_profile_revision", ""),
+        "action_profile_sha256": train_config.get("action_profile_sha256", ""),
+        "action_profile_source_table_sha256": train_config.get(
+            "action_profile_source_table_sha256", ""
+        ),
         "reward_program_kind": train_config.get("reward_program_kind", ""),
         "reward_program_revision": train_config.get("reward_program_revision", ""),
         "reward_shape": train_config.get("reward_shape", ""),
