@@ -37,6 +37,7 @@ from gradlab.metric_names import (
     EVAL_FULL_SUCCESS_ACROSS_STARTS_RATE_MIN,
     EVAL_FULL_SUCCESS_ACROSS_STARTS_RATE_MEAN,
     ORCHESTRATION_EVENT_SEQ,
+    eval_progress_metric,
 )
 from gradlab.vizdoom_assets import validate_vizdoom_iwad_binding
 from gradlab.modal_eval_backend import ModalEvalBackend
@@ -78,7 +79,7 @@ _STRICT_COMPLETE_ACCEPTANCE_METRIC_BY_GAME = {
     "VizdoomBasic-v1": EVAL_FULL_SUCCESS_ACROSS_STARTS_RATE_MIN,
     "VizdoomBasic-Plus-v1": EVAL_FULL_SUCCESS_ACROSS_STARTS_RATE_MIN,
     "VizdoomDeadlyCorridor-v1": EVAL_FULL_EPISODE_RETURN_SHAPED_MEAN,
-    "VizdoomDeathmatch-v1": EVAL_FULL_EPISODE_RETURN_SHAPED_MEAN,
+    "VizdoomDeathmatch-v1": eval_progress_metric("full", "kills", "mean"),
     "VizdoomDefendLine-v1": EVAL_FULL_EPISODE_RETURN_SHAPED_MEAN,
     "VizdoomDefendLine-Plus-v1": EVAL_FULL_EPISODE_RETURN_SHAPED_MEAN,
 }

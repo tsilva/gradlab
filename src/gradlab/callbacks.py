@@ -801,6 +801,14 @@ class RewardStatsAccumulator:
         "completion": "completion_reward_component",
         "death": "death_penalty_component",
         "time": "time_penalty_component",
+        "kill": "kill_reward_component",
+        "hit": "hit_reward_component",
+        "damage": "damage_reward_component",
+        "health": "health_reward_component",
+        "armor": "armor_reward_component",
+        "weapon": "weapon_reward_component",
+        "ammo": "ammo_reward_component",
+        "weapon_hold": "weapon_hold_reward_component",
     }
     signal_info_keys = {
         "progress": "progress_component",

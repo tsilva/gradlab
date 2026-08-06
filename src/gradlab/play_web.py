@@ -102,6 +102,14 @@ REWARD_COMPONENT_INFO_KEYS = {
     "completion_reward_component": "completion_reward",
     "death_penalty_component": "death_penalty",
     "time_penalty_component": "time_penalty",
+    "kill_reward_component": "kill_reward",
+    "hit_reward_component": "hit_reward",
+    "damage_reward_component": "damage_reward",
+    "health_reward_component": "health_reward",
+    "armor_reward_component": "armor_reward",
+    "weapon_reward_component": "weapon_reward",
+    "ammo_reward_component": "ammo_reward",
+    "weapon_hold_reward_component": "weapon_hold_reward",
 }
 
 

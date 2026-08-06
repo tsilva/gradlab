@@ -5,12 +5,17 @@ from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from typing import Any
 
+from gradlab.action_codecs import validate_task_action_codec
 from gradlab.env_registry import environment_spec
 from gradlab.json_utils import canonical_json_text
 from gradlab.metric_names import metric_path_segment
 from gradlab.provider_config import provider_env_id, provider_game, semantic_provider_args
 from gradlab.preprocessing import preprocessing_contract
-from gradlab.reward_programs import MARIO_REWARD_FIELD_SET
+from gradlab.reward_programs import (
+    MARIO_REWARD_FIELD_SET,
+    VIZDOOM_DEATHMATCH_REWARD_FIELD_SET,
+    normalize_vizdoom_deathmatch_reward,
+)
 from gradlab.reward_transform import (
     COMMON_REWARD_KEYS,
     normalize_task_reward,
@@ -39,9 +44,7 @@ PREPROCESSING_KEYS = (
     "obs_crop_fill",
     "obs_resize_algorithm",
 )
-IDENTITY_REWARD_KEYS = (
-    frozenset({"reward_mode", CELL_NOVELTY_REWARD_KEY}) | COMMON_REWARD_KEYS
-)
+IDENTITY_REWARD_KEYS = frozenset({"reward_mode", CELL_NOVELTY_REWARD_KEY}) | COMMON_REWARD_KEYS
 
 
 def _normalize_preprocessing(identity: dict[str, Any]) -> None:
@@ -144,14 +147,7 @@ def validate_task_config(task: Mapping[str, Any], *, label: str = "task") -> Non
             raise ValueError(f"{label}.action.codec is only supported by the identity task")
         if not isinstance(codec, Mapping):
             raise ValueError(f"{label}.action.codec must be an object")
-        extra_codec_keys = sorted(set(codec) - {"type", "values"})
-        if extra_codec_keys:
-            raise ValueError(f"{label}.action.codec has unexpected keys: {extra_codec_keys}")
-        if codec.get("type") != "discrete_lookup":
-            raise ValueError(f"{label}.action.codec.type must be 'discrete_lookup'")
-        values = codec.get("values")
-        if not isinstance(values, list | tuple) or not values:
-            raise ValueError(f"{label}.action.codec.values must be a non-empty list")
+        validate_task_action_codec(codec, label=f"{label}.action.codec")
     signals = task["signals"]
     for name, source in signals.items():
         if not isinstance(name, str) or not name.strip():
@@ -275,16 +271,48 @@ def validate_task_config(task: Mapping[str, Any], *, label: str = "task") -> Non
         if not isinstance(value, int) or isinstance(value, bool) or value < 0:
             raise ValueError(f"{label}.termination.{key} must be a non-negative integer")
     reward = task["reward"]
-    allowed_reward_keys = (
-        IDENTITY_REWARD_KEYS if task_id == "identity" else MARIO_REWARD_FIELD_SET
-    )
+    reward_mode = reward.get("reward_mode")
+    allowed_reward_keys = MARIO_REWARD_FIELD_SET
+    if task_id == "identity":
+        allowed_reward_keys = (
+            VIZDOOM_DEATHMATCH_REWARD_FIELD_SET
+            if reward_mode == "sample-factory-v0"
+            else IDENTITY_REWARD_KEYS
+        )
     extra_reward_keys = sorted(set(reward) - allowed_reward_keys)
     if extra_reward_keys:
         raise ValueError(f"{label}.reward has unexpected keys: {extra_reward_keys}")
     reward_transform_from_reward(reward, label=f"{label}.reward")
-    reward_mode = reward.get("reward_mode")
-    if task_id == "identity" and reward_mode not in {None, "native"}:
-        raise ValueError(f"{label}.reward.reward_mode must be 'native' for the identity task")
+    if task_id == "identity" and reward_mode not in {None, "native", "sample-factory-v0"}:
+        raise ValueError(
+            f"{label}.reward.reward_mode must be 'native' or 'sample-factory-v0' "
+            "for the identity task"
+        )
+    if task_id == "identity" and reward_mode == "sample-factory-v0":
+        normalize_vizdoom_deathmatch_reward(
+            reward,
+            label=f"{label}.reward",
+            require_complete=True,
+        )
+        required_signals = {
+            "kills",
+            "deaths",
+            "hits",
+            "damage",
+            "health",
+            "armor",
+            "selected_weapon",
+            "selected_weapon_ammo",
+            "weapons_owned",
+            "weapon_ammo",
+            "player_dead",
+        }
+        missing_signals = sorted(required_signals - set(signals))
+        if missing_signals:
+            raise ValueError(
+                f"{label}.reward.reward_mode='sample-factory-v0' requires declared task "
+                f"signal(s): {', '.join(missing_signals)}"
+            )
     cell_novelty = reward.get(CELL_NOVELTY_REWARD_KEY)
     if cell_novelty is not None:
         normalized_novelty = normalize_cell_novelty_config(
@@ -292,8 +320,7 @@ def validate_task_config(task: Mapping[str, Any], *, label: str = "task") -> Non
             label=f"{label}.reward.{CELL_NOVELTY_REWARD_KEY}",
         )
         required_signals = {
-            str(dimension["signal"])
-            for dimension in normalized_novelty["cell"]["dimensions"]
+            str(dimension["signal"]) for dimension in normalized_novelty["cell"]["dimensions"]
         }
         missing_signals = sorted(required_signals - set(signals))
         if missing_signals:
@@ -329,9 +356,7 @@ def validate_task_config(task: Mapping[str, Any], *, label: str = "task") -> Non
             label=f"{label}.model_inputs",
         )
         if conditioning is not None and conditioning.get("enabled"):
-            raise ValueError(
-                f"{label} cannot combine conditioning with model_inputs"
-            )
+            raise ValueError(f"{label} cannot combine conditioning with model_inputs")
         for name, field in normalized_inputs["context"].items():
             signal = field["signal"]
             if signal in RUNTIME_CONTEXT_SIGNALS:

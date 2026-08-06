@@ -16,6 +16,8 @@ BREAKOUT_GOAL = Path("experiments/goals/Breakout-Atari2600-v0/_goal.yaml")
 BREAKOUT_RECIPE = BREAKOUT_GOAL.parent / "recipes/ppo.yaml"
 VIZDOOM_GOAL = Path("experiments/goals/VizdoomBasic-v1/_goal.yaml")
 VIZDOOM_RECIPE = VIZDOOM_GOAL.parent / "recipes/ppo.yaml"
+DEATHMATCH_GOAL = Path("experiments/goals/VizdoomDeathmatch-v1/_goal.yaml")
+DEATHMATCH_RECIPE = DEATHMATCH_GOAL.parent / "recipes/ppo.yaml"
 
 
 def test_mario_reward_shape_defaults_and_cli_override_materialize_both_phases() -> None:
@@ -66,6 +68,98 @@ def test_all_mario_recipes_select_the_speedrun_default() -> None:
         assert (
             config["checkpoint_eval_environment"]["task"]["reward"]["reward_mode"] == "additive"
         ), recipe
+
+
+def test_deathmatch_reward_shape_defaults_native_and_materializes_optional_signals() -> None:
+    native = compose_train_document(DEATHMATCH_GOAL, DEATHMATCH_RECIPE)
+    shaped = compose_train_document(
+        DEATHMATCH_GOAL,
+        DEATHMATCH_RECIPE,
+        recipe_overrides=("reward_shape=sample-factory-v0",),
+    )
+
+    native_config = native["train_config"]
+    shaped_config = shaped["train_config"]
+    assert native_config["reward_shape"] == "native-v1"
+    assert native_config["reward_shape_is_default"] is True
+    assert native_config["task"]["reward"] == {
+        "reward_mode": "native",
+        "reward_scale": 1.0,
+        "reward_clip": False,
+    }
+    assert not {"deathcount", "hitcount", "damagecount"} & set(
+        native_config["env_args"]["game_variables"]
+    )
+
+    assert shaped_config["reward_shape"] == "sample-factory-v0"
+    assert shaped_config["reward_shape_is_default"] is False
+    assert shaped_config["task"]["reward"]["reward_mode"] == "sample-factory-v0"
+    assert shaped_config["task"]["reward"]["weapon_preferences"] == [
+        1.0,
+        1.0,
+        5.0,
+        5.0,
+        5.0,
+        10.0,
+    ]
+    for environment in (
+        shaped_config,
+        shaped_config["checkpoint_eval_environment"],
+    ):
+        assert {"deathcount", "hitcount", "damagecount"} <= set(
+            environment["env_args"]["game_variables"]
+        )
+        assert {"deathcount", "hitcount", "damagecount"} <= set(
+            environment["env_args"]["info_filter"]["keys"]
+        )
+        assert {
+            "deaths": "deathcount",
+            "hits": "hitcount",
+            "damage": "damagecount",
+        }.items() <= environment["task"]["signals"].items()
+    assert native_config["reward_shape_sha256"] != shaped_config["reward_shape_sha256"]
+    assert (
+        native_config["effective_goal_contract_sha256"]
+        != shaped_config["effective_goal_contract_sha256"]
+    )
+
+
+def test_deathmatch_selected_reward_definition_supports_strict_field_overrides() -> None:
+    document = compose_train_document(
+        DEATHMATCH_GOAL,
+        DEATHMATCH_RECIPE,
+        recipe_overrides=(
+            "reward_shape=sample-factory-v0",
+            "reward_shapes.definitions.sample-factory-v0.kill_reward=2.0",
+        ),
+    )
+    assert document["train_config"]["task"]["reward"]["kill_reward"] == 2.0
+    assert (
+        document["train_config"]["checkpoint_eval_environment"]["task"]["reward"]["kill_reward"]
+        == 2.0
+    )
+
+    with pytest.raises(ValueError, match="weapon_preferences must contain exactly six"):
+        compose_train_document(
+            DEATHMATCH_GOAL,
+            DEATHMATCH_RECIPE,
+            recipe_overrides=(
+                "reward_shape=sample-factory-v0",
+                "reward_shapes.definitions.sample-factory-v0.weapon_preferences=[1,2]",
+            ),
+        )
+
+    with pytest.raises(ValueError, match="combined with weapon_preferences"):
+        compose_train_document(
+            DEATHMATCH_GOAL,
+            DEATHMATCH_RECIPE,
+            recipe_overrides=(
+                "reward_shape=sample-factory-v0",
+                "reward_shapes.definitions.sample-factory-v0.weapon_preferences="
+                "[1e20,1e20,1e20,1e20,1e20,1e20]",
+                "reward_shapes.definitions.sample-factory-v0.weapon_gain_reward_scale=1e20",
+            ),
+        )
 
 
 def test_catalog_selector_and_raw_reward_override_fail_closed() -> None:

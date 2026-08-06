@@ -13,6 +13,12 @@ from typing import Any
 import gymnasium as gym
 import numpy as np
 
+from gradlab.action_codecs import (
+    VIZDOOM_DEATHMATCH_MULTIDISCRETE_CODEC,
+    vizdoom_deathmatch_multidiscrete_codec_document,
+    vizdoom_deathmatch_multidiscrete_semantics,
+)
+
 
 MARIO_PROVIDERS = frozenset({"stable-retro-turbo", "supermariobrosnes-turbo"})
 BUILTIN_ACTION_MODES = frozenset({"all", "filtered", "discrete", "multi_discrete"})
@@ -106,21 +112,15 @@ def provider_buttons(
             if isinstance(raw_buttons, (str, bytes, bytearray)) or not isinstance(
                 raw_buttons, list | tuple
             ):
-                raise ValueError(
-                    "env_args.vizdoom_config.available_buttons must be a button list"
-                )
+                raise ValueError("env_args.vizdoom_config.available_buttons must be a button list")
             buttons = tuple(
                 str(getattr(button, "name", button)).split(".")[-1].strip().upper()
                 for button in raw_buttons
             )
             if not buttons or any(not button for button in buttons):
-                raise ValueError(
-                    "env_args.vizdoom_config.available_buttons must not be empty"
-                )
+                raise ValueError("env_args.vizdoom_config.available_buttons must not be empty")
             if len(set(buttons)) != len(buttons):
-                raise ValueError(
-                    "env_args.vizdoom_config.available_buttons cannot repeat a button"
-                )
+                raise ValueError("env_args.vizdoom_config.available_buttons cannot repeat a button")
             return buttons
         return scenario_buttons(game, scenario=args.get("scenario"))
     if provider_id == "supermariobrosnes-turbo":
@@ -407,8 +407,7 @@ def action_space_document(space: gym.Space) -> dict[str, Any]:
         return {
             "type": "dict",
             "spaces": {
-                str(key): action_space_document(child)
-                for key, child in space.spaces.items()
+                str(key): action_space_document(child) for key, child in space.spaces.items()
             },
         }
     return {
@@ -463,8 +462,7 @@ def _entry_controls(provider_id: str, table_entry: Any) -> list[dict[str, Any]] 
             }
         ]
     if all(
-        isinstance(player, tuple | list)
-        and all(isinstance(value, str) for value in player)
+        isinstance(player, tuple | list) and all(isinstance(value, str) for value in player)
         for player in table_entry
     ):
         return [
@@ -579,10 +577,7 @@ def _provider_semantics(descriptor: Any) -> dict[str, Any]:
                             "semantic_id": semantic_id,
                             "label": _display_label(semantic_id),
                             "atoms": list(atoms),
-                            "inputs": [
-                                _input_atom(provider_id, atom)
-                                for atom in atoms
-                            ],
+                            "inputs": [_input_atom(provider_id, atom) for atom in atoms],
                         }
                     )
                 cardinality *= len(values)
@@ -677,9 +672,7 @@ def _provider_semantics(descriptor: Any) -> dict[str, Any]:
                     for index, button in enumerate(buttons)
                 ],
             }
-        return _unavailable(
-            f"provider {provider_id!r} did not declare Box component meanings"
-        )
+        return _unavailable(f"provider {provider_id!r} did not declare Box component meanings")
 
     return _unavailable(
         f"provider {provider_id!r} action space {type(space).__name__} has no semantic adapter"
@@ -734,7 +727,7 @@ def action_contract_entry(contract: Mapping[str, Any], value: Any) -> dict[str, 
         return None
     try:
         scalar = int(np.asarray(value).reshape(-1)[0])
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return None
     entries = semantics.get("entries")
     if isinstance(entries, list):
@@ -775,11 +768,7 @@ def action_index_for_controls(
 ) -> int:
     """Map browser control inputs through structured policy action metadata."""
 
-    requested = {
-        _semantic_id(label)
-        for label in labels
-        if _semantic_id(label)
-    }
+    requested = {_semantic_id(label) for label in labels if _semantic_id(label)}
     policy = contract.get("policy")
     space = policy.get("space") if isinstance(policy, Mapping) else None
     if not isinstance(space, Mapping) or space.get("type") != "discrete":
@@ -793,9 +782,7 @@ def action_index_for_controls(
         if not isinstance(controls, list) or len(controls) != 1:
             continue
         inputs = {
-            _semantic_id(label)
-            for label in controls[0].get("inputs", ())
-            if _semantic_id(label)
+            _semantic_id(label) for label in controls[0].get("inputs", ()) if _semantic_id(label)
         }
         if inputs == requested:
             matches.append(value)
@@ -873,6 +860,7 @@ def compile_runtime_action_contract(
     policy_action_space: gym.Space,
     *,
     policy_action_values: Any = None,
+    policy_action_codec: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Compile the exact provider-native and final policy-facing action contract."""
 
@@ -888,10 +876,23 @@ def compile_runtime_action_contract(
         "semantics": provider_semantics,
     }
 
-    if policy_action_values is None:
+    configured_codec_type = (
+        policy_action_codec.get("type") if isinstance(policy_action_codec, Mapping) else None
+    )
+    if configured_codec_type == VIZDOOM_DEATHMATCH_MULTIDISCRETE_CODEC:
+        if policy_action_values is not None:
+            raise ValueError("a policy action contract cannot combine task codecs")
+        codec = vizdoom_deathmatch_multidiscrete_codec_document(
+            descriptor,
+            policy_action_space,
+        )
+        policy_semantics = vizdoom_deathmatch_multidiscrete_semantics()
+    elif policy_action_values is None and configured_codec_type is None:
         codec: dict[str, Any] = {"type": "identity"}
         policy_semantics = deepcopy(provider_semantics)
-    else:
+    elif configured_codec_type in {None, "discrete_lookup"}:
+        if configured_codec_type == "discrete_lookup" and policy_action_values is None:
+            policy_action_values = policy_action_codec.get("values")
         if not isinstance(policy_action_space, gym.spaces.Discrete):
             raise ValueError("a discrete lookup codec requires a Discrete policy action space")
         values = tuple(policy_action_values)
@@ -933,6 +934,8 @@ def compile_runtime_action_contract(
                 "encoding": "explicit",
                 "entries": entries,
             }
+    else:
+        raise ValueError(f"unsupported policy action codec {configured_codec_type!r}")
 
     requested = declared_action_contract(config)
     base = {
@@ -1030,6 +1033,23 @@ def validate_runtime_action_contract(contract: Mapping[str, Any]) -> None:
         ids = [str(entry.get("semantic_id", "")) for entry in entries]
         if any(not value for value in ids) or len(ids) != len(set(ids)):
             raise ValueError("explicit Discrete semantic IDs must be non-empty and unique")
+    if (
+        semantics.get("status") == "available"
+        and space.get("type") == "multi_discrete"
+        and semantics.get("encoding") == "components"
+    ):
+        nvec = np.asarray(space.get("nvec")).reshape(-1)
+        components = semantics.get("components")
+        if not isinstance(components, list) or len(components) != len(nvec):
+            raise ValueError("MultiDiscrete action semantics must contain one component per axis")
+        for index, (component, cardinality) in enumerate(zip(components, nvec, strict=True)):
+            if not isinstance(component, Mapping) or int(component.get("index", -1)) != index:
+                raise ValueError("MultiDiscrete action semantic components are out of order")
+            values = component.get("values")
+            if not isinstance(values, list) or len(values) != int(cardinality):
+                raise ValueError(
+                    "MultiDiscrete action semantics must contain one value per category"
+                )
 
 
 def action_contract_payload(
@@ -1073,8 +1093,7 @@ def assert_action_contract_compatible(
     ]
     if mismatches:
         raise ValueError(
-            "runtime action contract differs from the checkpoint at "
-            + ", ".join(mismatches)
+            "runtime action contract differs from the checkpoint at " + ", ".join(mismatches)
         )
     return {
         "status": "compatible",

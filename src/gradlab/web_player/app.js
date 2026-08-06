@@ -65,6 +65,7 @@ const state = {
   replayingInspection: false,
   inspectionReplayTimer: null,
   inspectionPauseCommandId: null,
+  cnnCaptureCommand: null,
   timelineSequences: [],
   history: [],
   historyLimit: 4096,
@@ -171,6 +172,7 @@ function resetSession(epoch) {
   state.pendingSnapshot = null;
   state.inspectionSequence = null;
   state.inspectionPauseCommandId = null;
+  state.cnnCaptureCommand = null;
   state.liveSnapshot = null;
   state.snapshot = null;
   state.history = [];
@@ -356,6 +358,7 @@ function handleMessage(message) {
     if (message.id === state.inspectionPauseCommandId && !message.ok) {
       state.inspectionPauseCommandId = null;
     }
+    if (message.id === state.cnnCaptureCommand?.id) state.cnnCaptureCommand = null;
     if (!message.ok) showToast(message.error || "Command failed", true);
     return;
   }
@@ -586,6 +589,7 @@ function applySnapshot(snapshot) {
     renderTimeline();
   }
   if (historyChanged) renderHistory();
+  syncCnnCaptureToPanel();
 }
 
 function flushPendingSnapshot() {
@@ -612,6 +616,26 @@ function command(name, payload = {}) {
     expected_revision: state.liveSnapshot?.revision ?? null,
   });
   return id;
+}
+
+function syncCnnCaptureToPanel() {
+  const panel = state.layout?.panels?.cnn;
+  const cnn = state.liveSnapshot?.session?.cnn;
+  if (
+    !panel
+    || panel.placement?.window !== state.windowId
+    || !cnn
+  ) return;
+  const desired = Boolean(panel.enabled && panel.placement.visible);
+  const layers = state.liveSnapshot?.policy?.cnn?.layers;
+  if (desired && (!Array.isArray(layers) || !layers.length)) return;
+  if (Boolean(cnn.enabled) === desired) {
+    if (state.cnnCaptureCommand?.desired === desired) state.cnnCaptureCommand = null;
+    return;
+  }
+  if (state.cnnCaptureCommand?.desired === desired || !state.hasControl) return;
+  const id = command("set_cnn_inspection", { enabled: desired });
+  if (id) state.cnnCaptureCommand = { id, desired };
 }
 
 function inspectionEpisodeSequences() {
@@ -1109,6 +1133,7 @@ async function applyLayout() {
     }
   }
   requestAnimationFrame(() => panelRuntime.resize());
+  syncCnnCaptureToPanel();
 }
 
 function readSavedLayouts() {
@@ -1173,12 +1198,17 @@ function bindPanelElement(panel, name) {
   if (definition?.switchable) {
     const toggle = document.createElement("label");
     toggle.className = "panel-processing-toggle";
-    toggle.title = `Enable or disable ${panelLabel(name)} data processing`;
+    toggle.title = name === "cnn"
+      ? "Enable or disable CNN capture"
+      : `Enable or disable ${panelLabel(name)} data processing`;
     const input = document.createElement("input");
     input.type = "checkbox";
     input.checked = definition.enabled;
     input.dataset.panelEnabled = name;
-    input.setAttribute("aria-label", `Process data for ${panelLabel(name)}`);
+    input.setAttribute(
+      "aria-label",
+      name === "cnn" ? "Capture CNN features" : `Process data for ${panelLabel(name)}`,
+    );
     input.addEventListener("change", () => {
       const instance = state.layout.panels[name];
       if (!instance) return;
@@ -1186,7 +1216,9 @@ function bindPanelElement(panel, name) {
       persistLayout();
       void applyLayout();
       showToast(
-        `${panelLabel(name)} processing ${input.checked ? "enabled" : "disabled"}.`,
+        name === "cnn"
+          ? `CNN capture ${input.checked ? "enabled" : "disabled"}.`
+          : `${panelLabel(name)} processing ${input.checked ? "enabled" : "disabled"}.`,
       );
     });
     const label = document.createElement("span");

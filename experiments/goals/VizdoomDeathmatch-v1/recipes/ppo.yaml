@@ -3,6 +3,8 @@ defaults:
 - _self_
 recipe_id: ppo
 description: Single-player ViZDoom Deathmatch custom PPO with 128-environment, 32-step rollouts, frame skip 2, masked HUD pixels, and shared combat-state context.
+# Preserve native rewards by default; launch overrides may select sample-factory-v0.
+reward_shape: native-v1
 train:
   checkpoint_eval_backend: none
   timesteps: 500000000

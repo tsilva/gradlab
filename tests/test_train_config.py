@@ -132,17 +132,17 @@ class TrainConfigFieldSchemaTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "must be one of modal, none"):
             validate_and_normalize_train_config({"checkpoint_eval_backend": "local"})
 
-    def test_metrics_schema_version_accepts_only_active_v16(self) -> None:
+    def test_metrics_schema_version_accepts_only_active_v17(self) -> None:
         self.assertEqual(
-            validate_and_normalize_train_config({"metrics_schema_version": 16})[
+            validate_and_normalize_train_config({"metrics_schema_version": 17})[
                 "metrics_schema_version"
             ],
-            16,
+            17,
         )
-        with self.assertRaisesRegex(ValueError, "must be >= 16"):
-            validate_and_normalize_train_config({"metrics_schema_version": 15})
-        with self.assertRaisesRegex(ValueError, "must be <= 16"):
-            validate_and_normalize_train_config({"metrics_schema_version": 17})
+        with self.assertRaisesRegex(ValueError, "must be >= 17"):
+            validate_and_normalize_train_config({"metrics_schema_version": 16})
+        with self.assertRaisesRegex(ValueError, "must be <= 17"):
+            validate_and_normalize_train_config({"metrics_schema_version": 18})
 
     def test_no_eval_config_rejects_eval_metric_stop_behavior(self) -> None:
         with self.assertRaisesRegex(ValueError, "must use a train/\\* metric"):

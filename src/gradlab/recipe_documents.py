@@ -35,7 +35,7 @@ from gradlab.recipe_schema import (
     train_recipe_id,
     validate_materialized_train_recipe,
 )
-from gradlab.reward_programs import MARIO_REWARD_FIELD_SET, select_goal_reward_shape
+from gradlab.reward_programs import reward_program_field_set, select_goal_reward_shape
 from gradlab.train_config import train_config_keys_in_source_section, train_config_keys_owned_by
 from gradlab.validation import is_secret_like_key
 
@@ -726,10 +726,11 @@ def compose_train_document(
                 "reward definition overrides are unsupported"
             )
         selected_key = selector or str(catalog.get("default") or "")
+        allowed_reward_fields = reward_program_field_set(catalog.get("program_kind"))
         for item in reward_definition_overrides:
             path = item.split("=", 1)[0].strip()
             parts = path.split(".")
-            if len(parts) != 4 or parts[3] not in MARIO_REWARD_FIELD_SET:
+            if len(parts) != 4 or parts[3] not in allowed_reward_fields:
                 raise ValueError(
                     "reward definition overrides must target exactly "
                     "reward_shapes.definitions.<selected-shape>.<reward-field>: "

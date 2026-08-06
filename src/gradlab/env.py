@@ -40,6 +40,7 @@ from gradlab.task_kernels import (
     MarioTaskConfig,
     MarioTaskDefinition,
     with_cell_novelty,
+    with_deathmatch_reward,
     with_reward_transform,
 )
 from gradlab.model_inputs import with_model_inputs
@@ -264,6 +265,14 @@ def task_action_values(config: EnvConfig) -> tuple[Any, ...] | None:
     return tuple(values) if isinstance(values, list | tuple) else None
 
 
+def task_action_codec(config: EnvConfig) -> Mapping[str, Any] | None:
+    action = config.task.get("action", {})
+    if not isinstance(action, Mapping):
+        return None
+    codec = action.get("codec")
+    return codec if isinstance(codec, Mapping) else None
+
+
 def task_termination(config: EnvConfig) -> Mapping[str, Any]:
     value = config.task.get("termination", {})
     return value if isinstance(value, Mapping) else {}
@@ -360,6 +369,7 @@ def bind_native_provider(
             descriptor,
             kernel.action_space,
             policy_action_values=action_values,
+            policy_action_codec=task_action_codec(config),
         )
         runtime = BatchRuntime(
             native_env,
@@ -405,13 +415,16 @@ def _bound_task_kernel(config: EnvConfig, descriptor: ProviderDescriptor, n_envs
     if task_id != "identity":
         raise ValueError(f"unknown task kernel {task_id!r}")
     reward = task_reward(config)
-    action_values = task_action_values(config)
-    if task_action_set(config) != "native" and action_values is None:
+    action_codec = task_action_codec(config)
+    if task_action_set(config) != "native" and action_codec is None:
         raise ValueError(
-            "generic native-vector tasks require native actions or a discrete lookup codec"
+            "generic native-vector tasks require native actions or a task action codec"
         )
-    if reward.get("reward_mode") != "native":
-        raise ValueError("generic native-vector tasks require native rewards")
+    reward_mode = reward.get("reward_mode")
+    if reward_mode not in {"native", "sample-factory-v0"}:
+        raise ValueError(
+            "generic native-vector tasks require native or Sample Factory Deathmatch rewards"
+        )
     if task_conditioning(config).get("enabled"):
         raise ValueError("generic native-vector tasks do not support task conditioning")
     # Stable Retro applies obs_crop natively. Only ale-py needs the task kernel
@@ -425,11 +438,18 @@ def _bound_task_kernel(config: EnvConfig, descriptor: ProviderDescriptor, n_envs
         observation_mask_fill=config.obs_crop_fill,
         observation_source_shape=source_shape,
         max_episode_steps=task_max_episode_steps(config),
-        action_values=action_values,
+        action_codec=action_codec,
         signals=config.task.get("signals", {}),
         events=config.task.get("events", {}),
         termination=task_termination(config),
     ).bind(descriptor, n_envs)
+    if reward_mode == "sample-factory-v0":
+        kernel = with_deathmatch_reward(
+            kernel,
+            descriptor,
+            config.task.get("signals", {}),
+            reward,
+        )
     kernel = with_cell_novelty(kernel, reward.get(CELL_NOVELTY_REWARD_KEY))
     kernel = with_reward_transform(kernel, reward)
     return with_model_inputs(

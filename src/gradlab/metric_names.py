@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 
-METRICS_SCHEMA_VERSION = 16
+METRICS_SCHEMA_VERSION = 17
 TRAIN_GLOBAL_STEP = "train/global_step"
 EVAL_CHECKPOINT_STEP = "eval/checkpoint/step"
 ORCHESTRATION_EVENT_SEQ = "orchestration/event_seq"
@@ -284,8 +284,12 @@ def evaluation_metric_schema(version: object) -> EvaluationMetricSchema:
     return _EVALUATION_METRIC_SCHEMA
 
 
-def leader_checkpoint_progress_metric(progress: object) -> str:
-    return validate_metric_name(f"leader/checkpoint/progress/{metric_path_segment(progress)}/max")
+def leader_checkpoint_progress_metric(progress: object, statistic: str = "max") -> str:
+    if statistic not in {"mean", "max"}:
+        raise ValueError("leader checkpoint progress statistic must be 'mean' or 'max'")
+    return validate_metric_name(
+        f"leader/checkpoint/progress/{metric_path_segment(progress)}/{statistic}"
+    )
 
 
 def leader_metric_for_rank_metric(
@@ -309,10 +313,14 @@ def leader_metric_for_rank_metric(
     if mapped is not None:
         return mapped
     prefix = f"{EVAL_FULL_ROOT}/progress/"
-    if metric.startswith(prefix) and metric.endswith("/max"):
-        progress = metric[len(prefix) : -len("/max")]
-        if "/" not in progress:
-            return leader_checkpoint_progress_metric(progress)
+    if metric.startswith(prefix):
+        for statistic in ("mean", "max"):
+            suffix = f"/{statistic}"
+            if not metric.endswith(suffix):
+                continue
+            progress = metric[len(prefix) : -len(suffix)]
+            if "/" not in progress:
+                return leader_checkpoint_progress_metric(progress, statistic)
     raise ValueError(f"evaluation rank criterion cannot be projected: {metric}")
 
 
