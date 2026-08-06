@@ -265,7 +265,7 @@ def test_cell_bonus_is_added_before_reward_scaling_and_clipping() -> None:
     )
     kernel = with_reward_transform(
         novelty,
-        {"reward_scale": 2.0, "reward_clip": [-0.05, 0.05]},
+        {"reward_scale": 0.5, "reward_clip": [-0.05, 0.05]},
     )
     _reset(kernel, (0.0,), (0.0,))
     result = _step(kernel, (64.0,), (0.0,))

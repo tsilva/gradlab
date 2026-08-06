@@ -58,7 +58,7 @@ EXPECTED_GOALS = {
         "training_metric": "train/outcome/success/across_starts/window_100/rate/min",
         "acceptance_metric": "eval/full/outcome/success/across_starts/rate/min",
         "acceptance_threshold": 1.0,
-        "reward_scale": 100.0,
+        "reward_scale": 0.01,
         "max_episode_steps": None,
     },
     "VizdoomBasic-Plus-v1": {
@@ -67,7 +67,7 @@ EXPECTED_GOALS = {
         "training_metric": "train/outcome/success/across_starts/window_100/rate/min",
         "acceptance_metric": "eval/full/outcome/success/across_starts/rate/min",
         "acceptance_threshold": 1.0,
-        "reward_scale": 100.0,
+        "reward_scale": 0.01,
         "max_episode_steps": None,
     },
     "VizdoomDeadlyCorridor-v1": {
@@ -77,7 +77,7 @@ EXPECTED_GOALS = {
         "training_threshold": 1.0,
         "acceptance_metric": "eval/full/episode/return/shaped/mean",
         "acceptance_threshold": 0.80,
-        "reward_scale": 100.0,
+        "reward_scale": 0.01,
         "max_episode_steps": None,
     },
     "VizdoomDeathmatch-v1": {
@@ -131,7 +131,7 @@ EXPECTED_GOALS = {
         "training_threshold": 1.0,
         "acceptance_metric": "eval/full/outcome/success/across_starts/rate/min",
         "acceptance_threshold": 0.95,
-        "reward_scale": 100.0,
+        "reward_scale": 0.01,
         "max_episode_steps": None,
     },
     "VizdoomHealthGathering-Plus-v1": {
@@ -142,7 +142,7 @@ EXPECTED_GOALS = {
         "training_threshold": 1.0,
         "acceptance_metric": "eval/full/outcome/success/across_starts/rate/min",
         "acceptance_threshold": 0.95,
-        "reward_scale": 100.0,
+        "reward_scale": 0.01,
         "max_episode_steps": None,
     },
     "VizdoomHealthGatheringSupreme-v1": {
@@ -152,7 +152,7 @@ EXPECTED_GOALS = {
         "training_threshold": 1.0,
         "acceptance_metric": "eval/full/outcome/success/across_starts/rate/min",
         "acceptance_threshold": 0.95,
-        "reward_scale": 100.0,
+        "reward_scale": 0.01,
         "max_episode_steps": None,
     },
     "VizdoomMyWayHome-v1": {
@@ -182,7 +182,7 @@ EXPECTED_GOALS = {
         "training_threshold": 1.0,
         "acceptance_metric": "eval/full/outcome/success/across_starts/rate/min",
         "acceptance_threshold": 0.95,
-        "reward_scale": 100.0,
+        "reward_scale": 0.01,
         "max_episode_steps": None,
     },
 }

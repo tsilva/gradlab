@@ -14,7 +14,7 @@ from gradlab.recipe_documents import goal_contract_sha256
 from gradlab.run_contracts import ATTEMPT_ID_PATTERN, RUN_ID_PATTERN, SHA256_PATTERN
 
 
-GOAL_CATALOG_SCHEMA_VERSION = 1
+GOAL_CATALOG_SCHEMA_VERSION = 2
 GOAL_CATALOG_ROOT = "goal-catalog/v1"
 GOAL_CATALOG_EVENT_ROOT = "run-index-events/v1"
 GOAL_CATALOG_HOT_TERMINAL_RUNS = 200

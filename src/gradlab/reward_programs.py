@@ -13,9 +13,9 @@ from gradlab.reward_transform import normalize_reward_mapping
 
 
 REWARD_PROGRAM_KIND_MARIO_V1 = "mario-v1"
-MARIO_REWARD_KERNEL_REVISION = "mario-kernel-v3"
+MARIO_REWARD_KERNEL_REVISION = "mario-kernel-v4"
 REWARD_PROGRAM_KIND_VIZDOOM_DEATHMATCH_V1 = "vizdoom-deathmatch-v1"
-VIZDOOM_DEATHMATCH_REWARD_KERNEL_REVISION = "vizdoom-deathmatch-kernel-v1"
+VIZDOOM_DEATHMATCH_REWARD_KERNEL_REVISION = "vizdoom-deathmatch-kernel-v2"
 REWARD_SHAPE_KEY_PATTERN = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$")
 
 MARIO_REWARD_FIELDS = (
@@ -150,6 +150,11 @@ def normalize_mario_reward(
         if abs(number) > _MARIO_SAFE_COEFFICIENT_ABS_MAX:
             raise ValueError(f"{label}.{key} exceeds the Mario float32 reward safety bound")
         normalized[key] = _normalize_zero(number)
+    if "reward_scale" in value:
+        normalized["reward_scale"] = normalize_reward_mapping(
+            {"reward_scale": value["reward_scale"]},
+            label=label,
+        )["reward_scale"]
     if "reward_clip" in value:
         normalized["reward_clip"] = normalize_reward_mapping(
             {

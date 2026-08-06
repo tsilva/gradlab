@@ -52,7 +52,7 @@ from gradlab.youtube_publication import (
 )
 
 
-PROTOCOL_VERSION = 7
+PROTOCOL_VERSION = 8
 HISTORY_LIMIT = 4096
 COMMAND_QUEUE_LIMIT = 64
 CLIENT_QUEUE_LIMIT = 64
@@ -129,7 +129,7 @@ def unavailable_reward_accounting(reason: str) -> dict[str, Any]:
     return {
         "status": "unavailable",
         "reason": str(reason),
-        "scale_divisor": None,
+        "reward_scale": None,
         "clip_bounds": None,
     }
 
@@ -146,7 +146,7 @@ def reward_accounting_contract(config: Any) -> dict[str, Any]:
     return {
         "status": "available",
         "reason": None,
-        "scale_divisor": transform.scale,
+        "reward_scale": transform.scale,
         "clip_bounds": (list(transform.clip_bounds) if transform.clip_bounds is not None else None),
     }
 
@@ -186,7 +186,7 @@ def _reward_accounting_payload(
         raw_reward = _finite_scalar(task_metrics["raw_reward"])
         if raw_reward is None:
             errors.append("raw_reward is not a finite scalar")
-    elif accounting.get("scale_divisor") == 1.0 and accounting.get("clip_bounds") is None:
+    elif accounting.get("reward_scale") == 1.0 and accounting.get("clip_bounds") is None:
         raw_reward = _finite_scalar(final_reward)
         if raw_reward is None:
             errors.append("final reward is not a finite scalar")
@@ -403,7 +403,7 @@ def transition_payload(
             or {
                 "status": "available",
                 "reason": None,
-                "scale_divisor": 1.0,
+                "reward_scale": 1.0,
                 "clip_bounds": None,
             }
         )
@@ -945,6 +945,21 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
             return
         if self.driver != "policy":
             self.capture.abort("human-driven episodes are not publishable")
+            return
+        active_config = getattr(self.session, "config", None)
+        base_config = getattr(self.session, "termination_base_config", active_config)
+        active_task = (
+            active_config.get("task")
+            if isinstance(active_config, Mapping)
+            else getattr(active_config, "task", None)
+        )
+        base_task = (
+            base_config.get("task")
+            if isinstance(base_config, Mapping)
+            else getattr(base_config, "task", None)
+        )
+        if active_task != base_task:
+            self.capture.abort("episode termination differs from the faithful playback contract")
             return
         expected = str((self.capture.context or {}).get("expected_sampling_mode") or "")
         if expected and self.sampling_mode != expected:
@@ -2311,9 +2326,17 @@ class PlaybackWebServer:
         ):
             raise web.HTTPUnauthorized(text="catalog token required")
 
-    def _authorize_publication(self, request: web.Request) -> WebClient:
-        if request.headers.get("Origin") != self.origin:
+    def _authorize_publication(
+        self,
+        request: web.Request,
+        *,
+        mutation: bool = False,
+    ) -> WebClient:
+        origin = request.headers.get("Origin")
+        if origin and origin != self.origin:
             raise web.HTTPForbidden(text="exact player origin required")
+        if mutation and origin != self.origin:
+            raise web.HTTPForbidden(text="exact player origin required for publication mutation")
         self._authorize_api(request)
         client_id = request.headers.get("X-Gradlab-Client", "")
         client = self.clients.get(client_id)
@@ -2383,7 +2406,7 @@ class PlaybackWebServer:
         return web.json_response(result)
 
     async def publication_preflight(self, request: web.Request) -> web.Response:
-        self._authorize_publication(request)
+        self._authorize_publication(request, mutation=True)
         try:
             result = await asyncio.to_thread(self._publications().preflight)
         except Exception as exc:
@@ -2391,7 +2414,7 @@ class PlaybackWebServer:
         return web.json_response(result)
 
     async def publication_admit(self, request: web.Request) -> web.Response:
-        self._authorize_publication(request)
+        self._authorize_publication(request, mutation=True)
         try:
             payload = await request.json()
         except (json.JSONDecodeError, TypeError):
@@ -2422,7 +2445,7 @@ class PlaybackWebServer:
         return web.json_response(result)
 
     async def _publication_job_action(self, request: web.Request, action: str) -> web.Response:
-        self._authorize_publication(request)
+        self._authorize_publication(request, mutation=True)
         try:
             service = self._publications()
             if action == "resolve":
@@ -2458,7 +2481,7 @@ class PlaybackWebServer:
         return await self._publication_job_action(request, "cleanup")
 
     async def publication_oauth_start(self, request: web.Request) -> web.Response:
-        client = self._authorize_publication(request)
+        client = self._authorize_publication(request, mutation=True)
         try:
             paths = youtube_credential_paths(self._repo_root or Path.cwd())
             with credential_lock(paths.lock):
@@ -2501,7 +2524,7 @@ class PlaybackWebServer:
         raise web.HTTPSeeOther(location="/?youtube=authorized")
 
     async def publication_replay_ticket(self, request: web.Request) -> web.Response:
-        client = self._authorize_publication(request)
+        client = self._authorize_publication(request, mutation=True)
         try:
             await asyncio.to_thread(self._publications().replay_path)
         except ValueError as exc:

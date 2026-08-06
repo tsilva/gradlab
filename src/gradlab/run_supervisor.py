@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from gradlab.checkpoint_acceptance import manifest_index
+from gradlab.checkpoint_contract import checkpoint_manifest_contract_sha256
 from gradlab.cli_parser import ExactArgumentParser
 from gradlab.clock import format_utc_datetime, parse_utc_datetime, utc_timestamp
 from gradlab.dstack_backend import DSTACK_VERSION
@@ -58,7 +59,6 @@ from gradlab.policy_bundle import (
     build_recipe_document,
     canonical_json_sha256,
     evaluation_contract,
-    evaluation_contract_sha256,
     write_canonical_json,
 )
 from gradlab.r2_store import ConditionalWriteConflict, RunStorageConfig
@@ -789,7 +789,7 @@ class RunSupervisor:
             cached_rom = cache_path(CONTAINER_ROM_CACHE, normalized_asset)
             try:
                 verify_rom_file(cached_rom, normalized_asset)
-            except FileNotFoundError, ValueError:
+            except (FileNotFoundError, ValueError):
                 if str(os.environ.get("GRADLAB_ROM_CACHE_READ_ONLY") or "") == "1":
                     raise
                 object_key = self.authority.evaluation.key_from_uri(
@@ -812,7 +812,7 @@ class RunSupervisor:
             cached_iwad = vizdoom_iwad_cache_path(CONTAINER_ROM_CACHE, normalized_iwad)
             try:
                 verify_vizdoom_iwad_file(cached_iwad, normalized_iwad)
-            except (FileNotFoundError, ValueError):
+            except FileNotFoundError, ValueError:
                 if str(os.environ.get("GRADLAB_ROM_CACHE_READ_ONLY") or "") == "1":
                     raise
                 object_uri = str(normalized_iwad.get("object_uri") or "")
@@ -1413,15 +1413,8 @@ class RunSupervisor:
             "goal_sha256": self.manifest.goal_sha256,
             "recipe_sha256": self.manifest.recipe_sha256,
             "environment_sha256": self.manifest.environment_sha256,
-            "evaluation_contract_sha256": (
-                evaluation_contract_sha256(self.recipe_document)
-                if self.evaluation_required
-                else canonical_json_sha256(
-                    {
-                        "training_only": True,
-                        "playback": self.recipe_document["recipe"]["playback"],
-                    }
-                )
+            "evaluation_contract_sha256": checkpoint_manifest_contract_sha256(
+                self.recipe_document
             ),
         }
         for checkpoint in self.store.checkpoints():

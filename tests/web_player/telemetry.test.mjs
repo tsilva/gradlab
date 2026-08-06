@@ -43,6 +43,10 @@ const styles = readFileSync(
   new URL("../../src/gradlab/web_player/styles.css", import.meta.url),
   "utf8",
 );
+const telemetryPanelSource = readFileSync(
+  new URL("../../src/gradlab/web_player/panels/telemetry-panel.js", import.meta.url),
+  "utf8",
+);
 
 test("signal selectors leave focus-safe space before the chart", () => {
   assert.match(
@@ -56,6 +60,15 @@ test("distribution contents use the panel as their only scroll container", () =>
   assert.doesNotMatch(rule, /(?:max-height|overflow)\s*:/);
   const comparisonRule = styles.match(/\.action-comparison \{([^}]*)\}/)?.[1] || "";
   assert.doesNotMatch(comparisonRule, /(?:max-height|overflow)\s*:/);
+});
+
+test("long action labels truncate on one line and retain their full tooltip", () => {
+  const rule = styles.match(/\.action-comparison-label \{([^}]*)\}/)?.[1] || "";
+  assert.match(rule, /overflow: hidden;/);
+  assert.match(rule, /text-overflow: ellipsis;/);
+  assert.match(rule, /white-space: nowrap;/);
+  assert.doesNotMatch(rule, /overflow-wrap/);
+  assert.match(telemetryPanelSource, /label\.title = row\.name;/);
 });
 
 test("dynamic metric names round-trip without path ambiguity", () => {

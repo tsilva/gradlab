@@ -164,8 +164,9 @@ does not read, project, or preserve noncurrent W&B or R2 schemas.
   `update/policy_gradient_loss` and `update/value_loss` are not proxies for their respective
   gradient magnitudes.
 - For reward-transform ablations, first compare `train/reward/raw/*` with
-  `train/reward/shaped/*`. `task.reward.reward_scale` is a positive divisor, so a value below one
-  amplifies the policy-facing reward. If raw rewards match but shaped magnitudes diverge, inspect
+  `train/reward/shaped/*`. `task.reward.reward_scale` is a finite multiplier from zero through one,
+  so values below one attenuate the policy-facing reward. If raw rewards match but shaped
+  magnitudes diverge, inspect
   value loss and explained variance before policy entropy, dominant-action rate, KL, and clip
   fraction: squared-error value loss can grow roughly with the square of the target scale, while
   advantage normalization does not protect the critic from poorly conditioned targets.
@@ -204,8 +205,8 @@ does not read, project, or preserve noncurrent W&B or R2 schemas.
   `progress_reward_boost_start_x`. ViZDoom Deathmatch's optional `sample-factory-v0` shape exposes
   `kill`, `death`, `hit`, `damage`, `health`, `armor`, `weapon`, `ammo`, and `weapon_hold`
   components; their sum is the pre-transform task reward and excludes the replaced provider reward.
-- The player's protocol-v5 Reward analysis ledger is local playback telemetry, not a W&B metric.
-  It shows raw component values, converts each impact through the positive reward-scale divisor,
+- The player's protocol-v8 Reward analysis ledger is local playback telemetry, not a W&B metric.
+  It shows raw component values, multiplies each impact by the unit-interval reward scale,
   accounts for unattributed raw reward and per-transition clipping, and reports both signed
   contribution (`impact / abs(final reward)`) and absolute transformed activity share. Signed
   contributions preserve penalties, can exceed 100%, and are unavailable at zero final reward;

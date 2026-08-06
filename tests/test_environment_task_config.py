@@ -12,7 +12,7 @@ from gradlab.env_metadata import sanitize_env_config_metadata
 
 
 class EnvironmentTaskConfigTests(unittest.TestCase):
-    def test_environment_identity_uses_v4_canonical_task(self) -> None:
+    def test_environment_identity_uses_v5_canonical_task(self) -> None:
         identity = environment_identity_from_train_config(
             {
                 "env_provider": "supermariobrosnes-turbo",
@@ -39,8 +39,8 @@ class EnvironmentTaskConfigTests(unittest.TestCase):
             }
         )
 
-        self.assertEqual(ENVIRONMENT_HASH_ALGORITHM, "gradlab.environment.v4")
-        self.assertEqual(identity["schema_version"], 4)
+        self.assertEqual(ENVIRONMENT_HASH_ALGORITHM, "gradlab.environment.v5")
+        self.assertEqual(identity["schema_version"], 5)
         self.assertEqual(identity["task"]["id"], "mario")
         self.assertEqual(identity["task"]["termination"]["failure"], ["life_loss"])
         self.assertEqual(identity["task"]["termination"]["success"], ["level_change"])

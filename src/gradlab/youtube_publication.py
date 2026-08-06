@@ -166,7 +166,10 @@ def exchange_oauth_code(
     token.pop("client_secret", None)
     token["client_id"] = str(installed["client_id"])
     token["token_uri"] = TOKEN_URL
-    token["scopes"] = sorted(set(str(token.get("scope") or "").split()) | set(YOUTUBE_SCOPES))
+    returned_scope = token.get("scope")
+    token["scopes"] = sorted(
+        set(str(returned_scope).split()) if returned_scope else set(YOUTUBE_SCOPES)
+    )
     return token
 
 
@@ -193,7 +196,7 @@ def refresh_access_token(
         "refresh_token": refresh_token,
         "client_id": str(installed["client_id"]),
         "token_uri": TOKEN_URL,
-        "scopes": sorted(set(token.get("scopes") or ()) | set(YOUTUBE_SCOPES)),
+        "scopes": sorted(set(token.get("scopes") or ())),
     }
 
 

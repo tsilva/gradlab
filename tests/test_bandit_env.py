@@ -211,7 +211,7 @@ def test_gradlab_facade_applies_common_reward_scale_then_clip() -> None:
     config = _config()
     reward = {
         **config.task["reward"],
-        "reward_scale": 2.0,
+        "reward_scale": 0.5,
         "reward_clip": [0.0, 0.4],
     }
     env = make_vec_envs(

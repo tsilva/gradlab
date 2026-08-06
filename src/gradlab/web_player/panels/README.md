@@ -39,9 +39,9 @@ keys are local visualization descriptors, not W&B metric names. A descriptor
 defines its label, value type, unit, transition phase, formatting, and accessors
 for snapshots and history points.
 
-Playback protocol v5 and newer supply reward-accounting data separately from general
-telemetry. `session.reward_accounting` declares availability, the positive
-`scale_divisor`, and optional `clip_bounds`; each transition supplies
+Playback protocol v8 and newer supply reward-accounting data separately from general
+telemetry. `session.reward_accounting` declares availability, the unit-interval
+`reward_scale`, and optional `clip_bounds`; each transition supplies
 `reward.raw`, `reward.components`, and `reward.accounting_error`, with matching
 `reward_raw` and `reward_accounting_error` history fields. Components use the
 explicit player wire IDs `native_reward`, `cell_novelty_reward`,
@@ -49,8 +49,8 @@ explicit player wire IDs `native_reward`, `cell_novelty_reward`,
 `time_penalty`. Other task signals are not inferred as reward components.
 
 For each transition the ledger converts a raw component `c` to final-reward
-units as `c / scale_divisor`, attributes any raw residual separately, and adds
-the clip adjustment `final - raw / scale_divisor`. Signed contribution is
+units as `c * reward_scale`, attributes any raw residual separately, and adds
+the clip adjustment `final - raw * reward_scale`. Signed contribution is
 `100 * impact / abs(final)` and can be negative or exceed 100%; activity share
 uses absolute per-transition impact. Episode scope sums those per-transition
 quantities and applies clipping per transition. It fails closed when retained

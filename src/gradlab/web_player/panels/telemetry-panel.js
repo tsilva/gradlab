@@ -401,6 +401,7 @@ function actionComparisonRow(row) {
   const label = document.createElement("span");
   label.className = "action-comparison-label";
   label.textContent = row.name;
+  label.title = row.name;
   const bars = document.createElement("div");
   bars.className = "action-comparison-bars";
   bars.append(
@@ -807,7 +808,7 @@ function makeRewardBreakdownBlock(block, definition, services) {
     transform.replaceChildren();
     const parts = [
       `${presentation.scope === "episode" ? "Σ raw" : "Raw"} ${rewardNumber(presentation.raw, { signed: true })}`,
-      `÷ ${rewardNumber(presentation.contract.scaleDivisor)}`,
+      `× ${rewardNumber(presentation.contract.rewardScale)}`,
       `= ${rewardNumber(presentation.preclip, { signed: true })} pre-clip`,
       clip
         ? `clip each step to [${rewardNumber(clip[0])}, ${rewardNumber(clip[1])}]`

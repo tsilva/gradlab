@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 import shutil
@@ -100,6 +101,32 @@ def _copy_regular(source: Path, destination: Path) -> None:
         output_stream.flush()
         os.fsync(output_stream.fileno())
     os.replace(temporary, destination)
+
+
+def _display_name(value: object) -> str:
+    text = re.sub(r"-v[0-9]+$", "", str(value or "").strip())
+    text = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", text)
+    text = re.sub(r"[_-]+", " ", text)
+    text = re.sub(r"\b(nes|snes|gb|gba|n64)\b", lambda match: match.group(1).upper(), text, flags=re.I)
+    text = re.sub(r"\b(Level|Stage|World)\s*(?=[0-9])", r"\1 ", text, flags=re.I)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _bounded_youtube_tags(values: Sequence[object], *, max_characters: int = 500) -> list[str]:
+    tags: list[str] = []
+    total = 0
+    for raw in values:
+        value = str(raw).strip()
+        if not value or value in tags:
+            continue
+        if len(value) > 100:
+            raise ValueError("YouTube tags must be at most 100 characters each")
+        added = len(value) + (1 if tags else 0)
+        if total + added > max_characters:
+            break
+        tags.append(value)
+        total += added
+    return tags
 
 
 def _youtube_access(
@@ -219,10 +246,12 @@ def generated_metadata(
     if privacy not in PRIVACY_VALUES:
         raise ValueError("YouTube privacy must be public, unlisted, or private")
     goal = _required_mapping(capture.get("goal"), label="capture goal")
-    goal_title = str(goal.get("title") or goal.get("goal_id") or "Goal").strip()
+    raw_goal = str(goal.get("title") or goal.get("goal_id") or "Goal").strip()
+    goal_title = _display_name(raw_goal)
     qualified = str((capture.get("execution") or {}).get("qualified_environment_id") or "")
     _provider, _separator, game = qualified.partition(":")
-    game_title = game or qualified or "Game"
+    raw_game = game or qualified or "Game"
+    game_title = _display_name(raw_game)
     policy = _required_mapping(bundle.model.get("policy"), label="model policy")
     algorithm = str(policy.get("algorithm_id") or "policy").upper()
     accepted = True
@@ -230,48 +259,71 @@ def generated_metadata(
     verb = "Solved by" if captured_success and accepted else "Played by"
     success_mean = evaluation.get("success_rate_mean")
     suffix = (
-        f" - {100.0 * float(success_mean):.1f}% Verified Win Rate"
+        f" - {100.0 * float(success_mean):.1f}% Win Rate"
         if isinstance(success_mean, int | float) and not isinstance(success_mean, bool)
         else ""
     )
     title = f"{game_title} {goal_title} {verb} {algorithm}{suffix}"
     title = title[:100].rstrip()
     outcome = "met" if captured_success else "did not meet"
+    episode_verb = "completes" if captured_success else "plays"
+    evaluation_claim = (
+        f" with a {100.0 * float(success_mean):.1f}% verified full-evaluation win rate"
+        if isinstance(success_mean, int | float) and not isinstance(success_mean, bool)
+        else ""
+    )
     description = (
-        f"This faithful {capture.get('sampling_mode')} policy episode {outcome} the embedded "
-        f"goal. The checkpoint's separate verified full evaluation used "
+        f"A {algorithm} reinforcement learning agent {episode_verb} {game_title} "
+        f"{goal_title}{evaluation_claim}. This exact faithful {capture.get('sampling_mode')} "
+        f"episode {outcome} the embedded goal; the separate checkpoint evaluation used "
         f"{evaluation.get('episodes')} episodes.\n\n"
         f"Model: https://huggingface.co/{repo_id}\n"
         "gradlab: https://github.com/tsilva/gradlab"
     )
     note = str(settings.get("operator_note") or "").strip()
+    if len(note) > 1000:
+        raise ValueError("operator note must be at most 1000 characters")
     if note:
         description += f"\n\nOperator note (not verified evidence):\n{note}"
-    description += f"\n\n#ReinforcementLearning #{algorithm} #gradlab"
+    game_hashtag = re.sub(r"[^A-Za-z0-9]", "", game_title)[:60] or "gradlab"
+    description += f"\n\n#ReinforcementLearning #{algorithm} #{game_hashtag}"
+    if len(description) > 5000:
+        raise ValueError("generated YouTube description exceeds 5000 characters")
     tags_value = settings.get("tags") or ()
     if isinstance(tags_value, str | bytes) or not isinstance(tags_value, Sequence):
         raise ValueError("YouTube tags must be an array")
     operator_tags = [str(value).strip() for value in tags_value if str(value).strip()]
-    tags = list(
-        dict.fromkeys(
-            [
-                "reinforcement learning",
-                "AI gameplay",
-                "gradlab",
-                algorithm,
-                game_title,
-                goal_title,
-                *operator_tags,
-            ]
-        )
+    tags = _bounded_youtube_tags(
+        [
+            "reinforcement learning",
+            "deep reinforcement learning",
+            "AI gameplay",
+            "stable-baselines3",
+            "Stable Retro",
+            "gradlab",
+            algorithm,
+            raw_game,
+            game_title,
+            str(goal.get("goal_id") or ""),
+            goal_title,
+            *operator_tags,
+        ],
+        max_characters=400,
     )
+    playlist = str(settings.get("playlist") or "gradlab").strip() or "gradlab"
+    if len(playlist) > 150:
+        raise ValueError("YouTube playlist title must be at most 150 characters")
+    thumbnail_value = settings.get("thumbnail_time")
+    thumbnail_time = 10.0 if thumbnail_value is None else float(thumbnail_value)
+    if not math.isfinite(thumbnail_time) or not 0 <= thumbnail_time <= 86_400:
+        raise ValueError("YouTube thumbnail time must be finite and in [0, 86400]")
     return {
         "title": title,
         "description": description,
-        "tags": tags[:40],
+        "tags": tags,
         "privacy": privacy,
-        "playlist": str(settings.get("playlist") or "gradlab").strip() or "gradlab",
-        "thumbnail_time": float(settings.get("thumbnail_time") or 10.0),
+        "playlist": playlist,
+        "thumbnail_time": thumbnail_time,
         "operator_note": note,
     }
 
@@ -372,10 +424,11 @@ class PlayerPublicationService:
         store: JobStore | None = None,
         hf_api_factory: Callable[..., Any] = HfApi,
         evidence_loader: Callable[[str, str], Mapping[str, Any]] | None = None,
+        root: Path | None = None,
     ) -> None:
         self.repo_root = Path(repo_root).resolve()
         self.host = host
-        self.root = publication_root()
+        self.root = Path(root or publication_root()).expanduser().resolve()
         self.requests_root = self.root / "requests"
         self.requests_root.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.store = store or JobStore()
@@ -520,7 +573,7 @@ class PlayerPublicationService:
         request_fingerprint = canonical_json_sha256(basis)
         marker = f"gradlab-publication-{request_fingerprint}"
         final_metadata = deepcopy(metadata)
-        final_metadata["tags"] = list(dict.fromkeys([*final_metadata["tags"], marker]))
+        final_metadata["tags"] = _bounded_youtube_tags([marker, *final_metadata["tags"]])
         request = {
             **basis,
             "fingerprint_basis": basis,

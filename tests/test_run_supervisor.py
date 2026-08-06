@@ -6,6 +6,7 @@ from dataclasses import replace
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+from gradlab.checkpoint_contract import checkpoint_manifest_contract_sha256
 from gradlab.early_stop import MetricEarlyStopStateMachine, MetricSample
 from gradlab.eval_backend import EvalHandle, EvalPoll
 from gradlab.file_utils import atomic_write_json
@@ -391,6 +392,102 @@ class RunSupervisorTests(unittest.TestCase):
                 attempt=1,
             )
         )
+
+    def test_manual_evaluation_accepts_checkpoint_with_playback_contract_binding(self) -> None:
+        resolved_documents = compose_resolved_train_documents(
+            GOAL,
+            RECIPE,
+            source_sha=SOURCE_SHA,
+        )
+        document = resolved_documents.effective
+        contract_document = dict(document)
+        contract_config = dict(contract_document["train_config"])
+        contract_config["rom_asset_manifest"] = self.asset
+        contract_config["checkpoint_eval_backend"] = "none"
+        contract_document["train_config"] = contract_config
+        contract_document["goal_variant"] = build_goal_variant_descriptor(
+            goal_slug="SuperMarioBros-Nes-v0/Level1-1",
+            source_sha=SOURCE_SHA,
+            authored_goal=load_goal_contract(GOAL, Path.cwd()),
+            effective_goal=dict(document["goal"]),
+        )
+        recipe_document = build_recipe_document(
+            contract_document,
+            repo_root=Path.cwd(),
+            source_commit=SOURCE_SHA,
+            run_description="manual evaluation after training-only execution",
+            seed=123,
+            runtime_image_ref=IMAGE,
+            base_materialized_recipe={
+                **resolved_documents.base,
+                "train_config": {
+                    **resolved_documents.base["train_config"],
+                    "rom_asset_manifest": self.asset,
+                    "checkpoint_eval_backend": "none",
+                },
+            },
+            canonical_goal=resolved_documents.canonical_goal,
+        )
+        self.assertNotIn("eval", recipe_document["recipe"])
+        self.assertIn("playback", recipe_document["recipe"])
+
+        recipe_sha256 = canonical_json_sha256(recipe_document)
+        manifest = replace(self.manifest, recipe_sha256=recipe_sha256)
+        checkpoint = CheckpointManifest(
+            run_id=self.run_id,
+            checkpoint_id="checkpoint-250000-" + "e" * 16,
+            step=250_000,
+            purpose="periodic",
+            sha256="e" * 64,
+            size_bytes=10,
+            public_url="https://models.example/model.zip",
+            model_document_url="https://models.example/model.json",
+            model_document_sha256="f" * 64,
+            recipe_document_url="https://models.example/recipe.json",
+            recipe_document_sha256=recipe_sha256,
+            goal_sha256=manifest.goal_sha256,
+            recipe_sha256=manifest.recipe_sha256,
+            environment_sha256=manifest.environment_sha256,
+            evaluation_contract_sha256=checkpoint_manifest_contract_sha256(recipe_document),
+            recovery_sidecar_key="recovery.json",
+            created_at=utc_now(),
+        )
+        checkpoint_prefix = f"runs/{self.run_id}/checkpoints/{checkpoint.step}-{checkpoint.sha256}"
+        self.authority.models.put_json(
+            f"{checkpoint_prefix}/recipe.json",
+            recipe_document,
+        )
+        queue = ManualEvaluationSupervisor(
+            authority=self.authority,
+            repo_root=Path.cwd(),
+            project_results=False,
+            holder_id="manual-eval-playback-contract-test",
+            work_root=Path(self.temporary.name) / "manual-eval-playback-contract",
+        )
+
+        context = queue._context(
+            manifest=manifest,
+            checkpoint=checkpoint,
+            enforce_current_protocol=False,
+        )
+
+        self.assertNotEqual(
+            checkpoint.evaluation_contract_sha256,
+            context.intent.evaluation_contract_sha256,
+        )
+        self.assertEqual(
+            context.intent.evaluation_contract_sha256,
+            evaluation_contract_sha256(recipe_document),
+        )
+        with self.assertRaisesRegex(ValueError, "checkpoint manifest contract hash mismatch"):
+            queue._context(
+                manifest=manifest,
+                checkpoint=replace(
+                    checkpoint,
+                    evaluation_contract_sha256="0" * 64,
+                ),
+                enforce_current_protocol=False,
+            )
 
     def test_manual_vizdoom_evaluation_rejects_stale_protocol(self) -> None:
         valid = {

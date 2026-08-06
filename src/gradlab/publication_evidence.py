@@ -4,6 +4,7 @@ from collections.abc import Mapping
 from copy import deepcopy
 from typing import Any
 
+from gradlab.checkpoint_contract import checkpoint_manifest_contract_sha256
 from gradlab.eval_metrics import eval_by_start_rows
 from gradlab.json_utils import canonical_json_sha256
 from gradlab.modal_eval_protocol import normalize_attempt_result
@@ -64,11 +65,11 @@ def validate_publication_evidence(evidence: Mapping[str, Any]) -> dict[str, Any]
         if actual.get(field) != expected.get(field):
             raise ValueError(f"evaluation intent {field} differs from snapshot recipe")
     contract_sha256 = evaluation_contract_sha256(recipe)
-    if (
-        intent.evaluation_contract_sha256 != contract_sha256
-        or checkpoint.evaluation_contract_sha256 != contract_sha256
-    ):
+    if intent.evaluation_contract_sha256 != contract_sha256:
         raise ValueError("evaluation contract digest differs from snapshot recipe")
+    checkpoint_contract_sha256 = checkpoint_manifest_contract_sha256(recipe)
+    if checkpoint.evaluation_contract_sha256 != checkpoint_contract_sha256:
+        raise ValueError("checkpoint manifest contract digest differs from snapshot recipe")
     if actual.get("checkpoint_sha256") != checkpoint.sha256:
         raise ValueError("evaluation execution contract checkpoint hash is inconsistent")
     if actual.get("recipe_sha256") != checkpoint.recipe_document_sha256:

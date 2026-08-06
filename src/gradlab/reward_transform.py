@@ -34,10 +34,10 @@ class RewardTransform:
 
 def _normalize_scale(value: Any, *, label: str) -> float:
     if isinstance(value, bool) or not isinstance(value, Real):
-        raise ValueError(f"{label} must be a positive finite number")
+        raise ValueError(f"{label} must be a finite number between 0 and 1 inclusive")
     scale = float(value)
-    if not math.isfinite(scale) or scale <= 0.0:
-        raise ValueError(f"{label} must be a positive finite number")
+    if not math.isfinite(scale) or scale < 0.0 or scale > 1.0:
+        raise ValueError(f"{label} must be a finite number between 0 and 1 inclusive")
     return scale
 
 
@@ -78,6 +78,8 @@ def reward_transform_from_reward(
         reward.get(REWARD_CLIP_KEY, False),
         label=f"{label}.reward_clip",
     )
+    if scale == 0.0 and bounds is not None and not bounds[0] <= 0.0 <= bounds[1]:
+        raise ValueError(f"{label}.reward_clip must include zero when {label}.reward_scale is zero")
     return RewardTransform(scale=scale, clip_bounds=bounds)
 
 

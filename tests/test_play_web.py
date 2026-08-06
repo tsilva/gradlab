@@ -120,14 +120,14 @@ def test_web_playback_retains_step_zero_snapshot_and_frame() -> None:
 
     snapshot, frames = runner.episode_start_payload()
     assert snapshot["sequence"] == 0
-    assert snapshot["protocol"] == 7
+    assert snapshot["protocol"] == 8
     assert snapshot["session"]["step"] == 0
     assert snapshot["session"]["default_seed"] == 42
     assert snapshot["session"]["value_discount"] is None
     assert snapshot["session"]["reward_accounting"] == {
         "status": "available",
         "reason": None,
-        "scale_divisor": 1.0,
+        "reward_scale": 1.0,
         "clip_bounds": None,
     }
     assert snapshot["session"]["attribution"]["status"] == "off"
@@ -1228,13 +1228,13 @@ def test_transition_payload_skips_disabled_panel_processors() -> None:
 
 def test_reward_accounting_contract_uses_scale_then_clip_from_materialized_config() -> None:
     contract = reward_accounting_contract(
-        argparse.Namespace(task={"reward": {"reward_scale": 2.5, "reward_clip": [-1, 1]}})
+        argparse.Namespace(task={"reward": {"reward_scale": 0.4, "reward_clip": [-1, 1]}})
     )
 
     assert contract == {
         "status": "available",
         "reason": None,
-        "scale_divisor": 2.5,
+        "reward_scale": 0.4,
         "clip_bounds": [-1.0, 1.0],
     }
 
@@ -1294,7 +1294,7 @@ def test_transition_reward_accounting_uses_only_declared_reward_components() -> 
         reward_accounting={
             "status": "available",
             "reason": None,
-            "scale_divisor": 2.0,
+            "reward_scale": 0.5,
             "clip_bounds": [-1.0, 1.0],
         },
     )
@@ -1344,7 +1344,7 @@ def test_active_reward_transform_fails_closed_without_raw_reward() -> None:
         reward_accounting={
             "status": "available",
             "reason": None,
-            "scale_divisor": 2.0,
+            "reward_scale": 0.5,
             "clip_bounds": None,
         },
     )
