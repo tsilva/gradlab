@@ -157,6 +157,54 @@ test("action comparison aligns episode frequencies with selected-step probabilit
   assert.equal(presentation.rows[3].executed, true);
 });
 
+test("legal-tuple action comparison aligns the joint categorical support", () => {
+  const legalTuples = [
+    [0, 0, 0, 0, 0, 0],
+    [1, 0, 0, 0, 0, 0],
+    [0, 0, 0, 1, 0, 0],
+  ];
+  const legalEntries = ["noop", "move_forward", "attack"].map(
+    (semanticId, index) => ({
+      value: legalTuples[index],
+      semantic_id: semanticId,
+      label: semanticId.replaceAll("_", " "),
+    }),
+  );
+  const snapshot = {
+    transition: { executed_action: legalTuples[2] },
+    session: {
+      action_contract: {
+        policy: {
+          space: { type: "multi_discrete", legal_tuples: legalTuples },
+          semantics: {
+            status: "available",
+            encoding: "components",
+            legal_entries: legalEntries,
+          },
+        },
+      },
+    },
+  };
+  const presentation = actionComparisonPresentation(
+    snapshot,
+    [
+      { executed_action: legalTuples[0] },
+      { executed_action: legalTuples[1] },
+      { executed_action: legalTuples[1] },
+    ],
+    { probabilities: [0.1, 0.7, 0.2], selected_action: 1 },
+  );
+
+  assert.equal(formatActionValue(legalTuples[1], snapshot), "move forward");
+  assert.deepEqual(discreteActionLabels(snapshot, 3), ["noop", "move forward", "attack"]);
+  assert.deepEqual(
+    presentation.rows.map((row) => row.episodeProbability),
+    [1 / 3, 2 / 3, 0],
+  );
+  assert.equal(presentation.rows[1].selected, true);
+  assert.equal(presentation.rows[2].executed, true);
+});
+
 test("action comparison keeps the episode aggregate fixed across inspected steps", () => {
   const snapshot = {
     transition: { executed_action: 0 },

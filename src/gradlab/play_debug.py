@@ -17,6 +17,7 @@ from stable_baselines3.common.distributions import (
     StateDependentNoiseDistribution,
 )
 
+from gradlab.action_distributions import LegalTupleCategoricalDistribution
 
 ANSI_PATTERN = re.compile(r"\x1b\[[0-9;]*m")
 
@@ -39,9 +40,12 @@ class PolicyDecision:
     program: Mapping[str, Any] | None = None
     route: Mapping[str, Any] | None = None
     sampled: bool | None = None
+    categorical_index: int | None = None
 
     @property
     def selected_discrete_action(self) -> int | None:
+        if self.categorical_index is not None:
+            return self.categorical_index
         if self.raw_action.size != 1:
             return None
         return int(self.raw_action.reshape(-1)[0])
@@ -103,7 +107,12 @@ def _decisions_from_distribution(
     component_probabilities: tuple[np.ndarray, ...] = ()
     mean: np.ndarray | None = None
     stddev: np.ndarray | None = None
-    if isinstance(distribution, CategoricalDistribution):
+    categorical_indices: np.ndarray | None = None
+    if isinstance(distribution, LegalTupleCategoricalDistribution):
+        distribution_kind = "legal_tuple_categorical"
+        probabilities = _as_numpy(distribution.distribution.probs)
+        categorical_indices = _as_numpy(distribution.row_indices(raw_tensor)).reshape(-1)
+    elif isinstance(distribution, CategoricalDistribution):
         distribution_kind = "categorical"
         probabilities = _as_numpy(distribution.distribution.probs)
     elif isinstance(distribution, MultiCategoricalDistribution):
@@ -140,6 +149,11 @@ def _decisions_from_distribution(
                 mean=None if mean is None else mean[lane].copy(),
                 stddev=None if stddev is None else stddev[lane].copy(),
                 sampled=sampled,
+                categorical_index=(
+                    None
+                    if categorical_indices is None
+                    else int(categorical_indices[lane])
+                ),
             )
         )
     return tuple(decisions)

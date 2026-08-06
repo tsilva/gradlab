@@ -55,6 +55,20 @@ def compile_policy_execution_contract(model: Any, env: Any) -> dict[str, Any] | 
                 "shared policy context disagrees with the runtime model-input contract: "
                 f"policy has {list(extractor_context)}, runtime has {context_names}"
             )
+        runtime_history_names = tuple(
+            name
+            for name in context_names
+            if isinstance(context[name], Mapping) and context[name].get("history") is not None
+        )
+        extractor_history_names = tuple(
+            getattr(extractor, "provider_history_names", ())
+        )
+        if extractor_history_names != runtime_history_names:
+            raise ValueError(
+                "shared policy provider histories disagree with the runtime model-input "
+                f"contract: policy has {list(extractor_history_names)}, runtime has "
+                f"{list(runtime_history_names)}"
+            )
         role_inputs = {role: list(shared_inputs) for role in POLICY_ROLES}
     payload = {
         "schema_version": POLICY_EXECUTION_SCHEMA_VERSION,

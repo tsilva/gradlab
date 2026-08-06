@@ -256,6 +256,19 @@ class PlaybackLoader:
             revision=getattr(args, "hf_revision", None),
             public_base_url=str(args.public_models_base_url),
         )
+        if spec.kind == "public_run":
+            manifest = source.run_config.get("checkpoint_manifest")
+            if not isinstance(manifest, Mapping):
+                raise ValueError("public-run playback is missing its verified checkpoint manifest")
+            if spec.run_id and str(manifest.get("run_id") or "") != spec.run_id:
+                raise ValueError("public-run checkpoint manifest does not match the selected run")
+            if (
+                spec.checkpoint_id
+                and str(manifest.get("checkpoint_id") or "") != spec.checkpoint_id
+            ):
+                raise ValueError(
+                    "public-run checkpoint manifest does not match the selected checkpoint"
+                )
         artifact_ref = source.artifact_ref
         args.model = str(source.model_path)
 

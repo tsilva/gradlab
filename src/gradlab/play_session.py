@@ -19,7 +19,7 @@ import torch
 from gradlab.action_contract import (
     action_contract_meanings,
     action_contract_payload,
-    action_index_for_controls,
+    action_value_for_controls,
     configured_action_meanings,
     configured_action_name,
 )
@@ -286,9 +286,9 @@ def add_play_source_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--run",
         help=(
-            "Immutable gradlab run ID. Resolves its public promoted checkpoint, or its "
-            "highest-step final checkpoint when no promotion exists, without W&B or "
-            "private R2 credentials."
+            "Immutable gradlab run ID or exact public checkpoint manifest URL. A run ID "
+            "resolves its promoted checkpoint, or its highest-step final checkpoint when "
+            "no promotion exists, without W&B or private R2 credentials."
         ),
     )
     parser.add_argument(
@@ -1122,9 +1122,12 @@ class _PlaybackSession:
             action_source="policy",
         )
 
-    def manual_action(self, labels: set[str] | tuple[str, ...] | list[str]) -> int:
+    def manual_action(
+        self,
+        labels: set[str] | tuple[str, ...] | list[str],
+    ) -> int | tuple[int, ...]:
         if isinstance(getattr(self, "action_contract", None), Mapping):
-            return action_index_for_controls(self.action_contract, labels)
+            return action_value_for_controls(self.action_contract, labels)
         requested = {str(label).strip().casefold() for label in labels if str(label).strip()}
         for index, meaning in enumerate(self.action_names):
             normalized = str(meaning).strip().casefold()

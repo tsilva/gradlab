@@ -21,7 +21,7 @@ from gradlab.goal_schema import goal_evaluation_mode
 from gradlab.job_queue import JobStore, JobSubject, ensure_flusher
 from gradlab.json_utils import canonical_json_sha256
 from gradlab.local_paths import default_runs_dir
-from gradlab.manual_evaluation import build_manual_evaluation_queue
+from gradlab.operator_environment import load_repository_operator_environment
 from gradlab.policy_bundle import (
     PolicyBundle,
     build_model_document,
@@ -51,6 +51,9 @@ from gradlab.publication_credentials import (
     youtube_credential_paths,
 )
 from gradlab.publication_evidence import validate_publication_evidence
+from gradlab.r2_store import RunStorageConfig
+from gradlab.run_authority import RunAuthority
+from gradlab.run_contracts import CheckpointManifest
 from gradlab.youtube_publication import (
     YOUTUBE_SCOPES,
     YouTubeClient,
@@ -480,14 +483,79 @@ class PlayerPublicationService:
             "settings": deepcopy(detail.get("settings") or {}),
         }
 
-    def _load_evidence(self, run_id: str, checkpoint_id: str) -> Mapping[str, Any]:
+    def _load_exact_evidence(
+        self,
+        active: Mapping[str, Any],
+    ) -> Mapping[str, Any]:
+        capture = _required_mapping(active.get("capture_document"), label="capture")
+        bundle = active.get("bundle")
+        if not isinstance(bundle, PolicyBundle):
+            raise ValueError("active publication bundle is unavailable")
+        source = active.get("source")
+        run_config = getattr(source, "run_config", None)
+        raw_manifest = (
+            run_config.get("checkpoint_manifest")
+            if isinstance(run_config, Mapping)
+            else None
+        )
+        if not isinstance(raw_manifest, Mapping):
+            raise ValueError("active public checkpoint has no verified manifest binding")
+        checkpoint = CheckpointManifest.from_dict(raw_manifest)
+        run_id = str(capture["run_id"])
+        checkpoint_id = str(capture["checkpoint_id"])
+        if checkpoint.run_id != run_id or checkpoint.checkpoint_id != checkpoint_id:
+            raise ValueError("active public checkpoint manifest identity is inconsistent")
+        if checkpoint.sha256 != bundle.checkpoint_sha256:
+            raise ValueError("active public checkpoint manifest model hash is inconsistent")
+        if checkpoint.recipe_document_sha256 != bundle.recipe_sha256:
+            raise ValueError("active public checkpoint manifest recipe hash is inconsistent")
+
+        load_repository_operator_environment(self.repo_root)
+        authority = RunAuthority(RunStorageConfig.from_env())
+        rejected: list[str] = []
+        for key in authority.evaluation.iter_keys(f"runs/{run_id}/evals/"):
+            if not key.endswith("/verified-result.json"):
+                continue
+            verified = authority.evaluation.get_json(key)
+            if str(verified.get("checkpoint_id") or "") != checkpoint_id:
+                continue
+            idempotency_key = str(verified.get("idempotency_key") or "")
+            intent = authority.eval_intent(
+                run_id=run_id,
+                idempotency_key=idempotency_key,
+            )
+            raw = authority.eval_result(
+                run_id=run_id,
+                idempotency_key=idempotency_key,
+            )
+            if intent is None or raw is None:
+                rejected.append(f"{idempotency_key}: incomplete intent/raw join")
+                continue
+            evidence = {
+                "checkpoint_manifest": checkpoint.to_dict(),
+                "recipe": deepcopy(bundle.recipe),
+                "intent": deepcopy(dict(intent)),
+                "raw_result": deepcopy(dict(raw)),
+                "verified_result": deepcopy(dict(verified)),
+            }
+            try:
+                validate_publication_evidence(evidence)
+            except ValueError as exc:
+                rejected.append(f"{idempotency_key}: {exc}")
+                continue
+            return evidence
+        detail = f"; rejected candidates: {' | '.join(rejected)}" if rejected else ""
+        raise ValueError(
+            "checkpoint does not have current exact verified evaluation evidence" + detail
+        )
+
+    def _load_evidence(self, active: Mapping[str, Any]) -> Mapping[str, Any]:
+        capture = _required_mapping(active.get("capture_document"), label="capture")
+        run_id = str(capture["run_id"])
+        checkpoint_id = str(capture["checkpoint_id"])
         if self._evidence_loader is not None:
             return self._evidence_loader(run_id, checkpoint_id)
-        queue_service = build_manual_evaluation_queue(self.repo_root)
-        return queue_service.publication_evidence(
-            run_id=run_id,
-            checkpoint_id=checkpoint_id,
-        )
+        return self._load_exact_evidence(active)
 
     def admit(
         self,
@@ -506,7 +574,7 @@ class PlayerPublicationService:
         if not isinstance(release, Mapping) or not isinstance(release.get("huggingface"), Mapping):
             raise ValueError("the embedded goal does not enable Hugging Face release")
         evidence = validate_publication_evidence(
-            self._load_evidence(str(capture["run_id"]), str(capture["checkpoint_id"]))
+            self._load_evidence(active)
         )
         evaluation = _required_mapping(evidence.get("evaluation"), label="publication evaluation")
         normalized = normalize_publication_evaluation(

@@ -160,3 +160,81 @@ def test_admission_rejects_changed_settings_for_same_capture(
 
     with pytest.raises(PublicationConflict, match="immutable publication request"):
         service.admit({"privacy": "private", "tags": []}, credential_result=_credentials())
+
+
+def test_exact_evidence_fallback_joins_private_results_to_active_manifest(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = _service(tmp_path, monkeypatch)
+    context = service.host.active_publication_context()
+    run_id = str(context["capture"]["latest"]["run_id"])
+    checkpoint_id = "checkpoint-10-" + "a" * 16
+    context["capture"]["latest"]["checkpoint_id"] = checkpoint_id
+    context["source"] = SimpleNamespace(
+        run_config={
+            "checkpoint_manifest": {
+                "schema_version": 2,
+                "run_id": run_id,
+                "checkpoint_id": checkpoint_id,
+                "step": 10,
+                "purpose": "periodic",
+                "sha256": "a" * 64,
+                "size_bytes": 7,
+                "public_url": "https://example.invalid/model.zip",
+                "model_document_url": "https://example.invalid/model.json",
+                "model_document_sha256": "c" * 64,
+                "recipe_document_url": "https://example.invalid/recipe.json",
+                "recipe_document_sha256": "b" * 64,
+                "goal_sha256": "d" * 64,
+                "recipe_sha256": "e" * 64,
+                "environment_sha256": "f" * 64,
+                "evaluation_contract_sha256": "1" * 64,
+                "recovery_sidecar_key": "runs/recovery-sidecar.json",
+                "created_at": "2026-08-06T12:00:00Z",
+            }
+        }
+    )
+    service.host = SimpleNamespace(active_publication_context=lambda: context)
+    verified = {
+        "checkpoint_id": checkpoint_id,
+        "idempotency_key": "eval-key",
+    }
+
+    class Evaluation:
+        @staticmethod
+        def iter_keys(_prefix):
+            return [f"runs/{run_id}/evals/eval-key/verified-result.json"]
+
+        @staticmethod
+        def get_json(_key):
+            return verified
+
+    authority = SimpleNamespace(
+        evaluation=Evaluation(),
+        eval_intent=lambda **_kwargs: {"intent": True},
+        eval_result=lambda **_kwargs: {"raw": True},
+    )
+    monkeypatch.setattr(
+        "gradlab.player_publication.load_repository_operator_environment",
+        lambda _root: None,
+    )
+    monkeypatch.setattr(
+        "gradlab.player_publication.RunStorageConfig.from_env",
+        lambda: object(),
+    )
+    monkeypatch.setattr(
+        "gradlab.player_publication.RunAuthority",
+        lambda _config: authority,
+    )
+    monkeypatch.setattr(
+        "gradlab.player_publication.validate_publication_evidence",
+        lambda evidence: evidence,
+    )
+
+    evidence = service._load_exact_evidence(service._active())
+
+    assert evidence["checkpoint_manifest"]["checkpoint_id"] == checkpoint_id
+    assert evidence["intent"] == {"intent": True}
+    assert evidence["raw_result"] == {"raw": True}
+    assert evidence["verified_result"] == verified

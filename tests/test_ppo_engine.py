@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import gymnasium as gym
 import numpy as np
 import pytest
@@ -13,12 +15,51 @@ from gradlab.ppo import GradLabPPO
 from gradlab.task_advantage import normalize_advantages_by_context
 from gradlab.training.ppo_engine import (
     TensorRolloutBuffer,
+    _bootstrap_device_time_limits,
     _CompiledPolicyCalls,
     _EXECUTION_PROFILES,
     _normalize_grouped_advantages,
     _ppo_update,
     _Precision,
 )
+
+
+def test_device_rollout_bootstraps_only_truncated_transitions() -> None:
+    observations = torch.zeros((2, 1), dtype=torch.float32)
+    buffer = TensorRolloutBuffer.allocate(
+        observations,
+        action_space=gym.spaces.Discrete(2),
+        n_steps=2,
+        n_envs=2,
+        device=torch.device("cpu"),
+        store_final_observations=True,
+    )
+    terminal = (torch.tensor([[1.0], [2.0]]), torch.tensor([[3.0], [4.0]]))
+    truncations = (torch.tensor([False, True]), torch.tensor([True, False]))
+    for step in range(2):
+        buffer.add(
+            observations,
+            torch.zeros(2, dtype=torch.int64),
+            torch.zeros(2),
+            torch.zeros(2, dtype=torch.bool),
+            torch.zeros(2),
+            torch.zeros(2),
+            final_observations=terminal[step],
+            truncated=truncations[step],
+        )
+    calls = SimpleNamespace(predict_values=lambda values: values[:, 0])
+
+    _bootstrap_device_time_limits(
+        buffer,
+        calls=calls,
+        precision=_Precision("fp32", torch.device("cpu")),
+        gamma=0.9,
+    )
+
+    torch.testing.assert_close(
+        buffer.rewards,
+        torch.tensor([[0.0, 1.8], [2.7, 0.0]]),
+    )
 
 
 def test_execution_profiles_add_one_cuda_optimization_at_a_time() -> None:
@@ -199,11 +240,7 @@ def test_grouped_advantage_normalization_matches_existing_ppo_semantics() -> Non
     expected = advantages.copy()
     normalize_advantages_by_context(
         expected,
-        {
-            "context/task": np.stack(
-                [observation["context/task"] for observation in observations]
-            )
-        },
+        {"context/task": np.stack([observation["context/task"] for observation in observations])},
         "task",
     )
 
@@ -310,9 +347,7 @@ def test_tensor_native_update_matches_one_sb3_ppo_update() -> None:
         torch.manual_seed(23)
         for index, observation in enumerate(observations):
             with torch.no_grad():
-                actions, values, log_probs = sb3_model.policy(
-                    torch.as_tensor(observation)
-                )
+                actions, values, log_probs = sb3_model.policy(torch.as_tensor(observation))
             sb3_model.rollout_buffer.add(
                 observation,
                 actions.numpy().reshape(2, 1),
@@ -334,9 +369,7 @@ def test_tensor_native_update_matches_one_sb3_ppo_update() -> None:
             dtype=np.float32,
         )
         with torch.no_grad():
-            last_values = sb3_model.policy.predict_values(
-                torch.as_tensor(next_observation)
-            )
+            last_values = sb3_model.policy.predict_values(torch.as_tensor(next_observation))
         dones = np.asarray([False, True])
         sb3_model.rollout_buffer.compute_returns_and_advantage(
             last_values=last_values,

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass
 import hashlib
 import json
@@ -22,6 +22,7 @@ from gradlab.batch_runtime import ProviderDescriptor, SignalSpec
 from gradlab.env_registry import (
     ALE_PY_PROVIDER,
     BREAKOUT_TURBO_ENV_PROVIDER,
+    GRADOOM_PROVIDER,
     GYMNASIUM_PROVIDER,
     GRADLAB_PROVIDER,
     STABLE_RETRO_TURBO_PROVIDER,
@@ -30,6 +31,7 @@ from gradlab.env_registry import (
     is_stable_retro_atari_env,
     resolve_env_provider,
 )
+from gradlab.model_inputs import provider_frame_stack_info_keys
 from gradlab.reward_transform import PROVIDER_REWARD_TRANSFORM_KEYS
 from gradlab.task_kernels import RUNTIME_BOUNDARY_SIGNALS
 from gradlab.turbo_api import validate_turbo_vector_env
@@ -241,6 +243,14 @@ def vizdoom_turbo_vec_env_type():
     return VizdoomTurboVecEnv
 
 
+def gradoom_vec_env_type():
+    try:
+        from gradoom import GraDoomVecEnv
+    except ImportError as exc:
+        raise ImportError("gradoom provider requires GraDOOM") from exc
+    return GraDoomVecEnv
+
+
 def _stable_retro_packaged_data_path(game: str, filename: str) -> Path:
     path = Path(retro.__file__).resolve().parent / "data" / "stable" / game / filename
     if not path.is_file():
@@ -377,6 +387,41 @@ def _turbo_native_vec_kwargs(
     return defaults
 
 
+def _with_provider_info_frame_stack(
+    config: Any,
+    native_kwargs: dict[str, Any],
+) -> dict[str, Any]:
+    """Compile model-input history requests into the provider constructor contract."""
+
+    task = config.task if isinstance(getattr(config, "task", None), Mapping) else {}
+    selected = provider_frame_stack_info_keys(task)
+    if not selected:
+        return native_kwargs
+    configured_filter = native_kwargs.get("info_filter")
+    if isinstance(configured_filter, Mapping):
+        mode = str(configured_filter.get("mode", "all"))
+        if mode != "all":
+            raise ValueError("provider frame-stack policy histories require info_filter mode='all'")
+        raw_keys = configured_filter.get("keys", ())
+        if not isinstance(raw_keys, Sequence) or isinstance(raw_keys, str | bytes):
+            raise ValueError("info_filter.keys must be a sequence for provider histories")
+        keys = [str(key) for key in raw_keys]
+        for key in selected:
+            if key not in keys:
+                keys.append(key)
+        native_kwargs["info_filter"] = {
+            **dict(configured_filter),
+            "mode": "all",
+            "keys": tuple(keys),
+        }
+    elif configured_filter is None:
+        native_kwargs["info_filter"] = {"mode": "all", "keys": selected}
+    elif str(configured_filter) != "all":
+        raise ValueError("provider frame-stack policy histories require info_filter='all'")
+    native_kwargs["info_frame_stack_keys"] = selected
+    return native_kwargs
+
+
 def _stable_retro_native_vec_kwargs(
     config: Any,
     native_kwargs: dict[str, Any],
@@ -434,12 +479,36 @@ def _vizdoom_native_vec_kwargs(
     from gradlab.vizdoom_assets import resolve_vizdoom_iwad_path
 
     native_kwargs["rom_path"] = resolve_vizdoom_iwad_path(native_kwargs.get("rom_path"))
-    return _turbo_native_vec_kwargs(
+    native_kwargs = _turbo_native_vec_kwargs(
         config,
         native_kwargs,
         n_envs=n_envs,
         native_obs_crop=native_obs_crop,
     )
+    return _with_provider_info_frame_stack(config, native_kwargs)
+
+
+def _gradoom_native_vec_kwargs(
+    config: Any,
+    native_kwargs: dict[str, Any],
+    *,
+    n_envs: int,
+    native_obs_crop: Callable[[Any], tuple[int, int, int, int] | None],
+    runtime_rom_path: str | None,
+) -> dict[str, Any]:
+    del runtime_rom_path
+    from gradlab.vizdoom_assets import resolve_vizdoom_iwad_path
+
+    native_kwargs["rom_path"] = resolve_vizdoom_iwad_path(native_kwargs.get("rom_path"))
+    native_kwargs = _turbo_native_vec_kwargs(
+        config,
+        native_kwargs,
+        n_envs=n_envs,
+        native_obs_crop=native_obs_crop,
+    )
+    native_kwargs["device"] = "cuda"
+    native_kwargs["transport"] = "torch"
+    return native_kwargs
 
 
 def _breakout_native_vec_kwargs(
@@ -655,6 +724,47 @@ def provider_descriptor(
                     options=reset_options,
                 )
 
+    requested_histories = provider_frame_stack_info_keys(task)
+    if requested_histories:
+        if (
+            turbo_contract is None
+            or turbo_contract.capabilities.get("supports_info_frame_stack") is not True
+        ):
+            raise ValueError(
+                f"provider {provider.provider_id!r} does not support requested provider-owned "
+                "info frame stacks; install a build that declares "
+                "capabilities['supports_info_frame_stack']=true"
+            )
+        frame_stack = int(getattr(contract_env, "frame_stack", 0))
+        if frame_stack < 1:
+            raise ValueError(
+                f"provider {provider.provider_id!r} declares an invalid frame_stack {frame_stack!r}"
+            )
+        for base_name in requested_histories:
+            history_name = f"{base_name}_frame_stack"
+            base_spec = signal_schema.get(base_name)
+            history_spec = signal_schema.get(history_name)
+            if base_spec is None or history_spec is None:
+                raise ValueError(
+                    f"provider {provider.provider_id!r} did not declare requested history "
+                    f"{history_name!r} and its base signal {base_name!r} in signal_schema"
+                )
+            expected_shape = (frame_stack, *base_spec.shape)
+            if history_spec.shape != expected_shape:
+                raise ValueError(
+                    f"provider history {history_name!r} must have shape {expected_shape}, "
+                    f"got {history_spec.shape}"
+                )
+            if history_spec.dtype != base_spec.dtype:
+                raise ValueError(
+                    f"provider history {history_name!r} dtype {history_spec.dtype} does not "
+                    f"match base signal {base_name!r} dtype {base_spec.dtype}"
+                )
+            if not history_spec.available_on_reset or not history_spec.available_on_step:
+                raise ValueError(
+                    f"provider history {history_name!r} must be available on reset and step"
+                )
+
     if task.get("id") == "mario":
         if provider.provider_id not in {
             STABLE_RETRO_TURBO_PROVIDER.provider_id,
@@ -688,7 +798,7 @@ def provider_descriptor(
         if callable(get_action_meanings):
             try:
                 action_meanings = get_action_meanings()
-            except (AttributeError, RuntimeError, TypeError, ValueError):
+            except AttributeError, RuntimeError, TypeError, ValueError:
                 action_meanings = None
     if provider.provider_id == ALE_PY_PROVIDER.provider_id:
         ale = getattr(contract_env, "ale", None)
@@ -700,10 +810,7 @@ def provider_descriptor(
             action_buttons = ("radius", "theta", "fire")
         elif callable(get_action_set):
             raw_actions = tuple(get_action_set())
-            action_meanings = tuple(
-                str(getattr(action, "name", action))
-                for action in raw_actions
-            )
+            action_meanings = tuple(str(getattr(action, "name", action)) for action in raw_actions)
             action_table = action_meanings
             action_mode = "discrete"
             action_preset = (
@@ -772,14 +879,8 @@ def provider_descriptor(
             tuple(str(value) for value in action_meanings) if action_meanings is not None else None
         ),
         action_table_hash=(str(action_table_hash) if action_table_hash is not None else None),
-        action_buttons=tuple(
-            str(value) if value is not None else None
-            for value in action_buttons
-        ),
-        action_combos=tuple(
-            tuple(int(value) for value in combo)
-            for combo in action_combos
-        ),
+        action_buttons=tuple(str(value) if value is not None else None for value in action_buttons),
+        action_combos=tuple(tuple(int(value) for value in combo) for combo in action_combos),
         supports_live_snapshots=supports_live_snapshots,
         live_snapshots_deterministic=deterministic_snapshots,
         snapshot_codec_id=snapshot_codec_id,
@@ -983,6 +1084,22 @@ def _vizdoom_turbo_make_vec_env(
     )
 
 
+def _gradoom_make_vec_env(
+    config: Any,
+    *,
+    native_kwargs: Mapping[str, Any],
+    gradoom_env_type=gradoom_vec_env_type,
+):
+    _require_provider(config, GRADOOM_PROVIDER.provider_id)
+    env_type = gradoom_env_type()
+    env = env_type(config.game, **dict(native_kwargs))
+    return _validated_turbo_start_info_adapter(
+        env,
+        GRADOOM_PROVIDER.provider_id,
+        validate_contract=gradoom_env_type is gradoom_vec_env_type,
+    )
+
+
 @dataclass(frozen=True)
 class ProviderRuntimeAdapter:
     provider_id: str
@@ -1059,6 +1176,12 @@ PROVIDER_RUNTIME_ADAPTERS = {
         _vizdoom_turbo_make_vec_env,
         factory_override="vizdoom_vec_env_type",
     ),
+    GRADOOM_PROVIDER.provider_id: ProviderRuntimeAdapter(
+        GRADOOM_PROVIDER.provider_id,
+        _gradoom_native_vec_kwargs,
+        _gradoom_make_vec_env,
+        factory_override="gradoom_env_type",
+    ),
     GYMNASIUM_PROVIDER.provider_id: ProviderRuntimeAdapter(
         GYMNASIUM_PROVIDER.provider_id,
         _passthrough_native_vec_kwargs,
@@ -1084,6 +1207,7 @@ def make_provider_vec_env(
     ale_py_vec_env_type=ale_py_atari_vector_env_type,
     breakout_vec_env_type=breakout_turbo_vec_env_type,
     vizdoom_vec_env_type=vizdoom_turbo_vec_env_type,
+    gradoom_env_type=gradoom_vec_env_type,
 ):
     adapter = provider_runtime_adapter(config.env_provider)
     overrides = {
@@ -1092,6 +1216,7 @@ def make_provider_vec_env(
         "ale_py_vec_env_type": ale_py_vec_env_type,
         "breakout_vec_env_type": breakout_vec_env_type,
         "vizdoom_vec_env_type": vizdoom_vec_env_type,
+        "gradoom_env_type": gradoom_env_type,
     }
     override = overrides.get(adapter.factory_override) if adapter.factory_override else None
     return adapter.make_vec_env(

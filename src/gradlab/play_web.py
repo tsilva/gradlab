@@ -36,7 +36,6 @@ from gradlab.play_processing import (
     normalize_player_processing,
 )
 from gradlab.seeds import validate_playback_seed
-from gradlab.evaluation_fence import evaluation_selection_fence
 from gradlab.reward_transform import reward_transform_from_reward
 from gradlab.play_capture import EpisodeCaptureManager
 from gradlab.publication_credentials import (
@@ -2823,7 +2822,6 @@ class PlaybackWebServer:
         if self.catalog is None:
             raise web.HTTPNotFound()
         from gradlab.play_catalog import (
-            checkpoint_metric_columns,
             checkpoint_metric_leaders,
             checkpoint_metric_values,
             filter_checkpoint_summaries,
@@ -2832,25 +2830,15 @@ class PlaybackWebServer:
 
         query = normalize_search_query(request.query.get("q"))
         try:
-            items = list(
-                await asyncio.to_thread(
-                    self.catalog.checkpoints,
-                    run_id=request.match_info["run_id"],
-                    query="",
-                    goal_variant_id=request.query.get("goal_variant_id", ""),
-                )
+            page = await asyncio.to_thread(
+                self.catalog.checkpoints,
+                run_id=request.match_info["run_id"],
+                query="",
+                goal_variant_id=request.query.get("goal_variant_id", ""),
             )
-            warning_reader = getattr(self.catalog, "checkpoint_warnings", None)
-            warnings = (
-                list(
-                    await asyncio.to_thread(
-                        warning_reader,
-                        run_id=request.match_info["run_id"],
-                    )
-                )
-                if callable(warning_reader)
-                else []
-            )
+            items = list(page.items)
+            metric_columns = list(page.metric_columns)
+            warnings = list(page.warnings)
         except Exception as exc:
             problem = self._catalog_error_response(exc)
             if problem is not None:
@@ -2882,6 +2870,7 @@ class PlaybackWebServer:
                             "metrics": checkpoint_metric_values(
                                 dict(item.get("metrics") or {}),
                                 evaluation,
+                                metric_columns,
                             ),
                             "evaluation": evaluation,
                             "evaluation_queue": status or None,
@@ -2907,23 +2896,15 @@ class PlaybackWebServer:
                 }
                 for item in items
             ]
-        items = list(checkpoint_metric_leaders(items))
-        selection_items = items
+        items = list(checkpoint_metric_leaders(items, metric_columns))
         items = list(filter_checkpoint_summaries(items, query=query))
         return web.json_response(
             {
                 "items": items,
                 "next_cursor": None,
-                "metric_columns": list(checkpoint_metric_columns()),
-                "selection_fence": (
-                    self.catalog.checkpoint_selection_fence(run_id=request.match_info["run_id"])
-                    if callable(getattr(self.catalog, "checkpoint_selection_fence", None))
-                    else evaluation_selection_fence(
-                        run_id=request.match_info["run_id"],
-                        checkpoints=[item for item in selection_items if isinstance(item, Mapping)],
-                    )
-                ),
-                "freshness": "partial" if warnings else "fresh",
+                "metric_columns": metric_columns,
+                "selection_fence": page.selection_fence,
+                "freshness": "partial" if warnings else page.freshness,
                 "warnings": warnings,
             }
         )

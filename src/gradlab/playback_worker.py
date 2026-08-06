@@ -84,6 +84,8 @@ def _worker_main(
                 value = getattr(host, name)
             elif operation == "active_recipe_document":
                 value = host.active_recipe_document()
+            elif operation == "active_publication_context":
+                value = host.active_publication_context()
             elif operation == "clear_input":
                 value = host.clear_input()
             elif operation == "update_input":
@@ -309,6 +311,9 @@ class IsolatedPlaybackHost:
 
     def active_recipe_document(self) -> Any:
         return self._rpc("active_recipe_document")
+
+    def active_publication_context(self) -> Any:
+        return self._rpc("active_publication_context")
 
     def clear_input(self) -> None:
         self._rpc("clear_input")

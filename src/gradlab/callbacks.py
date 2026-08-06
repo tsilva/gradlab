@@ -12,6 +12,7 @@ import numpy as np
 from stable_baselines3.common.callbacks import BaseCallback
 from stable_baselines3.common.logger import KVWriter
 
+from gradlab.action_codecs import LegalTupleMultiDiscrete
 from gradlab.action_contract import runtime_action_contract
 from gradlab.artifacts import install_model_bundle
 from gradlab.early_stop import (
@@ -68,6 +69,8 @@ def policy_entropy_bounds(action_space: Any) -> tuple[float, float] | None:
     """Return finite theoretical entropy bounds for an SB3 discrete policy."""
     if isinstance(action_space, gym.spaces.Discrete):
         upper = math.log(int(action_space.n))
+    elif isinstance(action_space, LegalTupleMultiDiscrete):
+        upper = math.log(action_space.legal_tuple_count)
     elif isinstance(action_space, gym.spaces.MultiDiscrete):
         upper = math.fsum(
             math.log(int(cardinality))
@@ -78,6 +81,28 @@ def policy_entropy_bounds(action_space: Any) -> tuple[float, float] | None:
     else:
         return None
     return 0.0, float(upper)
+
+
+def policy_discrete_action_indices(actions: Any, action_space: Any) -> np.ndarray:
+    """Map rollout actions to scalar categories used by collapse diagnostics."""
+
+    if actions is None:
+        return np.array([], dtype=np.int64)
+    if isinstance(action_space, LegalTupleMultiDiscrete):
+        return action_space.legal_tuple_indices(actions).reshape(-1)
+    if not isinstance(getattr(action_space, "n", None), Integral):
+        return np.array([], dtype=np.int64)
+    values = np.asarray(actions)
+    if values.size == 0 or (values.ndim > 1 and values.shape[-1] != 1):
+        return np.array([], dtype=np.int64)
+    flattened = values.reshape(-1)
+    if not np.issubdtype(flattened.dtype, np.number):
+        return np.array([], dtype=np.int64)
+    finite = flattened[np.isfinite(flattened)]
+    integers = finite.astype(np.int64)
+    if not np.allclose(finite, integers):
+        return np.array([], dtype=np.int64)
+    return integers
 
 
 class CallbackHelper:
@@ -605,19 +630,7 @@ class RolloutDiagnosticsHelper(CallbackHelper):
 
     @staticmethod
     def _discrete_actions(actions: Any, action_space: Any) -> np.ndarray:
-        if actions is None or not isinstance(getattr(action_space, "n", None), Integral):
-            return np.array([], dtype=np.int64)
-        values = np.asarray(actions)
-        if values.size == 0 or (values.ndim > 1 and values.shape[-1] != 1):
-            return np.array([], dtype=np.int64)
-        flattened = values.reshape(-1)
-        if not np.issubdtype(flattened.dtype, np.number):
-            return np.array([], dtype=np.int64)
-        finite = flattened[np.isfinite(flattened)]
-        integers = finite.astype(np.int64)
-        if not np.allclose(finite, integers):
-            return np.array([], dtype=np.int64)
-        return integers
+        return policy_discrete_action_indices(actions, action_space)
 
     def _record_stats(self, prefix: str, values: np.ndarray) -> None:
         if values.size == 0:

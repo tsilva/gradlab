@@ -38,6 +38,24 @@ def test_deathmatch_recipe_defaults_to_the_sample_efficient_custom_ppo_profile()
     assert backend["config"]["gae_lambda"] == 0.95
 
 
+def test_gradoom_recipe_trains_on_gpu_and_keeps_reference_vizdoom_evaluation() -> None:
+    document = compose_train_document(
+        GOAL_ROOT / "_goal.yaml",
+        GOAL_ROOT / "recipes/gradoom-ppo.yaml",
+    )
+    train_config = document["train_config"]
+
+    assert train_config["env_provider"] == "gradoom"
+    assert train_config["n_envs"] == 128
+    assert train_config["env_args"]["compile_engine"] is True
+    assert train_config["checkpoint_eval_environment"]["env_provider"] == "vizdoom-turbo"
+    assert document["policy_environment_hash"] == document["evaluation_environment_hash"]
+    backend = train_config["training_backend"]
+    assert backend["id"] == "gradlab.ppo"
+    assert backend["config"]["execution_profile"] == "max-throughput"
+    assert backend["config"]["precision"] == "amp-fp16"
+
+
 def test_deathmatch_recipe_runs_through_the_real_single_player_vector_runtime() -> None:
     document = compose_train_document(
         GOAL_ROOT / "_goal.yaml",

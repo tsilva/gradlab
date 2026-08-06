@@ -147,9 +147,11 @@ does not read, project, or preserve noncurrent W&B or R2 schemas.
 - Positive actor-critic policy entropy, dominant-action rate, and the action histogram diagnose
   discrete policy collapse. For a categorical `Discrete(n)` policy, entropy has infimum zero and
   maximum `ln(n)` nats at the uniform distribution; a `MultiDiscrete(nvec)` maximum is
-  `sum(ln(nvec))`, and a `MultiBinary(d)` maximum is `d * ln(2)`. Continuous `Box` policies report
-  differential entropy, which has no finite action-space-only minimum or maximum and must not use
-  those discrete bounds. Value prediction and advantage histograms are sampled every 64 rollouts.
+  `sum(ln(nvec))`, while a constrained legal-tuple categorical policy has maximum
+  `ln(legal_tuple_count)` regardless of the enclosing `nvec`; a `MultiBinary(d)` maximum is
+  `d * ln(2)`. Continuous `Box` policies report differential entropy, which has no finite
+  action-space-only minimum or maximum and must not use those discrete bounds. Value prediction
+  and advantage histograms are sampled every 64 rollouts.
 - Actor-critic explained variance is `1 - Var(value_target - value_prediction) /
   Var(value_target)`: one is perfect, zero means the critic explains no more target variance than a
   constant baseline, and negative values are worse than that baseline. A near-zero value is not by
@@ -386,7 +388,7 @@ unevaluated for future explicit user action. dstack process exit alone is never 
 | `train/algorithm/{algorithm}/update/learning_rate` | Current actor-critic learning rate. | scalar | rollout | history |
 | `train/algorithm/{algorithm}/policy/entropy` | Positive actor-critic policy entropy. | nats | rollout | history |
 | `train/algorithm/{algorithm}/policy/entropy_bound/lower` | Theoretical lower bound for finite discrete actor-critic policy entropy; always zero and omitted for continuous action spaces. | nats | rollout | history |
-| `train/algorithm/{algorithm}/policy/entropy_bound/upper` | Theoretical maximum finite discrete actor-critic policy entropy at the uniform distribution, derived from the resolved policy-facing action space and omitted for continuous action spaces. | nats | rollout | history |
+| `train/algorithm/{algorithm}/policy/entropy_bound/upper` | Theoretical maximum finite discrete actor-critic policy entropy at the uniform distribution, derived from the resolved policy-facing support (including only legal tuples for a constrained `MultiDiscrete` policy) and omitted for continuous action spaces. | nats | rollout | history |
 | `train/algorithm/{algorithm}/policy/distribution_std` | Continuous-action distribution standard deviation. | scalar | rollout | history |
 | `train/algorithm/{algorithm}/policy/dominant_action_rate` | Fraction assigned to the most frequent sampled discrete action. | fraction | rollout | history |
 | `train/algorithm/{algorithm}/policy/action_hist` | Sampled discrete-action histogram. | histogram | every 64 rollouts | history |

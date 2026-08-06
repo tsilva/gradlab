@@ -197,12 +197,17 @@ def bind_policy_action_space(
     action_space: Any,
     action_contract: Mapping[str, Any] | None = None,
 ) -> None:
-    bind_contract = getattr(model, "bind_action_contract", None)
-    if callable(bind_contract) and action_contract is not None:
-        bind_contract(action_contract)
-    bind = getattr(model, "bind_action_space", None)
-    if callable(bind):
-        bind(action_space)
+    targets = [model]
+    policy = getattr(model, "policy", None)
+    if policy is not None and policy is not model:
+        targets.append(policy)
+    for target in targets:
+        bind_contract = getattr(target, "bind_action_contract", None)
+        if callable(bind_contract) and action_contract is not None:
+            bind_contract(action_contract)
+        bind = getattr(target, "bind_action_space", None)
+        if callable(bind):
+            bind(action_space)
     if getattr(model, "action_space", None) is None:
         try:
             model.action_space = action_space

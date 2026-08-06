@@ -112,6 +112,33 @@ def test_accepts_the_strict_vizdoom_capability_extensions() -> None:
     assert contract.capabilities["supports_surface_variants"] is False
 
 
+def test_accepts_optional_vizdoom_info_frame_stack_capability() -> None:
+    env = _contract_env(
+        capability_extensions={
+            "supports_enemy_variants": False,
+            "supports_surface_variants": False,
+            "supports_info_frame_stack": True,
+        }
+    )
+
+    contract = validate_turbo_vector_env(env, "vizdoom-turbo")
+
+    assert contract.capabilities["supports_info_frame_stack"] is True
+
+
+def test_requires_boolean_optional_vizdoom_info_frame_stack_capability() -> None:
+    env = _contract_env(
+        capability_extensions={
+            "supports_enemy_variants": False,
+            "supports_surface_variants": False,
+            "supports_info_frame_stack": "yes",
+        }
+    )
+
+    with pytest.raises(TypeError, match="supports_info_frame_stack.*boolean"):
+        validate_turbo_vector_env(env, "vizdoom-turbo")
+
+
 def test_rejects_vizdoom_capability_extensions_from_other_providers() -> None:
     env = _contract_env(
         capability_extensions={

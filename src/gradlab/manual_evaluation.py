@@ -837,6 +837,7 @@ class ManualEvaluationSupervisor:
         *,
         ledger: SupervisorLedger,
         event_seq_offset: int,
+        allow_projection: bool = True,
     ) -> dict[str, Any]:
         manually_requested = (
             self.authority.control.get_json_optional(self._request_key(context)) is not None
@@ -846,7 +847,7 @@ class ManualEvaluationSupervisor:
             or self.authority.control.get_json_optional(self._projection_key(context)) is not None
         )
         projection_error = None
-        if raw is not None and not projected:
+        if raw is not None and not projected and allow_projection:
             try:
                 projected = self._project_result(
                     context,
@@ -859,6 +860,8 @@ class ManualEvaluationSupervisor:
                 projection_error = "waiting for the run writer lease"
             except Exception as exc:
                 projection_error = str(exc)
+        elif raw is not None and not projected:
+            projection_error = "waiting for training terminal before W&B projection"
         return {
             "checkpoint_id": context.checkpoint.checkpoint_id,
             "state": result.status if projected else "awaiting_projection",
@@ -873,6 +876,7 @@ class ManualEvaluationSupervisor:
         flush: bool,
         ledger: SupervisorLedger,
         event_seq_offset: int,
+        allow_projection: bool = True,
     ) -> dict[str, Any]:
         key = context.intent.idempotency_key
         verified_document = self.authority.evaluation.get_json_optional(
@@ -890,6 +894,7 @@ class ManualEvaluationSupervisor:
                 raw,
                 ledger=ledger,
                 event_seq_offset=event_seq_offset,
+                allow_projection=allow_projection,
             )
 
         attempt, prepared, dispatch = self._latest_attempt(context)
@@ -921,6 +926,7 @@ class ManualEvaluationSupervisor:
                 raw,
                 ledger=ledger,
                 event_seq_offset=event_seq_offset,
+                allow_projection=allow_projection,
             )
 
         if not flush:
@@ -1165,52 +1171,41 @@ class ManualEvaluationSupervisor:
         contexts = self._contexts(run_id, checkpoint_ids)
         manifest = contexts[0].manifest
         terminal = self._training_terminal(manifest)
-        if terminal is None:
-            statuses = [
-                {
-                    "checkpoint_id": context.checkpoint.checkpoint_id,
-                    "state": "waiting_for_training_terminal",
-                    "evaluation": None,
-                    "message": "waiting for authoritative training terminal evidence",
-                }
-                for context in contexts
-            ]
-            return HandlerResult(
-                state="retry_wait",
-                available_at=self.clock.time() + MANUAL_EVAL_WAIT_SECONDS,
-                message="waiting for training to become terminal",
-                subjects=self._subject_updates(run_id, statuses),
-            )
-
-        try:
-            self._lease(manifest)
-        except LeaseUnavailable as exc:
-            statuses = [
-                {
-                    "checkpoint_id": context.checkpoint.checkpoint_id,
-                    "state": "waiting_for_run_lease",
-                    "evaluation": None,
-                    "message": str(exc),
-                }
-                for context in contexts
-            ]
-            return HandlerResult(
-                state="retry_wait",
-                available_at=self.clock.time() + MANUAL_EVAL_WAIT_SECONDS,
-                message="waiting for the run writer lease",
-                subjects=self._subject_updates(run_id, statuses),
-            )
+        if terminal is not None:
+            try:
+                self._lease(manifest)
+            except LeaseUnavailable as exc:
+                statuses = [
+                    {
+                        "checkpoint_id": context.checkpoint.checkpoint_id,
+                        "state": "waiting_for_run_lease",
+                        "evaluation": None,
+                        "message": str(exc),
+                    }
+                    for context in contexts
+                ]
+                return HandlerResult(
+                    state="retry_wait",
+                    available_at=self.clock.time() + MANUAL_EVAL_WAIT_SECONDS,
+                    message="waiting for the run writer lease",
+                    subjects=self._subject_updates(run_id, statuses),
+                )
 
         self._ensure_intents(contexts, job_id=job_id)
         ledger = SupervisorLedger(self.work_root / job_id / "supervisor.sqlite3", clock=self.clock)
         ledger.init()
-        event_seq_offset = self._event_seq_offset(manifest, terminal)
+        event_seq_offset = (
+            self._event_seq_offset(manifest, terminal)
+            if terminal is not None
+            else 0
+        )
         statuses = [
             self._status(
                 context,
                 flush=not cancel_requested,
                 ledger=ledger,
                 event_seq_offset=event_seq_offset,
+                allow_projection=terminal is not None,
             )
             for context in contexts
         ]

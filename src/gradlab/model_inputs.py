@@ -25,6 +25,7 @@ MODEL_INPUTS_SCHEMA_VERSION = 1
 CONTEXT_UPDATES = frozenset({"transition", "episode"})
 CONTEXT_ENCODINGS = frozenset({"continuous", "categorical"})
 CONTEXT_OBSERVATION_LAYOUT = "dict_observation_context_v1"
+PROVIDER_FRAME_STACK_HISTORY = "provider_frame_stack"
 EPISODE_STEP_SIGNAL = "episode_step"
 NATIVE_TIME_REMAINING_SIGNAL = "native_time_remaining"
 RUNTIME_CONTEXT_SIGNALS = frozenset({EPISODE_STEP_SIGNAL, NATIVE_TIME_REMAINING_SIGNAL})
@@ -129,7 +130,7 @@ def normalize_model_inputs(value: Any, *, label: str = "task.model_inputs") -> d
         field_label = f"{label}.context.{name}"
         if not isinstance(raw_field, Mapping):
             raise ValueError(f"{field_label} must be an object")
-        unexpected_field = sorted(set(raw_field) - {"signal", "update", "encoding"})
+        unexpected_field = sorted(set(raw_field) - {"signal", "update", "encoding", "history"})
         if unexpected_field:
             raise ValueError(f"{field_label} has unexpected fields: {unexpected_field}")
         signal = raw_field.get("signal")
@@ -142,6 +143,18 @@ def normalize_model_inputs(value: Any, *, label: str = "task.model_inputs") -> d
             raise ValueError(
                 f"{field_label} uses a runtime context signal and must update on every transition"
             )
+        history = raw_field.get("history")
+        if history is not None:
+            if history != PROVIDER_FRAME_STACK_HISTORY:
+                raise ValueError(f"{field_label}.history must be {PROVIDER_FRAME_STACK_HISTORY!r}")
+            if update != "transition":
+                raise ValueError(
+                    f"{field_label} provider frame-stack history must update on every transition"
+                )
+            if signal.strip() in RUNTIME_CONTEXT_SIGNALS:
+                raise ValueError(
+                    f"{field_label} cannot request provider history for a runtime context signal"
+                )
         encoding = raw_field.get("encoding")
         if not isinstance(encoding, Mapping):
             raise ValueError(f"{field_label}.encoding must be an object")
@@ -214,11 +227,14 @@ def normalize_model_inputs(value: Any, *, label: str = "task.model_inputs") -> d
                 "kind": kind,
                 "values": [_portable_category(item) for item in categories],
             }
-        normalized_fields[name] = {
+        normalized_field = {
             "signal": signal.strip(),
             "update": update,
             "encoding": normalized_encoding,
         }
+        if history is not None:
+            normalized_field["history"] = history
+        normalized_fields[name] = normalized_field
     return {
         "schema_version": MODEL_INPUTS_SCHEMA_VERSION,
         "context": {name: normalized_fields[name] for name in sorted(normalized_fields)},
@@ -246,6 +262,50 @@ def model_input_fields(task: Mapping[str, Any]) -> Mapping[str, Any]:
 
 def has_model_inputs(task: Mapping[str, Any]) -> bool:
     return bool(model_input_fields(task))
+
+
+def provider_frame_stack_info_keys(task: Mapping[str, Any]) -> tuple[str, ...]:
+    """Return provider base keys requested by model-input history fields."""
+
+    fields = model_input_fields(task)
+    signals = task.get("signals")
+    if not isinstance(signals, Mapping):
+        return ()
+    selected: list[str] = []
+    for name in sorted(fields):
+        field = fields[name]
+        if field.get("history") != PROVIDER_FRAME_STACK_HISTORY:
+            continue
+        semantic_name = str(field["signal"])
+        try:
+            source = signals[semantic_name]
+        except KeyError as exc:
+            raise ValueError(
+                f"provider history context {name!r} references unknown task signal "
+                f"{semantic_name!r}"
+            ) from exc
+        source_names = (source,) if isinstance(source, str) else tuple(source)
+        for source_name in source_names:
+            key = str(source_name)
+            if key not in selected:
+                selected.append(key)
+    return tuple(selected)
+
+
+class ProviderFrameStackBox(gym.spaces.Box):
+    """Box whose leading axis is a provider-owned policy-transition history."""
+
+    def __init__(self, low: Any, high: Any, *, frame_stack: int) -> None:
+        super().__init__(low=low, high=high, dtype=np.float32)
+        self.frame_stack = int(frame_stack)
+
+
+class ProviderFrameStackMultiDiscrete(gym.spaces.MultiDiscrete):
+    """Categorical provider history with one category identity per transition."""
+
+    def __init__(self, nvec: Any, *, frame_stack: int) -> None:
+        super().__init__(nvec=np.asarray(nvec, dtype=np.int64), dtype=np.int64)
+        self.frame_stack = int(frame_stack)
 
 
 def _vector_parameter(
@@ -278,6 +338,8 @@ class CompiledContextField:
     source_shapes: tuple[tuple[int, ...], ...]
     width: int
     space: gym.Space
+    history: str | None = None
+    history_depth: int = 1
     scale: np.ndarray | None = None
     offset: np.ndarray | None = None
     low: np.ndarray | None = None
@@ -314,6 +376,7 @@ class ContextTaskKernel:
         if not isinstance(signals, Mapping):
             raise ValueError("task.signals must be an object")
         context_bindings: dict[str, Any] = {}
+        history_bindings: dict[str, Any] = {}
         for name, declaration in declarations.items():
             signal = declaration["signal"]
             if signal in RUNTIME_CONTEXT_SIGNALS:
@@ -332,9 +395,21 @@ class ContextTaskKernel:
                     f"task signal {signal!r}"
                 )
             context_bindings[signal] = signals[signal]
+            if declaration.get("history") == PROVIDER_FRAME_STACK_HISTORY:
+                source = signals[signal]
+                source_names = (source,) if isinstance(source, str) else tuple(source)
+                history_bindings[name] = tuple(
+                    f"{source_name}_frame_stack" for source_name in source_names
+                )
         self._bindings = SignalBindings(
             descriptor,
             context_bindings,
+            self.num_envs,
+            require_step=False,
+        )
+        self._history_bindings = SignalBindings(
+            descriptor,
+            history_bindings,
             self.num_envs,
             require_step=False,
         )
@@ -358,6 +433,7 @@ class ContextTaskKernel:
         for name in sorted(declarations):
             declaration = declarations[name]
             signal = str(declaration["signal"])
+            history = declaration.get("history")
             if signal in RUNTIME_CONTEXT_SIGNALS:
                 if signal == NATIVE_TIME_REMAINING_SIGNAL and native_episode_horizon is None:
                     raise ValueError(
@@ -384,7 +460,54 @@ class ContextTaskKernel:
                 raise ValueError(
                     f"transition context field {name!r} must be available on every step"
                 )
-            width = sum(int(np.prod(spec.shape, dtype=np.int64)) or 1 for spec in specs)
+            base_source_names = tuple(str(item) for item in source_names)
+            base_specs = specs
+            history_depth = 1
+            if history == PROVIDER_FRAME_STACK_HISTORY:
+                history_source = self._history_bindings.source(name)
+                source_names = (
+                    (history_source,) if isinstance(history_source, str) else tuple(history_source)
+                )
+                specs = self._history_bindings.source_specs(name)
+                assert all(spec is not None for spec in specs)
+                if len(specs) != len(base_specs):
+                    raise ValueError(f"context field {name!r} history sources are inconsistent")
+                depths: set[int] = set()
+                for base_name, base_spec, history_name, history_spec in zip(
+                    base_source_names,
+                    base_specs,
+                    source_names,
+                    specs,
+                    strict=True,
+                ):
+                    if not history_spec.shape:
+                        raise ValueError(
+                            f"provider history signal {history_name!r} has no frame-stack axis"
+                        )
+                    depths.add(int(history_spec.shape[0]))
+                    if tuple(history_spec.shape[1:]) != tuple(base_spec.shape):
+                        raise ValueError(
+                            f"provider history signal {history_name!r} trailing shape does not "
+                            f"match base signal {base_name!r}"
+                        )
+                    if history_spec.dtype != base_spec.dtype:
+                        raise ValueError(
+                            f"provider history signal {history_name!r} dtype does not match "
+                            f"base signal {base_name!r}"
+                        )
+                    if not history_spec.available_on_reset or not history_spec.available_on_step:
+                        raise ValueError(
+                            f"provider history signal {history_name!r} must be available on "
+                            "reset and step"
+                        )
+                if len(depths) != 1:
+                    raise ValueError(
+                        f"context field {name!r} provider histories have different depths"
+                    )
+                history_depth = depths.pop()
+                if history_depth < 1:
+                    raise ValueError(f"context field {name!r} history depth must be positive")
+            width = sum(int(np.prod(spec.shape, dtype=np.int64)) or 1 for spec in base_specs)
             encoding = declaration["encoding"]
             if encoding["kind"] == "continuous":
                 if any(
@@ -416,8 +539,21 @@ class ContextTaskKernel:
                 )
                 if np.any(low > high):
                     raise ValueError(f"context field {name!r} low exceeds high")
-                space = gym.spaces.Box(low=low, high=high, dtype=np.float32)
-                buffers[name] = np.zeros((self.num_envs, width), dtype=np.float32)
+                if history == PROVIDER_FRAME_STACK_HISTORY:
+                    history_low = np.broadcast_to(low, (history_depth, width)).copy()
+                    history_high = np.broadcast_to(high, (history_depth, width)).copy()
+                    space = ProviderFrameStackBox(
+                        history_low,
+                        history_high,
+                        frame_stack=history_depth,
+                    )
+                    buffers[name] = np.zeros(
+                        (self.num_envs, history_depth, width),
+                        dtype=np.float32,
+                    )
+                else:
+                    space = gym.spaces.Box(low=low, high=high, dtype=np.float32)
+                    buffers[name] = np.zeros((self.num_envs, width), dtype=np.float32)
                 categories: tuple[Any, ...] = ()
                 clip = bool(encoding.get("clip", False))
             else:
@@ -436,8 +572,18 @@ class ContextTaskKernel:
                     )
                 scale = offset = low = high = None
                 clip = False
-                space = gym.spaces.Discrete(len(categories))
-                buffers[name] = np.zeros(self.num_envs, dtype=np.int64)
+                if history == PROVIDER_FRAME_STACK_HISTORY:
+                    space = ProviderFrameStackMultiDiscrete(
+                        np.full(history_depth, len(categories), dtype=np.int64),
+                        frame_stack=history_depth,
+                    )
+                    buffers[name] = np.zeros(
+                        (self.num_envs, history_depth),
+                        dtype=np.int64,
+                    )
+                else:
+                    space = gym.spaces.Discrete(len(categories))
+                    buffers[name] = np.zeros(self.num_envs, dtype=np.int64)
             spaces[f"context/{name}"] = space
             field = CompiledContextField(
                 name=name,
@@ -448,6 +594,8 @@ class ContextTaskKernel:
                 source_shapes=tuple(tuple(spec.shape) for spec in specs),
                 width=width,
                 space=space,
+                history=str(history) if history is not None else None,
+                history_depth=history_depth,
                 scale=scale,
                 offset=offset,
                 low=low,
@@ -456,7 +604,7 @@ class ContextTaskKernel:
                 categories=categories,
             )
             compiled.append(field)
-            contract_fields[name] = {
+            contract_field = {
                 "signal": signal,
                 "update": field.update,
                 "encoding": deepcopy(dict(encoding)),
@@ -475,16 +623,38 @@ class ContextTaskKernel:
                     {
                         "kind": "box",
                         "dtype": np.dtype(np.float32).str,
-                        "shape": [width],
+                        "shape": (
+                            [history_depth, width]
+                            if history == PROVIDER_FRAME_STACK_HISTORY
+                            else [width]
+                        ),
                     }
                     if field.encoding == "continuous"
                     else {
-                        "kind": "discrete",
+                        "kind": (
+                            "multi_discrete"
+                            if history == PROVIDER_FRAME_STACK_HISTORY
+                            else "discrete"
+                        ),
                         "dtype": np.dtype(np.int64).str,
                         "categories": len(categories),
+                        **(
+                            {"shape": [history_depth]}
+                            if history == PROVIDER_FRAME_STACK_HISTORY
+                            else {}
+                        ),
                     }
                 ),
             }
+            if history is not None:
+                contract_field["history"] = {
+                    "kind": history,
+                    "depth": history_depth,
+                    "order": "oldest_to_newest",
+                    "flattening": "temporal_major",
+                    "base_sources": list(base_source_names),
+                }
+            contract_fields[name] = contract_field
         self.fields = tuple(compiled)
         self._field_by_name = {field.name: field for field in self.fields}
         self._buffers = buffers
@@ -536,6 +706,13 @@ class ContextTaskKernel:
                 / self._native_horizon_tics,
             )
             return remaining.reshape(self.num_envs, 1)
+        if field.history == PROVIDER_FRAME_STACK_HISTORY:
+            columns = self._history_bindings.columns(field.name, signals, mask=mask)
+            flattened = [
+                np.asarray(column).reshape(self.num_envs, field.history_depth, -1)
+                for column in columns
+            ]
+            return flattened[0] if len(flattened) == 1 else np.concatenate(flattened, axis=2)
         columns = self._bindings.columns(field.signal, signals, mask=mask)
         flattened = [np.asarray(column).reshape(self.num_envs, -1) for column in columns]
         return flattened[0] if len(flattened) == 1 else np.concatenate(flattened, axis=1)
@@ -578,44 +755,72 @@ class ContextTaskKernel:
                 return np.clip(encoded, field.low, field.high)
             outside = (selected < field.low) | (selected > field.high)
             if np.any(outside):
-                selected_row, column = np.argwhere(outside)[0]
+                location = np.argwhere(outside)[0]
+                selected_row = int(location[0])
                 lane = int(np.flatnonzero(mask)[selected_row])
-                raw = matrix[lane, column].item()
-                value = encoded[lane, column].item()
+                if field.history == PROVIDER_FRAME_STACK_HISTORY:
+                    timestep = int(location[1])
+                    column = int(location[2])
+                    raw = matrix[lane, timestep, column].item()
+                    value = encoded[lane, timestep, column].item()
+                    position = f", history position {timestep}"
+                else:
+                    column = int(location[1])
+                    raw = matrix[lane, column].item()
+                    value = encoded[lane, column].item()
+                    position = ""
                 low = field.low[column].item()
                 high = field.high[column].item()
                 raise ValueError(
                     f"context field {field.name!r} is outside encoded bounds in "
-                    f"lane {lane}, column {column}: raw={raw!r}, encoded={value!r}, "
+                    f"lane {lane}{position}, column {column}: raw={raw!r}, "
+                    f"encoded={value!r}, "
                     f"bounds=[{low!r}, {high!r}]"
                 )
             return encoded
 
         category_index = {value: index for index, value in enumerate(field.categories)}
-        encoded = np.empty(self.num_envs, dtype=np.int64)
+        encoded_shape = (
+            (self.num_envs, field.history_depth)
+            if field.history == PROVIDER_FRAME_STACK_HISTORY
+            else (self.num_envs,)
+        )
+        encoded = np.empty(encoded_shape, dtype=np.int64)
         for lane in np.flatnonzero(mask):
             lane_index = int(lane)
-            row = matrix[lane_index]
-            raw: Any
-            if field.width == 1:
-                raw = row.reshape(-1)[0]
-                if isinstance(raw, np.generic):
-                    raw = raw.item()
-            else:
-                raw = tuple(
-                    item.item() if isinstance(item, np.generic) else item
-                    for item in row.reshape(-1)
-                )
-            identity = _canonical_runtime_category(
-                raw,
-                label=f"context field {field.name!r} lane {lane_index}",
+            rows = (
+                matrix[lane_index]
+                if field.history == PROVIDER_FRAME_STACK_HISTORY
+                else matrix[lane_index].reshape(1, -1)
             )
-            try:
-                encoded[lane_index] = category_index[identity]
-            except KeyError as exc:
-                raise ValueError(
-                    f"context field {field.name!r} received unknown category {identity!r}"
-                ) from exc
+            for timestep, row in enumerate(rows):
+                raw: Any
+                if field.width == 1:
+                    raw = row.reshape(-1)[0]
+                    if isinstance(raw, np.generic):
+                        raw = raw.item()
+                else:
+                    raw = tuple(
+                        item.item() if isinstance(item, np.generic) else item
+                        for item in row.reshape(-1)
+                    )
+                identity = _canonical_runtime_category(
+                    raw,
+                    label=(
+                        f"context field {field.name!r} lane {lane_index} "
+                        f"history position {timestep}"
+                    ),
+                )
+                try:
+                    category = category_index[identity]
+                except KeyError as exc:
+                    raise ValueError(
+                        f"context field {field.name!r} received unknown category {identity!r}"
+                    ) from exc
+                if field.history == PROVIDER_FRAME_STACK_HISTORY:
+                    encoded[lane_index, timestep] = category
+                else:
+                    encoded[lane_index] = category
         return encoded
 
     def _update_field(

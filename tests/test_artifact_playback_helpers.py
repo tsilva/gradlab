@@ -374,6 +374,20 @@ def test_model_source_resolution_has_one_kind_aware_owner(
     assert resolved is expected
     assert resolved.artifact_ref == manifest_ref
 
+    expected_public_run = ResolvedModelSource(tmp_path / "selected.zip", bundle=bundle)
+    monkeypatch.setattr(
+        "gradlab.model_sources.download_public_checkpoint_manifest_source",
+        lambda ref, *, root: expected_public_run,
+    )
+    selected = resolve_model_source(
+        "public_run",
+        manifest_ref,
+        public_root=tmp_path / "public",
+        hf_root=tmp_path / "hf",
+    )
+    assert selected is expected_public_run
+    assert selected.artifact_ref == manifest_ref
+
     local = tmp_path / "local.zip"
     local.write_bytes(b"checkpoint")
     monkeypatch.setattr(
@@ -388,6 +402,42 @@ def test_model_source_resolution_has_one_kind_aware_owner(
     )
     assert resolved.model_path == local
     assert resolved.artifact_ref is None
+
+
+def test_public_checkpoint_manifest_validates_url_identity(monkeypatch) -> None:
+    from gradlab.model_sources import public_checkpoint_manifest
+
+    run_id = "gradlab-" + "a" * 32
+    digest = "b" * 64
+    manifest_ref = (
+        f"https://models.example/runs/{run_id}/checkpoints/42-{digest}/manifest.json"
+    )
+    document = {
+        "schema_version": 2,
+        "run_id": run_id,
+        "checkpoint_id": "checkpoint-42-" + digest[:16],
+        "step": 42,
+        "purpose": "periodic",
+        "sha256": digest,
+        "size_bytes": 7,
+        "public_url": "https://models.example/model.zip",
+        "model_document_url": "https://models.example/model.json",
+        "model_document_sha256": "c" * 64,
+        "recipe_document_url": "https://models.example/recipe.json",
+        "recipe_document_sha256": "d" * 64,
+        "goal_sha256": "e" * 64,
+        "recipe_sha256": "f" * 64,
+        "environment_sha256": "1" * 64,
+        "evaluation_contract_sha256": "2" * 64,
+        "recovery_sidecar_key": "runs/recovery-sidecar.json",
+        "created_at": "2026-08-06T12:00:00Z",
+    }
+    monkeypatch.setattr("gradlab.model_sources._public_json", lambda _url: document)
+
+    checkpoint = public_checkpoint_manifest(manifest_ref)
+
+    assert checkpoint.run_id == run_id
+    assert checkpoint.checkpoint_id == document["checkpoint_id"]
 
 
 def test_playback_only_ends_on_environment_done() -> None:

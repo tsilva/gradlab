@@ -14,7 +14,7 @@ configure_matplotlib_cache()
 
 import numpy as np
 
-from gradlab.action_contract import action_contract_meanings
+from gradlab.action_contract import action_contract_meanings, action_value_for_semantic
 from gradlab.cli_args import explicit_arg_dests, parse_json_value
 from gradlab.cli_parser import ExactArgumentParser
 from gradlab.device import resolve_sb3_device
@@ -71,12 +71,14 @@ class ScriptedPolicy:
         self.policy = policy
         self.action_names = action_names
         self.action_space = None
+        self.action_contract = None
         self.step_idx = 0
 
     def bind_action_space(self, action_space) -> None:
         self.action_space = action_space
 
     def bind_action_contract(self, action_contract) -> None:
+        self.action_contract = action_contract
         self.action_names = action_contract_meanings(action_contract)
 
     def reset_episode(self) -> None:
@@ -88,6 +90,18 @@ class ScriptedPolicy:
             if self.action_space is None:
                 raise RuntimeError("scripted policy action space was not bound")
             action = self.action_space.sample()
+        elif self.action_contract is not None:
+            if self.policy == "noop":
+                semantic = "noop"
+            elif self.policy == "right":
+                semantic = (
+                    "right_a_b"
+                    if self.step_idx % 55 in range(30, 42)
+                    else "right_b"
+                )
+            else:  # pragma: no cover - parser choices prevent this.
+                raise ValueError(f"unknown policy: {self.policy}")
+            action = action_value_for_semantic(self.action_contract, semantic)
         else:
             action = scripted_action(self.policy, self.step_idx, self.action_names)
         self.step_idx += 1

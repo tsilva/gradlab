@@ -13,7 +13,7 @@ from aiohttp import ClientSession, WSServerHandshakeError, WSMsgType
 from PIL import Image
 
 from gradlab.dataset_cli import build_parser as build_dataset_parser
-from gradlab.play_catalog import CatalogPage
+from gradlab.play_catalog import CatalogPage, CheckpointPage
 from gradlab.play_debug import PolicyDecision
 from gradlab.play_session import _PlaybackSession, _PlaybackTransition
 from gradlab.play_web import (
@@ -789,6 +789,34 @@ def test_browser_button_chords_map_to_declared_discrete_actions() -> None:
 
     assert _PlaybackSession.manual_action(session, []) == 0
     assert _PlaybackSession.manual_action(session, ["RIGHT", "a"]) == 2
+
+
+def test_browser_button_chords_map_to_declared_legal_tuple_actions() -> None:
+    session = argparse.Namespace(
+        action_contract={
+            "policy": {
+                "space": {"type": "multi_discrete"},
+                "semantics": {
+                    "status": "available",
+                    "legal_entries": [
+                        {
+                            "value": [0, 0, 0, 0, 0, 0],
+                            "semantic_id": "noop",
+                            "controls": [{"player": 1, "inputs": []}],
+                        },
+                        {
+                            "value": [0, 2, 0, 1, 0, 0],
+                            "semantic_id": "attack_move_left",
+                            "controls": [{"player": 1, "inputs": ["a", "left"]}],
+                        },
+                    ],
+                },
+            }
+        }
+    )
+
+    assert _PlaybackSession.manual_action(session, []) == (0, 0, 0, 0, 0, 0)
+    assert _PlaybackSession.manual_action(session, ["LEFT", "a"]) == (0, 2, 0, 1, 0, 0)
 
 
 def test_frame_encoder_emits_versioned_latest_only_png_packet() -> None:
@@ -1891,14 +1919,15 @@ def test_catalog_http_api_requires_the_fragment_session_token() -> None:
                 query,
                 goal_variant_id,
             ) == ("gradlab-" + "a" * 32, "", "")
-            return (
-                {
+            return CheckpointPage(
+                items=(
+                    {
                     "run_id": run_id,
                     "checkpoint_id": "checkpoint-1-" + "b" * 16,
                     "sha256": "b" * 64,
                     "metrics": {
-                        "train/outcome/success/across_starts/window_100/rate/mean": 0.75,
-                        "train/episode/return/shaped/from/target/rolling_up_to_100/mean": 8.5,
+                        "train/progress/kills/from/target/rolling_up_to_100/mean": 8.5,
+                        "train/episode/return/shaped/from/target/rolling_up_to_100/mean": 120.0,
                     },
                     "evaluation": {
                         "status": "accepted",
@@ -1908,11 +1937,53 @@ def test_catalog_http_api_requires_the_fragment_session_token() -> None:
                         "failure_count": 0,
                         "criteria": [],
                         "metrics": {
-                            "eval/full/outcome/success/across_starts/rate/mean": 0.9,
-                            "eval/full/episode/return/shaped/mean": 9.5,
+                            "eval/full/progress/kills/mean": 9.0,
+                            "eval/full/progress/kills/max": 15.0,
                         },
                     },
-                },
+                    },
+                ),
+                metric_columns=(
+                    {
+                        "metric": "eval/full/progress/kills/mean",
+                        "direction": "max",
+                        "label": "Eval mean kills",
+                        "evidence": "evaluation",
+                        "roles": ["objective", "acceptance"],
+                        "rank_index": 0,
+                        "acceptance": [
+                            {
+                                "metric": "eval/full/progress/kills/mean",
+                                "operator": ">=",
+                                "threshold": 10.0,
+                            }
+                        ],
+                    },
+                    {
+                        "metric": "train/progress/kills/from/target/rolling_up_to_100/mean",
+                        "direction": "max",
+                        "label": "Train mean kills (up to 100)",
+                        "evidence": "training",
+                        "roles": ["training_proxy"],
+                        "proxy_for": "eval/full/progress/kills/mean",
+                    },
+                    {
+                        "metric": "eval/full/progress/kills/max",
+                        "direction": "max",
+                        "label": "Eval max kills",
+                        "evidence": "evaluation",
+                        "roles": ["tie_breaker"],
+                        "rank_index": 1,
+                    },
+                    {
+                        "metric": "train/episode/return/shaped/from/target/rolling_up_to_100/mean",
+                        "direction": "max",
+                        "label": "Train mean return (up to 100)",
+                        "evidence": "training",
+                        "roles": ["optimization"],
+                    },
+                ),
+                selection_fence="f" * 64,
             )
 
     class FakeEvaluationQueue:
@@ -1951,8 +2022,8 @@ def test_catalog_http_api_requires_the_fragment_session_token() -> None:
                         "failure_count": 0,
                         "criteria": [],
                         "metrics": {
-                            "eval/full/outcome/success/across_starts/rate/mean": 0.95,
-                            "eval/full/episode/return/shaped/mean": 10.5,
+                            "eval/full/progress/kills/mean": 11.0,
+                            "eval/full/progress/kills/max": 16.0,
                         },
                     },
                 }
@@ -2072,37 +2143,55 @@ def test_catalog_http_api_requires_the_fragment_session_token() -> None:
                 selection_fence = checkpoint_payload["selection_fence"]
                 assert checkpoint_payload["metric_columns"] == [
                     {
-                        "metric": "train/outcome/success/across_starts/window_100/rate/mean",
+                        "metric": "eval/full/progress/kills/mean",
                         "direction": "max",
-                        "label": "Train success",
+                        "label": "Eval mean kills",
+                        "evidence": "evaluation",
+                        "roles": ["objective", "acceptance"],
+                        "rank_index": 0,
+                        "acceptance": [
+                            {
+                                "metric": "eval/full/progress/kills/mean",
+                                "operator": ">=",
+                                "threshold": 10.0,
+                            }
+                        ],
+                    },
+                    {
+                        "metric": "train/progress/kills/from/target/rolling_up_to_100/mean",
+                        "direction": "max",
+                        "label": "Train mean kills (up to 100)",
+                        "evidence": "training",
+                        "roles": ["training_proxy"],
+                        "proxy_for": "eval/full/progress/kills/mean",
+                    },
+                    {
+                        "metric": "eval/full/progress/kills/max",
+                        "direction": "max",
+                        "label": "Eval max kills",
+                        "evidence": "evaluation",
+                        "roles": ["tie_breaker"],
+                        "rank_index": 1,
                     },
                     {
                         "metric": "train/episode/return/shaped/from/target/rolling_up_to_100/mean",
                         "direction": "max",
-                        "label": "Train return",
-                    },
-                    {
-                        "metric": "eval/full/outcome/success/across_starts/rate/mean",
-                        "direction": "max",
-                        "label": "Eval success",
-                    },
-                    {
-                        "metric": "eval/full/episode/return/shaped/mean",
-                        "direction": "max",
-                        "label": "Eval return",
+                        "label": "Train mean return (up to 100)",
+                        "evidence": "training",
+                        "roles": ["optimization"],
                     },
                 ]
                 assert checkpoint_payload["items"][0]["metrics"] == {
-                    "train/outcome/success/across_starts/window_100/rate/mean": 0.75,
-                    "train/episode/return/shaped/from/target/rolling_up_to_100/mean": 8.5,
-                    "eval/full/outcome/success/across_starts/rate/mean": 0.95,
-                    "eval/full/episode/return/shaped/mean": 10.5,
+                    "eval/full/progress/kills/mean": 11.0,
+                    "train/progress/kills/from/target/rolling_up_to_100/mean": 8.5,
+                    "eval/full/progress/kills/max": 16.0,
+                    "train/episode/return/shaped/from/target/rolling_up_to_100/mean": 120.0,
                 }
                 assert checkpoint_payload["items"][0]["best_metrics"] == [
-                    "train/outcome/success/across_starts/window_100/rate/mean",
+                    "eval/full/progress/kills/mean",
+                    "train/progress/kills/from/target/rolling_up_to_100/mean",
+                    "eval/full/progress/kills/max",
                     "train/episode/return/shaped/from/target/rolling_up_to_100/mean",
-                    "eval/full/outcome/success/across_starts/rate/mean",
-                    "eval/full/episode/return/shaped/mean",
                 ]
                 run_inspection = await client.get(
                     f"{server.origin}/api/catalog/runs/gradlab-{'a' * 32}/inspection",

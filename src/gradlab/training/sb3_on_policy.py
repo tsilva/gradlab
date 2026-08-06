@@ -359,6 +359,13 @@ def run_sb3_on_policy(
         device = resolve_sb3_device(str(backend_config["device"]))
         context.session.event(f"using torch device: {device}")
         model = model_factory(context, env, config, device)
+        from gradlab.policy_runtime import bind_policy_action_space
+
+        bind_policy_action_space(
+            model,
+            env.action_space,
+            runtime_action_contract(env),
+        )
         rollout_quantum = n_envs * int(backend_config["n_steps"])
         context.session.configure_budget(
             requested_limit=int(common_config["timesteps"]),

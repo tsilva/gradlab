@@ -169,20 +169,13 @@ def download_public_checkpoint_manifest_source(
     *,
     root: Path,
 ) -> ResolvedModelSource:
+    checkpoint = public_checkpoint_manifest(manifest_url)
+    manifest = checkpoint.to_dict()
     text = str(manifest_url).strip()
-    if not is_public_checkpoint_manifest_ref(text):
-        raise ValueError("public checkpoint source must be an immutable manifest URL")
-    manifest = _public_json(text)
-    match = PUBLIC_CHECKPOINT_MANIFEST.search(urlparse(text).path)
-    assert match is not None
-    run_id, step, path_sha256 = match.groups()
-    if (
-        str(manifest.get("run_id") or "") != run_id
-        or int(manifest.get("step") or -1) != int(step)
-        or str(manifest.get("sha256") or "") != path_sha256
-    ):
-        raise ValueError("public checkpoint manifest does not match its immutable URL")
-    checkpoint_id = str(manifest.get("checkpoint_id") or "")
+    run_id = checkpoint.run_id
+    step = checkpoint.step
+    path_sha256 = checkpoint.sha256
+    checkpoint_id = checkpoint.checkpoint_id
     target_dir = root / _safe_stem(f"{run_id}-{checkpoint_id}")
     model_path = _download_public_file(
         str(manifest["public_url"]),
@@ -210,7 +203,25 @@ def download_public_checkpoint_manifest_source(
         artifact_name=text,
         checkpoint_step=int(step),
         bundle=bundle,
+        run_config={"checkpoint_manifest": dict(manifest)},
     )
+
+
+def public_checkpoint_manifest(manifest_url: str) -> CheckpointManifest:
+    text = str(manifest_url).strip()
+    if not is_public_checkpoint_manifest_ref(text):
+        raise ValueError("public checkpoint source must be an immutable manifest URL")
+    manifest = _public_json(text)
+    match = PUBLIC_CHECKPOINT_MANIFEST.search(urlparse(text).path)
+    assert match is not None
+    run_id, step, path_sha256 = match.groups()
+    if (
+        str(manifest.get("run_id") or "") != run_id
+        or int(manifest.get("step") or -1) != int(step)
+        or str(manifest.get("sha256") or "") != path_sha256
+    ):
+        raise ValueError("public checkpoint manifest does not match its immutable URL")
+    return CheckpointManifest.from_dict(manifest)
 
 
 def public_run_checkpoint_manifest_url(
@@ -445,6 +456,10 @@ def resolve_model_source(
 ) -> ResolvedModelSource:
     text = str(value).strip()
     if kind == "public_run":
+        if is_public_checkpoint_manifest_ref(text):
+            resolved = download_public_checkpoint_manifest_source(text, root=public_root)
+            resolved.artifact_ref = text
+            return resolved
         return download_public_run_source(
             text,
             root=public_root,

@@ -51,19 +51,29 @@ from gradlab.evaluation_projection import validate_evaluation_scientific_metric
 from gradlab.evaluation_fence import evaluation_selection_fence
 from gradlab.metric_names import (
     EVAL_ACCEPTANCE_PASS,
+    EVAL_FULL_EPISODE_RETURN_SHAPED_MAX,
     EVAL_FULL_EPISODE_RETURN_SHAPED_MEAN,
+    EVAL_FULL_SUCCESS_ACROSS_STARTS_RATE_MIN,
     EVAL_FULL_SUCCESS_ACROSS_STARTS_RATE_MEAN,
     LEADER_CHECKPOINT_STEP,
+    TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_ROLLING_UP_TO_100_MAX,
     TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_ROLLING_UP_TO_100_MEAN,
     TRAIN_EPISODE_RETURN_SHAPED_ACROSS_ORIGINS_ROLLING_UP_TO_100_MEAN,
     TRAIN_GLOBAL_STEP,
     TRAIN_OUTCOME_SUCCESS_ACROSS_STARTS_WINDOW_100_RATE_MIN,
     TRAIN_OUTCOME_SUCCESS_ACROSS_STARTS_WINDOW_100_RATE_MEAN,
     evaluation_metric_schema,
+    metric_path_segment,
+    train_progress_from_target_rolling_mean_metric,
 )
 from gradlab.model_sources import DEFAULT_PUBLIC_MODELS_BASE_URL, _public_json
 from gradlab.policy_bundle import canonical_json_sha256, validate_recipe_document
-from gradlab.ranking import RankCriterion, parse_objective_rank
+from gradlab.ranking import (
+    RankCriterion,
+    objective_rank_strings,
+    parse_objective_rank,
+    require_objective_rank,
+)
 from gradlab.recipe_documents import (
     compose_resolved_train_documents,
     goal_contract_sha256,
@@ -113,35 +123,15 @@ LIVE_TRAINING_METRICS = (
         (TRAIN_GLOBAL_STEP,),
     ),
 )
-CHECKPOINT_TRAINING_METRICS = (
-    (
-        RankCriterion(
-            direction="max",
-            metric=TRAIN_OUTCOME_SUCCESS_ACROSS_STARTS_WINDOW_100_RATE_MEAN,
-        ),
-        (TRAIN_OUTCOME_SUCCESS_ACROSS_STARTS_WINDOW_100_RATE_MEAN,),
-    ),
-    (
-        RankCriterion(
-            direction="max",
-            metric=TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_ROLLING_UP_TO_100_MEAN,
-        ),
-        (
-            TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_ROLLING_UP_TO_100_MEAN,
-            TRAIN_EPISODE_RETURN_SHAPED_ACROSS_ORIGINS_ROLLING_UP_TO_100_MEAN,
-        ),
-    ),
-    (
-        RankCriterion(
-            direction="min",
-            metric=TRAIN_GLOBAL_STEP,
-        ),
-        (TRAIN_GLOBAL_STEP,),
-    ),
+CHECKPOINT_STRUCTURAL_METRICS = frozenset({LEADER_CHECKPOINT_STEP, TRAIN_GLOBAL_STEP})
+CHECKPOINT_COLUMN_ROLES = frozenset(
+    {"objective", "tie_breaker", "acceptance", "training_proxy", "optimization"}
 )
-CHECKPOINT_EVALUATION_METRICS = (
-    EVAL_FULL_SUCCESS_ACROSS_STARTS_RATE_MEAN,
-    EVAL_FULL_EPISODE_RETURN_SHAPED_MEAN,
+_EVAL_PROGRESS_METRIC_RE = re.compile(
+    r"^eval/full/progress/([A-Za-z0-9_.-]+)/(mean|max)$"
+)
+_TRAIN_PROGRESS_METRIC_RE = re.compile(
+    r"^train/progress/([A-Za-z0-9_.-]+)/from/target/rolling_up_to_100/mean$"
 )
 
 
@@ -180,6 +170,23 @@ class CatalogPage:
         if self.generated_at is not None:
             payload["generated_at"] = self.generated_at
         return payload
+
+
+@dataclass(frozen=True)
+class CheckpointMetricContract:
+    metrics_schema_version: int
+    rank: tuple[RankCriterion, ...]
+    acceptance: tuple[Mapping[str, Any], ...]
+    columns: tuple[Mapping[str, Any], ...]
+
+
+@dataclass(frozen=True)
+class CheckpointPage:
+    items: tuple[dict[str, Any], ...]
+    metric_columns: tuple[Mapping[str, Any], ...]
+    selection_fence: str
+    freshness: Literal["fresh", "partial"] = "fresh"
+    warnings: tuple[Mapping[str, Any], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -310,11 +317,7 @@ class _CheckpointEvaluationData:
     evaluations: Mapping[int, dict[str, Any]]
     training_seed: int | None
     evaluation_seed: int | None
-    training_metric_history: Mapping[
-        str,
-        Mapping[str, tuple[tuple[int, float], ...]],
-    ]
-    evaluation_rank: tuple[RankCriterion, ...]
+    training_metric_history: Mapping[str, tuple[tuple[int, float], ...]]
     warning: Mapping[str, Any] | None = None
 
 
@@ -474,38 +477,218 @@ def _run_fallback_metric_specs(
     return LIVE_TRAINING_METRICS
 
 
-def checkpoint_metric_columns() -> tuple[dict[str, str], ...]:
-    return (
-        {
-            "metric": TRAIN_OUTCOME_SUCCESS_ACROSS_STARTS_WINDOW_100_RATE_MEAN,
-            "direction": "max",
-            "label": "Train success",
-        },
-        {
-            "metric": TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_ROLLING_UP_TO_100_MEAN,
-            "direction": "max",
-            "label": "Train return",
-        },
-        {
-            "metric": EVAL_FULL_SUCCESS_ACROSS_STARTS_RATE_MEAN,
-            "direction": "max",
-            "label": "Eval success",
-        },
-        {
-            "metric": EVAL_FULL_EPISODE_RETURN_SHAPED_MEAN,
-            "direction": "max",
-            "label": "Eval return",
-        },
+def _checkpoint_metric_label(metric: str) -> str:
+    fixed = {
+        EVAL_FULL_SUCCESS_ACROSS_STARTS_RATE_MIN: "Eval min success",
+        EVAL_FULL_SUCCESS_ACROSS_STARTS_RATE_MEAN: "Eval mean success",
+        EVAL_FULL_EPISODE_RETURN_SHAPED_MEAN: "Eval mean return",
+        EVAL_FULL_EPISODE_RETURN_SHAPED_MAX: "Eval max return",
+        TRAIN_OUTCOME_SUCCESS_ACROSS_STARTS_WINDOW_100_RATE_MIN: (
+            "Train min success (last 100)"
+        ),
+        TRAIN_OUTCOME_SUCCESS_ACROSS_STARTS_WINDOW_100_RATE_MEAN: (
+            "Train mean success (last 100)"
+        ),
+        TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_ROLLING_UP_TO_100_MEAN: (
+            "Train mean return (up to 100)"
+        ),
+        TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_ROLLING_UP_TO_100_MAX: (
+            "Train max return (up to 100)"
+        ),
+    }
+    if metric in fixed:
+        return fixed[metric]
+    match = _EVAL_PROGRESS_METRIC_RE.fullmatch(metric)
+    if match is not None:
+        field, statistic = match.groups()
+        readable = re.sub(r"[_.-]+", " ", field).strip().lower()
+        return f"Eval {statistic} {readable}"
+    match = _TRAIN_PROGRESS_METRIC_RE.fullmatch(metric)
+    if match is not None:
+        readable = re.sub(r"[_.-]+", " ", match.group(1)).strip().lower()
+        return f"Train mean {readable} (up to 100)"
+    readable = re.sub(r"[_.-]+", " ", metric).replace("/", " · ")
+    return readable[:1].upper() + readable[1:]
+
+
+def _checkpoint_acceptance_direction(operator: str) -> Literal["min", "max"]:
+    return "max" if operator in {">", ">="} else "min"
+
+
+def _checkpoint_training_proxy(
+    metric: str,
+    *,
+    progress_fields: frozenset[str],
+) -> str | None:
+    fixed = {
+        EVAL_FULL_SUCCESS_ACROSS_STARTS_RATE_MIN: (
+            TRAIN_OUTCOME_SUCCESS_ACROSS_STARTS_WINDOW_100_RATE_MIN
+        ),
+        EVAL_FULL_SUCCESS_ACROSS_STARTS_RATE_MEAN: (
+            TRAIN_OUTCOME_SUCCESS_ACROSS_STARTS_WINDOW_100_RATE_MEAN
+        ),
+        EVAL_FULL_EPISODE_RETURN_SHAPED_MEAN: (
+            TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_ROLLING_UP_TO_100_MEAN
+        ),
+        EVAL_FULL_EPISODE_RETURN_SHAPED_MAX: (
+            TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_ROLLING_UP_TO_100_MAX
+        ),
+    }
+    if metric in fixed:
+        return fixed[metric]
+    match = _EVAL_PROGRESS_METRIC_RE.fullmatch(metric)
+    if match is None or match.group(2) != "mean" or match.group(1) not in progress_fields:
+        return None
+    return train_progress_from_target_rolling_mean_metric(match.group(1))
+
+
+def checkpoint_metric_contract(
+    train_config: Mapping[str, Any],
+) -> CheckpointMetricContract:
+    schema = evaluation_metric_schema(train_config.get("metrics_schema_version"))
+    rank = require_objective_rank(
+        train_config.get("selection_rank"),
+        metrics_schema_version=schema.version,
     )
+    raw_acceptance = train_config.get("checkpoint_eval_acceptance")
+    acceptance = (
+        tuple(
+            normalize_metric_threshold_rules(
+                raw_acceptance,
+                label="recipe.train_config.checkpoint_eval_acceptance",
+                metric_validator=lambda name: validate_evaluation_scientific_metric(
+                    name,
+                    schema_version=schema.version,
+                ),
+            )
+        )
+        if raw_acceptance is not None
+        else ()
+    )
+    progress_fields = frozenset(
+        metric_path_segment(field)
+        for field in train_config.get("episode_progress_fields", ())
+    )
+    columns: list[dict[str, Any]] = []
+    by_metric: dict[str, dict[str, Any]] = {}
+
+    def add_column(
+        metric: str,
+        *,
+        direction: Literal["min", "max"] | None,
+        role: str,
+        rank_index: int | None = None,
+        acceptance_rule: Mapping[str, Any] | None = None,
+        proxy_for: str | None = None,
+    ) -> dict[str, Any]:
+        if role not in CHECKPOINT_COLUMN_ROLES:
+            raise ValueError(f"unsupported checkpoint metric role: {role}")
+        column = by_metric.get(metric)
+        if column is None:
+            if metric.startswith("eval/"):
+                evidence = "evaluation"
+            elif metric.startswith("train/"):
+                evidence = "training"
+            else:
+                raise ValueError(
+                    f"checkpoint list cannot project metric family: {metric}"
+                )
+            column = {
+                "metric": metric,
+                "direction": direction,
+                "label": _checkpoint_metric_label(metric),
+                "evidence": evidence,
+                "roles": [],
+            }
+            by_metric[metric] = column
+            columns.append(column)
+        if role not in column["roles"]:
+            column["roles"].append(role)
+        if rank_index is not None:
+            previous_rank = column.get("rank_index")
+            if previous_rank is None or rank_index < previous_rank:
+                column["rank_index"] = rank_index
+                column["direction"] = direction
+        elif column.get("rank_index") is None:
+            existing_direction = column.get("direction")
+            if existing_direction is not None and direction != existing_direction:
+                column["direction"] = None
+        if acceptance_rule is not None:
+            column.setdefault("acceptance", []).append(dict(acceptance_rule))
+        if proxy_for is not None:
+            column["proxy_for"] = proxy_for
+        return column
+
+    for rank_index, criterion in enumerate(rank):
+        if criterion.metric in CHECKPOINT_STRUCTURAL_METRICS:
+            continue
+        role = "objective" if rank_index == 0 else "tie_breaker"
+        add_column(
+            criterion.metric,
+            direction=criterion.direction,
+            role=role,
+            rank_index=rank_index,
+        )
+        proxy = _checkpoint_training_proxy(
+            criterion.metric,
+            progress_fields=progress_fields,
+        )
+        if proxy is not None:
+            add_column(
+                proxy,
+                direction=criterion.direction,
+                role="training_proxy",
+                proxy_for=criterion.metric,
+            )
+
+    for rule in acceptance:
+        metric = str(rule["metric"])
+        direction = _checkpoint_acceptance_direction(str(rule["operator"]))
+        add_column(
+            metric,
+            direction=direction,
+            role="acceptance",
+            acceptance_rule=rule,
+        )
+        proxy = _checkpoint_training_proxy(metric, progress_fields=progress_fields)
+        if proxy is not None:
+            add_column(
+                proxy,
+                direction=direction,
+                role="training_proxy",
+                proxy_for=metric,
+            )
+
+    add_column(
+        TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_ROLLING_UP_TO_100_MEAN,
+        direction="max",
+        role="optimization",
+    )
+    return CheckpointMetricContract(
+        metrics_schema_version=schema.version,
+        rank=rank,
+        acceptance=acceptance,
+        columns=tuple(columns),
+    )
+
+
+def checkpoint_metric_columns(
+    train_config: Mapping[str, Any],
+) -> tuple[Mapping[str, Any], ...]:
+    return checkpoint_metric_contract(train_config).columns
 
 
 def checkpoint_metric_leaders(
     items: Sequence[Mapping[str, Any]],
+    columns: Sequence[Mapping[str, Any]],
 ) -> tuple[dict[str, Any], ...]:
     copied = [dict(item) for item in items]
     best_values: dict[str, float] = {}
-    for column in checkpoint_metric_columns():
-        metric = column["metric"]
+    for column in columns:
+        metric = str(column["metric"])
+        direction = column.get("direction")
+        if direction not in {"min", "max"}:
+            continue
         values = [
             value
             for item in copied
@@ -513,17 +696,17 @@ def checkpoint_metric_leaders(
             and (value := _safe_float(item["metrics"].get(metric))) is not None
         ]
         if values:
-            best_values[metric] = min(values) if column["direction"] == "min" else max(values)
+            best_values[metric] = min(values) if direction == "min" else max(values)
     return tuple(
         {
             **item,
             "best_metrics": [
-                column["metric"]
-                for column in checkpoint_metric_columns()
-                if column["metric"] in best_values
+                str(column["metric"])
+                for column in columns
+                if str(column["metric"]) in best_values
                 and isinstance(item.get("metrics"), Mapping)
-                and _safe_float(item["metrics"].get(column["metric"]))
-                == best_values[column["metric"]]
+                and _safe_float(item["metrics"].get(str(column["metric"])))
+                == best_values[str(column["metric"])]
             ],
         }
         for item in copied
@@ -556,75 +739,67 @@ def filter_checkpoint_summaries(
 
 def _checkpoint_training_metric_history(
     run: Any,
-) -> dict[str, dict[str, tuple[tuple[int, float], ...]]]:
-    history: dict[str, dict[str, tuple[tuple[int, float], ...]]] = {}
-    for criterion, sources in CHECKPOINT_TRAINING_METRICS:
-        if criterion.metric == TRAIN_GLOBAL_STEP:
+    columns: Sequence[Mapping[str, Any]],
+) -> dict[str, tuple[tuple[int, float], ...]]:
+    history: dict[str, tuple[tuple[int, float], ...]] = {}
+    for column in columns:
+        metric = str(column["metric"])
+        if column.get("evidence") != "training" or metric == TRAIN_GLOBAL_STEP:
             continue
-        source_history: dict[str, tuple[tuple[int, float], ...]] = {}
-        for source in sources:
-            samples: dict[int, float] = {}
-            try:
-                rows = run.scan_history(
-                    keys=[TRAIN_GLOBAL_STEP, source],
-                    page_size=10_000,
-                )
-                for raw in rows:
-                    if not isinstance(raw, Mapping):
-                        continue
-                    step = _safe_int(raw.get(TRAIN_GLOBAL_STEP))
-                    value = _safe_float(raw.get(source))
-                    if step is not None and value is not None:
-                        samples[step] = value
-            except Exception:
+        samples: dict[int, float] = {}
+        rows = run.scan_history(
+            keys=[TRAIN_GLOBAL_STEP, metric],
+            page_size=10_000,
+        )
+        for raw in rows:
+            if not isinstance(raw, Mapping):
                 continue
-            if samples:
-                source_history[source] = tuple(sorted(samples.items()))
-        if source_history:
-            history[criterion.metric] = source_history
+            step = _safe_int(raw.get(TRAIN_GLOBAL_STEP))
+            value = _safe_float(raw.get(metric))
+            if step is not None and value is not None:
+                samples[step] = value
+        if samples:
+            history[metric] = tuple(sorted(samples.items()))
     return history
 
 
 def _checkpoint_training_metrics(
-    history: Mapping[str, Mapping[str, tuple[tuple[int, float], ...]]],
+    history: Mapping[str, tuple[tuple[int, float], ...]],
     *,
     checkpoint_step: int,
+    columns: Sequence[Mapping[str, Any]],
 ) -> dict[str, float | None]:
-    metrics: dict[str, float | None] = {TRAIN_GLOBAL_STEP: float(checkpoint_step)}
-    for criterion, sources in CHECKPOINT_TRAINING_METRICS:
-        if criterion.metric == TRAIN_GLOBAL_STEP:
+    metrics: dict[str, float | None] = {}
+    for column in columns:
+        metric = str(column["metric"])
+        if column.get("evidence") != "training" or metric == TRAIN_GLOBAL_STEP:
             continue
-        value = None
-        source_history = history.get(criterion.metric, {})
-        for source in sources:
-            samples = source_history.get(source, ())
-            eligible = (sample for sample in samples if sample[0] <= checkpoint_step)
-            latest = max(eligible, default=None, key=lambda sample: sample[0])
-            if latest is not None:
-                value = latest[1]
-                break
-        metrics[criterion.metric] = value
+        samples = history.get(metric, ())
+        eligible = (sample for sample in samples if sample[0] <= checkpoint_step)
+        latest = max(eligible, default=None, key=lambda sample: sample[0])
+        metrics[metric] = latest[1] if latest is not None else None
     return metrics
 
 
 def checkpoint_metric_values(
     training_metrics: Mapping[str, Any],
     evaluation: Mapping[str, Any] | None,
+    columns: Sequence[Mapping[str, Any]],
 ) -> dict[str, float | None]:
-    metrics = {
-        str(name): _safe_float(value)
-        for name, value in training_metrics.items()
-    }
     evaluation_metrics = (
         evaluation.get("metrics") if isinstance(evaluation, Mapping) else None
     )
-    for name in CHECKPOINT_EVALUATION_METRICS:
-        metrics[name] = (
-            _safe_float(evaluation_metrics.get(name))
-            if isinstance(evaluation_metrics, Mapping)
+    return {
+        str(column["metric"]): (
+            _safe_float(evaluation_metrics.get(str(column["metric"])))
+            if column.get("evidence") == "evaluation"
+            and isinstance(evaluation_metrics, Mapping)
+            else _safe_float(training_metrics.get(str(column["metric"])))
+            if column.get("evidence") == "training"
             else None
         )
-    return metrics
+        for column in columns
+    }
 
 
 def _complete_run_rank(
@@ -770,8 +945,6 @@ class PlayCatalog:
             tuple[str, str, str],
             tuple[float, _CheckpointEvaluationData],
         ] = {}
-        self._checkpoint_warnings: dict[str, tuple[dict[str, Any], ...]] = {}
-        self._checkpoint_fences: dict[str, str] = {}
 
     def _page(
         self,
@@ -3431,7 +3604,43 @@ class PlayCatalog:
         self,
         *,
         run_id: str,
+        metric_contract: CheckpointMetricContract,
     ) -> _CheckpointEvaluationData:
+        def validate_wandb_config(config: Mapping[str, Any]) -> None:
+            schema = evaluation_metric_schema(config.get("metrics_schema_version"))
+            if schema.version != metric_contract.metrics_schema_version:
+                raise ValueError("W&B metrics schema disagrees with the immutable recipe")
+            observed_rank = require_objective_rank(
+                config.get("selection_rank"),
+                metrics_schema_version=schema.version,
+            )
+            if objective_rank_strings(observed_rank) != objective_rank_strings(
+                metric_contract.rank
+            ):
+                raise ValueError("W&B checkpoint ranking disagrees with the immutable recipe")
+            raw_contract = config.get("checkpoint_eval_contract")
+            if metric_contract.acceptance:
+                if not isinstance(raw_contract, Mapping):
+                    raise ValueError("W&B checkpoint evaluation contract is missing")
+                observed_acceptance = tuple(
+                    normalize_metric_threshold_rules(
+                        raw_contract.get("acceptance"),
+                        label="W&B checkpoint_eval_contract.acceptance",
+                        metric_validator=lambda name: validate_evaluation_scientific_metric(
+                            name,
+                            schema_version=schema.version,
+                        ),
+                    )
+                )
+                if observed_acceptance != metric_contract.acceptance:
+                    raise ValueError(
+                        "W&B checkpoint acceptance disagrees with the immutable recipe"
+                    )
+            elif isinstance(raw_contract, Mapping) and raw_contract.get("acceptance"):
+                raise ValueError(
+                    "W&B exposes checkpoint acceptance for a training-only recipe"
+                )
+
         manifest = (
             self.control_bucket.get_json_optional(f"runs/{run_id}/manifest.json")
             if self.control_bucket is not None
@@ -3501,15 +3710,6 @@ class PlayCatalog:
                         ],
                         "metrics": ranked_metrics,
                     }
-            evaluation_rank: tuple[RankCriterion, ...] = ()
-            for goal in self._repository_goals():
-                if goal.goal_slug == goal_slug:
-                    detailed_goal = self._repository_goal(
-                        environment_id=goal.environment_id,
-                        goal_id=goal.goal_id,
-                    )
-                    evaluation_rank = detailed_goal.rank or ()
-                    break
             training_metric_history = {}
             warning = None
             training_seed = _safe_int(manifest.get("seed"))
@@ -3527,14 +3727,21 @@ class PlayCatalog:
             if entity and project:
                 try:
                     run = self._wandb_api().run(f"{entity}/{project}/{run_id}")
+                    config = dict(getattr(run, "config", {}) or {})
+                    validate_wandb_config(config)
                     if training_seed is None:
-                        training_seed = _safe_int(
-                            dict(getattr(run, "config", {}) or {}).get("seed")
-                        )
-                    training_metric_history = _checkpoint_training_metric_history(run)
+                        training_seed = _safe_int(config.get("seed"))
+                    training_metric_history = _checkpoint_training_metric_history(
+                        run,
+                        metric_contract.columns,
+                    )
                 except Exception as exc:
                     warning = {
-                        "code": "wandb_enrichment_unavailable",
+                        "code": (
+                            "wandb_contract_mismatch"
+                            if isinstance(exc, ValueError)
+                            else "wandb_enrichment_unavailable"
+                        ),
                         "message": f"Optional W&B training history is unavailable: {exc}",
                         "retryable": isinstance(exc, (TimeoutError, OSError)),
                         "source": "wandb",
@@ -3544,14 +3751,13 @@ class PlayCatalog:
                 training_seed=training_seed,
                 evaluation_seed=evaluation_seed,
                 training_metric_history=training_metric_history,
-                evaluation_rank=evaluation_rank,
                 warning=warning,
             )
         wandb_location = self._wandb_run_locations.get(run_id)
         entity = str(wandb_location.entity or "").strip() if wandb_location else ""
         project = str(wandb_location.project or "").strip() if wandb_location else ""
         if not entity or not project:
-            return _CheckpointEvaluationData({}, None, None, {}, ())
+            return _CheckpointEvaluationData({}, None, None, {})
         cache_key = (entity, project, run_id)
         now = time.monotonic()
         with self._lock:
@@ -3562,26 +3768,17 @@ class PlayCatalog:
         try:
             run = self._wandb_api().run(f"{entity}/{project}/{run_id}")
             config = dict(getattr(run, "config", {}) or {})
-            metric_schema = evaluation_metric_schema(config.get("metrics_schema_version"))
-            evaluation_rank = parse_objective_rank(
-                config.get("selection_rank"),
-                metrics_schema_version=metric_schema.version,
-            )
+            validate_wandb_config(config)
+            metric_schema = evaluation_metric_schema(metric_contract.metrics_schema_version)
             training_seed = _safe_int(config.get("seed"))
             contract = config.get("checkpoint_eval_contract")
-            if not isinstance(contract, Mapping):
+            if not metric_contract.acceptance:
                 evaluations = {}
                 evaluation_seed = None
             else:
+                assert isinstance(contract, Mapping)
                 evaluation_seed = _safe_int(contract.get("seed"))
-                rules = normalize_metric_threshold_rules(
-                    contract.get("acceptance"),
-                    label="checkpoint_eval_contract.acceptance",
-                    metric_validator=lambda name: validate_evaluation_scientific_metric(
-                        name,
-                        schema_version=metric_schema.version,
-                    ),
-                )
+                rules = metric_contract.acceptance
                 result_keys = {
                     metric_schema.checkpoint_step,
                     EVAL_ACCEPTANCE_PASS,
@@ -3653,10 +3850,9 @@ class PlayCatalog:
                             )
                         )
                 evaluation_metric_names = dict.fromkeys(
-                    (
-                        *CHECKPOINT_EVALUATION_METRICS,
-                        *(criterion.metric for criterion in evaluation_rank),
-                    )
+                    str(column["metric"])
+                    for column in metric_contract.columns
+                    if column.get("evidence") == "evaluation"
                 )
                 evaluation_metric_names.pop(LEADER_CHECKPOINT_STEP, None)
                 for metric in evaluation_metric_names:
@@ -3671,8 +3867,9 @@ class PlayCatalog:
                         evaluation = evaluations.get(step) if step is not None else None
                         if evaluation is not None and value is not None:
                             evaluation["metrics"][metric] = value
-            training_metric_history = (
-                _checkpoint_training_metric_history(run) if run is not None else {}
+            training_metric_history = _checkpoint_training_metric_history(
+                run,
+                metric_contract.columns,
             )
         except Exception as exc:
             # Public checkpoints remain playable when W&B history is unavailable.
@@ -3683,7 +3880,6 @@ class PlayCatalog:
                     training_seed=prior.training_seed,
                     evaluation_seed=prior.evaluation_seed,
                     training_metric_history=prior.training_metric_history,
-                    evaluation_rank=prior.evaluation_rank,
                     warning={
                         "code": "wandb_enrichment_stale",
                         "message": f"W&B enrichment is temporarily unavailable: {exc}",
@@ -3694,12 +3890,13 @@ class PlayCatalog:
             evaluations = {}
             training_seed = None
             evaluation_seed = None
-            evaluation_rank = ()
-            training_metric_history = (
-                _checkpoint_training_metric_history(run) if run is not None else {}
-            )
+            training_metric_history = {}
             warning = {
-                "code": "wandb_enrichment_unavailable",
+                "code": (
+                    "wandb_contract_mismatch"
+                    if isinstance(exc, ValueError)
+                    else "wandb_enrichment_unavailable"
+                ),
                 "message": f"W&B enrichment is unavailable: {exc}",
                 "retryable": isinstance(exc, (TimeoutError, OSError)),
                 "source": "wandb",
@@ -3711,7 +3908,6 @@ class PlayCatalog:
             training_seed=training_seed,
             evaluation_seed=evaluation_seed,
             training_metric_history=training_metric_history,
-            evaluation_rank=evaluation_rank,
             warning=warning,
         )
         if warning is None:
@@ -3725,7 +3921,7 @@ class PlayCatalog:
         run_id: str,
         query: str = "",
         goal_variant_id: str = "",
-    ) -> tuple[dict[str, Any], ...]:
+    ) -> CheckpointPage:
         if RUN_ID_PATTERN.fullmatch(run_id) is None:
             raise ValueError("run id must match gradlab-<32 lowercase hex>")
         url = f"{self.public_models_base_url}/runs/{run_id}/index.json"
@@ -3738,37 +3934,6 @@ class PlayCatalog:
         promoted_id = (
             str(promotion.get("checkpoint_id") or "") if isinstance(promotion, Mapping) else ""
         )
-        expected_effective_goal_hash = ""
-        selected_variant = str(goal_variant_id or "").strip()
-        if selected_variant:
-            manifest = (
-                self.control_bucket.get_json_optional(f"runs/{run_id}/manifest.json")
-                if self.control_bucket is not None
-                else None
-            )
-            raw_descriptor = manifest.get("goal_variant") if isinstance(manifest, Mapping) else None
-            if not isinstance(raw_descriptor, Mapping):
-                public_document = self._public_run_recipe_document(run_id)
-                recipe = (
-                    public_document.get("recipe") if isinstance(public_document, Mapping) else None
-                )
-                raw_descriptor = recipe.get("goal_variant") if isinstance(recipe, Mapping) else None
-            if not isinstance(raw_descriptor, Mapping):
-                raise ValueError("run has no current goal variant descriptor")
-            descriptor = validate_goal_variant_descriptor(raw_descriptor)
-            observed_variant = str(descriptor["variant_id"])
-            expected_effective_goal_hash = str(descriptor["effective_goal_contract_sha256"])
-            if observed_variant != selected_variant:
-                raise ValueError("run does not belong to the selected goal variant")
-        evaluation_data = self._checkpoint_evaluations(
-            run_id=run_id,
-        )
-        with self._lock:
-            self._checkpoint_warnings[run_id] = (
-                (dict(evaluation_data.warning),)
-                if isinstance(evaluation_data.warning, Mapping)
-                else ()
-            )
         manifests: list[CheckpointManifest] = []
         for raw in index.get("checkpoints") or ():
             if not isinstance(raw, Mapping):
@@ -3776,6 +3941,77 @@ class PlayCatalog:
             manifest = CheckpointManifest.from_dict(raw)
             if manifest.run_id != run_id:
                 raise ValueError("checkpoint does not belong to the selected run")
+            manifests.append(manifest)
+        selection_fence = evaluation_selection_fence(
+            run_id=run_id,
+            checkpoints=[manifest.to_dict() for manifest in manifests],
+        )
+        warnings: list[Mapping[str, Any]] = []
+        recipe_document: Mapping[str, Any] | None = None
+        metric_contract: CheckpointMetricContract | None = None
+        try:
+            recipe_document, _metadata = self._run_recipe_document(run_id)
+            if recipe_document is None:
+                raise ValueError("no hash-verified immutable recipe is available")
+            recipe_digest = canonical_json_sha256(recipe_document)
+            if any(
+                manifest.recipe_sha256 != recipe_digest
+                or manifest.recipe_document_sha256 != recipe_digest
+                for manifest in manifests
+            ):
+                raise ValueError("checkpoint recipes do not match the immutable run recipe")
+            recipe = recipe_document.get("recipe")
+            train_config = recipe.get("train_config") if isinstance(recipe, Mapping) else None
+            if not isinstance(train_config, Mapping):
+                raise ValueError("immutable recipe has no train_config")
+            metric_contract = checkpoint_metric_contract(train_config)
+        except Exception as exc:
+            warnings.append(
+                {
+                    "code": "checkpoint_metric_contract_unavailable",
+                    "message": (
+                        "Checkpoint metric semantics are unavailable; showing structural "
+                        f"checkpoint data only: {exc}"
+                    ),
+                    "retryable": isinstance(
+                        exc,
+                        (CatalogUnavailable, TimeoutError, URLError, OSError),
+                    ),
+                    "source": "recipe",
+                }
+            )
+
+        expected_effective_goal_hash = ""
+        selected_variant = str(goal_variant_id or "").strip()
+        if selected_variant:
+            raw_descriptor = None
+            recipe = (
+                recipe_document.get("recipe")
+                if isinstance(recipe_document, Mapping)
+                else None
+            )
+            if isinstance(recipe, Mapping):
+                raw_descriptor = recipe.get("goal_variant")
+            if not isinstance(raw_descriptor, Mapping):
+                manifest_document = (
+                    self.control_bucket.get_json_optional(f"runs/{run_id}/manifest.json")
+                    if self.control_bucket is not None
+                    else None
+                )
+                raw_descriptor = (
+                    manifest_document.get("goal_variant")
+                    if isinstance(manifest_document, Mapping)
+                    else None
+                )
+            if not isinstance(raw_descriptor, Mapping):
+                raise ValueError("run has no exact goal variant descriptor")
+            descriptor = validate_goal_variant_descriptor(raw_descriptor)
+            expected_effective_goal_hash = str(
+                descriptor["effective_goal_contract_sha256"]
+            )
+            if str(descriptor["variant_id"]) != selected_variant:
+                raise ValueError("run does not belong to the selected goal variant")
+        for manifest in manifests:
             if (
                 expected_effective_goal_hash
                 and manifest.goal_sha256 != expected_effective_goal_hash
@@ -3783,12 +4019,18 @@ class PlayCatalog:
                 raise ValueError(
                     "checkpoint effective goal contract does not match its run variant"
                 )
-            manifests.append(manifest)
-        with self._lock:
-            self._checkpoint_fences[run_id] = evaluation_selection_fence(
+
+        evaluation_data = (
+            self._checkpoint_evaluations(
                 run_id=run_id,
-                checkpoints=[manifest.to_dict() for manifest in manifests],
+                metric_contract=metric_contract,
             )
+            if metric_contract is not None
+            else _CheckpointEvaluationData({}, None, None, {})
+        )
+        if isinstance(evaluation_data.warning, Mapping):
+            warnings.append(dict(evaluation_data.warning))
+        columns = metric_contract.columns if metric_contract is not None else ()
         rows: list[CheckpointSummary] = []
         for manifest in manifests:
             evaluation = evaluation_data.evaluations.get(manifest.step)
@@ -3807,6 +4049,7 @@ class PlayCatalog:
             training_metrics = _checkpoint_training_metrics(
                 evaluation_data.training_metric_history,
                 checkpoint_step=manifest.step,
+                columns=columns,
             )
             row = CheckpointSummary(
                 run_id=run_id,
@@ -3820,26 +4063,26 @@ class PlayCatalog:
                 promoted=manifest.checkpoint_id == promoted_id,
                 playback_seed=playback_seed,
                 playback_seed_source=playback_seed_source,
-                metrics=checkpoint_metric_values(training_metrics, evaluation),
+                metrics=checkpoint_metric_values(
+                    training_metrics,
+                    evaluation,
+                    columns,
+                ),
                 evaluation=evaluation,
             )
             rows.append(row)
         rows.sort(key=lambda row: (row.step, row.sha256), reverse=True)
-        return filter_checkpoint_summaries(
-            checkpoint_metric_leaders([row.to_dict() for row in rows]),
-            query=query,
+        enriched_rows = checkpoint_metric_leaders(
+            [row.to_dict() for row in rows],
+            columns,
         )
-
-    def checkpoint_warnings(self, *, run_id: str) -> tuple[dict[str, Any], ...]:
-        with self._lock:
-            return tuple(dict(item) for item in self._checkpoint_warnings.get(str(run_id), ()))
-
-    def checkpoint_selection_fence(self, *, run_id: str) -> str:
-        with self._lock:
-            fence = self._checkpoint_fences.get(str(run_id))
-        if fence is None:
-            raise ValueError("checkpoint selection fence is unavailable")
-        return fence
+        return CheckpointPage(
+            items=filter_checkpoint_summaries(enriched_rows, query=query),
+            metric_columns=columns,
+            selection_fence=selection_fence,
+            freshness="partial" if warnings else "fresh",
+            warnings=tuple(warnings),
+        )
 
 
 def is_wandb_url(value: object) -> bool:
@@ -3854,7 +4097,10 @@ def normalize_search_query(value: object) -> str:
 __all__ = [
     "CATALOG_PAGE_SIZE",
     "CatalogPage",
+    "CheckpointMetricContract",
+    "CheckpointPage",
     "CheckpointSummary",
+    "checkpoint_metric_contract",
     "checkpoint_metric_columns",
     "checkpoint_metric_leaders",
     "checkpoint_metric_values",
