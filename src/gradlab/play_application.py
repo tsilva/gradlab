@@ -160,6 +160,25 @@ class PlaybackHost:
                 },
             )
 
+    def active_publication_context(self) -> dict[str, Any] | None:
+        with self._lock:
+            if self._active is None or self._phase != "active":
+                return None
+            capture = getattr(self._active.runner, "capture", None)
+            status = capture.status() if capture is not None else {
+                "enabled": False,
+                "recording": False,
+                "error": "episode capture is unavailable",
+                "latest": None,
+            }
+            return {
+                "spec": self._active.spec,
+                "source": self._active.source,
+                "bundle": self._active.source.bundle,
+                "capture": status,
+                "session_epoch": self._session_epoch,
+            }
+
     def start(self) -> None:
         with self._lock:
             source = self._last_source

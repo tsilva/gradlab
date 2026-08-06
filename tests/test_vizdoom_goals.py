@@ -43,6 +43,7 @@ NATIVE_HORIZONS = {
     "VizdoomTakeCover-v1": 2048,
 }
 SUCCESSFUL_HORIZON_GOALS = {
+    "VizdoomDeathmatch-v1",
     "VizdoomDefendLine-v1",
     "VizdoomDefendLine-Plus-v1",
     "VizdoomHealthGathering-v1",
@@ -85,7 +86,8 @@ EXPECTED_GOALS = {
         "num_threads": 32,
         "n_steps": 32,
         "event": "monster_killed",
-        "training_metric": "train/episode/return/shaped/from/target/window_100/mean",
+        "training_metric": "train/outcome/success/across_starts/window_100/rate/min",
+        "training_threshold": 1.0,
         "acceptance_metric": "eval/full/progress/kills/mean",
         "acceptance_threshold": 10.0,
         "reward_scale": 1.0,
@@ -256,7 +258,6 @@ def test_vizdoom_goal_has_complete_evaluated_ppo_contract(
     assert goal["eval"]["policy"] == {"stochastic": True}
     conditions = train_config["early_stop"]["conditions"]
     assert set(conditions) == {"return_plateau", "target_reached"}
-    expected_target_action = "observe" if goal_id == "VizdoomDeathmatch-v1" else "stop"
     assert conditions["target_reached"] == {
         "metric": expected["training_metric"],
         "trigger": "threshold",
@@ -265,7 +266,7 @@ def test_vizdoom_goal_has_complete_evaluated_ppo_contract(
         "threshold": expected.get("training_threshold", expected["acceptance_threshold"]),
         "patience_steps": 0,
         "outcome": "success",
-        "action": expected_target_action,
+        "action": "stop",
     }
     assert acceptance == [
         {
@@ -619,8 +620,10 @@ def test_vizdoom_deathmatch_declares_complete_single_player_combat_semantics() -
     }
     assert train_config["task"]["termination"] == {
         "failure": ["player_died"],
-        "timeout": ["time_limit_reached"],
+        "success": ["time_limit_reached"],
+        "bootstrap": ["time_limit_reached"],
     }
+    assert train_config["episode_progress_fields"] == ["kills"]
     assert train_config["env_args"]["vizdoom_config"] == {
         "episode_timeout": 4200,
         "render_hud": True,

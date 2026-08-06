@@ -240,6 +240,35 @@ class EnvironmentTaskConfigTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "exactly once"):
             validate_task_config(task)
 
+    def test_identity_task_bootstrap_events_must_be_successes(self) -> None:
+        task = {
+            "id": "identity",
+            "action": {"set": "native"},
+            "signals": {"native_timeout": "provider_truncated"},
+            "events": {
+                "time_limit_reached": {
+                    "signal": "native_timeout",
+                    "operation": "equals_for",
+                    "value": 1,
+                    "steps": 1,
+                }
+            },
+            "termination": {
+                "success": ["time_limit_reached"],
+                "bootstrap": ["time_limit_reached"],
+            },
+            "reward": {"reward_mode": "native"},
+        }
+
+        validate_task_config(task)
+
+        task["termination"] = {
+            "timeout": ["time_limit_reached"],
+            "bootstrap": ["time_limit_reached"],
+        }
+        with self.assertRaisesRegex(ValueError, "must also map to success"):
+            validate_task_config(task)
+
     def test_task_validation_rejects_unimplemented_kernel_and_mario_event_semantics(self) -> None:
         with self.assertRaisesRegex(ValueError, "no registered task kernel"):
             validate_task_config(

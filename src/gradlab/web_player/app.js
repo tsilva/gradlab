@@ -65,11 +65,19 @@ const state = {
   replayingInspection: false,
   inspectionReplayTimer: null,
   inspectionPauseCommandId: null,
+  attributionCommand: null,
+  attributionPreference: { mode: "gradcam", interval: 1 },
   cnnCaptureCommand: null,
   timelineSequences: [],
   history: [],
   historyLimit: 4096,
   hasControl: false,
+  publicationAuthority: false,
+  publicationCapability: null,
+  controlEpoch: 0,
+  publicationCurrent: null,
+  publicationJob: null,
+  publicationPoll: null,
   frameSequence: new Map(),
   receivedFrameSequence: new Map(),
   retainedEpisode: null,
@@ -172,6 +180,7 @@ function resetSession(epoch) {
   state.pendingSnapshot = null;
   state.inspectionSequence = null;
   state.inspectionPauseCommandId = null;
+  state.attributionCommand = null;
   state.cnnCaptureCommand = null;
   state.liveSnapshot = null;
   state.snapshot = null;
@@ -307,6 +316,8 @@ function connect() {
   socket.addEventListener("close", () => {
     state.connected = false;
     state.hasControl = false;
+    state.publicationAuthority = false;
+    state.publicationCapability = null;
     updateConnection("Disconnected", "error");
     updateControlState();
   });
@@ -330,6 +341,13 @@ function handleMessage(message) {
     renderHistory();
     return;
   }
+  if (message.type === "publication_authority") {
+    state.publicationAuthority = Boolean(message.has_authority);
+    state.publicationCapability = message.capability || null;
+    state.controlEpoch = Number(message.control_epoch || 0);
+    updatePublicationButton();
+    return;
+  }
   if (message.type === "session_changed") {
     resetSession(message.session_epoch);
     return;
@@ -339,6 +357,8 @@ function handleMessage(message) {
     if (epoch !== state.sessionEpoch) resetSession(epoch);
     state.applicationSnapshot = message;
     state.hasControl = Boolean(message.control?.has_control);
+    state.controlEpoch = Number(message.control_epoch || 0);
+    updatePublicationButton();
     if (message.app && message.app.phase !== "active") {
       state.liveSnapshot = message;
       state.snapshot = message;
@@ -358,11 +378,149 @@ function handleMessage(message) {
     if (message.id === state.inspectionPauseCommandId && !message.ok) {
       state.inspectionPauseCommandId = null;
     }
+    if (message.id === state.attributionCommand?.id) state.attributionCommand = null;
     if (message.id === state.cnnCaptureCommand?.id) state.cnnCaptureCommand = null;
     if (!message.ok) showToast(message.error || "Command failed", true);
     return;
   }
   if (message.type === "error") showToast(message.error || "Player error", true);
+}
+
+function updatePublicationButton() {
+  const button = $("#publish-episode");
+  if (!button) return;
+  const snapshot = state.applicationSnapshot || state.liveSnapshot;
+  const configured = Boolean(snapshot?.publication?.configured);
+  const complete = Boolean(snapshot?.publication_capture?.latest);
+  button.hidden = !(configured && complete && state.publicationAuthority);
+}
+
+async function publicationApi(path, { method = "GET", body } = {}) {
+  if (!state.publicationAuthority || !state.publicationCapability || !state.clientId) {
+    throw new Error("This tab no longer has publication authority.");
+  }
+  const response = await fetch(path, {
+    method,
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "X-Gradlab-Client": state.clientId,
+      "X-Gradlab-Control-Epoch": String(state.controlEpoch),
+      "X-Gradlab-Publication-Capability": state.publicationCapability,
+      ...(body === undefined ? {} : { "Content-Type": "application/json" }),
+    },
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+  });
+  const payload = await response.json().catch(() => ({ error: `HTTP ${response.status}` }));
+  if (!response.ok) throw new Error(payload.error || payload.message || `HTTP ${response.status}`);
+  return payload;
+}
+
+function publicationFact(term, value) {
+  const facts = $("#publication-capture");
+  const dt = document.createElement("dt");
+  const dd = document.createElement("dd");
+  dt.textContent = term;
+  dd.textContent = String(value ?? "—");
+  facts.append(dt, dd);
+}
+
+function renderPublicationCurrent(current) {
+  state.publicationCurrent = current;
+  const capture = current?.capture;
+  const facts = $("#publication-capture");
+  facts.replaceChildren();
+  if (!current?.available || !capture) {
+    $("#publication-status").textContent = current?.message || "No publishable episode is ready.";
+    $("#publication-submit").disabled = true;
+    return;
+  }
+  publicationFact("Outcome", capture.outcome);
+  publicationFact("Episode seed", capture.seed);
+  publicationFact("Steps", capture.steps);
+  publicationFact("Return", capture.return);
+  publicationFact("Action selection", capture.sampling_mode);
+  publicationFact("Capture", capture.capture_id);
+  $("#publication-status").textContent = "The exact completed episode will be uploaded to both destinations.";
+  if (current.job) renderPublicationJob(current.job);
+}
+
+function renderPublicationCredentials(result) {
+  const panel = $("#publication-credentials");
+  const hf = result?.huggingface || {};
+  const yt = result?.youtube || {};
+  panel.textContent = [
+    `Hugging Face: ${hf.ready ? `${hf.username} → ${hf.namespace}` : (hf.message || "not ready")}`,
+    `YouTube: ${yt.ready ? `${yt.channel_title} (${yt.channel_id})` : (yt.message || "not ready")}`,
+  ].join("\n");
+  panel.style.whiteSpace = "pre-line";
+  $("#publication-authorize-youtube").hidden = Boolean(yt.ready);
+  $("#publication-submit").disabled = !(result?.ready && state.publicationCurrent?.available && !state.publicationJob);
+}
+
+function renderPublicationJob(job) {
+  if (!job) return;
+  state.publicationJob = job;
+  const panel = $("#publication-job");
+  panel.hidden = false;
+  panel.replaceChildren();
+  const summary = document.createElement("div");
+  summary.textContent = `${job.state || "queued"} · ${job.progress?.phase || "queued"}${job.message ? ` · ${job.message}` : ""}`;
+  panel.append(summary);
+  Object.entries(job.urls || {}).forEach(([label, url]) => {
+    if (!String(url).startsWith("https://")) return;
+    const row = document.createElement("div");
+    const link = document.createElement("a");
+    link.href = String(url);
+    link.target = "_blank";
+    link.rel = "noopener noreferrer";
+    link.textContent = `${label}: ${url}`;
+    row.append(link);
+    panel.append(row);
+  });
+  const terminal = ["succeeded", "failed", "blocked", "canceled"].includes(job.state);
+  $("#publication-submit").disabled = true;
+  $("#publication-retry").hidden = !["failed", "blocked", "canceled"].includes(job.state);
+  $("#publication-cancel").hidden = terminal;
+  $("#publication-resolve").hidden = !(job.state === "blocked" && job.progress?.phase === "youtube_uncertain");
+  $("#publication-cleanup").hidden = !terminal;
+  clearInterval(state.publicationPoll);
+  state.publicationPoll = null;
+  if (!terminal && job.job_id) {
+    state.publicationPoll = setInterval(() => {
+      void publicationApi(`/api/publication/jobs/${encodeURIComponent(job.job_id)}`)
+        .then(renderPublicationJob)
+        .catch((error) => {
+          clearInterval(state.publicationPoll);
+          state.publicationPoll = null;
+          showToast(error.message, true);
+        });
+    }, 2000);
+  }
+}
+
+async function checkPublicationCredentials() {
+  $("#publication-credentials").textContent = "Checking both accounts…";
+  const result = await publicationApi("/api/publication/preflight", { method: "POST" });
+  renderPublicationCredentials(result);
+  return result;
+}
+
+async function openPublicationDialog() {
+  const dialog = $("#publication-dialog");
+  dialog.showModal();
+  try {
+    const [current, ticket] = await Promise.all([
+      publicationApi("/api/publication/current"),
+      publicationApi("/api/publication/replay-ticket", { method: "POST" }),
+    ]);
+    renderPublicationCurrent(current);
+    $("#publication-video").src = ticket.url;
+    if (current.job) renderPublicationJob(current.job);
+    else await checkPublicationCredentials();
+  } catch (error) {
+    $("#publication-status").textContent = error.message || String(error);
+    $("#publication-submit").disabled = true;
+  }
 }
 
 function frameKey(sequence, generation = 0) {
@@ -589,6 +747,7 @@ function applySnapshot(snapshot) {
     renderTimeline();
   }
   if (historyChanged) renderHistory();
+  syncAttributionToPanel();
   syncCnnCaptureToPanel();
 }
 
@@ -616,6 +775,43 @@ function command(name, payload = {}) {
     expected_revision: state.liveSnapshot?.revision ?? null,
   });
   return id;
+}
+
+function syncAttributionToPanel() {
+  const panel = state.layout?.panels?.attribution;
+  const attribution = state.liveSnapshot?.session?.attribution;
+  if (
+    !panel
+    || panel.placement?.window !== state.windowId
+    || !attribution
+  ) return;
+  const supported = state.liveSnapshot?.policy?.attribution?.supported_modes;
+  if (!Array.isArray(supported)) return;
+  if (supported.includes(attribution.mode) && attribution.mode !== "none") {
+    state.attributionPreference = {
+      mode: attribution.mode,
+      interval: Math.max(1, Number(attribution.interval) || 1),
+    };
+  }
+  const desired = Boolean(panel.enabled && panel.placement.visible);
+  if (desired && !supported.length) return;
+  const active = supported.includes(attribution.mode) && attribution.mode !== "none";
+  if (active === desired) {
+    if (state.attributionCommand?.desired === desired) state.attributionCommand = null;
+    return;
+  }
+  if (state.attributionCommand?.desired === desired || !state.hasControl) return;
+  const preferredMode = supported.includes(state.attributionPreference?.mode)
+    ? state.attributionPreference.mode
+    : supported[0];
+  const payload = desired
+    ? {
+      mode: preferredMode,
+      interval: Math.max(1, Number(state.attributionPreference?.interval) || 1),
+    }
+    : { mode: "none" };
+  const id = command("set_attribution", payload);
+  if (id) state.attributionCommand = { id, desired };
 }
 
 function syncCnnCaptureToPanel() {
@@ -1133,6 +1329,7 @@ async function applyLayout() {
     }
   }
   requestAnimationFrame(() => panelRuntime.resize());
+  syncAttributionToPanel();
   syncCnnCaptureToPanel();
 }
 
@@ -1196,10 +1393,15 @@ function renderPanelShelf() {
 function bindPanelElement(panel, name) {
   const definition = panelDefinition(state.layout, name);
   if (definition?.switchable) {
+    const captureLabel = name === "cnn"
+      ? "CNN features"
+      : name === "attribution"
+        ? "attribution"
+        : null;
     const toggle = document.createElement("label");
     toggle.className = "panel-processing-toggle";
-    toggle.title = name === "cnn"
-      ? "Enable or disable CNN capture"
+    toggle.title = captureLabel
+      ? `Enable or disable ${captureLabel} capture`
       : `Enable or disable ${panelLabel(name)} data processing`;
     const input = document.createElement("input");
     input.type = "checkbox";
@@ -1207,7 +1409,7 @@ function bindPanelElement(panel, name) {
     input.dataset.panelEnabled = name;
     input.setAttribute(
       "aria-label",
-      name === "cnn" ? "Capture CNN features" : `Process data for ${panelLabel(name)}`,
+      captureLabel ? `Capture ${captureLabel}` : `Process data for ${panelLabel(name)}`,
     );
     input.addEventListener("change", () => {
       const instance = state.layout.panels[name];
@@ -1216,8 +1418,8 @@ function bindPanelElement(panel, name) {
       persistLayout();
       void applyLayout();
       showToast(
-        name === "cnn"
-          ? `CNN capture ${input.checked ? "enabled" : "disabled"}.`
+        captureLabel
+          ? `${panelLabel(name)} capture ${input.checked ? "enabled" : "disabled"}.`
           : `${panelLabel(name)} processing ${input.checked ? "enabled" : "disabled"}.`,
       );
     });
@@ -1697,6 +1899,75 @@ function initWorkspace() {
       preferredDocument: "goal",
     }).catch((error) => showToast(`Contract viewer failed: ${error.message || error}`, true));
   });
+  $("#publish-episode").addEventListener("click", () => {
+    void openPublicationDialog();
+  });
+  $("#publication-close").addEventListener("click", () => {
+    $("#publication-dialog").close();
+  });
+  $("#publication-dialog").addEventListener("close", () => {
+    clearInterval(state.publicationPoll);
+    state.publicationPoll = null;
+    const video = $("#publication-video");
+    video.pause();
+    video.removeAttribute("src");
+    video.load();
+  });
+  $("#publication-check").addEventListener("click", () => {
+    void checkPublicationCredentials().catch((error) => showToast(error.message, true));
+  });
+  $("#publication-authorize-youtube").addEventListener("click", async () => {
+    try {
+      const result = await publicationApi("/api/publication/oauth/start", { method: "POST" });
+      const popup = window.open(result.authorization_url, "gradlab-youtube-oauth", "popup,width=620,height=760");
+      if (!popup) throw new Error("The browser blocked the YouTube authorization window.");
+      showToast("Finish YouTube authorization, then check accounts again.");
+    } catch (error) {
+      showToast(error.message || String(error), true);
+    }
+  });
+  $("#publication-form").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const submit = $("#publication-submit");
+    submit.disabled = true;
+    try {
+      const result = await publicationApi("/api/publication/admit", {
+        method: "POST",
+        body: {
+          privacy: $("#publication-privacy").value,
+          playlist: $("#publication-playlist").value,
+          thumbnail_time: Number($("#publication-thumbnail-time").value),
+          tags: $("#publication-tags").value.split(",").map((value) => value.trim()).filter(Boolean),
+          operator_note: $("#publication-note").value,
+        },
+      });
+      renderPublicationJob(result.job);
+      showToast(result.created ? "Combined publication queued." : "Publication is already queued.");
+    } catch (error) {
+      submit.disabled = false;
+      showToast(error.message || String(error), true);
+    }
+  });
+  const publicationAction = async (action, body) => {
+    const jobId = state.publicationJob?.job_id;
+    if (!jobId) return;
+    try {
+      const job = await publicationApi(
+        `/api/publication/jobs/${encodeURIComponent(jobId)}/${action}`,
+        { method: "POST", ...(body === undefined ? {} : { body }) },
+      );
+      renderPublicationJob(job);
+    } catch (error) {
+      showToast(error.message || String(error), true);
+    }
+  };
+  $("#publication-retry").addEventListener("click", () => void publicationAction("retry"));
+  $("#publication-cancel").addEventListener("click", () => void publicationAction("cancel"));
+  $("#publication-cleanup").addEventListener("click", () => void publicationAction("cleanup"));
+  $("#publication-resolve").addEventListener("click", () => {
+    const videoId = window.prompt("YouTube video id from the admitted channel:", "");
+    if (videoId) void publicationAction("resolve", { video_id: videoId.trim() });
+  });
 }
 
 panelRuntime = new PanelRuntime({
@@ -1708,6 +1979,12 @@ panelRuntime = new PanelRuntime({
     command,
     inspectSequence,
     showToast,
+    setAttributionPreference: (config) => {
+      state.attributionPreference = {
+        mode: String(config?.mode || "gradcam"),
+        interval: Math.max(1, Number(config?.interval) || 1),
+      };
+    },
     updatePanelConfig: (name, config) => {
       const panel = state.layout.panels[name];
       if (panel?.type === "telemetry") {

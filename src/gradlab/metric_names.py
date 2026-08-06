@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 
-METRICS_SCHEMA_VERSION = 17
+METRICS_SCHEMA_VERSION = 18
 TRAIN_GLOBAL_STEP = "train/global_step"
 EVAL_CHECKPOINT_STEP = "eval/checkpoint/step"
 ORCHESTRATION_EVENT_SEQ = "orchestration/event_seq"
@@ -51,6 +51,9 @@ TRAIN_EPISODE_LENGTH_ACROSS_ORIGINS_ROLLING_UP_TO_100_MEAN = (
 )
 TRAIN_EXPLORATION_CELL_UNIQUE_FROM_TARGET_ROLLING_UP_TO_100_MEAN = (
     "train/exploration/cell/unique/from/target/rolling_up_to_100/mean"
+)
+TRAIN_PROGRESS_KILLS_FROM_TARGET_ROLLING_UP_TO_100_MEAN = (
+    "train/progress/kills/from/target/rolling_up_to_100/mean"
 )
 
 TRAIN_ARCHIVE_CURRICULUM_ROOT = "train/curriculum/archive"
@@ -454,6 +457,12 @@ def train_outcome_reason_count_metric(reason: object) -> str:
 def train_outcome_reason_window_rate_metric(reason: object) -> str:
     return validate_metric_name(
         f"train/outcome/failure/reason/{metric_path_segment(reason)}/window_100/rate"
+    )
+
+
+def train_progress_from_target_rolling_mean_metric(progress: object) -> str:
+    return validate_metric_name(
+        f"train/progress/{metric_path_segment(progress)}/from/target/rolling_up_to_100/mean"
     )
 
 

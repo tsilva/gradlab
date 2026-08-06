@@ -10,8 +10,8 @@ and bounded trajectory cursor. A panel module owns its DOM and visualization.
   and singleton behavior for reusable panel types.
 - `BUILTIN_PANEL_PRESETS` instantiates the default research workspace. Policy,
   reward, action, and signal views are presets of the same `telemetry` type;
-  game, controls, observation, CNN feature inspection, events, and raw transition inspection remain
-  specialized types.
+  game, controls, observation, attribution, CNN feature inspection, events, and
+  raw transition inspection remain specialized types.
 
 `workspace.js` owns the v6 persisted shape. Each instance has `type`, `title`,
 `config`, `enabled`, `builtin`, and a zero-based GridStack `placement`. Custom
@@ -62,14 +62,20 @@ The built-in Reward analysis panel is visible in newly created workspaces.
 Normalization adds it hidden on the shelf when an existing v6 workspace does
 not contain it, preserving the existing layout without a schema-version reset.
 
-The built-in Observation panel owns the one canonical policy-input viewport.
-Its local selector displays either exact-transition action attribution or the
-CNN winner map, never both simultaneously; selection and per-diagnostic opacity
-do not change shared computation. The panel subscribes to CNN frames without
-requesting CNN processing, so an enabled explorer in any synchronized workspace
-window can supply its overlay without coupling the panels or triggering work on
-its own. Base observations and generated overlays must match the selected
-transition sequence, and generated overlays must also match its generation.
+The built-in Observation panel owns the one canonical policy-input viewport and
+requests only base-observation processing. Enabling the standalone Attribution
+or CNN feature explorer panel changes that viewport with its exact-transition
+overlay; the most recently enabled diagnostic wins while both remain active.
+Observation subscribes to both generated frame kinds without requesting their
+processing, so neither overlay is computed merely because Observation is open.
+Base observations and generated overlays must match the selected transition
+sequence, and generated overlays must also match its generation.
+
+The built-in Attribution panel is an opt-in specialized control panel for live
+policy attribution. Its standardized Enabled switch controls attribution
+processing and whether the resulting overlay changes Observation. Its shared
+controls select Grad-CAM or occlusion and their capture cadence. It does not own
+an observation viewport.
 
 The built-in CNN feature explorer is an opt-in specialized panel for a live
 policy's actor image encoder. It is disabled by default. Its standardized

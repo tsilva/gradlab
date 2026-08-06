@@ -38,6 +38,18 @@ from gradlab.play_processing import (
 from gradlab.seeds import validate_playback_seed
 from gradlab.evaluation_fence import evaluation_selection_fence
 from gradlab.reward_transform import reward_transform_from_reward
+from gradlab.play_capture import EpisodeCaptureManager
+from gradlab.publication_credentials import (
+    credential_lock,
+    load_private_json,
+    save_private_json,
+    youtube_credential_paths,
+)
+from gradlab.youtube_publication import (
+    OAuthTransaction,
+    exchange_oauth_code,
+    new_oauth_transaction,
+)
 
 
 PROTOCOL_VERSION = 7
@@ -790,6 +802,9 @@ class _PlaybackRunnerProtocol:
         thread = getattr(self, "_thread", None)
         if thread is not None and thread.is_alive():
             thread.join(timeout=10.0)
+        capture = getattr(self, "capture", None)
+        if capture is not None:
+            capture.abort("playback session stopped before episode completion")
         self.encoder.close()
 
     def submit(self, command: PlaybackCommand) -> None:
@@ -845,6 +860,7 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
         config_text: str,
         contract_details: Mapping[str, Any] | None = None,
         value_contract: Mapping[str, Any] | None = None,
+        capture_context: Mapping[str, Any] | None = None,
     ) -> None:
         self._init_protocol(thread_name="gradlab-playback-runtime")
         self.session = session
@@ -920,6 +936,30 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
         self.value_discount = _value_discount_factor(getattr(session, "model", None))
         self.contract_details = dict(contract_details or {})
         self.value_contract = dict(value_contract) if isinstance(value_contract, Mapping) else None
+        resolved_capture_context = dict(capture_context or {})
+        resolved_capture_context["expected_sampling_mode"] = self.sampling_mode
+        self.capture = EpisodeCaptureManager(resolved_capture_context or None)
+
+    def _begin_capture(self) -> None:
+        if not self.capture.enabled:
+            return
+        if self.driver != "policy":
+            self.capture.abort("human-driven episodes are not publishable")
+            return
+        expected = str((self.capture.context or {}).get("expected_sampling_mode") or "")
+        if expected and self.sampling_mode != expected:
+            self.capture.abort("action selection differs from the faithful playback contract")
+            return
+        self.capture.begin(
+            self.session.current_frame,
+            episode=int(self.session.episode),
+            seed=int(self.session.active_seed),
+            sampling_mode=self.sampling_mode,
+        )
+
+    def start(self) -> None:
+        self._begin_capture()
+        super().start()
 
     def _critic_comparison_reasons(
         self,
@@ -1046,6 +1086,7 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
                 },
             },
             "status_message": self._status_message,
+            "publication_capture": self.capture.status(),
             "session": {
                 "episode": self.session.episode,
                 "step": self.session.step_index,
@@ -1329,6 +1370,7 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
                 self.awaiting_next_episode = False
                 self.remaining_steps = 0
                 self.continue_target = None
+                self._begin_capture()
                 self._set_state(
                     "playing",
                     message="playing next episode",
@@ -1354,6 +1396,7 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
                 self.awaiting_next_episode = False
                 self.remaining_steps = 0
                 self.continue_target = None
+                self._begin_capture()
                 self._set_state(
                     "paused",
                     message=f"episode reset · seed {self.session.active_seed}",
@@ -1381,6 +1424,9 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
                 self.remaining_steps = 0
                 self.continue_target = None
                 self.clear_input()
+                self.capture.abort(
+                    "custom episode termination conditions are not publishable"
+                )
                 self._set_state(
                     "paused",
                     message=(
@@ -1423,6 +1469,7 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
             self._set_state("paused", message=str(exc))
             return None
         self.revision += 1
+        self.capture.record_transition(transition)
         if transition.boundary:
             self.boundaries += 1
             self.awaiting_next_episode = True
@@ -2162,6 +2209,8 @@ class PlaybackWebServer:
         catalog: Any | None = None,
         defer_secondary_window: bool = False,
         manual_evaluation_factory: Any | None = None,
+        repo_root: Path | None = None,
+        publication_factory: Any | None = None,
     ) -> None:
         self.runner = runner
         self.args = args
@@ -2174,6 +2223,8 @@ class PlaybackWebServer:
         self.control_holder: str | None = None
         self.input_holder: str | None = None
         self.control_epoch = 0
+        self.publication_authority_client_id: str | None = None
+        self.publication_capability: str | None = None
         self.stop_event = asyncio.Event()
         self.ever_connected = False
         self.last_client_at = time.monotonic()
@@ -2185,6 +2236,11 @@ class PlaybackWebServer:
         self._initial_environment_catalog: dict[str, Any] | None = None
         self._manual_evaluation_factory = manual_evaluation_factory
         self._manual_evaluation_queue: Any | None = None
+        self._repo_root = None if repo_root is None else Path(repo_root).resolve()
+        self._publication_factory = publication_factory
+        self._publication_service: Any | None = None
+        self._oauth_transactions: dict[str, OAuthTransaction] = {}
+        self._media_tickets: dict[str, tuple[str, int, float]] = {}
 
     async def _sync_player_processing(self) -> None:
         configure = getattr(self.runner, "set_processing", None)
@@ -2254,6 +2310,221 @@ class PlaybackWebServer:
             self.token,
         ):
             raise web.HTTPUnauthorized(text="catalog token required")
+
+    def _authorize_publication(self, request: web.Request) -> WebClient:
+        if request.headers.get("Origin") != self.origin:
+            raise web.HTTPForbidden(text="exact player origin required")
+        self._authorize_api(request)
+        client_id = request.headers.get("X-Gradlab-Client", "")
+        client = self.clients.get(client_id)
+        try:
+            epoch = int(request.headers.get("X-Gradlab-Control-Epoch", ""))
+        except ValueError as exc:
+            raise web.HTTPForbidden(text="publication authority epoch required") from exc
+        supplied = request.headers.get("X-Gradlab-Publication-Capability", "")
+        if (
+            client is None
+            or self.publication_authority_client_id != client_id
+            or epoch != self.control_epoch
+            or self.publication_capability is None
+            or not secrets.compare_digest(supplied, self.publication_capability)
+        ):
+            raise web.HTTPForbidden(text="exact publication authority required")
+        return client
+
+    def _publications(self) -> Any:
+        if self._publication_service is not None:
+            return self._publication_service
+        if self._repo_root is None or (
+            self._publication_factory is None
+            and not hasattr(self.runner, "active_publication_context")
+        ):
+            raise ValueError("player publication is unavailable for this playback mode")
+        if self._publication_factory is None:
+            from gradlab.player_publication import PlayerPublicationService
+
+            self._publication_service = PlayerPublicationService(
+                repo_root=self._repo_root,
+                host=self.runner,
+            )
+        else:
+            self._publication_service = self._publication_factory(
+                repo_root=self._repo_root,
+                host=self.runner,
+            )
+        return self._publication_service
+
+    def _rotate_publication_authority(self, client_id: str | None) -> None:
+        self.publication_authority_client_id = client_id
+        self.publication_capability = secrets.token_urlsafe(32) if client_id else None
+        self._oauth_transactions.clear()
+        self._media_tickets.clear()
+        for client in self.clients.values():
+            owns = client.client_id == client_id
+            client.offer_reliable(
+                {
+                    "type": "publication_authority",
+                    "has_authority": owns,
+                    "control_epoch": self.control_epoch,
+                    **(
+                        {"capability": self.publication_capability}
+                        if owns and self.publication_capability is not None
+                        else {}
+                    ),
+                }
+            )
+
+    async def publication_current(self, request: web.Request) -> web.Response:
+        self._authorize_publication(request)
+        try:
+            result = await asyncio.to_thread(self._publications().current)
+        except ValueError as exc:
+            return web.json_response({"available": False, "message": str(exc)})
+        return web.json_response(result)
+
+    async def publication_preflight(self, request: web.Request) -> web.Response:
+        self._authorize_publication(request)
+        try:
+            result = await asyncio.to_thread(self._publications().preflight)
+        except Exception as exc:
+            return web.json_response({"ready": False, "message": str(exc)}, status=503)
+        return web.json_response(result)
+
+    async def publication_admit(self, request: web.Request) -> web.Response:
+        self._authorize_publication(request)
+        try:
+            payload = await request.json()
+        except (json.JSONDecodeError, TypeError):
+            return web.json_response({"error": "publication request must be JSON"}, status=400)
+        if not isinstance(payload, Mapping):
+            return web.json_response({"error": "publication request must be an object"}, status=400)
+        try:
+            result = await asyncio.to_thread(self._publications().admit, payload)
+        except Exception as exc:
+            from gradlab.player_publication import PublicationConflict
+
+            status = 409 if isinstance(exc, PublicationConflict) else 400
+            body: dict[str, Any] = {"error": str(exc)}
+            if isinstance(exc, PublicationConflict) and exc.job is not None:
+                body["job"] = exc.job
+            return web.json_response(body, status=status)
+        return web.json_response(result, status=202 if result.get("created") else 200)
+
+    async def publication_job(self, request: web.Request) -> web.Response:
+        self._authorize_publication(request)
+        try:
+            result = await asyncio.to_thread(
+                self._publications().job,
+                request.match_info["job_id"],
+            )
+        except ValueError as exc:
+            return web.json_response({"error": str(exc)}, status=404)
+        return web.json_response(result)
+
+    async def _publication_job_action(self, request: web.Request, action: str) -> web.Response:
+        self._authorize_publication(request)
+        try:
+            service = self._publications()
+            if action == "resolve":
+                payload = await request.json()
+                if not isinstance(payload, Mapping):
+                    raise ValueError("resolution must be a JSON object")
+                result = await asyncio.to_thread(
+                    service.resolve_youtube,
+                    request.match_info["job_id"],
+                    str(payload.get("video_id") or ""),
+                )
+            else:
+                result = await asyncio.to_thread(
+                    getattr(service, action),
+                    request.match_info["job_id"],
+                )
+        except ValueError as exc:
+            return web.json_response({"error": str(exc)}, status=400)
+        except Exception as exc:
+            return web.json_response({"error": str(exc)}, status=502)
+        return web.json_response(result)
+
+    async def publication_retry(self, request: web.Request) -> web.Response:
+        return await self._publication_job_action(request, "retry")
+
+    async def publication_cancel(self, request: web.Request) -> web.Response:
+        return await self._publication_job_action(request, "cancel")
+
+    async def publication_resolve(self, request: web.Request) -> web.Response:
+        return await self._publication_job_action(request, "resolve")
+
+    async def publication_cleanup(self, request: web.Request) -> web.Response:
+        return await self._publication_job_action(request, "cleanup")
+
+    async def publication_oauth_start(self, request: web.Request) -> web.Response:
+        client = self._authorize_publication(request)
+        try:
+            paths = youtube_credential_paths(self._repo_root or Path.cwd())
+            with credential_lock(paths.lock):
+                config = load_private_json(paths.client, root=paths.root)
+            transaction = new_oauth_transaction(
+                config,
+                redirect_uri=f"{self.origin}/api/publication/oauth/callback",
+                authority_client_id=client.client_id,
+                control_epoch=self.control_epoch,
+            )
+        except Exception as exc:
+            return web.json_response({"error": str(exc)}, status=400)
+        self._oauth_transactions[transaction.state] = transaction
+        return web.json_response({"authorization_url": transaction.authorization_url})
+
+    async def publication_oauth_callback(self, request: web.Request) -> web.Response:
+        state = str(request.query.get("state") or "")
+        code = str(request.query.get("code") or "")
+        transaction = self._oauth_transactions.pop(state, None)
+        try:
+            if transaction is None or not code:
+                raise ValueError("YouTube authorization callback is incomplete or expired")
+            if self.publication_authority_client_id is None:
+                raise ValueError("player publication authority no longer exists")
+            transaction.validate_authority(
+                self.publication_authority_client_id,
+                self.control_epoch,
+            )
+            paths = youtube_credential_paths(self._repo_root or Path.cwd())
+            with credential_lock(paths.lock):
+                config = load_private_json(paths.client, root=paths.root)
+                token = exchange_oauth_code(config, transaction, code=code)
+                save_private_json(paths.token, token, root=paths.root)
+        except Exception as exc:
+            return web.Response(
+                text=f"YouTube authorization failed: {exc}",
+                status=400,
+                content_type="text/plain",
+            )
+        raise web.HTTPSeeOther(location="/?youtube=authorized")
+
+    async def publication_replay_ticket(self, request: web.Request) -> web.Response:
+        client = self._authorize_publication(request)
+        try:
+            await asyncio.to_thread(self._publications().replay_path)
+        except ValueError as exc:
+            return web.json_response({"error": str(exc)}, status=404)
+        ticket = secrets.token_urlsafe(32)
+        self._media_tickets[ticket] = (client.client_id, self.control_epoch, time.time() + 60)
+        return web.json_response({"url": f"/api/publication/replay/{ticket}"})
+
+    async def publication_replay(self, request: web.Request) -> web.StreamResponse:
+        ticket = str(request.match_info["ticket"])
+        admission = self._media_tickets.get(ticket)
+        if (
+            admission is None
+            or admission[0] != self.publication_authority_client_id
+            or admission[1] != self.control_epoch
+            or admission[2] <= time.time()
+        ):
+            raise web.HTTPForbidden(text="replay ticket expired")
+        try:
+            path = await asyncio.to_thread(self._publications().replay_path)
+        except ValueError as exc:
+            raise web.HTTPNotFound(text=str(exc)) from exc
+        return web.FileResponse(path)
 
     @staticmethod
     def _catalog_error_response(exc: Exception) -> web.Response | None:
@@ -2720,6 +2991,10 @@ class PlaybackWebServer:
                 "input_holder": self.input_holder,
                 "has_control": self.control_holder == client.workspace_id,
             },
+            "publication": {
+                "has_authority": self.publication_authority_client_id == client.client_id,
+                "configured": self._repo_root is not None,
+            },
         }
         app = payload.get("app")
         if (
@@ -2916,6 +3191,8 @@ class PlaybackWebServer:
                     "history_limit": HISTORY_LIMIT,
                 }
             )
+            if self.publication_authority_client_id is None and self.control_holder == workspace_id:
+                self._rotate_publication_authority(client_id)
             client.offer_reliable(self.runner.history_payload())
             episode_start_payload = getattr(self.runner, "episode_start_payload", None)
             if callable(episode_start_payload):
@@ -2946,11 +3223,15 @@ class PlaybackWebServer:
                     continue
                 kind = str(payload.get("type") or "")
                 if kind == "acquire_control":
-                    if self.control_holder != client.workspace_id:
+                    if (
+                        self.control_holder != client.workspace_id
+                        or self.publication_authority_client_id != client.client_id
+                    ):
                         self.control_holder = client.workspace_id
                         self.input_holder = None
                         self.control_epoch += 1
                         self.runner.clear_input()
+                        self._rotate_publication_authority(client.client_id)
                         self._broadcast_control()
                 elif kind == "subscribe":
                     client.subscriptions = {
@@ -3061,6 +3342,12 @@ class PlaybackWebServer:
                 if self.input_holder == client.client_id:
                     self.input_holder = None
                     self.runner.clear_input()
+                publication_authority_closed = (
+                    self.publication_authority_client_id == client.client_id
+                )
+                if publication_authority_closed:
+                    self.control_epoch += 1
+                    self._rotate_publication_authority(None)
                 controlling_workspace_closed = (
                     self.control_holder == client.workspace_id
                     and not any(
@@ -3070,7 +3357,9 @@ class PlaybackWebServer:
                 )
                 if controlling_workspace_closed:
                     self.control_holder = None
-                    self.control_epoch += 1
+                    if not publication_authority_closed:
+                        self.control_epoch += 1
+                        self._rotate_publication_authority(None)
                     self.runner.clear_input()
                     try:
                         self.runner.submit(
@@ -3246,6 +3535,18 @@ class PlaybackWebServer:
                     self.catalog_evaluate_checkpoints,
                 ),
                 web.get("/api/playback/inspection", self.inspect_active_playback),
+                web.get("/api/publication/current", self.publication_current),
+                web.post("/api/publication/preflight", self.publication_preflight),
+                web.post("/api/publication/admit", self.publication_admit),
+                web.get("/api/publication/jobs/{job_id}", self.publication_job),
+                web.post("/api/publication/jobs/{job_id}/retry", self.publication_retry),
+                web.post("/api/publication/jobs/{job_id}/cancel", self.publication_cancel),
+                web.post("/api/publication/jobs/{job_id}/resolve", self.publication_resolve),
+                web.post("/api/publication/jobs/{job_id}/cleanup", self.publication_cleanup),
+                web.post("/api/publication/oauth/start", self.publication_oauth_start),
+                web.get("/api/publication/oauth/callback", self.publication_oauth_callback),
+                web.post("/api/publication/replay-ticket", self.publication_replay_ticket),
+                web.get("/api/publication/replay/{ticket}", self.publication_replay),
                 web.get("/ws", self.websocket),
             ]
         )
@@ -3305,6 +3606,7 @@ def run_web_player_application(
     args: argparse.Namespace,
     *,
     catalog: Any,
+    repo_root: Path,
 ) -> int:
     server = PlaybackWebServer(
         host,
@@ -3312,6 +3614,7 @@ def run_web_player_application(
         paired_windows=True,
         catalog=catalog,
         defer_secondary_window=True,
+        repo_root=repo_root,
     )
     try:
         return asyncio.run(server.run())

@@ -56,18 +56,19 @@ objective:
   - min(leader/checkpoint/step)
 # Override the shared settings used while training a policy for this goal.
 train:
+  # Track native monster frags independently of the selected reward shape.
+  episode_progress_fields: [kills]
   # Refine the family-wide rules that can stop training before its timestep cap.
   early_stop:
     # Address inherited early-stop rules by their stable condition names.
     conditions:
-      # Retain a reward-shape-local return diagnostic for Deathmatch, which has no binary success event.
+      # Treat sustained survival to the native horizon as solving the training task.
       target_reached:
-        # Select the training metric compared with this condition's threshold.
-        metric: train/episode/return/shaped/from/target/window_100/mean
-        # Keep the existing diagnostic threshold without using it as raw-kill acceptance evidence.
-        threshold: 10.0
-        # Observe the return target without treating it as success-based early stopping.
-        action: observe
+        # Require the latest 100 target-origin episodes to reach the native horizon.
+        metric: train/outcome/success/across_starts/window_100/rate/min
+        threshold: 1.0
+        # Stop after the mature success window proves the training target.
+        action: stop
   # Override the shared ViZDoom environment contract used for training.
   environment:
     # Supply arguments for the native vectorized ViZDoom environment.
@@ -233,8 +234,10 @@ train:
       termination:
         # List the events that mark an episode as failed.
         failure: [player_died]
-        # List provider boundaries treated as timeouts rather than task outcomes.
-        timeout: [time_limit_reached]
+        # Count survival to the provider-native horizon as task success.
+        success: [time_limit_reached]
+        # Preserve a truncation boundary so the learner bootstraps from the final observation.
+        bootstrap: [time_limit_reached]
 # Override the shared settings used to evaluate checkpoints for this goal.
 eval:
   # Declare every metric threshold a checkpoint must satisfy to be accepted.

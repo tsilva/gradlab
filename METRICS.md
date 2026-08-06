@@ -1,4 +1,4 @@
-# Metrics schema v17
+# Metrics schema v18
 
 This file is the source of truth for gradlab telemetry. The Python registry loads the table below
 and requires every emitted metric to match an exact registry entry or a bounded template.
@@ -19,7 +19,7 @@ and requires every emitted metric to match an exact registry entry or a bounded 
 - Public model R2 contains immutable checkpoint closures and a mutable no-cache run index. Private
   eval R2 contains intents, results, and episode evidence. Private control R2 contains leases,
   journals, promotions, and terminal receipts.
-- W&B config contains run-defining dimensions: `metrics_schema_version: 17`, `training_backend_id`,
+- W&B config contains run-defining dimensions: `metrics_schema_version: 18`, `training_backend_id`,
   `training_backend_config_hash`, `algorithm_id`, goal,
   environment, starts, seed, frame skip, environment count, hyperparameters, eval protocol, and
   runtime versions.
@@ -92,7 +92,7 @@ Asynchronous evaluations may arrive after later training rows without changing t
 X-axis. Each producer writes only its applicable scientific axis; durable delivery order uses
 `orchestration/event_seq`.
 
-Current runs declare schema v17, and the supervisor validates and emits only v17 names. GradLab
+Current runs declare schema v18, and the supervisor validates and emits only v18 names. GradLab
 does not read, project, or preserve noncurrent W&B or R2 schemas.
 
 ## Research interpretation
@@ -182,12 +182,13 @@ does not read, project, or preserve noncurrent W&B or R2 schemas.
   baseline to its threshold; because it consumes the watched metric, a mature rolling-window target
   has no progress value before its full window exists. Only goal-owned checkpoint evaluation may
   establish acceptance.
-- Training episode reduction currently aggregates return, length, outcome, success, and the
-  explicitly supported target-origin cell-novelty statistic; it does not aggregate arbitrary task
-  progress fields. In particular, ViZDoom Deathmatch exposes `killcount` to episode records and
-  playback but does not emit a rolling training kills-per-episode mean. Its native shaped return is
-  not an exact substitute because different monster kills can contribute different score values.
-  `eval/full/progress/kills/{mean|max}` is emitted only by checkpoint evaluation.
+- Training episode reduction aggregates return, length, outcome, success, the explicitly supported
+  target-origin cell-novelty statistic, and goal-declared numeric episode progress fields.
+  `VizdoomDeathmatch-v1` declares `kills`, so
+  `train/progress/kills/from/target/rolling_up_to_100/mean` reports mean native monster frags over up
+  to the latest 100 genuine target-origin training episodes. Native shaped return is not an exact
+  substitute because different monster kills can contribute different score values.
+  `eval/full/progress/kills/{mean|max}` remains frozen-checkpoint evaluation evidence.
 - Snapshot-curriculum `sampling/probability/max` and `sampling/effective_cell/count` summarize the
   current cell-probability distribution. They do not report realized per-cell selection frequency
   or identify which resident cells were selected.
@@ -225,9 +226,11 @@ does not read, project, or preserve noncurrent W&B or R2 schemas.
 - A ViZDoom success-rate target is success-based early stopping only when its `target_reached`
   condition has `action: stop`. Every ViZDoom goal with a binary success event now stops when
   `train/outcome/success/across_starts/window_100/rate/min` reaches one. This requires 100
-  consecutive successful training episodes for each configured start. `VizdoomDeathmatch-v1` is
-  the sole exception: it has no binary success outcome, so its return target remains observational
-  and it has no active early-stop condition.
+  consecutive successful training episodes for each configured start. For
+  `VizdoomDeathmatch-v1`, reaching the 4,200-native-tic horizon is a successful outcome while the
+  episode boundary remains truncated so training bootstraps from the final observation. Its single
+  configured start therefore stops after 100 consecutive horizon-reaching training episodes. This
+  training success evidence does not replace its goal-owned mean-kills checkpoint acceptance rule.
 - Episode-return means are neither a best-episode metric nor the score of a currently visible lane:
   they reduce the latest 100 completed episodes across all applicable vector lanes. W&B chart
   smoothing, when enabled, is applied on top of that already-rolling value. Under the root Breakout
@@ -320,6 +323,7 @@ unevaluated for future explicit user action. dstack process exit alone is never 
 | `train/episode/return/shaped/across_origins/rolling_up_to_100/max` | Rolling maximum shaped return over the same episodes as the across-origin rolling mean; this is observed recent headroom, not a theoretical maximum. | return | rollout | history |
 | `train/episode/length/across_origins/rolling_up_to_100/mean` | Rolling mean length over up to the latest 100 completed training episodes across target and archive origins. | steps | rollout | history |
 | `train/exploration/cell/unique/from/target/rolling_up_to_100/mean` | Rolling mean episodic unique-cell count over up to the latest 100 completed target-origin training episodes when cell-novelty shaping is active. Includes the reset/start cell, which is recorded without receiving a bonus. | cells | rollout | history |
+| `train/progress/{progress}/from/target/rolling_up_to_100/mean` | Rolling mean of a goal-declared finite numeric episode progress field over up to the latest 100 genuine target-origin training episodes, emitted beginning with the first such episode; archive-origin episodes are excluded. | progress units | rollout | history |
 | `train/episode/completed/count` | Cumulative completed episode records. | episodes | rollout | history |
 | `train/outcome/failure/reason/{reason}/episode/count` | Cumulative failed episodes containing a reason. | episodes | rollout | history |
 | `train/outcome/failure/reason/{reason}/window_100/rate` | Unsuccessful completed episodes containing the reason divided by all completed episodes in the latest up-to-100-episode window; presence is boolean per episode, successful episodes remain in the denominator, and the reason need not be the terminal cause. | fraction | rollout | history |

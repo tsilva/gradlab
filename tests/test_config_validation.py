@@ -525,15 +525,9 @@ class ConfigValidationTests(unittest.TestCase):
                 conditions = train_config["early_stop"]["conditions"]
                 self.assertEqual(set(conditions), {"return_plateau", "target_reached"})
                 self.assertEqual(conditions["target_reached"]["outcome"], "success")
-                expected_target_action = (
-                    "stop"
-                    if goal_path.parent.name
-                    in {"VizdoomBasic-v1", "VizdoomBasic-Plus-v1"}
-                    else "observe"
-                )
                 self.assertEqual(
                     conditions["target_reached"]["action"],
-                    expected_target_action,
+                    "stop",
                 )
                 plateau = conditions["return_plateau"]
                 calibration_steps = train_config["timesteps"] // 4

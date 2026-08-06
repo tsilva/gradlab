@@ -24,6 +24,7 @@ GOAL_TRAIN_FIELDS = frozenset(
         "checkpoint_freq",
         "early_stop",
         "environment",
+        "episode_progress_fields",
     }
 )
 GOAL_EVAL_FIELDS = frozenset({"acceptance", "environment", "episodes", "policy"})

@@ -112,7 +112,7 @@ class WandbWorkspaceRenderingTests(unittest.TestCase):
         self.assertEqual(workspace.settings.max_runs, 25)
         self.assertEqual(
             workspace.runset_settings.filters,
-            "Config('metrics_schema_version') = 17",
+            "Config('metrics_schema_version') = 18",
         )
         self.assertEqual(len(workspace.sections), 1)
         self.assertTrue(workspace.sections[0].pinned)

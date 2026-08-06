@@ -167,6 +167,33 @@ class JobQueueTests(unittest.TestCase):
         kinds = [event["kind"] for event in self.store.events(job["job_id"])]
         self.assertIn("recovered_after_worker_stop", kinds)
 
+    def test_running_checkpoint_is_durable_and_observes_cancellation(self) -> None:
+        enqueued = self.enqueue()
+        job_id = str(enqueued.job["job_id"])
+        self.store.claim_next()
+
+        canceled = self.store.checkpoint(
+            job_id,
+            kind="uploaded_chunk",
+            subjects=(
+                SubjectUpdate(
+                    subject_type="test",
+                    subject_id="subject-a",
+                    state="running",
+                    detail={"uploaded_bytes": 8},
+                ),
+            ),
+            detail={"offset": 8},
+        )
+        self.assertFalse(canceled)
+        self.assertEqual(self.store.subjects(job_id)[0]["detail"], {"uploaded_bytes": 8})
+        self.store.request_cancel(job_id)
+        self.assertTrue(self.store.checkpoint(job_id, kind="cancel_boundary"))
+        self.assertEqual(
+            [event["kind"] for event in self.store.events(job_id)][-3:],
+            ["checkpoint:uploaded_chunk", "cancel_requested", "checkpoint:cancel_boundary"],
+        )
+
     def test_cancel_and_retry_preserve_append_only_history(self) -> None:
         enqueued = self.enqueue()
         job_id = str(enqueued.job["job_id"])

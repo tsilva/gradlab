@@ -9,6 +9,11 @@ description: Upload or update YouTube model preview videos from gradlab, especia
 
 Publish a local preview video to the user's YouTube account, connect it to the associated model page, and leave enough metadata for future agents to update or verify it.
 
+For player-initiated checkpoint publication, treat the admitted request as immutable. Upload the
+exact admitted `replay.mp4`, add the hidden `gradlab-publication-<request-fingerprint>` tag, and
+verify successful YouTube processing before Hugging Face publication starts. Never infer
+evaluation evidence from the replay itself.
+
 Prefer the repo uploader script at `scripts/upload_youtube_video.py`. It uses `.secret/youtube_client_secret.json` and stores the OAuth token at `.secret/youtube_token.json`; do not print secret or token contents.
 
 ## Before Uploading
@@ -34,7 +39,10 @@ Super Mario Bros NES Level 1-2 Solved by PPO - 100% Win Rate
 Mega Man NES Cut Man Solved by PPO - 100% Win Rate
 ```
 
-If completion rate is below the solved threshold, use `Played by` instead of `Solved by`.
+Use `Solved by` only when the recorded episode itself meets the embedded goal's success rule and
+the checkpoint satisfies every embedded release-acceptance rule. Otherwise use `Played by`.
+Keep the recorded-episode outcome separate from verified checkpoint evaluation. Do not describe a
+failed replay as completing the goal merely because the checkpoint passed evaluation.
 
 Use this description shape for RL/model preview videos:
 
@@ -60,6 +68,14 @@ Rules:
 - Avoid shorteners and redirect domains for YouTube descriptions; they can be visually truncated or treated suspiciously by YouTube.
 - Expect YouTube to visually ellipsize long links in collapsed views even when the actual link is correct and clickable.
 - Include extra eval claims only when the user asks for them or when they are needed for the video description and are backed by the current model card, private-R2 evaluation evidence, W&B metrics, or generated summary files.
+- Keep evidence-bearing title text, replay outcome, evaluation statements, the direct model URL,
+  and the gradlab link generated and locked in player publication. An optional operator note must
+  be labeled `Operator note (not verified evidence)` and kept separate from generated claims.
+- Player publication has no destination opt-outs. YouTube must reach `processingStatus=succeeded`
+  with the admitted channel, privacy, marker, and metadata before the Hugging Face mutation begins.
+- Persist a resumable session before uploading bytes and reconcile it before retrying. If the final
+  response is uncertain, do not automatically upload a duplicate; require an explicit verified
+  attachment or an acknowledged abandon-and-reupload decision.
 
 ## Upload Command
 

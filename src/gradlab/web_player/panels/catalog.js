@@ -26,8 +26,17 @@ export const PANEL_TYPES = Object.freeze({
     module: "./observation.js",
     minimum: { w: 2, h: 4 },
     subscriptions: ["observation", "attribution", "cnn-inspection"],
-    processing: ["observation", "attribution"],
+    processing: ["observation"],
     frameKinds: [FRAME_OBSERVATION, FRAME_ATTRIBUTION, FRAME_CNN_INSPECTION],
+    singleton: true,
+    switchable: true,
+  },
+  attribution: {
+    module: "./attribution.js",
+    minimum: { w: 2, h: 4 },
+    subscriptions: [],
+    processing: ["attribution"],
+    frameKinds: [],
     singleton: true,
     switchable: true,
   },
@@ -81,6 +90,7 @@ const SINGLE_LAYOUT = Object.freeze({
   events: { x: 0, y: 30, w: 4, h: 7, visible: false, window: "main" },
   raw: { x: 4, y: 30, w: 8, h: 7, visible: false, window: "main" },
   "reward-analysis": { x: 0, y: 37, w: 12, h: 15, visible: true, window: "main" },
+  attribution: { x: 0, y: 52, w: 4, h: 8, visible: false, window: "main" },
   cnn: { x: 0, y: 52, w: 8, h: 15, visible: false, window: "main" },
 });
 
@@ -96,7 +106,8 @@ const PAIRED_LAYOUT = Object.freeze({
   events: { x: 9, y: 15, w: 3, h: 8, visible: true, window: "stats" },
   raw: { x: 0, y: 23, w: 12, h: 7, visible: true, window: "stats" },
   "reward-analysis": { x: 0, y: 30, w: 12, h: 15, visible: true, window: "stats" },
-  cnn: { x: 0, y: 45, w: 12, h: 15, visible: true, window: "stats" },
+  attribution: { x: 0, y: 45, w: 4, h: 15, visible: true, window: "stats" },
+  cnn: { x: 4, y: 45, w: 8, h: 15, visible: true, window: "stats" },
 });
 
 export const BUILTIN_PANEL_PRESETS = Object.freeze({
@@ -181,7 +192,12 @@ export const BUILTIN_PANEL_PRESETS = Object.freeze({
   },
   observation: {
     type: "observation",
-    title: "Observation and attribution",
+    title: "Observation",
+    config: {},
+  },
+  attribution: {
+    type: "attribution",
+    title: "Attribution",
     config: {},
   },
   cnn: {
@@ -260,7 +276,7 @@ export function defaultPanelInstances({ paired = false } = {}) {
       id,
       {
         ...clone(preset),
-        enabled: id !== "cnn",
+        enabled: !["attribution", "cnn"].includes(id),
         builtin: true,
         placement: clone(layout[id]),
       },

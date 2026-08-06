@@ -132,17 +132,34 @@ class TrainConfigFieldSchemaTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "must be one of modal, none"):
             validate_and_normalize_train_config({"checkpoint_eval_backend": "local"})
 
-    def test_metrics_schema_version_accepts_only_active_v17(self) -> None:
+    def test_metrics_schema_version_accepts_only_active_v18(self) -> None:
         self.assertEqual(
-            validate_and_normalize_train_config({"metrics_schema_version": 17})[
+            validate_and_normalize_train_config({"metrics_schema_version": 18})[
                 "metrics_schema_version"
             ],
-            17,
+            18,
         )
-        with self.assertRaisesRegex(ValueError, "must be >= 17"):
-            validate_and_normalize_train_config({"metrics_schema_version": 16})
-        with self.assertRaisesRegex(ValueError, "must be <= 17"):
-            validate_and_normalize_train_config({"metrics_schema_version": 18})
+        with self.assertRaisesRegex(ValueError, "must be >= 18"):
+            validate_and_normalize_train_config({"metrics_schema_version": 17})
+        with self.assertRaisesRegex(ValueError, "must be <= 18"):
+            validate_and_normalize_train_config({"metrics_schema_version": 19})
+
+    def test_episode_progress_fields_must_reference_task_signals(self) -> None:
+        normalized = validate_and_normalize_train_config(
+            {
+                "episode_progress_fields": ["kills"],
+                "task": {"signals": {"kills": "killcount"}},
+            }
+        )
+        self.assertEqual(normalized["episode_progress_fields"], ["kills"])
+
+        with self.assertRaisesRegex(ValueError, "unknown task signal.*frags"):
+            validate_and_normalize_train_config(
+                {
+                    "episode_progress_fields": ["frags"],
+                    "task": {"signals": {"kills": "killcount"}},
+                }
+            )
 
     def test_no_eval_config_rejects_eval_metric_stop_behavior(self) -> None:
         with self.assertRaisesRegex(ValueError, "must use a train/\\* metric"):

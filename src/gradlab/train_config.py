@@ -435,6 +435,17 @@ def validate_and_normalize_train_config(
                 task,
                 label=f"{label}.policy_model",
             )
+    episode_progress_fields = tuple(normalized.get("episode_progress_fields", ()))
+    if episode_progress_fields:
+        signals = task.get("signals") if isinstance(task, Mapping) else None
+        if not isinstance(signals, Mapping):
+            raise ValueError(f"{label}.episode_progress_fields requires task.signals")
+        missing_progress_fields = sorted(set(episode_progress_fields) - set(signals))
+        if missing_progress_fields:
+            raise ValueError(
+                f"{label}.episode_progress_fields references unknown task signal(s): "
+                + ", ".join(missing_progress_fields)
+            )
     early_stop = normalized.get("early_stop")
     conditions = early_stop.get("conditions") if isinstance(early_stop, Mapping) else None
     has_training_success_condition = isinstance(conditions, Mapping) and any(
@@ -501,6 +512,14 @@ TRAIN_CONFIG_FIELDS: tuple[TrainConfigField, ...] = (
         type_name="json",
         default=None,
         source_section="train",
+    ),
+    _field(
+        "episode_progress_fields",
+        default=(),
+        sequence_items="str",
+        allow_empty_sequence=True,
+        owner="goal_objective",
+        source_section="goal_train",
     ),
     _field(
         "n_envs",

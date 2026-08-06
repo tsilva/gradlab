@@ -7,6 +7,7 @@ from gradlab.batch_runtime import ProviderDescriptor, SignalSpec
 from gradlab.callbacks import RewardStatsAccumulator
 from gradlab.task_kernels import (
     IdentityTaskDefinition,
+    Outcome,
     with_deathmatch_reward,
     with_reward_transform,
 )
@@ -94,7 +95,8 @@ def kernel(*, reward: dict[str, object] | None = None):
         },
         termination={
             "failure": ["player_died"],
-            "timeout": ["time_limit_reached"],
+            "success": ["time_limit_reached"],
+            "bootstrap": ["time_limit_reached"],
         },
     ).bind(source_descriptor, 1)
     configured = reward or reward_config()
@@ -205,6 +207,7 @@ def test_death_transition_is_shaped_but_pure_timeout_is_not() -> None:
     final = state(selected_weapon=0, selected_weapon_ammo=0, killcount=1)
     timeout_step = bound.process(NATIVE_REWARD, FALSE, TRUE, final)
     assert bool(timeout_step.truncated[0])
+    assert Outcome(int(timeout_step.outcomes[0])) == Outcome.SUCCESS
     np.testing.assert_allclose(timeout_step.rewards, [0.0])
 
 

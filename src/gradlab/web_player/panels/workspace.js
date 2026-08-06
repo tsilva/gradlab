@@ -137,7 +137,7 @@ export function normalizeWorkspace(value, { paired = false, writer = "" } = {}) 
   const panels = {};
   Object.entries(fallback.panels).forEach(([id, panel]) => {
     panels[id] = normalizePanel(id, value.panels?.[id], panel);
-    if (["reward-analysis", "cnn"].includes(id) && value.panels?.[id] === undefined) {
+    if (["reward-analysis", "attribution", "cnn"].includes(id) && value.panels?.[id] === undefined) {
       panels[id].placement.visible = false;
     }
   });

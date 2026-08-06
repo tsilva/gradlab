@@ -38,8 +38,65 @@ from gradlab.publication import (
     publication_source_from_policy_bundle,
     release_artifact_records,
     render_model_card,
+    validate_release_manifest_document,
     validate_release_bundle,
 )
+
+
+def _v2_replay() -> dict:
+    return {
+        "capture_id": "capture-" + "1" * 32,
+        "capture_fence_sha256": "1" * 64,
+        "run_id": "gradlab-" + "2" * 32,
+        "checkpoint_id": "checkpoint-1",
+        "checkpoint_sha256": "3" * 64,
+        "recipe_sha256": "4" * 64,
+        "episode": 1,
+        "seed": 7,
+        "start_id": "Level1-1",
+        "sampling_mode": "stochastic",
+        "steps": 2,
+        "return_value": 3.0,
+        "max_x_pos": 4,
+        "outcome": "success",
+        "success": True,
+        "boundary_role": "terminal_observation",
+        "contract": {"mode": "training"},
+        "execution": {
+            "source": {"kind": "checkout", "source_tree_sha256": "5" * 64},
+            "qualified_environment_id": "stable-retro-turbo:SuperMarioBros-Nes-v0",
+            "provider_id": "stable-retro-turbo",
+            "provider_version": "1.0.1",
+            "environment_hash": "sha256:environment",
+            "runtime_versions": {"stable_retro_turbo": "1.0.1"},
+            "runtime_image_digest": "",
+            "asset": {"sha256": "6" * 64},
+            "execution_target": "local_player",
+            "device_type": "cpu",
+            "contract_mode": "training",
+            "overrides": [],
+            "seed": 7,
+        },
+        "media": {
+            "sha256": "7" * 64,
+            "size_bytes": 100,
+            "frames": 3,
+            "fps": 30,
+            "width": 128,
+            "height": 128,
+        },
+    }
+
+
+def _v2_publication() -> dict:
+    return {
+        "request_fingerprint": "8" * 64,
+        "huggingface_username": "tsilva",
+        "huggingface_namespace": "tsilva",
+        "youtube_channel_id": "channel-1",
+        "youtube_channel_title": "GradLab",
+        "youtube_privacy": "public",
+    }
 
 
 def _render_current_model_card_fixture(
@@ -73,6 +130,7 @@ def _render_current_model_card_fixture(
         evaluation=evaluation.as_manifest_value(),
         artifacts={},
         youtube_url=youtube_url,
+        format_version=1,
     )
     return render_model_card(manifest, bundle)
 
@@ -512,6 +570,7 @@ def test_release_bundle_has_exact_files_hashes_and_portable_identity() -> None:
             evaluation=evaluation_value,
             artifacts={},
             youtube_url="https://www.youtube.com/watch?v=example",
+            format_version=1,
         )
         (root / "README.md").write_text(
             render_model_card(provisional, bundle),
@@ -527,6 +586,7 @@ def test_release_bundle_has_exact_files_hashes_and_portable_identity() -> None:
             evaluation=evaluation_value,
             artifacts=records,
             youtube_url="https://www.youtube.com/watch?v=example",
+            format_version=1,
         )
         (root / "release_manifest.json").write_text(
             json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
@@ -567,3 +627,103 @@ def test_release_bundle_rejects_non_file_entries() -> None:
 
         with pytest.raises(ValueError, match="regular files"):
             validate_release_bundle(root)
+
+
+def test_release_manifest_v2_requires_bound_replay_and_publisher() -> None:
+    bundle = policy_bundle_from_metadata(model_metadata())
+    identity = publication_identity_from_policy_bundle("Level1-1", bundle)
+    evaluation = normalize_publication_evaluation(evaluation_payload())
+    source = publication_source_from_policy_bundle(bundle, evaluation)
+
+    manifest = build_release_manifest(
+        identity,
+        bundle,
+        release_version="v2",
+        published_at="2026-08-06T12:00:00Z",
+        source=source,
+        evaluation={
+            **evaluation.as_manifest_value(),
+            "checkpoint_sha256": "3" * 64,
+            "recipe_sha256": "4" * 64,
+            "recipe_format_version": 5,
+            "evaluation_contract_sha256": "9" * 64,
+            "exact_contract": True,
+        },
+        artifacts={
+            filename: {"sha256": "a" * 64, "size_bytes": 1}
+            for filename in HUGGINGFACE_RELEASE_FILES - {"release_manifest.json"}
+        },
+        youtube_url="https://www.youtube.com/watch?v=abcdefghijk",
+        replay=_v2_replay(),
+        publication=_v2_publication(),
+    )
+
+    assert validate_release_manifest_document(manifest) == manifest
+    assert manifest["replay"]["capture_id"].startswith("capture-")
+    assert "representative" in render_model_card(manifest, bundle).lower()
+
+
+def test_release_manifest_v2_rejects_replay_frame_gap() -> None:
+    replay = _v2_replay()
+    replay["media"]["frames"] = 2
+    document = {
+        "document_type": "gradlab.release_manifest",
+        "format_version": 2,
+        "repo_naming_schema": 1,
+        "repository": {
+            "repo_id": "tsilva/model",
+            "game_family": "Game",
+            "goal": "Goal",
+            "policy_variant": "variant",
+            "algorithm": "ppo",
+        },
+        "release": {
+            "version": "v1",
+            "published_at": "2026-08-06T12:00:00Z",
+            "youtube_url": "https://www.youtube.com/watch?v=abcdefghijk",
+        },
+        "model": {
+            "algorithm_id": "ppo",
+            "model_class": "PPO",
+            "qualified_env_id": "provider:game",
+            "environment_hash": "hash",
+            "preprocessing": {},
+            "action": {},
+        },
+        "source": {
+            "repository": "https://github.com/tsilva/gradlab",
+            "commit": "a" * 40,
+            "run_id": "run",
+            "run_name": "run",
+            "wandb_project": "project",
+            "recipe": "recipe",
+            "seed": 1,
+            "checkpoint_step": 1,
+            "checkpoint_artifact": "artifact",
+        },
+        "evaluation": {
+            "action_sampling": "stochastic",
+            "protocol": "full",
+            "checkpoint_step": 1,
+            "checkpoint_artifact": "artifact",
+            "episodes": 1,
+            "success_rate_min": 1.0,
+            "success_rate_mean": 1.0,
+            "return_mean": 1.0,
+            "by_start": [],
+            "checkpoint_sha256": "b" * 64,
+            "recipe_sha256": "c" * 64,
+            "recipe_format_version": 1,
+            "evaluation_contract_sha256": "d" * 64,
+            "exact_contract": True,
+        },
+        "replay": replay,
+        "publication": _v2_publication(),
+        "artifacts": {
+            filename: {"sha256": "e" * 64, "size_bytes": 1}
+            for filename in HUGGINGFACE_RELEASE_FILES - {"release_manifest.json"}
+        },
+    }
+
+    with pytest.raises(PolicyDocumentError, match="frames must equal"):
+        validate_release_manifest_document(document)

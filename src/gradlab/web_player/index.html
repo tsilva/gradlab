@@ -19,6 +19,7 @@
         <nav id="source-breadcrumbs" class="source-breadcrumbs header-breadcrumbs" aria-label="Playback source" hidden></nav>
       </div>
       <div class="header-status">
+        <button id="publish-episode" class="quiet button-with-icon" type="button" title="Publish the completed episode to YouTube and Hugging Face" hidden><svg class="icon" aria-hidden="true"><use href="/assets/tabler-icons.svg#ti-external-link"></use></svg><span>Publish episode</span></button>
         <button id="inspect-active" class="quiet icon-only" type="button" aria-label="Inspect active goal and recipe YAML" title="Inspect active goal and recipe YAML" hidden><svg class="icon" aria-hidden="true"><use href="/assets/tabler-icons.svg#ti-code"></use></svg></button>
         <button id="change-source" class="quiet icon-only" type="button" aria-label="Choose another checkpoint" title="Choose another checkpoint" hidden><svg class="icon" aria-hidden="true"><use href="/assets/tabler-icons.svg#ti-folder-search"></use></svg></button>
         <button id="layouts-toggle" class="quiet icon-only" type="button" aria-label="Layouts" title="Layouts"><svg class="icon" aria-hidden="true"><use href="/assets/tabler-icons.svg#ti-layout-dashboard"></use></svg></button>
@@ -136,6 +137,45 @@
             </section>
           </div>
           <div id="contract-diff-error" class="contract-diff-error" role="alert" hidden></div>
+        </div>
+      </div>
+    </dialog>
+
+    <dialog id="publication-dialog" class="publication-dialog" aria-labelledby="publication-heading">
+      <div class="publication-shell">
+        <header class="publication-header">
+          <div>
+            <span class="eyebrow">COMBINED RELEASE</span>
+            <h2 id="publication-heading">Publish episode</h2>
+            <p id="publication-status" class="publication-status" aria-live="polite">Checking the completed episode…</p>
+          </div>
+          <button id="publication-close" class="quiet icon-only" type="button" aria-label="Close publication dialog" title="Close"><svg class="icon" aria-hidden="true"><use href="/assets/tabler-icons.svg#ti-x"></use></svg></button>
+        </header>
+        <div class="publication-body">
+          <section class="publication-preview">
+            <video id="publication-video" controls preload="metadata"></video>
+            <dl id="publication-capture" class="publication-facts"></dl>
+          </section>
+          <form id="publication-form" class="publication-form">
+            <div class="publication-fields">
+              <label><span>Privacy</span><select id="publication-privacy"><option value="public">Public</option><option value="unlisted">Unlisted</option><option value="private">Private</option></select></label>
+              <label><span>Playlist</span><input id="publication-playlist" value="gradlab" maxlength="150" required></label>
+              <label><span>Thumbnail time (seconds)</span><input id="publication-thumbnail-time" type="number" min="0" step="0.25" value="10" required></label>
+              <label class="publication-wide"><span>Extra tags (comma-separated)</span><input id="publication-tags" maxlength="300"></label>
+              <label class="publication-wide"><span>Operator note <small>clearly labeled as unverified</small></span><textarea id="publication-note" rows="3" maxlength="1000"></textarea></label>
+            </div>
+            <div id="publication-credentials" class="publication-credentials"></div>
+            <div id="publication-job" class="publication-job" hidden></div>
+            <footer class="publication-actions">
+              <button id="publication-authorize-youtube" class="quiet" type="button" hidden>Authorize YouTube</button>
+              <button id="publication-check" class="quiet" type="button">Check accounts</button>
+              <button id="publication-retry" class="quiet" type="button" hidden>Retry</button>
+              <button id="publication-cancel" class="quiet danger" type="button" hidden>Cancel</button>
+              <button id="publication-resolve" class="quiet" type="button" hidden>Resolve upload</button>
+              <button id="publication-cleanup" class="quiet" type="button" hidden>Clean local staging</button>
+              <button id="publication-submit" class="primary" type="submit" disabled>Publish to both</button>
+            </footer>
+          </form>
         </div>
       </div>
     </dialog>

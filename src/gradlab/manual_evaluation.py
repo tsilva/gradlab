@@ -5,6 +5,7 @@ import json
 import sqlite3
 import uuid
 from collections.abc import Callable, Mapping, Sequence
+from copy import deepcopy
 from dataclasses import dataclass
 from datetime import UTC, timedelta
 from pathlib import Path
@@ -424,6 +425,36 @@ class ManualEvaluationSupervisor:
             )
             for identifier in identifiers
         ]
+
+    def publication_evidence(
+        self,
+        *,
+        run_id: str,
+        checkpoint_id: str,
+    ) -> dict[str, Any]:
+        manifest = self._manifest(run_id)
+        checkpoints = self._checkpoint_map(run_id)
+        checkpoint = checkpoints.get(str(checkpoint_id))
+        if checkpoint is None:
+            raise ValueError(f"unknown checkpoint: {checkpoint_id}")
+        context = self._context(manifest=manifest, checkpoint=checkpoint)
+        raw = self.authority.eval_result(
+            run_id=run_id,
+            idempotency_key=context.intent.idempotency_key,
+        )
+        verified = self.authority.evaluation.get_json_optional(
+            f"runs/{run_id}/evals/{context.intent.idempotency_key}/verified-result.json"
+        )
+        if raw is None or verified is None:
+            raise ValueError("checkpoint does not have complete verified evaluation evidence")
+        return {
+            "run_manifest": manifest.to_dict(),
+            "checkpoint_manifest": checkpoint.to_dict(),
+            "recipe": deepcopy(dict(context.recipe_document)),
+            "intent": context.intent.to_dict(),
+            "raw_result": deepcopy(dict(raw)),
+            "verified_result": deepcopy(dict(verified)),
+        }
 
     @staticmethod
     def _current_protocol_contract(
@@ -1360,6 +1391,12 @@ class ManualEvaluationQueue:
             repo_root=self.repo_root,
             project_results=False,
             work_root=self.store.work_root,
+        )
+
+    def publication_evidence(self, *, run_id: str, checkpoint_id: str) -> dict[str, Any]:
+        return self._planner().publication_evidence(
+            run_id=run_id,
+            checkpoint_id=checkpoint_id,
         )
 
     @staticmethod

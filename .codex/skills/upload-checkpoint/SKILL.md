@@ -7,7 +7,9 @@ description: Composite gradlab release workflow for trained checkpoints. Use whe
 
 ## Contract
 
-Publish a trained checkpoint as a Hugging Face model repo with a model card and preview video, then upload the same preview video to YouTube.
+Publish a trained checkpoint through one combined release: validate the complete local request,
+upload and verify the preview video on YouTube, then publish the exact same source replay with the
+model bundle on Hugging Face.
 
 This is a composite skill. When executing the workflow, also load and follow:
 
@@ -51,13 +53,15 @@ If a required fact is ambiguous and cannot be safely inferred from source artifa
    - Encode/verify `replay.mp4` as H.264/AVC, `yuv420p`, faststart, with valid duration and frames.
    - Let Hugging Face's reinforcement-learning widget render the root `replay.mp4` as the model page preview; do not also embed the same video in the README body unless the widget is unavailable.
 
-4. Upload the same preview video to YouTube with `$upload-youtube-video`.
+4. Upload and verify the same preview video on YouTube with `$upload-youtube-video`.
    - Use the exact same representative video uploaded to Hugging Face unless it must be re-encoded for YouTube compatibility.
    - Defer title, description, tags, thumbnail, playlist, and privacy details to that skill so
      this composite workflow cannot drift from the YouTube publication contract.
+   - For player publication, require successful video processing and admitted channel/privacy/
+     metadata verification before any Hugging Face mutation.
 
 5. Build and publish the immutable release bundle.
-   - Supply the YouTube URL and stochastic evaluation evidence to
+   - Supply the verified YouTube URL and exact goal-owned evaluation evidence to
      `scripts/prepare_huggingface_release.py`; it fails closed on deterministic evaluation,
      invalid video, non-portable paths, inconsistent identity, or a nonstandard file set.
    - The bundle must contain exactly `.gitattributes`, `README.md`, `LICENSE`, `model.zip`,

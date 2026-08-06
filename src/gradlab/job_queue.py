@@ -200,10 +200,11 @@ def register_handler(
 
 def load_builtin_handlers() -> None:
     # Closed, explicit imports prevent queue rows from selecting executable code.
-    from gradlab import catalog_jobs, manual_evaluation
+    from gradlab import catalog_jobs, manual_evaluation, publication_jobs
 
     manual_evaluation.register_job_handler()
     catalog_jobs.register_job_handler()
+    publication_jobs.register_job_handler()
 
 
 def handler_for(job_type: str, version: int) -> JobHandler:
@@ -650,6 +651,58 @@ class JobStore(SqliteStore):
         if updated is None:
             raise RuntimeError("finished job disappeared")
         return updated
+
+    def checkpoint(
+        self,
+        job_id: str,
+        *,
+        kind: str,
+        subjects: Sequence[SubjectUpdate] = (),
+        detail: Mapping[str, Any] | None = None,
+    ) -> bool:
+        """Persist in-flight progress and return the current cancellation flag."""
+        self.init()
+        now = self.clock.time()
+        with self.connection() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            current = connection.execute(
+                "SELECT state, cancel_requested FROM jobs WHERE job_id = ?",
+                (str(job_id),),
+            ).fetchone()
+            if current is None:
+                raise ValueError(f"unknown job: {job_id}")
+            if str(current["state"]) != "running":
+                raise RuntimeError(f"job {job_id} is not running")
+            for subject in subjects:
+                if subject.state not in ACTIVE_SUBJECT_STATES | TERMINAL_SUBJECT_STATES:
+                    raise ValueError(f"invalid subject state: {subject.state}")
+                cursor = connection.execute(
+                    """
+                    UPDATE job_subjects SET state = ?, detail_json = ?, updated_at = ?
+                    WHERE job_id = ? AND subject_type = ? AND subject_id = ?
+                    """,
+                    (
+                        subject.state,
+                        None if subject.detail is None else _canonical_json(subject.detail),
+                        now,
+                        str(job_id),
+                        subject.subject_type,
+                        subject.subject_id,
+                    ),
+                )
+                if cursor.rowcount != 1:
+                    raise ValueError(
+                        f"job {job_id} has no subject "
+                        f"{subject.subject_type}/{subject.subject_id}"
+                    )
+            self._event(
+                connection,
+                job_id=str(job_id),
+                kind=f"checkpoint:{kind}",
+                detail=detail,
+                now=now,
+            )
+            return bool(current["cancel_requested"])
 
     def recover_running(self) -> int:
         self.init()

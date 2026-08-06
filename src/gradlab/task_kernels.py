@@ -210,6 +210,7 @@ def _identity_step_kernel(
 @njit(cache=True, nogil=True, inline="always")
 def _identity_apply_event_outcome(
     event_outcome,
+    event_bootstrap,
     outcome_priorities,
     lane,
     terminated,
@@ -221,7 +222,7 @@ def _identity_apply_event_outcome(
     ):
         return
     outcomes[lane] = event_outcome
-    if event_outcome == 3:
+    if event_outcome == 3 or event_bootstrap:
         terminated[lane] = False
         truncated[lane] = True
     else:
@@ -237,6 +238,7 @@ def _identity_equals_for_event_kernel(
     consecutive_steps,
     event_bit,
     event_outcome,
+    event_bootstrap,
     outcome_priorities,
     terminated,
     truncated,
@@ -254,6 +256,7 @@ def _identity_equals_for_event_kernel(
         event_bits[lane] |= event_bit
         _identity_apply_event_outcome(
             event_outcome,
+            event_bootstrap,
             outcome_priorities,
             lane,
             terminated,
@@ -271,6 +274,7 @@ def _identity_decrease_event_kernel(
     transition_targets,
     event_bit,
     event_outcome,
+    event_bootstrap,
     outcome_priorities,
     terminated,
     truncated,
@@ -290,6 +294,7 @@ def _identity_decrease_event_kernel(
         event_bits[lane] |= event_bit
         _identity_apply_event_outcome(
             event_outcome,
+            event_bootstrap,
             outcome_priorities,
             lane,
             terminated,
@@ -307,6 +312,7 @@ def _identity_increase_event_kernel(
     transition_targets,
     event_bit,
     event_outcome,
+    event_bootstrap,
     outcome_priorities,
     terminated,
     truncated,
@@ -326,6 +332,7 @@ def _identity_increase_event_kernel(
         event_bits[lane] |= event_bit
         _identity_apply_event_outcome(
             event_outcome,
+            event_bootstrap,
             outcome_priorities,
             lane,
             terminated,
@@ -1804,6 +1811,7 @@ class IdentityEvent:
     signal: str
     operation: str
     outcome: Outcome = Outcome.NEUTRAL
+    bootstrap: bool = False
     value: int | float | None = None
     steps: int = 0
 
@@ -1839,6 +1847,10 @@ class IdentityTaskDefinition:
             raise ValueError("identity task supports at most 64 events")
         event_outcomes: dict[str, Outcome] = {}
         termination = dict(termination or {})
+        raw_bootstrap_events = termination.get("bootstrap", ())
+        if not isinstance(raw_bootstrap_events, list | tuple):
+            raise ValueError("identity task termination.bootstrap must be a list")
+        bootstrap_events = {str(name) for name in raw_bootstrap_events}
         self.outcome_precedence = normalize_identity_outcome_precedence(
             termination.get("outcome_precedence")
         )
@@ -1853,6 +1865,22 @@ class IdentityTaskDefinition:
                 if event_name in event_outcomes:
                     raise ValueError(f"identity event {event_name!r} has multiple outcomes")
                 event_outcomes[event_name] = outcome
+        unknown_bootstrap_events = sorted(bootstrap_events - set(raw_events))
+        if unknown_bootstrap_events:
+            raise ValueError(
+                "identity task termination.bootstrap references unknown events: "
+                + ", ".join(unknown_bootstrap_events)
+            )
+        non_success_bootstrap_events = sorted(
+            name
+            for name in bootstrap_events
+            if event_outcomes.get(name) != Outcome.SUCCESS
+        )
+        if non_success_bootstrap_events:
+            raise ValueError(
+                "identity task termination.bootstrap events must also map to success: "
+                + ", ".join(non_success_bootstrap_events)
+            )
         compiled_events: list[IdentityEvent] = []
         for name, rule in raw_events.items():
             operation = str(rule.get("operation", ""))
@@ -1874,6 +1902,7 @@ class IdentityTaskDefinition:
                     signal=str(rule["signal"]),
                     operation=operation,
                     outcome=event_outcomes.get(str(name), Outcome.NEUTRAL),
+                    bootstrap=str(name) in bootstrap_events,
                     value=rule.get("value"),
                     steps=int(rule.get("steps", 0)),
                 )
@@ -2118,6 +2147,7 @@ class IdentityTaskKernel:
                         self._event_consecutive_steps[index],
                         np.uint64(1 << index),
                         int(event.outcome),
+                        bool(event.bootstrap),
                         self._outcome_priorities,
                         self._terminated,
                         self._truncated,
@@ -2133,6 +2163,7 @@ class IdentityTaskKernel:
                         self._event_transition_targets[index],
                         np.uint64(1 << index),
                         int(event.outcome),
+                        bool(event.bootstrap),
                         self._outcome_priorities,
                         self._terminated,
                         self._truncated,
@@ -2148,6 +2179,7 @@ class IdentityTaskKernel:
                         self._event_transition_targets[index],
                         np.uint64(1 << index),
                         int(event.outcome),
+                        bool(event.bootstrap),
                         self._outcome_priorities,
                         self._terminated,
                         self._truncated,

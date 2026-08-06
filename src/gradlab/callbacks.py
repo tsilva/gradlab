@@ -910,6 +910,7 @@ class RuntimeMetricsHelper(CallbackHelper):
         active_reward_components: Sequence[str] = (),
         active_reward_signals: Sequence[str] = (),
         configured_starts: Sequence[str] = (),
+        progress_fields: Sequence[str] = (),
         track_success: bool = False,
         session: Any | None = None,
     ) -> None:
@@ -922,6 +923,7 @@ class RuntimeMetricsHelper(CallbackHelper):
         self.episode_metrics = EpisodeMetricsReducer(
             event_names=event_names,
             configured_starts=configured_starts,
+            progress_fields=progress_fields,
             track_success=track_success,
         )
         self.pending_metrics: dict[str, int | float] = {}
