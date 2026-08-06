@@ -8,6 +8,7 @@ import pytest
 
 from gradlab.youtube_publication import (
     YouTubePublicationError,
+    exchange_oauth_code,
     new_oauth_transaction,
     validate_processed_video,
 )
@@ -68,3 +69,24 @@ def test_processed_video_must_match_admitted_principal_metadata_and_marker() -> 
             title="Title",
             description="Description",
         )
+
+
+def test_oauth_does_not_invent_scopes_omitted_from_partial_grant(monkeypatch) -> None:
+    transaction = new_oauth_transaction(
+        CLIENT,
+        redirect_uri="http://127.0.0.1:1234/api/publication/oauth/callback",
+        authority_client_id="client-1",
+        control_epoch=1,
+    )
+    monkeypatch.setattr(
+        "gradlab.youtube_publication.post_form",
+        lambda _url, _fields: {
+            "access_token": "access",
+            "refresh_token": "refresh",
+            "scope": "https://www.googleapis.com/auth/youtube.upload",
+        },
+    )
+
+    token = exchange_oauth_code(CLIENT, transaction, code="code")
+
+    assert token["scopes"] == ["https://www.googleapis.com/auth/youtube.upload"]

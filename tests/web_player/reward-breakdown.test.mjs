@@ -7,7 +7,7 @@ import {
   signedContributionLabel,
 } from "../../src/gradlab/web_player/panels/reward-breakdown.js";
 
-function snapshot({ scale = 1, clip = null, protocol = 6, status = "available" } = {}) {
+function snapshot({ scale = 1, clip = null, protocol = 8, status = "available" } = {}) {
   return {
     protocol,
     session: {
@@ -15,13 +15,13 @@ function snapshot({ scale = 1, clip = null, protocol = 6, status = "available" }
         ? {
           status,
           reason: null,
-          scale_divisor: scale,
+          reward_scale: scale,
           clip_bounds: clip,
         }
         : {
           status,
           reason: "recording does not contain raw reward",
-          scale_divisor: null,
+          reward_scale: null,
           clip_bounds: null,
         },
     },
@@ -63,7 +63,7 @@ test("mixed bonuses, penalties, unattributed reward, and clipping reconcile exac
     },
   })];
   const result = rewardBreakdownPresentation({
-    snapshot: snapshot({ scale: 2, clip: [-1, 1] }),
+    snapshot: snapshot({ scale: 0.5, clip: [-1, 1] }),
     history,
     view: { selectedSequence: 1 },
     scope: "step",
@@ -131,6 +131,24 @@ test("zero-net steps omit signed percentages but preserve gross activity", () =>
   assert.equal(magnitudeShareLabel(null), "N/A");
 });
 
+test("reward scale accepts zero and rejects values above one", () => {
+  const muted = rewardBreakdownPresentation({
+    snapshot: snapshot({ scale: 0 }),
+    history: [point({ raw: 4, final: 0, components: { progress_reward: 4 } })],
+    view: { selectedSequence: 1 },
+  });
+  assert.equal(muted.status, "available");
+  assert.equal(muted.preclip, 0);
+
+  const invalid = rewardBreakdownPresentation({
+    snapshot: snapshot({ scale: 2 }),
+    history: [point({ raw: 1, final: 2 })],
+    view: { selectedSequence: 1 },
+  });
+  assert.equal(invalid.status, "protocol-error");
+  assert.match(invalid.message, /scale is invalid/);
+});
+
 test("episode activity sums absolute per-transition impacts through cancellation", () => {
   const history = [
     point({ sequence: 1, raw: 1, final: 1, total: 1, components: { progress_reward: 1 } }),
@@ -158,7 +176,7 @@ test("episode clipping is accounted per transition rather than on the aggregate"
     point({ sequence: 2, raw: -4, final: -1, total: 0 }),
   ];
   const result = rewardBreakdownPresentation({
-    snapshot: snapshot({ scale: 2, clip: [-1, 1] }),
+    snapshot: snapshot({ scale: 0.5, clip: [-1, 1] }),
     history,
     view: { selectedSequence: 2 },
     scope: "episode",
@@ -204,7 +222,7 @@ test("unavailable, old, missing, malformed, and inconsistent accounting stay dis
     "unavailable",
   );
   assert.equal(
-    rewardBreakdownPresentation({ snapshot: snapshot({ protocol: 4 }) }).status,
+    rewardBreakdownPresentation({ snapshot: snapshot({ protocol: 7 }) }).status,
     "protocol-error",
   );
   assert.equal(

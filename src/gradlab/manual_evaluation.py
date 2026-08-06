@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from gradlab.checkpoint_acceptance import manifest_index, requires_complete_evaluation
+from gradlab.checkpoint_contract import checkpoint_manifest_contract_sha256
 from gradlab.clock import Clock, SystemClock, format_utc_datetime, parse_utc_datetime
 from gradlab.early_stop import EARLY_STOP_OPERATORS
 from gradlab.eval_backend import EvalBackend
@@ -328,9 +329,10 @@ class ManualEvaluationSupervisor:
         recipe_document = self._recipe_document(checkpoint)
         contract = evaluation_contract(recipe_document)
         contract_sha256 = evaluation_contract_sha256(recipe_document)
-        if contract_sha256 != checkpoint.evaluation_contract_sha256:
+        checkpoint_contract_sha256 = checkpoint_manifest_contract_sha256(recipe_document)
+        if checkpoint_contract_sha256 != checkpoint.evaluation_contract_sha256:
             raise ValueError(
-                f"checkpoint evaluation contract hash mismatch: {checkpoint.checkpoint_id}"
+                f"checkpoint manifest contract hash mismatch: {checkpoint.checkpoint_id}"
             )
         contract.update(
             {

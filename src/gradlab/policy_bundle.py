@@ -26,9 +26,9 @@ from gradlab.validation import is_secret_like_key
 
 
 RECIPE_DOCUMENT_TYPE = "gradlab.recipe"
-RECIPE_FORMAT_VERSION = 3
+RECIPE_FORMAT_VERSION = 4
 MODEL_DOCUMENT_TYPE = "gradlab.model"
-MODEL_FORMAT_VERSION = 2
+MODEL_FORMAT_VERSION = 3
 
 RECIPE_FILENAME = "recipe.json"
 MODEL_FILENAME = "model.json"

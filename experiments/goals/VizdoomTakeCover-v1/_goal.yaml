@@ -41,8 +41,8 @@ train:
         success: [time_limit_reached]
       # Configure the reward presented to the policy after the inherited native reward is computed.
       reward:
-        # Set the positive divisor applied to native rewards before clipping.
-        reward_scale: 100.0
+        # Set the unit-interval scale multiplied into native rewards before clipping.
+        reward_scale: 0.01
 # Override the shared settings used to evaluate checkpoints for this goal.
 eval:
   # Override the shared ViZDoom environment contract used during evaluation.

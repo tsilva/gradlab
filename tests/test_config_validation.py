@@ -60,13 +60,13 @@ class ConfigValidationTests(unittest.TestCase):
             self.VIZDOOM_BASIC_GOAL,
             self.VIZDOOM_BASIC_RECIPE,
             recipe_overrides=(
-                "train.environment.task.reward.reward_scale=100",
+                "train.environment.task.reward.reward_scale=0.01",
                 "train.environment.task.reward.reward_clip=[-0.05,0.5]",
             ),
         )
         expected = {
             "reward_mode": "native",
-            "reward_scale": 100.0,
+            "reward_scale": 0.01,
             "reward_clip": [-0.05, 0.5],
         }
 
@@ -76,6 +76,13 @@ class ConfigValidationTests(unittest.TestCase):
             expected,
         )
         self.assertNotIn("reward_clip", document["train_config"]["env_args"])
+
+        with self.assertRaisesRegex(ValueError, "between 0 and 1"):
+            compose_train_document(
+                self.VIZDOOM_BASIC_GOAL,
+                self.VIZDOOM_BASIC_RECIPE,
+                recipe_overrides=("train.environment.task.reward.reward_scale=100",),
+            )
 
     def test_vizdoom_policy_can_select_independent_sb3_feature_extractors(self) -> None:
         document = compose_train_document(
@@ -272,7 +279,7 @@ class ConfigValidationTests(unittest.TestCase):
         )
         expected_reward = {
             "reward_mode": "native",
-            "reward_scale": 100.0,
+            "reward_scale": 0.01,
             "reward_clip": False,
         }
         self.assertEqual(train_config["task"]["reward"], expected_reward)
@@ -530,7 +537,11 @@ class ConfigValidationTests(unittest.TestCase):
                     "stop",
                 )
                 plateau = conditions["return_plateau"]
-                calibration_steps = train_config["timesteps"] // 4
+                calibration_steps = (
+                    25_000_000
+                    if goal_path.parent.name == "VizdoomDeathmatch-v1"
+                    else train_config["timesteps"] // 4
+                )
 
                 self.assertEqual(
                     plateau["metric"],

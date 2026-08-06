@@ -150,7 +150,7 @@ class GenericNativeProviderTests(unittest.TestCase):
                 "termination": {},
                 "reward": {
                     "reward_mode": "native",
-                    "reward_scale": 2.0,
+                    "reward_scale": 0.5,
                     "reward_clip": [0.0, 0.4],
                 },
             },
@@ -193,7 +193,7 @@ class GenericNativeProviderTests(unittest.TestCase):
                 "termination": {},
                 "reward": {
                     "reward_mode": "native",
-                    "reward_scale": 2.0,
+                    "reward_scale": 0.5,
                     "reward_clip": False,
                 },
             },

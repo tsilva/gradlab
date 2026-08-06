@@ -30,8 +30,8 @@ from gradlab.task_kernels import (
 )
 
 
-ENVIRONMENT_HASH_ALGORITHM = "gradlab.environment.v4"
-ENVIRONMENT_SCHEMA_VERSION = 4
+ENVIRONMENT_HASH_ALGORITHM = "gradlab.environment.v5"
+ENVIRONMENT_SCHEMA_VERSION = 5
 
 STATE_KEYS = ("state", "states", "state_probs")
 PREPROCESSING_KEYS = (

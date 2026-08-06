@@ -34,23 +34,33 @@ class _StaticKernel:
 
 def test_normalizes_scale_and_clip_to_one_canonical_form() -> None:
     assert normalize_reward_mapping(
-        {"reward_mode": "native", "reward_scale": 100, "reward_clip": True},
+        {"reward_mode": "native", "reward_scale": 0.01, "reward_clip": True},
         label="reward",
     ) == {
         "reward_mode": "native",
-        "reward_scale": 100.0,
+        "reward_scale": 0.01,
         "reward_clip": [-1.0, 1.0],
     }
 
-    with pytest.raises(ValueError, match="positive finite"):
-        normalize_reward_mapping({"reward_scale": 0}, label="reward")
+    assert normalize_reward_mapping({"reward_scale": 0}, label="reward") == {
+        "reward_scale": 0.0,
+        "reward_clip": False,
+    }
+    for invalid in (-0.01, 1.01, True, float("nan"), float("inf")):
+        with pytest.raises(ValueError, match="between 0 and 1"):
+            normalize_reward_mapping({"reward_scale": invalid}, label="reward")
+    with pytest.raises(ValueError, match="must include zero"):
+        normalize_reward_mapping(
+            {"reward_scale": 0, "reward_clip": [0.1, 1.0]},
+            label="reward",
+        )
     with pytest.raises(ValueError, match="low <= high"):
         normalize_reward_mapping({"reward_clip": [1, -1]}, label="reward")
 
 
 def test_common_transform_scales_before_clipping_and_preserves_raw_metrics() -> None:
     kernel = _StaticKernel([-9.0, -4.0, 97.0])
-    transform = reward_transform_from_reward({"reward_scale": 100.0, "reward_clip": [-0.05, 0.5]})
+    transform = reward_transform_from_reward({"reward_scale": 0.01, "reward_clip": [-0.05, 0.5]})
     wrapped = RewardTransformTaskKernel(kernel, transform)
 
     step = wrapped.process(
@@ -81,6 +91,24 @@ def test_disabled_transform_returns_the_original_kernel() -> None:
     )
 
 
+def test_zero_scale_mutes_reward_and_preserves_raw_metrics() -> None:
+    kernel = _StaticKernel([-3.0, 5.0])
+    wrapped = RewardTransformTaskKernel(
+        kernel,
+        reward_transform_from_reward({"reward_scale": 0.0, "reward_clip": False}),
+    )
+
+    step = wrapped.process(
+        np.zeros(2, dtype=np.float32),
+        np.zeros(2, dtype=np.bool_),
+        np.zeros(2, dtype=np.bool_),
+        {},
+    )
+
+    np.testing.assert_allclose(step.rewards, [0.0, 0.0])
+    np.testing.assert_allclose(step.metrics["raw_reward"], [-3.0, 5.0])
+
+
 def test_reward_transform_changes_environment_hash() -> None:
     def identity(clip, *, scale=1.0):
         return environment_identity_from_train_config(
@@ -103,4 +131,4 @@ def test_reward_transform_changes_environment_hash() -> None:
         )
 
     assert environment_hash(identity(False)) != environment_hash(identity(True))
-    assert environment_hash(identity(False)) != environment_hash(identity(False, scale=100.0))
+    assert environment_hash(identity(False)) != environment_hash(identity(False, scale=0.01))

@@ -241,8 +241,8 @@ def test_global_reward_transform_runs_after_component_sum() -> None:
     step = bound.process(NATIVE_REWARD, FALSE, FALSE, killed)
     np.testing.assert_allclose(step.metrics["kill_reward_component"], [0.75])
     np.testing.assert_allclose(step.metrics["raw_reward"], [0.75])
-    np.testing.assert_allclose(step.metrics["shaped_reward"], [1.0])
-    np.testing.assert_allclose(step.rewards, [1.0])
+    np.testing.assert_allclose(step.metrics["shaped_reward"], [0.375])
+    np.testing.assert_allclose(step.rewards, [0.375])
 
 
 def test_training_telemetry_registers_every_deathmatch_component() -> None:

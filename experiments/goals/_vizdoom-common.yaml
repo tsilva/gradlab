@@ -183,7 +183,7 @@ train:
       reward:
         # Use the provider's native reward as the untransformed reward source.
         reward_mode: native
-        # Set the positive divisor applied to native rewards before clipping.
+        # Set the unit-interval scale multiplied into native rewards before clipping.
         reward_scale: 1.0
         # Control clipping after reward scaling.
         reward_clip: false

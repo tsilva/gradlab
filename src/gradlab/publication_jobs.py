@@ -336,6 +336,7 @@ class PlayerPublicationJobHandler:
         if phase in {"youtube_session", "youtube_uncertain"}:
             if phase == "youtube_uncertain" and state.get("resolved_video_id"):
                 state["youtube_video_id"] = str(state["resolved_video_id"])
+                state.setdefault("youtube_uploaded_at", time.time())
                 state["phase"] = "youtube_uploaded"
                 self._save_state(state_path, state)
             else:
@@ -361,6 +362,7 @@ class PlayerPublicationJobHandler:
                             "YouTube completed the upload without a video id"
                         )
                     state["youtube_video_id"] = video_id
+                    state.setdefault("youtube_uploaded_at", time.time())
                     state["phase"] = "youtube_uploaded"
                     self._save_state(state_path, state)
                 else:
@@ -389,6 +391,7 @@ class PlayerPublicationJobHandler:
                         self._save_state(state_path, state)
                         raise
                     state["youtube_video_id"] = str(uploaded["id"])
+                    state.setdefault("youtube_uploaded_at", time.time())
                     state["phase"] = "youtube_uploaded"
                     self._save_state(state_path, state)
 
@@ -406,6 +409,13 @@ class PlayerPublicationJobHandler:
                 )
             except YouTubePublicationError as exc:
                 if exc.code == "processing_pending":
+                    if time.time() - float(state.get("youtube_uploaded_at") or time.time()) > 86_400:
+                        return self._block(
+                            request,
+                            state,
+                            state_path,
+                            "YouTube processing did not finish within 24 hours",
+                        )
                     state["phase"] = "youtube_processing"
                     state["urls"] = {
                         **dict(state.get("urls") or {}),

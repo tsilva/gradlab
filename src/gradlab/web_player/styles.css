@@ -1243,7 +1243,12 @@ select {
   min-width: 0;
   font-size: .72rem;
 }
-.action-comparison-label { min-width: 0; overflow-wrap: anywhere; }
+.action-comparison-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .action-comparison-row.selected .action-comparison-label { color: var(--color-evaluation-text); font-weight: 700; }
 .action-comparison-bars {
   display: grid;
@@ -1787,14 +1792,14 @@ td:last-child { text-align: right; }
   background: var(--color-surface-primary);
   color: var(--color-text);
 }
-.publication-dialog::backdrop { background: rgb(3 7 18 / 72%); }
+.publication-dialog::backdrop { background: var(--color-backdrop); }
 .publication-shell { display: grid; grid-template-rows: auto minmax(0, 1fr); max-height: calc(100dvh - 2rem); }
 .publication-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; padding: 1rem 1.1rem; border-bottom: 1px solid var(--color-border); background: var(--color-surface-secondary); }
 .publication-header h2 { margin: .15rem 0 0; font-size: 1.15rem; }
 .publication-status { margin: .28rem 0 0; color: var(--color-text-muted); font-size: .72rem; }
 .publication-body { display: grid; grid-template-columns: minmax(16rem, 2fr) minmax(20rem, 3fr); min-height: 0; overflow: auto; }
 .publication-preview { padding: 1rem; border-right: 1px solid var(--color-border); background: var(--color-chart-surface); }
-.publication-preview video { display: block; width: 100%; max-height: 22rem; border-radius: .45rem; background: #000; }
+.publication-preview video { display: block; width: 100%; max-height: 22rem; border-radius: .45rem; background: var(--color-canvas); }
 .publication-facts { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: .35rem .65rem; margin: .9rem 0 0; font: .68rem/1.45 "JetBrains Mono", ui-monospace, monospace; }
 .publication-facts dt { color: var(--color-text-muted); }
 .publication-facts dd { min-width: 0; margin: 0; overflow-wrap: anywhere; }

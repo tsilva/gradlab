@@ -87,7 +87,7 @@ def level1_1_recipe_document(*, seed: int = 7) -> dict:
     )
 
 
-def test_recipe_v3_embeds_verified_goal_and_recipe_bases() -> None:
+def test_recipe_v4_embeds_verified_goal_and_recipe_bases() -> None:
     resolved = compose_resolved_train_documents(
         BANDIT_GOAL,
         BANDIT_RECIPE,
@@ -98,14 +98,14 @@ def test_recipe_v3_embeds_verified_goal_and_recipe_bases() -> None:
         resolved.effective,
         repo_root=Path.cwd(),
         source_commit="a" * 40,
-        run_description="Bandit recipe v3 proof",
+        run_description="Bandit recipe v4 proof",
         seed=7,
         runtime_packages=("gradlab==0.1.0",),
         base_materialized_recipe=resolved.base,
         canonical_goal=resolved.canonical_goal,
     )
 
-    assert document["format_version"] == 3
+    assert document["format_version"] == 4
     assert document["recipe"]["train_config"]["metrics_schema_version"] == 18
     assert (
         document["resolution"]["recipe"]["base"]["train_config"]["metrics_schema_version"]
@@ -705,8 +705,16 @@ def test_future_recipe_version_fails_with_source_and_supported_versions(tmp_path
     message = str(error.value)
     assert str(path) in message
     assert "999" in message
-    assert "[3]" in message
+    assert "[4]" in message
     assert "Regenerate the artifact" in message
+
+
+def test_divisor_era_recipe_version_is_rejected() -> None:
+    document = level1_1_recipe_document()
+    document["format_version"] = 3
+
+    with pytest.raises(UnsupportedPolicyDocumentVersion, match="format_version 3"):
+        validate_recipe_document(document)
 
 
 def test_future_model_version_fails_before_checkpoint_access(tmp_path: Path) -> None:
@@ -721,10 +729,10 @@ def test_future_model_version_fails_before_checkpoint_access(tmp_path: Path) -> 
             load_policy_bundle(tmp_path)
     assert MODEL_DOCUMENT_TYPE in str(error.value)
     assert "format_version 999" in str(error.value)
-    assert "[2]" in str(error.value)
+    assert "[3]" in str(error.value)
 
 
-def test_model_v2_records_durable_state_archive_summary(tmp_path: Path) -> None:
+def test_model_v3_records_durable_state_archive_summary(tmp_path: Path) -> None:
     checkpoint = tmp_path / "model.zip"
     checkpoint.write_bytes(b"checkpoint bytes")
     recipe_document = level1_1_recipe_document()
@@ -757,7 +765,7 @@ def test_model_v2_records_durable_state_archive_summary(tmp_path: Path) -> None:
 
     bundle = load_policy_bundle(tmp_path)
 
-    assert bundle.model["format_version"] == 2
+    assert bundle.model["format_version"] == 3
     assert bundle.model["provenance"]["state_archive_summary"] == metadata["state_archive_summary"]
 
 
@@ -765,10 +773,10 @@ def test_noncurrent_model_schema_is_rejected(tmp_path: Path) -> None:
     write_bundle(tmp_path)
     model_path = tmp_path / "model.json"
     model = json.loads(model_path.read_text(encoding="utf-8"))
-    model["format_version"] = 1
+    model["format_version"] = 2
     write_canonical_json(model_path, model)
 
-    with pytest.raises(UnsupportedPolicyDocumentVersion, match="format_version 1"):
+    with pytest.raises(UnsupportedPolicyDocumentVersion, match="format_version 2"):
         load_policy_bundle(tmp_path)
 
 

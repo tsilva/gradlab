@@ -54,10 +54,10 @@ function pointLedger(point, contract) {
   }
   const raw = finite(point?.reward_raw);
   const final = finite(point?.reward_shaped);
-  const scale = finite(contract?.scale_divisor);
+  const scale = finite(contract?.reward_scale);
   if (raw === null) return { error: "Pre-transform reward is missing or non-finite." };
   if (final === null) return { error: "Final reward is missing or non-finite." };
-  if (scale === null || scale <= 0) return { error: "Reward scale divisor is invalid." };
+  if (scale === null || scale < 0 || scale > 1) return { error: "Reward scale is invalid." };
   const values = point?.components;
   if (!values || typeof values !== "object" || Array.isArray(values)) {
     return { error: "Reward components are malformed." };
@@ -79,7 +79,7 @@ function pointLedger(point, contract) {
       || Number(clip[0]) > Number(clip[1]))
   ) return { error: "Reward clip bounds are invalid." };
 
-  const preclip = raw / scale;
+  const preclip = raw * scale;
   const expectedFinal = clip === null
     ? preclip
     : Math.min(Number(clip[1]), Math.max(Number(clip[0]), preclip));
@@ -96,7 +96,7 @@ function pointLedger(point, contract) {
       label: COMPONENT_LABELS[id],
       kind: "component",
       raw: components[id],
-      impact: components[id] / scale,
+      impact: components[id] * scale,
     }));
   const attributedRaw = entries.reduce((sum, entry) => sum + entry.raw, 0);
   const unattributedRaw = raw - attributedRaw;
@@ -105,7 +105,7 @@ function pointLedger(point, contract) {
     label: COMPONENT_LABELS.unattributed,
     kind: "residual",
     raw: unattributedRaw,
-    impact: unattributedRaw / scale,
+    impact: unattributedRaw * scale,
   });
   entries.push({
     id: "clip_adjustment",
@@ -235,11 +235,11 @@ export function rewardBreakdownPresentation({
       message: `Reward accounting unavailable: ${contract.reason || "the source did not provide it"}.`,
     };
   }
-  if (Number(snapshot?.protocol) < 5 || contract?.status !== "available") {
+  if (Number(snapshot?.protocol) < 8 || contract?.status !== "available") {
     return {
       status: "protocol-error",
       scope: normalizedScope,
-      message: "Reward accounting requires playback protocol v5+ and an available transform contract.",
+      message: "Reward accounting requires playback protocol v8+ and an available transform contract.",
     };
   }
   const selected = selectedPoint(history, snapshot, view);
@@ -283,7 +283,7 @@ export function rewardBreakdownPresentation({
     step: Number(selected.step),
     count: scoped.points.length,
     contract: {
-      scaleDivisor: Number(contract.scale_divisor),
+      rewardScale: Number(contract.reward_scale),
       clipBounds: contract.clip_bounds,
     },
     ...aggregate,
