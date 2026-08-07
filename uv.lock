@@ -19,7 +19,7 @@ exclude-newer = "0001-01-01T00:00:00Z" # This has no effect and is included for 
 exclude-newer-span = "P7D"
 
 [options.exclude-newer-package]
-vizdoom-turbo = "2026-08-04T16:34:32Z"
+vizdoom-turbo = "2026-08-07T07:22:15Z"
 stable-retro-turbo = "2026-07-29T13:20:49Z"
 supermariobrosnes-turbo = "2026-07-29T13:20:49Z"
 breakout-turbo-env = "2026-07-29T13:20:49Z"
@@ -790,8 +790,8 @@ requires-dist = [
     { name = "torch", marker = "platform_machine == 'arm64' and sys_platform == 'darwin'", specifier = "==2.11.0" },
     { name = "torch", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'", specifier = "==2.12.0" },
     { name = "tqdm", specifier = ">=4.67,<5" },
-    { name = "vizdoom-turbo", marker = "platform_machine == 'arm64' and sys_platform == 'darwin'", specifier = "==1.3.0.post22" },
-    { name = "vizdoom-turbo", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'", specifier = "==1.3.0.post22" },
+    { name = "vizdoom-turbo", marker = "platform_machine == 'arm64' and sys_platform == 'darwin'", specifier = "==1.3.0.post23" },
+    { name = "vizdoom-turbo", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'", specifier = "==1.3.0.post23" },
     { name = "wandb", specifier = ">=0.18,<0.23" },
     { name = "wandb-workspaces", specifier = ">=0.4,<0.5" },
 ]
@@ -830,7 +830,7 @@ train-runtime = [
     { name = "tensorboard", specifier = ">=2.16,<3" },
     { name = "torch", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'", specifier = "==2.12.0" },
     { name = "tqdm", specifier = ">=4.67,<5" },
-    { name = "vizdoom-turbo", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'", specifier = "==1.3.0.post22" },
+    { name = "vizdoom-turbo", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'", specifier = "==1.3.0.post23" },
     { name = "wandb", specifier = ">=0.18,<0.23" },
 ]
 
@@ -2486,7 +2486,7 @@ wheels = [
 
 [[package]]
 name = "vizdoom-turbo"
-version = "1.3.0.post22"
+version = "1.3.0.post23"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "gymnasium", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'linux')" },
@@ -2494,8 +2494,8 @@ dependencies = [
     { name = "pygame-ce", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'linux')" },
 ]
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/30/fd/8a2bfd57a38b0e1b8366d4db4d89c5d4b6dd014d424e6a6583fab32a51b5/vizdoom_turbo-1.3.0.post22-cp314-cp314-macosx_15_0_arm64.whl", hash = "sha256:6af0c6dcac0ebb8ebafac2d89e9cd4507a1e8d62b836a97fafe23fd676524022", size = 42911641, upload-time = "2026-08-04T16:34:27.475Z" },
-    { url = "https://files.pythonhosted.org/packages/fd/01/532fe86b42ddb2af3e02a17f4e783d34c1a5a86e01844dc3b48d35ea7417/vizdoom_turbo-1.3.0.post22-cp314-cp314-manylinux_2_28_x86_64.whl", hash = "sha256:2f2fa4c48792afbde2ba5e47920834101d25263806f01a8aaa99bfc6c627f253", size = 39920182, upload-time = "2026-08-04T16:34:31.118Z" },
+    { url = "https://files.pythonhosted.org/packages/6a/c7/193abc44861f1f743d5374c93c505d837ab8eda820ac048b2db3519fd3cf/vizdoom_turbo-1.3.0.post23-cp314-cp314-macosx_15_0_arm64.whl", hash = "sha256:44b934b9272b78d8f7d8a2f55d53390613721430db514dccd589008fcac63fd7", size = 42913984, upload-time = "2026-08-07T07:22:10.775Z" },
+    { url = "https://files.pythonhosted.org/packages/1a/e2/3a39b2b92ffff8b400bd2d69f8fa7e41e4042336691ead70df8b2caaf8ad/vizdoom_turbo-1.3.0.post23-cp314-cp314-manylinux_2_28_x86_64.whl", hash = "sha256:1bbc0da066b3f2bcea03df84a402691138aa643a68a9e49da0a1d8c3a14959ec", size = 39923139, upload-time = "2026-08-07T07:22:14.27Z" },
 ]
 
 [[package]]
