@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
+import io
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -16,12 +18,15 @@ from gradlab.env_metadata import env_config_from_config_dict, training_metadata
 from gradlab.eval import build_parser as build_eval_parser
 from gradlab.model_sources import (
     ResolvedModelSource,
+    _download_public_file,
+    download_public_checkpoint_manifest_source,
     is_huggingface_model_ref,
     model_source_ref,
     parse_huggingface_model_ref,
     positional_model_source_arg,
     resolve_model_source,
 )
+from gradlab.run_contracts import CheckpointManifest
 from gradlab.local_paths import default_runs_dir
 from gradlab.play_session import (
     _PlaybackSession,
@@ -93,9 +98,7 @@ def test_model_metadata_round_trips_playback_environment(tmp_path: Path) -> None
                 "algorithm_id": "ppo",
                 "model_class": "stable_baselines3.ppo.ppo.PPO",
                 "training_backend_id": "sb3.ppo",
-                "training_backend_config_hash": training_backend_config_hash(
-                    train_config
-                ),
+                "training_backend_config_hash": training_backend_config_hash(train_config),
                 "training_metadata": {
                     **training_metadata(config),
                     "preprocessing": {"unsupported": True},
@@ -108,9 +111,10 @@ def test_model_metadata_round_trips_playback_environment(tmp_path: Path) -> None
     bundle = load_policy_bundle_from_checkpoint(model)
     assert bundle is not None
     assert bundle.model["checkpoint"]["step"] == 250_000
-    assert bundle.recipe["recipe"]["environment"]["preprocessing"] == recipe_document[
-        "recipe"
-    ]["environment"]["preprocessing"]
+    assert (
+        bundle.recipe["recipe"]["environment"]["preprocessing"]
+        == recipe_document["recipe"]["environment"]["preprocessing"]
+    )
     saved_config = playback_contract(bundle.recipe, mode="training")["environment"]
     playback_config = env_config_from_config_dict(saved_config)
     assert playback_config is not None
@@ -244,6 +248,7 @@ def test_playback_session_rebuilds_environment_for_termination_change() -> None:
     assert session.env is replacement_env
     assert session.termination_source == "evaluation"
 
+
 def test_playback_session_resumes_an_explicit_cell_representative() -> None:
     runtime_state = SimpleNamespace(
         episode_seed=127,
@@ -325,9 +330,7 @@ def test_public_source_parsers_exclude_wandb_artifacts() -> None:
     assert "--resume-cell" in play_help
     assert "--attribution" not in play_help
     with pytest.raises(SystemExit):
-        build_play_parser().parse_args(
-            ["--model", "/tmp/model.zip", "--attribution", "gradcam"]
-        )
+        build_play_parser().parse_args(["--model", "/tmp/model.zip", "--attribution", "gradcam"])
 
 
 def test_huggingface_refs_parse_and_resolve_from_cli_namespace() -> None:
@@ -409,9 +412,7 @@ def test_public_checkpoint_manifest_validates_url_identity(monkeypatch) -> None:
 
     run_id = "gradlab-" + "a" * 32
     digest = "b" * 64
-    manifest_ref = (
-        f"https://models.example/runs/{run_id}/checkpoints/42-{digest}/manifest.json"
-    )
+    manifest_ref = f"https://models.example/runs/{run_id}/checkpoints/42-{digest}/manifest.json"
     document = {
         "schema_version": 2,
         "run_id": run_id,
@@ -438,6 +439,99 @@ def test_public_checkpoint_manifest_validates_url_identity(monkeypatch) -> None:
 
     assert checkpoint.run_id == run_id
     assert checkpoint.checkpoint_id == document["checkpoint_id"]
+
+
+def test_public_checkpoint_activation_reuses_only_fully_verified_bytes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    model_bytes = b"immutable checkpoint bytes"
+    model_document_bytes = b'{"kind":"model"}\n'
+    recipe_document_bytes = b'{"kind":"recipe"}\n'
+    digest = hashlib.sha256(model_bytes).hexdigest()
+    model_document_digest = hashlib.sha256(model_document_bytes).hexdigest()
+    recipe_document_digest = hashlib.sha256(recipe_document_bytes).hexdigest()
+    run_id = "gradlab-" + "a" * 32
+    checkpoint = CheckpointManifest.from_dict(
+        {
+            "schema_version": 2,
+            "run_id": run_id,
+            "checkpoint_id": f"checkpoint-42-{digest[:16]}",
+            "step": 42,
+            "purpose": "periodic",
+            "sha256": digest,
+            "size_bytes": len(model_bytes),
+            "public_url": "https://models.example/model.zip",
+            "model_document_url": "https://models.example/model.json",
+            "model_document_sha256": model_document_digest,
+            "recipe_document_url": "https://models.example/recipe.json",
+            "recipe_document_sha256": recipe_document_digest,
+            "goal_sha256": "e" * 64,
+            "recipe_sha256": recipe_document_digest,
+            "environment_sha256": "1" * 64,
+            "evaluation_contract_sha256": "2" * 64,
+            "recovery_sidecar_key": "runs/recovery-sidecar.json",
+            "created_at": "2026-08-06T12:00:00Z",
+        }
+    )
+    manifest_url = f"https://models.example/runs/{run_id}/checkpoints/42-{digest}/manifest.json"
+    payloads = {
+        checkpoint.public_url: model_bytes,
+        checkpoint.model_document_url: model_document_bytes,
+        checkpoint.recipe_document_url: recipe_document_bytes,
+    }
+    manifest_reads = 0
+    byte_reads: list[str] = []
+
+    def live_manifest(_url: str) -> CheckpointManifest:
+        nonlocal manifest_reads
+        manifest_reads += 1
+        return checkpoint
+
+    def urlopen(request, *, timeout):
+        assert timeout == 60
+        byte_reads.append(request.full_url)
+        return io.BytesIO(payloads[request.full_url])
+
+    bundle = SimpleNamespace()
+    monkeypatch.setattr("gradlab.model_sources.public_checkpoint_manifest", live_manifest)
+    monkeypatch.setattr("gradlab.model_sources.urllib.request.urlopen", urlopen)
+    monkeypatch.setattr(
+        "gradlab.model_sources.load_policy_bundle", lambda *_args, **_kwargs: bundle
+    )
+
+    first = download_public_checkpoint_manifest_source(manifest_url, root=tmp_path)
+    second = download_public_checkpoint_manifest_source(manifest_url, root=tmp_path)
+
+    assert first.model_path == second.model_path == tmp_path / "sha256" / digest / "model.zip"
+    assert manifest_reads == 2
+    assert byte_reads == list(payloads)
+
+    first.model_path.write_bytes(b"corrupt")
+    repaired = download_public_checkpoint_manifest_source(manifest_url, root=tmp_path)
+    assert repaired.model_path.read_bytes() == model_bytes
+    assert manifest_reads == 3
+    assert byte_reads == [*payloads, checkpoint.public_url]
+
+
+def test_public_checkpoint_byte_reuse_rejects_symlink_substitution(
+    tmp_path: Path,
+) -> None:
+    payload = b"checkpoint"
+    digest = hashlib.sha256(payload).hexdigest()
+    source = tmp_path / "source.zip"
+    source.write_bytes(payload)
+    target = tmp_path / "cache" / "model.zip"
+    target.parent.mkdir()
+    target.symlink_to(source)
+
+    with pytest.raises(ValueError, match="not regular"):
+        _download_public_file(
+            source.as_uri(),
+            target,
+            expected_sha256=digest,
+            expected_size=len(payload),
+        )
 
 
 def test_playback_only_ends_on_environment_done() -> None:

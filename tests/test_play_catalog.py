@@ -15,7 +15,6 @@ from gradlab.goal_catalog import (
     goal_catalog_pointer_key,
     validate_goal_catalog_generation,
 )
-from gradlab.catalog_cache import CatalogEntryCache
 from gradlab.play_catalog import (
     PlayCatalog,
     WandbRunLocation,
@@ -75,9 +74,7 @@ def goal_catalog_documents(
                 "recipe_overrides": list(raw.get("recipe_overrides") or []),
                 "recipe_variant_id": str(raw.get("recipe_variant_id") or "base"),
                 "goal_contract_sha256": descriptor["goal_contract_sha256"],
-                "effective_goal_contract_sha256": descriptor[
-                    "effective_goal_contract_sha256"
-                ],
+                "effective_goal_contract_sha256": descriptor["effective_goal_contract_sha256"],
                 "goal_variant_id": descriptor["variant_id"],
                 "goal_variant_label": descriptor["label"],
                 "description": str(raw.get("description") or ""),
@@ -447,29 +444,8 @@ def test_goal_variants_use_one_private_index_read_without_wandb(
             return generation
 
     bucket = OneReadControlBucket()
-    cache_path = tmp_path / "play-catalog.json"
-    cache_key = PlayCatalog._variant_cache_key(
-        environment_id="Mario",
-        goal_slug="Mario/Level1-1",
-    )
-    CatalogEntryCache(cache_path.with_name(f"{cache_path.name}.entries")).write(
-        "variants-v5",
-        cache_key,
-        {
-            "authority": "explicit-control",
-            "generated_at": 1.0,
-            "items": [
-                {
-                    "environment_id": "Mario",
-                    "goal_slug": "Mario/Level1-1",
-                    "variant_id": "obsolete-cache-entry",
-                }
-            ],
-        },
-    )
     catalog = PlayCatalog(
         repo_root=tmp_path,
-        cache_path=cache_path,
         control_bucket=bucket,
     )
 
@@ -489,7 +465,7 @@ def test_goal_variants_use_one_private_index_read_without_wandb(
     assert bucket.calls == [pointer_key, pointer["generation_key"]]
 
 
-def test_goal_activity_uses_last_verified_generation_when_pointer_read_fails(
+def test_goal_activity_never_falls_back_to_a_stale_generation(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -529,19 +505,10 @@ def test_goal_activity_uses_last_verified_generation_when_pointer_read_fails(
 
     fresh = catalog.goal_activity(environment_id="Mario", goal_id="Level1-1")
     bucket.available = False
-    stale = catalog.goal_activity(environment_id="Mario", goal_id="Level1-1")
-    filtered = catalog.goal_activity(
-        environment_id="Mario",
-        goal_id="Level1-1",
-        query="current",
-    )
+    with pytest.raises(CatalogUnavailable, match="temporarily unavailable"):
+        catalog.goal_activity(environment_id="Mario", goal_id="Level1-1")
 
     assert fresh["generation_sha256"] == pointer["generation_sha256"]
-    assert stale["generation_sha256"] == pointer["generation_sha256"]
-    assert stale["freshness"] == "stale"
-    assert stale["warnings"][0]["code"] == "catalog_stale"
-    assert stale["items"][0]["run_count"] == 1
-    assert filtered["revision"] != stale["revision"]
 
 
 def test_goal_variants_load_deployed_schema_one_generation_without_new_projection(
@@ -793,7 +760,7 @@ def test_run_catalog_uses_lifecycle_owned_variant_index_without_wandb(
     )
     assert [item["run_id"] for item in searched.items] == [RUN_ID]
     assert bucket.calls.count(pointer_key) >= 1
-    assert bucket.calls.count(pointer["generation_key"]) == 1
+    assert bucket.calls.count(pointer["generation_key"]) == 2
 
 
 def test_success_badges_propagate_from_runs_through_current_goals_and_environment(
@@ -1022,30 +989,30 @@ def test_indexed_project_listing_does_not_parse_goal_contracts_and_scopes_goal_r
     ]
 
 
-def test_indexed_goal_metadata_persists_across_catalog_instances(
+def test_indexed_goal_metadata_is_read_fresh_across_catalog_instances(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     write_indexed_goal_catalog(tmp_path)
-    cache_path = tmp_path / "cache" / "catalog.json"
-    first = PlayCatalog(repo_root=tmp_path, cache_path=cache_path)
+    first = PlayCatalog(repo_root=tmp_path)
     assert first.goals(environment_id="Mario").items
-    assert cache_path.is_file()
 
     from gradlab import play_catalog
 
     real_loader = play_catalog.load_mapping_document
 
-    def index_only_loader(path: Path, *, label: str | None = None) -> dict[str, Any]:
-        if path.name == "_goal.yaml":
-            raise AssertionError("unchanged goal metadata must come from persistent cache")
+    loaded_paths: list[Path] = []
+
+    def tracked_loader(path: Path, *, label: str | None = None) -> dict[str, Any]:
+        loaded_paths.append(path)
         return real_loader(path, label=label)
 
-    monkeypatch.setattr(play_catalog, "load_mapping_document", index_only_loader)
-    second = PlayCatalog(repo_root=tmp_path, cache_path=cache_path)
+    monkeypatch.setattr(play_catalog, "load_mapping_document", tracked_loader)
+    second = PlayCatalog(repo_root=tmp_path)
 
     goals = second.goals(environment_id="Mario")
     assert [item["title"] for item in goals.items] == ["Mario Level 1-1 completion"]
+    assert any(path.name == "_goal.yaml" for path in loaded_paths)
 
 
 def test_checked_in_browse_catalog_matches_composed_goal_contracts() -> None:
@@ -1218,6 +1185,48 @@ def test_catalog_validates_and_orders_public_checkpoints(monkeypatch: pytest.Mon
     assert page.warnings[0]["code"] == "checkpoint_metric_contract_unavailable"
 
 
+def test_checkpoint_base_inventory_never_waits_for_wandb(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    periodic = checkpoint_row(step=250_000, digest="2" * 64, purpose="periodic")
+    monkeypatch.setattr(
+        "gradlab.play_catalog._public_json",
+        lambda _url: {
+            "schema_version": 1,
+            "run_id": RUN_ID,
+            "checkpoints": [periodic],
+            "promotion": None,
+        },
+    )
+    catalog = PlayCatalog(
+        public_models_base_url="https://models.example",
+        wandb_run_location=WandbRunLocation(
+            entity="research",
+            project="Mario",
+            run_id=RUN_ID,
+        ),
+    )
+    bind_checkpoint_recipe(
+        catalog,
+        monkeypatch,
+        (periodic,),
+        mario_checkpoint_train_config(),
+    )
+
+    class MustNotReadWandb:
+        @staticmethod
+        def run(_path):
+            raise AssertionError("base checkpoint inventory must not read W&B")
+
+    catalog._api = MustNotReadWandb()
+    page = catalog.checkpoints(run_id=RUN_ID, include_wandb=False)
+
+    assert len(page.items) == 1
+    assert page.items[0]["evaluation"] is None
+    assert all(value is None for value in page.items[0]["metrics"].values())
+    assert page.warnings == ()
+
+
 def test_deathmatch_checkpoint_metric_contract_prioritizes_frag_evidence() -> None:
     repo_root = Path.cwd()
     goal_root = repo_root / "experiments/goals/VizdoomDeathmatch-v1"
@@ -1273,9 +1282,7 @@ def test_deathmatch_checkpoint_metric_contract_prioritizes_frag_evidence() -> No
 
 def test_checkpoint_metric_leaders_marks_each_best_value_and_ties() -> None:
     train_success = "train/outcome/success/starts/all/rolling/rate/mean"
-    train_return = (
-        "train/episode/return/shaped/origin/target/rolling/mean"
-    )
+    train_return = "train/episode/return/shaped/origin/target/rolling/mean"
     eval_success = "eval/full/outcome/success/starts/rate/mean"
     eval_return = "eval/full/episode/return/shaped/mean"
 
@@ -1584,9 +1591,7 @@ def test_catalog_attaches_goal_required_eval_results_by_checkpoint(
         "eval/full/episode/return/shaped/mean": 1.0,
         "leader/checkpoint/step": 250_000.0,
     }
-    assert accepted_row["metrics"][
-        "eval/full/outcome/success/starts/rate/mean"
-    ] == 1.0
+    assert accepted_row["metrics"]["eval/full/outcome/success/starts/rate/mean"] == 1.0
     assert accepted_row["metrics"]["eval/full/episode/return/shaped/mean"] == 1.0
     assert accepted_row["best_metrics"] == [
         "eval/full/outcome/success/starts/rate/mean",

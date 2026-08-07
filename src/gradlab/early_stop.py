@@ -179,6 +179,7 @@ def _normalize_metric_early_stop_condition(
     value: Any,
     *,
     label: str,
+    metric_validator: Callable[[str], object],
 ) -> dict[str, Any]:
     node = _require_mapping(value, label=label)
     trigger = _require_choice(
@@ -198,7 +199,7 @@ def _normalize_metric_early_stop_condition(
 
     metric = _require_non_empty_string(node, "metric", label=label)
     try:
-        validate_metric_name(metric)
+        metric_validator(metric)
     except ValueError as exc:
         raise ValueError(
             f"{_label_path(label, 'metric')} is not a registered metric: {metric}"
@@ -289,6 +290,7 @@ def normalize_metric_early_stop_config(
     value: Any,
     *,
     label: str = "early_stop",
+    metric_validator: Callable[[str], object] = validate_metric_name,
 ) -> dict[str, Any]:
     root = _require_mapping(value, label=label)
     extra_keys = sorted(set(root) - METRIC_EARLY_STOP_CONFIG_KEYS)
@@ -314,6 +316,7 @@ def normalize_metric_early_stop_config(
             condition_id,
             conditions[raw_condition_id],
             label=f"{label}.conditions.{condition_id}",
+            metric_validator=metric_validator,
         )
     return {"conditions": normalized}
 
@@ -322,10 +325,15 @@ def validate_metric_early_stop_policy(
     value: Any,
     *,
     label: str = "early_stop",
+    metric_validator: Callable[[str], object] = validate_metric_name,
 ) -> dict[str, Any]:
     """Enforce the current authoring and launch policy over a structural config."""
 
-    normalized = normalize_metric_early_stop_config(value, label=label)
+    normalized = normalize_metric_early_stop_config(
+        value,
+        label=label,
+        metric_validator=metric_validator,
+    )
     for condition_id, condition in normalized["conditions"].items():
         condition_label = f"{label}.conditions.{condition_id}"
         trigger = str(condition["trigger"])
@@ -401,9 +409,7 @@ def validate_metric_early_stop_decision(
     for key in ("outcome", "trigger", "metric"):
         if str(decision[key]) != str(condition[key]):
             raise ValueError(f"{label}.{key} does not match the configured condition")
-    if dict(_require_mapping(decision["condition"], label=f"{label}.condition")) != dict(
-        condition
-    ):
+    if dict(_require_mapping(decision["condition"], label=f"{label}.condition")) != dict(condition):
         raise ValueError(f"{label}.condition does not match the normalized train config")
     metric_step = decision["metric_step"]
     elapsed_steps = decision["elapsed_steps"]
@@ -481,9 +487,7 @@ class MetricEarlyStopStateMachine:
     def __init__(self, config: Any, *, label: str = "early_stop") -> None:
         self.config = normalize_metric_early_stop_config(config, label=label)
         self.conditions: Mapping[str, Mapping[str, Any]] = self.config["conditions"]
-        self.states = {
-            condition_id: _MetricEarlyStopRuntime() for condition_id in self.conditions
-        }
+        self.states = {condition_id: _MetricEarlyStopRuntime() for condition_id in self.conditions}
         self.config_sha256 = canonical_json_sha256(self.config)
 
     @staticmethod
@@ -633,7 +637,11 @@ class MetricEarlyStopStateMachine:
         eligible = sample.step >= int(condition["start_after_steps"])
         anchor = max(
             int(condition["start_after_steps"]),
-            int(state.last_improvement_step if state.last_improvement_step is not None else sample.step),
+            int(
+                state.last_improvement_step
+                if state.last_improvement_step is not None
+                else sample.step
+            ),
         )
         elapsed = max(0, sample.step - anchor) if eligible else 0
         patience = int(condition["patience_steps"])

@@ -6,6 +6,7 @@ from typing import Any, cast
 from gradlab.policy_registry import (
     SB3_ALGORITHMS,
     Sb3AlgorithmId,
+    load_policy_model_class,
     resolve_policy_algorithm,
 )
 from gradlab.trusted_inputs import ApprovedModelInput
@@ -48,31 +49,29 @@ def load_sb3_model(
             raise TypeError("ppo_model_class must be a stable-baselines3 PPO subclass")
     model_input.verify()
     path = model_input.model_path
+    document = _approved_model_document(model_input)
+    artifact_model_class = str(document["policy"]["model_class"])
+    registered_model_class = load_policy_model_class(
+        artifact_model_class,
+        algorithm_id=algorithm_id,
+    )
     if algorithm_id == "a2c":
         from stable_baselines3 import A2C
 
-        model_class = A2C
+        if not issubclass(registered_model_class, A2C):
+            raise TypeError("registered A2C model class must inherit stable-baselines3 A2C")
+        model_class = registered_model_class
     else:
         from stable_baselines3 import PPO
 
-        document = _approved_model_document(model_input)
-        artifact_model_class = str(document["policy"]["model_class"])
         if ppo_model_class is not None:
             model_class = ppo_model_class
-        elif artifact_model_class == "gradlab.ppo.GradLabPPO":
-            from gradlab.ppo import GradLabPPO
-
-            model_class = GradLabPPO
-        elif artifact_model_class == "gradlab.task_advantage.GroupedAdvantagePPO":
-            from gradlab.task_advantage import GroupedAdvantagePPO
-
-            model_class = GroupedAdvantagePPO
-        elif artifact_model_class == "gradlab.task_advantage.PerTaskAdvantagePPO":
-            from gradlab.task_advantage import PerTaskAdvantagePPO
-
-            model_class = PerTaskAdvantagePPO
         else:
-            model_class = PPO
+            if not issubclass(registered_model_class, PPO):
+                raise TypeError(
+                    "registered PPO model class must inherit stable-baselines3 PPO"
+                )
+            model_class = registered_model_class
     kwargs: dict[str, Any] = {"device": device}
     if env is not None:
         kwargs["env"] = env
@@ -90,8 +89,6 @@ def load_sb3_model(
             group["fused"] = False
             group["capturable"] = False
             group["foreach"] = None
-    if algorithm_id == "a2c":
-        document = _approved_model_document(model_input)
     provenance = document.get("provenance")
     training_metadata = (
         provenance.get("training_metadata")

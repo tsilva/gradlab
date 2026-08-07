@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Literal, TypeAlias, cast
@@ -131,6 +132,26 @@ def default_action_selection_mode(algorithm_id: PolicyAlgorithmId) -> str:
     if spec is None:
         raise ValueError(f"unsupported checkpoint algorithm: {algorithm_id}")
     return spec.default_action_selection_mode
+
+
+def load_policy_model_class(
+    model_class: str,
+    *,
+    algorithm_id: PolicyAlgorithmId,
+) -> type:
+    normalized = str(model_class).strip()
+    registered_algorithm = MODEL_CLASS_ALGORITHMS.get(normalized)
+    if registered_algorithm is None:
+        raise ValueError(f"unsupported checkpoint model class: {model_class}")
+    if registered_algorithm != algorithm_id:
+        raise ValueError("checkpoint algorithm and model class metadata disagree")
+    module_name, separator, class_name = normalized.rpartition(".")
+    if not separator:
+        raise ValueError(f"invalid checkpoint model class: {model_class}")
+    loaded = getattr(importlib.import_module(module_name), class_name, None)
+    if not isinstance(loaded, type):
+        raise TypeError(f"checkpoint model class is not a type: {model_class}")
+    return loaded
 
 
 def resolve_policy_algorithm(

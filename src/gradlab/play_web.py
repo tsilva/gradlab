@@ -1438,9 +1438,7 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
                 self.remaining_steps = 0
                 self.continue_target = None
                 self.clear_input()
-                self.capture.abort(
-                    "custom episode termination conditions are not publishable"
-                )
+                self.capture.abort("custom episode termination conditions are not publishable")
                 self._set_state(
                     "paused",
                     message=(
@@ -2423,7 +2421,7 @@ class PlaybackWebServer:
         self._authorize_publication(request, mutation=True)
         try:
             payload = await request.json()
-        except (json.JSONDecodeError, TypeError):
+        except json.JSONDecodeError, TypeError:
             return web.json_response({"error": "publication request must be JSON"}, status=400)
         if not isinstance(payload, Mapping):
             return web.json_response({"error": "publication request must be an object"}, status=400)
@@ -2667,16 +2665,7 @@ class PlaybackWebServer:
             if problem is not None:
                 return problem
             return web.json_response({"error": str(exc)}, status=502)
-        etag = f'"{payload["revision"]}"'
-        if request.headers.get("If-None-Match") == etag:
-            return web.Response(status=304, headers={"ETag": etag})
-        return web.json_response(
-            payload,
-            headers={
-                "ETag": etag,
-                "Cache-Control": "private, no-cache",
-            },
-        )
+        return web.json_response(payload)
 
     async def catalog_goals(self, request: web.Request) -> web.Response:
         self._authorize_api(request)
@@ -2827,6 +2816,17 @@ class PlaybackWebServer:
         return web.json_response(document)
 
     async def catalog_checkpoints(self, request: web.Request) -> web.Response:
+        return await self._catalog_checkpoints(request, include_wandb=False)
+
+    async def catalog_checkpoint_training(self, request: web.Request) -> web.Response:
+        return await self._catalog_checkpoints(request, include_wandb=True)
+
+    async def _catalog_checkpoints(
+        self,
+        request: web.Request,
+        *,
+        include_wandb: bool,
+    ) -> web.Response:
         self._authorize_api(request)
         if self.catalog is None:
             raise web.HTTPNotFound()
@@ -2844,10 +2844,24 @@ class PlaybackWebServer:
                 run_id=request.match_info["run_id"],
                 query="",
                 goal_variant_id=request.query.get("goal_variant_id", ""),
+                include_wandb=include_wandb,
             )
             items = list(page.items)
             metric_columns = list(page.metric_columns)
             warnings = list(page.warnings)
+            if not include_wandb and any(
+                column.get("evidence") == "training"
+                for column in metric_columns
+                if isinstance(column, Mapping)
+            ):
+                warnings.append(
+                    {
+                        "code": "wandb_enrichment_pending",
+                        "message": "Live W&B training evidence is loading.",
+                        "retryable": True,
+                        "source": "wandb",
+                    }
+                )
         except Exception as exc:
             problem = self._catalog_error_response(exc)
             if problem is not None:
@@ -2913,6 +2927,7 @@ class PlaybackWebServer:
                 "next_cursor": None,
                 "metric_columns": metric_columns,
                 "selection_fence": page.selection_fence,
+                "training_enrichment": "complete" if include_wandb else "pending",
                 "freshness": "partial" if warnings else page.freshness,
                 "warnings": warnings,
             }
@@ -3463,7 +3478,6 @@ class PlaybackWebServer:
             await asyncio.sleep(1.0 / 120.0)
 
     async def run(self) -> int:
-        await self._prepare_initial_catalog()
         app = web.Application(middlewares=[self.security_headers])
         app.add_routes(
             [
@@ -3540,6 +3554,10 @@ class PlaybackWebServer:
                     self.catalog_checkpoints,
                 ),
                 web.get(
+                    "/api/catalog/runs/{run_id}/checkpoint-training",
+                    self.catalog_checkpoint_training,
+                ),
+                web.get(
                     "/api/catalog/runs/{run_id}/inspection",
                     self.inspect_run,
                 ),
@@ -3578,6 +3596,7 @@ class PlaybackWebServer:
         print(f"{dashboard_label}: {urls[0]}", flush=True)
         if self.paired_windows and not self.defer_secondary_window:
             print(f"Player stats: {urls[1]}", flush=True)
+        await self._prepare_initial_catalog()
         self.runner.start()
         pump = asyncio.create_task(self.pump())
         if not bool(getattr(self.args, "no_open", False)):

@@ -78,7 +78,6 @@ def main(argv: list[str] | None = None) -> int:
     catalog = PlayCatalog(
         public_models_base_url=args.public_models_base_url,
         repo_root=repo_root,
-        cache_path=PlayCatalog.default_cache_path(repo_root),
         control_bucket=catalog_authority,
         control_error=catalog_control_error,
         wandb_run_location=wandb_location,
@@ -107,9 +106,7 @@ def main(argv: list[str] | None = None) -> int:
             "public_run",
             run_ref,
             run_id=run_id,
-            checkpoint_id=(
-                exact_checkpoint.checkpoint_id if exact_checkpoint is not None else ""
-            ),
+            checkpoint_id=(exact_checkpoint.checkpoint_id if exact_checkpoint is not None else ""),
         )
     elif args.model:
         initial_source = PlaySourceSpec("local", str(Path(args.model).expanduser()))
@@ -131,8 +128,7 @@ def main(argv: list[str] | None = None) -> int:
                 start_private_catalog()
                 if catalog_authority is None:
                     raise CatalogUnavailable(
-                        catalog_control_error
-                        or "private catalog authority could not be started",
+                        catalog_control_error or "private catalog authority could not be started",
                         code="catalog_configuration",
                         retryable=False,
                         source="control-catalog",
@@ -140,7 +136,6 @@ def main(argv: list[str] | None = None) -> int:
                 catalog = PlayCatalog(
                     public_models_base_url=args.public_models_base_url,
                     repo_root=repo_root,
-                    cache_path=PlayCatalog.default_cache_path(repo_root),
                     control_bucket=catalog_authority,
                     control_error=catalog_control_error,
                     wandb_run_location=wandb_location,

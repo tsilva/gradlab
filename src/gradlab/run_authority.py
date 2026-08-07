@@ -124,7 +124,7 @@ class RunAuthority:
 
     def create_manifest(self, manifest: RunManifest) -> str:
         event = self._goal_catalog_event_for_manifest(manifest)
-        self._goal_catalog_projector().put_event(event)
+        self._put_goal_catalog_event(event)
         etag = self.control.put_json(
             f"{self.run_prefix(manifest.run_id)}/manifest.json",
             manifest.to_dict(),
@@ -135,7 +135,7 @@ class RunAuthority:
             manifest.to_dict(),
             create_only=True,
         )
-        self._project_goal_catalog_best_effort(
+        self._schedule_goal_catalog_projection(
             manifest.goal_slug,
             event_id=str(event["event_id"]),
         )
@@ -143,13 +143,13 @@ class RunAuthority:
 
     def create_attempt_manifest(self, manifest: RunManifest) -> str:
         event = self._goal_catalog_event_for_manifest(manifest)
-        self._goal_catalog_projector().put_event(event)
+        self._put_goal_catalog_event(event)
         etag = self.control.put_json(
             f"{self.run_prefix(manifest.run_id)}/attempts/{manifest.attempt_id}/manifest.json",
             manifest.to_dict(),
             create_only=True,
         )
-        self._project_goal_catalog_best_effort(
+        self._schedule_goal_catalog_projection(
             manifest.goal_slug,
             event_id=str(event["event_id"]),
         )
@@ -364,7 +364,7 @@ class RunAuthority:
             raise RuntimeError("goal catalog event write returned no ETag")
         return dict(event)
 
-    def _project_goal_catalog_best_effort(
+    def _schedule_goal_catalog_projection(
         self,
         goal_slug: str,
         *,
@@ -389,23 +389,16 @@ class RunAuthority:
         if outcome.get("succeeded") is True:
             return True
 
-        def queue_repair() -> None:
-            try:
-                from gradlab.catalog_jobs import enqueue_catalog_projection
+        try:
+            from gradlab.catalog_jobs import enqueue_catalog_projection
 
-                enqueue_catalog_projection(
-                    repo_root=Path(__file__).resolve().parents[2],
-                    goal_slug=goal_slug,
-                    request_id=event_id,
-                )
-            except Exception:
-                pass
-
-        threading.Thread(
-            target=queue_repair,
-            name=f"gradlab-queue-catalog-{event_id[:12]}",
-            daemon=True,
-        ).start()
+            enqueue_catalog_projection(
+                repo_root=Path(__file__).resolve().parents[2],
+                goal_slug=goal_slug,
+                request_id=event_id,
+            )
+        except Exception:
+            pass
         return False
 
     def catalog_generation(self, goal_slug: str | None = None) -> dict[str, Any] | None:
@@ -551,7 +544,7 @@ class RunAuthority:
         goal_slugs: set[str] = set()
         for manifest, terminal in records:
             manifest_event = self._goal_catalog_event_for_manifest(manifest)
-            self._goal_catalog_projector().put_event(manifest_event)
+            self._put_goal_catalog_event(manifest_event)
             goal_slugs.add(manifest.goal_slug)
             if terminal is not None:
                 terminal_key = (
@@ -564,7 +557,7 @@ class RunAuthority:
                     source_key=terminal_key,
                     metrics=None,
                 )
-                self._goal_catalog_projector().put_event(terminal_event)
+                self._put_goal_catalog_event(terminal_event)
             for eval_key in self.evaluation.iter_keys(
                 f"{self.run_prefix(manifest.run_id)}/evals/"
             ):
@@ -592,7 +585,7 @@ class RunAuthority:
                         "metrics": metrics,
                     },
                 )
-                self._goal_catalog_projector().put_event(eval_event)
+                self._put_goal_catalog_event(eval_event)
             promotion_document = self.control.get_json_optional(
                 f"{self.run_prefix(manifest.run_id)}/promotion.json"
             )
@@ -607,7 +600,7 @@ class RunAuthority:
                     created_at=promotion.promoted_at,
                     promotion=promotion.to_dict(),
                 )
-                self._goal_catalog_projector().put_event(promotion_event)
+                self._put_goal_catalog_event(promotion_event)
         results = {
             goal_slug: self._goal_catalog_projector().reconcile(goal_slug).to_dict()
             for goal_slug in sorted(goal_slugs)
@@ -616,8 +609,8 @@ class RunAuthority:
 
     def register_goal_variant(self, manifest: RunManifest) -> dict[str, Any]:
         event = self._goal_catalog_event_for_manifest(manifest)
-        self._goal_catalog_projector().put_event(event)
-        self._project_goal_catalog_best_effort(
+        self._put_goal_catalog_event(event)
+        self._schedule_goal_catalog_projection(
             manifest.goal_slug,
             event_id=str(event["event_id"]),
         )
@@ -639,76 +632,6 @@ class RunAuthority:
             return self.register_goal_variant(manifest)
         raise ValueError(
             "terminal goal catalog updates require an authoritative terminal receipt"
-        )
-    def update_goal_variant_run_best_effort(
-        self,
-        manifest: RunManifest,
-        *,
-        state: str,
-        updated_at: str | None = None,
-        metrics: Mapping[str, Any] | None = None,
-        stop_reason: str | None = None,
-        final_step: int | None = None,
-        early_stop: Mapping[str, Any] | None = None,
-    ) -> bool:
-        if manifest.goal_variant is None:
-            return False
-        try:
-            self.update_goal_variant_run(
-                manifest,
-                state=state,
-                updated_at=updated_at,
-                metrics=metrics,
-                stop_reason=stop_reason,
-                final_step=final_step,
-                early_stop=early_stop,
-            )
-        except Exception as exc:
-            try:
-                self.record_goal_variant_projection(manifest, error=exc)
-            except Exception:
-                pass
-            return False
-        try:
-            self.record_goal_variant_projection(manifest)
-        except Exception:
-            pass
-        return True
-
-    def record_goal_variant_projection(
-        self,
-        manifest: RunManifest,
-        *,
-        error: BaseException | None = None,
-    ) -> None:
-        self.control.put_json(
-            f"{self.run_prefix(manifest.run_id)}/goal-variant-projection.json",
-            {
-                "schema_version": 1,
-                "run_id": manifest.run_id,
-                "variant_id": (
-                    str(manifest.goal_variant.get("variant_id") or "")
-                    if isinstance(manifest.goal_variant, Mapping)
-                    else ""
-                ),
-                "status": "pending_rebuild" if error is not None else "indexed",
-                "error_type": type(error).__name__ if error is not None else "",
-                "updated_at": self.clock.utc_now(),
-            },
-            create_only=False,
-        )
-
-    def project_goal_variant_best_effort(self, manifest: RunManifest) -> bool:
-        if manifest.goal_variant is None:
-            return False
-        try:
-            event = self._goal_catalog_event_for_manifest(manifest)
-            self._goal_catalog_projector().put_event(event)
-        except Exception:
-            return False
-        return self._project_goal_catalog_best_effort(
-            manifest.goal_slug,
-            event_id=str(event["event_id"]),
         )
 
     def clear_goal_variant_catalog(self) -> dict[str, int]:
@@ -1350,14 +1273,14 @@ class RunAuthority:
             else None
         )
         if event is not None:
-            self._goal_catalog_projector().put_event(event)
+            self._put_goal_catalog_event(event)
         etag = self.evaluation.put_json(
             key,
             result.to_dict(),
             create_only=True,
         )
         if manifest is not None and event is not None:
-            self._project_goal_catalog_best_effort(
+            self._schedule_goal_catalog_projection(
                 manifest.goal_slug,
                 event_id=str(event["event_id"]),
             )
@@ -1383,7 +1306,7 @@ class RunAuthority:
             else None
         )
         if event is not None:
-            self._goal_catalog_projector().put_event(event)
+            self._put_goal_catalog_event(event)
         etag = self.control.put_json(
             key,
             receipt.to_dict(),
@@ -1391,7 +1314,7 @@ class RunAuthority:
         )
         self._update_public_index(receipt.run_id, promotion=receipt)
         if manifest is not None and event is not None:
-            self._project_goal_catalog_best_effort(
+            self._schedule_goal_catalog_projection(
                 manifest.goal_slug,
                 event_id=str(event["event_id"]),
             )
@@ -1543,14 +1466,14 @@ class RunAuthority:
             else None
         )
         if event is not None:
-            self._goal_catalog_projector().put_event(event)
+            self._put_goal_catalog_event(event)
         etag = self.control.put_json(
             terminal_key,
             receipt.to_dict(),
             create_only=True,
         )
         if manifest is not None:
-            self._project_goal_catalog_best_effort(
+            self._schedule_goal_catalog_projection(
                 manifest.goal_slug,
                 event_id=(
                     str(event["event_id"])
@@ -1591,14 +1514,14 @@ class RunAuthority:
             else None
         )
         if event is not None:
-            self._goal_catalog_projector().put_event(event)
+            self._put_goal_catalog_event(event)
         etag = self.control.put_json(
             terminal_key,
             receipt.to_dict(),
             create_only=True,
         )
         if manifest is not None and event is not None:
-            self._project_goal_catalog_best_effort(
+            self._schedule_goal_catalog_projection(
                 manifest.goal_slug,
                 event_id=str(event["event_id"]),
             )
@@ -1632,8 +1555,8 @@ class RunAuthority:
             ),
             metrics=metrics,
         )
-        self._goal_catalog_projector().put_event(event)
-        self._project_goal_catalog_best_effort(
+        self._put_goal_catalog_event(event)
+        self._schedule_goal_catalog_projection(
             manifest.goal_slug,
             event_id=str(event["event_id"]),
         )

@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import io
+import threading
 import time
 from contextlib import nullcontext
 from dataclasses import replace
@@ -1524,9 +1525,7 @@ def test_loopback_server_requires_exact_origin_and_fragment_token() -> None:
                     "same-origin-allow-popups"
                 )
                 assert "frame-ancestors 'none'" in response.headers["Content-Security-Policy"]
-                oauth_complete = await client.get(
-                    f"{server.origin}/publication/oauth/complete"
-                )
+                oauth_complete = await client.get(f"{server.origin}/publication/oauth/complete")
                 assert oauth_complete.status == 200
                 assert oauth_complete.headers["Cross-Origin-Opener-Policy"] == (
                     "same-origin-allow-popups"
@@ -1544,9 +1543,7 @@ def test_loopback_server_requires_exact_origin_and_fragment_token() -> None:
                 )
                 assert font_response.status == 200
                 assert font_response.headers["Content-Type"] == "font/woff2"
-                assert "default-src 'self'" in font_response.headers[
-                    "Content-Security-Policy"
-                ]
+                assert "default-src 'self'" in font_response.headers["Content-Security-Policy"]
                 panel_response = await client.get(f"{server.origin}/assets/panels/catalog.js")
                 assert panel_response.status == 200
                 assert "javascript" in panel_response.headers["Content-Type"]
@@ -1794,6 +1791,8 @@ def test_publication_authority_is_exact_tab_private_and_rotates(tmp_path: Path) 
 
 def test_catalog_http_api_requires_the_fragment_session_token() -> None:
     class FakeCatalog:
+        checkpoint_modes: list[bool] = []
+
         @staticmethod
         def environments(*, query, cursor):
             assert (query, cursor) == ("mario", None)
@@ -1975,35 +1974,36 @@ def test_catalog_http_api_requires_the_fragment_session_token() -> None:
                 next_cursor=None,
             )
 
-        @staticmethod
-        def checkpoints(*, run_id, query, goal_variant_id):
+        @classmethod
+        def checkpoints(cls, *, run_id, query, goal_variant_id, include_wandb):
             assert (
                 run_id,
                 query,
                 goal_variant_id,
             ) == ("gradlab-" + "a" * 32, "", "")
+            cls.checkpoint_modes.append(include_wandb)
             return CheckpointPage(
                 items=(
                     {
-                    "run_id": run_id,
-                    "checkpoint_id": "checkpoint-1-" + "b" * 16,
-                    "sha256": "b" * 64,
-                    "metrics": {
-                        "train/progress/kills/origin/target/rolling/mean": 8.5,
-                        "train/episode/return/shaped/origin/target/rolling/mean": 120.0,
-                    },
-                    "evaluation": {
-                        "status": "accepted",
-                        "pass": True,
-                        "episodes_planned": 100,
-                        "episodes_completed": 100,
-                        "failure_count": 0,
-                        "criteria": [],
+                        "run_id": run_id,
+                        "checkpoint_id": "checkpoint-1-" + "b" * 16,
+                        "sha256": "b" * 64,
                         "metrics": {
-                            "eval/full/progress/kills/mean": 9.0,
-                            "eval/full/progress/kills/max": 15.0,
+                            "train/progress/kills/origin/target/rolling/mean": 8.5,
+                            "train/episode/return/shaped/origin/target/rolling/mean": 120.0,
                         },
-                    },
+                        "evaluation": {
+                            "status": "accepted",
+                            "pass": True,
+                            "episodes_planned": 100,
+                            "episodes_completed": 100,
+                            "failure_count": 0,
+                            "criteria": [],
+                            "metrics": {
+                                "eval/full/progress/kills/mean": 9.0,
+                                "eval/full/progress/kills/max": 15.0,
+                            },
+                        },
                     },
                 ),
                 metric_columns=(
@@ -2167,7 +2167,7 @@ def test_catalog_http_api_requires_the_fragment_session_token() -> None:
                     headers={"Authorization": f"Bearer {server.token}"},
                 )
                 assert activity.status == 200
-                assert activity.headers["ETag"] == f'"{"f" * 64}"'
+                assert "ETag" not in activity.headers
                 unchanged = await client.get(
                     (f"{server.origin}/api/catalog/environments/Mario/goals/Level1-1/activity"),
                     headers={
@@ -2175,7 +2175,7 @@ def test_catalog_http_api_requires_the_fragment_session_token() -> None:
                         "If-None-Match": f'"{"f" * 64}"',
                     },
                 )
-                assert unchanged.status == 304
+                assert unchanged.status == 200
                 variant_inspection = await client.get(
                     (
                         f"{server.origin}/api/catalog/environments/Mario"
@@ -2256,6 +2256,13 @@ def test_catalog_http_api_requires_the_fragment_session_token() -> None:
                     "eval/full/progress/kills/max",
                     "train/episode/return/shaped/origin/target/rolling/mean",
                 ]
+                training = await client.get(
+                    (f"{server.origin}/api/catalog/runs/gradlab-{'a' * 32}/checkpoint-training"),
+                    headers={"Authorization": f"Bearer {server.token}"},
+                )
+                assert training.status == 200
+                assert (await training.json())["training_enrichment"] == "complete"
+                assert FakeCatalog.checkpoint_modes == [False, True]
                 run_inspection = await client.get(
                     f"{server.origin}/api/catalog/runs/gradlab-{'a' * 32}/inspection",
                     headers={"Authorization": f"Bearer {server.token}"},
@@ -2363,6 +2370,37 @@ def test_initial_environment_catalog_is_embedded_in_selection_snapshots() -> Non
     assert nested_snapshot["app"]["catalog"]["items"][0]["name"] == "Mario"
 
 
+def test_player_binds_before_initial_catalog_work() -> None:
+    release = threading.Event()
+
+    class SlowCatalog:
+        @staticmethod
+        def initial_environments():
+            assert release.wait(timeout=3.0)
+            return {"items": [], "next_cursor": None}
+
+    async def scenario() -> None:
+        runner = HumanRecordingRunner(FakeHumanSession(), human_args())
+        server = PlaybackWebServer(runner, human_args(), catalog=SlowCatalog())
+        started_at = time.monotonic()
+        task = asyncio.create_task(server.run())
+        try:
+            deadline = started_at + 1.0
+            while not server.origin and time.monotonic() < deadline:
+                await asyncio.sleep(0.005)
+            assert server.origin
+            assert time.monotonic() - started_at < 0.5
+            assert not task.done()
+            release.set()
+            await asyncio.sleep(0.05)
+        finally:
+            release.set()
+            runner.stop()
+            await asyncio.wait_for(task, timeout=3.0)
+
+    asyncio.run(scenario())
+
+
 def test_web_dashboard_assets_are_packaged_beside_server() -> None:
     root = Path(__file__).parents[1] / "src" / "gradlab" / "web_player"
     panel_root = root / "panels"
@@ -2450,7 +2488,7 @@ def test_web_dashboard_assets_are_packaged_beside_server() -> None:
     assert "event.source !== youtubeOAuthPopup" in script
     assert "gradlab-youtube-oauth-complete" in oauth_script
     assert "window.opener.postMessage(message, location.origin)" in oauth_script
-    assert 'location.replace(`/#token=${encodeURIComponent(token)}`)' in oauth_script
+    assert "location.replace(`/#token=${encodeURIComponent(token)}`)" in oauth_script
     assert '$("#player-home")' not in script
     assert '$("#page-title").hidden = Boolean(state.sourceMode || activeCheckpointRoute);' in script
     assert '$("#page-title").textContent = "Select checkpoint"' not in script

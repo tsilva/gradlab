@@ -10,6 +10,10 @@ from gradlab.early_stop import (
     validate_metric_early_stop_policy,
 )
 from gradlab.env_identity import validate_task_config
+from gradlab.environment_fields import (
+    GOAL_REQUIRED_ENVIRONMENT_FIELD_NAMES,
+    PREPROCESSING_FIELD_NAMES,
+)
 from gradlab.env_registry import (
     env_supports_states,
     qualify_env_id,
@@ -39,19 +43,7 @@ from gradlab.validation import (
 
 ENV_CONFIG_ALLOWED_KEYS = env_config_allowed_keys() | {"n_envs", "task"}
 
-GOAL_REQUIRED_ENV_CONFIG_KEYS = frozenset(
-    {
-        "frame_skip",
-        "max_pool_frames",
-        "n_envs",
-        "obs_crop",
-        "obs_crop_fill",
-        "obs_crop_mode",
-        "obs_resize",
-        "obs_resize_algorithm",
-        "sticky_action_prob",
-    }
-)
+GOAL_REQUIRED_ENV_CONFIG_KEYS = GOAL_REQUIRED_ENVIRONMENT_FIELD_NAMES | {"n_envs"}
 
 
 def _require_bool(document: Mapping[str, Any], key: str, *, label: str) -> bool:
@@ -127,16 +119,7 @@ def _validate_environment_identity(
             preprocessing,
             label=f"{label}.environment.preprocessing",
         )
-        allowed_preprocessing_keys = {
-            "frame_skip",
-            "max_pool_frames",
-            "obs_crop",
-            "obs_crop_fill",
-            "obs_crop_mode",
-            "obs_resize",
-            "obs_resize_algorithm",
-            "sticky_action_prob",
-        }
+        allowed_preprocessing_keys = set(PREPROCESSING_FIELD_NAMES)
         extra_preprocessing_keys = sorted(set(preprocessing) - allowed_preprocessing_keys)
         if extra_preprocessing_keys:
             raise ValueError(

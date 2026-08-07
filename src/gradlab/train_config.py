@@ -7,7 +7,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
-from gradlab.env import EnvConfig
+from gradlab.environment_fields import (
+    ENVIRONMENT_FIELD_SPECS,
+    EnvConfig,
+    EnvironmentFieldSpec,
+    FieldKind,
+    SequenceItemKind,
+    TypeName,
+)
 from gradlab.local_paths import PORTABLE_DEFAULT_RUNS_DIR
 from gradlab.metric_names import METRICS_SCHEMA_VERSION
 from gradlab.modal_eval_protocol import SEED_PROTOCOL
@@ -19,9 +26,6 @@ from gradlab.validation import normalize_obs_crop, normalize_obs_resize
 
 WANDB_MODE_CHOICES = ("online", "offline", "disabled")
 
-FieldKind = Literal["value", "bool_optional"]
-TypeName = Literal["str", "int", "float", "json", "obs_crop", "obs_resize"]
-SequenceItemKind = Literal["str", "number", "rows"]
 FieldOwner = Literal["runtime", "goal_environment", "goal_objective"]
 SourceSection = Literal["runtime", "train", "goal_train"]
 
@@ -60,11 +64,32 @@ class TrainConfigField:
     mapping_value: bool = False
     owner: FieldOwner = "runtime"
     source_section: SourceSection = "runtime"
+    mixed_state: bool = False
 
 
 def _field(dest: str, *, flag: str | None = None, **metadata: Any) -> TrainConfigField:
     cli_flag = flag or f"--{dest.replace('_', '-')}" if metadata.get("environment") else None
     return TrainConfigField(dest, flag=cli_flag, **metadata)
+
+
+def _environment_field(spec: EnvironmentFieldSpec) -> TrainConfigField:
+    return _field(
+        spec.dest,
+        flag=spec.flag,
+        kind=spec.kind,
+        type_name=spec.type_name,
+        default=spec.cli_default,
+        env_default=spec.dest if spec.use_runtime_default else None,
+        choices=spec.choices,
+        help=spec.help,
+        environment=True,
+        non_empty=spec.non_empty,
+        validation_min=spec.validation_min,
+        validation_max=spec.validation_max,
+        sequence_items=spec.sequence_items,
+        mapping_value=spec.mapping_value,
+        mixed_state=spec.mixed_state,
+    )
 
 
 def _env_default(env_defaults: EnvConfig, field: TrainConfigField) -> Any:
@@ -369,6 +394,7 @@ def validate_and_normalize_train_config(
     required_keys: Sequence[str] = (),
     validate_backend_config: bool = True,
     enforce_early_stop_policy: bool = False,
+    metric_validator: Callable[[str], object] | None = None,
 ) -> dict[str, Any]:
     """Validate one flat train config and normalize its structured rule fields."""
 
@@ -393,12 +419,15 @@ def validate_and_normalize_train_config(
             else normalize_metric_early_stop_config
         )
         normalized["early_stop"] = early_stop_validator(
-            normalized["early_stop"], label=f"{label}.early_stop"
+            normalized["early_stop"],
+            label=f"{label}.early_stop",
+            **({} if metric_validator is None else {"metric_validator": metric_validator}),
         )
     if normalized.get("checkpoint_eval_acceptance") is not None:
         normalized["checkpoint_eval_acceptance"] = normalize_metric_threshold_rules(
             normalized["checkpoint_eval_acceptance"],
             label=f"{label}.checkpoint_eval_acceptance",
+            **({} if metric_validator is None else {"metric_validator": metric_validator}),
         )
     if normalized.get("state_archive") is not None:
         n_envs = normalized.get("n_envs")
@@ -536,122 +565,7 @@ TRAIN_CONFIG_FIELDS: tuple[TrainConfigField, ...] = (
     _field("run_name", default="ppo_retro"),
     _field("run_description", default=""),
     _field("runs_dir", default=PORTABLE_DEFAULT_RUNS_DIR),
-    _field(
-        "env_provider",
-        env_default="env_provider",
-        environment=True,
-        non_empty=True,
-        help=(
-            "Environment provider id. Supported: gradlab, stable-retro-turbo, "
-            "supermariobrosnes-turbo, ale-py, gymnasium."
-        ),
-    ),
-    _field(
-        "game",
-        env_default="game",
-        environment=True,
-        non_empty=True,
-        help="Provider game id. Defaults to RETRO_GAME when set.",
-    ),
-    _field(
-        "env_args",
-        type_name="json",
-        default={},
-        env_default="env_args",
-        environment=True,
-        mapping_value=True,
-        help="Provider-native environment constructor arguments, serialized as a JSON object.",
-    ),
-    _field(
-        "task",
-        flag="--task-json",
-        type_name="json",
-        default={},
-        env_default="task",
-        environment=True,
-        mapping_value=True,
-        help="Canonical bound-task definition as a JSON object.",
-    ),
-    _field(
-        "state",
-        env_default="state",
-        environment=True,
-        non_empty=True,
-        help="Provider state. If omitted, the registered environment spec may provide a default.",
-    ),
-    _field(
-        "states",
-        default="",
-        environment=True,
-        sequence_items="str",
-        help="Comma-separated provider states. Without --state-probs, provide exactly one state per env slot in order.",
-    ),
-    _field(
-        "state_probs",
-        default="",
-        environment=True,
-        sequence_items="number",
-        help="Comma-separated non-negative sampling weights for --states. The native vector env normalizes weights and samples independently on each episode reset.",
-    ),
-    _field(
-        "frame_skip",
-        type_name="int",
-        default=4,
-        environment=True,
-        validation_min=1,
-    ),
-    _field(
-        "sticky_action_prob",
-        type_name="float",
-        env_default="sticky_action_prob",
-        environment=True,
-        help="Probability of replaying the previous high-level action; 0 disables sticky actions.",
-    ),
-    _field(
-        "max_pool_frames",
-        kind="bool_optional",
-        default=True,
-        environment=True,
-        help="Max-pool over the last two raw frames inside each frame-skip step.",
-    ),
-    _field(
-        "obs_resize",
-        type_name="obs_resize",
-        env_default="obs_resize",
-        environment=True,
-        help="Policy observation dimensions as height,width.",
-    ),
-    _field(
-        "obs_crop",
-        type_name="obs_crop",
-        env_default="obs_crop",
-        environment=True,
-        help="Four-sided raw-frame crop as top,right,bottom,left before grayscale resize.",
-    ),
-    _field(
-        "obs_crop_mode",
-        env_default="obs_crop_mode",
-        choices=("remove", "mask"),
-        environment=True,
-        non_empty=True,
-        help="Whether obs_crop removes pixels or masks them before resize.",
-    ),
-    _field(
-        "obs_crop_fill",
-        type_name="int",
-        env_default="obs_crop_fill",
-        environment=True,
-        validation_min=0,
-        validation_max=255,
-        help="Pixel fill value for obs_crop_mode=mask.",
-    ),
-    _field(
-        "obs_resize_algorithm",
-        env_default="obs_resize_algorithm",
-        environment=True,
-        non_empty=True,
-        help="Resize algorithm for native frame preprocessing.",
-    ),
+    *(_environment_field(spec) for spec in ENVIRONMENT_FIELD_SPECS),
     _field(
         "checkpoint_freq",
         type_name="int",
