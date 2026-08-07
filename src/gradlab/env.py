@@ -6,7 +6,7 @@ import tempfile
 import time
 import traceback
 from copy import deepcopy
-from dataclasses import dataclass, field, replace
+from dataclasses import replace
 from typing import Any, Mapping, Sequence
 
 import numpy as np
@@ -31,6 +31,11 @@ from gradlab.env_registry import (
     resolve_env_provider,
     validate_provider_constructor_args,
 )
+from gradlab.environment_fields import (
+    DEFAULT_OBS_RESIZE_ALGORITHM as DEFAULT_OBS_RESIZE_ALGORITHM,
+    GAME as GAME,
+    EnvConfig as EnvConfig,
+)
 from gradlab.local_paths import PORTABLE_DEFAULT_RUNS_DIR, configure_matplotlib_cache
 from gradlab.env_identity import task_config_from_train_config, validate_task_config
 from gradlab.env_registry import environment_spec
@@ -52,29 +57,6 @@ from gradlab.validation import (
 from gradlab.rom_runtime import RomRuntimeBinding
 
 configure_matplotlib_cache()
-
-GAME = os.environ.get("RETRO_GAME", "")
-DEFAULT_OBS_RESIZE_ALGORITHM = "area"
-
-
-@dataclass(frozen=True)
-class EnvConfig:
-    env_provider: str = STABLE_RETRO_TURBO_PROVIDER.provider_id
-    game: str = GAME
-    env_args: dict[str, Any] = field(default_factory=dict)
-    task: dict[str, Any] = field(default_factory=dict)
-    state: str = ""
-    states: tuple[str, ...] = ()
-    state_probs: tuple[float, ...] = ()
-    frame_skip: int = 4
-    max_pool_frames: bool = True
-    sticky_action_prob: float = 0.0
-    obs_resize: tuple[int, int] = (84, 84)
-    obs_crop: tuple[int, int, int, int] | None = None
-    obs_crop_mode: str = "remove"
-    obs_crop_fill: int = 0
-    obs_resize_algorithm: str = DEFAULT_OBS_RESIZE_ALGORITHM
-
 
 def validate_obs_crop_mode(value: str) -> str:
     if value not in {"remove", "mask"}:

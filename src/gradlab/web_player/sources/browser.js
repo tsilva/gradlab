@@ -658,6 +658,12 @@ export function checkpointMetricBestBadge(column) {
   return "Best observed";
 }
 
+export function catalogItemMatchesSearch(item, query) {
+  const normalized = String(query || "").trim().toLocaleLowerCase();
+  if (!normalized) return true;
+  return JSON.stringify(item ?? {}).toLocaleLowerCase().includes(normalized);
+}
+
 function decodePathPart(value) {
   try {
     return decodeURIComponent(value);
@@ -874,6 +880,7 @@ export class SourceBrowser {
     };
     this.query = "";
     this.items = [];
+    this.sourceItems = [];
     this.metricColumns = [];
     this.fallbackMetricColumns = [];
     this.sort = { metric: "", direction: "" };
@@ -890,6 +897,8 @@ export class SourceBrowser {
     this.loadedKey = "";
     this.requestSerial = 0;
     this.requestController = null;
+    this.checkpointTrainingController = null;
+    this.checkpointTrainingSerial = 0;
     this.loadingKey = "";
     this.catalogRequestTimeoutMs = catalogRequestTimeoutMs;
     this.searchTimer = null;
@@ -907,6 +916,7 @@ export class SourceBrowser {
     this.autoSelectedRoute = "";
     this.activeBreadcrumbRoute = "";
     this.initialEnvironmentCatalog = null;
+    this.initialCatalogConsumed = false;
     this.historyEnabled = (
       location.pathname === "/"
       || location.pathname.startsWith("/environments/")
@@ -924,7 +934,11 @@ export class SourceBrowser {
 
   render(snapshot) {
     this.app = snapshot?.app || { phase: "active" };
-    if (this.app.catalog && typeof this.app.catalog === "object") {
+    if (
+      !this.initialCatalogConsumed
+      && this.app.catalog
+      && typeof this.app.catalog === "object"
+    ) {
       this.initialEnvironmentCatalog = this.app.catalog;
     }
     const appRoute = this.app.route || {};
@@ -955,6 +969,7 @@ export class SourceBrowser {
       };
       this.query = "";
       this.items = [];
+      this.sourceItems = [];
       this.metricColumns = [];
       this.fallbackMetricColumns = [];
       this.sort = { metric: "", direction: "" };
@@ -964,6 +979,9 @@ export class SourceBrowser {
       this.catalogSource = null;
       this.generatedAt = null;
       this.selectionFence = "";
+      this.checkpointTrainingController?.abort();
+      this.checkpointTrainingController = null;
+      this.checkpointTrainingSerial += 1;
       this.loadedKey = "";
       this.error = "";
       this.selectedCheckpoints.clear();
@@ -984,6 +1002,9 @@ export class SourceBrowser {
     this.requestController?.abort();
     this.requestController = null;
     this.requestSerial += 1;
+    this.checkpointTrainingController?.abort();
+    this.checkpointTrainingController = null;
+    this.checkpointTrainingSerial += 1;
     this.goalVariantDiffController?.abort();
     this.goalVariantDiffController = null;
     this.goalVariantDiffSerial += 1;
@@ -1068,12 +1089,32 @@ export class SourceBrowser {
     );
   }
 
-  goalVariantInspectionEndpoint(variant) {
-    return (
-      `/api/catalog/environments/${encodeURIComponent(this.route.environment_id)}`
-      + `/goals/${encodeURIComponent(this.route.goal_id)}`
-      + `/variants/${encodeURIComponent(variant.variant_id)}/inspection`
-    );
+  goalVariantDiffFromActivity(variant) {
+    const variantId = String(variant?.variant_id || "");
+    if (!variant?.comparison_available) {
+      return {
+        variantId,
+        state: "ready",
+        availability: "unavailable",
+        changeCount: null,
+        entries: [],
+        message: "The live goal activity has no exact comparison proof.",
+      };
+    }
+    const entries = Array.isArray(variant.current_diff) ? variant.current_diff : [];
+    const count = Number(variant.current_diff_count);
+    return {
+      variantId,
+      state: "ready",
+      availability: "exact",
+      changeCount: variant.current_diff_count_exact && Number.isFinite(count)
+        ? Math.max(0, count)
+        : entries.length,
+      entries,
+      message: variant.current_diff_truncated
+        ? "The live activity response contains the first exact differences only. View YAML for the complete contract."
+        : "",
+    };
   }
 
   selectGoalVariant(variant) {
@@ -1084,69 +1125,9 @@ export class SourceBrowser {
       this.goalVariantDiffController = null;
       this.goalVariantDiffSerial += 1;
       this.selectedGoalVariantId = variantId;
-      this.goalVariantDiff = null;
+      this.goalVariantDiff = this.goalVariantDiffFromActivity(variant);
     }
     this.renderView();
-    const presentation = goalConfigurationPresentation(variant);
-    if (presentation.kind !== "current_default" && presentation.comparisonAvailable) {
-      void this.loadGoalVariantDiff(variant);
-    }
-  }
-
-  async loadGoalVariantDiff(variant, { force = false } = {}) {
-    const variantId = String(variant?.variant_id || "");
-    if (!variantId || variantId !== this.selectedGoalVariantId) return;
-    if (
-      !force
-      && this.goalVariantDiff?.variantId === variantId
-      && ["loading", "ready"].includes(this.goalVariantDiff.state)
-    ) {
-      return;
-    }
-    this.goalVariantDiffController?.abort();
-    const controller = new AbortController();
-    this.goalVariantDiffController = controller;
-    const serial = ++this.goalVariantDiffSerial;
-    this.goalVariantDiff = { variantId, state: "loading" };
-    this.renderView();
-    try {
-      const response = await fetch(this.goalVariantInspectionEndpoint(variant), {
-        headers: { Authorization: `Bearer ${this.token}` },
-        cache: "no-store",
-        signal: controller.signal,
-      });
-      const payload = await response.json().catch(() => ({}));
-      if (!response.ok) {
-        throw new Error(payload.error || `Goal diff request failed (${response.status})`);
-      }
-      if (serial !== this.goalVariantDiffSerial || variantId !== this.selectedGoalVariantId) {
-        return;
-      }
-      const goalDiff = payload?.goal_diff;
-      const entries = Array.isArray(goalDiff?.entries) ? goalDiff.entries : [];
-      this.goalVariantDiff = {
-        variantId,
-        state: "ready",
-        availability: goalDiff?.availability === "exact" ? "exact" : "unavailable",
-        changeCount: Number.isFinite(Number(goalDiff?.change_count))
-          ? Math.max(0, Number(goalDiff.change_count))
-          : null,
-        entries,
-        message: String(goalDiff?.message || ""),
-      };
-    } catch (error) {
-      if (controller.signal.aborted || serial !== this.goalVariantDiffSerial) return;
-      this.goalVariantDiff = {
-        variantId,
-        state: "error",
-        message: String(error?.message || error),
-      };
-    } finally {
-      if (serial === this.goalVariantDiffSerial) {
-        this.goalVariantDiffController = null;
-        this.renderView();
-      }
-    }
   }
 
   inspectRun(runId = this.route.run_id) {
@@ -1170,7 +1151,10 @@ export class SourceBrowser {
     ) {
       return false;
     }
-    this.items = Array.isArray(catalog.items) ? [...catalog.items] : [];
+    this.initialCatalogConsumed = true;
+    this.initialEnvironmentCatalog = null;
+    this.sourceItems = Array.isArray(catalog.items) ? [...catalog.items] : [];
+    this.items = [...this.sourceItems];
     this.metricColumns = Array.isArray(catalog.metric_columns)
       ? [...catalog.metric_columns]
       : [];
@@ -1178,7 +1162,8 @@ export class SourceBrowser {
       ? [...catalog.fallback_metric_columns]
       : [];
     this.nextCursor = catalog.next_cursor || null;
-    this.loadedKey = this.routeKey();
+    this.freshness = "partial";
+    this.catalogWarnings = Array.isArray(catalog.warnings) ? catalog.warnings : [];
     this.error = "";
     return true;
   }
@@ -1231,22 +1216,15 @@ export class SourceBrowser {
     this.renderView();
     try {
       const headers = { Authorization: `Bearer ${this.token}` };
-      if (this.route.level === "goal_variants" && this.activityRevision && !force && !append) {
-        headers["If-None-Match"] = `"${this.activityRevision}"`;
-      }
       const response = await fetch(this.endpoint(cursor, { force }), {
         headers,
         cache: "no-store",
         signal: controller.signal,
       });
-      if (response.status === 304) {
-        this.loadedKey = this.routeKey();
-        this.error = "";
-        return;
-      }
       const payload = await response.json().catch(() => ({}));
       if (response.status === 409 && append) {
         this.items = [];
+        this.sourceItems = [];
         this.nextCursor = null;
         this.loadedKey = "";
         this.showToast("Catalog changed; reloading the first page.", false);
@@ -1256,7 +1234,8 @@ export class SourceBrowser {
       if (!response.ok) throw new Error(payload.error || `Catalog request failed (${response.status})`);
       if (serial !== this.requestSerial || key !== this.routeKey()) return;
       const received = Array.isArray(payload.items) ? payload.items : [];
-      this.items = append ? [...this.items, ...received] : received;
+      this.sourceItems = append ? [...this.sourceItems, ...received] : received;
+      this.items = [...this.sourceItems];
       const visibleEligible = new Set(
         this.items
           .filter(checkpointCanEvaluate)
@@ -1304,6 +1283,14 @@ export class SourceBrowser {
         this.nextCursor = payload.next_cursor || null;
       this.loadedKey = this.routeKey();
       this.error = "";
+      if (
+        !append
+        && payload.training_enrichment === "pending"
+        && this.route.level === "runs"
+        && this.route.run_id
+      ) {
+        queueMicrotask(() => this.loadCheckpointTraining(key));
+      }
       if (this.route.checkpoint_id && !append) {
         const selected = received.find(
           (item) => item.checkpoint_id === this.route.checkpoint_id,
@@ -1341,6 +1328,72 @@ export class SourceBrowser {
     }
   }
 
+  async loadCheckpointTraining(expectedKey) {
+    const runId = String(this.route.run_id || "");
+    if (!runId || expectedKey !== this.routeKey()) return;
+    this.checkpointTrainingController?.abort();
+    const controller = new AbortController();
+    this.checkpointTrainingController = controller;
+    const serial = ++this.checkpointTrainingSerial;
+    const query = new URLSearchParams();
+    if (this.query.trim()) query.set("q", this.query.trim());
+    if (this.route.goal_variant_id) {
+      query.set("goal_variant_id", this.route.goal_variant_id);
+    }
+    const timeout = setTimeout(() => controller.abort(), this.catalogRequestTimeoutMs);
+    try {
+      const response = await fetch(
+        `/api/catalog/runs/${encodeURIComponent(runId)}/checkpoint-training?${query}`,
+        {
+          headers: { Authorization: `Bearer ${this.token}` },
+          cache: "no-store",
+          signal: controller.signal,
+        },
+      );
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(payload.error || `Training evidence request failed (${response.status})`);
+      }
+      if (
+        serial !== this.checkpointTrainingSerial
+        || expectedKey !== this.routeKey()
+        || runId !== this.route.run_id
+      ) return;
+      this.sourceItems = Array.isArray(payload.items) ? payload.items : [];
+      this.items = [...this.sourceItems];
+      this.metricColumns = Array.isArray(payload.metric_columns)
+        ? payload.metric_columns
+        : this.metricColumns;
+      this.selectionFence = typeof payload.selection_fence === "string"
+        ? payload.selection_fence
+        : this.selectionFence;
+      this.catalogWarnings = Array.isArray(payload.warnings) ? payload.warnings : [];
+      this.freshness = this.catalogWarnings.length ? "partial" : "fresh";
+    } catch (error) {
+      if (
+        controller.signal.aborted
+        || serial !== this.checkpointTrainingSerial
+        || expectedKey !== this.routeKey()
+      ) return;
+      this.freshness = "partial";
+      this.catalogWarnings = [
+        ...this.catalogWarnings.filter((warning) => warning?.code !== "wandb_enrichment_pending"),
+        {
+          code: "wandb_enrichment_unavailable",
+          message: `Live W&B training evidence is unavailable: ${String(error?.message || error)}`,
+          retryable: true,
+          source: "wandb",
+        },
+      ];
+    } finally {
+      clearTimeout(timeout);
+      if (serial === this.checkpointTrainingSerial) {
+        this.checkpointTrainingController = null;
+        this.renderView();
+      }
+    }
+  }
+
   updatePolling() {
     const shouldPoll = (
       this.app.phase === "selecting"
@@ -1358,19 +1411,33 @@ export class SourceBrowser {
     }
   }
 
-  applyRoute(route) {
+  applyRoute(route, { seedItems = null } = {}) {
     this.route = { ...this.route, ...route };
     this.query = "";
     this.items = [];
+    this.sourceItems = [];
     this.metricColumns = [];
     this.fallbackMetricColumns = [];
     this.sort = { metric: "", direction: "" };
     this.nextCursor = null;
+    this.freshness = "fresh";
+    this.catalogWarnings = [];
+    this.catalogSource = null;
+    this.generatedAt = null;
+    this.selectionFence = "";
     this.loadedKey = "";
     this.error = "";
+    this.checkpointTrainingController?.abort();
+    this.checkpointTrainingController = null;
+    this.checkpointTrainingSerial += 1;
     this.selectedCheckpoints.clear();
     this.resetGoalVariantDetail();
     this.autoSelectedRoute = "";
+    if (Array.isArray(seedItems) && seedItems.length) {
+      this.sourceItems = seedItems.map((item) => ({ ...item }));
+      this.items = [...this.sourceItems];
+      this.freshness = "partial";
+    }
     this.hydrateInitialEnvironments();
     this.renderView();
     this.ensureLoaded();
@@ -1387,11 +1454,11 @@ export class SourceBrowser {
     else history.pushState(null, "", target);
   }
 
-  navigate(route, { historyMode = "push" } = {}) {
+  navigate(route, { historyMode = "push", seedItems = null } = {}) {
     const nextRoute = { ...this.route, ...route };
     const commandId = this.command("browse_sources", { route: nextRoute });
     if (commandId === null) return false;
-    this.applyRoute(route);
+    this.applyRoute(route, { seedItems });
     if (historyMode) this.syncUrl(historyMode);
     this.openSourceRoute?.({ ...this.route });
     return true;
@@ -1476,12 +1543,16 @@ export class SourceBrowser {
   setSearch(value) {
     this.query = value;
     clearTimeout(this.searchTimer);
+    this.checkpointTrainingController?.abort();
+    this.checkpointTrainingController = null;
+    this.checkpointTrainingSerial += 1;
+    this.items = this.sourceItems.filter((item) => catalogItemMatchesSearch(item, value));
+    this.nextCursor = null;
+    this.loadedKey = "";
+    this.renderView();
     this.searchTimer = window.setTimeout(() => {
-      this.items = [];
-      this.nextCursor = null;
-      this.loadedKey = "";
       this.load();
-    }, 220);
+    }, 80);
   }
 
   renderView() {
@@ -1887,6 +1958,9 @@ export class SourceBrowser {
       || variants[0];
     if (!selected) return container;
     this.selectedGoalVariantId = String(selected.variant.variant_id || "");
+    if (this.goalVariantDiff?.variantId !== this.selectedGoalVariantId) {
+      this.goalVariantDiff = this.goalVariantDiffFromActivity(selected.variant);
+    }
 
     const tableScroll = document.createElement("div");
     tableScroll.className = "goal-configuration-table-scroll";
@@ -1957,17 +2031,6 @@ export class SourceBrowser {
     tableScroll.append(table);
     container.append(tableScroll, this.renderGoalVariantDetail(selected));
 
-    const detailState = this.goalVariantDiff;
-    if (
-      selected.presentation.kind !== "current_default"
-      && selected.presentation.comparisonAvailable
-      && (
-        detailState?.variantId !== selected.variant.variant_id
-        || !["loading", "ready", "error"].includes(detailState.state)
-      )
-    ) {
-      queueMicrotask(() => this.loadGoalVariantDiff(selected.variant));
-    }
     return container;
   }
 
@@ -2000,12 +2063,15 @@ export class SourceBrowser {
       { iconName: "external-link", primary: true },
     );
     viewRuns.disabled = !this.hasControl() || presentation.runCount === 0;
-    viewRuns.addEventListener("click", () => this.navigate({
-      level: "runs",
-      goal_variant_id: variant.variant_id,
-      run_id: "",
-      checkpoint_id: "",
-    }));
+    viewRuns.addEventListener("click", () => this.navigate(
+      {
+        level: "runs",
+        goal_variant_id: variant.variant_id,
+        run_id: "",
+        checkpoint_id: "",
+      },
+      { seedItems: Array.isArray(variant.recent_runs) ? variant.recent_runs : [] },
+    ));
     actions.append(inspect, viewRuns);
     header.append(identity, actions);
     section.append(header, this.renderEmbeddedGoalRuns(variant));
@@ -2032,14 +2098,7 @@ export class SourceBrowser {
       return section;
     }
     if (state.state === "error") {
-      const error = document.createElement("div");
-      error.className = "source-inline-error goal-configuration-diff-error";
-      const message = document.createElement("p");
-      message.textContent = state.message;
-      const retry = button("Retry", { iconName: "refresh" });
-      retry.addEventListener("click", () => this.loadGoalVariantDiff(variant, { force: true }));
-      error.append(message, retry);
-      section.append(error);
+      section.append(this.goalVariantDiffEmpty(state.message, { warning: true }));
       return section;
     }
     if (state.availability !== "exact") {

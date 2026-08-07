@@ -15,17 +15,22 @@ from functools import partial
 from pathlib import Path
 from typing import Any
 
-from gradlab.checkpoint_acceptance import manifest_index
 from gradlab.checkpoint_contract import checkpoint_manifest_contract_sha256
 from gradlab.cli_parser import ExactArgumentParser
-from gradlab.clock import format_utc_datetime, parse_utc_datetime, utc_timestamp
+from gradlab.clock import parse_utc_datetime, utc_timestamp
 from gradlab.dstack_backend import DSTACK_VERSION
 from gradlab.early_stop import validate_metric_early_stop_decision
 from gradlab.env import resolve_env_config
 from gradlab.env_config import env_config_from_mapping
-from gradlab.eval_metrics import eval_by_start_records
 from gradlab.eval_backend import EvalBackend, EvalHandle
-from gradlab.evaluation_projection import evaluation_wandb_projection
+from gradlab.evaluation_attempts import (
+    build_modal_eval_payload,
+    compile_eval_intent,
+    compile_execution_contract,
+    evaluation_metric_records,
+    promotion_receipt,
+    verify_eval_result,
+)
 from gradlab.file_utils import file_sha256
 from gradlab.goal_variants import validate_goal_variant_descriptor
 from gradlab.metric_names import (
@@ -44,10 +49,6 @@ from gradlab.metric_store import metric_store_path
 from gradlab.model_sources import download_public_checkpoint_manifest_source
 from gradlab.modal_eval_backend import ModalEvalBackend
 from gradlab.modal_eval_config import load_modal_eval_config
-from gradlab.modal_eval_protocol import (
-    PROTOCOL_SCHEMA_VERSION,
-    normalize_attempt_result,
-)
 from gradlab.policy_bundle import (
     build_recipe_document,
     canonical_json_sha256,
@@ -84,7 +85,6 @@ from gradlab.run_contracts import (
     RunManifest,
     TerminalReceipt,
     document_sha256,
-    eval_idempotency_key,
 )
 from gradlab.supervisor_ledger import SupervisorLedger
 from gradlab.supervisor_runtime import (
@@ -118,6 +118,7 @@ from gradlab.vizdoom_assets import (
 METRIC_SEGMENT_SECONDS = 5.0
 METRIC_SEGMENT_EVENTS = 1_000
 EVAL_POLL_SECONDS = 2.0
+AUTOMATIC_EVAL_PROTOCOL = "modal-acceptance-v3"
 WANDB_WARNING_SECONDS = 45.0
 WANDB_UNHEALTHY_SECONDS = 60.0
 WANDB_DRAIN_TIMEOUT_SECONDS = 300.0
@@ -755,7 +756,6 @@ class RunSupervisor:
             goal_variant = validate_goal_variant_descriptor(materialized["goal_variant"])
             if goal_variant != validate_goal_variant_descriptor(self.manifest.goal_variant):
                 raise RuntimeError("materialized goal variant does not match the run manifest")
-            self.authority.project_goal_variant_best_effort(self.manifest)
 
         config = dict(materialized["train_config"])
         asset = self.manifest.modal.get("rom_asset_manifest")
@@ -1468,24 +1468,13 @@ class RunSupervisor:
         return published
 
     def _execution_contract(self, checkpoint: CheckpointManifest) -> dict[str, Any]:
-        contract = dict(self.eval_contract)
-        contract.update(
-            {
-                "schema_version": PROTOCOL_SCHEMA_VERSION,
-                "checkpoint_sha256": checkpoint.sha256,
-                "runtime_image_ref": self.manifest.image_digest,
-                "recipe_sha256": checkpoint.recipe_document_sha256,
-                "recipe_format_version": int(self.recipe_document["format_version"]),
-                "evaluation_contract_sha256": checkpoint.evaluation_contract_sha256,
-            }
+        return compile_execution_contract(
+            self.eval_contract,
+            manifest=self.manifest,
+            checkpoint=checkpoint,
+            recipe_format_version=int(self.recipe_document["format_version"]),
+            evaluation_contract_sha256=checkpoint.evaluation_contract_sha256,
         )
-        asset = contract.get("asset")
-        if isinstance(asset, Mapping):
-            contract["asset"] = {
-                str(key): value for key, value in asset.items() if str(key) != "object_uri"
-            }
-        manifest_index(contract)
-        return contract
 
     def _ensure_eval(
         self,
@@ -1495,37 +1484,19 @@ class RunSupervisor:
         create_if_missing: bool = True,
     ) -> bool:
         contract = self._execution_contract(checkpoint)
-        episode_manifest_sha = document_sha256(contract["manifest"])
-        key = eval_idempotency_key(
-            run_id=self.manifest.run_id,
-            checkpoint_sha256=checkpoint.sha256,
-            evaluation_contract_sha256=checkpoint.evaluation_contract_sha256,
-            episode_manifest_sha256=episode_manifest_sha,
-            protocol="modal-acceptance-v3",
-        )
         timeout = int(self.modal_config.timeouts.acceptance_seconds)
-        created = parse_utc_datetime(checkpoint.created_at)
-        result_key = f"runs/{self.manifest.run_id}/evals/{key}/result.json"
-        intent = EvalIntent(
-            run_id=self.manifest.run_id,
-            checkpoint_id=checkpoint.checkpoint_id,
-            idempotency_key=key,
-            checkpoint_sha256=checkpoint.sha256,
-            goal_sha256=self.manifest.goal_sha256,
-            recipe_sha256=self.manifest.recipe_sha256,
-            environment_sha256=self.manifest.environment_sha256,
-            evaluation_contract_sha256=checkpoint.evaluation_contract_sha256,
-            episode_manifest_sha256=episode_manifest_sha,
-            protocol="modal-acceptance-v3",
+        intent = compile_eval_intent(
+            manifest=self.manifest,
+            checkpoint=checkpoint,
             execution_contract=contract,
-            result_key=result_key,
+            evaluation_contract_sha256=checkpoint.evaluation_contract_sha256,
+            protocol=AUTOMATIC_EVAL_PROTOCOL,
             timeout_seconds=timeout,
-            created_at=format_utc_datetime(created),
-            expires_at=format_utc_datetime(created + timedelta(seconds=timeout)),
+            created_at=parse_utc_datetime(checkpoint.created_at),
         )
         existing = self.authority.eval_intent(
             run_id=self.manifest.run_id,
-            idempotency_key=key,
+            idempotency_key=intent.idempotency_key,
         )
         if existing is None:
             if not create_if_missing:
@@ -1548,7 +1519,7 @@ class RunSupervisor:
                 "eval_intent_persisted",
                 checkpoint_id=checkpoint.checkpoint_id,
                 checkpoint_step=checkpoint.step,
-                idempotency_key=key,
+                idempotency_key=intent.idempotency_key,
             )
         return True
 
@@ -1559,51 +1530,19 @@ class RunSupervisor:
         attempt: int,
         expires_at: float,
     ) -> dict[str, Any]:
-        intent = dict(row["intent"])
-        checkpoint = dict(intent["checkpoint"])
-        contract = dict(intent["execution_contract"])
-        timeout = int(intent["timeout_seconds"])
-        result_key = str(intent["result_key"])
-        attempt_id = f"{intent['idempotency_key'][:20]}-a{attempt}"
-        payload: dict[str, Any] = {
-            "attempt_id": attempt_id,
-            "contract": contract,
-            "expires_at": expires_at,
-            "child_timeout_seconds": max(
-                1,
-                timeout - int(self.modal_config.timeouts.child_margin_seconds),
-            ),
-            "model_get_url": str(checkpoint["public_url"]),
-            "model_document_get_url": str(checkpoint["model_document_url"]),
-            "model_document_sha256": str(checkpoint["model_document_sha256"]),
-            "recipe_get_url": str(checkpoint["recipe_document_url"]),
-            "result_uri": self.authority.evaluation.uri(result_key),
-            "result_put_url": self.authority.evaluation.presign_put(
-                result_key,
-                expires_seconds=timeout + int(self.modal_config.timeouts.expiry_margin_seconds),
-            ),
-        }
-        asset = self.manifest.modal.get("rom_asset_manifest")
-        if isinstance(asset, Mapping):
-            rom_key = self.authority.evaluation.key_from_uri(str(asset["object_uri"]))
-            payload["rom_get_url"] = self.authority.evaluation.presign_get(
-                rom_key,
-                expires_seconds=timeout + int(self.modal_config.timeouts.expiry_margin_seconds),
-            )
-        iwad = self.manifest.modal.get("vizdoom_iwad_binding")
-        if isinstance(iwad, Mapping):
-            normalized_iwad = validate_vizdoom_iwad_binding(iwad)
-            iwad_key = self.authority.evaluation.key_from_uri(
-                str(normalized_iwad["object_uri"])
-            )
-            payload["vizdoom_iwad_binding"] = {
-                key: value for key, value in normalized_iwad.items() if key != "object_uri"
-            }
-            payload["vizdoom_iwad_get_url"] = self.authority.evaluation.presign_get(
-                iwad_key,
-                expires_seconds=timeout + int(self.modal_config.timeouts.expiry_margin_seconds),
-            )
-        return payload
+        intent_document = dict(row["intent"])
+        checkpoint_document = intent_document.pop("checkpoint")
+        intent_document.pop("checkpoint_step")
+        return build_modal_eval_payload(
+            manifest=self.manifest,
+            checkpoint=CheckpointManifest.from_dict(checkpoint_document),
+            intent=EvalIntent.from_dict(intent_document),
+            attempt=attempt,
+            expires_at=expires_at,
+            evaluation_store=self.authority.evaluation,
+            child_margin_seconds=int(self.modal_config.timeouts.child_margin_seconds),
+            expiry_margin_seconds=int(self.modal_config.timeouts.expiry_margin_seconds),
+        )
 
     def _submit_pending_evals(self) -> int:
         if self.eval_admission_closed:
@@ -1747,30 +1686,17 @@ class RunSupervisor:
         row: Mapping[str, Any],
         raw: Mapping[str, Any],
     ) -> EvalResult:
-        intent = dict(row["intent"])
-        attempt = int(row["attempt"])
-        attempt_id = f"{intent['idempotency_key'][:20]}-a{attempt}"
-        contract = dict(intent["execution_contract"])
-        normalized = normalize_attempt_result(
-            raw,
-            contract=contract,
-            attempt_id=attempt_id,
-        )
-        return EvalResult(
+        intent_document = dict(row["intent"])
+        intent_document.pop("checkpoint")
+        intent_document.pop("checkpoint_step")
+        return verify_eval_result(
             run_id=self.manifest.run_id,
             checkpoint_id=str(row["checkpoint_id"]),
-            idempotency_key=str(row["idempotency_key"]),
+            intent=EvalIntent.from_dict(intent_document),
+            raw=raw,
+            attempt=int(row["attempt"]),
             modal_call_id=str(row["modal_call_id"] or "not-recorded"),
-            status=normalized["status"],  # type: ignore[arg-type]
-            episode_results=normalized["episode_results"],
-            aggregates=normalized["aggregates"],
-            timings={
-                "duration_seconds": normalized["duration_seconds"],
-                "result_observed_at": self.clock.utc_now(),
-            },
-            evidence_sha256=normalized["evidence_sha256"],
-            completed_at=self.clock.utc_now(),
-            error=normalized["error"],
+            clock=self.clock,
         )
 
     def _record_eval_metrics(
@@ -1779,29 +1705,21 @@ class RunSupervisor:
         result: EvalResult,
     ) -> None:
         episodes_planned = int(row["intent"]["execution_contract"]["episodes"])
-        metrics = evaluation_wandb_projection(
-            result.aggregates,
+        metrics, by_start = evaluation_metric_records(
+            result,
             schema_version=METRICS_SCHEMA_VERSION,
             checkpoint_step=int(row["checkpoint_step"]),
-            accepted=result.status == "accepted",
             episodes_planned=episodes_planned,
-            episodes_completed=len(result.episode_results),
         )
         self.store.append_metrics(
             metrics,
             step=int(row["checkpoint_step"]),
             source=f"eval:{row['idempotency_key']}",
         )
-        if result.status in {"accepted", "rejected"} and len(
-            result.episode_results
-        ) == episodes_planned:
+        if by_start is not None:
             self.store.enqueue_event(
                 kind="eval_by_start",
-                payload={
-                    "records": eval_by_start_records(
-                        [dict(episode) for episode in result.episode_results]
-                    )
-                },
+                payload={"records": by_start},
                 step=int(row["checkpoint_step"]),
                 source=f"eval:{row['idempotency_key']}:by-start",
             )
@@ -2244,13 +2162,12 @@ class RunSupervisor:
             ),
         )
         result = dict(selected["result"])
-        receipt = PromotionReceipt(
+        receipt = promotion_receipt(
             run_id=self.manifest.run_id,
             checkpoint_id=str(selected["checkpoint_id"]),
             checkpoint_step=int(selected["checkpoint_step"]),
             eval_idempotency_key=str(selected["idempotency_key"]),
-            eval_result_sha256=document_sha256(result),
-            accepted_episode_count=len(result.get("episode_results") or []),
+            result=result,
             promoted_at=self.clock.utc_now(),
         )
         self.authority.create_promotion(receipt)

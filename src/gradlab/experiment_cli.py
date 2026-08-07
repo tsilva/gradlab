@@ -1634,7 +1634,6 @@ def cmd_retry(args: argparse.Namespace) -> int:
     task_request = _task_request(manifest, manifest_uri=manifest_uri)
     task_request.validate()
     authority.create_attempt_manifest(manifest)
-    authority.project_goal_variant_best_effort(manifest)
     try:
         task = dstack_backend.submit(task_request)
     except Exception:

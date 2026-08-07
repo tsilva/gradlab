@@ -9,6 +9,7 @@ from gradlab.policy_registry import (
     RUNTIME_POLICY_ALGORITHMS,
     SB3_ALGORITHMS,
     default_action_selection_mode,
+    load_policy_model_class,
     resolve_policy_algorithm,
 )
 from gradlab.sb3_models import resolve_sb3_algorithm
@@ -91,3 +92,40 @@ def test_algorithm_registry_views_are_derived_from_authoritative_specs() -> None
         )
         assert (algorithm_id in SB3_ALGORITHMS) is (spec.runtime_family == "sb3")
         assert default_action_selection_mode(algorithm_id) == (spec.default_action_selection_mode)
+
+
+def test_registered_policy_model_class_is_loaded_from_registry_identity() -> None:
+    from stable_baselines3 import A2C, PPO
+
+    assert (
+        load_policy_model_class(
+            "stable_baselines3.ppo.ppo.PPO",
+            algorithm_id="ppo",
+        )
+        is PPO
+    )
+    assert (
+        load_policy_model_class(
+            "stable_baselines3.a2c.a2c.A2C",
+            algorithm_id="a2c",
+        )
+        is A2C
+    )
+    assert load_policy_model_class(
+        "gradlab.ppo.GradLabPPO",
+        algorithm_id="ppo",
+    ).__name__ == "GradLabPPO"
+    assert load_policy_model_class(
+        "gradlab.task_advantage.GroupedAdvantagePPO",
+        algorithm_id="ppo",
+    ).__name__ == "GroupedAdvantagePPO"
+
+
+def test_registered_policy_model_class_rejects_unknown_or_mismatched_identity() -> None:
+    with pytest.raises(ValueError, match="unsupported checkpoint model class"):
+        load_policy_model_class("example.Unknown", algorithm_id="ppo")
+    with pytest.raises(ValueError, match="metadata disagree"):
+        load_policy_model_class(
+            "stable_baselines3.a2c.a2c.A2C",
+            algorithm_id="ppo",
+        )

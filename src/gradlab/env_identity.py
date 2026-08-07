@@ -7,6 +7,10 @@ from typing import Any
 
 from gradlab.action_codecs import validate_task_action_codec
 from gradlab.env_registry import environment_spec, policy_environment_compatibility_id
+from gradlab.environment_fields import (
+    PREPROCESSING_FIELD_NAMES as PREPROCESSING_KEYS,
+    STATE_FIELD_NAMES as STATE_KEYS,
+)
 from gradlab.json_utils import canonical_json_text
 from gradlab.metric_names import metric_path_segment
 from gradlab.provider_config import provider_env_id, provider_game, semantic_provider_args
@@ -33,17 +37,6 @@ from gradlab.task_kernels import (
 ENVIRONMENT_HASH_ALGORITHM = "gradlab.environment.v5"
 ENVIRONMENT_SCHEMA_VERSION = 5
 
-STATE_KEYS = ("state", "states", "state_probs")
-PREPROCESSING_KEYS = (
-    "frame_skip",
-    "max_pool_frames",
-    "sticky_action_prob",
-    "obs_resize",
-    "obs_crop",
-    "obs_crop_mode",
-    "obs_crop_fill",
-    "obs_resize_algorithm",
-)
 IDENTITY_REWARD_KEYS = frozenset({"reward_mode", CELL_NOVELTY_REWARD_KEY}) | COMMON_REWARD_KEYS
 
 

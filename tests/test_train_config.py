@@ -7,6 +7,14 @@ import unittest
 from pathlib import Path
 
 from gradlab.env import EnvConfig
+from gradlab.environment_fields import (
+    ENVIRONMENT_FIELD_NAMES,
+    GOAL_REQUIRED_ENVIRONMENT_FIELD_NAMES,
+    PREPROCESSING_FIELD_NAMES,
+    STATE_FIELD_NAMES,
+)
+from gradlab.experiment_contracts import GOAL_REQUIRED_ENV_CONFIG_KEYS
+from gradlab.env_identity import PREPROCESSING_KEYS, STATE_KEYS
 from gradlab.train_config import (
     add_env_config_args,
     checkpoint_eval_requires_acceptance,
@@ -16,6 +24,7 @@ from gradlab.train_config import (
     validate_train_config_fields,
     validate_train_config_value,
     wandb_publication_enabled,
+    env_config_arg_fields,
 )
 from gradlab.train import build_parser as build_train_parser, parse_train_invocation
 from gradlab.training_lifecycle import TrainingExecutionMode
@@ -31,6 +40,22 @@ POLICY_MODEL = {
 
 
 class TrainConfigFieldSchemaTests(unittest.TestCase):
+    def test_environment_field_registry_drives_all_config_views(self) -> None:
+        fields = env_config_arg_fields()
+
+        self.assertEqual(tuple(field.dest for field in fields), ENVIRONMENT_FIELD_NAMES)
+        self.assertEqual(STATE_KEYS, STATE_FIELD_NAMES)
+        self.assertEqual(PREPROCESSING_KEYS, PREPROCESSING_FIELD_NAMES)
+        self.assertEqual(
+            GOAL_REQUIRED_ENV_CONFIG_KEYS,
+            GOAL_REQUIRED_ENVIRONMENT_FIELD_NAMES | {"n_envs"},
+        )
+        defaults = EnvConfig()
+        for field in fields:
+            if field.env_default is not None:
+                self.assertEqual(field.env_default, field.dest)
+                self.assertEqual(getattr(defaults, field.dest), getattr(defaults, field.env_default))
+
     def test_internal_train_cli_requires_one_materialized_json_input(self) -> None:
         parser = build_train_parser()
         options = {option for action in parser._actions for option in action.option_strings}

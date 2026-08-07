@@ -107,10 +107,7 @@ def test_recipe_v4_embeds_verified_goal_and_recipe_bases() -> None:
 
     assert document["format_version"] == 4
     assert document["recipe"]["train_config"]["metrics_schema_version"] == 19
-    assert (
-        document["resolution"]["recipe"]["base"]["train_config"]["metrics_schema_version"]
-        == 19
-    )
+    assert document["resolution"]["recipe"]["base"]["train_config"]["metrics_schema_version"] == 19
     assert document["resolution"]["goal"]["base"] == resolved.canonical_goal
     assert document["resolution"]["recipe"]["variant_id"].startswith("v-")
     assert (
@@ -174,12 +171,60 @@ def test_portable_recipe_reader_preserves_source_bound_metrics_schema() -> None:
     base_recipe = document["resolution"]["recipe"]["base"]
 
     for recipe in (document["recipe"], base_recipe):
-        recipe["train_config"]["metrics_schema_version"] = 15
+        recipe["train_config"]["metrics_schema_version"] = 18
+        conditions = recipe["train_config"]["early_stop"]["conditions"]
+        conditions["clear_100"]["metric"] = (
+            "train/outcome/success/across_starts/window_100/rate/min"
+        )
+        conditions["return_plateau"] = {
+            "metric": "train/episode/return/shaped/from/target/rolling_up_to_100/mean",
+            "trigger": "no_improvement",
+            "direction": "maximize",
+            "min_delta": 0.01,
+            "delta_mode": "absolute",
+            "start_after_steps": 25_000_000,
+            "patience_steps": 25_000_000,
+            "outcome": "neutral",
+            "action": "observe",
+        }
 
     document["resolution"]["recipe"]["base_sha256"] = canonical_json_sha256(base_recipe)
     document["resolution"]["recipe"]["effective_sha256"] = canonical_json_sha256(document["recipe"])
 
     assert validate_recipe_document(document) == document
+
+
+def test_portable_recipe_reader_rejects_malformed_source_bound_metric_name() -> None:
+    document = level1_1_recipe_document()
+    base_recipe = document["resolution"]["recipe"]["base"]
+
+    for recipe in (document["recipe"], base_recipe):
+        recipe["train_config"]["metrics_schema_version"] = 18
+        recipe["train_config"]["early_stop"]["conditions"]["clear_100"]["metric"] = (
+            "train/episode return"
+        )
+
+    document["resolution"]["recipe"]["base_sha256"] = canonical_json_sha256(base_recipe)
+    document["resolution"]["recipe"]["effective_sha256"] = canonical_json_sha256(document["recipe"])
+
+    with pytest.raises(PolicyDocumentError, match="is not a registered metric"):
+        validate_recipe_document(document)
+
+
+def test_portable_recipe_reader_rejects_unregistered_current_metric_name() -> None:
+    document = level1_1_recipe_document()
+    base_recipe = document["resolution"]["recipe"]["base"]
+
+    for recipe in (document["recipe"], base_recipe):
+        recipe["train_config"]["early_stop"]["conditions"]["clear_100"]["metric"] = (
+            "train/unregistered/value"
+        )
+
+    document["resolution"]["recipe"]["base_sha256"] = canonical_json_sha256(base_recipe)
+    document["resolution"]["recipe"]["effective_sha256"] = canonical_json_sha256(document["recipe"])
+
+    with pytest.raises(PolicyDocumentError, match="is not a registered metric"):
+        validate_recipe_document(document)
 
 
 @pytest.mark.parametrize("invalid", [0, -1, True, "15"])

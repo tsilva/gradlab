@@ -6,6 +6,7 @@ import {
   activeRunMetricColumns,
   availableRunMetricColumns,
   bestRunEfficiency,
+  catalogItemMatchesSearch,
   checkpointCanEvaluate,
   checkpointMetricBestBadge,
   checkpointMetricDescription,
@@ -26,6 +27,31 @@ import {
   sourceRouteFromPath,
   sourceRoutePath,
 } from "../../src/gradlab/web_player/sources/browser.js";
+
+test("catalog search filters the displayed authoritative page synchronously", () => {
+  const mario = { run_id: "gradlab-mario", description: "Level 1-1" };
+  const doom = { run_id: "gradlab-doom", description: "Deathmatch" };
+
+  assert.equal(catalogItemMatchesSearch(mario, "level 1"), true);
+  assert.equal(catalogItemMatchesSearch(doom, "level 1"), false);
+  assert.equal(catalogItemMatchesSearch(doom, ""), true);
+});
+
+test("goal variant selection uses the exact live activity diff", () => {
+  const browser = Object.create(SourceBrowser.prototype);
+  const state = browser.goalVariantDiffFromActivity({
+    variant_id: "goal-variant-live",
+    comparison_available: true,
+    current_diff_count: 1,
+    current_diff_count_exact: true,
+    current_diff: [{ kind: "changed", path: "/train/checkpoint_freq", before: 1, after: 2 }],
+    current_diff_truncated: false,
+  });
+
+  assert.equal(state.availability, "exact");
+  assert.equal(state.changeCount, 1);
+  assert.equal(state.entries[0].path, "/train/checkpoint_freq");
+});
 
 const METRIC = "eval/full/episode/return/shaped/mean";
 
@@ -217,7 +243,9 @@ test("goal activity unifies variants with recent and best runs", async () => {
   );
 
   assert.match(source, /\/goals\/\$\{encodeURIComponent\(this\.route\.goal_id\)\}\/activity/);
-  assert.match(source, /headers\["If-None-Match"\] = `"\$\{this\.activityRevision\}"`/);
+  assert.doesNotMatch(source, /If-None-Match/);
+  assert.match(source, /Array\.isArray\(variant\.current_diff\)/);
+  assert.doesNotMatch(source, /Goal diff request failed/);
   assert.match(source, /this\.activityHasActiveRuns = Boolean\(payload\.has_active_runs\)/);
   assert.match(
     source,

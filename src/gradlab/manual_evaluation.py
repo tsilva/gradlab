@@ -7,20 +7,24 @@ import uuid
 from collections.abc import Callable, Mapping, Sequence
 from copy import deepcopy
 from dataclasses import dataclass
-from datetime import UTC, timedelta
+from datetime import UTC
 from pathlib import Path
 from typing import Any
 
-from gradlab.checkpoint_acceptance import manifest_index, requires_complete_evaluation
+from gradlab.checkpoint_acceptance import requires_complete_evaluation
 from gradlab.checkpoint_contract import checkpoint_manifest_contract_sha256
-from gradlab.clock import Clock, SystemClock, format_utc_datetime, parse_utc_datetime
+from gradlab.clock import Clock, SystemClock, parse_utc_datetime
 from gradlab.early_stop import EARLY_STOP_OPERATORS
 from gradlab.eval_backend import EvalBackend
-from gradlab.eval_metrics import eval_by_start_records
-from gradlab.evaluation_projection import (
-    evaluation_wandb_projection,
-    metrics_schema_version_from_recipe_document,
+from gradlab.evaluation_attempts import (
+    build_modal_eval_payload,
+    compile_eval_intent,
+    compile_execution_contract,
+    evaluation_metric_records,
+    promotion_receipt,
+    verify_eval_result,
 )
+from gradlab.evaluation_projection import metrics_schema_version_from_recipe_document
 from gradlab.evaluation_fence import (
     EVALUATION_SELECTION_FENCE_PATTERN,
     evaluation_selection_fence,
@@ -42,13 +46,8 @@ from gradlab.metric_names import (
     eval_full_progress_metric,
     summary_value,
 )
-from gradlab.vizdoom_assets import validate_vizdoom_iwad_binding
 from gradlab.modal_eval_backend import ModalEvalBackend
 from gradlab.modal_eval_config import ModalEvalConfig, load_modal_eval_config
-from gradlab.modal_eval_protocol import (
-    PROTOCOL_SCHEMA_VERSION,
-    normalize_attempt_result,
-)
 from gradlab.operator_environment import load_repository_operator_environment
 from gradlab.policy_bundle import (
     evaluation_contract,
@@ -64,7 +63,6 @@ from gradlab.run_contracts import (
     RunManifest,
     TerminalReceipt,
     document_sha256,
-    eval_idempotency_key,
 )
 from gradlab.runtime_refs import RuntimeImageInfo, modal_readiness_for_release
 from gradlab.supervisor_ledger import SupervisorLedger
@@ -115,40 +113,6 @@ def _checkpoint_object_prefix(checkpoint: CheckpointManifest) -> str:
 
 def _evaluation_subject_type(run_id: str) -> str:
     return f"checkpoint-evaluation:{run_id}"
-
-
-def _verified_result(
-    *,
-    context: _EvaluationContext,
-    raw: Mapping[str, Any],
-    attempt: int,
-    modal_call_id: str,
-    clock: Clock,
-) -> EvalResult:
-    intent = context.intent
-    contract = dict(intent.execution_contract)
-    attempt_id = f"{intent.idempotency_key[:20]}-a{attempt}"
-    normalized = normalize_attempt_result(
-        raw,
-        contract=contract,
-        attempt_id=attempt_id,
-    )
-    return EvalResult(
-        run_id=context.manifest.run_id,
-        checkpoint_id=context.checkpoint.checkpoint_id,
-        idempotency_key=intent.idempotency_key,
-        modal_call_id=modal_call_id or "not-recorded",
-        status=normalized["status"],  # type: ignore[arg-type]
-        episode_results=normalized["episode_results"],
-        aggregates=normalized["aggregates"],
-        timings={
-            "duration_seconds": normalized["duration_seconds"],
-            "result_observed_at": clock.utc_now(),
-        },
-        evidence_sha256=normalized["evidence_sha256"],
-        completed_at=clock.utc_now(),
-        error=normalized["error"],
-    )
 
 
 def _evaluation_summary(
@@ -329,62 +293,36 @@ class ManualEvaluationSupervisor:
                 f"checkpoint provenance does not match its run: {checkpoint.checkpoint_id}"
             )
         recipe_document = self._recipe_document(checkpoint)
-        contract = evaluation_contract(recipe_document)
+        base_contract = evaluation_contract(recipe_document)
         contract_sha256 = evaluation_contract_sha256(recipe_document)
         checkpoint_contract_sha256 = checkpoint_manifest_contract_sha256(recipe_document)
         if checkpoint_contract_sha256 != checkpoint.evaluation_contract_sha256:
             raise ValueError(
                 f"checkpoint manifest contract hash mismatch: {checkpoint.checkpoint_id}"
             )
-        contract.update(
-            {
-                "schema_version": PROTOCOL_SCHEMA_VERSION,
-                "checkpoint_sha256": checkpoint.sha256,
-                "runtime_image_ref": manifest.image_digest,
-                "recipe_sha256": checkpoint.recipe_document_sha256,
-                "recipe_format_version": int(recipe_document["format_version"]),
-                "evaluation_contract_sha256": contract_sha256,
-            }
+        contract = compile_execution_contract(
+            base_contract,
+            manifest=manifest,
+            checkpoint=checkpoint,
+            recipe_format_version=int(recipe_document["format_version"]),
+            evaluation_contract_sha256=contract_sha256,
+            transform=self._current_protocol_contract,
         )
-        asset = contract.get("asset")
-        if isinstance(asset, Mapping):
-            contract["asset"] = {
-                str(key): value for key, value in asset.items() if str(key) != "object_uri"
-            }
-        contract = self._current_protocol_contract(contract)
-        manifest_index(contract)
         if enforce_current_protocol:
             self._validate_current_protocol(contract)
-        episode_manifest_sha = document_sha256(contract["manifest"])
-        key = eval_idempotency_key(
-            run_id=manifest.run_id,
-            checkpoint_sha256=checkpoint.sha256,
-            evaluation_contract_sha256=contract_sha256,
-            episode_manifest_sha256=episode_manifest_sha,
-            protocol=MANUAL_EVAL_PROTOCOL,
-        )
-        now = self.clock.utc_datetime().astimezone(UTC)
         timeout = int(self.modal_config.timeouts.acceptance_seconds)
-        intent = EvalIntent(
-            run_id=manifest.run_id,
-            checkpoint_id=checkpoint.checkpoint_id,
-            idempotency_key=key,
-            checkpoint_sha256=checkpoint.sha256,
-            goal_sha256=manifest.goal_sha256,
-            recipe_sha256=manifest.recipe_sha256,
-            environment_sha256=manifest.environment_sha256,
-            evaluation_contract_sha256=contract_sha256,
-            episode_manifest_sha256=episode_manifest_sha,
-            protocol=MANUAL_EVAL_PROTOCOL,
+        intent = compile_eval_intent(
+            manifest=manifest,
+            checkpoint=checkpoint,
             execution_contract=contract,
-            result_key=f"runs/{manifest.run_id}/evals/{key}/result.json",
+            evaluation_contract_sha256=contract_sha256,
+            protocol=MANUAL_EVAL_PROTOCOL,
             timeout_seconds=timeout,
-            created_at=format_utc_datetime(now),
-            expires_at=format_utc_datetime(now + timedelta(seconds=timeout)),
+            created_at=self.clock.utc_datetime().astimezone(UTC),
         )
         existing = self.authority.eval_intent(
             run_id=manifest.run_id,
-            idempotency_key=key,
+            idempotency_key=intent.idempotency_key,
         )
         if existing is not None:
             # Creation timestamps describe the first admission and do not affect
@@ -547,47 +485,16 @@ class ManualEvaluationSupervisor:
         attempt: int,
         expires_at: float,
     ) -> dict[str, Any]:
-        checkpoint = context.checkpoint
-        timeout = int(context.intent.timeout_seconds)
-        payload: dict[str, Any] = {
-            "attempt_id": f"{context.intent.idempotency_key[:20]}-a{attempt}",
-            "contract": dict(context.intent.execution_contract),
-            "expires_at": expires_at,
-            "child_timeout_seconds": max(
-                1,
-                timeout - int(self.modal_config.timeouts.child_margin_seconds),
-            ),
-            "model_get_url": checkpoint.public_url,
-            "model_document_get_url": checkpoint.model_document_url,
-            "model_document_sha256": checkpoint.model_document_sha256,
-            "recipe_get_url": checkpoint.recipe_document_url,
-            "result_uri": self.authority.evaluation.uri(context.intent.result_key),
-            "result_put_url": self.authority.evaluation.presign_put(
-                context.intent.result_key,
-                expires_seconds=(timeout + int(self.modal_config.timeouts.expiry_margin_seconds)),
-            ),
-        }
-        asset = context.manifest.modal.get("rom_asset_manifest")
-        if isinstance(asset, Mapping):
-            rom_key = self.authority.evaluation.key_from_uri(str(asset["object_uri"]))
-            payload["rom_get_url"] = self.authority.evaluation.presign_get(
-                rom_key,
-                expires_seconds=(timeout + int(self.modal_config.timeouts.expiry_margin_seconds)),
-            )
-        iwad = context.manifest.modal.get("vizdoom_iwad_binding")
-        if isinstance(iwad, Mapping):
-            normalized_iwad = validate_vizdoom_iwad_binding(iwad)
-            iwad_key = self.authority.evaluation.key_from_uri(
-                str(normalized_iwad["object_uri"])
-            )
-            payload["vizdoom_iwad_binding"] = {
-                key: value for key, value in normalized_iwad.items() if key != "object_uri"
-            }
-            payload["vizdoom_iwad_get_url"] = self.authority.evaluation.presign_get(
-                iwad_key,
-                expires_seconds=(timeout + int(self.modal_config.timeouts.expiry_margin_seconds)),
-            )
-        return payload
+        return build_modal_eval_payload(
+            manifest=context.manifest,
+            checkpoint=context.checkpoint,
+            intent=context.intent,
+            attempt=attempt,
+            expires_at=expires_at,
+            evaluation_store=self.authority.evaluation,
+            child_margin_seconds=int(self.modal_config.timeouts.child_margin_seconds),
+            expiry_margin_seconds=int(self.modal_config.timeouts.expiry_margin_seconds),
+        )
 
     def _projection_key(self, context: _EvaluationContext) -> str:
         return (
@@ -657,13 +564,11 @@ class ManualEvaluationSupervisor:
             context.recipe_document
         )
         episodes_planned = int(context.intent.execution_contract["episodes"])
-        metrics = evaluation_wandb_projection(
-            result.aggregates,
+        metrics, by_start = evaluation_metric_records(
+            result,
             schema_version=metrics_schema_version,
             checkpoint_step=context.checkpoint.step,
-            accepted=result.status == "accepted",
             episodes_planned=episodes_planned,
-            episodes_completed=len(result.episode_results),
         )
         ledger.append_metrics(
             metrics,
@@ -671,16 +576,10 @@ class ManualEvaluationSupervisor:
             source=f"eval:manual:{context.intent.idempotency_key}",
             metrics_schema_version=metrics_schema_version,
         )
-        if result.status in {"accepted", "rejected"} and len(
-            result.episode_results
-        ) == episodes_planned:
+        if by_start is not None:
             ledger.enqueue_event(
                 kind="eval_by_start",
-                payload={
-                    "records": eval_by_start_records(
-                        [dict(episode) for episode in result.episode_results]
-                    )
-                },
+                payload={"records": by_start},
                 step=context.checkpoint.step,
                 source=f"eval:manual:{context.intent.idempotency_key}:by_start",
             )
@@ -748,13 +647,12 @@ class ManualEvaluationSupervisor:
                     "manual evaluation would invalidate the immutable lowest-step promotion"
                 )
             return
-        receipt = PromotionReceipt(
+        receipt = promotion_receipt(
             run_id=context.manifest.run_id,
             checkpoint_id=context.checkpoint.checkpoint_id,
             checkpoint_step=context.checkpoint.step,
             eval_idempotency_key=result.idempotency_key,
-            eval_result_sha256=document_sha256(result.to_dict()),
-            accepted_episode_count=len(result.episode_results),
+            result=result.to_dict(),
             promoted_at=self.clock.utc_now(),
         )
         self.authority.create_promotion(receipt)
@@ -910,8 +808,10 @@ class ManualEvaluationSupervisor:
                     attempt = int(raw_attempt.rsplit("-a", 1)[1])
                 except (IndexError, ValueError) as exc:
                     raise ValueError("raw eval result has no recoverable attempt") from exc
-            result = _verified_result(
-                context=context,
+            result = verify_eval_result(
+                run_id=context.manifest.run_id,
+                checkpoint_id=context.checkpoint.checkpoint_id,
+                intent=context.intent,
                 raw=raw,
                 attempt=attempt,
                 modal_call_id=str((dispatch or {}).get("modal_call_id") or ""),

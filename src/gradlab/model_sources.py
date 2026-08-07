@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 import argparse
+import fcntl
 import json
+import os
 import re
 import shutil
+import stat
 import urllib.request
 from collections.abc import Mapping
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal, TypeAlias
@@ -31,9 +35,7 @@ _SHA256 = re.compile(r"[0-9a-f]{64}")
 PUBLIC_CHECKPOINT_MANIFEST = re.compile(
     r"/runs/(gradlab-[0-9a-f]{32})/checkpoints/(\d+)-([0-9a-f]{64})/manifest\.json$"
 )
-DEFAULT_PUBLIC_MODELS_BASE_URL = (
-    "https://pub-fc35c0b186ce4aad8eea5e93d38c99db.r2.dev"
-)
+DEFAULT_PUBLIC_MODELS_BASE_URL = "https://pub-fc35c0b186ce4aad8eea5e93d38c99db.r2.dev"
 ModelSourceKind: TypeAlias = Literal["manifest", "huggingface", "local", "public_run"]
 
 
@@ -145,23 +147,71 @@ def _download_public_file(
     digest = str(expected_sha256).strip().lower()
     if _SHA256.fullmatch(digest) is None:
         raise ValueError("public file manifest has an invalid SHA-256")
-    target.parent.mkdir(parents=True, exist_ok=True)
-    temporary = target.with_name(f".{target.name}.partial")
+    target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    parent_mode = target.parent.stat(follow_symlinks=False).st_mode
+    if target.parent.is_symlink() or not stat.S_ISDIR(parent_mode):
+        raise ValueError("public checkpoint cache directory must not be a symlink")
+    try:
+        target_mode = target.stat(follow_symlinks=False).st_mode
+    except FileNotFoundError:
+        target_mode = None
+    if target_mode is not None:
+        if target.is_symlink() or not stat.S_ISREG(target_mode):
+            raise ValueError(f"public checkpoint cache file is not regular: {target}")
+        size_matches = expected_size is None or target.stat().st_size == int(expected_size)
+        if size_matches and file_sha256(target) == digest:
+            return target
+    temporary = target.with_name(f".{target.name}.{os.getpid()}.{os.urandom(8).hex()}.partial")
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    descriptor = os.open(temporary, flags, 0o600)
     try:
         with urllib.request.urlopen(
             public_object_request(url),
             timeout=60,
         ) as response:  # noqa: S310
-            with temporary.open("wb") as destination:
+            with os.fdopen(descriptor, "wb") as destination:
+                descriptor = -1
                 shutil.copyfileobj(response, destination, length=1024 * 1024)
+                destination.flush()
+                os.fsync(destination.fileno())
         if expected_size is not None and temporary.stat().st_size != int(expected_size):
             raise ValueError(f"public file size mismatch: {url}")
         if file_sha256(temporary) != digest:
             raise ValueError(f"public file SHA-256 mismatch: {url}")
-        temporary.replace(target)
+        os.replace(temporary, target)
+        directory_descriptor = os.open(target.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory_descriptor)
+        finally:
+            os.close(directory_descriptor)
     finally:
+        if descriptor >= 0:
+            os.close(descriptor)
         temporary.unlink(missing_ok=True)
     return target
+
+
+@contextmanager
+def _public_checkpoint_digest_lock(root: Path, digest: str):
+    lock_root = root / ".locks"
+    lock_root.mkdir(parents=True, exist_ok=True, mode=0o700)
+    if lock_root.is_symlink() or not stat.S_ISDIR(lock_root.stat(follow_symlinks=False).st_mode):
+        raise ValueError("public checkpoint lock directory must not be a symlink")
+    lock_path = lock_root / f"{digest}.lock"
+    flags = os.O_RDWR | os.O_CREAT
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    descriptor = os.open(lock_path, flags, 0o600)
+    try:
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+            raise ValueError("public checkpoint digest lock must be a regular file")
+        fcntl.flock(descriptor, fcntl.LOCK_EX)
+        yield
+    finally:
+        fcntl.flock(descriptor, fcntl.LOCK_UN)
+        os.close(descriptor)
 
 
 def download_public_checkpoint_manifest_source(
@@ -176,28 +226,36 @@ def download_public_checkpoint_manifest_source(
     step = checkpoint.step
     path_sha256 = checkpoint.sha256
     checkpoint_id = checkpoint.checkpoint_id
-    target_dir = root / _safe_stem(f"{run_id}-{checkpoint_id}")
-    model_path = _download_public_file(
-        str(manifest["public_url"]),
-        target_dir / CHECKPOINT_FILENAME,
-        expected_sha256=path_sha256,
-        expected_size=int(manifest["size_bytes"]),
-    )
-    _download_public_file(
-        str(manifest["model_document_url"]),
-        target_dir / MODEL_FILENAME,
-        expected_sha256=str(manifest["model_document_sha256"]),
-    )
-    _download_public_file(
-        str(manifest["recipe_document_url"]),
-        target_dir / RECIPE_FILENAME,
-        expected_sha256=str(manifest["recipe_document_sha256"]),
-    )
-    bundle = load_policy_bundle(
-        target_dir,
-        source=text,
-        revision=path_sha256,
-    )
+    del run_id, checkpoint_id
+    resolved_root = root.expanduser().resolve()
+    resolved_root.mkdir(parents=True, exist_ok=True, mode=0o700)
+    sha_root = resolved_root / "sha256"
+    sha_root.mkdir(parents=True, exist_ok=True, mode=0o700)
+    if sha_root.is_symlink() or not stat.S_ISDIR(sha_root.stat(follow_symlinks=False).st_mode):
+        raise ValueError("public checkpoint digest directory must not be a symlink")
+    target_dir = sha_root / path_sha256
+    with _public_checkpoint_digest_lock(resolved_root, path_sha256):
+        model_path = _download_public_file(
+            str(manifest["public_url"]),
+            target_dir / CHECKPOINT_FILENAME,
+            expected_sha256=path_sha256,
+            expected_size=int(manifest["size_bytes"]),
+        )
+        _download_public_file(
+            str(manifest["model_document_url"]),
+            target_dir / MODEL_FILENAME,
+            expected_sha256=str(manifest["model_document_sha256"]),
+        )
+        _download_public_file(
+            str(manifest["recipe_document_url"]),
+            target_dir / RECIPE_FILENAME,
+            expected_sha256=str(manifest["recipe_document_sha256"]),
+        )
+        bundle = load_policy_bundle(
+            target_dir,
+            source=text,
+            revision=path_sha256,
+        )
     return ResolvedModelSource(
         model_path=model_path,
         artifact_name=text,
@@ -290,9 +348,7 @@ def parse_huggingface_model_ref(value: str) -> tuple[str, str | None]:
             if part
         ]
         if len(parts) != 2:
-            raise ValueError(
-                f"expected Hugging Face model ref like hf://owner/repo, got {value!r}"
-            )
+            raise ValueError(f"expected Hugging Face model ref like hf://owner/repo, got {value!r}")
         repo_name, separator, revision = parts[1].partition("@")
         if separator and not revision:
             raise ValueError(f"Hugging Face model ref has an empty revision: {value!r}")
@@ -377,8 +433,7 @@ def download_huggingface_model_source(
     for bundle_filename in (CHECKPOINT_FILENAME, MODEL_FILENAME, RECIPE_FILENAME):
         if bundle_filename not in repo_files:
             raise SystemExit(
-                f"Hugging Face bundle {repo_id}@{immutable_revision} is missing "
-                f"{bundle_filename}"
+                f"Hugging Face bundle {repo_id}@{immutable_revision} is missing {bundle_filename}"
             )
         hf_hub_download(
             repo_id=repo_id,
@@ -424,8 +479,7 @@ def _download_model_ref(
             revision=revision,
         )
     raise ValueError(
-        "remote model source must be an immutable public checkpoint manifest "
-        "or Hugging Face model"
+        "remote model source must be an immutable public checkpoint manifest or Hugging Face model"
     )
 
 
@@ -521,7 +575,5 @@ def resolve_single_model_source(
         public_root=Path(
             getattr(args, "public_model_root", default_runs_dir() / "public_models")
         ).expanduser(),
-        hf_root=Path(
-            getattr(args, "hf_model_root", default_runs_dir() / "hf_models")
-        ).expanduser(),
+        hf_root=Path(getattr(args, "hf_model_root", default_runs_dir() / "hf_models")).expanduser(),
     )

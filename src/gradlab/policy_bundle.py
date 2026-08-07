@@ -50,6 +50,14 @@ STATE_ARCHIVE_SUMMARY_FIELDS = frozenset(
 )
 
 
+def _validate_source_bound_metric_name(name: str) -> str:
+    """Validate the shape of an opaque metric recorded under a retired schema."""
+
+    if re.fullmatch(r"[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)+", name) is None:
+        raise ValueError(f"invalid source-bound metric name: {name}")
+    return name
+
+
 class _EvaluationDocument(BoundaryModel):
     environment: dict[str, Any]
     action_sampling: Any = None
@@ -500,6 +508,11 @@ def _validate_recipe_contract(
                 validation_train_config,
                 label=f"{source}.recipe.train_config",
                 validate_backend_config=False,
+                metric_validator=(
+                    None
+                    if metrics_schema_version == METRICS_SCHEMA_VERSION
+                    else _validate_source_bound_metric_name
+                ),
             )
         else:
             raise ValueError(f"unknown training backend {backend_id!r}")

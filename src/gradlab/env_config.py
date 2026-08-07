@@ -6,7 +6,8 @@ import math
 from collections.abc import Mapping
 from typing import Any
 
-from gradlab.env import EnvConfig, validate_obs_crop, validate_obs_resize
+from gradlab.env import validate_obs_crop, validate_obs_resize
+from gradlab.environment_fields import EnvConfig
 from gradlab.train_config import env_config_arg_fields
 
 
@@ -80,6 +81,18 @@ def parse_obs_crop(
     return validate_obs_crop(raw)
 
 
+def _normalize_environment_field(field: Any, value: Any) -> Any:
+    if field.sequence_items == "str":
+        return parse_states(value)
+    if field.sequence_items == "number":
+        return parse_state_probs(value)
+    if field.type_name == "obs_crop":
+        return parse_obs_crop(value)
+    if field.type_name == "obs_resize":
+        return validate_obs_resize(value)
+    return value
+
+
 def env_config_from_args(
     args: argparse.Namespace,
     *,
@@ -92,20 +105,10 @@ def env_config_from_args(
 
     config_kwargs: dict[str, Any] = {}
     for field in env_config_arg_fields():
-        if field.dest in {"states", "state_probs"} and not include_states:
+        if field.mixed_state and not include_states:
             continue
         key = field.dest
-        raw_value = value(field.dest)
-        if field.dest == "states":
-            config_kwargs[key] = parse_states(raw_value)
-        elif field.dest == "state_probs":
-            config_kwargs[key] = parse_state_probs(raw_value)
-        elif field.dest == "obs_crop":
-            config_kwargs[key] = parse_obs_crop(raw_value)
-        elif field.dest == "obs_resize":
-            config_kwargs[key] = validate_obs_resize(raw_value)
-        else:
-            config_kwargs[key] = raw_value
+        config_kwargs[key] = _normalize_environment_field(field, value(field.dest))
     return EnvConfig(**config_kwargs)
 
 
@@ -114,14 +117,8 @@ def env_config_from_mapping(config: Mapping[str, Any]) -> EnvConfig:
     for field in env_config_arg_fields():
         if field.dest not in config:
             continue
-        value = config[field.dest]
-        if field.dest == "states":
-            value = parse_states(value)
-        elif field.dest == "state_probs":
-            value = parse_state_probs(value)
-        elif field.dest == "obs_crop":
-            value = parse_obs_crop(value)
-        elif field.dest == "obs_resize":
-            value = validate_obs_resize(value)
-        config_kwargs[field.dest] = value
+        config_kwargs[field.dest] = _normalize_environment_field(
+            field,
+            config[field.dest],
+        )
     return EnvConfig(**config_kwargs)
