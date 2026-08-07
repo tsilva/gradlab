@@ -1224,7 +1224,7 @@ def _project_reconciled_terminal(
             "wandb_entity": manifest.wandb["entity"],
             "wandb_project": manifest.wandb["project"],
             "wandb_mode": "online",
-            "run_name": manifest.wandb.get("display_name"),
+            "wandb_display_name": manifest.wandb.get("display_name"),
             "wandb_group": manifest.wandb.get("group"),
         },
         update_finish_state=True,

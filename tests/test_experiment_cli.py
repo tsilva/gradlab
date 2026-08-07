@@ -918,7 +918,7 @@ def test_reconciled_failure_closes_wandb_with_nonzero_exit() -> None:
             "wandb_entity": manifest.wandb["entity"],
             "wandb_project": manifest.wandb["project"],
             "wandb_mode": "online",
-            "run_name": manifest.wandb.get("display_name"),
+            "wandb_display_name": manifest.wandb.get("display_name"),
             "wandb_group": manifest.wandb.get("group"),
         },
         update_finish_state=True,
