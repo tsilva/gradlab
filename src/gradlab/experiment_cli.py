@@ -32,7 +32,11 @@ from gradlab.dstack_backend import (
 )
 from gradlab.env_registry import resolve_env_provider
 from gradlab.file_utils import file_sha256
-from gradlab.goal_variants import goal_variant_catalog_contract
+from gradlab.goal_variants import (
+    GOAL_VARIANT_SCHEMA_VERSION,
+    goal_variant_catalog_contract,
+    validate_goal_variant_descriptor,
+)
 from gradlab.json_utils import canonical_json_text, json_safe
 from gradlab.modal_eval_config import load_modal_eval_config
 from gradlab.operator_credentials import (
@@ -911,6 +915,28 @@ def _latest_attempt_terminal(state: dict[str, Any]) -> dict[str, Any] | None:
     return terminals[-1] if terminals else None
 
 
+def _reconciliation_manifest(document: Mapping[str, Any]) -> RunManifest:
+    """Parse a current manifest or the deployed schema-one goal descriptor it embeds."""
+
+    try:
+        return RunManifest.from_dict(document)
+    except ValueError as failure:
+        raw_variant = document.get("goal_variant")
+        if not isinstance(raw_variant, Mapping) or int(raw_variant.get("schema_version") or 0) != 1:
+            raise failure
+        upgraded_variant = {
+            **dict(raw_variant),
+            "schema_version": GOAL_VARIANT_SCHEMA_VERSION,
+        }
+        validate_goal_variant_descriptor(upgraded_variant)
+        return RunManifest.from_dict(
+            {
+                **dict(document),
+                "goal_variant": upgraded_variant,
+            }
+        )
+
+
 def _record_pre_submit_failure(
     authority: RunAuthority,
     manifest: RunManifest,
@@ -991,7 +1017,7 @@ def _record_terminal_task_without_receipt(
         },
         completed_at=utc_now(),
     )
-    authority.create_attempt_terminal(receipt)
+    authority.create_attempt_terminal(receipt, manifest_override=manifest)
     return receipt
 
 
@@ -1216,7 +1242,7 @@ def cmd_reconcile(args: argparse.Namespace) -> int:
     root = repository_root()
     _storage_config, authority = _storage(root)
     state = authority.semantic_state(args.run_id)
-    manifest = RunManifest.from_dict(_latest_attempt(state))
+    manifest = _reconciliation_manifest(_latest_attempt(state))
     task = _dstack_backend_for_compute(manifest.compute).status(
         str(manifest.compute["dstack_task"])
     )
