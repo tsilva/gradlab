@@ -14,21 +14,15 @@ sections:
       title: Task success
       x: train/global_step
       y:
-      - train/outcome/success/across_starts/window_100/rate/min
-      - train/outcome/success/across_starts/window_100/rate/mean
+      - train/outcome/success/starts/all/rolling/rate/min
+      - train/outcome/success/starts/all/rolling/rate/mean
     - id: target_return
       kind: line
       title: Target-origin return
       x: train/global_step
       y:
-      - train/episode/return/shaped/from/target/rolling_up_to_100/mean
-      - train/episode/return/shaped/from/target/rolling_up_to_100/max
-    - id: start_coverage
-      kind: line
-      title: Start coverage
-      x: train/global_step
-      y:
-      - train/outcome/success/across_starts/coverage/rate
+      - train/episode/return/shaped/origin/target/rolling/mean
+      - train/episode/return/shaped/origin/target/rolling/max
     - id: completed_episodes
       kind: line
       title: Completed episodes
@@ -64,10 +58,6 @@ sections:
       y:
       - train/algorithm/ppo/policy/entropy
       - train/algorithm/a2c/policy/entropy
-      - train/algorithm/ppo/policy/entropy_bound/lower
-      - train/algorithm/a2c/policy/entropy_bound/lower
-      - train/algorithm/ppo/policy/entropy_bound/upper
-      - train/algorithm/a2c/policy/entropy_bound/upper
     - id: ppo_update_constraints
       kind: line
       title: PPO update constraints
@@ -80,8 +70,8 @@ sections:
       title: Training throughput
       x: train/global_step
       y:
-      - train/throughput/loop_fps
-      - train/throughput/env_step_fps
+      - train/throughput/loop/rate
+      - train/throughput/provider/step/rate
 
 profiles:
   training:

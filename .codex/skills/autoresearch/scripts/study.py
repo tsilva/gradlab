@@ -25,9 +25,9 @@ from urllib.parse import urlparse
 from gradlab.dstack_backend import resolve_local_fleet
 from gradlab.local_paths import default_runs_dir
 from gradlab.metric_names import (
-    TRAIN_EPISODE_RETURN_SHAPED_ACROSS_ORIGINS_ROLLING_UP_TO_100_MEAN,
+    TRAIN_EPISODE_RETURN_SHAPED_ORIGIN_TARGET_ROLLING_MEAN,
     TRAIN_GLOBAL_STEP,
-    TRAIN_OUTCOME_SUCCESS_ACROSS_STARTS_WINDOW_100_RATE_MIN,
+    TRAIN_OUTCOME_SUCCESS_STARTS_ALL_ROLLING_RATE_MIN,
     train_success_count_metric,
 )
 from gradlab.operator_environment import load_repository_operator_environment
@@ -475,14 +475,14 @@ def candidate_score(state: Mapping[str, Any], candidate: Mapping[str, Any]) -> d
             crossing_steps.append(int(step))
         else:
             crossing_steps.append(censor)
-        peak = evidence.get("peak_window_100_rate_min")
+        peak = evidence.get("peak_rolling_success_rate_min")
         peaks.append(float(peak) if peak is not None else 0.0)
     return {
         "evidence_mode": EVIDENCE_SUCCESS,
         "strong_seeds": strong,
         "median_censored_first_strong_step": float(median(crossing_steps)),
         "worst_censored_first_strong_step": max(crossing_steps),
-        "worst_peak_window_100_rate_min": min(peaks),
+        "worst_peak_rolling_success_rate_min": min(peaks),
         "candidate_id": candidate["id"],
     }
 
@@ -500,7 +500,7 @@ def evidence_key(score: Mapping[str, Any]) -> tuple[float, ...]:
         -float(score["strong_seeds"]),
         float(score["median_censored_first_strong_step"]),
         float(score["worst_censored_first_strong_step"]),
-        -float(score["worst_peak_window_100_rate_min"]),
+        -float(score["worst_peak_rolling_success_rate_min"]),
     )
 
 
@@ -1371,7 +1371,7 @@ def fetch_training_evidence(
         }
         rate_history = scan(
             TRAIN_GLOBAL_STEP,
-            TRAIN_OUTCOME_SUCCESS_ACROSS_STARTS_WINDOW_100_RATE_MIN,
+            TRAIN_OUTCOME_SUCCESS_STARTS_ALL_ROLLING_RATE_MIN,
         )
     else:
         counts = {start: 0 for start in starts}
@@ -1380,10 +1380,10 @@ def fetch_training_evidence(
     rate_rows = [
         (
             int(row.get(TRAIN_GLOBAL_STEP) or 0),
-            float(row[TRAIN_OUTCOME_SUCCESS_ACROSS_STARTS_WINDOW_100_RATE_MIN]),
+            float(row[TRAIN_OUTCOME_SUCCESS_STARTS_ALL_ROLLING_RATE_MIN]),
         )
         for row in rate_history
-        if row.get(TRAIN_OUTCOME_SUCCESS_ACROSS_STARTS_WINDOW_100_RATE_MIN) is not None
+        if row.get(TRAIN_OUTCOME_SUCCESS_STARTS_ALL_ROLLING_RATE_MIN) is not None
     ]
     peak = max((value for _step, value in rate_rows), default=None)
     first_strong_step = next(
@@ -1396,12 +1396,12 @@ def fetch_training_evidence(
     )
     return_history = scan(
         TRAIN_GLOBAL_STEP,
-        TRAIN_EPISODE_RETURN_SHAPED_ACROSS_ORIGINS_ROLLING_UP_TO_100_MEAN,
+        TRAIN_EPISODE_RETURN_SHAPED_ORIGIN_TARGET_ROLLING_MEAN,
     )
     returns = [
-        float(row[TRAIN_EPISODE_RETURN_SHAPED_ACROSS_ORIGINS_ROLLING_UP_TO_100_MEAN])
+        float(row[TRAIN_EPISODE_RETURN_SHAPED_ORIGIN_TARGET_ROLLING_MEAN])
         for row in return_history
-        if row.get(TRAIN_EPISODE_RETURN_SHAPED_ACROSS_ORIGINS_ROLLING_UP_TO_100_MEAN) is not None
+        if row.get(TRAIN_EPISODE_RETURN_SHAPED_ORIGIN_TARGET_ROLLING_MEAN) is not None
     ]
     tail_count = max(1, math.ceil(len(returns) * float(return_tail_fraction))) if returns else 0
     tail_values = returns[-tail_count:] if tail_count else []
@@ -1421,7 +1421,7 @@ def fetch_training_evidence(
         "evidence_mode": mode,
         "all_starts_succeeded": all_starts_succeeded,
         "success_counts_by_start": counts,
-        "peak_window_100_rate_min": peak,
+        "peak_rolling_success_rate_min": peak,
         "first_strong_step": first_strong_step,
         "strong": first_strong_step is not None,
         "observed_max_step": observed_max_step,
@@ -1432,7 +1432,7 @@ def fetch_training_evidence(
         "authority": "wandb_history",
         "rank_direction": "maximize",
         "collected_at": utc_now(),
-        "return_metric": (TRAIN_EPISODE_RETURN_SHAPED_ACROSS_ORIGINS_ROLLING_UP_TO_100_MEAN),
+        "return_metric": TRAIN_EPISODE_RETURN_SHAPED_ORIGIN_TARGET_ROLLING_MEAN,
         "return_points": return_points,
         "return_tail_fraction": float(return_tail_fraction),
         "return_tail_points": tail_count,

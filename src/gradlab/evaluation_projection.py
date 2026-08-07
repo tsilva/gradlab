@@ -5,23 +5,25 @@ from collections.abc import Mapping
 from typing import Any
 
 from gradlab.metric_names import (
-    EVAL_ACCEPTANCE_DURATION_SECONDS,
+    EVAL_ACCEPTANCE_EPISODE_COMPLETED_COUNT,
+    EVAL_ACCEPTANCE_EPISODE_PLANNED_COUNT,
     EVAL_ACCEPTANCE_PASS,
-    evaluation_metric_schema,
+    EVAL_CHECKPOINT_STEP,
+    EVAL_FULL_EPISODE_RETURN_SHAPED_MAX,
+    EVAL_FULL_EPISODE_RETURN_SHAPED_MEAN,
+    EVAL_FULL_OUTCOME_SUCCESS_STARTS_RATE_MEAN,
+    EVAL_FULL_OUTCOME_SUCCESS_STARTS_RATE_MIN,
     metric_definition,
+    require_current_metrics_schema,
 )
 
 
 _CURRENT_FIXED_FULL_METRICS = frozenset(
     {
-        "eval/full/episode/return/shaped/mean",
-        "eval/full/episode/return/shaped/std",
-        "eval/full/episode/return/shaped/median",
-        "eval/full/episode/return/shaped/max",
-        "eval/full/episode/length/mean",
-        "eval/full/episode/completed/count",
-        "eval/full/outcome/success/across_starts/rate/min",
-        "eval/full/outcome/success/across_starts/rate/mean",
+        EVAL_FULL_EPISODE_RETURN_SHAPED_MEAN,
+        EVAL_FULL_EPISODE_RETURN_SHAPED_MAX,
+        EVAL_FULL_OUTCOME_SUCCESS_STARTS_RATE_MIN,
+        EVAL_FULL_OUTCOME_SUCCESS_STARTS_RATE_MEAN,
     }
 )
 _PROGRESS_METRIC_RE = re.compile(r"^eval/full/progress/[A-Za-z0-9_.-]+/(?:mean|max)$")
@@ -39,12 +41,11 @@ def metrics_schema_version_from_recipe_document(document: Mapping[str, Any]) -> 
         version = int(value)
     except (TypeError, ValueError) as exc:
         raise ValueError("checkpoint recipe has no valid metrics_schema_version") from exc
-    evaluation_metric_schema(version)
-    return version
+    return require_current_metrics_schema(version)
 
 
 def _allowed_full_metric(name: str, *, schema_version: int) -> bool:
-    evaluation_metric_schema(schema_version)
+    require_current_metrics_schema(schema_version)
     if _PROGRESS_METRIC_RE.fullmatch(name):
         return True
     return name in _CURRENT_FIXED_FULL_METRICS and metric_definition(name) is not None
@@ -69,13 +70,12 @@ def validate_evaluation_metric_payload(
 ) -> None:
     """Validate the finite W&B projection allowed for one eval schema."""
 
-    schema = evaluation_metric_schema(schema_version)
+    require_current_metrics_schema(schema_version)
     fixed = {
-        schema.checkpoint_step,
-        schema.acceptance_episode_planned_count,
-        schema.acceptance_episode_completed_count,
+        EVAL_CHECKPOINT_STEP,
+        EVAL_ACCEPTANCE_EPISODE_PLANNED_COUNT,
+        EVAL_ACCEPTANCE_EPISODE_COMPLETED_COUNT,
         EVAL_ACCEPTANCE_PASS,
-        EVAL_ACCEPTANCE_DURATION_SECONDS,
     }
     invalid = sorted(
         name
@@ -91,28 +91,26 @@ def validate_evaluation_metric_payload(
 
 
 def evaluation_wandb_projection(
-    raw_metrics: Mapping[str, Any],
+    aggregates: Mapping[str, Any],
     *,
     schema_version: int,
     checkpoint_step: int,
     accepted: bool,
     episodes_planned: int,
     episodes_completed: int,
-    duration_seconds: float,
 ) -> dict[str, Any]:
-    schema = evaluation_metric_schema(schema_version)
+    require_current_metrics_schema(schema_version)
     projected = {
         str(name): value
-        for name, value in raw_metrics.items()
+        for name, value in aggregates.items()
         if _allowed_full_metric(str(name), schema_version=schema_version)
     }
     projected.update(
         {
-            schema.checkpoint_step: int(checkpoint_step),
+            EVAL_CHECKPOINT_STEP: int(checkpoint_step),
             EVAL_ACCEPTANCE_PASS: 1.0 if accepted else 0.0,
-            schema.acceptance_episode_planned_count: float(episodes_planned),
-            schema.acceptance_episode_completed_count: float(episodes_completed),
-            EVAL_ACCEPTANCE_DURATION_SECONDS: float(duration_seconds),
+            EVAL_ACCEPTANCE_EPISODE_PLANNED_COUNT: float(episodes_planned),
+            EVAL_ACCEPTANCE_EPISODE_COMPLETED_COUNT: float(episodes_completed),
         }
     )
     return projected

@@ -19,12 +19,12 @@ class SupervisorLedgerTests(unittest.TestCase):
 
     def test_segments_advance_contiguously(self) -> None:
         self.ledger.append_metrics(
-            {"train/throughput/loop_fps": 1.0},
+            {"train/throughput/loop/rate": 1.0},
             step=10,
             source="train",
         )
         self.ledger.append_metrics(
-            {"train/throughput/loop_fps": 2.0},
+            {"train/throughput/loop/rate": 2.0},
             step=20,
             source="train",
         )

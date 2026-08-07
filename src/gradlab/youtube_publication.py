@@ -420,12 +420,31 @@ class YouTubeClient:
 
     def find_or_create_playlist(self, title: str, *, privacy: str) -> str:
         matches = self.find_playlist(title)
-        if len(matches) > 1:
+        accessible: list[str] = []
+        for match in matches:
+            playlist_id = str(match.get("id") or "")
+            if not playlist_id:
+                continue
+            params = {
+                "part": "id",
+                "playlistId": playlist_id,
+                "maxResults": "1",
+            }
+            try:
+                self._request_json(
+                    f"{API_URL}/playlistItems?{urllib.parse.urlencode(params)}"
+                )
+            except YouTubePublicationError as exc:
+                if exc.status == 404:
+                    continue
+                raise
+            accessible.append(playlist_id)
+        if len(accessible) > 1:
             raise YouTubePublicationError(
                 f"multiple YouTube playlists have the admitted title {title!r}"
             )
-        if matches:
-            return str(matches[0].get("id") or "")
+        if accessible:
+            return accessible[0]
         value = self._request_json(
             f"{API_URL}/playlists?{urllib.parse.urlencode({'part': 'snippet,status'})}",
             method="POST",

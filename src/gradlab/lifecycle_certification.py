@@ -17,7 +17,6 @@ from types import SimpleNamespace
 from typing import Any
 from unittest.mock import patch
 
-from gradlab.checkpoint_acceptance import acceptance_aggregates
 from gradlab.clock import format_utc_datetime
 from gradlab.early_stop import (
     MetricEarlyStopStateMachine,
@@ -36,9 +35,15 @@ from gradlab.job_queue import (
 )
 from gradlab.manual_evaluation import ManualEvaluationSupervisor
 from gradlab.metric_names import (
+    LEADER_CHECKPOINT_ARTIFACT_REF,
+    LEADER_CHECKPOINT_EVALUATION_SOURCE,
+    LEADER_CHECKPOINT_PROJECTION_TIMESTAMP,
+    LEADER_CHECKPOINT_STEP,
     METRICS_SCHEMA_VERSION,
-    ORCHESTRATION_EVENT_ID,
-    ORCHESTRATION_EVENT_SEQ,
+    ORCHESTRATION_EVENT_SEQUENCE,
+    ORCHESTRATION_RUN_TERMINAL_REASON,
+    ORCHESTRATION_RUN_TERMINAL_STATE,
+    leader_metric_for_rank_metric,
 )
 from gradlab.modal_eval_protocol import execution_key
 from gradlab.policy_bundle import (
@@ -56,6 +61,7 @@ from gradlab.r2_store import (
     RunStorageConfig,
 )
 from gradlab.recipe_documents import compose_resolved_train_documents
+from gradlab.ranking import require_objective_rank
 from gradlab.run_authority import LEASE_TTL_SECONDS, LeaseUnavailable, RunAuthority
 from gradlab.run_contracts import (
     EarlyStopReceipt,
@@ -295,8 +301,7 @@ class CertificationRuntime(SupervisorRuntime):
                 "payload": payload,
             }
             if event["kind"] == "history":
-                event["payload"][ORCHESTRATION_EVENT_SEQ] = event_seq
-                event["payload"][ORCHESTRATION_EVENT_ID] = event["event_id"]
+                event["payload"][ORCHESTRATION_EVENT_SEQUENCE] = event_seq
                 if event["source"].startswith("eval"):
                     event["payload"]["eval/checkpoint/step"] = event["step"]
                 elif not event["source"].startswith("orchestration"):
@@ -305,7 +310,7 @@ class CertificationRuntime(SupervisorRuntime):
             if self.evidence_path is not None:
                 self.evidence_path.parent.mkdir(parents=True, exist_ok=True)
                 self.evidence_path.write_bytes(_canonical_bytes({"events": self.wandb_events}))
-            self.summary[ORCHESTRATION_EVENT_SEQ] = event_seq
+            self.summary[ORCHESTRATION_EVENT_SEQUENCE] = event_seq
             store.mark_metric_frame_published(frame_id, step=row["step"])
             published += 1
         return published
@@ -332,21 +337,24 @@ class CertificationRuntime(SupervisorRuntime):
         evaluation_source: str,
         metrics_schema_version: int = METRICS_SCHEMA_VERSION,
     ) -> None:
-        del (
-            projector,
-            metrics,
-            updated_at,
+        del projector
+        projection: dict[str, Any] = {
+            LEADER_CHECKPOINT_STEP: int(checkpoint_step),
+            LEADER_CHECKPOINT_ARTIFACT_REF: str(checkpoint_url),
+            LEADER_CHECKPOINT_EVALUATION_SOURCE: str(evaluation_source),
+            LEADER_CHECKPOINT_PROJECTION_TIMESTAMP: str(updated_at),
+        }
+        for criterion in require_objective_rank(
             selection_rank,
-            evaluation_source,
-            metrics_schema_version,
-        )
-        self.summary.update(
-            {
-                "gradlab/goal/outcome": "accepted",
-                "leader/checkpoint/step": int(checkpoint_step),
-                "leader/checkpoint/artifact/ref": str(checkpoint_url),
-            }
-        )
+            metrics_schema_version=metrics_schema_version,
+        ):
+            leader_name = leader_metric_for_rank_metric(
+                criterion.metric,
+                schema_version=metrics_schema_version,
+            )
+            if leader_name != LEADER_CHECKPOINT_STEP:
+                projection[leader_name] = float(metrics[criterion.metric])
+        self.summary.update(projection)
 
     def remote_summary(self, run_path: str) -> dict[str, Any]:
         if not run_path:
@@ -372,15 +380,8 @@ class CertificationRuntime(SupervisorRuntime):
         del train_config, timeout_seconds
         self.summary.update(
             {
-                "gradlab/run/terminal_state": receipt.state,
-                "gradlab/run/stop_reason": receipt.stop_reason,
-                "gradlab/run/final_step": receipt.final_step,
-                "gradlab/run/early_stop_trigger": str(
-                    (receipt.early_stop or {}).get("trigger") or ""
-                ),
-                "gradlab/run/early_stop_condition": str(
-                    (receipt.early_stop or {}).get("condition_id") or ""
-                ),
+                ORCHESTRATION_RUN_TERMINAL_STATE: receipt.state,
+                ORCHESTRATION_RUN_TERMINAL_REASON: receipt.stop_reason,
             }
         )
 
@@ -663,6 +664,7 @@ def _accepted_or_rejected_raw(
             "seed_lane": int(entry["lane"]),
             "seed_episode_ordinal": int(entry["lane_episode_ordinal"]),
             "seed": int(entry["seed"]),
+            "seed_protocol": str(contract["seed_protocol"]),
             "start_state": str(entry.get("start_state") or ""),
             "outcome": "success" if accepted else "failure",
             "level_complete": bool(accepted),
@@ -671,13 +673,6 @@ def _accepted_or_rejected_raw(
         }
         for entry in selected
     ]
-    aggregates = acceptance_aggregates(episodes, contract=contract)
-    metrics: dict[str, float] = {}
-    if accepted:
-        metrics = {
-            "eval/full/outcome/success/across_starts/rate/min": 1.0,
-            "eval/full/outcome/success/across_starts/rate/mean": 1.0,
-        }
     attempt = int(row["attempt"])
     asset = contract.get("asset")
     return {
@@ -697,9 +692,8 @@ def _accepted_or_rejected_raw(
         "status": "succeeded",
         "verdict": "accepted" if accepted else "rejected",
         "episode_results": episodes,
-        "claimed_aggregates": aggregates,
-        "metrics": metrics,
         "duration_seconds": 1.0,
+        "evaluation_evidence": {},
     }
 
 
@@ -944,7 +938,7 @@ def _finalize_success(prepared: PreparedSupervisor) -> TerminalReceipt:
             .isoformat()
             .replace("+00:00", "Z"),
             "wandb_remote_high_water_mark": int(
-                prepared.runtime.summary.get(ORCHESTRATION_EVENT_SEQ) or 0
+                prepared.runtime.summary.get(ORCHESTRATION_EVENT_SEQUENCE) or 0
             ),
             "publication_capacity_ratio": None,
             "failure": None,
@@ -968,7 +962,7 @@ def _scenario_full_lifecycle(root: Path) -> dict[str, Any]:
     prepared = fixture.prepare(run_number=1)
     supervisor = prepared.supervisor
     supervisor.store.append_metrics(
-        {"train/episode/return/shaped/across_origins/rolling_up_to_100/mean": 1.0},
+        {"train/episode/return/shaped/origin/target/rolling/mean": 1.0},
         step=250_000,
         source="learner",
     )
@@ -1054,7 +1048,7 @@ def _scenario_parallel_run_isolation(root: Path) -> dict[str, Any]:
     second = fixture.prepare(run_number=12)
     for index, prepared in enumerate((first, second), start=1):
         prepared.supervisor.store.append_metrics(
-            {"train/episode/return/shaped/across_origins/rolling_up_to_100/mean": float(index)},
+            {"train/episode/return/shaped/origin/target/rolling/mean": float(index)},
             step=100 * index,
             source="learner",
         )
@@ -1169,7 +1163,7 @@ def _scenario_wandb_retry_deduplication(root: Path) -> dict[str, Any]:
     prepared = fixture.prepare(run_number=31, publish_failures=1)
     supervisor = prepared.supervisor
     supervisor.store.append_metrics(
-        {"train/episode/return/shaped/across_origins/rolling_up_to_100/mean": 3.0},
+        {"train/episode/return/shaped/origin/target/rolling/mean": 3.0},
         step=300,
         source="learner",
     )
@@ -1210,14 +1204,14 @@ def _scenario_wandb_visibility_gating(root: Path) -> dict[str, Any]:
     prepared = fixture.prepare(run_number=36)
     supervisor = prepared.supervisor
     supervisor.store.append_metrics(
-        {"train/episode/return/shaped/across_origins/rolling_up_to_100/mean": 3.6},
+        {"train/episode/return/shaped/origin/target/rolling/mean": 3.6},
         step=360,
         source="learner",
     )
     fixture.clock.advance(5)
     supervisor.active_iteration()
     high_water = supervisor._finish_wandb()
-    prepared.runtime.summary[ORCHESTRATION_EVENT_SEQ] = 0
+    prepared.runtime.summary[ORCHESTRATION_EVENT_SEQUENCE] = 0
     timed_out = False
     try:
         supervisor._wait_for_remote_delivery(high_water)
@@ -1454,7 +1448,7 @@ def _scenario_scratch_preservation_stop(root: Path) -> dict[str, Any]:
     prepared = fixture.prepare(run_number=56)
     supervisor = prepared.supervisor
     supervisor.store.append_metrics(
-        {"train/episode/return/shaped/across_origins/rolling_up_to_100/mean": 5.6},
+        {"train/episode/return/shaped/origin/target/rolling/mean": 5.6},
         step=560,
         source="learner",
     )
@@ -1490,7 +1484,7 @@ def _scenario_drain_only_recovery(root: Path) -> dict[str, Any]:
     fixture = CertificationFixture(root)
     first = fixture.prepare(run_number=61)
     first.supervisor.store.append_metrics(
-        {"train/episode/return/shaped/across_origins/rolling_up_to_100/mean": 6.0},
+        {"train/episode/return/shaped/origin/target/rolling/mean": 6.0},
         step=600,
         source="learner",
     )
@@ -1652,14 +1646,14 @@ def _scenario_early_stop_outcomes(root: Path) -> dict[str, Any]:
             matched_condition_ids=("target_reached",),
             outcome="success",
             trigger="threshold",
-            metric="train/outcome/success/across_starts/window_100/rate/min",
+            metric="train/outcome/success/starts/all/rolling/rate/min",
             metric_step=10,
             value=0.95,
             best_value=0.95,
             elapsed_steps=0,
             patience_progress=1.0,
             condition={
-                "metric": "train/outcome/success/across_starts/window_100/rate/min",
+                "metric": "train/outcome/success/starts/all/rolling/rate/min",
                 "trigger": "threshold",
                 "operator": ">=",
                 "threshold": 0.95,
@@ -1679,7 +1673,7 @@ def _scenario_early_stop_outcomes(root: Path) -> dict[str, Any]:
     config = {
         "conditions": {
             "return_plateau": {
-                "metric": "train/episode/return/shaped/from/target/rolling_up_to_100/mean",
+                "metric": "train/episode/return/shaped/origin/target/rolling/mean",
                 "trigger": "no_improvement",
                 "direction": "maximize",
                 "min_delta": 0.01,
@@ -1692,7 +1686,7 @@ def _scenario_early_stop_outcomes(root: Path) -> dict[str, Any]:
         }
     }
     machine = MetricEarlyStopStateMachine(config)
-    metric = "train/episode/return/shaped/from/target/rolling_up_to_100/mean"
+    metric = "train/episode/return/shaped/origin/target/rolling/mean"
     machine.update({metric: MetricSample(value=100.0, step=0)})
     update = machine.update({metric: MetricSample(value=100.0, step=10)})
     decision = validate_metric_early_stop_decision(update.stop_decision, config)
@@ -2120,7 +2114,7 @@ def _scenario_local_background_jobs(root: Path) -> dict[str, Any]:
     prepared = fixture.prepare(run_number=81)
     supervisor = prepared.supervisor
     supervisor.store.append_metrics(
-        {"train/episode/return/shaped/across_origins/rolling_up_to_100/mean": 1.0},
+        {"train/episode/return/shaped/origin/target/rolling/mean": 1.0},
         step=250_000,
         source="learner",
     )
@@ -2144,7 +2138,9 @@ def _scenario_local_background_jobs(root: Path) -> dict[str, Any]:
         writer_id="manual-eval-writer-81",
         evidence_path=root / "evaluation" / "evidence" / "manual-wandb-events.json",
     )
-    manual_runtime.summary[ORCHESTRATION_EVENT_SEQ] = training_terminal.wandb_high_water_mark
+    manual_runtime.summary[
+        ORCHESTRATION_EVENT_SEQUENCE
+    ] = training_terminal.wandb_high_water_mark
 
     def manual_supervisor() -> ManualEvaluationSupervisor:
         return ManualEvaluationSupervisor(

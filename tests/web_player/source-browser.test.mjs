@@ -573,23 +573,23 @@ test("run metrics use compact labels and values", () => {
   assert.equal(metricLabel("leader/checkpoint/step"), "Checkpoint step");
   assert.equal(metricLabel(METRIC), "Mean return");
   assert.equal(
-    metricLabel("train/outcome/success/across_starts/window_100/rate/min"),
-    "Min success (last 100)",
+    metricLabel("train/outcome/success/starts/all/rolling/rate/min"),
+    "Recent all-start success rate min",
   );
   assert.equal(
-    metricLabel("train/outcome/success/across_starts/window_100/rate/mean"),
-    "Mean success (last 100)",
+    metricLabel("train/outcome/success/starts/all/rolling/rate/mean"),
+    "Recent all-start success rate mean",
   );
   assert.equal(
-    metricLabel("train/episode/return/shaped/from/target/rolling_up_to_100/mean"),
-    "Mean target-start return (up to 100)",
+    metricLabel("train/episode/return/shaped/origin/target/rolling/mean"),
+    "Recent target return mean",
   );
   assert.equal(
-    metricLabel("train/progress/kills/from/target/rolling_up_to_100/mean"),
-    "Mean Kills (up to 100)",
+    metricLabel("train/progress/kills/origin/target/rolling/mean"),
+    "Recent target kills mean",
   );
   assert.equal(
-    formatMetricValue("eval/full/outcome/success/across_starts/rate/min", 0.875),
+    formatMetricValue("eval/full/outcome/success/starts/rate/min", 0.875),
     "87.5%",
   );
   assert.equal(formatMetricValue(METRIC, null), "—");
@@ -655,10 +655,10 @@ test("run finish reasons distinguish resource, training, and evaluation outcomes
       early_stop: {
         condition_id: "training_target",
         trigger: "threshold",
-        metric: "train/episode/return/shaped/from/target/window_100/mean",
+        metric: "train/episode/return/shaped/origin/target/rolling/mean",
         value: 5.25,
         condition: {
-          metric: "train/episode/return/shaped/from/target/window_100/mean",
+          metric: "train/episode/return/shaped/origin/target/rolling/mean",
           trigger: "threshold",
           operator: ">=",
           threshold: 5,
@@ -668,11 +668,11 @@ test("run finish reasons distinguish resource, training, and evaluation outcomes
     {
       label: "Training target met",
       detail: (
-        "Mean target-start return (last 100) ≥ 5"
+        "Recent target return mean ≥ 5"
         + " · observed 5.25 · Stopped at 16,384 steps"
       ),
       evidence: {
-        metric: "Mean target-start return (last 100)",
+        metric: "Recent target return mean",
         observed: "5.25",
         required: "≥ 5",
         step: "Stopped at 16,384 steps",
@@ -778,14 +778,14 @@ test("unevaluated and unsuccessfully evaluated checkpoints are selectable", () =
 });
 
 test("checkpoint metric cells identify their own leaders", async () => {
-  const trainSuccess = "train/outcome/success/across_starts/window_100/rate/mean";
+  const trainSuccess = "train/outcome/success/starts/all/rolling/rate/mean";
   const evalReturn = "eval/full/episode/return/shaped/mean";
   const checkpoint = { best_metrics: [trainSuccess, evalReturn] };
 
   assert.equal(checkpointMetricIsBest(checkpoint, trainSuccess), true);
   assert.equal(checkpointMetricIsBest(checkpoint, evalReturn), true);
   assert.equal(
-    checkpointMetricIsBest(checkpoint, "eval/full/outcome/success/across_starts/rate/mean"),
+    checkpointMetricIsBest(checkpoint, "eval/full/outcome/success/starts/rate/mean"),
     false,
   );
   assert.equal(checkpointMetricIsBest({}, trainSuccess), false);
@@ -1144,7 +1144,7 @@ test("run efficiency prefers complete goal evaluation and follows its rank order
   ];
   const fallback = [
     {
-      metric: "train/outcome/success/across_starts/window_100/rate/min",
+      metric: "train/outcome/success/starts/all/rolling/rate/min",
       direction: "max",
     },
     { metric: "train/global_step", direction: "min" },
@@ -1154,7 +1154,7 @@ test("run efficiency prefers complete goal evaluation and follows its rank order
       run_id: "training-only",
       recipe: "fast-training",
       metrics: {
-        "train/outcome/success/across_starts/window_100/rate/min": 1,
+        "train/outcome/success/starts/all/rolling/rate/min": 1,
         "train/global_step": 100,
       },
     },
@@ -1193,7 +1193,7 @@ test("run efficiency labels training fallback without evaluation evidence", () =
   ];
   const fallback = [
     {
-      metric: "train/outcome/success/across_starts/window_100/rate/min",
+      metric: "train/outcome/success/starts/all/rolling/rate/min",
       direction: "max",
     },
     { metric: "train/global_step", direction: "min" },
@@ -1202,14 +1202,14 @@ test("run efficiency labels training fallback without evaluation evidence", () =
     {
       run_id: "slower",
       metrics: {
-        "train/outcome/success/across_starts/window_100/rate/min": 0.9,
+        "train/outcome/success/starts/all/rolling/rate/min": 0.9,
         "train/global_step": 2_000,
       },
     },
     {
       run_id: "faster",
       metrics: {
-        "train/outcome/success/across_starts/window_100/rate/min": 0.9,
+        "train/outcome/success/starts/all/rolling/rate/min": 0.9,
         "train/global_step": 1_000,
       },
     },

@@ -132,17 +132,17 @@ class TrainConfigFieldSchemaTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "must be one of modal, none"):
             validate_and_normalize_train_config({"checkpoint_eval_backend": "local"})
 
-    def test_metrics_schema_version_accepts_only_active_v18(self) -> None:
+    def test_metrics_schema_version_accepts_only_active_v19(self) -> None:
         self.assertEqual(
-            validate_and_normalize_train_config({"metrics_schema_version": 18})[
+            validate_and_normalize_train_config({"metrics_schema_version": 19})[
                 "metrics_schema_version"
             ],
-            18,
+            19,
         )
-        with self.assertRaisesRegex(ValueError, "must be >= 18"):
-            validate_and_normalize_train_config({"metrics_schema_version": 17})
-        with self.assertRaisesRegex(ValueError, "must be <= 18"):
-            validate_and_normalize_train_config({"metrics_schema_version": 19})
+        with self.assertRaisesRegex(ValueError, "must be >= 19"):
+            validate_and_normalize_train_config({"metrics_schema_version": 18})
+        with self.assertRaisesRegex(ValueError, "must be <= 19"):
+            validate_and_normalize_train_config({"metrics_schema_version": 20})
 
     def test_episode_progress_fields_must_reference_task_signals(self) -> None:
         normalized = validate_and_normalize_train_config(
@@ -169,7 +169,7 @@ class TrainConfigFieldSchemaTests(unittest.TestCase):
                     "early_stop": {
                         "conditions": {
                             "invalid": {
-                                "metric": "eval/full/outcome/success/across_starts/rate/min",
+                                "metric": "eval/full/outcome/success/starts/rate/min",
                                 "trigger": "threshold",
                                 "operator": ">=",
                                 "threshold": 1.0,
@@ -189,7 +189,7 @@ class TrainConfigFieldSchemaTests(unittest.TestCase):
                 "early_stop": {
                     "conditions": {
                         "clear": {
-                            "metric": "train/outcome/success/across_starts/window_100/rate/min",
+                            "metric": "train/outcome/success/starts/all/rolling/rate/min",
                             "trigger": "threshold",
                             "operator": ">=",
                             "threshold": 1.0,
@@ -207,7 +207,7 @@ class TrainConfigFieldSchemaTests(unittest.TestCase):
             {
                 "conditions": {
                     "clear": {
-                        "metric": "train/outcome/success/across_starts/window_100/rate/min",
+                        "metric": "train/outcome/success/starts/all/rolling/rate/min",
                         "trigger": "threshold",
                         "outcome": "success",
                         "action": "stop",
@@ -222,7 +222,7 @@ class TrainConfigFieldSchemaTests(unittest.TestCase):
 
     def test_eval_acceptance_allows_training_success_as_a_learner_stop(self) -> None:
         failure_condition = {
-            "metric": "train/episode/return/shaped/from/target/rolling_up_to_100/mean",
+            "metric": "train/episode/return/shaped/origin/target/rolling/mean",
             "trigger": "no_improvement",
             "direction": "maximize",
             "min_delta": 0.01,
@@ -234,7 +234,7 @@ class TrainConfigFieldSchemaTests(unittest.TestCase):
         }
         acceptance = [
             {
-                "metric": "eval/full/outcome/success/across_starts/rate/min",
+                "metric": "eval/full/outcome/success/starts/rate/min",
                 "operator": ">=",
                 "threshold": 1.0,
             }
@@ -251,7 +251,7 @@ class TrainConfigFieldSchemaTests(unittest.TestCase):
         )
 
         success_condition = {
-            "metric": "train/outcome/success/across_starts/window_100/rate/min",
+            "metric": "train/outcome/success/starts/all/rolling/rate/min",
             "trigger": "threshold",
             "operator": ">=",
             "threshold": 1.0,

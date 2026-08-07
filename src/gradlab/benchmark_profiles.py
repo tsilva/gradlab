@@ -141,8 +141,8 @@ class _PPOBackendComparisonProfile(_Profile):
     @field_validator("required_metrics")
     @classmethod
     def validate_required_metrics(cls, values: list[str]) -> list[str]:
-        if "train/throughput/loop_fps" not in values:
-            raise ValueError("must include train/throughput/loop_fps")
+        if "train/throughput/loop/rate" not in values:
+            raise ValueError("must include train/throughput/loop/rate")
         for metric_name in values:
             validate_metric_name(metric_name)
         return values

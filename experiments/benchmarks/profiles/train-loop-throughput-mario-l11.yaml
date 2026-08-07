@@ -15,4 +15,4 @@ recipe_overrides:
 run_name: benchmark_train_loop_mario_l11
 run_description: Consolidated native-vector SB3 on-policy throughput probe for Mario Level1-1.
 required_metrics:
-- train/throughput/loop_fps
+- train/throughput/loop/rate

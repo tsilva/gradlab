@@ -193,7 +193,7 @@ goal_file: experiments/goals/SuperMarioBros-Nes-v0/Level1-1/_goal.yaml
 recipe_file: experiments/goals/SuperMarioBros-Nes-v0/Level1-1/recipes/ppo.yaml
 recipe_overrides:
 - train.backend.config.timstepz=512
-required_metrics: [train/throughput/loop_fps]
+required_metrics: [train/throughput/loop/rate]
 """,
                 encoding="utf-8",
             )
@@ -400,7 +400,7 @@ required_metrics: [train/throughput/not_real]
                 store.init()
                 is_candidate = command.label.startswith("candidate-")
                 payload = {
-                    "train/throughput/loop_fps": 95.0 if is_candidate else 100.0,
+                    "train/throughput/loop/rate": 95.0 if is_candidate else 100.0,
                 }
                 if is_candidate:
                     payload.update(
@@ -457,9 +457,9 @@ required_metrics: [train/throughput/not_real]
         self.assertGreaterEqual(comparison["geometric_mean_speedup"], 1.25)
         first = validation["evidence"]["samples"][0]
         self.assertEqual(first["warmup_iterations"], 2)
-        self.assertEqual(first["loop_fps_measured_median"], 100.0)
+        self.assertEqual(first["loop_rate_measured_median"], 100.0)
         self.assertEqual(
-            {sample["status"] for sample in first["loop_fps_history"]},
+            {sample["status"] for sample in first["loop_rate_history"]},
             {"local_only"},
         )
 

@@ -155,7 +155,7 @@ def _string_list(value: Any, *, label: str) -> tuple[str, ...]:
 def _validate_history_metric(name: str, *, label: str) -> str:
     validate_metric_name(name)
     definition = metric_definition(name)
-    if definition is None or definition.storage != "history":
+    if definition is None or definition.placement != "history":
         raise ValueError(f"{label} must name a W&B history metric")
     return name
 
@@ -165,7 +165,7 @@ def _validate_metric_template(name: str, *, label: str) -> str:
     definition = definitions.get(name)
     if definition is None or "{" not in name:
         raise ValueError(f"{label} must exactly match a registered metric template")
-    if definition.storage != "history":
+    if definition.placement != "history":
         raise ValueError(f"{label} must name a W&B history metric template")
     return name
 

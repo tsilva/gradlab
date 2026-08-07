@@ -53,13 +53,13 @@ class WandbWorkspaceDeclarationTests(unittest.TestCase):
         for section in spec.sections:
             for panel in section.panels:
                 validate_metric_name(panel.x)
-                self.assertEqual(metric_definition(panel.x).storage, "history")
+                self.assertEqual(metric_definition(panel.x).placement, "history")
                 for metric in panel.y:
                     validate_metric_name(metric)
-                    self.assertEqual(metric_definition(metric).storage, "history")
+                    self.assertEqual(metric_definition(metric).placement, "history")
                 for template in panel.metric_templates:
                     definition = next(item for item in METRIC_DEFINITIONS if item.name == template)
-                    self.assertEqual(definition.storage, "history")
+                    self.assertEqual(definition.placement, "history")
 
     def test_project_override_selects_a_complete_profile(self) -> None:
         document = yaml.safe_load(MANIFEST.read_text(encoding="utf-8"))
@@ -112,12 +112,12 @@ class WandbWorkspaceRenderingTests(unittest.TestCase):
         self.assertEqual(workspace.settings.max_runs, 25)
         self.assertEqual(
             workspace.runset_settings.filters,
-            "Config('metrics_schema_version') = 18",
+            "Config('metrics_schema_version') = 19",
         )
         self.assertEqual(len(workspace.sections), 1)
         self.assertTrue(workspace.sections[0].pinned)
         self.assertTrue(workspace.sections[0].is_open)
-        self.assertEqual(len(workspace.sections[0].panels), 10)
+        self.assertEqual(len(workspace.sections[0].panels), 9)
         for panel_spec, panel in zip(
             self.spec.sections[0].panels,
             workspace.sections[0].panels,
@@ -144,7 +144,6 @@ class WandbWorkspaceRenderingTests(unittest.TestCase):
                 (0, 24, 12, 8),
                 (12, 24, 12, 8),
                 (0, 32, 12, 8),
-                (12, 32, 12, 8),
             ],
         )
         _adopt_managed_identity(workspace, self.spec, entity="entity")

@@ -37,7 +37,7 @@ def training_evidence(
     return {
         "all_starts_succeeded": all_starts,
         "success_counts_by_start": {"Level1-3": 1 if all_starts else 0},
-        "peak_window_100_rate_min": peak,
+        "peak_rolling_success_rate_min": peak,
         "first_strong_step": step,
         "strong": strong,
         "observed_max_step": 50_176,
@@ -426,7 +426,7 @@ class AutoresearchStudyTests(unittest.TestCase):
         self.assertEqual(score["strong_seeds"], 1)
         self.assertEqual(score["median_censored_first_strong_step"], 40_088)
         self.assertEqual(score["worst_censored_first_strong_step"], 50_176)
-        self.assertEqual(score["worst_peak_window_100_rate_min"], 0.7)
+        self.assertEqual(score["worst_peak_rolling_success_rate_min"], 0.7)
 
     def test_terminal_then_remote_evidence_is_persisted_idempotently(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -548,7 +548,7 @@ class AutoresearchStudyTests(unittest.TestCase):
         self.assertEqual(
             persisted["candidates"][persisted["baseline_candidate_id"]]["screen_runs"][0][
                 "training_evidence"
-            ]["peak_window_100_rate_min"],
+            ]["peak_rolling_success_rate_min"],
             0.94,
         )
 
@@ -837,7 +837,7 @@ class AutoresearchStudyTests(unittest.TestCase):
                     "train/global_step": 50_176,
                     "train/outcome/success/from/A/episode/count": 2,
                     "train/outcome/success/from/B/episode/count": 0,
-                    "train/outcome/success/across_starts/window_100/rate/min": 0.91,
+                    "train/outcome/success/starts/all/rolling/rate/min": 0.91,
                 }
             ],
         )
@@ -855,14 +855,14 @@ class AutoresearchStudyTests(unittest.TestCase):
             )
 
         self.assertFalse(evidence["all_starts_succeeded"])
-        self.assertEqual(evidence["peak_window_100_rate_min"], 0.91)
+        self.assertEqual(evidence["peak_rolling_success_rate_min"], 0.91)
         self.assertEqual(evidence["first_strong_step"], 50_176)
         self.assertTrue(evidence["strong"])
         self.assertEqual(evidence["authority"], "wandb_history")
 
     def test_return_evidence_does_not_query_absent_success_metrics(self) -> None:
         queried_keys: list[list[str]] = []
-        return_metric = "train/episode/return/shaped/across_origins/rolling_up_to_100/mean"
+        return_metric = "train/episode/return/shaped/origin/target/rolling/mean"
         return_rows = [
             {
                 "train/global_step": step * 4096,

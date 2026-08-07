@@ -18,7 +18,6 @@ from gradlab.callbacks import (
     ARCHIVE_CURRICULUM_METRIC_MAP,
     RewardStatsAccumulator,
     policy_discrete_action_indices,
-    policy_entropy_bounds,
 )
 from gradlab.metric_names import (
     TRAIN_PPO_APPROX_KL,
@@ -26,15 +25,7 @@ from gradlab.metric_names import (
     TRAIN_PPO_EXPLAINED_VARIANCE,
     TRAIN_PPO_LEARNING_RATE,
     TRAIN_PPO_POLICY_ENTROPY,
-    TRAIN_PPO_POLICY_ENTROPY_BOUND_LOWER,
-    TRAIN_PPO_POLICY_ENTROPY_BOUND_UPPER,
     TRAIN_PPO_VALUE_LOSS,
-    TRAIN_THROUGHPUT_BETWEEN_ROLLOUTS_SECONDS,
-    TRAIN_THROUGHPUT_ENV_STEP_FPS,
-    TRAIN_THROUGHPUT_ENV_STEP_SECONDS,
-    TRAIN_THROUGHPUT_LOOP_FPS,
-    TRAIN_THROUGHPUT_ROLLOUT_OVERHEAD_SECONDS,
-    TRAIN_THROUGHPUT_ROLLOUT_SECONDS,
     stat_metric,
     train_algorithm_metric,
     validate_metric_payload,
@@ -42,7 +33,6 @@ from gradlab.metric_names import (
 from gradlab.ppo import GradLabPPO
 from gradlab.training.sb3_on_policy import (
     active_reward_components,
-    active_reward_signals,
     checkpoint_prefix,
     checkpoint_save_frequency,
     policy_kwargs_from_config,
@@ -53,6 +43,7 @@ from gradlab.training.sb3_on_policy import (
 )
 from gradlab.training_backend import BackendContext
 from gradlab.training_lifecycle import ProgressField, TrainingExecutionMode, TrainingResult
+from gradlab.training_metrics import throughput_delta_metrics
 
 
 ObservationTree = torch.Tensor | dict[str, "ObservationTree"]
@@ -397,23 +388,13 @@ class _ThroughputTracker:
         between_seconds = next_start - rollout.ended_at
         if rollout.steps <= 0 or loop_seconds <= 0.0 or between_seconds < 0.0:
             return
-        payload: dict[str, float] = {
-            TRAIN_THROUGHPUT_LOOP_FPS: rollout.steps / loop_seconds,
-            TRAIN_THROUGHPUT_ROLLOUT_SECONDS: rollout.rollout_seconds,
-            TRAIN_THROUGHPUT_BETWEEN_ROLLOUTS_SECONDS: between_seconds,
-        }
-        if rollout.env_step_seconds is not None:
-            payload.update(
-                {
-                    TRAIN_THROUGHPUT_ENV_STEP_FPS: rollout.steps / rollout.env_step_seconds,
-                    TRAIN_THROUGHPUT_ENV_STEP_SECONDS: rollout.env_step_seconds,
-                    TRAIN_THROUGHPUT_ROLLOUT_OVERHEAD_SECONDS: max(
-                        rollout.rollout_seconds - rollout.env_step_seconds,
-                        0.0,
-                    ),
-                }
-            )
-        validate_metric_payload(payload)
+        payload = throughput_delta_metrics(
+            steps=rollout.steps,
+            loop_seconds=loop_seconds,
+            provider_step_seconds=rollout.env_step_seconds,
+            rollout_seconds=rollout.rollout_seconds,
+            between_rollouts_seconds=between_seconds,
+        )
         self.context.session.metric_sink.publish(payload, step=rollout.step)
 
 
@@ -701,7 +682,7 @@ def _rollout_diagnostics(
 ) -> dict[str, float]:
     payload: dict[str, float] = {}
     for suffix, values in (
-        ("rollout/value_prediction", buffer.values),
+        ("rollout/value/prediction", buffer.values),
         ("rollout/advantage", buffer.advantages),
     ):
         finite = values[torch.isfinite(values)].float()
@@ -712,8 +693,6 @@ def _rollout_diagnostics(
             {
                 stat_metric(prefix, "mean"): float(finite.mean().item()),
                 stat_metric(prefix, "std"): float(finite.std(correction=0).item()),
-                stat_metric(prefix, "min"): float(finite.min().item()),
-                stat_metric(prefix, "max"): float(finite.max().item()),
             }
         )
     discrete_actions = policy_discrete_action_indices(
@@ -723,13 +702,9 @@ def _rollout_diagnostics(
     if discrete_actions.size:
         counts = np.bincount(discrete_actions)
         if counts.size:
-            payload[train_algorithm_metric("ppo", "policy/dominant_action_rate")] = float(
+            payload[train_algorithm_metric("ppo", "policy/dominant/action/rate")] = float(
                 counts.max() / discrete_actions.size
             )
-    bounds = policy_entropy_bounds(action_space)
-    if bounds is not None:
-        payload[TRAIN_PPO_POLICY_ENTROPY_BOUND_LOWER] = bounds[0]
-        payload[TRAIN_PPO_POLICY_ENTROPY_BOUND_UPPER] = bounds[1]
     return payload
 
 
@@ -867,12 +842,11 @@ def _ppo_update(
         train_algorithm_metric("ppo", "update/policy_gradient_loss"): (
             float(np.mean(policy_losses)) if policy_losses else 0.0
         ),
-        train_algorithm_metric("ppo", "hyperparameter/entropy_coefficient"): float(ent_coef),
     }
     if math.isfinite(explained_variance):
         payload[TRAIN_PPO_EXPLAINED_VARIANCE] = explained_variance
     if hasattr(model.policy, "log_std"):
-        payload[train_algorithm_metric("ppo", "policy/distribution_std")] = float(
+        payload[train_algorithm_metric("ppo", "policy/distribution/std")] = float(
             torch.exp(model.policy.log_std).mean().detach().item()
         )
     validate_metric_payload(payload)
@@ -1045,7 +1019,6 @@ def run_gradlab_ppo(
         precision = _Precision(str(backend_config["precision"]), device)
         reward_stats = RewardStatsAccumulator(
             active_components=active_reward_components(config.task),
-            active_signals=active_reward_signals(config.task),
         )
         curriculum = _CurriculumFeedback(runtime)
         throughput = _ThroughputTracker(context, runtime, device)
@@ -1056,7 +1029,6 @@ def run_gradlab_ppo(
             n_envs,
         )
         calls_since_start = 0
-        rollout_count = 0
         context.mark_ready()
 
         while int(model.num_timesteps) < budget.execution_total:
@@ -1227,30 +1199,6 @@ def run_gradlab_ppo(
                 step=int(model.num_timesteps),
                 metrics=rollout_metrics,
             )
-            rollout_count += 1
-            if rollout_count % 64 == 0 and context.wandb_enabled:
-                histograms = {
-                    train_algorithm_metric(
-                        "ppo", "rollout/value_prediction/hist"
-                    ): buffer.values.detach().float().cpu().flatten().tolist(),
-                    train_algorithm_metric(
-                        "ppo", "rollout/advantage/hist"
-                    ): buffer.advantages.detach().float().cpu().flatten().tolist(),
-                }
-                discrete_actions = policy_discrete_action_indices(
-                    buffer.actions.detach().cpu().numpy(),
-                    env.action_space,
-                )
-                if discrete_actions.size:
-                    histograms[train_algorithm_metric("ppo", "policy/action_hist")] = (
-                        discrete_actions.astype(float).tolist()
-                    )
-                context.metric_store.enqueue_event(
-                    kind="histogram",
-                    payload={"histograms": histograms},
-                    step=int(model.num_timesteps),
-                    source="train",
-                )
             if context.stop_flag.requested:
                 graceful_stop.acknowledge_safe_boundary(num_timesteps=int(model.num_timesteps))
                 break

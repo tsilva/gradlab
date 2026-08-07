@@ -14,26 +14,26 @@ def test_metric_outbox_deduplicates_stable_events_and_tracks_latest() -> None:
         store = MetricStore(Path(temporary) / "gradlab.sqlite")
         store.init()
         first = store.append_metrics(
-            {"train/episode/return/shaped/across_origins/rolling_up_to_100/mean": 1.0},
+            {"train/episode/return/shaped/origin/target/rolling/mean": 1.0},
             step=10,
             source="learner",
         )
         second = store.append_metrics(
-            {"train/episode/return/shaped/across_origins/rolling_up_to_100/mean": 1.0},
+            {"train/episode/return/shaped/origin/target/rolling/mean": 1.0},
             step=10,
             source="learner",
         )
 
         assert first == second == 1
         assert len(store.pending_metric_frames()) == 1
-        assert store.latest_metric("train/episode/return/shaped/across_origins/rolling_up_to_100/mean") == 1.0
+        assert store.latest_metric("train/episode/return/shaped/origin/target/rolling/mean") == 1.0
 
 
 def test_offline_metrics_retain_history_without_entering_publisher_outbox() -> None:
     with tempfile.TemporaryDirectory() as temporary:
         store = MetricStore(Path(temporary) / "gradlab.sqlite")
         store.init()
-        metric = "train/throughput/loop_fps"
+        metric = "train/throughput/loop/rate"
         store.append_metrics(
             {metric: 100.0},
             step=10,
@@ -62,7 +62,7 @@ def test_frame_publish_failure_is_retryable_and_success_drains_outbox() -> None:
         store = MetricStore(Path(temporary) / "gradlab.sqlite")
         store.init()
         store.append_metrics(
-            {"train/episode/return/shaped/across_origins/rolling_up_to_100/mean": 10},
+            {"train/episode/return/shaped/origin/target/rolling/mean": 10},
             step=10,
             source="learner",
         )
@@ -81,7 +81,7 @@ def test_interrupted_publish_claim_is_recovered() -> None:
         store = MetricStore(Path(temporary) / "gradlab.sqlite")
         store.init()
         store.append_metrics(
-            {"train/episode/return/shaped/across_origins/rolling_up_to_100/mean": 1},
+            {"train/episode/return/shaped/origin/target/rolling/mean": 1},
             step=1,
             source="learner",
         )
@@ -179,7 +179,7 @@ def test_wal_accepts_concurrent_learner_writes() -> None:
             try:
                 for step in range(offset, offset + 20):
                     store.append_metrics(
-                        {"train/episode/return/shaped/across_origins/rolling_up_to_100/mean": float(step)},
+                        {"train/episode/return/shaped/origin/target/rolling/mean": float(step)},
                         step=step,
                         source=f"learner-{offset}",
                     )

@@ -15,7 +15,7 @@ from gradlab.modal_eval_backend import ModalEvalBackend
 from gradlab.modal_eval_config import load_modal_eval_config, modal_app_name
 from gradlab.modal_eval_protocol import SEED_PROTOCOL, build_execution_contract
 from gradlab.modal_eval_storage import write_downloaded_file
-from gradlab.modal_eval_worker import _prepare_vizdoom_iwad, execute_attempt
+from gradlab.modal_eval_worker import _prepare_vizdoom_iwad, execute_attempt, run_child
 from gradlab.r2_store import PUBLIC_OBJECT_USER_AGENT
 from gradlab.vizdoom_assets import (
     verify_vizdoom_iwad_file,
@@ -204,3 +204,67 @@ def test_expired_attempt_persists_create_only_result_before_download(tmp_path: P
 
     with pytest.raises(RuntimeError, match="different content"):
         execute_attempt({**payload, "attempt_id": "attempt-2"}, cache_root=tmp_path / "cache")
+
+
+def test_modal_child_wire_result_omits_metrics_and_claimed_aggregates(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    contract = {
+        "environment": {"env_provider": "gradlab", "game": "Bandit-v0", "task": {}},
+        "episodes": 1,
+        "n_envs": 1,
+        "watchdog_steps": 10,
+        "seed": 10_000,
+        "asset": None,
+        "acceptance": [{"metric": "eval/full/episode/return/shaped/mean"}],
+    }
+    input_path = tmp_path / "input.json"
+    output_path = tmp_path / "output.json"
+    input_path.write_text(
+        json.dumps(
+            {
+                "contract": contract,
+                "bundle_root": str(tmp_path / "bundle"),
+                "rom_path": None,
+                "rom_asset_manifest": None,
+                "execution_id": "execution-1",
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "gradlab.modal_eval_worker.load_policy_bundle",
+        lambda _root: SimpleNamespace(recipe={}),
+    )
+    monkeypatch.setattr(
+        "gradlab.modal_eval_worker.evaluation_contract",
+        lambda _recipe: {
+            "environment": contract["environment"],
+            "seed": contract["seed"],
+            "watchdog_steps": contract["watchdog_steps"],
+        },
+    )
+    monkeypatch.setattr(
+        "gradlab.eval_runner.evaluate_policy_bundle",
+        lambda *_args, **_kwargs: (
+            {
+                "eval/full/episode/return/shaped/mean": 1.0,
+                "episode_results": [{"episode_id": "episode-1"}],
+                "evaluation_evidence": {"manifest": "verified"},
+                "acceptance_verdict": "accepted",
+                "acceptance_aggregates": {"episodes_completed": 1},
+            },
+            None,
+        ),
+    )
+
+    assert run_child(input_path, output_path) == 0
+
+    result = json.loads(output_path.read_text(encoding="utf-8"))
+    assert result == {
+        "episode_results": [{"episode_id": "episode-1"}],
+        "evaluation_evidence": {"manifest": "verified"},
+        "preview": None,
+        "verdict": "accepted",
+    }

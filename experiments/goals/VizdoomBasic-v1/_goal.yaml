@@ -15,7 +15,7 @@ train:
       # Specialize the inherited solved-target rule for the Basic task.
       target_reached:
         # Select the training metric compared with this condition's threshold.
-        metric: train/outcome/success/across_starts/window_100/rate/min
+        metric: train/outcome/success/starts/all/rolling/rate/min
         # Align the training target with this goal's perfect-success acceptance requirement.
         threshold: 1.0
         # Stop successfully as soon as the mature training window reaches perfect success.
@@ -79,7 +79,7 @@ eval:
   # Declare every metric threshold a checkpoint must satisfy to be accepted.
   acceptance:
   # Select the evaluation metric tested by this acceptance rule.
-  - metric: eval/full/outcome/success/across_starts/rate/min
+  - metric: eval/full/outcome/success/starts/rate/min
     # Choose how the observed metric is compared with the threshold.
     operator: '>='
     # Make perfect success across every represented start state mandatory for acceptance.

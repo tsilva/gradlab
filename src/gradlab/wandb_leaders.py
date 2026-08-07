@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 from collections import defaultdict
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import asdict, dataclass
@@ -13,35 +14,24 @@ from gradlab.json_utils import json_safe
 from gradlab.metric_names import (
     LEADER_CHECKPOINT_ARTIFACT_REF,
     LEADER_CHECKPOINT_EVALUATION_SOURCE,
-    LEADER_CHECKPOINT_RETURN_SHAPED_MEAN,
+    LEADER_CHECKPOINT_PROJECTION_TIMESTAMP,
     LEADER_CHECKPOINT_STEP,
-    LEADER_CHECKPOINT_SUCCESS_ACROSS_STARTS_RATE_MEAN,
-    LEADER_CHECKPOINT_SUCCESS_ACROSS_STARTS_RATE_MIN,
-    TRAIN_EPISODE_RETURN_SHAPED_ACROSS_ORIGINS_ROLLING_UP_TO_100_MEAN,
+    TRAIN_EPISODE_RETURN_SHAPED_ORIGIN_TARGET_ROLLING_MEAN,
     TRAIN_GLOBAL_STEP,
-    TRAIN_OUTCOME_SUCCESS_ACROSS_STARTS_WINDOW_100_RATE_MIN,
-    evaluation_metric_schema,
+    TRAIN_OUTCOME_SUCCESS_STARTS_ALL_ROLLING_RATE_MIN,
     leader_metric_for_rank_metric,
+    require_current_metrics_schema,
+    summary_value,
 )
 from gradlab.ranking import parse_objective_rank, rank_score
 from gradlab.wandb_utils import DEFAULT_WANDB_PROJECT_PATH, load_wandb_env
 
 
 RUN_OBJECTIVE_KEYS = (
-    TRAIN_OUTCOME_SUCCESS_ACROSS_STARTS_WINDOW_100_RATE_MIN,
-    TRAIN_EPISODE_RETURN_SHAPED_ACROSS_ORIGINS_ROLLING_UP_TO_100_MEAN,
+    TRAIN_OUTCOME_SUCCESS_STARTS_ALL_ROLLING_RATE_MIN,
+    TRAIN_EPISODE_RETURN_SHAPED_ORIGIN_TARGET_ROLLING_MEAN,
 )
 RUN_PRIMARY_ORDER = "-created_at"
-CHECKPOINT_SUCCESS_KEYS = (
-    LEADER_CHECKPOINT_SUCCESS_ACROSS_STARTS_RATE_MIN,
-)
-CHECKPOINT_SUCCESS_MEAN_KEYS = (
-    LEADER_CHECKPOINT_SUCCESS_ACROSS_STARTS_RATE_MEAN,
-)
-CHECKPOINT_RETURN_KEYS = (
-    LEADER_CHECKPOINT_RETURN_SHAPED_MEAN,
-)
-CHECKPOINT_STEP_KEYS = (LEADER_CHECKPOINT_STEP,)
 # API ordering is only a retrieval hint. Goal-specific ranking happens in Python,
 # because the primary objective may be either minimized or maximized.
 CHECKPOINT_PRIMARY_ORDER = "-created_at"
@@ -93,19 +83,17 @@ class CheckpointLeader:
     url: str
     objective: float
     objective_name: str
-    success_rate_min: float | None
-    success_rate_mean: float | None
-    progress_max: float | None
-    return_mean: float
-    checkpoint_step: int | None
+    rank_values: Mapping[str, float]
+    checkpoint_step: int
     artifact_ref: str
     eval_source: str
+    projection_updated_at: str
     rank_score: tuple[float, ...]
 
 
 def _mapping_value(mapping: Mapping[str, Any], key: str) -> Any:
     try:
-        return mapping.get(key)
+        return summary_value(mapping.get(key))
     except AttributeError:
         return None
 
@@ -121,12 +109,14 @@ def _first_text(*values: Any) -> str:
 def _first_float(mapping: Mapping[str, Any], keys: Sequence[str]) -> float | None:
     for key in keys:
         value = _mapping_value(mapping, key)
-        if value is None:
+        if value is None or isinstance(value, bool):
             continue
         try:
-            return float(value)
+            numeric = float(value)
         except TypeError, ValueError:
             continue
+        if math.isfinite(numeric):
+            return numeric
     return None
 
 
@@ -174,12 +164,7 @@ def run_query_objective_keys(args: argparse.Namespace) -> tuple[str, ...]:
 
 
 def checkpoint_summary_filter() -> dict[str, Any]:
-    return {
-        "$and": [
-            _exists_filter(LEADER_CHECKPOINT_ARTIFACT_REF),
-            _exists_filter(LEADER_CHECKPOINT_RETURN_SHAPED_MEAN),
-        ]
-    }
+    return _exists_filter(LEADER_CHECKPOINT_ARTIFACT_REF)
 
 
 def run_score(run: Any, *, objective_keys: Sequence[str]) -> RunScore | None:
@@ -289,17 +274,25 @@ def checkpoint_leader(run: Any) -> CheckpointLeader | None:
     summary = getattr(run, "summary", {}) or {}
     try:
         metrics_schema_version = int(config.get("metrics_schema_version"))
-        evaluation_metric_schema(metrics_schema_version)
+        require_current_metrics_schema(metrics_schema_version)
     except (TypeError, ValueError):
         return None
-    success = _first_float(summary, CHECKPOINT_SUCCESS_KEYS)
-    success_mean = _first_float(summary, CHECKPOINT_SUCCESS_MEAN_KEYS)
-    episode_return = _first_float(summary, CHECKPOINT_RETURN_KEYS)
-    checkpoint_step = _optional_int(_first_float(summary, CHECKPOINT_STEP_KEYS))
+    checkpoint_step = _optional_int(_mapping_value(summary, LEADER_CHECKPOINT_STEP))
     artifact_ref = _first_text(
-        _mapping_value(summary, (LEADER_CHECKPOINT_ARTIFACT_REF,)),
+        _mapping_value(summary, LEADER_CHECKPOINT_ARTIFACT_REF),
     )
-    if episode_return is None or not artifact_ref:
+    eval_source = _first_text(
+        _mapping_value(summary, LEADER_CHECKPOINT_EVALUATION_SOURCE)
+    )
+    projection_updated_at = _first_text(
+        _mapping_value(summary, LEADER_CHECKPOINT_PROJECTION_TIMESTAMP)
+    )
+    if (
+        checkpoint_step is None
+        or not artifact_ref
+        or not eval_source
+        or not projection_updated_at
+    ):
         return None
     rank = parse_objective_rank(
         config.get("selection_rank"),
@@ -307,8 +300,7 @@ def checkpoint_leader(run: Any) -> CheckpointLeader | None:
     )
     if not rank:
         return None
-    rank_metrics: dict[str, Any] = {}
-    progress: float | None = None
+    rank_metrics: dict[str, float] = {}
     for criterion in rank:
         leader_metric = leader_metric_for_rank_metric(
             criterion.metric,
@@ -319,12 +311,10 @@ def checkpoint_leader(run: Any) -> CheckpointLeader | None:
             if leader_metric == LEADER_CHECKPOINT_STEP
             else _first_float(summary, (leader_metric,))
         )
-        rank_metrics[criterion.metric] = value
-        if "/progress/" in criterion.metric and criterion.metric.endswith("/max"):
-            progress = value
-    objective = rank_metrics.get(rank[0].metric)
-    if objective is None:
-        return None
+        if value is None:
+            return None
+        rank_metrics[criterion.metric] = float(value)
+    objective = rank_metrics[rank[0].metric]
     return CheckpointLeader(
         goal_slug=_first_text(config.get("goal_slug")),
         recipe_slug=_first_text(config.get("recipe_slug")),
@@ -339,15 +329,11 @@ def checkpoint_leader(run: Any) -> CheckpointLeader | None:
         url=str(getattr(run, "url", "") or ""),
         objective=float(objective),
         objective_name=rank[0].metric,
-        success_rate_min=success,
-        success_rate_mean=success_mean,
-        progress_max=progress,
-        return_mean=episode_return,
+        rank_values=rank_metrics,
         checkpoint_step=checkpoint_step,
         artifact_ref=artifact_ref,
-        eval_source=_first_text(
-            _mapping_value(summary, (LEADER_CHECKPOINT_EVALUATION_SOURCE,))
-        ),
+        eval_source=eval_source,
+        projection_updated_at=projection_updated_at,
         rank_score=rank_score(rank_metrics, rank),
     )
 
@@ -414,22 +400,16 @@ def print_run_leaders(rows: Sequence[RunLeader]) -> None:
 
 def print_checkpoint_leaders(rows: Sequence[CheckpointLeader]) -> None:
     print(
-        "goal_slug\trecipe_slug\treward_shape\tobjective\tobjective_name\tsuccess_min\t"
-        "success_mean\treturn\tprogress\tstep\trun\tartifact_ref"
+        "goal_slug\trecipe_slug\treward_shape\tobjective\tobjective_name\trank_values\t"
+        "step\trun\tartifact_ref\teval_source\tprojection_updated_at"
     )
     for row in rows:
-        success_rate = f"{row.success_rate_min:.6g}" if row.success_rate_min is not None else ""
-        success_rate_mean = (
-            f"{row.success_rate_mean:.6g}" if row.success_rate_mean is not None else ""
-        )
-        progress = f"{row.progress_max:.6g}" if row.progress_max is not None else ""
         print(
             f"{row.goal_slug}\t{row.recipe_slug}\t{row.reward_shape}\t"
             f"{row.objective:.6g}\t"
-            f"{row.objective_name}\t{success_rate}\t"
-            f"{success_rate_mean}\t{row.return_mean:.6g}\t"
-            f"{progress}\t"
-            f"{row.checkpoint_step or ''}\t{row.run_name}\t{row.artifact_ref}"
+            f"{row.objective_name}\t{json.dumps(dict(row.rank_values), sort_keys=True)}\t"
+            f"{row.checkpoint_step}\t{row.run_name}\t{row.artifact_ref}\t"
+            f"{row.eval_source}\t{row.projection_updated_at}"
         )
 
 

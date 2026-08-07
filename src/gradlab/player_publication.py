@@ -110,9 +110,20 @@ def _display_name(value: object) -> str:
     text = re.sub(r"-v[0-9]+$", "", str(value or "").strip())
     text = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", text)
     text = re.sub(r"[_-]+", " ", text)
+    text = re.sub(r"\b(?:vi\s*zdoom|vizdoom)\b", "ViZDoom", text, flags=re.I)
     text = re.sub(r"\b(nes|snes|gb|gba|n64)\b", lambda match: match.group(1).upper(), text, flags=re.I)
     text = re.sub(r"\b(Level|Stage|World)\s*(?=[0-9])", r"\1 ", text, flags=re.I)
     return re.sub(r"\s+", " ", text).strip()
+
+
+def _training_backend_display(policy: Mapping[str, Any]) -> tuple[str, str]:
+    backend_id = str(policy.get("training_backend_id") or "").strip()
+    model_class = str(policy.get("model_class") or "").strip()
+    if backend_id.startswith("gradlab.") or model_class.startswith("gradlab."):
+        return "GradLab", backend_id
+    if backend_id.startswith("sb3.") or model_class.startswith("stable_baselines3."):
+        return "Stable-Baselines3", backend_id
+    raise ValueError("model policy does not identify a supported training backend")
 
 
 def _bounded_youtube_tags(values: Sequence[object], *, max_characters: int = 500) -> list[str]:
@@ -133,11 +144,10 @@ def _bounded_youtube_tags(values: Sequence[object], *, max_characters: int = 500
 
 
 def _youtube_access(
-    repo_root: Path,
     *,
     client_factory: Callable[[str], YouTubeClient] = YouTubeClient,
 ) -> tuple[YouTubeClient, dict[str, Any]]:
-    paths = youtube_credential_paths(repo_root)
+    paths = youtube_credential_paths()
     with credential_lock(paths.lock):
         client_config = load_private_json(paths.client, root=paths.root)
         if not paths.token.exists():
@@ -170,7 +180,6 @@ def _youtube_access(
 
 
 def credential_preflight(
-    repo_root: Path,
     *,
     hf_api_factory: Callable[..., Any] = HfApi,
     youtube_client_factory: Callable[[str], YouTubeClient] = YouTubeClient,
@@ -203,7 +212,6 @@ def credential_preflight(
         result["huggingface"] = {"ready": False, "message": str(exc)}
     try:
         _client, principal = _youtube_access(
-            repo_root,
             client_factory=youtube_client_factory,
         )
         result["youtube"] = {"ready": True, **principal}
@@ -249,24 +257,23 @@ def generated_metadata(
     if privacy not in PRIVACY_VALUES:
         raise ValueError("YouTube privacy must be public, unlisted, or private")
     goal = _required_mapping(capture.get("goal"), label="capture goal")
-    raw_goal = str(goal.get("title") or goal.get("goal_id") or "Goal").strip()
+    goal_id = str(goal.get("goal_id") or "").strip()
+    raw_goal = str(goal.get("title") or goal_id or "Goal").strip()
     goal_title = _display_name(raw_goal)
     qualified = str((capture.get("execution") or {}).get("qualified_environment_id") or "")
-    _provider, _separator, game = qualified.partition(":")
+    provider, _separator, game = qualified.partition(":")
     raw_game = game or qualified or "Game"
     game_title = _display_name(raw_game)
     policy = _required_mapping(bundle.model.get("policy"), label="model policy")
     algorithm = str(policy.get("algorithm_id") or "policy").upper()
-    accepted = True
+    trainer, backend_id = _training_backend_display(policy)
+    trainer_title = "SB3" if trainer == "Stable-Baselines3" else trainer
+    same_task = bool(goal_id) and goal_id.casefold() == raw_game.casefold()
+    task_title = game_title if same_task else f"{game_title} — {goal_title}"
+    task_description = game_title if same_task else f"{game_title} {goal_title}"
     captured_success = bool(capture.get("success"))
-    verb = "Solved by" if captured_success and accepted else "Played by"
     success_mean = evaluation.get("success_rate_mean")
-    suffix = (
-        f" - {100.0 * float(success_mean):.1f}% Win Rate"
-        if isinstance(success_mean, int | float) and not isinstance(success_mean, bool)
-        else ""
-    )
-    title = f"{game_title} {goal_title} {verb} {algorithm}{suffix}"
+    title = f"{task_title} — {trainer_title} {algorithm}"
     title = title[:100].rstrip()
     outcome = "met" if captured_success else "did not meet"
     episode_verb = "completes" if captured_success else "plays"
@@ -276,8 +283,9 @@ def generated_metadata(
         else ""
     )
     description = (
-        f"A {algorithm} reinforcement learning agent {episode_verb} {game_title} "
-        f"{goal_title}{evaluation_claim}. This exact faithful {capture.get('sampling_mode')} "
+        f"A {algorithm} reinforcement-learning agent trained with {trainer} "
+        f"{episode_verb} {task_description}{evaluation_claim}. This exact faithful "
+        f"{capture.get('sampling_mode')} "
         f"episode {outcome} the embedded goal; the separate checkpoint evaluation used "
         f"{evaluation.get('episodes')} episodes.\n\n"
         f"Model: https://huggingface.co/{repo_id}\n"
@@ -301,9 +309,11 @@ def generated_metadata(
             "reinforcement learning",
             "deep reinforcement learning",
             "AI gameplay",
-            "stable-baselines3",
-            "Stable Retro",
             "gradlab",
+            backend_id,
+            trainer,
+            *(["stable-baselines3"] if trainer == "Stable-Baselines3" else []),
+            *(["Stable Retro"] if provider == "stable-retro-turbo" else []),
             algorithm,
             raw_game,
             game_title,
@@ -447,6 +457,11 @@ class PlayerPublicationService:
         if getattr(spec, "kind", None) != "public_run":
             raise ValueError("only verified catalog public-run checkpoints are publishable")
         capture_status = _required_mapping(context.get("capture"), label="capture status")
+        if capture_status.get("ready") is not True:
+            raise ValueError(
+                capture_status.get("error")
+                or "finish the current episode before publishing"
+            )
         capture = capture_status.get("latest")
         if not isinstance(capture, Mapping):
             raise ValueError(capture_status.get("error") or "complete an episode before publishing")
@@ -581,7 +596,7 @@ class PlayerPublicationService:
             evaluation,
             algorithm_id=str(bundle.model["policy"].get("algorithm_id") or ""),
         ).as_manifest_value()
-        credentials = dict(credential_result or credential_preflight(self.repo_root))
+        credentials = dict(credential_result or credential_preflight())
         if not credentials.get("ready"):
             raise ValueError("Hugging Face and YouTube credentials must both pass preflight")
         hf_principal = _required_mapping(credentials.get("huggingface"), label="Hugging Face")
@@ -726,7 +741,7 @@ class PlayerPublicationService:
         return {"created": result.created, "job": self._public_subject(subject)}
 
     def preflight(self) -> dict[str, Any]:
-        return credential_preflight(self.repo_root)
+        return credential_preflight()
 
     def job(self, job_id: str) -> dict[str, Any]:
         job = self.store.job(job_id)

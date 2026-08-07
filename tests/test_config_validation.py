@@ -215,7 +215,7 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertEqual(
             train_config["selection_rank"],
             [
-                "max(train/episode/return/shaped/from/target/rolling_up_to_100/mean)",
+                "max(train/episode/return/shaped/origin/target/rolling/mean)",
                 "min(train/global_step)",
             ],
         )
@@ -299,7 +299,7 @@ class ConfigValidationTests(unittest.TestCase):
             document["goal"]["eval"]["acceptance"],
             [
                 {
-                    "metric": "eval/full/outcome/success/across_starts/rate/min",
+                    "metric": "eval/full/outcome/success/starts/rate/min",
                     "operator": ">=",
                     "threshold": 1.0,
                 }
@@ -417,7 +417,7 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertEqual(
             train_config["early_stop"]["conditions"]["clear_100"],
             {
-                "metric": "train/outcome/success/across_starts/window_100/rate/min",
+                "metric": "train/outcome/success/starts/all/rolling/rate/min",
                 "trigger": "threshold",
                 "outcome": "success",
                 "action": "stop",
@@ -499,7 +499,7 @@ class ConfigValidationTests(unittest.TestCase):
                 self.assertEqual(
                     conditions["clear_100"],
                     {
-                        "metric": "train/outcome/success/across_starts/window_100/rate/min",
+                        "metric": "train/outcome/success/starts/all/rolling/rate/min",
                         "trigger": "threshold",
                         "outcome": "success",
                         "action": "stop",
@@ -545,7 +545,7 @@ class ConfigValidationTests(unittest.TestCase):
 
                 self.assertEqual(
                     plateau["metric"],
-                    "train/episode/return/shaped/from/target/rolling_up_to_100/mean",
+                    "train/episode/return/shaped/origin/target/rolling/mean",
                 )
                 self.assertEqual(plateau["trigger"], "no_improvement")
                 self.assertEqual(plateau["direction"], "maximize")
@@ -621,7 +621,7 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertEqual(
             train_config["selection_rank"],
             [
-                "max(train/episode/return/shaped/from/target/rolling_up_to_100/mean)",
+                "max(train/episode/return/shaped/origin/target/rolling/mean)",
                 "min(train/global_step)",
             ],
         )
@@ -893,7 +893,7 @@ class ConfigValidationTests(unittest.TestCase):
         document = load_goal_contract(path)
         document["train"]["early_stop"] = [
             {
-                "metric": "train/outcome/success/across_starts/window_100/rate/min",
+                "metric": "train/outcome/success/starts/all/rolling/rate/min",
                 "operator": ">",
                 "threshold": 0.99,
             }
@@ -905,7 +905,7 @@ class ConfigValidationTests(unittest.TestCase):
         path = self.MARIO_L11_GOAL.resolve()
         document = load_goal_contract(path)
         document["train"]["early_stop"]["conditions"]["return_plateau"] = {
-            "metric": "train/episode/return/shaped/from/target/rolling_up_to_100/mean",
+            "metric": "train/episode/return/shaped/origin/target/rolling/mean",
             "trigger": "no_improvement",
             "direction": "maximize",
             "min_delta": 0.01,
@@ -993,7 +993,7 @@ class ConfigValidationTests(unittest.TestCase):
         path = self.MARIO_L11_GOAL.resolve()
         document = load_goal_contract(path)
         document["objective"]["success"] = {
-            "metric": "train/outcome/success/across_starts/window_100/rate/min",
+            "metric": "train/outcome/success/starts/all/rolling/rate/min",
             "operator": ">",
             "threshold": 0.99,
         }
@@ -1068,7 +1068,7 @@ class ConfigValidationTests(unittest.TestCase):
             document["eval"]["acceptance"],
             [
                 {
-                    "metric": "eval/full/outcome/success/across_starts/rate/min",
+                    "metric": "eval/full/outcome/success/starts/rate/min",
                     "operator": ">=",
                     "threshold": 1.0,
                 }

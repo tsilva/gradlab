@@ -6,7 +6,6 @@ from typing import Any
 from stable_baselines3.common.utils import get_schedule_fn
 
 from gradlab.callbacks import CallbackHelper
-from gradlab.metric_names import train_algorithm_metric
 
 
 def linear_decay_schedule(
@@ -49,7 +48,6 @@ class EntropyCoefficientScheduleHelper(CallbackHelper):
         initial_value: float,
         final_value: float,
         schedule_timesteps: int,
-        algorithm_id: str = "ppo",
     ):
         super().__init__()
         if schedule_timesteps <= 0:
@@ -57,7 +55,6 @@ class EntropyCoefficientScheduleHelper(CallbackHelper):
         self.initial_value = initial_value
         self.final_value = final_value
         self.schedule_timesteps = schedule_timesteps
-        self.algorithm_id = algorithm_id
 
     def _current_value(self) -> float:
         progress = min(max(self.num_timesteps / self.schedule_timesteps, 0.0), 1.0)
@@ -69,10 +66,6 @@ class EntropyCoefficientScheduleHelper(CallbackHelper):
     def _on_step(self) -> bool:
         ent_coef = self._current_value()
         self.model.ent_coef = ent_coef
-        self.logger.record(
-            train_algorithm_metric(self.algorithm_id, "hyperparameter/entropy_coefficient"),
-            ent_coef,
-        )
         return True
 
 

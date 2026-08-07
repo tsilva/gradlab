@@ -14,9 +14,15 @@ from gradlab.batch_runtime import EpisodeRecord
 from gradlab.cell_graph import CellGraphExecutionContext, CellGraphPolicy
 from gradlab.go_explore import GoExploreSearch
 from gradlab.metric_names import (
-    TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_ROLLING_UP_TO_100_MEAN,
+    TRAIN_EPISODE_RETURN_SHAPED_ORIGIN_TARGET_ROLLING_MEAN,
     TRAIN_GO_EXPLORE_ARCHIVE_BLOB_BYTES,
-    TRAIN_OUTCOME_SUCCESS_ACROSS_OBSERVED_STARTS_CUMULATIVE_RATE_MEAN,
+    TRAIN_GO_EXPLORE_ARCHIVE_CELL_COUNT,
+    TRAIN_GO_EXPLORE_ARCHIVE_CELL_DISCOVERY_RATE,
+    TRAIN_GO_EXPLORE_ARCHIVE_VISIT_COUNT,
+    TRAIN_GO_EXPLORE_BEST_PROGRAM_STEPS,
+    TRAIN_GO_EXPLORE_BEST_PROGRESS,
+    TRAIN_GO_EXPLORE_BEST_RETURN,
+    TRAIN_OUTCOME_SUCCESS_STARTS_OBSERVED_CUMULATIVE_RATE_MEAN,
 )
 from gradlab.task_kernels import Outcome
 from gradlab.training.go_explore import (
@@ -25,6 +31,7 @@ from gradlab.training.go_explore import (
     normalize_config,
     run_go_explore,
 )
+from gradlab.training import go_explore as go_explore_training
 from gradlab.training_backend import BackendContext, GracefulStopFlag
 from gradlab.training_lifecycle import (
     TerminalReason,
@@ -44,6 +51,31 @@ def test_go_explore_progress_fields_define_dashboard_groups() -> None:
         "exploration",
         "traffic",
     ]
+
+
+def test_go_explore_wandb_payload_keeps_only_decision_useful_search_metrics() -> None:
+    search = SimpleNamespace(
+        archive_count=9,
+        archive_visit_count=12,
+        archive_recent_new_cell_rate=0.25,
+        best_candidate=lambda: SimpleNamespace(
+            progress=30.0,
+            episode_return=4.0,
+            step_count=11,
+        ),
+    )
+
+    payload = go_explore_training._wandb_metric_payload(search, archive_blob_bytes=1_024)
+
+    assert payload == {
+        TRAIN_GO_EXPLORE_ARCHIVE_CELL_COUNT: 9,
+        TRAIN_GO_EXPLORE_ARCHIVE_BLOB_BYTES: 1_024,
+        TRAIN_GO_EXPLORE_ARCHIVE_VISIT_COUNT: 12,
+        TRAIN_GO_EXPLORE_ARCHIVE_CELL_DISCOVERY_RATE: 0.25,
+        TRAIN_GO_EXPLORE_BEST_PROGRESS: 30.0,
+        TRAIN_GO_EXPLORE_BEST_RETURN: 4.0,
+        TRAIN_GO_EXPLORE_BEST_PROGRAM_STEPS: 11,
+    }
 
 
 class GoExploreSearchTests(unittest.TestCase):
@@ -309,7 +341,7 @@ class GoExploreSearchTests(unittest.TestCase):
                 )
                 self.assertEqual(progress.n, 1 if interrupted else 2)
                 self.assertNotIn(
-                    TRAIN_OUTCOME_SUCCESS_ACROSS_OBSERVED_STARTS_CUMULATIVE_RATE_MEAN,
+                    TRAIN_OUTCOME_SUCCESS_STARTS_OBSERVED_CUMULATIVE_RATE_MEAN,
                     progress.metrics,
                 )
 
@@ -367,11 +399,11 @@ class GoExploreSearchTests(unittest.TestCase):
             0,
         )
         self.assertEqual(
-            progress.metrics[TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_ROLLING_UP_TO_100_MEAN],
+            progress.metrics[TRAIN_EPISODE_RETURN_SHAPED_ORIGIN_TARGET_ROLLING_MEAN],
             10.0,
         )
         self.assertEqual(
-            progress.metrics[TRAIN_OUTCOME_SUCCESS_ACROSS_OBSERVED_STARTS_CUMULATIVE_RATE_MEAN],
+            progress.metrics[TRAIN_OUTCOME_SUCCESS_STARTS_OBSERVED_CUMULATIVE_RATE_MEAN],
             1.0,
         )
 

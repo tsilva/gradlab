@@ -241,7 +241,7 @@ def validate_benchmark_results(
         common_metrics = tuple(profile.payload.get("required_metrics", ()))
         candidate_metrics = tuple(profile.payload.get("candidate_required_metrics", ()))
         samples: list[dict[str, Any]] = []
-        loop_fps: dict[str, list[float]] = {"baseline": [], "candidate": []}
+        loop_rates: dict[str, list[float]] = {"baseline": [], "candidate": []}
         for command, result in zip(commands, results, strict=False):
             if int(result["returncode"]) != 0:
                 continue
@@ -261,9 +261,9 @@ def validate_benchmark_results(
             missing = sorted(name for name, value in metrics.items() if value is None)
             if missing:
                 issues.append(f"{command.label} metrics are missing: {', '.join(missing)}")
-            loop_value = metrics.get("train/throughput/loop_fps")
+            loop_value = metrics.get("train/throughput/loop/rate")
             if loop_value is not None:
-                loop_fps[variant].append(float(loop_value))
+                loop_rates[variant].append(float(loop_value))
             samples.append(
                 {
                     "label": command.label,
@@ -273,16 +273,16 @@ def validate_benchmark_results(
                 }
             )
         evidence["samples"] = samples
-        if not loop_fps["baseline"] or not loop_fps["candidate"]:
-            issues.append("throughput comparison lacks baseline or candidate loop_fps samples")
+        if not loop_rates["baseline"] or not loop_rates["candidate"]:
+            issues.append("throughput comparison lacks baseline or candidate loop-rate samples")
         else:
-            baseline_mean = sum(loop_fps["baseline"]) / len(loop_fps["baseline"])
-            candidate_mean = sum(loop_fps["candidate"]) / len(loop_fps["candidate"])
+            baseline_mean = sum(loop_rates["baseline"]) / len(loop_rates["baseline"])
+            candidate_mean = sum(loop_rates["candidate"]) / len(loop_rates["candidate"])
             slowdown = 1.0 - candidate_mean / baseline_mean if baseline_mean > 0.0 else 1.0
             maximum = float(profile.payload["max_candidate_slowdown"])
             evidence["comparison"] = {
-                "baseline_loop_fps_mean": baseline_mean,
-                "candidate_loop_fps_mean": candidate_mean,
+                "baseline_loop_rate_mean": baseline_mean,
+                "candidate_loop_rate_mean": candidate_mean,
                 "candidate_slowdown_fraction": slowdown,
                 "max_candidate_slowdown": maximum,
             }
@@ -338,15 +338,15 @@ def validate_benchmark_results(
             missing = sorted(name for name, value in latest.items() if value is None)
             if missing:
                 issues.append(f"{command.label} metrics are missing: {', '.join(missing)}")
-            history = store.metric_history("train/throughput/loop_fps")
+            history = store.metric_history("train/throughput/loop/rate")
             measured = [float(sample["value"]) for sample in history[warmup:]]
             if not measured:
                 issues.append(
-                    f"{command.label} has no loop_fps samples after {warmup} warmups"
+                    f"{command.label} has no loop-rate samples after {warmup} warmups"
                 )
                 continue
             if any(value <= 0.0 or not math.isfinite(value) for value in measured):
-                issues.append(f"{command.label} has invalid loop_fps history")
+                issues.append(f"{command.label} has invalid loop-rate history")
                 continue
             run_median = float(statistics.median(measured))
             paired.setdefault(case_name, {}).setdefault(repeat, {})[variant] = run_median
@@ -358,8 +358,8 @@ def validate_benchmark_results(
                     "repeat": repeat,
                     "metric_store": str(store_path),
                     "warmup_iterations": warmup,
-                    "loop_fps_history": history,
-                    "loop_fps_measured_median": run_median,
+                    "loop_rate_history": history,
+                    "loop_rate_measured_median": run_median,
                     "metrics": latest,
                 }
             )

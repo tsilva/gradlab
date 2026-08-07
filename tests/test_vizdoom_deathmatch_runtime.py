@@ -12,7 +12,7 @@ from gradlab.action_codecs import (
 from gradlab.batch_runtime import BatchMetricRecord, EpisodeRecord
 from gradlab.env import make_training_vec_env, resolve_env_config
 from gradlab.env_config import env_config_from_mapping
-from gradlab.metric_names import TRAIN_PROGRESS_KILLS_FROM_TARGET_ROLLING_UP_TO_100_MEAN
+from gradlab.metric_names import TRAIN_PROGRESS_KILLS_ORIGIN_TARGET_ROLLING_MEAN
 from gradlab.recipe_documents import compose_train_document
 from gradlab.actor_critic_policy import SharedActorCriticPolicy
 from gradlab.training_metrics import EpisodeMetricsReducer
@@ -325,7 +325,7 @@ def test_deathmatch_native_horizon_is_successful_and_keeps_bootstrap() -> None:
             progress_fields=progress_fields,
             track_success=False,
         ).consume(records)
-        assert reduced[TRAIN_PROGRESS_KILLS_FROM_TARGET_ROLLING_UP_TO_100_MEAN] == 0.0
+        assert reduced[TRAIN_PROGRESS_KILLS_ORIGIN_TARGET_ROLLING_MEAN] == 0.0
     finally:
         env.close()
 

@@ -104,6 +104,7 @@ let gridStack = null;
 let gridCellHeight = DEFAULT_GRID_CELL_HEIGHT;
 let syncingGrid = false;
 let panelManager = null;
+let youtubeOAuthPopup = null;
 
 const workspaceChannel = "BroadcastChannel" in window
   ? new BroadcastChannel(`gradlab-player-${workspaceId}`)
@@ -391,7 +392,7 @@ function updatePublicationButton() {
   if (!button) return;
   const snapshot = state.applicationSnapshot || state.liveSnapshot;
   const configured = Boolean(snapshot?.publication?.configured);
-  const complete = Boolean(snapshot?.publication_capture?.latest);
+  const complete = snapshot?.publication_capture?.ready === true;
   button.hidden = !(configured && complete && state.publicationAuthority);
 }
 
@@ -1919,12 +1920,37 @@ function initWorkspace() {
   $("#publication-authorize-youtube").addEventListener("click", async () => {
     try {
       const result = await publicationApi("/api/publication/oauth/start", { method: "POST" });
-      const popup = window.open(result.authorization_url, "gradlab-youtube-oauth", "popup,width=620,height=760");
-      if (!popup) throw new Error("The browser blocked the YouTube authorization window.");
-      showToast("Finish YouTube authorization, then check accounts again.");
+      youtubeOAuthPopup = window.open(
+        result.authorization_url,
+        "gradlab-youtube-oauth",
+        "popup,width=620,height=760",
+      );
+      if (!youtubeOAuthPopup) {
+        throw new Error("The browser blocked the YouTube authorization window.");
+      }
+      showToast("Finish YouTube authorization in the popup.");
     } catch (error) {
       showToast(error.message || String(error), true);
     }
+  });
+  window.addEventListener("message", (event) => {
+    if (
+      event.origin !== location.origin
+      || event.source !== youtubeOAuthPopup
+      || event.data?.type !== "gradlab-youtube-oauth-complete"
+    ) {
+      return;
+    }
+    youtubeOAuthPopup = null;
+    void checkPublicationCredentials().then((result) => {
+      const youtube = result?.youtube || {};
+      showToast(
+        youtube.ready
+          ? `YouTube authorized as ${youtube.channel_title}.`
+          : (youtube.message || "YouTube authorization needs attention."),
+        !youtube.ready,
+      );
+    }).catch((error) => showToast(error.message || String(error), true));
   });
   $("#publication-form").addEventListener("submit", async (event) => {
     event.preventDefault();

@@ -20,7 +20,7 @@ from textual.message import Message
 from textual.widget import Widget
 from textual.widgets import Footer, ProgressBar, RichLog, Sparkline, Static
 
-from gradlab.metric_names import TRAIN_OUTCOME_SUCCESS_ACROSS_OBSERVED_STARTS_CUMULATIVE_RATE_MEAN
+from gradlab.metric_names import TRAIN_OUTCOME_SUCCESS_STARTS_OBSERVED_CUMULATIVE_RATE_MEAN
 from gradlab.train import TrainingRuntimeControl, graceful_stop_signal_scope
 from gradlab.training_backend import GracefulStopFlag
 from gradlab.training_lifecycle import (
@@ -672,7 +672,7 @@ class LocalTrainingApp(App[None]):
         for field in snapshot.fields:
             value = snapshot.metrics.get(field.metric)
             completion_unavailable = bool(
-                field.metric == TRAIN_OUTCOME_SUCCESS_ACROSS_OBSERVED_STARTS_CUMULATIVE_RATE_MEAN
+                field.metric == TRAIN_OUTCOME_SUCCESS_STARTS_OBSERVED_CUMULATIVE_RATE_MEAN
                 and self.identity.completion_signal_available is False
             )
             self._cards[field.metric].set_metric(

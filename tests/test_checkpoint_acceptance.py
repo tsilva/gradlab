@@ -7,7 +7,6 @@ import pytest
 from gradlab.checkpoint_acceptance import (
     CheckpointEvalContractCompiler,
     acceptance_aggregates,
-    aggregates_match,
     build_checkpoint_eval_contract,
     checkpoint_eval_watchdog_steps,
     evaluate_acceptance,
@@ -40,7 +39,7 @@ def contract(
         acceptance=acceptance
         or [
             {
-                "metric": "eval/full/outcome/success/across_starts/rate/min",
+                "metric": "eval/full/outcome/success/starts/rate/min",
                 "operator": ">=",
                 "threshold": 1.0,
             }
@@ -61,6 +60,39 @@ def row(entry: dict, *, success: bool = True, episode_return: float = 1.0) -> di
     }
 
 
+def modal_contract(**kwargs) -> dict:
+    value = contract(**kwargs)
+    value.update(
+        {
+            "schema_version": PROTOCOL_SCHEMA_VERSION,
+            "checkpoint_sha256": "a" * 64,
+            "runtime_image_ref": "docker:example.invalid/gradlab@sha256:" + "b" * 64,
+            "recipe_sha256": "c" * 64,
+            "recipe_format_version": 1,
+            "evaluation_contract_sha256": "d" * 64,
+        }
+    )
+    return value
+
+
+def result_identity(value: dict, *, attempt_id: str) -> dict:
+    return {
+        "schema_version": PROTOCOL_SCHEMA_VERSION,
+        "contract_schema_version": PROTOCOL_SCHEMA_VERSION,
+        "attempt_id": attempt_id,
+        "execution_key": execution_key(value),
+        "checkpoint_sha256": value["checkpoint_sha256"],
+        "recipe_sha256": value["recipe_sha256"],
+        "recipe_format_version": value["recipe_format_version"],
+        "evaluation_contract_sha256": value["evaluation_contract_sha256"],
+        "runtime_image_ref": value["runtime_image_ref"],
+        "rom_sha256": "",
+        "seed_protocol": value["seed_protocol"],
+        "n_envs": value["n_envs"],
+        "episodes": value["episodes"],
+    }
+
+
 def test_manifest_has_exact_count_unique_identities_and_fixed_quotas() -> None:
     value = contract()
     manifest = value["manifest"]
@@ -76,7 +108,7 @@ def test_rejection_is_valid_partial_evidence_only_through_first_failure() -> Non
     entries = value["manifest"]["episodes"]
     rows = [row(entries[0]), row(entries[1], success=False)]
 
-    assert validate_episode_rows(rows, contract=value, verdict="rejected") == rows
+    assert validate_episode_rows(rows, contract=value) == rows
     aggregates = acceptance_aggregates(rows, contract=value)
     assert aggregates["episodes_planned"] == 4
     assert aggregates["episodes_completed"] == 2
@@ -84,7 +116,7 @@ def test_rejection_is_valid_partial_evidence_only_through_first_failure() -> Non
     assert not any(name.startswith("eval/full/") for name in aggregates)
 
     with pytest.raises(ValueError, match="after its first failure"):
-        validate_episode_rows([*rows, row(entries[2])], contract=value, verdict="rejected")
+        validate_episode_rows([*rows, row(entries[2])], contract=value)
 
 
 @pytest.mark.parametrize(
@@ -116,8 +148,8 @@ def test_mean_return_acceptance_requires_and_uses_every_episode(
     ]
 
     with pytest.raises(ValueError, match="every planned episode"):
-        validate_episode_rows(rows[:-1], contract=value, verdict=verdict)
-    validate_episode_rows(rows, contract=value, verdict=verdict)
+        validate_episode_rows(rows[:-1], contract=value)
+    validate_episode_rows(rows, contract=value)
     aggregates = acceptance_aggregates(rows, contract=value)
 
     assert aggregates["episodes_completed"] == 4
@@ -137,7 +169,7 @@ def test_vizdoom_basic_perfect_success_acceptance_requires_every_episode() -> No
         seed_protocol="vector-lane-v1",
         acceptance=[
             {
-                "metric": "eval/full/outcome/success/across_starts/rate/min",
+                "metric": "eval/full/outcome/success/starts/rate/min",
                 "operator": ">=",
                 "threshold": 1.0,
             }
@@ -149,13 +181,13 @@ def test_vizdoom_basic_perfect_success_acceptance_requires_every_episode() -> No
     ]
 
     with pytest.raises(ValueError, match="every planned episode"):
-        validate_episode_rows(rows[:-1], contract=value, verdict="rejected")
-    validate_episode_rows(rows, contract=value, verdict="rejected")
+        validate_episode_rows(rows[:-1], contract=value)
+    validate_episode_rows(rows, contract=value)
     aggregates = acceptance_aggregates(rows, contract=value)
 
     assert aggregates["episodes_completed"] == 4
     assert aggregates["failure_count"] == 1
-    assert aggregates["eval/full/outcome/success/across_starts/rate/min"] == 0.75
+    assert aggregates["eval/full/outcome/success/starts/rate/min"] == 0.75
     accepted, _observed = evaluate_acceptance(aggregates, contract=value)
     assert accepted is False
 
@@ -195,7 +227,7 @@ def test_vizdoom_deathmatch_acceptance_aggregates_raw_kills() -> None:
 
 
 def test_modal_protocol_accepts_complete_mean_return_rejection() -> None:
-    value = contract(
+    value = modal_contract(
         episodes=2,
         n_envs=1,
         acceptance=[
@@ -206,40 +238,15 @@ def test_modal_protocol_accepts_complete_mean_return_rejection() -> None:
             }
         ],
     )
-    value.update(
-        {
-            "schema_version": PROTOCOL_SCHEMA_VERSION,
-            "checkpoint_sha256": "a" * 64,
-            "runtime_image_ref": "docker:example.invalid/gradlab@sha256:" + "b" * 64,
-            "recipe_sha256": "c" * 64,
-            "recipe_format_version": 1,
-            "evaluation_contract_sha256": "d" * 64,
-        }
-    )
     rows = [
         row(entry, success=False, episode_return=0.25) for entry in value["manifest"]["episodes"]
     ]
-    aggregates = acceptance_aggregates(rows, contract=value)
     attempt_id = "attempt-1"
     result = {
-        "schema_version": PROTOCOL_SCHEMA_VERSION,
-        "contract_schema_version": PROTOCOL_SCHEMA_VERSION,
-        "attempt_id": attempt_id,
-        "execution_key": execution_key(value),
-        "checkpoint_sha256": value["checkpoint_sha256"],
-        "recipe_sha256": value["recipe_sha256"],
-        "recipe_format_version": value["recipe_format_version"],
-        "evaluation_contract_sha256": value["evaluation_contract_sha256"],
-        "runtime_image_ref": value["runtime_image_ref"],
-        "rom_sha256": "",
-        "seed_protocol": value["seed_protocol"],
-        "n_envs": value["n_envs"],
-        "episodes": value["episodes"],
+        **result_identity(value, attempt_id=attempt_id),
         "status": "succeeded",
         "verdict": "rejected",
         "episode_results": rows,
-        "claimed_aggregates": aggregates,
-        "metrics": {"eval/full/episode/return/shaped/mean": 0.25},
         "duration_seconds": 1.25,
         "evaluation_evidence": {"manifest": "verified"},
     }
@@ -248,7 +255,7 @@ def test_modal_protocol_accepts_complete_mean_return_rejection() -> None:
     normalized = normalize_attempt_result(result, contract=value, attempt_id=attempt_id)
 
     assert validated["verdict"] == "rejected"
-    assert validated["claimed_aggregates"]["episodes_completed"] == 2
+    assert validated["aggregates"]["episodes_completed"] == 2
     assert normalized["status"] == "rejected"
     assert normalized["aggregates"]["episodes_completed"] == 2
     assert normalized["duration_seconds"] == 1.25
@@ -257,12 +264,11 @@ def test_modal_protocol_accepts_complete_mean_return_rejection() -> None:
 
 
 def test_modal_protocol_normalizes_failed_attempt_identity() -> None:
-    value = contract(episodes=2, n_envs=1)
+    value = modal_contract(episodes=2, n_envs=1)
     attempt_id = "attempt-2"
     result = {
+        **result_identity(value, attempt_id=attempt_id),
         "status": "expired",
-        "attempt_id": attempt_id,
-        "execution_key": execution_key(value),
         "duration_seconds": 3.5,
         "error": "deadline reached",
     }
@@ -281,25 +287,49 @@ def test_modal_protocol_normalizes_failed_attempt_identity() -> None:
         normalize_attempt_result(result, contract=value, attempt_id="different-attempt")
 
 
-def test_accepted_evidence_requires_every_identity_once_and_all_successes() -> None:
+def test_complete_evidence_requires_every_identity_once() -> None:
     value = contract(episodes=4, n_envs=2)
     rows = [row(entry) for entry in value["manifest"]["episodes"]]
 
-    validate_episode_rows(rows, contract=value, verdict="accepted")
+    validate_episode_rows(rows, contract=value)
     with pytest.raises(ValueError, match="unknown or duplicate"):
-        validate_episode_rows([*rows[:-1], rows[0]], contract=value, verdict="accepted")
-    with pytest.raises(ValueError, match="every planned successful"):
-        validate_episode_rows(rows[:-1], contract=value, verdict="accepted")
+        validate_episode_rows([*rows[:-1], rows[0]], contract=value)
+    with pytest.raises(ValueError, match="incomplete fail-fast evidence"):
+        validate_episode_rows(rows[:-1], contract=value)
 
 
-def test_claimed_aggregate_mismatch_is_detected() -> None:
-    value = contract(episodes=2, n_envs=1)
+def test_modal_protocol_recomputes_and_rejects_a_false_worker_verdict() -> None:
+    value = modal_contract(episodes=2, n_envs=1)
+    rows = [row(value["manifest"]["episodes"][0], success=False)]
+    attempt_id = "attempt-verdict"
+    result = {
+        **result_identity(value, attempt_id=attempt_id),
+        "status": "succeeded",
+        "verdict": "accepted",
+        "episode_results": rows,
+        "duration_seconds": 1.0,
+    }
+
+    with pytest.raises(ValueError, match="supervisor recomputation"):
+        validate_attempt_result(result, contract=value, attempt_id=attempt_id)
+
+
+@pytest.mark.parametrize("retired_field", ["metrics", "claimed_aggregates"])
+def test_modal_protocol_v6_rejects_retired_worker_claims(retired_field: str) -> None:
+    value = modal_contract(episodes=2, n_envs=1)
     rows = [row(entry) for entry in value["manifest"]["episodes"]]
-    computed = acceptance_aggregates(rows, contract=value)
-    claimed = {**computed, "success_count": 1}
+    attempt_id = "attempt-retired"
+    result = {
+        **result_identity(value, attempt_id=attempt_id),
+        "status": "succeeded",
+        "verdict": "accepted",
+        "episode_results": rows,
+        "duration_seconds": 1.0,
+        retired_field: {},
+    }
 
-    assert aggregates_match(computed, computed)
-    assert not aggregates_match(claimed, computed)
+    with pytest.raises(ValueError, match="forbids result field"):
+        validate_attempt_result(result, contract=value, attempt_id=attempt_id)
 
 
 @pytest.mark.parametrize(

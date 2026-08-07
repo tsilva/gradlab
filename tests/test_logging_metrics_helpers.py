@@ -83,8 +83,8 @@ class Sb3LoggerTests(unittest.TestCase):
         output_format.write(
             {
                 "rollout/ep_rew_mean": 99.0,
-                "train/episode/return/shaped/from/target/rolling_up_to_100/mean": 357.25,
-                "train/outcome/success/across_observed_starts/cumulative/rate/mean": 0.125,
+                "train/episode/return/shaped/origin/target/rolling/mean": 357.25,
+                "train/outcome/success/starts/observed/cumulative/rate/mean": 0.125,
                 "train/algorithm/ppo/update/value_loss": 42.0,
                 "time/fps": 1_344,
             },
@@ -133,8 +133,8 @@ class Sb3LoggerTests(unittest.TestCase):
         )
         self.assertIs(logger.output_formats[1], complete_format)
 
-        logger.record("train/episode/return/shaped/from/target/rolling_up_to_100/mean", 10.0)
-        logger.record("train/outcome/success/across_observed_starts/cumulative/rate/mean", 0.5)
+        logger.record("train/episode/return/shaped/origin/target/rolling/mean", 10.0)
+        logger.record("train/outcome/success/starts/observed/cumulative/rate/mean", 0.5)
         logger.record("train/algorithm/ppo/update/value_loss", 42.0)
         logger.dump(step=8_192)
 
@@ -200,8 +200,6 @@ class MetricsDocumentationTests(unittest.TestCase):
                 "train/value_loss": 1.5,
                 "train/entropy_loss": -0.75,
                 "train/learning_rate": 0.0007,
-                "train/algorithm/a2c/policy/entropy_bound/lower": 0.0,
-                "train/algorithm/a2c/policy/entropy_bound/upper": 1.5,
             },
             algorithm_id="a2c",
         )
@@ -213,8 +211,6 @@ class MetricsDocumentationTests(unittest.TestCase):
                 "train/algorithm/a2c/update/value_loss": 1.5,
                 "train/algorithm/a2c/policy/entropy": 0.75,
                 "train/algorithm/a2c/update/learning_rate": 0.0007,
-                "train/algorithm/a2c/policy/entropy_bound/lower": 0.0,
-                "train/algorithm/a2c/policy/entropy_bound/upper": 1.5,
             },
         )
         self.assertFalse(any("/ppo/" in name for name in payload))
@@ -223,41 +219,38 @@ class MetricsDocumentationTests(unittest.TestCase):
         starts = [f"Start-{index}" for index in range(32)]
         reasons = [f"reason-{index}" for index in range(5)]
         names = {metric_names.train_success_count_metric(start) for start in starts} | {
-            metric_names.train_outcome_reason_count_metric(reason) for reason in reasons
+            metric_names.train_outcome_reason_rolling_rate_metric(reason)
+            for reason in reasons
         }
         self.assertEqual(len(names), len(starts) + len(reasons))
         self.assertFalse(any("/reason/" in name and "/from/" in name for name in names))
 
     def test_eval_outcome_cardinality_stays_bounded(self) -> None:
-        names = {metric_names.EVAL_FULL_BY_START}
-        for protocol in metric_names.EVAL_PROTOCOLS:
-            names.update(
-                {
-                    metric_names.eval_success_rate_metric(protocol, "min"),
-                    metric_names.eval_success_rate_metric(protocol, "mean"),
-                }
-            )
+        names = {metric_names.EVAL_FULL_START_TABLE}
+        names.update(
+            {
+                metric_names.EVAL_FULL_OUTCOME_SUCCESS_STARTS_RATE_MIN,
+                metric_names.EVAL_FULL_OUTCOME_SUCCESS_STARTS_RATE_MEAN,
+            }
+        )
 
         self.assertEqual(len(names), 3)
         self.assertLessEqual(len(names), 50)
 
     def test_cardinality_margins_and_single_start_lifecycle(self) -> None:
-        protocols = list(metric_names.EVAL_PROTOCOLS)
         starts = ["Start"]
         reasons = [f"reason-{index}" for index in range(5)]
         values = {
             "algorithm": list(metric_names.TRAIN_ACTOR_CRITIC_ALGORITHMS),
-            "protocol": protocols,
             "reason": reasons,
             "start": starts,
             "component": ["progress"],
-            "signal": ["progress"],
             "progress": ["x"],
             "condition": ["return_plateau"],
         }
         scalar_names: set[str] = set()
         for definition in metric_names.METRIC_DEFINITIONS:
-            if definition.unit in {"histogram", "table"} or definition.storage == "summary":
+            if definition.unit == "table" or definition.placement == "summary":
                 continue
             placeholders = re.findall(r"\{([^}]+)\}", definition.name)
             for replacements in itertools.product(*(values[name] for name in placeholders)):
@@ -266,22 +259,20 @@ class MetricsDocumentationTests(unittest.TestCase):
                     name = name.replace(f"{{{placeholder}}}", replacement, 1)
                 scalar_names.add(name)
 
-        self.assertEqual(len(metric_names.METRIC_DEFINITIONS), 150)
-        self.assertEqual(len(scalar_names), 162)
+        self.assertEqual(len(metric_names.METRIC_DEFINITIONS), 96)
+        self.assertEqual(len(scalar_names), 99)
         self.assertEqual(
             len(
                 {
                     metric_names.train_success_count_metric("A"),
-                    metric_names.train_success_attempts_metric("A"),
-                    metric_names.train_success_window_rate_metric("A"),
+                    metric_names.train_success_rolling_rate_metric("A"),
                 }
             ),
-            3,
+            2,
         )
 
     def test_registry_grammar_units_templates_and_package_data_are_bounded(self) -> None:
         allowed_units = {
-            "blobs",
             "boolean",
             "boundaries",
             "bytes",
@@ -292,31 +283,22 @@ class MetricsDocumentationTests(unittest.TestCase):
             "episodes",
             "evaluations",
             "events",
-            "events/second",
             "fraction",
-            "histogram",
-            "improvements",
             "metadata",
             "nats",
-            "progress",
-            "progress units",
-            "ratio",
             "return",
-            "runs",
             "scalar",
             "seconds",
-            "selections",
             "sequences",
             "steps",
-            "steps/second",
             "table",
             "text",
             "timestamp",
             "trajectories",
             "transitions",
-            "updates",
             "value",
             "visits",
+            "transitions/second",
         }
         for definition in metric_names.METRIC_DEFINITIONS:
             with self.subTest(metric=definition.name):

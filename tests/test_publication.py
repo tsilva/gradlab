@@ -101,6 +101,7 @@ def _v2_publication() -> dict:
 
 def _render_current_model_card_fixture(
     *,
+    goal: str = "Level1-1",
     algorithm: str = "ppo",
     model_class: str = "stable_baselines3.ppo.ppo.PPO",
     search_algorithm: str | None = None,
@@ -112,7 +113,7 @@ def _render_current_model_card_fixture(
         search_algorithm=search_algorithm,
     )
     bundle = policy_bundle_from_metadata(raw_metadata)
-    identity = publication_identity_from_policy_bundle("Level1-1", bundle)
+    identity = publication_identity_from_policy_bundle(goal, bundle)
     raw_evaluation = evaluation_payload()
     if algorithm == "action-program":
         raw_evaluation["action_sampling"] = "program"
@@ -255,25 +256,27 @@ def evaluation_payload() -> dict:
         "protocol": "full",
         "eval/checkpoint/step": 4_000_000,
         "checkpoint_artifact": "tsilva/project/run-checkpoint:v3",
-        "eval/full/episode/completed/count": 30,
-        "eval/full/outcome/success/across_starts/rate/min": 0.8,
-        "eval/full/outcome/success/across_starts/rate/mean": 0.9,
+        "episodes": 30,
+        "eval/full/outcome/success/starts/rate/min": 0.8,
+        "eval/full/outcome/success/starts/rate/mean": 0.9,
         "eval/full/episode/return/shaped/mean": 123.5,
         "eval/full/progress/x/max": 6256,
-        "eval/full/by_start": [
+        "by_start": [
             {
                 "start_id": "Level1-1",
-                "episodes": 15,
+                "episode_count": 15,
                 "success_count": 12,
                 "success_rate": 0.8,
-                "return_mean": 100.0,
+                "shaped_return_mean": 100.0,
+                "failure_reasons": {},
             },
             {
                 "start_id": "Level1-2",
-                "episodes": 15,
+                "episode_count": 15,
                 "success_count": 15,
                 "success_rate": 1.0,
-                "return_mean": 147.0,
+                "shaped_return_mean": 147.0,
+                "failure_reasons": {},
             },
         ],
     }
@@ -295,12 +298,23 @@ def test_mario_publication_identity_is_exact_and_provider_neutral() -> None:
         policy_variant="gray84-hudmask-stack4-basic",
         algorithm="ppo",
     )
-    assert build_model_repo_id(native) == (
-        "tsilva/NES-SuperMarioBros_Level1-1_gray84-hudmask-stack4-basic_ppo"
+    assert build_model_repo_id(native) == "tsilva/Level1-1_ppo_c868549e"
+
+
+def test_publication_repo_id_uses_goal_algorithm_and_stable_contract_hash() -> None:
+    identity = PublicationIdentity(
+        game_family="Doom-ViZDoom-Deathmatch",
+        goal="VizdoomDeathmatch-v1",
+        policy_variant="gray84-mask-t0-r32-b0-l0-stack4-contextdict-custom-discrete",
+        algorithm="ppo",
     )
 
+    repo_id = build_model_repo_id(identity)
 
-def test_non_default_reward_shape_gets_a_bounded_repository_suffix() -> None:
+    assert repo_id == "tsilva/VizdoomDeathmatch-v1_ppo_ae2049cb"
+
+
+def test_non_default_reward_shape_is_bound_into_the_contract_hash() -> None:
     metadata = model_metadata()
     metadata.update(
         reward_shape="score-step-0p01-v1",
@@ -312,7 +326,8 @@ def test_non_default_reward_shape_gets_a_bounded_repository_suffix() -> None:
     )
 
     assert identity.policy_variant.endswith("shape-score-step-0p01-v1-aaaaaaaa")
-    assert len(identity.repo_name) <= 96
+    assert identity.repo_name.startswith("Level1-1_ppo_")
+    assert len(identity.repo_name.rsplit("_", 1)[-1]) == 8
 
 
 @pytest.mark.parametrize(
@@ -356,6 +371,25 @@ def test_policy_variant_records_rgb_shape_crop_stack_layout_and_action() -> None
     assert identity.policy_variant == "rgb84x96-crop-t8-r1-b2-l3-stack2-taskdict-native"
 
 
+def test_policy_variant_records_observation_context_layout() -> None:
+    identity = publication_identity_from_policy_bundle(
+        "Deathmatch",
+        policy_bundle_from_metadata(
+            model_metadata(
+                provider="vizdoom-turbo",
+                game="VizdoomDeathmatch-v1",
+                crop=[0, 32, 0, 0],
+                layout="dict_observation_context_v1",
+                action_set="native",
+            )
+        ),
+    )
+
+    assert identity.policy_variant == (
+        "gray84-mask-t0-r32-b0-l0-stack4-contextdict-native"
+    )
+
+
 def test_policy_variant_accepts_another_registered_action_set() -> None:
     identity = publication_identity_from_policy_bundle(
         "Level1-1",
@@ -373,12 +407,12 @@ def test_policy_variant_accepts_another_registered_action_set() -> None:
         ("cell-graph", "gradlab.cell_graph.CellGraphPolicy"),
     ],
 )
-def test_supported_algorithms_are_the_last_axis(algorithm: str, model_class: str) -> None:
+def test_supported_algorithms_are_the_middle_axis(algorithm: str, model_class: str) -> None:
     identity = publication_identity_from_policy_bundle(
         "Level1-1",
         policy_bundle_from_metadata(model_metadata(algorithm=algorithm, model_class=model_class)),
     )
-    assert build_model_repo_id(identity).endswith(f"_{algorithm}")
+    assert f"_{algorithm}_" in build_model_repo_id(identity)
 
 
 def test_publication_rejects_unknown_family_and_algorithm_mismatch() -> None:
@@ -409,7 +443,7 @@ def test_long_repo_names_are_rejected() -> None:
         build_model_repo_id(
             PublicationIdentity(
                 game_family="NES-SuperMarioBros",
-                goal="A" * 70,
+                goal="A" * 90,
                 policy_variant="gray84-hudmask-stack4-basic",
                 algorithm="ppo",
             )
@@ -436,7 +470,7 @@ def test_publication_evaluation_requires_stochastic_consistent_by_start() -> Non
         normalize_publication_evaluation(deterministic)
 
     inconsistent = evaluation_payload()
-    inconsistent["eval/full/outcome/success/across_starts/rate/min"] = 0.7
+    inconsistent["eval/full/outcome/success/starts/rate/min"] = 0.7
     with pytest.raises(ValueError, match="success_rate_min"):
         normalize_publication_evaluation(inconsistent)
 
@@ -468,8 +502,17 @@ def test_model_card_template_preserves_current_sb3_golden_output() -> None:
 
     ModelCard(card).validate(repo_type="model")
     assert hashlib.sha256(card.encode()).hexdigest() == (
-        "c48895c4608bf5b34da0c33025bbd5ed8b9de8489d8c24cabfdcc5c3918f9d08"
+        "62faa14cf1aa05b3bd27112c5e4e88ea19d20bfea983492aa38072d7009e773d"
     )
+
+
+def test_model_card_deduplicates_identical_game_and_goal_labels() -> None:
+    card = _render_current_model_card_fixture(goal="SuperMarioBros-Nes-v0")
+
+    assert "# SuperMarioBros-Nes-v0 — PPO" in card
+    assert "# SuperMarioBros-Nes-v0 — SuperMarioBros-Nes-v0" not in card
+    assert "policy for `SuperMarioBros-Nes-v0`, trained" in card
+    assert "| Task | Complete `SuperMarioBros-Nes-v0` |" in card
 
 
 def test_model_card_template_preserves_current_action_program_golden_output() -> None:
@@ -482,9 +525,9 @@ def test_model_card_template_preserves_current_action_program_golden_output() ->
 
     ModelCard(card).validate(repo_type="model")
     assert "| Producer | `jerk` |" in card
-    assert "_action-program/resolve/v1/model.zip" in card
+    assert "_action-program_c868549e/resolve/v1/model.zip" in card
     assert hashlib.sha256(card.encode()).hexdigest() == (
-        "b9325aa74ab72711dc920b28d0a754fcd9742cc8cbd3242db4bbc2eac1b15862"
+        "3a1bd70dda6159e0401ad1e9a86cacd900f3c800f0178d211ad5385f41a4ca60"
     )
 
 
@@ -669,7 +712,7 @@ def test_release_manifest_v2_rejects_replay_frame_gap() -> None:
     document = {
         "document_type": "gradlab.release_manifest",
         "format_version": 2,
-        "repo_naming_schema": 1,
+        "repo_naming_schema": 2,
         "repository": {
             "repo_id": "tsilva/model",
             "game_family": "Game",

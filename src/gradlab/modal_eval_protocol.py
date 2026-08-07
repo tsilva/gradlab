@@ -7,14 +7,37 @@ from typing import Any
 from gradlab.checkpoint_acceptance import (
     SEED_PROTOCOL,
     acceptance_aggregates,
-    aggregates_match,
     evaluate_acceptance,
     validate_episode_rows,
 )
 from gradlab.json_utils import canonical_json_sha256
 
 
-PROTOCOL_SCHEMA_VERSION = 5
+PROTOCOL_SCHEMA_VERSION = 6
+_RESULT_FIELDS = frozenset(
+    {
+        "schema_version",
+        "contract_schema_version",
+        "attempt_id",
+        "execution_key",
+        "checkpoint_sha256",
+        "runtime_image_ref",
+        "rom_sha256",
+        "seed_protocol",
+        "n_envs",
+        "episodes",
+        "recipe_sha256",
+        "recipe_format_version",
+        "evaluation_contract_sha256",
+        "status",
+        "duration_seconds",
+        "episode_results",
+        "evaluation_evidence",
+        "verdict",
+        "preview",
+        "error",
+    }
+)
 
 
 def _sha256(value: object, *, label: str) -> str:
@@ -100,15 +123,32 @@ def _validate_finite(value: object, *, label: str) -> None:
             _validate_finite(nested, label=f"{label}[{index}]")
 
 
-def validate_attempt_result(
+def _validate_result_shape(result: Mapping[str, Any]) -> None:
+    for retired_field in ("metrics", "claimed_aggregates"):
+        if retired_field in result:
+            raise ValueError(f"eval protocol v6 forbids result field: {retired_field}")
+    unknown = sorted(str(name) for name in result if name not in _RESULT_FIELDS)
+    if unknown:
+        raise ValueError(f"eval protocol v6 result has unknown field: {unknown[0]}")
+
+
+def _validate_result_identity(
     result: Mapping[str, Any],
     *,
     contract: Mapping[str, Any],
     attempt_id: str,
-) -> dict[str, Any]:
-    """Validate a complete or fail-fast acceptance result from Modal."""
+) -> None:
+    def require_matching_int(name: str, expected: int, *, message: str) -> None:
+        value = result.get(name)
+        if isinstance(value, bool) or not isinstance(value, int) or value != expected:
+            raise ValueError(f"eval result {message} mismatch")
 
-    if int(result.get("schema_version") or 0) != PROTOCOL_SCHEMA_VERSION:
+    schema_version = result.get("schema_version")
+    if (
+        isinstance(schema_version, bool)
+        or not isinstance(schema_version, int)
+        or schema_version != PROTOCOL_SCHEMA_VERSION
+    ):
         raise ValueError("eval result schema version mismatch")
     if str(result.get("attempt_id") or "") != attempt_id:
         raise ValueError("eval result attempt id mismatch")
@@ -122,10 +162,16 @@ def validate_attempt_result(
     ):
         if str(result.get(name) or "") != str(contract[name]):
             raise ValueError(f"eval result {message} mismatch")
-    if int(result.get("recipe_format_version") or 0) != int(contract["recipe_format_version"]):
-        raise ValueError("eval result recipe format version mismatch")
-    if int(result.get("contract_schema_version") or 0) != int(contract["schema_version"]):
-        raise ValueError("eval result contract schema version mismatch")
+    require_matching_int(
+        "recipe_format_version",
+        int(contract["recipe_format_version"]),
+        message="recipe format version",
+    )
+    require_matching_int(
+        "contract_schema_version",
+        int(contract["schema_version"]),
+        message="contract schema version",
+    )
     if str(result.get("runtime_image_ref") or "") != str(contract["runtime_image_ref"]):
         raise ValueError("eval result runtime identity mismatch")
     asset = contract.get("asset")
@@ -134,57 +180,70 @@ def validate_attempt_result(
         raise ValueError("eval result ROM hash mismatch")
     if str(result.get("seed_protocol") or "") != str(contract["seed_protocol"]):
         raise ValueError("eval result seed protocol mismatch")
-    if int(result.get("n_envs") or 0) != int(contract["n_envs"]):
-        raise ValueError("eval result n_envs mismatch")
-    if int(result.get("episodes") or 0) != int(contract["episodes"]):
-        raise ValueError("eval result episode contract mismatch")
+    require_matching_int("n_envs", int(contract["n_envs"]), message="n_envs")
+    require_matching_int(
+        "episodes",
+        int(contract["episodes"]),
+        message="episode contract",
+    )
+
+
+def _duration_seconds(result: Mapping[str, Any], *, required: bool) -> float:
+    value = result.get("duration_seconds")
+    if value is None and not required:
+        return 0.0
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, int | float)
+        or not math.isfinite(float(value))
+        or float(value) < 0.0
+    ):
+        raise ValueError("eval result duration_seconds must be a finite non-negative number")
+    return float(value)
+
+
+def validate_attempt_result(
+    result: Mapping[str, Any],
+    *,
+    contract: Mapping[str, Any],
+    attempt_id: str,
+) -> dict[str, Any]:
+    """Validate and scientifically recompute one successful Modal result."""
+
+    _validate_result_shape(result)
+    _validate_result_identity(result, contract=contract, attempt_id=attempt_id)
     if str(result.get("status") or "") != "succeeded":
         raise ValueError("eval attempt did not succeed")
     if "acceptance" not in contract:
         raise ValueError("Modal evaluation requires an acceptance contract")
-
     episodes = result.get("episode_results")
     if not isinstance(episodes, list):
         raise ValueError("acceptance result episode rows must be a list")
-    verdict = str(result.get("verdict") or "")
     validated_rows = validate_episode_rows(
         episodes,
         contract=contract,
-        verdict=verdict,
     )
     computed = acceptance_aggregates(validated_rows, contract=contract)
-    claimed = result.get("claimed_aggregates")
-    if not isinstance(claimed, Mapping) or not aggregates_match(claimed, computed):
-        raise ValueError("acceptance result claimed aggregates do not match episode evidence")
-    metrics = result.get("metrics")
-    if not isinstance(metrics, Mapping):
-        raise ValueError("acceptance result metrics must be a mapping")
-    _validate_finite(metrics, label="eval metrics")
     _validate_finite(validated_rows, label="eval episodes")
-    fail_fast = str(contract.get("evidence_policy", {}).get("fail_fast") or "")
-    if fail_fast == "first_failed_episode" and verdict == "rejected":
-        if any(str(name).startswith("eval/full/") for name in metrics):
-            raise ValueError("partial rejection must not emit completed eval/full metrics")
-        if int(computed["failure_count"]) < 1:
-            raise ValueError("acceptance rejection has no failed episode")
-    else:
-        accepted, _observed = evaluate_acceptance(computed, contract=contract)
-        if accepted != (verdict == "accepted"):
-            raise ValueError("acceptance verdict does not match its acceptance rules")
+    complete = len(validated_rows) == int(contract["episodes"])
+    if complete:
         for rule in contract["acceptance"]:
-            name = str(rule["metric"])
-            if name not in computed:
+            if str(rule["metric"]) not in computed:
                 raise ValueError("acceptance result is missing its decisive aggregate")
-            if name not in metrics or not math.isclose(
-                float(metrics[name]),
-                float(computed[name]),
-                rel_tol=0.0,
-                abs_tol=1e-12,
-            ):
-                raise ValueError("acceptance result decisive metric mismatch")
+        accepted, _observed = evaluate_acceptance(computed, contract=contract)
+        computed_verdict = "accepted" if accepted else "rejected"
+    else:
+        computed_verdict = "rejected"
+    verdict = str(result.get("verdict") or "")
+    if verdict not in {"accepted", "rejected"}:
+        raise ValueError("acceptance verdict must be accepted or rejected")
+    if verdict != computed_verdict:
+        raise ValueError("acceptance verdict does not match supervisor recomputation")
+    _duration_seconds(result, required=True)
     validated_result = dict(result)
     validated_result["episode_results"] = validated_rows
-    validated_result["claimed_aggregates"] = computed
+    validated_result["aggregates"] = computed
+    validated_result["verdict"] = computed_verdict
     return validated_result
 
 
@@ -197,6 +256,9 @@ def normalize_attempt_result(
     """Normalize one identity-verified Modal result for durable supervisor storage."""
 
     raw_status = str(result.get("status") or "")
+    if raw_status not in {"succeeded", "failed", "expired"}:
+        raise ValueError(f"unsupported eval result status: {raw_status!r}")
+    _validate_result_shape(result)
     if raw_status == "succeeded":
         validated = validate_attempt_result(
             result,
@@ -206,16 +268,13 @@ def normalize_attempt_result(
         verdict = str(validated.get("verdict") or "")
         status = "accepted" if verdict == "accepted" else "rejected"
         episodes = list(validated.get("episode_results") or [])
-        aggregates = dict(validated.get("claimed_aggregates") or {})
+        aggregates = dict(validated.get("aggregates") or {})
         error = None
     else:
-        if str(result.get("attempt_id") or "") != attempt_id:
-            raise ValueError("failed eval result attempt id mismatch")
-        if str(result.get("execution_key") or "") != execution_key(contract):
-            raise ValueError("failed eval result execution key mismatch")
+        _validate_result_identity(result, contract=contract, attempt_id=attempt_id)
         status = "expired" if raw_status == "expired" else "failed"
-        episodes = list(result.get("episode_results") or [])
-        aggregates = dict(result.get("claimed_aggregates") or {})
+        episodes = []
+        aggregates = {}
         error = str(result.get("error") or f"Modal eval status={raw_status or 'unknown'}")
 
     evidence_values = [
@@ -227,7 +286,7 @@ def normalize_attempt_result(
         "status": status,
         "episode_results": episodes,
         "aggregates": aggregates,
-        "duration_seconds": float(result.get("duration_seconds") or 0.0),
+        "duration_seconds": _duration_seconds(result, required=raw_status == "succeeded"),
         "evidence_sha256": [
             canonical_json_sha256({"evidence": value})
             for value in evidence_values

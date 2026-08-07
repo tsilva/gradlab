@@ -16,7 +16,7 @@ from gradlab.checkpoint_contract import checkpoint_manifest_contract_sha256
 from gradlab.clock import Clock, SystemClock, format_utc_datetime, parse_utc_datetime
 from gradlab.early_stop import EARLY_STOP_OPERATORS
 from gradlab.eval_backend import EvalBackend
-from gradlab.eval_metrics import eval_by_start_rows
+from gradlab.eval_metrics import eval_by_start_records
 from gradlab.evaluation_projection import (
     evaluation_wandb_projection,
     metrics_schema_version_from_recipe_document,
@@ -36,10 +36,11 @@ from gradlab.job_queue import (
 )
 from gradlab.metric_names import (
     EVAL_FULL_EPISODE_RETURN_SHAPED_MEAN,
-    EVAL_FULL_SUCCESS_ACROSS_STARTS_RATE_MIN,
-    EVAL_FULL_SUCCESS_ACROSS_STARTS_RATE_MEAN,
-    ORCHESTRATION_EVENT_SEQ,
-    eval_progress_metric,
+    EVAL_FULL_OUTCOME_SUCCESS_STARTS_RATE_MEAN,
+    EVAL_FULL_OUTCOME_SUCCESS_STARTS_RATE_MIN,
+    ORCHESTRATION_EVENT_SEQUENCE,
+    eval_full_progress_metric,
+    summary_value,
 )
 from gradlab.vizdoom_assets import validate_vizdoom_iwad_binding
 from gradlab.modal_eval_backend import ModalEvalBackend
@@ -68,6 +69,7 @@ from gradlab.run_contracts import (
 from gradlab.runtime_refs import RuntimeImageInfo, modal_readiness_for_release
 from gradlab.supervisor_ledger import SupervisorLedger
 from gradlab.supervisor_runtime import SupervisorRuntime
+from gradlab.wandb_publisher import promotion_summary_matches
 
 
 MANUAL_EVAL_PROTOCOL = "modal-acceptance-v4"
@@ -78,10 +80,10 @@ MANUAL_EVAL_RETRY_SECONDS = 2.0
 MANUAL_EVAL_WAIT_SECONDS = 15.0
 
 _STRICT_COMPLETE_ACCEPTANCE_METRIC_BY_GAME = {
-    "VizdoomBasic-v1": EVAL_FULL_SUCCESS_ACROSS_STARTS_RATE_MIN,
-    "VizdoomBasic-Plus-v1": EVAL_FULL_SUCCESS_ACROSS_STARTS_RATE_MIN,
+    "VizdoomBasic-v1": EVAL_FULL_OUTCOME_SUCCESS_STARTS_RATE_MIN,
+    "VizdoomBasic-Plus-v1": EVAL_FULL_OUTCOME_SUCCESS_STARTS_RATE_MIN,
     "VizdoomDeadlyCorridor-v1": EVAL_FULL_EPISODE_RETURN_SHAPED_MEAN,
-    "VizdoomDeathmatch-v1": eval_progress_metric("full", "kills", "mean"),
+    "VizdoomDeathmatch-v1": eval_full_progress_metric("kills", "mean"),
     "VizdoomDefendLine-v1": EVAL_FULL_EPISODE_RETURN_SHAPED_MEAN,
     "VizdoomDefendLine-Plus-v1": EVAL_FULL_EPISODE_RETURN_SHAPED_MEAN,
 }
@@ -181,7 +183,7 @@ def _evaluation_summary(
     metrics = {
         metric: float(result.aggregates[metric])
         for metric in (
-            EVAL_FULL_SUCCESS_ACROSS_STARTS_RATE_MEAN,
+            EVAL_FULL_OUTCOME_SUCCESS_STARTS_RATE_MEAN,
             EVAL_FULL_EPISODE_RETURN_SHAPED_MEAN,
         )
         if not isinstance(result.aggregates.get(metric), bool)
@@ -640,7 +642,6 @@ class ManualEvaluationSupervisor:
         self,
         context: _EvaluationContext,
         result: EvalResult,
-        raw: Mapping[str, Any],
         *,
         ledger: SupervisorLedger,
         event_seq_offset: int,
@@ -655,14 +656,14 @@ class ManualEvaluationSupervisor:
         metrics_schema_version = metrics_schema_version_from_recipe_document(
             context.recipe_document
         )
+        episodes_planned = int(context.intent.execution_contract["episodes"])
         metrics = evaluation_wandb_projection(
-            dict(raw.get("metrics") or {}),
+            result.aggregates,
             schema_version=metrics_schema_version,
             checkpoint_step=context.checkpoint.step,
             accepted=result.status == "accepted",
-            episodes_planned=int(context.intent.execution_contract["episodes"]),
+            episodes_planned=episodes_planned,
             episodes_completed=len(result.episode_results),
-            duration_seconds=float(raw.get("duration_seconds") or 0.0),
         )
         ledger.append_metrics(
             metrics,
@@ -670,11 +671,13 @@ class ManualEvaluationSupervisor:
             source=f"eval:manual:{context.intent.idempotency_key}",
             metrics_schema_version=metrics_schema_version,
         )
-        if result.status == "accepted":
+        if result.status in {"accepted", "rejected"} and len(
+            result.episode_results
+        ) == episodes_planned:
             ledger.enqueue_event(
                 kind="eval_by_start",
                 payload={
-                    "rows": eval_by_start_rows(
+                    "records": eval_by_start_records(
                         [dict(episode) for episode in result.episode_results]
                     )
                 },
@@ -715,7 +718,7 @@ class ManualEvaluationSupervisor:
             row = connection.execute("SELECT COALESCE(MAX(id), 0) FROM metric_frames").fetchone()
         high_water = event_seq_offset + int(row[0] if row else 0)
         remote = self.runtime.remote_summary(self._wandb_run_path(context.manifest))
-        if int(remote.get(ORCHESTRATION_EVENT_SEQ) or 0) < high_water:
+        if int(summary_value(remote.get(ORCHESTRATION_EVENT_SEQUENCE)) or 0) < high_water:
             return False
         self.authority.control.put_json(
             projection_key,
@@ -760,25 +763,11 @@ class ManualEvaluationSupervisor:
         self,
         context: _EvaluationContext,
         result: EvalResult,
-        raw: Mapping[str, Any],
         receipt: PromotionReceipt,
     ) -> None:
         if not self.project_results:
             return
         run_path = self._wandb_run_path(context.manifest)
-        try:
-            remote = self.runtime.remote_summary(run_path)
-            if (
-                str(remote.get("gradlab/goal/outcome") or "") == "accepted"
-                and int(remote.get("leader/checkpoint/step") or -1) == receipt.checkpoint_step
-            ):
-                return
-        except Exception:
-            pass
-        metrics = {
-            **dict(raw.get("metrics") or {}),
-            **dict(result.aggregates),
-        }
         metrics_schema_version = metrics_schema_version_from_recipe_document(
             context.recipe_document
         )
@@ -788,6 +777,21 @@ class ManualEvaluationSupervisor:
             raise EvaluationProjectionPending(
                 "checkpoint recipe has no train_config for promotion ranking"
             )
+        selection_rank = train_config.get("selection_rank") or ()
+        try:
+            remote = self.runtime.remote_summary(run_path)
+            if promotion_summary_matches(
+                remote,
+                checkpoint_step=receipt.checkpoint_step,
+                checkpoint_url=context.checkpoint.public_url,
+                updated_at=receipt.promoted_at,
+                selection_rank=selection_rank,
+                metrics_schema_version=metrics_schema_version,
+            ):
+                return
+        except Exception:
+            pass
+        metrics = dict(result.aggregates)
         try:
             environment = context.intent.execution_contract["environment"]
             projector = self.runtime.resume_wandb(
@@ -812,7 +816,7 @@ class ManualEvaluationSupervisor:
                     checkpoint_url=context.checkpoint.public_url,
                     metrics=metrics,
                     updated_at=receipt.promoted_at,
-                    selection_rank=train_config.get("selection_rank") or (),
+                    selection_rank=selection_rank,
                     evaluation_source="modal:manual",
                     metrics_schema_version=metrics_schema_version,
                 )
@@ -823,9 +827,13 @@ class ManualEvaluationSupervisor:
             raise EvaluationProjectionPending(
                 f"W&B promotion projection is not yet complete: {exc}"
             ) from exc
-        if (
-            str(remote.get("gradlab/goal/outcome") or "") != "accepted"
-            or int(remote.get("leader/checkpoint/step") or -1) != receipt.checkpoint_step
+        if not promotion_summary_matches(
+            remote,
+            checkpoint_step=receipt.checkpoint_step,
+            checkpoint_url=context.checkpoint.public_url,
+            updated_at=receipt.promoted_at,
+            selection_rank=selection_rank,
+            metrics_schema_version=metrics_schema_version,
         ):
             raise EvaluationProjectionPending("W&B promotion summary is not yet remotely visible")
 
@@ -833,7 +841,6 @@ class ManualEvaluationSupervisor:
         self,
         context: _EvaluationContext,
         result: EvalResult,
-        raw: Mapping[str, Any] | None,
         *,
         ledger: SupervisorLedger,
         event_seq_offset: int,
@@ -847,12 +854,11 @@ class ManualEvaluationSupervisor:
             or self.authority.control.get_json_optional(self._projection_key(context)) is not None
         )
         projection_error = None
-        if raw is not None and not projected and allow_projection:
+        if not projected and allow_projection:
             try:
                 projected = self._project_result(
                     context,
                     result,
-                    raw,
                     ledger=ledger,
                     event_seq_offset=event_seq_offset,
                 )
@@ -860,7 +866,7 @@ class ManualEvaluationSupervisor:
                 projection_error = "waiting for the run writer lease"
             except Exception as exc:
                 projection_error = str(exc)
-        elif raw is not None and not projected:
+        elif not projected:
             projection_error = "waiting for training terminal before W&B projection"
         return {
             "checkpoint_id": context.checkpoint.checkpoint_id,
@@ -891,7 +897,6 @@ class ManualEvaluationSupervisor:
             return self._terminal_status(
                 context,
                 result,
-                raw,
                 ledger=ledger,
                 event_seq_offset=event_seq_offset,
                 allow_projection=allow_projection,
@@ -923,7 +928,6 @@ class ManualEvaluationSupervisor:
             return self._terminal_status(
                 context,
                 result,
-                raw,
                 ledger=ledger,
                 event_seq_offset=event_seq_offset,
                 allow_projection=allow_projection,
@@ -1023,9 +1027,9 @@ class ManualEvaluationSupervisor:
     def _promotion_candidate(
         self,
         manifest: RunManifest,
-    ) -> tuple[_EvaluationContext, EvalResult, Mapping[str, Any]] | None:
+    ) -> tuple[_EvaluationContext, EvalResult] | None:
         checkpoints = self._checkpoint_map(manifest.run_id)
-        candidates: list[tuple[int, str, _EvaluationContext, EvalResult, Mapping[str, Any]]] = []
+        candidates: list[tuple[int, str, _EvaluationContext, EvalResult]] = []
         for key in self.authority.evaluation.iter_keys(f"runs/{manifest.run_id}/evals"):
             if not key.endswith("/verified-result.json"):
                 continue
@@ -1037,25 +1041,18 @@ class ManualEvaluationSupervisor:
             if checkpoint is None:
                 raise ValueError("accepted evaluation references an unknown checkpoint")
             context = self._context(manifest=manifest, checkpoint=checkpoint)
-            raw = self.authority.eval_result(
-                run_id=manifest.run_id,
-                idempotency_key=result.idempotency_key,
-            )
-            if raw is None:
-                raise ValueError("accepted evaluation is missing its raw result")
             candidates.append(
                 (
                     checkpoint.step,
                     checkpoint.checkpoint_id,
                     context,
                     result,
-                    raw,
                 )
             )
         if not candidates:
             return None
-        _step, _checkpoint_id, context, result, raw = min(candidates)
-        return context, result, raw
+        _step, _checkpoint_id, context, result = min(candidates)
+        return context, result
 
     def _finalize_promotion(self, manifest: RunManifest) -> Mapping[str, Any] | None:
         candidate = self._promotion_candidate(manifest)
@@ -1066,7 +1063,7 @@ class ManualEvaluationSupervisor:
             if existing is not None:
                 raise ValueError("promotion has no matching accepted evaluation evidence")
             return None
-        context, result, raw = candidate
+        context, result = candidate
         if existing is not None:
             if (
                 str(existing.get("checkpoint_id") or "") != context.checkpoint.checkpoint_id
@@ -1079,7 +1076,15 @@ class ManualEvaluationSupervisor:
             self._promote(context, result)
             existing = self.authority.control.get_json(f"runs/{manifest.run_id}/promotion.json")
         receipt = PromotionReceipt.from_dict(existing)
-        self._ensure_promotion_projection(context, result, raw, receipt)
+        if (
+            receipt.eval_idempotency_key != result.idempotency_key
+            or receipt.eval_result_sha256 != document_sha256(result.to_dict())
+            or receipt.accepted_episode_count != len(result.episode_results)
+        ):
+            raise EvaluationContractIneligible(
+                "promotion receipt does not match its verified accepted evaluation"
+            )
+        self._ensure_promotion_projection(context, result, receipt)
         return existing
 
     def _promotion_retry_result(

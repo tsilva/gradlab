@@ -6,7 +6,11 @@ from types import SimpleNamespace
 import pytest
 
 from gradlab.job_queue import JobStore, WorkerStart
-from gradlab.player_publication import PlayerPublicationService, PublicationConflict
+from gradlab.player_publication import (
+    PlayerPublicationService,
+    PublicationConflict,
+    generated_metadata,
+)
 from gradlab.policy_bundle import PolicyBundle
 from gradlab.publication import PublicationIdentity
 
@@ -38,7 +42,11 @@ def _service(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> PlayerPublicati
         model_path=model_json,
         recipe_path=recipe,
         model={
-            "policy": {"algorithm_id": "ppo"},
+            "policy": {
+                "algorithm_id": "ppo",
+                "model_class": "gradlab.ppo.GradLabPPO",
+                "training_backend_id": "gradlab.ppo",
+            },
             "checkpoint": {"sha256": "a" * 64},
             "recipe": {"sha256": "b" * 64},
         },
@@ -69,7 +77,13 @@ def _service(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> PlayerPublicati
             return {
                 "spec": SimpleNamespace(kind="public_run"),
                 "bundle": bundle,
-                "capture": {"latest": capture, "error": None},
+                "capture": {
+                    "ready": True,
+                    "recording": False,
+                    "episode_in_progress": False,
+                    "latest": capture,
+                    "error": None,
+                },
             }
 
     store = JobStore(tmp_path / "queue")
@@ -134,6 +148,59 @@ def _credentials() -> dict[str, object]:
             "scopes": ["scope"],
         },
     }
+
+
+def test_generated_metadata_uses_concise_task_and_actual_trainer(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = _service(tmp_path, monkeypatch)
+    context = service.host.active_publication_context()
+    capture = context["capture"]["latest"]
+    capture["goal"] = {
+        "goal_id": "VizdoomDeathmatch-v1",
+        "title": "ViZDoom single-player Deathmatch score attack",
+    }
+    capture["execution"]["qualified_environment_id"] = (
+        "vizdoom-turbo:VizdoomDeathmatch-v1"
+    )
+    capture["success"] = False
+    metadata = generated_metadata(
+        capture=capture,
+        bundle=context["bundle"],
+        evaluation={"episodes": 100, "success_rate_mean": 0.0},
+        repo_id="tsilva/VizdoomDeathmatch-v1_ppo_ae2049cb",
+        settings={},
+    )
+
+    assert metadata["title"] == "ViZDoom Deathmatch — GradLab PPO"
+    assert metadata["description"].startswith(
+        "A PPO reinforcement-learning agent trained with GradLab plays ViZDoom Deathmatch "
+        "with a 0.0% verified full-evaluation win rate."
+    )
+    assert "Vi ZDoom" not in metadata["description"]
+    assert "stable-baselines3" not in metadata["tags"]
+    assert "Stable Retro" not in metadata["tags"]
+    assert "gradlab.ppo" in metadata["tags"]
+
+
+def test_current_episode_must_finish_before_publication(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = _service(tmp_path, monkeypatch)
+    context = service.host.active_publication_context()
+    context["capture"]["ready"] = False
+    context["capture"]["recording"] = True
+    context["capture"]["episode_in_progress"] = True
+    service.host = SimpleNamespace(active_publication_context=lambda: context)
+
+    assert service.current() == {
+        "available": False,
+        "message": "finish the current episode before publishing",
+    }
+    with pytest.raises(ValueError, match="finish the current episode"):
+        service.admit({"privacy": "public", "tags": []}, credential_result=_credentials())
 
 
 def test_admission_is_idempotent_for_same_capture_and_settings(

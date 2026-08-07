@@ -9,9 +9,7 @@ import numpy as np
 
 
 TURBO_API_VERSION = 1
-ACTION_MODES = frozenset(
-    {"all", "filtered", "discrete", "multi_discrete", "custom_discrete"}
-)
+ACTION_MODES = frozenset({"all", "filtered", "discrete", "multi_discrete", "custom_discrete"})
 CAPABILITY_KEYS = frozenset(
     {
         "supported_action_modes",
@@ -33,6 +31,13 @@ PROVIDER_CAPABILITY_KEYS = MappingProxyType(
             {
                 "supports_enemy_variants",
                 "supports_surface_variants",
+            }
+        ),
+        "gradoom": frozenset(
+            {
+                "supports_enemy_variants",
+                "supports_surface_variants",
+                "supports_info_frame_stack",
             }
         ),
     }
@@ -63,9 +68,7 @@ COMMON_FIELDS = (
     "render_mode",
     "closed",
 )
-SIGNAL_SPEC_FIELDS = frozenset(
-    {"dtype", "shape", "available_on_reset", "available_on_step"}
-)
+SIGNAL_SPEC_FIELDS = frozenset({"dtype", "shape", "available_on_reset", "available_on_step"})
 IMMUTABLE_MAPPING_TYPE = type(MappingProxyType({}))
 
 
@@ -129,8 +132,7 @@ def validate_turbo_vector_env(env: Any, provider_id: str) -> TurboApiContract:
     extra = set(capabilities) - expected_capability_keys - optional_capability_keys
     if missing or extra:
         raise RuntimeError(
-            f"{provider_id} capabilities mismatch; missing={sorted(missing)}, "
-            f"extra={sorted(extra)}"
+            f"{provider_id} capabilities mismatch; missing={sorted(missing)}, extra={sorted(extra)}"
         )
     for name in provider_capability_keys | (set(capabilities) & optional_capability_keys):
         if not isinstance(capabilities[name], bool):
@@ -143,9 +145,7 @@ def validate_turbo_vector_env(env: Any, provider_id: str) -> TurboApiContract:
     ):
         raise ValueError(f"{provider_id} declares invalid supported_action_modes")
     if str(env.action_mode) not in action_modes:
-        raise ValueError(
-            f"{provider_id} resolved action_mode {env.action_mode!r} is not declared"
-        )
+        raise ValueError(f"{provider_id} resolved action_mode {env.action_mode!r} is not declared")
     buttons = getattr(env, "buttons")
     if not isinstance(buttons, tuple) or any(
         value is not None and not isinstance(value, str) for value in buttons

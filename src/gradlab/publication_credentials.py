@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, Iterator, Mapping
 
 from gradlab.file_utils import atomic_write_json
+from gradlab.local_paths import default_gradlab_config_dir
 
 
 class CredentialSecurityError(RuntimeError):
@@ -74,24 +75,24 @@ class YouTubeCredentialPaths:
     lock: Path
 
 
-def youtube_credential_paths(repo_root: Path | str) -> YouTubeCredentialPaths:
-    repository = Path(repo_root).resolve()
-    secret = repository / ".secret"
-    resolved_root = _require_owned_directory(secret, create=True)
-    if resolved_root.parent != repository:
-        raise CredentialSecurityError(".secret must resolve directly under the repository root")
+def youtube_credential_paths(
+    *,
+    environment: Mapping[str, str] | None = None,
+) -> YouTubeCredentialPaths:
+    config_root = default_gradlab_config_dir(environment)
+    resolved_root = _require_owned_directory(config_root, create=True)
     client = _require_owned_file(
-        secret / "youtube_client_secret.json",
+        config_root / "youtube_client_secret.json",
         root=resolved_root,
     )
-    token_path = secret / "youtube_token.json"
+    token_path = config_root / "youtube_token.json"
     token = (
         _require_owned_file(token_path, root=resolved_root)
         if token_path.exists()
         else token_path
     )
     lock = _require_owned_file(
-        secret / "youtube_token.lock",
+        config_root / "youtube_token.lock",
         root=resolved_root,
         create=True,
     )

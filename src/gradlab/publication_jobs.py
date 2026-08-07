@@ -5,7 +5,7 @@ import os
 import shutil
 import tempfile
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
@@ -61,6 +61,17 @@ def _json_object(path: Path, *, label: str) -> dict[str, Any]:
 def _http_status(exc: BaseException) -> int | None:
     response = getattr(exc, "response", None)
     return int(response.status_code) if getattr(response, "status_code", None) else None
+
+
+def _validate_new_repository_files(files: Sequence[str]) -> set[str]:
+    current = {str(name) for name in files}
+    unexpected = current - {".gitattributes"}
+    if unexpected:
+        raise ValueError(
+            "new Hugging Face repository is no longer empty: "
+            + ", ".join(sorted(unexpected))
+        )
+    return current
 
 
 def _retry_delay(job: Mapping[str, Any]) -> int:
@@ -254,9 +265,8 @@ class PlayerPublicationJobHandler:
             raise ValueError("Hugging Face namespace differs from the admitted repository")
         return api, credential.token
 
-    def _youtube_access(self, repo_root: Path, request: Mapping[str, Any]) -> YouTubeClient:
+    def _youtube_access(self, request: Mapping[str, Any]) -> YouTubeClient:
         client, principal = _youtube_access(
-            repo_root,
             client_factory=self.youtube_client_factory,
         )
         if principal.get("channel_id") != request["principals"]["youtube_channel_id"]:
@@ -310,7 +320,7 @@ class PlayerPublicationJobHandler:
         root = snapshot["root"]
         job_id = str(job["job_id"])
         phase = str(state["phase"])
-        client = self._youtube_access(repo_root, request)
+        client = self._youtube_access(request)
         replay_path = Path(root) / "capture/replay.mp4"
 
         if phase == "validated":
@@ -567,10 +577,12 @@ class PlayerPublicationJobHandler:
                         api.model_info(repo_id=repo_id)
                     except Exception:
                         raise
-                current_files = api.list_repo_files(repo_id, repo_type="model")
-                if current_files:
-                    raise ValueError("new Hugging Face repository is no longer empty")
-                current_parent = None
+                _validate_new_repository_files(
+                    api.list_repo_files(repo_id, repo_type="model")
+                )
+                created = api.model_info(repo_id=repo_id)
+                current_parent = str(getattr(created, "sha", "") or "") or None
+                exists = True
             else:
                 current_parent = str(getattr(info, "sha", "") or "") or None
                 if current_parent != request.get("parent_commit"):
@@ -585,14 +597,16 @@ class PlayerPublicationJobHandler:
                         state["huggingface_commit"] = current_parent
                         state["phase"] = "huggingface_committed"
                         self._save_state(state_path, state)
+                    elif request.get("parent_commit") is None:
+                        _validate_new_repository_files(
+                            api.list_repo_files(repo_id, repo_type="model")
+                        )
                     else:
                         raise ValueError(
                             "Hugging Face main changed after publication admission"
                         )
             if state["phase"] == "release_built":
-                existing_files = (
-                    set(api.list_repo_files(repo_id, repo_type="model")) if exists else set()
-                )
+                existing_files = set(api.list_repo_files(repo_id, repo_type="model"))
                 operations: list[Any] = [
                     CommitOperationAdd(
                         path_in_repo=name,
@@ -714,7 +728,7 @@ class PlayerPublicationJobHandler:
         state: Mapping[str, Any],
     ) -> None:
         request = snapshot["request"]
-        client = self._youtube_access(repo_root, request)
+        client = self._youtube_access(request)
         video = client.video_metadata(str(state["youtube_video_id"]))
         validate_processed_video(
             video,

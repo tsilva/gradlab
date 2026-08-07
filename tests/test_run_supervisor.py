@@ -11,7 +11,10 @@ from gradlab.early_stop import MetricEarlyStopStateMachine, MetricSample
 from gradlab.eval_backend import EvalHandle, EvalPoll
 from gradlab.file_utils import atomic_write_json
 from gradlab.goal_variants import build_goal_variant_descriptor
-from gradlab.metric_names import TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_ROLLING_UP_TO_100_MEAN
+from gradlab.metric_names import (
+    TRAIN_EPISODE_RETURN_SHAPED_ORIGIN_TARGET_ROLLING_MEAN,
+    summary_value,
+)
 from gradlab.manual_evaluation import ManualEvaluationSupervisor
 from gradlab.policy_bundle import (
     build_recipe_document,
@@ -44,7 +47,6 @@ from gradlab.run_supervisor import (
     LearnerTeardownTimeout,
     RunSupervisor,
     _bind_evaluation_contract,
-    _summary_scalar,
     _terminal_outcome,
 )
 
@@ -504,7 +506,7 @@ class RunSupervisorTests(unittest.TestCase):
                 **valid,
                 "acceptance": [
                     {
-                        "metric": "eval/full/outcome/success/across_starts/rate/min",
+                        "metric": "eval/full/outcome/success/starts/rate/min",
                         "operator": ">=",
                         "threshold": 1.0,
                     }
@@ -534,7 +536,7 @@ class RunSupervisorTests(unittest.TestCase):
             "evidence_policy": {"fail_fast": "disabled"},
             "acceptance": [
                 {
-                    "metric": "eval/full/outcome/success/across_starts/rate/min",
+                    "metric": "eval/full/outcome/success/starts/rate/min",
                     "operator": ">=",
                     "threshold": 1.0,
                 }
@@ -762,12 +764,31 @@ class RunSupervisorTests(unittest.TestCase):
             promoted_at=utc_now(),
         ).validate()
 
-    def test_wandb_summary_subdict_is_normalized(self) -> None:
-        class SummarySubDictLike:
-            def get(self, key):
-                return {"max": 10}.get(key)
+    def test_wandb_summary_subdict_is_normalized_centrally(self) -> None:
+        self.assertEqual(summary_value({"max": 10}), 10)
 
-        self.assertEqual(_summary_scalar(SummarySubDictLike()), 10)
+    def test_health_publication_keeps_only_the_v19_operational_surface(self) -> None:
+        supervisor = self.supervisor()
+        supervisor.store.init()
+
+        supervisor._emit_health(15.0)
+
+        self.assertEqual(
+            set(supervisor.store.latest_metrics()),
+            {
+                "orchestration/outbox/pending/count",
+                "orchestration/outbox/oldest/age/seconds",
+                "orchestration/outbox/remote/visibility/lag/seconds",
+                "orchestration/checkpoint/pending/count",
+                "orchestration/eval/pending/count",
+                "orchestration/scratch/used/fraction",
+            },
+        )
+        internal = supervisor.store.state("backpressure")
+        assert internal is not None
+        self.assertIn("local_high_water", internal)
+        self.assertIn("wandb_high_water", internal)
+        self.assertNotIn("publication_capacity_sufficient", internal)
 
     def test_terminal_training_result_bounds_hung_learner_teardown(self) -> None:
         supervisor = self.supervisor()
@@ -939,14 +960,14 @@ class RunSupervisorTests(unittest.TestCase):
             matched_condition_ids=("return_plateau",),
             outcome=outcome,  # type: ignore[arg-type]
             trigger="no_improvement",
-            metric="train/episode/return/shaped/from/target/rolling_up_to_100/mean",
+            metric="train/episode/return/shaped/origin/target/rolling/mean",
             metric_step=2_000_000,
             value=650.0,
             best_value=650.0,
             elapsed_steps=1_000_000,
             patience_progress=1.0,
             condition={
-                "metric": "train/episode/return/shaped/from/target/rolling_up_to_100/mean",
+                "metric": "train/episode/return/shaped/origin/target/rolling/mean",
                 "trigger": "no_improvement",
             },
             early_stop_config_sha256="d" * 64,
@@ -1054,7 +1075,7 @@ class RunSupervisorTests(unittest.TestCase):
         config = {
             "conditions": {
                 "return_plateau": {
-                    "metric": TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_ROLLING_UP_TO_100_MEAN,
+                    "metric": TRAIN_EPISODE_RETURN_SHAPED_ORIGIN_TARGET_ROLLING_MEAN,
                     "trigger": "no_improvement",
                     "direction": "maximize",
                     "min_delta": 0.01,
@@ -1069,7 +1090,7 @@ class RunSupervisorTests(unittest.TestCase):
         machine = MetricEarlyStopStateMachine(config)
         machine.update(
             {
-                TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_ROLLING_UP_TO_100_MEAN: MetricSample(
+                TRAIN_EPISODE_RETURN_SHAPED_ORIGIN_TARGET_ROLLING_MEAN: MetricSample(
                     value=100.0,
                     step=0,
                 )
@@ -1077,7 +1098,7 @@ class RunSupervisorTests(unittest.TestCase):
         )
         update = machine.update(
             {
-                TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_ROLLING_UP_TO_100_MEAN: MetricSample(
+                TRAIN_EPISODE_RETURN_SHAPED_ORIGIN_TARGET_ROLLING_MEAN: MetricSample(
                     value=100.0,
                     step=10,
                 )
@@ -1115,7 +1136,7 @@ class RunSupervisorTests(unittest.TestCase):
         config = {
             "conditions": {
                 "clear": {
-                    "metric": "train/outcome/success/across_starts/window_100/rate/min",
+                    "metric": "train/outcome/success/starts/all/rolling/rate/min",
                     "trigger": "threshold",
                     "operator": ">=",
                     "threshold": 1.0,
@@ -1128,7 +1149,7 @@ class RunSupervisorTests(unittest.TestCase):
         machine = MetricEarlyStopStateMachine(config)
         update = machine.update(
             {
-                "train/outcome/success/across_starts/window_100/rate/min": MetricSample(
+                "train/outcome/success/starts/all/rolling/rate/min": MetricSample(
                     value=1.0,
                     step=10,
                 )
@@ -1150,7 +1171,7 @@ class RunSupervisorTests(unittest.TestCase):
         config = {
             "conditions": {
                 "return_plateau": {
-                    "metric": TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_ROLLING_UP_TO_100_MEAN,
+                    "metric": TRAIN_EPISODE_RETURN_SHAPED_ORIGIN_TARGET_ROLLING_MEAN,
                     "trigger": "no_improvement",
                     "direction": "maximize",
                     "min_delta": 0.01,
@@ -1165,7 +1186,7 @@ class RunSupervisorTests(unittest.TestCase):
         machine = MetricEarlyStopStateMachine(config)
         machine.update(
             {
-                TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_ROLLING_UP_TO_100_MEAN: MetricSample(
+                TRAIN_EPISODE_RETURN_SHAPED_ORIGIN_TARGET_ROLLING_MEAN: MetricSample(
                     value=100.0,
                     step=0,
                 )
@@ -1173,7 +1194,7 @@ class RunSupervisorTests(unittest.TestCase):
         )
         update = machine.update(
             {
-                TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_ROLLING_UP_TO_100_MEAN: MetricSample(
+                TRAIN_EPISODE_RETURN_SHAPED_ORIGIN_TARGET_ROLLING_MEAN: MetricSample(
                     value=100.0,
                     step=10,
                 )
@@ -1225,7 +1246,7 @@ class RunSupervisorTests(unittest.TestCase):
 
     def test_wandb_remote_probe_survives_sdk_finish(self) -> None:
         class RemoteRun:
-            summary = {"orchestration/event_seq": {"max": 10}}
+            summary = {"orchestration/event/sequence": {"max": 10}}
 
         class Api:
             def flush(self) -> None:
@@ -1274,7 +1295,7 @@ class RunSupervisorTests(unittest.TestCase):
             supervisor.eval_contract["acceptance"],
             [
                 {
-                    "metric": "eval/full/outcome/success/across_starts/rate/min",
+                    "metric": "eval/full/outcome/success/starts/rate/min",
                     "operator": ">=",
                     "threshold": 1.0,
                 }
@@ -1353,7 +1374,10 @@ class RunSupervisorTests(unittest.TestCase):
                 }
             ]
             * 100,
-            aggregates={"failure_count": 0},
+            aggregates={
+                "eval/full/episode/return/shaped/mean": 1.0,
+                "failure_count": 0,
+            },
             timings={},
             evidence_sha256=[],
             completed_at=utc_now(),
@@ -1365,22 +1389,70 @@ class RunSupervisorTests(unittest.TestCase):
                 "intent": {"execution_contract": {"episodes": 100}},
             },
             result,
-            {
-                "duration_seconds": 1.0,
-                "metrics": {
-                    "death_count": 0,
-                    "success_count": 100,
-                    "eval/full/episode/completed/count": 100,
-                },
-            },
         )
 
         self.assertEqual(
-            supervisor.store.latest_metric("eval/full/episode/completed/count"),
-            100,
+            supervisor.store.latest_metric("eval/full/episode/return/shaped/mean"),
+            1.0,
         )
+        self.assertIsNone(supervisor.store.latest_metric("failure_count"))
         self.assertIsNone(supervisor.store.latest_metric("death_count"))
         self.assertIsNone(supervisor.store.latest_metric("success_count"))
+
+    def test_start_table_requires_a_complete_accepted_or_rejected_evaluation(self) -> None:
+        def result(*, episode_count: int) -> EvalResult:
+            return EvalResult(
+                run_id=self.run_id,
+                checkpoint_id="checkpoint-100-" + "e" * 16,
+                idempotency_key=("a" if episode_count == 2 else "b") * 64,
+                modal_call_id="fc-rejected",
+                status="rejected",
+                episode_results=[
+                    {
+                        "start_state": "Level1-1",
+                        "return": 0.0,
+                        "steps": 1,
+                        "outcome": "failure",
+                        "terminated": True,
+                    }
+                ]
+                * episode_count,
+                aggregates={"eval/full/episode/return/shaped/mean": 0.0},
+                timings={},
+                evidence_sha256=[],
+                completed_at=utc_now(),
+            )
+
+        complete = self.supervisor()
+        complete.store.init()
+        complete_result = result(episode_count=2)
+        complete._record_eval_metrics(
+            {
+                "checkpoint_step": 100,
+                "idempotency_key": complete_result.idempotency_key,
+                "intent": {"execution_contract": {"episodes": 2}},
+            },
+            complete_result,
+        )
+        before = sum(
+            row["kind"] == "eval_by_start"
+            for row in complete.store.pending_metric_frames(limit=10)
+        )
+        self.assertEqual(before, 1)
+        partial_result = result(episode_count=1)
+        complete._record_eval_metrics(
+            {
+                "checkpoint_step": 100,
+                "idempotency_key": partial_result.idempotency_key,
+                "intent": {"execution_contract": {"episodes": 2}},
+            },
+            partial_result,
+        )
+        after = sum(
+            row["kind"] == "eval_by_start"
+            for row in complete.store.pending_metric_frames(limit=10)
+        )
+        self.assertEqual(after, before)
 
     def test_failure_wait_renews_writer_lease(self) -> None:
         supervisor = self.supervisor()

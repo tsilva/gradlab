@@ -115,6 +115,57 @@ def test_capture_store_commits_fenced_latest_capture(tmp_path: Path) -> None:
     )
 
 
+def test_new_episode_makes_prior_capture_ineligible(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    replay = tmp_path / "source.mp4"
+    replay.write_bytes(b"browser-safe-fixture")
+    store = EpisodeCaptureStore(tmp_path / "captures")
+    captured = store.commit(
+        checkpoint_identity="run:checkpoint",
+        temporary_replay=replay,
+        document_without_identity=_document(replay),
+    )
+    context = {
+        "source_kind": "public_run",
+        "contract_mode": "training",
+        "matches_contract": True,
+        "checkpoint_identity": "run:checkpoint",
+    }
+    manager = EpisodeCaptureManager(context, store=store)
+
+    class Writer:
+        def __init__(self, _path: Path, _frame: object) -> None:
+            pass
+
+        def abort(self) -> None:
+            pass
+
+    monkeypatch.setattr("gradlab.play_capture.StreamingReplayWriter", Writer)
+
+    assert manager.status()["ready"] is True
+    manager.begin(
+        np.zeros((2, 2, 3), dtype=np.uint8),
+        episode=2,
+        seed=8,
+        sampling_mode="stochastic",
+    )
+
+    recording = manager.status()
+    assert recording["recording"] is True
+    assert recording["episode_in_progress"] is True
+    assert recording["ready"] is False
+    assert recording["latest"] == captured
+
+    manager.abort("current episode capture failed")
+    failed = manager.status()
+    assert failed["recording"] is False
+    assert failed["episode_in_progress"] is True
+    assert failed["ready"] is False
+    assert failed["latest"] == captured
+
+
 @pytest.mark.skipif(
     shutil.which("ffmpeg") is None or shutil.which("ffprobe") is None,
     reason="ffmpeg and ffprobe are required",

@@ -25,7 +25,7 @@ train:
       # Specialize the inherited successful-stop rule for line defense.
       target_reached:
         # Select the training metric compared with this condition's threshold.
-        metric: train/outcome/success/across_starts/window_100/rate/min
+        metric: train/outcome/success/starts/all/rolling/rate/min
         # Require every episode in the mature rolling window to reach the native horizon.
         threshold: 1.0
         # Stop training after the policy sustains a perfect rolling success rate.
