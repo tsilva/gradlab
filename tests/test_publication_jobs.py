@@ -20,7 +20,7 @@ def _snapshot(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[dict[str
     queue.mkdir()
     basis = {
         "document_type": "gradlab.player_publication_request",
-        "format_version": 1,
+        "format_version": 2,
         "capture_id": "capture-" + "1" * 32,
         "capture_fence_sha256": "2" * 64,
         "repo_id": "tsilva/example",
@@ -32,9 +32,16 @@ def _snapshot(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[dict[str
             "description": "Example",
             "tags": ["gradlab"],
             "privacy": "public",
-            "playlist": "gradlab",
+            "container_name": "GradLab — Example-v0",
             "thumbnail_time": 1.0,
             "operator_note": "",
+            "feature": False,
+            "thumbnail": {
+                "task": "Example",
+                "trainer_algorithm": "GradLab PPO",
+                "step": "1M env steps",
+                "metric": "Return: 1",
+            },
         },
         "principals": {
             "huggingface_username": "tsilva",
@@ -44,6 +51,8 @@ def _snapshot(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[dict[str
             "youtube_scopes": [],
         },
         "evidence_sha256": "3" * 64,
+        "comparison": {"comparable": False, "reason": "no prior release selected"},
+        "feature": False,
     }
     fingerprint = canonical_json_sha256(basis)
     marker = f"gradlab-publication-{fingerprint}"

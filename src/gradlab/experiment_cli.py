@@ -37,6 +37,7 @@ from gradlab.goal_variants import (
     goal_variant_catalog_contract,
     validate_goal_variant_descriptor,
 )
+from gradlab.goal_catalog import GOAL_CATALOG_ROOT
 from gradlab.json_utils import canonical_json_text, json_safe
 from gradlab.metric_names import METRICS_SCHEMA_VERSION
 from gradlab.modal_eval_config import load_modal_eval_config
@@ -827,7 +828,7 @@ def cmd_catalog_rebuild(args: argparse.Namespace) -> int:
         discovered += 1
         try:
             state = authority.semantic_state(key.split("/")[1])
-            manifest = RunManifest.from_dict(_latest_attempt(state))
+            manifest = _reconciliation_manifest(_latest_attempt(state))
             terminal_document = _latest_attempt_terminal(state)
             terminal = None
             if terminal_document is not None:
@@ -871,7 +872,7 @@ def cmd_catalog_rebuild(args: argparse.Namespace) -> int:
         except Exception as exc:
             failed.append(
                 {
-                    "key": "goal-catalog/v1",
+                    "key": GOAL_CATALOG_ROOT,
                     "error_type": type(exc).__name__,
                     "error": str(exc),
                 }

@@ -48,6 +48,7 @@ from gradlab.policy_bundle import (
 )
 from gradlab.goal_variants import validate_goal_variant_descriptor
 from gradlab.goal_catalog import (
+    GOAL_CATALOG_EVENT_ROOT,
     GOAL_CATALOG_ROOT,
     build_goal_catalog_event,
     goal_catalog_event_key,
@@ -227,7 +228,12 @@ class RunAuthority:
             clock=self.clock,
         )
 
-    def _goal_catalog_event_for_manifest(self, manifest: RunManifest) -> dict[str, Any]:
+    def _goal_catalog_event_for_manifest(
+        self,
+        manifest: RunManifest,
+        *,
+        source_document: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
         if manifest.goal_variant is None:
             raise ValueError("run manifest has no goal variant descriptor")
         descriptor = validate_goal_variant_descriptor(manifest.goal_variant)
@@ -247,7 +253,9 @@ class RunAuthority:
             attempt_id=manifest.attempt_id,
             source_bucket="control",
             source_key=source_key,
-            source_document=manifest.to_dict(),
+            source_document=(
+                manifest.to_dict() if source_document is None else source_document
+            ),
             created_at=manifest.created_at,
             variant=descriptor,
             run=self._catalog_run_record(
@@ -543,7 +551,15 @@ class RunAuthority:
 
         goal_slugs: set[str] = set()
         for manifest, terminal in records:
-            manifest_event = self._goal_catalog_event_for_manifest(manifest)
+            manifest_source_key = (
+                f"{self.run_prefix(manifest.run_id)}/attempts/"
+                f"{manifest.attempt_id}/manifest.json"
+            )
+            manifest_source = self.control.get_json_optional(manifest_source_key)
+            manifest_event = self._goal_catalog_event_for_manifest(
+                manifest,
+                source_document=manifest_source,
+            )
             self._put_goal_catalog_event(manifest_event)
             goal_slugs.add(manifest.goal_slug)
             if terminal is not None:
@@ -650,7 +666,7 @@ class RunAuthority:
             "catalog_objects": len(catalog_keys),
             "projection_receipts": len(projection_keys),
             "source_events_preserved": sum(
-                1 for _ in self.control.iter_keys("run-index-events/v1/goals/")
+                1 for _ in self.control.iter_keys(f"{GOAL_CATALOG_EVENT_ROOT}/goals/")
             ),
         }
 

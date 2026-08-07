@@ -21,6 +21,7 @@ from huggingface_hub.errors import HfHubHTTPError
 from gradlab.file_utils import atomic_write_json, file_sha256
 from gradlab.job_queue import (
     HandlerResult,
+    JobSubject,
     JobStore,
     SubjectUpdate,
     register_handler,
@@ -42,13 +43,17 @@ from gradlab.youtube_publication import (
     YouTubeClient,
     YouTubePublicationError,
     YouTubeSubmissionUncertain,
-    extract_thumbnail,
+    create_publication_thumbnail,
     validate_processed_video,
 )
 
 
 class PublicationCanceled(RuntimeError):
     pass
+
+
+FEATURED_PUBLICATION_JOB_TYPE = "publication-featured-curation"
+FEATURED_PUBLICATION_JOB_VERSION = 1
 
 
 def _json_object(path: Path, *, label: str) -> dict[str, Any]:
@@ -330,7 +335,7 @@ class PlayerPublicationJobHandler:
                 title=str(request["metadata"]["title"]),
                 description=str(request["metadata"]["description"]),
                 tags=list(request["metadata"]["tags"]),
-                privacy=str(request["metadata"]["privacy"]),
+                privacy="unlisted",
             )
             state.update(
                 phase="youtube_session",
@@ -412,7 +417,7 @@ class PlayerPublicationJobHandler:
                 validate_processed_video(
                     video,
                     channel_id=str(request["principals"]["youtube_channel_id"]),
-                    privacy=str(request["metadata"]["privacy"]),
+                    privacy="unlisted",
                     marker=str(request["marker"]),
                     title=str(request["metadata"]["title"]),
                     description=str(request["metadata"]["description"]),
@@ -450,32 +455,24 @@ class PlayerPublicationJobHandler:
             self._checkpoint(store, job_id, request, state, kind="youtube_verified")
 
         if state["phase"] == "youtube_verified":
-            playlist_id = client.find_or_create_playlist(
-                str(request["metadata"]["playlist"]),
-                privacy=str(request["metadata"]["privacy"]),
-            )
-            client.add_video_to_playlist(
-                playlist_id=playlist_id,
-                video_id=str(state["youtube_video_id"]),
-            )
             media = verify_replay(replay_path)
             requested = float(request["metadata"]["thumbnail_time"])
             duration = float(media["duration_seconds"])
-            thumbnail = extract_thumbnail(
+            thumbnail_settings = request["metadata"].get("thumbnail") or {}
+            thumbnail = create_publication_thumbnail(
                 replay_path,
                 state_path.parent / "thumbnail.jpg",
                 seconds=min(requested, max(0.0, duration - 0.25)),
+                task=str(thumbnail_settings.get("task") or request["metadata"]["title"]),
+                trainer_algorithm=str(thumbnail_settings.get("trainer_algorithm") or "GradLab"),
+                step=str(thumbnail_settings.get("step") or ""),
+                metric=str(thumbnail_settings.get("metric") or "Accepted evaluation"),
             )
             client.upload_thumbnail(
                 video_id=str(state["youtube_video_id"]),
                 thumbnail_path=thumbnail,
             )
             state["phase"] = "youtube_complete"
-            state["youtube_playlist_id"] = playlist_id
-            state["urls"] = {
-                **dict(state.get("urls") or {}),
-                "playlist": f"https://www.youtube.com/playlist?list={playlist_id}",
-            }
             self._save_state(state_path, state)
             self._checkpoint(store, job_id, request, state, kind="youtube_complete")
         return None
@@ -500,11 +497,17 @@ class PlayerPublicationJobHandler:
             evaluation_document=_json_object(
                 root / "evidence/evaluation.json", label="publication evaluation"
             ),
+            evaluation_evidence_document=_json_object(
+                root / "evidence/evaluation_evidence.json",
+                label="publication evaluation evidence",
+            ),
             publication=publication,
             release_version=str(request["release_version"]),
             published_at=str(request["published_at"]),
             youtube_url=str(state["urls"]["youtube"]),
             output=release_root,
+            comparison=request.get("comparison"),
+            featured=bool(request.get("feature")),
         )
         if manifest.get("publication", {}).get("request_fingerprint") != request[
             "request_fingerprint"
@@ -680,45 +683,119 @@ class PlayerPublicationJobHandler:
                     revision=commit,
                     exist_ok=False,
                 )
+            release_manifest = _json_object(
+                release_root / "release_manifest.json", label="release manifest"
+            )
+            checkpoint_tag = f"checkpoint-{release_manifest['evaluation']['checkpoint_step']}"
+            if checkpoint_tag in tags and tags[checkpoint_tag] != commit:
+                raise ValueError("Hugging Face checkpoint tag points to a different commit")
+            if checkpoint_tag not in tags:
+                api.create_tag(
+                    repo_id,
+                    repo_type="model",
+                    tag=checkpoint_tag,
+                    revision=commit,
+                    exist_ok=False,
+                )
             state["phase"] = "huggingface_tagged"
             self._save_state(state_path, state)
             self._checkpoint(store, job_id, request, state, kind="huggingface_tagged")
 
         if state["phase"] == "huggingface_tagged":
-            manifest = _json_object(
-                release_root / "release_manifest.json", label="release manifest"
-            )
-            title = f"{manifest['repository']['game_family']} Policies"
-            matches = [
-                item
-                for item in api.list_collections(owner=request["principals"]["huggingface_namespace"], limit=100)
-                if str(item.title) == title
-            ]
-            if len(matches) > 1:
-                raise ValueError(f"multiple Hugging Face collections are titled {title!r}")
-            collection = (
-                matches[0]
-                if matches
-                else api.create_collection(
-                    title,
-                    namespace=str(request["principals"]["huggingface_namespace"]),
-                    description="Published GradLab reinforcement-learning policies.",
-                    private=False,
-                    exists_ok=False,
-                )
-            )
-            if bool(getattr(collection, "private", False)):
-                raise ValueError("Hugging Face policy collection must be public")
-            slug = str(collection.slug)
-            api.add_collection_item(slug, repo_id, "model", exists_ok=True)
-            state["huggingface_collection"] = slug
-            state["phase"] = "huggingface_complete"
-            state["urls"] = {
-                **dict(state.get("urls") or {}),
-                "huggingface_collection": f"https://huggingface.co/collections/{slug}",
-            }
+            version = str(request["release_version"])
+            with tempfile.TemporaryDirectory(prefix="gradlab-hf-release-verify-") as name:
+                downloaded_root = Path(name)
+                for filename in sorted(HUGGINGFACE_RELEASE_FILES):
+                    downloaded = self.hub_download(
+                        repo_id,
+                        filename,
+                        repo_type="model",
+                        revision=version,
+                        token=token,
+                    )
+                    shutil.copyfile(downloaded, downloaded_root / filename)
+                validate_release_bundle(downloaded_root)
+            state["phase"] = "huggingface_verified"
             self._save_state(state_path, state)
-            self._checkpoint(store, job_id, request, state, kind="huggingface_complete")
+            self._checkpoint(store, job_id, request, state, kind="huggingface_verified")
+
+    def _advance_containers(
+        self,
+        *,
+        job: Mapping[str, Any],
+        store: JobStore,
+        snapshot: Mapping[str, Any],
+        state_path: Path,
+        state: dict[str, Any],
+    ) -> None:
+        request = snapshot["request"]
+        job_id = str(job["job_id"])
+        api, _token = self._hf_access(request)
+        client = self._youtube_access(request)
+        title = str(request["metadata"]["container_name"])
+        matches = [
+            item
+            for item in api.list_collections(
+                owner=request["principals"]["huggingface_namespace"], limit=100
+            )
+            if str(item.title) == title
+        ]
+        if len(matches) > 1:
+            raise ValueError(f"multiple Hugging Face collections are titled {title!r}")
+        collection = (
+            matches[0]
+            if matches
+            else api.create_collection(
+                title,
+                namespace=str(request["principals"]["huggingface_namespace"]),
+                description="GradLab research releases for this canonical environment.",
+                private=False,
+                exists_ok=False,
+            )
+        )
+        if bool(getattr(collection, "private", False)):
+            raise ValueError("Hugging Face environment collection must be public")
+        slug = str(collection.slug)
+        repo_id = str(request["repo_id"])
+        version = str(request["release_version"])
+        immutable_url = f"https://huggingface.co/{repo_id}/tree/{version}"
+        api.add_collection_item(
+            slug,
+            repo_id,
+            "model",
+            note=f"Immutable research release: {immutable_url}",
+            exists_ok=True,
+        )
+        playlist_id = client.find_or_create_playlist(title, privacy="public")
+        client.add_video_to_playlist(
+            playlist_id=playlist_id,
+            video_id=str(state["youtube_video_id"]),
+        )
+        collection_url = f"https://huggingface.co/collections/{slug}"
+        playlist_url = f"https://www.youtube.com/playlist?list={playlist_id}"
+        final_description = (
+            str(request["metadata"]["description"])
+            .replace("{{COLLECTION_URL}}", collection_url)
+            .replace("{{PLAYLIST_URL}}", playlist_url)
+        )
+        client.update_video_metadata(
+            video_id=str(state["youtube_video_id"]),
+            title=str(request["metadata"]["title"]),
+            description=final_description,
+            tags=list(request["metadata"]["tags"]),
+            privacy=str(request["metadata"]["privacy"]),
+        )
+        state["youtube_final_description"] = final_description
+        state["youtube_playlist_id"] = playlist_id
+        state["huggingface_collection"] = slug
+        state["phase"] = "containers_complete"
+        state["urls"] = {
+            **dict(state.get("urls") or {}),
+            "playlist": playlist_url,
+            "huggingface_collection": collection_url,
+        }
+        self._save_state(state_path, state)
+        self._checkpoint(store, job_id, request, state, kind="containers_complete")
 
     def _audit(
         self,
@@ -736,7 +813,7 @@ class PlayerPublicationJobHandler:
             privacy=str(request["metadata"]["privacy"]),
             marker=str(request["marker"]),
             title=str(request["metadata"]["title"]),
-            description=str(request["metadata"]["description"]),
+            description=str(state["youtube_final_description"]),
         )
         api, token = self._hf_access(request)
         repo_id = str(request["repo_id"])
@@ -744,6 +821,18 @@ class PlayerPublicationJobHandler:
         info = api.model_info(repo_id=repo_id, revision=version)
         if str(getattr(info, "sha", "")) != str(state["huggingface_commit"]):
             raise ValueError("Hugging Face tag changed before final audit")
+        refs = api.list_repo_refs(repo_id=repo_id, repo_type="model")
+        tag_targets = {
+            str(tag.name): str(tag.target_commit) for tag in getattr(refs, "tags", ())
+        }
+        checkpoint_step = int(
+            _json_object(
+                Path(snapshot["root"]) / "evidence/evaluation.json",
+                label="publication evaluation",
+            )["checkpoint_step"]
+        )
+        if tag_targets.get(f"checkpoint-{checkpoint_step}") != str(state["huggingface_commit"]):
+            raise ValueError("Hugging Face exact checkpoint tag failed final audit")
         if set(api.list_repo_files(repo_id, revision=version, repo_type="model")) != set(
             HUGGINGFACE_RELEASE_FILES
         ):
@@ -818,15 +907,52 @@ class PlayerPublicationJobHandler:
                     state_path=state_path,
                     state=state,
                 )
-            if state["phase"] == "huggingface_complete":
+            if state["phase"] == "huggingface_verified":
+                self._advance_containers(
+                    job=job,
+                    store=store,
+                    snapshot=snapshot,
+                    state_path=state_path,
+                    state=state,
+                )
+            if state["phase"] == "containers_complete":
                 self._audit(
                     repo_root=Path(payload["repo_root"]),
                     snapshot=snapshot,
                     state=state,
                 )
                 state["phase"] = "succeeded"
-                state["message"] = "YouTube and Hugging Face publication verified"
+                state["message"] = "YouTube, Hugging Face, and environment containers verified"
                 self._save_state(state_path, state)
+                if request.get("feature") is True and not state.get("featured_job_id"):
+                    featured_payload = {
+                        "queue_root": str(store.root),
+                        "repo_id": str(request["repo_id"]),
+                        "release_version": str(request["release_version"]),
+                        "youtube_video_id": str(state["youtube_video_id"]),
+                        "principals": deepcopy(dict(request["principals"])),
+                    }
+                    featured_fingerprint = canonical_json_sha256(featured_payload)
+                    try:
+                        queued = store.enqueue(
+                            job_type=FEATURED_PUBLICATION_JOB_TYPE,
+                            handler_version=FEATURED_PUBLICATION_JOB_VERSION,
+                            payload=featured_payload,
+                            idempotency_key=featured_fingerprint,
+                            subjects=[
+                                JobSubject(
+                                    subject_type="research-release-featured",
+                                    subject_id=(
+                                        f"{request['repo_id']}@{request['release_version']}"
+                                    ),
+                                )
+                            ],
+                        )
+                        if queued.job is not None:
+                            state["featured_job_id"] = queued.job["job_id"]
+                    except Exception as exc:
+                        state["featured_enqueue_error"] = str(exc)
+                    self._save_state(state_path, state)
             if state["phase"] != "succeeded":
                 raise RuntimeError(f"unsupported publication phase: {state['phase']}")
             return HandlerResult(
@@ -861,6 +987,134 @@ class PlayerPublicationJobHandler:
             return self._block(request, state, state_path, f"{type(exc).__name__}: {exc}")
 
 
+class FeaturedPublicationJobHandler:
+    job_type = FEATURED_PUBLICATION_JOB_TYPE
+    version = FEATURED_PUBLICATION_JOB_VERSION
+
+    def __init__(
+        self,
+        *,
+        hf_api_factory: Callable[..., Any] = HfApi,
+        youtube_client_factory: Callable[[str], YouTubeClient] = YouTubeClient,
+    ) -> None:
+        self.hf_api_factory = hf_api_factory
+        self.youtube_client_factory = youtube_client_factory
+
+    @classmethod
+    def validate_payload(cls, payload: Mapping[str, Any]) -> dict[str, Any]:
+        expected = {
+            "queue_root",
+            "repo_id",
+            "release_version",
+            "youtube_video_id",
+            "principals",
+        }
+        if set(payload) != expected or not isinstance(payload.get("principals"), Mapping):
+            raise ValueError("featured publication payload is malformed")
+        return deepcopy(dict(payload))
+
+    def advance(self, job: Mapping[str, Any]) -> HandlerResult:
+        payload = self.validate_payload(job.get("payload") or {})
+        subject_id = f"{payload['repo_id']}@{payload['release_version']}"
+        try:
+            credential = resolve_huggingface_credential()
+            api = self.hf_api_factory(token=credential.token)
+            whoami = api.whoami()
+            if str(whoami.get("name") or "") != str(
+                payload["principals"]["huggingface_username"]
+            ):
+                raise ValueError("Hugging Face principal changed before featured curation")
+            client, principal = _youtube_access(
+                client_factory=self.youtube_client_factory
+            )
+            if principal.get("channel_id") != payload["principals"]["youtube_channel_id"]:
+                raise ValueError("YouTube principal changed before featured curation")
+            title = "GradLab — Featured Research"
+            matches = [
+                item
+                for item in api.list_collections(
+                    owner=payload["principals"]["huggingface_namespace"], limit=100
+                )
+                if str(item.title) == title
+            ]
+            if len(matches) > 1:
+                raise ValueError("multiple Featured Research collections exist")
+            collection = (
+                matches[0]
+                if matches
+                else api.create_collection(
+                    title,
+                    namespace=str(payload["principals"]["huggingface_namespace"]),
+                    description="Editorially selected GradLab research releases.",
+                    private=False,
+                    exists_ok=False,
+                )
+            )
+            immutable_url = (
+                f"https://huggingface.co/{payload['repo_id']}/tree/"
+                f"{payload['release_version']}"
+            )
+            api.add_collection_item(
+                str(collection.slug),
+                str(payload["repo_id"]),
+                "model",
+                note=f"Immutable featured release: {immutable_url}",
+                exists_ok=True,
+            )
+            playlist_id = client.find_or_create_playlist(title, privacy="public")
+            client.add_video_to_playlist(
+                playlist_id=playlist_id,
+                video_id=str(payload["youtube_video_id"]),
+            )
+            detail = {
+                "urls": {
+                    "huggingface_featured": (
+                        f"https://huggingface.co/collections/{collection.slug}"
+                    ),
+                    "youtube_featured": (
+                        f"https://www.youtube.com/playlist?list={playlist_id}"
+                    ),
+                }
+            }
+            return HandlerResult(
+                state="succeeded",
+                message="featured editorial curation verified",
+                subjects=(
+                    SubjectUpdate(
+                        "research-release-featured", subject_id, "succeeded", detail
+                    ),
+                ),
+            )
+        except (OSError, TimeoutError, YouTubePublicationError, HfHubHTTPError) as exc:
+            retryable = not isinstance(exc, YouTubePublicationError) or exc.retryable
+            return HandlerResult(
+                state="retry_wait" if retryable else "blocked",
+                available_at=(time.time() + _retry_delay(job)) if retryable else None,
+                message=str(exc),
+                subjects=(
+                    SubjectUpdate(
+                        "research-release-featured",
+                        subject_id,
+                        "retry_wait" if retryable else "blocked",
+                        {"message": str(exc)},
+                    ),
+                ),
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            return HandlerResult(
+                state="blocked",
+                message=str(exc),
+                subjects=(
+                    SubjectUpdate(
+                        "research-release-featured",
+                        subject_id,
+                        "blocked",
+                        {"message": str(exc)},
+                    ),
+                ),
+            )
+
+
 def register_job_handler() -> None:
     register_handler(
         PLAYER_PUBLICATION_JOB_TYPE,
@@ -868,6 +1122,19 @@ def register_job_handler() -> None:
         PlayerPublicationJobHandler,
         replace=True,
     )
+    register_handler(
+        FEATURED_PUBLICATION_JOB_TYPE,
+        FEATURED_PUBLICATION_JOB_VERSION,
+        FeaturedPublicationJobHandler,
+        replace=True,
+    )
 
 
-__all__ = ["PlayerPublicationJobHandler", "PublicationCanceled", "register_job_handler"]
+__all__ = [
+    "FEATURED_PUBLICATION_JOB_TYPE",
+    "FEATURED_PUBLICATION_JOB_VERSION",
+    "FeaturedPublicationJobHandler",
+    "PlayerPublicationJobHandler",
+    "PublicationCanceled",
+    "register_job_handler",
+]

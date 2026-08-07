@@ -1852,6 +1852,8 @@ td:last-child { text-align: right; }
 .publication-fields small { font-weight: 400; }
 .publication-fields input, .publication-fields select, .publication-fields textarea { width: 100%; }
 .publication-fields textarea { resize: vertical; }
+.publication-fields .publication-feature { grid-template-columns: auto 1fr; align-items: center; align-self: end; }
+.publication-fields .publication-feature input { width: auto; }
 .publication-wide { grid-column: 1 / -1; }
 .publication-credentials, .publication-job { padding: .72rem .8rem; border: 1px solid var(--color-border); border-radius: .48rem; background: var(--color-surface-secondary); font-size: .72rem; line-height: 1.55; }
 .publication-job a { color: var(--color-interaction); }

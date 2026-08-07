@@ -7,7 +7,10 @@ from pathlib import Path
 
 from gradlab.goal_catalog import (
     GOAL_CATALOG_ARCHIVE_PAGE_SIZE,
+    GOAL_CATALOG_EVENT_ROOT,
     GOAL_CATALOG_HOT_TERMINAL_RUNS,
+    GOAL_CATALOG_ROOT,
+    GOAL_CATALOG_SCHEMA_VERSION,
     build_goal_catalog_event,
     goal_catalog_ack_key,
     goal_catalog_event_key,
@@ -17,6 +20,13 @@ from gradlab.goal_catalog import (
 from gradlab.goal_catalog_projection import GoalCatalogProjector
 from gradlab.goal_variants import build_goal_variant_descriptor
 from gradlab.r2_store import BucketConfig, R2Bucket
+
+
+def test_catalog_schema_uses_isolated_storage_namespaces() -> None:
+    assert GOAL_CATALOG_ROOT == f"goal-catalog/v{GOAL_CATALOG_SCHEMA_VERSION}"
+    assert GOAL_CATALOG_EVENT_ROOT == (
+        f"run-index-events/v{GOAL_CATALOG_SCHEMA_VERSION}"
+    )
 
 
 def _timestamp(index: int) -> str:

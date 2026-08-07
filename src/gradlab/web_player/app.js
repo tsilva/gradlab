@@ -416,13 +416,48 @@ async function publicationApi(path, { method = "GET", body } = {}) {
   return payload;
 }
 
-function publicationFact(term, value) {
-  const facts = $("#publication-capture");
+function publicationFact(term, value, selector = "#publication-capture") {
+  const facts = $(selector);
   const dt = document.createElement("dt");
   const dd = document.createElement("dd");
   dt.textContent = term;
   dd.textContent = String(value ?? "—");
   facts.append(dt, dd);
+}
+
+function publicationSettings() {
+  return {
+    privacy: $("#publication-privacy").value,
+    thumbnail_time: Number($("#publication-thumbnail-time").value),
+    tags: $("#publication-tags").value.split(",").map((value) => value.trim()).filter(Boolean),
+    operator_note: $("#publication-note").value,
+    feature: $("#publication-feature").checked,
+  };
+}
+
+function renderPublicationPreview(preview) {
+  const facts = $("#publication-generated");
+  facts.replaceChildren();
+  if (!preview) return;
+  publicationFact("Generated title", preview.title, "#publication-generated");
+  publicationFact("Generated description", preview.description, "#publication-generated");
+  publicationFact("Repository", `${preview.repo_id}@${preview.release_tag}`, "#publication-generated");
+  publicationFact("Checkpoint tag", preview.checkpoint_tag, "#publication-generated");
+  publicationFact("Acceptance", preview.acceptance?.passed ? "Accepted" : "Not accepted", "#publication-generated");
+  publicationFact("Replay", `${preview.replay?.status}: ${preview.replay?.outcome}`, "#publication-generated");
+  publicationFact("Comparison", preview.comparison?.reason, "#publication-generated");
+  publicationFact("Environment container", preview.containers?.environment, "#publication-generated");
+  publicationFact("Featured container", preview.feature ? preview.containers?.featured : "Not requested", "#publication-generated");
+  publicationFact("Operator note", preview.operator_note || "None", "#publication-generated");
+}
+
+async function refreshPublicationPreview() {
+  const preview = await publicationApi("/api/publication/preview", {
+    method: "POST",
+    body: publicationSettings(),
+  });
+  renderPublicationPreview(preview);
+  return preview;
 }
 
 function renderPublicationCurrent(current) {
@@ -442,6 +477,7 @@ function renderPublicationCurrent(current) {
   publicationFact("Action selection", capture.sampling_mode);
   publicationFact("Capture", capture.capture_id);
   $("#publication-status").textContent = "The exact completed episode will be uploaded to both destinations.";
+  renderPublicationPreview(current.preview);
   if (current.job) renderPublicationJob(current.job);
 }
 
@@ -515,6 +551,7 @@ async function openPublicationDialog() {
       publicationApi("/api/publication/replay-ticket", { method: "POST" }),
     ]);
     renderPublicationCurrent(current);
+    await refreshPublicationPreview();
     $("#publication-video").src = ticket.url;
     if (current.job) renderPublicationJob(current.job);
     else await checkPublicationCredentials();
@@ -1960,11 +1997,7 @@ function initWorkspace() {
       const result = await publicationApi("/api/publication/admit", {
         method: "POST",
         body: {
-          privacy: $("#publication-privacy").value,
-          playlist: $("#publication-playlist").value,
-          thumbnail_time: Number($("#publication-thumbnail-time").value),
-          tags: $("#publication-tags").value.split(",").map((value) => value.trim()).filter(Boolean),
-          operator_note: $("#publication-note").value,
+          ...publicationSettings(),
         },
       });
       renderPublicationJob(result.job);
@@ -1973,6 +2006,11 @@ function initWorkspace() {
       submit.disabled = false;
       showToast(error.message || String(error), true);
     }
+  });
+  ["#publication-privacy", "#publication-thumbnail-time", "#publication-tags", "#publication-note", "#publication-feature"].forEach((selector) => {
+    $(selector).addEventListener("change", () => {
+      void refreshPublicationPreview().catch((error) => showToast(error.message || String(error), true));
+    });
   });
   const publicationAction = async (action, body) => {
     const jobId = state.publicationJob?.job_id;

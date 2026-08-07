@@ -1,76 +1,310 @@
 from __future__ import annotations
 
-import hashlib
-import json
-import tempfile
 from copy import deepcopy
 from pathlib import Path
-from unittest.mock import patch
 
 import pytest
-from huggingface_hub import ModelCard
-from jinja2 import UndefinedError
 
-from gradlab.preprocessing import preprocessing_contract
-from gradlab.policy_bundle import (
-    PolicyBundle,
-    PolicyDocumentError,
-    UnsupportedPolicyDocumentVersion,
-    build_model_document,
-    build_recipe_document,
-    evaluation_contract_sha256,
-    load_policy_bundle,
-    sha256_file,
-    write_canonical_json,
-)
-from gradlab.recipe_documents import compose_resolved_train_documents
-from gradlab.training_backend import training_backend_config_hash
+from gradlab.policy_bundle import PolicyBundle, UnsupportedPolicyDocumentVersion
 from gradlab.publication import (
-    GITATTRIBUTES_TEXT,
-    HUGGINGFACE_RELEASE_FILES,
-    MIT_LICENSE_TEXT,
-    PublicationIdentity,
-    _render_model_card_template,
+    HASHED_RELEASE_FILES,
+    RELEASE_MANIFEST_VERSION,
+    REPO_NAMING_SCHEMA_VERSION,
     build_model_repo_id,
     build_release_manifest,
-    normalize_publication_evaluation,
+    policy_lineage_contract,
     publication_identity_from_policy_bundle,
-    publication_source_from_policy_bundle,
-    release_artifact_records,
+    release_comparison,
     render_model_card,
     validate_release_manifest_document,
-    validate_release_bundle,
 )
 
 
-def _v2_replay() -> dict:
+def bundle(*, seed: int = 7, step: int = 4_000_000) -> PolicyBundle:
+    action_contract = {
+        "schema_version": 1,
+        "requested": {"mode": "custom_discrete", "meanings": ["noop", "attack"]},
+        "provider": {
+            "provider_id": "vizdoom-turbo",
+            "mode": "custom_discrete",
+            "semantics": {
+                "status": "available",
+                "encoding": "explicit",
+                "entries": [
+                    {"value": 0, "semantic_id": "noop"},
+                    {"value": 1, "semantic_id": "attack"},
+                ],
+            },
+        },
+        "policy": {
+            "codec": {"type": "identity"},
+            "space": {"type": "discrete", "start": 0, "n": 2},
+            "semantics": {
+                "status": "available",
+                "encoding": "explicit",
+                "entries": [
+                    {"value": 0, "semantic_id": "noop"},
+                    {"value": 1, "semantic_id": "attack"},
+                ],
+            },
+        },
+    }
+    task = {
+        "action": {"set": "native"},
+        "signals": {"kills": "killcount", "health": "health"},
+        "model_inputs": {
+            "schema_version": 1,
+            "context": {
+                "health": {
+                    "signal": "health",
+                    "update": "transition",
+                    "history": "provider_frame_stack",
+                    "encoding": {"kind": "continuous", "scale": 0.01},
+                }
+            },
+        },
+        "reward": {"mode": "native", "scale": 1.0},
+        "events": {"monster_killed": {"signal": "kills", "operation": "increase"}},
+        "termination": {"success": ["time_limit_reached"], "bootstrap": ["time_limit_reached"]},
+    }
+    recipe = {
+        "document_type": "gradlab.recipe",
+        "format_version": 4,
+        "recipe": {
+            "environment": {
+                "env_id": "vizdoom-turbo:VizdoomDeathmatch-v1",
+                "state": "default",
+                "preprocessing": {
+                    "obs_resize": [84, 84],
+                    "obs_grayscale": True,
+                    "obs_crop": [0, 32, 0, 0],
+                    "obs_crop_mode": "mask",
+                    "frame_stack": 4,
+                    "policy_observation_layout": "dict_observation_context_v1",
+                },
+                "provider_args": {
+                    "frame_stack": 4,
+                    "num_threads": 32,
+                    "info_filter": {"mode": "all", "keys": ["killcount", "health"]},
+                    "vizdoom_config": {"episode_timeout": 4200},
+                },
+                "task": task,
+            },
+            "environment_hash": "sha256:environment",
+            "train": {
+                "policy_model": {
+                    "schema_version": 2,
+                    "encoder": {"kind": "nature_cnn", "features_dim": 512},
+                }
+            },
+            "value_contract": {"discount": 0.995},
+            "goal": {
+                "goal_id": "VizdoomDeathmatch-v1",
+                "title": "ViZDoom single-player Deathmatch score attack",
+                "evaluation_mode": "evaluated",
+                "eval": {
+                    "episodes": 2,
+                    "acceptance": [
+                        {
+                            "metric": "eval/full/progress/kills/mean",
+                            "operator": ">=",
+                            "threshold": 10.0,
+                        }
+                    ],
+                },
+                "objective": {
+                    "rank": [
+                        "max(eval/full/progress/kills/mean)",
+                        "min(leader/checkpoint/step)",
+                    ]
+                },
+            },
+        },
+    }
+    model = {
+        "policy": {
+            "algorithm_id": "ppo",
+            "model_class": "gradlab.ppo.GradLabPPO",
+            "training_backend_id": "gradlab.ppo",
+            "training_backend_config_hash": "a" * 64,
+        },
+        "checkpoint": {
+            "step": step,
+            "sha256": "b" * 64,
+            "kind": "checkpoint",
+        },
+        "provenance": {
+            "seed": seed,
+            "repo_git_commit": "c" * 40,
+            "wandb_run_id": "gradlab-" + "d" * 32,
+            "wandb_project": "VizdoomDeathmatch-v1",
+            "run_name": "deathmatch-run",
+            "recipe_slug": "ppo",
+            "training_metadata": {
+                "action_contract": action_contract,
+                "policy_execution_contract": {
+                    "policy_model": deepcopy(recipe["recipe"]["train"]["policy_model"]),
+                    "model_inputs": deepcopy(task["model_inputs"]),
+                    "role_inputs": {"actor": ["image", "context"], "critic": ["image", "context"]},
+                },
+                "versions": {"vizdoom_turbo": "1.3.0.post23"},
+            },
+        },
+    }
+    return PolicyBundle(
+        checkpoint_path=Path("model.zip"),
+        model_path=Path("model.json"),
+        recipe_path=Path("recipe.json"),
+        model=model,
+        recipe=recipe,
+        source="fixture",
+    )
+
+
+def evaluation_evidence() -> dict:
+    acceptance = {
+        "rules": [
+            {
+                "metric": "eval/full/progress/kills/mean",
+                "operator": ">=",
+                "threshold": 10.0,
+            }
+        ],
+        "outcomes": [
+            {
+                "metric": "eval/full/progress/kills/mean",
+                "label": "Full-eval kills mean",
+                "unit": "value",
+                "value": 12.5,
+                "operator": ">=",
+                "threshold": 10.0,
+                "passed": True,
+            }
+        ],
+        "passed": True,
+    }
+    return {
+        "document_type": "gradlab.evaluation_evidence",
+        "format_version": 1,
+        "status": "accepted",
+        "identity": {
+            "run_id": "gradlab-" + "d" * 32,
+            "checkpoint_id": "checkpoint-4000000-" + "b" * 16,
+            "checkpoint_step": 4_000_000,
+            "checkpoint_sha256": "b" * 64,
+            "recipe_sha256": "e" * 64,
+        },
+        "protocol": {
+            "action_sampling": "stochastic",
+            "episodes": 2,
+            "seed": 10000,
+            "seed_protocol": {"kind": "fixed"},
+            "manifest": [{"episode": 0}, {"episode": 1}],
+        },
+        "episode_results": [
+            {"episode": 0, "start_id": "default", "progress": {"kills": 12}},
+            {"episode": 1, "start_id": "default", "progress": {"kills": 13}},
+        ],
+        "aggregates": {"eval/full/progress/kills/mean": 12.5},
+        "acceptance": acceptance,
+        "ranking": {
+            "rules": [
+                "max(eval/full/progress/kills/mean)",
+                "min(leader/checkpoint/step)",
+            ],
+            "outcomes": [
+                {
+                    "metric": "eval/full/progress/kills/mean",
+                    "label": "Full-eval kills mean",
+                    "unit": "value",
+                    "value": 12.5,
+                    "direction": "max",
+                    "rank_value": 12.5,
+                },
+                {
+                    "metric": "leader/checkpoint/step",
+                    "label": "Leader checkpoint step",
+                    "unit": "steps",
+                    "value": 4_000_000,
+                    "direction": "min",
+                    "rank_value": -4_000_000.0,
+                },
+            ],
+        },
+        "contracts": {
+            "materialized_goal": bundle().recipe["recipe"]["goal"],
+            "evaluation": {"episodes": 2},
+            "environment": {"env_id": "vizdoom-turbo:VizdoomDeathmatch-v1"},
+        },
+        "authoritative_hashes": {
+            "intent_sha256": "1" * 64,
+            "raw_result_sha256": "2" * 64,
+            "verified_result_sha256": "3" * 64,
+            "checkpoint_manifest_sha256": "4" * 64,
+            "recipe_sha256": "e" * 64,
+            "checkpoint_sha256": "b" * 64,
+            "evaluation_contract_sha256": "f" * 64,
+        },
+    }
+
+
+def evaluation_summary() -> dict:
+    return {
+        "action_sampling": "stochastic",
+        "protocol": "full",
+        "checkpoint_step": 4_000_000,
+        "checkpoint_artifact": "https://example.invalid/model.zip",
+        "episodes": 2,
+        "success_rate_min": 0.0,
+        "success_rate_mean": 0.0,
+        "return_mean": 100.0,
+        "progress_max": 13.0,
+        "by_start": [
+            {
+                "start_id": "default",
+                "episode_count": 2,
+                "success_count": 0,
+                "success_rate": 0.0,
+                "shaped_return_mean": 100.0,
+                "failure_reasons": {"player_died": 2},
+            }
+        ],
+        "checkpoint_sha256": "b" * 64,
+        "recipe_sha256": "e" * 64,
+        "recipe_format_version": 4,
+        "evaluation_contract_sha256": "f" * 64,
+        "exact_contract": True,
+    }
+
+
+def replay() -> dict:
     return {
         "capture_id": "capture-" + "1" * 32,
         "capture_fence_sha256": "1" * 64,
-        "run_id": "gradlab-" + "2" * 32,
-        "checkpoint_id": "checkpoint-1",
-        "checkpoint_sha256": "3" * 64,
-        "recipe_sha256": "4" * 64,
+        "run_id": "gradlab-" + "d" * 32,
+        "checkpoint_id": "checkpoint-4000000-" + "b" * 16,
+        "checkpoint_sha256": "b" * 64,
+        "recipe_sha256": "e" * 64,
         "episode": 1,
         "seed": 7,
-        "start_id": "Level1-1",
+        "start_id": "default",
         "sampling_mode": "stochastic",
         "steps": 2,
-        "return_value": 3.0,
-        "max_x_pos": 4,
-        "outcome": "success",
-        "success": True,
+        "return_value": 100.0,
+        "max_x_pos": 0,
+        "outcome": "terminated",
+        "success": False,
         "boundary_role": "terminal_observation",
         "contract": {"mode": "training"},
         "execution": {
-            "source": {"kind": "checkout", "source_tree_sha256": "5" * 64},
-            "qualified_environment_id": "stable-retro-turbo:SuperMarioBros-Nes-v0",
-            "provider_id": "stable-retro-turbo",
-            "provider_version": "1.0.1",
+            "source": {"kind": "checkout"},
+            "qualified_environment_id": "vizdoom-turbo:VizdoomDeathmatch-v1",
+            "provider_id": "vizdoom-turbo",
+            "provider_version": "1.3.0.post23",
             "environment_hash": "sha256:environment",
-            "runtime_versions": {"stable_retro_turbo": "1.0.1"},
-            "runtime_image_digest": "",
-            "asset": {"sha256": "6" * 64},
+            "runtime_versions": {"vizdoom_turbo": "1.3.0.post23"},
+            "runtime_image_digest": "docker:image@sha256:" + "6" * 64,
+            "asset": None,
             "execution_target": "local_player",
             "device_type": "cpu",
             "contract_mode": "training",
@@ -81,692 +315,141 @@ def _v2_replay() -> dict:
             "sha256": "7" * 64,
             "size_bytes": 100,
             "frames": 3,
-            "fps": 30,
-            "width": 128,
-            "height": 128,
+            "fps": 30.0,
+            "width": 1280,
+            "height": 720,
         },
     }
 
 
-def _v2_publication() -> dict:
+def publication() -> dict:
     return {
         "request_fingerprint": "8" * 64,
         "huggingface_username": "tsilva",
         "huggingface_namespace": "tsilva",
-        "youtube_channel_id": "channel-1",
+        "youtube_channel_id": "channel",
         "youtube_channel_title": "GradLab",
         "youtube_privacy": "public",
     }
 
 
-def _render_current_model_card_fixture(
-    *,
-    goal: str = "Level1-1",
-    algorithm: str = "ppo",
-    model_class: str = "stable_baselines3.ppo.ppo.PPO",
-    search_algorithm: str | None = None,
-    youtube_url: str | None = "https://www.youtube.com/watch?v=example",
-) -> str:
-    raw_metadata = model_metadata(
-        algorithm=algorithm,
-        model_class=model_class,
-        search_algorithm=search_algorithm,
-    )
-    bundle = policy_bundle_from_metadata(raw_metadata)
-    identity = publication_identity_from_policy_bundle(goal, bundle)
-    raw_evaluation = evaluation_payload()
-    if algorithm == "action-program":
-        raw_evaluation["action_sampling"] = "program"
-    evaluation = normalize_publication_evaluation(
-        raw_evaluation,
-        algorithm_id=algorithm,
-    )
-    source = publication_source_from_policy_bundle(bundle, evaluation)
-    manifest = build_release_manifest(
-        identity,
-        bundle,
-        release_version="v1",
-        published_at="2026-07-14T12:00:00Z",
-        source=source,
-        evaluation=evaluation.as_manifest_value(),
-        artifacts={},
-        youtube_url=youtube_url,
-        format_version=1,
-    )
-    return render_model_card(manifest, bundle)
-
-
-def model_metadata(
-    *,
-    provider: str = "supermariobrosnes-turbo",
-    game: str = "SuperMarioBros-Nes-v0",
-    grayscale: bool = True,
-    resize: tuple[int, int] = (84, 84),
-    crop: list[int] | None = None,
-    crop_mode: str = "mask",
-    frame_stack: int = 4,
-    layout: str = "channel_first",
-    action_set: str = "basic",
-    algorithm: str = "ppo",
-    model_class: str = "stable_baselines3.ppo.ppo.PPO",
-    search_algorithm: str | None = None,
-) -> dict:
-    if crop is None and game == "SuperMarioBros-Nes-v0":
-        crop = [32, 0, 0, 0]
-    action_meanings = {
-        "basic": ("noop", "right", "right_b", "right_a", "right_a_b", "a", "left"),
-        "right-jump": ("right", "right_b", "right_a", "right_a_b"),
-        "native": ("native",),
-    }
-    if action_set not in action_meanings:
-        raise ValueError(f"unknown action set: {action_set}")
-    meanings = action_meanings[action_set]
-    action_contract = {
-        "schema_version": 1,
-        "provider": {
-            "mode": "native" if action_set == "native" else "custom_discrete",
-            "preset": None if action_set == "native" else action_set,
-        },
-        "policy": {
-            "space": {"type": "discrete", "start": 0, "n": len(meanings)},
-            "semantics": {
-                "status": "available",
-                "encoding": "explicit",
-                "entries": [
-                    {"value": index, "semantic_id": meaning}
-                    for index, meaning in enumerate(meanings)
-                ],
-            },
-        },
-    }
-    metadata = {
-        "algorithm_id": algorithm,
-        "model_class": model_class,
-        "training_backend_id": ("gradlab.jerk" if algorithm == "action-program" else "sb3.ppo"),
-        "training_backend_config_hash": "c" * 64,
+def manifest() -> dict:
+    source = {
+        "repository": "https://github.com/tsilva/gradlab",
+        "commit": "c" * 40,
+        "run_id": "gradlab-" + "d" * 32,
+        "run_name": "deathmatch-run",
+        "wandb_project": "VizdoomDeathmatch-v1",
+        "recipe": "ppo",
         "seed": 7,
-        "repo_git_commit": "a" * 40,
-        "run_name": "bx0000000000000000-release-s7-20260714T120000Z",
-        "wandb_run_id": "run123",
-        "wandb_project": "SuperMarioBros-Nes-v0",
-        "recipe_slug": "base",
         "checkpoint_step": 4_000_000,
-        "training_metadata": {
-            "environment_hash": "sha256:environment",
-            "environment": {
-                "env_id": f"{provider}:{game}",
-                "task": {"action": {"set": action_set}},
-            },
-            "action_contract": action_contract,
-            "preprocessing": {
-                "obs_resize": list(resize),
-                "obs_crop": crop,
-                "obs_crop_mode": crop_mode,
-                "obs_grayscale": grayscale,
-                "frame_stack": frame_stack,
-                "policy_observation_layout": layout,
-            },
-        },
+        "checkpoint_artifact": "https://example.invalid/model.zip",
     }
-    if search_algorithm:
-        metadata["search_algorithm_id"] = search_algorithm
-    return metadata
-
-
-def policy_bundle_from_metadata(metadata: dict) -> PolicyBundle:
-    value = deepcopy(metadata)
-    training = deepcopy(value.pop("training_metadata"))
-    environment = deepcopy(training["environment"])
-    environment["preprocessing"] = deepcopy(training["preprocessing"])
-    policy_keys = {
-        "algorithm_id",
-        "model_class",
-        "training_backend_id",
-        "training_backend_config_hash",
-    }
-    policy = {key: value.pop(key) for key in policy_keys}
-    checkpoint_step = value.pop("checkpoint_step")
-    persisted_training = {
-        key: deepcopy(training[key]) for key in ("action_contract", "versions") if key in training
-    }
-    if persisted_training:
-        value["training_metadata"] = persisted_training
-    return PolicyBundle(
-        checkpoint_path=Path("model.zip"),
-        model_path=Path("model.json"),
-        recipe_path=Path("recipe.json"),
-        model={
-            "policy": policy,
-            "provenance": value,
-            "checkpoint": {"step": checkpoint_step},
-        },
-        recipe={
-            "recipe": {
-                "environment": environment,
-                "environment_hash": training["environment_hash"],
-            }
-        },
-        source="test",
-    )
-
-
-def evaluation_payload() -> dict:
-    return {
-        "action_sampling": "stochastic",
-        "protocol": "full",
-        "eval/checkpoint/step": 4_000_000,
-        "checkpoint_artifact": "tsilva/project/run-checkpoint:v3",
-        "episodes": 30,
-        "eval/full/outcome/success/starts/rate/min": 0.8,
-        "eval/full/outcome/success/starts/rate/mean": 0.9,
-        "eval/full/episode/return/shaped/mean": 123.5,
-        "eval/full/progress/x/max": 6256,
-        "by_start": [
-            {
-                "start_id": "Level1-1",
-                "episode_count": 15,
-                "success_count": 12,
-                "success_rate": 0.8,
-                "shaped_return_mean": 100.0,
-                "failure_reasons": {},
-            },
-            {
-                "start_id": "Level1-2",
-                "episode_count": 15,
-                "success_count": 15,
-                "success_rate": 1.0,
-                "shaped_return_mean": 147.0,
-                "failure_reasons": {},
-            },
-        ],
-    }
-
-
-def test_mario_publication_identity_is_exact_and_provider_neutral() -> None:
-    native = publication_identity_from_policy_bundle(
-        "Level1-1", policy_bundle_from_metadata(model_metadata())
-    )
-    retro = publication_identity_from_policy_bundle(
-        "Level1-1",
-        policy_bundle_from_metadata(model_metadata(provider="stable-retro-turbo")),
-    )
-
-    assert native == retro
-    assert native == PublicationIdentity(
-        game_family="NES-SuperMarioBros",
-        goal="Level1-1",
-        policy_variant="gray84-hudmask-stack4-basic",
-        algorithm="ppo",
-    )
-    assert build_model_repo_id(native) == "tsilva/Level1-1_ppo_c868549e"
-
-
-def test_publication_repo_id_uses_goal_algorithm_and_stable_contract_hash() -> None:
-    identity = PublicationIdentity(
-        game_family="Doom-ViZDoom-Deathmatch",
-        goal="VizdoomDeathmatch-v1",
-        policy_variant="gray84-mask-t0-r32-b0-l0-stack4-contextdict-custom-discrete",
-        algorithm="ppo",
-    )
-
-    repo_id = build_model_repo_id(identity)
-
-    assert repo_id == "tsilva/VizdoomDeathmatch-v1_ppo_ae2049cb"
-
-
-def test_non_default_reward_shape_is_bound_into_the_contract_hash() -> None:
-    metadata = model_metadata()
-    metadata.update(
-        reward_shape="score-step-0p01-v1",
-        reward_shape_sha256="sha256:" + "a" * 64,
-        reward_shape_is_default=False,
-    )
-    identity = publication_identity_from_policy_bundle(
-        "Level1-1", policy_bundle_from_metadata(metadata)
-    )
-
-    assert identity.policy_variant.endswith("shape-score-step-0p01-v1-aaaaaaaa")
-    assert identity.repo_name.startswith("Level1-1_ppo_")
-    assert len(identity.repo_name.rsplit("_", 1)[-1]) == 8
-
-
-@pytest.mark.parametrize(
-    ("provider", "game", "family"),
-    [
-        ("stable-retro-turbo", "SuperMarioBros3-Nes-v0", "NES-SuperMarioBros3"),
-        ("ale-py", "breakout", "Atari2600-Breakout"),
-        (
-            "breakout-turbo-env",
-            "Breakout-Atari2600-v0",
-            "Atari2600-Breakout",
-        ),
-        ("stable-retro-turbo", "Breakout-Atari2600-v0", "Atari2600-Breakout"),
-        ("ale-py", "ms_pacman", "Atari2600-MsPacman"),
-    ],
-)
-def test_registered_game_families(provider: str, game: str, family: str) -> None:
-    metadata = model_metadata(provider=provider, game=game, crop=[0, 0, 0, 0], action_set="native")
-    identity = publication_identity_from_policy_bundle(
-        "Goal1", policy_bundle_from_metadata(metadata)
-    )
-    assert identity.game_family == family
-
-
-def test_policy_variant_records_rgb_shape_crop_stack_layout_and_action() -> None:
-    metadata = model_metadata(
-        grayscale=False,
-        resize=(84, 96),
-        crop=[8, 1, 2, 3],
-        crop_mode="remove",
-        frame_stack=2,
-        layout="dict_image_task",
-        action_set="native",
-    )
-
-    identity = publication_identity_from_policy_bundle(
-        "Levels_1-1_1-2", policy_bundle_from_metadata(metadata)
-    )
-
-    assert identity.goal == "Levels-1-1-1-2"
-    assert identity.policy_variant == "rgb84x96-crop-t8-r1-b2-l3-stack2-taskdict-native"
-
-
-def test_policy_variant_records_observation_context_layout() -> None:
-    identity = publication_identity_from_policy_bundle(
-        "Deathmatch",
-        policy_bundle_from_metadata(
-            model_metadata(
-                provider="vizdoom-turbo",
-                game="VizdoomDeathmatch-v1",
-                crop=[0, 32, 0, 0],
-                layout="dict_observation_context_v1",
-                action_set="native",
-            )
-        ),
-    )
-
-    assert identity.policy_variant == (
-        "gray84-mask-t0-r32-b0-l0-stack4-contextdict-native"
-    )
-
-
-def test_policy_variant_accepts_another_registered_action_set() -> None:
-    identity = publication_identity_from_policy_bundle(
-        "Level1-1",
-        policy_bundle_from_metadata(model_metadata(action_set="right-jump")),
-    )
-    assert identity.policy_variant.endswith("-right-jump")
-
-
-@pytest.mark.parametrize(
-    ("algorithm", "model_class"),
-    [
-        ("ppo", "stable_baselines3.ppo.ppo.PPO"),
-        ("a2c", "stable_baselines3.a2c.a2c.A2C"),
-        ("action-program", "gradlab.action_program.ActionProgramPolicy"),
-        ("cell-graph", "gradlab.cell_graph.CellGraphPolicy"),
-    ],
-)
-def test_supported_algorithms_are_the_middle_axis(algorithm: str, model_class: str) -> None:
-    identity = publication_identity_from_policy_bundle(
-        "Level1-1",
-        policy_bundle_from_metadata(model_metadata(algorithm=algorithm, model_class=model_class)),
-    )
-    assert f"_{algorithm}_" in build_model_repo_id(identity)
-
-
-def test_publication_rejects_unknown_family_and_algorithm_mismatch() -> None:
-    with pytest.raises(ValueError, match="no registered canonical game family"):
-        publication_identity_from_policy_bundle(
-            "Goal1",
-            policy_bundle_from_metadata(
-                model_metadata(provider="gymnasium", game="CustomVector-v0", crop=[])
-            ),
-        )
-    with pytest.raises(ValueError, match="incompatible"):
-        publication_identity_from_policy_bundle(
-            "Level1-1",
-            policy_bundle_from_metadata(
-                model_metadata(
-                    algorithm="a2c",
-                    model_class="stable_baselines3.ppo.ppo.PPO",
-                )
-            ),
-        )
-    with pytest.raises(ValueError, match="unknown environment provider"):
-        publication_identity_from_policy_bundle(
-            "Level1-1",
-            policy_bundle_from_metadata(model_metadata(provider="unregistered-mario-provider")),
-        )
-def test_long_repo_names_are_rejected() -> None:
-    with pytest.raises(ValueError, match="96"):
-        build_model_repo_id(
-            PublicationIdentity(
-                game_family="NES-SuperMarioBros",
-                goal="A" * 90,
-                policy_variant="gray84-hudmask-stack4-basic",
-                algorithm="ppo",
-            )
-        )
-
-
-def test_preprocessing_contract_reads_provider_rgb_and_stack_arguments() -> None:
-    contract = preprocessing_contract(
-        {
-            "env_provider": "supermariobrosnes-turbo",
-            "obs_resize": [96, 96],
-            "env_args": {"obs_grayscale": False, "frame_stack": 2},
-        }
-    )
-    assert contract["obs_grayscale"] is False
-    assert contract["obs_resize"] == [96, 96]
-    assert contract["frame_stack"] == 2
-
-
-def test_publication_evaluation_requires_stochastic_consistent_by_start() -> None:
-    deterministic = evaluation_payload()
-    deterministic["action_sampling"] = "deterministic"
-    with pytest.raises(ValueError, match="action_sampling"):
-        normalize_publication_evaluation(deterministic)
-
-    inconsistent = evaluation_payload()
-    inconsistent["eval/full/outcome/success/starts/rate/min"] = 0.7
-    with pytest.raises(ValueError, match="success_rate_min"):
-        normalize_publication_evaluation(inconsistent)
-
-
-def test_publication_source_requires_explicit_seed_commit_and_matching_step() -> None:
-    evaluation = normalize_publication_evaluation(evaluation_payload())
-    metadata = model_metadata()
-    metadata["repo_git_commit"] = ""
-    with pytest.raises(ValueError, match="repo_git_commit"):
-        publication_source_from_policy_bundle(policy_bundle_from_metadata(metadata), evaluation)
-
-    metadata = model_metadata()
-    metadata["checkpoint_step"] = 1
-    with pytest.raises(ValueError, match="checkpoint_step disagrees"):
-        publication_source_from_policy_bundle(policy_bundle_from_metadata(metadata), evaluation)
-
-
-def test_model_card_template_uses_canonical_cli_commands() -> None:
-    card = _render_current_model_card_fixture()
-
-    assert "uv run gradlab rom import ~/roms" in card
-    assert "uv run gradlab eval https://huggingface.co/" in card
-    assert "gradlab import-roms" not in card
-    assert "gradlab eval run" not in card
-
-
-def test_model_card_template_preserves_current_sb3_golden_output() -> None:
-    card = _render_current_model_card_fixture()
-
-    ModelCard(card).validate(repo_type="model")
-    assert hashlib.sha256(card.encode()).hexdigest() == (
-        "62faa14cf1aa05b3bd27112c5e4e88ea19d20bfea983492aa38072d7009e773d"
-    )
-
-
-def test_model_card_deduplicates_identical_game_and_goal_labels() -> None:
-    card = _render_current_model_card_fixture(goal="SuperMarioBros-Nes-v0")
-
-    assert "# SuperMarioBros-Nes-v0 — PPO" in card
-    assert "# SuperMarioBros-Nes-v0 — SuperMarioBros-Nes-v0" not in card
-    assert "policy for `SuperMarioBros-Nes-v0`, trained" in card
-    assert "| Task | Complete `SuperMarioBros-Nes-v0` |" in card
-
-
-def test_model_card_template_preserves_current_action_program_golden_output() -> None:
-    card = _render_current_model_card_fixture(
-        algorithm="action-program",
-        model_class="gradlab.action_program.ActionProgramPolicy",
-        search_algorithm="jerk",
-        youtube_url=None,
-    )
-
-    ModelCard(card).validate(repo_type="model")
-    assert "| Producer | `jerk` |" in card
-    assert "_action-program_c868549e/resolve/v1/model.zip" in card
-    assert hashlib.sha256(card.encode()).hexdigest() == (
-        "3a1bd70dda6159e0401ad1e9a86cacd900f3c800f0178d211ad5385f41a4ca60"
-    )
-
-
-def test_model_card_template_rejects_missing_context() -> None:
-    with pytest.raises(UndefinedError):
-        _render_model_card_template({})
-
-
-def test_release_bundle_has_exact_files_hashes_and_portable_identity() -> None:
-    with tempfile.TemporaryDirectory() as temporary:
-        root = Path(temporary)
-        metadata = model_metadata()
-        evaluation = normalize_publication_evaluation(evaluation_payload())
-        contents = {
-            ".gitattributes": GITATTRIBUTES_TEXT,
-            "LICENSE": MIT_LICENSE_TEXT,
-            "model.zip": "checkpoint",
-            "replay.mp4": "video",
-        }
-        for filename, content in contents.items():
-            (root / filename).write_text(content, encoding="utf-8")
-        resolved = compose_resolved_train_documents(
-            Path("experiments/goals/SuperMarioBros-Nes-v0/Level1-1/_goal.yaml"),
-            Path("experiments/goals/SuperMarioBros-Nes-v0/Level1-1/recipes/ppo.yaml"),
-            source_sha="a" * 40,
-        )
-        asset = {
-            "schema_version": 2,
-            "game": "SuperMarioBros-Nes-v0",
-            "filename": "mario.nes",
-            "size_bytes": 1024,
-            "sha256": "c" * 64,
-            "provider_rom_identity": "d" * 40,
-            "provider_rom_identity_algorithm": "sha1-provider-body-v1",
-            "object_uri": "s3://private-bucket/mario.nes",
-        }
-        resolved.effective["train_config"]["rom_asset_manifest"] = asset
-        resolved.base["train_config"]["rom_asset_manifest"] = deepcopy(asset)
-        recipe_document = build_recipe_document(
-            resolved.effective,
-            repo_root=Path.cwd(),
-            source_commit="a" * 40,
-            run_description="release fixture",
-            seed=7,
-            runtime_image_ref="docker:example.invalid/gradlab@sha256:" + "b" * 64,
-            base_materialized_recipe=resolved.base,
-            canonical_goal=resolved.canonical_goal,
-        )
-        write_canonical_json(root / "recipe.json", recipe_document)
-        metadata["training_backend_id"] = recipe_document["recipe"]["train_config"][
-            "training_backend"
-        ]["id"]
-        metadata["training_backend_config_hash"] = training_backend_config_hash(
-            recipe_document["recipe"]["train_config"]
-        )
-        metadata["training_metadata"] = {
-            "environment_hash": recipe_document["recipe"]["environment_hash"],
-            "environment": recipe_document["recipe"]["environment"],
-            "action_contract": metadata["training_metadata"]["action_contract"],
-            "preprocessing": recipe_document["recipe"]["environment"]["preprocessing"],
-        }
-        write_canonical_json(
-            root / "model.json",
-            build_model_document(root / "model.zip", root / "recipe.json", metadata),
-        )
-        bundle = load_policy_bundle(root, source=str(root))
-        identity = publication_identity_from_policy_bundle("Level1-1", bundle)
-        source = publication_source_from_policy_bundle(bundle, evaluation)
-        evaluation_value = evaluation.as_manifest_value()
-        evaluation_value.update(
-            checkpoint_sha256=sha256_file(root / "model.zip"),
-            recipe_sha256=sha256_file(root / "recipe.json"),
-            recipe_format_version=recipe_document["format_version"],
-            evaluation_contract_sha256=evaluation_contract_sha256(recipe_document),
-            exact_contract=True,
-        )
-        provisional = build_release_manifest(
-            identity,
-            bundle,
-            release_version="v1",
-            published_at="2026-07-14T12:00:00Z",
-            source=source,
-            evaluation=evaluation_value,
-            artifacts={},
-            youtube_url="https://www.youtube.com/watch?v=example",
-            format_version=1,
-        )
-        (root / "README.md").write_text(
-            render_model_card(provisional, bundle),
-            encoding="utf-8",
-        )
-        records = release_artifact_records(root)
-        manifest = build_release_manifest(
-            identity,
-            bundle,
-            release_version="v1",
-            published_at="2026-07-14T12:00:00Z",
-            source=source,
-            evaluation=evaluation_value,
-            artifacts=records,
-            youtube_url="https://www.youtube.com/watch?v=example",
-            format_version=1,
-        )
-        (root / "release_manifest.json").write_text(
-            json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
-        )
-
-        assert {path.name for path in root.iterdir()} == HUGGINGFACE_RELEASE_FILES
-        assert validate_release_bundle(root) == manifest
-
-        future = deepcopy(manifest)
-        future["format_version"] = 999
-        write_canonical_json(root / "release_manifest.json", future)
-        with patch(
-            "gradlab.publication.load_policy_bundle",
-            side_effect=AssertionError("bundle access"),
-        ):
-            with pytest.raises(UnsupportedPolicyDocumentVersion, match="999"):
-                validate_release_bundle(root)
-
-        malformed = deepcopy(manifest)
-        malformed["evaluation"]["unexpected_contract_field"] = True
-        write_canonical_json(root / "release_manifest.json", malformed)
-        with pytest.raises(PolicyDocumentError, match="unknown field"):
-            validate_release_bundle(root)
-
-        broken = deepcopy(manifest)
-        broken["source"]["checkpoint_artifact"] = "/Users/example/model.zip"
-        (root / "release_manifest.json").write_text(json.dumps(broken), encoding="utf-8")
-        with pytest.raises(ValueError, match="absolute local path"):
-            validate_release_bundle(root)
-
-
-def test_release_bundle_rejects_non_file_entries() -> None:
-    with tempfile.TemporaryDirectory() as temporary:
-        root = Path(temporary)
-        for filename in HUGGINGFACE_RELEASE_FILES - {"replay.mp4"}:
-            (root / filename).write_text("placeholder", encoding="utf-8")
-        (root / "replay.mp4").mkdir()
-
-        with pytest.raises(ValueError, match="regular files"):
-            validate_release_bundle(root)
-
-
-def test_release_manifest_v2_requires_bound_replay_and_publisher() -> None:
-    bundle = policy_bundle_from_metadata(model_metadata())
-    identity = publication_identity_from_policy_bundle("Level1-1", bundle)
-    evaluation = normalize_publication_evaluation(evaluation_payload())
-    source = publication_source_from_policy_bundle(bundle, evaluation)
-
-    manifest = build_release_manifest(
-        identity,
-        bundle,
-        release_version="v2",
-        published_at="2026-08-06T12:00:00Z",
+    return build_release_manifest(
+        publication_identity_from_policy_bundle("VizdoomDeathmatch-v1", bundle()),
+        bundle(),
+        release_version="v3",
+        published_at="2026-08-07T12:00:00Z",
         source=source,
-        evaluation={
-            **evaluation.as_manifest_value(),
-            "checkpoint_sha256": "3" * 64,
-            "recipe_sha256": "4" * 64,
-            "recipe_format_version": 5,
-            "evaluation_contract_sha256": "9" * 64,
-            "exact_contract": True,
-        },
-        artifacts={
-            filename: {"sha256": "a" * 64, "size_bytes": 1}
-            for filename in HUGGINGFACE_RELEASE_FILES - {"release_manifest.json"}
-        },
-        youtube_url="https://www.youtube.com/watch?v=abcdefghijk",
-        replay=_v2_replay(),
-        publication=_v2_publication(),
+        evaluation=evaluation_summary(),
+        artifacts={name: {"sha256": "9" * 64, "size_bytes": 1} for name in HASHED_RELEASE_FILES},
+        youtube_url="https://www.youtube.com/watch?v=A0Id3WxTlqk",
+        replay=replay(),
+        publication=publication(),
+        evaluation_evidence=evaluation_evidence(),
+        featured=True,
     )
 
-    assert validate_release_manifest_document(manifest) == manifest
-    assert manifest["replay"]["capture_id"].startswith("capture-")
-    assert "representative" in render_model_card(manifest, bundle).lower()
+
+def test_schema_v3_identity_uses_trainer_and_full_lineage_digest() -> None:
+    identity = publication_identity_from_policy_bundle("VizdoomDeathmatch-v1", bundle())
+    assert identity.trainer == "GradLab"
+    assert identity.trainer_slug == "gradlab"
+    assert len(identity.lineage_digest) == 64
+    assert build_model_repo_id(identity) == (
+        f"tsilva/VizdoomDeathmatch-v1_gradlab-ppo_{identity.lineage_digest[:8]}"
+    )
 
 
-def test_release_manifest_v2_rejects_replay_frame_gap() -> None:
-    replay = _v2_replay()
-    replay["media"]["frames"] = 2
-    document = {
-        "document_type": "gradlab.release_manifest",
-        "format_version": 2,
-        "repo_naming_schema": 2,
-        "repository": {
-            "repo_id": "tsilva/model",
-            "game_family": "Game",
-            "goal": "Goal",
-            "policy_variant": "variant",
-            "algorithm": "ppo",
-        },
-        "release": {
-            "version": "v1",
-            "published_at": "2026-08-06T12:00:00Z",
-            "youtube_url": "https://www.youtube.com/watch?v=abcdefghijk",
-        },
-        "model": {
-            "algorithm_id": "ppo",
-            "model_class": "PPO",
-            "qualified_env_id": "provider:game",
-            "environment_hash": "hash",
-            "preprocessing": {},
-            "action": {},
-        },
-        "source": {
-            "repository": "https://github.com/tsilva/gradlab",
-            "commit": "a" * 40,
-            "run_id": "run",
-            "run_name": "run",
-            "wandb_project": "project",
-            "recipe": "recipe",
-            "seed": 1,
-            "checkpoint_step": 1,
-            "checkpoint_artifact": "artifact",
-        },
-        "evaluation": {
-            "action_sampling": "stochastic",
-            "protocol": "full",
-            "checkpoint_step": 1,
-            "checkpoint_artifact": "artifact",
-            "episodes": 1,
-            "success_rate_min": 1.0,
-            "success_rate_mean": 1.0,
-            "return_mean": 1.0,
-            "by_start": [],
-            "checkpoint_sha256": "b" * 64,
-            "recipe_sha256": "c" * 64,
-            "recipe_format_version": 1,
-            "evaluation_contract_sha256": "d" * 64,
-            "exact_contract": True,
-        },
-        "replay": replay,
-        "publication": _v2_publication(),
-        "artifacts": {
-            filename: {"sha256": "e" * 64, "size_bytes": 1}
-            for filename in HUGGINGFACE_RELEASE_FILES - {"release_manifest.json"}
-        },
-    }
+@pytest.mark.parametrize(
+    "path,value",
+    [
+        (("recipe", "train", "policy_model", "encoder", "features_dim"), 256),
+        (("recipe", "environment", "preprocessing", "frame_stack"), 8),
+        (("recipe", "environment", "task", "reward", "scale"), 0.5),
+        (("recipe", "value_contract", "discount"), 0.99),
+        (("recipe", "environment", "task", "termination", "success"), ["monster_killed"]),
+    ],
+)
+def test_material_policy_semantics_change_lineage(path: tuple[str, ...], value: object) -> None:
+    original = bundle()
+    changed = bundle()
+    target = changed.recipe
+    for key in path[:-1]:
+        target = target[key]
+    target[path[-1]] = value
+    assert policy_lineage_contract("VizdoomDeathmatch-v1", original) != policy_lineage_contract(
+        "VizdoomDeathmatch-v1", changed
+    )
+    assert publication_identity_from_policy_bundle(
+        "VizdoomDeathmatch-v1", original
+    ).lineage_digest != publication_identity_from_policy_bundle(
+        "VizdoomDeathmatch-v1", changed
+    ).lineage_digest
 
-    with pytest.raises(PolicyDocumentError, match="frames must equal"):
-        validate_release_manifest_document(document)
+
+def test_operational_and_evaluation_changes_do_not_change_lineage() -> None:
+    original = bundle(seed=7, step=4_000_000)
+    changed = bundle(seed=99, step=8_000_000)
+    changed.model["provenance"]["repo_git_commit"] = "0" * 40
+    changed.model["provenance"]["training_metadata"]["versions"]["vizdoom_turbo"] = "9.9"
+    changed.recipe["recipe"]["environment"]["provider_args"]["num_threads"] = 1
+    changed.recipe["recipe"]["goal"]["eval"]["acceptance"][0]["threshold"] = 999
+    assert publication_identity_from_policy_bundle(
+        "VizdoomDeathmatch-v1", original
+    ).lineage_digest == publication_identity_from_policy_bundle(
+        "VizdoomDeathmatch-v1", changed
+    ).lineage_digest
+
+
+def test_manifest_v3_is_the_only_supported_release_contract() -> None:
+    value = manifest()
+    assert value["format_version"] == RELEASE_MANIFEST_VERSION == 3
+    assert value["repo_naming_schema"] == REPO_NAMING_SCHEMA_VERSION == 3
+    assert value["release"]["checkpoint_tag"] == "checkpoint-4000000"
+    assert value["evaluation"]["evidence_file"] == "evaluation_evidence.json"
+    assert validate_release_manifest_document(value) == value
+    old = deepcopy(value)
+    old["format_version"] = 2
+    with pytest.raises(UnsupportedPolicyDocumentVersion):
+        validate_release_manifest_document(old)
+
+
+def test_gradlab_card_uses_faithful_metadata_and_provider_aware_quick_start() -> None:
+    card = render_model_card(manifest(), bundle())
+    assert "Trainer: **GradLab**" in card
+    assert "Algorithm: **PPO**" in card
+    assert "`gradlab.ppo.GradLabPPO`" in card
+    assert "Compatibility: **SB3-compatible**" in card
+    assert "library_name: gradlab" in card
+    assert "stable-baselines3" not in card.casefold()
+    assert "uvx --from gradlab gradlab play hf://" in card
+    assert "rom import" not in card
+    assert "representative media and is not evaluation" in card
+    assert "eval/full/progress/kills/mean" in card
+
+
+def test_release_comparison_requires_all_four_contract_axes() -> None:
+    current = manifest()
+    previous = deepcopy(current)
+    previous["release"]["version"] = "v2"
+    assert release_comparison(current, previous)["comparable"] is True
+    for section, key in (
+        ("repository", "lineage_digest"),
+        ("source", "run_id"),
+        ("source", "seed"),
+        ("evaluation", "evaluation_contract_sha256"),
+    ):
+        changed = deepcopy(previous)
+        changed[section][key] = "different"
+        assert release_comparison(current, changed)["comparable"] is False

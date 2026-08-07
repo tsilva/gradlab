@@ -100,8 +100,11 @@ def audit_huggingface_release(
         raise ValueError(
             f"release manifest version {manifest_version!r} disagrees with {revision!r}"
         )
-    family = str(manifest["repository"]["game_family"])
-    expected_title = f"{family} Policies"
+    checkpoint_tag = str(manifest["release"]["checkpoint_tag"])
+    if tags.get(checkpoint_tag) != str(tagged.sha):
+        raise ValueError(f"tag {checkpoint_tag!r} is missing or points elsewhere")
+    environment_id = str(manifest["repository"]["canonical_environment_id"])
+    expected_title = f"GradLab — {environment_id}"
     owner = repo_id.split("/", 1)[0]
     listed_collection = _collection_with_title(
         api.list_collections(owner=owner, limit=100),
@@ -117,6 +120,16 @@ def audit_huggingface_release(
     }
     if repo_id not in members:
         raise ValueError(f"collection {collection.slug} does not contain {repo_id}")
+    immutable_url = f"https://huggingface.co/{repo_id}/tree/{revision}"
+    matching_items = [
+        item
+        for item in collection.items
+        if str(item.item_type) == "model" and str(item.item_id) == repo_id
+    ]
+    if len(matching_items) != 1 or immutable_url not in str(
+        getattr(matching_items[0], "note", "") or ""
+    ):
+        raise ValueError("collection item note does not link the immutable release tag")
     return {
         "repo_id": repo_id,
         "revision": revision,

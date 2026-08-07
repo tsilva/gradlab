@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import json
 import re
 import shutil
@@ -22,9 +21,8 @@ from gradlab.boundary_schema import (
     Sha256,
     validate_boundary,
 )
-from gradlab.env_registry import game_family_for_environment
 from gradlab.file_utils import file_sha256 as sha256_file
-from gradlab.json_utils import canonical_json_text
+from gradlab.json_utils import canonical_json_sha256, canonical_json_text
 from gradlab.metric_names import (
     EVAL_CHECKPOINT_STEP,
     EVAL_FULL_EPISODE_RETURN_SHAPED_MEAN,
@@ -32,7 +30,6 @@ from gradlab.metric_names import (
     EVAL_FULL_OUTCOME_SUCCESS_STARTS_RATE_MIN,
     EVAL_FULL_PROGRESS_X_MAX,
 )
-from gradlab.model_inputs import CONTEXT_OBSERVATION_LAYOUT
 from gradlab.env_registry import environment_spec
 from gradlab.policy_bundle import (
     PolicyBundle,
@@ -46,9 +43,11 @@ from gradlab.validation import require_mapping as _require_mapping
 
 
 HUGGINGFACE_NAMESPACE = "tsilva"
-REPO_NAMING_SCHEMA_VERSION = 2
+REPO_NAMING_SCHEMA_VERSION = 3
 RELEASE_MANIFEST_DOCUMENT_TYPE = "gradlab.release_manifest"
-RELEASE_MANIFEST_VERSION = 2
+RELEASE_MANIFEST_VERSION = 3
+EVALUATION_EVIDENCE_DOCUMENT_TYPE = "gradlab.evaluation_evidence"
+EVALUATION_EVIDENCE_VERSION = 1
 HUGGINGFACE_RELEASE_FILES = frozenset(
     {
         ".gitattributes",
@@ -57,6 +56,7 @@ HUGGINGFACE_RELEASE_FILES = frozenset(
         "model.zip",
         "model.json",
         "recipe.json",
+        "evaluation_evidence.json",
         "release_manifest.json",
         "replay.mp4",
     }
@@ -90,25 +90,35 @@ SOFTWARE.
 
 class _ReleaseRepository(BoundaryModel):
     repo_id: NonEmptyText
-    game_family: NonEmptyText
-    goal: NonEmptyText
-    policy_variant: NonEmptyText
+    canonical_environment_id: NonEmptyText
+    goal_id: NonEmptyText
+    trainer: NonEmptyText
+    trainer_slug: NonEmptyText
     algorithm: NonEmptyText
+    lineage_digest: Sha256
+    lineage_prefix: NonEmptyText
 
 
 class _ReleaseDetails(BoundaryModel):
     version: NonEmptyText
+    checkpoint_tag: NonEmptyText
     published_at: NonEmptyText
     youtube_url: NonEmptyText | None = None
+    correction_note: Any = None
 
 
 class _ReleaseModel(BoundaryModel):
+    trainer: Any
     algorithm_id: Any
     model_class: Any
+    compatibility: Any
+    library_name: Any
     qualified_env_id: Any
     environment_hash: Any
     preprocessing: Any
     action: Any
+    action_semantics: Any
+    model_inputs: Any
 
 
 class _ReleaseSource(BoundaryModel):
@@ -121,6 +131,8 @@ class _ReleaseSource(BoundaryModel):
     seed: Any
     checkpoint_step: Any
     checkpoint_artifact: Any
+    model_document_url: Any = None
+    recipe_document_url: Any = None
 
 
 class _ReleaseEvaluation(BoundaryModel):
@@ -139,23 +151,16 @@ class _ReleaseEvaluation(BoundaryModel):
     evaluation_contract_sha256: Any
     exact_contract: Any
     progress_max: Any = None
+    accepted: bool
+    evidence_file: Literal["evaluation_evidence.json"]
+    evidence_sha256: Sha256
+    acceptance: Any
+    ranking: Any
 
 
 class _ArtifactRecord(BoundaryModel):
     sha256: Sha256
     size_bytes: PositiveInt
-
-
-class _ReleaseManifestV1(BoundaryModel):
-    document_type: Literal[RELEASE_MANIFEST_DOCUMENT_TYPE]
-    format_version: Literal[1]
-    repo_naming_schema: Literal[REPO_NAMING_SCHEMA_VERSION]
-    repository: _ReleaseRepository
-    release: _ReleaseDetails
-    model: _ReleaseModel
-    source: _ReleaseSource
-    evaluation: _ReleaseEvaluation
-    artifacts: dict[str, _ArtifactRecord]
 
 
 class _ReplayExecution(BoundaryModel):
@@ -205,9 +210,9 @@ class _ReleasePublisher(BoundaryModel):
     youtube_privacy: Literal["public", "unlisted", "private"]
 
 
-class _ReleaseManifestV2(BoundaryModel):
+class _ReleaseManifestV3(BoundaryModel):
     document_type: Literal[RELEASE_MANIFEST_DOCUMENT_TYPE]
-    format_version: Literal[2]
+    format_version: Literal[3]
     repo_naming_schema: Literal[REPO_NAMING_SCHEMA_VERSION]
     repository: _ReleaseRepository
     release: _ReleaseDetails
@@ -216,20 +221,28 @@ class _ReleaseManifestV2(BoundaryModel):
     evaluation: _ReleaseEvaluation
     replay: _ReleaseReplay
     publication: _ReleasePublisher
+    containers: Any
+    comparison: Any
+    featured: bool
     artifacts: dict[str, _ArtifactRecord]
 
 
 @dataclass(frozen=True)
 class PublicationIdentity:
-    game_family: str
-    goal: str
-    policy_variant: str
+    canonical_environment_id: str
+    goal_id: str
+    trainer: str
+    trainer_slug: str
     algorithm: str
+    lineage_digest: str
+
+    @property
+    def lineage_prefix(self) -> str:
+        return self.lineage_digest[:8]
 
     @property
     def repo_name(self) -> str:
-        contract_hash = hashlib.sha256(self.policy_variant.encode("utf-8")).hexdigest()[:8]
-        return f"{self.goal}_{self.algorithm}_{contract_hash}"
+        return f"{self.goal_id}_{self.trainer_slug}-{self.algorithm}_{self.lineage_prefix}"
 
 
 @dataclass(frozen=True)
@@ -304,105 +317,122 @@ def validate_algorithm_model_class(algorithm: str, model_class: object) -> str:
     return class_name
 
 
-def _observation_shape(preprocessing: Mapping[str, Any]) -> tuple[int, int]:
-    resize = preprocessing.get("obs_resize")
-    if not isinstance(resize, Sequence) or isinstance(resize, str | bytes) or len(resize) != 2:
-        raise ValueError("publication preprocessing.obs_resize must contain height and width")
-    height, width = (int(resize[0]), int(resize[1]))
-    if height <= 0 or width <= 0:
-        raise ValueError("publication observation dimensions must be positive")
-    return height, width
+def publication_trainer(bundle: PolicyBundle) -> dict[str, str]:
+    policy = _require_mapping(bundle.model.get("policy"), label="model.json policy")
+    backend_id = str(policy.get("training_backend_id") or "").strip()
+    model_class = str(policy.get("model_class") or "").strip()
+    if backend_id.startswith("gradlab.") or model_class.startswith("gradlab."):
+        return {
+            "trainer": "GradLab",
+            "trainer_slug": "gradlab",
+            "compatibility": "SB3-compatible",
+            "library_name": "gradlab",
+        }
+    if backend_id.startswith("sb3.") or model_class.startswith("stable_baselines3."):
+        return {
+            "trainer": "Stable-Baselines3",
+            "trainer_slug": "stable-baselines3",
+            "compatibility": "Stable-Baselines3",
+            "library_name": "stable-baselines3",
+        }
+    raise ValueError("model policy does not identify a supported trainer")
 
 
-def _view_component(
-    preprocessing: Mapping[str, Any],
-    *,
-    game: str,
-    provider: str,
-) -> str:
-    raw_crop = preprocessing.get("obs_crop")
-    if raw_crop is None:
-        return "full"
-    if (
-        not isinstance(raw_crop, Sequence)
-        or isinstance(raw_crop, str | bytes)
-        or len(raw_crop) != 4
-    ):
-        raise ValueError("publication preprocessing.obs_crop must contain top,right,bottom,left")
-    crop = tuple(int(value) for value in raw_crop)
-    if any(value < 0 for value in crop):
-        raise ValueError("publication crop values must be non-negative")
-    if not any(crop):
-        return "full"
-    mode = str(preprocessing.get("obs_crop_mode") or "remove")
-    if mode not in {"mask", "remove"}:
-        raise ValueError(f"unsupported publication crop mode {mode!r}")
-    default_crop = environment_spec(provider, game).default_obs_crop
-    if default_crop is not None and crop == default_crop:
-        return "hudmask" if mode == "mask" else "hudcrop"
-    prefix = "mask" if mode == "mask" else "crop"
-    top, right, bottom, left = crop
-    return f"{prefix}-t{top}-r{right}-b{bottom}-l{left}"
+_NON_LINEAGE_PROVIDER_ARGS = frozenset(
+    {
+        "n_envs",
+        "num_threads",
+        "record",
+        "render_mode",
+        "rom_path",
+        "rom_asset",
+    }
+)
 
 
-def policy_variant_from_contract(
-    preprocessing: Mapping[str, Any],
-    task: Mapping[str, Any],
-    *,
-    game: str,
-    provider: str = "stable-retro-turbo",
-    action_contract: Mapping[str, Any] | None = None,
-) -> str:
-    height, width = _observation_shape(preprocessing)
-    grayscale = preprocessing.get("obs_grayscale")
-    if not isinstance(grayscale, bool):
-        raise ValueError("publication preprocessing.obs_grayscale must be boolean")
-    color = "gray" if grayscale else "rgb"
-    dimensions = str(height) if height == width else f"{height}x{width}"
-    components = [
-        f"{color}{dimensions}",
-        _view_component(preprocessing, game=game, provider=provider),
-    ]
+def _semantic_provider_args(value: object) -> dict[str, Any]:
+    provider_args = _require_mapping(value, label="recipe environment.provider_args")
+    return {
+        str(key): deepcopy(nested)
+        for key, nested in provider_args.items()
+        if str(key) not in _NON_LINEAGE_PROVIDER_ARGS
+    }
 
-    frame_stack = int(preprocessing.get("frame_stack") or 0)
-    if frame_stack <= 0:
-        raise ValueError("publication preprocessing.frame_stack must be positive")
-    components.append(f"stack{frame_stack}")
 
-    layout = str(preprocessing.get("policy_observation_layout") or "")
-    if layout == "dict_image_task":
-        components.append("taskdict")
-    elif layout == CONTEXT_OBSERVATION_LAYOUT:
-        components.append("contextdict")
-    elif layout != "channel_first":
-        raise ValueError(f"unsupported policy observation layout {layout!r}")
-
-    action = _require_mapping(task.get("action"), label="publication task.action")
-    action_set = str(action.get("set") or "").strip()
-    if not isinstance(action_contract, Mapping) or action_contract.get("schema_version") is None:
-        raise ValueError("publication requires a structured runtime action contract")
-    provider_contract = _require_mapping(
-        action_contract.get("provider"),
-        label="publication runtime action contract provider",
+def policy_lineage_contract(
+    goal_id: object,
+    bundle: PolicyBundle,
+) -> dict[str, Any]:
+    recipe = _require_mapping(bundle.recipe.get("recipe"), label="recipe.json recipe")
+    environment = _require_mapping(
+        recipe.get("environment"), label="recipe.json recipe.environment"
     )
-    policy_contract = _require_mapping(
-        action_contract.get("policy"),
-        label="publication runtime action contract policy",
+    provider, game = _provider_and_environment(environment.get("env_id"))
+    spec = environment_spec(provider, game)
+    task = _require_mapping(environment.get("task"), label="recipe environment.task")
+    train = _require_mapping(recipe.get("train"), label="recipe train")
+    policy = _require_mapping(bundle.model.get("policy"), label="model.json policy")
+    provenance = _require_mapping(bundle.model.get("provenance"), label="model.json provenance")
+    training_metadata = _require_mapping(
+        provenance.get("training_metadata"), label="model provenance.training_metadata"
     )
-    raw_codec = policy_contract.get("codec")
-    codec = dict(raw_codec) if isinstance(raw_codec, Mapping) else {}
-    action_set = str(
-        provider_contract.get("preset") or provider_contract.get("mode") or action_set
-    ).strip()
-    if codec.get("type") == "vizdoom_shared_multidiscrete_v1":
-        action_set = "vizdoom-shared-multidiscrete-v1"
+    action_contract = _require_mapping(
+        training_metadata.get("action_contract"),
+        label="model provenance.training_metadata.action_contract",
+    )
     if not action_contract_meanings(action_contract):
-        raise ValueError(
-            "publication runtime action contract requires semantic IDs "
-            "for every legal policy action"
-        )
-    components.append(normalize_publication_component(action_set, label="publication action set"))
-    return "-".join(components)
+        raise ValueError("publication requires complete saved action semantics")
+    provider_action = _require_mapping(
+        action_contract.get("provider"), label="action contract provider"
+    )
+    semantic_provider_action = {
+        key: deepcopy(value)
+        for key, value in provider_action.items()
+        if key != "provider_id"
+    }
+    policy_execution = training_metadata.get("policy_execution_contract")
+    policy_execution_value = (
+        dict(policy_execution) if isinstance(policy_execution, Mapping) else {}
+    )
+    trainer = publication_trainer(bundle)
+    value_contract = _require_mapping(
+        recipe.get("value_contract"), label="recipe value_contract"
+    )
+    return {
+        "schema_version": 1,
+        "canonical_environment_id": spec.spec_id,
+        "goal_id": normalize_publication_component(goal_id, label="goal id"),
+        "trainer": trainer["trainer"],
+        "algorithm": normalize_algorithm_id(policy.get("algorithm_id")),
+        "architecture": {
+            "recipe": deepcopy(train.get("policy_model")),
+            "saved_execution": deepcopy(policy_execution_value.get("policy_model")),
+        },
+        "observations": {
+            "preprocessing": deepcopy(environment.get("preprocessing")),
+            "model_inputs": deepcopy(task.get("model_inputs")),
+            "policy_execution_model_inputs": deepcopy(
+                policy_execution_value.get("model_inputs")
+            ),
+            "role_inputs": deepcopy(policy_execution_value.get("role_inputs")),
+            "provider_args": _semantic_provider_args(environment.get("provider_args")),
+        },
+        "action_semantics": {
+            "requested": deepcopy(action_contract.get("requested")),
+            "provider": semantic_provider_action,
+            "policy": deepcopy(action_contract.get("policy")),
+        },
+        "reward": deepcopy(task.get("reward")),
+        "discount": deepcopy(value_contract.get("discount")),
+        "signals": deepcopy(task.get("signals")),
+        "events": deepcopy(task.get("events")),
+        "starts": {
+            "state": deepcopy(environment.get("state")),
+            "start": deepcopy(task.get("start")),
+            "starts": deepcopy(task.get("starts")),
+        },
+        "episode_boundaries": deepcopy(task.get("termination")),
+    }
 
 
 def publication_identity_from_policy_bundle(
@@ -414,55 +444,25 @@ def publication_identity_from_policy_bundle(
         recipe.get("environment"), label="recipe.json recipe.environment"
     )
     provider, game = _provider_and_environment(environment.get("env_id"))
-    family = game_family_for_environment(provider, game, require_registered=True)
-    preprocessing = _require_mapping(
-        environment.get("preprocessing"),
-        label="recipe.json recipe.environment.preprocessing",
-    )
-    task = _require_mapping(environment.get("task"), label="recipe.json recipe.environment.task")
     policy = _require_mapping(bundle.model.get("policy"), label="model.json policy")
-    provenance = _require_mapping(bundle.model.get("provenance"), label="model.json provenance")
-    training_metadata = provenance.get("training_metadata")
-    action_contract = (
-        training_metadata.get("action_contract")
-        if isinstance(training_metadata, Mapping)
-        and isinstance(training_metadata.get("action_contract"), Mapping)
-        else None
-    )
-    if action_contract is None:
-        raise ValueError(
-            "model.json provenance must contain a saved runtime action contract"
-        )
     algorithm = normalize_algorithm_id(policy.get("algorithm_id"))
     validate_algorithm_model_class(algorithm, policy.get("model_class"))
-    game_family = normalize_publication_component(family, label="game family")
-    goal_component = normalize_publication_component(goal_id, label="goal id")
-    policy_variant = policy_variant_from_contract(
-        preprocessing,
-        task,
-        game=game,
-        provider=provider,
-        action_contract=action_contract,
-    )
-    reward_shape = str(provenance.get("reward_shape") or "").strip()
-    reward_shape_sha256 = str(provenance.get("reward_shape_sha256") or "").strip()
-    if reward_shape and not bool(provenance.get("reward_shape_is_default", False)):
-        raw_shape_component = normalize_publication_component(
-            reward_shape, label="reward shape"
-        ).lower()
-        digest = reward_shape_sha256.removeprefix("sha256:")
-        if not re.fullmatch(r"[0-9a-f]{64}", digest):
-            raise ValueError("non-default publication reward_shape_sha256 must be a SHA-256")
-        policy_variant = f"{policy_variant}-shape-{raw_shape_component}-{digest[:8]}"
+    spec = environment_spec(provider, game)
+    trainer = publication_trainer(bundle)
+    lineage_contract = policy_lineage_contract(goal_id, bundle)
     return PublicationIdentity(
-        game_family=game_family,
-        goal=goal_component,
-        policy_variant=policy_variant,
+        canonical_environment_id=spec.spec_id,
+        goal_id=normalize_publication_component(goal_id, label="goal id"),
+        trainer=trainer["trainer"],
+        trainer_slug=trainer["trainer_slug"],
         algorithm=algorithm,
+        lineage_digest=canonical_json_sha256(lineage_contract),
     )
 
 
 def build_model_repo_id(identity: PublicationIdentity) -> str:
+    if not re.fullmatch(r"[0-9a-f]{64}", identity.lineage_digest):
+        raise ValueError("publication lineage_digest must be a full lowercase SHA-256")
     for field, value in asdict(identity).items():
         normalized = normalize_publication_component(value, label=field)
         if normalized != value:
@@ -707,13 +707,26 @@ def publication_model_contract(bundle: PolicyBundle) -> dict[str, Any]:
         recipe.get("environment"), label="recipe.json recipe.environment"
     )
     task = _require_mapping(environment.get("task"), label="recipe.json recipe.environment.task")
+    provenance = _require_mapping(bundle.model.get("provenance"), label="model provenance")
+    training_metadata = _require_mapping(
+        provenance.get("training_metadata"), label="model provenance.training_metadata"
+    )
+    action_contract = _require_mapping(
+        training_metadata.get("action_contract"), label="saved action contract"
+    )
+    trainer = publication_trainer(bundle)
     return {
+        "trainer": trainer["trainer"],
         "algorithm_id": policy.get("algorithm_id"),
         "model_class": policy.get("model_class"),
+        "compatibility": trainer["compatibility"],
+        "library_name": trainer["library_name"],
         "qualified_env_id": environment.get("env_id"),
         "environment_hash": recipe.get("environment_hash"),
         "preprocessing": environment.get("preprocessing"),
         "action": task.get("action"),
+        "action_semantics": deepcopy(action_contract),
+        "model_inputs": deepcopy(task.get("model_inputs")),
     }
 
 
@@ -733,8 +746,56 @@ _MODEL_CARD_TEMPLATE_ENV = Environment(
 )
 
 
-def _render_model_card_template(context: Mapping[str, Any]) -> str:
-    return _MODEL_CARD_TEMPLATE_ENV.get_template("model_card.md.j2").render(**context)
+def _metric_value(value: object, unit: object) -> str:
+    if str(unit) == "fraction":
+        return _percent(value)
+    if isinstance(value, bool):
+        return "pass" if value else "fail"
+    if isinstance(value, float):
+        return f"{value:.6g}"
+    return str(value)
+
+
+def release_comparison(
+    current: Mapping[str, Any],
+    previous: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    if previous is None:
+        return {"comparable": False, "reason": "no prior release selected"}
+    checks = (
+        (
+            "lineage",
+            (current.get("repository") or {}).get("lineage_digest"),
+            (previous.get("repository") or {}).get("lineage_digest"),
+        ),
+        (
+            "run",
+            (current.get("source") or {}).get("run_id"),
+            (previous.get("source") or {}).get("run_id"),
+        ),
+        (
+            "seed",
+            (current.get("source") or {}).get("seed"),
+            (previous.get("source") or {}).get("seed"),
+        ),
+        (
+            "evaluation contract",
+            (current.get("evaluation") or {}).get("evaluation_contract_sha256"),
+            (previous.get("evaluation") or {}).get("evaluation_contract_sha256"),
+        ),
+    )
+    for label, left, right in checks:
+        if left != right:
+            return {"comparable": False, "reason": f"{label} differs"}
+    current_ranking = (current.get("evaluation") or {}).get("ranking") or {}
+    previous_ranking = (previous.get("evaluation") or {}).get("ranking") or {}
+    return {
+        "comparable": True,
+        "reason": "lineage, run, seed, and evaluation contract match",
+        "previous_version": (previous.get("release") or {}).get("version"),
+        "ranking_before": deepcopy(previous_ranking.get("outcomes") or []),
+        "ranking_after": deepcopy(current_ranking.get("outcomes") or []),
+    }
 
 
 def render_model_card(
@@ -747,7 +808,7 @@ def render_model_card(
     source = _require_mapping(manifest.get("source"), label="manifest source")
     evaluation = _require_mapping(manifest.get("evaluation"), label="manifest evaluation")
     repo_id = _required_text(repository.get("repo_id"), label="manifest repository.repo_id")
-    goal = _required_text(repository.get("goal"), label="manifest repository.goal")
+    goal = _required_text(repository.get("goal_id"), label="manifest repository.goal_id")
     qualified_env_id = _required_text(
         model.get("qualified_env_id"), label="manifest model.qualified_env_id"
     )
@@ -758,86 +819,70 @@ def render_model_card(
     action_sampling = _required_text(
         evaluation.get("action_sampling"), label="manifest evaluation.action_sampling"
     )
-    by_start = _normalize_by_start_rows(evaluation.get("by_start"))
-    success_min = _required_rate(
-        evaluation.get("success_rate_min"), label="manifest evaluation.success_rate_min"
-    )
-    success_mean = _required_rate(
-        evaluation.get("success_rate_mean"), label="manifest evaluation.success_rate_mean"
-    )
     checkpoint_step = _required_int(
         evaluation.get("checkpoint_step"), label="manifest evaluation.checkpoint_step"
     )
     episodes = _required_int(evaluation.get("episodes"), label="manifest evaluation.episodes")
-    return_mean = _required_float(
-        evaluation.get("return_mean"), label="manifest evaluation.return_mean"
-    )
     preprocessing = _require_mapping(model.get("preprocessing"), label="manifest preprocessing")
-    action = _require_mapping(model.get("action"), label="manifest action")
+    action = _require_mapping(
+        model.get("action_semantics"), label="manifest action semantics"
+    )
     run_id = str(source.get("run_id") or "").strip()
     project = str(source.get("wandb_project") or "").strip()
     wandb_url = f"https://wandb.ai/tsilva/{project}/runs/{run_id}" if project and run_id else ""
     if not re.fullmatch(r"v[1-9][0-9]*", version):
         raise ValueError("model cards require a sequential release version")
     commit = _required_text(source.get("commit"), label="manifest source.commit")
-    model_ref = f"https://huggingface.co/{repo_id}/resolve/{version}/model.zip"
-    install = "\n".join(
-        (
-            "```bash",
-            "git clone https://github.com/tsilva/gradlab",
-            "cd gradlab",
-            f"git checkout {commit}",
-            "uv sync --frozen",
-            "```",
-        )
-    )
+    model_ref = f"hf://{repo_id}@{version}"
     youtube_value = f"[Watch on YouTube]({youtube_url})" if youtube_url else "Not available"
     manifest_purpose = "Release identity, evaluation evidence, and artifact hashes"
-    rows = "\n".join(
-        "| {start} | {episodes} | {success_count} | {success_rate} | {return_mean:.3f} |".format(
-            start=_markdown_value(row["start_id"]),
-            episodes=int(row["episode_count"]),
-            success_count=int(row["success_count"]),
-            success_rate=_percent(row["success_rate"]),
-            return_mean=float(row["shaped_return_mean"]),
-        )
-        for row in by_start
+    trainer = _required_text(model.get("trainer"), label="manifest model.trainer")
+    library_name = _required_text(
+        model.get("library_name"), label="manifest model.library_name"
     )
-    status = ""
-    is_action_program = algorithm == "action-program"
-    is_cell_graph = algorithm == "cell-graph"
-    is_gradlab_policy = is_action_program or is_cell_graph
-    provenance = _require_mapping(bundle.model.get("provenance"), label="model.json provenance")
-    producer = (
-        _required_text(
-            provenance.get("search_algorithm_id"),
-            label="model provenance search_algorithm_id",
-        )
-        if is_gradlab_policy
-        else ""
+    compatibility = _required_text(
+        model.get("compatibility"), label="manifest model.compatibility"
     )
-    library_name = "gradlab" if is_gradlab_policy else "stable-baselines3"
-    library_tag = "gradlab-policy" if is_gradlab_policy else "stable-baselines3"
-    same_task_label = game.casefold() == goal.casefold()
-    task_title = game if same_task_label else f"{game} — {goal}"
-    task_targets = f"`{game}`" if same_task_label else f"`{game}` `{goal}`"
-    policy_description = (
-        f"GradLab open-loop action program for {task_targets}, produced by "
-        f"`{producer}` and trained and evaluated with"
-        if is_action_program
-        else f"GradLab closed-loop semantic cell graph for {task_targets}, "
-        f"produced by `{producer}` and trained and evaluated with"
-        if is_cell_graph
-        else f"Stable-Baselines3 {algorithm.upper()} policy for {task_targets}, "
-        "trained and evaluated with"
+    materialized_goal = _require_mapping(
+        bundle.recipe.get("recipe"), label="recipe materialized recipe"
+    ).get("goal")
+    goal_title = (
+        str(materialized_goal.get("title") or goal)
+        if isinstance(materialized_goal, Mapping)
+        else goal
     )
-    model_file_description = (
-        "Portable GradLab open-loop action program"
-        if is_action_program
-        else "Portable GradLab closed-loop semantic cell graph"
-        if is_cell_graph
-        else "Stable-Baselines3 policy checkpoint"
+    acceptance = _require_mapping(
+        evaluation.get("acceptance"), label="manifest evaluation.acceptance"
     )
+    ranking = _require_mapping(
+        evaluation.get("ranking"), label="manifest evaluation.ranking"
+    )
+    acceptance_rows = "\n".join(
+        f"| `{_markdown_value(row['metric'])}` | {_markdown_value(row['label'])} | "
+        f"{_metric_value(row['value'], row['unit'])} | `{row['operator']} {_markdown_value(row['threshold'])}` | "
+        f"{'Pass' if row['passed'] else 'Fail'} |"
+        for row in acceptance.get("outcomes") or ()
+    )
+    ranking_rows = "\n".join(
+        f"| `{_markdown_value(row['metric'])}` | {_markdown_value(row['label'])} | "
+        f"{_metric_value(row['value'], row['unit'])} | `{row['direction']}` |"
+        for row in ranking.get("outcomes") or ()
+    )
+    quick_start_lines = [
+        "```bash",
+        "uvx --from gradlab gradlab play " + model_ref,
+        "```",
+    ]
+    if provider == "stable-retro-turbo":
+        quick_start_lines = [
+            "Import a legally obtained compatible game image, then play the immutable release:",
+            "",
+            "```bash",
+            f"uvx --from gradlab gradlab rom import ~/roms --game {game}",
+            "uvx --from gradlab gradlab play " + model_ref,
+            "```",
+        ]
+    quick_start = "\n".join(quick_start_lines)
     run_name = _required_text(source.get("run_name"), label="manifest source.run_name")
     run_value = f"[{_markdown_value(run_name)}]({wandb_url})" if wandb_url else run_name
     replay_value = manifest.get("replay")
@@ -845,39 +890,43 @@ def render_model_card(
     replay_execution = (
         replay.get("execution") if isinstance(replay, Mapping) else None
     )
-    template = (
-        "model_card_v2.md.j2"
-        if int(manifest.get("format_version") or 1) == 2
-        else "model_card.md.j2"
-    )
-    card = _MODEL_CARD_TEMPLATE_ENV.get_template(template).render(
+    comparison = _require_mapping(manifest.get("comparison"), label="manifest comparison")
+    card = _MODEL_CARD_TEMPLATE_ENV.get_template("model_card_v3.md.j2").render(
         {
             "library_name": library_name,
-            "library_tag": library_tag,
             "algorithm": algorithm,
             "algorithm_upper": algorithm.upper(),
-            "producer": producer,
             "provider": provider,
             "game": game,
             "goal": goal,
-            "task_title": task_title,
-            "task_targets": task_targets,
-            "policy_description": policy_description,
+            "goal_title": goal_title,
+            "trainer": trainer,
+            "model_class": _required_text(model.get("model_class"), label="model class"),
+            "compatibility": compatibility,
             "checkpoint_step": checkpoint_step,
             "action_sampling": action_sampling,
             "episodes": episodes,
-            "success_min": _percent(success_min),
-            "success_mean": _percent(success_mean),
-            "return_mean": f"{return_mean:.3f}",
+            "acceptance_rows": acceptance_rows,
+            "ranking_rows": ranking_rows,
+            "accepted": bool(evaluation.get("accepted")),
             "version": version,
+            "checkpoint_tag": _required_text(
+                release.get("checkpoint_tag"), label="release checkpoint_tag"
+            ),
             "youtube_value": youtube_value,
-            "install": install,
+            "quick_start": quick_start,
             "model_ref": model_ref,
-            "rows": rows,
             "qualified_env_id": qualified_env_id,
+            "canonical_environment_id": repository.get("canonical_environment_id"),
             "environment_hash": _markdown_value(model.get("environment_hash")),
             "preprocessing": _markdown_value(
-                canonical_json_text(preprocessing, ensure_ascii=True)
+                canonical_json_text(
+                    {
+                        "preprocessing": preprocessing,
+                        "model_inputs": model.get("model_inputs"),
+                    },
+                    ensure_ascii=True,
+                )
             ),
             "action": _markdown_value(canonical_json_text(action, ensure_ascii=True)),
             "run_value": run_value,
@@ -892,9 +941,15 @@ def render_model_card(
                     label="manifest source.checkpoint_artifact",
                 )
             ),
-            "model_file_description": model_file_description,
             "manifest_purpose": manifest_purpose,
-            "status": status,
+            "lineage_digest": repository.get("lineage_digest"),
+            "comparison_status": (
+                "Comparable" if comparison.get("comparable") else "Not compared"
+            ),
+            "comparison_reason": _markdown_value(comparison.get("reason")),
+            "evidence_sha256": evaluation.get("evidence_sha256"),
+            "environment_container": (manifest.get("containers") or {}).get("environment"),
+            "featured": bool(manifest.get("featured")),
             "replay_outcome": (
                 _markdown_value(replay.get("outcome")) if replay is not None else ""
             ),
@@ -1026,39 +1081,78 @@ def build_release_manifest(
     youtube_url: str | None = None,
     replay: Mapping[str, Any] | None = None,
     publication: Mapping[str, Any] | None = None,
+    evaluation_evidence: Mapping[str, Any] | None = None,
+    comparison: Mapping[str, Any] | None = None,
+    featured: bool = False,
+    correction_note: str | None = None,
     format_version: int = RELEASE_MANIFEST_VERSION,
 ) -> dict[str, Any]:
     if not re.fullmatch(r"v[1-9][0-9]*", release_version):
         raise ValueError("release_version must be a sequential tag such as v1 or v2")
-    expected_identity = publication_identity_from_policy_bundle(identity.goal, bundle)
+    expected_identity = publication_identity_from_policy_bundle(identity.goal_id, bundle)
     if expected_identity != identity:
         raise ValueError("release identity does not match model metadata")
     if identity.algorithm == "action-program" and evaluation.get("action_sampling") != "program":
         raise ValueError("action-program releases require program action sampling")
     if identity.algorithm == "cell-graph" and evaluation.get("action_sampling") != "route":
         raise ValueError("cell-graph releases require route action sampling")
-    if format_version not in {1, 2}:
-        raise ValueError("release manifest format_version must be 1 or 2")
-    if format_version == 2 and not isinstance(replay, Mapping):
-        raise ValueError("release manifest v2 requires replay provenance")
-    if format_version == 2 and not isinstance(publication, Mapping):
-        raise ValueError("release manifest v2 requires publication provenance")
+    if format_version != RELEASE_MANIFEST_VERSION:
+        raise ValueError("release manifest format_version must be 3")
+    if not isinstance(replay, Mapping):
+        raise ValueError("release manifest v3 requires replay provenance")
+    if not isinstance(publication, Mapping):
+        raise ValueError("release manifest v3 requires publication provenance")
+    if not isinstance(evaluation_evidence, Mapping):
+        raise ValueError("release manifest v3 requires evaluation_evidence.json")
+    from gradlab.publication_evidence import validate_evaluation_evidence_document
+
+    evidence_document = validate_evaluation_evidence_document(evaluation_evidence)
+    evidence_hash = canonical_json_sha256(evidence_document)
+    evidence_identity = _require_mapping(
+        evidence_document.get("identity"), label="evaluation evidence identity"
+    )
+    if int(evidence_identity.get("checkpoint_step") or -1) != int(
+        evaluation.get("checkpoint_step") or -2
+    ):
+        raise ValueError("evaluation evidence checkpoint step disagrees with release")
+    evaluation_value = {
+        **dict(evaluation),
+        "accepted": True,
+        "evidence_file": "evaluation_evidence.json",
+        "evidence_sha256": evidence_hash,
+        "acceptance": deepcopy(evidence_document["acceptance"]),
+        "ranking": deepcopy(evidence_document["ranking"]),
+    }
+    checkpoint_step = int(evaluation_value["checkpoint_step"])
+    environment_container = f"GradLab — {identity.canonical_environment_id}"
     manifest: dict[str, Any] = {
         "document_type": RELEASE_MANIFEST_DOCUMENT_TYPE,
         "format_version": format_version,
         "repo_naming_schema": REPO_NAMING_SCHEMA_VERSION,
-        "repository": {"repo_id": build_model_repo_id(identity), **asdict(identity)},
-        "release": {"version": release_version, "published_at": published_at},
+        "repository": {
+            "repo_id": build_model_repo_id(identity),
+            **asdict(identity),
+            "lineage_prefix": identity.lineage_prefix,
+        },
+        "release": {
+            "version": release_version,
+            "checkpoint_tag": f"checkpoint-{checkpoint_step}",
+            "published_at": published_at,
+            **({"correction_note": correction_note} if correction_note else {}),
+        },
         "model": publication_model_contract(bundle),
         "source": dict(source),
-        "evaluation": dict(evaluation),
+        "evaluation": evaluation_value,
+        "replay": dict(replay),
+        "publication": dict(publication),
+        "containers": {
+            "environment": environment_container,
+            "featured": "GradLab — Featured Research",
+        },
+        "comparison": dict(comparison or {"comparable": False, "reason": "no prior release selected"}),
+        "featured": bool(featured),
         "artifacts": dict(artifacts),
     }
-    if format_version == 2:
-        assert isinstance(replay, Mapping)
-        assert isinstance(publication, Mapping)
-        manifest["replay"] = dict(replay)
-        manifest["publication"] = dict(publication)
     if youtube_url:
         manifest["release"]["youtube_url"] = youtube_url
     _assert_no_absolute_paths(manifest)
@@ -1093,23 +1187,9 @@ def release_replay_from_capture(capture: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
-def _validate_release_manifest_v1(document: Mapping[str, Any], source: str) -> dict[str, Any]:
+def _validate_release_manifest_v3(document: Mapping[str, Any], source: str) -> dict[str, Any]:
     manifest = validate_boundary(
-        _ReleaseManifestV1,
-        document,
-        label=source,
-        error_type=PolicyDocumentError,
-    )
-    if set(manifest.artifacts) != HASHED_RELEASE_FILES:
-        raise PolicyDocumentError(
-            f"{source}.artifacts must describe exactly: " + ", ".join(sorted(HASHED_RELEASE_FILES))
-        )
-    return deepcopy(dict(document))
-
-
-def _validate_release_manifest_v2(document: Mapping[str, Any], source: str) -> dict[str, Any]:
-    manifest = validate_boundary(
-        _ReleaseManifestV2,
+        _ReleaseManifestV3,
         document,
         label=source,
         error_type=PolicyDocumentError,
@@ -1134,15 +1214,13 @@ def validate_release_manifest_document(
     if document.get("document_type") != RELEASE_MANIFEST_DOCUMENT_TYPE:
         raise PolicyDocumentError(f"{source} has an invalid document_type")
     version = document.get("format_version")
-    if version == 1:
-        return _validate_release_manifest_v1(document, source)
-    if version == 2:
-        return _validate_release_manifest_v2(document, source)
+    if version == RELEASE_MANIFEST_VERSION:
+        return _validate_release_manifest_v3(document, source)
     raise UnsupportedPolicyDocumentVersion(
         source=source,
         document_type=RELEASE_MANIFEST_DOCUMENT_TYPE,
         format_version=version,
-        supported_versions=[1, 2],
+        supported_versions=[RELEASE_MANIFEST_VERSION],
     )
 
 
@@ -1164,9 +1242,13 @@ def validate_release_bundle(root: Path) -> dict[str, Any]:
     card_text = (root / "README.md").read_text(encoding="utf-8")
     _assert_no_absolute_paths(manifest)
     repository = _require_mapping(manifest.get("repository"), label="manifest repository")
-    identity = publication_identity_from_policy_bundle(repository.get("goal"), bundle)
+    identity = publication_identity_from_policy_bundle(repository.get("goal_id"), bundle)
     if repository.get("repo_id") != build_model_repo_id(identity):
         raise ValueError("release manifest repository id does not match model metadata")
+    if repository.get("lineage_digest") != identity.lineage_digest:
+        raise ValueError("release manifest full lineage digest does not match model metadata")
+    if repository.get("lineage_prefix") != identity.lineage_prefix:
+        raise ValueError("release manifest lineage prefix does not match its full digest")
     if int(manifest.get("repo_naming_schema") or 0) != REPO_NAMING_SCHEMA_VERSION:
         raise ValueError("release manifest has an unsupported repository naming schema")
     expected_model = publication_model_contract(bundle)
@@ -1187,22 +1269,37 @@ def validate_release_bundle(root: Path) -> dict[str, Any]:
             raise ValueError(f"release evaluation {key} does not match the policy bundle")
     if evidence.get("exact_contract") is not True:
         raise ValueError("release evaluation evidence is not exact-contract")
-    if int(manifest.get("format_version") or 0) == 2:
-        replay = _require_mapping(manifest.get("replay"), label="manifest replay")
-        media = _require_mapping(replay.get("media"), label="manifest replay.media")
-        replay_record = _require_mapping(
-            expected_records.get("replay.mp4"),
-            label="release replay.mp4 artifact",
-        )
-        if media.get("sha256") != replay_record.get("sha256"):
-            raise ValueError("release replay sha256 does not match replay.mp4")
-        if int(media.get("size_bytes") or 0) != int(replay_record.get("size_bytes") or 0):
-            raise ValueError("release replay size does not match replay.mp4")
-        replay_probe = verify_replay(root / "replay.mp4")
-        for key in ("frames", "width", "height"):
-            if int(media.get(key) or 0) != int(replay_probe.get(key) or 0):
-                raise ValueError(f"release replay {key} does not match replay.mp4")
-        if abs(float(media.get("fps") or 0.0) - float(replay_probe.get("fps") or 0.0)) > 1e-6:
-            raise ValueError("release replay fps does not match replay.mp4")
+    from gradlab.publication_evidence import validate_evaluation_evidence_document
+
+    evidence_document_value = json.loads(
+        (root / "evaluation_evidence.json").read_text(encoding="utf-8")
+    )
+    if not isinstance(evidence_document_value, Mapping):
+        raise ValueError("evaluation_evidence.json must contain an object")
+    evidence_document = validate_evaluation_evidence_document(evidence_document_value)
+    evidence_record = _require_mapping(
+        expected_records.get("evaluation_evidence.json"),
+        label="release evaluation evidence artifact",
+    )
+    if evidence.get("evidence_sha256") != evidence_record.get("sha256"):
+        raise ValueError("release evaluation evidence hash does not match evaluation_evidence.json")
+    if canonical_json_sha256(evidence_document) != evidence.get("evidence_sha256"):
+        raise ValueError("release evaluation evidence canonical hash is inconsistent")
+    replay = _require_mapping(manifest.get("replay"), label="manifest replay")
+    media = _require_mapping(replay.get("media"), label="manifest replay.media")
+    replay_record = _require_mapping(
+        expected_records.get("replay.mp4"),
+        label="release replay.mp4 artifact",
+    )
+    if media.get("sha256") != replay_record.get("sha256"):
+        raise ValueError("release replay sha256 does not match replay.mp4")
+    if int(media.get("size_bytes") or 0) != int(replay_record.get("size_bytes") or 0):
+        raise ValueError("release replay size does not match replay.mp4")
+    replay_probe = verify_replay(root / "replay.mp4")
+    for key in ("frames", "width", "height"):
+        if int(media.get(key) or 0) != int(replay_probe.get(key) or 0):
+            raise ValueError(f"release replay {key} does not match replay.mp4")
+    if abs(float(media.get("fps") or 0.0) - float(replay_probe.get("fps") or 0.0)) > 1e-6:
+        raise ValueError("release replay fps does not match replay.mp4")
     validate_model_card(card_text, manifest, bundle)
     return manifest

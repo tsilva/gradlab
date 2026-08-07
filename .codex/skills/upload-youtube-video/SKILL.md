@@ -22,31 +22,24 @@ Prefer the repo uploader script at `scripts/upload_youtube_video.py`. It reads `
 
 ## Before Uploading
 
-1. Confirm the local video path, title, model page URL, and privacy status. Default privacy to `public` unless the user asks otherwise.
-2. For model preview videos, prefer adding them to the `gradlab` playlist unless the user asks for a different playlist.
+1. Confirm the local video path, generated title, immutable model tag URL, and requested final privacy status. New research releases upload as unlisted until both destinations and containers verify.
+2. Use the generated environment playlist `GradLab — <canonical environment ID>`; only editorial cross-environment curation uses `GradLab — Featured Research`. Do not expose an editable playlist field.
 3. Check the model page URL is direct and fully qualified. Prefer `https://huggingface.co/<owner>/<repo>` over redirect/short domains such as `https://hf.co/...`.
 4. For gameplay preview videos, set a custom YouTube thumbnail from the local video at 10 seconds by default. The repo uploader does this automatically unless `--no-thumbnail` is passed. If the video is shorter than 10 seconds, use the last safe frame the uploader selects.
 5. If the user needs OAuth again, run the uploader with `--no-browser` only when appropriate and relay the printed authorization URL. After the user says they authorized it, continue the waiting process; do not restart unless the callback failed.
 
 ## Description Format
 
-Use a compact, human-readable title shape for RL/model preview videos:
+Use the generated research-release title shape:
 
 ```text
-<Game Display Name>[ — <Distinct Level/State Display Name>] — <Trainer> <ALGORITHM>
+<materialized goal title> — <Trainer> <ALGORITHM> @ <compact env steps>
 ```
 
-Examples:
-
-```text
-ViZDoom Deathmatch — GradLab PPO
-Super Mario Bros NES — Level 1-2 — SB3 PPO
-```
-
-Omit the level/state segment when it is the same identity as the game or environment. Keep win
-rate, acceptance, and the recorded-episode outcome out of the title; report them with their
-evidence context in the description. Identify the actual training backend as `GradLab` or `SB3`,
-not the artifact compatibility layer.
+If it exceeds YouTube's limit, use `<canonical-env-id> / <goal-id> — <Trainer> <ALGORITHM> @
+<compact env steps>` and fail rather than truncating if that fallback is still too long. Keep
+acceptance and replay outcomes out of the title. Identify the actual trainer, never its
+compatibility layer.
 
 Use this description shape for RL/model preview videos:
 
@@ -61,8 +54,11 @@ gradlab: https://github.com/tsilva/gradlab
 
 Rules:
 
-- Keep titles compact and scannable: human game name, a distinct level/state when applicable,
-  actual trainer, and algorithm. Keep outcome metrics in the description.
+- Include the exact checkpoint, evaluation protocol/count, every acceptance outcome, key ranking
+  metrics, separately labeled replay result, immutable HF tag, W&B, R2 manifest, source
+  commit/recipe, GitHub, environment collection, and environment playlist in the description.
+- Never invent generic success or win-rate claims; render the materialized goal metrics documented
+  by `METRICS.md`.
 - Prefer human display names over raw env ids in titles/descriptions. For example, use `Super Mario Bros NES` instead of `SuperMarioBros-Nes-v0`, and `Level 1-2` instead of `Level1-2`.
 - Start with a concise human-readable description of what the video shows.
 - Mention that the checkpoint was trained with `gradlab` in the first sentence when true.
@@ -80,7 +76,9 @@ Rules:
   and the gradlab link generated and locked in player publication. An optional operator note must
   be labeled `Operator note (not verified evidence)` and kept separate from generated claims.
 - Player publication has no destination opt-outs. YouTube must reach `processingStatus=succeeded`
-  with the admitted channel, privacy, marker, and metadata before the Hugging Face mutation begins.
+  while unlisted with the admitted channel, marker, and metadata before the Hugging Face mutation
+  begins. Set requested privacy only after HF, both environment containers, metadata, and thumbnail
+  verify.
 - Persist a resumable session before uploading bytes and reconcile it before retrying. If the final
   response is uncertain, do not automatically upload a duplicate; require an explicit verified
   attachment or an acknowledged abandon-and-reupload decision.
