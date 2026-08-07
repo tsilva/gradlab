@@ -35,6 +35,7 @@ from gradlab.policy_bundle import (
     PolicyBundle,
     PolicyDocumentError,
     UnsupportedPolicyDocumentVersion,
+    canonical_json_sha256 as policy_document_sha256,
     evaluation_contract_sha256,
     load_policy_bundle,
 )
@@ -738,6 +739,16 @@ def _percent(value: object) -> str:
     return f"{100.0 * float(value):.1f}%"
 
 
+def _compact_steps(value: int) -> str:
+    step = int(value)
+    for divisor, suffix in ((1_000_000_000, "B"), (1_000_000, "M"), (1_000, "K")):
+        if step >= divisor:
+            scaled = step / divisor
+            rendered = f"{scaled:.3g}"
+            return f"{rendered}{suffix}"
+    return str(step)
+
+
 _MODEL_CARD_TEMPLATE_ENV = Environment(
     loader=FileSystemLoader(Path(__file__).with_name("templates")),
     undefined=StrictUndefined,
@@ -904,6 +915,7 @@ def render_model_card(
             "model_class": _required_text(model.get("model_class"), label="model class"),
             "compatibility": compatibility,
             "checkpoint_step": checkpoint_step,
+            "checkpoint_step_compact": _compact_steps(checkpoint_step),
             "action_sampling": action_sampling,
             "episodes": episodes,
             "acceptance_rows": acceptance_rows,
@@ -1107,7 +1119,7 @@ def build_release_manifest(
     from gradlab.publication_evidence import validate_evaluation_evidence_document
 
     evidence_document = validate_evaluation_evidence_document(evaluation_evidence)
-    evidence_hash = canonical_json_sha256(evidence_document)
+    evidence_hash = policy_document_sha256(evidence_document)
     evidence_identity = _require_mapping(
         evidence_document.get("identity"), label="evaluation evidence identity"
     )
@@ -1283,7 +1295,7 @@ def validate_release_bundle(root: Path) -> dict[str, Any]:
     )
     if evidence.get("evidence_sha256") != evidence_record.get("sha256"):
         raise ValueError("release evaluation evidence hash does not match evaluation_evidence.json")
-    if canonical_json_sha256(evidence_document) != evidence.get("evidence_sha256"):
+    if policy_document_sha256(evidence_document) != evidence.get("evidence_sha256"):
         raise ValueError("release evaluation evidence canonical hash is inconsistent")
     replay = _require_mapping(manifest.get("replay"), label="manifest replay")
     media = _require_mapping(replay.get("media"), label="manifest replay.media")

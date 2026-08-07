@@ -67,7 +67,12 @@ def featured_manifests(collection_slug: str) -> list[dict[str, Any]]:
         if not isinstance(item, Mapping) or item.get("type") != "model":
             continue
         repo_id = str(item.get("id") or "")
-        note = str(item.get("note") or "")
+        note_value = item.get("note")
+        note = (
+            str(note_value.get("text") or "")
+            if isinstance(note_value, Mapping)
+            else str(note_value or "")
+        )
         marker = f"https://huggingface.co/{repo_id}/tree/"
         revision = note.split(marker, 1)[1].split()[0].rstrip(".,)") if marker in note else "main"
         manifest_url = (

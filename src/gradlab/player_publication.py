@@ -151,6 +151,16 @@ def _render_metric_outcome(row: Mapping[str, Any]) -> str:
     return f"{row.get('label')} (`{row.get('metric')}`): {rendered}"
 
 
+def _youtube_operator(value: object) -> str:
+    return {
+        ">=": "at least",
+        ">": "greater than",
+        "<=": "at most",
+        "<": "less than",
+        "==": "equal to",
+    }.get(str(value), str(value))
+
+
 def _bounded_youtube_tags(values: Sequence[object], *, max_characters: int = 500) -> list[str]:
     tags: list[str] = []
     total = 0
@@ -362,7 +372,8 @@ def generated_metadata(
     acceptance = (evidence_value.get("acceptance") or {}).get("outcomes") or ()
     ranking = (evidence_value.get("ranking") or {}).get("outcomes") or ()
     acceptance_lines = [
-        f"- {_render_metric_outcome(row)}; requirement {row.get('operator')} {row.get('threshold')}; "
+        f"- {_render_metric_outcome(row)}; requirement {_youtube_operator(row.get('operator'))} "
+        f"{row.get('threshold')}; "
         f"{'pass' if row.get('passed') else 'fail'}"
         for row in acceptance
         if isinstance(row, Mapping)
@@ -386,7 +397,13 @@ def generated_metadata(
     model_tag_url = f"https://huggingface.co/{repo_id}/tree/{release_version}"
     source_commit = str(source_value.get("commit") or "")
     recipe_name = str(source_value.get("recipe") or "")
-    r2_manifest = str(source_value.get("model_document_url") or evaluation.get("checkpoint_artifact") or "")
+    r2_manifest = str(
+        source_value.get("model_document_url")
+        or evaluation.get("checkpoint_artifact")
+        or ""
+    )
+    if r2_manifest.endswith("/model.zip"):
+        r2_manifest = r2_manifest[: -len("model.zip")] + "manifest.json"
     description = "\n".join(
         [
             f"{trainer} {algorithm} research release for {goal_title}.",

@@ -57,6 +57,24 @@ Use `gradlab <command> --help` for full arguments. Gameplay datasets, leader
 queries, W&B reports, and workspace management are also available through the
 `dataset`, `leaders`, `reports`, and `workspaces` commands.
 
+## Research results
+
+Evidence-backed research releases are indexed in the pinned
+[Research Results Discussion](https://github.com/tsilva/gradlab/discussions/7).
+Start with [Featured Research on Hugging Face](https://huggingface.co/collections/tsilva/gradlab-featured-research-6a76017e31c4e6f8fd5593f3)
+or its [YouTube playlist](https://www.youtube.com/playlist?list=PLKUQZsKUoinA).
+
+Environment indexes:
+
+- [VizdoomDeathmatch-v1 models](https://huggingface.co/collections/tsilva/gradlab-vizdoomdeathmatch-v1-6a75be1f7f77460f66953c43)
+  and [videos](https://www.youtube.com/playlist?list=PLbd2wb1agDJ0)
+- [SuperMarioBros-Nes-v0 models](https://huggingface.co/collections/tsilva/gradlab-supermariobros-nes-v0-6a5675af108d798040f3aafb)
+  and [videos](https://www.youtube.com/playlist?list=PLpwSvrlUj8-ISJH2ptsalWqNc8dc6N5Hi)
+
+Evaluation evidence and representative replay are distinct: immutable model
+tags contain the accepted evaluation record, while videos show one separately
+labeled episode.
+
 ## Queued runs
 
 Queued training uses dstack for placement, a single supervisor-controlled

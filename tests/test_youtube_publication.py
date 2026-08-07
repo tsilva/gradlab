@@ -154,6 +154,38 @@ def test_final_metadata_update_sets_requested_privacy_without_reupload(monkeypat
     assert observed["payload"]["status"]["privacyStatus"] == "public"
 
 
+def test_playlist_metadata_update_and_removal_use_existing_ids(monkeypatch) -> None:
+    client = YouTubeClient("access")
+    calls: list[tuple[str, str, object]] = []
+
+    def fake_request(url: str, *, method: str = "GET", payload=None, timeout=60.0):
+        calls.append((url, method, payload))
+        if method == "GET":
+            return {
+                "items": [
+                    {
+                        "id": "playlist-1",
+                        "snippet": {"title": "old"},
+                        "status": {"privacyStatus": "public"},
+                    }
+                ]
+            }
+        return {}
+
+    monkeypatch.setattr(client, "_request_json", fake_request)
+    assert client.playlist_metadata("playlist-1")["id"] == "playlist-1"
+    client.update_playlist_metadata(
+        playlist_id="playlist-1",
+        title="GradLab — Example-v0",
+        description="Evidence-backed releases.",
+        privacy="public",
+    )
+    client.remove_playlist_item("item-1")
+    assert calls[1][1] == "PUT"
+    assert calls[1][2]["id"] == "playlist-1"
+    assert calls[2][1] == "DELETE"
+
+
 def test_publication_thumbnail_is_consistent_16_by_9(
     monkeypatch, tmp_path: Path
 ) -> None:
