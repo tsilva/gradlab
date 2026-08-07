@@ -314,6 +314,7 @@ def run_go_explore(context: BackendContext) -> TrainingResult:
         config,
         n_envs,
         int(common_config["seed"]),
+        episode_progress_fields=tuple(common_config.get("episode_progress_fields", ())),
         rom_binding=context.rom_binding,
         state_archive=common_config["state_archive"],
         state_archive_root=context.run_dir / "state-archive",

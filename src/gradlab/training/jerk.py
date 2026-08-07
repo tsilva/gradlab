@@ -201,6 +201,7 @@ def run_jerk(context: BackendContext) -> TrainingResult:
         config=config,
         n_envs=n_envs,
         seed=int(common_config["seed"]),
+        episode_progress_fields=tuple(common_config.get("episode_progress_fields", ())),
         rom_binding=getattr(context, "rom_binding", None),
     )
     try:
