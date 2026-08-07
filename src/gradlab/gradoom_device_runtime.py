@@ -41,21 +41,32 @@ class _DeviceContextField:
     high: torch.Tensor | None
     clip: bool
     categories: torch.Tensor | None
+    history: str | None
 
 
 class _DeviceContextEncoder:
     def __init__(self, env: Any, kernel: Any, device: torch.device) -> None:
         signal_indices = {name: index for index, name in enumerate(env.device_signal_names)}
+        history_indices = {
+            name: index for index, name in enumerate(getattr(env, "device_info_history_names", ()))
+        }
         fields: list[_DeviceContextField] = []
         for field in getattr(kernel, "fields", ()):
+            source_indices = signal_indices
+            source_names = field.source_names
+            if field.history is not None:
+                if field.history != "provider_frame_stack":
+                    raise ValueError(f"unsupported GraDOOM context history {field.history!r}")
+                source_indices = history_indices
+                source_names = tuple(
+                    name.removesuffix("_frame_stack") for name in field.source_names
+                )
             try:
-                indices = tuple(signal_indices[name] for name in field.source_names)
+                indices = tuple(source_indices[name] for name in source_names)
             except KeyError as exc:
                 raise ValueError(
                     f"GraDOOM device context references unavailable signal {exc.args[0]!r}"
                 ) from exc
-            if field.history is not None:
-                raise ValueError("GraDOOM device context histories are not implemented")
             if field.encoding == "continuous":
                 fields.append(
                     _DeviceContextField(
@@ -68,6 +79,7 @@ class _DeviceContextEncoder:
                         high=torch.as_tensor(field.high, device=device),
                         clip=field.clip,
                         categories=None,
+                        history=field.history,
                     )
                 )
                 continue
@@ -84,16 +96,28 @@ class _DeviceContextEncoder:
                     high=None,
                     clip=False,
                     categories=torch.as_tensor(field.categories, device=device),
+                    history=field.history,
                 )
             )
         self.fields = tuple(fields)
+        self.uses_histories = any(field.history is not None for field in self.fields)
 
-    def encode(self, observations: torch.Tensor, signals: torch.Tensor) -> Any:
+    def encode(
+        self,
+        observations: torch.Tensor,
+        signals: torch.Tensor,
+        info_histories: torch.Tensor | None = None,
+    ) -> Any:
         if not self.fields:
             return observations
         result: dict[str, torch.Tensor] = {"observation": observations}
         for field in self.fields:
-            raw = signals[:, field.source_indices]
+            if field.history is None:
+                raw = signals[:, field.source_indices]
+            else:
+                if info_histories is None:
+                    raise ValueError("GraDOOM device context histories are unavailable")
+                raw = info_histories[:, field.source_indices].transpose(1, 2)
             if field.encoding == "continuous":
                 assert field.scale is not None
                 assert field.offset is not None
@@ -105,10 +129,10 @@ class _DeviceContextEncoder:
                 result[f"context/{field.name}"] = encoded
                 continue
             assert field.categories is not None
-            if raw.shape[1] != 1:
+            if raw.shape[-1] != 1:
                 raise ValueError("GraDOOM categorical contexts must be scalar")
-            matches = raw[:, 0, None] == field.categories[None, :]
-            result[f"context/{field.name}"] = torch.argmax(matches.to(torch.int64), dim=1)
+            matches = raw[..., 0, None] == field.categories
+            result[f"context/{field.name}"] = torch.argmax(matches.to(torch.int64), dim=-1)
         return result
 
 
@@ -173,7 +197,10 @@ class GraDoomDeviceRuntime:
         self._record_batches.clear()
         mask = torch.ones(self.num_envs, device=self.device, dtype=torch.bool)
         observations, signals = self.provider.reset_device(mask, self._seeds())
-        return self._encoder.encode(observations, signals)
+        info_histories = (
+            self.provider.device_info_histories() if self._encoder.uses_histories else None
+        )
+        return self._encoder.encode(observations, signals, info_histories)
 
     def step(self, actions: torch.Tensor) -> GraDoomDeviceBatchStep:
         if self._closed:
@@ -214,12 +241,18 @@ class GraDoomDeviceRuntime:
         self._episode_index.add_(done.to(torch.int64))
         self._calls_total += 1
         return GraDoomDeviceBatchStep(
-            observations=self._encoder.encode(transition.observations, transition.signals),
+            observations=self._encoder.encode(
+                transition.observations,
+                transition.signals,
+                transition.info_histories if self._encoder.uses_histories else None,
+            ),
             rewards=transition.rewards,
             terminated=transition.terminated,
             truncated=transition.truncated,
             final_observations=self._encoder.encode(
-                transition.final_observations, transition.final_signals
+                transition.final_observations,
+                transition.final_signals,
+                transition.final_info_histories if self._encoder.uses_histories else None,
             ),
             transition_info={},
             reset_info=None,

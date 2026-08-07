@@ -162,7 +162,7 @@ uv run python .codex/skills/autoresearch/scripts/study.py collect-training-evide
 A transient W&B read failure leaves the action pending and is safe to repeat. Missing success or
 window-100 metrics are valid negative evidence, not an infrastructure failure. Return-mode
 studies collect the final 10% mean, p05, standard deviation, peak, and last value of
-`train/episode/return/shaped/across_origins/rolling_up_to_100/mean`.
+`train/episode/return/shaped/origin/target/rolling/mean`.
 
 Persist attention and resume only from supported new evidence:
 

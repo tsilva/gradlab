@@ -51,20 +51,23 @@ from gradlab.evaluation_projection import validate_evaluation_scientific_metric
 from gradlab.evaluation_fence import evaluation_selection_fence
 from gradlab.metric_names import (
     EVAL_ACCEPTANCE_PASS,
+    EVAL_ACCEPTANCE_EPISODE_COMPLETED_COUNT,
+    EVAL_ACCEPTANCE_EPISODE_PLANNED_COUNT,
+    EVAL_CHECKPOINT_STEP,
     EVAL_FULL_EPISODE_RETURN_SHAPED_MAX,
     EVAL_FULL_EPISODE_RETURN_SHAPED_MEAN,
-    EVAL_FULL_SUCCESS_ACROSS_STARTS_RATE_MIN,
-    EVAL_FULL_SUCCESS_ACROSS_STARTS_RATE_MEAN,
+    EVAL_FULL_OUTCOME_SUCCESS_STARTS_RATE_MIN,
+    EVAL_FULL_OUTCOME_SUCCESS_STARTS_RATE_MEAN,
     LEADER_CHECKPOINT_STEP,
-    TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_ROLLING_UP_TO_100_MAX,
-    TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_ROLLING_UP_TO_100_MEAN,
-    TRAIN_EPISODE_RETURN_SHAPED_ACROSS_ORIGINS_ROLLING_UP_TO_100_MEAN,
+    TRAIN_EPISODE_RETURN_SHAPED_ORIGIN_TARGET_ROLLING_MAX,
+    TRAIN_EPISODE_RETURN_SHAPED_ORIGIN_TARGET_ROLLING_MEAN,
     TRAIN_GLOBAL_STEP,
-    TRAIN_OUTCOME_SUCCESS_ACROSS_STARTS_WINDOW_100_RATE_MIN,
-    TRAIN_OUTCOME_SUCCESS_ACROSS_STARTS_WINDOW_100_RATE_MEAN,
-    evaluation_metric_schema,
+    TRAIN_OUTCOME_SUCCESS_STARTS_ALL_ROLLING_RATE_MIN,
+    TRAIN_OUTCOME_SUCCESS_STARTS_ALL_ROLLING_RATE_MEAN,
+    metric_display_label,
     metric_path_segment,
-    train_progress_from_target_rolling_mean_metric,
+    require_current_metrics_schema,
+    train_progress_origin_target_rolling_mean_metric,
 )
 from gradlab.model_sources import DEFAULT_PUBLIC_MODELS_BASE_URL, _public_json
 from gradlab.policy_bundle import canonical_json_sha256, validate_recipe_document
@@ -101,19 +104,16 @@ LIVE_TRAINING_METRICS = (
     (
         RankCriterion(
             direction="max",
-            metric=TRAIN_OUTCOME_SUCCESS_ACROSS_STARTS_WINDOW_100_RATE_MIN,
+            metric=TRAIN_OUTCOME_SUCCESS_STARTS_ALL_ROLLING_RATE_MIN,
         ),
-        (TRAIN_OUTCOME_SUCCESS_ACROSS_STARTS_WINDOW_100_RATE_MIN,),
+        (TRAIN_OUTCOME_SUCCESS_STARTS_ALL_ROLLING_RATE_MIN,),
     ),
     (
         RankCriterion(
             direction="max",
-            metric=TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_ROLLING_UP_TO_100_MEAN,
+            metric=TRAIN_EPISODE_RETURN_SHAPED_ORIGIN_TARGET_ROLLING_MEAN,
         ),
-        (
-            TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_ROLLING_UP_TO_100_MEAN,
-            TRAIN_EPISODE_RETURN_SHAPED_ACROSS_ORIGINS_ROLLING_UP_TO_100_MEAN,
-        ),
+        (TRAIN_EPISODE_RETURN_SHAPED_ORIGIN_TARGET_ROLLING_MEAN,),
     ),
     (
         RankCriterion(
@@ -131,7 +131,7 @@ _EVAL_PROGRESS_METRIC_RE = re.compile(
     r"^eval/full/progress/([A-Za-z0-9_.-]+)/(mean|max)$"
 )
 _TRAIN_PROGRESS_METRIC_RE = re.compile(
-    r"^train/progress/([A-Za-z0-9_.-]+)/from/target/rolling_up_to_100/mean$"
+    r"^train/progress/([A-Za-z0-9_.-]+)/origin/target/rolling/mean$"
 )
 
 
@@ -478,37 +478,7 @@ def _run_fallback_metric_specs(
 
 
 def _checkpoint_metric_label(metric: str) -> str:
-    fixed = {
-        EVAL_FULL_SUCCESS_ACROSS_STARTS_RATE_MIN: "Eval min success",
-        EVAL_FULL_SUCCESS_ACROSS_STARTS_RATE_MEAN: "Eval mean success",
-        EVAL_FULL_EPISODE_RETURN_SHAPED_MEAN: "Eval mean return",
-        EVAL_FULL_EPISODE_RETURN_SHAPED_MAX: "Eval max return",
-        TRAIN_OUTCOME_SUCCESS_ACROSS_STARTS_WINDOW_100_RATE_MIN: (
-            "Train min success (last 100)"
-        ),
-        TRAIN_OUTCOME_SUCCESS_ACROSS_STARTS_WINDOW_100_RATE_MEAN: (
-            "Train mean success (last 100)"
-        ),
-        TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_ROLLING_UP_TO_100_MEAN: (
-            "Train mean return (up to 100)"
-        ),
-        TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_ROLLING_UP_TO_100_MAX: (
-            "Train max return (up to 100)"
-        ),
-    }
-    if metric in fixed:
-        return fixed[metric]
-    match = _EVAL_PROGRESS_METRIC_RE.fullmatch(metric)
-    if match is not None:
-        field, statistic = match.groups()
-        readable = re.sub(r"[_.-]+", " ", field).strip().lower()
-        return f"Eval {statistic} {readable}"
-    match = _TRAIN_PROGRESS_METRIC_RE.fullmatch(metric)
-    if match is not None:
-        readable = re.sub(r"[_.-]+", " ", match.group(1)).strip().lower()
-        return f"Train mean {readable} (up to 100)"
-    readable = re.sub(r"[_.-]+", " ", metric).replace("/", " · ")
-    return readable[:1].upper() + readable[1:]
+    return metric_display_label(metric)
 
 
 def _checkpoint_acceptance_direction(operator: str) -> Literal["min", "max"]:
@@ -521,17 +491,17 @@ def _checkpoint_training_proxy(
     progress_fields: frozenset[str],
 ) -> str | None:
     fixed = {
-        EVAL_FULL_SUCCESS_ACROSS_STARTS_RATE_MIN: (
-            TRAIN_OUTCOME_SUCCESS_ACROSS_STARTS_WINDOW_100_RATE_MIN
+        EVAL_FULL_OUTCOME_SUCCESS_STARTS_RATE_MIN: (
+            TRAIN_OUTCOME_SUCCESS_STARTS_ALL_ROLLING_RATE_MIN
         ),
-        EVAL_FULL_SUCCESS_ACROSS_STARTS_RATE_MEAN: (
-            TRAIN_OUTCOME_SUCCESS_ACROSS_STARTS_WINDOW_100_RATE_MEAN
+        EVAL_FULL_OUTCOME_SUCCESS_STARTS_RATE_MEAN: (
+            TRAIN_OUTCOME_SUCCESS_STARTS_ALL_ROLLING_RATE_MEAN
         ),
         EVAL_FULL_EPISODE_RETURN_SHAPED_MEAN: (
-            TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_ROLLING_UP_TO_100_MEAN
+            TRAIN_EPISODE_RETURN_SHAPED_ORIGIN_TARGET_ROLLING_MEAN
         ),
         EVAL_FULL_EPISODE_RETURN_SHAPED_MAX: (
-            TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_ROLLING_UP_TO_100_MAX
+            TRAIN_EPISODE_RETURN_SHAPED_ORIGIN_TARGET_ROLLING_MAX
         ),
     }
     if metric in fixed:
@@ -539,16 +509,18 @@ def _checkpoint_training_proxy(
     match = _EVAL_PROGRESS_METRIC_RE.fullmatch(metric)
     if match is None or match.group(2) != "mean" or match.group(1) not in progress_fields:
         return None
-    return train_progress_from_target_rolling_mean_metric(match.group(1))
+    return train_progress_origin_target_rolling_mean_metric(match.group(1))
 
 
 def checkpoint_metric_contract(
     train_config: Mapping[str, Any],
 ) -> CheckpointMetricContract:
-    schema = evaluation_metric_schema(train_config.get("metrics_schema_version"))
+    schema_version = require_current_metrics_schema(
+        train_config.get("metrics_schema_version")
+    )
     rank = require_objective_rank(
         train_config.get("selection_rank"),
-        metrics_schema_version=schema.version,
+        metrics_schema_version=schema_version,
     )
     raw_acceptance = train_config.get("checkpoint_eval_acceptance")
     acceptance = (
@@ -558,7 +530,7 @@ def checkpoint_metric_contract(
                 label="recipe.train_config.checkpoint_eval_acceptance",
                 metric_validator=lambda name: validate_evaluation_scientific_metric(
                     name,
-                    schema_version=schema.version,
+                    schema_version=schema_version,
                 ),
             )
         )
@@ -660,12 +632,12 @@ def checkpoint_metric_contract(
             )
 
     add_column(
-        TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_ROLLING_UP_TO_100_MEAN,
+        TRAIN_EPISODE_RETURN_SHAPED_ORIGIN_TARGET_ROLLING_MEAN,
         direction="max",
         role="optimization",
     )
     return CheckpointMetricContract(
-        metrics_schema_version=schema.version,
+        metrics_schema_version=schema_version,
         rank=rank,
         acceptance=acceptance,
         columns=tuple(columns),
@@ -3607,12 +3579,14 @@ class PlayCatalog:
         metric_contract: CheckpointMetricContract,
     ) -> _CheckpointEvaluationData:
         def validate_wandb_config(config: Mapping[str, Any]) -> None:
-            schema = evaluation_metric_schema(config.get("metrics_schema_version"))
-            if schema.version != metric_contract.metrics_schema_version:
+            schema_version = require_current_metrics_schema(
+                config.get("metrics_schema_version")
+            )
+            if schema_version != metric_contract.metrics_schema_version:
                 raise ValueError("W&B metrics schema disagrees with the immutable recipe")
             observed_rank = require_objective_rank(
                 config.get("selection_rank"),
-                metrics_schema_version=schema.version,
+                metrics_schema_version=schema_version,
             )
             if objective_rank_strings(observed_rank) != objective_rank_strings(
                 metric_contract.rank
@@ -3628,7 +3602,7 @@ class PlayCatalog:
                         label="W&B checkpoint_eval_contract.acceptance",
                         metric_validator=lambda name: validate_evaluation_scientific_metric(
                             name,
-                            schema_version=schema.version,
+                            schema_version=schema_version,
                         ),
                     )
                 )
@@ -3769,7 +3743,7 @@ class PlayCatalog:
             run = self._wandb_api().run(f"{entity}/{project}/{run_id}")
             config = dict(getattr(run, "config", {}) or {})
             validate_wandb_config(config)
-            metric_schema = evaluation_metric_schema(metric_contract.metrics_schema_version)
+            require_current_metrics_schema(metric_contract.metrics_schema_version)
             training_seed = _safe_int(config.get("seed"))
             contract = config.get("checkpoint_eval_contract")
             if not metric_contract.acceptance:
@@ -3780,16 +3754,16 @@ class PlayCatalog:
                 evaluation_seed = _safe_int(contract.get("seed"))
                 rules = metric_contract.acceptance
                 result_keys = {
-                    metric_schema.checkpoint_step,
+                    EVAL_CHECKPOINT_STEP,
                     EVAL_ACCEPTANCE_PASS,
-                    metric_schema.acceptance_episode_planned_count,
-                    metric_schema.acceptance_episode_completed_count,
+                    EVAL_ACCEPTANCE_EPISODE_PLANNED_COUNT,
+                    EVAL_ACCEPTANCE_EPISODE_COMPLETED_COUNT,
                 }
                 evaluations = {}
                 for raw in run.scan_history(keys=sorted(result_keys), page_size=10_000):
                     if not isinstance(raw, Mapping):
                         continue
-                    step = _safe_int(raw.get(metric_schema.checkpoint_step))
+                    step = _safe_int(raw.get(EVAL_CHECKPOINT_STEP))
                     accepted = _safe_float(raw.get(EVAL_ACCEPTANCE_PASS))
                     if step is None or accepted is None:
                         continue
@@ -3816,10 +3790,10 @@ class PlayCatalog:
                         "status": "accepted" if accepted >= 0.5 else "rejected",
                         "pass": accepted >= 0.5,
                         "episodes_planned": _safe_int(
-                            raw.get(metric_schema.acceptance_episode_planned_count)
+                            raw.get(EVAL_ACCEPTANCE_EPISODE_PLANNED_COUNT)
                         ),
                         "episodes_completed": _safe_int(
-                            raw.get(metric_schema.acceptance_episode_completed_count)
+                            raw.get(EVAL_ACCEPTANCE_EPISODE_COMPLETED_COUNT)
                         ),
                         "criteria": criteria,
                         "metrics": {LEADER_CHECKPOINT_STEP: float(step)},
@@ -3831,12 +3805,12 @@ class PlayCatalog:
                 for rule_index, rule in enumerate(rules):
                     metric = str(rule["metric"])
                     for raw in run.scan_history(
-                        keys=[metric_schema.checkpoint_step, metric],
+                        keys=[EVAL_CHECKPOINT_STEP, metric],
                         page_size=10_000,
                     ):
                         if not isinstance(raw, Mapping):
                             continue
-                        step = _safe_int(raw.get(metric_schema.checkpoint_step))
+                        step = _safe_int(raw.get(EVAL_CHECKPOINT_STEP))
                         value = _safe_float(raw.get(metric))
                         evaluation = evaluations.get(step) if step is not None else None
                         if evaluation is None or value is None:
@@ -3857,12 +3831,12 @@ class PlayCatalog:
                 evaluation_metric_names.pop(LEADER_CHECKPOINT_STEP, None)
                 for metric in evaluation_metric_names:
                     for raw in run.scan_history(
-                        keys=[metric_schema.checkpoint_step, metric],
+                        keys=[EVAL_CHECKPOINT_STEP, metric],
                         page_size=10_000,
                     ):
                         if not isinstance(raw, Mapping):
                             continue
-                        step = _safe_int(raw.get(metric_schema.checkpoint_step))
+                        step = _safe_int(raw.get(EVAL_CHECKPOINT_STEP))
                         value = _safe_float(raw.get(metric))
                         evaluation = evaluations.get(step) if step is not None else None
                         if evaluation is not None and value is not None:

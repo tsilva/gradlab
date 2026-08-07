@@ -15,11 +15,10 @@ from gradlab.early_stop import (
 from gradlab.eval_metrics import episode_is_complete, episode_start_state, progress_metric_name
 from gradlab.env_registry import ENVIRONMENT_SPECS, environment_spec, resolve_env_provider
 from gradlab.metric_names import (
-    EVAL_FULL_SUCCESS_ACROSS_STARTS_RATE_MEAN,
-    EVAL_FULL_SUCCESS_ACROSS_STARTS_RATE_MIN,
-    METRICS_SCHEMA_VERSION,
-    eval_progress_metric,
-    evaluation_metric_schema,
+    EVAL_FULL_EPISODE_RETURN_SHAPED_MEAN,
+    EVAL_FULL_OUTCOME_SUCCESS_STARTS_RATE_MEAN,
+    EVAL_FULL_OUTCOME_SUCCESS_STARTS_RATE_MIN,
+    eval_full_progress_metric,
 )
 from gradlab.seeds import EVAL_SEED_START
 from gradlab.rom_assets import manifest_from_train_config, validate_rom_asset_manifest
@@ -347,7 +346,10 @@ def build_checkpoint_eval_contract(
         if not requires_complete_evaluation(environment)
         and all(
             str(rule["metric"])
-            in {EVAL_FULL_SUCCESS_ACROSS_STARTS_RATE_MIN, EVAL_FULL_SUCCESS_ACROSS_STARTS_RATE_MEAN}
+            in {
+                EVAL_FULL_OUTCOME_SUCCESS_STARTS_RATE_MIN,
+                EVAL_FULL_OUTCOME_SUCCESS_STARTS_RATE_MEAN,
+            }
             and str(rule["operator"]) == ">="
             and float(rule["threshold"]) >= 1.0
             for rule in rules
@@ -414,7 +416,6 @@ def manifest_index(contract: Mapping[str, Any]) -> dict[tuple[int, int], dict[st
 def acceptance_aggregates(
     episode_rows: Sequence[Mapping[str, Any]], *, contract: Mapping[str, Any]
 ) -> dict[str, Any]:
-    metric_schema = evaluation_metric_schema(METRICS_SCHEMA_VERSION)
     rows = [dict(row) for row in episode_rows]
     failures = sum(not episode_is_complete(row) for row in rows)
     successes = len(rows) - failures
@@ -436,13 +437,15 @@ def acceptance_aggregates(
     }
     if len(rows) == int(contract["episodes"]):
         if rates:
-            result[metric_schema.success_rate_min] = min(rates.values())
-            result[metric_schema.success_rate_mean] = sum(rates.values()) / len(rates)
+            result[EVAL_FULL_OUTCOME_SUCCESS_STARTS_RATE_MIN] = min(rates.values())
+            result[EVAL_FULL_OUTCOME_SUCCESS_STARTS_RATE_MEAN] = sum(rates.values()) / len(
+                rates
+            )
         returns = [float(row["return"]) for row in rows if row.get("return") is not None]
         if len(returns) == len(rows) and returns:
             if not all(math.isfinite(value) for value in returns):
                 raise ValueError("acceptance episode returns must be finite")
-            result[metric_schema.return_mean] = sum(returns) / len(returns)
+            result[EVAL_FULL_EPISODE_RETURN_SHAPED_MEAN] = sum(returns) / len(returns)
         environment = contract.get("environment")
         if isinstance(environment, Mapping):
             provider_id = environment.get("env_provider")
@@ -465,41 +468,19 @@ def acceptance_aggregates(
                         f"acceptance episode progress {field.result_key!r} must be finite"
                     )
                 progress_name = progress_metric_name(field.result_key)
-                result[eval_progress_metric("full", progress_name, "mean")] = sum(
+                result[eval_full_progress_metric(progress_name, "mean")] = sum(
                     float(value) for value in values
                 ) / len(values)
-                result[eval_progress_metric("full", progress_name, "max")] = max(
+                result[eval_full_progress_metric(progress_name, "max")] = max(
                     float(value) for value in values
                 )
     return result
-
-
-def _equal_json_number(left: object, right: object) -> bool:
-    if isinstance(left, bool) or isinstance(right, bool):
-        return left == right
-    if isinstance(left, int | float) and isinstance(right, int | float):
-        return math.isclose(float(left), float(right), rel_tol=0.0, abs_tol=1e-12)
-    return left == right
-
-
-def aggregates_match(claimed: Mapping[str, Any], computed: Mapping[str, Any]) -> bool:
-    if set(claimed) != set(computed):
-        return False
-    for key, expected in computed.items():
-        actual = claimed[key]
-        if isinstance(expected, Mapping):
-            if not isinstance(actual, Mapping) or not aggregates_match(actual, expected):
-                return False
-        elif not _equal_json_number(actual, expected):
-            return False
-    return True
 
 
 def validate_episode_rows(
     episode_rows: Sequence[Mapping[str, Any]],
     *,
     contract: Mapping[str, Any],
-    verdict: str,
 ) -> list[dict[str, Any]]:
     planned = manifest_index(contract)
     evidence_policy = contract.get("evidence_policy")
@@ -508,44 +489,55 @@ def validate_episode_rows(
     fail_fast = str(evidence_policy.get("fail_fast") or "")
     if fail_fast not in {"first_failed_episode", "disabled"}:
         raise ValueError(f"unsupported acceptance fail-fast policy: {fail_fast!r}")
-    rows = [dict(row) for row in episode_rows]
+    rows: list[dict[str, Any]] = []
+    for raw_row in episode_rows:
+        if not isinstance(raw_row, Mapping):
+            raise ValueError("acceptance episode evidence must contain objects")
+        rows.append(dict(raw_row))
     seen: set[tuple[int, int]] = set()
-    failure_seen = False
-    for row in rows:
-        key = (int(row.get("seed_lane", -1)), int(row.get("seed_episode_ordinal", -1)))
+    first_failure_index: int | None = None
+    declared_starts = set(contract["manifest"].get("declared_starts") or [])
+    for index, row in enumerate(rows):
+        raw_lane = row.get("seed_lane")
+        raw_ordinal = row.get("seed_episode_ordinal")
+        if (
+            isinstance(raw_lane, bool)
+            or not isinstance(raw_lane, int)
+            or isinstance(raw_ordinal, bool)
+            or not isinstance(raw_ordinal, int)
+        ):
+            raise ValueError("acceptance evidence episode lane identity is invalid")
+        key = (raw_lane, raw_ordinal)
         entry = planned.get(key)
         if entry is None or key in seen:
             raise ValueError("acceptance evidence contains an unknown or duplicate episode")
         seen.add(key)
         if str(row.get("episode_id") or "") != str(entry["episode_id"]):
             raise ValueError("acceptance evidence episode identity mismatch")
-        if int(row.get("seed", -1)) != int(entry["seed"]):
+        raw_seed = row.get("seed")
+        if isinstance(raw_seed, bool) or not isinstance(raw_seed, int):
+            raise ValueError("acceptance evidence episode seed is invalid")
+        if raw_seed != int(entry["seed"]):
             raise ValueError("acceptance evidence episode seed mismatch")
+        if str(row.get("seed_protocol") or "") != str(contract["seed_protocol"]):
+            raise ValueError("acceptance evidence episode seed protocol mismatch")
         expected_start = str(entry.get("start_state") or "")
         actual_start = episode_start_state(row) or ""
         if expected_start and actual_start != expected_start:
             raise ValueError("acceptance evidence start-state mismatch")
-        declared_starts = set(contract["manifest"].get("declared_starts") or [])
         if declared_starts and actual_start not in declared_starts:
             raise ValueError("acceptance evidence contains an undeclared start state")
         if not episode_is_complete(row):
-            failure_seen = True
-            if (
-                fail_fast == "first_failed_episode"
-                and verdict == "rejected"
-                and row is not rows[-1]
-            ):
-                raise ValueError("fail-fast rejection contains episodes after its first failure")
-    if verdict not in {"accepted", "rejected"}:
-        raise ValueError("acceptance verdict must be accepted or rejected")
+            if first_failure_index is None:
+                first_failure_index = index
     if fail_fast == "disabled":
         if set(planned) != seen:
             raise ValueError("exhaustive evidence must contain every planned episode")
-    elif verdict == "accepted":
-        if set(planned) != seen or failure_seen:
-            raise ValueError("accepted evidence must contain every planned successful episode")
-    elif not rows or not failure_seen:
-        raise ValueError("rejected evidence must contain a valid failed planned episode")
+    elif first_failure_index is None:
+        if set(planned) != seen:
+            raise ValueError("incomplete fail-fast evidence must end with a failed episode")
+    elif first_failure_index != len(rows) - 1:
+        raise ValueError("fail-fast rejection contains episodes after its first failure")
     return rows
 
 

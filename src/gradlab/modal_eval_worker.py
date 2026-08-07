@@ -246,7 +246,7 @@ def run_child(input_path: Path, output_path: Path) -> int:
     evaluation_evidence = metrics.pop("evaluation_evidence", None)
     metrics.pop("episode_seeds", None)
     verdict = metrics.pop("acceptance_verdict", None)
-    claimed_aggregates = metrics.pop("acceptance_aggregates", None)
+    metrics.pop("acceptance_aggregates", None)
     preview: dict[str, Any] | None = None
     if preview_capture is not None:
         preview = {
@@ -277,11 +277,9 @@ def run_child(input_path: Path, output_path: Path) -> int:
     _write_json(
         output_path,
         {
-            "metrics": metrics,
             "episode_results": episode_results,
             "evaluation_evidence": evaluation_evidence,
             "verdict": verdict,
-            "claimed_aggregates": claimed_aggregates,
             "preview": preview,
         },
     )
@@ -440,11 +438,9 @@ def execute_attempt(
             result.update(
                 status="succeeded",
                 duration_seconds=time.monotonic() - started,
-                metrics=child_result["metrics"],
                 episode_results=child_result["episode_results"],
                 evaluation_evidence=child_result.get("evaluation_evidence"),
                 verdict=child_result.get("verdict"),
-                claimed_aggregates=child_result.get("claimed_aggregates"),
                 preview=preview,
             )
     except subprocess.TimeoutExpired:

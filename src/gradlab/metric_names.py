@@ -8,53 +8,41 @@ from pathlib import Path
 from typing import Any, Mapping
 
 
-METRICS_SCHEMA_VERSION = 18
+METRICS_SCHEMA_VERSION = 19
+EPISODE_METRIC_WINDOW_SIZE = 100
+METRICS_EPISODE_WINDOW_SIZE_CONFIG = "metrics_episode_window_size"
+
 TRAIN_GLOBAL_STEP = "train/global_step"
 EVAL_CHECKPOINT_STEP = "eval/checkpoint/step"
-ORCHESTRATION_EVENT_SEQ = "orchestration/event_seq"
-ORCHESTRATION_EVENT_ID = "orchestration/event_id"
-ORCHESTRATION_QUEUE_DEPTH = "orchestration/outbox/queue_depth"
-ORCHESTRATION_OLDEST_UNPUBLISHED_SECONDS = "orchestration/outbox/oldest_unpublished_seconds"
-ORCHESTRATION_INGRESS_RATE = "orchestration/outbox/ingress_rate"
-ORCHESTRATION_PUBLISH_RATE = "orchestration/outbox/publish_rate"
-ORCHESTRATION_PUBLICATION_CAPACITY_RATIO = "orchestration/outbox/publication_capacity_ratio"
-ORCHESTRATION_LOCAL_HIGH_WATER = "orchestration/outbox/local_high_water"
-ORCHESTRATION_R2_HIGH_WATER = "orchestration/outbox/r2_high_water"
-ORCHESTRATION_WANDB_HIGH_WATER = "orchestration/outbox/wandb_high_water"
-ORCHESTRATION_WANDB_REMOTE_HIGH_WATER = "orchestration/outbox/wandb_remote_high_water"
-ORCHESTRATION_WANDB_REMOTE_VISIBLE_LAG_SECONDS = (
-    "orchestration/outbox/wandb_remote_visible_lag_seconds"
+ORCHESTRATION_EVENT_SEQUENCE = "orchestration/event/sequence"
+ORCHESTRATION_OUTBOX_PENDING_COUNT = "orchestration/outbox/pending/count"
+ORCHESTRATION_OUTBOX_OLDEST_AGE_SECONDS = "orchestration/outbox/oldest/age/seconds"
+ORCHESTRATION_OUTBOX_REMOTE_VISIBILITY_LAG_SECONDS = (
+    "orchestration/outbox/remote/visibility/lag/seconds"
 )
-ORCHESTRATION_CHECKPOINT_BACKLOG = "orchestration/checkpoint/backlog"
-ORCHESTRATION_PENDING_EVALS = "orchestration/eval/pending"
-ORCHESTRATION_RESULT_TO_STOP_SECONDS = "orchestration/eval/result_to_stop_seconds"
-ORCHESTRATION_IDLE_GPU_TAIL_SECONDS = "orchestration/drain/idle_gpu_tail_seconds"
-ORCHESTRATION_SCRATCH_USED_FRACTION = "orchestration/scratch/used_fraction"
+ORCHESTRATION_CHECKPOINT_PENDING_COUNT = "orchestration/checkpoint/pending/count"
+ORCHESTRATION_EVAL_PENDING_COUNT = "orchestration/eval/pending/count"
+ORCHESTRATION_DRAIN_GPU_IDLE_SECONDS = "orchestration/drain/gpu/idle/seconds"
+ORCHESTRATION_SCRATCH_USED_FRACTION = "orchestration/scratch/used/fraction"
+ORCHESTRATION_RUN_TERMINAL_STATE = "orchestration/run/terminal/state"
+ORCHESTRATION_RUN_TERMINAL_REASON = "orchestration/run/terminal/reason"
 
-TRAIN_EPISODE_RETURN_SHAPED_ACROSS_ORIGINS_ROLLING_UP_TO_100_MEAN = (
-    "train/episode/return/shaped/across_origins/rolling_up_to_100/mean"
+TRAIN_EPISODE_RETURN_SHAPED_ORIGIN_TARGET_ROLLING_MEAN = (
+    "train/episode/return/shaped/origin/target/rolling/mean"
 )
-TRAIN_EPISODE_RETURN_SHAPED_ACROSS_ORIGINS_ROLLING_UP_TO_100_MAX = (
-    "train/episode/return/shaped/across_origins/rolling_up_to_100/max"
+TRAIN_EPISODE_RETURN_SHAPED_ORIGIN_TARGET_ROLLING_MAX = (
+    "train/episode/return/shaped/origin/target/rolling/max"
 )
-TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_ROLLING_UP_TO_100_MEAN = (
-    "train/episode/return/shaped/from/target/rolling_up_to_100/mean"
+TRAIN_EPISODE_LENGTH_ORIGIN_ALL_ROLLING_MEAN = (
+    "train/episode/length/origin/all/rolling/mean"
 )
-TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_ROLLING_UP_TO_100_MAX = (
-    "train/episode/return/shaped/from/target/rolling_up_to_100/max"
+TRAIN_EXPLORATION_CELL_UNIQUE_ORIGIN_TARGET_ROLLING_MEAN = (
+    "train/exploration/cell/unique/origin/target/rolling/mean"
 )
-TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_WINDOW_100_MEAN = (
-    "train/episode/return/shaped/from/target/window_100/mean"
+TRAIN_PROGRESS_KILLS_ORIGIN_TARGET_ROLLING_MEAN = (
+    "train/progress/kills/origin/target/rolling/mean"
 )
-TRAIN_EPISODE_LENGTH_ACROSS_ORIGINS_ROLLING_UP_TO_100_MEAN = (
-    "train/episode/length/across_origins/rolling_up_to_100/mean"
-)
-TRAIN_EXPLORATION_CELL_UNIQUE_FROM_TARGET_ROLLING_UP_TO_100_MEAN = (
-    "train/exploration/cell/unique/from/target/rolling_up_to_100/mean"
-)
-TRAIN_PROGRESS_KILLS_FROM_TARGET_ROLLING_UP_TO_100_MEAN = (
-    "train/progress/kills/from/target/rolling_up_to_100/mean"
-)
+TRAIN_EPISODE_COMPLETED_COUNT = "train/episode/completed/count"
 
 TRAIN_ARCHIVE_CURRICULUM_ROOT = "train/curriculum/archive"
 TRAIN_ARCHIVE_CURRICULUM_CELL_COUNT = f"{TRAIN_ARCHIVE_CURRICULUM_ROOT}/cell/count"
@@ -62,7 +50,9 @@ TRAIN_ARCHIVE_CURRICULUM_ENTRY_COUNT = f"{TRAIN_ARCHIVE_CURRICULUM_ROOT}/entry/c
 TRAIN_ARCHIVE_ADMISSION_CANDIDATE_COUNT = (
     f"{TRAIN_ARCHIVE_CURRICULUM_ROOT}/admission/candidate/count"
 )
-TRAIN_ARCHIVE_ADMISSION_ACCEPTED_COUNT = f"{TRAIN_ARCHIVE_CURRICULUM_ROOT}/admission/accepted/count"
+TRAIN_ARCHIVE_ADMISSION_ACCEPTED_COUNT = (
+    f"{TRAIN_ARCHIVE_CURRICULUM_ROOT}/admission/accepted/count"
+)
 TRAIN_ARCHIVE_EVICTED_COUNT = f"{TRAIN_ARCHIVE_CURRICULUM_ROOT}/evicted/count"
 TRAIN_ARCHIVE_CAPTURE_CALL_COUNT = f"{TRAIN_ARCHIVE_CURRICULUM_ROOT}/capture/call/count"
 TRAIN_ARCHIVE_RESTORE_EPISODE_COUNT = f"{TRAIN_ARCHIVE_CURRICULUM_ROOT}/restore/episode/count"
@@ -73,29 +63,27 @@ TRAIN_ARCHIVE_FEEDBACK_TRAJECTORY_COUNT = (
     f"{TRAIN_ARCHIVE_CURRICULUM_ROOT}/feedback/trajectory/count"
 )
 TRAIN_ARCHIVE_TRANSITION_SHARE = f"{TRAIN_ARCHIVE_CURRICULUM_ROOT}/transition/share"
-TRAIN_ARCHIVE_SAMPLING_PROBABILITY_MAX = f"{TRAIN_ARCHIVE_CURRICULUM_ROOT}/sampling/probability/max"
+TRAIN_ARCHIVE_SAMPLING_PROBABILITY_MAX = (
+    f"{TRAIN_ARCHIVE_CURRICULUM_ROOT}/sampling/probability/max"
+)
 TRAIN_ARCHIVE_SAMPLING_EFFECTIVE_CELL_COUNT = (
-    f"{TRAIN_ARCHIVE_CURRICULUM_ROOT}/sampling/effective_cell/count"
+    f"{TRAIN_ARCHIVE_CURRICULUM_ROOT}/sampling/effective/cell/count"
 )
 TRAIN_ARCHIVE_CAPTURE_SECONDS = f"{TRAIN_ARCHIVE_CURRICULUM_ROOT}/capture/seconds"
 TRAIN_ARCHIVE_RESTORE_SECONDS = f"{TRAIN_ARCHIVE_CURRICULUM_ROOT}/restore/seconds"
 
-TRAIN_EPISODE_COMPLETED_COUNT = "train/episode/completed/count"
 TRAIN_OUTCOME_SUCCESS_ROOT = "train/outcome/success"
-TRAIN_OUTCOME_SUCCESS_ACROSS_OBSERVED_STARTS_CUMULATIVE_RATE_MIN = (
-    f"{TRAIN_OUTCOME_SUCCESS_ROOT}/across_observed_starts/cumulative/rate/min"
+TRAIN_OUTCOME_SUCCESS_STARTS_OBSERVED_CUMULATIVE_RATE_MIN = (
+    f"{TRAIN_OUTCOME_SUCCESS_ROOT}/starts/observed/cumulative/rate/min"
 )
-TRAIN_OUTCOME_SUCCESS_ACROSS_OBSERVED_STARTS_CUMULATIVE_RATE_MEAN = (
-    f"{TRAIN_OUTCOME_SUCCESS_ROOT}/across_observed_starts/cumulative/rate/mean"
+TRAIN_OUTCOME_SUCCESS_STARTS_OBSERVED_CUMULATIVE_RATE_MEAN = (
+    f"{TRAIN_OUTCOME_SUCCESS_ROOT}/starts/observed/cumulative/rate/mean"
 )
-TRAIN_OUTCOME_SUCCESS_ACROSS_STARTS_WINDOW_100_RATE_MIN = (
-    f"{TRAIN_OUTCOME_SUCCESS_ROOT}/across_starts/window_100/rate/min"
+TRAIN_OUTCOME_SUCCESS_STARTS_ALL_ROLLING_RATE_MIN = (
+    f"{TRAIN_OUTCOME_SUCCESS_ROOT}/starts/all/rolling/rate/min"
 )
-TRAIN_OUTCOME_SUCCESS_ACROSS_STARTS_WINDOW_100_RATE_MEAN = (
-    f"{TRAIN_OUTCOME_SUCCESS_ROOT}/across_starts/window_100/rate/mean"
-)
-TRAIN_OUTCOME_SUCCESS_ACROSS_STARTS_COVERAGE_RATE = (
-    f"{TRAIN_OUTCOME_SUCCESS_ROOT}/across_starts/coverage/rate"
+TRAIN_OUTCOME_SUCCESS_STARTS_ALL_ROLLING_RATE_MEAN = (
+    f"{TRAIN_OUTCOME_SUCCESS_ROOT}/starts/all/rolling/rate/mean"
 )
 
 TRAIN_EARLY_STOP_ROOT = "train/early_stop"
@@ -105,47 +93,19 @@ TRAIN_ALGORITHM_ROOT = "train/algorithm"
 TRAIN_ACTOR_CRITIC_ALGORITHMS = ("ppo", "a2c")
 TRAIN_ALGORITHM_JERK_ROOT = f"{TRAIN_ALGORITHM_ROOT}/jerk"
 TRAIN_ALGORITHM_JERK_RETAINED_COUNT = f"{TRAIN_ALGORITHM_JERK_ROOT}/retained/count"
-TRAIN_ALGORITHM_JERK_BEST_RETURN_MEAN = f"{TRAIN_ALGORITHM_JERK_ROOT}/best/return_mean"
-TRAIN_ALGORITHM_JERK_BEST_SEQUENCE_LENGTH = f"{TRAIN_ALGORITHM_JERK_ROOT}/best/sequence_length"
-TRAIN_ALGORITHM_JERK_ARCHIVE_SELECTED_PREFIX_RETURN_MEAN = (
-    f"{TRAIN_ALGORITHM_JERK_ROOT}/archive/selected_prefix_return_mean"
-)
-TRAIN_ALGORITHM_JERK_EXPLOIT_PROBABILITY = f"{TRAIN_ALGORITHM_JERK_ROOT}/exploit/probability"
+TRAIN_ALGORITHM_JERK_BEST_RETURN_MEAN = f"{TRAIN_ALGORITHM_JERK_ROOT}/best/return/mean"
+TRAIN_ALGORITHM_JERK_BEST_PROGRAM_STEPS = f"{TRAIN_ALGORITHM_JERK_ROOT}/best/program/steps"
 
-TRAIN_ALGORITHM_GO_EXPLORE_ROOT = f"{TRAIN_ALGORITHM_ROOT}/go_explore"
-TRAIN_GO_EXPLORE_ARCHIVE_CELL_COUNT = f"{TRAIN_ALGORITHM_GO_EXPLORE_ROOT}/archive/cell_count"
-TRAIN_GO_EXPLORE_ARCHIVE_ENTRY_COUNT = f"{TRAIN_ALGORITHM_GO_EXPLORE_ROOT}/archive/entry_count"
-TRAIN_GO_EXPLORE_ARCHIVE_BLOB_COUNT = f"{TRAIN_ALGORITHM_GO_EXPLORE_ROOT}/archive/blob_count"
-TRAIN_GO_EXPLORE_ARCHIVE_BLOB_BYTES = f"{TRAIN_ALGORITHM_GO_EXPLORE_ROOT}/archive/blob_bytes"
-TRAIN_GO_EXPLORE_ARCHIVE_SELECTION_COUNT = (
-    f"{TRAIN_ALGORITHM_GO_EXPLORE_ROOT}/archive/selection_count"
-)
-TRAIN_GO_EXPLORE_ARCHIVE_VISIT_COUNT = f"{TRAIN_ALGORITHM_GO_EXPLORE_ROOT}/archive/visit_count"
-TRAIN_GO_EXPLORE_ARCHIVE_UPDATE_COUNT = f"{TRAIN_ALGORITHM_GO_EXPLORE_ROOT}/archive/update_count"
-TRAIN_GO_EXPLORE_ARCHIVE_RECENT_NEW_CELL_RATE = (
-    f"{TRAIN_ALGORITHM_GO_EXPLORE_ROOT}/archive/recent_new_cell_rate"
-)
-TRAIN_GO_EXPLORE_ARCHIVE_RECENT_VISIT_WINDOW = (
-    f"{TRAIN_ALGORITHM_GO_EXPLORE_ROOT}/archive/recent_visit_window"
-)
-TRAIN_GO_EXPLORE_PROGRESS_GUIDED_CELL_COUNT = (
-    f"{TRAIN_ALGORITHM_GO_EXPLORE_ROOT}/progress_guided/cell_count"
-)
-TRAIN_GO_EXPLORE_PROGRESS_GUIDED_SELECTION_COUNT = (
-    f"{TRAIN_ALGORITHM_GO_EXPLORE_ROOT}/progress_guided/selection_count"
-)
-TRAIN_GO_EXPLORE_SUCCESS_GUIDED_CELL_COUNT = (
-    f"{TRAIN_ALGORITHM_GO_EXPLORE_ROOT}/success_guided/cell_count"
-)
-TRAIN_GO_EXPLORE_SUCCESS_GUIDED_SELECTION_COUNT = (
-    f"{TRAIN_ALGORITHM_GO_EXPLORE_ROOT}/success_guided/selection_count"
+TRAIN_ALGORITHM_GO_EXPLORE_ROOT = f"{TRAIN_ALGORITHM_ROOT}/go-explore"
+TRAIN_GO_EXPLORE_ARCHIVE_CELL_COUNT = f"{TRAIN_ALGORITHM_GO_EXPLORE_ROOT}/archive/cell/count"
+TRAIN_GO_EXPLORE_ARCHIVE_BLOB_BYTES = f"{TRAIN_ALGORITHM_GO_EXPLORE_ROOT}/archive/blob/bytes"
+TRAIN_GO_EXPLORE_ARCHIVE_VISIT_COUNT = f"{TRAIN_ALGORITHM_GO_EXPLORE_ROOT}/archive/visit/count"
+TRAIN_GO_EXPLORE_ARCHIVE_CELL_DISCOVERY_RATE = (
+    f"{TRAIN_ALGORITHM_GO_EXPLORE_ROOT}/archive/cell/discovery/rate"
 )
 TRAIN_GO_EXPLORE_BEST_PROGRESS = f"{TRAIN_ALGORITHM_GO_EXPLORE_ROOT}/best/progress"
 TRAIN_GO_EXPLORE_BEST_RETURN = f"{TRAIN_ALGORITHM_GO_EXPLORE_ROOT}/best/return"
-TRAIN_GO_EXPLORE_BEST_PROGRAM_STEPS = f"{TRAIN_ALGORITHM_GO_EXPLORE_ROOT}/best/program_steps"
-TRAIN_GO_EXPLORE_BEST_PROGRAM_RUNS = f"{TRAIN_ALGORITHM_GO_EXPLORE_ROOT}/best/program_runs"
-TRAIN_GO_EXPLORE_BEST_COMPLETED = f"{TRAIN_ALGORITHM_GO_EXPLORE_ROOT}/best/completed"
-TRAIN_GO_EXPLORE_IMPROVEMENT_COUNT = f"{TRAIN_ALGORITHM_GO_EXPLORE_ROOT}/best/improvement_count"
+TRAIN_GO_EXPLORE_BEST_PROGRAM_STEPS = f"{TRAIN_ALGORITHM_GO_EXPLORE_ROOT}/best/program/steps"
 
 
 def train_algorithm_root(algorithm_id: str) -> str:
@@ -166,125 +126,72 @@ TRAIN_PPO_EXPLAINED_VARIANCE = f"{TRAIN_ALGORITHM_PPO_ROOT}/value/explained_vari
 TRAIN_PPO_VALUE_LOSS = f"{TRAIN_ALGORITHM_PPO_ROOT}/update/value_loss"
 TRAIN_PPO_LEARNING_RATE = f"{TRAIN_ALGORITHM_PPO_ROOT}/update/learning_rate"
 TRAIN_PPO_POLICY_ENTROPY = f"{TRAIN_ALGORITHM_PPO_ROOT}/policy/entropy"
-TRAIN_PPO_POLICY_ENTROPY_BOUND_LOWER = (
-    f"{TRAIN_ALGORITHM_PPO_ROOT}/policy/entropy_bound/lower"
-)
-TRAIN_PPO_POLICY_ENTROPY_BOUND_UPPER = (
-    f"{TRAIN_ALGORITHM_PPO_ROOT}/policy/entropy_bound/upper"
-)
-
 TRAIN_A2C_EXPLAINED_VARIANCE = f"{TRAIN_ALGORITHM_A2C_ROOT}/value/explained_variance"
 TRAIN_A2C_VALUE_LOSS = f"{TRAIN_ALGORITHM_A2C_ROOT}/update/value_loss"
 TRAIN_A2C_LEARNING_RATE = f"{TRAIN_ALGORITHM_A2C_ROOT}/update/learning_rate"
 TRAIN_A2C_POLICY_ENTROPY = f"{TRAIN_ALGORITHM_A2C_ROOT}/policy/entropy"
-TRAIN_A2C_POLICY_ENTROPY_BOUND_LOWER = (
-    f"{TRAIN_ALGORITHM_A2C_ROOT}/policy/entropy_bound/lower"
-)
-TRAIN_A2C_POLICY_ENTROPY_BOUND_UPPER = (
-    f"{TRAIN_ALGORITHM_A2C_ROOT}/policy/entropy_bound/upper"
-)
 
 TRAIN_THROUGHPUT_ROOT = "train/throughput"
-TRAIN_THROUGHPUT_LOOP_FPS = f"{TRAIN_THROUGHPUT_ROOT}/loop_fps"
-TRAIN_THROUGHPUT_ENV_STEP_FPS = f"{TRAIN_THROUGHPUT_ROOT}/env_step_fps"
-TRAIN_THROUGHPUT_ROLLOUT_SECONDS = f"{TRAIN_THROUGHPUT_ROOT}/rollout_seconds"
-TRAIN_THROUGHPUT_ENV_STEP_SECONDS = f"{TRAIN_THROUGHPUT_ROOT}/env_step_seconds"
-TRAIN_THROUGHPUT_ROLLOUT_OVERHEAD_SECONDS = f"{TRAIN_THROUGHPUT_ROOT}/rollout_overhead_seconds"
-TRAIN_THROUGHPUT_BETWEEN_ROLLOUTS_SECONDS = f"{TRAIN_THROUGHPUT_ROOT}/between_rollouts_seconds"
-
+TRAIN_THROUGHPUT_LOOP_RATE = f"{TRAIN_THROUGHPUT_ROOT}/loop/rate"
+TRAIN_THROUGHPUT_PROVIDER_STEP_RATE = f"{TRAIN_THROUGHPUT_ROOT}/provider/step/rate"
+TRAIN_THROUGHPUT_ROLLOUT_OVERHEAD_SECONDS = f"{TRAIN_THROUGHPUT_ROOT}/rollout/overhead/seconds"
+TRAIN_THROUGHPUT_BETWEEN_ROLLOUTS_SECONDS = f"{TRAIN_THROUGHPUT_ROOT}/between/rollouts/seconds"
 TRAIN_ARTIFACT_SAVE_SECONDS = "train/artifact/save/seconds"
-TRAIN_ARTIFACT_UPLOAD_SECONDS = "train/artifact/upload/seconds"
 
 EVAL_ROOT = "eval"
-EVAL_PROTOCOLS = ("full",)
 EVAL_FULL_ROOT = f"{EVAL_ROOT}/full"
 EVAL_FULL_EPISODE_RETURN_SHAPED_MEAN = f"{EVAL_FULL_ROOT}/episode/return/shaped/mean"
 EVAL_FULL_EPISODE_RETURN_SHAPED_MAX = f"{EVAL_FULL_ROOT}/episode/return/shaped/max"
-EVAL_FULL_EPISODE_COMPLETED_COUNT = f"{EVAL_FULL_ROOT}/episode/completed/count"
 EVAL_FULL_PROGRESS_X_MAX = f"{EVAL_FULL_ROOT}/progress/x/max"
-EVAL_FULL_SUCCESS_ACROSS_STARTS_RATE_MIN = (
-    f"{EVAL_FULL_ROOT}/outcome/success/across_starts/rate/min"
+EVAL_FULL_OUTCOME_SUCCESS_STARTS_RATE_MIN = (
+    f"{EVAL_FULL_ROOT}/outcome/success/starts/rate/min"
 )
-EVAL_FULL_SUCCESS_ACROSS_STARTS_RATE_MEAN = (
-    f"{EVAL_FULL_ROOT}/outcome/success/across_starts/rate/mean"
+EVAL_FULL_OUTCOME_SUCCESS_STARTS_RATE_MEAN = (
+    f"{EVAL_FULL_ROOT}/outcome/success/starts/rate/mean"
 )
-EVAL_FULL_BY_START = f"{EVAL_FULL_ROOT}/by_start"
+EVAL_FULL_START_TABLE = f"{EVAL_FULL_ROOT}/start/table"
 EVAL_ACCEPTANCE_PASS = "eval/acceptance/pass"
 EVAL_ACCEPTANCE_EPISODE_PLANNED_COUNT = "eval/acceptance/episode/planned/count"
 EVAL_ACCEPTANCE_EPISODE_COMPLETED_COUNT = "eval/acceptance/episode/completed/count"
-EVAL_ACCEPTANCE_DURATION_SECONDS = "eval/acceptance/duration/seconds"
-
-LEADER_CHECKPOINT_SUCCESS_ACROSS_STARTS_RATE_MIN = (
-    "leader/checkpoint/outcome/success/across_starts/rate/min"
+EVAL_START_TABLE_COLUMNS = (
+    "start_id",
+    "episode_count",
+    "success_count",
+    "success_rate",
+    "shaped_return_mean",
+    "failure_reasons",
 )
-LEADER_CHECKPOINT_SUCCESS_ACROSS_STARTS_RATE_MEAN = (
-    "leader/checkpoint/outcome/success/across_starts/rate/mean"
+
+LEADER_CHECKPOINT_OUTCOME_SUCCESS_STARTS_RATE_MIN = (
+    "leader/checkpoint/outcome/success/starts/rate/min"
 )
 LEADER_CHECKPOINT_RETURN_SHAPED_MEAN = "leader/checkpoint/episode/return/shaped/mean"
 LEADER_CHECKPOINT_RETURN_SHAPED_MAX = "leader/checkpoint/episode/return/shaped/max"
 LEADER_CHECKPOINT_STEP = "leader/checkpoint/step"
 LEADER_CHECKPOINT_ARTIFACT_REF = "leader/checkpoint/artifact/ref"
 LEADER_CHECKPOINT_EVALUATION_SOURCE = "leader/checkpoint/evaluation/source"
-LEADER_CHECKPOINT_UPDATED_AT = "leader/checkpoint/updated_at"
+LEADER_CHECKPOINT_PROJECTION_TIMESTAMP = "leader/checkpoint/projection/timestamp"
 
 
 @dataclass(frozen=True)
 class MetricDefinition:
     name: str
+    display_label: str
     description: str
     unit: str
     cadence: str
-    storage: str
+    placement: str
+    summary_reducer: str
 
 
-@dataclass(frozen=True)
-class EvaluationMetricSchema:
-    version: int
-    checkpoint_step: str
-    return_mean: str
-    return_max: str
-    episode_completed_count: str
-    success_rate_min: str
-    success_rate_mean: str
-    acceptance_episode_planned_count: str
-    acceptance_episode_completed_count: str
-    table_columns: tuple[str, ...]
-
-
-_EVALUATION_METRIC_SCHEMA = EvaluationMetricSchema(
-    version=METRICS_SCHEMA_VERSION,
-    checkpoint_step=EVAL_CHECKPOINT_STEP,
-    return_mean=EVAL_FULL_EPISODE_RETURN_SHAPED_MEAN,
-    return_max=EVAL_FULL_EPISODE_RETURN_SHAPED_MAX,
-    episode_completed_count=EVAL_FULL_EPISODE_COMPLETED_COUNT,
-    success_rate_min=EVAL_FULL_SUCCESS_ACROSS_STARTS_RATE_MIN,
-    success_rate_mean=EVAL_FULL_SUCCESS_ACROSS_STARTS_RATE_MEAN,
-    acceptance_episode_planned_count=EVAL_ACCEPTANCE_EPISODE_PLANNED_COUNT,
-    acceptance_episode_completed_count=EVAL_ACCEPTANCE_EPISODE_COMPLETED_COUNT,
-    table_columns=(
-        "checkpoint_step",
-        "start_id",
-        "episode_count",
-        "success_count",
-        "success_rate",
-        "shaped_return_mean",
-        "shaped_return_std",
-        "shaped_return_median",
-        "failure_reason",
-        "failure_reason_count",
-        "failure_reason_rate",
-    ),
-)
-
-
-def evaluation_metric_schema(version: object) -> EvaluationMetricSchema:
+def require_current_metrics_schema(version: object) -> int:
     try:
         normalized = int(version)
     except (TypeError, ValueError) as exc:
         raise ValueError(f"unsupported metrics schema version: {version!r}") from exc
     if normalized != METRICS_SCHEMA_VERSION:
         raise ValueError(f"unsupported metrics schema version: {normalized}")
-    return _EVALUATION_METRIC_SCHEMA
+    return normalized
 
 
 def leader_checkpoint_progress_metric(progress: object, statistic: str = "max") -> str:
@@ -300,37 +207,32 @@ def leader_metric_for_rank_metric(
     *,
     schema_version: int = METRICS_SCHEMA_VERSION,
 ) -> str:
-    evaluation_metric_schema(schema_version)
+    require_current_metrics_schema(schema_version)
     fixed = {
-        EVAL_FULL_SUCCESS_ACROSS_STARTS_RATE_MIN: (
-            LEADER_CHECKPOINT_SUCCESS_ACROSS_STARTS_RATE_MIN
-        ),
-        EVAL_FULL_SUCCESS_ACROSS_STARTS_RATE_MEAN: (
-            LEADER_CHECKPOINT_SUCCESS_ACROSS_STARTS_RATE_MEAN
-        ),
+        EVAL_FULL_OUTCOME_SUCCESS_STARTS_RATE_MIN: LEADER_CHECKPOINT_OUTCOME_SUCCESS_STARTS_RATE_MIN,
         EVAL_FULL_EPISODE_RETURN_SHAPED_MEAN: LEADER_CHECKPOINT_RETURN_SHAPED_MEAN,
         EVAL_FULL_EPISODE_RETURN_SHAPED_MAX: LEADER_CHECKPOINT_RETURN_SHAPED_MAX,
         LEADER_CHECKPOINT_STEP: LEADER_CHECKPOINT_STEP,
     }
-    mapped = fixed.get(metric)
-    if mapped is not None:
+    if (mapped := fixed.get(metric)) is not None:
         return mapped
     prefix = f"{EVAL_FULL_ROOT}/progress/"
     if metric.startswith(prefix):
         for statistic in ("mean", "max"):
             suffix = f"/{statistic}"
-            if not metric.endswith(suffix):
-                continue
-            progress = metric[len(prefix) : -len(suffix)]
-            if "/" not in progress:
-                return leader_checkpoint_progress_metric(progress, statistic)
+            if metric.endswith(suffix):
+                progress = metric[len(prefix) : -len(suffix)]
+                if "/" not in progress:
+                    return leader_checkpoint_progress_metric(progress, statistic)
     raise ValueError(f"evaluation rank criterion cannot be projected: {metric}")
 
 
 _METRIC_REGISTRY_START = "<!-- METRIC_REGISTRY_START -->"
 _METRIC_REGISTRY_END = "<!-- METRIC_REGISTRY_END -->"
-_METRIC_REGISTRY_HEADER = "| Metric or template | Meaning | Unit | Cadence | Surface |"
-_METRIC_REGISTRY_SEPARATOR = "|---|---|---|---|---|"
+_METRIC_REGISTRY_HEADER = (
+    "| Metric or template | Display label | Meaning | Unit | Cadence | Placement | Summary |"
+)
+_METRIC_REGISTRY_SEPARATOR = "|---|---|---|---|---|---|---|"
 
 
 def _metrics_markdown() -> str:
@@ -354,16 +256,21 @@ def _load_metric_definitions() -> tuple[MetricDefinition, ...]:
     definitions: list[MetricDefinition] = []
     for line_number, line in enumerate(lines[2:], start=3):
         columns = line.removeprefix("| ").removesuffix(" |").split(" | ")
-        if len(columns) != 5:
+        if len(columns) != 7:
             raise RuntimeError(
-                f"METRICS.md metric registry row {line_number} must have five columns"
+                f"METRICS.md metric registry row {line_number} must have seven columns"
             )
         name = columns[0]
         if len(name) < 3 or not name.startswith("`") or not name.endswith("`"):
             raise RuntimeError(
                 f"METRICS.md metric registry row {line_number} must use a code metric name"
             )
-        definitions.append(MetricDefinition(name[1:-1], *columns[1:]))
+        definition = MetricDefinition(name[1:-1], *columns[1:])
+        if definition.placement not in {"history", "summary"}:
+            raise RuntimeError(f"invalid metric placement: {definition.placement}")
+        if definition.summary_reducer not in {"last", "max", "none"}:
+            raise RuntimeError(f"invalid metric summary reducer: {definition.summary_reducer}")
+        definitions.append(definition)
     names = [definition.name for definition in definitions]
     if not names or len(names) != len(set(names)):
         raise RuntimeError("METRICS.md metric registry must be non-empty and unique")
@@ -372,28 +279,24 @@ def _load_metric_definitions() -> tuple[MetricDefinition, ...]:
 
 METRIC_DEFINITIONS = _load_metric_definitions()
 
-
 _SAFE_SEGMENT_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 _PLACEHOLDER_PATTERNS = {
     "algorithm": "(?:ppo|a2c)",
-    "protocol": "(?:full)",
     "reason": "[A-Za-z0-9_.-]+",
     "start": "[A-Za-z0-9_.-]+",
     "component": "[A-Za-z0-9_.-]+",
     "condition": "[A-Za-z0-9_.-]+",
-    "signal": "[A-Za-z0-9_.-]+",
     "progress": "[A-Za-z0-9_.-]+",
 }
 
 
-def _definition_pattern(
-    template: str, *, placeholders: Mapping[str, str] = _PLACEHOLDER_PATTERNS
-) -> re.Pattern[str]:
+def _definition_pattern(template: str) -> re.Pattern[str]:
     cursor = 0
     parts: list[str] = []
     for match in re.finditer(r"\{([a-z_]+)\}", template):
+        name = match.group(1)
         parts.append(re.escape(template[cursor : match.start()]))
-        parts.append(placeholders[match.group(1)])
+        parts.append(f"(?P<{name}>{_PLACEHOLDER_PATTERNS[name]})")
         cursor = match.end()
     parts.append(re.escape(template[cursor:]))
     return re.compile("^" + "".join(parts) + "$")
@@ -411,15 +314,46 @@ def metric_definition(name: str) -> MetricDefinition | None:
     return None
 
 
+def metric_display_label(name: str) -> str:
+    for definition, pattern in _DEFINITION_PATTERNS:
+        if (match := pattern.fullmatch(name)) is not None:
+            return definition.display_label.format_map(match.groupdict())
+    raise ValueError(f"unknown metric name: {name}")
+
+
 def validate_metric_name(name: str) -> str:
     if metric_definition(name) is None:
         raise ValueError(f"unknown metric name: {name}")
     return name
 
 
-def validate_metric_payload(payload: Mapping[str, Any]) -> None:
-    for name in payload:
-        validate_metric_name(str(name))
+def validate_metric_payload(
+    payload: Mapping[str, Any], *, placement: str = "history"
+) -> None:
+    if placement not in {"history", "summary"}:
+        raise ValueError(f"unknown metric placement: {placement}")
+    for raw_name in payload:
+        name = str(raw_name)
+        definition = metric_definition(name)
+        if definition is None:
+            raise ValueError(f"unknown metric name: {name}")
+        if definition.placement != placement:
+            raise ValueError(
+                f"metric {name} belongs in {definition.placement}, not {placement}"
+            )
+
+
+def summary_value(value: Any) -> Any:
+    while isinstance(value, Mapping):
+        for reducer in ("max", "last", "min"):
+            if reducer in value:
+                value = value[reducer]
+                break
+        else:
+            if len(value) != 1:
+                return None
+            value = next(iter(value.values()))
+    return value
 
 
 def metric_path_segment(value: object) -> str:
@@ -441,28 +375,15 @@ def stat_metric(prefix: str, stat: str) -> str:
     return validate_metric_name(f"{prefix}/{metric_path_segment(stat)}")
 
 
-def eval_metric(protocol: str, suffix: str) -> str:
-    protocol = metric_path_segment(protocol)
-    if protocol not in EVAL_PROTOCOLS:
-        raise ValueError(f"unknown evaluation protocol: {protocol}")
-    return validate_metric_name(f"{EVAL_ROOT}/{protocol}/{suffix.strip('/')}")
-
-
-def train_outcome_reason_count_metric(reason: object) -> str:
+def train_outcome_reason_rolling_rate_metric(reason: object) -> str:
     return validate_metric_name(
-        f"train/outcome/failure/reason/{metric_path_segment(reason)}/episode/count"
+        f"train/outcome/failure/reason/{metric_path_segment(reason)}/rolling/rate"
     )
 
 
-def train_outcome_reason_window_rate_metric(reason: object) -> str:
+def train_progress_origin_target_rolling_mean_metric(progress: object) -> str:
     return validate_metric_name(
-        f"train/outcome/failure/reason/{metric_path_segment(reason)}/window_100/rate"
-    )
-
-
-def train_progress_from_target_rolling_mean_metric(progress: object) -> str:
-    return validate_metric_name(
-        f"train/progress/{metric_path_segment(progress)}/from/target/rolling_up_to_100/mean"
+        f"train/progress/{metric_path_segment(progress)}/origin/target/rolling/mean"
     )
 
 
@@ -472,79 +393,61 @@ def train_early_stop_metric(condition: object, suffix: str) -> str:
     )
 
 
-def train_success_from_metric(start: object, suffix: str) -> str:
+def train_success_start_metric(start: object, suffix: str) -> str:
     return validate_metric_name(
-        f"{TRAIN_OUTCOME_SUCCESS_ROOT}/from/{metric_value_segment(start)}/{suffix}"
+        f"{TRAIN_OUTCOME_SUCCESS_ROOT}/start/{metric_value_segment(start)}/{suffix}"
     )
 
 
 def train_success_count_metric(start: object) -> str:
-    return train_success_from_metric(start, "episode/count")
+    return train_success_start_metric(start, "episode/count")
 
 
-def train_success_attempts_metric(start: object) -> str:
-    return train_success_from_metric(start, "attempt/count")
-
-
-def train_success_window_rate_metric(start: object) -> str:
-    return train_success_from_metric(start, "window_100/rate")
+def train_success_rolling_rate_metric(start: object) -> str:
+    return train_success_start_metric(start, "rolling/rate")
 
 
 def train_reward_component_metric(component: object, stat: str) -> str:
+    suffix = "nonzero/rate" if stat in {"nonzero_rate", "nonzero/rate"} else stat
     return validate_metric_name(
-        f"{TRAIN_REWARD_ROOT}/component/{metric_path_segment(component)}/{metric_path_segment(stat)}"
+        f"{TRAIN_REWARD_ROOT}/component/{metric_path_segment(component)}/{suffix}"
     )
 
 
-def train_reward_signal_metric(signal: object, stat: str) -> str:
+def eval_full_outcome_success_starts_rate_metric(statistic: str) -> str:
+    if statistic not in {"min", "mean"}:
+        raise ValueError("full-evaluation success statistic must be 'min' or 'mean'")
     return validate_metric_name(
-        f"{TRAIN_REWARD_ROOT}/signal/{metric_path_segment(signal)}/{metric_path_segment(stat)}"
+        f"{EVAL_FULL_ROOT}/outcome/success/starts/rate/"
+        f"{metric_path_segment(statistic)}"
     )
 
 
-def eval_success_rate_metric(protocol: str, stat: str) -> str:
-    return eval_metric(
-        protocol,
-        f"outcome/success/across_starts/rate/{metric_path_segment(stat)}",
-    )
-
-
-def eval_progress_metric(
-    protocol: str,
-    progress: object,
-    stat: str,
-) -> str:
-    return eval_metric(
-        protocol,
-        f"progress/{metric_path_segment(progress)}/{metric_path_segment(stat)}",
+def eval_full_progress_metric(progress: object, statistic: str) -> str:
+    if statistic not in {"mean", "max"}:
+        raise ValueError("full-evaluation progress statistic must be 'mean' or 'max'")
+    return validate_metric_name(
+        f"{EVAL_FULL_ROOT}/progress/{metric_path_segment(progress)}/"
+        f"{metric_path_segment(statistic)}"
     )
 
 
 SB3_SHARED_ACTOR_CRITIC_SCALAR_MAP = {
-    "rollout/ep_rew_mean": (
-        TRAIN_EPISODE_RETURN_SHAPED_ACROSS_ORIGINS_ROLLING_UP_TO_100_MEAN,
-        1.0,
-    ),
-    "rollout/ep_len_mean": (
-        TRAIN_EPISODE_LENGTH_ACROSS_ORIGINS_ROLLING_UP_TO_100_MEAN,
-        1.0,
-    ),
     "train/entropy_loss": ("policy/entropy", -1.0),
     "train/explained_variance": ("value/explained_variance", 1.0),
     "train/policy_gradient_loss": ("update/policy_gradient_loss", 1.0),
     "train/policy_loss": ("update/policy_gradient_loss", 1.0),
     "train/value_loss": ("update/value_loss", 1.0),
     "train/learning_rate": ("update/learning_rate", 1.0),
-    "train/std": ("policy/distribution_std", 1.0),
+    "train/std": ("policy/distribution/std", 1.0),
 }
-
 SB3_PPO_SCALAR_MAP = {
     "train/approx_kl": (TRAIN_PPO_APPROX_KL, 1.0),
     "train/clip_fraction": (TRAIN_PPO_CLIP_FRACTION, 1.0),
 }
-
 SB3_IGNORED_SCALARS = {
-    "rollout/ep_rew_mean",  # mapped above; listed here only for documentation symmetry
+    "rollout/ep_rew_mean",
+    "rollout/ep_len_mean",
     "time/fps",
     "time/iterations",
     "time/time_elapsed",
@@ -554,24 +457,25 @@ SB3_IGNORED_SCALARS = {
     "train/loss",
     "train/n_updates",
 }
-
 _GRADLAB_OWNED_PREFIXES = (
     "train/episode/",
     "train/exploration/",
+    "train/progress/",
     "train/outcome/",
+    "train/early_stop/",
+    "train/curriculum/",
     "train/reward/",
     "train/algorithm/",
     "train/throughput/",
     "train/artifact/",
     "eval/",
     "leader/",
+    "orchestration/",
 )
 
 
 def canonical_training_scalars(
-    key_values: Mapping[str, Any],
-    *,
-    algorithm_id: str = "ppo",
+    key_values: Mapping[str, Any], *, algorithm_id: str = "ppo"
 ) -> dict[str, float]:
     train_algorithm_root(algorithm_id)
     payload: dict[str, float] = {}
@@ -580,18 +484,15 @@ def canonical_training_scalars(
             continue
         numeric = float(value)
         raw_name = str(key)
-        mapped = SB3_SHARED_ACTOR_CRITIC_SCALAR_MAP.get(raw_name)
-        if mapped is not None:
-            name, multiplier = mapped
-            if name.startswith(("train/", "eval/", "leader/")):
-                payload[name] = numeric * multiplier
-            else:
-                payload[train_algorithm_metric(algorithm_id, name)] = numeric * multiplier
+        if (mapped := SB3_SHARED_ACTOR_CRITIC_SCALAR_MAP.get(raw_name)) is not None:
+            suffix, multiplier = mapped
+            payload[train_algorithm_metric(algorithm_id, suffix)] = numeric * multiplier
         elif algorithm_id == "ppo" and (mapped := SB3_PPO_SCALAR_MAP.get(raw_name)) is not None:
             name, multiplier = mapped
             payload[name] = numeric * multiplier
-        elif metric_definition(raw_name) is not None:
-            payload[raw_name] = numeric
+        elif (definition := metric_definition(raw_name)) is not None:
+            if definition.placement == "history":
+                payload[raw_name] = numeric
         elif raw_name in SB3_IGNORED_SCALARS:
             continue
         elif raw_name.startswith(_GRADLAB_OWNED_PREFIXES):

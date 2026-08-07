@@ -42,9 +42,10 @@ If a required fact is ambiguous and cannot be safely inferred from source artifa
      `--identity-only` before creating or moving any repository.
    - The only supported namespace is `tsilva`.
    - The generated name is
-     `<game-family>_<goal>_<policy-variant>_<algorithm>`; do not accept a manual repo name.
-   - Provider, run, seed, recipe, environment hash, and runtime versions belong in metadata,
-     not in the repository name.
+     `<goal>_<algorithm>_<policy-contract-sha256-prefix>`; do not accept a manual repo name.
+   - The suffix is the first eight hexadecimal characters of the SHA-256 of the canonical policy
+     variant. Game family, the full policy contract, provider, run, seed, recipe, environment hash,
+     and runtime versions belong in metadata, not in the repository name.
 
 3. Prepare the generated model card and preview with `$model-card-author` as the quality standard.
    - Do not hand-author `README.md`. The repository-owned release helper renders it from the
@@ -92,8 +93,9 @@ If a required fact is ambiguous and cannot be safely inferred from source artifa
 
 - Do not print or expose Hugging Face tokens, YouTube OAuth client secrets, OAuth refresh tokens, W&B credentials, or R2/S3 credentials.
 - Do not overwrite generated videos or model-card assets silently if labels, metrics, or task names are wrong; fix or regenerate them first.
-- Do not accept manual repository names, silently truncate long names, publish an unknown game
-  family, or infer an algorithm from a filename.
+- Do not accept manual repository names, publish an unknown game family, or infer an algorithm
+  from a filename. Reject a generated identifier that exceeds the provider limit instead of
+  truncating it.
 - Do not claim a win/completion rate unless it is backed by source evidence.
 - Do not move detailed YouTube formatting rules into this skill. Keep those in `$upload-youtube-video`; this skill only composes the release workflow.
 - Do not move detailed model-card writing or HF video-preview rules into this skill. Keep those in `$model-card-author`; this skill only requires that they are followed.

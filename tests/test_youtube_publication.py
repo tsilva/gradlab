@@ -7,6 +7,7 @@ import urllib.parse
 import pytest
 
 from gradlab.youtube_publication import (
+    YouTubeClient,
     YouTubePublicationError,
     exchange_oauth_code,
     new_oauth_transaction,
@@ -90,3 +91,32 @@ def test_oauth_does_not_invent_scopes_omitted_from_partial_grant(monkeypatch) ->
     token = exchange_oauth_code(CLIENT, transaction, code="code")
 
     assert token["scopes"] == ["https://www.googleapis.com/auth/youtube.upload"]
+
+
+def test_find_or_create_playlist_replaces_stale_listed_match(monkeypatch) -> None:
+    client = YouTubeClient("access")
+    calls: list[tuple[str, str]] = []
+
+    def request(url, *, method="GET", payload=None, timeout=60.0):
+        del payload, timeout
+        calls.append((method, url))
+        if "mine=true" in url:
+            return {
+                "items": [
+                    {
+                        "id": "stale-playlist",
+                        "snippet": {"title": "gradlab"},
+                    }
+                ]
+            }
+        if "playlistItems" in url:
+            raise YouTubePublicationError("playlist not found", status=404)
+        assert method == "POST"
+        return {"id": "replacement-playlist"}
+
+    monkeypatch.setattr(client, "_request_json", request)
+
+    assert client.find_or_create_playlist("gradlab", privacy="public") == (
+        "replacement-playlist"
+    )
+    assert any(method == "POST" for method, _url in calls)

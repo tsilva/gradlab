@@ -8,7 +8,7 @@ from typing import Any
 from gradlab.metric_names import (
     LEADER_CHECKPOINT_STEP,
     METRICS_SCHEMA_VERSION,
-    evaluation_metric_schema,
+    require_current_metrics_schema,
     validate_metric_name,
 )
 
@@ -29,7 +29,7 @@ def parse_objective_rank(
     if not isinstance(value, Sequence) or isinstance(value, str | bytes):
         return ()
     try:
-        evaluation_metric_schema(metrics_schema_version)
+        require_current_metrics_schema(metrics_schema_version)
     except ValueError:
         return ()
     criteria: list[RankCriterion] = []

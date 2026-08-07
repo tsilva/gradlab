@@ -9,6 +9,7 @@ from unittest.mock import patch
 import pytest
 
 from gradlab.env import EnvConfig
+from gradlab.metric_names import METRICS_SCHEMA_VERSION
 from gradlab.wandb_publisher import WandbProjector, _start_wandb
 from gradlab.wandb_utils import (
     canonical_wandb_environment,
@@ -205,7 +206,7 @@ def test_resume_wandb_requires_or_uses_display_name(
         "run_name": "gradlab-0123456789abcdef0123456789abcdef",
         "env_provider": "supermariobrosnes-turbo",
         "game": "SuperMarioBros-Nes-v0",
-        "metrics_schema_version": 18,
+        "metrics_schema_version": METRICS_SCHEMA_VERSION,
     }
     fake_wandb = SimpleNamespace(
         init=lambda **kwargs: captured.update(kwargs) or FakeRun(),

@@ -23,29 +23,22 @@ from gradlab.dstack_backend import DSTACK_VERSION
 from gradlab.early_stop import validate_metric_early_stop_decision
 from gradlab.env import resolve_env_config
 from gradlab.env_config import env_config_from_mapping
-from gradlab.eval_metrics import eval_by_start_rows
+from gradlab.eval_metrics import eval_by_start_records
 from gradlab.eval_backend import EvalBackend, EvalHandle
 from gradlab.evaluation_projection import evaluation_wandb_projection
 from gradlab.file_utils import file_sha256
 from gradlab.goal_variants import validate_goal_variant_descriptor
 from gradlab.metric_names import (
     METRICS_SCHEMA_VERSION,
-    ORCHESTRATION_CHECKPOINT_BACKLOG,
-    ORCHESTRATION_EVENT_SEQ,
-    ORCHESTRATION_IDLE_GPU_TAIL_SECONDS,
-    ORCHESTRATION_INGRESS_RATE,
-    ORCHESTRATION_LOCAL_HIGH_WATER,
-    ORCHESTRATION_OLDEST_UNPUBLISHED_SECONDS,
-    ORCHESTRATION_PENDING_EVALS,
-    ORCHESTRATION_PUBLICATION_CAPACITY_RATIO,
-    ORCHESTRATION_PUBLISH_RATE,
-    ORCHESTRATION_QUEUE_DEPTH,
-    ORCHESTRATION_R2_HIGH_WATER,
-    ORCHESTRATION_RESULT_TO_STOP_SECONDS,
+    ORCHESTRATION_CHECKPOINT_PENDING_COUNT,
+    ORCHESTRATION_DRAIN_GPU_IDLE_SECONDS,
+    ORCHESTRATION_EVAL_PENDING_COUNT,
+    ORCHESTRATION_EVENT_SEQUENCE,
+    ORCHESTRATION_OUTBOX_OLDEST_AGE_SECONDS,
+    ORCHESTRATION_OUTBOX_PENDING_COUNT,
+    ORCHESTRATION_OUTBOX_REMOTE_VISIBILITY_LAG_SECONDS,
     ORCHESTRATION_SCRATCH_USED_FRACTION,
-    ORCHESTRATION_WANDB_HIGH_WATER,
-    ORCHESTRATION_WANDB_REMOTE_HIGH_WATER,
-    ORCHESTRATION_WANDB_REMOTE_VISIBLE_LAG_SECONDS,
+    summary_value,
 )
 from gradlab.metric_store import metric_store_path
 from gradlab.model_sources import download_public_checkpoint_manifest_source
@@ -112,7 +105,7 @@ from gradlab.training_lifecycle import (
     TrainingExecutionMode,
 )
 from gradlab.trusted_inputs import stage_model_input
-from gradlab.wandb_publisher import WandbProjector
+from gradlab.wandb_publisher import WandbProjector, promotion_summary_matches
 from gradlab.vizdoom_assets import (
     bind_vizdoom_iwad_to_document,
     install_vizdoom_iwad_file,
@@ -218,16 +211,6 @@ def _bind_evaluation_contract(
     return {}
 
 
-def _summary_scalar(value: Any) -> Any:
-    getter = getattr(value, "get", None)
-    if callable(getter):
-        for key in ("max", "last"):
-            nested = getter(key)
-            if nested is not None:
-                return nested
-    return value
-
-
 def _terminal_outcome(
     *,
     cancel_requested: bool,
@@ -317,11 +300,6 @@ class RunSupervisor:
         self.last_segment = 0.0
         self.last_eval_poll = 0.0
         self.last_health_sample = 0.0
-        self.last_health_local_high_water = 0
-        self.last_health_wandb_high_water = 0
-        self.peak_ingress_rate = 0.0
-        self.peak_publish_rate = 0.0
-        self.peak_publish_capacity = 0.0
         self.last_remote_probe = 0.0
         self.wandb_remote_high_water = 0
         self.wandb_remote_visible_lag_seconds = 0.0
@@ -1212,12 +1190,10 @@ class RunSupervisor:
                     status=result.status,
                     result=result.to_dict(),
                 )
-                if raw is not None:
-                    self._record_eval_metrics(
-                        self.store.eval(key) or initial,
-                        result,
-                        raw,
-                    )
+                self._record_eval_metrics(
+                    self.store.eval(key) or initial,
+                    result,
+                )
                 if result.status == "accepted":
                     self.stop_reason = "eval_acceptance"
                 continue
@@ -1414,19 +1390,11 @@ class RunSupervisor:
     def _publish_wandb(self) -> int:
         if self.projector is None:
             return 0
-        started = self.clock.monotonic()
-        published = self.runtime.publish_frames(
+        return self.runtime.publish_frames(
             self.store,
             self.projector,
             limit=250,
         )
-        elapsed = max(self.clock.monotonic() - started, 1e-6)
-        if published:
-            self.peak_publish_capacity = max(
-                self.peak_publish_capacity,
-                published / elapsed,
-            )
-        return published
 
     def _publish_checkpoints(self) -> int:
         published = 0
@@ -1809,27 +1777,28 @@ class RunSupervisor:
         self,
         row: Mapping[str, Any],
         result: EvalResult,
-        raw: Mapping[str, Any],
     ) -> None:
+        episodes_planned = int(row["intent"]["execution_contract"]["episodes"])
         metrics = evaluation_wandb_projection(
-            dict(raw.get("metrics") or {}),
+            result.aggregates,
             schema_version=METRICS_SCHEMA_VERSION,
             checkpoint_step=int(row["checkpoint_step"]),
             accepted=result.status == "accepted",
-            episodes_planned=int(row["intent"]["execution_contract"]["episodes"]),
+            episodes_planned=episodes_planned,
             episodes_completed=len(result.episode_results),
-            duration_seconds=float(raw.get("duration_seconds") or 0.0),
         )
         self.store.append_metrics(
             metrics,
             step=int(row["checkpoint_step"]),
             source=f"eval:{row['idempotency_key']}",
         )
-        if result.status == "accepted":
+        if result.status in {"accepted", "rejected"} and len(
+            result.episode_results
+        ) == episodes_planned:
             self.store.enqueue_event(
                 kind="eval_by_start",
                 payload={
-                    "rows": eval_by_start_rows(
+                    "records": eval_by_start_records(
                         [dict(episode) for episode in result.episode_results]
                     )
                 },
@@ -1873,14 +1842,9 @@ class RunSupervisor:
             signal_sent = self.clock.time()
             requested = self.store.mark_stop_requested(idempotency_key=result.idempotency_key)
             result_to_stop = signal_sent - observed
-            self.store.append_metrics(
-                {ORCHESTRATION_RESULT_TO_STOP_SECONDS: result_to_stop},
-                step=int(row["checkpoint_step"]),
-                source=f"orchestration:stop:{result.idempotency_key}",
-            )
             if result_to_stop > 10.0 or requested - observed > 10.0:
                 raise RuntimeError("accepted eval did not issue stop within ten seconds")
-        self._record_eval_metrics(row, result, raw)
+        self._record_eval_metrics(row, result)
         print(
             f"Modal eval terminal checkpoint={result.checkpoint_id} status={result.status}",
             flush=True,
@@ -1984,11 +1948,10 @@ class RunSupervisor:
             return
         self.last_remote_probe = now
         try:
-            summary_value = self.runtime.remote_summary(self.wandb_run_path).get(
-                ORCHESTRATION_EVENT_SEQ
+            remote_value = self.runtime.remote_summary(self.wandb_run_path).get(
+                ORCHESTRATION_EVENT_SEQUENCE
             )
-            summary_value = _summary_scalar(summary_value)
-            remote_high_water = int(summary_value or 0)
+            remote_high_water = int(summary_value(remote_value) or 0)
             self.wandb_remote_high_water = max(
                 self.wandb_remote_high_water,
                 remote_high_water,
@@ -2013,44 +1976,21 @@ class RunSupervisor:
     def _emit_health(self, now: float) -> None:
         if now - self.last_health_sample < HEALTH_SAMPLE_SECONDS:
             return
-        interval = (
-            HEALTH_SAMPLE_SECONDS
-            if self.last_health_sample == 0.0
-            else max(now - self.last_health_sample, 0.001)
-        )
         local_high_water, wandb_high_water = self._frame_high_waters()
-        ingress_rate = max(
-            0.0,
-            (local_high_water - self.last_health_local_high_water) / interval,
-        )
-        publish_rate = max(
-            0.0,
-            (wandb_high_water - self.last_health_wandb_high_water) / interval,
-        )
-        self.peak_ingress_rate = max(self.peak_ingress_rate, ingress_rate)
-        self.peak_publish_rate = max(self.peak_publish_rate, publish_rate)
-        capacity_ratio = (
-            self.peak_publish_capacity / self.peak_ingress_rate
-            if self.peak_ingress_rate > 0.0
-            else 0.0
-        )
         self._probe_wandb_remote(now, local_high_water=local_high_water)
         usage = self.runtime.disk_usage(self.output_root)
         metrics = {
-            ORCHESTRATION_QUEUE_DEPTH: float(self.store.metric_outbox_stats()["frames"]),
-            ORCHESTRATION_OLDEST_UNPUBLISHED_SECONDS: self._oldest_unpublished_age(),
-            ORCHESTRATION_INGRESS_RATE: ingress_rate,
-            ORCHESTRATION_PUBLISH_RATE: publish_rate,
-            ORCHESTRATION_PUBLICATION_CAPACITY_RATIO: capacity_ratio,
-            ORCHESTRATION_LOCAL_HIGH_WATER: float(local_high_water),
-            ORCHESTRATION_R2_HIGH_WATER: float(self.store.metric_segment_high_water()),
-            ORCHESTRATION_WANDB_HIGH_WATER: float(wandb_high_water),
-            ORCHESTRATION_WANDB_REMOTE_HIGH_WATER: float(self.wandb_remote_high_water),
-            ORCHESTRATION_WANDB_REMOTE_VISIBLE_LAG_SECONDS: (self.wandb_remote_visible_lag_seconds),
-            ORCHESTRATION_CHECKPOINT_BACKLOG: float(
+            ORCHESTRATION_OUTBOX_PENDING_COUNT: float(
+                self.store.metric_outbox_stats()["frames"]
+            ),
+            ORCHESTRATION_OUTBOX_OLDEST_AGE_SECONDS: self._oldest_unpublished_age(),
+            ORCHESTRATION_OUTBOX_REMOTE_VISIBILITY_LAG_SECONDS: (
+                self.wandb_remote_visible_lag_seconds
+            ),
+            ORCHESTRATION_CHECKPOINT_PENDING_COUNT: float(
                 len(self.store.checkpoints()) - len(self.store.checkpoint_publications())
             ),
-            ORCHESTRATION_PENDING_EVALS: float(
+            ORCHESTRATION_EVAL_PENDING_COUNT: float(
                 len(
                     self.store.evals(
                         statuses=("pending", "submitted"),
@@ -2069,13 +2009,14 @@ class RunSupervisor:
             "backpressure",
             {
                 **metrics,
-                "publication_capacity_sufficient": capacity_ratio >= 2.0,
+                "local_high_water": local_high_water,
+                "r2_high_water": self.store.metric_segment_high_water(),
+                "wandb_high_water": wandb_high_water,
+                "wandb_remote_high_water": self.wandb_remote_high_water,
                 "sampled_at": self.clock.utc_now(),
             },
         )
         self.last_health_sample = now
-        self.last_health_local_high_water = local_high_water
-        self.last_health_wandb_high_water = wandb_high_water
 
     def _oldest_unpublished_age(self) -> float:
         health = self.store.outbox_health()
@@ -2215,13 +2156,6 @@ class RunSupervisor:
             else:
                 delivery_deadline = None
             if converged:
-                if (
-                    self.peak_ingress_rate > 0.0
-                    and self.peak_publish_capacity < 2.0 * self.peak_ingress_rate
-                ):
-                    raise RuntimeError(
-                        "measured W&B publication capacity is below twice peak metric ingress"
-                    )
                 return
             if delivery_deadline is not None and now >= delivery_deadline:
                 raise TimeoutError(
@@ -2356,17 +2290,17 @@ class RunSupervisor:
         selected = self.store.eval(receipt.eval_idempotency_key)
         if selected is None:
             raise RuntimeError("promoted eval is absent from the supervisor ledger")
-        raw = self.authority.eval_result(
-            run_id=self.manifest.run_id,
-            idempotency_key=receipt.eval_idempotency_key,
-        )
-        if raw is None:
-            raise RuntimeError("promoted eval raw result is absent from private R2")
+        verified_result = EvalResult.from_dict(selected["result"])
+        if (
+            verified_result.status != "accepted"
+            or verified_result.checkpoint_id != receipt.checkpoint_id
+            or document_sha256(verified_result.to_dict()) != receipt.eval_result_sha256
+        ):
+            raise RuntimeError("promotion receipt does not match its verified accepted result")
         checkpoint = self.store.checkpoint_publication_by_id(receipt.checkpoint_id)
         if checkpoint is None:
             raise RuntimeError("promoted checkpoint is absent from the public inventory")
-        metrics = dict(raw.get("metrics") or {})
-        metrics.update(dict(selected["result"].get("aggregates") or {}))
+        metrics = dict(verified_result.aggregates)
         assert self.projector is not None
         self.runtime.publish_promotion(
             self.projector,
@@ -2382,13 +2316,20 @@ class RunSupervisor:
     def _wait_for_remote_promotion(self, receipt: PromotionReceipt) -> None:
         if not self.wandb_run_path:
             raise RuntimeError("W&B run path is unavailable")
+        checkpoint = self.store.checkpoint_publication_by_id(receipt.checkpoint_id)
+        if checkpoint is None:
+            raise RuntimeError("promoted checkpoint is absent from the public inventory")
         deadline = self.clock.monotonic() + WANDB_DRAIN_TIMEOUT_SECONDS
         while True:
             try:
                 summary = self.runtime.remote_summary(self.wandb_run_path)
-                if (
-                    str(summary.get("gradlab/goal/outcome") or "") == "accepted"
-                    and int(summary.get("leader/checkpoint/step") or -1) == receipt.checkpoint_step
+                if promotion_summary_matches(
+                    summary,
+                    checkpoint_step=receipt.checkpoint_step,
+                    checkpoint_url=str(checkpoint["public_url"]),
+                    updated_at=receipt.promoted_at,
+                    selection_rank=self.train_config["selection_rank"],
+                    metrics_schema_version=METRICS_SCHEMA_VERSION,
                 ):
                     return
             except Exception as exc:
@@ -2561,7 +2502,6 @@ class RunSupervisor:
                 "journal_archive": None,
                 "journal_expires_at": None,
                 "wandb_remote_high_water_mark": 0,
-                "publication_capacity_ratio": None,
                 "failure": _bounded_exception_document(failure),
             },
             completed_at=self.clock.utc_now(),
@@ -2700,7 +2640,7 @@ class RunSupervisor:
             assert learner_exited_at is not None
             self.store.append_metrics(
                 {
-                    ORCHESTRATION_IDLE_GPU_TAIL_SECONDS: max(
+                    ORCHESTRATION_DRAIN_GPU_IDLE_SECONDS: max(
                         0.0,
                         self.clock.time() - learner_exited_at,
                     )
@@ -2814,11 +2754,6 @@ class RunSupervisor:
                 "journal_archive": journal_archive,
                 "journal_expires_at": journal_expires_at,
                 "wandb_remote_high_water_mark": self.wandb_remote_high_water,
-                "publication_capacity_ratio": (
-                    self.peak_publish_capacity / self.peak_ingress_rate
-                    if self.peak_ingress_rate > 0.0
-                    else None
-                ),
                 "failure": (_bounded_exception_document(failure) if failure is not None else None),
                 "learner_terminal": self.learner_terminal_document,
                 "learner_teardown": self.learner_teardown_evidence or None,

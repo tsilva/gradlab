@@ -192,11 +192,6 @@ def active_reward_components(task: Mapping[str, object]) -> tuple[str, ...]:
     return tuple(components)
 
 
-def active_reward_signals(task: Mapping[str, object]) -> tuple[str, ...]:
-    components = set(active_reward_components(task))
-    return tuple(name for name in ("progress", "score") if name in components)
-
-
 def validate_action_space(action_space, *, algorithm_id: str) -> None:
     supported = (spaces.Box, spaces.Discrete, spaces.MultiBinary, spaces.MultiDiscrete)
     if not isinstance(action_space, supported):
@@ -399,14 +394,10 @@ def run_sb3_on_policy(
             [
                 RolloutDiagnosticsHelper(
                     algorithm_id=algorithm_id,
-                    metric_store_path=store_path,
-                    wandb_enabled=context.wandb_enabled,
-                    histogram_interval=64,
                 ),
                 RuntimeMetricsHelper(
                     event_names=tuple(task_termination(config).get("failure", ())),
                     active_reward_components=active_reward_components(config.task),
-                    active_reward_signals=active_reward_signals(config.task),
                     progress_fields=tuple(common_config.get("episode_progress_fields", ())),
                     configured_starts=tuple(
                         config.states or ((config.state,) if config.state else ())
@@ -451,7 +442,6 @@ def run_sb3_on_policy(
                         if backend_config["ent_coef_schedule_timesteps"] > 0
                         else common_config["timesteps"]
                     ),
-                    algorithm_id=algorithm_id,
                 )
             )
         if (

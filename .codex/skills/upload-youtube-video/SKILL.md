@@ -14,7 +14,11 @@ exact admitted `replay.mp4`, add the hidden `gradlab-publication-<request-finger
 verify successful YouTube processing before Hugging Face publication starts. Never infer
 evaluation evidence from the replay itself.
 
-Prefer the repo uploader script at `scripts/upload_youtube_video.py`. It uses `.secret/youtube_client_secret.json` and stores the OAuth token at `.secret/youtube_token.json`; do not print secret or token contents.
+Do not expose or admit player publication while the current episode is unfinished or its replay
+is still encoding. A prior completed capture may remain visible as provenance, but must become
+ineligible as soon as a new episode begins and must not substitute for that current episode.
+
+Prefer the repo uploader script at `scripts/upload_youtube_video.py`. It reads `youtube_client_secret.json` and stores `youtube_token.json` in GradLab's user configuration directory (`~/.config/gradlab` by default, or `$XDG_CONFIG_HOME/gradlab` when configured); do not print secret or token contents. Explicit `--client-secret` and `--token` paths remain available for operator-directed overrides.
 
 ## Before Uploading
 
@@ -26,28 +30,28 @@ Prefer the repo uploader script at `scripts/upload_youtube_video.py`. It uses `.
 
 ## Description Format
 
-Use a human-readable, game-agnostic title shape for RL/model preview videos:
+Use a compact, human-readable title shape for RL/model preview videos:
 
 ```text
-<Game Display Name> <Level/State Display Name> Solved by <ALGORITHM> - <win-rate> Win Rate
+<Game Display Name>[ — <Distinct Level/State Display Name>] — <Trainer> <ALGORITHM>
 ```
 
 Examples:
 
 ```text
-Super Mario Bros NES Level 1-2 Solved by PPO - 100% Win Rate
-Mega Man NES Cut Man Solved by PPO - 100% Win Rate
+ViZDoom Deathmatch — GradLab PPO
+Super Mario Bros NES — Level 1-2 — SB3 PPO
 ```
 
-Use `Solved by` only when the recorded episode itself meets the embedded goal's success rule and
-the checkpoint satisfies every embedded release-acceptance rule. Otherwise use `Played by`.
-Keep the recorded-episode outcome separate from verified checkpoint evaluation. Do not describe a
-failed replay as completing the goal merely because the checkpoint passed evaluation.
+Omit the level/state segment when it is the same identity as the game or environment. Keep win
+rate, acceptance, and the recorded-episode outcome out of the title; report them with their
+evidence context in the description. Identify the actual training backend as `GradLab` or `SB3`,
+not the artifact compatibility layer.
 
 Use this description shape for RL/model preview videos:
 
 ```text
-A <ALGORITHM> reinforcement learning agent completes <Game Display Name> <Level/State Display Name> with a <win-rate> local eval win rate.
+A <ALGORITHM> reinforcement-learning agent trained with <Trainer> <plays/completes> <Game Display Name>[ <Level/State Display Name>] with a <win-rate> verified evaluation win rate.
 
 Model: https://huggingface.co/<owner>/<repo>
 gradlab: https://github.com/tsilva/gradlab
@@ -57,14 +61,18 @@ gradlab: https://github.com/tsilva/gradlab
 
 Rules:
 
-- Keep titles compact and scannable: human game name, level/state, algorithm, and headline outcome.
+- Keep titles compact and scannable: human game name, a distinct level/state when applicable,
+  actual trainer, and algorithm. Keep outcome metrics in the description.
 - Prefer human display names over raw env ids in titles/descriptions. For example, use `Super Mario Bros NES` instead of `SuperMarioBros-Nes-v0`, and `Level 1-2` instead of `Level1-2`.
 - Start with a concise human-readable description of what the video shows.
 - Mention that the checkpoint was trained with `gradlab` in the first sentence when true.
 - Put the `Model:` link before the `gradlab:` link.
 - Keep the link labels short and plain: `gradlab:` and `Model:`.
 - Include up to three visible hashtags at the end of the description: `#ReinforcementLearning`, `#<ALGORITHM>`, and one compact game hashtag such as `#SuperMarioBros` or `#MegaMan`.
-- Add hidden tags for search/context: reinforcement learning, deep reinforcement learning, AI gameplay, stable-baselines3, Stable Retro, gradlab, algorithm, raw game id, human game name, raw level/state id, and human level/state name.
+- Add hidden tags for search/context: reinforcement learning, deep reinforcement learning, AI
+  gameplay, actual training backend, gradlab, algorithm, raw game id, human game name, raw
+  level/state id, and human level/state name. Add `stable-baselines3` only for an SB3 training
+  backend and `Stable Retro` only for a Stable Retro environment provider.
 - Avoid shorteners and redirect domains for YouTube descriptions; they can be visually truncated or treated suspiciously by YouTube.
 - Expect YouTube to visually ellipsize long links in collapsed views even when the actual link is correct and clickable.
 - Include extra eval claims only when the user asks for them or when they are needed for the video description and are backed by the current model card, private-R2 evaluation evidence, W&B metrics, or generated summary files.
@@ -83,8 +91,8 @@ Use the script from the repo root:
 
 ```bash
 python3 scripts/upload_youtube_video.py <video.mp4> \
-  --title "<Game Display Name> <Level/State Display Name> Solved by PPO - <win-rate> Win Rate" \
-  --human-description "A PPO reinforcement learning agent completes <Game Display Name> <Level/State Display Name> with a <win-rate> local eval win rate." \
+  --title "<Game Display Name> — <Distinct Level/State Display Name> — <Trainer> PPO" \
+  --human-description "A PPO reinforcement-learning agent trained with <Trainer> completes <Game Display Name> <Level/State Display Name> with a <win-rate> verified evaluation win rate." \
   --model-page $'Model: https://huggingface.co/<owner>/<repo>\ngradlab: https://github.com/tsilva/gradlab' \
   --description "#ReinforcementLearning #PPO #<GameName>" \
   --tags "reinforcement learning,deep reinforcement learning,AI gameplay,stable-baselines3,Stable Retro,gradlab,PPO,<raw game id>,<Game Display Name>,<raw level/state id>,<Level/State Display Name>" \
@@ -110,8 +118,8 @@ Use `--video-id` to update metadata without re-uploading:
 ```bash
 python3 scripts/upload_youtube_video.py \
   --video-id <youtube-video-id> \
-  --title "<Game Display Name> <Level/State Display Name> Solved by PPO - <win-rate> Win Rate" \
-  --human-description "A PPO reinforcement learning agent completes <Game Display Name> <Level/State Display Name> with a <win-rate> local eval win rate." \
+  --title "<Game Display Name> — <Distinct Level/State Display Name> — <Trainer> PPO" \
+  --human-description "A PPO reinforcement-learning agent trained with <Trainer> completes <Game Display Name> <Level/State Display Name> with a <win-rate> verified evaluation win rate." \
   --model-page $'Model: https://huggingface.co/<owner>/<repo>\ngradlab: https://github.com/tsilva/gradlab' \
   --description "#ReinforcementLearning #PPO #<GameName>" \
   --privacy-status public \

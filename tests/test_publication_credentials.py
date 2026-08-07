@@ -52,25 +52,26 @@ def test_huggingface_symlinked_token_fails_closed(tmp_path: Path) -> None:
 
 
 def test_youtube_secret_paths_normalize_owned_modes(tmp_path: Path) -> None:
-    secret = tmp_path / ".secret"
-    secret.mkdir(mode=0o755)
-    client = secret / "youtube_client_secret.json"
+    config = tmp_path / ".config" / "gradlab"
+    config.mkdir(parents=True, mode=0o755)
+    client = config / "youtube_client_secret.json"
     client.write_text('{"installed": {"client_id": "id", "client_secret": "secret"}}')
     os.chmod(client, 0o644)
 
-    paths = youtube_credential_paths(tmp_path)
+    paths = youtube_credential_paths(environment={"HOME": str(tmp_path)})
 
+    assert paths.root == config.resolve()
     assert stat.S_IMODE(paths.root.stat().st_mode) == 0o700
     assert stat.S_IMODE(paths.client.stat().st_mode) == 0o600
     assert stat.S_IMODE(paths.lock.stat().st_mode) == 0o600
 
 
 def test_youtube_symlinked_client_secret_fails_closed(tmp_path: Path) -> None:
-    secret = tmp_path / ".secret"
-    secret.mkdir(mode=0o700)
+    config = tmp_path / ".config" / "gradlab"
+    config.mkdir(parents=True, mode=0o700)
     outside = tmp_path / "outside.json"
     outside.write_text("{}", encoding="utf-8")
-    (secret / "youtube_client_secret.json").symlink_to(outside)
+    (config / "youtube_client_secret.json").symlink_to(outside)
 
     with pytest.raises(CredentialSecurityError, match="regular non-symlink"):
-        youtube_credential_paths(tmp_path)
+        youtube_credential_paths(environment={"HOME": str(tmp_path)})

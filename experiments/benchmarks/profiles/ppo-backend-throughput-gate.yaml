@@ -32,8 +32,8 @@ cases:
   recipe_overrides:
   - train.timesteps=32768
 required_metrics:
-- train/throughput/loop_fps
-- train/throughput/env_step_fps
-- train/throughput/rollout_seconds
-- train/throughput/between_rollouts_seconds
+- train/throughput/loop/rate
+- train/throughput/provider/step/rate
+- train/throughput/rollout/overhead/seconds
+- train/throughput/between/rollouts/seconds
 run_description: Paired SB3-versus-GradLab PPO throughput acceptance gate.

@@ -32,6 +32,7 @@ def main() -> None:
     parser.add_argument("--iwad", type=Path, required=True)
     parser.add_argument("--goal-root", type=Path, required=True)
     parser.add_argument("--num-envs", type=int, default=128)
+    parser.add_argument("--skip-reference-check", action="store_true")
     args = parser.parse_args()
     if not torch.cuda.is_available():
         raise RuntimeError("CUDA is required")
@@ -136,33 +137,38 @@ def main() -> None:
             ent_coef=float(backend["ent_coef"]),
             torch_permutation=True,
         )
-        reference_mapping = dict(common["checkpoint_eval_environment"])
-        reference_mapping["env_args"] = {
-            **reference_mapping["env_args"],
-            "rom_path": str(args.iwad),
-        }
-        reference_config = resolve_env_config(env_config_from_mapping(reference_mapping))
-        reference = make_training_vec_env(reference_config, n_envs=1, seed=seed)
-        try:
-            if (
-                runtime.action_contract["semantic_hash"]
-                != reference.runtime.action_contract["semantic_hash"]
-            ):
-                print(
-                    json.dumps(
-                        {
-                            "gradoom": runtime.action_contract["provider"]["semantics"],
-                            "vizdoom": reference.runtime.action_contract["provider"]["semantics"],
-                        },
-                        sort_keys=True,
+        reference_action_contract = "skipped"
+        if not args.skip_reference_check:
+            reference_mapping = dict(common["checkpoint_eval_environment"])
+            reference_mapping["env_args"] = {
+                **reference_mapping["env_args"],
+                "rom_path": str(args.iwad),
+            }
+            reference_config = resolve_env_config(env_config_from_mapping(reference_mapping))
+            reference = make_training_vec_env(reference_config, n_envs=1, seed=seed)
+            try:
+                if (
+                    runtime.action_contract["semantic_hash"]
+                    != reference.runtime.action_contract["semantic_hash"]
+                ):
+                    print(
+                        json.dumps(
+                            {
+                                "gradoom": runtime.action_contract["provider"]["semantics"],
+                                "vizdoom": reference.runtime.action_contract["provider"][
+                                    "semantics"
+                                ],
+                            },
+                            sort_keys=True,
+                        )
                     )
+                action_compatibility = assert_action_contract_compatible(
+                    runtime.action_contract,
+                    reference.runtime.action_contract,
                 )
-            action_compatibility = assert_action_contract_compatible(
-                runtime.action_contract,
-                reference.runtime.action_contract,
-            )
-        finally:
-            reference.close()
+                reference_action_contract = action_compatibility["status"]
+            finally:
+                reference.close()
         torch.cuda.synchronize()
         print(
             json.dumps(
@@ -174,7 +180,7 @@ def main() -> None:
                     "num_envs": args.num_envs,
                     "observation_keys": sorted(observations),
                     "ppo_update_metrics": sorted(update),
-                    "reference_action_contract": action_compatibility["status"],
+                    "reference_action_contract": reference_action_contract,
                     "torch": torch.__version__,
                 },
                 sort_keys=True,

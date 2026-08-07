@@ -319,13 +319,13 @@ def mario_checkpoint_train_config() -> dict[str, object]:
     return {
         "metrics_schema_version": METRICS_SCHEMA_VERSION,
         "selection_rank": [
-            "max(eval/full/outcome/success/across_starts/rate/mean)",
+            "max(eval/full/outcome/success/starts/rate/mean)",
             "max(eval/full/episode/return/shaped/mean)",
             "min(leader/checkpoint/step)",
         ],
         "checkpoint_eval_acceptance": [
             {
-                "metric": "eval/full/outcome/success/across_starts/rate/min",
+                "metric": "eval/full/outcome/success/starts/rate/min",
                 "operator": ">=",
                 "threshold": 1.0,
             }
@@ -1233,7 +1233,7 @@ def test_deathmatch_checkpoint_metric_contract_prioritizes_frag_evidence() -> No
         {
             "metric": "eval/full/progress/kills/mean",
             "direction": "max",
-            "label": "Eval mean kills",
+            "label": "Full-eval kills mean",
             "evidence": "evaluation",
             "roles": ["objective", "acceptance"],
             "rank_index": 0,
@@ -1246,9 +1246,9 @@ def test_deathmatch_checkpoint_metric_contract_prioritizes_frag_evidence() -> No
             ],
         },
         {
-            "metric": "train/progress/kills/from/target/rolling_up_to_100/mean",
+            "metric": "train/progress/kills/origin/target/rolling/mean",
             "direction": "max",
-            "label": "Train mean kills (up to 100)",
+            "label": "Recent target kills mean",
             "evidence": "training",
             "roles": ["training_proxy"],
             "proxy_for": "eval/full/progress/kills/mean",
@@ -1256,15 +1256,15 @@ def test_deathmatch_checkpoint_metric_contract_prioritizes_frag_evidence() -> No
         {
             "metric": "eval/full/progress/kills/max",
             "direction": "max",
-            "label": "Eval max kills",
+            "label": "Full-eval kills max",
             "evidence": "evaluation",
             "roles": ["tie_breaker"],
             "rank_index": 1,
         },
         {
-            "metric": "train/episode/return/shaped/from/target/rolling_up_to_100/mean",
+            "metric": "train/episode/return/shaped/origin/target/rolling/mean",
             "direction": "max",
-            "label": "Train mean return (up to 100)",
+            "label": "Recent target return mean",
             "evidence": "training",
             "roles": ["optimization"],
         },
@@ -1272,11 +1272,11 @@ def test_deathmatch_checkpoint_metric_contract_prioritizes_frag_evidence() -> No
 
 
 def test_checkpoint_metric_leaders_marks_each_best_value_and_ties() -> None:
-    train_success = "train/outcome/success/across_starts/window_100/rate/mean"
+    train_success = "train/outcome/success/starts/all/rolling/rate/mean"
     train_return = (
-        "train/episode/return/shaped/from/target/rolling_up_to_100/mean"
+        "train/episode/return/shaped/origin/target/rolling/mean"
     )
-    eval_success = "eval/full/outcome/success/across_starts/rate/mean"
+    eval_success = "eval/full/outcome/success/starts/rate/mean"
     eval_return = "eval/full/episode/return/shaped/mean"
 
     columns = tuple(
@@ -1369,30 +1369,30 @@ def test_catalog_attaches_latest_training_metrics_at_each_checkpoint(
             assert page_size == 10_000
             if keys == [
                 "train/global_step",
-                "train/progress/kills/from/target/rolling_up_to_100/mean",
+                "train/progress/kills/origin/target/rolling/mean",
             ]:
                 return [
                     {
                         "train/global_step": 200_000,
-                        "train/progress/kills/from/target/rolling_up_to_100/mean": 2.5,
+                        "train/progress/kills/origin/target/rolling/mean": 2.5,
                     },
                     {
                         "train/global_step": 490_000,
-                        "train/progress/kills/from/target/rolling_up_to_100/mean": 9.0,
+                        "train/progress/kills/origin/target/rolling/mean": 9.0,
                     },
                 ]
             if keys == [
                 "train/global_step",
-                "train/episode/return/shaped/from/target/rolling_up_to_100/mean",
+                "train/episode/return/shaped/origin/target/rolling/mean",
             ]:
                 return [
                     {
                         "train/global_step": 220_000,
-                        "train/episode/return/shaped/from/target/rolling_up_to_100/mean": 11.5,
+                        "train/episode/return/shaped/origin/target/rolling/mean": 11.5,
                     },
                     {
                         "train/global_step": 480_000,
-                        "train/episode/return/shaped/from/target/rolling_up_to_100/mean": 22.0,
+                        "train/episode/return/shaped/origin/target/rolling/mean": 22.0,
                     },
                 ]
             assert "across_origins" not in " ".join(keys)
@@ -1416,19 +1416,19 @@ def test_catalog_attaches_latest_training_metrics_at_each_checkpoint(
 
     assert periodic_row["metrics"] == {
         "eval/full/progress/kills/mean": None,
-        "train/progress/kills/from/target/rolling_up_to_100/mean": 2.5,
+        "train/progress/kills/origin/target/rolling/mean": 2.5,
         "eval/full/progress/kills/max": None,
-        "train/episode/return/shaped/from/target/rolling_up_to_100/mean": 11.5,
+        "train/episode/return/shaped/origin/target/rolling/mean": 11.5,
     }
     assert final_row["metrics"] == {
         "eval/full/progress/kills/mean": None,
-        "train/progress/kills/from/target/rolling_up_to_100/mean": 9.0,
+        "train/progress/kills/origin/target/rolling/mean": 9.0,
         "eval/full/progress/kills/max": None,
-        "train/episode/return/shaped/from/target/rolling_up_to_100/mean": 22.0,
+        "train/episode/return/shaped/origin/target/rolling/mean": 22.0,
     }
     assert final_row["best_metrics"] == [
-        "train/progress/kills/from/target/rolling_up_to_100/mean",
-        "train/episode/return/shaped/from/target/rolling_up_to_100/mean",
+        "train/progress/kills/origin/target/rolling/mean",
+        "train/episode/return/shaped/origin/target/rolling/mean",
     ]
     assert periodic_row["best_metrics"] == []
     filtered = catalog.checkpoints(
@@ -1454,7 +1454,7 @@ def test_catalog_attaches_goal_required_eval_results_by_checkpoint(
             "promotion": {"checkpoint_id": periodic["checkpoint_id"]},
         },
     )
-    required_metric = "eval/full/outcome/success/across_starts/rate/min"
+    required_metric = "eval/full/outcome/success/starts/rate/min"
 
     repo_root = Path.cwd()
     goal_path = repo_root / "experiments/goals/SuperMarioBros-Nes-v0/Level1-1/_goal.yaml"
@@ -1494,7 +1494,7 @@ def test_catalog_attaches_goal_required_eval_results_by_checkpoint(
             ],
             "metrics": {
                 required_metric: 1.0,
-                "eval/full/outcome/success/across_starts/rate/mean": 1.0,
+                "eval/full/outcome/success/starts/rate/mean": 1.0,
                 "eval/full/episode/return/shaped/mean": 1.0,
             },
         },
@@ -1580,16 +1580,16 @@ def test_catalog_attaches_goal_required_eval_results_by_checkpoint(
     assert accepted_row["playback_seed_source"] == "evaluation"
     assert accepted["metrics"] == {
         required_metric: 1.0,
-        "eval/full/outcome/success/across_starts/rate/mean": 1.0,
+        "eval/full/outcome/success/starts/rate/mean": 1.0,
         "eval/full/episode/return/shaped/mean": 1.0,
         "leader/checkpoint/step": 250_000.0,
     }
     assert accepted_row["metrics"][
-        "eval/full/outcome/success/across_starts/rate/mean"
+        "eval/full/outcome/success/starts/rate/mean"
     ] == 1.0
     assert accepted_row["metrics"]["eval/full/episode/return/shaped/mean"] == 1.0
     assert accepted_row["best_metrics"] == [
-        "eval/full/outcome/success/across_starts/rate/mean",
+        "eval/full/outcome/success/starts/rate/mean",
         "eval/full/episode/return/shaped/mean",
         required_metric,
     ]

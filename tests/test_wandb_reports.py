@@ -11,11 +11,7 @@ from unittest.mock import patch
 
 from gradlab.metric_names import (
     TRAIN_A2C_POLICY_ENTROPY,
-    TRAIN_A2C_POLICY_ENTROPY_BOUND_LOWER,
-    TRAIN_A2C_POLICY_ENTROPY_BOUND_UPPER,
     TRAIN_PPO_POLICY_ENTROPY,
-    TRAIN_PPO_POLICY_ENTROPY_BOUND_LOWER,
-    TRAIN_PPO_POLICY_ENTROPY_BOUND_UPPER,
     validate_metric_name,
 )
 from gradlab.recipe_documents import (
@@ -102,9 +98,9 @@ class WandbReportCompilationTests(unittest.TestCase):
         self.assertIn("min(leader/checkpoint/step)", serialized)
         self.assertIn("max(eval/full/episode/return/shaped/mean)", serialized)
         self.assertIn("eval/acceptance/pass", serialized)
-        self.assertIn("train/outcome/success/across_starts/window_100/rate/min", serialized)
-        self.assertIn("train/throughput/env_step_fps", serialized)
-        self.assertIn("eval/full/by_start", serialized)
+        self.assertIn("train/outcome/success/starts/all/rolling/rate/min", serialized)
+        self.assertIn("train/throughput/provider/step/rate", serialized)
+        self.assertIn("eval/full/start/table", serialized)
         self.assertNotIn("eval/full/outcome/success/from/Level1-1/rate", serialized)
         self.assertNotIn("eval/full/outcome/success/from/Level1-2/rate", serialized)
 
@@ -123,7 +119,7 @@ class WandbReportCompilationTests(unittest.TestCase):
                 if table_name:
                     validate_metric_name(table_name)
 
-    def test_policy_entropy_panel_overlays_styled_theoretical_bounds(self) -> None:
+    def test_policy_entropy_panel_uses_only_observed_entropy_metrics(self) -> None:
         report = build_wandb_report(
             goal_spec("Level1-1"), entity="entity", source_sha="a" * 40
         )
@@ -139,30 +135,8 @@ class WandbReportCompilationTests(unittest.TestCase):
             [
                 TRAIN_PPO_POLICY_ENTROPY,
                 TRAIN_A2C_POLICY_ENTROPY,
-                TRAIN_PPO_POLICY_ENTROPY_BOUND_LOWER,
-                TRAIN_A2C_POLICY_ENTROPY_BOUND_LOWER,
-                TRAIN_PPO_POLICY_ENTROPY_BOUND_UPPER,
-                TRAIN_A2C_POLICY_ENTROPY_BOUND_UPPER,
             ],
         )
-        self.assertEqual(panel.title_y, "nats")
-        for metric in (
-            TRAIN_PPO_POLICY_ENTROPY,
-            TRAIN_A2C_POLICY_ENTROPY,
-        ):
-            self.assertEqual(panel.line_marks[metric], "solid")
-        for metric in (
-            TRAIN_PPO_POLICY_ENTROPY_BOUND_LOWER,
-            TRAIN_A2C_POLICY_ENTROPY_BOUND_LOWER,
-        ):
-            self.assertEqual(panel.line_marks[metric], "dotted")
-            self.assertIn("theoretical lower bound", panel.line_titles[metric])
-        for metric in (
-            TRAIN_PPO_POLICY_ENTROPY_BOUND_UPPER,
-            TRAIN_A2C_POLICY_ENTROPY_BOUND_UPPER,
-        ):
-            self.assertEqual(panel.line_marks[metric], "dashed")
-            self.assertIn("theoretical upper bound", panel.line_titles[metric])
 
     def test_goal_fingerprint_is_semantic_and_reaches_train_config(self) -> None:
         document = load_goal_contract(LEVEL1_1_GOAL, ROOT)

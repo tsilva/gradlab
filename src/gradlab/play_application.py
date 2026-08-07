@@ -168,6 +168,8 @@ class PlaybackHost:
             status = capture.status() if capture is not None else {
                 "enabled": False,
                 "recording": False,
+                "episode_in_progress": False,
+                "ready": False,
                 "error": "episode capture is unavailable",
                 "latest": None,
             }

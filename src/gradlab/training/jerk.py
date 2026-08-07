@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import re
-import time
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -19,11 +18,8 @@ from gradlab.env import make_training_vec_env
 from gradlab.jerk import JerkSearch
 from gradlab.metric_names import (
     TRAIN_ALGORITHM_JERK_BEST_RETURN_MEAN,
-    TRAIN_ALGORITHM_JERK_BEST_SEQUENCE_LENGTH,
-    TRAIN_ALGORITHM_JERK_ARCHIVE_SELECTED_PREFIX_RETURN_MEAN,
-    TRAIN_ALGORITHM_JERK_EXPLOIT_PROBABILITY,
+    TRAIN_ALGORITHM_JERK_BEST_PROGRAM_STEPS,
     TRAIN_ALGORITHM_JERK_RETAINED_COUNT,
-    TRAIN_THROUGHPUT_LOOP_FPS,
 )
 from gradlab.training_backend import (
     CHECKPOINT_EVAL_ACCEPTANCE,
@@ -37,7 +33,7 @@ from gradlab.training_lifecycle import (
     TrainingExecutionMode,
     TrainingResult,
 )
-from gradlab.training_metrics import episode_succeeded
+from gradlab.training_metrics import DeltaThroughputTracker, episode_succeeded
 
 
 DEFAULT_CONFIG: dict[str, Any] = {
@@ -74,7 +70,7 @@ JERK_PROGRESS_FIELDS = (
         "best return",
     ),
     ProgressField(
-        TRAIN_ALGORITHM_JERK_EXPLOIT_PROBABILITY,
+        "jerk/archive_replay_probability",
         "archive replay",
         ProgressValueFormat.PERCENT,
     ),
@@ -163,15 +159,11 @@ def _save_policy_bundle(
     )
 
 
-def _search_metric_payload(search: JerkSearch) -> dict[str, int | float]:
+def _wandb_metric_payload(search: JerkSearch) -> dict[str, int | float]:
     candidate = search.best_candidate()
     return {
         TRAIN_ALGORITHM_JERK_RETAINED_COUNT: search.retained_count,
-        TRAIN_ALGORITHM_JERK_EXPLOIT_PROBABILITY: search.archive_replay_probability,
-        TRAIN_ALGORITHM_JERK_ARCHIVE_SELECTED_PREFIX_RETURN_MEAN: (
-            search.archive_selected_prefix_return_mean
-        ),
-        TRAIN_ALGORITHM_JERK_BEST_SEQUENCE_LENGTH: (
+        TRAIN_ALGORITHM_JERK_BEST_PROGRAM_STEPS: (
             len(candidate.actions) if candidate is not None else 0
         ),
         TRAIN_ALGORITHM_JERK_BEST_RETURN_MEAN: (
@@ -180,15 +172,11 @@ def _search_metric_payload(search: JerkSearch) -> dict[str, int | float]:
     }
 
 
-def _metric_payload(
-    search: JerkSearch,
-    *,
-    step: int,
-    elapsed: float,
-) -> dict[str, int | float]:
+def _progress_metric_payload(search: JerkSearch) -> dict[str, int | float]:
     return {
-        **_search_metric_payload(search),
-        TRAIN_THROUGHPUT_LOOP_FPS: step / max(elapsed, 1e-9),
+        **_wandb_metric_payload(search),
+        "jerk/archive_replay_probability": search.archive_replay_probability,
+        "jerk/archive_selected_prefix_return_mean": (search.archive_selected_prefix_return_mean),
     }
 
 
@@ -237,7 +225,7 @@ def run_jerk(context: BackendContext) -> TrainingResult:
             progress_fields=JERK_PROGRESS_FIELDS,
         )
         context.mark_ready()
-        started_at = time.perf_counter()
+        throughput = DeltaThroughputTracker(env, initial_step=search.global_step)
         next_log = int(backend_config["log_interval_steps"])
         checkpoint_freq = int(common_config["checkpoint_freq"])
         next_checkpoint = checkpoint_freq if checkpoint_freq > 0 else None
@@ -272,7 +260,7 @@ def run_jerk(context: BackendContext) -> TrainingResult:
             context.session.advance(
                 step,
                 records,
-                progress_metrics=_search_metric_payload(search),
+                progress_metrics=_progress_metric_payload(search),
             )
             stop_for_completion = context.session.observe_completion(
                 step=step,
@@ -304,11 +292,10 @@ def run_jerk(context: BackendContext) -> TrainingResult:
             if step >= next_log:
                 early_stopped = context.session.report(
                     step=step,
-                    metrics=_metric_payload(
-                        search,
-                        step=step,
-                        elapsed=time.perf_counter() - started_at,
-                    ),
+                    metrics={
+                        **_wandb_metric_payload(search),
+                        **throughput.snapshot(step),
+                    },
                 )
                 next_log += int(backend_config["log_interval_steps"])
             while next_checkpoint is not None and step >= next_checkpoint:
@@ -331,11 +318,10 @@ def run_jerk(context: BackendContext) -> TrainingResult:
         step = search.global_step
         context.session.report(
             step=step,
-            metrics=_metric_payload(
-                search,
-                step=step,
-                elapsed=time.perf_counter() - started_at,
-            ),
+            metrics={
+                **_wandb_metric_payload(search),
+                **throughput.snapshot(step),
+            },
         )
         default_reason = (
             TerminalReason.TRAINING_ACCEPTANCE if accepted else TerminalReason.RESOURCE_EXHAUSTION

@@ -33,8 +33,9 @@ from gradlab.callbacks import (
 from gradlab.env import EnvConfig, resolve_env_config
 from gradlab.env_config import env_config_from_mapping
 from gradlab.metric_store import MetricStore
+from gradlab.training_metrics import DeltaThroughputTracker
 from gradlab.metric_names import (
-    TRAIN_OUTCOME_SUCCESS_ACROSS_STARTS_WINDOW_100_RATE_MIN,
+    TRAIN_OUTCOME_SUCCESS_STARTS_ALL_ROLLING_RATE_MIN,
     train_early_stop_metric,
 )
 from gradlab.policy_bundle import build_recipe_document, write_canonical_json
@@ -85,13 +86,9 @@ class RuntimeMetricsHelperTests(unittest.TestCase):
         self.assertEqual(logger.records, {})
         callback._on_rollout_end()
         self.assertEqual(logger.records["train/episode/completed/count"], 2)
-        self.assertEqual(logger.records["train/outcome/failure/reason/life_loss/episode/count"], 1)
-        self.assertEqual(logger.records["train/outcome/failure/reason/stalled/episode/count"], 1)
-        self.assertNotIn(
-            "train/outcome/failure/reason/timeout/episode/count",
-            logger.records,
-        )
-        self.assertNotIn("train/outcome/failure/reason/unclassified/episode/count", logger.records)
+        self.assertEqual(logger.records["train/outcome/failure/reason/life_loss/rolling/rate"], 0.5)
+        self.assertEqual(logger.records["train/outcome/failure/reason/stalled/rolling/rate"], 0.5)
+        self.assertFalse(any(name.endswith("/episode/count") for name in logger.records))
         self.assertFalse(any("/success/" in key for key in logger.records))
 
     def test_done_reason_rate_is_pooled_without_start_cross_product(self) -> None:
@@ -113,11 +110,11 @@ class RuntimeMetricsHelperTests(unittest.TestCase):
         callback._on_rollout_end()
 
         self.assertEqual(
-            logger.records["train/outcome/failure/reason/life_loss/window_100/rate"],
+            logger.records["train/outcome/failure/reason/life_loss/rolling/rate"],
             0.5,
         )
         self.assertEqual(
-            logger.records["train/outcome/failure/reason/stalled/window_100/rate"],
+            logger.records["train/outcome/failure/reason/stalled/rolling/rate"],
             0.5,
         )
 
@@ -186,13 +183,13 @@ class GradLabCallbackTests(unittest.TestCase):
         self.assertEqual(env.drain_calls, 1)
         self.assertEqual(model.logger.records["train/episode/completed/count"], 1)
         self.assertEqual(
-            model.logger.records["train/outcome/failure/reason/level_change/episode/count"], 0
+            model.logger.records["train/outcome/failure/reason/level_change/rolling/rate"], 0
         )
         self.assertNotIn(
-            "train/outcome/failure/reason/life_loss/episode/count", model.logger.records
+            "train/outcome/failure/reason/life_loss/rolling/rate", model.logger.records
         )
         self.assertEqual(
-            model.logger.records["train/outcome/success/from/Level1-1/episode/count"],
+            model.logger.records["train/outcome/success/start/Level1-1/episode/count"],
             1,
         )
 
@@ -264,9 +261,12 @@ class RuntimeMetricsCompletionTests(unittest.TestCase):
             ]
         )
         callback._on_rollout_end()
-        self.assertEqual(logger.records["train/outcome/success/from/StartA/episode/count"], 1)
-        self.assertEqual(logger.records["train/outcome/success/from/StartB/episode/count"], 0)
-        self.assertEqual(logger.records["train/outcome/success/across_starts/coverage/rate"], 1.0)
+        self.assertEqual(logger.records["train/outcome/success/start/StartA/episode/count"], 1)
+        self.assertEqual(logger.records["train/outcome/success/start/StartB/episode/count"], 0)
+        self.assertEqual(
+            logger.records["train/outcome/success/starts/observed/cumulative/rate/mean"],
+            0.5,
+        )
 
     def test_success_metrics_exclude_snapshot_origin_attempts(self) -> None:
         logger = SimpleNamespace(records={})
@@ -303,16 +303,13 @@ class RuntimeMetricsCompletionTests(unittest.TestCase):
         callback._on_rollout_end()
 
         self.assertEqual(
-            logger.records["train/outcome/success/from/Level1-3/attempt/count"],
-            1,
-        )
-        self.assertEqual(
-            logger.records["train/outcome/success/from/Level1-3/episode/count"],
+            logger.records["train/outcome/success/start/Level1-3/episode/count"],
             0,
         )
-        self.assertNotIn("train/outcome/success/across_starts/window_100/rate/min", logger.records)
+        self.assertFalse(any("attempt" in name for name in logger.records))
+        self.assertNotIn("train/outcome/success/starts/all/rolling/rate/min", logger.records)
 
-    def test_success_window_requires_every_configured_start_and_attempts_are_cumulative(
+    def test_success_window_requires_every_configured_start(
         self,
     ) -> None:
         logger = SimpleNamespace(records={})
@@ -336,8 +333,7 @@ class RuntimeMetricsCompletionTests(unittest.TestCase):
             ]
         )
         callback._on_rollout_end()
-        self.assertEqual(logger.records["train/outcome/success/from/StartA/attempt/count"], 150)
-        self.assertNotIn("train/outcome/success/across_starts/window_100/rate/min", logger.records)
+        self.assertNotIn("train/outcome/success/starts/all/rolling/rate/min", logger.records)
 
         callback._on_records(
             [
@@ -352,12 +348,8 @@ class RuntimeMetricsCompletionTests(unittest.TestCase):
             ]
         )
         callback._on_rollout_end()
-        self.assertEqual(
-            logger.records["train/outcome/success/across_starts/window_100/rate/min"], 0.0
-        )
-        self.assertEqual(
-            logger.records["train/outcome/success/across_starts/window_100/rate/mean"], 0.5
-        )
+        self.assertEqual(logger.records["train/outcome/success/starts/all/rolling/rate/min"], 0.0)
+        self.assertEqual(logger.records["train/outcome/success/starts/all/rolling/rate/mean"], 0.5)
 
 
 class MetricEarlyStopHelperTests(unittest.TestCase):
@@ -378,7 +370,7 @@ class MetricEarlyStopHelperTests(unittest.TestCase):
             config={
                 "conditions": {
                     "clear_100": {
-                        "metric": TRAIN_OUTCOME_SUCCESS_ACROSS_STARTS_WINDOW_100_RATE_MIN,
+                        "metric": TRAIN_OUTCOME_SUCCESS_STARTS_ALL_ROLLING_RATE_MIN,
                         "trigger": "threshold",
                         "operator": ">",
                         "progress_baseline": 0.0,
@@ -403,11 +395,11 @@ class MetricEarlyStopHelperTests(unittest.TestCase):
 
             self.assertFalse(decision_path.exists())
 
-            model.logger.records[TRAIN_OUTCOME_SUCCESS_ACROSS_STARTS_WINDOW_100_RATE_MIN] = 0.99
+            model.logger.records[TRAIN_OUTCOME_SUCCESS_STARTS_ALL_ROLLING_RATE_MIN] = 0.99
             callback._on_rollout_end()
             self.assertFalse(decision_path.exists())
 
-            model.logger.records[TRAIN_OUTCOME_SUCCESS_ACROSS_STARTS_WINDOW_100_RATE_MIN] = 1.0
+            model.logger.records[TRAIN_OUTCOME_SUCCESS_STARTS_ALL_ROLLING_RATE_MIN] = 1.0
             callback.num_timesteps = 200
             callback._on_rollout_end()
             self.assertTrue(callback.stop_flag.requested)
@@ -426,6 +418,12 @@ class MetricEarlyStopHelperTests(unittest.TestCase):
                 model.logger.records[train_early_stop_metric("clear_100", "target/progress")],
                 1.0,
             )
+            self.assertNotIn("train/early_stop/clear_100/value", model.logger.records)
+            self.assertNotIn("train/early_stop/clear_100/best", model.logger.records)
+            self.assertNotIn(
+                "train/early_stop/clear_100/patience/elapsed_steps",
+                model.logger.records,
+            )
 
     def test_reads_a_fresh_metric_store_sample_at_rollout_boundary(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -434,7 +432,7 @@ class MetricEarlyStopHelperTests(unittest.TestCase):
             store = MetricStore(store_path)
             store.init()
             store.append_metrics(
-                {TRAIN_OUTCOME_SUCCESS_ACROSS_STARTS_WINDOW_100_RATE_MIN: 1.0},
+                {TRAIN_OUTCOME_SUCCESS_STARTS_ALL_ROLLING_RATE_MIN: 1.0},
                 step=120000,
                 source="train",
             )
@@ -443,7 +441,7 @@ class MetricEarlyStopHelperTests(unittest.TestCase):
                 config={
                     "conditions": {
                         "clear_100": {
-                            "metric": TRAIN_OUTCOME_SUCCESS_ACROSS_STARTS_WINDOW_100_RATE_MIN,
+                            "metric": TRAIN_OUTCOME_SUCCESS_STARTS_ALL_ROLLING_RATE_MIN,
                             "trigger": "threshold",
                             "operator": ">=",
                             "threshold": 1.0,
@@ -473,7 +471,7 @@ class MetricEarlyStopHelperTests(unittest.TestCase):
             output_format = MetricStoreOutputFormat(store_path)
             output_format.write(
                 {
-                    TRAIN_OUTCOME_SUCCESS_ACROSS_STARTS_WINDOW_100_RATE_MIN: 0.5,
+                    TRAIN_OUTCOME_SUCCESS_STARTS_ALL_ROLLING_RATE_MIN: 0.5,
                     "rollout/ep_rew_mean": np.float32(4.25),
                     "train/entropy_loss": -0.7,
                     "train/clip_range": 0.2,
@@ -489,13 +487,10 @@ class MetricEarlyStopHelperTests(unittest.TestCase):
 
             store = MetricStore(store_path)
             self.assertEqual(
-                store.latest_metric(TRAIN_OUTCOME_SUCCESS_ACROSS_STARTS_WINDOW_100_RATE_MIN), 0.5
+                store.latest_metric(TRAIN_OUTCOME_SUCCESS_STARTS_ALL_ROLLING_RATE_MIN), 0.5
             )
-            self.assertEqual(
-                store.latest_metric(
-                    "train/episode/return/shaped/across_origins/rolling_up_to_100/mean"
-                ),
-                4.25,
+            self.assertIsNone(
+                store.latest_metric("train/episode/return/shaped/origin/target/rolling/mean")
             )
             self.assertEqual(store.latest_metric("train/algorithm/ppo/policy/entropy"), 0.7)
             self.assertIsNone(store.latest_metric("train/clip_range"))
@@ -537,7 +532,7 @@ class MetricEarlyStopHelperTests(unittest.TestCase):
             self.assertEqual(logger.name_to_value, {})
             self.assertEqual(logger.output_formats.count(callback.output_format), 1)
 
-    def test_sb3_lifecycle_publishes_rollout_metrics_after_dump_logs(self) -> None:
+    def test_sb3_lifecycle_does_not_republish_duplicate_episode_metrics(self) -> None:
         class OneStepEnv(gym.Env):
             observation_space = gym.spaces.Box(-1.0, 1.0, shape=(1,), dtype=np.float32)
             action_space = gym.spaces.Discrete(2)
@@ -569,16 +564,10 @@ class MetricEarlyStopHelperTests(unittest.TestCase):
                 env.close()
 
             store = MetricStore(store_path)
-            self.assertEqual(
-                store.latest_metric(
-                    "train/episode/return/shaped/across_origins/rolling_up_to_100/mean"
-                ),
-                2.0,
+            self.assertIsNone(
+                store.latest_metric("train/episode/return/shaped/origin/target/rolling/mean")
             )
-            self.assertEqual(
-                store.latest_metric("train/episode/length/across_origins/rolling_up_to_100/mean"),
-                1.0,
-            )
+            self.assertIsNone(store.latest_metric("train/episode/length/origin/all/rolling/mean"))
             self.assertIsNone(store.latest_metric("time/fps"))
             self.assertIsNone(store.latest_metric("train/loss"))
 
@@ -701,6 +690,35 @@ class LedgerCheckpointHelperTests(unittest.TestCase):
 
 
 class ThroughputHelperTests(unittest.TestCase):
+    def test_report_interval_tracker_uses_step_and_provider_deltas(self) -> None:
+        class NativeStatsSource:
+            def __init__(self) -> None:
+                self.stats = iter(
+                    (
+                        {"seconds_total": 0.0, "calls_total": 0},
+                        {"seconds_total": 2.0, "calls_total": 10},
+                        {"seconds_total": 3.0, "calls_total": 15},
+                    )
+                )
+
+            def native_step_stats(self):
+                return next(self.stats)
+
+        times = iter((0.0, 5.0, 7.0))
+        tracker = DeltaThroughputTracker(
+            NativeStatsSource(),
+            initial_step=0,
+            clock=lambda: next(times),
+        )
+
+        first = tracker.snapshot(100)
+        second = tracker.snapshot(140)
+
+        self.assertEqual(first["train/throughput/loop/rate"], 20.0)
+        self.assertEqual(first["train/throughput/provider/step/rate"], 50.0)
+        self.assertEqual(second["train/throughput/loop/rate"], 20.0)
+        self.assertEqual(second["train/throughput/provider/step/rate"], 40.0)
+
     def test_logs_one_complete_aligned_frame_at_the_next_rollout_start(self) -> None:
         class Logger:
             def __init__(self) -> None:
@@ -731,9 +749,8 @@ class ThroughputHelperTests(unittest.TestCase):
         self.assertEqual(
             dict(model.logger.records),
             {
-                "train/throughput/loop_fps": 20.0,
-                "train/throughput/rollout_seconds": 2.0,
-                "train/throughput/between_rollouts_seconds": 3.0,
+                "train/throughput/loop/rate": 20.0,
+                "train/throughput/between/rollouts/seconds": 3.0,
             },
         )
 
@@ -777,21 +794,12 @@ class ThroughputHelperTests(unittest.TestCase):
         callback._on_rollout_start()
 
         frame = dict(model.logger.records)
-        self.assertEqual(frame["train/throughput/rollout_seconds"], 5.0)
-        self.assertEqual(frame["train/throughput/between_rollouts_seconds"], 2.0)
-        self.assertEqual(frame["train/throughput/env_step_fps"], 50.0)
-        self.assertEqual(frame["train/throughput/env_step_seconds"], 2.0)
-        self.assertEqual(frame["train/throughput/rollout_overhead_seconds"], 3.0)
-        self.assertEqual(
-            7.0,
-            frame["train/throughput/rollout_seconds"]
-            + frame["train/throughput/between_rollouts_seconds"],
-        )
-        self.assertEqual(
-            frame["train/throughput/rollout_seconds"],
-            frame["train/throughput/env_step_seconds"]
-            + frame["train/throughput/rollout_overhead_seconds"],
-        )
+        self.assertAlmostEqual(frame["train/throughput/loop/rate"], 100.0 / 7.0)
+        self.assertEqual(frame["train/throughput/between/rollouts/seconds"], 2.0)
+        self.assertEqual(frame["train/throughput/provider/step/rate"], 50.0)
+        self.assertEqual(frame["train/throughput/rollout/overhead/seconds"], 3.0)
+        self.assertNotIn("train/throughput/rollout/seconds", frame)
+        self.assertNotIn("train/throughput/provider/step/seconds", frame)
 
     def test_complete_frame_uses_the_completed_rollout_step(self) -> None:
         times = iter([0.0, 2.0, 5.0])
@@ -856,26 +864,23 @@ class RolloutDiagnosticsHelperTests(unittest.TestCase):
                 self.rollout_buffer = RolloutBuffer()
 
         model = Model()
-        callback = RolloutDiagnosticsHelper(log_histograms=False)
+        callback = RolloutDiagnosticsHelper()
         callback.model = model  # type: ignore[assignment]
 
         callback._on_rollout_end()
 
         records = dict(model.logger.records)
-        self.assertEqual(records["train/algorithm/ppo/rollout/value_prediction/mean"], 2.5)
+        self.assertEqual(records["train/algorithm/ppo/rollout/value/prediction/mean"], 2.5)
         self.assertAlmostEqual(
-            records["train/algorithm/ppo/rollout/value_prediction/std"],
+            records["train/algorithm/ppo/rollout/value/prediction/std"],
             float(np.std([1.0, 2.0, 3.0, 4.0])),
         )
-        self.assertEqual(records["train/algorithm/ppo/rollout/value_prediction/min"], 1.0)
-        self.assertEqual(records["train/algorithm/ppo/rollout/value_prediction/max"], 4.0)
         self.assertEqual(records["train/algorithm/ppo/rollout/advantage/mean"], 0.5)
         self.assertAlmostEqual(
             records["train/algorithm/ppo/rollout/advantage/std"],
             float(np.std([-1.0, 0.0, 1.0, 2.0])),
         )
-        self.assertEqual(records["train/algorithm/ppo/rollout/advantage/min"], -1.0)
-        self.assertEqual(records["train/algorithm/ppo/rollout/advantage/max"], 2.0)
+        self.assertFalse(any(name.endswith(("/min", "/max")) for name in records))
         self.assertFalse(any(name.endswith("abs_mean") for name in records))
 
     def test_logs_discrete_policy_dominant_action_rate(self) -> None:
@@ -891,19 +896,15 @@ class RolloutDiagnosticsHelperTests(unittest.TestCase):
             rollout_buffer=rollout_buffer,
             action_space=gym.spaces.Discrete(2),
         )
-        callback = RolloutDiagnosticsHelper(log_histograms=False)
+        callback = RolloutDiagnosticsHelper()
         callback.model = model  # type: ignore[assignment]
 
         callback._on_rollout_end()
 
-        self.assertEqual(logger.records["train/algorithm/ppo/policy/dominant_action_rate"], 0.75)
-        self.assertEqual(logger.records["train/algorithm/ppo/policy/entropy_bound/lower"], 0.0)
-        self.assertAlmostEqual(
-            logger.records["train/algorithm/ppo/policy/entropy_bound/upper"],
-            math.log(2),
-        )
+        self.assertEqual(logger.records["train/algorithm/ppo/policy/dominant/action/rate"], 0.75)
+        self.assertFalse(any("entropy_bound" in name for name in logger.records))
 
-    def test_logs_entropy_bounds_in_the_a2c_namespace(self) -> None:
+    def test_logs_a2c_diagnostics_only_in_the_a2c_namespace(self) -> None:
         logger = SimpleNamespace(records={})
         logger.record = lambda key, value: logger.records.__setitem__(key, value)
         model = SimpleNamespace(
@@ -915,48 +916,14 @@ class RolloutDiagnosticsHelperTests(unittest.TestCase):
             ),
             action_space=gym.spaces.MultiDiscrete([2, 3]),
         )
-        callback = RolloutDiagnosticsHelper(algorithm_id="a2c", log_histograms=False)
+        callback = RolloutDiagnosticsHelper(algorithm_id="a2c")
         callback.model = model  # type: ignore[assignment]
 
         callback._on_rollout_end()
 
-        self.assertEqual(logger.records["train/algorithm/a2c/policy/entropy_bound/lower"], 0.0)
-        self.assertAlmostEqual(
-            logger.records["train/algorithm/a2c/policy/entropy_bound/upper"],
-            math.log(6),
-        )
+        self.assertIn("train/algorithm/a2c/rollout/value/prediction/mean", logger.records)
+        self.assertFalse(any("entropy_bound" in name for name in logger.records))
         self.assertFalse(any("/ppo/" in name for name in logger.records))
-
-    def test_logs_action_histogram_on_the_configured_rollout_cadence(self) -> None:
-        logger = SimpleNamespace(record=lambda *_args: None)
-        model = SimpleNamespace(
-            logger=logger,
-            rollout_buffer=SimpleNamespace(
-                values=np.asarray([1.0]),
-                advantages=np.asarray([0.0]),
-                actions=np.asarray([[0], [1], [1]]),
-            ),
-            action_space=gym.spaces.Discrete(2),
-        )
-        with tempfile.TemporaryDirectory() as tmp:
-            store_path = Path(tmp) / "gradlab.sqlite"
-            callback = RolloutDiagnosticsHelper(
-                metric_store_path=store_path,
-                wandb_enabled=True,
-                histogram_interval=1,
-            )
-            callback.model = model  # type: ignore[assignment]
-            callback.num_timesteps = 64
-            callback._on_rollout_end()
-            rows = MetricStore(store_path).pending_metric_frames(limit=10)
-
-        self.assertEqual(len(rows), 1)
-        payload = json.loads(rows[0]["payload_json"])
-        self.assertEqual(rows[0]["step"], 64)
-        self.assertEqual(
-            payload["histograms"]["train/algorithm/ppo/policy/action_hist"],
-            [0.0, 1.0, 1.0],
-        )
 
 
 class ArchiveCurriculumFeedbackHelperTests(unittest.TestCase):
@@ -1063,10 +1030,10 @@ class RuntimeMetricsRewardTests(unittest.TestCase):
         expected = np.asarray([1.0, -2.0, 0.0, 5.0])
         self.assertAlmostEqual(logger.records["train/reward/shaped/mean"], np.mean(expected))
         self.assertAlmostEqual(logger.records["train/reward/shaped/std"], np.std(expected))
-        self.assertEqual(logger.records["train/reward/shaped/min"], -2.0)
-        self.assertEqual(logger.records["train/reward/shaped/max"], 5.0)
+        self.assertNotIn("train/reward/shaped/min", logger.records)
+        self.assertNotIn("train/reward/shaped/max", logger.records)
         self.assertAlmostEqual(
-            logger.records["train/reward/shaped/nonzero_rate"],
+            logger.records["train/reward/shaped/nonzero/rate"],
             0.75,
         )
 

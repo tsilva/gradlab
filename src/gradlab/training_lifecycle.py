@@ -15,8 +15,8 @@ from gradlab.early_stop import MetricEarlyStopStateMachine, MetricSample
 from gradlab.file_utils import atomic_write_json
 from gradlab.metric_names import (
     TRAIN_ARTIFACT_SAVE_SECONDS,
-    TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_ROLLING_UP_TO_100_MEAN,
-    TRAIN_OUTCOME_SUCCESS_ACROSS_OBSERVED_STARTS_CUMULATIVE_RATE_MEAN,
+    TRAIN_EPISODE_RETURN_SHAPED_ORIGIN_TARGET_ROLLING_MEAN,
+    TRAIN_OUTCOME_SUCCESS_STARTS_OBSERVED_CUMULATIVE_RATE_MEAN,
     train_early_stop_metric,
     validate_metric_payload,
 )
@@ -227,12 +227,12 @@ class ProgressField:
 
 COMMON_PROGRESS_FIELDS = (
     ProgressField(
-        TRAIN_EPISODE_RETURN_SHAPED_FROM_TARGET_ROLLING_UP_TO_100_MEAN,
+        TRAIN_EPISODE_RETURN_SHAPED_ORIGIN_TARGET_ROLLING_MEAN,
         "mean return",
         group="outcomes",
     ),
     ProgressField(
-        TRAIN_OUTCOME_SUCCESS_ACROSS_OBSERVED_STARTS_CUMULATIVE_RATE_MEAN,
+        TRAIN_OUTCOME_SUCCESS_STARTS_OBSERVED_CUMULATIVE_RATE_MEAN,
         "completion",
         ProgressValueFormat.PERCENT,
         group="outcomes",
@@ -551,18 +551,9 @@ class MetricStopController:
         update = self.machine.update(samples)
         metrics: dict[str, int | float] = {}
         for condition_id, observation in update.observations.items():
-            metrics.update(
-                {
-                    train_early_stop_metric(condition_id, "value"): observation.value,
-                    train_early_stop_metric(condition_id, "best"): observation.best_value,
-                    train_early_stop_metric(
-                        condition_id, "patience/elapsed_steps"
-                    ): observation.elapsed_steps,
-                    train_early_stop_metric(
-                        condition_id, "patience/progress"
-                    ): observation.patience_progress,
-                }
-            )
+            metrics[
+                train_early_stop_metric(condition_id, "patience/progress")
+            ] = observation.patience_progress
             if observation.target_progress is not None:
                 metrics[train_early_stop_metric(condition_id, "target/progress")] = (
                     observation.target_progress

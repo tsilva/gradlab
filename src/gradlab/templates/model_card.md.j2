@@ -13,7 +13,7 @@ metrics:
   - success-rate
 ---
 
-# {{ game }} — {{ goal }} — {{ algorithm_upper }}
+# {{ task_title }} — {{ algorithm_upper }}
 
 {{ policy_description }}
 [`gradlab`](https://github.com/tsilva/gradlab).
@@ -22,7 +22,7 @@ metrics:
 
 | Item | Value |
 |---|---|
-| Task | Complete `{{ game }}` `{{ goal }}` |
+| Task | Complete {{ task_targets }} |
 | Provider | `{{ provider }}` |
 | Algorithm | `{{ algorithm }}` |
 {% if producer %}| Producer | `{{ producer }}` |

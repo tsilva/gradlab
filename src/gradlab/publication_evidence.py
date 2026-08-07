@@ -5,7 +5,7 @@ from copy import deepcopy
 from typing import Any
 
 from gradlab.checkpoint_contract import checkpoint_manifest_contract_sha256
-from gradlab.eval_metrics import eval_by_start_rows
+from gradlab.eval_metrics import eval_by_start_records
 from gradlab.json_utils import canonical_json_sha256
 from gradlab.modal_eval_protocol import normalize_attempt_result
 from gradlab.policy_bundle import evaluation_contract, evaluation_contract_sha256
@@ -102,9 +102,7 @@ def validate_publication_evidence(evidence: Mapping[str, Any]) -> dict[str, Any]
     if expected_verified != observed_verified:
         raise ValueError("verified evaluation does not equal normalized raw evidence")
 
-    metrics = raw.get("metrics")
-    publication = dict(metrics) if isinstance(metrics, Mapping) else {}
-    publication.update(deepcopy(dict(verified.aggregates)))
+    publication = deepcopy(dict(verified.aggregates))
     publication.update(
         {
             "action_sampling": str(expected.get("action_sampling") or ""),
@@ -112,7 +110,7 @@ def validate_publication_evidence(evidence: Mapping[str, Any]) -> dict[str, Any]
             "checkpoint_step": checkpoint.step,
             "checkpoint_artifact": checkpoint.public_url,
             "episodes": declared_episodes,
-            "by_start": eval_by_start_rows(
+            "by_start": eval_by_start_records(
                 [dict(item) for item in verified.episode_results]
             ),
             "evaluation_evidence": {

@@ -14,7 +14,7 @@ from gradlab.cli_parser import ExactArgumentParser
 from gradlab.config_loader import load_mapping_document
 from gradlab.json_utils import canonical_json_sha256
 from gradlab.metric_names import (
-    EVAL_FULL_BY_START,
+    EVAL_FULL_START_TABLE,
     EVAL_FULL_EPISODE_RETURN_SHAPED_MEAN,
     EVAL_ACCEPTANCE_EPISODE_COMPLETED_COUNT,
     EVAL_ACCEPTANCE_EPISODE_PLANNED_COUNT,
@@ -25,35 +25,28 @@ from gradlab.metric_names import (
     LEADER_CHECKPOINT_RETURN_SHAPED_MAX,
     LEADER_CHECKPOINT_RETURN_SHAPED_MEAN,
     LEADER_CHECKPOINT_STEP,
-    LEADER_CHECKPOINT_SUCCESS_ACROSS_STARTS_RATE_MEAN,
-    LEADER_CHECKPOINT_SUCCESS_ACROSS_STARTS_RATE_MIN,
-    LEADER_CHECKPOINT_UPDATED_AT,
+    LEADER_CHECKPOINT_OUTCOME_SUCCESS_STARTS_RATE_MIN,
+    LEADER_CHECKPOINT_PROJECTION_TIMESTAMP,
     METRICS_SCHEMA_VERSION,
     TRAIN_A2C_EXPLAINED_VARIANCE,
     TRAIN_A2C_LEARNING_RATE,
     TRAIN_A2C_POLICY_ENTROPY,
-    TRAIN_A2C_POLICY_ENTROPY_BOUND_LOWER,
-    TRAIN_A2C_POLICY_ENTROPY_BOUND_UPPER,
     TRAIN_A2C_VALUE_LOSS,
     TRAIN_ARTIFACT_SAVE_SECONDS,
-    TRAIN_ARTIFACT_UPLOAD_SECONDS,
     TRAIN_GLOBAL_STEP,
-    TRAIN_OUTCOME_SUCCESS_ACROSS_OBSERVED_STARTS_CUMULATIVE_RATE_MEAN,
-    TRAIN_OUTCOME_SUCCESS_ACROSS_OBSERVED_STARTS_CUMULATIVE_RATE_MIN,
-    TRAIN_OUTCOME_SUCCESS_ACROSS_STARTS_COVERAGE_RATE,
-    TRAIN_OUTCOME_SUCCESS_ACROSS_STARTS_WINDOW_100_RATE_MEAN,
-    TRAIN_OUTCOME_SUCCESS_ACROSS_STARTS_WINDOW_100_RATE_MIN,
+    TRAIN_OUTCOME_SUCCESS_STARTS_ALL_ROLLING_RATE_MEAN,
+    TRAIN_OUTCOME_SUCCESS_STARTS_ALL_ROLLING_RATE_MIN,
+    TRAIN_OUTCOME_SUCCESS_STARTS_OBSERVED_CUMULATIVE_RATE_MEAN,
+    TRAIN_OUTCOME_SUCCESS_STARTS_OBSERVED_CUMULATIVE_RATE_MIN,
     TRAIN_PPO_APPROX_KL,
     TRAIN_PPO_CLIP_FRACTION,
     TRAIN_PPO_EXPLAINED_VARIANCE,
     TRAIN_PPO_LEARNING_RATE,
     TRAIN_PPO_POLICY_ENTROPY,
-    TRAIN_PPO_POLICY_ENTROPY_BOUND_LOWER,
-    TRAIN_PPO_POLICY_ENTROPY_BOUND_UPPER,
     TRAIN_PPO_VALUE_LOSS,
     TRAIN_THROUGHPUT_BETWEEN_ROLLOUTS_SECONDS,
-    TRAIN_THROUGHPUT_ENV_STEP_FPS,
-    TRAIN_THROUGHPUT_LOOP_FPS,
+    TRAIN_THROUGHPUT_LOOP_RATE,
+    TRAIN_THROUGHPUT_PROVIDER_STEP_RATE,
     TRAIN_THROUGHPUT_ROLLOUT_OVERHEAD_SECONDS,
     leader_metric_for_rank_metric,
 )
@@ -95,13 +88,12 @@ LEADER_COLUMNS = [
     "config:goal_contract_sha256.value",
     "config:recipe_slug.value",
     "config:seed.value",
-    f"summary:{LEADER_CHECKPOINT_SUCCESS_ACROSS_STARTS_RATE_MIN}",
-    f"summary:{LEADER_CHECKPOINT_SUCCESS_ACROSS_STARTS_RATE_MEAN}",
+    f"summary:{LEADER_CHECKPOINT_OUTCOME_SUCCESS_STARTS_RATE_MIN}",
     f"summary:{LEADER_CHECKPOINT_RETURN_SHAPED_MEAN}",
     f"summary:{LEADER_CHECKPOINT_RETURN_SHAPED_MAX}",
     f"summary:{LEADER_CHECKPOINT_STEP}",
     f"summary:{LEADER_CHECKPOINT_ARTIFACT_REF}",
-    f"summary:{LEADER_CHECKPOINT_UPDATED_AT}",
+    f"summary:{LEADER_CHECKPOINT_PROJECTION_TIMESTAMP}",
 ]
 ACTIVE_COLUMNS = [
     "run:name",
@@ -123,7 +115,7 @@ COLUMN_WIDTHS = {
     "config:goal_contract_sha256.value": 300,
     "config:recipe_slug.value": 260,
     f"summary:{LEADER_CHECKPOINT_ARTIFACT_REF}": 460,
-    f"summary:{LEADER_CHECKPOINT_UPDATED_AT}": 220,
+    f"summary:{LEADER_CHECKPOINT_PROJECTION_TIMESTAMP}": 220,
 }
 
 
@@ -562,7 +554,7 @@ def _goal_section_blocks(wr, section: str, goal: GoalReportSpec, *, entity: str)
     if section == "evaluation_by_start":
         panels = [
             wr.WeavePanelSummaryTable(
-                table_name=EVAL_FULL_BY_START,
+                table_name=EVAL_FULL_START_TABLE,
                 layout=wr.Layout(w=24, h=12),
             )
         ]
@@ -577,29 +569,23 @@ def _goal_section_blocks(wr, section: str, goal: GoalReportSpec, *, entity: str)
                 title="Cumulative training success",
                 x=TRAIN_GLOBAL_STEP,
                 y=[
-                    TRAIN_OUTCOME_SUCCESS_ACROSS_OBSERVED_STARTS_CUMULATIVE_RATE_MIN,
-                    TRAIN_OUTCOME_SUCCESS_ACROSS_OBSERVED_STARTS_CUMULATIVE_RATE_MEAN,
+                    TRAIN_OUTCOME_SUCCESS_STARTS_OBSERVED_CUMULATIVE_RATE_MIN,
+                    TRAIN_OUTCOME_SUCCESS_STARTS_OBSERVED_CUMULATIVE_RATE_MEAN,
                 ],
             ),
             _line(
                 wr,
-                title="Window-100 training success",
+                title="Recent all-start training success",
                 x=TRAIN_GLOBAL_STEP,
                 y=[
-                    TRAIN_OUTCOME_SUCCESS_ACROSS_STARTS_WINDOW_100_RATE_MIN,
-                    TRAIN_OUTCOME_SUCCESS_ACROSS_STARTS_WINDOW_100_RATE_MEAN,
+                    TRAIN_OUTCOME_SUCCESS_STARTS_ALL_ROLLING_RATE_MIN,
+                    TRAIN_OUTCOME_SUCCESS_STARTS_ALL_ROLLING_RATE_MEAN,
                 ],
-            ),
-            _line(
-                wr,
-                title=TRAIN_OUTCOME_SUCCESS_ACROSS_STARTS_COVERAGE_RATE,
-                x=TRAIN_GLOBAL_STEP,
-                y=[TRAIN_OUTCOME_SUCCESS_ACROSS_STARTS_COVERAGE_RATE],
             ),
         ]
         if len(goal.starts) <= 4:
             for start in goal.starts:
-                metric = f"train/outcome/success/from/{start}/window_100/rate"
+                metric = f"train/outcome/success/start/{start}/rolling/rate"
                 panels.append(
                     _line(wr, title=metric, x=TRAIN_GLOBAL_STEP, y=[metric], w=12, h=7)
                 )
@@ -629,7 +615,7 @@ def _goal_section_blocks(wr, section: str, goal: GoalReportSpec, *, entity: str)
                         title="Training failure-reason rates",
                         x=TRAIN_GLOBAL_STEP,
                         y=[],
-                        metric_regex=r"train/outcome/failure/reason/.*/window_100/rate",
+                        metric_regex=r"train/outcome/failure/reason/.*/rolling/rate",
                         layout=wr.Layout(w=12, h=8),
                     ),
                 ],
@@ -659,50 +645,14 @@ def _goal_section_blocks(wr, section: str, goal: GoalReportSpec, *, entity: str)
                         x=TRAIN_GLOBAL_STEP,
                         y=[TRAIN_PPO_LEARNING_RATE, TRAIN_A2C_LEARNING_RATE],
                     ),
-                    wr.LinePlot(
+                    _line(
+                        wr,
                         title="Policy entropy",
                         x=TRAIN_GLOBAL_STEP,
                         y=[
                             TRAIN_PPO_POLICY_ENTROPY,
                             TRAIN_A2C_POLICY_ENTROPY,
-                            TRAIN_PPO_POLICY_ENTROPY_BOUND_LOWER,
-                            TRAIN_A2C_POLICY_ENTROPY_BOUND_LOWER,
-                            TRAIN_PPO_POLICY_ENTROPY_BOUND_UPPER,
-                            TRAIN_A2C_POLICY_ENTROPY_BOUND_UPPER,
                         ],
-                        title_y="nats",
-                        layout=wr.Layout(w=12, h=8),
-                        smoothing_type="none",
-                        line_titles={
-                            TRAIN_PPO_POLICY_ENTROPY: "PPO entropy",
-                            TRAIN_A2C_POLICY_ENTROPY: "A2C entropy",
-                            TRAIN_PPO_POLICY_ENTROPY_BOUND_LOWER: (
-                                "PPO theoretical lower bound"
-                            ),
-                            TRAIN_A2C_POLICY_ENTROPY_BOUND_LOWER: (
-                                "A2C theoretical lower bound"
-                            ),
-                            TRAIN_PPO_POLICY_ENTROPY_BOUND_UPPER: (
-                                "PPO theoretical upper bound"
-                            ),
-                            TRAIN_A2C_POLICY_ENTROPY_BOUND_UPPER: (
-                                "A2C theoretical upper bound"
-                            ),
-                        },
-                        line_colors={
-                            TRAIN_PPO_POLICY_ENTROPY_BOUND_LOWER: "#94A3B8",
-                            TRAIN_A2C_POLICY_ENTROPY_BOUND_LOWER: "#94A3B8",
-                            TRAIN_PPO_POLICY_ENTROPY_BOUND_UPPER: "#475569",
-                            TRAIN_A2C_POLICY_ENTROPY_BOUND_UPPER: "#475569",
-                        },
-                        line_marks={
-                            TRAIN_PPO_POLICY_ENTROPY: "solid",
-                            TRAIN_A2C_POLICY_ENTROPY: "solid",
-                            TRAIN_PPO_POLICY_ENTROPY_BOUND_LOWER: "dotted",
-                            TRAIN_A2C_POLICY_ENTROPY_BOUND_LOWER: "dotted",
-                            TRAIN_PPO_POLICY_ENTROPY_BOUND_UPPER: "dashed",
-                            TRAIN_A2C_POLICY_ENTROPY_BOUND_UPPER: "dashed",
-                        },
                     ),
                     _line(
                         wr,
@@ -724,8 +674,8 @@ def _goal_section_blocks(wr, section: str, goal: GoalReportSpec, *, entity: str)
                         title="Training throughput",
                         x=TRAIN_GLOBAL_STEP,
                         y=[
-                            TRAIN_THROUGHPUT_LOOP_FPS,
-                            TRAIN_THROUGHPUT_ENV_STEP_FPS,
+                            TRAIN_THROUGHPUT_LOOP_RATE,
+                            TRAIN_THROUGHPUT_PROVIDER_STEP_RATE,
                         ],
                     ),
                     _line(
@@ -741,7 +691,7 @@ def _goal_section_blocks(wr, section: str, goal: GoalReportSpec, *, entity: str)
                         wr,
                         title="Artifact timing",
                         x=TRAIN_GLOBAL_STEP,
-                        y=[TRAIN_ARTIFACT_SAVE_SECONDS, TRAIN_ARTIFACT_UPLOAD_SECONDS],
+                        y=[TRAIN_ARTIFACT_SAVE_SECONDS],
                     ),
                 ],
             ),

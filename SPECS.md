@@ -27,7 +27,7 @@ GradLab is a reproducible reinforcement-learning workbench that carries game-age
 
 - Every run, cohort, campaign, result, and artifact must have a stable identity and provenance covering its goal, configuration, overrides, seed, source, runtime, environment, target, and launch context.
 - Programmatic policy identities must describe execution semantics independently of their producing algorithm while preserving producer provenance.
-- Active references produced by current workflows must remain readable; GradLab must support only current GradLab-owned contracts and workflows and must not retain legacy aliases, migrations, redirects, fallback discovery, or backward-compatible readers for retired state.
+- Active references produced by current workflows must remain readable; GradLab must support only current GradLab-owned contracts and workflows and must not retain legacy aliases, migrations, fallback discovery, or backward-compatible readers for retired state; provider-managed redirects are allowed only for explicitly requested external repository renames.
 - Generated outputs and secrets must remain untracked, and normal operation must not expose credentials.
 - User- and machine-specific compute inventory, fleet names, hostnames, SSH identities, and operator endpoints must remain outside tracked source; checked-in operational configuration must be portable or explicitly templated.
 - Externally supplied executable models must be integrity-checked in full before execution; playback must not require model pre-approval.

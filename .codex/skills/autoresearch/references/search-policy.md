@@ -32,7 +32,7 @@ A screen passes only when the remotely finished W&B run shows at least one cumul
 success for every configured start. A missing start or zero success prevents the paired rung.
 
 For paired evidence, define a seed as strong when
-`train/outcome/success/across_starts/window_100/rate/min` reaches the frozen threshold at any logged
+`train/outcome/success/starts/all/rolling/rate/min` reaches the frozen threshold at any logged
 `train/global_step`. Missing window-100 history is not strong. Rank eligible two-seed candidates
 lexicographically by:
 
@@ -48,7 +48,7 @@ confirmation to exclude that candidate; do not use holdout per-seed evidence for
 ### Return mode
 
 For every remotely finished run, read
-`train/episode/return/shaped/across_origins/rolling_up_to_100/mean` and summarize the final
+`train/episode/return/shaped/origin/target/rolling/mean` and summarize the final
 10% of observed training steps with its mean, p05, and standard deviation; also retain the peak
 and last value. Missing or non-finite history is invalid evidence.
 

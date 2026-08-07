@@ -11,28 +11,27 @@ from typing import Any
 from gradlab.env_metadata import env_config_metadata, training_metadata
 from gradlab.evaluation_projection import validate_evaluation_metric_payload
 from gradlab.metric_names import (
-    EVAL_FULL_BY_START,
+    EVAL_CHECKPOINT_STEP,
+    EVAL_FULL_START_TABLE,
+    EVAL_START_TABLE_COLUMNS,
     LEADER_CHECKPOINT_ARTIFACT_REF,
     LEADER_CHECKPOINT_EVALUATION_SOURCE,
+    LEADER_CHECKPOINT_PROJECTION_TIMESTAMP,
     LEADER_CHECKPOINT_STEP,
-    LEADER_CHECKPOINT_UPDATED_AT,
+    EPISODE_METRIC_WINDOW_SIZE,
     METRICS_SCHEMA_VERSION,
-    ORCHESTRATION_EVENT_ID,
-    ORCHESTRATION_EVENT_SEQ,
-    evaluation_metric_schema,
+    METRICS_EPISODE_WINDOW_SIZE_CONFIG,
+    ORCHESTRATION_EVENT_SEQUENCE,
+    ORCHESTRATION_RUN_TERMINAL_REASON,
+    ORCHESTRATION_RUN_TERMINAL_STATE,
     leader_metric_for_rank_metric,
+    require_current_metrics_schema,
+    summary_value,
     validate_metric_payload,
 )
 from gradlab.metric_store import MetricStore
 from gradlab.ranking import require_objective_rank
-from gradlab.run_contracts import (
-    RUN_EARLY_STOP_CONDITION_SUMMARY,
-    RUN_EARLY_STOP_TRIGGER_SUMMARY,
-    RUN_FINAL_STEP_SUMMARY,
-    RUN_STOP_REASON_SUMMARY,
-    RUN_TERMINAL_STATE_SUMMARY,
-    TerminalReceipt,
-)
+from gradlab.run_contracts import TerminalReceipt
 from gradlab.wandb_utils import (
     configure_wandb_metric_axes,
     configure_wandb_metrics,
@@ -110,6 +109,7 @@ def _start_wandb(
 
         wandb_config.update(goal_variant_projection(goal_variant))
     wandb_config["metrics_schema_version"] = METRICS_SCHEMA_VERSION
+    wandb_config[METRICS_EPISODE_WINDOW_SIZE_CONFIG] = EPISODE_METRIC_WINDOW_SIZE
     training = training_metadata(
         config,
         rom_asset_manifest=train_config.get("rom_asset_manifest"),
@@ -154,9 +154,7 @@ class WandbProjector:
     ) -> None:
         self.run = run
         self.run_dir = run_dir
-        self.metrics_schema_version = evaluation_metric_schema(
-            metrics_schema_version
-        ).version
+        self.metrics_schema_version = require_current_metrics_schema(metrics_schema_version)
 
     @classmethod
     def start_live(
@@ -206,9 +204,11 @@ class WandbProjector:
         display_name = str(train_config.get("wandb_display_name") or "").strip()
         if not display_name:
             raise ValueError("W&B projection requires wandb_display_name")
-        metrics_schema_version = evaluation_metric_schema(
+        metrics_schema_version = require_current_metrics_schema(
             train_config.get("metrics_schema_version")
-        ).version
+        )
+        resume_config = dict(train_config)
+        resume_config[METRICS_EPISODE_WINDOW_SIZE_CONFIG] = EPISODE_METRIC_WINDOW_SIZE
         run = configure_wandb_metrics(
             wandb.init(
                 entity=entity,
@@ -219,7 +219,7 @@ class WandbProjector:
                 name=display_name,
                 group=str(train_config.get("wandb_group") or "") or None,
                 tags=tags,
-                config=dict(train_config) if allow_create else None,
+                config=resume_config if allow_create else None,
                 settings=wandb.Settings(
                     x_update_finish_state=update_finish_state,
                     x_server_side_expand_glob_metrics=False,
@@ -285,7 +285,6 @@ def _publish_frame(
     payload = json.loads(str(row["payload_json"]))
     kind = str(row["kind"])
     event_seq = int(row["id"]) + int(event_seq_offset)
-    event_id = str(row["event_id"])
     step = int(row["step"] or 0)
     source = str(row.get("source") or "")
 
@@ -297,10 +296,10 @@ def _publish_frame(
             )
         else:
             validate_metric_payload(payload)
-        payload[ORCHESTRATION_EVENT_SEQ] = event_seq
-        payload[ORCHESTRATION_EVENT_ID] = event_id
+        payload[ORCHESTRATION_EVENT_SEQUENCE] = event_seq
         if source.startswith("eval"):
-            payload[evaluation_metric_schema(metrics_schema_version).checkpoint_step] = step
+            require_current_metrics_schema(metrics_schema_version)
+            payload[EVAL_CHECKPOINT_STEP] = step
         elif not source.startswith("orchestration"):
             payload["train/global_step"] = step
         # Use the durable outbox sequence as W&B's internal step. If the SDK call
@@ -315,39 +314,31 @@ def _publish_frame(
         run.log(payload, step=event_seq)
         return
 
-    if kind == "histogram":
-        import wandb
-
-        converted: dict[str, object] = {
-            "train/global_step": step,
-            ORCHESTRATION_EVENT_SEQ: event_seq,
-            ORCHESTRATION_EVENT_ID: event_id,
-        }
-        for name, values in payload.get("histograms", {}).items():
-            converted[str(name)] = wandb.Histogram(values)
-        validate_metric_payload(converted)
-        configure_wandb_metric_axes(
-            run,
-            converted,
-            metrics_schema_version=metrics_schema_version,
-        )
-        run.log(converted, step=event_seq)
-        return
-
     if kind == "eval_by_start":
         import wandb
 
-        rows = payload.get("rows")
-        if not isinstance(rows, list):
-            raise ValueError("eval_by_start frame must contain rows")
-        schema = evaluation_metric_schema(metrics_schema_version)
+        records = payload.get("records")
+        if not isinstance(records, list) or not all(
+            isinstance(record, Mapping) for record in records
+        ):
+            raise ValueError("eval_by_start frame must contain records")
+        require_current_metrics_schema(metrics_schema_version)
         converted = {
-            schema.checkpoint_step: step,
-            ORCHESTRATION_EVENT_SEQ: event_seq,
-            ORCHESTRATION_EVENT_ID: event_id,
-            EVAL_FULL_BY_START: wandb.Table(
-                columns=list(schema.table_columns),
-                data=[[step, *list(result)] for result in rows],
+            EVAL_CHECKPOINT_STEP: step,
+            ORCHESTRATION_EVENT_SEQUENCE: event_seq,
+            EVAL_FULL_START_TABLE: wandb.Table(
+                columns=list(EVAL_START_TABLE_COLUMNS),
+                data=[
+                    [
+                        str(record["start_id"]),
+                        int(record["episode_count"]),
+                        int(record["success_count"]),
+                        float(record["success_rate"]),
+                        float(record["shaped_return_mean"]),
+                        dict(record.get("failure_reasons") or {}),
+                    ]
+                    for record in records
+                ],
             ),
         }
         configure_wandb_metric_axes(
@@ -411,49 +402,84 @@ def publish_promotion_summary(
         metrics_schema_version=metrics_schema_version,
     )
     projection: dict[str, Any] = {
-        "gradlab/goal/outcome": "accepted",
         LEADER_CHECKPOINT_STEP: int(checkpoint_step),
         LEADER_CHECKPOINT_ARTIFACT_REF: checkpoint_url,
         LEADER_CHECKPOINT_EVALUATION_SOURCE: str(evaluation_source),
-        LEADER_CHECKPOINT_UPDATED_AT: updated_at,
+        LEADER_CHECKPOINT_PROJECTION_TIMESTAMP: updated_at,
     }
-    available: dict[str, float] = {}
-    for name, value in metrics.items():
-        if isinstance(value, bool) or not isinstance(value, int | float):
-            continue
-        numeric = float(value)
-        if not math.isfinite(numeric):
-            continue
-        try:
-            leader_name = leader_metric_for_rank_metric(
-                str(name),
-                schema_version=metrics_schema_version,
-            )
-        except ValueError:
-            continue
-        available[str(name)] = numeric
-        projection[leader_name] = numeric
     for criterion in criteria:
-        if criterion.metric == LEADER_CHECKPOINT_STEP:
+        leader_name = leader_metric_for_rank_metric(
+            criterion.metric,
+            schema_version=metrics_schema_version,
+        )
+        if leader_name == LEADER_CHECKPOINT_STEP:
             continue
-        if criterion.metric not in available:
+        value = metrics.get(criterion.metric)
+        if isinstance(value, bool) or not isinstance(value, int | float):
             raise ValueError(
                 f"promoted checkpoint is missing finite rank metric: {criterion.metric}"
             )
+        numeric = float(value)
+        if not math.isfinite(numeric):
+            raise ValueError(
+                f"promoted checkpoint is missing finite rank metric: {criterion.metric}"
+            )
+        projection[leader_name] = numeric
+    validate_metric_payload(projection, placement="summary")
     run.summary.update(projection)
+
+
+def promotion_summary_matches(
+    summary: Mapping[str, Any],
+    *,
+    checkpoint_step: int,
+    checkpoint_url: str,
+    updated_at: str,
+    selection_rank: Sequence[str],
+    metrics_schema_version: int = METRICS_SCHEMA_VERSION,
+) -> bool:
+    """Return whether W&B exposes the complete projection for one promotion receipt."""
+
+    criteria = require_objective_rank(
+        selection_rank,
+        metrics_schema_version=metrics_schema_version,
+    )
+    if str(summary_value(summary.get(LEADER_CHECKPOINT_ARTIFACT_REF)) or "") != str(
+        checkpoint_url
+    ):
+        return False
+    try:
+        remote_step = int(summary_value(summary.get(LEADER_CHECKPOINT_STEP)))
+    except (TypeError, ValueError):
+        return False
+    if remote_step != int(checkpoint_step):
+        return False
+    if str(summary_value(summary.get(LEADER_CHECKPOINT_PROJECTION_TIMESTAMP)) or "") != str(
+        updated_at
+    ):
+        return False
+    if not str(summary_value(summary.get(LEADER_CHECKPOINT_EVALUATION_SOURCE)) or "").strip():
+        return False
+    for criterion in criteria:
+        leader_name = leader_metric_for_rank_metric(
+            criterion.metric,
+            schema_version=metrics_schema_version,
+        )
+        value = summary_value(summary.get(leader_name))
+        if isinstance(value, bool) or not isinstance(value, int | float):
+            return False
+        if not math.isfinite(float(value)):
+            return False
+    return True
 
 
 def publish_terminal_summary(run, receipt: TerminalReceipt) -> None:
     if run is None:
         raise RuntimeError("W&B run is unavailable")
     receipt.validate()
-    early_stop = receipt.early_stop if isinstance(receipt.early_stop, Mapping) else {}
-    run.summary.update(
-        {
-            RUN_TERMINAL_STATE_SUMMARY: receipt.state,
-            RUN_STOP_REASON_SUMMARY: receipt.stop_reason,
-            RUN_FINAL_STEP_SUMMARY: int(receipt.final_step),
-            RUN_EARLY_STOP_TRIGGER_SUMMARY: str(early_stop.get("trigger") or ""),
-            RUN_EARLY_STOP_CONDITION_SUMMARY: str(early_stop.get("condition_id") or ""),
-        }
-    )
+    projection = {
+        ORCHESTRATION_RUN_TERMINAL_STATE: receipt.state,
+        ORCHESTRATION_RUN_TERMINAL_REASON: receipt.stop_reason,
+    }
+    validate_metric_payload(projection, placement="summary")
+    run.summary.update(projection)

@@ -44,7 +44,7 @@ class TrainTests(unittest.TestCase):
         self.assertTrue(issubclass(GracefulStopHelper, CallbackHelper))
         self.assertFalse(issubclass(GracefulStopHelper, BaseCallback))
 
-    def test_gradlab_callback_drives_entropy_schedule_component(self) -> None:
+    def test_gradlab_callback_drives_entropy_schedule_without_emitting_a_metric(self) -> None:
         class Logger:
             def __init__(self) -> None:
                 self.records: dict[str, float] = {}
@@ -68,10 +68,7 @@ class TrainTests(unittest.TestCase):
         callback.num_timesteps = 50
         self.assertTrue(callback._on_step())
         self.assertAlmostEqual(model.ent_coef, 0.05)
-        self.assertAlmostEqual(
-            model.logger.records["train/algorithm/ppo/hyperparameter/entropy_coefficient"],
-            0.05,
-        )
+        self.assertEqual(model.logger.records, {})
 
     def test_checkpoint_save_frequency_disables_zero_or_negative(self) -> None:
         self.assertIsNone(checkpoint_save_frequency(0, 2))

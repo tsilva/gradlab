@@ -39,25 +39,21 @@ from gradlab.metric_names import (
     TRAIN_ARCHIVE_SAMPLING_PROBABILITY_MAX,
     TRAIN_ARCHIVE_TRANSITION_SHARE,
     TRAIN_REWARD_ROOT,
-    TRAIN_THROUGHPUT_BETWEEN_ROLLOUTS_SECONDS,
-    TRAIN_THROUGHPUT_ENV_STEP_FPS,
-    TRAIN_THROUGHPUT_ENV_STEP_SECONDS,
-    TRAIN_THROUGHPUT_LOOP_FPS,
-    TRAIN_THROUGHPUT_ROLLOUT_OVERHEAD_SECONDS,
-    TRAIN_THROUGHPUT_ROLLOUT_SECONDS,
     stat_metric,
     train_algorithm_metric,
     train_early_stop_metric,
     train_reward_component_metric,
-    train_reward_signal_metric,
-    validate_metric_payload,
+    validate_metric_name,
 )
 from gradlab.policy_execution import compile_policy_execution_contract
 from gradlab.metric_store import MetricStore
 from gradlab.state_archive import state_archive_artifact_summary
 from gradlab.train_config import wandb_publication_enabled
 from gradlab.training_lifecycle import LoggerMetricFrameSink
-from gradlab.training_metrics import EpisodeMetricsReducer
+from gradlab.training_metrics import (
+    EpisodeMetricsReducer,
+    throughput_delta_metrics,
+)
 
 
 def task_metric_source(start_id: Any) -> Any:
@@ -73,8 +69,7 @@ def policy_entropy_bounds(action_space: Any) -> tuple[float, float] | None:
         upper = math.log(action_space.legal_tuple_count)
     elif isinstance(action_space, gym.spaces.MultiDiscrete):
         upper = math.fsum(
-            math.log(int(cardinality))
-            for cardinality in np.asarray(action_space.nvec).reshape(-1)
+            math.log(int(cardinality)) for cardinality in np.asarray(action_space.nvec).reshape(-1)
         )
     elif isinstance(action_space, gym.spaces.MultiBinary):
         upper = math.prod(int(size) for size in action_space.shape) * math.log(2)
@@ -184,9 +179,7 @@ class LedgerCheckpointHelper(CallbackHelper):
                     state_archive_summary=state_archive_artifact_summary(
                         getattr(self.model, "env", None)
                     ),
-                    action_contract=runtime_action_contract(
-                        getattr(self.model, "env", None)
-                    ),
+                    action_contract=runtime_action_contract(getattr(self.model, "env", None)),
                     policy_execution_contract=compile_policy_execution_contract(
                         self.model,
                         getattr(self.model, "env", None),
@@ -337,25 +330,13 @@ class ThroughputHelper(CallbackHelper):
         loop_seconds = next_start_time - rollout.start_time
         if between_seconds < 0 or loop_seconds <= 0:
             return
-        payload: dict[str, float] = {
-            TRAIN_THROUGHPUT_LOOP_FPS: rollout.steps / loop_seconds,
-            TRAIN_THROUGHPUT_ROLLOUT_SECONDS: rollout.rollout_seconds,
-            TRAIN_THROUGHPUT_BETWEEN_ROLLOUTS_SECONDS: between_seconds,
-        }
-        if rollout.env_step_seconds is not None:
-            payload.update(
-                {
-                    TRAIN_THROUGHPUT_ENV_STEP_FPS: (
-                        rollout.steps / rollout.env_step_seconds
-                    ),
-                    TRAIN_THROUGHPUT_ENV_STEP_SECONDS: rollout.env_step_seconds,
-                    TRAIN_THROUGHPUT_ROLLOUT_OVERHEAD_SECONDS: max(
-                        rollout.rollout_seconds - rollout.env_step_seconds,
-                        0.0,
-                    ),
-                }
-            )
-        validate_metric_payload(payload)
+        payload = throughput_delta_metrics(
+            steps=rollout.steps,
+            loop_seconds=loop_seconds,
+            provider_step_seconds=rollout.env_step_seconds,
+            rollout_seconds=rollout.rollout_seconds,
+            between_rollouts_seconds=between_seconds,
+        )
         if self.metric_store is not None:
             self.metric_store.append_metrics(
                 payload,
@@ -404,12 +385,6 @@ class MetricEarlyStopHelper(CallbackHelper):
         update = self.machine.update(samples)
         for condition_id, observation in update.observations.items():
             values = {
-                train_early_stop_metric(condition_id, "value"): observation.value,
-                train_early_stop_metric(condition_id, "best"): observation.best_value,
-                train_early_stop_metric(
-                    condition_id,
-                    "patience/elapsed_steps",
-                ): observation.elapsed_steps,
                 train_early_stop_metric(
                     condition_id,
                     "patience/progress",
@@ -565,24 +540,11 @@ class RolloutDiagnosticsHelper(CallbackHelper):
     def __init__(
         self,
         algorithm_id: str = "ppo",
-        log_histograms: bool = True,
-        *,
-        metric_store_path: Path | str | None = None,
-        wandb_enabled: bool = True,
-        histogram_interval: int = 64,
     ):
         super().__init__()
         self.algorithm_id = algorithm_id
-        self.log_histograms = log_histograms
-        self.metric_store = MetricStore(metric_store_path) if metric_store_path else None
-        if self.metric_store is not None:
-            self.metric_store.init()
-        self.wandb_enabled = bool(wandb_enabled)
-        self.histogram_interval = max(int(histogram_interval), 1)
-        self.rollout_count = 0
 
     def _on_rollout_end(self) -> None:
-        self.rollout_count += 1
         rollout_buffer = getattr(self.model, "rollout_buffer", None)
         if rollout_buffer is None:
             return
@@ -593,19 +555,8 @@ class RolloutDiagnosticsHelper(CallbackHelper):
             getattr(rollout_buffer, "actions", None),
             getattr(self.model, "action_space", None),
         )
-        entropy_bounds = policy_entropy_bounds(getattr(self.model, "action_space", None))
-        if entropy_bounds is not None:
-            lower, upper = entropy_bounds
-            self.logger.record(
-                train_algorithm_metric(self.algorithm_id, "policy/entropy_bound/lower"),
-                lower,
-            )
-            self.logger.record(
-                train_algorithm_metric(self.algorithm_id, "policy/entropy_bound/upper"),
-                upper,
-            )
         self._record_stats(
-            train_algorithm_metric(self.algorithm_id, "rollout/value_prediction"),
+            train_algorithm_metric(self.algorithm_id, "rollout/value/prediction"),
             value_predictions,
         )
         self._record_stats(
@@ -615,11 +566,9 @@ class RolloutDiagnosticsHelper(CallbackHelper):
         if discrete_actions.size > 0:
             _actions, counts = np.unique(discrete_actions, return_counts=True)
             self.logger.record(
-                train_algorithm_metric(self.algorithm_id, "policy/dominant_action_rate"),
+                train_algorithm_metric(self.algorithm_id, "policy/dominant/action/rate"),
                 float(np.max(counts) / discrete_actions.size),
             )
-        if self.rollout_count % self.histogram_interval == 0:
-            self._log_histograms(value_predictions, advantages, discrete_actions)
 
     @staticmethod
     def _finite_values(values: Any) -> np.ndarray:
@@ -637,57 +586,23 @@ class RolloutDiagnosticsHelper(CallbackHelper):
             return
         self.logger.record(stat_metric(prefix, "mean"), float(np.mean(values)))
         self.logger.record(stat_metric(prefix, "std"), float(np.std(values)))
-        self.logger.record(stat_metric(prefix, "min"), float(np.min(values)))
-        self.logger.record(stat_metric(prefix, "max"), float(np.max(values)))
-
-    def _log_histograms(
-        self,
-        value_predictions: np.ndarray,
-        advantages: np.ndarray,
-        discrete_actions: np.ndarray,
-    ) -> None:
-        if not self.log_histograms:
-            return
-        values: dict[str, list[float]] = {}
-        if value_predictions.size > 0:
-            values[train_algorithm_metric(self.algorithm_id, "rollout/value_prediction/hist")] = (
-                value_predictions.tolist()
-            )
-        if advantages.size > 0:
-            values[train_algorithm_metric(self.algorithm_id, "rollout/advantage/hist")] = (
-                advantages.tolist()
-            )
-        if discrete_actions.size > 0:
-            values[train_algorithm_metric(self.algorithm_id, "policy/action_hist")] = (
-                discrete_actions.astype(float).tolist()
-            )
-        if not values:
-            return
-        validate_metric_payload(values)
-        if self.metric_store is not None and self.wandb_enabled:
-            self.metric_store.enqueue_event(
-                kind="histogram",
-                payload={"histograms": values},
-                step=self.num_timesteps,
-                source="train",
-            )
 
 
 ARCHIVE_CURRICULUM_METRIC_MAP = {
-        "archive_cell_count": TRAIN_ARCHIVE_CURRICULUM_CELL_COUNT,
-        "archive_entry_count": TRAIN_ARCHIVE_CURRICULUM_ENTRY_COUNT,
-        "admission_candidate_count": TRAIN_ARCHIVE_ADMISSION_CANDIDATE_COUNT,
-        "admission_accepted_count": TRAIN_ARCHIVE_ADMISSION_ACCEPTED_COUNT,
-        "evicted_count": TRAIN_ARCHIVE_EVICTED_COUNT,
-        "capture_call_count": TRAIN_ARCHIVE_CAPTURE_CALL_COUNT,
-        "archive_reset_count": TRAIN_ARCHIVE_RESTORE_EPISODE_COUNT,
-        "forced_boundary_count": TRAIN_ARCHIVE_RESTORE_FORCED_BOUNDARY_COUNT,
-        "feedback_trajectory_count": TRAIN_ARCHIVE_FEEDBACK_TRAJECTORY_COUNT,
-        "transition_share": TRAIN_ARCHIVE_TRANSITION_SHARE,
-        "sampling_probability_max": TRAIN_ARCHIVE_SAMPLING_PROBABILITY_MAX,
-        "sampling_effective_cell_count": TRAIN_ARCHIVE_SAMPLING_EFFECTIVE_CELL_COUNT,
-        "capture_seconds": TRAIN_ARCHIVE_CAPTURE_SECONDS,
-        "reset_seconds": TRAIN_ARCHIVE_RESTORE_SECONDS,
+    "archive_cell_count": TRAIN_ARCHIVE_CURRICULUM_CELL_COUNT,
+    "archive_entry_count": TRAIN_ARCHIVE_CURRICULUM_ENTRY_COUNT,
+    "admission_candidate_count": TRAIN_ARCHIVE_ADMISSION_CANDIDATE_COUNT,
+    "admission_accepted_count": TRAIN_ARCHIVE_ADMISSION_ACCEPTED_COUNT,
+    "evicted_count": TRAIN_ARCHIVE_EVICTED_COUNT,
+    "capture_call_count": TRAIN_ARCHIVE_CAPTURE_CALL_COUNT,
+    "archive_reset_count": TRAIN_ARCHIVE_RESTORE_EPISODE_COUNT,
+    "forced_boundary_count": TRAIN_ARCHIVE_RESTORE_FORCED_BOUNDARY_COUNT,
+    "feedback_trajectory_count": TRAIN_ARCHIVE_FEEDBACK_TRAJECTORY_COUNT,
+    "transition_share": TRAIN_ARCHIVE_TRANSITION_SHARE,
+    "sampling_probability_max": TRAIN_ARCHIVE_SAMPLING_PROBABILITY_MAX,
+    "sampling_effective_cell_count": TRAIN_ARCHIVE_SAMPLING_EFFECTIVE_CELL_COUNT,
+    "capture_seconds": TRAIN_ARCHIVE_CAPTURE_SECONDS,
+    "reset_seconds": TRAIN_ARCHIVE_RESTORE_SECONDS,
 }
 
 
@@ -823,16 +738,11 @@ class RewardStatsAccumulator:
         "ammo": "ammo_reward_component",
         "weapon_hold": "weapon_hold_reward_component",
     }
-    signal_info_keys = {
-        "progress": "progress_component",
-        "score": "score_delta",
-    }
 
     def __init__(
         self,
         *,
         active_components: Sequence[str] = (),
-        active_signals: Sequence[str] = (),
     ) -> None:
         self.shaped = _BufferedStats()
         self.raw = _BufferedStats()
@@ -840,9 +750,6 @@ class RewardStatsAccumulator:
             component for component in active_components if component in self.component_info_keys
         )
         self.components = {component: _BufferedStats() for component in self.active_components}
-        self.signals = {
-            signal: _BufferedStats() for signal in active_signals if signal in self.signal_info_keys
-        }
 
     def consume(self, metrics: Mapping[str, Any], *, reserve: int) -> None:
         if (value := metrics.get("shaped_reward")) is not None:
@@ -854,10 +761,6 @@ class RewardStatsAccumulator:
             value = metrics.get(info_key)
             if value is not None:
                 accumulator.update(value, reserve=reserve)
-        for signal, accumulator in self.signals.items():
-            value = metrics.get(self.signal_info_keys[signal])
-            if value is not None:
-                accumulator.update(value, reserve=reserve)
 
     @staticmethod
     def _distribution(prefix: str, values: np.ndarray, stats: Sequence[str]) -> dict[str, float]:
@@ -866,11 +769,16 @@ class RewardStatsAccumulator:
         calculations = {
             "mean": lambda: float(np.mean(values)),
             "std": lambda: float(np.std(values)),
-            "min": lambda: float(np.min(values)),
-            "max": lambda: float(np.max(values)),
             "nonzero_rate": lambda: float(np.mean(values != 0.0)),
         }
-        return {stat_metric(prefix, stat): calculations[stat]() for stat in stats}
+        return {
+            (
+                validate_metric_name(f"{prefix}/nonzero/rate")
+                if stat == "nonzero_rate"
+                else stat_metric(prefix, stat)
+            ): calculations[stat]()
+            for stat in stats
+        }
 
     def flush(self) -> dict[str, float]:
         shaped = self.shaped.flush()
@@ -878,7 +786,7 @@ class RewardStatsAccumulator:
         payload = self._distribution(
             f"{TRAIN_REWARD_ROOT}/shaped",
             shaped,
-            ("mean", "std", "min", "max", "nonzero_rate"),
+            ("mean", "std", "nonzero_rate"),
         )
         if raw.size > 0 and (shaped.size != raw.size or not np.array_equal(shaped, raw)):
             payload.update(self._distribution(f"{TRAIN_REWARD_ROOT}/raw", raw, ("mean", "std")))
@@ -897,19 +805,6 @@ class RewardStatsAccumulator:
             payload[train_reward_component_metric(component, "share")] = (
                 abs_sum / total_abs_sum if total_abs_sum > 0.0 else 0.0
             )
-        for signal, accumulator in self.signals.items():
-            values = accumulator.flush()
-            if values.size == 0:
-                continue
-            payload.update(
-                {
-                    train_reward_signal_metric(signal, "mean"): float(np.mean(values)),
-                    train_reward_signal_metric(signal, "max"): float(np.max(values)),
-                    train_reward_signal_metric(signal, "nonzero_rate"): float(
-                        np.mean(values != 0.0)
-                    ),
-                }
-            )
         return payload
 
 
@@ -921,7 +816,6 @@ class RuntimeMetricsHelper(CallbackHelper):
         *,
         event_names: Sequence[str] = (),
         active_reward_components: Sequence[str] = (),
-        active_reward_signals: Sequence[str] = (),
         configured_starts: Sequence[str] = (),
         progress_fields: Sequence[str] = (),
         track_success: bool = False,
@@ -931,7 +825,6 @@ class RuntimeMetricsHelper(CallbackHelper):
         self.session = session
         self.reward_stats = RewardStatsAccumulator(
             active_components=active_reward_components,
-            active_signals=active_reward_signals,
         )
         self.episode_metrics = EpisodeMetricsReducer(
             event_names=event_names,

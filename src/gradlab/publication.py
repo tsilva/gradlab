@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import shutil
@@ -26,13 +27,12 @@ from gradlab.file_utils import file_sha256 as sha256_file
 from gradlab.json_utils import canonical_json_text
 from gradlab.metric_names import (
     EVAL_CHECKPOINT_STEP,
-    EVAL_FULL_BY_START,
-    EVAL_FULL_EPISODE_COMPLETED_COUNT,
     EVAL_FULL_EPISODE_RETURN_SHAPED_MEAN,
+    EVAL_FULL_OUTCOME_SUCCESS_STARTS_RATE_MEAN,
+    EVAL_FULL_OUTCOME_SUCCESS_STARTS_RATE_MIN,
     EVAL_FULL_PROGRESS_X_MAX,
-    EVAL_FULL_SUCCESS_ACROSS_STARTS_RATE_MEAN,
-    EVAL_FULL_SUCCESS_ACROSS_STARTS_RATE_MIN,
 )
+from gradlab.model_inputs import CONTEXT_OBSERVATION_LAYOUT
 from gradlab.env_registry import environment_spec
 from gradlab.policy_bundle import (
     PolicyBundle,
@@ -46,7 +46,7 @@ from gradlab.validation import require_mapping as _require_mapping
 
 
 HUGGINGFACE_NAMESPACE = "tsilva"
-REPO_NAMING_SCHEMA_VERSION = 1
+REPO_NAMING_SCHEMA_VERSION = 2
 RELEASE_MANIFEST_DOCUMENT_TYPE = "gradlab.release_manifest"
 RELEASE_MANIFEST_VERSION = 2
 HUGGINGFACE_RELEASE_FILES = frozenset(
@@ -228,7 +228,8 @@ class PublicationIdentity:
 
     @property
     def repo_name(self) -> str:
-        return "_".join(asdict(self).values())
+        contract_hash = hashlib.sha256(self.policy_variant.encode("utf-8")).hexdigest()[:8]
+        return f"{self.goal}_{self.algorithm}_{contract_hash}"
 
 
 @dataclass(frozen=True)
@@ -371,6 +372,8 @@ def policy_variant_from_contract(
     layout = str(preprocessing.get("policy_observation_layout") or "")
     if layout == "dict_image_task":
         components.append("taskdict")
+    elif layout == CONTEXT_OBSERVATION_LAYOUT:
+        components.append("contextdict")
     elif layout != "channel_first":
         raise ValueError(f"unsupported policy observation layout {layout!r}")
 
@@ -450,12 +453,7 @@ def publication_identity_from_policy_bundle(
         digest = reward_shape_sha256.removeprefix("sha256:")
         if not re.fullmatch(r"[0-9a-f]{64}", digest):
             raise ValueError("non-default publication reward_shape_sha256 must be a SHA-256")
-        policy_budget = 96 - (len(game_family) + len(goal_component) + len(algorithm) + 3)
-        shape_budget = policy_budget - len(policy_variant) - len("-shape--") - 8
-        if shape_budget < 1:
-            raise ValueError("publication identity leaves no room for reward-shape provenance")
-        shape_component = raw_shape_component[:shape_budget].rstrip("-")
-        policy_variant = f"{policy_variant}-shape-{shape_component}-{digest[:8]}"
+        policy_variant = f"{policy_variant}-shape-{raw_shape_component}-{digest[:8]}"
     return PublicationIdentity(
         game_family=game_family,
         goal=goal_component,
@@ -472,10 +470,9 @@ def build_model_repo_id(identity: PublicationIdentity) -> str:
                 f"publication identity {field} must already be canonical: "
                 f"expected {normalized!r}, got {value!r}"
             )
-    repo_id = f"{HUGGINGFACE_NAMESPACE}/{identity.repo_name}"
+    repo_name = identity.repo_name
+    repo_id = f"{HUGGINGFACE_NAMESPACE}/{repo_name}"
     validate_repo_id(repo_id)
-    if len(identity.repo_name) > 96:
-        raise ValueError("Hugging Face repository name exceeds 96 characters")
     return repo_id
 
 
@@ -527,38 +524,39 @@ def _normalize_by_start_rows(value: object) -> tuple[dict[str, Any], ...]:
         raise ValueError("evaluation by_start must be a non-empty list")
     by_start: dict[str, dict[str, Any]] = {}
     for index, raw in enumerate(value):
-        if isinstance(raw, Mapping):
-            row = dict(raw)
-        elif isinstance(raw, Sequence) and not isinstance(raw, str | bytes) and len(raw) >= 7:
-            row = {
-                "start_id": raw[0],
-                "episodes": raw[1],
-                "success_count": raw[2],
-                "success_rate": raw[3],
-                "return_mean": raw[4],
-                "return_std": raw[5],
-                "return_median": raw[6],
-            }
-        else:
+        if not isinstance(raw, Mapping):
             raise ValueError(f"evaluation by_start row {index} has an unsupported shape")
+        row = dict(raw)
         start_id = _required_text(row.get("start_id"), label=f"by_start[{index}].start_id")
+        failure_reasons = row.get("failure_reasons")
+        if not isinstance(failure_reasons, Mapping):
+            raise ValueError(f"by_start[{index}].failure_reasons must be a mapping")
         normalized = {
             "start_id": start_id,
-            "episodes": _required_int(row.get("episodes"), label=f"by_start[{index}].episodes"),
+            "episode_count": _required_int(
+                row.get("episode_count"), label=f"by_start[{index}].episode_count"
+            ),
             "success_count": _required_int(
                 row.get("success_count"), label=f"by_start[{index}].success_count"
             ),
             "success_rate": _required_rate(
                 row.get("success_rate"), label=f"by_start[{index}].success_rate"
             ),
-            "return_mean": _required_float(
-                row.get("return_mean"), label=f"by_start[{index}].return_mean"
+            "shaped_return_mean": _required_float(
+                row.get("shaped_return_mean"),
+                label=f"by_start[{index}].shaped_return_mean",
             ),
+            "failure_reasons": {
+                _required_text(reason, label=f"by_start[{index}].failure_reasons reason"): (
+                    _required_int(count, label=f"by_start[{index}].failure_reasons count")
+                )
+                for reason, count in failure_reasons.items()
+            },
         }
-        if normalized["episodes"] <= 0:
-            raise ValueError(f"by_start[{index}].episodes must be positive")
-        if normalized["success_count"] > normalized["episodes"]:
-            raise ValueError(f"by_start[{index}].success_count exceeds episodes")
+        if normalized["episode_count"] <= 0:
+            raise ValueError(f"by_start[{index}].episode_count must be positive")
+        if normalized["success_count"] > normalized["episode_count"]:
+            raise ValueError(f"by_start[{index}].success_count exceeds episode_count")
         previous = by_start.get(start_id)
         if previous is not None and previous != normalized:
             raise ValueError(f"evaluation contains conflicting rows for start {start_id!r}")
@@ -605,11 +603,7 @@ def normalize_publication_evaluation(
         label="evaluation checkpoint_artifact",
     )
     episodes = _required_int(
-        _first_present(
-            evaluation,
-            "episodes",
-            EVAL_FULL_EPISODE_COMPLETED_COUNT,
-        ),
+        _first_present(evaluation, "episodes"),
         label="evaluation episodes",
     )
     if episodes <= 0:
@@ -618,7 +612,7 @@ def normalize_publication_evaluation(
         _first_present(
             evaluation,
             "success_rate_min",
-            EVAL_FULL_SUCCESS_ACROSS_STARTS_RATE_MIN,
+            EVAL_FULL_OUTCOME_SUCCESS_STARTS_RATE_MIN,
         ),
         label="evaluation success_rate_min",
     )
@@ -626,7 +620,7 @@ def normalize_publication_evaluation(
         _first_present(
             evaluation,
             "success_rate_mean",
-            EVAL_FULL_SUCCESS_ACROSS_STARTS_RATE_MEAN,
+            EVAL_FULL_OUTCOME_SUCCESS_STARTS_RATE_MEAN,
         ),
         label="evaluation success_rate_mean",
     )
@@ -644,11 +638,9 @@ def normalize_publication_evaluation(
         if progress_value is None
         else _required_float(progress_value, label="evaluation progress_max")
     )
-    by_start = _normalize_by_start_rows(
-        _first_present(evaluation, "by_start", "_eval_by_start_rows", EVAL_FULL_BY_START)
-    )
-    if sum(int(row["episodes"]) for row in by_start) != episodes:
-        raise ValueError("evaluation episodes must equal the sum of by_start episodes")
+    by_start = _normalize_by_start_rows(_first_present(evaluation, "by_start"))
+    if sum(int(row["episode_count"]) for row in by_start) != episodes:
+        raise ValueError("evaluation episodes must equal the sum of by_start episode_count")
     observed_rates = [float(row["success_rate"]) for row in by_start]
     if abs(min(observed_rates) - success_rate_min) > 1e-9:
         raise ValueError("evaluation success_rate_min disagrees with by_start")
@@ -804,10 +796,10 @@ def render_model_card(
     rows = "\n".join(
         "| {start} | {episodes} | {success_count} | {success_rate} | {return_mean:.3f} |".format(
             start=_markdown_value(row["start_id"]),
-            episodes=int(row["episodes"]),
+            episodes=int(row["episode_count"]),
             success_count=int(row["success_count"]),
             success_rate=_percent(row["success_rate"]),
-            return_mean=float(row["return_mean"]),
+            return_mean=float(row["shaped_return_mean"]),
         )
         for row in by_start
     )
@@ -826,14 +818,17 @@ def render_model_card(
     )
     library_name = "gradlab" if is_gradlab_policy else "stable-baselines3"
     library_tag = "gradlab-policy" if is_gradlab_policy else "stable-baselines3"
+    same_task_label = game.casefold() == goal.casefold()
+    task_title = game if same_task_label else f"{game} — {goal}"
+    task_targets = f"`{game}`" if same_task_label else f"`{game}` `{goal}`"
     policy_description = (
-        f"GradLab open-loop action program for `{game}` `{goal}`, produced by "
+        f"GradLab open-loop action program for {task_targets}, produced by "
         f"`{producer}` and trained and evaluated with"
         if is_action_program
-        else f"GradLab closed-loop semantic cell graph for `{game}` `{goal}`, "
+        else f"GradLab closed-loop semantic cell graph for {task_targets}, "
         f"produced by `{producer}` and trained and evaluated with"
         if is_cell_graph
-        else f"Stable-Baselines3 {algorithm.upper()} policy for `{game}` `{goal}`, "
+        else f"Stable-Baselines3 {algorithm.upper()} policy for {task_targets}, "
         "trained and evaluated with"
     )
     model_file_description = (
@@ -865,6 +860,8 @@ def render_model_card(
             "provider": provider,
             "game": game,
             "goal": goal,
+            "task_title": task_title,
+            "task_targets": task_targets,
             "policy_description": policy_description,
             "checkpoint_step": checkpoint_step,
             "action_sampling": action_sampling,

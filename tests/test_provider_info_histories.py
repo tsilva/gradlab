@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from dataclasses import replace
 from types import SimpleNamespace
 from unittest import mock
 
@@ -555,6 +556,29 @@ def test_vizdoom_constructor_receives_base_keys_and_augmented_info_filter() -> N
             state_weight_mapping=lambda _config: {},
         )
 
+    assert kwargs["info_frame_stack_keys"] == ("health", "position", "selected_weapon")
+    assert kwargs["info_filter"] == {
+        "mode": "all",
+        "keys": ("killcount", "health", "position", "selected_weapon"),
+    }
+
+
+def test_gradoom_constructor_receives_provider_history_keys() -> None:
+    config = _vizdoom_config()
+    config = replace(config, env_provider="gradoom")
+    with mock.patch(
+        "gradlab.vizdoom_assets.resolve_vizdoom_iwad_path",
+        return_value="/fake/doom2.wad",
+    ):
+        kwargs = provider_native_vec_kwargs(
+            config,
+            n_envs=2,
+            native_obs_crop=lambda _config: None,
+            state_weight_mapping=lambda _config: {},
+        )
+
+    assert kwargs["device"] == "cuda"
+    assert kwargs["transport"] == "torch"
     assert kwargs["info_frame_stack_keys"] == ("health", "position", "selected_weapon")
     assert kwargs["info_filter"] == {
         "mode": "all",

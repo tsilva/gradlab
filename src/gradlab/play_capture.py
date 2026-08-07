@@ -490,6 +490,7 @@ class EpisodeCaptureManager:
         self.start_id: str | None = None
         self.sampling_mode: str | None = None
         self.error: str | None = None
+        self._episode_in_progress = False
         self._last: dict[str, Any] | None = (
             self.store.latest_for(self.context["checkpoint_identity"])
             if self.context is not None and self.context.get("checkpoint_identity")
@@ -516,6 +517,7 @@ class EpisodeCaptureManager:
     ) -> None:
         self.abort(None)
         self.error = None
+        self._episode_in_progress = self.enabled
         if not self.enabled or frame is None:
             return
         temporary_root = self.store.root / ".encoding"
@@ -614,6 +616,7 @@ class EpisodeCaptureManager:
                 document_without_identity=document,
             )
             self._last = result
+            self._episode_in_progress = False
             self.temporary_replay = None
             return result
         except Exception as exc:
@@ -629,11 +632,19 @@ class EpisodeCaptureManager:
             self.temporary_replay = None
         if reason:
             self.error = str(reason)
+            self._episode_in_progress = self.enabled
 
     def status(self) -> dict[str, Any]:
         return {
             "enabled": self.enabled,
             "recording": self.writer is not None,
+            "episode_in_progress": self._episode_in_progress,
+            "ready": bool(
+                self.enabled
+                and not self._episode_in_progress
+                and self.writer is None
+                and self._last is not None
+            ),
             "error": self.error,
             "latest": deepcopy(self._last),
         }

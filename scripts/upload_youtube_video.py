@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from gradlab.cli_parser import ExactArgumentParser
-from gradlab.local_paths import default_runs_dir
+from gradlab.local_paths import default_gradlab_config_dir, default_runs_dir
 
 
 YOUTUBE_UPLOAD_SCOPES = (
@@ -195,6 +195,12 @@ def refresh_token(token: dict[str, Any]) -> dict[str, Any]:
 def access_token(client_config: dict[str, Any], token_path: Path, *, no_browser: bool) -> str:
     if token_path.is_file():
         token = json.loads(token_path.read_text(encoding="utf-8"))
+        token.setdefault("client_id", client_config["client_id"])
+        token.setdefault("client_secret", client_config.get("client_secret", ""))
+        token.setdefault(
+            "token_uri",
+            client_config.get("token_uri") or "https://oauth2.googleapis.com/token",
+        )
         try:
             token = refresh_token(token)
         except OAuthRequestError as exc:
@@ -388,10 +394,11 @@ def build_description(
 
 def replace_description_link_block(existing: str, model_page: str) -> str:
     replacements: dict[str, str] = {}
-    for line in model_page.splitlines():
+    model_page_lines = [line.strip() for line in model_page.splitlines() if line.strip()]
+    if len(model_page_lines) == 1 and model_page_lines[0].startswith(("https://", "http://")):
+        model_page_lines = [f"Model: {model_page_lines[0]}"]
+    for line in model_page_lines:
         stripped = line.strip()
-        if not stripped:
-            continue
         label, separator, _value = stripped.partition(":")
         if not separator or label not in {"Model", "gradlab"}:
             raise ValueError("model page updates may contain only Model: and gradlab: lines")
@@ -539,9 +546,18 @@ def update_video_metadata(
 
 def build_parser() -> argparse.ArgumentParser:
     parser = ExactArgumentParser(description="Upload a local video to YouTube.")
+    config_dir = default_gradlab_config_dir()
     parser.add_argument("video", type=Path, nargs="?")
-    parser.add_argument("--client-secret", type=Path, default=Path(".secret/youtube_client_secret.json"))
-    parser.add_argument("--token", type=Path, default=Path(".secret/youtube_token.json"))
+    parser.add_argument(
+        "--client-secret",
+        type=Path,
+        default=config_dir / "youtube_client_secret.json",
+    )
+    parser.add_argument(
+        "--token",
+        type=Path,
+        default=config_dir / "youtube_token.json",
+    )
     parser.add_argument("--title")
     parser.add_argument("--video-id", help="Update metadata for this existing YouTube video instead of uploading.")
     parser.add_argument(

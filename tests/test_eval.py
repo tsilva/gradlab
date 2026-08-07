@@ -10,7 +10,7 @@ from gradlab.batch_runtime import EpisodeRecord
 from gradlab.env import EnvConfig
 from gradlab.eval import ScriptedPolicy
 from gradlab.eval_metrics import (
-    eval_by_start_rows,
+    eval_by_start_records,
     episode_rank,
     episode_result_from_record,
     episode_reasons,
@@ -129,8 +129,8 @@ class EvalPreviewEquivalenceTests(unittest.TestCase):
 
 
 class EvalByStartTableTests(unittest.TestCase):
-    def test_rows_preserve_skewed_start_returns_and_overlapping_reasons(self) -> None:
-        rows = eval_by_start_rows(
+    def test_records_preserve_skewed_start_returns_and_overlapping_reasons(self) -> None:
+        records = eval_by_start_records(
             [
                 {
                     "start_state": "A",
@@ -159,11 +159,27 @@ class EvalByStartTableTests(unittest.TestCase):
             ]
         )
 
-        indexed = {(row[0], row[7]): row for row in rows}
-        self.assertEqual(indexed[("A", "level_change")][1:7], [2, 1, 0.5, 5.0, 4.0, 5.0])
-        self.assertEqual(indexed[("A", "level_change")][8:], [1, 0.5])
-        self.assertEqual(indexed[("A", "life_loss")][8:], [1, 0.5])
-        self.assertEqual(indexed[("B", "timeout")][1:7], [1, 0, 0.0, 100.0, 0.0, 100.0])
+        self.assertEqual(
+            records,
+            [
+                {
+                    "start_id": "A",
+                    "episode_count": 2,
+                    "success_count": 1,
+                    "success_rate": 0.5,
+                    "shaped_return_mean": 5.0,
+                    "failure_reasons": {"level_change": 1, "life_loss": 1},
+                },
+                {
+                    "start_id": "B",
+                    "episode_count": 1,
+                    "success_count": 0,
+                    "success_rate": 0.0,
+                    "shaped_return_mean": 100.0,
+                    "failure_reasons": {"timeout": 1},
+                },
+            ],
+        )
 
 
 class EvalMetricTests(unittest.TestCase):
@@ -186,7 +202,10 @@ class EvalMetricTests(unittest.TestCase):
             semantics=environment_spec("gymnasium", "breakout").eval_semantics,
         )
 
-        self.assertIn("train/outcome/failure/reason/terminated/episode/count", training)
+        self.assertEqual(
+            training["train/outcome/failure/reason/terminated/rolling/rate"],
+            1.0,
+        )
         self.assertEqual(episode_reasons(result), {"terminated"})
 
     def test_deathmatch_projects_and_summarizes_raw_killcount(self) -> None:
@@ -305,8 +324,8 @@ class EvalMetricTests(unittest.TestCase):
 
     def test_checkpoint_score_uses_explicit_v2_rank(self) -> None:
         metrics = {
-            "eval/full/outcome/success/across_starts/rate/min": 0.80,
-            "eval/full/outcome/success/across_starts/rate/mean": 0.90,
+            "eval/full/outcome/success/starts/rate/min": 0.80,
+            "eval/full/outcome/success/starts/rate/mean": 0.90,
             "checkpoint_step": 5000000,
             "eval/full/episode/return/shaped/mean": 1200.0,
         }
@@ -361,7 +380,7 @@ class EvalMetricTests(unittest.TestCase):
 
         self.assertFalse(any("/outcome/reason/" in key for key in metrics))
         self.assertNotIn("eval/full/outcome/success/from/Level1-1/rate", metrics)
-        self.assertEqual(metrics["eval/full/outcome/success/across_starts/rate/min"], 0.5)
+        self.assertEqual(metrics["eval/full/outcome/success/starts/rate/min"], 0.5)
 
     def test_checkpoint_score_uses_reward_when_completion_is_absent(self) -> None:
         metrics = {
@@ -419,7 +438,7 @@ class EvalMetricTests(unittest.TestCase):
         )
 
         self.assertEqual(summary["return_mean"], 7.0)
-        self.assertEqual(summary["eval/full/episode/completed/count"], 2)
+        self.assertNotIn("eval/full/episode/completed/count", summary)
         self.assertNotIn("eval/full/outcome/reason/terminated/count", summary)
         self.assertFalse(any("/outcome/reason/" in key for key in summary))
         self.assertNotIn("eval/full/outcome/reason/max_steps/count", summary)
@@ -448,8 +467,8 @@ class EvalMetricTests(unittest.TestCase):
         )
 
         self.assertNotIn("eval/full/outcome/success/from/Start/rate", summary)
-        self.assertEqual(summary["eval/full/outcome/success/across_starts/rate/min"], 0.0)
-        self.assertEqual(summary["eval/full/outcome/success/across_starts/rate/mean"], 0.0)
+        self.assertEqual(summary["eval/full/outcome/success/starts/rate/min"], 0.0)
+        self.assertEqual(summary["eval/full/outcome/success/starts/rate/mean"], 0.0)
 
     def test_non_mario_goal_reached_uses_generic_success_outcome(self) -> None:
         summary = summarize_episode_results(
@@ -584,14 +603,14 @@ class EvalMetricTests(unittest.TestCase):
 
     def test_checkpoint_score_prefers_fewer_timesteps_after_completion_goal(self) -> None:
         slower_higher_reward = {
-            "eval/full/outcome/success/across_starts/rate/min": 1.0,
-            "eval/full/outcome/success/across_starts/rate/mean": 1.0,
+            "eval/full/outcome/success/starts/rate/min": 1.0,
+            "eval/full/outcome/success/starts/rate/mean": 1.0,
             "checkpoint_step": 5000000,
             "eval/full/episode/return/shaped/mean": 1200.0,
         }
         faster_lower_reward = {
-            "eval/full/outcome/success/across_starts/rate/min": 1.0,
-            "eval/full/outcome/success/across_starts/rate/mean": 1.0,
+            "eval/full/outcome/success/starts/rate/min": 1.0,
+            "eval/full/outcome/success/starts/rate/mean": 1.0,
             "checkpoint_step": 3500000,
             "eval/full/episode/return/shaped/mean": 900.0,
         }
@@ -738,7 +757,7 @@ class EvalMetricTests(unittest.TestCase):
             seed_protocol=SEED_PROTOCOL,
             acceptance=[
                 {
-                    "metric": "eval/full/outcome/success/across_starts/rate/min",
+                    "metric": "eval/full/outcome/success/starts/rate/min",
                     "operator": ">=",
                     "threshold": 1.0,
                 }
@@ -960,8 +979,8 @@ class EvalMetricTests(unittest.TestCase):
         self.assertNotIn("eval/full/outcome/reason/max_steps/count", metrics)
         self.assertFalse(any("/outcome/reason/" in key for key in metrics))
         self.assertFalse(any("/outcome/success/from/" in key for key in metrics))
-        self.assertEqual(metrics["eval/full/outcome/success/across_starts/rate/min"], 0.0)
-        self.assertEqual(metrics["eval/full/outcome/success/across_starts/rate/mean"], 0.5)
+        self.assertEqual(metrics["eval/full/outcome/success/starts/rate/min"], 0.0)
+        self.assertEqual(metrics["eval/full/outcome/success/starts/rate/mean"], 0.5)
         self.assertEqual(metrics["episode_results"][0]["env_index"], 1)
         self.assertEqual(metrics["episode_results"][0]["seed"], 7)
         self.assertEqual(metrics["episode_results"][0]["seed_protocol"], SEED_PROTOCOL)

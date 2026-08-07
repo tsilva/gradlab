@@ -22,7 +22,7 @@ train:
   early_stop:
     conditions:
       clear_100:
-        metric: train/outcome/success/across_starts/window_100/rate/min
+        metric: train/outcome/success/starts/all/rolling/rate/min
         trigger: threshold
         operator: '>='
         progress_baseline: 0.0
@@ -113,7 +113,7 @@ train:
 eval:
   episodes: 100
   acceptance:
-  - metric: eval/full/outcome/success/across_starts/rate/min
+  - metric: eval/full/outcome/success/starts/rate/min
     operator: '>='
     threshold: 1.0
   environment:

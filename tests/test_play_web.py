@@ -4,12 +4,14 @@ import argparse
 import asyncio
 import io
 import time
+from contextlib import nullcontext
 from dataclasses import replace
 from pathlib import Path
 from unittest.mock import AsyncMock, Mock, patch
 
 import numpy as np
-from aiohttp import ClientSession, WSServerHandshakeError, WSMsgType
+import pytest
+from aiohttp import ClientSession, WSServerHandshakeError, WSMsgType, web
 from PIL import Image
 
 from gradlab.dataset_cli import build_parser as build_dataset_parser
@@ -1451,6 +1453,56 @@ def test_human_recording_runner_requires_fresh_focus_and_streams_transition_stat
     assert runner.history_payload()["points"][0]["action_source"] == "human"
 
 
+def test_youtube_oauth_callback_returns_to_authenticated_player(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    server = PlaybackWebServer(argparse.Namespace(session_change=0), human_args())
+    server.token = "session-token"
+    server.publication_authority_client_id = "client-1"
+    server.control_epoch = 3
+    transaction = Mock()
+    server._oauth_transactions["oauth-state"] = transaction
+    paths = argparse.Namespace(
+        root=Path("/private/config"),
+        client=Path("/private/config/youtube_client_secret.json"),
+        token=Path("/private/config/youtube_token.json"),
+        lock=Path("/private/config/youtube_token.lock"),
+    )
+    saved: dict[str, object] = {}
+
+    monkeypatch.setattr("gradlab.play_web.youtube_credential_paths", lambda: paths)
+    monkeypatch.setattr("gradlab.play_web.credential_lock", lambda _path: nullcontext())
+    monkeypatch.setattr(
+        "gradlab.play_web.load_private_json",
+        lambda _path, *, root: {"installed": {"client_id": "id"}},
+    )
+    monkeypatch.setattr(
+        "gradlab.play_web.exchange_oauth_code",
+        lambda _config, _transaction, *, code: {"access_token": code},
+    )
+    monkeypatch.setattr(
+        "gradlab.play_web.save_private_json",
+        lambda path, value, *, root: saved.update(path=path, value=value, root=root),
+    )
+
+    async def scenario() -> None:
+        request = argparse.Namespace(query={"state": "oauth-state", "code": "code"})
+        with pytest.raises(web.HTTPSeeOther) as redirect:
+            await server.publication_oauth_callback(request)
+        assert redirect.value.headers["Location"] == (
+            "/publication/oauth/complete#token=session-token"
+        )
+
+    asyncio.run(scenario())
+
+    transaction.validate_authority.assert_called_once_with("client-1", 3)
+    assert saved == {
+        "path": paths.token,
+        "value": {"access_token": "code"},
+        "root": paths.root,
+    }
+
+
 def test_loopback_server_requires_exact_origin_and_fragment_token() -> None:
     async def scenario() -> None:
         runner = HumanRecordingRunner(FakeHumanSession(), human_args())
@@ -1468,7 +1520,18 @@ def test_loopback_server_requires_exact_origin_and_fragment_token() -> None:
                 response = await client.get(server.origin)
                 assert response.status == 200
                 assert response.headers["Cache-Control"] == "no-store"
+                assert response.headers["Cross-Origin-Opener-Policy"] == (
+                    "same-origin-allow-popups"
+                )
                 assert "frame-ancestors 'none'" in response.headers["Content-Security-Policy"]
+                oauth_complete = await client.get(
+                    f"{server.origin}/publication/oauth/complete"
+                )
+                assert oauth_complete.status == 200
+                assert oauth_complete.headers["Cross-Origin-Opener-Policy"] == (
+                    "same-origin-allow-popups"
+                )
+                assert "Authorization complete" in await oauth_complete.text()
                 icon_response = await client.get(f"{server.origin}/assets/tabler-icons.svg")
                 assert icon_response.status == 200
                 assert "image/svg+xml" in icon_response.headers["Content-Type"]
@@ -1926,8 +1989,8 @@ def test_catalog_http_api_requires_the_fragment_session_token() -> None:
                     "checkpoint_id": "checkpoint-1-" + "b" * 16,
                     "sha256": "b" * 64,
                     "metrics": {
-                        "train/progress/kills/from/target/rolling_up_to_100/mean": 8.5,
-                        "train/episode/return/shaped/from/target/rolling_up_to_100/mean": 120.0,
+                        "train/progress/kills/origin/target/rolling/mean": 8.5,
+                        "train/episode/return/shaped/origin/target/rolling/mean": 120.0,
                     },
                     "evaluation": {
                         "status": "accepted",
@@ -1960,9 +2023,9 @@ def test_catalog_http_api_requires_the_fragment_session_token() -> None:
                         ],
                     },
                     {
-                        "metric": "train/progress/kills/from/target/rolling_up_to_100/mean",
+                        "metric": "train/progress/kills/origin/target/rolling/mean",
                         "direction": "max",
-                        "label": "Train mean kills (up to 100)",
+                        "label": "Recent target kills mean",
                         "evidence": "training",
                         "roles": ["training_proxy"],
                         "proxy_for": "eval/full/progress/kills/mean",
@@ -1976,9 +2039,9 @@ def test_catalog_http_api_requires_the_fragment_session_token() -> None:
                         "rank_index": 1,
                     },
                     {
-                        "metric": "train/episode/return/shaped/from/target/rolling_up_to_100/mean",
+                        "metric": "train/episode/return/shaped/origin/target/rolling/mean",
                         "direction": "max",
-                        "label": "Train mean return (up to 100)",
+                        "label": "Recent target return mean",
                         "evidence": "training",
                         "roles": ["optimization"],
                     },
@@ -2158,9 +2221,9 @@ def test_catalog_http_api_requires_the_fragment_session_token() -> None:
                         ],
                     },
                     {
-                        "metric": "train/progress/kills/from/target/rolling_up_to_100/mean",
+                        "metric": "train/progress/kills/origin/target/rolling/mean",
                         "direction": "max",
-                        "label": "Train mean kills (up to 100)",
+                        "label": "Recent target kills mean",
                         "evidence": "training",
                         "roles": ["training_proxy"],
                         "proxy_for": "eval/full/progress/kills/mean",
@@ -2174,24 +2237,24 @@ def test_catalog_http_api_requires_the_fragment_session_token() -> None:
                         "rank_index": 1,
                     },
                     {
-                        "metric": "train/episode/return/shaped/from/target/rolling_up_to_100/mean",
+                        "metric": "train/episode/return/shaped/origin/target/rolling/mean",
                         "direction": "max",
-                        "label": "Train mean return (up to 100)",
+                        "label": "Recent target return mean",
                         "evidence": "training",
                         "roles": ["optimization"],
                     },
                 ]
                 assert checkpoint_payload["items"][0]["metrics"] == {
                     "eval/full/progress/kills/mean": 11.0,
-                    "train/progress/kills/from/target/rolling_up_to_100/mean": 8.5,
+                    "train/progress/kills/origin/target/rolling/mean": 8.5,
                     "eval/full/progress/kills/max": 16.0,
-                    "train/episode/return/shaped/from/target/rolling_up_to_100/mean": 120.0,
+                    "train/episode/return/shaped/origin/target/rolling/mean": 120.0,
                 }
                 assert checkpoint_payload["items"][0]["best_metrics"] == [
                     "eval/full/progress/kills/mean",
-                    "train/progress/kills/from/target/rolling_up_to_100/mean",
+                    "train/progress/kills/origin/target/rolling/mean",
                     "eval/full/progress/kills/max",
-                    "train/episode/return/shaped/from/target/rolling_up_to_100/mean",
+                    "train/episode/return/shaped/origin/target/rolling/mean",
                 ]
                 run_inspection = await client.get(
                     f"{server.origin}/api/catalog/runs/gradlab-{'a' * 32}/inspection",
@@ -2306,6 +2369,8 @@ def test_web_dashboard_assets_are_packaged_beside_server() -> None:
     font_root = root / "fonts"
     expected_assets = (
         root / "index.html",
+        root / "oauth_complete.html",
+        root / "oauth_complete.js",
         root / "favicon.svg",
         root / "styles.css",
         root / "tabler-icons.svg",
@@ -2355,6 +2420,7 @@ def test_web_dashboard_assets_are_packaged_beside_server() -> None:
     ):
         assert f'url("/assets/fonts/{name}") format("woff2")' in styles
     script = (root / "app.js").read_text(encoding="utf-8")
+    oauth_script = (root / "oauth_complete.js").read_text(encoding="utf-8")
     source_browser = (root / "sources" / "browser.js").read_text(encoding="utf-8")
     contract_viewer = (root / "documents" / "viewer.js").read_text(encoding="utf-8")
     contract_diff = (root / "documents" / "diff.js").read_text(encoding="utf-8")
@@ -2378,6 +2444,13 @@ def test_web_dashboard_assets_are_packaged_beside_server() -> None:
     assert "GRADLAB PLAYER" not in markup
     assert 'id="source-breadcrumbs"' in markup
     assert '$("#source-breadcrumbs")' in script
+    assert "snapshot?.publication_capture?.ready === true" in script
+    assert "Boolean(snapshot?.publication_capture?.latest)" not in script
+    assert "gradlab-youtube-oauth-complete" in script
+    assert "event.source !== youtubeOAuthPopup" in script
+    assert "gradlab-youtube-oauth-complete" in oauth_script
+    assert "window.opener.postMessage(message, location.origin)" in oauth_script
+    assert 'location.replace(`/#token=${encodeURIComponent(token)}`)' in oauth_script
     assert '$("#player-home")' not in script
     assert '$("#page-title").hidden = Boolean(state.sourceMode || activeCheckpointRoute);' in script
     assert '$("#page-title").textContent = "Select checkpoint"' not in script

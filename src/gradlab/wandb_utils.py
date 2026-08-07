@@ -7,12 +7,12 @@ from weakref import WeakKeyDictionary
 from gradlab.dotenv import load_env_file
 from gradlab.env_registry import game_family_for_environment, wandb_project_for_environment
 from gradlab.metric_names import (
-    EVAL_ACCEPTANCE_PASS,
+    EVAL_CHECKPOINT_STEP,
     METRICS_SCHEMA_VERSION,
-    ORCHESTRATION_EVENT_SEQ,
-    TRAIN_EPISODE_RETURN_SHAPED_ACROSS_ORIGINS_ROLLING_UP_TO_100_MEAN,
+    ORCHESTRATION_EVENT_SEQUENCE,
     TRAIN_GLOBAL_STEP,
-    evaluation_metric_schema,
+    metric_definition,
+    require_current_metrics_schema,
 )
 from gradlab.operator_credentials import (
     load_operator_environment,
@@ -98,20 +98,16 @@ def configure_wandb_metrics(
     *,
     metrics_schema_version: int = METRICS_SCHEMA_VERSION,
 ):
-    eval_schema = evaluation_metric_schema(metrics_schema_version)
+    require_current_metrics_schema(metrics_schema_version)
     if run is not None:
-        run.define_metric(TRAIN_GLOBAL_STEP, summary="max")
-        run.define_metric(eval_schema.checkpoint_step, summary="max")
-        run.define_metric(ORCHESTRATION_EVENT_SEQ, summary="max")
-        run.define_metric(
-            EVAL_ACCEPTANCE_PASS,
-            step_metric=eval_schema.checkpoint_step,
-            summary="max",
-        )
-        run.define_metric(
-            TRAIN_EPISODE_RETURN_SHAPED_ACROSS_ORIGINS_ROLLING_UP_TO_100_MEAN,
-            step_metric=TRAIN_GLOBAL_STEP,
-            summary="last",
+        configure_wandb_metric_axes(
+            run,
+            (
+                TRAIN_GLOBAL_STEP,
+                EVAL_CHECKPOINT_STEP,
+                ORCHESTRATION_EVENT_SEQUENCE,
+            ),
+            metrics_schema_version=metrics_schema_version,
         )
     return run
 
@@ -126,11 +122,11 @@ def configure_wandb_metric_axes(
 
     if run is None:
         return run
-    eval_schema = evaluation_metric_schema(metrics_schema_version)
+    require_current_metrics_schema(metrics_schema_version)
     axes_by_prefix = (
         ("train/", TRAIN_GLOBAL_STEP),
-        ("eval/", eval_schema.checkpoint_step),
-        ("orchestration/", ORCHESTRATION_EVENT_SEQ),
+        ("eval/", EVAL_CHECKPOINT_STEP),
+        ("orchestration/", ORCHESTRATION_EVENT_SEQUENCE),
     )
     configured = _WANDB_AXIS_METRICS.setdefault(run, set())
     for name in sorted({str(metric_name) for metric_name in metric_names}):
@@ -144,8 +140,14 @@ def configure_wandb_metric_axes(
             ),
             None,
         )
-        if axis is None or name == axis:
-            continue
-        run.define_metric(name, step_metric=axis)
+        definition = metric_definition(name)
+        if definition is None:
+            raise ValueError(f"unknown metric name: {name}")
+        if definition.placement != "history":
+            raise ValueError(f"summary metric cannot be bound to a history axis: {name}")
+        options: dict[str, str] = {"summary": definition.summary_reducer}
+        if axis is not None and name != axis:
+            options["step_metric"] = axis
+        run.define_metric(name, **options)
         configured.add(name)
     return run

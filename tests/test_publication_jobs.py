@@ -7,7 +7,10 @@ import pytest
 
 from gradlab.file_utils import file_sha256
 from gradlab.json_utils import canonical_json_sha256
-from gradlab.publication_jobs import PlayerPublicationJobHandler
+from gradlab.publication_jobs import (
+    PlayerPublicationJobHandler,
+    _validate_new_repository_files,
+)
 
 
 def _snapshot(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[dict[str, str], Path]:
@@ -114,3 +117,11 @@ def test_publication_snapshot_rejects_symlink(
 
     with pytest.raises(ValueError, match="symlink"):
         PlayerPublicationJobHandler()._snapshot(payload)
+
+
+def test_new_huggingface_repository_allows_only_generated_gitattributes() -> None:
+    assert _validate_new_repository_files([".gitattributes"]) == {".gitattributes"}
+    assert _validate_new_repository_files([]) == set()
+
+    with pytest.raises(ValueError, match="README.md"):
+        _validate_new_repository_files([".gitattributes", "README.md"])

@@ -6,9 +6,11 @@ from typing import Any
 import numpy as np
 
 from gradlab.metric_names import (
-    eval_metric,
-    eval_progress_metric,
-    eval_success_rate_metric,
+    EVAL_FULL_EPISODE_RETURN_SHAPED_MAX,
+    EVAL_FULL_EPISODE_RETURN_SHAPED_MEAN,
+    EVAL_FULL_OUTCOME_SUCCESS_STARTS_RATE_MEAN,
+    EVAL_FULL_OUTCOME_SUCCESS_STARTS_RATE_MIN,
+    eval_full_progress_metric,
 )
 from gradlab.policy_runtime import reset_policy_state
 from gradlab.env_registry import EvalSemantics, environment_spec
@@ -198,7 +200,6 @@ def episode_reason_names(
 def eval_outcome_metrics(
     episode_results: list[dict[str, Any]],
     *,
-    protocol: str = "full",
     event_names: Sequence[str] = (),
     track_success: bool = False,
 ) -> dict[str, int | float]:
@@ -219,13 +220,13 @@ def eval_outcome_metrics(
             success_rate = success_count / denominator
             success_rates.append(success_rate)
     if success_rates:
-        metrics[eval_success_rate_metric(protocol, "min")] = min(success_rates)
-        metrics[eval_success_rate_metric(protocol, "mean")] = float(np.mean(success_rates))
+        metrics[EVAL_FULL_OUTCOME_SUCCESS_STARTS_RATE_MIN] = min(success_rates)
+        metrics[EVAL_FULL_OUTCOME_SUCCESS_STARTS_RATE_MEAN] = float(np.mean(success_rates))
     return metrics
 
 
-def eval_by_start_rows(episode_results: list[dict[str, Any]]) -> list[list[Any]]:
-    rows: list[list[Any]] = []
+def eval_by_start_records(episode_results: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
     states = sorted(
         {state for episode in episode_results if (state := episode_start_state(episode))}
     )
@@ -237,24 +238,17 @@ def eval_by_start_rows(episode_results: list[dict[str, Any]]) -> list[list[Any]]
         for episode in episodes:
             for reason in episode_reasons(episode):
                 reason_counts[reason] = reason_counts.get(reason, 0) + 1
-        reasons = sorted(reason_counts) or [""]
-        for reason in reasons:
-            reason_count = reason_counts.get(reason, 0)
-            rows.append(
-                [
-                    state,
-                    len(episodes),
-                    success_count,
-                    success_count / len(episodes),
-                    float(np.mean(returns)),
-                    float(np.std(returns)),
-                    float(np.median(returns)),
-                    reason,
-                    reason_count,
-                    reason_count / len(episodes),
-                ]
-            )
-    return rows
+        records.append(
+            {
+                "start_id": state,
+                "episode_count": len(episodes),
+                "success_count": success_count,
+                "success_rate": success_count / len(episodes),
+                "shaped_return_mean": float(np.mean(returns)),
+                "failure_reasons": dict(sorted(reason_counts.items())),
+            }
+        )
+    return records
 
 
 def primary_progress_value(
@@ -337,8 +331,8 @@ def summarize_episode_results(
         progress_metrics[mean_key] = float(values.mean())
         progress_metrics[max_key] = int(values.max())
         progress_name = progress_metric_name(field.result_key)
-        progress_metrics[eval_progress_metric("full", progress_name, "mean")] = float(values.mean())
-        progress_metrics[eval_progress_metric("full", progress_name, "max")] = int(values.max())
+        progress_metrics[eval_full_progress_metric(progress_name, "mean")] = float(values.mean())
+        progress_metrics[eval_full_progress_metric(progress_name, "max")] = int(values.max())
     death_x_positions = [
         int(episode["death_x_pos"])
         for episode in episode_results
@@ -354,12 +348,8 @@ def summarize_episode_results(
         "return_std": float(returns.std()),
         "return_median": float(np.median(returns)),
         "episode_length_mean": float(lengths.mean()),
-        eval_metric("full", "episode/return/shaped/mean"): float(returns.mean()),
-        eval_metric("full", "episode/return/shaped/std"): float(returns.std()),
-        eval_metric("full", "episode/return/shaped/median"): float(np.median(returns)),
-        eval_metric("full", "episode/return/shaped/max"): float(returns.max()),
-        eval_metric("full", "episode/length/mean"): float(lengths.mean()),
-        eval_metric("full", "episode/completed/count"): episode_count,
+        EVAL_FULL_EPISODE_RETURN_SHAPED_MEAN: float(returns.mean()),
+        EVAL_FULL_EPISODE_RETURN_SHAPED_MAX: float(returns.max()),
         "episode_results": episode_results,
     }
     metrics.update(progress_metrics)

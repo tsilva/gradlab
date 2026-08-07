@@ -2288,7 +2288,7 @@ class PlaybackWebServer:
         response.headers["Cache-Control"] = "no-store"
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["Referrer-Policy"] = "no-referrer"
-        response.headers["Cross-Origin-Opener-Policy"] = "same-origin"
+        response.headers.setdefault("Cross-Origin-Opener-Policy", "same-origin")
         response.headers["Content-Security-Policy"] = (
             "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob:; "
             "connect-src 'self' ws: wss:; object-src 'none'; base-uri 'none'; "
@@ -2297,7 +2297,14 @@ class PlaybackWebServer:
         return response
 
     async def page(self, _request: web.Request) -> web.FileResponse:
-        return web.FileResponse(self.asset_root / "index.html")
+        response = web.FileResponse(self.asset_root / "index.html")
+        response.headers["Cross-Origin-Opener-Policy"] = "same-origin-allow-popups"
+        return response
+
+    async def publication_oauth_complete(self, _request: web.Request) -> web.FileResponse:
+        response = web.FileResponse(self.asset_root / "oauth_complete.html")
+        response.headers["Cross-Origin-Opener-Policy"] = "same-origin-allow-popups"
+        return response
 
     async def asset(self, request: web.Request) -> web.FileResponse:
         relative = Path(request.match_info["path"])
@@ -2482,7 +2489,7 @@ class PlaybackWebServer:
     async def publication_oauth_start(self, request: web.Request) -> web.Response:
         client = self._authorize_publication(request, mutation=True)
         try:
-            paths = youtube_credential_paths(self._repo_root or Path.cwd())
+            paths = youtube_credential_paths()
             with credential_lock(paths.lock):
                 config = load_private_json(paths.client, root=paths.root)
             transaction = new_oauth_transaction(
@@ -2509,7 +2516,7 @@ class PlaybackWebServer:
                 self.publication_authority_client_id,
                 self.control_epoch,
             )
-            paths = youtube_credential_paths(self._repo_root or Path.cwd())
+            paths = youtube_credential_paths()
             with credential_lock(paths.lock):
                 config = load_private_json(paths.client, root=paths.root)
                 token = exchange_oauth_code(config, transaction, code=code)
@@ -2520,7 +2527,9 @@ class PlaybackWebServer:
                 status=400,
                 content_type="text/plain",
             )
-        raise web.HTTPSeeOther(location="/?youtube=authorized")
+        raise web.HTTPSeeOther(
+            location=f"/publication/oauth/complete#token={quote(self.token, safe='')}"
+        )
 
     async def publication_replay_ticket(self, request: web.Request) -> web.Response:
         client = self._authorize_publication(request, mutation=True)
@@ -3549,6 +3558,7 @@ class PlaybackWebServer:
                 web.post("/api/publication/jobs/{job_id}/cleanup", self.publication_cleanup),
                 web.post("/api/publication/oauth/start", self.publication_oauth_start),
                 web.get("/api/publication/oauth/callback", self.publication_oauth_callback),
+                web.get("/publication/oauth/complete", self.publication_oauth_complete),
                 web.post("/api/publication/replay-ticket", self.publication_replay_ticket),
                 web.get("/api/publication/replay/{ticket}", self.publication_replay),
                 web.get("/ws", self.websocket),

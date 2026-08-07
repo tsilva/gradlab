@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import re
-import time
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
@@ -21,25 +20,12 @@ from gradlab.file_utils import file_sha256
 from gradlab.go_explore import GoExploreSearch
 from gradlab.metric_names import (
     TRAIN_GO_EXPLORE_ARCHIVE_BLOB_BYTES,
-    TRAIN_GO_EXPLORE_ARCHIVE_BLOB_COUNT,
     TRAIN_GO_EXPLORE_ARCHIVE_CELL_COUNT,
-    TRAIN_GO_EXPLORE_ARCHIVE_ENTRY_COUNT,
-    TRAIN_GO_EXPLORE_ARCHIVE_RECENT_NEW_CELL_RATE,
-    TRAIN_GO_EXPLORE_ARCHIVE_RECENT_VISIT_WINDOW,
-    TRAIN_GO_EXPLORE_ARCHIVE_SELECTION_COUNT,
-    TRAIN_GO_EXPLORE_ARCHIVE_UPDATE_COUNT,
+    TRAIN_GO_EXPLORE_ARCHIVE_CELL_DISCOVERY_RATE,
     TRAIN_GO_EXPLORE_ARCHIVE_VISIT_COUNT,
-    TRAIN_GO_EXPLORE_BEST_COMPLETED,
-    TRAIN_GO_EXPLORE_BEST_PROGRAM_RUNS,
     TRAIN_GO_EXPLORE_BEST_PROGRAM_STEPS,
     TRAIN_GO_EXPLORE_BEST_PROGRESS,
     TRAIN_GO_EXPLORE_BEST_RETURN,
-    TRAIN_GO_EXPLORE_IMPROVEMENT_COUNT,
-    TRAIN_GO_EXPLORE_PROGRESS_GUIDED_CELL_COUNT,
-    TRAIN_GO_EXPLORE_PROGRESS_GUIDED_SELECTION_COUNT,
-    TRAIN_GO_EXPLORE_SUCCESS_GUIDED_CELL_COUNT,
-    TRAIN_GO_EXPLORE_SUCCESS_GUIDED_SELECTION_COUNT,
-    TRAIN_THROUGHPUT_LOOP_FPS,
 )
 from gradlab.policy_bundle import write_canonical_json
 from gradlab.state_archive import state_archive_artifact_summary
@@ -50,6 +36,7 @@ from gradlab.training_lifecycle import (
     TerminalReason,
     TrainingResult,
 )
+from gradlab.training_metrics import DeltaThroughputTracker
 
 
 DEFAULT_CONFIG: dict[str, Any] = {
@@ -83,7 +70,7 @@ GO_EXPLORE_PROGRESS_FIELDS = (
         group="traffic",
     ),
     ProgressField(
-        TRAIN_GO_EXPLORE_ARCHIVE_RECENT_NEW_CELL_RATE,
+        TRAIN_GO_EXPLORE_ARCHIVE_CELL_DISCOVERY_RATE,
         "new cells",
         ProgressValueFormat.PERCENT,
         group="exploration",
@@ -94,7 +81,7 @@ GO_EXPLORE_PROGRESS_FIELDS = (
         group="exploration",
     ),
     ProgressField(
-        TRAIN_GO_EXPLORE_PROGRESS_GUIDED_SELECTION_COUNT,
+        "go_explore/progress_guided_selection_count",
         "frontier restores",
         ProgressValueFormat.COUNT,
         group="traffic",
@@ -175,16 +162,12 @@ def _save_policy(
         if not isinstance(archive_config, Mapping):
             raise ValueError("Go-Explore checkpoint requires state_archive configuration")
         recorder = archive_config.get("recorder")
-        if not isinstance(recorder, Mapping) or not isinstance(
-            recorder.get("cell"), Mapping
-        ):
+        if not isinstance(recorder, Mapping) or not isinstance(recorder.get("cell"), Mapping):
             raise ValueError("Go-Explore checkpoint requires its cell detector")
         cell_detector = recorder["cell"]
         export = archive_config.get("export", {})
         snapshot_mode = (
-            str(export.get("snapshots", "none"))
-            if isinstance(export, Mapping)
-            else "none"
+            str(export.get("snapshots", "none")) if isinstance(export, Mapping) else "none"
         )
         snapshot_records: dict[str, tuple[Mapping[str, Any], bytes]] = {}
         if snapshot_mode == "retained":
@@ -226,7 +209,7 @@ def _save_policy(
     )
 
 
-def _search_metric_payload(
+def _wandb_metric_payload(
     search: GoExploreSearch,
     *,
     archive_blob_bytes: int,
@@ -235,40 +218,25 @@ def _search_metric_payload(
     return {
         TRAIN_GO_EXPLORE_ARCHIVE_CELL_COUNT: search.archive_count,
         TRAIN_GO_EXPLORE_ARCHIVE_BLOB_BYTES: archive_blob_bytes,
-        TRAIN_GO_EXPLORE_ARCHIVE_SELECTION_COUNT: search.archive_selection_count,
         TRAIN_GO_EXPLORE_ARCHIVE_VISIT_COUNT: search.archive_visit_count,
-        TRAIN_GO_EXPLORE_ARCHIVE_UPDATE_COUNT: search.archive_update_count,
-        TRAIN_GO_EXPLORE_ARCHIVE_RECENT_NEW_CELL_RATE: (search.archive_recent_new_cell_rate),
-        TRAIN_GO_EXPLORE_ARCHIVE_RECENT_VISIT_WINDOW: (search.archive_recent_visit_window),
-        TRAIN_GO_EXPLORE_PROGRESS_GUIDED_CELL_COUNT: search.progress_guided_cell_count,
-        TRAIN_GO_EXPLORE_PROGRESS_GUIDED_SELECTION_COUNT: (search.progress_guided_selection_count),
-        TRAIN_GO_EXPLORE_SUCCESS_GUIDED_CELL_COUNT: search.success_guided_cell_count,
-        TRAIN_GO_EXPLORE_SUCCESS_GUIDED_SELECTION_COUNT: (search.success_guided_selection_count),
+        TRAIN_GO_EXPLORE_ARCHIVE_CELL_DISCOVERY_RATE: search.archive_recent_new_cell_rate,
         TRAIN_GO_EXPLORE_BEST_PROGRESS: candidate.progress if candidate else 0.0,
         TRAIN_GO_EXPLORE_BEST_RETURN: candidate.episode_return if candidate else 0.0,
         TRAIN_GO_EXPLORE_BEST_PROGRAM_STEPS: candidate.step_count if candidate else 0,
-        TRAIN_GO_EXPLORE_BEST_PROGRAM_RUNS: len(candidate.runs) if candidate else 0,
-        TRAIN_GO_EXPLORE_BEST_COMPLETED: int(candidate.completed) if candidate else 0,
-        TRAIN_GO_EXPLORE_IMPROVEMENT_COUNT: search.improvement_count,
     }
 
 
-def _metric_payload(
+def _progress_metric_payload(
     search: GoExploreSearch,
-    runtime: Any,
     *,
-    elapsed: float,
+    archive_blob_bytes: int,
 ) -> dict[str, int | float]:
-    archive = runtime.state_archive_summary() or {}
     return {
-        **_search_metric_payload(
+        **_wandb_metric_payload(
             search,
-            archive_blob_bytes=int(archive.get("blob_bytes", 0)),
+            archive_blob_bytes=archive_blob_bytes,
         ),
-        TRAIN_GO_EXPLORE_ARCHIVE_ENTRY_COUNT: int(archive.get("entry_count", 0)),
-        TRAIN_GO_EXPLORE_ARCHIVE_BLOB_COUNT: int(archive.get("blob_count", 0)),
-        TRAIN_GO_EXPLORE_ARCHIVE_BLOB_BYTES: int(archive.get("blob_bytes", 0)),
-        TRAIN_THROUGHPUT_LOOP_FPS: search.global_step / max(elapsed, 1e-9),
+        "go_explore/progress_guided_selection_count": (search.progress_guided_selection_count),
     }
 
 
@@ -280,24 +248,17 @@ def run_go_explore(context: BackendContext) -> TrainingResult:
     if int(common_config["timesteps"]) % n_envs != 0:
         raise ValueError("Go-Explore timesteps must be divisible by n_envs")
     archive_config = common_config.get("state_archive")
-    recorder = (
-        archive_config.get("recorder")
-        if isinstance(archive_config, Mapping)
-        else None
-    )
+    recorder = archive_config.get("recorder") if isinstance(archive_config, Mapping) else None
     cell = recorder.get("cell") if isinstance(recorder, Mapping) else None
     dimensions = cell.get("dimensions") if isinstance(cell, Mapping) else None
     if (
         not isinstance(dimensions, Sequence)
         or isinstance(dimensions, str | bytes)
         or any(
-            not isinstance(dimension, Mapping) or "source" in dimension
-            for dimension in dimensions
+            not isinstance(dimension, Mapping) or "source" in dimension for dimension in dimensions
         )
     ):
-        raise ValueError(
-            "gradlab.go-explore executable cells require semantic signal dimensions"
-        )
+        raise ValueError("gradlab.go-explore executable cells require semantic signal dimensions")
     preflight = preflight_state_archive_provider(
         config=config,
         n_envs=n_envs,
@@ -364,7 +325,7 @@ def run_go_explore(context: BackendContext) -> TrainingResult:
             progress_fields=GO_EXPLORE_PROGRESS_FIELDS,
         )
         context.mark_ready()
-        started_at = time.perf_counter()
+        throughput = DeltaThroughputTracker(runtime, initial_step=search.global_step)
         log_interval_steps = int(backend_config["log_interval_steps"])
         compaction_interval_steps = int(backend_config["compaction_interval_steps"])
         checkpoint_freq = int(common_config["checkpoint_freq"])
@@ -431,7 +392,7 @@ def run_go_explore(context: BackendContext) -> TrainingResult:
             context.session.advance(
                 step,
                 records,
-                progress_metrics=_search_metric_payload(
+                progress_metrics=_progress_metric_payload(
                     search,
                     archive_blob_bytes=archive_blob_bytes,
                 ),
@@ -453,23 +414,14 @@ def run_go_explore(context: BackendContext) -> TrainingResult:
                 )
                 saved_checkpoint_steps.add(step)
             while step >= next_compaction:
-                retained_entry_ids = {
-                    cell.entry_id for cell in search.archive.values()
-                }
+                retained_entry_ids = {cell.entry_id for cell in search.archive.values()}
                 archive_config = common_config.get("state_archive")
                 export = (
-                    archive_config.get("export", {})
-                    if isinstance(archive_config, Mapping)
-                    else {}
+                    archive_config.get("export", {}) if isinstance(archive_config, Mapping) else {}
                 )
-                if (
-                    isinstance(export, Mapping)
-                    and export.get("snapshots") == "retained"
-                ):
+                if isinstance(export, Mapping) and export.get("snapshots") == "retained":
                     retained_entry_ids.update(search.graph_snapshot_entry_ids())
-                compacted = runtime.retain_state_archive_entries(
-                    tuple(sorted(retained_entry_ids))
-                )
+                compacted = runtime.retain_state_archive_entries(tuple(sorted(retained_entry_ids)))
                 context.session.telemetry_event(
                     "compacted ephemeral Go-Explore archive "
                     f"step={step} retained={compacted['retained_entries']} "
@@ -482,11 +434,13 @@ def run_go_explore(context: BackendContext) -> TrainingResult:
             if step >= next_log:
                 early_stopped = context.session.report(
                     step=step,
-                    metrics=_metric_payload(
-                        search,
-                        runtime,
-                        elapsed=time.perf_counter() - started_at,
-                    ),
+                    metrics={
+                        **_wandb_metric_payload(
+                            search,
+                            archive_blob_bytes=archive_blob_bytes,
+                        ),
+                        **throughput.snapshot(step),
+                    },
                 )
                 next_log += log_interval_steps
             while next_checkpoint is not None and step >= next_checkpoint:
@@ -510,11 +464,13 @@ def run_go_explore(context: BackendContext) -> TrainingResult:
             )
         context.session.report(
             step=search.global_step,
-            metrics=_metric_payload(
-                search,
-                runtime,
-                elapsed=time.perf_counter() - started_at,
-            ),
+            metrics={
+                **_wandb_metric_payload(
+                    search,
+                    archive_blob_bytes=archive_blob_bytes,
+                ),
+                **throughput.snapshot(search.global_step),
+            },
         )
         reason = context.session.terminal_reason(TerminalReason.RESOURCE_EXHAUSTION)
         if context.session.should_persist_interrupted_checkpoint(reason) and checkpoint_freq > 0:

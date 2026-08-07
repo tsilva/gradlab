@@ -508,7 +508,7 @@ def _gradoom_native_vec_kwargs(
     )
     native_kwargs["device"] = "cuda"
     native_kwargs["transport"] = "torch"
-    return native_kwargs
+    return _with_provider_info_frame_stack(config, native_kwargs)
 
 
 def _breakout_native_vec_kwargs(

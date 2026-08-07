@@ -20,6 +20,8 @@ def _field(
     high: np.ndarray | None = None,
     clip: bool = False,
     categories: tuple[int, ...] = (),
+    history: str | None = None,
+    history_depth: int = 1,
 ):
     return SimpleNamespace(
         name=name,
@@ -31,7 +33,8 @@ def _field(
         high=high,
         clip=clip,
         categories=categories,
-        history=None,
+        history=history,
+        history_depth=history_depth,
     )
 
 
@@ -95,21 +98,44 @@ def test_device_context_encoder_keeps_context_on_the_observation_device() -> Non
     )
 
 
-def test_device_context_encoder_rejects_histories_until_they_are_device_native() -> None:
-    env = SimpleNamespace(device_signal_names=("health",))
+def test_device_context_encoder_keeps_provider_histories_on_device() -> None:
+    env = SimpleNamespace(
+        device_signal_names=("health",),
+        device_info_history_names=("health",),
+    )
     field = _field(
         "health",
-        ("health",),
+        ("health_frame_stack",),
         encoding="continuous",
         scale=np.asarray([0.01], dtype=np.float32),
         offset=np.asarray([0.0], dtype=np.float32),
         low=np.asarray([0.0], dtype=np.float32),
         high=np.asarray([2.0], dtype=np.float32),
+        history="provider_frame_stack",
+        history_depth=4,
     )
-    field.history = "provider_frame_stack"
+    histories = torch.tensor(
+        [
+            [[100.0, 90.0, 80.0, 70.0]],
+            [[50.0, 40.0, 30.0, 20.0]],
+        ]
+    )
 
-    with pytest.raises(ValueError, match="histories are not implemented"):
-        _DeviceContextEncoder(env, SimpleNamespace(fields=(field,)), torch.device("cpu"))
+    encoded = _DeviceContextEncoder(
+        env,
+        SimpleNamespace(fields=(field,)),
+        torch.device("cpu"),
+    ).encode(torch.zeros((2, 4, 84, 84)), torch.zeros((2, 1)), histories)
+
+    torch.testing.assert_close(
+        encoded["context/health"],
+        torch.tensor(
+            [
+                [[1.0], [0.9], [0.8], [0.7]],
+                [[0.5], [0.4], [0.3], [0.2]],
+            ]
+        ),
+    )
 
 
 class _RecordProvider:

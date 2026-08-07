@@ -65,7 +65,7 @@ train:
       # Treat sustained survival to the native horizon as solving the training task.
       target_reached:
         # Require the latest 100 target-origin episodes to reach the native horizon.
-        metric: train/outcome/success/across_starts/window_100/rate/min
+        metric: train/outcome/success/starts/all/rolling/rate/min
         threshold: 1.0
         # Stop after the mature success window proves the training target.
         action: stop

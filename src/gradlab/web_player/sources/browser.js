@@ -400,12 +400,11 @@ export function metricLabel(metric) {
   const known = {
     "leader/checkpoint/step": "Checkpoint step",
     "train/global_step": "Global step",
-    "train/episode/return/shaped/from/target/rolling_up_to_100/mean": "Mean target-start return (up to 100)",
-    "train/episode/return/shaped/from/target/window_100/mean": "Mean target-start return (last 100)",
-    "train/outcome/success/across_starts/window_100/rate/min": "Min success (last 100)",
-    "train/outcome/success/across_starts/window_100/rate/mean": "Mean success (last 100)",
-    "eval/full/outcome/success/across_starts/rate/min": "Min success",
-    "eval/full/outcome/success/across_starts/rate/mean": "Mean success",
+    "train/episode/return/shaped/origin/target/rolling/mean": "Recent target return mean",
+    "train/outcome/success/starts/all/rolling/rate/min": "Recent all-start success rate min",
+    "train/outcome/success/starts/all/rolling/rate/mean": "Recent all-start success rate mean",
+    "eval/full/outcome/success/starts/rate/min": "Full-eval start success rate min",
+    "eval/full/outcome/success/starts/rate/mean": "Full-eval start success rate mean",
     "eval/full/episode/return/shaped/mean": "Mean return",
     "eval/full/episode/return/shaped/max": "Best return",
   };
@@ -417,10 +416,10 @@ export function metricLabel(metric) {
     return `${humanizeMetricPart(progress[1])} ${progress[2]}`;
   }
   const trainingProgress = name.match(
-    /^train\/progress\/([^/]+)\/from\/target\/rolling_up_to_100\/mean$/,
+    /^train\/progress\/([^/]+)\/origin\/target\/rolling\/mean$/,
   );
   if (trainingProgress) {
-    return `Mean ${humanizeMetricPart(trainingProgress[1])} (up to 100)`;
+    return `Recent target ${humanizeMetricPart(trainingProgress[1]).toLowerCase()} mean`;
   }
   return name
     .replace(/^(eval\/full|leader|train)\//, "")
