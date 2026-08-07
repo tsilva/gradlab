@@ -7,11 +7,13 @@ tags:
   - {{ library_name }}
   - {{ algorithm }}
   - {{ provider }}
+{% if library_name != "gradlab" %}
   - gradlab
+{% endif %}
   - {{ game }}
 ---
 
-# {{ goal_title }} — {{ trainer }} {{ algorithm_upper }} @ {{ checkpoint_step }} env steps
+# {{ goal_title }} — {{ trainer }} {{ algorithm_upper }} @ {{ checkpoint_step_compact }} env steps
 
 An immutable {{ algorithm_upper }} research release for `{{ canonical_environment_id }}` / `{{ goal }}`, backed by accepted exact-contract evaluation evidence and a separately labeled representative replay.
 

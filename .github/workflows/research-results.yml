@@ -16,9 +16,6 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
-      - uses: astral-sh/setup-uv@v6
-        with:
-          enable-cache: false
       - name: Update the pinned research index and new-featured announcements
         env:
           GITHUB_TOKEN: ${{ github.token }}
@@ -26,4 +23,4 @@ jobs:
           HF_FEATURED_COLLECTION_SLUG: ${{ vars.HF_FEATURED_COLLECTION_SLUG }}
           RESEARCH_DISCUSSION_NUMBER: ${{ vars.RESEARCH_DISCUSSION_NUMBER }}
           RESEARCH_UPDATE_CATEGORY_ID: ${{ vars.RESEARCH_UPDATE_CATEGORY_ID }}
-        run: uv run python scripts/update_research_discussion.py
+        run: python3 scripts/update_research_discussion.py

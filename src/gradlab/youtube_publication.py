@@ -495,6 +495,68 @@ class YouTubeClient:
             raise YouTubePublicationError("YouTube did not return the created playlist id")
         return playlist_id
 
+    def playlist_metadata(self, playlist_id: str) -> dict[str, Any]:
+        params = {
+            "part": "snippet,status",
+            "id": str(playlist_id),
+            "maxResults": "1",
+        }
+        value = self._request_json(f"{API_URL}/playlists?{urllib.parse.urlencode(params)}")
+        items = value.get("items")
+        if not isinstance(items, list) or len(items) != 1 or not isinstance(items[0], Mapping):
+            raise YouTubePublicationError(
+                f"YouTube playlist {playlist_id!r} was not found",
+                status=404,
+            )
+        return dict(items[0])
+
+    def update_playlist_metadata(
+        self,
+        *,
+        playlist_id: str,
+        title: str,
+        description: str,
+        privacy: str,
+    ) -> dict[str, Any]:
+        return self._request_json(
+            f"{API_URL}/playlists?{urllib.parse.urlencode({'part': 'snippet,status'})}",
+            method="PUT",
+            payload={
+                "id": str(playlist_id),
+                "snippet": {"title": str(title), "description": str(description)},
+                "status": {"privacyStatus": str(privacy)},
+            },
+        )
+
+    def playlist_items(self, playlist_id: str) -> list[dict[str, Any]]:
+        results: list[dict[str, Any]] = []
+        page_token = ""
+        while True:
+            params = {
+                "part": "snippet,contentDetails,status",
+                "playlistId": str(playlist_id),
+                "maxResults": "50",
+            }
+            if page_token:
+                params["pageToken"] = page_token
+            value = self._request_json(
+                f"{API_URL}/playlistItems?{urllib.parse.urlencode(params)}"
+            )
+            results.extend(
+                dict(item)
+                for item in value.get("items") or ()
+                if isinstance(item, Mapping)
+            )
+            page_token = str(value.get("nextPageToken") or "")
+            if not page_token:
+                return results
+
+    def remove_playlist_item(self, playlist_item_id: str) -> None:
+        self._request_json(
+            f"{API_URL}/playlistItems?{urllib.parse.urlencode({'id': str(playlist_item_id)})}",
+            method="DELETE",
+        )
+
     def add_video_to_playlist(self, *, playlist_id: str, video_id: str) -> dict[str, Any]:
         page_token = ""
         while True:
