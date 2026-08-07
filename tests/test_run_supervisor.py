@@ -287,6 +287,24 @@ class RunSupervisorTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "below the selected max duration"):
             invalid.validate()
 
+    def test_supervisor_observes_durable_cancel_and_requests_cooperative_stop(self) -> None:
+        supervisor = self.supervisor()
+        learner = MagicMock()
+        learner.poll.return_value = None
+        supervisor.learner = learner
+        self.authority.request_cancel(
+            run_id=self.run_id,
+            attempt_id=self.manifest.attempt_id,
+        )
+
+        with patch.object(supervisor.runtime, "request_learner_stop") as request_stop:
+            self.assertTrue(supervisor._observe_cancel_request())
+            self.assertTrue(supervisor._observe_cancel_request())
+
+        self.assertTrue(supervisor.cancel_requested)
+        self.assertEqual(supervisor.stop_reason, "canceled")
+        request_stop.assert_called_once_with(learner)
+
     def test_manual_evaluation_queue_reuses_durable_intent_and_modal_dispatch(self) -> None:
         checkpoint = CheckpointManifest(
             run_id=self.run_id,

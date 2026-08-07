@@ -13,6 +13,7 @@ from gradlab.json_utils import canonical_json_sha256 as document_sha256
 
 SCHEMA_VERSION = 2
 RUN_MANIFEST_SCHEMA_VERSION = 5
+CANCEL_REQUEST_SCHEMA_VERSION = 1
 DSTACK_STOP_DURATION_SECONDS = 10 * 60
 DEFAULT_LIVENESS_POLICY: dict[str, float] = {
     "startup_timeout_seconds": 600.0,
@@ -289,6 +290,28 @@ class RunManifest(_CurrentContract):
             self.storage.get("public_models_base_url"),
             "storage.public_models_base_url",
         )
+
+    def to_dict(self) -> dict[str, Any]:
+        self.validate()
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class CancelRequest(_CurrentContract):
+    run_id: str
+    attempt_id: str
+    requested_at: str
+    schema_version: int = CANCEL_REQUEST_SCHEMA_VERSION
+
+    def validate(self) -> None:
+        _require_current_schema(
+            self.schema_version,
+            expected=CANCEL_REQUEST_SCHEMA_VERSION,
+            label="cancel request",
+        )
+        _require_run_id(self.run_id)
+        _require_attempt_id(self.attempt_id)
+        _require_text(self.requested_at, "requested_at")
 
     def to_dict(self) -> dict[str, Any]:
         self.validate()
@@ -618,6 +641,31 @@ class TerminalReceipt(_CurrentContract):
             status = str(row.get("status") or "")
             if status not in EVAL_INVENTORY_SETTLED_STATUSES:
                 raise ValueError(f"eval inventory contains unsettled status: {status}")
+        if self.state == "canceled":
+            drain = self.drain
+            if not isinstance(drain, Mapping) or drain.get("complete") is not True:
+                raise ValueError("canceled terminal requires a complete drain")
+            checkpoints = [dict(row) for row in self.checkpoint_inventory]
+            if int(self.final_step) > 0:
+                finals = [
+                    row for row in checkpoints if str(row.get("purpose") or "") == "final"
+                ]
+                if not finals:
+                    raise ValueError("canceled terminal with training progress requires a final checkpoint")
+                maximum_step = max(int(row.get("step") or 0) for row in checkpoints)
+                if int(self.final_step) != maximum_step:
+                    raise ValueError(
+                        "canceled terminal final_step does not match checkpoint inventory"
+                    )
+            if int(self.wandb_high_water_mark) > 0:
+                if int(drain.get("metric_segment_high_water") or 0) != int(
+                    self.wandb_high_water_mark
+                ):
+                    raise ValueError("canceled terminal R2 and W&B high-water marks do not match")
+                if int(drain.get("wandb_remote_high_water_mark") or 0) < int(
+                    self.wandb_high_water_mark
+                ):
+                    raise ValueError("canceled terminal W&B delivery is not remotely visible")
         early_stop = (
             EarlyStopReceipt.from_dict(self.early_stop)
             if self.early_stop is not None

@@ -165,6 +165,7 @@ train:
           health:
             signal: health
             update: transition
+            history: provider_frame_stack
             encoding:
               kind: continuous
               scale: 0.01
@@ -176,6 +177,7 @@ train:
           armor:
             signal: armor
             update: transition
+            history: provider_frame_stack
             encoding:
               kind: continuous
               # Normalize standard Doom armor and saturate any custom over-armor.
@@ -187,6 +189,7 @@ train:
           selected_weapon:
             signal: selected_weapon
             update: transition
+            history: provider_frame_stack
             encoding:
               kind: categorical
               # The bundled Deathmatch scenario exposes weapon slots one through six.
@@ -194,6 +197,7 @@ train:
           selected_weapon_ammo:
             signal: selected_weapon_ammo
             update: transition
+            history: provider_frame_stack
             encoding:
               kind: continuous
               # Normalize the scenario's largest selected-weapon ammo capacity of 300.
@@ -205,6 +209,7 @@ train:
           weapons_owned:
             signal: weapons_owned
             update: transition
+            history: provider_frame_stack
             encoding:
               kind: continuous
               # Encode possession for selectable weapon slots one through six.
@@ -216,6 +221,7 @@ train:
           weapon_ammo:
             signal: weapon_ammo
             update: transition
+            history: provider_frame_stack
             encoding:
               kind: continuous
               # Normalize melee, bullet, shell, bullet, rocket, and cell ammo by capacity.

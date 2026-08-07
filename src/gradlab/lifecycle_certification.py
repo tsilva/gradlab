@@ -1378,20 +1378,74 @@ def _scenario_cancellation_terminalization(root: Path) -> dict[str, Any]:
     fixture.record_checkpoint(prepared, step=500, kind="checkpoint")
     fixture.clock.advance(5)
     prepared.supervisor.active_iteration()
-    prepared.supervisor.cancel_requested = True
-    prepared.supervisor.drain_iteration()
+    request = fixture.authority.request_cancel(
+        run_id=prepared.supervisor.manifest.run_id,
+        attempt_id=prepared.supervisor.manifest.attempt_id,
+    )
+    prepared.supervisor.active_iteration()
+    fixture.record_checkpoint(prepared, step=550, kind="final")
+    _activity, converged = prepared.supervisor.drain_iteration()
     row = prepared.supervisor.store.evals()[0]
     recorder.require(
-        "cancel-terminalizes-eval",
-        row["status"] == "canceled"
+        "durable-cancel-stops-admission-and-terminalizes-eval",
+        prepared.supervisor.cancel_requested
+        and prepared.supervisor.stop_reason == "canceled"
+        and row["status"] == "canceled"
         and len(prepared.backend.canceled) == 1
         and prepared.supervisor.store.all_evals_terminal(),
         evidence={
+            "requested_at": request["requested_at"],
             "status": row["status"],
             "canceled_calls": prepared.backend.canceled,
         },
     )
-    return {"invariants": recorder.invariants, "evidence": {"eval_status": row["status"]}}
+    checkpoints, evals = prepared.supervisor._terminal_inventory()
+    state, stop_reason = _terminal_outcome(
+        cancel_requested=prepared.supervisor.cancel_requested,
+        failure=None,
+        evaluation_required=True,
+        promotion=None,
+        early_stop=None,
+    )
+    receipt = TerminalReceipt(
+        run_id=prepared.supervisor.manifest.run_id,
+        attempt_id=prepared.supervisor.manifest.attempt_id,
+        state=state,  # type: ignore[arg-type]
+        acceptance_required=True,
+        stop_reason=stop_reason,
+        final_step=550,
+        checkpoint_inventory=checkpoints,
+        eval_inventory=evals,
+        wandb_high_water_mark=prepared.supervisor._wandb_high_water(),
+        drain={
+            "complete": converged,
+            "metric_segment_high_water": prepared.supervisor.store.metric_segment_high_water(),
+            "wandb_remote_high_water_mark": prepared.supervisor.wandb_remote_high_water,
+        },
+        completed_at=fixture.clock.utc_now(),
+    )
+    fixture.authority.create_attempt_terminal(receipt)
+    terminal = fixture.authority.semantic_state(receipt.run_id)["attempt_terminals"][0]
+    recorder.require(
+        "cancel-publishes-final-checkpoint-and-authoritative-attempt-terminal",
+        converged
+        and any(row["purpose"] == "final" and int(row["step"]) == 550 for row in checkpoints)
+        and terminal["state"] == "canceled"
+        and terminal["drain"]["complete"] is True,
+        evidence={
+            "checkpoint_count": len(checkpoints),
+            "final_step": terminal["final_step"],
+            "terminal_state": terminal["state"],
+        },
+    )
+    return {
+        "invariants": recorder.invariants,
+        "evidence": {
+            "eval_status": row["status"],
+            "final_step": terminal["final_step"],
+            "terminal_state": terminal["state"],
+        },
+    }
 
 
 def _scenario_scratch_preservation_stop(root: Path) -> dict[str, Any]:

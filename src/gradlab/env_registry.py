@@ -368,7 +368,7 @@ VIZDOOM_TURBO_PROVIDER = EnvProvider(
         truncation_env_arg="treat_episode_timeout_as_truncation",
     ),
     constructor_contract=ProviderConstructorContract(
-        canonical_args=_TURBO_CANONICAL_ARGS,
+        canonical_args=_TURBO_CANONICAL_ARGS | {"info_frame_stack_keys"},
         explicit_env_args=_TURBO_EXPLICIT_ENV_ARGS
         | {
             "doom_map",

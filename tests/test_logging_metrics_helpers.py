@@ -266,8 +266,8 @@ class MetricsDocumentationTests(unittest.TestCase):
                     name = name.replace(f"{{{placeholder}}}", replacement, 1)
                 scalar_names.add(name)
 
-        self.assertEqual(len(metric_names.METRIC_DEFINITIONS), 149)
-        self.assertEqual(len(scalar_names), 161)
+        self.assertEqual(len(metric_names.METRIC_DEFINITIONS), 150)
+        self.assertEqual(len(scalar_names), 162)
         self.assertEqual(
             len(
                 {
@@ -299,6 +299,7 @@ class MetricsDocumentationTests(unittest.TestCase):
             "metadata",
             "nats",
             "progress",
+            "progress units",
             "ratio",
             "return",
             "runs",

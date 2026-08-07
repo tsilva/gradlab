@@ -126,6 +126,7 @@ RECONCILE_STOP_REASONS = (
     "exit_contract_mismatch",
     "teardown_timeout",
     "supervisor_startup_failure",
+    "forced_cancel_before_drain",
 )
 
 
@@ -954,6 +955,7 @@ def _record_terminal_task_without_receipt(
     writer_lease: Lease,
     stop_reason: str = "supervisor_startup_failure",
     final_step: int = 0,
+    checkpoint_inventory: tuple[Mapping[str, Any], ...] = (),
     evidence_sha256: tuple[str, ...] = (),
 ) -> TerminalReceipt:
     if not task.terminal:
@@ -967,7 +969,7 @@ def _record_terminal_task_without_receipt(
         acceptance_required=bool(manifest.modal["enabled"]),
         stop_reason=stop_reason,
         final_step=int(final_step),
-        checkpoint_inventory=(),
+        checkpoint_inventory=tuple(dict(row) for row in checkpoint_inventory),
         eval_inventory=(),
         wandb_high_water_mark=0,
         drain={
@@ -979,6 +981,7 @@ def _record_terminal_task_without_receipt(
             "journal_expires_at": None,
             "wandb_remote_high_water_mark": 0,
             "publication_capacity_ratio": None,
+            "recovered_checkpoint_count": len(checkpoint_inventory),
             "failure": (
                 "dstack task reached terminal status "
                 f"{task.status!r} without an authoritative attempt receipt"
@@ -1159,11 +1162,15 @@ def cmd_cancel(args: argparse.Namespace) -> int:
     _storage_config, authority = _storage(root)
     state = authority.semantic_state(args.run_id)
     attempt = _latest_attempt(state)
+    if _latest_attempt_terminal(state) is not None:
+        raise RuntimeError("cannot cancel an attempt that already has a terminal receipt")
     task_name = str(attempt["compute"]["dstack_task"])
-    _dstack_backend_for_compute(attempt["compute"]).cancel(
-        task_name,
-        abort=bool(args.abort),
+    request = authority.request_cancel(
+        run_id=args.run_id,
+        attempt_id=str(attempt["attempt_id"]),
     )
+    if args.abort:
+        _dstack_backend_for_compute(attempt["compute"]).cancel(task_name, abort=True)
     print(
         json.dumps(
             {
@@ -1171,7 +1178,9 @@ def cmd_cancel(args: argparse.Namespace) -> int:
                 "attempt_id": attempt["attempt_id"],
                 "dstack_task": task_name,
                 "cancel_requested": True,
+                "cancel_requested_at": request["requested_at"],
                 "abort": bool(args.abort),
+                "dstack_cancel_sent": bool(args.abort),
             },
             sort_keys=True,
         )
@@ -1239,6 +1248,7 @@ def cmd_reconcile(args: argparse.Namespace) -> int:
                 writer_lease=lease,
                 stop_reason=str(args.stop_reason),
                 final_step=final_step,
+                checkpoint_inventory=tuple(checkpoints),
                 evidence_sha256=tuple(args.evidence_sha256 or ()),
             )
             created = True
@@ -1821,9 +1831,16 @@ def build_parser() -> argparse.ArgumentParser:
     wait.add_argument("--timeout", type=_parse_duration, default=12 * 60 * 60)
     wait.set_defaults(func=cmd_wait)
 
-    cancel = commands.add_parser("cancel", help="Cancel the current dstack attempt.")
+    cancel = commands.add_parser(
+        "cancel",
+        help="Request cooperative cancellation and terminal drain for the current attempt.",
+    )
     cancel.add_argument("--run", dest="run_id", type=_require_run_id, required=True)
-    cancel.add_argument("--abort", action="store_true")
+    cancel.add_argument(
+        "--abort",
+        action="store_true",
+        help="Also stop dstack immediately; final artifacts and drain are not guaranteed.",
+    )
     cancel.set_defaults(func=cmd_cancel)
 
     reconcile = commands.add_parser(
