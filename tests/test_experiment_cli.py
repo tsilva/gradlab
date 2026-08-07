@@ -11,6 +11,7 @@ from unittest import mock
 import pytest
 
 from gradlab.dstack_backend import DstackTask
+from gradlab.metric_names import METRICS_SCHEMA_VERSION
 from gradlab.experiment_cli import (
     _bind_launch_contract,
     _bind_vizdoom_iwad_for_launch,
@@ -920,6 +921,7 @@ def test_reconciled_failure_closes_wandb_with_nonzero_exit() -> None:
             "wandb_mode": "online",
             "wandb_display_name": manifest.wandb.get("display_name"),
             "wandb_group": manifest.wandb.get("group"),
+            "metrics_schema_version": METRICS_SCHEMA_VERSION,
         },
         update_finish_state=True,
     )
