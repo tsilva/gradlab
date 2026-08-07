@@ -38,6 +38,7 @@ from gradlab.goal_variants import (
     validate_goal_variant_descriptor,
 )
 from gradlab.json_utils import canonical_json_text, json_safe
+from gradlab.metric_names import METRICS_SCHEMA_VERSION
 from gradlab.modal_eval_config import load_modal_eval_config
 from gradlab.operator_credentials import (
     OperatorConfigurationError,
@@ -1226,6 +1227,7 @@ def _project_reconciled_terminal(
             "wandb_mode": "online",
             "wandb_display_name": manifest.wandb.get("display_name"),
             "wandb_group": manifest.wandb.get("group"),
+            "metrics_schema_version": METRICS_SCHEMA_VERSION,
         },
         update_finish_state=True,
     )
