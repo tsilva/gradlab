@@ -15,6 +15,7 @@ def test_deathmatch_shares_survivability_and_complete_weapon_state_between_heads
     assert train_config["task"]["model_inputs"]["context"]["health"] == {
         "signal": "health",
         "update": "transition",
+        "history": "provider_frame_stack",
         "encoding": {
             "kind": "continuous",
             "scale": 0.01,
@@ -27,6 +28,7 @@ def test_deathmatch_shares_survivability_and_complete_weapon_state_between_heads
     assert train_config["task"]["model_inputs"]["context"]["armor"] == {
         "signal": "armor",
         "update": "transition",
+        "history": "provider_frame_stack",
         "encoding": {
             "kind": "continuous",
             "scale": 0.005,
@@ -39,6 +41,7 @@ def test_deathmatch_shares_survivability_and_complete_weapon_state_between_heads
     assert train_config["task"]["model_inputs"]["context"]["selected_weapon"] == {
         "signal": "selected_weapon",
         "update": "transition",
+        "history": "provider_frame_stack",
         "encoding": {
             "kind": "categorical",
             "values": [1, 2, 3, 4, 5, 6],
@@ -47,6 +50,7 @@ def test_deathmatch_shares_survivability_and_complete_weapon_state_between_heads
     assert train_config["task"]["model_inputs"]["context"]["selected_weapon_ammo"] == {
         "signal": "selected_weapon_ammo",
         "update": "transition",
+        "history": "provider_frame_stack",
         "encoding": {
             "kind": "continuous",
             "scale": 1.0 / 300.0,
@@ -59,6 +63,7 @@ def test_deathmatch_shares_survivability_and_complete_weapon_state_between_heads
     assert train_config["task"]["model_inputs"]["context"]["weapons_owned"] == {
         "signal": "weapons_owned",
         "update": "transition",
+        "history": "provider_frame_stack",
         "encoding": {
             "kind": "continuous",
             "scale": 1.0,
@@ -71,6 +76,7 @@ def test_deathmatch_shares_survivability_and_complete_weapon_state_between_heads
     assert train_config["task"]["model_inputs"]["context"]["weapon_ammo"] == {
         "signal": "weapon_ammo",
         "update": "transition",
+        "history": "provider_frame_stack",
         "encoding": {
             "kind": "continuous",
             "scale": [1.0, 1.0 / 200.0, 1.0 / 50.0, 1.0 / 200.0, 1.0 / 50.0, 1.0 / 300.0],

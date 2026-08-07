@@ -104,6 +104,37 @@ def test_neutral_plateau_normalization_hashing_and_stopped_receipt_validation() 
     assert receipt.state == "stopped"
 
 
+def test_canceled_receipt_requires_complete_drain_and_final_checkpoint() -> None:
+    run_id = new_run_id()
+    attempt_id = new_attempt_id()
+    checkpoint_id = "checkpoint-20-" + "a" * 16
+    receipt = TerminalReceipt(
+        run_id=run_id,
+        attempt_id=attempt_id,
+        state="canceled",
+        acceptance_required=True,
+        stop_reason="canceled",
+        final_step=20,
+        checkpoint_inventory=(
+            {"checkpoint_id": checkpoint_id, "step": 20, "purpose": "final"},
+        ),
+        eval_inventory=(),
+        wandb_high_water_mark=2,
+        drain={
+            "complete": True,
+            "metric_segment_high_water": 2,
+            "wandb_remote_high_water_mark": 2,
+        },
+        completed_at=utc_now(),
+    )
+
+    assert TerminalReceipt.from_dict(receipt.to_dict()) == receipt
+    missing_final = copy.deepcopy(receipt.to_dict())
+    missing_final["checkpoint_inventory"][0]["purpose"] = "periodic"
+    with pytest.raises(ValueError, match="requires a final checkpoint"):
+        TerminalReceipt.from_dict(missing_final)
+
+
 @pytest.mark.parametrize(
     ("mutate", "message"),
     [

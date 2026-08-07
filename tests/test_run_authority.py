@@ -143,6 +143,30 @@ class RunAuthorityTests(unittest.TestCase):
                 create_only=True,
             )
 
+    def test_cancel_request_is_durable_idempotent_and_semantically_visible(self) -> None:
+        run_id = new_run_id()
+        manifest = self.manifest(run_id, new_attempt_id())
+        self.authority.create_manifest(manifest)
+
+        first = self.authority.request_cancel(
+            run_id=run_id,
+            attempt_id=manifest.attempt_id,
+        )
+        second = self.authority.request_cancel(
+            run_id=run_id,
+            attempt_id=manifest.attempt_id,
+        )
+
+        self.assertEqual(first, second)
+        self.assertEqual(
+            self.authority.cancel_request(
+                run_id=run_id,
+                attempt_id=manifest.attempt_id,
+            ),
+            first,
+        )
+        self.assertEqual(self.authority.semantic_state(run_id)["cancel_requests"], [first])
+
     def test_persisted_manifest_requires_explicit_current_schema(self) -> None:
         document = self.manifest(new_run_id(), new_attempt_id()).to_dict()
         document.pop("schema_version")

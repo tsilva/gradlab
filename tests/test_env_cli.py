@@ -255,6 +255,7 @@ assert 'vizdoom_turbo' not in sys.modules
         "breakout-turbo-env",
         "gymnasium",
         "gradlab",
+        "gradoom",
         "stable-retro-turbo",
         "supermariobrosnes-turbo",
         "vizdoom-turbo",

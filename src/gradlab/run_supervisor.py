@@ -1255,6 +1255,27 @@ class RunSupervisor:
             self.runtime.request_learner_stop(self.learner)
             print(f"learner stop requested: reason={reason}", flush=True)
 
+    def _observe_cancel_request(self) -> bool:
+        request = self.authority.cancel_request(
+            run_id=self.manifest.run_id,
+            attempt_id=self.manifest.attempt_id,
+        )
+        if request is None:
+            return False
+        if not self.cancel_requested:
+            self.cancel_requested = True
+            self._emit(
+                "cancel_request_observed",
+                requested_at=str(request["requested_at"]),
+            )
+            self._request_learner_stop("canceled")
+            print(
+                "durable cancel request observed: "
+                f"requested_at={request['requested_at']}",
+                flush=True,
+            )
+        return True
+
     def _request_finalize_only_stop(self, reason: str) -> None:
         if self.learner is None or self.learner.poll() is not None:
             return
@@ -2127,11 +2148,15 @@ class RunSupervisor:
         self._renew_lease(instant)
         if self.lease_lost:
             return 0
+        self._observe_cancel_request()
         activity += self._seal_metrics(instant)
         activity += self._publish_checkpoints()
         activity += self._publish_state_archive()
-        activity += self._reconcile_evals_before_submission()
-        activity += self._submit_pending_evals()
+        if self.cancel_requested:
+            self._cancel_outstanding_evals()
+        else:
+            activity += self._reconcile_evals_before_submission()
+            activity += self._submit_pending_evals()
         activity += self._poll_evals(instant)
         activity += self._publish_wandb()
         self._emit_health(instant)
@@ -2160,6 +2185,7 @@ class RunSupervisor:
         self._renew_lease(instant)
         if self.lease_lost:
             raise LeaseUnavailable("writer lease was lost while draining")
+        self._observe_cancel_request()
         activity += self._seal_metrics(instant, force=True)
         activity += self._publish_checkpoints()
         activity += self._publish_state_archive()
@@ -2576,6 +2602,7 @@ class RunSupervisor:
                 or self._prior_early_stop_receipt()
             )
             self._start_wandb()
+            self._observe_cancel_request()
             provisional_stop = self.eval_admission_closed or self.recovered_early_stop is not None
             final_checkpoint_published = self._has_public_final_checkpoint()
             if self.recovery_mode == "drain-only" and not (
@@ -2585,7 +2612,9 @@ class RunSupervisor:
                     "drain-only recovery requires a published final checkpoint "
                     "or a durable provisional stop"
                 )
-            if final_checkpoint_published and (
+            if self.cancel_requested:
+                print("cooperative cancellation recovery: learner will not start", flush=True)
+            elif final_checkpoint_published and (
                 self.recovery_mode == "drain-only" or provisional_stop
             ):
                 reason = (
@@ -2654,8 +2683,11 @@ class RunSupervisor:
                 raise LeaseUnavailable("writer lease was lost")
             if self.cancel_requested:
                 self._cancel_outstanding_evals()
-                raise RuntimeError("run canceled")
-            self._publish_state_archive(require_closed=True)
+            self._publish_state_archive(
+                require_closed=(
+                    not self.cancel_requested or self.learner_started_at is not None
+                )
+            )
             self._publish_checkpoints()
             self.store.set_state(
                 "checkpoint_set_frozen",
@@ -2680,7 +2712,7 @@ class RunSupervisor:
                 source="orchestration:drain",
             )
             self._drain()
-            if self.evaluation_required:
+            if self.evaluation_required and not self.cancel_requested:
                 promotion = self._create_promotion()
                 if promotion is not None:
                     self._publish_promotion(promotion)
@@ -2754,7 +2786,11 @@ class RunSupervisor:
             promotion=promotion,
             early_stop=early_stop,
         )
-        stop_reason = self.stop_reason or default_stop_reason
+        stop_reason = (
+            default_stop_reason
+            if failure is not None or self.cancel_requested
+            else self.stop_reason or default_stop_reason
+        )
         if stop_reason == "training_cap_complete" and training_terminal_reason in {
             TerminalReason.FIRST_COMPLETION.value,
             TerminalReason.TRAINING_ACCEPTANCE.value,
@@ -2825,6 +2861,13 @@ class RunSupervisor:
         if state == "stopped":
             print(
                 f"training stalled: run_id={self.manifest.run_id} "
+                f"final_step={final_step} dstack={DSTACK_VERSION}",
+                flush=True,
+            )
+            return 0
+        if state == "canceled":
+            print(
+                f"run canceled after terminal drain: run_id={self.manifest.run_id} "
                 f"final_step={final_step} dstack={DSTACK_VERSION}",
                 flush=True,
             )

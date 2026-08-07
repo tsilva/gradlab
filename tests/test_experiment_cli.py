@@ -37,6 +37,7 @@ from gradlab.experiment_cli import (
     _task_request,
     _wandb_identity,
     build_parser,
+    cmd_cancel,
     cmd_follow,
     cmd_fault_test,
     cmd_launch,
@@ -877,6 +878,8 @@ def test_reconcile_acquires_lease_writes_r2_before_wandb_and_releases(
     assert receipt.state == "resumable_failure"
     assert receipt.stop_reason == "learner_failure"
     assert receipt.final_step == 17
+    assert receipt.checkpoint_inventory == tuple(state["public_index"]["checkpoints"])
+    assert receipt.drain["recovered_checkpoint_count"] == 1
     assert receipt.drain["evidence_sha256"] == ["f" * 64]
     output = json.loads(capsys.readouterr().out)
     assert output["wandb_projected"] is True
@@ -1186,6 +1189,53 @@ def test_rom_free_launch_contract_omits_null_asset() -> None:
         base_materialized_recipe=base_contract,
         canonical_goal=resolved.canonical_goal,
     )
+
+
+@pytest.mark.parametrize("abort", [False, True])
+def test_cancel_persists_request_before_optional_dstack_abort(
+    abort: bool,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    run_id = "gradlab-0123456789abcdef0123456789abcdef"
+    attempt_id = "attempt-0123456789abcdef"
+    attempt = {
+        "attempt_id": attempt_id,
+        "compute": {"dstack_task": run_id},
+    }
+    authority = mock.Mock()
+    authority.semantic_state.return_value = {
+        "run_id": run_id,
+        "attempts": [attempt],
+        "attempt_terminals": [],
+    }
+    authority.request_cancel.return_value = {
+        "run_id": run_id,
+        "attempt_id": attempt_id,
+        "requested_at": "2026-08-07T12:00:00Z",
+    }
+    backend = mock.Mock()
+
+    with (
+        mock.patch("gradlab.experiment_cli.repository_root", return_value=Path.cwd()),
+        mock.patch(
+            "gradlab.experiment_cli._storage",
+            return_value=(mock.Mock(), authority),
+        ),
+        mock.patch(
+            "gradlab.experiment_cli._dstack_backend_for_compute",
+            return_value=backend,
+        ),
+    ):
+        assert cmd_cancel(SimpleNamespace(run_id=run_id, abort=abort)) == 0
+
+    authority.request_cancel.assert_called_once_with(run_id=run_id, attempt_id=attempt_id)
+    if abort:
+        backend.cancel.assert_called_once_with(run_id, abort=True)
+    else:
+        backend.cancel.assert_not_called()
+    output = json.loads(capsys.readouterr().out)
+    assert output["dstack_cancel_sent"] is abort
+    assert output["cancel_requested_at"] == "2026-08-07T12:00:00Z"
 
 
 def test_repair_runtime_accepts_rom_free_manifest() -> None:

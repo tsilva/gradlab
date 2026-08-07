@@ -27,6 +27,7 @@ from gradlab.r2_store import (
     RunStorageConfig,
 )
 from gradlab.run_contracts import (
+    CancelRequest,
     CheckpointManifest,
     EarlyStopReceipt,
     EVAL_INVENTORY_SETTLED_STATUSES,
@@ -1406,6 +1407,40 @@ class RunAuthority:
             f"{self.run_prefix(run_id)}/attempts/{attempt_id}/early-stop.json"
         )
 
+    @staticmethod
+    def cancel_request_key(*, run_id: str, attempt_id: str) -> str:
+        return f"{RunAuthority.run_prefix(run_id)}/attempts/{attempt_id}/cancel-request.json"
+
+    def cancel_request(
+        self,
+        *,
+        run_id: str,
+        attempt_id: str,
+    ) -> dict[str, Any] | None:
+        document = self.control.get_json_optional(
+            self.cancel_request_key(run_id=run_id, attempt_id=attempt_id)
+        )
+        if document is None:
+            return None
+        return CancelRequest.from_dict(document).to_dict()
+
+    def request_cancel(self, *, run_id: str, attempt_id: str) -> dict[str, Any]:
+        key = self.cancel_request_key(run_id=run_id, attempt_id=attempt_id)
+        existing = self.control.get_json_optional(key)
+        if existing is not None:
+            return CancelRequest.from_dict(existing).to_dict()
+        request = CancelRequest(
+            run_id=run_id,
+            attempt_id=attempt_id,
+            requested_at=self.clock.utc_now(),
+        )
+        try:
+            self.control.put_json(key, request.to_dict(), create_only=True)
+        except ConditionalWriteConflict:
+            existing = self.control.get_json(key)
+            return CancelRequest.from_dict(existing).to_dict()
+        return request.to_dict()
+
     def create_early_stop(self, receipt: EarlyStopReceipt) -> str:
         key = f"{self.run_prefix(receipt.run_id)}/attempts/{receipt.attempt_id}/early-stop.json"
         document = receipt.to_dict()
@@ -1619,8 +1654,14 @@ class RunAuthority:
         attempt_terminals = [
             self.control.get_json(key) for key in control_keys if key.endswith("/terminal.json")
         ]
+        cancel_requests = [
+            self.control.get_json(key)
+            for key in control_keys
+            if key.endswith("/cancel-request.json")
+        ]
         attempt_manifests.sort(key=lambda row: str(row.get("created_at") or ""))
         attempt_terminals.sort(key=lambda row: str(row.get("completed_at") or ""))
+        cancel_requests.sort(key=lambda row: str(row.get("requested_at") or ""))
         return {
             "run_id": run_id,
             "manifest": manifest,
@@ -1634,5 +1675,6 @@ class RunAuthority:
             ),
             "attempts": attempt_manifests,
             "attempt_terminals": attempt_terminals,
+            "cancel_requests": cancel_requests,
             "observed_at": self.clock.time(),
         }
