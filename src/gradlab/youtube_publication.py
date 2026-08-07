@@ -14,6 +14,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
+from PIL import Image, ImageDraw, ImageFont, ImageOps
+
 
 YOUTUBE_SCOPES = (
     "https://www.googleapis.com/auth/youtube.upload",
@@ -403,6 +405,38 @@ class YouTubeClient:
             raise YouTubePublicationError("YouTube video is missing or inaccessible")
         return dict(items[0])
 
+    def update_video_metadata(
+        self,
+        *,
+        video_id: str,
+        title: str,
+        description: str,
+        tags: list[str],
+        privacy: str,
+    ) -> dict[str, Any]:
+        current = self.video_metadata(video_id)
+        snippet = current.get("snippet") if isinstance(current.get("snippet"), Mapping) else {}
+        status = current.get("status") if isinstance(current.get("status"), Mapping) else {}
+        return self._request_json(
+            f"{API_URL}/videos?{urllib.parse.urlencode({'part': 'snippet,status'})}",
+            method="PUT",
+            payload={
+                "id": video_id,
+                "snippet": {
+                    "title": str(title),
+                    "description": str(description),
+                    "tags": list(tags),
+                    "categoryId": str(snippet.get("categoryId") or "20"),
+                },
+                "status": {
+                    "privacyStatus": str(privacy),
+                    "selfDeclaredMadeForKids": bool(
+                        status.get("selfDeclaredMadeForKids", False)
+                    ),
+                },
+            },
+        )
+
     def find_playlist(self, title: str) -> list[dict[str, Any]]:
         results: list[dict[str, Any]] = []
         page_token = ""
@@ -561,6 +595,53 @@ def extract_thumbnail(video_path: Path, output: Path, *, seconds: float) -> Path
     return output
 
 
+def create_publication_thumbnail(
+    video_path: Path,
+    output: Path,
+    *,
+    seconds: float,
+    task: str,
+    trainer_algorithm: str,
+    step: str,
+    metric: str,
+) -> Path:
+    source = output.with_name(f".{output.stem}-frame.jpg")
+    extract_thumbnail(video_path, source, seconds=seconds)
+    try:
+        with Image.open(source) as raw:
+            frame = ImageOps.fit(raw.convert("RGB"), (1280, 720), method=Image.Resampling.LANCZOS)
+        overlay = Image.new("RGBA", frame.size, (0, 0, 0, 0))
+        draw = ImageDraw.Draw(overlay)
+        draw.rectangle((0, 0, 1280, 150), fill=(8, 14, 24, 225))
+        draw.rectangle((0, 545, 1280, 720), fill=(8, 14, 24, 235))
+        font_paths = (
+            "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        )
+        font_path = next((path for path in font_paths if Path(path).is_file()), None)
+        title_font = ImageFont.truetype(font_path, 52) if font_path else ImageFont.load_default()
+        body_font = ImageFont.truetype(font_path, 34) if font_path else ImageFont.load_default()
+        small_font = ImageFont.truetype(font_path, 27) if font_path else ImageFont.load_default()
+        draw.text((48, 28), str(task), fill=(255, 255, 255, 255), font=title_font)
+        draw.text(
+            (48, 92),
+            f"{trainer_algorithm}  •  {step}",
+            fill=(113, 221, 255, 255),
+            font=body_font,
+        )
+        draw.text((48, 570), str(metric), fill=(255, 255, 255, 255), font=small_font)
+        draw.text((48, 660), "GRADLAB RESEARCH", fill=(113, 221, 255, 255), font=small_font)
+        composed = Image.alpha_composite(frame.convert("RGBA"), overlay).convert("RGB")
+        output.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        composed.save(output, format="JPEG", quality=92, optimize=True)
+    finally:
+        source.unlink(missing_ok=True)
+    if output.stat().st_size > 2_000_000:
+        with Image.open(output) as image:
+            image.save(output, format="JPEG", quality=82, optimize=True)
+    return output
+
+
 def validate_processed_video(
     video: Mapping[str, Any],
     *,
@@ -612,6 +693,7 @@ __all__ = [
     "YouTubePublicationError",
     "YouTubeSubmissionUncertain",
     "exchange_oauth_code",
+    "create_publication_thumbnail",
     "extract_thumbnail",
     "new_oauth_transaction",
     "refresh_access_token",

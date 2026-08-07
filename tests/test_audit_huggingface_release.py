@@ -27,7 +27,10 @@ class FakeApi:
 
     def list_repo_refs(self, repo_id: str, **kwargs: object) -> SimpleNamespace:
         return SimpleNamespace(
-            tags=[SimpleNamespace(name="v1", target_commit=self.tag_sha)]
+            tags=[
+                SimpleNamespace(name="v3", target_commit=self.tag_sha),
+                SimpleNamespace(name="checkpoint-10", target_commit=self.tag_sha),
+            ]
         )
 
     def list_repo_files(self, repo_id: str, **kwargs: object) -> list[str]:
@@ -36,17 +39,23 @@ class FakeApi:
     def list_collections(self, **kwargs: object) -> list[SimpleNamespace]:
         return [
             SimpleNamespace(
-                title="NES-SuperMarioBros Policies",
-                slug="tsilva/nes-supermariobros-policies-id",
+                title="GradLab — VizdoomDeathmatch-v1",
+                slug="tsilva/gradlab-vizdoom-id",
             )
         ]
 
     def get_collection(self, slug: str) -> SimpleNamespace:
         return SimpleNamespace(
-                title="NES-SuperMarioBros Policies",
+                title="GradLab — VizdoomDeathmatch-v1",
                 slug=slug,
                 private=False,
-                items=[SimpleNamespace(item_id="tsilva/model", item_type="model")],
+                items=[
+                    SimpleNamespace(
+                        item_id="tsilva/model",
+                        item_type="model",
+                        note="Immutable research release: https://huggingface.co/tsilva/model/tree/v3",
+                    )
+                ],
         )
 
 
@@ -64,12 +73,12 @@ def test_remote_release_audit_checks_commit_files_collection_and_bundle(
         MODULE,
         "validate_release_bundle",
         lambda root: {
-            "manifest_version": 1,
             "repository": {
                 "repo_id": "tsilva/model",
-                "game_family": "NES-SuperMarioBros",
+                "canonical_environment_id": "VizdoomDeathmatch-v1",
             },
-            "release": {"version": "v1"},
+            "release": {"version": "v3", "checkpoint_tag": "checkpoint-10"},
+            "format_version": 3,
         },
     )
     monkeypatch.setattr(
@@ -78,16 +87,16 @@ def test_remote_release_audit_checks_commit_files_collection_and_bundle(
         lambda path: {"codec_name": "h264", "frames": 100},
     )
 
-    result = MODULE.audit_huggingface_release("tsilva/model", "v1", api=FakeApi())
+    result = MODULE.audit_huggingface_release("tsilva/model", "v3", api=FakeApi())
 
     assert result["status"] == "passed"
-    assert result["collection"] == "tsilva/nes-supermariobros-policies-id"
+    assert result["collection"] == "tsilva/gradlab-vizdoom-id"
 
 
 def test_remote_release_audit_rejects_main_tag_drift() -> None:
     with pytest.raises(ValueError, match="do not point to the same commit"):
         MODULE.audit_huggingface_release(
             "tsilva/model",
-            "v1",
+            "v3",
             api=FakeApi(main_sha="a" * 40, tag_sha="b" * 40),
         )

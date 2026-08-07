@@ -122,6 +122,26 @@ class RunAuthorityTests(unittest.TestCase):
         self.assertEqual(rebuilt["schema_version"], GOAL_CATALOG_SCHEMA_VERSION)
         self.assertEqual(rebuilt["active_runs"][0]["run_id"], manifest.run_id)
 
+    def test_catalog_rebuild_hashes_the_unchanged_authoritative_manifest(self) -> None:
+        manifest = self.manifest(new_run_id(), new_attempt_id())
+        source = manifest.to_dict()
+        source["goal_variant"]["schema_version"] = 1
+        source_key = (
+            f"runs/{manifest.run_id}/attempts/{manifest.attempt_id}/manifest.json"
+        )
+        self.authority.control.put_json(source_key, source, create_only=True)
+
+        report = self.authority.replace_goal_variant_catalog([(manifest, None)])
+
+        result = report["goals"][manifest.goal_slug]
+        self.assertEqual(result["orphan_events"], [])
+        rebuilt = self.authority.catalog_generation(manifest.goal_slug)
+        assert rebuilt is not None
+        self.assertEqual(
+            [run["run_id"] for run in rebuilt["active_runs"]],
+            [manifest.run_id],
+        )
+
     def test_identifiers_have_required_shapes(self) -> None:
         self.assertRegex(new_run_id(), r"^gradlab-[0-9a-f]{32}$")
         self.assertRegex(new_attempt_id(), r"^attempt-[0-9a-f]{16}$")

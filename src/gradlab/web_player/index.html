@@ -155,12 +155,13 @@
           <section class="publication-preview">
             <video id="publication-video" controls preload="metadata"></video>
             <dl id="publication-capture" class="publication-facts"></dl>
+            <dl id="publication-generated" class="publication-facts publication-generated"></dl>
           </section>
           <form id="publication-form" class="publication-form">
             <div class="publication-fields">
               <label><span>Privacy</span><select id="publication-privacy"><option value="public">Public</option><option value="unlisted">Unlisted</option><option value="private">Private</option></select></label>
-              <label><span>Playlist</span><input id="publication-playlist" value="gradlab" maxlength="150" required></label>
               <label><span>Thumbnail time (seconds)</span><input id="publication-thumbnail-time" type="number" min="0" step="0.25" value="10" required></label>
+              <label class="publication-feature"><input id="publication-feature" type="checkbox"><span>Feature in GradLab — Featured Research</span></label>
               <label class="publication-wide"><span>Extra tags (comma-separated)</span><input id="publication-tags" maxlength="300"></label>
               <label class="publication-wide"><span>Operator note <small>clearly labeled as unverified</small></span><textarea id="publication-note" rows="3" maxlength="1000"></textarea></label>
             </div>

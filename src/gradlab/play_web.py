@@ -2417,6 +2417,20 @@ class PlaybackWebServer:
             return web.json_response({"ready": False, "message": str(exc)}, status=503)
         return web.json_response(result)
 
+    async def publication_preview(self, request: web.Request) -> web.Response:
+        self._authorize_publication(request)
+        try:
+            payload = await request.json()
+        except json.JSONDecodeError, TypeError:
+            return web.json_response({"error": "publication preview must be JSON"}, status=400)
+        if not isinstance(payload, Mapping):
+            return web.json_response({"error": "publication preview must be an object"}, status=400)
+        try:
+            result = await asyncio.to_thread(self._publications().preview, payload)
+        except Exception as exc:
+            return web.json_response({"error": str(exc)}, status=400)
+        return web.json_response(result)
+
     async def publication_admit(self, request: web.Request) -> web.Response:
         self._authorize_publication(request, mutation=True)
         try:
@@ -3568,6 +3582,7 @@ class PlaybackWebServer:
                 web.get("/api/playback/inspection", self.inspect_active_playback),
                 web.get("/api/publication/current", self.publication_current),
                 web.post("/api/publication/preflight", self.publication_preflight),
+                web.post("/api/publication/preview", self.publication_preview),
                 web.post("/api/publication/admit", self.publication_admit),
                 web.get("/api/publication/jobs/{job_id}", self.publication_job),
                 web.post("/api/publication/jobs/{job_id}/retry", self.publication_retry),

@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from gradlab.catalog_errors import CatalogIntegrityError, CatalogUnavailable
+from gradlab.goal_catalog import GOAL_CATALOG_ROOT
 from gradlab.operator_credentials import OPERATOR_CONFIG_ENV, PROTECTED_ENV_NAMES
 
 
@@ -34,11 +35,15 @@ MAX_BULK_REQUEST_KEYS = 64
 MAX_BULK_READ_WORKERS = 16
 
 _ALLOWED_CONTROL_KEYS = (
-    re.compile(r"goal-catalog/v1/goals/[0-9a-f]{64}/current\.json"),
+    re.compile(rf"{re.escape(GOAL_CATALOG_ROOT)}/goals/[0-9a-f]{{64}}/current\.json"),
     re.compile(
-        r"goal-catalog/v1/goals/[0-9a-f]{64}/generations/[0-9a-f]{64}\.json"
+        rf"{re.escape(GOAL_CATALOG_ROOT)}/goals/[0-9a-f]{{64}}/generations/"
+        r"[0-9a-f]{64}\.json"
     ),
-    re.compile(r"goal-catalog/v1/goals/[0-9a-f]{64}/pages/[0-9a-f]{64}\.json"),
+    re.compile(
+        rf"{re.escape(GOAL_CATALOG_ROOT)}/goals/[0-9a-f]{{64}}/pages/"
+        r"[0-9a-f]{64}\.json"
+    ),
     re.compile(r"runs/gradlab-[0-9a-f]{32}/manifest\.json"),
     re.compile(r"recipes/v2/sha256/[0-9a-f]{2}/[0-9a-f]{64}\.json"),
 )

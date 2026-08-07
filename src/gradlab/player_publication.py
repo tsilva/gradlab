@@ -13,7 +13,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from huggingface_hub import HfApi
+from huggingface_hub import HfApi, hf_hub_download
 from huggingface_hub.errors import HfHubHTTPError
 
 from gradlab.file_utils import atomic_write_json, file_sha256, fsync_tree
@@ -38,6 +38,7 @@ from gradlab.publication import (
     normalize_publication_evaluation,
     publication_identity_from_policy_bundle,
     publication_source_from_policy_bundle,
+    release_comparison,
     release_artifact_records,
     release_replay_from_capture,
     render_model_card,
@@ -50,7 +51,10 @@ from gradlab.publication_credentials import (
     save_private_json,
     youtube_credential_paths,
 )
-from gradlab.publication_evidence import validate_publication_evidence
+from gradlab.publication_evidence import (
+    build_evaluation_evidence_document,
+    validate_publication_evidence,
+)
 from gradlab.r2_store import RunStorageConfig
 from gradlab.run_authority import RunAuthority
 from gradlab.run_contracts import CheckpointManifest
@@ -63,9 +67,9 @@ from gradlab.youtube_publication import (
 
 
 PLAYER_PUBLICATION_JOB_TYPE = "player-publication"
-PLAYER_PUBLICATION_JOB_VERSION = 1
+PLAYER_PUBLICATION_JOB_VERSION = 2
 REQUEST_DOCUMENT_TYPE = "gradlab.player_publication_request"
-REQUEST_FORMAT_VERSION = 1
+REQUEST_FORMAT_VERSION = 2
 REQUEST_ROOT_NAME = "player_publications"
 YOUTUBE_PLACEHOLDER_URL = "https://www.youtube.com/watch?v=00000000000"
 PRIVACY_VALUES = frozenset({"public", "unlisted", "private"})
@@ -124,6 +128,27 @@ def _training_backend_display(policy: Mapping[str, Any]) -> tuple[str, str]:
     if backend_id.startswith("sb3.") or model_class.startswith("stable_baselines3."):
         return "Stable-Baselines3", backend_id
     raise ValueError("model policy does not identify a supported training backend")
+
+
+def _compact_steps(value: object) -> str:
+    steps = int(value)
+    for divisor, suffix in ((1_000_000_000, "B"), (1_000_000, "M"), (1_000, "K")):
+        if steps >= divisor:
+            number = steps / divisor
+            return f"{number:.3g}{suffix}"
+    return str(steps)
+
+
+def _render_metric_outcome(row: Mapping[str, Any]) -> str:
+    value = row.get("value")
+    rendered = (
+        f"{100.0 * float(value):.1f}%"
+        if row.get("unit") == "fraction"
+        else f"{float(value):.6g}"
+        if isinstance(value, int | float) and not isinstance(value, bool)
+        else str(value)
+    )
+    return f"{row.get('label')} (`{row.get('metric')}`): {rendered}"
 
 
 def _bounded_youtube_tags(values: Sequence[object], *, max_characters: int = 500) -> list[str]:
@@ -245,51 +270,144 @@ def next_release_version(api: Any, repo_id: str) -> tuple[str, str | None]:
     return f"v{max(versions, default=0) + 1}", str(getattr(info, "sha", "") or "") or None
 
 
+def _remote_release_manifest(
+    repo_id: str,
+    *,
+    token: str | bool | None,
+    revision: str = "main",
+) -> dict[str, Any] | None:
+    try:
+        path = hf_hub_download(
+            repo_id,
+            "release_manifest.json",
+            repo_type="model",
+            revision=revision,
+            token=token,
+        )
+    except Exception:
+        return None
+    value = json.loads(Path(path).read_text(encoding="utf-8"))
+    return dict(value) if isinstance(value, Mapping) else None
+
+
+def assert_lineage_repository_compatible(
+    api: Any,
+    *,
+    repo_id: str,
+    identity: Any,
+    token: str,
+) -> dict[str, Any] | None:
+    try:
+        api.model_info(repo_id=repo_id)
+    except HfHubHTTPError as exc:
+        if getattr(exc.response, "status_code", None) == 404:
+            return None
+        raise
+    except Exception as exc:
+        if type(exc).__name__ == "RepositoryNotFoundError":
+            return None
+        raise
+    manifest = _remote_release_manifest(repo_id, token=token)
+    if manifest is None:
+        raise ValueError(
+            "computed lineage repository already exists without a current v3 release manifest"
+        )
+    repository = manifest.get("repository")
+    stored_digest = repository.get("lineage_digest") if isinstance(repository, Mapping) else None
+    if stored_digest != identity.lineage_digest:
+        raise ValueError(
+            "eight-character lineage prefix collision: stored full digest differs"
+        )
+    return manifest
+
+
 def generated_metadata(
     *,
     capture: Mapping[str, Any],
     bundle: PolicyBundle,
     evaluation: Mapping[str, Any],
+    evaluation_evidence: Mapping[str, Any] | None = None,
     repo_id: str,
     settings: Mapping[str, Any],
+    release_version: str = "v1",
+    source: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     privacy = str(settings.get("privacy") or "public")
     if privacy not in PRIVACY_VALUES:
         raise ValueError("YouTube privacy must be public, unlisted, or private")
     goal = _required_mapping(capture.get("goal"), label="capture goal")
     goal_id = str(goal.get("goal_id") or "").strip()
-    raw_goal = str(goal.get("title") or goal_id or "Goal").strip()
-    goal_title = _display_name(raw_goal)
+    goal_title = str(goal.get("title") or goal_id or "Goal").strip()
     qualified = str((capture.get("execution") or {}).get("qualified_environment_id") or "")
     provider, _separator, game = qualified.partition(":")
     raw_game = game or qualified or "Game"
     game_title = _display_name(raw_game)
     policy = _required_mapping(bundle.model.get("policy"), label="model policy")
     algorithm = str(policy.get("algorithm_id") or "policy").upper()
-    trainer, backend_id = _training_backend_display(policy)
-    trainer_title = "SB3" if trainer == "Stable-Baselines3" else trainer
-    same_task = bool(goal_id) and goal_id.casefold() == raw_game.casefold()
-    task_title = game_title if same_task else f"{game_title} — {goal_title}"
-    task_description = game_title if same_task else f"{game_title} {goal_title}"
+    identity = publication_identity_from_policy_bundle(goal_id, bundle)
+    trainer = identity.trainer
+    backend_id = str(policy.get("training_backend_id") or "")
+    step = int((bundle.model.get("checkpoint") or {}).get("step") or evaluation.get("checkpoint_step") or 0)
+    title = f"{goal_title} — {trainer} {algorithm} @ {_compact_steps(step)} env steps"
+    if len(title) > 100:
+        title = (
+            f"{identity.canonical_environment_id} / {identity.goal_id} — "
+            f"{trainer} {algorithm} @ {_compact_steps(step)} env steps"
+        )
+    if len(title) > 100:
+        raise ValueError("generated YouTube fallback title exceeds 100 characters")
     captured_success = bool(capture.get("success"))
-    success_mean = evaluation.get("success_rate_mean")
-    title = f"{task_title} — {trainer_title} {algorithm}"
-    title = title[:100].rstrip()
-    outcome = "met" if captured_success else "did not meet"
-    episode_verb = "completes" if captured_success else "plays"
-    evaluation_claim = (
-        f" with a {100.0 * float(success_mean):.1f}% verified full-evaluation win rate"
-        if isinstance(success_mean, int | float) and not isinstance(success_mean, bool)
-        else ""
+    source_value = dict(source or {})
+    evidence_value = dict(evaluation_evidence or {})
+    acceptance = (evidence_value.get("acceptance") or {}).get("outcomes") or ()
+    ranking = (evidence_value.get("ranking") or {}).get("outcomes") or ()
+    acceptance_lines = [
+        f"- {_render_metric_outcome(row)}; requirement {row.get('operator')} {row.get('threshold')}; "
+        f"{'pass' if row.get('passed') else 'fail'}"
+        for row in acceptance
+        if isinstance(row, Mapping)
+    ]
+    ranking_lines = [
+        f"- {_render_metric_outcome(row)}; rank direction {row.get('direction')}"
+        for row in ranking
+        if isinstance(row, Mapping)
+    ]
+    if not acceptance_lines:
+        raise ValueError("generated publication metadata requires acceptance outcomes")
+    replay_result = (
+        f"Representative replay: {capture.get('sampling_mode')} episode {capture.get('episode')}, "
+        f"outcome {capture.get('outcome')}, goal result {'met' if captured_success else 'not met'}, "
+        f"return {capture.get('return')}, {capture.get('steps')} policy steps. "
+        "This replay is not evaluation evidence."
     )
-    description = (
-        f"A {algorithm} reinforcement-learning agent trained with {trainer} "
-        f"{episode_verb} {task_description}{evaluation_claim}. This exact faithful "
-        f"{capture.get('sampling_mode')} "
-        f"episode {outcome} the embedded goal; the separate checkpoint evaluation used "
-        f"{evaluation.get('episodes')} episodes.\n\n"
-        f"Model: https://huggingface.co/{repo_id}\n"
-        "gradlab: https://github.com/tsilva/gradlab"
+    wandb_url = (
+        f"https://wandb.ai/tsilva/{source_value.get('wandb_project')}/runs/{source_value.get('run_id')}"
+    )
+    model_tag_url = f"https://huggingface.co/{repo_id}/tree/{release_version}"
+    source_commit = str(source_value.get("commit") or "")
+    recipe_name = str(source_value.get("recipe") or "")
+    r2_manifest = str(source_value.get("model_document_url") or evaluation.get("checkpoint_artifact") or "")
+    description = "\n".join(
+        [
+            f"{trainer} {algorithm} research release for {goal_title}.",
+            "",
+            f"Exact checkpoint: {step} environment steps (`checkpoint-{step}`).",
+            f"Evaluation: {evaluation.get('protocol')} / {evaluation.get('action_sampling')}, {evaluation.get('episodes')} episodes.",
+            "Acceptance results:",
+            *acceptance_lines,
+            "Ranking metrics:",
+            *ranking_lines,
+            "",
+            replay_result,
+            "",
+            f"Immutable model: {model_tag_url}",
+            f"W&B: {wandb_url}",
+            f"R2 manifest: {r2_manifest}",
+            f"Source/recipe: https://github.com/tsilva/gradlab/tree/{source_commit} ({recipe_name})",
+            "GitHub: https://github.com/tsilva/gradlab",
+            "Collection: {{COLLECTION_URL}}",
+            "Playlist: {{PLAYLIST_URL}}",
+        ]
     )
     note = str(settings.get("operator_note") or "").strip()
     if len(note) > 1000:
@@ -323,9 +441,6 @@ def generated_metadata(
         ],
         max_characters=400,
     )
-    playlist = str(settings.get("playlist") or "gradlab").strip() or "gradlab"
-    if len(playlist) > 150:
-        raise ValueError("YouTube playlist title must be at most 150 characters")
     thumbnail_value = settings.get("thumbnail_time")
     thumbnail_time = 10.0 if thumbnail_value is None else float(thumbnail_value)
     if not math.isfinite(thumbnail_time) or not 0 <= thumbnail_time <= 86_400:
@@ -335,9 +450,16 @@ def generated_metadata(
         "description": description,
         "tags": tags,
         "privacy": privacy,
-        "playlist": playlist,
+        "container_name": f"GradLab — {identity.canonical_environment_id}",
         "thumbnail_time": thumbnail_time,
         "operator_note": note,
+        "feature": bool(settings.get("feature", False)),
+        "thumbnail": {
+            "task": goal_title,
+            "trainer_algorithm": f"{trainer} {algorithm}",
+            "step": f"{_compact_steps(step)} env steps",
+            "metric": _render_metric_outcome(acceptance[0]),
+        },
     }
 
 
@@ -347,11 +469,15 @@ def prepare_release_bundle(
     replay_path: Path,
     capture: Mapping[str, Any],
     evaluation_document: Mapping[str, Any],
+    evaluation_evidence_document: Mapping[str, Any],
     publication: Mapping[str, Any],
     release_version: str,
     published_at: str,
     youtube_url: str,
     output: Path,
+    comparison: Mapping[str, Any] | None = None,
+    featured: bool = False,
+    correction_note: str | None = None,
 ) -> dict[str, Any]:
     if output.exists() and any(output.iterdir()):
         raise FileExistsError(f"release output directory is not empty: {output}")
@@ -361,6 +487,7 @@ def prepare_release_bundle(
     _copy_regular(replay_path, output / "replay.mp4")
     (output / ".gitattributes").write_text(GITATTRIBUTES_TEXT, encoding="utf-8")
     (output / "LICENSE").write_text(MIT_LICENSE_TEXT, encoding="utf-8")
+    write_canonical_json(output / "evaluation_evidence.json", evaluation_evidence_document)
     source_model = source_bundle.model
     metadata = deepcopy(dict(source_model["provenance"]))
     metadata.update(source_model["policy"])
@@ -409,6 +536,10 @@ def prepare_release_bundle(
         youtube_url=youtube_url,
         replay=replay,
         publication=publication,
+        evaluation_evidence=evaluation_evidence_document,
+        comparison=comparison,
+        featured=featured,
+        correction_note=correction_note,
     )
     (output / "README.md").write_text(render_model_card(provisional, bundle), encoding="utf-8")
     manifest = build_release_manifest(
@@ -422,6 +553,10 @@ def prepare_release_bundle(
         youtube_url=youtube_url,
         replay=replay,
         publication=publication,
+        evaluation_evidence=evaluation_evidence_document,
+        comparison=comparison,
+        featured=featured,
+        correction_note=correction_note,
     )
     write_canonical_json(output / "release_manifest.json", manifest)
     validate_release_bundle(output)
@@ -478,10 +613,87 @@ class PlayerPublicationService:
             subject_ids=[str(capture["capture_id"])],
         )
         subject = statuses.get(str(capture["capture_id"]))
-        return {
+        result = {
             "available": True,
             "capture": capture,
             "job": None if subject is None else self._public_subject(subject),
+        }
+        try:
+            result["preview"] = self.preview({})
+        except Exception as exc:
+            result["preview_error"] = str(exc)
+        return result
+
+    def preview(self, settings: Mapping[str, Any]) -> dict[str, Any]:
+        active = self._active()
+        capture = _required_mapping(active.get("capture_document"), label="capture")
+        bundle = active.get("bundle")
+        if not isinstance(bundle, PolicyBundle):
+            raise ValueError("active publication bundle is unavailable")
+        raw_evidence = self._load_evidence(active)
+        evidence = validate_publication_evidence(raw_evidence)
+        evidence_document = build_evaluation_evidence_document(raw_evidence)
+        evaluation_value = _required_mapping(
+            evidence.get("evaluation"), label="publication evaluation"
+        )
+        normalized_evaluation = normalize_publication_evaluation(
+            evaluation_value,
+            algorithm_id=str(bundle.model["policy"].get("algorithm_id") or ""),
+        )
+        normalized = normalized_evaluation.as_manifest_value()
+        goal = _required_mapping(capture.get("goal"), label="capture goal")
+        identity = publication_identity_from_policy_bundle(goal.get("goal_id"), bundle)
+        repo_id = build_model_repo_id(identity)
+        api = self.hf_api_factory()
+        version, _parent = next_release_version(api, repo_id)
+        previous = _remote_release_manifest(repo_id, token=None)
+        source = publication_source_from_policy_bundle(bundle, normalized_evaluation)
+        checkpoint_manifest = _required_mapping(
+            evidence.get("checkpoint_manifest"), label="checkpoint manifest"
+        )
+        source["model_document_url"] = checkpoint_manifest.get("model_document_url")
+        source["recipe_document_url"] = checkpoint_manifest.get("recipe_document_url")
+        comparison = release_comparison(
+            {
+                "repository": {"lineage_digest": identity.lineage_digest},
+                "source": source,
+                "evaluation": {
+                    "evaluation_contract_sha256": (
+                        evaluation_value.get("evaluation_evidence") or {}
+                    ).get("evaluation_contract_sha256")
+                },
+            },
+            previous,
+        )
+        metadata = generated_metadata(
+            capture=capture,
+            bundle=bundle,
+            evaluation=normalized,
+            evaluation_evidence=evidence_document,
+            repo_id=repo_id,
+            settings=settings,
+            release_version=version,
+            source=source,
+        )
+        return {
+            "title": metadata["title"],
+            "description": metadata["description"],
+            "repo_id": repo_id,
+            "release_tag": version,
+            "checkpoint_tag": f"checkpoint-{normalized['checkpoint_step']}",
+            "acceptance": deepcopy(evidence_document["acceptance"]),
+            "replay": {
+                "status": "validated completed episode",
+                "outcome": capture.get("outcome"),
+                "success": bool(capture.get("success")),
+            },
+            "comparison": comparison,
+            "containers": {
+                "environment": metadata["container_name"],
+                "featured": "GradLab — Featured Research",
+            },
+            "operator_note": metadata["operator_note"],
+            "feature": metadata["feature"],
         }
 
     @staticmethod
@@ -588,14 +800,15 @@ class PlayerPublicationService:
         release = goal.get("release")
         if not isinstance(release, Mapping) or not isinstance(release.get("huggingface"), Mapping):
             raise ValueError("the embedded goal does not enable Hugging Face release")
-        evidence = validate_publication_evidence(
-            self._load_evidence(active)
-        )
+        raw_evidence = self._load_evidence(active)
+        evidence = validate_publication_evidence(raw_evidence)
+        evaluation_evidence_document = build_evaluation_evidence_document(raw_evidence)
         evaluation = _required_mapping(evidence.get("evaluation"), label="publication evaluation")
-        normalized = normalize_publication_evaluation(
+        normalized_evaluation = normalize_publication_evaluation(
             evaluation,
             algorithm_id=str(bundle.model["policy"].get("algorithm_id") or ""),
-        ).as_manifest_value()
+        )
+        normalized = normalized_evaluation.as_manifest_value()
         credentials = dict(credential_result or credential_preflight())
         if not credentials.get("ready"):
             raise ValueError("Hugging Face and YouTube credentials must both pass preflight")
@@ -625,13 +838,40 @@ class PlayerPublicationService:
             )
         hf_credential = resolve_huggingface_credential()
         api = self.hf_api_factory(token=hf_credential.token)
+        previous_manifest = assert_lineage_repository_compatible(
+            api,
+            repo_id=repo_id,
+            identity=identity,
+            token=hf_credential.token,
+        )
         version, parent_commit = next_release_version(api, repo_id)
+        source = publication_source_from_policy_bundle(bundle, normalized_evaluation)
+        checkpoint_manifest = _required_mapping(
+            evidence.get("checkpoint_manifest"), label="checkpoint manifest"
+        )
+        source["model_document_url"] = checkpoint_manifest.get("model_document_url")
+        source["recipe_document_url"] = checkpoint_manifest.get("recipe_document_url")
+        comparison_basis = {
+            "repository": {
+                "lineage_digest": identity.lineage_digest,
+            },
+            "source": source,
+            "evaluation": {
+                "evaluation_contract_sha256": (
+                    evaluation.get("evaluation_evidence") or {}
+                ).get("evaluation_contract_sha256")
+            },
+        }
+        comparison = release_comparison(comparison_basis, previous_manifest)
         metadata = generated_metadata(
             capture=capture,
             bundle=bundle,
             evaluation=normalized,
+            evaluation_evidence=evaluation_evidence_document,
             repo_id=repo_id,
             settings=settings,
+            release_version=version,
+            source=source,
         )
         published_at = _utc_now()
         basis: dict[str, Any] = {
@@ -652,6 +892,8 @@ class PlayerPublicationService:
                 "youtube_scopes": sorted(youtube_principal.get("scopes") or ()),
             },
             "evidence_sha256": canonical_json_sha256(evidence),
+            "comparison": comparison,
+            "feature": bool(settings.get("feature", False)),
         }
         request_fingerprint = canonical_json_sha256(basis)
         marker = f"gradlab-publication-{request_fingerprint}"
@@ -852,6 +1094,11 @@ class PlayerPublicationService:
             for name in ("intent", "raw_result", "verified_result", "checkpoint_manifest"):
                 atomic_write_json(evidence_root / f"{name}.json", _required_mapping(evidence[name], label=name))
             atomic_write_json(evidence_root / "evaluation.json", _required_mapping(evidence["evaluation"], label="evaluation"))
+            evaluation_evidence_document = build_evaluation_evidence_document(evidence)
+            atomic_write_json(
+                evidence_root / "evaluation_evidence.json",
+                evaluation_evidence_document,
+            )
             publication = {
                 "request_fingerprint": request["request_fingerprint"],
                 "huggingface_username": request["principals"]["huggingface_username"],
@@ -866,11 +1113,14 @@ class PlayerPublicationService:
                 replay_path=capture_root / "replay.mp4",
                 capture=capture,
                 evaluation_document=evidence["evaluation"],
+                evaluation_evidence_document=evaluation_evidence_document,
                 publication=publication,
                 release_version=str(request["release_version"]),
                 published_at=str(request["published_at"]),
                 youtube_url=YOUTUBE_PLACEHOLDER_URL,
                 output=temporary / "provisional_release",
+                comparison=request.get("comparison"),
+                featured=bool(request.get("feature")),
             )
             atomic_write_json(temporary / "request.json", dict(request))
             hashes = {

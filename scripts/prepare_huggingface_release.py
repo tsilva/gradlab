@@ -34,6 +34,7 @@ from gradlab.policy_bundle import (
     sha256_file,
     write_canonical_json,
 )
+from gradlab.publication_evidence import validate_evaluation_evidence_document
 
 
 def _load_object(path: Path, *, label: str) -> dict:
@@ -54,6 +55,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--recipe", type=Path)
     parser.add_argument("--replay", type=Path)
     parser.add_argument("--evaluation-json", type=Path)
+    parser.add_argument("--evaluation-evidence-json", type=Path)
     parser.add_argument("--capture-json", type=Path)
     parser.add_argument("--publication-json", type=Path)
     parser.add_argument("--release-version")
@@ -93,6 +95,7 @@ def main(argv: list[str] | None = None) -> int:
         "--recipe": args.recipe,
         "--replay": args.replay,
         "--evaluation-json": args.evaluation_json,
+        "--evaluation-evidence-json": args.evaluation_evidence_json,
         "--capture-json": args.capture_json,
         "--publication-json": args.publication_json,
         "--release-version": args.release_version,
@@ -106,6 +109,7 @@ def main(argv: list[str] | None = None) -> int:
     assert args.recipe is not None
     assert args.replay is not None
     assert args.evaluation_json is not None
+    assert args.evaluation_evidence_json is not None
     assert args.capture_json is not None
     assert args.publication_json is not None
     assert args.release_version is not None
@@ -116,6 +120,7 @@ def main(argv: list[str] | None = None) -> int:
         args.recipe,
         args.replay,
         args.evaluation_json,
+        args.evaluation_evidence_json,
         args.capture_json,
         args.publication_json,
     ):
@@ -126,6 +131,9 @@ def main(argv: list[str] | None = None) -> int:
 
     verify_replay(args.replay)
     evaluation_document = _load_object(args.evaluation_json, label="evaluation")
+    evaluation_evidence_document = validate_evaluation_evidence_document(
+        _load_object(args.evaluation_evidence_json, label="evaluation evidence")
+    )
     capture_document = _load_object(args.capture_json, label="capture")
     publication_document = _load_object(args.publication_json, label="publication")
     replay_value = release_replay_from_capture(capture_document)
@@ -137,6 +145,9 @@ def main(argv: list[str] | None = None) -> int:
     shutil.copy2(args.replay, args.output_dir / "replay.mp4")
     (args.output_dir / ".gitattributes").write_text(GITATTRIBUTES_TEXT, encoding="utf-8")
     (args.output_dir / "LICENSE").write_text(MIT_LICENSE_TEXT, encoding="utf-8")
+    write_canonical_json(
+        args.output_dir / "evaluation_evidence.json", evaluation_evidence_document
+    )
     metadata = deepcopy(dict(source_model["provenance"]))
     metadata.update(source_model["policy"])
     metadata["checkpoint_step"] = source_model["checkpoint"].get("step")
@@ -188,6 +199,7 @@ def main(argv: list[str] | None = None) -> int:
         youtube_url=args.youtube_url,
         replay=replay_value,
         publication=publication_document,
+        evaluation_evidence=evaluation_evidence_document,
     )
     (args.output_dir / "README.md").write_text(
         render_model_card(provisional_manifest, bundle), encoding="utf-8"
@@ -204,6 +216,7 @@ def main(argv: list[str] | None = None) -> int:
         youtube_url=args.youtube_url,
         replay=replay_value,
         publication=publication_document,
+        evaluation_evidence=evaluation_evidence_document,
     )
     (args.output_dir / "release_manifest.json").write_text(
         json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"

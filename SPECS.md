@@ -43,6 +43,9 @@ GradLab is a reproducible reinforcement-learning workbench that carries game-age
 
 ### Training Results and Publication
 
+- Published research must use one evidence-backed identity across model, video, source, and telemetry surfaces; distinguish task, trainer, algorithm, policy contract, checkpoint, evaluation, and representative replay; and cross-link those surfaces without conflating replay behavior with evaluation evidence.
+- Publication must organize checkpoints into stable policy lineages, immutable releases, and curated game/task indexes so progress remains easy to publish, compare, discover, and reproduce without proliferating ambiguous artifacts.
+- Environment-scoped Hugging Face collections and YouTube playlists must be named `GradLab — <canonical environment ID>`; only cross-environment curated containers may use a non-environment name.
 - Every backend must honor the common local and queued lifecycle for progress, outcome metrics, checkpointing, graceful stopping, and final artifacts.
 - Algorithm-specific telemetry may extend but not replace the common lifecycle.
 - Training must preserve authoritative metrics and checkpoints by default, separately from job state and diagnostics.
