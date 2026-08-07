@@ -1565,14 +1565,21 @@ class RunAuthority:
         receipt: TerminalReceipt,
         *,
         metrics: Mapping[str, Any] | None = None,
+        manifest_override: RunManifest | None = None,
     ) -> str:
         terminal_key = (
             f"{self.run_prefix(receipt.run_id)}/attempts/{receipt.attempt_id}/terminal.json"
         )
-        try:
-            manifest = self._manifest_for_attempt(receipt.run_id, receipt.attempt_id)
-        except ValueError:
-            manifest = None
+        manifest = manifest_override
+        if manifest is not None and (
+            manifest.run_id != receipt.run_id or manifest.attempt_id != receipt.attempt_id
+        ):
+            raise ValueError("attempt terminal manifest override identity mismatch")
+        if manifest is None:
+            try:
+                manifest = self._manifest_for_attempt(receipt.run_id, receipt.attempt_id)
+            except ValueError:
+                manifest = None
         event = (
             self._goal_catalog_event_for_terminal(
                 manifest,

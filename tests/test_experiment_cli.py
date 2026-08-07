@@ -27,6 +27,7 @@ from gradlab.experiment_cli import (
     _public_dstack_state,
     _record_pre_submit_failure,
     _record_terminal_task_without_receipt,
+    _reconciliation_manifest,
     _require_retryable_attempt_terminal,
     _retry_compute_request,
     _required_operator_environment,
@@ -754,6 +755,16 @@ def test_latest_attempt_terminal_does_not_reuse_prior_attempt_receipt() -> None:
     assert _latest_attempt_terminal(state) == second_terminal
 
 
+def test_reconciliation_accepts_deployed_goal_variant_schema_one_without_mutating_source() -> None:
+    document = _manifest_only_run().to_dict()
+    document["goal_variant"]["schema_version"] = 1
+
+    manifest = _reconciliation_manifest(document)
+
+    assert manifest.goal_variant["schema_version"] == 2
+    assert document["goal_variant"]["schema_version"] == 1
+
+
 def test_pre_submit_failure_records_typed_attempt_evidence() -> None:
     manifest = _manifest_only_run()
     authority = mock.MagicMock()
@@ -843,7 +854,9 @@ def test_reconcile_acquires_lease_writes_r2_before_wandb_and_releases(
     )
     authority.acquire_lease.return_value = lease
     events: list[str] = []
-    authority.create_attempt_terminal.side_effect = lambda _receipt: events.append("r2")
+    authority.create_attempt_terminal.side_effect = (
+        lambda _receipt, **_kwargs: events.append("r2")
+    )
     backend = mock.MagicMock()
     backend.status.return_value = DstackTask(
         project="research",
