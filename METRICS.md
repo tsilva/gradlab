@@ -187,7 +187,9 @@ does not read, project, or preserve noncurrent W&B or R2 schemas.
   establish acceptance.
 - Training episode reduction aggregates return, length, outcome, success, the explicitly supported
   target-origin cell-novelty statistic, and goal-declared numeric episode progress fields.
-  `VizdoomDeathmatch-v1` declares `kills`, so
+  Progress field names refer to task-semantic signals and must be populated independently of the
+  selected reward shape; `VizdoomDeathmatch-v1` maps task signal `kills` to provider field
+  `killcount`, so
   `train/progress/kills/from/target/rolling_up_to_100/mean` reports mean native monster frags over up
   to the latest 100 genuine target-origin training episodes. Native shaped return is not an exact
   substitute because different monster kills can contribute different score values.

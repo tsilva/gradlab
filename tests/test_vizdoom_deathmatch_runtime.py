@@ -12,8 +12,10 @@ from gradlab.action_codecs import (
 from gradlab.batch_runtime import BatchMetricRecord, EpisodeRecord
 from gradlab.env import make_training_vec_env, resolve_env_config
 from gradlab.env_config import env_config_from_mapping
+from gradlab.metric_names import TRAIN_PROGRESS_KILLS_FROM_TARGET_ROLLING_UP_TO_100_MEAN
 from gradlab.recipe_documents import compose_train_document
 from gradlab.actor_critic_policy import SharedActorCriticPolicy
+from gradlab.training_metrics import EpisodeMetricsReducer
 
 
 GOAL_ROOT = Path("experiments/goals/VizdoomDeathmatch-v1")
@@ -295,7 +297,13 @@ def test_deathmatch_native_horizon_is_successful_and_keeps_bootstrap() -> None:
         },
     }
     config = replace(config, env_args=env_args)
-    env = make_training_vec_env(config, n_envs=1, seed=1701)
+    progress_fields = tuple(document["train_config"]["episode_progress_fields"])
+    env = make_training_vec_env(
+        config,
+        n_envs=1,
+        seed=1701,
+        episode_progress_fields=progress_fields,
+    )
 
     try:
         env.reset()
@@ -312,6 +320,12 @@ def test_deathmatch_native_horizon_is_successful_and_keeps_bootstrap() -> None:
         assert records[0].outcome.name == "SUCCESS"
         assert records[0].truncated is True
         assert records[0].terminated is False
+        assert records[0].metrics["kills"] == 0
+        reduced = EpisodeMetricsReducer(
+            progress_fields=progress_fields,
+            track_success=False,
+        ).consume(records)
+        assert reduced[TRAIN_PROGRESS_KILLS_FROM_TARGET_ROLLING_UP_TO_100_MEAN] == 0.0
     finally:
         env.close()
 

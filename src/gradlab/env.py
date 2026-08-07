@@ -41,6 +41,7 @@ from gradlab.task_kernels import (
     MarioTaskDefinition,
     with_cell_novelty,
     with_deathmatch_reward,
+    with_episode_progress_metrics,
     with_reward_transform,
 )
 from gradlab.model_inputs import with_model_inputs
@@ -353,6 +354,7 @@ def bind_native_provider(
     seed: int,
     native_env: Any,
     descriptor: ProviderDescriptor,
+    episode_progress_fields: Sequence[str] = (),
     global_lane_ids: tuple[int, ...] | None = None,
     capture_step_diagnostics: bool = False,
     state_archive: Mapping[str, Any] | None = None,
@@ -362,7 +364,12 @@ def bind_native_provider(
 
     runtime: BatchRuntime | None = None
     try:
-        kernel = _bound_task_kernel(config, descriptor, n_envs)
+        kernel = _bound_task_kernel(
+            config,
+            descriptor,
+            n_envs,
+            episode_progress_fields=episode_progress_fields,
+        )
         action_values = task_action_values(config)
         action_contract = compile_runtime_action_contract(
             config,
@@ -391,7 +398,13 @@ def bind_native_provider(
         raise
 
 
-def _bound_task_kernel(config: EnvConfig, descriptor: ProviderDescriptor, n_envs: int):
+def _bound_task_kernel(
+    config: EnvConfig,
+    descriptor: ProviderDescriptor,
+    n_envs: int,
+    *,
+    episode_progress_fields: Sequence[str] = (),
+):
     native_horizon = resolve_native_episode_horizon(
         {
             "env_provider": config.env_provider,
@@ -406,6 +419,12 @@ def _bound_task_kernel(config: EnvConfig, descriptor: ProviderDescriptor, n_envs
             n_envs,
         )
         kernel = with_reward_transform(kernel, task_reward(config))
+        kernel = with_episode_progress_metrics(
+            kernel,
+            descriptor,
+            config.task.get("signals", {}),
+            episode_progress_fields,
+        )
         return with_model_inputs(
             kernel,
             descriptor,
@@ -452,6 +471,12 @@ def _bound_task_kernel(config: EnvConfig, descriptor: ProviderDescriptor, n_envs
         )
     kernel = with_cell_novelty(kernel, reward.get(CELL_NOVELTY_REWARD_KEY))
     kernel = with_reward_transform(kernel, reward)
+    kernel = with_episode_progress_metrics(
+        kernel,
+        descriptor,
+        config.task.get("signals", {}),
+        episode_progress_fields,
+    )
     return with_model_inputs(
         kernel,
         descriptor,
@@ -465,6 +490,7 @@ def make_vec_envs(
     n_envs: int,
     seed: int,
     *,
+    episode_progress_fields: Sequence[str] = (),
     capture_step_diagnostics: bool = False,
     rom_binding: RomRuntimeBinding | None = None,
     state_archive: Mapping[str, Any] | None = None,
@@ -476,6 +502,7 @@ def make_vec_envs(
         config,
         n_envs,
         seed,
+        episode_progress_fields=episode_progress_fields,
         capture_step_diagnostics=capture_step_diagnostics,
         rom_binding=rom_binding,
         state_archive=state_archive,
@@ -491,6 +518,7 @@ def make_training_batch_runtime(
     n_envs: int,
     seed: int,
     *,
+    episode_progress_fields: Sequence[str] = (),
     global_lane_ids: tuple[int, ...] | None = None,
     capture_step_diagnostics: bool = False,
     rom_binding: RomRuntimeBinding | None = None,
@@ -553,6 +581,7 @@ def make_training_batch_runtime(
         seed=seed,
         native_env=native_env,
         descriptor=descriptor,
+        episode_progress_fields=episode_progress_fields,
         global_lane_ids=global_lane_ids,
         capture_step_diagnostics=capture_step_diagnostics,
         state_archive=state_archive,
@@ -684,6 +713,7 @@ def make_training_vec_env(
     n_envs: int,
     seed: int,
     *,
+    episode_progress_fields: Sequence[str] = (),
     rom_binding: RomRuntimeBinding | None = None,
     state_archive: Mapping[str, Any] | None = None,
     state_archive_root: str | os.PathLike[str] | None = None,
@@ -692,6 +722,7 @@ def make_training_vec_env(
         config=config,
         n_envs=n_envs,
         seed=seed,
+        episode_progress_fields=episode_progress_fields,
         rom_binding=rom_binding,
         state_archive=state_archive,
         state_archive_root=state_archive_root,

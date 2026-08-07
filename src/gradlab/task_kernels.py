@@ -1299,6 +1299,92 @@ class SignalBindings:
         )
 
 
+class EpisodeProgressTaskKernel:
+    """Project declared task signals into reward-independent episode metrics."""
+
+    def __init__(
+        self,
+        kernel: BoundTaskKernel,
+        descriptor: ProviderDescriptor,
+        signals: Mapping[str, SignalSource],
+        fields: Sequence[str],
+    ) -> None:
+        self.kernel = kernel
+        self.num_envs = int(kernel.num_envs)
+        self.fields = tuple(dict.fromkeys(str(field) for field in fields))
+        missing = sorted(set(self.fields) - set(signals))
+        if missing:
+            raise ValueError(
+                "episode progress fields reference unavailable task signals: " + ", ".join(missing)
+            )
+        self.bindings = SignalBindings(
+            descriptor,
+            {field: signals[field] for field in self.fields},
+            self.num_envs,
+        )
+        self._values: dict[str, np.ndarray] = {}
+        for field_name in self.fields:
+            dtype = self.bindings.scalar_dtype(field_name)
+            if not (
+                np.issubdtype(dtype, np.integer) or np.issubdtype(dtype, np.floating)
+            ) or np.issubdtype(dtype, np.bool_):
+                raise ValueError(f"episode progress signal {field_name!r} must be numeric")
+            self._values[field_name] = np.empty(self.num_envs, dtype=dtype)
+        self._metrics: dict[str, np.ndarray] | None = None
+        self._task_step: TaskStep | None = None
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self.kernel, name)
+
+    def map_actions(self, actions: Any) -> Any:
+        return self.kernel.map_actions(actions)
+
+    def encode_observations(self, observations: Any) -> Any:
+        return self.kernel.encode_observations(observations)
+
+    def process(
+        self,
+        native_rewards: np.ndarray,
+        provider_terminated: np.ndarray,
+        provider_truncated: np.ndarray,
+        signals: Mapping[str, Any],
+    ) -> TaskStep:
+        task_step = self.kernel.process(
+            native_rewards,
+            provider_terminated,
+            provider_truncated,
+            signals,
+        )
+        for field_name, target in self._values.items():
+            values = self.bindings.scalar(field_name, signals)
+            if not np.all(np.isfinite(values)):
+                raise ValueError(f"episode progress signal {field_name!r} must be finite")
+            np.copyto(target, values)
+        if self._metrics is None:
+            self._metrics = dict(task_step.metrics)
+            self._metrics.update(self._values)
+            self._task_step = TaskStep(
+                task_step.rewards,
+                task_step.terminated,
+                task_step.truncated,
+                task_step.outcomes,
+                task_step.event_bits,
+                self._metrics,
+                task_step.event_transitions,
+            )
+        assert self._task_step is not None
+        return self._task_step
+
+
+def with_episode_progress_metrics(
+    kernel: BoundTaskKernel,
+    descriptor: ProviderDescriptor,
+    signals: Mapping[str, SignalSource],
+    fields: Sequence[str],
+) -> BoundTaskKernel:
+    return kernel if not fields else EpisodeProgressTaskKernel(kernel, descriptor, signals, fields)
+
+
 @dataclass(frozen=True)
 class DeathmatchRewardConfig:
     kill_reward: float
@@ -1872,7 +1958,7 @@ class IdentityTaskDefinition:
             raise ValueError(
                 "identity task termination.bootstrap references unknown events: "
                 + ", ".join(unknown_bootstrap_events)
-            )
+        )
         non_success_bootstrap_events = sorted(
             name
             for name in bootstrap_events
