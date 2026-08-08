@@ -512,6 +512,28 @@ class RunAuthorityTests(unittest.TestCase):
             archived,
         )
 
+    def test_metric_journal_archive_heartbeats_during_object_work(self) -> None:
+        run_id = new_run_id()
+        attempt_id = new_attempt_id()
+        self.authority.seal_metric_segment(
+            run_id=run_id,
+            attempt_id=attempt_id,
+            events=[{"event_seq": 1, "event_id": "one"}],
+        )
+        beats = 0
+
+        def heartbeat() -> None:
+            nonlocal beats
+            beats += 1
+
+        archived = self.authority.archive_metric_journals(
+            run_id=run_id,
+            heartbeat=heartbeat,
+        )
+
+        self.assertEqual(archived["segment_count"], 1)
+        self.assertGreaterEqual(beats, 5)
+
     def test_checkpoint_is_verified_and_public_index_is_cas_updated(self) -> None:
         run_id = new_run_id()
         root = Path(self.temporary.name)

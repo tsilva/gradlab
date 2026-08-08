@@ -26,7 +26,7 @@ from gradlab.recipe_documents import (
     compose_resolved_train_documents,
     load_goal_contract,
 )
-from gradlab.run_authority import RunAuthority
+from gradlab.run_authority import LeaseUnavailable, RunAuthority
 from gradlab.run_contracts import (
     CheckpointManifest,
     EarlyStopReceipt,
@@ -1482,6 +1482,16 @@ class RunSupervisorTests(unittest.TestCase):
         ):
             self.assertTrue(supervisor._wait_for_learner_exit_with_lease(30))
         renew.assert_called_once()
+
+    def test_finalization_heartbeat_fails_closed_after_lease_loss(self) -> None:
+        supervisor = self.supervisor()
+
+        def lose_lease(_now: float) -> None:
+            supervisor.lease_lost = True
+
+        with patch.object(supervisor, "_renew_lease", side_effect=lose_lease):
+            with self.assertRaisesRegex(LeaseUnavailable, "lost during finalization"):
+                supervisor._lease_heartbeat()
 
     def test_accepted_eval_requests_stop_before_metric_projection(self) -> None:
         supervisor = self.supervisor()
