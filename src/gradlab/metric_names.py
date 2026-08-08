@@ -344,7 +344,12 @@ def validate_metric_payload(
 
 
 def summary_value(value: Any) -> Any:
-    while isinstance(value, Mapping):
+    while isinstance(value, Mapping) or callable(getattr(value, "items", None)):
+        if not isinstance(value, Mapping):
+            try:
+                value = dict(value.items())
+            except (TypeError, ValueError):
+                return value
         for reducer in ("max", "last", "min"):
             if reducer in value:
                 value = value[reducer]

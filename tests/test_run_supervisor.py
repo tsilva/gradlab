@@ -765,7 +765,15 @@ class RunSupervisorTests(unittest.TestCase):
         ).validate()
 
     def test_wandb_summary_subdict_is_normalized_centrally(self) -> None:
+        class SummarySubDict:
+            def __init__(self, value: dict[str, int]) -> None:
+                self.value = value
+
+            def items(self):
+                return self.value.items()
+
         self.assertEqual(summary_value({"max": 10}), 10)
+        self.assertEqual(summary_value(SummarySubDict({"max": 10})), 10)
 
     def test_health_publication_keeps_only_the_v19_operational_surface(self) -> None:
         supervisor = self.supervisor()
@@ -1245,8 +1253,17 @@ class RunSupervisorTests(unittest.TestCase):
         self.assertEqual(stop_reason, "early_stop_neutral:return_plateau")
 
     def test_wandb_remote_probe_survives_sdk_finish(self) -> None:
+        class SummarySubDict:
+            def __init__(self, value: dict[str, int]) -> None:
+                self.value = value
+
+            def items(self):
+                return self.value.items()
+
         class RemoteRun:
-            summary = {"orchestration/event/sequence": {"max": 10}}
+            summary = {
+                "orchestration/event/sequence": SummarySubDict({"max": 10})
+            }
 
         class Api:
             def flush(self) -> None:
