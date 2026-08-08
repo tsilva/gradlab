@@ -788,18 +788,34 @@ class RunAuthority:
         )
         return key, digest
 
-    def archive_metric_journals(self, *, run_id: str) -> dict[str, Any]:
+    def archive_metric_journals(
+        self,
+        *,
+        run_id: str,
+        heartbeat: Callable[[], None] | None = None,
+    ) -> dict[str, Any]:
+        def beat() -> None:
+            if heartbeat is not None:
+                heartbeat()
+
         active_prefix = f"{self.run_prefix(run_id)}/attempts"
-        active_keys = sorted(
-            key
-            for key in self.control.iter_keys(active_prefix)
-            if "/metric-segments/" in key and key.endswith(".jsonl")
-        )
+        beat()
+        active_keys: list[str] = []
+        for key in self.control.iter_keys(active_prefix):
+            beat()
+            if "/metric-segments/" in key and key.endswith(".jsonl"):
+                active_keys.append(key)
+        active_keys.sort()
         archive_prefix = f"expiring-metric-journals/{run_id}/"
-        archived_keys = sorted(
-            key for key in self.control.iter_keys(archive_prefix) if key.endswith(".jsonl")
-        )
+        beat()
+        archived_keys: list[str] = []
+        for key in self.control.iter_keys(archive_prefix):
+            beat()
+            if key.endswith(".jsonl"):
+                archived_keys.append(key)
+        archived_keys.sort()
         for source_key in active_keys:
+            beat()
             suffix = source_key.split(f"{active_prefix}/", 1)[1]
             attempt_id, remainder = suffix.split("/", 1)
             if not remainder.startswith("metric-segments/"):
@@ -811,6 +827,7 @@ class RunAuthority:
             source_etag = str(self.control.head(source_key)["etag"])
             self.control.copy_within(source_key, destination_key)
             self.control.delete(source_key, if_match=source_etag)
+            beat()
             if destination_key not in archived_keys:
                 archived_keys.append(destination_key)
         archived_keys.sort()

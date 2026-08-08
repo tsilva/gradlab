@@ -1356,6 +1356,11 @@ class RunSupervisor:
             self.last_lease_renewal = now
             self._emit("writer_lease_renewed", holder_id=self.lease.holder_id)
 
+    def _lease_heartbeat(self) -> None:
+        self._renew_lease(self.clock.monotonic())
+        if self.lease_lost:
+            raise LeaseUnavailable("writer lease was lost during finalization")
+
     def _seal_metrics(self, now: float, *, force: bool = False) -> int:
         events = self.store.next_metric_events(limit=METRIC_SEGMENT_EVENTS)
         if not events:
@@ -2238,6 +2243,7 @@ class RunSupervisor:
             raise RuntimeError("promoted checkpoint is absent from the public inventory")
         deadline = self.clock.monotonic() + WANDB_DRAIN_TIMEOUT_SECONDS
         while True:
+            self._lease_heartbeat()
             try:
                 summary = self.runtime.remote_summary(self.wandb_run_path)
                 if promotion_summary_matches(
@@ -2263,6 +2269,7 @@ class RunSupervisor:
     def _wait_for_remote_delivery(self, local_high_water: int) -> None:
         deadline = self.clock.monotonic() + WANDB_DRAIN_TIMEOUT_SECONDS
         while True:
+            self._lease_heartbeat()
             self._probe_wandb_remote(
                 self.clock.monotonic(),
                 local_high_water=local_high_water,
@@ -2620,7 +2627,8 @@ class RunSupervisor:
         if failure is None:
             try:
                 journal_archive = self.authority.archive_metric_journals(
-                    run_id=self.manifest.run_id
+                    run_id=self.manifest.run_id,
+                    heartbeat=self._lease_heartbeat,
                 )
                 journal_expires_at = (
                     (self.clock.utc_datetime() + timedelta(days=METRIC_JOURNAL_RETENTION_DAYS))
