@@ -270,6 +270,41 @@ def test_current_episode_must_finish_before_publication(
         service.admit({"privacy": "public"}, credential_result=_credentials())
 
 
+def test_publication_render_materializes_pending_capture_on_explicit_action(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service = _service(tmp_path, monkeypatch)
+    context = service.host.active_publication_context()
+    capture = context["capture"]["latest"]
+    context["capture"] = {
+        "ready": True,
+        "render_required": True,
+        "latest": None,
+        "error": None,
+    }
+    calls: list[str] = []
+
+    def render() -> dict:
+        calls.append("render")
+        context["capture"] = {
+            "ready": True,
+            "render_required": False,
+            "latest": capture,
+            "error": None,
+        }
+        return capture
+
+    service.host = SimpleNamespace(
+        active_publication_context=lambda: context,
+        render_publication_capture=render,
+    )
+
+    result = service.render()
+
+    assert calls == ["render"]
+    assert result["capture"]["capture_id"] == capture["capture_id"]
+
+
 def test_admission_v2_is_idempotent_and_playlist_is_not_operator_input(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -15,6 +15,7 @@ from gradlab.play_web import idle_playback_snapshot
 
 
 PLAYBACK_RPC_TIMEOUT_SECONDS = 30.0
+PUBLICATION_RENDER_TIMEOUT_SECONDS = 300.0
 
 
 def _worker_main(
@@ -86,6 +87,8 @@ def _worker_main(
                 value = host.active_recipe_document()
             elif operation == "active_publication_context":
                 value = host.active_publication_context()
+            elif operation == "render_publication_capture":
+                value = host.render_publication_capture()
             elif operation == "clear_input":
                 value = host.clear_input()
             elif operation == "update_input":
@@ -315,6 +318,12 @@ class IsolatedPlaybackHost:
     def active_publication_context(self) -> Any:
         return self._rpc("active_publication_context")
 
+    def render_publication_capture(self) -> Any:
+        return self._rpc(
+            "render_publication_capture",
+            timeout_seconds=PUBLICATION_RENDER_TIMEOUT_SECONDS,
+        )
+
     def clear_input(self) -> None:
         self._rpc("clear_input")
 
@@ -351,4 +360,8 @@ class IsolatedPlaybackHost:
         return bool(self._property("has_active_runner", False))
 
 
-__all__ = ["IsolatedPlaybackHost", "PLAYBACK_RPC_TIMEOUT_SECONDS"]
+__all__ = [
+    "IsolatedPlaybackHost",
+    "PLAYBACK_RPC_TIMEOUT_SECONDS",
+    "PUBLICATION_RENDER_TIMEOUT_SECONDS",
+]

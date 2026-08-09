@@ -3,7 +3,6 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import queue
 import shutil
 import subprocess
 import threading
@@ -12,9 +11,8 @@ from collections.abc import Mapping
 from copy import deepcopy
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, BinaryIO
 
-import cv2
 import numpy as np
 
 from gradlab.file_utils import atomic_write_json, file_sha256, fsync_path
@@ -27,7 +25,6 @@ from gradlab.publication import verify_replay
 CAPTURE_DOCUMENT_TYPE = "gradlab.player_episode_capture"
 CAPTURE_FORMAT_VERSION = 1
 CAPTURE_FPS = 30
-CAPTURE_QUEUE_LIMIT = 256
 CAPTURE_MAX_COUNT = 32
 CAPTURE_MAX_TOTAL_BYTES = 10 * 1024**3
 CAPTURE_MAX_FILE_BYTES = 2 * 1024**3
@@ -135,10 +132,8 @@ def capture_output_size(height: int, width: int) -> tuple[int, int, str]:
     return output_width, output_height, interpolation
 
 
-class StreamingReplayWriter:
-    """Bounded, lossless raw-frame pipe into one browser-safe MP4."""
-
-    _SENTINEL = object()
+class EpisodeFrameSpool:
+    """Bounded raw-frame spool that does not render a movie during playback."""
 
     def __init__(
         self,
@@ -146,7 +141,6 @@ class StreamingReplayWriter:
         first_frame: object,
         *,
         fps: int = CAPTURE_FPS,
-        queue_limit: int = CAPTURE_QUEUE_LIMIT,
         max_bytes: int = CAPTURE_MAX_FILE_BYTES,
     ) -> None:
         self.output = Path(output)
@@ -157,146 +151,145 @@ class StreamingReplayWriter:
         self.width, self.height, self.interpolation = capture_output_size(
             self.input_shape[0], self.input_shape[1]
         )
-        self._queue: queue.Queue[object] = queue.Queue(max(1, int(queue_limit)))
-        self._thread = threading.Thread(
-            target=self._run,
-            name="gradlab-player-replay-encoder",
-            daemon=True,
-        )
-        self._error: BaseException | None = None
         self._closed = False
+        self._stream: BinaryIO | None = None
         self.frames = 0
+        self.size_bytes = 0
         self.output.parent.mkdir(parents=True, exist_ok=True)
-        self._thread.start()
-        self.write(frame)
-
-    def _scaled(self, frame: np.ndarray) -> np.ndarray:
-        if frame.shape != self.input_shape:
-            raise ValueError(
-                f"capture frame shape changed: expected {self.input_shape}, got {frame.shape}"
-            )
-        if (frame.shape[1], frame.shape[0]) == (self.width, self.height):
-            return frame
-        interpolation = cv2.INTER_NEAREST if self.interpolation == "nearest" else cv2.INTER_AREA
-        return np.ascontiguousarray(
-            cv2.resize(frame, (self.width, self.height), interpolation=interpolation)
-        )
-
-    def _raise_error(self) -> None:
-        if self._error is not None:
-            raise RuntimeError(f"replay encoder failed: {self._error}") from self._error
+        try:
+            self._stream = self.output.open("xb")
+            self.write(frame)
+        except BaseException:
+            if self._stream is not None:
+                self._stream.close()
+            self.output.unlink(missing_ok=True)
+            raise
 
     def write(self, frame: object) -> None:
-        if self._closed:
-            raise RuntimeError("replay encoder is closed")
-        self._raise_error()
-        converted = self._scaled(_rgb_frame(frame)).copy()
-        while True:
-            self._raise_error()
-            try:
-                self._queue.put(converted, timeout=0.25)
-                self.frames += 1
-                return
-            except queue.Full:
-                continue
-
-    def _run(self) -> None:
-        process: subprocess.Popen[bytes] | None = None
-        try:
-            ffmpeg = shutil.which("ffmpeg")
-            if ffmpeg is None:
-                raise RuntimeError("ffmpeg is required to capture player episodes")
-            command = [
-                ffmpeg,
-                "-hide_banner",
-                "-loglevel",
-                "error",
-                "-y",
-                "-f",
-                "rawvideo",
-                "-pix_fmt",
-                "rgb24",
-                "-s",
-                f"{self.width}x{self.height}",
-                "-r",
-                str(self.fps),
-                "-i",
-                "pipe:0",
-                "-an",
-                "-c:v",
-                "libx264",
-                "-profile:v",
-                "high",
-                "-level",
-                "4.0",
-                "-pix_fmt",
-                "yuv420p",
-                "-movflags",
-                "+faststart",
-                str(self.output),
-            ]
-            process = subprocess.Popen(command, stdin=subprocess.PIPE, stderr=subprocess.PIPE)
-            assert process.stdin is not None
-            while True:
-                item = self._queue.get()
-                if item is self._SENTINEL:
-                    break
-                process.stdin.write(np.asarray(item).tobytes())
-            process.stdin.close()
-            stderr = process.stderr.read() if process.stderr is not None else b""
-            return_code = process.wait()
-            if return_code:
-                message = stderr.decode("utf-8", errors="replace").strip()
-                raise RuntimeError(f"ffmpeg exited with {return_code}: {message[-1000:]}")
-            size = self.output.stat().st_size
-            if size < 1:
-                raise RuntimeError("replay encoder produced an empty file")
-            if size > self.max_bytes:
-                raise RuntimeError(
-                    f"replay exceeds capture limit: {size} > {self.max_bytes} bytes"
-                )
-        except BaseException as exc:
-            self._error = exc
-            if process is not None and process.poll() is None:
-                process.kill()
-                process.wait()
+        if self._closed or self._stream is None:
+            raise RuntimeError("episode frame spool is closed")
+        converted = _rgb_frame(frame)
+        if converted.shape != self.input_shape:
+            raise ValueError(
+                f"capture frame shape changed: expected {self.input_shape}, got {converted.shape}"
+            )
+        payload = converted.tobytes()
+        projected_size = self.size_bytes + len(payload)
+        if projected_size > self.max_bytes:
+            raise RuntimeError(
+                f"raw episode capture exceeds limit: {projected_size} > {self.max_bytes} bytes"
+            )
+        self._stream.write(payload)
+        self.frames += 1
+        self.size_bytes = projected_size
 
     def close(self) -> dict[str, Any]:
         if self._closed:
-            raise RuntimeError("replay encoder is already closed")
+            raise RuntimeError("episode frame spool is already closed")
         self._closed = True
-        while self._thread.is_alive():
-            self._raise_error()
-            try:
-                self._queue.put(self._SENTINEL, timeout=0.25)
-                break
-            except queue.Full:
-                continue
-        self._thread.join(timeout=60.0)
-        if self._thread.is_alive():
-            raise RuntimeError("replay encoder did not finish within 60 seconds")
-        self._raise_error()
+        assert self._stream is not None
+        self._stream.flush()
+        os.fsync(self._stream.fileno())
+        self._stream.close()
+        self._stream = None
         return {
             "frames": self.frames,
             "fps": self.fps,
             "width": self.width,
             "height": self.height,
-            "size_bytes": self.output.stat().st_size,
+            "input_width": self.input_shape[1],
+            "input_height": self.input_shape[0],
+            "interpolation": self.interpolation,
+            "raw_size_bytes": self.size_bytes,
         }
 
     def abort(self) -> None:
         self._closed = True
-        while True:
-            try:
-                self._queue.get_nowait()
-            except queue.Empty:
-                break
-        try:
-            self._queue.put_nowait(self._SENTINEL)
-        except queue.Full:
-            pass
-        self._thread.join(timeout=5.0)
+        if self._stream is not None:
+            self._stream.close()
+            self._stream = None
         self.output.unlink(missing_ok=True)
+
+
+def render_spooled_replay(
+    source: Path,
+    output: Path,
+    spool: Mapping[str, Any],
+    *,
+    max_bytes: int = CAPTURE_MAX_FILE_BYTES,
+) -> dict[str, Any]:
+    """Synchronously render a completed raw frame spool as browser-safe MP4."""
+
+    ffmpeg = shutil.which("ffmpeg")
+    if ffmpeg is None:
+        raise RuntimeError("ffmpeg is required to render publication movies")
+    input_width = int(spool["input_width"])
+    input_height = int(spool["input_height"])
+    width = int(spool["width"])
+    height = int(spool["height"])
+    frames = int(spool["frames"])
+    fps = int(spool["fps"])
+    expected_raw_size = input_width * input_height * 3 * frames
+    if source.is_symlink() or not source.is_file() or source.stat().st_size != expected_raw_size:
+        raise ValueError("completed episode frame spool is unavailable or changed")
+    output.parent.mkdir(parents=True, exist_ok=True)
+    command = [
+        ffmpeg,
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-y",
+        "-f",
+        "rawvideo",
+        "-pix_fmt",
+        "rgb24",
+        "-s",
+        f"{input_width}x{input_height}",
+        "-r",
+        str(fps),
+        "-i",
+        str(source),
+        "-frames:v",
+        str(frames),
+    ]
+    if (input_width, input_height) != (width, height):
+        interpolation = "neighbor" if spool.get("interpolation") == "nearest" else "area"
+        command.extend(["-vf", f"scale={width}:{height}:flags={interpolation}"])
+    command.extend(
+        [
+            "-an",
+            "-c:v",
+            "libx264",
+            "-profile:v",
+            "high",
+            "-level",
+            "4.0",
+            "-pix_fmt",
+            "yuv420p",
+            "-movflags",
+            "+faststart",
+            str(output),
+        ]
+    )
+    completed = subprocess.run(command, capture_output=True, check=False)
+    if completed.returncode:
+        output.unlink(missing_ok=True)
+        message = completed.stderr.decode("utf-8", errors="replace").strip()
+        raise RuntimeError(f"ffmpeg exited with {completed.returncode}: {message[-1000:]}")
+    size = output.stat().st_size
+    if size < 1:
+        output.unlink(missing_ok=True)
+        raise RuntimeError("publication movie render produced an empty file")
+    if size > int(max_bytes):
+        output.unlink(missing_ok=True)
+        raise RuntimeError(f"replay exceeds capture limit: {size} > {max_bytes} bytes")
+    return {
+        "frames": frames,
+        "fps": fps,
+        "width": width,
+        "height": height,
+        "size_bytes": size,
+    }
 
 
 def validate_capture_document(document: Mapping[str, Any]) -> dict[str, Any]:
@@ -483,14 +476,16 @@ class EpisodeCaptureManager:
     ) -> None:
         self.context = deepcopy(dict(context)) if isinstance(context, Mapping) else None
         self.store = store or EpisodeCaptureStore()
-        self.writer: StreamingReplayWriter | None = None
-        self.temporary_replay: Path | None = None
+        self.writer: EpisodeFrameSpool | None = None
+        self.temporary_frames: Path | None = None
         self.episode: int | None = None
         self.seed: int | None = None
         self.start_id: str | None = None
         self.sampling_mode: str | None = None
         self.error: str | None = None
+        self._lock = threading.RLock()
         self._episode_in_progress = False
+        self._pending: dict[str, Any] | None = None
         self._last: dict[str, Any] | None = (
             self.store.latest_for(self.context["checkpoint_identity"])
             if self.context is not None and self.context.get("checkpoint_identity")
@@ -515,147 +510,207 @@ class EpisodeCaptureManager:
         seed: int,
         sampling_mode: str,
     ) -> None:
-        self.abort(None)
-        self.error = None
-        self._episode_in_progress = self.enabled
-        if not self.enabled or frame is None:
-            return
-        temporary_root = self.store.root / ".encoding"
-        temporary_root.mkdir(parents=True, exist_ok=True, mode=0o700)
-        path = temporary_root / f"{uuid.uuid4().hex}.mp4"
-        try:
-            self.writer = StreamingReplayWriter(path, frame)
-        except Exception as exc:
-            self.error = str(exc)
-            path.unlink(missing_ok=True)
-            return
-        self.temporary_replay = path
-        self.episode = int(episode)
-        self.seed = int(seed)
-        self.sampling_mode = str(sampling_mode)
-        self.start_id = None
+        with self._lock:
+            self._abort(None)
+            self.error = None
+            self._episode_in_progress = self.enabled
+            if not self.enabled or frame is None:
+                return
+            temporary_root = self.store.root / ".recording"
+            temporary_root.mkdir(parents=True, exist_ok=True, mode=0o700)
+            path = temporary_root / f"{uuid.uuid4().hex}.rgb"
+            try:
+                self.writer = EpisodeFrameSpool(path, frame)
+            except Exception as exc:
+                self.error = str(exc)
+                path.unlink(missing_ok=True)
+                return
+            self.temporary_frames = path
+            self.episode = int(episode)
+            self.seed = int(seed)
+            self.sampling_mode = str(sampling_mode)
+            self.start_id = None
 
     def record_transition(self, transition: Any) -> dict[str, Any] | None:
-        writer = self.writer
-        if writer is None:
-            return None
-        if str(getattr(transition, "action_source", "")) != "policy":
-            self.abort("human or recorded actions are not publishable")
-            return None
-        frame = getattr(transition, "after_frame", None)
-        if frame is None:
-            self.abort("transition has no display frame")
-            return None
-        try:
-            writer.write(frame)
-        except Exception as exc:
-            self.abort(str(exc))
-            return None
-        start_id = getattr(transition, "start_id", None)
-        if start_id is not None:
-            self.start_id = str(start_id)
-        if not bool(getattr(transition, "boundary", False)):
-            return None
-        if getattr(transition, "after_frame_role", None) != "terminal_observation":
-            self.abort("episode boundary did not expose a terminal observation")
-            return None
-        try:
-            encoding = writer.close()
-            self.writer = None
-            assert self.temporary_replay is not None
-            probe = verify_replay(self.temporary_replay)
-            expected_frames = int(getattr(transition, "step")) + 1
-            if int(probe["frames"]) != expected_frames or encoding["frames"] != expected_frames:
-                raise ValueError(
-                    f"capture frame count mismatch: expected {expected_frames}, "
-                    f"encoded {probe['frames']}"
+        with self._lock:
+            writer = self.writer
+            if writer is None:
+                return None
+            if str(getattr(transition, "action_source", "")) != "policy":
+                self._abort("human or recorded actions are not publishable")
+                return None
+            frame = getattr(transition, "after_frame", None)
+            if frame is None:
+                self._abort("transition has no display frame")
+                return None
+            try:
+                writer.write(frame)
+            except Exception as exc:
+                self._abort(str(exc))
+                return None
+            start_id = getattr(transition, "start_id", None)
+            if start_id is not None:
+                self.start_id = str(start_id)
+            if not bool(getattr(transition, "boundary", False)):
+                return None
+            if getattr(transition, "after_frame_role", None) != "terminal_observation":
+                self._abort("episode boundary did not expose a terminal observation")
+                return None
+            try:
+                spool = writer.close()
+                self.writer = None
+                assert self.temporary_frames is not None
+                expected_frames = int(getattr(transition, "step")) + 1
+                if spool["frames"] != expected_frames:
+                    raise ValueError(
+                        f"capture frame count mismatch: expected {expected_frames}, "
+                        f"spooled {spool['frames']}"
+                    )
+                execution = deepcopy(dict(self.context.get("execution") or {}))
+                document = {
+                    "document_type": CAPTURE_DOCUMENT_TYPE,
+                    "format_version": CAPTURE_FORMAT_VERSION,
+                    "created_at": _utc_now(),
+                    "checkpoint_identity": str(self.context["checkpoint_identity"]),
+                    "source": deepcopy(dict(self.context.get("source") or {})),
+                    "run_id": str(self.context.get("run_id") or ""),
+                    "checkpoint_id": str(self.context.get("checkpoint_id") or ""),
+                    "checkpoint_sha256": str(self.context.get("checkpoint_sha256") or ""),
+                    "recipe_sha256": str(self.context.get("recipe_sha256") or ""),
+                    "goal": deepcopy(self.context.get("goal")),
+                    "contract": deepcopy(dict(self.context.get("contract") or {})),
+                    "execution": execution,
+                    "episode": int(self.episode or getattr(transition, "episode", 0)),
+                    "seed": int(
+                        self.seed if self.seed is not None else getattr(transition, "seed")
+                    ),
+                    "start_id": self.start_id,
+                    "sampling_mode": self.sampling_mode,
+                    "steps": int(getattr(transition, "step")),
+                    "return": float(getattr(transition, "total_reward")),
+                    "max_x_pos": int(getattr(transition, "max_x_pos")),
+                    "terminated": bool(getattr(transition, "terminated")),
+                    "truncated": bool(getattr(transition, "truncated")),
+                    "success": bool(getattr(transition, "completed")),
+                    "outcome": (
+                        "success"
+                        if bool(getattr(transition, "completed"))
+                        else "truncated"
+                        if bool(getattr(transition, "truncated"))
+                        else "terminated"
+                    ),
+                    "boundary_role": "terminal_observation",
+                }
+                self._pending = {
+                    "document": document,
+                    "frames_path": self.temporary_frames,
+                    "spool": spool,
+                }
+                self._episode_in_progress = False
+                self.temporary_frames = None
+                return deepcopy(document)
+            except Exception as exc:
+                self._abort(str(exc))
+                return None
+
+    def render(self) -> dict[str, Any]:
+        """Render the completed episode only after an explicit publication action."""
+
+        with self._lock:
+            if self._pending is None:
+                if (
+                    self.enabled
+                    and not self._episode_in_progress
+                    and self.writer is None
+                    and self._last is not None
+                ):
+                    return deepcopy(self._last)
+                raise ValueError(self.error or "complete an episode before publishing")
+            pending = self._pending
+            frames_path = Path(pending["frames_path"])
+            temporary_root = self.store.root / ".rendering"
+            temporary_root.mkdir(parents=True, exist_ok=True, mode=0o700)
+            temporary_replay = temporary_root / f"{uuid.uuid4().hex}.mp4"
+            try:
+                encoding = render_spooled_replay(
+                    frames_path,
+                    temporary_replay,
+                    pending["spool"],
                 )
-            replay = {
-                **encoding,
-                **probe,
-                "sha256": file_sha256(self.temporary_replay),
-                "size_bytes": self.temporary_replay.stat().st_size,
-            }
-            execution = deepcopy(dict(self.context.get("execution") or {}))
-            document = {
-                "document_type": CAPTURE_DOCUMENT_TYPE,
-                "format_version": CAPTURE_FORMAT_VERSION,
-                "created_at": _utc_now(),
-                "checkpoint_identity": str(self.context["checkpoint_identity"]),
-                "source": deepcopy(dict(self.context.get("source") or {})),
-                "run_id": str(self.context.get("run_id") or ""),
-                "checkpoint_id": str(self.context.get("checkpoint_id") or ""),
-                "checkpoint_sha256": str(self.context.get("checkpoint_sha256") or ""),
-                "recipe_sha256": str(self.context.get("recipe_sha256") or ""),
-                "goal": deepcopy(self.context.get("goal")),
-                "contract": deepcopy(dict(self.context.get("contract") or {})),
-                "execution": execution,
-                "episode": int(self.episode or getattr(transition, "episode", 0)),
-                "seed": int(self.seed if self.seed is not None else getattr(transition, "seed")),
-                "start_id": self.start_id,
-                "sampling_mode": self.sampling_mode,
-                "steps": int(getattr(transition, "step")),
-                "return": float(getattr(transition, "total_reward")),
-                "max_x_pos": int(getattr(transition, "max_x_pos")),
-                "terminated": bool(getattr(transition, "terminated")),
-                "truncated": bool(getattr(transition, "truncated")),
-                "success": bool(getattr(transition, "completed")),
-                "outcome": (
-                    "success"
-                    if bool(getattr(transition, "completed"))
-                    else "truncated"
-                    if bool(getattr(transition, "truncated"))
-                    else "terminated"
-                ),
-                "boundary_role": "terminal_observation",
-                "replay": json_safe(replay),
-            }
-            result = self.store.commit(
-                checkpoint_identity=self.context["checkpoint_identity"],
-                temporary_replay=self.temporary_replay,
-                document_without_identity=document,
-            )
-            self._last = result
-            self._episode_in_progress = False
-            self.temporary_replay = None
-            return result
-        except Exception as exc:
-            self.abort(str(exc))
-            return None
+                probe = verify_replay(temporary_replay)
+                if int(probe["frames"]) != int(encoding["frames"]):
+                    raise ValueError(
+                        f"capture frame count mismatch: expected {encoding['frames']}, "
+                        f"encoded {probe['frames']}"
+                    )
+                replay = {
+                    **encoding,
+                    **probe,
+                    "sha256": file_sha256(temporary_replay),
+                    "size_bytes": temporary_replay.stat().st_size,
+                }
+                document = {
+                    **deepcopy(dict(pending["document"])),
+                    "replay": json_safe(replay),
+                }
+                result = self.store.commit(
+                    checkpoint_identity=self.context["checkpoint_identity"],
+                    temporary_replay=temporary_replay,
+                    document_without_identity=document,
+                )
+                frames_path.unlink(missing_ok=True)
+                self._pending = None
+                self._last = result
+                self.error = None
+                return deepcopy(result)
+            except Exception as exc:
+                temporary_replay.unlink(missing_ok=True)
+                self.error = str(exc)
+                raise
 
     def abort(self, reason: str | None) -> None:
+        with self._lock:
+            self._abort(reason)
+
+    def _abort(self, reason: str | None) -> None:
         writer, self.writer = self.writer, None
         if writer is not None:
             writer.abort()
-        if self.temporary_replay is not None:
-            self.temporary_replay.unlink(missing_ok=True)
-            self.temporary_replay = None
+        if self.temporary_frames is not None:
+            self.temporary_frames.unlink(missing_ok=True)
+            self.temporary_frames = None
+        if self._pending is not None:
+            Path(self._pending["frames_path"]).unlink(missing_ok=True)
+            self._pending = None
         if reason:
             self.error = str(reason)
             self._episode_in_progress = self.enabled
 
     def status(self) -> dict[str, Any]:
-        return {
-            "enabled": self.enabled,
-            "recording": self.writer is not None,
-            "episode_in_progress": self._episode_in_progress,
-            "ready": bool(
-                self.enabled
-                and not self._episode_in_progress
-                and self.writer is None
-                and self._last is not None
-            ),
-            "error": self.error,
-            "latest": deepcopy(self._last),
-        }
+        with self._lock:
+            return {
+                "enabled": self.enabled,
+                "recording": self.writer is not None,
+                "episode_in_progress": self._episode_in_progress,
+                "ready": bool(
+                    self.enabled
+                    and not self._episode_in_progress
+                    and self.writer is None
+                    and (self._pending is not None or self._last is not None)
+                ),
+                "render_required": self._pending is not None,
+                "error": self.error,
+                "latest": deepcopy(self._last),
+            }
 
 
 __all__ = [
     "CAPTURE_DOCUMENT_TYPE",
     "CAPTURE_FORMAT_VERSION",
+    "EpisodeFrameSpool",
     "EpisodeCaptureManager",
     "EpisodeCaptureStore",
-    "StreamingReplayWriter",
     "capture_output_size",
+    "render_spooled_replay",
     "validate_capture_document",
 ]

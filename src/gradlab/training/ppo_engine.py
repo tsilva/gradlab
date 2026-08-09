@@ -13,11 +13,11 @@ from gymnasium import spaces
 from stable_baselines3.common.preprocessing import get_action_dim
 from stable_baselines3.common.utils import get_schedule_fn
 
+from gradlab.action_codecs import LegalTupleMultiDiscrete
 from gradlab.batch_runtime import BatchMetricRecord, CurriculumStepAttribution
 from gradlab.callbacks import (
     ARCHIVE_CURRICULUM_METRIC_MAP,
     RewardStatsAccumulator,
-    policy_discrete_action_indices,
 )
 from gradlab.metric_names import (
     TRAIN_PPO_APPROX_KL,
@@ -80,7 +80,13 @@ def _copy_observation_slot(destination: Any, observations: Any, step: int) -> No
         for key in destination:
             _copy_observation_slot(destination[key], observations[key], step)
         return
-    destination[step].copy_(torch.as_tensor(observations, device=destination.device))
+    destination[step].copy_(torch.as_tensor(observations))
+
+
+def _observation_slot(observations: Any, step: int) -> Any:
+    if isinstance(observations, Mapping):
+        return {key: _observation_slot(value, step) for key, value in observations.items()}
+    return observations[step]
 
 
 def _observation_tensor(observations: Any, device: torch.device) -> Any:
@@ -142,6 +148,7 @@ class TensorRolloutBuffer:
     final_observations: Any | None = None
     truncated: torch.Tensor | None = None
     position: int = 0
+    _step_open: bool = False
 
     @classmethod
     def allocate(
@@ -199,23 +206,39 @@ class TensorRolloutBuffer:
     def size(self) -> int:
         return self.n_steps * self.n_envs
 
-    def add(
+    def reset(self) -> None:
+        if self._step_open:
+            raise RuntimeError("cannot reset a rollout buffer with an open step")
+        self.position = 0
+
+    def begin_step(
         self,
         observations: Any,
-        actions: torch.Tensor,
-        rewards: torch.Tensor,
         episode_starts: torch.Tensor,
-        values: torch.Tensor,
-        log_probs: torch.Tensor,
-        final_observations: Any | None = None,
-        truncated: torch.Tensor | None = None,
-    ) -> None:
+    ) -> Any:
+        if self._step_open:
+            raise RuntimeError("rollout buffer step is already open")
         if self.position >= self.n_steps:
             raise RuntimeError("rollout buffer overflow")
         _copy_observation_slot(self.observations, observations, self.position)
-        self.actions[self.position].copy_(actions.reshape_as(self.actions[self.position]))
-        self.rewards[self.position].copy_(rewards)
         self.episode_starts[self.position].copy_(episode_starts)
+        self._step_open = True
+        return _observation_slot(self.observations, self.position)
+
+    def end_step(
+        self,
+        actions: torch.Tensor,
+        rewards: Any,
+        values: torch.Tensor,
+        log_probs: torch.Tensor,
+        final_observations: Any | None = None,
+        truncated: Any | None = None,
+    ) -> torch.Tensor:
+        if not self._step_open:
+            raise RuntimeError("rollout buffer step is not open")
+        self.actions[self.position].copy_(actions.reshape_as(self.actions[self.position]))
+        reward_slot = self.rewards[self.position]
+        reward_slot.copy_(torch.as_tensor(rewards))
         self.values[self.position].copy_(values.flatten().float())
         self.log_probs[self.position].copy_(log_probs.flatten().float())
         if self.final_observations is not None:
@@ -224,6 +247,8 @@ class TensorRolloutBuffer:
             _copy_observation_slot(self.final_observations, final_observations, self.position)
             self.truncated[self.position].copy_(truncated)
         self.position += 1
+        self._step_open = False
+        return reward_slot
 
     def finish(
         self,
@@ -668,44 +693,104 @@ def _normalize_grouped_advantages(
         torch.uint8,
     }:
         raise ValueError(f"grouped context {context!r} must contain integer category indices")
+    if task_ids.dtype != torch.uint8 and bool(torch.any(task_ids < 0)):
+        raise ValueError(f"grouped context {context!r} contains a negative category index")
     for task_id in torch.unique(task_ids):
-        if int(task_id.item()) < 0:
-            raise ValueError(f"grouped context {context!r} contains a negative category index")
         mask = task_ids == task_id
         values = buffer.advantages[mask]
         if values.numel() > 1:
             buffer.advantages[mask] = (values - values.mean()) / (values.std(correction=0) + 1e-8)
 
 
+def _finite_mean_std(values: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    values = values.float()
+    finite = torch.isfinite(values)
+    count = finite.sum().float()
+    safe_count = count.clamp_min(1.0)
+    finite_values = torch.where(finite, values, torch.zeros_like(values))
+    mean = finite_values.sum() / safe_count
+    centered = torch.where(finite, values - mean, torch.zeros_like(values))
+    std = torch.sqrt(centered.square().sum() / safe_count)
+    nan = torch.full((), float("nan"), dtype=torch.float32, device=values.device)
+    return torch.where(count > 0, mean, nan), torch.where(count > 0, std, nan)
+
+
+def _dominant_action_rate(
+    actions: torch.Tensor,
+    action_space: spaces.Space,
+) -> torch.Tensor | None:
+    if isinstance(action_space, LegalTupleMultiDiscrete):
+        axis_count = int(np.asarray(action_space.nvec).size)
+        flattened = actions.reshape(-1, axis_count).long()
+        nvec = tuple(int(value) for value in np.asarray(action_space.nvec).reshape(-1))
+        encoded = flattened[:, 0].clone()
+        multiplier = nvec[0]
+        for axis in range(1, axis_count):
+            encoded.add_(flattened[:, axis], alpha=multiplier)
+            multiplier *= nvec[axis]
+        counts = torch.bincount(encoded, minlength=multiplier)
+        return counts.max().float() / max(int(flattened.shape[0]), 1)
+    if not isinstance(action_space, spaces.Discrete):
+        return None
+    flattened = actions.reshape(-1).long()
+    counts = torch.bincount(flattened, minlength=int(action_space.n))
+    return counts.max().float() / max(int(flattened.numel()), 1)
+
+
 def _rollout_diagnostics(
     buffer: TensorRolloutBuffer, action_space: spaces.Space
-) -> dict[str, float]:
-    payload: dict[str, float] = {}
+) -> tuple[dict[str, torch.Tensor], frozenset[str]]:
+    payload: dict[str, torch.Tensor] = {}
+    omit_if_nonfinite: set[str] = set()
     for suffix, values in (
         ("rollout/value/prediction", buffer.values),
         ("rollout/advantage", buffer.advantages),
     ):
-        finite = values[torch.isfinite(values)].float()
-        if finite.numel() == 0:
-            continue
         prefix = train_algorithm_metric("ppo", suffix)
+        mean_name = stat_metric(prefix, "mean")
+        std_name = stat_metric(prefix, "std")
+        mean, std = _finite_mean_std(values)
         payload.update(
             {
-                stat_metric(prefix, "mean"): float(finite.mean().item()),
-                stat_metric(prefix, "std"): float(finite.std(correction=0).item()),
+                mean_name: mean,
+                std_name: std,
             }
         )
-    discrete_actions = policy_discrete_action_indices(
-        buffer.actions.detach().cpu().numpy(),
-        action_space,
-    )
-    if discrete_actions.size:
-        counts = np.bincount(discrete_actions)
-        if counts.size:
-            payload[train_algorithm_metric("ppo", "policy/dominant/action/rate")] = float(
-                counts.max() / discrete_actions.size
-            )
+        omit_if_nonfinite.update((mean_name, std_name))
+    dominant_action_rate = _dominant_action_rate(buffer.actions.detach(), action_space)
+    if dominant_action_rate is not None:
+        payload[train_algorithm_metric("ppo", "policy/dominant/action/rate")] = dominant_action_rate
+    return payload, frozenset(omit_if_nonfinite)
+
+
+def _materialize_metrics(
+    values: Mapping[str, float | torch.Tensor],
+    *,
+    omit_if_nonfinite: frozenset[str] = frozenset(),
+) -> dict[str, float]:
+    payload = {
+        name: float(value) for name, value in values.items() if not isinstance(value, torch.Tensor)
+    }
+    tensor_items = [
+        (name, value.detach().float().reshape(()))
+        for name, value in values.items()
+        if isinstance(value, torch.Tensor)
+    ]
+    if tensor_items:
+        host_values = torch.stack([value for _name, value in tensor_items]).cpu().tolist()
+        for (name, _value), host_value in zip(tensor_items, host_values, strict=True):
+            materialized = float(host_value)
+            if name in omit_if_nonfinite and not math.isfinite(materialized):
+                continue
+            payload[name] = materialized
+    validate_metric_payload(payload)
     return payload
+
+
+def _target_kl_exceeded(approx_kl: torch.Tensor, target_kl: float | None) -> bool:
+    if target_kl is None:
+        return False
+    return float(approx_kl.detach().float().item()) > 1.5 * float(target_kl)
 
 
 def _ppo_update(
@@ -719,6 +804,8 @@ def _ppo_update(
     advantage_context: str | None,
     ent_coef: float,
     torch_permutation: bool = True,
+    extra_metric_tensors: Mapping[str, torch.Tensor] | None = None,
+    omit_if_nonfinite: frozenset[str] = frozenset(),
 ) -> dict[str, float]:
     model.policy.set_training_mode(True)
     learning_rate = float(model.lr_schedule(progress_remaining))
@@ -742,16 +829,16 @@ def _ppo_update(
     flat_log_probs = _flatten_rollout_tensor(buffer.log_probs, env_major=env_major).flatten()
     flat_advantages = _flatten_rollout_tensor(buffer.advantages, env_major=env_major).flatten()
     flat_returns = _flatten_rollout_tensor(buffer.returns, env_major=env_major).flatten()
-    policy_losses: list[float] = []
-    value_losses: list[float] = []
-    entropy_losses: list[float] = []
-    clip_fractions: list[float] = []
-    last_epoch_kls: list[float] = []
+    metric_sums = torch.zeros(4, dtype=torch.float32, device=buffer.rewards.device)
+    metric_count = 0
+    last_epoch_kl_sum = torch.zeros((), dtype=torch.float32, device=buffer.rewards.device)
+    last_epoch_kl_count = 0
     continue_training = True
     final_loss = torch.zeros((), device=buffer.rewards.device)
 
     for _epoch in range(int(model.n_epochs)):
-        last_epoch_kls = []
+        last_epoch_kl_sum.zero_()
+        last_epoch_kl_count = 0
         if torch_permutation:
             indices = torch.randperm(buffer.size, device=buffer.rewards.device)
         else:
@@ -798,15 +885,24 @@ def _ppo_update(
             with torch.no_grad():
                 log_ratio = log_prob - old_log_probs
                 approx_kl = ((torch.exp(log_ratio) - 1.0) - log_ratio).mean()
-                kl_value = float(approx_kl.float().item())
-                last_epoch_kls.append(kl_value)
-                clip_fractions.append(
-                    float(((ratio - 1.0).abs() > clip_range).float().mean().item())
+                clip_fraction = ((ratio - 1.0).abs() > clip_range).float().mean()
+                last_epoch_kl_sum.add_(approx_kl.detach().float())
+                last_epoch_kl_count += 1
+                metric_sums.add_(
+                    torch.stack(
+                        (
+                            policy_loss.detach().float(),
+                            value_loss.detach().float(),
+                            entropy_loss.detach().float(),
+                            clip_fraction,
+                        )
+                    )
                 )
-            policy_losses.append(float(policy_loss.float().item()))
-            value_losses.append(float(value_loss.float().item()))
-            entropy_losses.append(float(entropy_loss.float().item()))
-            if model.target_kl is not None and kl_value > 1.5 * float(model.target_kl):
+                metric_count += 1
+            if model.target_kl is not None and _target_kl_exceeded(
+                approx_kl,
+                model.target_kl,
+            ):
                 continue_training = False
                 break
 
@@ -826,31 +922,35 @@ def _ppo_update(
             break
 
     returns_variance = torch.var(flat_returns, correction=0)
-    explained_variance = (
-        float("nan")
-        if float(returns_variance.item()) == 0.0
-        else float(
-            (1.0 - torch.var(flat_returns - flat_values, correction=0) / returns_variance).item()
-        )
+    explained_variance = torch.where(
+        returns_variance == 0.0,
+        torch.full_like(returns_variance, float("nan")),
+        1.0 - torch.var(flat_returns - flat_values, correction=0) / returns_variance,
     )
-    payload: dict[str, float] = {
-        TRAIN_PPO_APPROX_KL: float(np.mean(last_epoch_kls)) if last_epoch_kls else 0.0,
-        TRAIN_PPO_CLIP_FRACTION: float(np.mean(clip_fractions)) if clip_fractions else 0.0,
-        TRAIN_PPO_VALUE_LOSS: float(np.mean(value_losses)) if value_losses else 0.0,
-        TRAIN_PPO_LEARNING_RATE: learning_rate,
-        TRAIN_PPO_POLICY_ENTROPY: -float(np.mean(entropy_losses)) if entropy_losses else 0.0,
-        train_algorithm_metric("ppo", "update/policy_gradient_loss"): (
-            float(np.mean(policy_losses)) if policy_losses else 0.0
-        ),
-    }
-    if math.isfinite(explained_variance):
-        payload[TRAIN_PPO_EXPLAINED_VARIANCE] = explained_variance
+    denominator = max(metric_count, 1)
+    metric_means = metric_sums / denominator
+    payload: dict[str, float | torch.Tensor] = dict(extra_metric_tensors or {})
+    payload.update(
+        {
+            TRAIN_PPO_APPROX_KL: last_epoch_kl_sum / max(last_epoch_kl_count, 1),
+            TRAIN_PPO_CLIP_FRACTION: metric_means[3],
+            TRAIN_PPO_VALUE_LOSS: metric_means[1],
+            TRAIN_PPO_LEARNING_RATE: learning_rate,
+            TRAIN_PPO_POLICY_ENTROPY: -metric_means[2],
+            train_algorithm_metric("ppo", "update/policy_gradient_loss"): metric_means[0],
+            TRAIN_PPO_EXPLAINED_VARIANCE: explained_variance,
+        }
+    )
+    optional_metrics = set(omit_if_nonfinite)
+    optional_metrics.add(TRAIN_PPO_EXPLAINED_VARIANCE)
     if hasattr(model.policy, "log_std"):
-        payload[train_algorithm_metric("ppo", "policy/distribution/std")] = float(
-            torch.exp(model.policy.log_std).mean().detach().item()
+        payload[train_algorithm_metric("ppo", "policy/distribution/std")] = (
+            torch.exp(model.policy.log_std).mean().detach()
         )
-    validate_metric_payload(payload)
-    return payload
+    return _materialize_metrics(
+        payload,
+        omit_if_nonfinite=frozenset(optional_metrics),
+    )
 
 
 def _environment_actions(
@@ -1035,12 +1135,12 @@ def run_gradlab_ppo(
             if context.stop_flag.requested:
                 graceful_stop.acknowledge_safe_boundary(num_timesteps=int(model.num_timesteps))
                 break
-            buffer.position = 0
+            buffer.reset()
             curriculum.begin()
             model.policy.set_training_mode(False)
             throughput.begin(int(model.num_timesteps))
             for _step in range(int(backend_config["n_steps"])):
-                obs_tensor = _observation_tensor(observations, device)
+                obs_tensor = buffer.begin_step(observations, episode_starts)
                 with torch.no_grad(), precision.autocast():
                     actions, values, log_probs = calls.forward(obs_tensor)
                 environment_actions = (
@@ -1053,14 +1153,9 @@ def run_gradlab_ppo(
                     )
                 )
                 batch_step = runtime.step(environment_actions)
-                if device_resident:
-                    reward_tensor = batch_step.rewards.clone()
-                else:
-                    reward_tensor = torch.as_tensor(
-                        batch_step.rewards,
-                        device=device,
-                        dtype=torch.float32,
-                    ).clone()
+                truncated_lanes: np.ndarray | None = None
+                terminal_values: torch.Tensor | None = None
+                if not device_resident:
                     truncated_lanes = np.flatnonzero(batch_step.truncated)
                     if truncated_lanes.size:
                         if batch_step.final_observations is None:
@@ -1074,29 +1169,33 @@ def run_gradlab_ppo(
                             terminal_values = (
                                 calls.predict_values(terminal_tensor).flatten().float()
                             )
-                        lane_tensor = torch.as_tensor(
-                            truncated_lanes,
-                            dtype=torch.int64,
-                            device=device,
-                        )
-                        reward_tensor[lane_tensor] += float(model.gamma) * terminal_values
-                buffer.add(
-                    obs_tensor,
+                reward_slot = buffer.end_step(
                     actions,
-                    reward_tensor,
-                    episode_starts,
+                    batch_step.rewards,
                     values,
                     log_probs,
                     final_observations=(batch_step.final_observations if device_resident else None),
                     truncated=(batch_step.truncated if device_resident else None),
                 )
+                if truncated_lanes is not None and truncated_lanes.size:
+                    assert terminal_values is not None
+                    lane_tensor = torch.as_tensor(
+                        truncated_lanes,
+                        dtype=torch.int64,
+                        device=device,
+                    )
+                    reward_slot[lane_tensor] += float(model.gamma) * terminal_values
                 curriculum.capture(batch_step)
                 observations = batch_step.observations
                 if device_resident:
-                    dones = (batch_step.terminated | batch_step.truncated).clone()
+                    torch.logical_or(
+                        batch_step.terminated,
+                        batch_step.truncated,
+                        out=dones,
+                    )
                 else:
                     done_array = np.logical_or(batch_step.terminated, batch_step.truncated)
-                    dones = torch.as_tensor(done_array, device=device).clone()
+                    dones.copy_(torch.as_tensor(done_array))
                 episode_starts = dones
                 model.num_timesteps += n_envs
                 calls_since_start += 1
@@ -1155,9 +1254,11 @@ def run_gradlab_ppo(
                 gae_lambda=float(model.gae_lambda),
             )
             throughput.end(int(model.num_timesteps))
-            raw_advantages = buffer.advantages.clone() if curriculum.enabled else buffer.advantages
-            curriculum_metrics = curriculum.complete(raw_advantages)
-            rollout_metrics = _rollout_diagnostics(buffer, env.action_space)
+            curriculum_metrics = curriculum.complete(buffer.advantages)
+            rollout_metric_tensors, optional_rollout_metrics = _rollout_diagnostics(
+                buffer,
+                env.action_space,
+            )
             progress_remaining = max(
                 1.0 - int(model.num_timesteps) / max(int(common_config["timesteps"]), 1),
                 0.0,
@@ -1179,8 +1280,10 @@ def run_gradlab_ppo(
                 advantage_context=advantage_context,
                 ent_coef=ent_coef,
                 torch_permutation=execution_profile.torch_permutation,
+                extra_metric_tensors=rollout_metric_tensors,
+                omit_if_nonfinite=optional_rollout_metrics,
             )
-            rollout_metrics.update(curriculum_metrics)
+            rollout_metrics = dict(curriculum_metrics)
             rollout_metrics.update(reward_stats.flush())
             rollout_metrics.update(update_metrics)
             progress_metrics = {

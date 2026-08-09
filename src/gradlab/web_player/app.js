@@ -546,6 +546,8 @@ async function openPublicationDialog() {
   const dialog = $("#publication-dialog");
   dialog.showModal();
   try {
+    $("#publication-status").textContent = "Rendering the completed episode…";
+    await publicationApi("/api/publication/render", { method: "POST" });
     const [current, ticket] = await Promise.all([
       publicationApi("/api/publication/current"),
       publicationApi("/api/publication/replay-ticket", { method: "POST" }),

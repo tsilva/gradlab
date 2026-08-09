@@ -2409,6 +2409,14 @@ class PlaybackWebServer:
             return web.json_response({"available": False, "message": str(exc)})
         return web.json_response(result)
 
+    async def publication_render(self, request: web.Request) -> web.Response:
+        self._authorize_publication(request, mutation=True)
+        try:
+            result = await asyncio.to_thread(self._publications().render)
+        except Exception as exc:
+            return web.json_response({"error": str(exc)}, status=400)
+        return web.json_response(result)
+
     async def publication_preflight(self, request: web.Request) -> web.Response:
         self._authorize_publication(request, mutation=True)
         try:
@@ -3581,6 +3589,7 @@ class PlaybackWebServer:
                 ),
                 web.get("/api/playback/inspection", self.inspect_active_playback),
                 web.get("/api/publication/current", self.publication_current),
+                web.post("/api/publication/render", self.publication_render),
                 web.post("/api/publication/preflight", self.publication_preflight),
                 web.post("/api/publication/preview", self.publication_preview),
                 web.post("/api/publication/admit", self.publication_admit),
