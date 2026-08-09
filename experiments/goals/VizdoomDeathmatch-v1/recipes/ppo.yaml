@@ -41,7 +41,8 @@ train:
       # Split each 4096-transition rollout into four GPU-efficient minibatches per epoch.
       batch_size: 1024
       n_epochs: 2
-      learning_rate: 6.25e-5
+      # Use the matched seed-123 learning-rate winner while retaining two update epochs.
+      learning_rate: 9.375e-5
       # Use the matched-ablation winner for frame-skip-2 credit assignment.
       gamma: 0.995
       gae_lambda: 0.95

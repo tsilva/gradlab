@@ -37,6 +37,8 @@ def test_deathmatch_recipe_defaults_to_the_measured_throughput_profile() -> None
     assert backend["id"] == "gradlab.ppo"
     assert backend["config"]["execution_profile"] == "max-throughput"
     assert backend["config"]["batch_size"] == 1024
+    assert backend["config"]["n_epochs"] == 2
+    assert backend["config"]["learning_rate"] == 9.375e-5
     assert backend["config"]["gamma"] == 0.995
     assert backend["config"]["gae_lambda"] == 0.95
     context = train_config["task"]["model_inputs"]["context"]
