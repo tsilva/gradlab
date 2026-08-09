@@ -614,10 +614,32 @@ class PlayerPublicationService:
                 capture_status.get("error")
                 or "finish the current episode before publishing"
             )
+        if capture_status.get("render_required") is True:
+            raise ValueError("render the completed episode before publishing")
         capture = capture_status.get("latest")
         if not isinstance(capture, Mapping):
             raise ValueError(capture_status.get("error") or "complete an episode before publishing")
         return {**dict(context), "capture_document": deepcopy(dict(capture))}
+
+    def render(self) -> dict[str, Any]:
+        context = self.host.active_publication_context()
+        if not isinstance(context, Mapping):
+            raise ValueError("no active player checkpoint is available")
+        spec = context.get("spec")
+        if getattr(spec, "kind", None) != "public_run":
+            raise ValueError("only verified catalog public-run checkpoints are publishable")
+        capture_status = _required_mapping(context.get("capture"), label="capture status")
+        if capture_status.get("ready") is not True:
+            raise ValueError(
+                capture_status.get("error") or "finish the current episode before publishing"
+            )
+        if capture_status.get("render_required") is True:
+            renderer = getattr(self.host, "render_publication_capture", None)
+            if not callable(renderer):
+                raise ValueError("player publication movie rendering is unavailable")
+            renderer()
+        active = self._active()
+        return {"capture": deepcopy(active["capture_document"])}
 
     def current(self) -> dict[str, Any]:
         try:

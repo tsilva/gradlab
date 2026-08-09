@@ -11,10 +11,11 @@ from gradlab.file_utils import file_sha256
 from gradlab.play_capture import (
     CAPTURE_DOCUMENT_TYPE,
     CAPTURE_FORMAT_VERSION,
+    EpisodeFrameSpool,
     EpisodeCaptureManager,
     EpisodeCaptureStore,
-    StreamingReplayWriter,
     capture_output_size,
+    render_spooled_replay,
     validate_capture_document,
 )
 from gradlab.publication import verify_replay
@@ -142,7 +143,7 @@ def test_new_episode_makes_prior_capture_ineligible(
         def abort(self) -> None:
             pass
 
-    monkeypatch.setattr("gradlab.play_capture.StreamingReplayWriter", Writer)
+    monkeypatch.setattr("gradlab.play_capture.EpisodeFrameSpool", Writer)
 
     assert manager.status()["ready"] is True
     manager.begin(
@@ -170,20 +171,80 @@ def test_new_episode_makes_prior_capture_ineligible(
     shutil.which("ffmpeg") is None or shutil.which("ffprobe") is None,
     reason="ffmpeg and ffprobe are required",
 )
-def test_streaming_replay_writer_is_browser_safe_and_lossless(tmp_path: Path) -> None:
+def test_completed_frames_render_as_browser_safe_movie_only_on_demand(tmp_path: Path) -> None:
+    raw = tmp_path / "episode.rgb"
     output = tmp_path / "replay.mp4"
     frames = [np.full((32, 40, 3), index * 30, dtype=np.uint8) for index in range(3)]
-    writer = StreamingReplayWriter(output, frames[0])
-    writer.write(frames[1])
-    writer.write(frames[2])
+    spool = EpisodeFrameSpool(raw, frames[0])
+    spool.write(frames[1])
+    spool.write(frames[2])
 
-    result = writer.close()
+    manifest = spool.close()
+    assert raw.is_file()
+    assert not output.exists()
+
+    result = render_spooled_replay(raw, output, manifest)
     probe = verify_replay(output)
 
     assert result["frames"] == 3
     assert probe["frames"] == 3
     assert probe["codec_name"] == "h264"
     assert probe["pix_fmt"] == "yuv420p"
+
+
+@pytest.mark.skipif(
+    shutil.which("ffmpeg") is None or shutil.which("ffprobe") is None,
+    reason="ffmpeg and ffprobe are required",
+)
+def test_capture_manager_defers_movie_render_until_publish_action(tmp_path: Path) -> None:
+    context = {
+        "source_kind": "public_run",
+        "contract_mode": "training",
+        "matches_contract": True,
+        "checkpoint_identity": "run:checkpoint",
+        "run_id": "run",
+        "checkpoint_id": "checkpoint",
+        "checkpoint_sha256": "d" * 64,
+        "recipe_sha256": "e" * 64,
+        "goal": {"goal_id": "Goal1"},
+        "execution": _execution(),
+    }
+    store = EpisodeCaptureStore(tmp_path / "captures")
+    manager = EpisodeCaptureManager(context, store=store)
+    frames = [np.full((32, 40, 3), index * 30, dtype=np.uint8) for index in range(3)]
+    manager.begin(frames[0], episode=1, seed=7, sampling_mode="stochastic")
+
+    for index, frame in enumerate(frames[1:], start=1):
+        boundary = index == 2
+        manager.record_transition(
+            SimpleNamespace(
+                action_source="policy",
+                after_frame=frame,
+                boundary=boundary,
+                after_frame_role="terminal_observation" if boundary else "observation",
+                start_id="Start1",
+                step=index,
+                episode=1,
+                seed=7,
+                total_reward=3.0,
+                max_x_pos=4,
+                terminated=boundary,
+                truncated=False,
+                completed=boundary,
+            )
+        )
+
+    completed = manager.status()
+    assert completed["ready"] is True
+    assert completed["render_required"] is True
+    assert completed["latest"] is None
+    assert not tuple(store.root.glob("capture-*/replay.mp4"))
+
+    capture = manager.render()
+
+    assert capture["capture_id"].startswith("capture-")
+    assert manager.status()["render_required"] is False
+    assert (store.capture_dir(capture["capture_id"]) / "replay.mp4").is_file()
 
 
 def test_capture_rejects_reset_frame_at_terminal_boundary(tmp_path: Path) -> None:
@@ -208,8 +269,8 @@ def test_capture_rejects_reset_frame_at_terminal_boundary(tmp_path: Path) -> Non
             return None
 
     manager.writer = Writer()  # type: ignore[assignment]
-    manager.temporary_replay = tmp_path / "partial.mp4"
-    manager.temporary_replay.write_bytes(b"partial")
+    manager.temporary_frames = tmp_path / "partial.rgb"
+    manager.temporary_frames.write_bytes(b"partial")
     transition = SimpleNamespace(
         action_source="policy",
         after_frame=np.zeros((2, 2, 3), dtype=np.uint8),

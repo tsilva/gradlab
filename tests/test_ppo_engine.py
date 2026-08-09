@@ -13,6 +13,7 @@ from stable_baselines3.common.logger import configure
 
 from gradlab.ppo import GradLabPPO
 from gradlab.task_advantage import normalize_advantages_by_context
+import gradlab.training.ppo_engine as ppo_engine
 from gradlab.training.ppo_engine import (
     TensorRolloutBuffer,
     _bootstrap_device_time_limits,
@@ -22,6 +23,26 @@ from gradlab.training.ppo_engine import (
     _ppo_update,
     _Precision,
 )
+
+
+def _add_rollout_step(
+    buffer: TensorRolloutBuffer,
+    observations,
+    actions: torch.Tensor,
+    rewards,
+    episode_starts: torch.Tensor,
+    values: torch.Tensor,
+    log_probs: torch.Tensor,
+    **kwargs,
+) -> torch.Tensor:
+    buffer.begin_step(observations, episode_starts)
+    return buffer.end_step(
+        actions,
+        rewards,
+        values,
+        log_probs,
+        **kwargs,
+    )
 
 
 def test_device_rollout_bootstraps_only_truncated_transitions() -> None:
@@ -37,7 +58,8 @@ def test_device_rollout_bootstraps_only_truncated_transitions() -> None:
     terminal = (torch.tensor([[1.0], [2.0]]), torch.tensor([[3.0], [4.0]]))
     truncations = (torch.tensor([False, True]), torch.tensor([True, False]))
     for step in range(2):
-        buffer.add(
+        _add_rollout_step(
+            buffer,
             observations,
             torch.zeros(2, dtype=torch.int64),
             torch.zeros(2),
@@ -103,7 +125,8 @@ def test_tensor_rollout_buffer_uses_sb3_action_storage_convention(
         device=torch.device("cpu"),
     )
     actions = torch.zeros(sample_shape, dtype=dtype)
-    buffer.add(
+    _add_rollout_step(
+        buffer,
         observations,
         actions,
         torch.zeros(2),
@@ -114,6 +137,92 @@ def test_tensor_rollout_buffer_uses_sb3_action_storage_convention(
 
     assert buffer.actions.shape == (2, 2, stored_width)
     assert buffer.actions.dtype == dtype
+
+
+def test_tensor_rollout_buffer_stages_owned_mutable_provider_storage() -> None:
+    observations = {
+        "state": np.asarray([[1.0, 2.0], [3.0, 4.0]], dtype=np.float32),
+        "context/task": torch.tensor([[0], [1]], dtype=torch.int64),
+    }
+    buffer = TensorRolloutBuffer.allocate(
+        observations,
+        action_space=gym.spaces.Discrete(2),
+        n_steps=1,
+        n_envs=2,
+        device=torch.device("cpu"),
+        store_final_observations=True,
+    )
+    staged = buffer.begin_step(observations, torch.ones(2, dtype=torch.bool))
+    np.testing.assert_array_equal(staged["state"].numpy(), observations["state"])
+    torch.testing.assert_close(staged["context/task"], observations["context/task"])
+
+    observations["state"].fill(99.0)
+    observations["context/task"].fill_(99)
+    np.testing.assert_array_equal(
+        staged["state"].numpy(),
+        np.asarray([[1.0, 2.0], [3.0, 4.0]], dtype=np.float32),
+    )
+    torch.testing.assert_close(
+        staged["context/task"],
+        torch.tensor([[0], [1]], dtype=torch.int64),
+    )
+
+    rewards = torch.tensor([1.0, 2.0])
+    final_observations = {
+        "state": torch.tensor([[5.0, 6.0], [7.0, 8.0]]),
+        "context/task": torch.tensor([[1], [0]], dtype=torch.int64),
+    }
+    reward_slot = buffer.end_step(
+        torch.zeros(2, dtype=torch.int64),
+        rewards,
+        torch.zeros(2),
+        torch.zeros(2),
+        final_observations=final_observations,
+        truncated=torch.tensor([True, False]),
+    )
+    rewards.fill_(99.0)
+    final_observations["state"].fill_(99.0)
+    final_observations["context/task"].fill_(99)
+
+    torch.testing.assert_close(reward_slot, torch.tensor([1.0, 2.0]))
+    torch.testing.assert_close(
+        buffer.final_observations["state"][0],
+        torch.tensor([[5.0, 6.0], [7.0, 8.0]]),
+    )
+    torch.testing.assert_close(
+        buffer.final_observations["context/task"][0],
+        torch.tensor([[1], [0]], dtype=torch.int64),
+    )
+
+
+def test_tensor_rollout_buffer_does_not_prestage_sources_on_the_destination_device(
+    monkeypatch,
+) -> None:
+    observations = np.asarray([[1.0, 2.0], [3.0, 4.0]], dtype=np.float32)
+    buffer = TensorRolloutBuffer.allocate(
+        observations,
+        action_space=gym.spaces.Discrete(2),
+        n_steps=1,
+        n_envs=2,
+        device=torch.device("cpu"),
+    )
+    requested_devices = []
+    original_as_tensor = torch.as_tensor
+
+    def tracked_as_tensor(*args, **kwargs):
+        requested_devices.append(kwargs.get("device"))
+        return original_as_tensor(*args, **kwargs)
+
+    monkeypatch.setattr(ppo_engine.torch, "as_tensor", tracked_as_tensor)
+    buffer.begin_step(observations, torch.ones(2, dtype=torch.bool))
+    buffer.end_step(
+        torch.zeros(2, dtype=torch.int64),
+        np.asarray([1.0, 2.0], dtype=np.float32),
+        torch.zeros(2),
+        torch.zeros(2),
+    )
+
+    assert requested_devices == [None, None]
 
 
 def test_tensor_rollout_buffer_matches_sb3_gae_and_returns() -> None:
@@ -175,7 +284,8 @@ def test_tensor_rollout_buffer_matches_sb3_gae_and_returns() -> None:
             values[index],
             log_probs[index],
         )
-        tensor_buffer.add(
+        _add_rollout_step(
+            tensor_buffer,
             observations[index],
             torch.as_tensor(actions[index]),
             torch.as_tensor(rewards[index]),
@@ -227,7 +337,8 @@ def test_grouped_advantage_normalization_matches_existing_ppo_semantics() -> Non
         device=torch.device("cpu"),
     )
     for observation in observations:
-        buffer.add(
+        _add_rollout_step(
+            buffer,
             observation,
             torch.zeros(3, dtype=torch.int64),
             torch.zeros(3),
@@ -247,6 +358,151 @@ def test_grouped_advantage_normalization_matches_existing_ppo_semantics() -> Non
     _normalize_grouped_advantages(buffer, "task")
 
     np.testing.assert_allclose(buffer.advantages.numpy(), expected, rtol=1e-6, atol=1e-6)
+
+
+def test_rollout_diagnostics_remain_on_device_until_one_materialization() -> None:
+    buffer = TensorRolloutBuffer.allocate(
+        np.zeros((2, 3), dtype=np.float32),
+        action_space=gym.spaces.Discrete(2),
+        n_steps=2,
+        n_envs=2,
+        device=torch.device("cpu"),
+    )
+    buffer.values.copy_(torch.tensor([[1.0, float("nan")], [3.0, 5.0]]))
+    buffer.advantages.copy_(torch.tensor([[1.0, 2.0], [3.0, 4.0]]))
+    buffer.actions.copy_(torch.tensor([[[0], [1]], [[1], [1]]]))
+
+    pending, optional = ppo_engine._rollout_diagnostics(
+        buffer,
+        gym.spaces.Discrete(2),
+    )
+
+    assert pending
+    assert all(isinstance(value, torch.Tensor) for value in pending.values())
+    metrics = ppo_engine._materialize_metrics(pending, omit_if_nonfinite=optional)
+    assert metrics["train/algorithm/ppo/rollout/value/prediction/mean"] == pytest.approx(3.0)
+    assert metrics["train/algorithm/ppo/rollout/value/prediction/std"] == pytest.approx(
+        np.std([1.0, 3.0, 5.0])
+    )
+    assert metrics["train/algorithm/ppo/rollout/advantage/mean"] == pytest.approx(2.5)
+    assert metrics["train/algorithm/ppo/rollout/advantage/std"] == pytest.approx(
+        np.std([1.0, 2.0, 3.0, 4.0])
+    )
+    assert metrics["train/algorithm/ppo/policy/dominant/action/rate"] == pytest.approx(0.75)
+
+
+def test_rollout_diagnostics_count_legal_tuple_actions_on_device() -> None:
+    action_space = ppo_engine.LegalTupleMultiDiscrete(
+        [2, 2],
+        [(0, 0), (1, 0), (0, 1)],
+    )
+    buffer = TensorRolloutBuffer.allocate(
+        np.zeros((2, 3), dtype=np.float32),
+        action_space=action_space,
+        n_steps=2,
+        n_envs=2,
+        device=torch.device("cpu"),
+    )
+    buffer.values.zero_()
+    buffer.advantages.zero_()
+    buffer.actions.copy_(
+        torch.tensor(
+            [
+                [[0, 0], [1, 0]],
+                [[0, 0], [0, 1]],
+            ]
+        )
+    )
+
+    pending, optional = ppo_engine._rollout_diagnostics(buffer, action_space)
+    metrics = ppo_engine._materialize_metrics(pending, omit_if_nonfinite=optional)
+
+    assert metrics["train/algorithm/ppo/policy/dominant/action/rate"] == pytest.approx(0.5)
+
+
+def test_target_kl_stops_before_optimization_after_one_control_read(monkeypatch) -> None:
+    class Policy(torch.nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.weight = torch.nn.Parameter(torch.tensor(1.0))
+            self.optimizer = torch.optim.Adam(self.parameters(), lr=1e-3)
+
+        def set_training_mode(self, _enabled: bool) -> None:
+            return
+
+    policy = Policy()
+    model = SimpleNamespace(
+        policy=policy,
+        lr_schedule=lambda _progress: 1e-3,
+        clip_range=lambda _progress: 0.2,
+        clip_range_vf=None,
+        n_epochs=3,
+        batch_size=2,
+        action_space=gym.spaces.Discrete(2),
+        target_kl=0.01,
+        vf_coef=0.5,
+        max_grad_norm=0.5,
+        _n_updates=0,
+    )
+    buffer = TensorRolloutBuffer.allocate(
+        np.zeros((2, 3), dtype=np.float32),
+        action_space=model.action_space,
+        n_steps=1,
+        n_envs=2,
+        device=torch.device("cpu"),
+    )
+    _add_rollout_step(
+        buffer,
+        np.zeros((2, 3), dtype=np.float32),
+        torch.zeros(2, dtype=torch.int64),
+        torch.zeros(2),
+        torch.ones(2, dtype=torch.bool),
+        torch.zeros(2),
+        torch.zeros(2),
+    )
+    buffer.advantages.fill_(1.0)
+    buffer.returns.zero_()
+
+    class Calls:
+        @staticmethod
+        def evaluate_actions(_observations, actions):
+            count = int(actions.shape[0])
+            dependency = policy.weight * 0.0
+            return (
+                torch.zeros(count) + dependency,
+                torch.full((count,), 0.5) + dependency,
+                torch.zeros(count) + dependency,
+            )
+
+    target_kl_reads = 0
+    original_target_kl_exceeded = ppo_engine._target_kl_exceeded
+
+    def counted_target_kl_exceeded(approx_kl, target_kl):
+        nonlocal target_kl_reads
+        target_kl_reads += 1
+        return original_target_kl_exceeded(approx_kl, target_kl)
+
+    monkeypatch.setattr(ppo_engine, "_target_kl_exceeded", counted_target_kl_exceeded)
+    initial_weight = policy.weight.detach().clone()
+
+    metrics = _ppo_update(
+        model,
+        buffer,
+        calls=Calls(),
+        precision=_Precision("fp32", torch.device("cpu")),
+        progress_remaining=1.0,
+        normalization_mode="none",
+        advantage_context=None,
+        ent_coef=0.0,
+        torch_permutation=False,
+    )
+
+    assert target_kl_reads == 1
+    assert model._n_updates == 1
+    assert not policy.optimizer.state
+    torch.testing.assert_close(policy.weight, initial_weight)
+    assert metrics["train/algorithm/ppo/update/approx_kl"] == pytest.approx(np.exp(0.5) - 1.0 - 0.5)
+    assert metrics["train/algorithm/ppo/update/clip_fraction"] == pytest.approx(1.0)
 
 
 @pytest.mark.parametrize("method", ["collect_rollouts", "train", "learn"])
@@ -300,7 +556,7 @@ def test_ppo_checkpoint_can_resume_across_sb3_and_gradlab_classes(tmp_path) -> N
         env.close()
 
 
-def test_tensor_native_update_matches_one_sb3_ppo_update() -> None:
+def test_tensor_native_update_matches_one_sb3_ppo_update(monkeypatch) -> None:
     env = make_vec_env("CartPole-v1", n_envs=2, seed=11)
     model_kwargs = {
         "n_steps": 2,
@@ -356,7 +612,8 @@ def test_tensor_native_update_matches_one_sb3_ppo_update() -> None:
                 values,
                 log_probs,
             )
-            tensor_buffer.add(
+            _add_rollout_step(
+                tensor_buffer,
                 observation,
                 actions,
                 torch.as_tensor(rewards[index]),
@@ -389,6 +646,20 @@ def test_tensor_native_update_matches_one_sb3_ppo_update() -> None:
         sb3_model.train()
         np.random.seed(29)
         torch.manual_seed(29)
+        materializations = 0
+        original_materialize_metrics = ppo_engine._materialize_metrics
+
+        def counted_materialize_metrics(*args, **kwargs):
+            nonlocal materializations
+            materializations += 1
+            return original_materialize_metrics(*args, **kwargs)
+
+        monkeypatch.setattr(ppo_engine, "_materialize_metrics", counted_materialize_metrics)
+
+        def unexpected_target_kl_read(*_args, **_kwargs):
+            raise AssertionError("target_kl=None must not read a minibatch CUDA scalar")
+
+        monkeypatch.setattr(ppo_engine, "_target_kl_exceeded", unexpected_target_kl_read)
         metrics = _ppo_update(
             candidate,
             tensor_buffer,
@@ -408,6 +679,7 @@ def test_tensor_native_update_matches_one_sb3_ppo_update() -> None:
                 rtol=2e-6,
                 atol=2e-6,
             )
+        assert materializations == 1
         assert metrics["train/algorithm/ppo/update/learning_rate"] == pytest.approx(1e-3)
     finally:
         env.close()

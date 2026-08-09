@@ -181,6 +181,15 @@ class PlaybackHost:
                 "session_epoch": self._session_epoch,
             }
 
+    def render_publication_capture(self) -> dict[str, Any]:
+        with self._lock:
+            if self._active is None or self._phase != "active":
+                raise ValueError("no active player checkpoint is available")
+            capture = getattr(self._active.runner, "capture", None)
+            if capture is None:
+                raise ValueError("episode capture is unavailable")
+            return capture.render()
+
     def start(self) -> None:
         with self._lock:
             source = self._last_source

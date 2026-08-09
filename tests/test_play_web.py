@@ -2484,6 +2484,7 @@ def test_web_dashboard_assets_are_packaged_beside_server() -> None:
     assert '$("#source-breadcrumbs")' in script
     assert "snapshot?.publication_capture?.ready === true" in script
     assert "Boolean(snapshot?.publication_capture?.latest)" not in script
+    assert 'await publicationApi("/api/publication/render", { method: "POST" });' in script
     assert "gradlab-youtube-oauth-complete" in script
     assert "event.source !== youtubeOAuthPopup" in script
     assert "gradlab-youtube-oauth-complete" in oauth_script
