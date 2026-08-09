@@ -2,7 +2,7 @@ defaults:
 - ../../../recipes/_presets/atari-ppo@_global_
 - _self_
 recipe_id: ppo
-description: Single-player ViZDoom Deathmatch custom PPO with 128-environment, 32-step rollouts, frame skip 2, masked HUD pixels, and four-frame shared combat-state history.
+description: Single-player ViZDoom Deathmatch custom PPO with 128-environment, 32-step rollouts, 1024-sample minibatches, frame skip 2, masked HUD pixels, and four-frame shared combat-state history.
 # Preserve native rewards by default; launch overrides may select sample-factory-v0.
 reward_shape: native-v1
 train:
@@ -34,10 +34,12 @@ train:
   backend:
     id: gradlab.ppo
     config:
-      # Preserve SB3-compatible sample ordering while using the faster custom loop.
-      execution_profile: sb3-parity
+      # Use the measured Beast-3 winner with compiled calls, fused Adam, and device permutations.
+      execution_profile: max-throughput
       # Pair 32-step rollout fragments with the goal's 128 training environments.
       n_steps: 32
+      # Split each 4096-transition rollout into four GPU-efficient minibatches per epoch.
+      batch_size: 1024
       n_epochs: 2
       learning_rate: 6.25e-5
       # Use the matched-ablation winner for frame-skip-2 credit assignment.

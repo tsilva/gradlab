@@ -30,11 +30,13 @@ def test_process_group_escalation_targets_the_spawned_group() -> None:
 
     with patch("gradlab.supervisor_runtime.os.killpg") as killpg:
         assert runtime.learner_group_alive(learner) is True
+        runtime.request_learner_stop(learner)
         runtime.terminate_learner_group(learner)
         runtime.kill_learner_group(learner)
 
     assert killpg.call_args_list == [
         call(4321, 0),
+        call(4321, signal.SIGUSR1),
         call(4321, signal.SIGTERM),
         call(4321, signal.SIGKILL),
     ]
@@ -50,6 +52,7 @@ def test_missing_process_group_is_already_gone() -> None:
         side_effect=ProcessLookupError,
     ):
         assert runtime.learner_group_alive(learner) is False
+        runtime.request_learner_stop(learner)
         runtime.terminate_learner_group(learner)
         runtime.kill_learner_group(learner)
 

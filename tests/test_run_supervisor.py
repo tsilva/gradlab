@@ -44,6 +44,7 @@ from gradlab.run_supervisor import (
     LearnerFailure,
     LearnerStartupTimeout,
     LearnerStateContractError,
+    LearnerStopAcknowledgementTimeout,
     LearnerTeardownTimeout,
     RunSupervisor,
     _bind_evaluation_contract,
@@ -306,6 +307,45 @@ class RunSupervisorTests(unittest.TestCase):
         self.assertTrue(supervisor.cancel_requested)
         self.assertEqual(supervisor.stop_reason, "canceled")
         request_stop.assert_called_once_with(learner)
+
+    def test_supervisor_retries_stop_until_safe_boundary_acknowledgement(self) -> None:
+        supervisor = self.supervisor()
+        self.prepare_live_learner_contract(supervisor)
+        learner = MagicMock()
+        learner.poll.return_value = None
+        supervisor.learner = learner
+        supervisor.learner_stop_requested_at = 0.0
+        supervisor.last_learner_stop_signal_at = 0.0
+        supervisor.stop_reason = "canceled"
+
+        with patch.object(supervisor.runtime, "request_learner_stop") as request_stop:
+            supervisor._maintain_learner_stop(2.0)
+            atomic_write_json(
+                supervisor.run_dir / "learner_stop_observed.json",
+                {
+                    "pid": 1234,
+                    "boundary": "on_policy_update_end",
+                    "num_timesteps": 4096,
+                },
+            )
+            supervisor._maintain_learner_stop(2.1)
+
+        request_stop.assert_called_once_with(learner)
+        self.assertEqual(supervisor.learner_stop_signal_attempts, 1)
+        self.assertTrue(supervisor.learner_stop_acknowledged)
+
+    def test_supervisor_bounds_missing_stop_acknowledgement(self) -> None:
+        supervisor = self.supervisor()
+        self.prepare_live_learner_contract(supervisor)
+        learner = MagicMock()
+        learner.poll.return_value = None
+        supervisor.learner = learner
+        supervisor.learner_stop_requested_at = 0.0
+        supervisor.last_learner_stop_signal_at = 9.0
+        supervisor.stop_reason = "canceled"
+
+        with self.assertRaises(LearnerStopAcknowledgementTimeout):
+            supervisor._maintain_learner_stop(10.0)
 
     def test_manual_evaluation_queue_reuses_durable_intent_and_modal_dispatch(self) -> None:
         checkpoint = CheckpointManifest(

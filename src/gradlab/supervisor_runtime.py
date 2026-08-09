@@ -184,7 +184,13 @@ class SupervisorRuntime:
         return learner
 
     def request_learner_stop(self, learner: LearnerProcess) -> None:
-        learner.send_signal(getattr(signal, "SIGUSR1", signal.SIGTERM))
+        try:
+            os.killpg(
+                self._learner_process_group_id(learner),
+                getattr(signal, "SIGUSR1", signal.SIGTERM),
+            )
+        except ProcessLookupError:
+            return
 
     @staticmethod
     def _learner_process_group_id(learner: LearnerProcess) -> int:

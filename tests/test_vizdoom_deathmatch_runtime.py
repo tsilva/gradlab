@@ -21,7 +21,7 @@ from gradlab.training_metrics import EpisodeMetricsReducer
 GOAL_ROOT = Path("experiments/goals/VizdoomDeathmatch-v1")
 
 
-def test_deathmatch_recipe_defaults_to_the_sample_efficient_custom_ppo_profile() -> None:
+def test_deathmatch_recipe_defaults_to_the_measured_throughput_profile() -> None:
     document = compose_train_document(
         GOAL_ROOT / "_goal.yaml",
         GOAL_ROOT / "recipes/ppo.yaml",
@@ -35,7 +35,8 @@ def test_deathmatch_recipe_defaults_to_the_sample_efficient_custom_ppo_profile()
     assert train_config["obs_crop_fill"] == 0
     backend = train_config["training_backend"]
     assert backend["id"] == "gradlab.ppo"
-    assert backend["config"]["execution_profile"] == "sb3-parity"
+    assert backend["config"]["execution_profile"] == "max-throughput"
+    assert backend["config"]["batch_size"] == 1024
     assert backend["config"]["gamma"] == 0.995
     assert backend["config"]["gae_lambda"] == 0.95
     context = train_config["task"]["model_inputs"]["context"]

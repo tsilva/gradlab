@@ -127,6 +127,7 @@ METRIC_JOURNAL_RETENTION_DAYS = 7
 HEALTH_SAMPLE_SECONDS = 15.0
 WANDB_REMOTE_PROBE_SECONDS = 30.0
 WANDB_DRAIN_REMOTE_PROBE_SECONDS = 2.0
+LEARNER_STOP_RETRY_SECONDS = 2.0
 
 
 class IncompleteEvaluationEvidence(RuntimeError):
@@ -163,6 +164,12 @@ class LearnerTeardownTimeout(LearnerOperationalFailure):
     """The learner process group remained alive after bounded escalation."""
 
     stop_reason = "teardown_timeout"
+
+
+class LearnerStopAcknowledgementTimeout(LearnerOperationalFailure):
+    """The learner ignored bounded cooperative-stop requests."""
+
+    stop_reason = "stop_acknowledgement_timeout"
 
 
 @dataclass(frozen=True)
@@ -307,6 +314,10 @@ class RunSupervisor:
         self.learner_started_at: float | None = None
         self.expected_learner_pid: int | None = None
         self.learner_result_observed_at: float | None = None
+        self.learner_stop_requested_at: float | None = None
+        self.last_learner_stop_signal_at: float | None = None
+        self.learner_stop_signal_attempts = 0
+        self.learner_stop_acknowledged = False
         self.learner_final_step: int | None = None
         self.learner_terminal_document: dict[str, Any] | None = None
         self.learner_teardown_evidence: dict[str, Any] = {}
@@ -998,6 +1009,7 @@ class RunSupervisor:
         for filename in (
             LEARNER_READY_FILENAME,
             "learner_ready.json",
+            "learner_stop_observed.json",
             TRAINING_RESULT_FILENAME,
         ):
             path = self.run_dir / filename
@@ -1223,13 +1235,67 @@ class RunSupervisor:
                 flush=True,
             )
 
+    def _expects_learner_stop_acknowledgement(self) -> bool:
+        backend = self.train_config.get("training_backend")
+        backend_id = str(backend.get("id") or "") if isinstance(backend, Mapping) else ""
+        return backend_id in {"gradlab.ppo", "sb3.ppo", "sb3.a2c"}
+
+    def _learner_stop_acknowledgement_exists(self) -> bool:
+        path = self.run_dir / "learner_stop_observed.json"
+        if not path.is_file():
+            return False
+        document = _read_json(path)
+        if int(document.get("pid") or 0) != int(self.expected_learner_pid or 0):
+            raise LearnerStateContractError(
+                "learner stop acknowledgement PID does not match the active learner"
+            )
+        if str(document.get("boundary") or "") != "on_policy_update_end":
+            raise LearnerStateContractError(
+                "learner stop acknowledgement has an invalid safe boundary"
+            )
+        if not self.learner_stop_acknowledged:
+            self.learner_stop_acknowledged = True
+            self._emit(
+                "learner_stop_acknowledged",
+                signal_attempts=self.learner_stop_signal_attempts,
+                num_timesteps=int(document.get("num_timesteps") or 0),
+            )
+        return True
+
     def _request_learner_stop(self, reason: str) -> None:
         if not self.stop_reason:
             self.stop_reason = reason
             self._emit("learner_stop_requested", reason=reason)
         if self.learner is not None and self.learner.poll() is None:
+            now = self.clock.monotonic()
+            if self._expects_learner_stop_acknowledgement():
+                if self.learner_stop_requested_at is None:
+                    self.learner_stop_requested_at = now
+                self.last_learner_stop_signal_at = now
+                self.learner_stop_signal_attempts += 1
             self.runtime.request_learner_stop(self.learner)
             print(f"learner stop requested: reason={reason}", flush=True)
+
+    def _maintain_learner_stop(self, now: float) -> None:
+        learner = self.learner
+        requested_at = self.learner_stop_requested_at
+        if (
+            learner is None
+            or learner.poll() is not None
+            or requested_at is None
+            or self.learner_stop_acknowledged
+        ):
+            return
+        if self._learner_stop_acknowledgement_exists():
+            return
+        elapsed = float(now) - requested_at
+        if elapsed >= self._liveness_seconds("terminate_grace_seconds"):
+            raise LearnerStopAcknowledgementTimeout(
+                "learner did not acknowledge a cooperative stop before the bounded deadline"
+            )
+        last_signal_at = self.last_learner_stop_signal_at
+        if last_signal_at is None or float(now) - last_signal_at >= LEARNER_STOP_RETRY_SECONDS:
+            self._request_learner_stop(self.stop_reason or "cooperative_stop")
 
     def _observe_cancel_request(self) -> bool:
         request = self.authority.cancel_request(
@@ -2013,6 +2079,7 @@ class RunSupervisor:
         if self.lease_lost:
             return 0
         self._observe_cancel_request()
+        self._maintain_learner_stop(instant)
         activity += self._seal_metrics(instant)
         activity += self._publish_checkpoints()
         activity += self._publish_state_archive()
