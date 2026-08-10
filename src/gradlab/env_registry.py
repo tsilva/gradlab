@@ -410,7 +410,7 @@ GRADOOM_PROVIDER = EnvProvider(
             "treat_episode_timeout_as_truncation",
             "vizdoom_config",
         },
-        required_values={},
+        required_values={"doom_skill": 3},
         optional_env_args=frozenset({"compile_engine"}),
     ),
 )
