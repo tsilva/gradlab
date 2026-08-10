@@ -185,10 +185,7 @@ class SupervisorRuntime:
 
     def request_learner_stop(self, learner: LearnerProcess) -> None:
         try:
-            os.killpg(
-                self._learner_process_group_id(learner),
-                getattr(signal, "SIGUSR1", signal.SIGTERM),
-            )
+            os.kill(int(learner.pid), getattr(signal, "SIGUSR1", signal.SIGTERM))
         except ProcessLookupError:
             return
 

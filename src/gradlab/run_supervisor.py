@@ -2465,7 +2465,8 @@ class RunSupervisor:
         evidence["completed_phase"] = "timeout"
         self.learner_teardown_evidence = evidence
         return LearnerTeardownTimeout(
-            "learner process group survived SIGUSR1, SIGTERM, and SIGKILL deadlines"
+            "learner process group survived the cooperative stop request, "
+            "SIGTERM, and SIGKILL deadlines"
         )
 
     def _record_startup_failure(
