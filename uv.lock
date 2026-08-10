@@ -682,7 +682,7 @@ dependencies = [
     { name = "breakout-turbo-env", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'linux')" },
     { name = "captum" },
     { name = "certifi" },
-    { name = "gradoom", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "gradoom", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'linux')" },
     { name = "huggingface-hub" },
     { name = "jinja2" },
     { name = "modal" },
@@ -770,6 +770,7 @@ requires-dist = [
     { name = "certifi", specifier = ">=2026.5.20" },
     { name = "datasets", marker = "extra == 'dataset'", specifier = ">=5,<6" },
     { name = "datasets", marker = "extra == 'dataset-minari'", specifier = ">=5,<6" },
+    { name = "gradoom", marker = "platform_machine == 'arm64' and sys_platform == 'darwin'", specifier = "==0.1.0a0" },
     { name = "gradoom", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'", specifier = "==0.1.0a0" },
     { name = "huggingface-hub", specifier = ">=1.0,<2" },
     { name = "jinja2", specifier = ">=3.1,<4" },
@@ -844,8 +845,9 @@ name = "gradoom"
 version = "0.1.0a0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "gymnasium", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
-    { name = "numpy", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "gymnasium", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'linux')" },
+    { name = "numpy", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'linux')" },
+    { name = "torch", version = "2.11.0", source = { registry = "https://pypi.org/simple" }, marker = "platform_machine == 'arm64' and sys_platform == 'darwin'" },
     { name = "torch", version = "2.12.0", source = { registry = "https://pypi.org/simple" }, marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/4f/97/98a49e7720a00ca82f2bb6d0cf2fc592f63e0010db01abf7b639c25b407d/gradoom-0.1.0a0.tar.gz", hash = "sha256:36625e4c2fe5161bd7770f9032be4883edf989b1234a4804f9e7431a44c512ba", size = 194169, upload-time = "2026-08-10T16:43:10.46Z" }
