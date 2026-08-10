@@ -8,14 +8,18 @@ import pytest
 from gradlab.policy_bundle import PolicyBundle, UnsupportedPolicyDocumentVersion
 from gradlab.publication import (
     HASHED_RELEASE_FILES,
+    PublicationIdentity,
     RELEASE_MANIFEST_VERSION,
     REPO_NAMING_SCHEMA_VERSION,
     build_model_repo_id,
+    build_historical_release_manifest,
     build_release_manifest,
+    latest_comparable_release,
     policy_lineage_contract,
     publication_identity_from_policy_bundle,
     release_comparison,
     render_model_card,
+    render_historical_model_card,
     validate_release_manifest_document,
 )
 
@@ -369,6 +373,17 @@ def test_schema_v4_identity_uses_one_repository_per_goal() -> None:
     assert identity.trainer_slug == "gradlab"
     assert len(identity.lineage_digest) == 64
     assert build_model_repo_id(identity) == "tsilva/VizdoomDeathmatch-v1"
+    different_goal = PublicationIdentity(
+        canonical_environment_id="SuperMarioBros-Nes-v0",
+        goal_id="Level1-1",
+        trainer="Stable-Baselines3",
+        trainer_slug="stable-baselines3",
+        algorithm="ppo",
+        lineage_digest="a" * 64,
+    )
+    assert build_model_repo_id(different_goal) == (
+        "tsilva/SuperMarioBros-Nes-v0_Level1-1"
+    )
 
 
 @pytest.mark.parametrize(
@@ -458,3 +473,94 @@ def test_release_comparison_requires_all_four_contract_axes() -> None:
         changed = deepcopy(previous)
         changed[section][key] = "different"
         assert release_comparison(current, changed)["comparable"] is False
+
+
+def test_latest_comparable_release_searches_across_goal_lineages() -> None:
+    current = manifest()
+    matching = deepcopy(current)
+    matching["release"]["version"] = "v2"
+    different_lineage = deepcopy(current)
+    different_lineage["release"]["version"] = "v3"
+    different_lineage["lineage"]["digest"] = "f" * 64
+    result = latest_comparable_release(current, [matching, different_lineage])
+    assert result["comparable"] is True
+    assert result["previous_version"] == "v2"
+
+
+def test_historical_import_is_explicitly_not_accepted_or_featured() -> None:
+    identity = PublicationIdentity(
+        canonical_environment_id="SuperMarioBros-Nes-v0",
+        goal_id="Level1-1",
+        trainer="Stable-Baselines3",
+        trainer_slug="stable-baselines3",
+        algorithm="ppo",
+        lineage_digest="a" * 64,
+    )
+    evidence = evaluation_evidence()
+    evidence.update(
+        tier="historical-import",
+        status="evaluated-not-accepted",
+        provenance={"origin": "legacy-exact-contract-rerun"},
+    )
+    evidence["acceptance"]["passed"] = False
+    evidence["acceptance"]["outcomes"][0]["passed"] = False
+    evidence["acceptance"]["outcomes"][0]["value"] = 0.96
+    historical = build_historical_release_manifest(
+        identity,
+        release_version="v2",
+        published_at="2026-08-10T12:00:00Z",
+        model={
+            "trainer": "Stable-Baselines3",
+            "algorithm_id": "ppo",
+            "model_class": "stable_baselines3.ppo.ppo.PPO",
+            "qualified_env_id": "supermariobrosnes-turbo:SuperMarioBros-Nes-v0",
+        },
+        source={
+            "run_id": "vnj2jxi5",
+            "commit": "0" * 40,
+            "checkpoint_step": 4_000_000,
+        },
+        evaluation={
+            **evaluation_summary(),
+            "checkpoint_step": 4_000_000,
+            "exact_contract": True,
+        },
+        replay={"media": {"frames": 2}},
+        publication={"youtube_video_id": "LQ4x1Sr5TSI"},
+        historical_import={
+            "source_repo_id": "tsilva/legacy",
+            "source_revision": "v1",
+            "evidence_origin": "legacy-exact-contract-rerun",
+            "runtime_image_ref": "docker:ghcr.io/tsilva/rlab/rlab-train@sha256:"
+            + "1" * 64,
+            "preserved_artifacts": {},
+        },
+        evaluation_evidence=evidence,
+        artifacts={
+            name: {"sha256": "9" * 64, "size_bytes": 1}
+            for name in HASHED_RELEASE_FILES
+        },
+        history=[
+            {
+                "version": "v1",
+                "tier": "historical-import",
+                "published_at": "2026-07-16T12:00:00Z",
+                "trainer": "Stable-Baselines3",
+                "algorithm": "ppo",
+                "lineage_prefix": "aaaaaaaa",
+                "checkpoint_step": 4_000_000,
+                "evidence_status": "source-summary-only",
+            }
+        ],
+        youtube_url="https://www.youtube.com/watch?v=LQ4x1Sr5TSI",
+    )
+    assert historical["repository"]["repo_id"] == (
+        "tsilva/SuperMarioBros-Nes-v0_Level1-1"
+    )
+    assert historical["release"]["tier"] == "historical-import"
+    assert historical["evaluation"]["accepted"] is False
+    assert historical["featured"] is False
+    assert validate_release_manifest_document(historical) == historical
+    card = render_historical_model_card(historical)
+    assert "not an accepted research release" in card
+    assert ".venv/bin/rlab-play --model" in card

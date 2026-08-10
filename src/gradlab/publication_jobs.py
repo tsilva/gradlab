@@ -818,10 +818,6 @@ class PlayerPublicationJobHandler:
         info = api.model_info(repo_id=repo_id, revision=version)
         if str(getattr(info, "sha", "")) != str(state["huggingface_commit"]):
             raise ValueError("Hugging Face tag changed before final audit")
-        refs = api.list_repo_refs(repo_id=repo_id, repo_type="model")
-        tag_targets = {
-            str(tag.name): str(tag.target_commit) for tag in getattr(refs, "tags", ())
-        }
         if set(api.list_repo_files(repo_id, revision=version, repo_type="model")) != set(
             HUGGINGFACE_RELEASE_FILES
         ):

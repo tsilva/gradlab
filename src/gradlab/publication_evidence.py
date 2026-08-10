@@ -318,17 +318,43 @@ def validate_evaluation_evidence_document(document: Mapping[str, Any]) -> dict[s
     acceptance = document.get("acceptance")
     if not isinstance(acceptance, Mapping):
         raise ValueError("evaluation_evidence.json is missing acceptance outcomes")
+    outcomes = acceptance.get("outcomes")
+    if not isinstance(outcomes, list) or not outcomes or any(
+        not isinstance(row, Mapping) or not isinstance(row.get("passed"), bool)
+        for row in outcomes
+    ):
+        raise ValueError("evaluation_evidence.json has invalid acceptance outcomes")
     if tier == RESEARCH_EVIDENCE_TIER:
-        if status != "accepted" or acceptance.get("passed") is not True:
+        if (
+            status != "accepted"
+            or acceptance.get("passed") is not True
+            or not all(bool(row["passed"]) for row in outcomes)
+        ):
             raise ValueError("research release evidence must be accepted")
-    elif status != "evaluated-not-accepted" or acceptance.get("passed") is not False:
+    elif (
+        status != "evaluated-not-accepted"
+        or acceptance.get("passed") is not False
+        or all(bool(row["passed"]) for row in outcomes)
+    ):
         raise ValueError("historical-import evidence must record failed acceptance")
     episodes = document.get("episode_results")
     protocol = document.get("protocol")
     if not isinstance(episodes, list) or not isinstance(protocol, Mapping):
         raise ValueError("evaluation_evidence.json is missing episode results or protocol")
-    if len(episodes) != int(protocol.get("episodes") or 0):
+    declared_episodes = int(protocol.get("episodes") or 0)
+    if declared_episodes <= 0 or len(episodes) != declared_episodes:
         raise ValueError("evaluation_evidence.json episode count is incomplete")
+    if any(not isinstance(row, Mapping) for row in episodes):
+        raise ValueError("evaluation_evidence.json episode results must be objects")
+    episode_ids = [row.get("episode") for row in episodes if "episode" in row]
+    if episode_ids and (
+        len(episode_ids) != len(episodes) or len(set(episode_ids)) != len(episode_ids)
+    ):
+        raise ValueError("evaluation_evidence.json episode identities must be complete and unique")
+    if not isinstance(document.get("identity"), Mapping):
+        raise ValueError("evaluation_evidence.json is missing checkpoint identity")
+    if not isinstance(document.get("authoritative_hashes"), Mapping):
+        raise ValueError("evaluation_evidence.json is missing authoritative hashes")
     provenance = document.get("provenance")
     if not isinstance(provenance, Mapping) or not str(provenance.get("origin") or ""):
         raise ValueError("evaluation_evidence.json is missing evidence provenance")

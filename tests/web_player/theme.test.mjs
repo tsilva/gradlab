@@ -69,6 +69,24 @@ test("the dark theme retains all three bundled editorial font families", async (
   assert.match(styles, /JetBrainsMonoVariable\.woff2/);
 });
 
+test("scrollbars use compact cross-browser theme styling", async () => {
+  const styles = await readFile(new URL("styles.css", ROOT), "utf8");
+  assert.match(
+    styles,
+    /\* \{[^}]*scrollbar-color: var\(--color-outline-strong\) transparent;[^}]*scrollbar-width: thin;/,
+  );
+  assert.match(styles, /\*::-webkit-scrollbar \{[^}]*width: \.65rem;[^}]*height: \.65rem;/);
+  assert.match(
+    styles,
+    /\*::-webkit-scrollbar-thumb \{[^}]*border-radius: 999px;[^}]*background: var\(--color-outline-strong\);/,
+  );
+  assert.match(
+    styles,
+    /\*::-webkit-scrollbar-thumb:hover \{ background-color: var\(--color-interaction\); \}/,
+  );
+  assert.match(styles, /\*::-webkit-scrollbar-corner \{ background: transparent; \}/);
+});
+
 test("canvas colors resolve the same CSS theme properties", async () => {
   const styles = await readFile(new URL("styles.css", ROOT), "utf8");
   const shared = await readFile(new URL("panels/shared.js", ROOT), "utf8");

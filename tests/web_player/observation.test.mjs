@@ -174,23 +174,31 @@ test("observation receives CNN frames without demanding CNN processing", () => {
   assert.deepEqual(PANEL_TYPES.observation.frameKinds, [2, 3, 4]);
   assert.match(source, /baseIdentity/);
   assert.match(source, /sameFrameIdentity\(baseIdentity, expectedBaseIdentity\(\)\)/);
-  assert.ok(
-    source.indexOf("if (!sameFrameIdentity(incoming, expectedBaseIdentity())) return true;")
-      < source.indexOf("const request = ++baseBitmapRequest;"),
-    "stale base frames are rejected before they can cancel an exact-frame decode",
-  );
-  assert.ok(
-    source.indexOf("if (!sameFrameIdentity(incoming, expectedAttributionIdentity())) return true;")
-      < source.indexOf("const request = ++attributionBitmapRequest;"),
-    "stale attribution frames are rejected before they can cancel an exact-frame decode",
-  );
-  assert.ok(
-    source.indexOf("if (!sameFrameIdentity(incoming, expectedCnnIdentity())) return true;")
-      < source.indexOf("const request = ++cnnBitmapRequest;"),
-    "stale CNN frames are rejected before they can cancel an exact-frame decode",
-  );
+  for (const [identity, request] of [
+    ["targetBaseIdentity", "baseBitmapRequest"],
+    ["targetAttributionIdentity", "attributionBitmapRequest"],
+    ["targetCnnIdentity", "cnnBitmapRequest"],
+  ]) {
+    const guard = source.indexOf(
+      `if (!sameFrameIdentity(incoming, ${identity}())) return true;`,
+    );
+    const decode = source.indexOf(`const request = ++${request};`, guard);
+    assert.ok(guard >= 0 && decode > guard, `${identity} rejects unrelated frames before decoding`);
+  }
   assert.match(appSource, /magic !== "RLP3"/);
   assert.match(appSource, /getBigUint64\(24\)/);
   assert.match(appSource, /function frameGeneration/);
   assert.match(catalogSource, /cnn-inspection/);
+});
+
+test("observation commits an exact decoded frame and its metadata without blanking between frames", () => {
+  const renderStart = source.indexOf("render(nextSnapshot)");
+  const frameStart = source.indexOf("async renderFrame", renderStart);
+  const renderSource = source.slice(renderStart, frameStart);
+  assert.match(renderSource, /targetSnapshot = nextSnapshot/);
+  assert.doesNotMatch(renderSource, /closeBase\(\)/);
+  assert.match(source, /request < baseBitmapCommittedRequest/);
+  assert.match(source, /commitSnapshot\(frameSnapshot\)/);
+  assert.match(source, /baseCanvas\.hidden = true/);
+  assert.doesNotMatch(source, /baseCanvas\.width = 1/);
 });

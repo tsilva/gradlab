@@ -62,6 +62,13 @@ test("distribution contents use the panel as their only scroll container", () =>
   assert.doesNotMatch(comparisonRule, /(?:max-height|overflow)\s*:/);
 });
 
+test("namespace telemetry tables use the panel as their only scroll container", () => {
+  assert.match(telemetryPanelSource, /table\.className = "telemetry-namespace-table";/);
+  const rule = styles.match(/\.telemetry-namespace-table \{([^}]*)\}/)?.[1] || "";
+  assert.match(rule, /margin-top: \.55rem;/);
+  assert.doesNotMatch(rule, /(?:max-height|overflow)\s*:/);
+});
+
 test("long action labels truncate on one line and retain their full tooltip", () => {
   const rule = styles.match(/\.action-comparison-label \{([^}]*)\}/)?.[1] || "";
   assert.match(rule, /overflow: hidden;/);
