@@ -3,6 +3,7 @@ from pathlib import Path
 
 import gymnasium as gym
 import numpy as np
+import pytest
 
 from gradlab.action_codecs import (
     VIZDOOM_DEATHMATCH_MULTIDISCRETE_BUTTONS,
@@ -56,13 +57,24 @@ def test_gradoom_recipe_trains_on_gpu_and_keeps_reference_vizdoom_evaluation() -
 
     assert train_config["env_provider"] == "gradoom"
     assert train_config["n_envs"] == 128
+    assert train_config["env_args"]["doom_skill"] == 3
     assert train_config["env_args"]["compile_engine"] is True
     assert train_config["checkpoint_eval_environment"]["env_provider"] == "vizdoom-turbo"
+    assert train_config["checkpoint_eval_environment"]["env_args"]["doom_skill"] == 3
     assert document["policy_environment_hash"] == document["evaluation_environment_hash"]
     backend = train_config["training_backend"]
     assert backend["id"] == "gradlab.ppo"
     assert backend["config"]["execution_profile"] == "max-throughput"
     assert backend["config"]["precision"] == "amp-fp16"
+
+
+def test_gradoom_recipe_rejects_an_unsupported_doom_skill_before_runtime() -> None:
+    with pytest.raises(ValueError, match=r"doom_skill must be 3; got 1"):
+        compose_train_document(
+            GOAL_ROOT / "_goal.yaml",
+            GOAL_ROOT / "recipes/gradoom-ppo.yaml",
+            recipe_overrides=("train.environment.env_config.env_args.doom_skill=1",),
+        )
 
 
 def test_deathmatch_recipe_runs_through_the_real_single_player_vector_runtime() -> None:
